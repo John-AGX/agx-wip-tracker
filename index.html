@@ -743,7 +743,7 @@
                             <button onclick="window.print()" class="secondary">Print Report</button>
                         </div>
 
-                        <div class="summary-grid">
+                        <div class=""summary-grid">
                             <div class="summary-card">
                                 <div class="summary-card-label">Total Pipeline</div>
                                 <div class="summary-card-value" id="total-pipeline">$0.00</div>
@@ -932,7 +932,8 @@
 
                         <!-- Job Subcontractors -->
                         <div id="job-subs" class="sub-tab-content-job">
-                            <div class="table-container">                        <table id="job-subs-table">
+                            <div class="table-container">
+                                <table id="job-subs-table">
                                     <thead>
                                         <tr>
                                             <th>Subcontractor</th>
@@ -1088,7 +1089,7 @@
             <div class="modal-header" id="phaseModalHeader">Add Phase Entry</div>
             <div class="form-group">
                 <label>Building</label>
-                <select id="phaseBuilding"></select>
+                <select id="phaseBuilding" onchange="syncBudgetFromPct()"></select>
             </div>
             <div class="form-group">
                 <label>Phase</label>
@@ -1140,9 +1141,15 @@
                     <input type="number" id="phaseEquipment" placeholder="0.00" step="0.01">
                 </div>
             </div>
-            <div class="form-group">
-                <label>Phase Budget</label>
-                <input type="number" id="phaseBudget" placeholder="0.00" step="0.01">
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Budget % of Building</label>
+                    <input type="number" id="phaseBudgetPct" placeholder="0" step="0.1" min="0" max="100" oninput="syncBudgetFromPct()">
+                </div>
+                <div class="form-group">
+                    <label>Phase Budget $</label>
+                    <input type="number" id="phaseBudget" placeholder="0.00" step="0.01" oninput="syncBudgetFromDollar()">
+                </div>
             </div>
             <div class="form-row">
                 <div class="form-group">
@@ -1696,7 +1703,7 @@
                         </div>
                         <div>
                             <div style="font-size: 12px; color: var(--text-dim);">Variance</div>
-                            <div style="font-size: 16px; font-weight: 600; color: ${(building.budget - buildingCost) >= 0 ? 'var(--green)' : 'var(--red)'};">${formatCurrency(building.budget - buildingCost)}
+                            <div style="font-size: 16px; font-weight: 600; color: ${(building.budget - buildingCost) >= 0 ? 'var(--green)' : 'var(--red)'};">${formatCurrency(building.budget - buildingCost)}</div>
                         </div>
                     </div>
                     <div style="margin-top: 15px;">
@@ -1871,6 +1878,28 @@
             renderJobDetail(appState.currentJobId);
         }
 
+        function getSelectedBuildingBudget() {
+            const buildingId = document.getElementById('phaseBuilding').value;
+            const building = appData.buildings.find(b => b.id === buildingId);
+            return building ? (building.budget || 0) : 0;
+        }
+
+        function syncBudgetFromPct() {
+            const pct = parseFloat(document.getElementById('phaseBudgetPct').value) || 0;
+            const bldgBudget = getSelectedBuildingBudget();
+            if (bldgBudget > 0) {
+                document.getElementById('phaseBudget').value = (bldgBudget * pct / 100).toFixed(2);
+            }
+        }
+
+        function syncBudgetFromDollar() {
+            const dollars = parseFloat(document.getElementById('phaseBudget').value) || 0;
+            const bldgBudget = getSelectedBuildingBudget();
+            if (bldgBudget > 0) {
+                document.getElementById('phaseBudgetPct').value = (dollars / bldgBudget * 100).toFixed(1);
+            }
+        }
+
         function openAddPhaseToJobModal() {
             appState.editPhaseId = null;
             document.getElementById('phaseModalHeader').textContent = 'Add Phase Entry';
@@ -1893,6 +1922,7 @@
             document.getElementById('phaseLabor').value = '';
             document.getElementById('phaseSub').value = '';
             document.getElementById('phaseEquipment').value = '';
+            document.getElementById('phaseBudgetPct').value = '';
             document.getElementById('phaseBudget').value = '';
             document.getElementById('phaseHoursWeek').value = '';
             document.getElementById('phaseHoursTotal').value = '';
@@ -1929,6 +1959,14 @@
             document.getElementById('phaseSub').value = phase.sub || '';
             document.getElementById('phaseEquipment').value = phase.equipment || '';
             document.getElementById('phaseBudget').value = phase.phaseBudget || '';
+            // Calculate and show the budget percentage
+            const bldg = appData.buildings.find(b => b.id === phase.buildingId);
+            const bldgBudget = bldg ? (bldg.budget || 0) : 0;
+            if (bldgBudget > 0 && phase.phaseBudget) {
+                document.getElementById('phaseBudgetPct').value = (phase.phaseBudget / bldgBudget * 100).toFixed(1);
+            } else {
+                document.getElementById('phaseBudgetPct').value = '';
+            }
             document.getElementById('phaseHoursWeek').value = phase.hoursWeek || '';
             document.getElementById('phaseHoursTotal').value = phase.hoursTotal || '';
             document.getElementById('phaseRate').value = phase.rate || '';
