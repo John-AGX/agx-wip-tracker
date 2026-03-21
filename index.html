@@ -743,7 +743,7 @@
                             <button onclick="window.print()" class="secondary">Print Report</button>
                         </div>
 
-                        <div class=""summary-grid">
+                        <div class="summary-grid">
                             <div class="summary-card">
                                 <div class="summary-card-label">Total Pipeline</div>
                                 <div class="summary-card-value" id="total-pipeline">$0.00</div>
@@ -1064,22 +1064,30 @@
 
     <div id="addBuildingModal" class="modal">
         <div class="modal-content">
-            <div class="modal-header">Add Building</div>
+            <div class="modal-header" id="buildingModalHeader">Add Building</div>
             <div class="form-group">
                 <label>Building Name</label>
                 <input type="text" id="buildingName" placeholder="e.g., Main Office, Warehouse A">
             </div>
-            <div class="form-group">
-                <label>Total Budget</label>
-                <input type="number" id="buildingBudget" placeholder="0.00" step="0.01">
+            <div class="form-row">
+                <div class="form-group">
+                    <label>% of Job</label>
+                    <input type="number" id="buildingBudgetPct" placeholder="0" step="0.1" min="0" max="100" oninput="syncBuildingBudgetFromPct()">
+                </div>
+                <div class="form-group">
+                    <label>Building Budget $</label>
+                    <input type="number" id="buildingBudget" placeholder="0.00" step="0.01" oninput="syncBuildingBudgetFromDollar()">
+                </div>
             </div>
+            <div id="buildingBudgetHint" style="font-size: 12px; color: var(--text-dim); margin-top: -12px; margin-bottom: 16px;"></div>
             <div class="form-group">
                 <label>Address</label>
                 <input type="text" id="buildingAddress" placeholder="123 Main St, City, State ZIP">
             </div>
             <div class="modal-footer">
+                <button class="danger small" id="deleteBuildingBtn" onclick="deleteBuilding()" style="margin-right: auto; display: none;">Delete Building</button>
                 <button class="secondary" onclick="closeModal('addBuildingModal')">Cancel</button>
-                <button onclick="saveBuilding()">Add Building</button>
+                <button onclick="saveBuilding()" id="saveBuildingBtn">Add Building</button>
             </div>
         </div>
     </div>
@@ -1363,7 +1371,8 @@
         let appState = {
             currentJobId: null,
             currentStatusFilter: '',
-            editPhaseId: null
+            editPhaseId: null,
+            editBuildingId: null
         };
 
         function loadData() {
@@ -1683,14 +1692,21 @@
                     buildingCost += (p.materials || 0) + (p.labor || 0) + (p.sub || 0) + (p.equipment || 0);
                 });
 
+                const contractAmt = appData.jobs.find(j => j.id === jobId)?.contractAmt || 0;
+                const bldgPct = contractAmt > 0 ? ((building.budget || 0) / contractAmt * 100).toFixed(1) : '—';
+
                 const card = document.createElement('div');
                 card.className = 'card';
+                card.style.cursor = 'pointer';
+                card.title = 'Click to edit this building';
+                card.onclick = function() { editBuilding(building.id); };
                 card.innerHTML = `
                     <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 15px;">
                         <div>
                             <h3 style="font-size: 18px; margin-bottom: 5px;">${building.name}</h3>
                             <p style="font-size: 13px; color: var(--text-dim);">${building.address}</p>
                         </div>
+                        <span style="font-size: 13px; color: var(--purple); font-weight: 600;">${bldgPct}% of Job</span>
                     </div>
                     <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 15px;">
                         <div>
@@ -1857,22 +1873,105 @@
             container.appendChild(card);
         }
 
+        function getJobContractAmount() {
+            const job = appData.jobs.find(j => j.id === appState.currentJobId);
+            return job ? (job.contractAmt || 0) : 0;
+        }
+
+        function syncBuildingBudgetFromPct() {
+            const pct = parseFloat(document.getElementById('buildingBudgetPct').value) || 0;
+            const contractAmt = getJobContractAmount();
+            if (contractAmt > 0) {
+                const budget = (contractAmt * pct / 100);
+                document.getElementById('buildingBudget').value = budget.toFixed(2);
+                document.getElementById('buildingBudgetHint').textContent = pct + '% of ' + formatCurrency(contractAmt) + ' = ' + formatCurrency(budget);
+            }
+        }
+
+        function syncBuildingBudgetFromDollar() {
+            const dollars = parseFloat(document.getElementById('buildingBudget').value) || 0;
+            const contractAmt = getJobContractAmount();
+            if (contractAmt > 0) {
+                const pct = (dollars / contractAmt * 100);
+                document.getElementById('buildingBudgetPct').value = pct.toFixed(1);
+                document.getElementById('buildingBudgetHint').textContent = pct.toFixed(1) + '% of ' + formatCurrency(contractAmt) + ' = ' + formatCurrency(dollars);
+            }
+        }
+
         function openAddBuildingToJobModal() {
+            appState.editBuildingId = null;
+            document.getElementById('buildingModalHeader').textContent = 'Add Building';
+            document.getElementById('saveBuildingBtn').textContent = 'Add Building';
+            document.getElementById('deleteBuildingBtn').style.display = 'none';
             document.getElementById('buildingName').value = '';
+            document.getElementById('buildingBudgetPct').value = '';
             document.getElementById('buildingBudget').value = '';
+            document.getElementById('buildingBudgetHint').textContent = 'Contract: ' + formatCurrency(getJobContractAmount());
             document.getElementById('buildingAddress').value = '';
             openModal('addBuildingModal');
         }
 
+        function editBuilding(buildingId) {
+            const building = appData.buildings.find(b => b.id === buildingId);
+            if (!building) return;
+
+            appState.editBuildingId = buildingId;
+            document.getElementById('buildingModalHeader').textContent = 'Edit Building';
+            document.getElementById('saveBuildingBtn').textContent = 'Save Changes';
+            document.getElementById('deleteBuildingBtn').style.display = 'inline-block';
+            document.getElementById('buildingName').value = building.name || '';
+            document.getElementById('buildingBudget').value = building.budget || '';
+            document.getElementById('buildingAddress').value = building.address || '';
+
+            const contractAmt = getJobContractAmount();
+            if (contractAmt > 0 && building.budget) {
+                const pct = (building.budget / contractAmt * 100);
+                document.getElementById('buildingBudgetPct').value = pct.toFixed(1);
+                document.getElementById('buildingBudgetHint').textContent = pct.toFixed(1) + '% of ' + formatCurrency(contractAmt) + ' = ' + formatCurrency(building.budget);
+            } else {
+                document.getElementById('buildingBudgetPct').value = building.budgetPct || '';
+                document.getElementById('buildingBudgetHint').textContent = 'Contract: ' + formatCurrency(contractAmt);
+            }
+            openModal('addBuildingModal');
+        }
+
+        function deleteBuilding() {
+            if (!appState.editBuildingId) return;
+            const phases = appData.phases.filter(p => p.buildingId === appState.editBuildingId);
+            if (phases.length > 0) {
+                if (!confirm('This building has ' + phases.length + ' phase(s). Delete the building AND all its phases?')) return;
+                appData.phases = appData.phases.filter(p => p.buildingId !== appState.editBuildingId);
+            } else {
+                if (!confirm('Delete this building?')) return;
+            }
+            appData.buildings = appData.buildings.filter(b => b.id !== appState.editBuildingId);
+            appState.editBuildingId = null;
+            saveData();
+            closeModal('addBuildingModal');
+            renderJobDetail(appState.currentJobId);
+        }
+
         function saveBuilding() {
-            const building = {
-                id: 'b' + Date.now(),
-                jobId: appState.currentJobId,
+            const formData = {
                 name: document.getElementById('buildingName').value,
                 budget: parseFloat(document.getElementById('buildingBudget').value) || 0,
+                budgetPct: parseFloat(document.getElementById('buildingBudgetPct').value) || 0,
                 address: document.getElementById('buildingAddress').value
             };
-            appData.buildings.push(building);
+
+            if (appState.editBuildingId) {
+                const idx = appData.buildings.findIndex(b => b.id === appState.editBuildingId);
+                if (idx !== -1) {
+                    Object.assign(appData.buildings[idx], formData);
+                }
+                appState.editBuildingId = null;
+            } else {
+                const building = Object.assign({
+                    id: 'b' + Date.now(),
+                    jobId: appState.currentJobId
+                }, formData);
+                appData.buildings.push(building);
+            }
             saveData();
             closeModal('addBuildingModal');
             renderJobDetail(appState.currentJobId);
