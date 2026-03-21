@@ -329,7 +329,7 @@
             background: var(--surface2);
             font-weight: 600;
             border-top: 2px solid var(--border);
-        }   }
+        }
 
         /* STATUS BADGES */
         .badge {
@@ -932,8 +932,7 @@
 
                         <!-- Job Subcontractors -->
                         <div id="job-subs" class="sub-tab-content-job">
-                            <div class="table-container">
-                                <table id="job-subs-table">
+                            <div class="table-container">                        <table id="job-subs-table">
                                     <thead>
                                         <tr>
                                             <th>Subcontractor</th>
@@ -1086,7 +1085,7 @@
 
     <div id="addPhaseModal" class="modal">
         <div class="modal-content">
-            <div class="modal-header">Add Phase Entry</div>
+            <div class="modal-header" id="phaseModalHeader">Add Phase Entry</div>
             <div class="form-group">
                 <label>Building</label>
                 <select id="phaseBuilding"></select>
@@ -1170,8 +1169,9 @@
                 <textarea id="phaseNotes" placeholder="Any notes or issues to discuss..."></textarea>
             </div>
             <div class="modal-footer">
+                <button class="danger small" id="deletePhaseBtn" onclick="deletePhase()" style="margin-right: auto; display: none;">Delete Phase</button>
                 <button class="secondary" onclick="closeModal('addPhaseModal')">Cancel</button>
-                <button onclick="savePhase()">Add Phase</button>
+                <button onclick="savePhase()" id="savePhaseBtn">Add Phase</button>
             </div>
         </div>
     </div>
@@ -1355,7 +1355,8 @@
 
         let appState = {
             currentJobId: null,
-            currentStatusFilter: ''
+            currentStatusFilter: '',
+            editPhaseId: null
         };
 
         function loadData() {
@@ -1638,6 +1639,9 @@
                 const status = getStatus(totalSpent, p.phaseBudget);
 
                 const row = document.createElement('tr');
+                row.style.cursor = 'pointer';
+                row.title = 'Click to edit this phase';
+                row.onclick = function() { editPhase(p.id); };
                 row.innerHTML = `
                     <td>${building?.name || ''}</td>
                     <td>${p.phase}</td>
@@ -1692,7 +1696,7 @@
                         </div>
                         <div>
                             <div style="font-size: 12px; color: var(--text-dim);">Variance</div>
-                            <div style="font-size: 16px; font-weight: 600; color: ${(building.budget - buildingCost) >= 0 ? 'var(--green)' : 'var(--red)'};">${formatCurrency(building.budget - buildingCost)}</div>
+                            <div style="font-size: 16px; font-weight: 600; color: ${(building.budget - buildingCost) >= 0 ? 'var(--green)' : 'var(--red)'};">${formatCurrency(building.budget - buildingCost)}
                         </div>
                     </div>
                     <div style="margin-top: 15px;">
@@ -1868,6 +1872,11 @@
         }
 
         function openAddPhaseToJobModal() {
+            appState.editPhaseId = null;
+            document.getElementById('phaseModalHeader').textContent = 'Add Phase Entry';
+            document.getElementById('savePhaseBtn').textContent = 'Add Phase';
+            document.getElementById('deletePhaseBtn').style.display = 'none';
+
             const buildings = appData.buildings.filter(b => b.jobId === appState.currentJobId);
             const select = document.getElementById('phaseBuilding');
             select.innerHTML = '<option value="">-- Select Building --</option>';
@@ -1893,10 +1902,53 @@
             openModal('addPhaseModal');
         }
 
+        function editPhase(phaseId) {
+            const phase = appData.phases.find(p => p.id === phaseId);
+            if (!phase) return;
+
+            appState.editPhaseId = phaseId;
+            document.getElementById('phaseModalHeader').textContent = 'Edit Phase Entry';
+            document.getElementById('savePhaseBtn').textContent = 'Save Changes';
+            document.getElementById('deletePhaseBtn').style.display = 'inline-block';
+
+            const buildings = appData.buildings.filter(b => b.jobId === phase.jobId);
+            const select = document.getElementById('phaseBuilding');
+            select.innerHTML = '<option value="">-- Select Building --</option>';
+            buildings.forEach(b => {
+                const opt = document.createElement('option');
+                opt.value = b.id;
+                opt.textContent = b.name;
+                select.appendChild(opt);
+            });
+
+            select.value = phase.buildingId || '';
+            document.getElementById('phaseType').value = phase.phase || '';
+            document.getElementById('phasePercent').value = phase.pctComplete || 0;
+            document.getElementById('phaseMaterials').value = phase.materials || '';
+            document.getElementById('phaseLabor').value = phase.labor || '';
+            document.getElementById('phaseSub').value = phase.sub || '';
+            document.getElementById('phaseEquipment').value = phase.equipment || '';
+            document.getElementById('phaseBudget').value = phase.phaseBudget || '';
+            document.getElementById('phaseHoursWeek').value = phase.hoursWeek || '';
+            document.getElementById('phaseHoursTotal').value = phase.hoursTotal || '';
+            document.getElementById('phaseRate').value = phase.rate || '';
+            document.getElementById('phaseBurden').value = phase.burden || 35;
+            document.getElementById('phaseNotes').value = phase.notes || '';
+            openModal('addPhaseModal');
+        }
+
+        function deletePhase() {
+            if (!appState.editPhaseId) return;
+            if (!confirm('Delete this phase entry? This cannot be undone.')) return;
+            appData.phases = appData.phases.filter(p => p.id !== appState.editPhaseId);
+            appState.editPhaseId = null;
+            saveData();
+            closeModal('addPhaseModal');
+            renderJobDetail(appState.currentJobId);
+        }
+
         function savePhase() {
-            const phase = {
-                id: 'p' + Date.now(),
-                jobId: appState.currentJobId,
+            const formData = {
                 buildingId: document.getElementById('phaseBuilding').value,
                 phase: document.getElementById('phaseType').value,
                 pctComplete: parseFloat(document.getElementById('phasePercent').value) || 0,
@@ -1909,14 +1961,27 @@
                 hoursTotal: parseFloat(document.getElementById('phaseHoursTotal').value) || 0,
                 rate: parseFloat(document.getElementById('phaseRate').value) || 0,
                 burden: parseFloat(document.getElementById('phaseBurden').value) || 0,
-                notes: document.getElementById('phaseNotes').value,
-                weeklyMat: 0,
-                weeklyLabor: 0,
-                weeklySub: 0,
-                weeklyEquip: 0,
-                dateAdded: new Date().toISOString()
+                notes: document.getElementById('phaseNotes').value
             };
-            appData.phases.push(phase);
+
+            if (appState.editPhaseId) {
+                const idx = appData.phases.findIndex(p => p.id === appState.editPhaseId);
+                if (idx !== -1) {
+                    Object.assign(appData.phases[idx], formData);
+                }
+                appState.editPhaseId = null;
+            } else {
+                const phase = Object.assign({
+                    id: 'p' + Date.now(),
+                    jobId: appState.currentJobId,
+                    weeklyMat: 0,
+                    weeklyLabor: 0,
+                    weeklySub: 0,
+                    weeklyEquip: 0,
+                    dateAdded: new Date().toISOString()
+                }, formData);
+                appData.phases.push(phase);
+            }
             saveData();
             closeModal('addPhaseModal');
             renderJobDetail(appState.currentJobId);
