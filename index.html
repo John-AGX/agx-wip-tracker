@@ -874,6 +874,7 @@
 
                         <div class="sub-tabs">
                             <button class="sub-tab-btn-job active" data-subtab="job-overview">Overview</button>
+                            <button class="sub-tab-btn-job" data-subtab="job-costs">Job Costs</button>
                             <button class="sub-tab-btn-job" data-subtab="job-buildings">Buildings</button>
                             <button class="sub-tab-btn-job" data-subtab="job-phases">Phases</button>
                             <button class="sub-tab-btn-job" data-subtab="job-subs">Subcontractors</button>
@@ -902,6 +903,64 @@
                                     </thead>
                                     <tbody></tbody>
                                 </table>
+                            </div>
+                        </div>
+
+                        <!-- Job Costs (direct job-level) -->
+                        <div id="job-costs" class="sub-tab-content-job">
+                            <div class="card" style="margin-bottom: 20px;">
+                                <h3 style="margin-bottom: 5px;">Job-Level Costs</h3>
+                                <p style="font-size: 13px; color: var(--text-dim); margin-bottom: 20px;">Enter costs directly on the job for smaller jobs or general overhead. These are added to building/phase costs in the total.</p>
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                                    <div class="form-group">
+                                        <label>Materials $</label>
+                                        <input type="number" id="jobCostMaterials" placeholder="0.00" step="0.01" oninput="saveJobCosts()">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Labor $</label>
+                                        <input type="number" id="jobCostLabor" placeholder="0.00" step="0.01" oninput="saveJobCosts()">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Subcontractor $</label>
+                                        <input type="number" id="jobCostSub" placeholder="0.00" step="0.01" oninput="saveJobCosts()">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Equipment $</label>
+                                        <input type="number" id="jobCostEquipment" placeholder="0.00" step="0.01" oninput="saveJobCosts()">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Labor Hours This Week</label>
+                                        <input type="number" id="jobCostHoursWeek" placeholder="0" step="0.5" oninput="saveJobCosts()">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Total Hours to Date</label>
+                                        <input type="number" id="jobCostHoursTotal" placeholder="0" step="0.5" oninput="saveJobCosts()">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Avg Hourly Rate</label>
+                                        <input type="number" id="jobCostRate" placeholder="0.00" step="0.01" oninput="saveJobCosts()">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Burden Rate %</label>
+                                        <input type="number" id="jobCostBurden" value="35" step="0.1" oninput="saveJobCosts()">
+                                    </div>
+                                </div>
+                                <div style="margin-top: 15px; padding: 15px; background: var(--surface2); border-radius: 8px;">
+                                    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px;">
+                                        <div>
+                                            <div style="font-size: 12px; color: var(--text-dim);">Job-Level Total</div>
+                                            <div style="font-size: 18px; font-weight: 700; color: var(--accent);" id="jobCostTotal">$0.00</div>
+                                        </div>
+                                        <div>
+                                            <div style="font-size: 12px; color: var(--text-dim);">Labor w/ Burden</div>
+                                            <div style="font-size: 18px; font-weight: 700; color: var(--accent);" id="jobCostLaborBurden">$0.00</div>
+                                        </div>
+                                        <div>
+                                            <div style="font-size: 12px; color: var(--text-dim);">Phase/Building Costs</div>
+                                            <div style="font-size: 18px; font-weight: 700; color: var(--text-dim);" id="jobCostFromPhases">$0.00</div>
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
                         </div>
 
@@ -1083,6 +1142,49 @@
             <div class="form-group">
                 <label>Address</label>
                 <input type="text" id="buildingAddress" placeholder="123 Main St, City, State ZIP">
+            </div>
+            <div style="border-top: 1px solid var(--border); margin: 16px 0; padding-top: 16px;">
+                <h4 style="font-size: 13px; color: var(--text-dim); text-transform: uppercase; margin-bottom: 12px;">Building-Level Costs (optional)</h4>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Materials $</label>
+                        <input type="number" id="buildingMaterials" placeholder="0.00" step="0.01">
+                    </div>
+                    <div class="form-group">
+                        <label>Labor $</label>
+                        <input type="number" id="buildingLabor" placeholder="0.00" step="0.01">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Subcontractor $</label>
+                        <input type="number" id="buildingSub" placeholder="0.00" step="0.01">
+                    </div>
+                    <div class="form-group">
+                        <label>Equipment $</label>
+                        <input type="number" id="buildingEquipment" placeholder="0.00" step="0.01">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Labor Hours This Week</label>
+                        <input type="number" id="buildingHoursWeek" placeholder="0" step="0.5">
+                    </div>
+                    <div class="form-group">
+                        <label>Total Hours to Date</label>
+                        <input type="number" id="buildingHoursTotal" placeholder="0" step="0.5">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Avg Hourly Rate</label>
+                        <input type="number" id="buildingRate" placeholder="0.00" step="0.01">
+                    </div>
+                    <div class="form-group">
+                        <label>Burden Rate %</label>
+                        <input type="number" id="buildingBurden" value="35" step="0.1">
+                    </div>
+                </div>
             </div>
             <div class="modal-footer">
                 <button class="danger small" id="deleteBuildingBtn" onclick="deleteBuilding()" style="margin-right: auto; display: none;">Delete Building</button>
@@ -1350,6 +1452,7 @@
 
             const currentJobId = appState.currentJobId;
             if (subtabName === 'job-overview') renderJobOverview(currentJobId);
+            else if (subtabName === 'job-costs') renderJobCosts(currentJobId);
             else if (subtabName === 'job-buildings') renderJobBuildings(currentJobId);
             else if (subtabName === 'job-phases') renderJobPhases(currentJobId);
             else if (subtabName === 'job-subs') renderJobSubs(currentJobId);
@@ -1477,13 +1580,33 @@
             calculateWIPSummary();
         }
 
+        function getJobTotalCost(jobId) {
+            // Phase-level costs
+            let phaseCost = 0;
+            appData.phases.filter(p => p.jobId === jobId).forEach(p => {
+                phaseCost += (p.materials || 0) + (p.labor || 0) + (p.sub || 0) + (p.equipment || 0);
+            });
+            // Building-level costs
+            let buildingCost = 0;
+            appData.buildings.filter(b => b.jobId === jobId).forEach(b => {
+                buildingCost += (b.materials || 0) + (b.labor || 0) + (b.sub || 0) + (b.equipment || 0);
+            });
+            // Job-level costs
+            const job = appData.jobs.find(j => j.id === jobId);
+            let jobCost = 0;
+            if (job) {
+                jobCost = (job.materials || 0) + (job.labor || 0) + (job.sub || 0) + (job.equipment || 0);
+            }
+            return { phaseCost, buildingCost, jobCost, total: phaseCost + buildingCost + jobCost };
+        }
+
         function calculateWIPSummary() {
             let totalPipeline = appData.jobs.reduce((sum, j) => sum + (j.contractAmount || 0), 0);
             let activeJobs = appData.jobs.filter(j => ['New', 'In Progress', 'On Hold'].includes(j.status)).length;
 
             let totalCost = 0;
-            appData.phases.forEach(p => {
-                totalCost += (p.materials || 0) + (p.labor || 0) + (p.sub || 0) + (p.equipment || 0);
+            appData.jobs.forEach(j => {
+                totalCost += getJobTotalCost(j.id).total;
             });
 
             let totalProfit = totalPipeline - totalCost;
@@ -1508,12 +1631,7 @@
             }
 
             jobs.forEach((job, index) => {
-                const phases = appData.phases.filter(p => p.jobId === job.id);
-
-                let totalCost = 0;
-                phases.forEach(p => {
-                    totalCost += (p.materials || 0) + (p.labor || 0) + (p.sub || 0) + (p.equipment || 0);
-                });
+                const totalCost = getJobTotalCost(job.id).total;
 
                 const profit = (job.contractAmount || 0) - totalCost;
                 const marginPct = job.contractAmount > 0 ? ((profit / job.contractAmount) * 100).toFixed(1) : 0;
@@ -1525,8 +1643,8 @@
                 row.onclick = function() { editJob(job.id); };
                 row.innerHTML = `
                     <td>${index + 1}</td>
-                    <td><strong>${job.jobNumber ? job.jobNumber + ' — ' : ''}${job.title}</strong></td>
-                    <td>${job.market || '—'}</td>
+                    <td><strong>${job.jobNumber ? job.jobNumber + ' \u2014 ' : ''}${job.title}</strong></td>
+                    <td>${job.market || '\u2014'}</td>
                     <td><span class="badge ${statusClass}">${job.status}</span></td>
                     <td style="text-align: right;">${formatCurrency(job.contractAmount)}</td>
                     <td style="text-align: right;">${formatCurrency(totalCost)}</td>
@@ -1611,23 +1729,21 @@
             const buildings = appData.buildings.filter(b => b.jobId === jobId);
             const phases = appData.phases.filter(p => p.jobId === jobId);
 
-            let totalCost = 0;
-            phases.forEach(p => {
-                totalCost += (p.materials || 0) + (p.labor || 0) + (p.sub || 0) + (p.equipment || 0);
-            });
+            const costs = getJobTotalCost(jobId);
+            const totalCost = costs.total;
 
             const profit = (job.contractAmount || 0) - totalCost;
             const marginPct = job.contractAmount > 0 ? ((profit / job.contractAmount) * 100).toFixed(1) : 0;
             const avgCompletion = phases.length > 0 ? Math.round(phases.reduce((sum, p) => sum + (p.pctComplete || 0), 0) / phases.length) : 0;
 
-            document.getElementById('job-detail-title').textContent = (job.jobNumber ? job.jobNumber + ' — ' : '') + job.title;
+            document.getElementById('job-detail-title').textContent = (job.jobNumber ? job.jobNumber + ' \u2014 ' : '') + job.title;
             const detailStatusClass = job.status === 'On Hold' ? 'at-risk' : job.status === 'Completed' ? 'on-track' : job.status === 'Archived' ? 'not-started' : 'on-track';
             document.getElementById('job-detail-status').innerHTML = `<span class="badge ${detailStatusClass}">${job.status}</span>`;
             document.getElementById('job-detail-contract').textContent = `Contract: ${formatCurrency(job.contractAmount)}`;
 
-            document.getElementById('job-info-number').textContent = job.jobNumber || '—';
+            document.getElementById('job-info-number').textContent = job.jobNumber || '\u2014';
             document.getElementById('job-info-title').textContent = job.title;
-            document.getElementById('job-info-market').textContent = job.market || '—';
+            document.getElementById('job-info-market').textContent = job.market || '\u2014';
             document.getElementById('job-info-contract').textContent = formatCurrency(job.contractAmount);
             document.getElementById('job-info-margin').textContent = (job.targetMarginPct || 50) + '%';
             const statusClass = job.status === 'On Hold' ? 'at-risk' : job.status === 'Completed' ? 'on-track' : job.status === 'Archived' ? 'not-started' : 'on-track';
@@ -1687,13 +1803,15 @@
 
             buildings.forEach(building => {
                 const phases = appData.phases.filter(p => p.buildingId === building.id);
-                let buildingCost = 0;
+                let phaseCost = 0;
                 phases.forEach(p => {
-                    buildingCost += (p.materials || 0) + (p.labor || 0) + (p.sub || 0) + (p.equipment || 0);
+                    phaseCost += (p.materials || 0) + (p.labor || 0) + (p.sub || 0) + (p.equipment || 0);
                 });
+                const bldgDirectCost = (building.materials || 0) + (building.labor || 0) + (building.sub || 0) + (building.equipment || 0);
+                const buildingCost = phaseCost + bldgDirectCost;
 
-                const contractAmt = appData.jobs.find(j => j.id === jobId)?.contractAmt || 0;
-                const bldgPct = contractAmt > 0 ? ((building.budget || 0) / contractAmt * 100).toFixed(1) : '—';
+                const contractAmt = appData.jobs.find(j => j.id === jobId)?.contractAmount || 0;
+                const bldgPct = contractAmt > 0 ? ((building.budget || 0) / contractAmt * 100).toFixed(1) : '\u2014';
 
                 const card = document.createElement('div');
                 card.className = 'card';
@@ -1873,9 +1991,57 @@
             container.appendChild(card);
         }
 
+        function renderJobCosts(jobId) {
+            const job = appData.jobs.find(j => j.id === jobId);
+            if (!job) return;
+            document.getElementById('jobCostMaterials').value = job.materials || '';
+            document.getElementById('jobCostLabor').value = job.labor || '';
+            document.getElementById('jobCostSub').value = job.sub || '';
+            document.getElementById('jobCostEquipment').value = job.equipment || '';
+            document.getElementById('jobCostHoursWeek').value = job.hoursWeek || '';
+            document.getElementById('jobCostHoursTotal').value = job.hoursTotal || '';
+            document.getElementById('jobCostRate').value = job.rate || '';
+            document.getElementById('jobCostBurden').value = job.burden || 35;
+            updateJobCostSummary(jobId);
+        }
+
+        function saveJobCosts() {
+            const job = appData.jobs.find(j => j.id === appState.currentJobId);
+            if (!job) return;
+            job.materials = parseFloat(document.getElementById('jobCostMaterials').value) || 0;
+            job.labor = parseFloat(document.getElementById('jobCostLabor').value) || 0;
+            job.sub = parseFloat(document.getElementById('jobCostSub').value) || 0;
+            job.equipment = parseFloat(document.getElementById('jobCostEquipment').value) || 0;
+            job.hoursWeek = parseFloat(document.getElementById('jobCostHoursWeek').value) || 0;
+            job.hoursTotal = parseFloat(document.getElementById('jobCostHoursTotal').value) || 0;
+            job.rate = parseFloat(document.getElementById('jobCostRate').value) || 0;
+            job.burden = parseFloat(document.getElementById('jobCostBurden').value) || 0;
+            saveData();
+            updateJobCostSummary(appState.currentJobId);
+            // Update the summary cards too
+            const costs = getJobTotalCost(appState.currentJobId);
+            const profit = (job.contractAmount || 0) - costs.total;
+            const marginPct = job.contractAmount > 0 ? ((profit / job.contractAmount) * 100).toFixed(1) : 0;
+            document.getElementById('job-summary-cost').textContent = formatCurrency(costs.total);
+            document.getElementById('job-summary-profit').textContent = formatCurrency(profit);
+            document.getElementById('job-summary-margin').textContent = marginPct + '%';
+        }
+
+        function updateJobCostSummary(jobId) {
+            const job = appData.jobs.find(j => j.id === jobId);
+            if (!job) return;
+            const jobLevelTotal = (job.materials || 0) + (job.labor || 0) + (job.sub || 0) + (job.equipment || 0);
+            const laborWithBurden = (job.labor || 0) * (1 + (job.burden || 0) / 100);
+            const costs = getJobTotalCost(jobId);
+            const phaseBuildingCost = costs.phaseCost + costs.buildingCost;
+            document.getElementById('jobCostTotal').textContent = formatCurrency(jobLevelTotal);
+            document.getElementById('jobCostLaborBurden').textContent = formatCurrency(laborWithBurden);
+            document.getElementById('jobCostFromPhases').textContent = formatCurrency(phaseBuildingCost);
+        }
+
         function getJobContractAmount() {
             const job = appData.jobs.find(j => j.id === appState.currentJobId);
-            return job ? (job.contractAmt || 0) : 0;
+            return job ? (job.contractAmount || 0) : 0;
         }
 
         function syncBuildingBudgetFromPct() {
@@ -1908,6 +2074,14 @@
             document.getElementById('buildingBudget').value = '';
             document.getElementById('buildingBudgetHint').textContent = 'Contract: ' + formatCurrency(getJobContractAmount());
             document.getElementById('buildingAddress').value = '';
+            document.getElementById('buildingMaterials').value = '';
+            document.getElementById('buildingLabor').value = '';
+            document.getElementById('buildingSub').value = '';
+            document.getElementById('buildingEquipment').value = '';
+            document.getElementById('buildingHoursWeek').value = '';
+            document.getElementById('buildingHoursTotal').value = '';
+            document.getElementById('buildingRate').value = '';
+            document.getElementById('buildingBurden').value = '35';
             openModal('addBuildingModal');
         }
 
@@ -1922,6 +2096,14 @@
             document.getElementById('buildingName').value = building.name || '';
             document.getElementById('buildingBudget').value = building.budget || '';
             document.getElementById('buildingAddress').value = building.address || '';
+            document.getElementById('buildingMaterials').value = building.materials || '';
+            document.getElementById('buildingLabor').value = building.labor || '';
+            document.getElementById('buildingSub').value = building.sub || '';
+            document.getElementById('buildingEquipment').value = building.equipment || '';
+            document.getElementById('buildingHoursWeek').value = building.hoursWeek || '';
+            document.getElementById('buildingHoursTotal').value = building.hoursTotal || '';
+            document.getElementById('buildingRate').value = building.rate || '';
+            document.getElementById('buildingBurden').value = building.burden || 35;
 
             const contractAmt = getJobContractAmount();
             if (contractAmt > 0 && building.budget) {
@@ -1956,7 +2138,15 @@
                 name: document.getElementById('buildingName').value,
                 budget: parseFloat(document.getElementById('buildingBudget').value) || 0,
                 budgetPct: parseFloat(document.getElementById('buildingBudgetPct').value) || 0,
-                address: document.getElementById('buildingAddress').value
+                address: document.getElementById('buildingAddress').value,
+                materials: parseFloat(document.getElementById('buildingMaterials').value) || 0,
+                labor: parseFloat(document.getElementById('buildingLabor').value) || 0,
+                sub: parseFloat(document.getElementById('buildingSub').value) || 0,
+                equipment: parseFloat(document.getElementById('buildingEquipment').value) || 0,
+                hoursWeek: parseFloat(document.getElementById('buildingHoursWeek').value) || 0,
+                hoursTotal: parseFloat(document.getElementById('buildingHoursTotal').value) || 0,
+                rate: parseFloat(document.getElementById('buildingRate').value) || 0,
+                burden: parseFloat(document.getElementById('buildingBurden').value) || 0
             };
 
             if (appState.editBuildingId) {
