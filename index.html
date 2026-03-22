@@ -951,31 +951,31 @@
                                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
                                     <div class="form-group">
                                         <label>Materials $</label>
-                                        <input type="number" id="jobCostMaterials" placeholder="0.00" step="0.01" oninput="saveJobCosts()">
+                                        <input type="number" id="jobCostMaterials" placeholder="0.00" step="0.01">
                                     </div>
                                     <div class="form-group">
                                         <label>Labor $ (auto: hours × rate)</label>
                                         <input type="number" id="jobCostLabor" placeholder="0.00" step="0.01" readonly style="opacity: 0.7; cursor: not-allowed;">
                                     </div>
                                     <div class="form-group">
-                                        <label>Subcontractor $</label>
-                                        <input type="number" id="jobCostSub" placeholder="0.00" step="0.01" oninput="saveJobCosts()">
+                                        <label>Subcontractor $ (auto from Subs tab)</label>
+                                        <input type="number" id="jobCostSub" placeholder="0.00" step="0.01" readonly style="opacity: 0.7; cursor: not-allowed;">
                                     </div>
                                     <div class="form-group">
                                         <label>Equipment $</label>
-                                        <input type="number" id="jobCostEquipment" placeholder="0.00" step="0.01" oninput="saveJobCosts()">
+                                        <input type="number" id="jobCostEquipment" placeholder="0.00" step="0.01">
                                     </div>
                                     <div class="form-group">
                                         <label>Labor Hours This Week</label>
-                                        <input type="number" id="jobCostHoursWeek" placeholder="0" step="0.5" oninput="saveJobCosts()">
+                                        <input type="number" id="jobCostHoursWeek" placeholder="0" step="0.5">
                                     </div>
                                     <div class="form-group">
                                         <label>Total Hours to Date</label>
-                                        <input type="number" id="jobCostHoursTotal" placeholder="0" step="0.5" oninput="saveJobCosts()">
+                                        <input type="number" id="jobCostHoursTotal" placeholder="0" step="0.5">
                                     </div>
                                     <div class="form-group">
                                         <label>Avg Hourly Rate</label>
-                                        <input type="number" id="jobCostRate" placeholder="40.00" step="0.01" value="40" oninput="saveJobCosts()">
+                                        <input type="number" id="jobCostRate" placeholder="40.00" step="0.01" value="40">
                                     </div>
                                 </div>
                                 <div style="margin-top: 15px; display: flex; gap: 10px;">
@@ -1196,8 +1196,8 @@
                 </div>
                 <div class="form-row">
                     <div class="form-group">
-                        <label>Subcontractor $</label>
-                        <input type="number" id="buildingSub" placeholder="0.00" step="0.01">
+                        <label>Subcontractor $ (auto from Subs tab)</label>
+                        <input type="number" id="buildingSub" placeholder="0.00" step="0.01" readonly style="opacity: 0.7; cursor: not-allowed;">
                     </div>
                     <div class="form-group">
                         <label>Equipment $</label>
@@ -1278,8 +1278,8 @@
             </div>
             <div class="form-row">
                 <div class="form-group">
-                    <label>Subcontractor Cost</label>
-                    <input type="number" id="phaseSub" placeholder="0.00" step="0.01">
+                    <label>Subcontractor $ (auto from Subs tab)</label>
+                    <input type="number" id="phaseSub" placeholder="0.00" step="0.01" readonly style="opacity: 0.7; cursor: not-allowed;">
                 </div>
                 <div class="form-group">
                     <label>Equipment Cost</label>
@@ -1631,6 +1631,79 @@
             calculateWIPSummary();
         }
 
+        // Calculate sub costs from the Subcontractors tab entries
+        function getSubCostForPhase(phaseId) {
+            // Sum contractAmt of all subs assigned directly to this phase
+            return appData.subs.filter(s => s.level === 'phase' && s.phaseId === phaseId)
+                .reduce((sum, s) => sum + (s.billedToDate || 0), 0);
+        }
+
+        function getSubCostForBuilding(buildingId, jobId) {
+            // 1. Subs assigned directly to this building
+            let total = appData.subs.filter(s => s.level === 'building' && s.buildingId === buildingId)
+                .reduce((sum, s) => sum + (s.billedToDate || 0), 0);
+            // 2. Job-level subs distributed by building budget %
+            const jobSubs = appData.subs.filter(s => s.level === 'job' && s.jobId === jobId);
+            if (jobSubs.length > 0) {
+                const buildings = appData.buildings.filter(b => b.jobId === jobId);
+                const totalBudget = buildings.reduce((sum, b) => sum + (b.budget || 0), 0);
+                if (totalBudget > 0) {
+                    const thisBldg = appData.buildings.find(b => b.id === buildingId);
+                    const bldgPct = (thisBldg?.budget || 0) / totalBudget;
+                    const jobSubTotal = jobSubs.reduce((sum, s) => sum + (s.billedToDate || 0), 0);
+                    total += jobSubTotal * bldgPct;
+                }
+            }
+            return total;
+        }
+
+        function getSubCostForJob(jobId) {
+            // All subs for this job, summed by billedToDate
+            return appData.subs.filter(s => s.jobId === jobId)
+                .reduce((sum, s) => sum + (s.billedToDate || 0), 0);
+        }
+
+        function getSubContractForPhase(phaseId) {
+            return appData.subs.filter(s => s.level === 'phase' && s.phaseId === phaseId)
+                .reduce((sum, s) => sum + (s.contractAmt || 0), 0);
+        }
+
+        function getSubContractForBuilding(buildingId, jobId) {
+            let total = appData.subs.filter(s => s.level === 'building' && s.buildingId === buildingId)
+                .reduce((sum, s) => sum + (s.contractAmt || 0), 0);
+            const jobSubs = appData.subs.filter(s => s.level === 'job' && s.jobId === jobId);
+            if (jobSubs.length > 0) {
+                const buildings = appData.buildings.filter(b => b.jobId === jobId);
+                const totalBudget = buildings.reduce((sum, b) => sum + (b.budget || 0), 0);
+                if (totalBudget > 0) {
+                    const thisBldg = appData.buildings.find(b => b.id === buildingId);
+                    const bldgPct = (thisBldg?.budget || 0) / totalBudget;
+                    const jobSubTotal = jobSubs.reduce((sum, s) => sum + (s.contractAmt || 0), 0);
+                    total += jobSubTotal * bldgPct;
+                }
+            }
+            return total;
+        }
+
+        // Recalculate all sub $ fields on phases and buildings from subs entries
+        function recalcSubCosts(jobId) {
+            // Update phases
+            appData.phases.filter(p => p.jobId === jobId).forEach(p => {
+                p.sub = getSubCostForPhase(p.id);
+            });
+            // Update buildings
+            appData.buildings.filter(b => b.jobId === jobId).forEach(b => {
+                b.sub = getSubCostForBuilding(b.id, jobId);
+            });
+            // Update job-level sub cost
+            const job = appData.jobs.find(j => j.id === jobId);
+            if (job) {
+                // Job-level sub = sum of all job-level subs' billedToDate
+                job.sub = appData.subs.filter(s => s.level === 'job' && s.jobId === jobId)
+                    .reduce((sum, s) => sum + (s.billedToDate || 0), 0);
+            }
+        }
+
         function getJobTotalCost(jobId) {
             // Phase-level costs
             let phaseCost = 0;
@@ -1862,6 +1935,10 @@
         function renderJobDetail(jobId) {
             const job = appData.jobs.find(j => j.id === jobId);
             if (!job) return;
+
+            // Recalculate sub costs from Subcontractors tab entries
+            recalcSubCosts(jobId);
+            saveData();
 
             const buildings = appData.buildings.filter(b => b.jobId === jobId);
             const phases = appData.phases.filter(p => p.jobId === jobId);
@@ -2192,7 +2269,7 @@
             if (!job) return;
             document.getElementById('jobCostMaterials').value = job.materials || '';
             document.getElementById('jobCostLabor').value = job.labor || '';
-            document.getElementById('jobCostSub').value = job.sub || '';
+            document.getElementById('jobCostSub').value = (job.sub || 0).toFixed(2);
             document.getElementById('jobCostEquipment').value = job.equipment || '';
             document.getElementById('jobCostHoursWeek').value = job.hoursWeek || '';
             document.getElementById('jobCostHoursTotal').value = job.hoursTotal || '';
@@ -2204,7 +2281,7 @@
             const job = appData.jobs.find(j => j.id === appState.currentJobId);
             if (!job) return;
             job.materials = parseFloat(document.getElementById('jobCostMaterials').value) || 0;
-            job.sub = parseFloat(document.getElementById('jobCostSub').value) || 0;
+            // job.sub is auto-calculated from Subs tab by recalcSubCosts — don't overwrite
             job.equipment = parseFloat(document.getElementById('jobCostEquipment').value) || 0;
             job.hoursWeek = parseFloat(document.getElementById('jobCostHoursWeek').value) || 0;
             job.hoursTotal = (parseFloat(document.getElementById('jobCostHoursTotal').value) || 0) + job.hoursWeek;
@@ -2283,7 +2360,7 @@
             document.getElementById('buildingAddress').value = '';
             document.getElementById('buildingMaterials').value = '';
             document.getElementById('buildingLabor').value = '';
-            document.getElementById('buildingSub').value = '';
+            document.getElementById('buildingSub').value = '0.00';
             document.getElementById('buildingEquipment').value = '';
             document.getElementById('buildingHoursWeek').value = '';
             document.getElementById('buildingHoursTotal').value = '';
@@ -2304,7 +2381,7 @@
             document.getElementById('buildingAddress').value = building.address || '';
             document.getElementById('buildingMaterials').value = building.materials || '';
             document.getElementById('buildingLabor').value = building.labor || '';
-            document.getElementById('buildingSub').value = building.sub || '';
+            document.getElementById('buildingSub').value = getSubCostForBuilding(building.id, building.jobId || appState.currentJobId).toFixed(2);
             document.getElementById('buildingEquipment').value = building.equipment || '';
             document.getElementById('buildingHoursWeek').value = '';
             document.getElementById('buildingHoursTotal').value = building.hoursTotal || '';
@@ -2349,7 +2426,7 @@
                 address: document.getElementById('buildingAddress').value,
                 materials: parseFloat(document.getElementById('buildingMaterials').value) || 0,
                 labor: hoursTotal * rate,
-                sub: parseFloat(document.getElementById('buildingSub').value) || 0,
+                sub: 0, // auto-calculated from Subs tab by recalcSubCosts
                 equipment: parseFloat(document.getElementById('buildingEquipment').value) || 0,
                 hoursWeek: hoursWeek,
                 hoursTotal: hoursTotal,
@@ -2416,7 +2493,7 @@
             document.getElementById('phasePercent').value = '0';
             document.getElementById('phaseMaterials').value = '';
             document.getElementById('phaseLabor').value = '';
-            document.getElementById('phaseSub').value = '';
+            document.getElementById('phaseSub').value = '0.00';
             document.getElementById('phaseEquipment').value = '';
             document.getElementById('phaseBudgetPct').value = '';
             document.getElementById('phaseBudget').value = '';
@@ -2451,7 +2528,7 @@
             document.getElementById('phasePercent').value = phase.pctComplete || 0;
             document.getElementById('phaseMaterials').value = phase.materials || '';
             document.getElementById('phaseLabor').value = phase.labor || '';
-            document.getElementById('phaseSub').value = phase.sub || '';
+            document.getElementById('phaseSub').value = getSubCostForPhase(phase.id).toFixed(2);
             document.getElementById('phaseEquipment').value = phase.equipment || '';
             document.getElementById('phaseBudget').value = phase.phaseBudget || '';
             // Calculate and show the budget percentage
@@ -2489,7 +2566,7 @@
                 pctComplete: parseFloat(document.getElementById('phasePercent').value) || 0,
                 materials: parseFloat(document.getElementById('phaseMaterials').value) || 0,
                 labor: hoursTotal * rate,
-                sub: parseFloat(document.getElementById('phaseSub').value) || 0,
+                sub: 0, // auto-calculated from Subs tab by recalcSubCosts
                 equipment: parseFloat(document.getElementById('phaseEquipment').value) || 0,
                 phaseBudget: parseFloat(document.getElementById('phaseBudget').value) || 0,
                 hoursWeek: hoursWeek,
