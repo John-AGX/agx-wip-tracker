@@ -1034,16 +1034,19 @@
                                         <tr>
                                             <th>Subcontractor</th>
                                             <th>Trade</th>
-                                            <th>Building</th>
+                                            <th>Level</th>
+                                            <th>Assigned To</th>
                                             <th style="text-align: right;">Contract $</th>
                                             <th style="text-align: right;">Billed to Date</th>
                                             <th style="text-align: right;">Remaining</th>
                                             <th style="text-align: right;">% Billed</th>
+                                            <th>Actions</th>
                                         </tr>
                                     </thead>
                                     <tbody></tbody>
                                 </table>
                             </div>
+                            <div id="job-subs-summary" style="margin-top: 15px; padding: 15px; background: var(--surface2); border-radius: 8px;"></div>
                         </div>
 
                         <!-- Job Labor & Burden -->
@@ -1323,7 +1326,7 @@
 
     <div id="addSubModal" class="modal">
         <div class="modal-content">
-            <div class="modal-header">Add Subcontractor</div>
+            <div class="modal-header" id="subModalHeader">Add Subcontractor</div>
             <div class="form-group">
                 <label>Subcontractor Name</label>
                 <input type="text" id="subName" placeholder="e.g., Apex Electrical">
@@ -1333,8 +1336,20 @@
                 <input type="text" id="subTrade" placeholder="e.g., Electrical">
             </div>
             <div class="form-group">
+                <label>Assignment Level</label>
+                <select id="subLevel" onchange="subLevelChanged()">
+                    <option value="job">Job-Wide (costs split by building %)</option>
+                    <option value="building">Building</option>
+                    <option value="phase">Phase</option>
+                </select>
+            </div>
+            <div class="form-group" id="subBuildingGroup" style="display:none;">
                 <label>Building</label>
-                <select id="subBuilding"></select>
+                <select id="subBuilding" onchange="subBuildingChanged()"></select>
+            </div>
+            <div class="form-group" id="subPhaseGroup" style="display:none;">
+                <label>Phase</label>
+                <select id="subPhase"></select>
             </div>
             <div class="form-row">
                 <div class="form-group">
@@ -1346,9 +1361,13 @@
                     <input type="number" id="subBilled" placeholder="0.00" step="0.01">
                 </div>
             </div>
+            <div class="form-group">
+                <label>Notes</label>
+                <input type="text" id="subNotes" placeholder="Optional notes">
+            </div>
             <div class="modal-footer">
                 <button class="secondary" onclick="closeModal('addSubModal')">Cancel</button>
-                <button onclick="saveSub()">Add Subcontractor</button>
+                <button onclick="saveSub()" id="subSaveBtn">Add Subcontractor</button>
             </div>
         </div>
     </div>
@@ -1506,7 +1525,8 @@
             sortColumn: null,
             sortDirection: null,
             editPhaseId: null,
-            editBuildingId: null
+            editBuildingId: null,
+            editSubId: null
         };
 
         function loadData() {
@@ -1591,15 +1611,15 @@
 
             // Subcontractors for Job 1
             appData.subs = [
-                { id: 's1', jobId: 'j1', name: 'Apex Electrical', trade: 'Electrical', buildingId: 'b1', contractAmt: 450000, billedToDate: 225000 },
-                { id: 's2', jobId: 'j1', name: 'Summit Plumbing', trade: 'Plumbing', buildingId: 'b1', contractAmt: 320000, billedToDate: 160000 },
-                { id: 's3', jobId: 'j1', name: 'CoolAir Mechanical', trade: 'HVAC', buildingId: 'b2', contractAmt: 380000, billedToDate: 190000 },
-                { id: 's4', jobId: 'j1', name: 'IronWorks Steel', trade: 'Structural Steel', buildingId: 'b1', contractAmt: 520000, billedToDate: 312000 },
-                { id: 's5', jobId: 'j1', name: 'FastPave Concrete', trade: 'Concrete', buildingId: 'b3', contractAmt: 225000, billedToDate: 180000 },
-                { id: 's6', jobId: 'j1', name: 'PrecisionPlumb Inc', trade: 'Plumbing', buildingId: 'b2', contractAmt: 290000, billedToDate: 145000 },
+                { id: 's1', jobId: 'j1', name: 'Apex Electrical', trade: 'Electrical', level: 'building', buildingId: 'b1', phaseId: '', contractAmt: 450000, billedToDate: 225000, notes: '' },
+                { id: 's2', jobId: 'j1', name: 'Summit Plumbing', trade: 'Plumbing', level: 'building', buildingId: 'b1', phaseId: '', contractAmt: 320000, billedToDate: 160000, notes: '' },
+                { id: 's3', jobId: 'j1', name: 'CoolAir Mechanical', trade: 'HVAC', level: 'building', buildingId: 'b2', phaseId: '', contractAmt: 380000, billedToDate: 190000, notes: '' },
+                { id: 's4', jobId: 'j1', name: 'IronWorks Steel', trade: 'Structural Steel', level: 'job', buildingId: '', phaseId: '', contractAmt: 520000, billedToDate: 312000, notes: 'Supplies all buildings' },
+                { id: 's5', jobId: 'j1', name: 'FastPave Concrete', trade: 'Concrete', level: 'building', buildingId: 'b3', phaseId: '', contractAmt: 225000, billedToDate: 180000, notes: '' },
+                { id: 's6', jobId: 'j1', name: 'PrecisionPlumb Inc', trade: 'Plumbing', level: 'phase', buildingId: 'b2', phaseId: 'p6', contractAmt: 290000, billedToDate: 145000, notes: 'Foundation plumbing only' },
                 // Job 2 subs
-                { id: 's7', jobId: 'j2', name: 'Sunset Painters LLC', trade: 'Painting', buildingId: 'b4', contractAmt: 85000, billedToDate: 25000 },
-                { id: 's8', jobId: 'j2', name: 'Rapid Roofing', trade: 'Roofing', buildingId: 'b4', contractAmt: 95000, billedToDate: 0 }
+                { id: 's7', jobId: 'j2', name: 'Sunset Painters LLC', trade: 'Painting', level: 'phase', buildingId: 'b4', phaseId: 'p12', contractAmt: 85000, billedToDate: 25000, notes: '' },
+                { id: 's8', jobId: 'j2', name: 'Rapid Roofing', trade: 'Roofing', level: 'phase', buildingId: 'b4', phaseId: 'p13', contractAmt: 95000, billedToDate: 0, notes: '' }
             ];
 
             saveData();
@@ -2031,23 +2051,71 @@
             const tbody = document.querySelector('#job-subs-table tbody');
             tbody.innerHTML = '';
 
+            let totalContract = 0, totalBilled = 0;
+
             subs.forEach(sub => {
                 const remaining = (sub.contractAmt || 0) - (sub.billedToDate || 0);
                 const pctBilled = sub.contractAmt > 0 ? ((sub.billedToDate / sub.contractAmt) * 100).toFixed(1) : 0;
-                const building = appData.buildings.find(b => b.id === sub.buildingId);
+                const level = sub.level || 'building';
+                let assignedTo = '';
+                if (level === 'job') {
+                    assignedTo = 'All Buildings';
+                } else if (level === 'phase') {
+                    const building = appData.buildings.find(b => b.id === sub.buildingId);
+                    const phase = appData.phases.find(p => p.id === sub.phaseId);
+                    assignedTo = (building?.name || '?') + ' → ' + (phase?.phase || '?');
+                } else {
+                    const building = appData.buildings.find(b => b.id === sub.buildingId);
+                    assignedTo = building?.name || '';
+                }
+
+                const levelLabel = level === 'job' ? 'Job-Wide' : level === 'phase' ? 'Phase' : 'Building';
+                const levelColor = level === 'job' ? 'var(--purple)' : level === 'phase' ? 'var(--green)' : 'var(--accent)';
+
+                totalContract += sub.contractAmt || 0;
+                totalBilled += sub.billedToDate || 0;
 
                 const row = document.createElement('tr');
                 row.innerHTML = `
-                    <td>${sub.name}</td>
+                    <td><strong>${sub.name}</strong>${sub.notes ? '<br><span style="font-size:11px;color:var(--text-dim);">' + sub.notes + '</span>' : ''}</td>
                     <td>${sub.trade}</td>
-                    <td>${building?.name || ''}</td>
+                    <td><span style="color:${levelColor};font-size:12px;font-weight:600;">${levelLabel}</span></td>
+                    <td>${assignedTo}</td>
                     <td style="text-align: right;">${formatCurrency(sub.contractAmt)}</td>
                     <td style="text-align: right;">${formatCurrency(sub.billedToDate)}</td>
                     <td style="text-align: right;">${formatCurrency(remaining)}</td>
                     <td style="text-align: right;">${pctBilled}%</td>
+                    <td>
+                        <button class="small" onclick="editSub('${sub.id}')">Edit</button>
+                        <button class="small danger" onclick="deleteSub('${sub.id}')">Del</button>
+                    </td>
                 `;
                 tbody.appendChild(row);
             });
+
+            // Summary
+            const totalRemaining = totalContract - totalBilled;
+            const totalPct = totalContract > 0 ? ((totalBilled / totalContract) * 100).toFixed(1) : 0;
+            document.getElementById('job-subs-summary').innerHTML = `
+                <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; text-align: center;">
+                    <div>
+                        <div style="font-size: 12px; color: var(--text-dim);">Total Subs</div>
+                        <div style="font-size: 20px; font-weight: 700; color: var(--accent);">${subs.length}</div>
+                    </div>
+                    <div>
+                        <div style="font-size: 12px; color: var(--text-dim);">Total Contract</div>
+                        <div style="font-size: 20px; font-weight: 700; color: var(--accent);">${formatCurrency(totalContract)}</div>
+                    </div>
+                    <div>
+                        <div style="font-size: 12px; color: var(--text-dim);">Total Billed</div>
+                        <div style="font-size: 20px; font-weight: 700; color: var(--green);">${formatCurrency(totalBilled)}</div>
+                    </div>
+                    <div>
+                        <div style="font-size: 12px; color: var(--text-dim);">Remaining</div>
+                        <div style="font-size: 20px; font-weight: 700; color: var(--orange);">${formatCurrency(totalRemaining)}</div>
+                    </div>
+                </div>
+            `;
         }
 
         function renderJobLabor(jobId) {
@@ -2454,6 +2522,21 @@
         }
 
         function openAddSubToJobModal() {
+            appState.editSubId = null;
+            document.getElementById('subModalHeader').textContent = 'Add Subcontractor';
+            document.getElementById('subSaveBtn').textContent = 'Add Subcontractor';
+            populateSubBuildingSelect();
+            document.getElementById('subName').value = '';
+            document.getElementById('subTrade').value = '';
+            document.getElementById('subLevel').value = 'job';
+            document.getElementById('subContract').value = '';
+            document.getElementById('subBilled').value = '';
+            document.getElementById('subNotes').value = '';
+            subLevelChanged();
+            openModal('addSubModal');
+        }
+
+        function populateSubBuildingSelect() {
             const buildings = appData.buildings.filter(b => b.jobId === appState.currentJobId);
             const select = document.getElementById('subBuilding');
             select.innerHTML = '<option value="">-- Select Building --</option>';
@@ -2463,27 +2546,87 @@
                 opt.textContent = b.name;
                 select.appendChild(opt);
             });
+        }
 
-            document.getElementById('subName').value = '';
-            document.getElementById('subTrade').value = '';
-            document.getElementById('subContract').value = '';
-            document.getElementById('subBilled').value = '';
-            openModal('addSubModal');
+        function subLevelChanged() {
+            const level = document.getElementById('subLevel').value;
+            document.getElementById('subBuildingGroup').style.display = (level === 'building' || level === 'phase') ? '' : 'none';
+            document.getElementById('subPhaseGroup').style.display = level === 'phase' ? '' : 'none';
+            if (level === 'building' || level === 'phase') {
+                subBuildingChanged();
+            }
+        }
+
+        function subBuildingChanged() {
+            const buildingId = document.getElementById('subBuilding').value;
+            const phaseSelect = document.getElementById('subPhase');
+            phaseSelect.innerHTML = '<option value="">-- Select Phase --</option>';
+            if (buildingId) {
+                const phases = appData.phases.filter(p => p.jobId === appState.currentJobId && p.buildingId === buildingId);
+                phases.forEach(p => {
+                    const opt = document.createElement('option');
+                    opt.value = p.id;
+                    opt.textContent = p.phase;
+                    phaseSelect.appendChild(opt);
+                });
+            }
         }
 
         function saveSub() {
-            const sub = {
-                id: 's' + Date.now(),
+            const level = document.getElementById('subLevel').value;
+            const subData = {
                 jobId: appState.currentJobId,
                 name: document.getElementById('subName').value,
                 trade: document.getElementById('subTrade').value,
-                buildingId: document.getElementById('subBuilding').value,
+                level: level,
+                buildingId: (level === 'building' || level === 'phase') ? document.getElementById('subBuilding').value : '',
+                phaseId: level === 'phase' ? document.getElementById('subPhase').value : '',
                 contractAmt: parseFloat(document.getElementById('subContract').value) || 0,
-                billedToDate: parseFloat(document.getElementById('subBilled').value) || 0
+                billedToDate: parseFloat(document.getElementById('subBilled').value) || 0,
+                notes: document.getElementById('subNotes').value
             };
-            appData.subs.push(sub);
+
+            if (appState.editSubId) {
+                const idx = appData.subs.findIndex(s => s.id === appState.editSubId);
+                if (idx >= 0) {
+                    subData.id = appState.editSubId;
+                    appData.subs[idx] = subData;
+                }
+            } else {
+                subData.id = 's' + Date.now();
+                appData.subs.push(subData);
+            }
             saveData();
             closeModal('addSubModal');
+            renderJobDetail(appState.currentJobId);
+        }
+
+        function editSub(subId) {
+            const sub = appData.subs.find(s => s.id === subId);
+            if (!sub) return;
+            appState.editSubId = subId;
+            document.getElementById('subModalHeader').textContent = 'Edit Subcontractor';
+            document.getElementById('subSaveBtn').textContent = 'Save Changes';
+            populateSubBuildingSelect();
+            document.getElementById('subName').value = sub.name || '';
+            document.getElementById('subTrade').value = sub.trade || '';
+            document.getElementById('subLevel').value = sub.level || 'building';
+            document.getElementById('subContract').value = sub.contractAmt || '';
+            document.getElementById('subBilled').value = sub.billedToDate || '';
+            document.getElementById('subNotes').value = sub.notes || '';
+            subLevelChanged();
+            if (sub.buildingId) document.getElementById('subBuilding').value = sub.buildingId;
+            if (sub.level === 'phase') {
+                subBuildingChanged();
+                setTimeout(() => { document.getElementById('subPhase').value = sub.phaseId || ''; }, 50);
+            }
+            openModal('addSubModal');
+        }
+
+        function deleteSub(subId) {
+            if (!confirm('Delete this subcontractor?')) return;
+            appData.subs = appData.subs.filter(s => s.id !== subId);
+            saveData();
             renderJobDetail(appState.currentJobId);
         }
 
