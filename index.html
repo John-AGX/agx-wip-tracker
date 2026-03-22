@@ -311,6 +311,34 @@
             z-index: 10;
         }
 
+        th.sortable {
+            cursor: pointer;
+            user-select: none;
+            transition: color 0.2s;
+        }
+
+        th.sortable:hover {
+            color: var(--accent);
+        }
+
+        th.sortable::after {
+            content: ' ⇅';
+            opacity: 0.3;
+            font-size: 11px;
+        }
+
+        th.sortable.sort-asc::after {
+            content: ' ▲';
+            opacity: 0.8;
+            color: var(--accent);
+        }
+
+        th.sortable.sort-desc::after {
+            content: ' ▼';
+            opacity: 0.8;
+            color: var(--accent);
+        }
+
         td {
             padding: 12px;
             border-bottom: 1px solid var(--border);
@@ -762,7 +790,7 @@
                             </div>
                         </div>
 
-                        <div class="action-buttons" style="margin-bottom: 20px;">
+                        <div class="action-buttons" style="margin-bottom: 20px; display: flex; gap: 20px; flex-wrap: wrap; align-items: center;">
                             <label style="display: flex; align-items: center; gap: 8px; margin: 0;">
                                 Filter by Status:
                                 <select id="statusFilter" onchange="filterJobs()" style="width: 200px; margin: 0;">
@@ -774,6 +802,15 @@
                                     <option value="Archived">Archived</option>
                                 </select>
                             </label>
+                            <label style="display: flex; align-items: center; gap: 8px; margin: 0;">
+                                Filter by Type:
+                                <select id="typeFilter" onchange="filterJobs()" style="width: 200px; margin: 0;">
+                                    <option value="">All Types</option>
+                                    <option value="S">Service (S)</option>
+                                    <option value="RV">Renovation (RV)</option>
+                                    <option value="WO">Work Order (WO)</option>
+                                </select>
+                            </label>
                         </div>
 
                         <div class="table-container">
@@ -781,13 +818,13 @@
                                 <thead>
                                     <tr>
                                         <th style="width: 40px;">#</th>
-                                        <th>Job # / Name</th>
-                                        <th>Market</th>
-                                        <th>Status</th>
-                                        <th style="text-align: right;">Contract Amount</th>
-                                        <th style="text-align: right;">Total Cost</th>
-                                        <th style="text-align: right;">Profit</th>
-                                        <th style="text-align: right;">Margin %</th>
+                                        <th class="sortable" data-sort="name" onclick="sortJobsTable('name')">Job # / Name</th>
+                                        <th class="sortable" data-sort="market" onclick="sortJobsTable('market')">Market</th>
+                                        <th class="sortable" data-sort="status" onclick="sortJobsTable('status')">Status</th>
+                                        <th class="sortable" data-sort="contract" onclick="sortJobsTable('contract')" style="text-align: right;">Contract Amount</th>
+                                        <th class="sortable" data-sort="cost" onclick="sortJobsTable('cost')" style="text-align: right;">Total Cost</th>
+                                        <th class="sortable" data-sort="profit" onclick="sortJobsTable('profit')" style="text-align: right;">Profit</th>
+                                        <th class="sortable" data-sort="margin" onclick="sortJobsTable('margin')" style="text-align: right;">Margin %</th>
                                         <th style="text-align: center; width: 80px;">Actions</th>
                                     </tr>
                                 </thead>
@@ -940,6 +977,10 @@
                                         <label>Avg Hourly Rate</label>
                                         <input type="number" id="jobCostRate" placeholder="40.00" step="0.01" value="40" oninput="saveJobCosts()">
                                     </div>
+                                </div>
+                                <div style="margin-top: 15px; display: flex; gap: 10px;">
+                                    <button class="primary" onclick="saveJobCosts()" style="flex: 0 0 auto;">💾 Save Costs</button>
+                                    <span id="jobCostSaveStatus" style="font-size: 13px; color: var(--green); align-self: center; opacity: 0; transition: opacity 0.3s;"></span>
                                 </div>
                                 <div style="margin-top: 15px; padding: 15px; background: var(--surface2); border-radius: 8px;">
                                     <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px;">
@@ -1461,6 +1502,9 @@
         let appState = {
             currentJobId: null,
             currentStatusFilter: '',
+            currentTypeFilter: '',
+            sortColumn: null,
+            sortDirection: null,
             editPhaseId: null,
             editBuildingId: null
         };
@@ -1604,6 +1648,22 @@
             document.getElementById('total-profit').textContent = formatCurrency(totalProfit);
         }
 
+        function getJobType(jobNumber) {
+            if (!jobNumber) return '';
+            const num = jobNumber.toUpperCase().trim();
+            if (num.startsWith('RV')) return 'RV';
+            if (num.startsWith('WO')) return 'WO';
+            if (num.startsWith('S')) return 'S';
+            return '';
+        }
+
+        function getJobTypeLabel(type) {
+            if (type === 'S') return 'Service';
+            if (type === 'RV') return 'Renovation';
+            if (type === 'WO') return 'Work Order';
+            return '';
+        }
+
         function renderJobsTable() {
             const tbody = document.querySelector('#jobs-table tbody');
             tbody.innerHTML = '';
@@ -1617,6 +1677,57 @@
                 jobs = jobs.filter(j => j.status !== 'Archived');
             }
 
+            // Apply type filter
+            const typeFilter = appState.currentTypeFilter;
+            if (typeFilter) {
+                jobs = jobs.filter(j => getJobType(j.jobNumber) === typeFilter);
+            }
+
+            // Apply sorting
+            if (appState.sortColumn) {
+                const col = appState.sortColumn;
+                const dir = appState.sortDirection === 'asc' ? 1 : -1;
+                jobs = [...jobs].sort((a, b) => {
+                    let va, vb;
+                    switch(col) {
+                        case 'name':
+                            va = ((a.jobNumber || '') + ' ' + (a.title || '')).toLowerCase();
+                            vb = ((b.jobNumber || '') + ' ' + (b.title || '')).toLowerCase();
+                            return va.localeCompare(vb) * dir;
+                        case 'market':
+                            va = (a.market || '').toLowerCase();
+                            vb = (b.market || '').toLowerCase();
+                            return va.localeCompare(vb) * dir;
+                        case 'status':
+                            va = (a.status || '').toLowerCase();
+                            vb = (b.status || '').toLowerCase();
+                            return va.localeCompare(vb) * dir;
+                        case 'contract':
+                            return ((a.contractAmount || 0) - (b.contractAmount || 0)) * dir;
+                        case 'cost':
+                            return (getJobTotalCost(a.id).total - getJobTotalCost(b.id).total) * dir;
+                        case 'profit':
+                            va = (a.contractAmount || 0) - getJobTotalCost(a.id).total;
+                            vb = (b.contractAmount || 0) - getJobTotalCost(b.id).total;
+                            return (va - vb) * dir;
+                        case 'margin':
+                            va = a.contractAmount > 0 ? ((a.contractAmount - getJobTotalCost(a.id).total) / a.contractAmount) : 0;
+                            vb = b.contractAmount > 0 ? ((b.contractAmount - getJobTotalCost(b.id).total) / b.contractAmount) : 0;
+                            return (va - vb) * dir;
+                        default:
+                            return 0;
+                    }
+                });
+            }
+
+            // Update sort indicator classes on headers
+            document.querySelectorAll('#jobs-table th.sortable').forEach(th => {
+                th.classList.remove('sort-asc', 'sort-desc');
+                if (th.dataset.sort === appState.sortColumn) {
+                    th.classList.add(appState.sortDirection === 'asc' ? 'sort-asc' : 'sort-desc');
+                }
+            });
+
             jobs.forEach((job, index) => {
                 const totalCost = getJobTotalCost(job.id).total;
 
@@ -1624,13 +1735,15 @@
                 const marginPct = job.contractAmount > 0 ? ((profit / job.contractAmount) * 100).toFixed(1) : 0;
 
                 const statusClass = job.status === 'On Hold' ? 'at-risk' : job.status === 'Completed' ? 'on-track' : job.status === 'Archived' ? 'not-started' : 'on-track';
+                const jobType = getJobType(job.jobNumber);
+                const typeLabel = jobType ? `<span style="font-size: 11px; color: var(--text-dim); font-weight: normal; margin-left: 6px;">${getJobTypeLabel(jobType)}</span>` : '';
 
                 const row = document.createElement('tr');
                 row.style.cursor = 'pointer';
                 row.onclick = function() { editJob(job.id); };
                 row.innerHTML = `
                     <td>${index + 1}</td>
-                    <td><strong>${job.jobNumber ? job.jobNumber + ' — ' : ''}${job.title}</strong></td>
+                    <td><strong>${job.jobNumber ? job.jobNumber + ' — ' : ''}${job.title}</strong>${typeLabel}</td>
                     <td>${job.market || '—'}</td>
                     <td><span class="badge ${statusClass}">${job.status}</span></td>
                     <td style="text-align: right;">${formatCurrency(job.contractAmount)}</td>
@@ -1645,8 +1758,25 @@
             });
         }
 
+        function sortJobsTable(column) {
+            if (appState.sortColumn === column) {
+                // Toggle direction, or clear if already desc
+                if (appState.sortDirection === 'asc') {
+                    appState.sortDirection = 'desc';
+                } else {
+                    appState.sortColumn = null;
+                    appState.sortDirection = null;
+                }
+            } else {
+                appState.sortColumn = column;
+                appState.sortDirection = 'asc';
+            }
+            renderJobsTable();
+        }
+
         function filterJobs() {
             appState.currentStatusFilter = document.getElementById('statusFilter').value;
+            appState.currentTypeFilter = document.getElementById('typeFilter').value;
             renderJobsTable();
         }
 
@@ -2023,6 +2153,14 @@
             document.getElementById('job-summary-cost').textContent = formatCurrency(costs.total);
             document.getElementById('job-summary-profit').textContent = formatCurrency(profit);
             document.getElementById('job-summary-margin').textContent = marginPct + '%';
+            // Show save confirmation
+            const statusEl = document.getElementById('jobCostSaveStatus');
+            if (statusEl) {
+                statusEl.textContent = 'Saved!';
+                statusEl.style.opacity = '1';
+                clearTimeout(statusEl._timer);
+                statusEl._timer = setTimeout(() => { statusEl.style.opacity = '0'; }, 2000);
+            }
         }
 
         function updateJobCostSummary(jobId) {
