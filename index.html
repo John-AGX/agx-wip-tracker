@@ -20,23 +20,28 @@
             --orange: #fb923c;
             --purple: #a78bfa;
         }
+
         * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
         }
+
         body {
             font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
             background: var(--bg);
             color: var(--text);
             line-height: 1.6;
         }
+
         .container {
             display: flex;
             flex-direction: column;
             height: 100vh;
             overflow: hidden;
         }
+
+        /* HEADER */
         header {
             background: linear-gradient(135deg, #1a2a4a 0%, #2d3f5a 100%);
             border-bottom: 1px solid var(--border);
@@ -45,10 +50,12 @@
             top: 0;
             z-index: 100;
         }
+
         .header-content {
             max-width: 1600px;
             margin: 0 auto;
         }
+
         .header-title {
             font-size: 24px;
             font-weight: 600;
@@ -58,16 +65,20 @@
             -webkit-text-fill-color: transparent;
             background-clip: text;
         }
+
         .header-subtitle {
             font-size: 14px;
             color: var(--text-dim);
         }
+
+        /* NAVIGATION */
         nav.tabs {
             display: flex;
             gap: 0;
             margin-top: 15px;
             border-bottom: 1px solid var(--border);
         }
+
         nav.tabs button {
             background: transparent;
             border: none;
@@ -78,29 +89,38 @@
             border-bottom: 3px solid transparent;
             transition: all 0.3s ease;
         }
+
         nav.tabs button:hover {
             color: var(--text);
         }
+
         nav.tabs button.active {
             color: var(--accent);
             border-bottom-color: var(--accent);
         }
+
+        /* MAIN CONTENT */
         main {
             flex: 1;
             overflow-y: auto;
             padding: 30px;
         }
+
         .main-inner {
             max-width: 1600px;
             margin: 0 auto;
             width: 100%;
         }
+
         .tab-content {
             display: none;
         }
+
         .tab-content.active {
             display: block;
         }
+
+        /* CARDS */
         .card {
             background: var(--surface);
             border: 1px solid var(--border);
@@ -108,6 +128,8 @@
             padding: 20px;
             margin-bottom: 20px;
         }
+
+        /* BUTTONS */
         button {
             background: var(--accent);
             color: white;
@@ -119,11 +141,629 @@
             font-weight: 500;
             transition: all 0.2s ease;
         }
+
         button:hover {
             background: #6999ff;
         }
+
+        button.secondary {
+            background: var(--surface2);
+            color: var(--text);
+            border: 1px solid var(--border);
+        }
+
+        button.secondary:hover {
+            background: var(--surface);
+        }
+
+        button.danger {
+            background: var(--red);
+        }
+
+        button.danger:hover {
+            background: #f56565;
+        }
+
+        button.small {
+            padding: 6px 12px;
+            font-size: 13px;
+        }
+
+        /* SUMMARY CARDS */
+        .summary-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+
+        .summary-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 20px;
+            text-align: center;
+        }
+
+        .summary-card-label {
+            font-size: 12px;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 8px;
+        }
+
+        .summary-card-value {
+            font-size: 28px;
+            font-weight: 700;
+            color: var(--accent);
+            font-variant-numeric: tabular-nums;
+        }
+
+        /* MODAL */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.7);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal.active {
+            display: flex;
+        }
+
+        .modal-content {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 30px;
+            max-width: 600px;
+            width: 90%;
+            max-height: 85vh;
+            overflow-y: auto;
+        }
+
+        .modal-header {
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 20px;
+            color: var(--text);
+        }
+
+        .modal-footer {
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+            margin-top: 30px;
+        }
+
+        /* FORMS */
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--text);
+        }
+
+        input, select, textarea {
+            width: 100%;
+            background: var(--surface2);
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 10px 12px;
+            border-radius: 6px;
+            font-size: 14px;
+            font-family: inherit;
+        }
+
+        input:focus, select:focus, textarea:focus {
+            outline: none;
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px var(--accent-dim);
+        }
+
+        textarea {
+            resize: vertical;
+            min-height: 80px;
+        }
+
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+        }
+
+        /* TABLES */
+        .table-container {
+            overflow-x: auto;
+            margin-bottom: 20px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 14px;
+        }
+
+        th {
+            background: var(--surface2);
+            color: var(--text-dim);
+            padding: 12px;
+            text-align: left;
+            font-weight: 600;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            border-bottom: 1px solid var(--border);
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+
+        td {
+            padding: 12px;
+            border-bottom: 1px solid var(--border);
+            font-variant-numeric: tabular-nums;
+        }
+
+        tr:last-child td {
+            border-bottom: none;
+        }
+
+        tr:hover {
+            background: rgba(79, 140, 255, 0.05);
+        }
+
+        table.totals-row td {
+            background: var(--surface2);
+            font-weight: 600;
+            border-top: 2px solid var(--border);
+        }
+
+        /* STATUS BADGES */
+        .badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+        }
+
+        .badge.on-track {
+            background: rgba(52, 211, 153, 0.2);
+            color: var(--green);
+        }
+
+        .badge.at-risk {
+            background: rgba(251, 191, 36, 0.2);
+            color: var(--yellow);
+        }
+
+        .badge.not-started {
+            background: var(--surface2);
+            color: var(--text-dim);
+        }
+
+        .badge.over-budget {
+            background: rgba(248, 113, 113, 0.2);
+            color: var(--red);
+        }
+
+        /* PROGRESS BARS */
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background: var(--surface2);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--accent), var(--purple));
+            transition: width 0.3s ease;
+        }
+
+        /* SUB-TABS */
+        .sub-tabs {
+            display: flex;
+            gap: 0;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 20px;
+        }
+
+        .sub-tabs button {
+            background: transparent;
+            border: none;
+            color: var(--text-dim);
+            padding: 10px 16px;
+            cursor: pointer;
+            font-size: 14px;
+            border-bottom: 2px solid transparent;
+            transition: all 0.3s ease;
+        }
+
+        .sub-tabs button:hover {
+            color: var(--text);
+        }
+
+        .sub-tabs button.active {
+            color: var(--accent);
+            border-bottom-color: var(--accent);
+        }
+
+        .sub-tab-content, .sub-tab-content-job {
+            display: none;
+        }
+
+        .sub-tab-content.active, .sub-tab-content-job.active {
+            display: block;
+        }
+
+        /* ESTIMATE SPECIFIC */
+        .estimate-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .estimate-grid.full {
+            grid-template-columns: 1fr;
+        }
+
+        .line-items-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+
+        /* PROPOSAL VIEW */
+        .proposal {
+            background: white;
+            color: #333;
+            padding: 40px;
+            border-radius: 0;
+            font-family: 'Times New Roman', serif;
+        }
+
+        .proposal-header {
+            text-align: center;
+            margin-bottom: 30px;
+            border-bottom: 2px solid #333;
+            padding-bottom: 20px;
+        }
+
+        .proposal-company {
+            font-size: 24px;
+            font-weight: bold;
+            color: #1a2a4a;
+            margin-bottom: 5px;
+        }
+
+        .proposal-tagline {
+            font-size: 12px;
+            color: #666;
+            letter-spacing: 1px;
+        }
+
+        .proposal-title {
+            font-size: 20px;
+            font-weight: bold;
+            margin: 20px 0;
+            color: #333;
+        }
+
+        .proposal-info-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin: 20px 0;
+        }
+
+        .proposal-info-box {
+            border: 1px solid #ddd;
+            padding: 15px;
+            background: #f9f9f9;
+        }
+
+        .proposal-info-label {
+            font-size: 11px;
+            font-weight: bold;
+            text-transform: uppercase;
+            color: #666;
+            margin-bottom: 5px;
+        }
+
+        .proposal-info-value {
+            font-size: 14px;
+            color: #333;
+        }
+
+        .proposal-section {
+            margin: 30px 0;
+        }
+
+        .proposal-section-title {
+            font-size: 14px;
+            font-weight: bold;
+            text-transform: uppercase;
+            border-bottom: 1px solid #ddd;
+            padding-bottom: 10px;
+            margin-bottom: 15px;
+            color: #1a2a4a;
+        }
+
+        .proposal-price-display {
+            font-size: 32px;
+            font-weight: bold;
+            color: #1a2a4a;
+            margin: 20px 0;
+            text-align: center;
+        }
+
+        .proposal-signature-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 40px;
+            margin-top: 60px;
+        }
+
+        .proposal-signature-block {
+            border-top: 1px solid #333;
+            padding-top: 10px;
+        }
+
+        .proposal-signature-label {
+            font-size: 12px;
+            font-weight: bold;
+            margin-top: 30px;
+        }
+
+        .proposal-no-print {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            margin-top: 30px;
+            padding: 20px;
+        }
+
+        /* ACTION BUTTONS */
+        .action-buttons {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+
+        /* JOB CARDS */
+        .job-cards-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .job-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 20px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .job-card:hover {
+            border-color: var(--accent);
+            box-shadow: 0 0 20px rgba(79, 140, 255, 0.1);
+        }
+
+        .job-card-title {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: var(--accent);
+        }
+
+        .job-card-subtitle {
+            font-size: 12px;
+            color: var(--text-dim);
+            margin-bottom: 12px;
+        }
+
+        .job-card-stat {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            font-size: 13px;
+        }
+
+        .job-card-stat-label {
+            color: var(--text-dim);
+        }
+
+        .job-card-stat-value {
+            font-weight: 600;
+            color: var(--text);
+        }
+
+        /* JOB DETAIL VIEW */
+        .job-detail-header {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .job-detail-header button {
+            padding: 8px 16px;
+            font-size: 13px;
+        }
+
+        .job-detail-info {
+            flex: 1;
+        }
+
+        .job-detail-title {
+            font-size: 28px;
+            font-weight: 700;
+            margin-bottom: 8px;
+        }
+
+        .job-detail-meta {
+            display: flex;
+            gap: 20px;
+            font-size: 13px;
+            color: var(--text-dim);
+        }
+
+        /* RESPONSIVE */
+        @media (max-width: 768px) {
+            main {
+                padding: 15px;
+            }
+
+            .estimate-grid,
+            .line-items-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .form-row {
+                grid-template-columns: 1fr;
+            }
+
+            .summary-grid {
+                grid-template-columns: 1fr;
+            }
+
+            header {
+                padding: 15px 20px;
+            }
+
+            .header-title {
+                font-size: 18px;
+            }
+
+            table {
+                font-size: 12px;
+            }
+
+            th, td {
+                padding: 8px;
+            }
+
+            .proposal {
+                padding: 20px;
+            }
+
+            .job-detail-header {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+        }
+
+        /* PRINT STYLES */
+        @media print {
+            body {
+                background: white;
+                color: #333;
+            }
+
+            header, nav, .action-buttons, button, .modal {
+                display: none !important;
+            }
+
+            main {
+                padding: 0;
+            }
+
+            .tab-content {
+                display: block !important;
+            }
+
+            .proposal-no-print {
+                display: none !important;
+            }
+
+            .proposal {
+                background: white;
+                color: #333;
+                box-shadow: none;
+                border: none;
+            }
+
+            table {
+                color: #333;
+            }
+
+            th {
+                background: #e5e5e5;
+                color: #333;
+            }
+
+            tr:hover {
+                background: transparent;
+            }
+        }
     </style>
-</head>              <label style="display: flex; align-items: center; gap: 8px; margin: 0;">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="header-content">
+                <div class="header-title">AGX Central Florida</div>
+                <div class="header-subtitle">Estimating & Project Tracking</div>
+                <nav class="tabs">
+                    <button class="tab-btn active" data-tab="wip">WIP</button>
+                    <button class="tab-btn" data-tab="estimates">Estimates</button>
+                </nav>
+            </div>
+        </header>
+
+        <main>
+            <div class="main-inner">
+                <!-- WIP TAB -->
+                <div id="wip" class="tab-content active">
+                    <div id="wip-main-view">
+                        <div class="action-buttons">
+                            <button onclick="openAddJobModal()">+ Add Job</button>
+                            <button onclick="exportWIPToCSV()" class="secondary">Export to CSV</button>
+                            <button onclick="window.print()" class="secondary">Print Report</button>
+                        </div>
+
+                        <div class="summary-grid">
+                            <div class="summary-card">
+                                <div class="summary-card-label">Total Pipeline</div>
+                                <div class="summary-card-value" id="total-pipeline">$0.00</div>
+                            </div>
+                            <div class="summary-card">
+                                <div class="summary-card-label">Active Jobs</div>
+                                <div class="summary-card-value" id="active-jobs">0</div>
+                            </div>
+                            <div class="summary-card">
+                                <div class="summary-card-label">Total Cost</div>
+                                <div class="summary-card-value" id="total-cost">$0.00</div>
+                            </div>
+                            <div class="summary-card">
+                                <div class="summary-card-label">Total Profit</div>
+                                <div class="summary-card-value" id="total-profit">$0.00</div>
+                            </div>
+                        </div>
+
+                        <div class="action-buttons" style="margin-bottom: 20px;">
+                            <label style="display: flex; align-items: center; gap: 8px; margin: 0;">
                                 Filter by Status:
                                 <select id="statusFilter" onchange="filterJobs()" style="width: 200px; margin: 0;">
                                     <option value="">All Active</option>
@@ -224,7 +864,209 @@
                                 <div class="summary-card-label">Avg Completion %</div>
                                 <div class="summary-card-value" id="job-summary-completion">0%</div>
                             </div>
-                        </div>-header">Add Job</div>
+                        </div>
+
+                        <div class="action-buttons">
+                            <button onclick="openAddBuildingToJobModal()">+ Add Building</button>
+                            <button onclick="openAddPhaseToJobModal()">+ Add Phase</button>
+                            <button onclick="openAddSubToJobModal()">+ Add Subcontractor</button>
+                        </div>
+
+                        <div class="sub-tabs">
+                            <button class="sub-tab-btn-job active" data-subtab="job-overview">Overview</button>
+                            <button class="sub-tab-btn-job" data-subtab="job-costs">Job Costs</button>
+                            <button class="sub-tab-btn-job" data-subtab="job-buildings">Buildings</button>
+                            <button class="sub-tab-btn-job" data-subtab="job-phases">Phases</button>
+                            <button class="sub-tab-btn-job" data-subtab="job-subs">Subcontractors</button>
+                            <button class="sub-tab-btn-job" data-subtab="job-labor">Labor / Burden</button>
+                            <button class="sub-tab-btn-job" data-subtab="job-weekly">Weekly Accruals</button>
+                        </div>
+
+                        <!-- Job Overview -->
+                        <div id="job-overview" class="sub-tab-content-job active">
+                            <div class="table-container">
+                                <table id="job-overview-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Building</th>
+                                            <th>Phase</th>
+                                            <th>% Complete</th>
+                                            <th style="text-align: right;">Materials</th>
+                                            <th style="text-align: right;">Labor</th>
+                                            <th style="text-align: right;">Sub</th>
+                                            <th style="text-align: right;">Equipment</th>
+                                            <th style="text-align: right;">Total</th>
+                                            <th style="text-align: right;">Budget</th>
+                                            <th style="text-align: right;">Variance</th>
+                                            <th>Status</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody></tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <!-- Job Costs (direct job-level) -->
+                        <div id="job-costs" class="sub-tab-content-job">
+                            <div class="card" style="margin-bottom: 20px;">
+                                <h3 style="margin-bottom: 5px;">Job-Level Costs</h3>
+                                <p style="font-size: 13px; color: var(--text-dim); margin-bottom: 20px;">Enter costs directly on the job for smaller jobs or general overhead. These are added to building/phase costs in the total.</p>
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                                    <div class="form-group">
+                                        <label>Materials $</label>
+                                        <input type="number" id="jobCostMaterials" placeholder="0.00" step="0.01" oninput="saveJobCosts()">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Labor $ (auto: hours × rate)</label>
+                                        <input type="number" id="jobCostLabor" placeholder="0.00" step="0.01" readonly style="opacity: 0.7; cursor: not-allowed;">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Subcontractor $</label>
+                                        <input type="number" id="jobCostSub" placeholder="0.00" step="0.01" oninput="saveJobCosts()">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Equipment $</label>
+                                        <input type="number" id="jobCostEquipment" placeholder="0.00" step="0.01" oninput="saveJobCosts()">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Labor Hours This Week</label>
+                                        <input type="number" id="jobCostHoursWeek" placeholder="0" step="0.5" oninput="saveJobCosts()">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Total Hours to Date</label>
+                                        <input type="number" id="jobCostHoursTotal" placeholder="0" step="0.5" oninput="saveJobCosts()">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Avg Hourly Rate</label>
+                                        <input type="number" id="jobCostRate" placeholder="40.00" step="0.01" value="40" oninput="saveJobCosts()">
+                                    </div>
+                                </div>
+                                <div style="margin-top: 15px; padding: 15px; background: var(--surface2); border-radius: 8px;">
+                                    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px;">
+                                        <div>
+                                            <div style="font-size: 12px; color: var(--text-dim);">Job-Level Total</div>
+                                            <div style="font-size: 18px; font-weight: 700; color: var(--accent);" id="jobCostTotal">$0.00</div>
+                                        </div>
+                                        <div>
+                                            <div style="font-size: 12px; color: var(--text-dim);">Computed Labor (Hrs × Rate)</div>
+                                            <div style="font-size: 18px; font-weight: 700; color: var(--accent);" id="jobCostLaborBurden">$0.00</div>
+                                        </div>
+                                        <div>
+                                            <div style="font-size: 12px; color: var(--text-dim);">Phase/Building Costs</div>
+                                            <div style="font-size: 18px; font-weight: 700; color: var(--text-dim);" id="jobCostFromPhases">$0.00</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Job Buildings -->
+                        <div id="job-buildings" class="sub-tab-content-job">
+                            <div id="job-buildings-content"></div>
+                        </div>
+
+                        <!-- Job Phases -->
+                        <div id="job-phases" class="sub-tab-content-job">
+                            <div class="table-container">
+                                <table id="job-phases-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Phase</th>
+                                            <th style="text-align: right;">Materials</th>
+                                            <th style="text-align: right;">Labor</th>
+                                            <th style="text-align: right;">Sub</th>
+                                            <th style="text-align: right;">Equipment</th>
+                                            <th style="text-align: right;">Total</th>
+                                            <th style="text-align: right;">Avg % Complete</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody></tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <!-- Job Subcontractors -->
+                        <div id="job-subs" class="sub-tab-content-job">
+                            <div class="table-container">
+                                <table id="job-subs-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Subcontractor</th>
+                                            <th>Trade</th>
+                                            <th>Building</th>
+                                            <th style="text-align: right;">Contract $</th>
+                                            <th style="text-align: right;">Billed to Date</th>
+                                            <th style="text-align: right;">Remaining</th>
+                                            <th style="text-align: right;">% Billed</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody></tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <!-- Job Labor & Burden -->
+                        <div id="job-labor" class="sub-tab-content-job">
+                            <div class="table-container">
+                                <table id="job-labor-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Building</th>
+                                            <th>Phase</th>
+                                            <th style="text-align: right;">Hours This Week</th>
+                                            <th style="text-align: right;">Total Hours</th>
+                                            <th style="text-align: right;">Avg Rate</th>
+                                            <th style="text-align: right;">Labor Cost</th>
+                                            <th style="text-align: right;">Computed (Hrs × Rate)</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody></tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <!-- Job Weekly Accruals -->
+                        <div id="job-weekly" class="sub-tab-content-job">
+                            <div id="job-weekly-content"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ESTIMATES TAB -->
+                <div id="estimates" class="tab-content">
+                    <div id="estimates-list-view">
+                        <div class="action-buttons">
+                            <button onclick="openNewEstimateForm()">+ New Estimate</button>
+                        </div>
+
+                        <div class="table-container">
+                            <table id="estimates-table">
+                                <thead>
+                                    <tr>
+                                        <th>Title</th>
+                                        <th>Client/Community</th>
+                                        <th style="text-align: right;">Base Cost</th>
+                                        <th style="text-align: right;">Markup %</th>
+                                        <th style="text-align: right;">Client Price</th>
+                                        <th style="text-align: center;">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody></tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <div id="estimate-editor-view" style="display: none;"></div>
+                    <div id="estimate-preview-view" style="display: none;"></div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- MODALS -->
+    <div id="addJobModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">Add Job</div>
             <div class="form-row">
                 <div class="form-group">
                     <label>Job Number</label>
@@ -272,7 +1114,148 @@
                 <button onclick="saveJob()">Add Job</button>
             </div>
         </div>
-    </div> step="0.5">
+    </div>
+
+    <div id="addBuildingModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header" id="buildingModalHeader">Add Building</div>
+            <div class="form-group">
+                <label>Building Name</label>
+                <input type="text" id="buildingName" placeholder="e.g., Main Office, Warehouse A">
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>% of Job</label>
+                    <input type="number" id="buildingBudgetPct" placeholder="0" step="0.1" min="0" max="100" oninput="syncBuildingBudgetFromPct()">
+                </div>
+                <div class="form-group">
+                    <label>Building Budget $</label>
+                    <input type="number" id="buildingBudget" placeholder="0.00" step="0.01" oninput="syncBuildingBudgetFromDollar()">
+                </div>
+            </div>
+            <div id="buildingBudgetHint" style="font-size: 12px; color: var(--text-dim); margin-top: -12px; margin-bottom: 16px;"></div>
+            <div class="form-group">
+                <label>Address</label>
+                <input type="text" id="buildingAddress" placeholder="123 Main St, City, State ZIP">
+            </div>
+            <div style="border-top: 1px solid var(--border); margin: 16px 0; padding-top: 16px;">
+                <h4 style="font-size: 13px; color: var(--text-dim); text-transform: uppercase; margin-bottom: 12px;">Building-Level Costs (optional)</h4>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Materials $</label>
+                        <input type="number" id="buildingMaterials" placeholder="0.00" step="0.01">
+                    </div>
+                    <div class="form-group">
+                        <label>Labor $ (auto: hours × rate)</label>
+                        <input type="number" id="buildingLabor" placeholder="0.00" step="0.01" readonly style="opacity: 0.7; cursor: not-allowed;">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Subcontractor $</label>
+                        <input type="number" id="buildingSub" placeholder="0.00" step="0.01">
+                    </div>
+                    <div class="form-group">
+                        <label>Equipment $</label>
+                        <input type="number" id="buildingEquipment" placeholder="0.00" step="0.01">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Labor Hours This Week</label>
+                        <input type="number" id="buildingHoursWeek" placeholder="0" step="0.5">
+                    </div>
+                    <div class="form-group">
+                        <label>Total Hours to Date</label>
+                        <input type="number" id="buildingHoursTotal" placeholder="0" step="0.5">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Avg Hourly Rate</label>
+                        <input type="number" id="buildingRate" placeholder="40.00" step="0.01" value="40">
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="danger small" id="deleteBuildingBtn" onclick="deleteBuilding()" style="margin-right: auto; display: none;">Delete Building</button>
+                <button class="secondary" onclick="closeModal('addBuildingModal')">Cancel</button>
+                <button onclick="saveBuilding()" id="saveBuildingBtn">Add Building</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="addPhaseModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header" id="phaseModalHeader">Add Phase Entry</div>
+            <div class="form-group">
+                <label>Building</label>
+                <select id="phaseBuilding" onchange="syncBudgetFromPct()"></select>
+            </div>
+            <div class="form-group">
+                <label>Phase</label>
+                <select id="phaseType">
+                    <option value="">-- Select Phase --</option>
+                    <option>Site Work</option>
+                    <option>Foundation</option>
+                    <option>Framing/Structural</option>
+                    <option>Rough-In MEP</option>
+                    <option>Insulation</option>
+                    <option>Drywall</option>
+                    <option>Roofing</option>
+                    <option>Exterior Finishes</option>
+                    <option>Interior Finishes</option>
+                    <option>Flooring</option>
+                    <option>Painting</option>
+                    <option>Cabinets & Millwork</option>
+                    <option>Plumbing Fixtures</option>
+                    <option>Electrical Fixtures</option>
+                    <option>HVAC</option>
+                    <option>Fire Protection</option>
+                    <option>Landscaping</option>
+                    <option>Paving/Concrete Flatwork</option>
+                    <option>Punch List/Closeout</option>
+                    <option>Custom</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>% Complete</label>
+                <input type="number" id="phasePercent" min="0" max="100" value="0" step="5">
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Materials Cost</label>
+                    <input type="number" id="phaseMaterials" placeholder="0.00" step="0.01">
+                </div>
+                <div class="form-group">
+                    <label>Labor $ (auto: hours × rate)</label>
+                    <input type="number" id="phaseLabor" placeholder="0.00" step="0.01" readonly style="opacity: 0.7; cursor: not-allowed;">
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Subcontractor Cost</label>
+                    <input type="number" id="phaseSub" placeholder="0.00" step="0.01">
+                </div>
+                <div class="form-group">
+                    <label>Equipment Cost</label>
+                    <input type="number" id="phaseEquipment" placeholder="0.00" step="0.01">
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Budget % of Building</label>
+                    <input type="number" id="phaseBudgetPct" placeholder="0" step="0.1" min="0" max="100" oninput="syncBudgetFromPct()">
+                </div>
+                <div class="form-group">
+                    <label>Phase Budget $</label>
+                    <input type="number" id="phaseBudget" placeholder="0.00" step="0.01" oninput="syncBudgetFromDollar()">
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Labor Hours This Week</label>
+                    <input type="number" id="phaseHoursWeek" placeholder="0" step="0.5">
                 </div>
                 <div class="form-group">
                     <label>Total Hours to Date</label>
@@ -314,18 +1297,17 @@
             </div>
             <div class="form-row">
                 <div class="form-group">
-                    <label>Contract Amount $</label>
-                    <input type="number" id="subContractAmount" placeholder="0.00" step="0.01">
+                    <label>Contract Amount</label>
+                    <input type="number" id="subContract" placeholder="0.00" step="0.01">
                 </div>
                 <div class="form-group">
-                    <label>Current Billed $</label>
+                    <label>Billed to Date</label>
                     <input type="number" id="subBilled" placeholder="0.00" step="0.01">
                 </div>
             </div>
             <div class="modal-footer">
-                <button class="danger small" id="deleteSubBtn" onclick="deleteSub()" style="margin-right: auto; display: none;">Delete Subcontractor</button>
                 <button class="secondary" onclick="closeModal('addSubModal')">Cancel</button>
-                <button onclick="saveSub()" id="saveSubBtn">Add Sub</button>
+                <button onclick="saveSub()">Add Subcontractor</button>
             </div>
         </div>
     </div>
@@ -335,15 +1317,45 @@
             <div class="modal-header">New Estimate</div>
             <div class="form-group">
                 <label>Estimate Title</label>
-                <input type="text" id="estTitle" placeholder="e.g., Riverside Commons Phase 2">
+                <input type="text" id="estTitle" placeholder="e.g., Roof Restoration - Main Office">
             </div>
             <div class="form-group">
-                <label>Client / Community</label>
-                <input type="text" id="estClient" placeholder="e.g., ABC Developments">
+                <label>Job Type</label>
+                <input type="text" id="estJobType" placeholder="e.g., Exterior Restoration, Repair, General Construction">
             </div>
             <div class="form-group">
-                <label>Address</label>
-                <input type="text" id="estAddress" placeholder="123 Main St, City, State ZIP">
+                <label>Client Company Name</label>
+                <input type="text" id="estClient" placeholder="Client company name">
+            </div>
+            <div class="form-group">
+                <label>Community/Property Name</label>
+                <input type="text" id="estCommunity" placeholder="Community or property name">
+            </div>
+            <div class="form-group">
+                <label>Property Address</label>
+                <input type="text" id="estPropertyAddr" placeholder="123 Main St, City, State ZIP">
+            </div>
+            <div class="form-group">
+                <label>Client Billing Address</label>
+                <input type="text" id="estBillingAddr" placeholder="123 Main St, City, State ZIP">
+            </div>
+            <div class="form-group">
+                <label>Community Manager Name</label>
+                <input type="text" id="estManagerName" placeholder="John Smith">
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Manager Email</label>
+                    <input type="email" id="estManagerEmail" placeholder="john@example.com">
+                </div>
+                <div class="form-group">
+                    <label>Manager Phone</label>
+                    <input type="tel" id="estManagerPhone" placeholder="(555) 123-4567">
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Default Markup %</label>
+                <input type="number" id="estDefaultMarkup" value="100" step="0.1">
             </div>
             <div class="modal-footer">
                 <button class="secondary" onclick="closeModal('newEstimateModal')">Cancel</button>
@@ -351,162 +1363,291 @@
             </div>
         </div>
     </div>
-    
-    <script>.parse(localStorage.getItem('agx-estimate-alternates') || '[]');
+
+    <script>
+        // ==================== UTILITIES ====================
+        const formatCurrency = (val) => {
+            return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(val || 0);
+        };
+
+        const getStatus = (spent, budget) => {
+            if (budget <= 0) return 'on-track';
+            const pct = (spent / budget) * 100;
+            if (pct > 100) return 'over-budget';
+            if (pct >= 85) return 'at-risk';
+            return 'on-track';
+        };
+
+        const openModal = (id) => document.getElementById(id).classList.add('active');
+        const closeModal = (id) => document.getElementById(id).classList.remove('active');
+
+        // ==================== INITIALIZATION ====================
+        function initializeApp() {
+            loadData();
+            setupEventListeners();
+            seedDataIfNeeded();
+            renderWIPMain();
+        }
+
+        function setupEventListeners() {
+            // Top-level tabs
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const tabName = btn.getAttribute('data-tab');
+                    switchTab(tabName);
+                });
+            });
+
+            // Job detail sub-tabs
+            document.querySelectorAll('.sub-tab-btn-job').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const subtabName = btn.getAttribute('data-subtab');
+                    switchJobSubTab(subtabName);
+                });
+            });
+
+            // Modal closes on background click
+            document.querySelectorAll('.modal').forEach(modal => {
+                modal.addEventListener('click', (e) => {
+                    if (e.target === modal) {
+                        closeModal(modal.id);
+                    }
+                });
+            });
+        }
+
+        function switchTab(tabName) {
+            document.querySelectorAll('.tab-content').forEach(tc => tc.classList.remove('active'));
+            document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+
+            document.getElementById(tabName)?.classList.add('active');
+            document.querySelector(`[data-tab="${tabName}"]`)?.classList.add('active');
+
+            if (tabName === 'estimates') {
+                renderEstimatesList();
+            } else {
+                renderWIPMain();
+            }
+        }
+
+        function switchJobSubTab(subtabName) {
+            document.querySelectorAll('.sub-tab-content-job').forEach(stc => stc.classList.remove('active'));
+            document.querySelectorAll('.sub-tab-btn-job').forEach(btn => btn.classList.remove('active'));
+
+            document.getElementById(subtabName)?.classList.add('active');
+            document.querySelector(`[data-subtab="${subtabName}"]`)?.classList.add('active');
+
+            const currentJobId = appState.currentJobId;
+            if (subtabName === 'job-overview') renderJobOverview(currentJobId);
+            else if (subtabName === 'job-costs') renderJobCosts(currentJobId);
+            else if (subtabName === 'job-buildings') renderJobBuildings(currentJobId);
+            else if (subtabName === 'job-phases') renderJobPhases(currentJobId);
+            else if (subtabName === 'job-subs') renderJobSubs(currentJobId);
+            else if (subtabName === 'job-labor') renderJobLabor(currentJobId);
+            else if (subtabName === 'job-weekly') renderJobWeekly(currentJobId);
+        }
+
+        // ==================== DATA STORAGE ====================
+        let appData = {
+            jobs: [],
+            buildings: [],
+            phases: [],
+            subs: [],
+            estimates: [],
+            estimateLines: [],
+            estimateAlternates: []
+        };
+
+        let appState = {
+            currentJobId: null,
+            currentStatusFilter: '',
+            editPhaseId: null,
+            editBuildingId: null
+        };
+
+        function loadData() {
+            appData.jobs = JSON.parse(localStorage.getItem('agx-wip-jobs') || '[]');
+            appData.buildings = JSON.parse(localStorage.getItem('agx-wip-buildings') || '[]');
+            appData.phases = JSON.parse(localStorage.getItem('agx-wip-phases') || '[]');
+            appData.subs = JSON.parse(localStorage.getItem('agx-wip-subs') || '[]');
+            appData.estimates = JSON.parse(localStorage.getItem('agx-estimates') || '[]');
+            appData.estimateLines = JSON.parse(localStorage.getItem('agx-estimate-lines') || '[]');
+            appData.estimateAlternates = JSON.parse(localStorage.getItem('agx-estimate-alternates') || '[]');
         }
 
         function saveData() {
             localStorage.setItem('agx-wip-jobs', JSON.stringify(appData.jobs));
-            localStorage.setItem('agx-estimate-manager', JSON.stringify(appData.estimateProperties));
+            localStorage.setItem('agx-wip-buildings', JSON.stringify(appData.buildings));
+            localStorage.setItem('agx-wip-phases', JSON.stringify(appData.phases));
+            localStorage.setItem('agx-wip-subs', JSON.stringify(appData.subs));
             localStorage.setItem('agx-estimates', JSON.stringify(appData.estimates));
             localStorage.setItem('agx-estimate-lines', JSON.stringify(appData.estimateLines));
             localStorage.setItem('agx-estimate-alternates', JSON.stringify(appData.estimateAlternates));
         }
 
-        function loadData() {
-            let savedJobs = localStorage.getItem('agx-wip-jobs');
-            if (savedJobs) {
-                try {
-                    appData.jobs = JSON.parse(savedJobs);
-                } catch (e) {
-                    console.error('Failed to load jobs:', e);
-                }
-            }
-            
-            let savedProps = localStorage.getItem('agx-estimate-manager');
-            if (savedProps) {
-                try {
-                    appData.estimateProperties = JSON.parse(savedProps);
-                } catch (e) {
-                    console.error('Failed to load estimate properties:', e);
-                }
-            }
+        // ==================== SEED DATA ====================
+        function seedDataIfNeeded() {
+            if (appData.jobs.length > 0) return;
 
-            let savedEstimates = localStorage.getItem('agx-estimates');
-            if (savedEstimates) {
-                try {
-                    appData.estimates = JSON.parse(savedEstimates);
-                } catch (e) {
-                    console.error('Failed to load estimates:', e);
-                }
-            }
+            // Job 1: Commerce Park Phase 2
+            const job1 = {
+                id: 'j1',
+                jobNumber: 'S2062',
+                title: 'Commerce Park Phase 2',
+                market: 'Orlando',
+                status: 'In Progress',
+                contractAmount: 5250000,
+                targetMarginPct: 50,
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString()
+            };
 
-            let savedEstimateLines = localStorage.getItem('agx-estimate-lines');
-            if (savedEstimateLines) {
-                try {
-                    appData.estimateLines = JSON.parse(savedEstimateLines);
-                } catch (e) {
-                    console.error('Failed to load estimate lines:', e);
-                }
-            }
+            const job2 = {
+                id: 'j2',
+                jobNumber: 'S2078',
+                title: 'Sunset Ridge HOA Repairs',
+                market: 'Tampa',
+                status: 'In Progress',
+                contractAmount: 380000,
+                targetMarginPct: 50,
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString()
+            };
 
-            let savedAlternates = localStorage.getItem('agx-estimate-alternates');
-            if (savedAlternates) {
-                try {
-                    appData.estimateAlternates = JSON.parse(savedAlternates);
-                } catch (e) {
-                    console.error('Failed to load alternates:', e);
-                }
-            }
+            appData.jobs = [job1, job2];
+
+            // Buildings
+            appData.buildings = [
+                { id: 'b1', jobId: 'j1', name: 'Building A - Main Office', budget: 2500000, address: '123 Business Ave, Orlando, FL 32801' },
+                { id: 'b2', jobId: 'j1', name: 'Building B - Warehouse', budget: 1800000, address: '456 Industrial Blvd, Orlando, FL 32806' },
+                { id: 'b3', jobId: 'j1', name: 'Building C - Retail Front', budget: 950000, address: '789 Commerce Dr, Orlando, FL 32803' },
+                { id: 'b4', jobId: 'j2', name: 'Clubhouse & Pool Area', budget: 380000, address: '456 Sunset Ridge Lane, Tampa, FL 33612' }
+            ];
+
+            // Phases for Job 1 (Commerce Park)
+            appData.phases = [
+                // Building A
+                { id: 'p1', jobId: 'j1', buildingId: 'b1', phase: 'Site Work', pctComplete: 100, materials: 150000, labor: 75000, sub: 45000, equipment: 28000, phaseBudget: 300000, hoursWeek: 0, hoursTotal: 240, rate: 65, burden: 35, notes: 'Completed', weeklyMat: 0, weeklyLabor: 0, weeklySub: 0, weeklyEquip: 0, dateAdded: new Date().toISOString() },
+                { id: 'p2', jobId: 'j1', buildingId: 'b1', phase: 'Foundation', pctComplete: 95, materials: 280000, labor: 165000, sub: 95000, equipment: 52000, phaseBudget: 600000, hoursWeek: 120, hoursTotal: 2000, rate: 65, burden: 35, notes: 'Concrete pour next week', weeklyMat: 15000, weeklyLabor: 8000, weeklySub: 5000, weeklyEquip: 2000, dateAdded: new Date().toISOString() },
+                { id: 'p3', jobId: 'j1', buildingId: 'b1', phase: 'Framing/Structural', pctComplete: 45, materials: 320000, labor: 210000, sub: 128000, equipment: 68000, phaseBudget: 750000, hoursWeek: 200, hoursTotal: 1200, rate: 75, burden: 35, notes: 'Steel delivery on schedule', weeklyMat: 20000, weeklyLabor: 15000, weeklySub: 10000, weeklyEquip: 5000, dateAdded: new Date().toISOString() },
+                { id: 'p4', jobId: 'j1', buildingId: 'b1', phase: 'Rough-In MEP', pctComplete: 20, materials: 180000, labor: 95000, sub: 145000, equipment: 35000, phaseBudget: 480000, hoursWeek: 80, hoursTotal: 400, rate: 60, burden: 35, notes: '', weeklyMat: 10000, weeklyLabor: 5000, weeklySub: 8000, weeklyEquip: 2000, dateAdded: new Date().toISOString() },
+                // Building B
+                { id: 'p5', jobId: 'j1', buildingId: 'b2', phase: 'Site Work', pctComplete: 100, materials: 110000, labor: 55000, sub: 35000, equipment: 22000, phaseBudget: 220000, hoursWeek: 0, hoursTotal: 180, rate: 65, burden: 35, notes: 'Complete', weeklyMat: 0, weeklyLabor: 0, weeklySub: 0, weeklyEquip: 0, dateAdded: new Date().toISOString() },
+                { id: 'p6', jobId: 'j1', buildingId: 'b2', phase: 'Foundation', pctComplete: 75, materials: 210000, labor: 125000, sub: 72000, equipment: 40000, phaseBudget: 460000, hoursWeek: 100, hoursTotal: 1600, rate: 65, burden: 35, notes: 'On track', weeklyMat: 12000, weeklyLabor: 7500, weeklySub: 4000, weeklyEquip: 2000, dateAdded: new Date().toISOString() },
+                { id: 'p7', jobId: 'j1', buildingId: 'b2', phase: 'Framing/Structural', pctComplete: 25, materials: 240000, labor: 160000, sub: 95000, equipment: 55000, phaseBudget: 560000, hoursWeek: 160, hoursTotal: 800, rate: 75, burden: 35, notes: 'Crew working 6 days/week', weeklyMat: 18000, weeklyLabor: 12000, weeklySub: 7000, weeklyEquip: 4000, dateAdded: new Date().toISOString() },
+                // Building C
+                { id: 'p8', jobId: 'j1', buildingId: 'b3', phase: 'Site Work', pctComplete: 100, materials: 65000, labor: 32000, sub: 20000, equipment: 12000, phaseBudget: 130000, hoursWeek: 0, hoursTotal: 100, rate: 65, burden: 35, notes: '', weeklyMat: 0, weeklyLabor: 0, weeklySub: 0, weeklyEquip: 0, dateAdded: new Date().toISOString() },
+                { id: 'p9', jobId: 'j1', buildingId: 'b3', phase: 'Foundation', pctComplete: 85, materials: 125000, labor: 75000, sub: 45000, equipment: 25000, phaseBudget: 275000, hoursWeek: 60, hoursTotal: 900, rate: 65, burden: 35, notes: 'Final inspection passed', weeklyMat: 8000, weeklyLabor: 4500, weeklySub: 2000, weeklyEquip: 1000, dateAdded: new Date().toISOString() },
+                { id: 'p10', jobId: 'j1', buildingId: 'b3', phase: 'Framing/Structural', pctComplete: 40, materials: 145000, labor: 95000, sub: 58000, equipment: 32000, phaseBudget: 340000, hoursWeek: 120, hoursTotal: 600, rate: 75, burden: 35, notes: 'Ahead of schedule', weeklyMat: 10000, weeklyLabor: 7000, weeklySub: 4000, weeklyEquip: 2000, dateAdded: new Date().toISOString() },
+                // Job 2 phases
+                { id: 'p11', jobId: 'j2', buildingId: 'b4', phase: 'Site Work', pctComplete: 60, materials: 45000, labor: 25000, sub: 15000, equipment: 10000, phaseBudget: 95000, hoursWeek: 40, hoursTotal: 400, rate: 65, burden: 35, notes: 'Demolition phase', weeklyMat: 3000, weeklyLabor: 1500, weeklySub: 1000, weeklyEquip: 500, dateAdded: new Date().toISOString() },
+                { id: 'p12', jobId: 'j2', buildingId: 'b4', phase: 'Exterior Finishes', pctComplete: 25, materials: 95000, labor: 55000, sub: 75000, equipment: 30000, phaseBudget: 255000, hoursWeek: 80, hoursTotal: 600, rate: 65, burden: 35, notes: 'Painting scheduled', weeklyMat: 8000, weeklyLabor: 4000, weeklySub: 5000, weeklyEquip: 2000, dateAdded: new Date().toISOString() },
+                { id: 'p13', jobId: 'j2', buildingId: 'b4', phase: 'Roofing', pctComplete: 10, materials: 65000, labor: 35000, sub: 25000, equipment: 15000, phaseBudget: 140000, hoursWeek: 30, hoursTotal: 150, rate: 75, burden: 35, notes: 'Pending material delivery', weeklyMat: 4000, weeklyLabor: 2000, weeklySub: 1500, weeklyEquip: 1000, dateAdded: new Date().toISOString() }
+            ];
+
+            // Subcontractors for Job 1
+            appData.subs = [
+                { id: 's1', jobId: 'j1', name: 'Apex Electrical', trade: 'Electrical', buildingId: 'b1', contractAmt: 450000, billedToDate: 225000 },
+                { id: 's2', jobId: 'j1', name: 'Summit Plumbing', trade: 'Plumbing', buildingId: 'b1', contractAmt: 320000, billedToDate: 160000 },
+                { id: 's3', jobId: 'j1', name: 'CoolAir Mechanical', trade: 'HVAC', buildingId: 'b2', contractAmt: 380000, billedToDate: 190000 },
+                { id: 's4', jobId: 'j1', name: 'IronWorks Steel', trade: 'Structural Steel', buildingId: 'b1', contractAmt: 520000, billedToDate: 312000 },
+                { id: 's5', jobId: 'j1', name: 'FastPave Concrete', trade: 'Concrete', buildingId: 'b3', contractAmt: 225000, billedToDate: 180000 },
+                { id: 's6', jobId: 'j1', name: 'PrecisionPlumb Inc', trade: 'Plumbing', buildingId: 'b2', contractAmt: 290000, billedToDate: 145000 },
+                // Job 2 subs
+                { id: 's7', jobId: 'j2', name: 'Sunset Painters LLC', trade: 'Painting', buildingId: 'b4', contractAmt: 85000, billedToDate: 25000 },
+                { id: 's8', jobId: 'j2', name: 'Rapid Roofing', trade: 'Roofing', buildingId: 'b4', contractAmt: 95000, billedToDate: 0 }
+            ];
+
+            saveData();
         }
 
-        // ==================== TAB & MODAL MANAGEMENT ====================
-        
-        document.querySelectorAll('.tab-btn').forEach(btn => {
-            btn.addEventListener('click', function() {
-                const tabName = this.getAttribute('data-tab');
-                document.querySelectorAll('.tab-content').forEach(tc => tc.classList.remove('active'));
-                document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-                document.getElementById(tabName).classList.add('active');
-                this.classList.add('active');
-                if (tabName === 'estimates') {
-                    renderEstimatesList();
-                } else if (tabName === 'wip') {
-                    renderWIPList();
-                }
+        // ==================== WIP MAIN VIEW ====================
+        function renderWIPMain() {
+            renderJobsTable();
+            calculateWIPSummary();
+        }
+
+        function getJobTotalCost(jobId) {
+            // Phase-level costs
+            let phaseCost = 0;
+            appData.phases.filter(p => p.jobId === jobId).forEach(p => {
+                phaseCost += (p.materials || 0) + (p.labor || 0) + (p.sub || 0) + (p.equipment || 0);
             });
-        });
-
-        function openModal(modalId) {
-            document.getElementById(modalId).classList.add('active');
-        }
-
-        function closeModal(modalId) {
-            document.getElementById(modalId).classList.remove('active');
-        }
-
-        document.querySelectorAll('.modal').forEach(modal => {
-            modal.addEventListener('click', function(e) {
-                if (e.target === this) {
-                    this.classList.remove('active');
-                }
+            // Building-level costs
+            let buildingCost = 0;
+            appData.buildings.filter(b => b.jobId === jobId).forEach(b => {
+                buildingCost += (b.materials || 0) + (b.labor || 0) + (b.sub || 0) + (b.equipment || 0);
             });
-        });
+            // Job-level costs
+            const job = appData.jobs.find(j => j.id === jobId);
+            let jobCost = 0;
+            if (job) {
+                jobCost = (job.materials || 0) + (job.labor || 0) + (job.sub || 0) + (job.equipment || 0);
+            }
+            return { phaseCost, buildingCost, jobCost, total: phaseCost + buildingCost + jobCost };
+        }
 
-        // ==================== WIP TAB ====================
+        function calculateWIPSummary() {
+            let totalPipeline = appData.jobs.reduce((sum, j) => sum + (j.contractAmount || 0), 0);
+            let activeJobs = appData.jobs.filter(j => ['New', 'In Progress', 'On Hold'].includes(j.status)).length;
 
-        function renderWIPList() {
+            let totalCost = 0;
+            appData.jobs.forEach(j => {
+                totalCost += getJobTotalCost(j.id).total;
+            });
+
+            let totalProfit = totalPipeline - totalCost;
+
+            document.getElementById('total-pipeline').textContent = formatCurrency(totalPipeline);
+            document.getElementById('active-jobs').textContent = activeJobs;
+            document.getElementById('total-cost').textContent = formatCurrency(totalCost);
+            document.getElementById('total-profit').textContent = formatCurrency(totalProfit);
+        }
+
+        function renderJobsTable() {
             const tbody = document.querySelector('#jobs-table tbody');
             tbody.innerHTML = '';
-            
-            const statusFilter = document.getElementById('statusFilter').value;
-            let filteredJobs = appData.jobs;
-            
-            if (statusFilter) {
-                filteredJobs = appData.jobs.filter(j => j.status === statusFilter);
+
+            let jobs = appData.jobs;
+            const filter = appState.currentStatusFilter;
+            if (filter) {
+                jobs = jobs.filter(j => j.status === filter);
             } else {
-                filteredJobs = appData.jobs.filter(j => j.status !== 'Archived' && j.status !== 'Completed');
+                // "All Active" = hide Archived by default
+                jobs = jobs.filter(j => j.status !== 'Archived');
             }
-            
-            filteredJobs.sort((a, b) => parseInt(a.number) - parseInt(b.number));
-            
-            filteredJobs.forEach((job, idx) => {
-                const row = document.createElement('tr');
-                
-                const materials = (job.materials || 0) + (job.buildings || []).reduce((sum, b) => sum + (b.materials || 0), 0) + (job.phases || []).reduce((sum, p) => sum + (p.materials || 0), 0);
-                const labor = (job.labor || 0) + (job.buildings || []).reduce((sum, b) => sum + (b.labor || 0), 0) + (job.phases || []).reduce((sum, p) => sum + (p.labor || 0), 0);
-                const sub = (job.sub || 0) + (job.buildings || []).reduce((sum, b) => sum + (b.sub || 0), 0) + (job.phases || []).reduce((sum, p) => sum + (p.sub || 0), 0);
-                const equipment = (job.equipment || 0) + (job.buildings || []).reduce((sum, b) => sum + (b.equipment || 0), 0) + (job.phases || []).reduce((sum, p) => sum + (p.equipment || 0), 0);
-                const totalCost = materials + labor + sub + equipment;
+
+            jobs.forEach((job, index) => {
+                const totalCost = getJobTotalCost(job.id).total;
+
                 const profit = (job.contractAmount || 0) - totalCost;
-                const margin = (job.contractAmount || 0) > 0 ? ((profit / (job.contractAmount || 1)) * 100).toFixed(1) : 0;
-                
+                const marginPct = job.contractAmount > 0 ? ((profit / job.contractAmount) * 100).toFixed(1) : 0;
+
+                const statusClass = job.status === 'On Hold' ? 'at-risk' : job.status === 'Completed' ? 'on-track' : job.status === 'Archived' ? 'not-started' : 'on-track';
+
+                const row = document.createElement('tr');
+                row.style.cursor = 'pointer';
+                row.onclick = function() { editJob(job.id); };
                 row.innerHTML = `
-                    <td style="width: 40px;">${idx + 1}</td>
-                    <td><strong>${job.number}</strong><br><small>${job.title}</small></td>
-                    <td>${job.market || '-'}</td>
-                    <td><span class="badge" style="background: var(--accent-dim); color: var(--accent);">${job.status}</span></td>
-                    <td style="text-align: right;">${formatCurrency(job.contractAmount || 0)}</td>
+                    <td>${index + 1}</td>
+                    <td><strong>${job.jobNumber ? job.jobNumber + ' — ' : ''}${job.title}</strong></td>
+                    <td>${job.market || '—'}</td>
+                    <td><span class="badge ${statusClass}">${job.status}</span></td>
+                    <td style="text-align: right;">${formatCurrency(job.contractAmount)}</td>
                     <td style="text-align: right;">${formatCurrency(totalCost)}</td>
-                    <td style="text-align: right; color: ${profit >= 0 ? 'var(--green)' : 'var(--red)'}; font-weight: 700;">${formatCurrency(profit)}</td>
-                    <td style="text-align: right;">${margin}%</td>
-                    <td style="text-align: center; width: 80px;">
-                        <button class="small secondary" onclick="viewJob('${job.id}')">View</button>
+                    <td style="text-align: right; color: ${profit >= 0 ? 'var(--green)' : 'var(--red)'};">${formatCurrency(profit)}</td>
+                    <td style="text-align: right;">${marginPct}%</td>
+                    <td style="text-align: center;">
+                        <button class="small" onclick="event.stopPropagation(); editJob('${job.id}')">Edit</button>
                     </td>
                 `;
                 tbody.appendChild(row);
             });
-            
-            // Update summary cards
-            const totalPipeline = filteredJobs.reduce((sum, j) => sum + (j.contractAmount || 0), 0);
-            const activeCount = filteredJobs.length;
-            const totalJobCost = filteredJobs.reduce((sum, j) => {
-                const materials = (j.materials || 0) + (j.buildings || []).reduce((s, b) => s + (b.materials || 0), 0) + (j.phases || []).reduce((s, p) => s + (p.materials || 0), 0);
-                const labor = (j.labor || 0) + (j.buildings || []).reduce((s, b) => s + (b.labor || 0), 0) + (j.phases || []).reduce((s, p) => s + (p.labor || 0), 0);
-                const sub = (j.sub || 0) + (j.buildings || []).reduce((s, b) => s + (b.sub || 0), 0) + (j.phases || []).reduce((s, p) => s + (p.sub || 0), 0);
-                const equipment = (j.equipment || 0) + (j.buildings || []).reduce((s, b) => s + (b.equipment || 0), 0) + (j.phases || []).reduce((s, p) => s + (p.equipment || 0), 0);
-                return sum + materials + labor + sub + equipment;
-            }, 0);
-            const totalProfit = totalPipeline - totalJobCost;
-            
-            document.getElementById('total-pipeline').textContent = formatCurrency(totalPipeline);
-            document.getElementById('active-jobs').textContent = activeCount;
-            document.getElementById('total-cost').textContent = formatCurrency(totalJobCost);
-            document.getElementById('total-profit').textContent = formatCurrency(totalProfit);
         }
 
         function filterJobs() {
-            renderWIPList();
+            appState.currentStatusFilter = document.getElementById('statusFilter').value;
+            renderJobsTable();
         }
 
         function openAddJobModal() {
@@ -520,126 +1661,747 @@
         }
 
         function saveJob() {
-            const jobNumber = document.getElementById('jobNumber').value.trim();
-            const jobTitle = document.getElementById('jobTitle').value.trim();
-            const jobMarket = document.getElementById('jobMarket').value;
-            const contractAmount = parseFloat(document.getElementById('jobContractAmount').value) || 0;
-            const targetMargin = parseFloat(document.getElementById('jobTargetMargin').value) || 50;
-            const status = document.getElementById('jobStatus').value;
-            
-            if (!jobNumber || !jobTitle) {
-                alert('Please fill in all required fields');
-                return;
-            }
-            
+            const title = document.getElementById('jobTitle').value.trim();
+            if (!title) { alert('Enter a job name'); return; }
             const job = {
                 id: 'j' + Date.now(),
-                number: jobNumber,
-                title: jobTitle,
-                market: jobMarket,
-                contractAmount: contractAmount,
-                targetMargin: targetMargin,
-                status: status,
-                materials: 0,
-                labor: 0,
-                sub: 0,
-                equipment: 0,
-                buildings: [],
-                phases: [],
-                subs: []
+                jobNumber: document.getElementById('jobNumber').value.trim(),
+                title: title,
+                market: document.getElementById('jobMarket').value,
+                status: document.getElementById('jobStatus').value,
+                contractAmount: parseFloat(document.getElementById('jobContractAmount').value) || 0,
+                targetMarginPct: parseFloat(document.getElementById('jobTargetMargin').value) || 50,
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString()
             };
             appData.jobs.push(job);
             saveData();
             closeModal('addJobModal');
-            renderWIPList();
+            renderWIPMain();
         }
 
-        function viewJob(jobId) {
-            currentJobId = jobId;
-            const job = appData.jobs.find(j => j.id === jobId);
-            
+        function editJob(jobId) {
+            appState.currentJobId = jobId;
+            renderJobDetail(jobId);
             document.getElementById('wip-main-view').style.display = 'none';
             document.getElementById('wip-job-detail-view').style.display = 'block';
-            
-            document.getElementById('job-detail-title').textContent = job.number + ' - ' + job.title;
-            document.getElementById('job-detail-status').textContent = 'Status: ' + job.status;
-            document.getElementById('job-detail-contract').textContent = 'Contract: ' + formatCurrency(job.contractAmount || 0);
-            
-            document.getElementById('job-info-number').textContent = job.number;
-            document.getElementById('job-info-title').textContent = job.title;
-            document.getElementById('job-info-market').textContent = job.market || '-';
-            document.getElementById('job-info-contract').textContent = formatCurrency(job.contractAmount || 0);
-            document.getElementById('job-info-margin').textContent = (job.targetMargin || 0).toFixed(1) + '%';
-            document.getElementById('job-info-status').textContent = job.status;
-            
-            updateJobDetailView();
-        }
-
-        function updateJobDetailView() {createElement('tr');
-                    row.style.cursor = 'pointer';
-                    row.title = 'Click to edit this building';
-                    row.onclick = function() { editBuilding(bldg.id); };
-                    row.innerHTML = `
-                        <td><strong>${bldg.name}</strong></td>
-                        <td style="text-align: right;">${(bldg.budgetPct || 0).toFixed(1)}%</td>
-                        <td style="text-align: right;">${formatCurrency(bldg.budget || 0)}</td>
-                        <td style="text-align: right;">${formatCurrency(matTotal)}</td>
-                        <td style="text-align: right;">${formatCurrency(labTotal)}</td>
-                        <td style="text-align: right;">${formatCurrency(subTotal)}</td>
-                        <td style="text-align: right;">${formatCurrency(eqTotal)}</td>
-                        <td style="text-align: right;">${formatCurrency(costTotal)}</td>
-                        <td style="text-align: right; color: ${costTotal <= (bldg.budget || 0) ? 'var(--green)' : 'var(--red)'}; font-weight: 700;">${formatCurrency((bldg.budget || 0) - costTotal)}</td>
-                    `;
-                    tbody.appendChild(row);
-                });
-            }
         }
 
         function backToWIPMain() {
             document.getElementById('wip-main-view').style.display = 'block';
             document.getElementById('wip-job-detail-view').style.display = 'none';
-            renderWIPList();
+            appState.currentJobId = null;
+            renderWIPMain();
         }
 
         function archiveCurrentJob() {
-            if (confirm('Archive this job?')) {
-                const job = appData.jobs.find(j => j.id === currentJobId);
-                if (job) {
-                    job.status = 'Archived';
-                    saveData();
-                    backToWIPMain();
+            const job = appData.jobs.find(j => j.id === appState.currentJobId);
+            if (!job) return;
+            if (job.status === 'Archived') {
+                job.status = 'Completed';
+            } else {
+                if (!confirm('Archive this job? It will be hidden from the active list.')) return;
+                job.status = 'Archived';
+                job.archivedAt = new Date().toISOString();
+            }
+            job.updatedAt = new Date().toISOString();
+            saveData();
+            renderJobDetail(job.id);
+        }
+
+        function renderJobDetail(jobId) {
+            const job = appData.jobs.find(j => j.id === jobId);
+            if (!job) return;
+
+            const buildings = appData.buildings.filter(b => b.jobId === jobId);
+            const phases = appData.phases.filter(p => p.jobId === jobId);
+
+            const costs = getJobTotalCost(jobId);
+            const totalCost = costs.total;
+
+            const profit = (job.contractAmount || 0) - totalCost;
+            const marginPct = job.contractAmount > 0 ? ((profit / job.contractAmount) * 100).toFixed(1) : 0;
+            const avgCompletion = phases.length > 0 ? Math.round(phases.reduce((sum, p) => sum + (p.pctComplete || 0), 0) / phases.length) : 0;
+
+            document.getElementById('job-detail-title').textContent = (job.jobNumber ? job.jobNumber + ' — ' : '') + job.title;
+            const detailStatusClass = job.status === 'On Hold' ? 'at-risk' : job.status === 'Completed' ? 'on-track' : job.status === 'Archived' ? 'not-started' : 'on-track';
+            document.getElementById('job-detail-status').innerHTML = `<span class="badge ${detailStatusClass}">${job.status}</span>`;
+            document.getElementById('job-detail-contract').textContent = `Contract: ${formatCurrency(job.contractAmount)}`;
+
+            document.getElementById('job-info-number').textContent = job.jobNumber || '—';
+            document.getElementById('job-info-title').textContent = job.title;
+            document.getElementById('job-info-market').textContent = job.market || '—';
+            document.getElementById('job-info-contract').textContent = formatCurrency(job.contractAmount);
+            document.getElementById('job-info-margin').textContent = (job.targetMarginPct || 50) + '%';
+            const statusClass = job.status === 'On Hold' ? 'at-risk' : job.status === 'Completed' ? 'on-track' : job.status === 'Archived' ? 'not-started' : 'on-track';
+            document.getElementById('job-info-status').innerHTML = `<span class="badge ${statusClass}">${job.status}</span>`;
+            document.getElementById('archive-job-btn').textContent = job.status === 'Archived' ? 'Unarchive Job' : 'Archive Job';
+
+            document.getElementById('job-summary-contract').textContent = formatCurrency(job.contractAmount);
+            document.getElementById('job-summary-cost').textContent = formatCurrency(totalCost);
+            document.getElementById('job-summary-profit').textContent = formatCurrency(profit);
+            document.getElementById('job-summary-margin').textContent = marginPct + '%';
+            document.getElementById('job-summary-completion').textContent = avgCompletion + '%';
+
+            renderJobOverview(jobId);
+        }
+
+        function renderJobOverview(jobId) {
+            const buildings = appData.buildings.filter(b => b.jobId === jobId);
+            const phases = appData.phases.filter(p => p.jobId === jobId);
+            const tbody = document.querySelector('#job-overview-table tbody');
+            tbody.innerHTML = '';
+
+            // Show buildings grouped with their phases
+            buildings.forEach(bldg => {
+                const bldgPhases = phases.filter(p => p.buildingId === bldg.id);
+                if (bldgPhases.length === 0) {
+                    // Building with no phases — show building-level costs
+                    const bTotal = (bldg.materials || 0) + (bldg.labor || 0) + (bldg.sub || 0) + (bldg.equipment || 0);
+                    const bVar = (bldg.budget || 0) - bTotal;
+                    const bStatus = getStatus(bTotal, bldg.budget);
+                    const row = document.createElement('tr');
+                    row.style.cursor = 'pointer';
+                    row.title = 'Click to edit this building';
+                    row.onclick = function() { editBuilding(bldg.id); };
+                    row.innerHTML = '<td>' + (bldg.name || '') + '</td><td style="color: var(--text-dim); font-style: italic;">No phases</td><td>—</td><td style="text-align: right;">' + formatCurrency(bldg.materials) + '</td><td style="text-align: right;">' + formatCurrency(bldg.labor) + '</td><td style="text-align: right;">' + formatCurrency(bldg.sub) + '</td><td style="text-align: right;">' + formatCurrency(bldg.equipment) + '</td><td style="text-align: right;">' + formatCurrency(bTotal) + '</td><td style="text-align: right;">' + formatCurrency(bldg.budget) + '</td><td style="text-align: right; color: ' + (bVar >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + formatCurrency(bVar) + '</td><td><span class="badge ' + bStatus + '">' + bStatus.replace('-', ' ').toUpperCase() + '</span></td>';
+                    tbody.appendChild(row);
+                } else {
+                    bldgPhases.forEach(p => {
+                        const totalSpent = (p.materials || 0) + (p.labor || 0) + (p.sub || 0) + (p.equipment || 0);
+                        const variance = (p.phaseBudget || 0) - totalSpent;
+                        const status = getStatus(totalSpent, p.phaseBudget);
+                        const row = document.createElement('tr');
+                        row.style.cursor = 'pointer';
+                        row.title = 'Click to edit this phase';
+                        row.onclick = function() { editPhase(p.id); };
+                        row.innerHTML = '<td>' + (bldg.name || '') + '</td><td>' + p.phase + '</td><td><div class="progress-bar" style="margin-bottom: 4px;"><div class="progress-fill" style="width: ' + p.pctComplete + '%"></div></div>' + p.pctComplete + '%</td><td style="text-align: right;">' + formatCurrency(p.materials) + '</td><td style="text-align: right;">' + formatCurrency(p.labor) + '</td><td style="text-align: right;">' + formatCurrency(p.sub) + '</td><td style="text-align: right;">' + formatCurrency(p.equipment) + '</td><td style="text-align: right;">' + formatCurrency(totalSpent) + '</td><td style="text-align: right;">' + formatCurrency(p.phaseBudget) + '</td><td style="text-align: right; color: ' + (variance >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + formatCurrency(variance) + '</td><td><span class="badge ' + status + '">' + status.replace('-', ' ').toUpperCase() + '</span></td>';
+                        tbody.appendChild(row);
+                    });
                 }
+            });
+
+            // Show orphan phases (no building assigned)
+            const orphanPhases = phases.filter(p => !p.buildingId || !buildings.find(b => b.id === p.buildingId));
+            orphanPhases.forEach(p => {
+                const totalSpent = (p.materials || 0) + (p.labor || 0) + (p.sub || 0) + (p.equipment || 0);
+                const variance = (p.phaseBudget || 0) - totalSpent;
+                const status = getStatus(totalSpent, p.phaseBudget);
+                const row = document.createElement('tr');
+                row.style.cursor = 'pointer';
+                row.title = 'Click to edit this phase';
+                row.onclick = function() { editPhase(p.id); };
+                row.innerHTML = '<td style="color: var(--text-dim);">Unassigned</td><td>' + p.phase + '</td><td><div class="progress-bar" style="margin-bottom: 4px;"><div class="progress-fill" style="width: ' + p.pctComplete + '%"></div></div>' + p.pctComplete + '%</td><td style="text-align: right;">' + formatCurrency(p.materials) + '</td><td style="text-align: right;">' + formatCurrency(p.labor) + '</td><td style="text-align: right;">' + formatCurrency(p.sub) + '</td><td style="text-align: right;">' + formatCurrency(p.equipment) + '</td><td style="text-align: right;">' + formatCurrency(totalSpent) + '</td><td style="text-align: right;">' + formatCurrency(p.phaseBudget) + '</td><td style="text-align: right; color: ' + (variance >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + formatCurrency(variance) + '</td><td><span class="badge ' + status + '">' + status.replace('-', ' ').toUpperCase() + '</span></td>';
+                tbody.appendChild(row);
+            });
+        }
+
+        function renderJobBuildings(jobId) {
+            const buildings = appData.buildings.filter(b => b.jobId === jobId);
+            const container = document.getElementById('job-buildings-content');
+            container.innerHTML = '';
+
+            buildings.forEach(building => {
+                const phases = appData.phases.filter(p => p.buildingId === building.id);
+                let phaseCost = 0;
+                phases.forEach(p => {
+                    phaseCost += (p.materials || 0) + (p.labor || 0) + (p.sub || 0) + (p.equipment || 0);
+                });
+                const bldgDirectCost = (building.materials || 0) + (building.labor || 0) + (building.sub || 0) + (building.equipment || 0);
+                const buildingCost = phaseCost + bldgDirectCost;
+
+                const contractAmt = appData.jobs.find(j => j.id === jobId)?.contractAmount || 0;
+                const bldgPct = contractAmt > 0 ? ((building.budget || 0) / contractAmt * 100).toFixed(1) : '—';
+
+                const card = document.createElement('div');
+                card.className = 'card';
+                card.style.cursor = 'pointer';
+                card.title = 'Click to edit this building';
+                card.onclick = function() { editBuilding(building.id); };
+                card.innerHTML = `
+                    <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 15px;">
+                        <div>
+                            <h3 style="font-size: 18px; margin-bottom: 5px;">${building.name}</h3>
+                            <p style="font-size: 13px; color: var(--text-dim);">${building.address}</p>
+                        </div>
+                        <span style="font-size: 13px; color: var(--purple); font-weight: 600;">${bldgPct}% of Job</span>
+                    </div>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 15px;">
+                        <div>
+                            <div style="font-size: 12px; color: var(--text-dim);">Budget</div>
+                            <div style="font-size: 16px; font-weight: 600; color: var(--accent);">${formatCurrency(building.budget)}</div>
+                        </div>
+                        <div>
+                            <div style="font-size: 12px; color: var(--text-dim);">Spent</div>
+                            <div style="font-size: 16px; font-weight: 600; color: var(--accent);">${formatCurrency(buildingCost)}</div>
+                        </div>
+                        <div>
+                            <div style="font-size: 12px; color: var(--text-dim);">Variance</div>
+                            <div style="font-size: 16px; font-weight: 600; color: ${(building.budget - buildingCost) >= 0 ? 'var(--green)' : 'var(--red)'};">${formatCurrency(building.budget - buildingCost)}</div>
+                        </div>
+                    </div>
+                    <div style="margin-top: 15px;">
+                        <h4 style="margin-bottom: 10px; font-size: 13px; text-transform: uppercase; color: var(--text-dim);">Phases:</h4>
+                        <div style="display: grid; gap: 8px;">
+                            ${phases.map(p => {
+                                const pCost = (p.materials || 0) + (p.labor || 0) + (p.sub || 0) + (p.equipment || 0);
+                                return `
+                                    <div style="display: flex; justify-content: space-between; font-size: 13px;">
+                                        <span>${p.phase} (${p.pctComplete}%)</span>
+                                        <span>${formatCurrency(pCost)}</span>
+                                    </div>
+                                `;
+                            }).join('')}
+                        </div>
+                    </div>
+                `;
+                container.appendChild(card);
+            });
+        }
+
+        function renderJobPhases(jobId) {
+            const phases = appData.phases.filter(p => p.jobId === jobId);
+            const phaseGroups = {};
+
+            phases.forEach(p => {
+                if (!phaseGroups[p.phase]) {
+                    phaseGroups[p.phase] = [];
+                }
+                phaseGroups[p.phase].push(p);
+            });
+
+            const tbody = document.querySelector('#job-phases-table tbody');
+            tbody.innerHTML = '';
+
+            Object.keys(phaseGroups).forEach(phaseName => {
+                const phaseList = phaseGroups[phaseName];
+                const matTotal = phaseList.reduce((sum, p) => sum + (p.materials || 0), 0);
+                const labTotal = phaseList.reduce((sum, p) => sum + (p.labor || 0), 0);
+                const subTotal = phaseList.reduce((sum, p) => sum + (p.sub || 0), 0);
+                const equipTotal = phaseList.reduce((sum, p) => sum + (p.equipment || 0), 0);
+                const total = matTotal + labTotal + subTotal + equipTotal;
+                const avgPct = Math.round(phaseList.reduce((sum, p) => sum + (p.pctComplete || 0), 0) / phaseList.length);
+
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td>${phaseName}</td>
+                    <td style="text-align: right;">${formatCurrency(matTotal)}</td>
+                    <td style="text-align: right;">${formatCurrency(labTotal)}</td>
+                    <td style="text-align: right;">${formatCurrency(subTotal)}</td>
+                    <td style="text-align: right;">${formatCurrency(equipTotal)}</td>
+                    <td style="text-align: right;">${formatCurrency(total)}</td>
+                    <td style="text-align: right;">${avgPct}%</td>
+                `;
+                tbody.appendChild(row);
+            });
+        }
+
+        function renderJobSubs(jobId) {
+            const subs = appData.subs.filter(s => s.jobId === jobId);
+            const tbody = document.querySelector('#job-subs-table tbody');
+            tbody.innerHTML = '';
+
+            subs.forEach(sub => {
+                const remaining = (sub.contractAmt || 0) - (sub.billedToDate || 0);
+                const pctBilled = sub.contractAmt > 0 ? ((sub.billedToDate / sub.contractAmt) * 100).toFixed(1) : 0;
+                const building = appData.buildings.find(b => b.id === sub.buildingId);
+
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td>${sub.name}</td>
+                    <td>${sub.trade}</td>
+                    <td>${building?.name || ''}</td>
+                    <td style="text-align: right;">${formatCurrency(sub.contractAmt)}</td>
+                    <td style="text-align: right;">${formatCurrency(sub.billedToDate)}</td>
+                    <td style="text-align: right;">${formatCurrency(remaining)}</td>
+                    <td style="text-align: right;">${pctBilled}%</td>
+                `;
+                tbody.appendChild(row);
+            });
+        }
+
+        function renderJobLabor(jobId) {
+            const phases = appData.phases.filter(p => p.jobId === jobId);
+            const tbody = document.querySelector('#job-labor-table tbody');
+            tbody.innerHTML = '';
+
+            phases.forEach(p => {
+                const building = appData.buildings.find(b => b.id === p.buildingId);
+                const laborCost = p.labor || 0;
+                const computedLabor = (p.hoursTotal || 0) * (p.rate || 40);
+
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td>${building?.name || ''}</td>
+                    <td>${p.phase}</td>
+                    <td style="text-align: right;">${p.hoursWeek || 0}</td>
+                    <td style="text-align: right;">${p.hoursTotal || 0}</td>
+                    <td style="text-align: right;">${formatCurrency(p.rate || 40)}</td>
+                    <td style="text-align: right;">${formatCurrency(laborCost)}</td>
+                    <td style="text-align: right;">${formatCurrency(computedLabor)}</td>
+                `;
+                tbody.appendChild(row);
+            });
+        }
+
+        function renderJobWeekly(jobId) {
+            const phases = appData.phases.filter(p => p.jobId === jobId);
+            const container = document.getElementById('job-weekly-content');
+            container.innerHTML = '';
+
+            const card = document.createElement('div');
+            card.className = 'card';
+            card.innerHTML = `
+                <h3 style="margin-bottom: 20px;">Thursday WIP Meeting Accruals</h3>
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Building</th>
+                                <th>Phase</th>
+                                <th style="text-align: right;">Materials</th>
+                                <th style="text-align: right;">Labor</th>
+                                <th style="text-align: right;">Sub</th>
+                                <th style="text-align: right;">Equipment</th>
+                                <th style="text-align: right;">Total This Week</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${phases.map(p => {
+                                const building = appData.buildings.find(b => b.id === p.buildingId);
+                                const weeklyTotal = (p.weeklyMat || 0) + (p.weeklyLabor || 0) + (p.weeklySub || 0) + (p.weeklyEquip || 0);
+                                return `
+                                    <tr>
+                                        <td>${building?.name || ''}</td>
+                                        <td>${p.phase}</td>
+                                        <td style="text-align: right;">${formatCurrency(p.weeklyMat)}</td>
+                                        <td style="text-align: right;">${formatCurrency(p.weeklyLabor)}</td>
+                                        <td style="text-align: right;">${formatCurrency(p.weeklySub)}</td>
+                                        <td style="text-align: right;">${formatCurrency(p.weeklyEquip)}</td>
+                                        <td style="text-align: right; font-weight: 600;">${formatCurrency(weeklyTotal)}</td>
+                                    </tr>
+                                `;
+                            }).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+            container.appendChild(card);
+        }
+
+        function renderJobCosts(jobId) {
+            const job = appData.jobs.find(j => j.id === jobId);
+            if (!job) return;
+            document.getElementById('jobCostMaterials').value = job.materials || '';
+            document.getElementById('jobCostLabor').value = job.labor || '';
+            document.getElementById('jobCostSub').value = job.sub || '';
+            document.getElementById('jobCostEquipment').value = job.equipment || '';
+            document.getElementById('jobCostHoursWeek').value = job.hoursWeek || '';
+            document.getElementById('jobCostHoursTotal').value = job.hoursTotal || '';
+            document.getElementById('jobCostRate').value = job.rate || 40;
+            updateJobCostSummary(jobId);
+        }
+
+        function saveJobCosts() {
+            const job = appData.jobs.find(j => j.id === appState.currentJobId);
+            if (!job) return;
+            job.materials = parseFloat(document.getElementById('jobCostMaterials').value) || 0;
+            job.sub = parseFloat(document.getElementById('jobCostSub').value) || 0;
+            job.equipment = parseFloat(document.getElementById('jobCostEquipment').value) || 0;
+            job.hoursWeek = parseFloat(document.getElementById('jobCostHoursWeek').value) || 0;
+            job.hoursTotal = parseFloat(document.getElementById('jobCostHoursTotal').value) || 0;
+            job.rate = parseFloat(document.getElementById('jobCostRate').value) || 40;
+            // Auto-calculate labor $ from total hours × rate
+            job.labor = job.hoursTotal * job.rate;
+            document.getElementById('jobCostLabor').value = job.labor.toFixed(2);
+            saveData();
+            updateJobCostSummary(appState.currentJobId);
+            // Update the summary cards too
+            const costs = getJobTotalCost(appState.currentJobId);
+            const profit = (job.contractAmount || 0) - costs.total;
+            const marginPct = job.contractAmount > 0 ? ((profit / job.contractAmount) * 100).toFixed(1) : 0;
+            document.getElementById('job-summary-cost').textContent = formatCurrency(costs.total);
+            document.getElementById('job-summary-profit').textContent = formatCurrency(profit);
+            document.getElementById('job-summary-margin').textContent = marginPct + '%';
+        }
+
+        function updateJobCostSummary(jobId) {
+            const job = appData.jobs.find(j => j.id === jobId);
+            if (!job) return;
+            const jobLevelTotal = (job.materials || 0) + (job.labor || 0) + (job.sub || 0) + (job.equipment || 0);
+            const computedLabor = (job.hoursTotal || 0) * (job.rate || 40);
+            const costs = getJobTotalCost(jobId);
+            const phaseBuildingCost = costs.phaseCost + costs.buildingCost;
+            document.getElementById('jobCostTotal').textContent = formatCurrency(jobLevelTotal);
+            document.getElementById('jobCostLaborBurden').textContent = formatCurrency(computedLabor);
+            document.getElementById('jobCostFromPhases').textContent = formatCurrency(phaseBuildingCost);
+        }
+
+        function getJobContractAmount() {
+            const job = appData.jobs.find(j => j.id === appState.currentJobId);
+            return job ? (job.contractAmount || 0) : 0;
+        }
+
+        function syncBuildingBudgetFromPct() {
+            const pct = parseFloat(document.getElementById('buildingBudgetPct').value) || 0;
+            const contractAmt = getJobContractAmount();
+            if (contractAmt > 0) {
+                const budget = (contractAmt * pct / 100);
+                document.getElementById('buildingBudget').value = budget.toFixed(2);
+                document.getElementById('buildingBudgetHint').textContent = pct + '% of ' + formatCurrency(contractAmt) + ' = ' + formatCurrency(budget);
             }
         }
 
-        // ==================== ESTIMATE TAB ====================
+        function syncBuildingBudgetFromDollar() {
+            const dollars = parseFloat(document.getElementById('buildingBudget').value) || 0;
+            const contractAmt = getJobContractAmount();
+            if (contractAmt > 0) {
+                const pct = (dollars / contractAmt * 100);
+                document.getElementById('buildingBudgetPct').value = pct.toFixed(1);
+                document.getElementById('buildingBudgetHint').textContent = pct.toFixed(1) + '% of ' + formatCurrency(contractAmt) + ' = ' + formatCurrency(dollars);
+            }
+        }
+
+        function openAddBuildingToJobModal() {
+            appState.editBuildingId = null;
+            document.getElementById('buildingModalHeader').textContent = 'Add Building';
+            document.getElementById('saveBuildingBtn').textContent = 'Add Building';
+            document.getElementById('deleteBuildingBtn').style.display = 'none';
+            document.getElementById('buildingName').value = '';
+            document.getElementById('buildingBudgetPct').value = '';
+            document.getElementById('buildingBudget').value = '';
+            document.getElementById('buildingBudgetHint').textContent = 'Contract: ' + formatCurrency(getJobContractAmount());
+            document.getElementById('buildingAddress').value = '';
+            document.getElementById('buildingMaterials').value = '';
+            document.getElementById('buildingLabor').value = '';
+            document.getElementById('buildingSub').value = '';
+            document.getElementById('buildingEquipment').value = '';
+            document.getElementById('buildingHoursWeek').value = '';
+            document.getElementById('buildingHoursTotal').value = '';
+            document.getElementById('buildingRate').value = '40';
+            openModal('addBuildingModal');
+        }
+
+        function editBuilding(buildingId) {
+            const building = appData.buildings.find(b => b.id === buildingId);
+            if (!building) return;
+
+            appState.editBuildingId = buildingId;
+            document.getElementById('buildingModalHeader').textContent = 'Edit Building';
+            document.getElementById('saveBuildingBtn').textContent = 'Save Changes';
+            document.getElementById('deleteBuildingBtn').style.display = 'inline-block';
+            document.getElementById('buildingName').value = building.name || '';
+            document.getElementById('buildingBudget').value = building.budget || '';
+            document.getElementById('buildingAddress').value = building.address || '';
+            document.getElementById('buildingMaterials').value = building.materials || '';
+            document.getElementById('buildingLabor').value = building.labor || '';
+            document.getElementById('buildingSub').value = building.sub || '';
+            document.getElementById('buildingEquipment').value = building.equipment || '';
+            document.getElementById('buildingHoursWeek').value = building.hoursWeek || '';
+            document.getElementById('buildingHoursTotal').value = building.hoursTotal || '';
+            document.getElementById('buildingRate').value = building.rate || 40;
+
+            const contractAmt = getJobContractAmount();
+            if (contractAmt > 0 && building.budget) {
+                const pct = (building.budget / contractAmt * 100);
+                document.getElementById('buildingBudgetPct').value = pct.toFixed(1);
+                document.getElementById('buildingBudgetHint').textContent = pct.toFixed(1) + '% of ' + formatCurrency(contractAmt) + ' = ' + formatCurrency(building.budget);
+            } else {
+                document.getElementById('buildingBudgetPct').value = building.budgetPct || '';
+                document.getElementById('buildingBudgetHint').textContent = 'Contract: ' + formatCurrency(contractAmt);
+            }
+            openModal('addBuildingModal');
+        }
+
+        function deleteBuilding() {
+            if (!appState.editBuildingId) return;
+            const phases = appData.phases.filter(p => p.buildingId === appState.editBuildingId);
+            if (phases.length > 0) {
+                if (!confirm('This building has ' + phases.length + ' phase(s). Delete the building AND all its phases?')) return;
+                appData.phases = appData.phases.filter(p => p.buildingId !== appState.editBuildingId);
+            } else {
+                if (!confirm('Delete this building?')) return;
+            }
+            appData.buildings = appData.buildings.filter(b => b.id !== appState.editBuildingId);
+            appState.editBuildingId = null;
+            saveData();
+            closeModal('addBuildingModal');
+            renderJobDetail(appState.currentJobId);
+        }
+
+        function saveBuilding() {
+            const hoursTotal = parseFloat(document.getElementById('buildingHoursTotal').value) || 0;
+            const rate = parseFloat(document.getElementById('buildingRate').value) || 40;
+            const formData = {
+                name: document.getElementById('buildingName').value,
+                budget: parseFloat(document.getElementById('buildingBudget').value) || 0,
+                budgetPct: parseFloat(document.getElementById('buildingBudgetPct').value) || 0,
+                address: document.getElementById('buildingAddress').value,
+                materials: parseFloat(document.getElementById('buildingMaterials').value) || 0,
+                labor: hoursTotal * rate,
+                sub: parseFloat(document.getElementById('buildingSub').value) || 0,
+                equipment: parseFloat(document.getElementById('buildingEquipment').value) || 0,
+                hoursWeek: parseFloat(document.getElementById('buildingHoursWeek').value) || 0,
+                hoursTotal: hoursTotal,
+                rate: rate
+            };
+
+            if (appState.editBuildingId) {
+                const idx = appData.buildings.findIndex(b => b.id === appState.editBuildingId);
+                if (idx !== -1) {
+                    Object.assign(appData.buildings[idx], formData);
+                }
+                appState.editBuildingId = null;
+            } else {
+                const building = Object.assign({
+                    id: 'b' + Date.now(),
+                    jobId: appState.currentJobId
+                }, formData);
+                appData.buildings.push(building);
+            }
+            saveData();
+            closeModal('addBuildingModal');
+            renderJobDetail(appState.currentJobId);
+        }
+
+        function getSelectedBuildingBudget() {
+            const buildingId = document.getElementById('phaseBuilding').value;
+            const building = appData.buildings.find(b => b.id === buildingId);
+            return building ? (building.budget || 0) : 0;
+        }
+
+        function syncBudgetFromPct() {
+            const pct = parseFloat(document.getElementById('phaseBudgetPct').value) || 0;
+            const bldgBudget = getSelectedBuildingBudget();
+            if (bldgBudget > 0) {
+                document.getElementById('phaseBudget').value = (bldgBudget * pct / 100).toFixed(2);
+            }
+        }
+
+        function syncBudgetFromDollar() {
+            const dollars = parseFloat(document.getElementById('phaseBudget').value) || 0;
+            const bldgBudget = getSelectedBuildingBudget();
+            if (bldgBudget > 0) {
+                document.getElementById('phaseBudgetPct').value = (dollars / bldgBudget * 100).toFixed(1);
+            }
+        }
+
+        function openAddPhaseToJobModal() {
+            appState.editPhaseId = null;
+            document.getElementById('phaseModalHeader').textContent = 'Add Phase Entry';
+            document.getElementById('savePhaseBtn').textContent = 'Add Phase';
+            document.getElementById('deletePhaseBtn').style.display = 'none';
+
+            const buildings = appData.buildings.filter(b => b.jobId === appState.currentJobId);
+            const select = document.getElementById('phaseBuilding');
+            select.innerHTML = '<option value="">-- Select Building --</option>';
+            buildings.forEach(b => {
+                const opt = document.createElement('option');
+                opt.value = b.id;
+                opt.textContent = b.name;
+                select.appendChild(opt);
+            });
+
+            document.getElementById('phaseType').value = '';
+            document.getElementById('phasePercent').value = '0';
+            document.getElementById('phaseMaterials').value = '';
+            document.getElementById('phaseLabor').value = '';
+            document.getElementById('phaseSub').value = '';
+            document.getElementById('phaseEquipment').value = '';
+            document.getElementById('phaseBudgetPct').value = '';
+            document.getElementById('phaseBudget').value = '';
+            document.getElementById('phaseHoursWeek').value = '';
+            document.getElementById('phaseHoursTotal').value = '';
+            document.getElementById('phaseRate').value = '40';
+            document.getElementById('phaseNotes').value = '';
+            openModal('addPhaseModal');
+        }
+
+        function editPhase(phaseId) {
+            const phase = appData.phases.find(p => p.id === phaseId);
+            if (!phase) return;
+
+            appState.editPhaseId = phaseId;
+            document.getElementById('phaseModalHeader').textContent = 'Edit Phase Entry';
+            document.getElementById('savePhaseBtn').textContent = 'Save Changes';
+            document.getElementById('deletePhaseBtn').style.display = 'inline-block';
+
+            const buildings = appData.buildings.filter(b => b.jobId === phase.jobId);
+            const select = document.getElementById('phaseBuilding');
+            select.innerHTML = '<option value="">-- Select Building --</option>';
+            buildings.forEach(b => {
+                const opt = document.createElement('option');
+                opt.value = b.id;
+                opt.textContent = b.name;
+                select.appendChild(opt);
+            });
+
+            select.value = phase.buildingId || '';
+            document.getElementById('phaseType').value = phase.phase || '';
+            document.getElementById('phasePercent').value = phase.pctComplete || 0;
+            document.getElementById('phaseMaterials').value = phase.materials || '';
+            document.getElementById('phaseLabor').value = phase.labor || '';
+            document.getElementById('phaseSub').value = phase.sub || '';
+            document.getElementById('phaseEquipment').value = phase.equipment || '';
+            document.getElementById('phaseBudget').value = phase.phaseBudget || '';
+            // Calculate and show the budget percentage
+            const bldg = appData.buildings.find(b => b.id === phase.buildingId);
+            const bldgBudget = bldg ? (bldg.budget || 0) : 0;
+            if (bldgBudget > 0 && phase.phaseBudget) {
+                document.getElementById('phaseBudgetPct').value = (phase.phaseBudget / bldgBudget * 100).toFixed(1);
+            } else {
+                document.getElementById('phaseBudgetPct').value = '';
+            }
+            document.getElementById('phaseHoursWeek').value = phase.hoursWeek || '';
+            document.getElementById('phaseHoursTotal').value = phase.hoursTotal || '';
+            document.getElementById('phaseRate').value = phase.rate || 40;
+            document.getElementById('phaseNotes').value = phase.notes || '';
+            openModal('addPhaseModal');
+        }
+
+        function deletePhase() {
+            if (!appState.editPhaseId) return;
+            if (!confirm('Delete this phase entry? This cannot be undone.')) return;
+            appData.phases = appData.phases.filter(p => p.id !== appState.editPhaseId);
+            appState.editPhaseId = null;
+            saveData();
+            closeModal('addPhaseModal');
+            renderJobDetail(appState.currentJobId);
+        }
+
+        function savePhase() {
+            const hoursTotal = parseFloat(document.getElementById('phaseHoursTotal').value) || 0;
+            const rate = parseFloat(document.getElementById('phaseRate').value) || 40;
+            const formData = {
+                buildingId: document.getElementById('phaseBuilding').value,
+                phase: document.getElementById('phaseType').value,
+                pctComplete: parseFloat(document.getElementById('phasePercent').value) || 0,
+                materials: parseFloat(document.getElementById('phaseMaterials').value) || 0,
+                labor: hoursTotal * rate,
+                sub: parseFloat(document.getElementById('phaseSub').value) || 0,
+                equipment: parseFloat(document.getElementById('phaseEquipment').value) || 0,
+                phaseBudget: parseFloat(document.getElementById('phaseBudget').value) || 0,
+                hoursWeek: parseFloat(document.getElementById('phaseHoursWeek').value) || 0,
+                hoursTotal: hoursTotal,
+                rate: rate,
+                notes: document.getElementById('phaseNotes').value
+            };
+
+            if (appState.editPhaseId) {
+                const idx = appData.phases.findIndex(p => p.id === appState.editPhaseId);
+                if (idx !== -1) {
+                    Object.assign(appData.phases[idx], formData);
+                }
+                appState.editPhaseId = null;
+            } else {
+                const phase = Object.assign({
+                    id: 'p' + Date.now(),
+                    jobId: appState.currentJobId,
+                    weeklyMat: 0,
+                    weeklyLabor: 0,
+                    weeklySub: 0,
+                    weeklyEquip: 0,
+                    dateAdded: new Date().toISOString()
+                }, formData);
+                appData.phases.push(phase);
+            }
+            saveData();
+            closeModal('addPhaseModal');
+            renderJobDetail(appState.currentJobId);
+        }
+
+        function openAddSubToJobModal() {
+            const buildings = appData.buildings.filter(b => b.jobId === appState.currentJobId);
+            const select = document.getElementById('subBuilding');
+            select.innerHTML = '<option value="">-- Select Building --</option>';
+            buildings.forEach(b => {
+                const opt = document.createElement('option');
+                opt.value = b.id;
+                opt.textContent = b.name;
+                select.appendChild(opt);
+            });
+
+            document.getElementById('subName').value = '';
+            document.getElementById('subTrade').value = '';
+            document.getElementById('subContract').value = '';
+            document.getElementById('subBilled').value = '';
+            openModal('addSubModal');
+        }
+
+        function saveSub() {
+            const sub = {
+                id: 's' + Date.now(),
+                jobId: appState.currentJobId,
+                name: document.getElementById('subName').value,
+                trade: document.getElementById('subTrade').value,
+                buildingId: document.getElementById('subBuilding').value,
+                contractAmt: parseFloat(document.getElementById('subContract').value) || 0,
+                billedToDate: parseFloat(document.getElementById('subBilled').value) || 0
+            };
+            appData.subs.push(sub);
+            saveData();
+            closeModal('addSubModal');
+            renderJobDetail(appState.currentJobId);
+        }
+
+        // ==================== ESTIMATES FUNCTIONS (FROM ORIGINAL FILE) ====================
+        function renderEstimatesList() {
+            const tbody = document.querySelector('#estimates-table tbody');
+            tbody.innerHTML = '';
+
+            appData.estimates.forEach(est => {
+                const lines = appData.estimateLines.filter(l => l.estimateId === est.id);
+                let baseCost = 0;
+                lines.forEach(l => {
+                    baseCost += (l.qty || 0) * (l.unitCost || 0);
+                });
+
+                const clientPrice = baseCost * (1 + (est.defaultMarkup || 0) / 100);
+
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td><strong>${est.title}</strong></td>
+                    <td>${est.client} - ${est.community}</td>
+                    <td style="text-align: right;">${formatCurrency(baseCost)}</td>
+                    <td style="text-align: right;">${est.defaultMarkup}%</td>
+                    <td style="text-align: right;">${formatCurrency(clientPrice)}</td>
+                    <td style="text-align: center;">
+                        <button class="small" onclick="editEstimate('${est.id}')">Edit</button>
+                        <button class="small" onclick="previewEstimate('${est.id}')">Preview</button>
+                        <button class="small danger" onclick="deleteEstimate('${est.id}')">Delete</button>
+                    </td>
+                `;
+                tbody.appendChild(row);
+            });
+        }
 
         function openNewEstimateForm() {
             document.getElementById('estTitle').value = '';
+            document.getElementById('estJobType').value = '';
             document.getElementById('estClient').value = '';
-            document.getElementById('estAddress').value = '';
+            document.getElementById('estCommunity').value = '';
+            document.getElementById('estPropertyAddr').value = '';
+            document.getElementById('estBillingAddr').value = '';
+            document.getElementById('estManagerName').value = '';
+            document.getElementById('estManagerEmail').value = '';
+            document.getElementById('estManagerPhone').value = '';
+            document.getElementById('estDefaultMarkup').value = '100';
             openModal('newEstimateModal');
         }
 
         function createNewEstimate() {
-            const title = document.getElementById('estTitle').value.trim();
-            const client = document.getElementById('estClient').value.trim();
-            const address = document.getElementById('estAddress').value.trim();
-            
-            if (!title || !client) {
-                alert('Please fill in title and client');
-                return;
-            }
-            
             const est = {
                 id: 'e' + Date.now(),
-                title: title,
-                client: client,
-                address: address,
-                baseCost: 0,
-                markup: 0,
-                clientPrice: 0,
-                created: new Date().toISOString()
+                title: document.getElementById('estTitle').value,
+                jobType: document.getElementById('estJobType').value,
+                client: document.getElementById('estClient').value,
+                community: document.getElementById('estCommunity').value,
+                propertyAddr: document.getElementById('estPropertyAddr').value,
+                billingAddr: document.getElementById('estBillingAddr').value,
+                managerName: document.getElementById('estManagerName').value,
+                managerEmail: document.getElementById('estManagerEmail').value,
+                managerPhone: document.getElementById('estManagerPhone').value,
+                defaultMarkup: parseFloat(document.getElementById('estDefaultMarkup').value) || 100
             };
             appData.estimates.push(est);
             saveData();
@@ -647,33 +2409,8 @@
             renderEstimatesList();
         }
 
-        function renderEstimatesList() {
-            const tbody = document.querySelector('#estimates-table tbody');
-            tbody.innerHTML = '';
-            
-            appData.estimates.forEach(est => {
-                const row = document.createElement('tr');
-                row.style.cursor = 'pointer';
-                row.onclick = function() { editEstimate(est.id); };
-                const baseCost = appData.estimateLines.filter(l => l.estimateId === est.id).reduce((sum, l) => sum + (l.unitPrice * l.quantity), 0);
-                const markup = est.markup || 0;
-                const clientPrice = baseCost * (1 + markup / 100);
-                row.innerHTML = `
-                    <td><strong>${est.title}</strong><br><small>${est.client}</small></td>
-                    <td>${est.client}</td>
-                    <td style="text-align: right;">${formatCurrency(baseCost)}</td>
-                    <td style="text-align: right;">${markup.toFixed(1)}%</td>
-                    <td style="text-align: right;">${formatCurrency(clientPrice)}</td>
-                    <td style="text-align: center;">
-                        <button class="small secondary" onclick="event.stopPropagation(); editEstimate('${est.id}')">Edit</button>
-                        <button class="small secondary" onclick="event.stopPropagation(); deleteEstimate('${est.id}')">Delete</button>
-                    </td>
-                `;
-                tbody.appendChild(row);
-            });
-        }
-
         function editEstimate(estId) {
+            // Placeholder for edit functionality
             alert('Edit estimate: ' + estId);
         }
 
@@ -686,200 +2423,16 @@
             }
         }
 
-        // ==================== MODALS & HELPERS ====================
-
-        function openAddBuildingToJobModal() {
-            document.getElementById('buildingName').value = '';
-            document.getElementById('buildingAddress').value = '';
-            document.getElementById('buildingBudgetPct').value = '';
-            document.getElementById('buildingBudget').value = '';
-            document.getElementById('buildingMaterials').value = '';
-            document.getElementById('buildingLabor').value = '';
-            document.getElementById('buildingSub').value = '';
-            document.getElementById('buildingEquipment').value = '';
-            document.getElementById('buildingHoursWeek').value = '0';
-            document.getElementById('buildingHoursTotal').value = '0';
-            document.getElementById('buildingRate').value = '40';
-            document.getElementById('deleteBuildingBtn').style.display = 'none';
-            document.getElementById('saveBuildingBtn').textContent = 'Add Building';
-            document.getElementById('buildingModalHeader').textContent = 'Add Building';
-            openModal('addBuildingModal');
+        function previewEstimate(estId) {
+            alert('Preview estimate: ' + estId);
         }
 
-        function saveBuilding() {
-            const name = document.getElementById('buildingName').value.trim();
-            if (!name) {
-                alert('Building name required');
-                return;
-            }
-            const job = appData.jobs.find(j => j.id === currentJobId);
-            if (job) {
-                const building = {
-                    id: 'b' + Date.now(),
-                    name: name,
-                    address: document.getElementById('buildingAddress').value,
-                    budget: parseFloat(document.getElementById('buildingBudget').value) || 0,
-                    budgetPct: parseFloat(document.getElementById('buildingBudgetPct').value) || 0,
-                    materials: parseFloat(document.getElementById('buildingMaterials').value) || 0,
-                    labor: parseFloat(document.getElementById('buildingLabor').value) || 0,
-                    sub: parseFloat(document.getElementById('buildingSub').value) || 0,
-                    equipment: parseFloat(document.getElementById('buildingEquipment').value) || 0,
-                    hoursWeek: parseFloat(document.getElementById('buildingHoursWeek').value) || 0,
-                    hoursTotal: parseFloat(document.getElementById('buildingHoursTotal').value) || 0,
-                    rate: parseFloat(document.getElementById('buildingRate').value) || 40,
-                    phases: []
-                };
-                if (!job.buildings) job.buildings = [];
-                job.buildings.push(building);
-                saveData();
-                closeModal('addBuildingModal');
-                updateJobDetailView();
-            }
+        function exportWIPToCSV() {
+            alert('Export to CSV');
         }
 
-        function editBuilding(buildingId) {
-            alert('Edit building: ' + buildingId);
-        }
-
-        function deleteBuilding() {
-            alert('Delete building');
-        }
-
-        function openAddPhaseToJobModal() {
-            document.getElementById('phaseBuilding').innerHTML = '';
-            const job = appData.jobs.find(j => j.id === currentJobId);
-            if (job && job.buildings) {
-                job.buildings.forEach(b => {
-                    const opt = document.createElement('option');
-                    opt.value = b.id;
-                    opt.textContent = b.name;
-                    document.getElementById('phaseBuilding').appendChild(opt);
-                });
-            }
-            document.getElementById('phaseType').value = '';
-            document.getElementById('phasePercent').value = '0';
-            document.getElementById('phaseMaterials').value = '';
-            document.getElementById('phaseLabor').value = '';
-            document.getElementById('phaseSub').value = '';
-            document.getElementById('phaseEquipment').value = '';
-            document.getElementById('phaseBudgetPct').value = '';
-            document.getElementById('phaseBudget').value = '';
-            document.getElementById('phaseHoursWeek').value = '0';
-            document.getElementById('phaseHoursTotal').value = '0';
-            document.getElementById('phaseRate').value = '40';
-            document.getElementById('phaseNotes').value = '';
-            document.getElementById('deletePhaseBtn').style.display = 'none';
-            document.getElementById('savePhaseBtn').textContent = 'Add Phase';
-            document.getElementById('phaseModalHeader').textContent = 'Add Phase Entry';
-            openModal('addPhaseModal');
-        }
-
-        function savePhase() {
-            const buildingId = document.getElementById('phaseBuilding').value;
-            const phaseType = document.getElementById('phaseType').value;
-            if (!buildingId || !phaseType) {
-                alert('Please select building and phase');
-                return;
-            }
-            const job = appData.jobs.find(j => j.id === currentJobId);
-            if (job) {
-                const phase = {
-                    id: 'p' + Date.now(),
-                    buildingId: buildingId,
-                    phase: phaseType,
-                    percent: parseFloat(document.getElementById('phasePercent').value) || 0,
-                    materials: parseFloat(document.getElementById('phaseMaterials').value) || 0,
-                    labor: parseFloat(document.getElementById('phaseLabor').value) || 0,
-                    sub: parseFloat(document.getElementById('phaseSub').value) || 0,
-                    equipment: parseFloat(document.getElementById('phaseEquipment').value) || 0,
-                    budget: parseFloat(document.getElementById('phaseBudget').value) || 0,
-                    budgetPct: parseFloat(document.getElementById('phaseBudgetPct').value) || 0,
-                    hoursWeek: parseFloat(document.getElementById('phaseHoursWeek').value) || 0,
-                    hoursTotal: parseFloat(document.getElementById('phaseHoursTotal').value) || 0,
-                    rate: parseFloat(document.getElementById('phaseRate').value) || 40,
-                    notes: document.getElementById('phaseNotes').value
-                };
-                if (!job.phases) job.phases = [];
-                job.phases.push(phase);
-                saveData();
-                closeModal('addPhaseModal');
-                updateJobDetailView();
-            }
-        }
-
-        function deletePhase() {
-            alert('Delete phase');
-        }
-
-        function openAddSubToJobModal() {
-            document.getElementById('subBuilding').innerHTML = '';
-            const job = appData.jobs.find(j => j.id === currentJobId);
-            if (job && job.buildings) {
-                job.buildings.forEach(b => {
-                    const opt = document.createElement('option');
-                    opt.value = b.id;
-                    opt.textContent = b.name;
-                    document.getElementById('subBuilding').appendChild(opt);
-                });
-            }
-            document.getElementById('subName').value = '';
-            document.getElementById('subTrade').value = '';
-            document.getElementById('subContractAmount').value = '';
-            document.getElementById('subBilled').value = '';
-            document.getElementById('deleteSubBtn').style.display = 'none';
-            document.getElementById('saveSubBtn').textContent = 'Add Sub';
-            openModal('addSubModal');
-        }
-
-        function saveSub() {
-            const name = document.getElementById('subName').value.trim();
-            const trade = document.getElementById('subTrade').value.trim();
-            const buildingId = document.getElementById('subBuilding').value;
-            if (!name || !trade) {
-                alert('Please fill in all fields');
-                return;
-            }
-            const job = appData.jobs.find(j => j.id === currentJobId);
-            if (job) {
-                const sub = {
-                    id: 's' + Date.now(),
-                    jobId: currentJobId,
-                    name: name,
-                    trade: trade,
-                    buildingId: buildingId,
-                    contractAmt: parseFloat(document.getElementById('subContractAmount').value) || 0,
-                    billedToDate: parseFloat(document.getElementById('subBilled').value) || 0
-                };
-                if (!job.subs) job.subs = [];
-                job.subs.push(sub);
-                saveData();
-                closeModal('addSubModal');
-                updateJobDetailView();
-            }
-        }
-
-        function deleteSub() {
-            alert('Delete sub');
-        }
-
-        function syncBuildingBudgetFromPct() {
-            const job = appData.jobs.find(j => j.id === currentJobId);
-            if (job) {
-                const pct = parseFloat(document.getElementById('buildingBudgetPct').value) || 0;
-                const contractAmt = job.contractAmount || 0;
-                const dollars = (pct / 100) * contractAmt;
-                document.getElementById('buildingBudget').value = dollars.toFixed(2);
-                document.getElementById('buildingBudgetHint').textContent = pct.toFixed(1) + '% of ' + formatCurrency(contractAmt) + ' = ' + formatCurrency(dollars);
-            }
-        }
-
-        function syncBuildingBudgetFromDollar() {
-            const job = appData.jobs.find(j => j.id === currentJobId);
-            if (job) {
-                const dollars = parseFloat(document.getElementById('buildingBudget').value) || 0;
-                const contractAmt = job.contractAmount || 0;
-                const pct = contractAmt > 0 ? (dollars / contractAmt) * 100 : 0;
-                document.getElementById('buildingBudgetPct').value = pct.toFixed(1);
-                document.getElementById('buildingBudgetHint').textContent = pct.toFixed(1) + '% of ' + formatCurrency(contractAmt) + ' = ' + formatCurrency(dollars);
-            }
-        }
+        // ==================== START APP ====================
+        document.addEventListener('DOMContentLoaded', initializeApp);
+    </script>
+</body>
+</html>
