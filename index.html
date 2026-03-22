@@ -878,7 +878,7 @@
                             <button class="sub-tab-btn-job" data-subtab="job-buildings">Buildings</button>
                             <button class="sub-tab-btn-job" data-subtab="job-phases">Phases</button>
                             <button class="sub-tab-btn-job" data-subtab="job-subs">Subcontractors</button>
-                            <button class="sub-tab-btn-job" data-subtab="job-labor">Labor & Burden</button>
+                            <button class="sub-tab-btn-job" data-subtab="job-labor">Labor / Burden</button>
                             <button class="sub-tab-btn-job" data-subtab="job-weekly">Weekly Accruals</button>
                         </div>
 
@@ -917,8 +917,8 @@
                                         <input type="number" id="jobCostMaterials" placeholder="0.00" step="0.01" oninput="saveJobCosts()">
                                     </div>
                                     <div class="form-group">
-                                        <label>Labor $</label>
-                                        <input type="number" id="jobCostLabor" placeholder="0.00" step="0.01" oninput="saveJobCosts()">
+                                        <label>Labor $ (auto: hours × rate)</label>
+                                        <input type="number" id="jobCostLabor" placeholder="0.00" step="0.01" readonly style="opacity: 0.7; cursor: not-allowed;">
                                     </div>
                                     <div class="form-group">
                                         <label>Subcontractor $</label>
@@ -938,11 +938,7 @@
                                     </div>
                                     <div class="form-group">
                                         <label>Avg Hourly Rate</label>
-                                        <input type="number" id="jobCostRate" placeholder="0.00" step="0.01" oninput="saveJobCosts()">
-                                    </div>
-                                    <div class="form-group">
-                                        <label>Burden Rate %</label>
-                                        <input type="number" id="jobCostBurden" value="35" step="0.1" oninput="saveJobCosts()">
+                                        <input type="number" id="jobCostRate" placeholder="40.00" step="0.01" value="40" oninput="saveJobCosts()">
                                     </div>
                                 </div>
                                 <div style="margin-top: 15px; padding: 15px; background: var(--surface2); border-radius: 8px;">
@@ -952,7 +948,7 @@
                                             <div style="font-size: 18px; font-weight: 700; color: var(--accent);" id="jobCostTotal">$0.00</div>
                                         </div>
                                         <div>
-                                            <div style="font-size: 12px; color: var(--text-dim);">Labor w/ Burden</div>
+                                            <div style="font-size: 12px; color: var(--text-dim);">Computed Labor (Hrs × Rate)</div>
                                             <div style="font-size: 18px; font-weight: 700; color: var(--accent);" id="jobCostLaborBurden">$0.00</div>
                                         </div>
                                         <div>
@@ -1021,8 +1017,7 @@
                                             <th style="text-align: right;">Total Hours</th>
                                             <th style="text-align: right;">Avg Rate</th>
                                             <th style="text-align: right;">Labor Cost</th>
-                                            <th style="text-align: right;">Burden %</th>
-                                            <th style="text-align: right;">Total w/ Burden</th>
+                                            <th style="text-align: right;">Computed (Hrs × Rate)</th>
                                         </tr>
                                     </thead>
                                     <tbody></tbody>
@@ -1061,196 +1056,7 @@
                         </div>
                     </div>
 
-                    <div id="estimate-form-view" style="display: none;">
-                        <button class="secondary small" onclick="backToEstimatesList()" style="margin-bottom: 20px;">← Back to Estimates</button>
-
-                        <div class="estimate-grid">
-                            <div>
-                                <div class="form-group">
-                                    <label>Estimate Title</label>
-                                    <input type="text" id="estTitle" placeholder="e.g., 123 Main St - Flooring">
-                                </div>
-                                <div class="form-group">
-                                    <label>Client/Community</label>
-                                    <input type="text" id="estClient" placeholder="e.g., Client Name or Community">
-                                </div>
-                                <div class="form-group">
-                                    <label>Description</label>
-                                    <textarea id="estDescription" placeholder="Estimate details..."></textarea>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="card" style="margin-bottom: 20px;">
-                            <h3 style="margin-bottom: 15px;">Line Items</h3>
-                            <div id="line-items-container"></div>
-                            <button onclick="addEstimateLineItem()" class="secondary" style="margin-top: 10px;">+ Add Line Item</button>
-                        </div>
-
-                        <div class="card">
-                            <h3 style="margin-bottom: 20px;">Summary & Pricing</h3>
-                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
-                                <div>
-                                    <label>Subtotal (Materials + Labor)</label>
-                                    <div style="font-size: 20px; font-weight: 700; color: var(--accent); margin: 10px 0;">$<span id="estSubtotal">0.00</span></div>
-                                </div>
-                                <div>
-                                    <label>Markup %</label>
-                                    <input type="number" id="estMarkup" value="30" step="0.1" oninput="recalculateEstimate()">
-                                </div>
-                                <div>
-                                    <label>Markup Amount</label>
-                                    <div style="font-size: 20px; font-weight: 700; color: var(--green); margin: 10px 0;">$<span id="estMarkupAmount">0.00</span></div>
-                                </div>
-                                <div>
-                                    <label>Client Price</label>
-                                    <div style="font-size: 28px; font-weight: 700; color: var(--accent); margin: 10px 0;">$<span id="estTotal">0.00</span></div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="action-buttons" style="margin-top: 20px;">
-                            <button onclick="openEstimateProposalView()">View/Print Proposal</button>
-                            <button onclick="saveEstimate()" class="secondary">Save Estimate</button>
-                            <button onclick="backToEstimatesList()" class="secondary">Cancel</button>
-                        </div>
-                    </div>
-
-                    <div id="estimate-proposal-view" style="display: none;">
-                        <div class="action-buttons">
-                            <button class="secondary small" onclick="backToEstimateForm()">← Back to Edit</button>
-                            <button onclick="window.print()" class="secondary">Print Proposal</button>
-                            <button onclick="exportProposalHTML()" class="secondary">Export HTML</button>
-                        </div>
-                        <div id="proposal-container"></div>
-                    </div>
-                </div>
-            </div>
-        </main>
-    </div>
-
-    <!-- MODALS -->
-
-    <!-- Add Job Modal -->
-    <div id="addJobModal" class="modal">
-        <div class="modal-content">
-            <div class="modal-header">Add New Job</div>
-            <div class="form-group">
-                <label>Job Number</label>
-                <input type="text" id="jobNumber" placeholder="e.g., J001">
-            </div>
-            <div class="form-group">
-                <label>Job Name</label>
-                <input type="text" id="jobName" placeholder="e.g., 123 Main St - Renovation">
-            </div>
-            <div class="form-group">
-                <label>Market</label>
-                <select id="jobMarket">
-                    <option value="">Select Market</option>
-                    <option value="Single Family">Single Family</option>
-                    <option value="Multi-Family">Multi-Family</option>
-                    <option value="Commercial">Commercial</option>
-                    <option value="Custom Homes">Custom Homes</option>
-                </select>
-            </div>
-            <div class="form-group">
-                <label>Contract Amount</label>
-                <input type="number" id="jobContract" placeholder="0.00" step="0.01">
-            </div>
-            <div class="form-group">
-                <label>Target Margin %</label>
-                <input type="number" id="jobMargin" value="20" step="0.1">
-            </div>
-            <div class="form-group">
-                <label>Status</label>
-                <select id="jobStatus">
-                    <option value="New">New</option>
-                    <option value="In Progress">In Progress</option>
-                    <option value="On Hold">On Hold</option>
-                    <option value="Completed">Completed</option>
-                </select>
-            </div>
-            <div class="modal-footer">
-                <button onclick="closeAddJobModal()" class="secondary">Cancel</button>
-                <button onclick="saveNewJob()">Add Job</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- Add Building Modal -->
-    <div id="addBuildingModal" class="modal">
-        <div class="modal-content">
-            <div class="modal-header">Add Building to Job</div>
-            <div class="form-group">
-                <label>Building Name</label>
-                <input type="text" id="buildingName" placeholder="e.g., Building A, Unit 1, etc.">
-            </div>
-            <div class="form-group">
-                <label>Building Budget ($)</label>
-                <input type="number" id="buildingBudget" placeholder="0.00" step="0.01">
-            </div>
-            <div class="modal-footer">
-                <button onclick="closeAddBuildingModal()" class="secondary">Cancel</button>
-                <button onclick="saveNewBuilding()">Add Building</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- Add Phase Modal -->
-    <div id="addPhaseModal" class="modal">
-        <div class="modal-content">
-            <div class="modal-header">Add Phase to Job</div>
-            <div class="form-group">
-                <label>Phase Name</label>
-                <input type="text" id="phaseName" placeholder="e.g., Foundation, Framing, etc.">
-            </div>
-            <div class="form-group">
-                <label>Phase Budget ($)</label>
-                <input type="number" id="phaseBudget" placeholder="0.00" step="0.01">
-            </div>
-            <div class="modal-footer">
-                <button onclick="closeAddPhaseModal()" class="secondary">Cancel</button>
-                <button onclick="saveNewPhase()">Add Phase</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- Add Subcontractor Modal -->
-    <div id="addSubModal" class="modal">
-        <div class="modal-content">
-            <div class="modal-header">Add Subcontractor to Job</div>
-            <div class="form-group">
-                <label>Subcontractor Name</label>
-                <input type="text" id="subName" placeholder="e.g., ABC Electrical">
-            </div>
-            <div class="form-group">
-                <label>Trade</label>
-                <select id="subTrade">
-                    <option value="">Select Trade</option>
-                    <option value="Electrical">Electrical</option>
-                    <option value="Plumbing">Plumbing</option>
-                    <option value="HVAC">HVAC</option>
-                    <option value="Framing">Framing</option>
-                    <option value="Roofing">Roofing</option>
-                    <option value="General Labor">General Labor</option>
-                </select>
-            </div>
-            <div class="form-group">
-                <label>Building</label>
-                <select id="subBuilding"></select>
-            </div>
-            <div class="form-group">
-                <label>Contract Amount ($)</label>
-                <input type="number" id="subContract" placeholder="0.00" step="0.01">
-            </div>
-            <div class="modal-footer">
-                <button onclick="closeAddSubModal()" class="secondary">Cancel</button>
-                <button onclick="saveNewSub()">Add Subcontractor</button>
-            </div>
-        </div>
-    </div>
-
-    <scriptmate-editor-view" style="display: none;"></div>
+                    <div id="estimate-editor-view" style="display: none;"></div>
                     <div id="estimate-preview-view" style="display: none;"></div>
                 </div>
             </div>
@@ -1340,8 +1146,8 @@
                         <input type="number" id="buildingMaterials" placeholder="0.00" step="0.01">
                     </div>
                     <div class="form-group">
-                        <label>Labor $</label>
-                        <input type="number" id="buildingLabor" placeholder="0.00" step="0.01">
+                        <label>Labor $ (auto: hours × rate)</label>
+                        <input type="number" id="buildingLabor" placeholder="0.00" step="0.01" readonly style="opacity: 0.7; cursor: not-allowed;">
                     </div>
                 </div>
                 <div class="form-row">
@@ -1366,12 +1172,8 @@
                 </div>
                 <div class="form-row">
                     <div class="form-group">
-                        <label>Avg Hourly Rate</label>
-                        <input type="number" id="buildingRate" placeholder="0.00" step="0.01">
-                    </div>
-                    <div class="form-group">
-                        <label>Burden Rate %</label>
-                        <input type="number" id="buildingBurden" value="35" step="0.1">
+                        <label>Avg Hourly Rate</label>>
+                        <input type="number" id="buildingRate" placeholder="40.00" step="0.01" value="40">
                     </div>
                 </div>
             </div>
@@ -1426,8 +1228,8 @@
                     <input type="number" id="phaseMaterials" placeholder="0.00" step="0.01">
                 </div>
                 <div class="form-group">
-                    <label>Labor Cost</label>
-                    <input type="number" id="phaseLabor" placeholder="0.00" step="0.01">
+                    <label>Labor $ (auto: hours × rate)</label>
+                    <input type="number" id="phaseLabor" placeholder="0.00" step="0.01" readonly style="opacity: 0.7; cursor: not-allowed;">
                 </div>
             </div>
             <div class="form-row">
@@ -1463,11 +1265,7 @@
             <div class="form-row">
                 <div class="form-group">
                     <label>Avg Hourly Rate</label>
-                    <input type="number" id="phaseRate" placeholder="0.00" step="0.01">
-                </div>
-                <div class="form-group">
-                    <label>Burden Rate %</label>
-                    <input type="number" id="phaseBurden" value="35" step="0.1">
+                    <input type="number" id="phaseRate" placeholder="40.00" step="0.01" value="40">
                 </div>
             </div>
             <div class="form-group">
@@ -1964,7 +1762,7 @@
                 row.title = 'Click to edit this phase';
                 row.onclick = function() { editPhase(p.id); };
                 row.innerHTML = `
-                    <td>${building?.name || ''}</td>
+                    <td>${building?.name || ''}</td>>
                     <td>${p.phase}</td>
                     <td>
                         <div class="progress-bar" style="margin-bottom: 4px;">
@@ -2117,8 +1915,7 @@
             phases.forEach(p => {
                 const building = appData.buildings.find(b => b.id === p.buildingId);
                 const laborCost = p.labor || 0;
-                const burdenCost = (laborCost * (p.burden || 0)) / 100;
-                const totalWithBurden = laborCost + burdenCost;
+                const computedLabor = (p.hoursTotal || 0) * (p.rate || 40);
 
                 const row = document.createElement('tr');
                 row.innerHTML = `
@@ -2126,10 +1923,9 @@
                     <td>${p.phase}</td>
                     <td style="text-align: right;">${p.hoursWeek || 0}</td>
                     <td style="text-align: right;">${p.hoursTotal || 0}</td>
-                    <td style="text-align: right;">${formatCurrency(p.rate)}</td>
+                    <td style="text-align: right;">${formatCurrency(p.rate || 40)}</td>
                     <td style="text-align: right;">${formatCurrency(laborCost)}</td>
-                    <td style="text-align: right;">${p.burden || 0}%</td>
-                    <td style="text-align: right;">${formatCurrency(totalWithBurden)}</td>
+                    <td style="text-align: right;">${formatCurrency(computedLabor)}</td>
                 `;
                 tbody.appendChild(row);
             });
@@ -2153,7 +1949,7 @@
                                 <th style="text-align: right;">Materials</th>
                                 <th style="text-align: right;">Labor</th>
                                 <th style="text-align: right;">Sub</th>
-                                <th style="text-align: right;">Equipmentth>
+                                <th style="text-align: right;">Equipment</th>
                                 <th style="text-align: right;">Total This Week</th>
                             </tr>
                         </thead>
@@ -2164,7 +1960,7 @@
                                 return `
                                     <tr>
                                         <td>${building?.name || ''}</td>
-                                        <td>${p.phase}</td>
+                                        <td>${p.phase}
                                         <td style="text-align: right;">${formatCurrency(p.weeklyMat)}</td>
                                         <td style="text-align: right;">${formatCurrency(p.weeklyLabor)}</td>
                                         <td style="text-align: right;">${formatCurrency(p.weeklySub)}</td>
@@ -2189,8 +1985,7 @@
             document.getElementById('jobCostEquipment').value = job.equipment || '';
             document.getElementById('jobCostHoursWeek').value = job.hoursWeek || '';
             document.getElementById('jobCostHoursTotal').value = job.hoursTotal || '';
-            document.getElementById('jobCostRate').value = job.rate || '';
-            document.getElementById('jobCostBurden').value = job.burden || 35;
+            document.getElementById('jobCostRate').value = job.rate || 40;
             updateJobCostSummary(jobId);
         }
 
@@ -2198,13 +1993,14 @@
             const job = appData.jobs.find(j => j.id === appState.currentJobId);
             if (!job) return;
             job.materials = parseFloat(document.getElementById('jobCostMaterials').value) || 0;
-            job.labor = parseFloat(document.getElementById('jobCostLabor').value) || 0;
             job.sub = parseFloat(document.getElementById('jobCostSub').value) || 0;
             job.equipment = parseFloat(document.getElementById('jobCostEquipment').value) || 0;
             job.hoursWeek = parseFloat(document.getElementById('jobCostHoursWeek').value) || 0;
             job.hoursTotal = parseFloat(document.getElementById('jobCostHoursTotal').value) || 0;
-            job.rate = parseFloat(document.getElementById('jobCostRate').value) || 0;
-            job.burden = parseFloat(document.getElementById('jobCostBurden').value) || 0;
+            job.rate = parseFloat(document.getElementById('jobCostRate').value) || 40;
+            // Auto-calculate labor $ from total hours × rate
+            job.labor = job.hoursTotal * job.rate;
+            document.getElementById('jobCostLabor').value = job.labor.toFixed(2);
             saveData();
             updateJobCostSummary(appState.currentJobId);
             // Update the summary cards too
@@ -2220,11 +2016,11 @@
             const job = appData.jobs.find(j => j.id === jobId);
             if (!job) return;
             const jobLevelTotal = (job.materials || 0) + (job.labor || 0) + (job.sub || 0) + (job.equipment || 0);
-            const laborWithBurden = (job.labor || 0) * (1 + (job.burden || 0) / 100);
+            const computedLabor = (job.hoursTotal || 0) * (job.rate || 40);
             const costs = getJobTotalCost(jobId);
             const phaseBuildingCost = costs.phaseCost + costs.buildingCost;
             document.getElementById('jobCostTotal').textContent = formatCurrency(jobLevelTotal);
-            document.getElementById('jobCostLaborBurden').textContent = formatCurrency(laborWithBurden);
+            document.getElementById('jobCostLaborBurden').textContent = formatCurrency(computedLabor);
             document.getElementById('jobCostFromPhases').textContent = formatCurrency(phaseBuildingCost);
         }
 
@@ -2269,8 +2065,7 @@
             document.getElementById('buildingEquipment').value = '';
             document.getElementById('buildingHoursWeek').value = '';
             document.getElementById('buildingHoursTotal').value = '';
-            document.getElementById('buildingRate').value = '';
-            document.getElementById('buildingBurden').value = '35';
+            document.getElementById('buildingRate').value = '40';
             openModal('addBuildingModal');
         }
 
@@ -2291,8 +2086,7 @@
             document.getElementById('buildingEquipment').value = building.equipment || '';
             document.getElementById('buildingHoursWeek').value = building.hoursWeek || '';
             document.getElementById('buildingHoursTotal').value = building.hoursTotal || '';
-            document.getElementById('buildingRate').value = building.rate || '';
-            document.getElementById('buildingBurden').value = building.burden || 35;
+            document.getElementById('buildingRate').value = building.rate || 40;
 
             const contractAmt = getJobContractAmount();
             if (contractAmt > 0 && building.budget) {
@@ -2323,19 +2117,20 @@
         }
 
         function saveBuilding() {
+            const hoursTotal = parseFloat(document.getElementById('buildingHoursTotal').value) || 0;
+            const rate = parseFloat(document.getElementById('buildingRate').value) || 40;
             const formData = {
                 name: document.getElementById('buildingName').value,
                 budget: parseFloat(document.getElementById('buildingBudget').value) || 0,
                 budgetPct: parseFloat(document.getElementById('buildingBudgetPct').value) || 0,
                 address: document.getElementById('buildingAddress').value,
                 materials: parseFloat(document.getElementById('buildingMaterials').value) || 0,
-                labor: parseFloat(document.getElementById('buildingLabor').value) || 0,
+                labor: hoursTotal * rate,
                 sub: parseFloat(document.getElementById('buildingSub').value) || 0,
                 equipment: parseFloat(document.getElementById('buildingEquipment').value) || 0,
                 hoursWeek: parseFloat(document.getElementById('buildingHoursWeek').value) || 0,
-                hoursTotal: parseFloat(document.getElementById('buildingHoursTotal').value) || 0,
-                rate: parseFloat(document.getElementById('buildingRate').value) || 0,
-                burden: parseFloat(document.getElementById('buildingBurden').value) || 0
+                hoursTotal: hoursTotal,
+                rate: rate
             };
 
             if (appState.editBuildingId) {
@@ -2404,8 +2199,7 @@
             document.getElementById('phaseBudget').value = '';
             document.getElementById('phaseHoursWeek').value = '';
             document.getElementById('phaseHoursTotal').value = '';
-            document.getElementById('phaseRate').value = '';
-            document.getElementById('phaseBurden').value = '35';
+            document.getElementById('phaseRate').value = '40';
             document.getElementById('phaseNotes').value = '';
             openModal('addPhaseModal');
         }
@@ -2447,8 +2241,7 @@
             }
             document.getElementById('phaseHoursWeek').value = phase.hoursWeek || '';
             document.getElementById('phaseHoursTotal').value = phase.hoursTotal || '';
-            document.getElementById('phaseRate').value = phase.rate || '';
-            document.getElementById('phaseBurden').value = phase.burden || 35;
+            document.getElementById('phaseRate').value = phase.rate || 40;
             document.getElementById('phaseNotes').value = phase.notes || '';
             openModal('addPhaseModal');
         }
@@ -2464,19 +2257,20 @@
         }
 
         function savePhase() {
+            const hoursTotal = parseFloat(document.getElementById('phaseHoursTotal').value) || 0;
+            const rate = parseFloat(document.getElementById('phaseRate').value) || 40;
             const formData = {
                 buildingId: document.getElementById('phaseBuilding').value,
                 phase: document.getElementById('phaseType').value,
                 pctComplete: parseFloat(document.getElementById('phasePercent').value) || 0,
                 materials: parseFloat(document.getElementById('phaseMaterials').value) || 0,
-                labor: parseFloat(document.getElementById('phaseLabor').value) || 0,
+                labor: hoursTotal * rate,
                 sub: parseFloat(document.getElementById('phaseSub').value) || 0,
                 equipment: parseFloat(document.getElementById('phaseEquipment').value) || 0,
                 phaseBudget: parseFloat(document.getElementById('phaseBudget').value) || 0,
                 hoursWeek: parseFloat(document.getElementById('phaseHoursWeek').value) || 0,
-                hoursTotal: parseFloat(document.getElementById('phaseHoursTotal').value) || 0,
-                rate: parseFloat(document.getElementById('phaseRate').value) || 0,
-                burden: parseFloat(document.getElementById('phaseBurden').value) || 0,
+                hoursTotal: hoursTotal,
+                rate: rate,
                 notes: document.getElementById('phaseNotes').value
             };
 
