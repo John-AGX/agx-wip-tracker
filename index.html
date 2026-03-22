@@ -806,9 +806,9 @@
                                 Filter by Type:
                                 <select id="typeFilter" onchange="filterJobs()" style="width: 200px; margin: 0;">
                                     <option value="">All Types</option>
-                                    <option value="S">Service (S)</option>
-                                    <option value="RV">Renovation (RV)</option>
-                                    <option value="WO">Work Order (WO)</option>
+                                    <option value="Service">Service</option>
+                                    <option value="Renovation">Renovation</option>
+                                    <option value="Work Order">Work Order</option>
                                 </select>
                             </label>
                         </div>
@@ -819,11 +819,12 @@
                                     <tr>
                                         <th style="width: 40px;">#</th>
                                         <th class="sortable" data-sort="name" onclick="sortJobsTable('name')">Job # / Name</th>
-                                        <th class="sortable" data-sort="market" onclick="sortJobsTable('market')">Market</th>
+                                        <th class="sortable" data-sort="client" onclick="sortJobsTable('client')">Client</th>
+                                        <th class="sortable" data-sort="pm" onclick="sortJobsTable('pm')">PM</th>
                                         <th class="sortable" data-sort="status" onclick="sortJobsTable('status')">Status</th>
-                                        <th class="sortable" data-sort="contract" onclick="sortJobsTable('contract')" style="text-align: right;">Contract Amount</th>
-                                        <th class="sortable" data-sort="cost" onclick="sortJobsTable('cost')" style="text-align: right;">Total Cost</th>
-                                        <th class="sortable" data-sort="profit" onclick="sortJobsTable('profit')" style="text-align: right;">Profit</th>
+                                        <th class="sortable" data-sort="contract" onclick="sortJobsTable('contract')" style="text-align: right;">Total Income</th>
+                                        <th class="sortable" data-sort="pctcomplete" onclick="sortJobsTable('pctcomplete')" style="text-align: right;">% Complete</th>
+                                        <th class="sortable" data-sort="profit" onclick="sortJobsTable('profit')" style="text-align: right;">Gross Profit</th>
                                         <th class="sortable" data-sort="margin" onclick="sortJobsTable('margin')" style="text-align: right;">Margin %</th>
                                         <th style="text-align: center; width: 80px;">Actions</th>
                                     </tr>
@@ -862,12 +863,32 @@
                                     <div style="font-size: 14px; color: var(--text);" id="job-info-title"></div>
                                 </div>
                                 <div>
+                                    <label style="font-size: 12px; color: var(--text-dim);">Client</label>
+                                    <div style="font-size: 14px; color: var(--text);" id="job-info-client"></div>
+                                </div>
+                                <div>
+                                    <label style="font-size: 12px; color: var(--text-dim);">PM</label>
+                                    <div style="font-size: 14px; color: var(--text);" id="job-info-pm"></div>
+                                </div>
+                                <div>
+                                    <label style="font-size: 12px; color: var(--text-dim);">Type</label>
+                                    <div style="font-size: 14px; color: var(--text);" id="job-info-type"></div>
+                                </div>
+                                <div>
+                                    <label style="font-size: 12px; color: var(--text-dim);">Work Type</label>
+                                    <div style="font-size: 14px; color: var(--text);" id="job-info-worktype"></div>
+                                </div>
+                                <div>
                                     <label style="font-size: 12px; color: var(--text-dim);">Market</label>
                                     <div style="font-size: 14px; color: var(--text);" id="job-info-market"></div>
                                 </div>
                                 <div>
-                                    <label style="font-size: 12px; color: var(--text-dim);">Contract Amount</label>
+                                    <label style="font-size: 12px; color: var(--text-dim);">Contract (As Sold)</label>
                                     <div style="font-size: 14px; color: var(--accent); font-weight: 700;" id="job-info-contract"></div>
+                                </div>
+                                <div>
+                                    <label style="font-size: 12px; color: var(--text-dim);">Est. Costs (As Sold)</label>
+                                    <div style="font-size: 14px; color: var(--text);" id="job-info-estcosts"></div>
                                 </div>
                                 <div>
                                     <label style="font-size: 12px; color: var(--text-dim);">Target Margin %</label>
@@ -877,29 +898,38 @@
                                     <label style="font-size: 12px; color: var(--text-dim);">Status</label>
                                     <div style="font-size: 14px;" id="job-info-status"></div>
                                 </div>
+                                <div>
+                                    <label style="font-size: 12px; color: var(--text-dim);">Notes</label>
+                                    <div style="font-size: 14px; color: var(--text);" id="job-info-notes"></div>
+                                </div>
                             </div>
                         </div>
 
                         <div class="summary-grid">
                             <div class="summary-card">
-                                <div class="summary-card-label">Contract Amount</div>
-                                <div class="summary-card-value" id="job-summary-contract">$0.00</div>
+                                <div class="summary-card-label">Total Income</div>
+                                <div class="summary-card-value" id="job-summary-totalincome">$0.00</div>
+                                <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;" id="job-summary-income-breakdown"></div>
                             </div>
                             <div class="summary-card">
-                                <div class="summary-card-label">Total Cost</div>
+                                <div class="summary-card-label">Actual Costs</div>
                                 <div class="summary-card-value" id="job-summary-cost">$0.00</div>
                             </div>
                             <div class="summary-card">
-                                <div class="summary-card-label">Profit</div>
+                                <div class="summary-card-label">% Complete</div>
+                                <div class="summary-card-value" id="job-summary-pctcomplete">0%</div>
+                            </div>
+                            <div class="summary-card">
+                                <div class="summary-card-label">Revenue Earned</div>
+                                <div class="summary-card-value" id="job-summary-revenue">$0.00</div>
+                            </div>
+                            <div class="summary-card">
+                                <div class="summary-card-label">Gross Profit</div>
                                 <div class="summary-card-value" id="job-summary-profit">$0.00</div>
                             </div>
                             <div class="summary-card">
                                 <div class="summary-card-label">Margin %</div>
                                 <div class="summary-card-value" id="job-summary-margin">0%</div>
-                            </div>
-                            <div class="summary-card">
-                                <div class="summary-card-label">Avg Completion %</div>
-                                <div class="summary-card-value" id="job-summary-completion">0%</div>
                             </div>
                         </div>
 
@@ -911,7 +941,9 @@
 
                         <div class="sub-tabs">
                             <button class="sub-tab-btn-job active" data-subtab="job-overview">Overview</button>
+                            <button class="sub-tab-btn-job" data-subtab="job-wip">WIP</button>
                             <button class="sub-tab-btn-job" data-subtab="job-costs">Job Costs</button>
+                            <button class="sub-tab-btn-job" data-subtab="job-changeorders">Change Orders</button>
                             <button class="sub-tab-btn-job" data-subtab="job-buildings">Buildings</button>
                             <button class="sub-tab-btn-job" data-subtab="job-phases">Phases</button>
                             <button class="sub-tab-btn-job" data-subtab="job-subs">Subcontractors</button>
@@ -939,6 +971,173 @@
                                         </tr>
                                     </thead>
                                     <tbody></tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <!-- WIP Tab -->
+                        <div id="job-wip" class="sub-tab-content-job">
+                            <div class="card" style="margin-bottom: 20px;">
+                                <h3 style="margin-bottom: 15px;">WIP Inputs</h3>
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label>Job to Date % Complete</label>
+                                        <input type="number" id="wipPctComplete" placeholder="0" step="0.1" min="0" max="100">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Invoiced to Date $</label>
+                                        <input type="number" id="wipInvoicedToDate" placeholder="0.00" step="0.01">
+                                    </div>
+                                </div>
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label>Revised Est. Cost Changes $</label>
+                                        <input type="number" id="wipRevisedCostChanges" placeholder="0.00" step="0.01">
+                                        <div style="font-size: 11px; color: var(--text-dim);">Positive = cost increase, Negative = savings</div>
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Notes</label>
+                                        <input type="text" id="wipNotes" placeholder="Weekly notes...">
+                                    </div>
+                                </div>
+                                <button onclick="saveWipInputs()" style="margin-top: 10px;">Save WIP</button>
+                            </div>
+                            <div class="card">
+                                <h3 style="margin-bottom: 15px;">WIP Calculations</h3>
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                                    <div>
+                                        <h4 style="color: var(--accent); margin-bottom: 10px; font-size: 13px; text-transform: uppercase;">Income</h4>
+                                        <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border);">
+                                            <span style="color: var(--text-dim);">Contract (As Sold)</span>
+                                            <span id="wip-contract-income">$0.00</span>
+                                        </div>
+                                        <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border);">
+                                            <span style="color: var(--text-dim);">+ Change Orders</span>
+                                            <span id="wip-co-income">$0.00</span>
+                                        </div>
+                                        <div style="display: flex; justify-content: space-between; padding: 6px 0; font-weight: 700; border-bottom: 2px solid var(--accent);">
+                                            <span>Total Income</span>
+                                            <span id="wip-total-income" style="color: var(--accent);">$0.00</span>
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <h4 style="color: var(--accent); margin-bottom: 10px; font-size: 13px; text-transform: uppercase;">Estimated Costs</h4>
+                                        <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border);">
+                                            <span style="color: var(--text-dim);">Est. Costs (As Sold)</span>
+                                            <span id="wip-est-costs">$0.00</span>
+                                        </div>
+                                        <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border);">
+                                            <span style="color: var(--text-dim);">+ CO Est. Costs</span>
+                                            <span id="wip-co-costs">$0.00</span>
+                                        </div>
+                                        <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border);">
+                                            <span style="color: var(--text-dim);">+ Revised Changes</span>
+                                            <span id="wip-revised-changes">$0.00</span>
+                                        </div>
+                                        <div style="display: flex; justify-content: space-between; padding: 6px 0; font-weight: 700; border-bottom: 2px solid var(--accent);">
+                                            <span>Total Est. Costs (Revised)</span>
+                                            <span id="wip-total-est-costs" style="color: var(--accent);">$0.00</span>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div style="margin-top: 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                                    <div>
+                                        <h4 style="color: var(--green); margin-bottom: 10px; font-size: 13px; text-transform: uppercase;">Profit & Margin</h4>
+                                        <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border);">
+                                            <span style="color: var(--text-dim);">As Sold Gross Profit</span>
+                                            <span id="wip-assold-profit">$0.00</span>
+                                        </div>
+                                        <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border);">
+                                            <span style="color: var(--text-dim);">As Sold Margin %</span>
+                                            <span id="wip-assold-margin">0%</span>
+                                        </div>
+                                        <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border);">
+                                            <span style="color: var(--text-dim);">Revised Gross Profit</span>
+                                            <span id="wip-revised-profit">$0.00</span>
+                                        </div>
+                                        <div style="display: flex; justify-content: space-between; padding: 6px 0; font-weight: 700;">
+                                            <span>Revised Margin %</span>
+                                            <span id="wip-revised-margin">0%</span>
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <h4 style="color: var(--yellow); margin-bottom: 10px; font-size: 13px; text-transform: uppercase;">Revenue & Billing</h4>
+                                        <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border);">
+                                            <span style="color: var(--text-dim);">% Complete</span>
+                                            <span id="wip-pct-complete">0%</span>
+                                        </div>
+                                        <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border);">
+                                            <span style="color: var(--text-dim);">Revenue Earned (Income × %)</span>
+                                            <span id="wip-revenue-earned">$0.00</span>
+                                        </div>
+                                        <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border);">
+                                            <span style="color: var(--text-dim);">JTD Gross Profit</span>
+                                            <span id="wip-jtd-profit">$0.00</span>
+                                        </div>
+                                        <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border);">
+                                            <span style="color: var(--text-dim);">JTD Margin %</span>
+                                            <span id="wip-jtd-margin">0%</span>
+                                        </div>
+                                        <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border);">
+                                            <span style="color: var(--text-dim);">Invoiced to Date</span>
+                                            <span id="wip-invoiced">$0.00</span>
+                                        </div>
+                                        <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border);">
+                                            <span style="color: var(--text-dim);">Unbilled (Revenue - Invoiced)</span>
+                                            <span id="wip-unbilled">$0.00</span>
+                                        </div>
+                                        <div style="display: flex; justify-content: space-between; padding: 6px 0; font-weight: 700;">
+                                            <span>Backlog (Income - Revenue)</span>
+                                            <span id="wip-backlog">$0.00</span>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div style="margin-top: 20px;">
+                                    <h4 style="color: var(--orange); margin-bottom: 10px; font-size: 13px; text-transform: uppercase;">Actual Costs vs Estimated</h4>
+                                    <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border);">
+                                        <span style="color: var(--text-dim);">Actual Costs (from tracker)</span>
+                                        <span id="wip-actual-costs">$0.00</span>
+                                    </div>
+                                    <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border);">
+                                        <span style="color: var(--text-dim);">Revised Est. Costs</span>
+                                        <span id="wip-revised-est-costs2">$0.00</span>
+                                    </div>
+                                    <div style="display: flex; justify-content: space-between; padding: 6px 0; font-weight: 700;">
+                                        <span>Remaining Est. Costs</span>
+                                        <span id="wip-remaining-costs">$0.00</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Change Orders -->
+                        <div id="job-changeorders" class="sub-tab-content-job">
+                            <div class="action-buttons" style="margin-bottom: 15px;">
+                                <button onclick="openAddChangeOrderModal()">+ Add Change Order</button>
+                            </div>
+                            <div class="table-container">
+                                <table id="co-table">
+                                    <thead>
+                                        <tr>
+                                            <th>CO #</th>
+                                            <th>Description</th>
+                                            <th style="text-align: right;">Income</th>
+                                            <th style="text-align: right;">Est. Costs</th>
+                                            <th style="text-align: right;">Profit</th>
+                                            <th>Date</th>
+                                            <th>Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody></tbody>
+                                    <tfoot>
+                                        <tr style="font-weight: 700; border-top: 2px solid var(--accent);">
+                                            <td colspan="2">TOTALS</td>
+                                            <td style="text-align: right;" id="co-total-income">$0.00</td>
+                                            <td style="text-align: right;" id="co-total-costs">$0.00</td>
+                                            <td style="text-align: right;" id="co-total-profit">$0.00</td>
+                                            <td colspan="2"></td>
+                                        </tr>
+                                    </tfoot>
                                 </table>
                             </div>
                         </div>
@@ -1123,6 +1322,39 @@
             </div>
             <div class="form-row">
                 <div class="form-group">
+                    <label>Client</label>
+                    <input type="text" id="jobClient" placeholder="e.g., RPM, PAC, Pensum">
+                </div>
+                <div class="form-group">
+                    <label>PM</label>
+                    <select id="jobPM">
+                        <option value="">-- Select PM --</option>
+                        <option value="John">John</option>
+                        <option value="Noah">Noah</option>
+                    </select>
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Type</label>
+                    <select id="jobType">
+                        <option value="">-- Select Type --</option>
+                        <option value="Service">Service</option>
+                        <option value="Renovation">Renovation</option>
+                        <option value="Work Order">Work Order</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Work Type</label>
+                    <select id="jobWorkType">
+                        <option value="">-- Select --</option>
+                        <option value="In-house">In-house</option>
+                        <option value="Sub">Sub</option>
+                    </select>
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
                     <label>Market</label>
                     <select id="jobMarket">
                         <option value="">-- Select Market --</option>
@@ -1133,15 +1365,21 @@
                     </select>
                 </div>
                 <div class="form-group">
-                    <label>Contract Amount</label>
+                    <label>Contract Amount (As Sold)</label>
                     <input type="number" id="jobContractAmount" placeholder="0.00" step="0.01">
                 </div>
             </div>
             <div class="form-row">
                 <div class="form-group">
+                    <label>Estimated Costs (As Sold)</label>
+                    <input type="number" id="jobEstimatedCosts" placeholder="0.00" step="0.01">
+                </div>
+                <div class="form-group">
                     <label>Target Margin %</label>
                     <input type="number" id="jobTargetMargin" value="50" step="0.1">
                 </div>
+            </div>
+            <div class="form-row">
                 <div class="form-group">
                     <label>Status</label>
                     <select id="jobStatus">
@@ -1151,6 +1389,10 @@
                         <option value="Completed">Completed</option>
                         <option value="Archived">Archived</option>
                     </select>
+                </div>
+                <div class="form-group">
+                    <label>Notes</label>
+                    <input type="text" id="jobNotes" placeholder="Optional notes">
                 </div>
             </div>
             <div class="modal-footer">
@@ -1372,6 +1614,44 @@
         </div>
     </div>
 
+    <div id="addCOModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header" id="coModalHeader">Add Change Order</div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>CO Number</label>
+                    <input type="text" id="coNumber" placeholder="e.g., CO-001">
+                </div>
+                <div class="form-group">
+                    <label>Date</label>
+                    <input type="date" id="coDate">
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Description</label>
+                <input type="text" id="coDescription" placeholder="Description of change order">
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Income (Revenue)</label>
+                    <input type="number" id="coIncome" placeholder="0.00" step="0.01">
+                </div>
+                <div class="form-group">
+                    <label>Estimated Costs</label>
+                    <input type="number" id="coCosts" placeholder="0.00" step="0.01">
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Notes</label>
+                <input type="text" id="coNotes" placeholder="Optional notes">
+            </div>
+            <div class="modal-footer">
+                <button class="secondary" onclick="closeModal('addCOModal')">Cancel</button>
+                <button onclick="saveCO()" id="coSaveBtn">Add Change Order</button>
+            </div>
+        </div>
+    </div>
+
     <div id="newEstimateModal" class="modal">
         <div class="modal-content">
             <div class="modal-header">New Estimate</div>
@@ -1513,6 +1793,7 @@
             buildings: [],
             phases: [],
             subs: [],
+            changeOrders: [],
             estimates: [],
             estimateLines: [],
             estimateAlternates: []
@@ -1526,7 +1807,8 @@
             sortDirection: null,
             editPhaseId: null,
             editBuildingId: null,
-            editSubId: null
+            editSubId: null,
+            editCOId: null
         };
 
         function loadData() {
@@ -1534,6 +1816,7 @@
             appData.buildings = JSON.parse(localStorage.getItem('agx-wip-buildings') || '[]');
             appData.phases = JSON.parse(localStorage.getItem('agx-wip-phases') || '[]');
             appData.subs = JSON.parse(localStorage.getItem('agx-wip-subs') || '[]');
+            appData.changeOrders = JSON.parse(localStorage.getItem('agx-wip-changeorders') || '[]');
             appData.estimates = JSON.parse(localStorage.getItem('agx-estimates') || '[]');
             appData.estimateLines = JSON.parse(localStorage.getItem('agx-estimate-lines') || '[]');
             appData.estimateAlternates = JSON.parse(localStorage.getItem('agx-estimate-alternates') || '[]');
@@ -1544,6 +1827,7 @@
             localStorage.setItem('agx-wip-buildings', JSON.stringify(appData.buildings));
             localStorage.setItem('agx-wip-phases', JSON.stringify(appData.phases));
             localStorage.setItem('agx-wip-subs', JSON.stringify(appData.subs));
+            localStorage.setItem('agx-wip-changeorders', JSON.stringify(appData.changeOrders));
             localStorage.setItem('agx-estimates', JSON.stringify(appData.estimates));
             localStorage.setItem('agx-estimate-lines', JSON.stringify(appData.estimateLines));
             localStorage.setItem('agx-estimate-alternates', JSON.stringify(appData.estimateAlternates));
@@ -1558,10 +1842,19 @@
                 id: 'j1',
                 jobNumber: 'S2062',
                 title: 'Commerce Park Phase 2',
+                client: 'RPM',
+                pm: 'John',
+                jobType: 'Service',
+                workType: 'In-house',
                 market: 'Orlando',
                 status: 'In Progress',
                 contractAmount: 5250000,
+                estimatedCosts: 2625000,
                 targetMarginPct: 50,
+                pctComplete: 55,
+                invoicedToDate: 2800000,
+                revisedCostChanges: 0,
+                notes: '',
                 createdAt: new Date().toISOString(),
                 updatedAt: new Date().toISOString()
             };
@@ -1570,10 +1863,19 @@
                 id: 'j2',
                 jobNumber: 'S2078',
                 title: 'Sunset Ridge HOA Repairs',
+                client: 'PAC',
+                pm: 'Noah',
+                jobType: 'Service',
+                workType: 'Sub',
                 market: 'Tampa',
                 status: 'In Progress',
                 contractAmount: 380000,
+                estimatedCosts: 228000,
                 targetMarginPct: 50,
+                pctComplete: 30,
+                invoicedToDate: 100000,
+                revisedCostChanges: 0,
+                notes: '',
                 createdAt: new Date().toISOString(),
                 updatedAt: new Date().toISOString()
             };
@@ -1620,6 +1922,12 @@
                 // Job 2 subs
                 { id: 's7', jobId: 'j2', name: 'Sunset Painters LLC', trade: 'Painting', level: 'phase', buildingId: 'b4', phaseId: 'p12', contractAmt: 85000, billedToDate: 25000, notes: '' },
                 { id: 's8', jobId: 'j2', name: 'Rapid Roofing', trade: 'Roofing', level: 'phase', buildingId: 'b4', phaseId: 'p13', contractAmt: 95000, billedToDate: 0, notes: '' }
+            ];
+
+            // Sample Change Orders
+            appData.changeOrders = [
+                { id: 'co1', jobId: 'j1', coNumber: 'CO-001', description: 'Additional waterproofing - Building A', income: 85000, estimatedCosts: 52000, date: '2026-02-15', notes: 'Client approved' },
+                { id: 'co2', jobId: 'j1', coNumber: 'CO-002', description: 'Extended parking lot scope', income: 125000, estimatedCosts: 78000, date: '2026-03-01', notes: '' }
             ];
 
             saveData();
@@ -1724,18 +2032,200 @@
             return { phaseCost, buildingCost, jobCost, total: phaseCost + buildingCost + jobCost };
         }
 
+        // ==================== WIP CALCULATIONS ====================
+        function getJobCOTotals(jobId) {
+            const cos = appData.changeOrders.filter(co => co.jobId === jobId);
+            return {
+                income: cos.reduce((sum, co) => sum + (co.income || 0), 0),
+                costs: cos.reduce((sum, co) => sum + (co.estimatedCosts || 0), 0),
+                count: cos.length
+            };
+        }
+
+        function getJobWIP(jobId) {
+            const job = appData.jobs.find(j => j.id === jobId);
+            if (!job) return {};
+            const co = getJobCOTotals(jobId);
+            const actualCosts = getJobTotalCost(jobId).total;
+            const contractIncome = job.contractAmount || 0;
+            const estimatedCosts = job.estimatedCosts || 0;
+            const totalIncome = contractIncome + co.income;
+            const totalEstCosts = estimatedCosts + co.costs;
+            const revisedCostChanges = job.revisedCostChanges || 0;
+            const revisedEstCosts = totalEstCosts + revisedCostChanges;
+            const asSoldProfit = contractIncome - estimatedCosts;
+            const asSoldMargin = contractIncome > 0 ? (asSoldProfit / contractIncome * 100) : 0;
+            const revisedProfit = totalIncome - revisedEstCosts;
+            const revisedMargin = totalIncome > 0 ? (revisedProfit / totalIncome * 100) : 0;
+            const pctComplete = job.pctComplete || 0;
+            const revenueEarned = totalIncome * (pctComplete / 100);
+            const jtdProfit = revenueEarned - actualCosts;
+            const jtdMargin = revenueEarned > 0 ? (jtdProfit / revenueEarned * 100) : 0;
+            const invoiced = job.invoicedToDate || 0;
+            const unbilled = revenueEarned - invoiced;
+            const backlog = totalIncome - revenueEarned;
+            const remainingCosts = revisedEstCosts - actualCosts;
+            return {
+                contractIncome, estimatedCosts, coIncome: co.income, coCosts: co.costs,
+                totalIncome, totalEstCosts, revisedCostChanges, revisedEstCosts,
+                asSoldProfit, asSoldMargin, revisedProfit, revisedMargin,
+                pctComplete, revenueEarned, actualCosts, jtdProfit, jtdMargin,
+                invoiced, unbilled, backlog, remainingCosts
+            };
+        }
+
+        function renderWipTab(jobId) {
+            const job = appData.jobs.find(j => j.id === jobId);
+            if (!job) return;
+            const w = getJobWIP(jobId);
+            document.getElementById('wipPctComplete').value = job.pctComplete || '';
+            document.getElementById('wipInvoicedToDate').value = job.invoicedToDate || '';
+            document.getElementById('wipRevisedCostChanges').value = job.revisedCostChanges || '';
+            document.getElementById('wipNotes').value = job.notes || '';
+
+            document.getElementById('wip-contract-income').textContent = formatCurrency(w.contractIncome);
+            document.getElementById('wip-co-income').textContent = formatCurrency(w.coIncome);
+            document.getElementById('wip-total-income').textContent = formatCurrency(w.totalIncome);
+            document.getElementById('wip-est-costs').textContent = formatCurrency(w.estimatedCosts);
+            document.getElementById('wip-co-costs').textContent = formatCurrency(w.coCosts);
+            document.getElementById('wip-revised-changes').textContent = formatCurrency(w.revisedCostChanges);
+            document.getElementById('wip-total-est-costs').textContent = formatCurrency(w.revisedEstCosts);
+            document.getElementById('wip-assold-profit').textContent = formatCurrency(w.asSoldProfit);
+            document.getElementById('wip-assold-profit').style.color = w.asSoldProfit >= 0 ? 'var(--green)' : 'var(--red)';
+            document.getElementById('wip-assold-margin').textContent = w.asSoldMargin.toFixed(1) + '%';
+            document.getElementById('wip-revised-profit').textContent = formatCurrency(w.revisedProfit);
+            document.getElementById('wip-revised-profit').style.color = w.revisedProfit >= 0 ? 'var(--green)' : 'var(--red)';
+            document.getElementById('wip-revised-margin').textContent = w.revisedMargin.toFixed(1) + '%';
+            document.getElementById('wip-pct-complete').textContent = w.pctComplete.toFixed(1) + '%';
+            document.getElementById('wip-revenue-earned').textContent = formatCurrency(w.revenueEarned);
+            document.getElementById('wip-jtd-profit').textContent = formatCurrency(w.jtdProfit);
+            document.getElementById('wip-jtd-profit').style.color = w.jtdProfit >= 0 ? 'var(--green)' : 'var(--red)';
+            document.getElementById('wip-jtd-margin').textContent = w.jtdMargin.toFixed(1) + '%';
+            document.getElementById('wip-invoiced').textContent = formatCurrency(w.invoiced);
+            document.getElementById('wip-unbilled').textContent = formatCurrency(w.unbilled);
+            document.getElementById('wip-unbilled').style.color = w.unbilled >= 0 ? 'var(--yellow)' : 'var(--red)';
+            document.getElementById('wip-backlog').textContent = formatCurrency(w.backlog);
+            document.getElementById('wip-actual-costs').textContent = formatCurrency(w.actualCosts);
+            document.getElementById('wip-revised-est-costs2').textContent = formatCurrency(w.revisedEstCosts);
+            document.getElementById('wip-remaining-costs').textContent = formatCurrency(w.remainingCosts);
+            document.getElementById('wip-remaining-costs').style.color = w.remainingCosts >= 0 ? 'var(--text)' : 'var(--red)';
+        }
+
+        function saveWipInputs() {
+            const job = appData.jobs.find(j => j.id === appState.currentJobId);
+            if (!job) return;
+            job.pctComplete = parseFloat(document.getElementById('wipPctComplete').value) || 0;
+            job.invoicedToDate = parseFloat(document.getElementById('wipInvoicedToDate').value) || 0;
+            job.revisedCostChanges = parseFloat(document.getElementById('wipRevisedCostChanges').value) || 0;
+            job.notes = document.getElementById('wipNotes').value.trim();
+            job.updatedAt = new Date().toISOString();
+            saveData();
+            renderJobDetail(appState.currentJobId);
+        }
+
+        // ==================== CHANGE ORDERS ====================
+        function openAddChangeOrderModal() {
+            document.getElementById('coModalHeader').textContent = 'Add Change Order';
+            document.getElementById('coSaveBtn').textContent = 'Add Change Order';
+            document.getElementById('coNumber').value = '';
+            document.getElementById('coDate').value = new Date().toISOString().split('T')[0];
+            document.getElementById('coDescription').value = '';
+            document.getElementById('coIncome').value = '';
+            document.getElementById('coCosts').value = '';
+            document.getElementById('coNotes').value = '';
+            appState.editCOId = null;
+            openModal('addCOModal');
+        }
+
+        function saveCO() {
+            const desc = document.getElementById('coDescription').value.trim();
+            if (!desc) { alert('Enter a description'); return; }
+            const coData = {
+                jobId: appState.currentJobId,
+                coNumber: document.getElementById('coNumber').value.trim(),
+                description: desc,
+                income: parseFloat(document.getElementById('coIncome').value) || 0,
+                estimatedCosts: parseFloat(document.getElementById('coCosts').value) || 0,
+                date: document.getElementById('coDate').value,
+                notes: document.getElementById('coNotes').value.trim()
+            };
+            if (appState.editCOId) {
+                const idx = appData.changeOrders.findIndex(co => co.id === appState.editCOId);
+                if (idx >= 0) Object.assign(appData.changeOrders[idx], coData);
+            } else {
+                coData.id = 'co' + Date.now();
+                appData.changeOrders.push(coData);
+            }
+            saveData();
+            closeModal('addCOModal');
+            renderJobDetail(appState.currentJobId);
+        }
+
+        function editCO(coId) {
+            const co = appData.changeOrders.find(c => c.id === coId);
+            if (!co) return;
+            appState.editCOId = coId;
+            document.getElementById('coModalHeader').textContent = 'Edit Change Order';
+            document.getElementById('coSaveBtn').textContent = 'Update Change Order';
+            document.getElementById('coNumber').value = co.coNumber || '';
+            document.getElementById('coDate').value = co.date || '';
+            document.getElementById('coDescription').value = co.description || '';
+            document.getElementById('coIncome').value = co.income || '';
+            document.getElementById('coCosts').value = co.estimatedCosts || '';
+            document.getElementById('coNotes').value = co.notes || '';
+            openModal('addCOModal');
+        }
+
+        function deleteCO(coId) {
+            if (!confirm('Delete this change order?')) return;
+            appData.changeOrders = appData.changeOrders.filter(co => co.id !== coId);
+            saveData();
+            renderJobDetail(appState.currentJobId);
+        }
+
+        function renderChangeOrders(jobId) {
+            const cos = appData.changeOrders.filter(co => co.jobId === jobId);
+            const tbody = document.querySelector('#co-table tbody');
+            tbody.innerHTML = '';
+            let totalInc = 0, totalCost = 0;
+            cos.forEach((co, idx) => {
+                const profit = (co.income || 0) - (co.estimatedCosts || 0);
+                totalInc += co.income || 0;
+                totalCost += co.estimatedCosts || 0;
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td>${co.coNumber || 'CO-' + (idx + 1)}</td>
+                    <td>${co.description}${co.notes ? '<br><span style="font-size: 11px; color: var(--text-dim);">' + co.notes + '</span>' : ''}</td>
+                    <td style="text-align: right;">${formatCurrency(co.income)}</td>
+                    <td style="text-align: right;">${formatCurrency(co.estimatedCosts)}</td>
+                    <td style="text-align: right; color: ${profit >= 0 ? 'var(--green)' : 'var(--red)'};">${formatCurrency(profit)}</td>
+                    <td>${co.date || '—'}</td>
+                    <td>
+                        <button class="small" onclick="event.stopPropagation(); editCO('${co.id}')">Edit</button>
+                        <button class="small secondary" onclick="event.stopPropagation(); deleteCO('${co.id}')">Del</button>
+                    </td>`;
+                tbody.appendChild(row);
+            });
+            document.getElementById('co-total-income').textContent = formatCurrency(totalInc);
+            document.getElementById('co-total-costs').textContent = formatCurrency(totalCost);
+            document.getElementById('co-total-profit').textContent = formatCurrency(totalInc - totalCost);
+            document.getElementById('co-total-profit').style.color = (totalInc - totalCost) >= 0 ? 'var(--green)' : 'var(--red)';
+        }
+
         function calculateWIPSummary() {
-            let totalPipeline = appData.jobs.reduce((sum, j) => sum + (j.contractAmount || 0), 0);
+            let totalIncome = 0;
+            let totalCost = 0;
             let activeJobs = appData.jobs.filter(j => ['New', 'In Progress', 'On Hold'].includes(j.status)).length;
 
-            let totalCost = 0;
             appData.jobs.forEach(j => {
-                totalCost += getJobTotalCost(j.id).total;
+                const w = getJobWIP(j.id);
+                totalIncome += w.totalIncome;
+                totalCost += w.actualCosts;
             });
 
-            let totalProfit = totalPipeline - totalCost;
+            let totalProfit = totalIncome - totalCost;
 
-            document.getElementById('total-pipeline').textContent = formatCurrency(totalPipeline);
+            document.getElementById('total-pipeline').textContent = formatCurrency(totalIncome);
             document.getElementById('active-jobs').textContent = activeJobs;
             document.getElementById('total-cost').textContent = formatCurrency(totalCost);
             document.getElementById('total-profit').textContent = formatCurrency(totalProfit);
@@ -1773,7 +2263,7 @@
             // Apply type filter
             const typeFilter = appState.currentTypeFilter;
             if (typeFilter) {
-                jobs = jobs.filter(j => getJobType(j.jobNumber) === typeFilter);
+                jobs = jobs.filter(j => (j.jobType || getJobTypeLabel(getJobType(j.jobNumber))) === typeFilter);
             }
 
             // Apply sorting
@@ -1795,18 +2285,22 @@
                             va = (a.status || '').toLowerCase();
                             vb = (b.status || '').toLowerCase();
                             return va.localeCompare(vb) * dir;
+                        case 'client':
+                            va = (a.client || '').toLowerCase();
+                            vb = (b.client || '').toLowerCase();
+                            return va.localeCompare(vb) * dir;
+                        case 'pm':
+                            va = (a.pm || '').toLowerCase();
+                            vb = (b.pm || '').toLowerCase();
+                            return va.localeCompare(vb) * dir;
                         case 'contract':
-                            return ((a.contractAmount || 0) - (b.contractAmount || 0)) * dir;
-                        case 'cost':
-                            return (getJobTotalCost(a.id).total - getJobTotalCost(b.id).total) * dir;
+                            return (getJobWIP(a.id).totalIncome - getJobWIP(b.id).totalIncome) * dir;
+                        case 'pctcomplete':
+                            return ((a.pctComplete || 0) - (b.pctComplete || 0)) * dir;
                         case 'profit':
-                            va = (a.contractAmount || 0) - getJobTotalCost(a.id).total;
-                            vb = (b.contractAmount || 0) - getJobTotalCost(b.id).total;
-                            return (va - vb) * dir;
+                            return (getJobWIP(a.id).jtdProfit - getJobWIP(b.id).jtdProfit) * dir;
                         case 'margin':
-                            va = a.contractAmount > 0 ? ((a.contractAmount - getJobTotalCost(a.id).total) / a.contractAmount) : 0;
-                            vb = b.contractAmount > 0 ? ((b.contractAmount - getJobTotalCost(b.id).total) / b.contractAmount) : 0;
-                            return (va - vb) * dir;
+                            return (getJobWIP(a.id).jtdMargin - getJobWIP(b.id).jtdMargin) * dir;
                         default:
                             return 0;
                     }
@@ -1822,14 +2316,9 @@
             });
 
             jobs.forEach((job, index) => {
-                const totalCost = getJobTotalCost(job.id).total;
-
-                const profit = (job.contractAmount || 0) - totalCost;
-                const marginPct = job.contractAmount > 0 ? ((profit / job.contractAmount) * 100).toFixed(1) : 0;
-
+                const w = getJobWIP(job.id);
                 const statusClass = job.status === 'On Hold' ? 'at-risk' : job.status === 'Completed' ? 'on-track' : job.status === 'Archived' ? 'not-started' : 'on-track';
-                const jobType = getJobType(job.jobNumber);
-                const typeLabel = jobType ? `<span style="font-size: 11px; color: var(--text-dim); font-weight: normal; margin-left: 6px;">${getJobTypeLabel(jobType)}</span>` : '';
+                const typeLabel = job.jobType ? `<span style="font-size: 11px; color: var(--text-dim); font-weight: normal; margin-left: 6px;">${job.jobType}${job.market ? ' - ' + job.market : ''}</span>` : '';
 
                 const row = document.createElement('tr');
                 row.style.cursor = 'pointer';
@@ -1837,12 +2326,13 @@
                 row.innerHTML = `
                     <td>${index + 1}</td>
                     <td><strong>${job.jobNumber ? job.jobNumber + ' — ' : ''}${job.title}</strong>${typeLabel}</td>
-                    <td>${job.market || '—'}</td>
+                    <td>${job.client || '—'}</td>
+                    <td>${job.pm || '—'}</td>
                     <td><span class="badge ${statusClass}">${job.status}</span></td>
-                    <td style="text-align: right;">${formatCurrency(job.contractAmount)}</td>
-                    <td style="text-align: right;">${formatCurrency(totalCost)}</td>
-                    <td style="text-align: right; color: ${profit >= 0 ? 'var(--green)' : 'var(--red)'};">${formatCurrency(profit)}</td>
-                    <td style="text-align: right;">${marginPct}%</td>
+                    <td style="text-align: right;">${formatCurrency(w.totalIncome)}</td>
+                    <td style="text-align: right;">${w.pctComplete.toFixed(1)}%</td>
+                    <td style="text-align: right; color: ${w.jtdProfit >= 0 ? 'var(--green)' : 'var(--red)'};">${formatCurrency(w.jtdProfit)}</td>
+                    <td style="text-align: right;">${w.jtdMargin.toFixed(1)}%</td>
                     <td style="text-align: center;">
                         <button class="small" onclick="event.stopPropagation(); editJob('${job.id}')">Edit</button>
                     </td>
@@ -1876,10 +2366,16 @@
         function openAddJobModal() {
             document.getElementById('jobNumber').value = '';
             document.getElementById('jobTitle').value = '';
+            document.getElementById('jobClient').value = '';
+            document.getElementById('jobPM').value = '';
+            document.getElementById('jobType').value = '';
+            document.getElementById('jobWorkType').value = '';
             document.getElementById('jobMarket').value = '';
             document.getElementById('jobContractAmount').value = '';
+            document.getElementById('jobEstimatedCosts').value = '';
             document.getElementById('jobTargetMargin').value = '50';
             document.getElementById('jobStatus').value = 'New';
+            document.getElementById('jobNotes').value = '';
             openModal('addJobModal');
         }
 
@@ -1890,10 +2386,18 @@
                 id: 'j' + Date.now(),
                 jobNumber: document.getElementById('jobNumber').value.trim(),
                 title: title,
+                client: document.getElementById('jobClient').value.trim(),
+                pm: document.getElementById('jobPM').value,
+                jobType: document.getElementById('jobType').value,
+                workType: document.getElementById('jobWorkType').value,
                 market: document.getElementById('jobMarket').value,
                 status: document.getElementById('jobStatus').value,
                 contractAmount: parseFloat(document.getElementById('jobContractAmount').value) || 0,
+                estimatedCosts: parseFloat(document.getElementById('jobEstimatedCosts').value) || 0,
                 targetMarginPct: parseFloat(document.getElementById('jobTargetMargin').value) || 50,
+                notes: document.getElementById('jobNotes').value.trim(),
+                pctComplete: 0,
+                invoicedToDate: 0,
                 createdAt: new Date().toISOString(),
                 updatedAt: new Date().toISOString()
             };
@@ -1940,37 +2444,43 @@
             recalcSubCosts(jobId);
             saveData();
 
-            const buildings = appData.buildings.filter(b => b.jobId === jobId);
-            const phases = appData.phases.filter(p => p.jobId === jobId);
-
-            const costs = getJobTotalCost(jobId);
-            const totalCost = costs.total;
-
-            const profit = (job.contractAmount || 0) - totalCost;
-            const marginPct = job.contractAmount > 0 ? ((profit / job.contractAmount) * 100).toFixed(1) : 0;
-            const avgCompletion = phases.length > 0 ? Math.round(phases.reduce((sum, p) => sum + (p.pctComplete || 0), 0) / phases.length) : 0;
+            const w = getJobWIP(jobId);
 
             document.getElementById('job-detail-title').textContent = (job.jobNumber ? job.jobNumber + ' — ' : '') + job.title;
             const detailStatusClass = job.status === 'On Hold' ? 'at-risk' : job.status === 'Completed' ? 'on-track' : job.status === 'Archived' ? 'not-started' : 'on-track';
             document.getElementById('job-detail-status').innerHTML = `<span class="badge ${detailStatusClass}">${job.status}</span>`;
-            document.getElementById('job-detail-contract').textContent = `Contract: ${formatCurrency(job.contractAmount)}`;
+            document.getElementById('job-detail-contract').textContent = `Total Income: ${formatCurrency(w.totalIncome)}`;
 
             document.getElementById('job-info-number').textContent = job.jobNumber || '—';
             document.getElementById('job-info-title').textContent = job.title;
+            document.getElementById('job-info-client').textContent = job.client || '—';
+            document.getElementById('job-info-pm').textContent = job.pm || '—';
+            document.getElementById('job-info-type').textContent = job.jobType ? (job.jobType + (job.market ? ' - ' + job.market : '')) : '—';
+            document.getElementById('job-info-worktype').textContent = job.workType || '—';
             document.getElementById('job-info-market').textContent = job.market || '—';
             document.getElementById('job-info-contract').textContent = formatCurrency(job.contractAmount);
+            document.getElementById('job-info-estcosts').textContent = formatCurrency(job.estimatedCosts);
             document.getElementById('job-info-margin').textContent = (job.targetMarginPct || 50) + '%';
             const statusClass = job.status === 'On Hold' ? 'at-risk' : job.status === 'Completed' ? 'on-track' : job.status === 'Archived' ? 'not-started' : 'on-track';
             document.getElementById('job-info-status').innerHTML = `<span class="badge ${statusClass}">${job.status}</span>`;
+            document.getElementById('job-info-notes').textContent = job.notes || '—';
             document.getElementById('archive-job-btn').textContent = job.status === 'Archived' ? 'Unarchive Job' : 'Archive Job';
 
-            document.getElementById('job-summary-contract').textContent = formatCurrency(job.contractAmount);
-            document.getElementById('job-summary-cost').textContent = formatCurrency(totalCost);
-            document.getElementById('job-summary-profit').textContent = formatCurrency(profit);
-            document.getElementById('job-summary-margin').textContent = marginPct + '%';
-            document.getElementById('job-summary-completion').textContent = avgCompletion + '%';
+            // Summary cards — WIP-based
+            const coInfo = w.coIncome > 0 ? `Contract: ${formatCurrency(w.contractIncome)} + CO: ${formatCurrency(w.coIncome)}` : '';
+            document.getElementById('job-summary-totalincome').textContent = formatCurrency(w.totalIncome);
+            document.getElementById('job-summary-income-breakdown').textContent = coInfo;
+            document.getElementById('job-summary-cost').textContent = formatCurrency(w.actualCosts);
+            document.getElementById('job-summary-pctcomplete').textContent = w.pctComplete.toFixed(1) + '%';
+            document.getElementById('job-summary-revenue').textContent = formatCurrency(w.revenueEarned);
+            document.getElementById('job-summary-profit').textContent = formatCurrency(w.jtdProfit);
+            document.getElementById('job-summary-profit').style.color = w.jtdProfit >= 0 ? 'var(--green)' : 'var(--red)';
+            const jtdMarginStr = w.jtdMargin.toFixed(1) + '%';
+            document.getElementById('job-summary-margin').textContent = jtdMarginStr;
 
             renderJobOverview(jobId);
+            renderWipTab(jobId);
+            renderChangeOrders(jobId);
         }
 
         function renderJobOverview(jobId) {
@@ -2294,13 +2804,8 @@
             document.getElementById('jobCostHoursWeek').value = '';
             saveData();
             updateJobCostSummary(appState.currentJobId);
-            // Update the summary cards too
-            const costs = getJobTotalCost(appState.currentJobId);
-            const profit = (job.contractAmount || 0) - costs.total;
-            const marginPct = job.contractAmount > 0 ? ((profit / job.contractAmount) * 100).toFixed(1) : 0;
-            document.getElementById('job-summary-cost').textContent = formatCurrency(costs.total);
-            document.getElementById('job-summary-profit').textContent = formatCurrency(profit);
-            document.getElementById('job-summary-margin').textContent = marginPct + '%';
+            // Update the summary cards using WIP
+            renderJobDetail(appState.currentJobId);
             // Show save confirmation
             const statusEl = document.getElementById('jobCostSaveStatus');
             if (statusEl) {
