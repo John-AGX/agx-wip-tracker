@@ -2139,11 +2139,14 @@
             job.sub = parseFloat(document.getElementById('jobCostSub').value) || 0;
             job.equipment = parseFloat(document.getElementById('jobCostEquipment').value) || 0;
             job.hoursWeek = parseFloat(document.getElementById('jobCostHoursWeek').value) || 0;
-            job.hoursTotal = parseFloat(document.getElementById('jobCostHoursTotal').value) || 0;
+            job.hoursTotal = (parseFloat(document.getElementById('jobCostHoursTotal').value) || 0) + job.hoursWeek;
             job.rate = parseFloat(document.getElementById('jobCostRate').value) || 40;
             // Auto-calculate labor $ from total hours × rate
             job.labor = job.hoursTotal * job.rate;
             document.getElementById('jobCostLabor').value = job.labor.toFixed(2);
+            // Update total hours display and reset weekly hours
+            document.getElementById('jobCostHoursTotal').value = job.hoursTotal;
+            document.getElementById('jobCostHoursWeek').value = '';
             saveData();
             updateJobCostSummary(appState.currentJobId);
             // Update the summary cards too
@@ -2235,7 +2238,7 @@
             document.getElementById('buildingLabor').value = building.labor || '';
             document.getElementById('buildingSub').value = building.sub || '';
             document.getElementById('buildingEquipment').value = building.equipment || '';
-            document.getElementById('buildingHoursWeek').value = building.hoursWeek || '';
+            document.getElementById('buildingHoursWeek').value = '';
             document.getElementById('buildingHoursTotal').value = building.hoursTotal || '';
             document.getElementById('buildingRate').value = building.rate || 40;
 
@@ -2268,7 +2271,8 @@
         }
 
         function saveBuilding() {
-            const hoursTotal = parseFloat(document.getElementById('buildingHoursTotal').value) || 0;
+            const hoursWeek = parseFloat(document.getElementById('buildingHoursWeek').value) || 0;
+            const hoursTotal = (parseFloat(document.getElementById('buildingHoursTotal').value) || 0) + hoursWeek;
             const rate = parseFloat(document.getElementById('buildingRate').value) || 40;
             const formData = {
                 name: document.getElementById('buildingName').value,
@@ -2279,7 +2283,7 @@
                 labor: hoursTotal * rate,
                 sub: parseFloat(document.getElementById('buildingSub').value) || 0,
                 equipment: parseFloat(document.getElementById('buildingEquipment').value) || 0,
-                hoursWeek: parseFloat(document.getElementById('buildingHoursWeek').value) || 0,
+                hoursWeek: hoursWeek,
                 hoursTotal: hoursTotal,
                 rate: rate
             };
@@ -2390,7 +2394,7 @@
             } else {
                 document.getElementById('phaseBudgetPct').value = '';
             }
-            document.getElementById('phaseHoursWeek').value = phase.hoursWeek || '';
+            document.getElementById('phaseHoursWeek').value = '';
             document.getElementById('phaseHoursTotal').value = phase.hoursTotal || '';
             document.getElementById('phaseRate').value = phase.rate || 40;
             document.getElementById('phaseNotes').value = phase.notes || '';
@@ -2408,7 +2412,8 @@
         }
 
         function savePhase() {
-            const hoursTotal = parseFloat(document.getElementById('phaseHoursTotal').value) || 0;
+            const hoursWeek = parseFloat(document.getElementById('phaseHoursWeek').value) || 0;
+            const hoursTotal = (parseFloat(document.getElementById('phaseHoursTotal').value) || 0) + hoursWeek;
             const rate = parseFloat(document.getElementById('phaseRate').value) || 40;
             const formData = {
                 buildingId: document.getElementById('phaseBuilding').value,
@@ -2419,7 +2424,7 @@
                 sub: parseFloat(document.getElementById('phaseSub').value) || 0,
                 equipment: parseFloat(document.getElementById('phaseEquipment').value) || 0,
                 phaseBudget: parseFloat(document.getElementById('phaseBudget').value) || 0,
-                hoursWeek: parseFloat(document.getElementById('phaseHoursWeek').value) || 0,
+                hoursWeek: hoursWeek,
                 hoursTotal: hoursTotal,
                 rate: rate,
                 notes: document.getElementById('phaseNotes').value
