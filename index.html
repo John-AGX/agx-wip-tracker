@@ -2070,15 +2070,15 @@
 
         // Calculate sub costs from the Subcontractors tab entries
         function getSubCostForPhase(phaseId) {
-            // Sum contractAmt of all subs assigned directly to this phase
+            // Sum billedToDate of all subs assigned directly to this phase
             return appData.subs.filter(s => s.level === 'phase' && s.phaseId === phaseId)
-                .reduce((sum, s) => sum + (s.contractAmt || 0), 0);
+                .reduce((sum, s) => sum + (s.billedToDate || 0), 0);
         }
 
         function getSubCostForBuilding(buildingId, jobId) {
             // 1. Subs assigned directly to this building
             let total = appData.subs.filter(s => s.level === 'building' && s.buildingId === buildingId)
-                .reduce((sum, s) => sum + (s.contractAmt || 0), 0);
+                .reduce((sum, s) => sum + (s.billedToDate || 0), 0);
             // 2. Job-level subs distributed by building budget %
             const jobSubs = appData.subs.filter(s => s.level === 'job' && s.jobId === jobId);
             if (jobSubs.length > 0) {
@@ -2087,7 +2087,7 @@
                 if (totalBudget > 0) {
                     const thisBldg = appData.buildings.find(b => b.id === buildingId);
                     const bldgPct = (thisBldg?.budget || 0) / totalBudget;
-                    const jobSubTotal = jobSubs.reduce((sum, s) => sum + (s.contractAmt || 0), 0);
+                    const jobSubTotal = jobSubs.reduce((sum, s) => sum + (s.billedToDate || 0), 0);
                     total += jobSubTotal * bldgPct;
                 }
             }
@@ -2095,9 +2095,9 @@
         }
 
         function getSubCostForJob(jobId) {
-            // All subs for this job, summed by contractAmt
+            // All subs for this job, summed by billedToDate
             return appData.subs.filter(s => s.jobId === jobId)
-                .reduce((sum, s) => sum + (s.contractAmt || 0), 0);
+                .reduce((sum, s) => sum + (s.billedToDate || 0), 0);
         }
 
         function getSubContractForPhase(phaseId) {
@@ -2173,9 +2173,9 @@
             // Update job-level sub cost
             const job = appData.jobs.find(j => j.id === jobId);
             if (job) {
-                // Job-level sub = sum of all job-level subs' contractAmt
+                // Job-level sub = sum of all job-level subs' billedToDate
                 job.sub = appData.subs.filter(s => s.level === 'job' && s.jobId === jobId)
-                    .reduce((sum, s) => sum + (s.contractAmt || 0), 0);
+                    .reduce((sum, s) => sum + (s.billedToDate || 0), 0);
             }
         }
 
