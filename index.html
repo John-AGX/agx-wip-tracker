@@ -2072,13 +2072,13 @@
         function getSubCostForPhase(phaseId) {
             // Sum contractAmt of all subs assigned directly to this phase
             return appData.subs.filter(s => s.level === 'phase' && s.phaseId === phaseId)
-                .reduce((sum, s) => sum + (s.billedToDate || 0), 0);
+                .reduce((sum, s) => sum + (s.contractAmt || 0), 0);
         }
 
         function getSubCostForBuilding(buildingId, jobId) {
             // 1. Subs assigned directly to this building
             let total = appData.subs.filter(s => s.level === 'building' && s.buildingId === buildingId)
-                .reduce((sum, s) => sum + (s.billedToDate || 0), 0);
+                .reduce((sum, s) => sum + (s.contractAmt || 0), 0);
             // 2. Job-level subs distributed by building budget %
             const jobSubs = appData.subs.filter(s => s.level === 'job' && s.jobId === jobId);
             if (jobSubs.length > 0) {
@@ -2087,7 +2087,7 @@
                 if (totalBudget > 0) {
                     const thisBldg = appData.buildings.find(b => b.id === buildingId);
                     const bldgPct = (thisBldg?.budget || 0) / totalBudget;
-                    const jobSubTotal = jobSubs.reduce((sum, s) => sum + (s.billedToDate || 0), 0);
+                    const jobSubTotal = jobSubs.reduce((sum, s) => sum + (s.contractAmt || 0), 0);
                     total += jobSubTotal * bldgPct;
                 }
             }
@@ -2095,9 +2095,9 @@
         }
 
         function getSubCostForJob(jobId) {
-            // All subs for this job, summed by billedToDate
+            // All subs for this job, summed by contractAmt
             return appData.subs.filter(s => s.jobId === jobId)
-                .reduce((sum, s) => sum + (s.billedToDate || 0), 0);
+                .reduce((sum, s) => sum + (s.contractAmt || 0), 0);
         }
 
         function getSubContractForPhase(phaseId) {
@@ -2122,6 +2122,44 @@
             return total;
         }
 
+        // Auto-calculate building % complete from its phases (weighted by phaseBudget)
+        function calcBuildingPctComplete(buildingId, jobId) {
+            const bldgPhases = appData.phases.filter(p => p.jobId === jobId && p.buildingId === buildingId);
+            if (bldgPhases.length === 0) return 0;
+            const totalBudget = bldgPhases.reduce((s, p) => s + (p.phaseBudget || 0), 0);
+            if (totalBudget > 0) {
+                return bldgPhases.reduce((s, p) => s + (p.pctComplete || 0) * (p.phaseBudget || 0), 0) / totalBudget;
+            }
+            // Equal weight if no budgets set
+            return bldgPhases.reduce((s, p) => s + (p.pctComplete || 0), 0) / bldgPhases.length;
+        }
+
+        // Auto-calculate job % complete from buildings (weighted by budget) or phases if no buildings
+        function calcJobPctComplete(jobId) {
+            const buildings = appData.buildings.filter(b => b.jobId === jobId);
+            const phases = appData.phases.filter(p => p.jobId === jobId);
+            if (buildings.length > 0) {
+                // Calculate each building's pctComplete from its phases
+                const bldgData = buildings.map(b => ({
+                    budget: b.budget || 0,
+                    pct: calcBuildingPctComplete(b.id, jobId)
+                }));
+                const totalBudget = bldgData.reduce((s, d) => s + d.budget, 0);
+                if (totalBudget > 0) {
+                    return bldgData.reduce((s, d) => s + d.pct * d.budget, 0) / totalBudget;
+                }
+                return bldgData.reduce((s, d) => s + d.pct, 0) / bldgData.length;
+            } else if (phases.length > 0) {
+                // No buildings - use phases directly
+                const totalBudget = phases.reduce((s, p) => s + (p.phaseBudget || 0), 0);
+                if (totalBudget > 0) {
+                    return phases.reduce((s, p) => s + (p.pctComplete || 0) * (p.phaseBudget || 0), 0) / totalBudget;
+                }
+                return phases.reduce((s, p) => s + (p.pctComplete || 0), 0) / phases.length;
+            }
+            return appData.jobs.find(j => j.id === jobId)?.pctComplete || 0;
+        }
+
         // Recalculate all sub $ fields on phases and buildings from subs entries
         function recalcSubCosts(jobId) {
             // Update phases
@@ -2135,9 +2173,9 @@
             // Update job-level sub cost
             const job = appData.jobs.find(j => j.id === jobId);
             if (job) {
-                // Job-level sub = sum of all job-level subs' billedToDate
+                // Job-level sub = sum of all job-level subs' contractAmt
                 job.sub = appData.subs.filter(s => s.level === 'job' && s.jobId === jobId)
-                    .reduce((sum, s) => sum + (s.billedToDate || 0), 0);
+                    .reduce((sum, s) => sum + (s.contractAmt || 0), 0);
             }
         }
 
@@ -2497,6 +2535,13 @@
             });
 
             jobs.forEach((job, index) => {
+                // Auto-calc % complete from phases/buildings
+                const _jp = appData.phases.filter(p => p.jobId === job.id);
+                const _jb = appData.buildings.filter(b => b.jobId === job.id);
+                if (_jp.length > 0 || _jb.length > 0) {
+                    recalcSubCosts(job.id);
+                    job.pctComplete = Math.round(calcJobPctComplete(job.id) * 10) / 10;
+                }
                 const w = getJobWIP(job.id);
                 const statusClass = job.status === 'On Hold' ? 'at-risk' : job.status === 'Completed' ? 'on-track' : job.status === 'Archived' ? 'not-started' : 'on-track';
                 const typeLabel = job.jobType ? `<span style="font-size: 11px; color: var(--text-dim); font-weight: normal; margin-left: 6px;">${job.jobType}${job.market ? ' - ' + job.market : ''}</span>` : '';
@@ -2701,6 +2746,13 @@
 
             // Recalculate sub costs from Subcontractors tab entries
             recalcSubCosts(jobId);
+
+            // Auto-calculate % complete from phases/buildings
+            const hasPhases = appData.phases.filter(p => p.jobId === jobId).length > 0;
+            const hasBuildings = appData.buildings.filter(b => b.jobId === jobId).length > 0;
+            if (hasPhases || hasBuildings) {
+                job.pctComplete = Math.round(calcJobPctComplete(jobId) * 10) / 10;
+            }
             saveData();
 
             const w = getJobWIP(jobId);
@@ -2823,7 +2875,7 @@
                             <h3 style="font-size: 18px; margin-bottom: 5px;">${building.name}</h3>
                             <p style="font-size: 13px; color: var(--text-dim);">${building.address}</p>
                         </div>
-                        <span style="font-size: 13px; color: var(--purple); font-weight: 600;">${bldgPct}% of Job</span>
+                        <div style="text-align: right;"><span style="font-size: 15px; font-weight: 700; color: var(--green);">${calcBuildingPctComplete(building.id, jobId).toFixed(1)}% Complete</span><br><span style="font-size: 12px; color: var(--purple);">${bldgPct}% of Job</span></div>
                     </div>
                     <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 15px;">
                         <div>
