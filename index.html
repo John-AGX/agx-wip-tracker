@@ -2466,6 +2466,18 @@
                 job.notes = document.getElementById('edit-jobNotes').value.trim();
                 job.updatedAt = new Date().toISOString();
                 saveData();
+                // Restore the original grid HTML so renderJobDetail can populate it
+                const grid = document.getElementById('job-info-card').querySelector('div[style*="grid-template-columns"]');
+                if (grid) {
+                    const mkDiv = (lbl, id, extraStyle) => {
+                        const lt = String.fromCharCode(60);
+                        const gt = String.fromCharCode(62);
+                        return lt + 'div' + gt + lt + 'label style="font-size: 12px; color: var(--text-dim);"' + gt + lbl + lt + '/label' + gt + lt + 'div style="font-size: 14px; color: ' + (extraStyle || 'var(--text)') + ';" id="' + id + '"' + gt + lt + '/div' + gt + lt + '/div' + gt;
+                    };
+                    grid.innerHTML = mkDiv('Job Number','job-info-number') + mkDiv('Job Name','job-info-title') + mkDiv('Client','job-info-client') + mkDiv('PM','job-info-pm') + mkDiv('Type','job-info-type') + mkDiv('Work Type','job-info-worktype') + mkDiv('Market','job-info-market') + mkDiv('Contract (As Sold)','job-info-contract','var(--accent); font-weight: 700') + mkDiv('Est. Costs (As Sold)','job-info-estcosts') + mkDiv('Target Margin %','job-info-margin') + mkDiv('Status','job-info-status') + mkDiv('Notes','job-info-notes');
+                }
+                btn.textContent = 'Edit Job';
+                btn.style.background = 'var(--accent)';
                 renderJobDetail(jobId);
             } else {
                 // Enter edit mode - replace displays with inputs
