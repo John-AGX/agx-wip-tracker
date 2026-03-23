@@ -853,7 +853,8 @@
                             <div style="display: flex; justify-content: space-between; align-items: start; flex-wrap: wrap; gap: 10px; margin-bottom: 15px;">
                                 <h3 style="margin: 0;">Job Information</h3>
                                 <div style="display: flex; gap: 8px;">
-                                    <button class="small secondary" onclick="archiveCurrentJob()" id="archive-job-btn">Archive Job</button>
+                                    <button class="small" onclick="toggleEditJobInfo()" id="edit-job-info-btn" style="background: var(--accent); color: #fff;">Edit Job</button>
+                        <button class="small secondary" onclick="archiveCurrentJob()" id="archive-job-btn">Archive Job</button>
                                 </div>
                             </div>
                             <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 15px;">
@@ -2023,14 +2024,16 @@
             });
             // Building-level costs
             let buildingCost = 0;
-            appData.buildings.filter(b => b.jobId === jobId).forEach(b => {
+            const jobBuildings = appData.buildings.filter(b => b.jobId === jobId);
+            jobBuildings.forEach(b => {
                 buildingCost += (b.materials || 0) + (b.labor || 0) + (b.sub || 0) + (b.equipment || 0);
             });
-            // Job-level costs
+            // Job-level costs (exclude sub if buildings exist, since recalcSubCosts distributes job-level subs to buildings)
             const job = appData.jobs.find(j => j.id === jobId);
             let jobCost = 0;
             if (job) {
-                jobCost = (job.materials || 0) + (job.labor || 0) + (job.sub || 0) + (job.equipment || 0);
+                const jobSub = (jobBuildings.length > 0) ? 0 : (job.sub || 0);
+                jobCost = (job.materials || 0) + (job.labor || 0) + jobSub + (job.equipment || 0);
             }
             return { phaseCost, buildingCost, jobCost, total: phaseCost + buildingCost + jobCost };
         }
@@ -2437,6 +2440,72 @@
             job.updatedAt = new Date().toISOString();
             saveData();
             renderJobDetail(job.id);
+        }
+
+        function toggleEditJobInfo() {
+            const jobId = appState.currentJobId;
+            const job = appData.jobs.find(j => j.id === jobId);
+            if (!job) return;
+            const btn = document.getElementById('edit-job-info-btn');
+            const card = document.getElementById('job-info-card');
+            const isEditing = btn.textContent === 'Save';
+            if (isEditing) {
+                // Save mode - read inputs and save
+                job.jobNumber = document.getElementById('edit-jobNumber').value.trim();
+                job.title = document.getElementById('edit-jobTitle').value.trim();
+                job.client = document.getElementById('edit-jobClient').value.trim();
+                job.pm = document.getElementById('edit-jobPM').value;
+                const typeVal = document.getElementById('edit-jobType').value;
+                job.jobType = typeVal;
+                job.workType = document.getElementById('edit-jobWorkType').value;
+                job.market = document.getElementById('edit-jobMarket').value;
+                job.contractAmount = parseFloat(document.getElementById('edit-jobContract').value) || 0;
+                job.estimatedCosts = parseFloat(document.getElementById('edit-jobEstCosts').value) || 0;
+                job.targetMarginPct = parseFloat(document.getElementById('edit-jobMargin').value) || 50;
+                job.status = document.getElementById('edit-jobStatus').value;
+                job.notes = document.getElementById('edit-jobNotes').value.trim();
+                job.updatedAt = new Date().toISOString();
+                saveData();
+                renderJobDetail(jobId);
+            } else {
+                // Enter edit mode - replace displays with inputs
+                btn.textContent = 'Save';
+                btn.style.background = 'var(--green)';
+                const grid = card.querySelector('div[style*="grid-template-columns"]');
+                if (!grid) return;
+                const pmOpts = ['John','Noah','Henry'].map(p => 
+                    String.fromCharCode(60) + 'option' + (p === job.pm ? ' selected' : '') + String.fromCharCode(62) + p + String.fromCharCode(60) + '/option' + String.fromCharCode(62)
+                ).join('');
+                const typeOpts = ['Service','Renovation','Work Order'].map(t =>
+                    String.fromCharCode(60) + 'option' + (t === job.jobType ? ' selected' : '') + String.fromCharCode(62) + t + String.fromCharCode(60) + '/option' + String.fromCharCode(62)
+                ).join('');
+                const statusOpts = ['New','Backlog','In Progress','On Hold','Completed','Archived'].map(s =>
+                    String.fromCharCode(60) + 'option' + (s === job.status ? ' selected' : '') + String.fromCharCode(62) + s + String.fromCharCode(60) + '/option' + String.fromCharCode(62)
+                ).join('');
+                const marketOpts = ['Tampa','Orlando'].map(m =>
+                    String.fromCharCode(60) + 'option' + (m === job.market ? ' selected' : '') + String.fromCharCode(62) + m + String.fromCharCode(60) + '/option' + String.fromCharCode(62)
+                ).join('');
+                const inp = (id, val, type) => {
+                    type = type || 'text';
+                    return String.fromCharCode(60) + 'input id="' + id + '" type="' + type + '" value="' + (val || '') + '" style="width:100%;background:var(--input-bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 8px;font-size:13px;"' + String.fromCharCode(62);
+                };
+                const sel = (id, opts) => String.fromCharCode(60) + 'select id="' + id + '" style="width:100%;background:var(--input-bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 8px;font-size:13px;"' + String.fromCharCode(62) + opts + String.fromCharCode(60) + '/select' + String.fromCharCode(62);
+                const lbl = (txt) => String.fromCharCode(60) + 'label style="font-size:12px;color:var(--text-dim);"' + String.fromCharCode(62) + txt + String.fromCharCode(60) + '/label' + String.fromCharCode(62);
+                const d = (inner) => String.fromCharCode(60) + 'div' + String.fromCharCode(62) + inner + String.fromCharCode(60) + '/div' + String.fromCharCode(62);
+                grid.innerHTML = 
+                    d(lbl('Job Number') + inp('edit-jobNumber', job.jobNumber)) +
+                    d(lbl('Job Name') + inp('edit-jobTitle', job.title)) +
+                    d(lbl('Client') + inp('edit-jobClient', job.client)) +
+                    d(lbl('PM') + sel('edit-jobPM', pmOpts)) +
+                    d(lbl('Type') + sel('edit-jobType', typeOpts)) +
+                    d(lbl('Work Type') + inp('edit-jobWorkType', job.workType)) +
+                    d(lbl('Market') + sel('edit-jobMarket', marketOpts)) +
+                    d(lbl('Contract (As Sold)') + inp('edit-jobContract', job.contractAmount, 'number')) +
+                    d(lbl('Est. Costs (As Sold)') + inp('edit-jobEstCosts', job.estimatedCosts, 'number')) +
+                    d(lbl('Target Margin %') + inp('edit-jobMargin', job.targetMarginPct || 50, 'number')) +
+                    d(lbl('Status') + sel('edit-jobStatus', statusOpts)) +
+                    d(lbl('Notes') + inp('edit-jobNotes', job.notes));
+            }
         }
 
         function renderJobDetail(jobId) {
@@ -2924,6 +2993,18 @@
         }
 
         function saveBuilding() {
+            // Validate building budget % doesn't exceed 100% for the job
+            const newBudgetPct = parseFloat(document.getElementById('buildingBudgetPct').value) || 0;
+            const jobBuildings = appData.buildings.filter(b => b.jobId === appState.currentJobId);
+            let existingPctTotal = jobBuildings.reduce((sum, b) => sum + (b.budgetPct || 0), 0);
+            if (appState.editBuildingId) {
+                const editBldg = jobBuildings.find(b => b.id === appState.editBuildingId);
+                if (editBldg) existingPctTotal -= (editBldg.budgetPct || 0);
+            }
+            if (existingPctTotal + newBudgetPct > 100) {
+                alert('Total building budget % cannot exceed 100%. Currently ' + existingPctTotal.toFixed(1) + '% allocated. Maximum you can add: ' + (100 - existingPctTotal).toFixed(1) + '%');
+                return;
+            }
             const hoursWeek = parseFloat(document.getElementById('buildingHoursWeek').value) || 0;
             const hoursTotal = (parseFloat(document.getElementById('buildingHoursTotal').value) || 0) + hoursWeek;
             const rate = parseFloat(document.getElementById('buildingRate').value) || 40;
@@ -3065,6 +3146,25 @@
         }
 
         function savePhase() {
+            // Validate phase budget doesn't exceed building budget
+            const selectedBuildingId = document.getElementById('phaseBuilding').value;
+            if (selectedBuildingId) {
+                const bldg = appData.buildings.find(b => b.id === selectedBuildingId);
+                if (bldg && bldg.budget > 0) {
+                    const newPhaseBudget = parseFloat(document.getElementById('phaseBudget').value) || 0;
+                    const bldgPhases = appData.phases.filter(p => p.jobId === appState.currentJobId && p.buildingId === selectedBuildingId);
+                    let existingBudgetTotal = bldgPhases.reduce((sum, p) => sum + (p.phaseBudget || 0), 0);
+                    if (appState.editPhaseId) {
+                        const editP = bldgPhases.find(p => p.id === appState.editPhaseId);
+                        if (editP) existingBudgetTotal -= (editP.phaseBudget || 0);
+                    }
+                    if (existingBudgetTotal + newPhaseBudget > bldg.budget * 1.001) {
+                        const remaining = bldg.budget - existingBudgetTotal;
+                        alert('Phase budgets cannot exceed building budget (' + formatCurrency(bldg.budget) + '). Currently ' + formatCurrency(existingBudgetTotal) + ' allocated. Remaining: ' + formatCurrency(remaining));
+                        return;
+                    }
+                }
+            }
             const hoursWeek = parseFloat(document.getElementById('phaseHoursWeek').value) || 0;
             const hoursTotal = (parseFloat(document.getElementById('phaseHoursTotal').value) || 0) + hoursWeek;
             const rate = parseFloat(document.getElementById('phaseRate').value) || 40;
