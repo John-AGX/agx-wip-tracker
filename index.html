@@ -1357,8 +1357,9 @@
                     <label>Work Type</label>
                     <select id="jobWorkType">
                         <option value="">-- Select --</option>
-                        <option value="In-house">In-house</option>
+                        <option value="In-house">In-House</option>
                         <option value="Sub">Sub</option>
+                        <option value="Both">Both</option>
                     </select>
                 </div>
             </div>
@@ -1429,9 +1430,24 @@
                 </div>
             </div>
             <div id="buildingBudgetHint" style="font-size: 12px; color: var(--text-dim); margin-top: -12px; margin-bottom: 16px;"></div>
+            <div class="form-row" style="align-items: center; margin-bottom: 16px;">
+                <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer;">
+                    <input type="checkbox" id="buildingLocked" style="width: 16px; height: 16px;">
+                    Lock this building's % (exclude from auto-balance)
+                </label>
+                <button type="button" class="small secondary" onclick="autoBalanceBuildingPcts()" style="margin-left: auto;">Auto-Balance %</button>
+            </div>
             <div class="form-group">
                 <label>Address</label>
                 <input type="text" id="buildingAddress" placeholder="123 Main St, City, State ZIP">
+            </div>
+            <div class="form-group">
+                <label>Work Scope</label>
+                <select id="buildingWorkScope">
+                    <option value="in-house">In-House</option>
+                    <option value="sub">Sub</option>
+                    <option value="both">Both</option>
+                </select>
             </div>
             <div style="border-top: 1px solid var(--border); margin: 16px 0; padding-top: 16px;">
                 <h4 style="font-size: 13px; color: var(--text-dim); text-transform: uppercase; margin-bottom: 12px;">Building-Level Costs (optional)</h4>
@@ -1494,6 +1510,14 @@
             <div class="form-group">
                 <label>% Complete</label>
                 <input type="number" id="phasePercent" min="0" max="100" value="0" step="5">
+            </div>
+            <div class="form-group">
+                <label>Work Scope</label>
+                <select id="phaseWorkScope">
+                    <option value="in-house">In-House</option>
+                    <option value="sub">Sub</option>
+                    <option value="both">Both</option>
+                </select>
             </div>
             <div class="form-row">
                 <div class="form-group">
@@ -1632,7 +1656,13 @@
                 <label>Notes</label>
                 <input type="text" id="coNotes" placeholder="Optional notes">
             </div>
-            <div class="modal-footer">
+            <div id="coBuildingAllocSection" style="border-top: 1px solid var(--border); margin: 16px 0; padding-top: 16px;">
+                    <h4 style="font-size: 13px; color: var(--text-dim); text-transform: uppercase; margin-bottom: 12px;">Allocate to Buildings (optional)</h4>
+                    <div id="coBuildingAllocRows"></div>
+                    <button type="button" class="small" onclick="addCOBuildingRow()" style="margin-top: 8px;">+ Add Building Allocation</button>
+                    <div id="coAllocRemaining" style="font-size: 12px; color: var(--text-dim); margin-top: 8px;"></div>
+                </div>
+                <div class="modal-footer">
                 <button class="secondary" onclick="closeModal('addCOModal')">Cancel</button>
                 <button onclick="saveCO()" id="coSaveBtn">Add Change Order</button>
             </div>
@@ -2353,7 +2383,59 @@
             document.getElementById('coCosts').value = '';
             document.getElementById('coNotes').value = '';
             appState.editCOId = null;
+            document.getElementById('coBuildingAllocRows').innerHTML = '';
+            updateCOAllocRemaining();
             openModal('addCOModal');
+        }
+
+        function addCOBuildingRow(existingData) {
+            const container = document.getElementById('coBuildingAllocRows');
+            const buildings = appData.buildings.filter(b => b.jobId === appState.currentJobId);
+            if (buildings.length === 0) {
+                alert('Add buildings to this job first before allocating CO amounts.');
+                return;
+            }
+            const lt = String.fromCharCode(60);
+            const gt = String.fromCharCode(62);
+            const row = document.createElement('div');
+            row.className = 'form-row';
+            row.style.marginBottom = '8px';
+            row.style.alignItems = 'center';
+            let opts = lt + 'option value=""' + gt + '-- Select Building --' + lt + '/option' + gt;
+            buildings.forEach(b => {
+                const sel = existingData && existingData.buildingId === b.id ? ' selected' : '';
+                opts += lt + 'option value="' + b.id + '"' + sel + gt + b.name + lt + '/option' + gt;
+            });
+            const amt = existingData ? existingData.amount : '';
+            row.innerHTML = lt + 'div class="form-group" style="flex:1;"' + gt + lt + 'select class="co-bldg-select"' + gt + opts + lt + '/select' + gt + lt + '/div' + gt + lt + 'div class="form-group" style="flex:1;"' + gt + lt + 'input type="number" class="co-bldg-amount" placeholder="Amount $" step="0.01" value="' + amt + '" oninput="updateCOAllocRemaining()"' + gt + lt + '/div' + gt + lt + 'button type="button" class="danger small" onclick="this.parentElement.remove();updateCOAllocRemaining()" style="flex:0;padding:4px 10px;"' + gt + 'X' + lt + '/button' + gt;
+            container.appendChild(row);
+            updateCOAllocRemaining();
+        }
+
+        function updateCOAllocRemaining() {
+            const totalIncome = parseFloat(document.getElementById('coIncome').value) || 0;
+            const amounts = document.querySelectorAll('.co-bldg-amount');
+            let allocated = 0;
+            amounts.forEach(a => { allocated += parseFloat(a.value) || 0; });
+            const remaining = totalIncome - allocated;
+            const el = document.getElementById('coAllocRemaining');
+            if (el) {
+                el.textContent = 'Allocated: ' + formatCurrency(allocated) + ' of ' + formatCurrency(totalIncome) + ' | Remaining: ' + formatCurrency(remaining);
+                el.style.color = remaining < 0 ? 'var(--red)' : 'var(--text-dim)';
+            }
+        }
+
+        function getCOBuildingAllocations() {
+            const rows = document.querySelectorAll('#coBuildingAllocRows .form-row');
+            const allocs = [];
+            rows.forEach(row => {
+                const bldgId = row.querySelector('.co-bldg-select')?.value;
+                const amount = parseFloat(row.querySelector('.co-bldg-amount')?.value) || 0;
+                if (bldgId && amount > 0) {
+                    allocs.push({ buildingId: bldgId, amount: amount });
+                }
+            });
+            return allocs;
         }
 
         function saveCO() {
@@ -2366,7 +2448,8 @@
                 income: parseFloat(document.getElementById('coIncome').value) || 0,
                 estimatedCosts: parseFloat(document.getElementById('coCosts').value) || 0,
                 date: document.getElementById('coDate').value,
-                notes: document.getElementById('coNotes').value.trim()
+                notes: document.getElementById('coNotes').value.trim(),
+                buildingAllocations: getCOBuildingAllocations()
             };
             if (appState.editCOId) {
                 const idx = appData.changeOrders.findIndex(co => co.id === appState.editCOId);
@@ -2374,6 +2457,15 @@
             } else {
                 coData.id = 'co' + Date.now();
                 appData.changeOrders.push(coData);
+            }
+            // Auto-add CO allocations to building budgets
+            if (coData.buildingAllocations && coData.buildingAllocations.length > 0) {
+                coData.buildingAllocations.forEach(alloc => {
+                    const bldg = appData.buildings.find(b => b.id === alloc.buildingId);
+                    if (bldg) {
+                        bldg.budget = (bldg.budget || 0) + alloc.amount;
+                    }
+                });
             }
             saveData();
             closeModal('addCOModal');
@@ -2392,6 +2484,14 @@
             document.getElementById('coIncome').value = co.income || '';
             document.getElementById('coCosts').value = co.estimatedCosts || '';
             document.getElementById('coNotes').value = co.notes || '';
+            // Load building allocations
+            document.getElementById('coBuildingAllocRows').innerHTML = '';
+            if (co.buildingAllocations && co.buildingAllocations.length > 0) {
+                co.buildingAllocations.forEach(alloc => {
+                    addCOBuildingRow(alloc);
+                });
+            }
+            updateCOAllocRemaining();
             openModal('addCOModal');
         }
 
@@ -2556,7 +2656,7 @@
                     <td>${job.pm || '—'}</td>
                     <td><span class="badge ${statusClass}">${job.status}</span></td>
                     <td style="text-align: right;">${formatCurrency(w.totalIncome)}</td>
-                    <td style="text-align: right;">${w.pctComplete.toFixed(1)}%</td>
+                    <td style="text-align: right;"><div class="progress-bar" style="margin-bottom: 2px; height: 6px;"><div class="progress-fill" style="width: ${w.pctComplete}%"></div></div><span style="font-size: 12px;">${w.pctComplete.toFixed(1)}%</span></td>
                     <td style="text-align: right; color: ${w.jtdProfit >= 0 ? 'var(--green)' : 'var(--red)'};">${formatCurrency(w.jtdProfit)}</td>
                     <td style="text-align: right;">${w.jtdMargin.toFixed(1)}%</td>
                     <td style="text-align: center;">
@@ -2792,7 +2892,10 @@
             const jtdMarginStr = w.jtdMargin.toFixed(1) + '%';
             document.getElementById('job-summary-margin').textContent = jtdMarginStr;
 
-            renderJobOverview(jobId);
+            // Re-render the currently active subtab
+            const activeSubTab = document.querySelector('.sub-tab-btn-job.active');
+            const activeTabName = activeSubTab ? activeSubTab.getAttribute('data-subtab') : 'job-overview';
+            switchJobSubTab(activeTabName);
             renderWipTab(jobId);
             renderChangeOrders(jobId);
         }
@@ -3184,6 +3287,8 @@
             document.getElementById('buildingHoursWeek').value = '';
             document.getElementById('buildingHoursTotal').value = '';
             document.getElementById('buildingRate').value = '40';
+            document.getElementById('buildingWorkScope').value = 'in-house';
+            document.getElementById('buildingLocked').checked = false;
             openModal('addBuildingModal');
         }
 
@@ -3215,6 +3320,8 @@
                 document.getElementById('buildingBudgetPct').value = building.budgetPct || '';
                 document.getElementById('buildingBudgetHint').textContent = 'Contract: ' + formatCurrency(contractAmt);
             }
+            document.getElementById('buildingWorkScope').value = building.workScope || 'in-house';
+            document.getElementById('buildingLocked').checked = building.locked || false;
             openModal('addBuildingModal');
         }
 
@@ -3232,6 +3339,37 @@
             saveData();
             closeModal('addBuildingModal');
             renderJobDetail(appState.currentJobId);
+        }
+
+        function autoBalanceBuildingPcts() {
+            const jobId = appState.currentJobId;
+            const buildings = appData.buildings.filter(b => b.jobId === jobId);
+            const lockedPct = buildings.filter(b => b.locked).reduce((sum, b) => sum + (b.budgetPct || 0), 0);
+            const unlocked = buildings.filter(b => !b.locked);
+            if (unlocked.length === 0) return;
+            const remaining = Math.max(0, 100 - lockedPct);
+            const each = remaining / unlocked.length;
+            const contractAmt = appData.jobs.find(j => j.id === jobId)?.contractAmount || 0;
+            unlocked.forEach(b => {
+                b.budgetPct = Math.round(each * 10) / 10;
+                b.budget = contractAmt > 0 ? Math.round(contractAmt * b.budgetPct / 100 * 100) / 100 : b.budget;
+            });
+            saveData();
+            renderJobDetail(jobId);
+        }
+
+        function autoBalanceOnBuildingAdd(jobId) {
+            const buildings = appData.buildings.filter(b => b.jobId === jobId);
+            const lockedPct = buildings.filter(b => b.locked).reduce((sum, b) => sum + (b.budgetPct || 0), 0);
+            const unlocked = buildings.filter(b => !b.locked);
+            if (unlocked.length === 0) return;
+            const remaining = Math.max(0, 100 - lockedPct);
+            const each = Math.round(remaining / unlocked.length * 10) / 10;
+            const contractAmt = appData.jobs.find(j => j.id === jobId)?.contractAmount || 0;
+            unlocked.forEach(b => {
+                b.budgetPct = each;
+                b.budget = contractAmt > 0 ? Math.round(contractAmt * each / 100 * 100) / 100 : b.budget;
+            });
         }
 
         function saveBuilding() {
@@ -3255,6 +3393,8 @@
                 budget: parseFloat(document.getElementById('buildingBudget').value) || 0,
                 budgetPct: parseFloat(document.getElementById('buildingBudgetPct').value) || 0,
                 address: document.getElementById('buildingAddress').value,
+                workScope: document.getElementById('buildingWorkScope').value || 'in-house',
+                locked: document.getElementById('buildingLocked').checked,
                 materials: parseFloat(document.getElementById('buildingMaterials').value) || 0,
                 labor: hoursTotal * rate,
                 sub: 0, // auto-calculated from Subs tab by recalcSubCosts
@@ -3276,6 +3416,7 @@
                     jobId: appState.currentJobId
                 }, formData);
                 appData.buildings.push(building);
+                autoBalanceOnBuildingAdd(appState.currentJobId);
             }
             saveData();
             closeModal('addBuildingModal');
@@ -3333,6 +3474,7 @@
             document.getElementById('phaseHoursTotal').value = '';
             document.getElementById('phaseRate').value = '40';
             document.getElementById('phaseNotes').value = '';
+            document.getElementById('phaseWorkScope').value = 'in-house';
             openModal('addPhaseModal');
         }
 
@@ -3380,6 +3522,7 @@
             document.getElementById('phaseHoursTotal').value = phase.hoursTotal || '';
             document.getElementById('phaseRate').value = phase.rate || 40;
             document.getElementById('phaseNotes').value = phase.notes || '';
+            document.getElementById('phaseWorkScope').value = phase.workScope || 'in-house';
             openModal('addPhaseModal');
         }
 
@@ -3419,6 +3562,7 @@
             const formData = {
                 buildingId: document.getElementById('phaseBuilding').value,
                 phase: document.getElementById('phaseType').value,
+                workScope: document.getElementById('phaseWorkScope').value || 'in-house',
                 pctComplete: parseFloat(document.getElementById('phasePercent').value) || 0,
                 materials: parseFloat(document.getElementById('phaseMaterials').value) || 0,
                 labor: hoursTotal * rate,
