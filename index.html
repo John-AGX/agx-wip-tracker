@@ -1,9 +1,10 @@
-<!DOCTYPE html>
+'<div style="margin-bottom:16px"><h4 style="color:#1B3A5C;margin-bottom:8px">Scope of Work</h4><div style="white-space:pre-wrap;font-size:13px;padding:8px;background:#f8f9fa;border:1px solid #e0e0e0;border-radius:4px;min-height:40px">' + (est.scopeOfWork || 'No scope of work entered') + '</div></div>' +
+    <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AGX Central Florida — WIP Tracker</title>
+    <title>AGX Central Florida â WIP Tracker</title>
     <style>
         :root {
             --bg: #0f1117;
@@ -325,19 +326,19 @@
         }
 
         th.sortable::after {
-            content: ' ⇅';
+            content: ' â';
             opacity: 0.3;
             font-size: 11px;
         }
 
         th.sortable.sort-asc::after {
-            content: ' ▲';
+            content: ' â²';
             opacity: 0.8;
             color: var(--accent);
         }
 
         th.sortable.sort-desc::after {
-            content: ' ▼';
+            content: ' â¼';
             opacity: 0.8;
             color: var(--accent);
         }
@@ -849,7 +850,7 @@
 
                     <div id="wip-job-detail-view" style="display: none;">
                         <div class="job-detail-header">
-                            <button class="secondary small" onclick="backToWIPMain()">← Back to WIP</button>
+                            <button class="secondary small" onclick="backToWIPMain()">â Back to WIP</button>
                             <div class="job-detail-info">
                                 <div class="job-detail-title" id="job-detail-title"></div>
                                 <div class="job-detail-meta">
@@ -1086,7 +1087,7 @@
                                             <span id="wip-pct-complete">0%</span>
                                         </div>
                                         <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border);">
-                                            <span style="color: var(--text-dim);">Revenue Earned (Income × %)</span>
+                                            <span style="color: var(--text-dim);">Revenue Earned (Income Ã %)</span>
                                             <span id="wip-revenue-earned">$0.00</span>
                                         </div>
                                         <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border);">
@@ -1172,7 +1173,7 @@
                                         <input type="number" id="jobCostMaterials" placeholder="0.00" step="0.01">
                                     </div>
                                     <div class="form-group">
-                                        <label>Labor $ (auto: hours × rate)</label>
+                                        <label>Labor $ (auto: hours Ã rate)</label>
                                         <input type="number" id="jobCostLabor" placeholder="0.00" step="0.01" readonly style="opacity: 0.7; cursor: not-allowed;">
                                     </div>
                                     <div class="form-group">
@@ -1197,7 +1198,7 @@
                                     </div>
                                 </div>
                                 <div style="margin-top: 15px; display: flex; gap: 10px;">
-                                    <button class="primary" onclick="saveJobCosts()" style="flex: 0 0 auto;">💾 Save Costs</button>
+                                    <button class="primary" onclick="saveJobCosts()" style="flex: 0 0 auto;">ð¾ Save Costs</button>
                                     <span id="jobCostSaveStatus" style="font-size: 13px; color: var(--green); align-self: center; opacity: 0; transition: opacity 0.3s;"></span>
                                 </div>
                                 <div style="margin-top: 15px; padding: 15px; background: var(--surface2); border-radius: 8px;">
@@ -1207,7 +1208,7 @@
                                             <div style="font-size: 18px; font-weight: 700; color: var(--accent);" id="jobCostTotal">$0.00</div>
                                         </div>
                                         <div>
-                                            <div style="font-size: 12px; color: var(--text-dim);">Computed Labor (Hrs × Rate)</div>
+                                            <div style="font-size: 12px; color: var(--text-dim);">Computed Labor (Hrs Ã Rate)</div>
                                             <div style="font-size: 18px; font-weight: 700; color: var(--accent);" id="jobCostLaborBurden">$0.00</div>
                                         </div>
                                         <div>
@@ -1279,7 +1280,7 @@
                                             <th style="text-align: right;">Total Hours</th>
                                             <th style="text-align: right;">Avg Rate</th>
                                             <th style="text-align: right;">Labor Cost</th>
-                                            <th style="text-align: right;">Computed (Hrs × Rate)</th>
+                                            <th style="text-align: right;">Computed (Hrs Ã Rate)</th>
                                         </tr>
                                     </thead>
                                     <tbody></tbody>
@@ -1467,7 +1468,7 @@
                         <input type="number" id="buildingMaterials" placeholder="0.00" step="0.01">
                     </div>
                     <div class="form-group">
-                        <label>Labor $ (auto: hours × rate)</label>
+                        <label>Labor $ (auto: hours Ã rate)</label>
                         <input type="number" id="buildingLabor" placeholder="0.00" step="0.01" readonly style="opacity: 0.7; cursor: not-allowed;">
                     </div>
                 </div>
@@ -1535,7 +1536,7 @@
                     <input type="number" id="phaseMaterials" placeholder="0.00" step="0.01">
                 </div>
                 <div class="form-group">
-                    <label>Labor $ (auto: hours × rate)</label>
+                    <label>Labor $ (auto: hours Ã rate)</label>
                     <input type="number" id="phaseLabor" placeholder="0.00" step="0.01" readonly style="opacity: 0.7; cursor: not-allowed;">
                 </div>
             </div>
@@ -1727,6 +1728,11 @@
                     <input type="tel" id="estManagerPhone" placeholder="(555) 123-4567">
                 </div>
             </div>
+<div style="margin-top:12px">
+<label style="font-weight:600;display:block;margin-bottom:4px">Scope of Work</label>
+<textarea id="newEst_scopeOfWork" style="width:100%;min-height:120px;padding:8px;border:1px solid #ccc;border-radius:4px;font-family:Arial,sans-serif;font-size:13px;resize:vertical" placeholder="Paste or type scope of work summary (bullet points)..."></textarea>
+</div>
+
             <div class="form-group">
                 <label>Default Markup %</label>
                 <input type="number" id="estDefaultMarkup" value="100" step="0.1">
@@ -1748,7 +1754,12 @@
             <div class="form-row" style="gap:8px;"><div class="form-group" style="flex:1.5;margin-bottom:4px;"><label style="font-size:11px;margin-bottom:2px;">Property Address</label><input type="text" id="editEst_propertyAddr" style="padding:6px 8px;font-size:13px;"></div><div class="form-group" style="flex:1.5;margin-bottom:4px;"><label style="font-size:11px;margin-bottom:2px;">Billing Address</label><input type="text" id="editEst_billingAddr" style="padding:6px 8px;font-size:13px;"></div><div class="form-group" style="flex:1;margin-bottom:4px;"><label style="font-size:11px;margin-bottom:2px;">Manager</label><input type="text" id="editEst_managerName" style="padding:6px 8px;font-size:13px;"></div><div class="form-group" style="flex:1;margin-bottom:4px;"><label style="font-size:11px;margin-bottom:2px;">Email</label><input type="email" id="editEst_managerEmail" style="padding:6px 8px;font-size:13px;"></div><div class="form-group" style="flex:0.7;margin-bottom:4px;"><label style="font-size:11px;margin-bottom:2px;">Phone</label><input type="tel" id="editEst_managerPhone" style="padding:6px 8px;font-size:13px;"></div></div>
           </div>
           <div style="background: var(--surface2); padding: 15px; border-radius: 4px;">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:15px;"><h3 style="margin:0;color:var(--text);">Line Items</h3><div><button onclick="addEstimateSection()" class="secondary small" style="margin-right:8px;">+ Section</button><button onclick="addEstimateLineRow(currentEditEstimateId)" class="secondary small">+ Line Item</button></div></div>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:15px;">
+<div style="margin-top:16px">
+<label style="font-weight:600;display:block;margin-bottom:4px">Scope of Work</label>
+<textarea id="editEst_scopeOfWork" style="width:100%;min-height:120px;padding:8px;border:1px solid #ccc;border-radius:4px;font-family:Arial,sans-serif;font-size:13px;resize:vertical" placeholder="Paste or type scope of work summary (bullet points)..."></textarea>
+</div>
+<h3 style="margin:0;color:var(--text);">Line Items</h3><div><button onclick="addEstimateSection()" class="secondary small" style="margin-right:8px;">+ Section</button><button onclick="addEstimateLineRow(currentEditEstimateId)" class="secondary small">+ Line Item</button></div></div>
             <div style="overflow-x:auto;">
               <table id="editEstimate_lineItems" style="width:100%;border-collapse:collapse;font-size:13px;">
                 <thead><tr style="background:var(--surface);"><th style="padding:8px;text-align:left;color:var(--text-dim);">Description</th><th style="padding:8px;text-align:center;color:var(--text-dim);width:80px;">Qty</th><th style="padding:8px;text-align:center;color:var(--text-dim);width:80px;">Unit</th><th style="padding:8px;text-align:right;color:var(--text-dim);width:100px;">Unit Cost</th><th style="padding:8px;text-align:center;color:var(--text-dim);width:80px;">Markup %</th><th style="padding:8px;text-align:right;color:var(--text-dim);width:110px;">Line Total</th><th style="padding:8px;width:40px;"></th></tr></thead>
@@ -1825,16 +1836,16 @@
             });
             // Custom options (with marker)
             if (custom.length > 0) {
-                html += lt + 'option disabled' + gt + '── Custom ──' + lt + '/option' + gt;
+                html += lt + 'option disabled' + gt + 'ââ Custom ââ' + lt + '/option' + gt;
                 custom.forEach(item => {
                     html += lt + 'option value="' + item + '"' + gt + item + lt + '/option' + gt;
                 });
             }
             // Action items
-            html += lt + 'option disabled' + gt + '──────────────' + lt + '/option' + gt;
+            html += lt + 'option disabled' + gt + 'ââââââââââââââ' + lt + '/option' + gt;
             html += lt + 'option value="__add_new__"' + gt + '+ Add New...' + lt + '/option' + gt;
             if (custom.length > 0) {
-                html += lt + 'option value="__manage__"' + gt + '✎ Manage List...' + lt + '/option' + gt;
+                html += lt + 'option value="__manage__"' + gt + 'â Manage List...' + lt + '/option' + gt;
             }
             sel.innerHTML = html;
             // Restore previous value if it exists
@@ -1897,7 +1908,7 @@
             overlay.innerHTML = lt + 'div style="background:var(--card-bg,#1a1a2e);border-radius:12px;padding:20px;min-width:300px;max-width:400px;border:1px solid var(--border,#333);"' + gt +
                 lt + 'div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:15px;"' + gt +
                 lt + 'h3 style="margin:0;color:var(--text,#fff);"' + gt + 'Manage Custom Items' + lt + '/h3' + gt +
-                lt + 'button onclick="closeManageList()" style="background:none;border:none;color:var(--text-dim,#888);font-size:20px;cursor:pointer;"' + gt + '×' + lt + '/button' + gt +
+                lt + 'button onclick="closeManageList()" style="background:none;border:none;color:var(--text-dim,#888);font-size:20px;cursor:pointer;"' + gt + 'Ã' + lt + '/button' + gt +
                 lt + '/div' + gt +
                 lt + 'div style="max-height:300px;overflow-y:auto;"' + gt + listHtml + lt + '/div' + gt +
                 lt + '/div' + gt;
@@ -2262,7 +2273,7 @@
         }
 
         function getJobAccruedCosts(jobId) {
-            // Accrued = (Sub Contract × % Complete of assigned scope) - Billed to Date, min $0
+            // Accrued = (Sub Contract Ã % Complete of assigned scope) - Billed to Date, min $0
             let totalAccrued = 0;
             const jobSubs = appData.subs.filter(s => s.jobId === jobId);
             const job = appData.jobs.find(j => j.id === jobId);
@@ -2570,7 +2581,7 @@
                     <td style="text-align: right;">${formatCurrency(co.income)}</td>
                     <td style="text-align: right;">${formatCurrency(co.estimatedCosts)}</td>
                     <td style="text-align: right; color: ${profit >= 0 ? 'var(--green)' : 'var(--red)'};">${formatCurrency(profit)}</td>
-                    <td>${co.date || '—'}</td>
+                    <td>${co.date || 'â'}</td>
                     <td>
                         <button class="small" onclick="event.stopPropagation(); editCO('${co.id}')">Edit</button>
                         <button class="small secondary" onclick="event.stopPropagation(); deleteCO('${co.id}')">Del</button>
@@ -2703,9 +2714,9 @@
                 row.onclick = function() { editJob(job.id); };
                 row.innerHTML = `
                     <td>${index + 1}</td>
-                    <td><strong>${job.jobNumber ? job.jobNumber + ' — ' : ''}${job.title}</strong>${typeLabel}</td>
-                    <td>${job.client || '—'}</td>
-                    <td>${job.pm || '—'}</td>
+                    <td><strong>${job.jobNumber ? job.jobNumber + ' â ' : ''}${job.title}</strong>${typeLabel}</td>
+                    <td>${job.client || 'â'}</td>
+                    <td>${job.pm || 'â'}</td>
                     <td><span class="badge ${statusClass}">${job.status}</span></td>
                     <td style="text-align: right;">${formatCurrency(w.totalIncome)}</td>
                     <td style="text-align: right;"><div class="progress-bar" style="margin-bottom: 2px; height: 6px;"><div class="progress-fill" style="width: ${w.pctComplete}%"></div></div><span style="font-size: 12px;">${w.pctComplete.toFixed(1)}%</span></td>
@@ -2909,27 +2920,27 @@
 
             const w = getJobWIP(jobId);
 
-            document.getElementById('job-detail-title').textContent = (job.jobNumber ? job.jobNumber + ' — ' : '') + job.title;
+            document.getElementById('job-detail-title').textContent = (job.jobNumber ? job.jobNumber + ' â ' : '') + job.title;
             const detailStatusClass = job.status === 'On Hold' ? 'at-risk' : job.status === 'Completed' ? 'on-track' : job.status === 'Archived' ? 'not-started' : 'on-track';
             document.getElementById('job-detail-status').innerHTML = `<span class="badge ${detailStatusClass}">${job.status}</span>`;
             document.getElementById('job-detail-contract').textContent = `Total Income: ${formatCurrency(w.totalIncome)}`;
 
-            document.getElementById('job-info-number').textContent = job.jobNumber || '—';
+            document.getElementById('job-info-number').textContent = job.jobNumber || 'â';
             document.getElementById('job-info-title').textContent = job.title;
-            document.getElementById('job-info-client').textContent = job.client || '—';
-            document.getElementById('job-info-pm').textContent = job.pm || '—';
-            document.getElementById('job-info-type').textContent = job.jobType ? (job.jobType + (job.market ? ' - ' + job.market : '')) : '—';
-            document.getElementById('job-info-worktype').textContent = job.workType || '—';
-            document.getElementById('job-info-market').textContent = job.market || '—';
+            document.getElementById('job-info-client').textContent = job.client || 'â';
+            document.getElementById('job-info-pm').textContent = job.pm || 'â';
+            document.getElementById('job-info-type').textContent = job.jobType ? (job.jobType + (job.market ? ' - ' + job.market : '')) : 'â';
+            document.getElementById('job-info-worktype').textContent = job.workType || 'â';
+            document.getElementById('job-info-market').textContent = job.market || 'â';
             document.getElementById('job-info-contract').textContent = formatCurrency(job.contractAmount);
             document.getElementById('job-info-estcosts').textContent = formatCurrency(job.estimatedCosts);
             document.getElementById('job-info-margin').textContent = (job.targetMarginPct || 50) + '%';
             const statusClass = job.status === 'On Hold' ? 'at-risk' : job.status === 'Completed' ? 'on-track' : job.status === 'Archived' ? 'not-started' : 'on-track';
             document.getElementById('job-info-status').innerHTML = `<span class="badge ${statusClass}">${job.status}</span>`;
-            document.getElementById('job-info-notes').textContent = job.notes || '—';
+            document.getElementById('job-info-notes').textContent = job.notes || 'â';
             document.getElementById('archive-job-btn').textContent = job.status === 'Archived' ? 'Unarchive Job' : 'Archive Job';
 
-            // Summary cards — WIP-based
+            // Summary cards â WIP-based
             const coInfo = w.coIncome > 0 ? `Contract: ${formatCurrency(w.contractIncome)} + CO: ${formatCurrency(w.coIncome)}` : '';
             document.getElementById('job-summary-totalincome').textContent = formatCurrency(w.totalIncome);
             document.getElementById('job-summary-income-breakdown').textContent = coInfo;
@@ -2962,7 +2973,7 @@
             buildings.forEach(bldg => {
                 const bldgPhases = phases.filter(p => p.buildingId === bldg.id);
                 if (bldgPhases.length === 0) {
-                    // Building with no phases — show building-level costs
+                    // Building with no phases â show building-level costs
                     const bTotal = (bldg.materials || 0) + (bldg.labor || 0) + (bldg.sub || 0) + (bldg.equipment || 0);
                     const bVar = (bldg.budget || 0) - bTotal;
                     const bStatus = getStatus(bTotal, bldg.budget);
@@ -2970,7 +2981,7 @@
                     row.style.cursor = 'pointer';
                     row.title = 'Click to edit this building';
                     row.onclick = function() { editBuilding(bldg.id); };
-                    row.innerHTML = '<td>' + (bldg.name || '') + '</td><td style="color: var(--text-dim); font-style: italic;">No phases</td><td>—</td><td style="text-align: right;">' + formatCurrency(bldg.materials) + '</td><td style="text-align: right;">' + formatCurrency(bldg.labor) + '</td><td style="text-align: right;">' + formatCurrency(bldg.sub) + '</td><td style="text-align: right;">' + formatCurrency(bldg.equipment) + '</td><td style="text-align: right;">' + formatCurrency(bTotal) + '</td><td style="text-align: right;">' + formatCurrency(bldg.budget) + '</td><td style="text-align: right; color: ' + (bVar >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + formatCurrency(bVar) + '</td><td><span class="badge ' + bStatus + '">' + bStatus.replace('-', ' ').toUpperCase() + '</span></td>';
+                    row.innerHTML = '<td>' + (bldg.name || '') + '</td><td style="color: var(--text-dim); font-style: italic;">No phases</td><td>â</td><td style="text-align: right;">' + formatCurrency(bldg.materials) + '</td><td style="text-align: right;">' + formatCurrency(bldg.labor) + '</td><td style="text-align: right;">' + formatCurrency(bldg.sub) + '</td><td style="text-align: right;">' + formatCurrency(bldg.equipment) + '</td><td style="text-align: right;">' + formatCurrency(bTotal) + '</td><td style="text-align: right;">' + formatCurrency(bldg.budget) + '</td><td style="text-align: right; color: ' + (bVar >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + formatCurrency(bVar) + '</td><td><span class="badge ' + bStatus + '">' + bStatus.replace('-', ' ').toUpperCase() + '</span></td>';
                     tbody.appendChild(row);
                 } else {
                     bldgPhases.forEach(p => {
@@ -3017,7 +3028,7 @@
                 const buildingCost = phaseCost + bldgDirectCost;
 
                 const contractAmt = appData.jobs.find(j => j.id === jobId)?.contractAmount || 0;
-                const bldgPct = contractAmt > 0 ? ((building.budget || 0) / contractAmt * 100).toFixed(1) : '—';
+                const bldgPct = contractAmt > 0 ? ((building.budget || 0) / contractAmt * 100).toFixed(1) : 'â';
 
                 const card = document.createElement('div');
                 card.className = 'card';
@@ -3119,7 +3130,7 @@
                 } else if (level === 'phase') {
                     const building = appData.buildings.find(b => b.id === sub.buildingId);
                     const phase = appData.phases.find(p => p.id === sub.phaseId);
-                    assignedTo = (building?.name || '?') + ' → ' + (phase?.phase || '?');
+                    assignedTo = (building?.name || '?') + ' â ' + (phase?.phase || '?');
                 } else {
                     const building = appData.buildings.find(b => b.id === sub.buildingId);
                     assignedTo = building?.name || '';
@@ -3260,12 +3271,12 @@
             const job = appData.jobs.find(j => j.id === appState.currentJobId);
             if (!job) return;
             job.materials = parseFloat(document.getElementById('jobCostMaterials').value) || 0;
-            // job.sub is auto-calculated from Subs tab by recalcSubCosts — don't overwrite
+            // job.sub is auto-calculated from Subs tab by recalcSubCosts â don't overwrite
             job.equipment = parseFloat(document.getElementById('jobCostEquipment').value) || 0;
             job.hoursWeek = parseFloat(document.getElementById('jobCostHoursWeek').value) || 0;
             job.hoursTotal = (parseFloat(document.getElementById('jobCostHoursTotal').value) || 0) + job.hoursWeek;
             job.rate = parseFloat(document.getElementById('jobCostRate').value) || 40;
-            // Auto-calculate labor $ from total hours × rate
+            // Auto-calculate labor $ from total hours Ã rate
             job.labor = job.hoursTotal * job.rate;
             document.getElementById('jobCostLabor').value = job.labor.toFixed(2);
             // Update total hours display and reset weekly hours
@@ -3881,7 +3892,9 @@
     document.getElementById('editEst_managerName').value = estimate.managerName || '';
     document.getElementById('editEst_managerEmail').value = estimate.managerEmail || '';
     document.getElementById('editEst_managerPhone').value = estimate.managerPhone || '';
+  if(document.getElementById('editEst_scopeOfWork')) document.getElementById('editEst_scopeOfWork').value = est.scopeOfWork || '';
     document.getElementById('editEst_defaultMarkup').value = estimate.defaultMarkup || 0;
+    scopeOfWork: document.getElementById('newEst_scopeOfWork') ? document.getElementById('newEst_scopeOfWork').value : '',
     const lineItems = appData.estimateLines.filter(line => line.estimateId === estId);
     renderEditEstimateLineItems(lineItems);
     recalcEstimateTotals();
@@ -3967,6 +3980,7 @@
     estimate.managerName = document.getElementById('editEst_managerName').value;
     estimate.managerEmail = document.getElementById('editEst_managerEmail').value;
     estimate.managerPhone = document.getElementById('editEst_managerPhone').value;
+  est.scopeOfWork = document.getElementById('editEst_scopeOfWork') ? document.getElementById('editEst_scopeOfWork').value : '';
     estimate.defaultMarkup = parseFloat(document.getElementById('editEst_defaultMarkup').value) || 0;
     const rows = document.querySelectorAll('#editEstimate_lineItemsBody tr[data-line-id]');
     const updatedIds = new Set();
