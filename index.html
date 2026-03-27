@@ -3894,12 +3894,13 @@
     document.getElementById('editEst_managerPhone').value = estimate.managerPhone || '';
   if(document.getElementById('editEst_scopeOfWork')) document.getElementById('editEst_scopeOfWork').value = est.scopeOfWork || '';
     document.getElementById('editEst_defaultMarkup').value = estimate.defaultMarkup || 0;
-    scopeOfWork: document.getElementById('newEst_scopeOfWork') ? document.getElementById('newEst_scopeOfWork').value : '',
     const lineItems = appData.estimateLines.filter(line => line.estimateId === estId);
     renderEditEstimateLineItems(lineItems);
     recalcEstimateTotals();
     openModal('editEstimateModal');
-    }
+    ,
+    scopeOfWork: document.getElementById('newEst_scopeOfWork') ? document.getElementById('newEst_scopeOfWork').value : ''
+  }
 
     function deleteEstimate(estId) {
             if (confirm('Delete this estimate?')) {
