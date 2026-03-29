@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AGX Central Florida Ã¢ÂÂ WIP Tracker</title>
+    <title>AGX Central Florida — WIP Tracker</title>
     <style>
         :root {
             --bg: #0f1117;
@@ -325,19 +325,19 @@
         }
 
         th.sortable::after {
-            content: ' Ã¢ÂÂ';
+            content: ' ⇅';
             opacity: 0.3;
             font-size: 11px;
         }
 
         th.sortable.sort-asc::after {
-            content: ' Ã¢ÂÂ²';
+            content: ' ▲';
             opacity: 0.8;
             color: var(--accent);
         }
 
         th.sortable.sort-desc::after {
-            content: ' Ã¢ÂÂ¼';
+            content: ' ▼';
             opacity: 0.8;
             color: var(--accent);
         }
@@ -849,7 +849,7 @@
 
                     <div id="wip-job-detail-view" style="display: none;">
                         <div class="job-detail-header">
-                            <button class="secondary small" onclick="backToWIPMain()">Ã¢ÂÂ Back to WIP</button>
+                            <button class="secondary small" onclick="backToWIPMain()">← Back to WIP</button>
                             <div class="job-detail-info">
                                 <div class="job-detail-title" id="job-detail-title"></div>
                                 <div class="job-detail-meta">
@@ -1834,16 +1834,16 @@
             });
             // Custom options (with marker)
             if (custom.length > 0) {
-                html += lt + 'option disabled' + gt + 'Ã¢ÂÂÃ¢ÂÂ Custom Ã¢ÂÂÃ¢ÂÂ' + lt + '/option' + gt;
+                html += lt + 'option disabled' + gt + '── Custom ──' + lt + '/option' + gt;
                 custom.forEach(item => {
                     html += lt + 'option value="' + item + '"' + gt + item + lt + '/option' + gt;
                 });
             }
             // Action items
-            html += lt + 'option disabled' + gt + 'Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ' + lt + '/option' + gt;
+            html += lt + 'option disabled' + gt + '──────────────' + lt + '/option' + gt;
             html += lt + 'option value="__add_new__"' + gt + '+ Add New...' + lt + '/option' + gt;
             if (custom.length > 0) {
-                html += lt + 'option value="__manage__"' + gt + 'Ã¢ÂÂ Manage List...' + lt + '/option' + gt;
+                html += lt + 'option value="__manage__"' + gt + '✎ Manage List...' + lt + '/option' + gt;
             }
             sel.innerHTML = html;
             // Restore previous value if it exists
@@ -2579,7 +2579,7 @@
                     <td style="text-align: right;">${formatCurrency(co.income)}</td>
                     <td style="text-align: right;">${formatCurrency(co.estimatedCosts)}</td>
                     <td style="text-align: right; color: ${profit >= 0 ? 'var(--green)' : 'var(--red)'};">${formatCurrency(profit)}</td>
-                    <td>${co.date || 'Ã¢ÂÂ'}</td>
+                    <td>${co.date || '—'}</td>
                     <td>
                         <button class="small" onclick="event.stopPropagation(); editCO('${co.id}')">Edit</button>
                         <button class="small secondary" onclick="event.stopPropagation(); deleteCO('${co.id}')">Del</button>
@@ -2712,9 +2712,9 @@
                 row.onclick = function() { editJob(job.id); };
                 row.innerHTML = `
                     <td>${index + 1}</td>
-                    <td><strong>${job.jobNumber ? job.jobNumber + ' Ã¢ÂÂ ' : ''}${job.title}</strong>${typeLabel}</td>
-                    <td>${job.client || 'Ã¢ÂÂ'}</td>
-                    <td>${job.pm || 'Ã¢ÂÂ'}</td>
+                    <td><strong>${job.jobNumber ? job.jobNumber + ' — ' : ''}${job.title}</strong>${typeLabel}</td>
+                    <td>${job.client || '—'}</td>
+                    <td>${job.pm || '—'}</td>
                     <td><span class="badge ${statusClass}">${job.status}</span></td>
                     <td style="text-align: right;">${formatCurrency(w.totalIncome)}</td>
                     <td style="text-align: right;"><div class="progress-bar" style="margin-bottom: 2px; height: 6px;"><div class="progress-fill" style="width: ${w.pctComplete}%"></div></div><span style="font-size: 12px;">${w.pctComplete.toFixed(1)}%</span></td>
@@ -2918,27 +2918,27 @@
 
             const w = getJobWIP(jobId);
 
-            document.getElementById('job-detail-title').textContent = (job.jobNumber ? job.jobNumber + ' Ã¢ÂÂ ' : '') + job.title;
+            document.getElementById('job-detail-title').textContent = (job.jobNumber ? job.jobNumber + ' — ' : '') + job.title;
             const detailStatusClass = job.status === 'On Hold' ? 'at-risk' : job.status === 'Completed' ? 'on-track' : job.status === 'Archived' ? 'not-started' : 'on-track';
             document.getElementById('job-detail-status').innerHTML = `<span class="badge ${detailStatusClass}">${job.status}</span>`;
             document.getElementById('job-detail-contract').textContent = `Total Income: ${formatCurrency(w.totalIncome)}`;
 
-            document.getElementById('job-info-number').textContent = job.jobNumber || 'Ã¢ÂÂ';
+            document.getElementById('job-info-number').textContent = job.jobNumber || '—';
             document.getElementById('job-info-title').textContent = job.title;
-            document.getElementById('job-info-client').textContent = job.client || 'Ã¢ÂÂ';
-            document.getElementById('job-info-pm').textContent = job.pm || 'Ã¢ÂÂ';
-            document.getElementById('job-info-type').textContent = job.jobType ? (job.jobType + (job.market ? ' - ' + job.market : '')) : 'Ã¢ÂÂ';
-            document.getElementById('job-info-worktype').textContent = job.workType || 'Ã¢ÂÂ';
-            document.getElementById('job-info-market').textContent = job.market || 'Ã¢ÂÂ';
+            document.getElementById('job-info-client').textContent = job.client || '—';
+            document.getElementById('job-info-pm').textContent = job.pm || '—';
+            document.getElementById('job-info-type').textContent = job.jobType ? (job.jobType + (job.market ? ' - ' + job.market : '')) : '—';
+            document.getElementById('job-info-worktype').textContent = job.workType || '—';
+            document.getElementById('job-info-market').textContent = job.market || '—';
             document.getElementById('job-info-contract').textContent = formatCurrency(job.contractAmount);
             document.getElementById('job-info-estcosts').textContent = formatCurrency(job.estimatedCosts);
             document.getElementById('job-info-margin').textContent = (job.targetMarginPct || 50) + '%';
             const statusClass = job.status === 'On Hold' ? 'at-risk' : job.status === 'Completed' ? 'on-track' : job.status === 'Archived' ? 'not-started' : 'on-track';
             document.getElementById('job-info-status').innerHTML = `<span class="badge ${statusClass}">${job.status}</span>`;
-            document.getElementById('job-info-notes').textContent = job.notes || 'Ã¢ÂÂ';
+            document.getElementById('job-info-notes').textContent = job.notes || '—';
             document.getElementById('archive-job-btn').textContent = job.status === 'Archived' ? 'Unarchive Job' : 'Archive Job';
 
-            // Summary cards Ã¢ÂÂ WIP-based
+            // Summary cards — WIP-based
             const coInfo = w.coIncome > 0 ? `Contract: ${formatCurrency(w.contractIncome)} + CO: ${formatCurrency(w.coIncome)}` : '';
             document.getElementById('job-summary-totalincome').textContent = formatCurrency(w.totalIncome);
             document.getElementById('job-summary-income-breakdown').textContent = coInfo;
@@ -2971,7 +2971,7 @@
             buildings.forEach(bldg => {
                 const bldgPhases = phases.filter(p => p.buildingId === bldg.id);
                 if (bldgPhases.length === 0) {
-                    // Building with no phases Ã¢ÂÂ show building-level costs
+                    // Building with no phases — show building-level costs
                     const bTotal = (bldg.materials || 0) + (bldg.labor || 0) + (bldg.sub || 0) + (bldg.equipment || 0);
                     const bVar = (bldg.budget || 0) - bTotal;
                     const bStatus = getStatus(bTotal, bldg.budget);
@@ -2979,7 +2979,7 @@
                     row.style.cursor = 'pointer';
                     row.title = 'Click to edit this building';
                     row.onclick = function() { editBuilding(bldg.id); };
-                    row.innerHTML = '<td>' + (bldg.name || '') + '</td><td style="color: var(--text-dim); font-style: italic;">No phases</td><td>Ã¢ÂÂ</td><td style="text-align: right;">' + formatCurrency(bldg.materials) + '</td><td style="text-align: right;">' + formatCurrency(bldg.labor) + '</td><td style="text-align: right;">' + formatCurrency(bldg.sub) + '</td><td style="text-align: right;">' + formatCurrency(bldg.equipment) + '</td><td style="text-align: right;">' + formatCurrency(bTotal) + '</td><td style="text-align: right;">' + formatCurrency(bldg.budget) + '</td><td style="text-align: right; color: ' + (bVar >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + formatCurrency(bVar) + '</td><td><span class="badge ' + bStatus + '">' + bStatus.replace('-', ' ').toUpperCase() + '</span></td>';
+                    row.innerHTML = '<td>' + (bldg.name || '') + '</td><td style="color: var(--text-dim); font-style: italic;">No phases</td><td>—</td><td style="text-align: right;">' + formatCurrency(bldg.materials) + '</td><td style="text-align: right;">' + formatCurrency(bldg.labor) + '</td><td style="text-align: right;">' + formatCurrency(bldg.sub) + '</td><td style="text-align: right;">' + formatCurrency(bldg.equipment) + '</td><td style="text-align: right;">' + formatCurrency(bTotal) + '</td><td style="text-align: right;">' + formatCurrency(bldg.budget) + '</td><td style="text-align: right; color: ' + (bVar >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + formatCurrency(bVar) + '</td><td><span class="badge ' + bStatus + '">' + bStatus.replace('-', ' ').toUpperCase() + '</span></td>';
                     tbody.appendChild(row);
                 } else {
                     bldgPhases.forEach(p => {
@@ -3026,7 +3026,7 @@
                 const buildingCost = phaseCost + bldgDirectCost;
 
                 const contractAmt = appData.jobs.find(j => j.id === jobId)?.contractAmount || 0;
-                const bldgPct = contractAmt > 0 ? ((building.budget || 0) / contractAmt * 100).toFixed(1) : 'Ã¢ÂÂ';
+                const bldgPct = contractAmt > 0 ? ((building.budget || 0) / contractAmt * 100).toFixed(1) : '—';
 
                 const card = document.createElement('div');
                 card.className = 'card';
@@ -3128,7 +3128,7 @@
                 } else if (level === 'phase') {
                     const building = appData.buildings.find(b => b.id === sub.buildingId);
                     const phase = appData.phases.find(p => p.id === sub.phaseId);
-                    assignedTo = (building?.name || '?') + ' Ã¢ÂÂ ' + (phase?.phase || '?');
+                    assignedTo = (building?.name || '?') + ' → ' + (phase?.phase || '?');
                 } else {
                     const building = appData.buildings.find(b => b.id === sub.buildingId);
                     assignedTo = building?.name || '';
@@ -3269,7 +3269,7 @@
             const job = appData.jobs.find(j => j.id === appState.currentJobId);
             if (!job) return;
             job.materials = parseFloat(document.getElementById('jobCostMaterials').value) || 0;
-            // job.sub is auto-calculated from Subs tab by recalcSubCosts Ã¢ÂÂ don't overwrite
+            // job.sub is auto-calculated from Subs tab by recalcSubCosts — don't overwrite
             job.equipment = parseFloat(document.getElementById('jobCostEquipment').value) || 0;
             job.hoursWeek = parseFloat(document.getElementById('jobCostHoursWeek').value) || 0;
             job.hoursTotal = (parseFloat(document.getElementById('jobCostHoursTotal').value) || 0) + job.hoursWeek;
@@ -4099,6 +4099,169 @@
 
         // ==================== START APP ====================
         document.addEventListener('DOMContentLoaded', initializeApp);
-    </script>
+    
+
+// ── AGX Estimate Import/Export ──────────────────────────────────
+(function(){
+  const sheetScript = document.createElement('script');
+  sheetScript.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+  document.head.appendChild(sheetScript);
+  sheetScript.onload = function(){ injectEstimateIO(); };
+
+  function injectEstimateIO(){
+    // Hidden file input
+    if(!document.getElementById('agx-import-file')){
+      const fi = document.createElement('input');
+      fi.type='file'; fi.accept='.xlsx,.xls'; fi.style.display='none'; fi.id='agx-import-file';
+      fi.addEventListener('change', processImportFile);
+      document.body.appendChild(fi);
+    }
+    // Watch for Estimates tab render to add buttons
+    const obs = new MutationObserver(addIOButtons);
+    obs.observe(document.body, {childList:true, subtree:true});
+    addIOButtons();
+  }
+
+  function addIOButtons(){
+    const btn = Array.from(document.querySelectorAll('button')).find(b=>b.textContent.trim().includes('New Estimate'));
+    if(!btn || document.getElementById('agx-import-btn')) return;
+    const ib = document.createElement('button');
+    ib.id='agx-import-btn'; ib.innerHTML='&#x1F4E5; Import xlsx';
+    ib.style.cssText='margin-left:8px;padding:8px 16px;background:#1B8541;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600;font-size:14px;';
+    ib.onclick=()=>document.getElementById('agx-import-file').click();
+    btn.parentNode.insertBefore(ib, btn.nextSibling);
+    addExportBtns();
+  }
+
+  function addExportBtns(){
+    const ests = JSON.parse(localStorage.getItem('agx-estimates')||'[]');
+    document.querySelectorAll('button').forEach(btn=>{
+      if(btn.textContent.trim()==='Preview'){
+        const p=btn.parentElement;
+        if(p && !p.querySelector('.agx-exp-btn')){
+          const eb=document.createElement('button');
+          eb.className='agx-exp-btn'; eb.innerHTML='&#x1F4E4; Export';
+          eb.style.cssText='margin-left:4px;padding:4px 10px;background:#1B3A5C;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;';
+          const row=btn.closest('[style]');
+          if(row){
+            const titleEl=row.querySelector('div');
+            const t=titleEl?titleEl.textContent.trim():'';
+            const est=ests.find(e=>e.title===t);
+            if(est) eb.onclick=()=>exportEstimate(est.id);
+          }
+          p.appendChild(eb);
+        }
+      }
+    });
+  }
+
+  function processImportFile(e){
+    const file=e.target.files[0]; if(!file) return;
+    const reader=new FileReader();
+    reader.onload=function(evt){
+      try{
+        const data=new Uint8Array(evt.target.result);
+        const wb=XLSX.read(data,{type:'array'});
+        const ws=wb.Sheets[wb.SheetNames[0]];
+        const rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:''});
+        const parsed=parseReport(rows);
+        if(!parsed){alert('Could not parse as AGX Lead Report.');return;}
+        const lc=parsed.lines.length;
+        const base=parsed.lines.reduce((s,l)=>s+(l.qty*l.unitCost),0);
+        const client=parsed.lines.reduce((s,l)=>s+(l.qty*l.unitCost*(1+l.markup/100)),0);
+        const msg='Import "'+parsed.est.title+'"?\n\nClient: '+parsed.est.client+'\nCommunity: '+parsed.est.community+'\nLine Items: '+lc+'\nBase Cost: $'+base.toLocaleString('en-US',{minimumFractionDigits:2})+'\nClient Price: $'+client.toLocaleString('en-US',{minimumFractionDigits:2});
+        if(confirm(msg)){
+          const ests=JSON.parse(localStorage.getItem('agx-estimates')||'[]');
+          ests.push(parsed.est);
+          localStorage.setItem('agx-estimates',JSON.stringify(ests));
+          const lines=JSON.parse(localStorage.getItem('agx-estimate-lines')||'[]');
+          lines.push(...parsed.lines);
+          localStorage.setItem('agx-estimate-lines',JSON.stringify(lines));
+          alert('Imported!'); location.reload();
+        }
+      }catch(err){alert('Error: '+err.message);}
+    };
+    reader.readAsArrayBuffer(file);
+    e.target.value='';
+  }
+
+  function parseReport(rows){
+    const est={id:'est_'+Date.now()+'_'+Math.random().toString(36).substr(2,6),title:'',jobType:'',client:'',community:'',propertyAddr:'',billingAddr:'',managerName:'',managerEmail:'',managerPhone:'',defaultMarkup:100,scopeOfWork:'',status:'draft',created:new Date().toISOString()};
+    const lines=[]; let curSec='',foundScope=false;
+    for(let i=0;i<rows.length;i++){
+      const r=rows[i], a=String(r[0]||'').trim(), b=String(r[1]||'').trim(), d=String(r[3]||'').trim();
+      if(a==='Title'&&d) est.title=d;
+      if(a==='Project Type'&&d) est.jobType=d;
+      if(a==='Community'&&d) est.community=d;
+      if(a==='Property Address'&&d) est.propertyAddr=d;
+      if(a==='Management Co.'&&d) est.client=d;
+      if(a==='CAM'&&d) est.managerName=d;
+      if(a==='CAM Email'&&d) est.managerEmail=d;
+      if(a==='POC Phone'&&d) est.managerPhone=d;
+      if(a==='Scope of Work'&&i+1<rows.length){const s=String(rows[i+1][0]||'').trim();if(s&&!s.startsWith('SCOPE')&&!s.startsWith('Item')) est.scopeOfWork=s;}
+      if(a.startsWith('SCOPE ')&&(a.includes('\u2014')||a.includes('-')||a.includes('\u2014'))){foundScope=true;curSec='';continue;}
+      if(a==='Item #'&&b==='Description'){continue;}
+      if(foundScope&&a&&!b&&!r[2]&&!r[4]&&!a.includes('Base:')&&!a.includes('Client:')&&!a.startsWith('GRAND')&&!a.startsWith('PROJECT')&&!a.startsWith('Scope ')&&!a.match(/^\d+\.\d+/)){
+        curSec=a;
+        lines.push({id:'el_'+Date.now()+'_'+Math.random().toString(36).substr(2,6),estimateId:est.id,section:a,description:'',qty:1,unit:'',unitCost:0,markup:100});
+        continue;
+      }
+      if(foundScope&&a.match(/^\d+\.\d+$/)){
+        const qty=parseFloat(r[2])||0, unit=String(r[3]||'').trim(), uc=parseFloat(r[4])||0;
+        const mr=parseFloat(r[5]); const mk=isNaN(mr)?100:Math.round(mr*100);
+        if(b&&qty>0) lines.push({id:'el_'+Date.now()+'_'+Math.random().toString(36).substr(2,6),estimateId:est.id,section:curSec,description:b,qty,unit,unitCost:uc,markup:mk});
+      }
+    }
+    if(!est.title&&!lines.length) return null;
+    if(!est.title) est.title=rows[2]?String(rows[2][0]||'').trim():'Imported Estimate';
+    return {est,lines};
+  }
+
+  function exportEstimate(id){
+    const ests=JSON.parse(localStorage.getItem('agx-estimates')||'[]');
+    const allLines=JSON.parse(localStorage.getItem('agx-estimate-lines')||'[]');
+    const est=ests.find(e=>e.id===id); if(!est){alert('Not found');return;}
+    const el=allLines.filter(l=>l.estimateId===id);
+    const d=[];
+    d.push(['AGX CENTRAL FLORIDA','','','','','','']);
+    d.push(['Lead Report & Preliminary Estimate','','','','','','']);
+    d.push([est.title,'','','','','','']);
+    d.push(['','','','','','','']);
+    d.push([]);
+    d.push(['Lead Information','','','','','','']);
+    d.push(['Title','','',est.title,'','','']);
+    d.push(['Project Type','','',est.jobType||'Service & Repair','','','']);
+    d.push(['Status','','',est.status||'Open','','','']);
+    d.push(['Created Date','','',est.created?new Date(est.created).toLocaleDateString():'','','','']);
+    d.push([]);
+    d.push(['Property Information','','','','','','']);
+    d.push(['Community','','',est.community,'','','']);
+    d.push(['Property Address','','',est.propertyAddr,'','','']);
+    d.push(['Management Co.','','',est.client,'','','']);
+    d.push(['CAM','','',est.managerName,'','','']);
+    d.push(['CAM Email','','',est.managerEmail,'','','']);
+    d.push(['Manager Phone','','',est.managerPhone,'','','']);
+    d.push([]);
+    d.push(['Scope of Work','','','','','','']);
+    d.push([est.scopeOfWork||'','','','','','','']);
+    d.push([]);
+    d.push(['SCOPE 1','','','','','','']);
+    d.push(['Item #','Description','Qty','Unit','Unit Cost','Markup %','Total']);
+    let sn=1,in2=1,curS='',bt=0,ct=0;
+    el.forEach(l=>{
+      if(l.section&&l.section!==curS){curS=l.section;if(!l.description){d.push([l.section,'','','','','','']);in2=1;return;}}
+      if(l.description){const mk=(l.markup||100)/100;const lt=l.qty*l.unitCost*(1+mk);const lb=l.qty*l.unitCost;bt+=lb;ct+=lt;d.push([sn+'.'+in2,l.description,l.qty,l.unit,l.unitCost,mk,lt]);in2++;}
+    });
+    d.push([]);d.push(['','','','','','Base:',bt]);d.push(['','','','','','Client:',ct]);
+    d.push([]);d.push(['','','','','','GRAND TOTAL Base:',bt]);d.push(['','','','','','GRAND TOTAL Client:',ct]);
+    const ws=XLSX.utils.aoa_to_sheet(d);
+    ws['!cols']=[{wch:8},{wch:45},{wch:8},{wch:8},{wch:14},{wch:10},{wch:16}];
+    const wb2=XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb2,ws,'Lead Report');
+    XLSX.writeFile(wb2,(est.title||'Estimate')+' - Lead Report.xlsx');
+  }
+})();
+
+</script>
 </body>
 </html>
