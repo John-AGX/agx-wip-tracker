@@ -1,11 +1,8 @@
 // ── AGX Estimate Import/Export & Proposal Generator ──
 
-  // ── AGX Estimate Import/Export v2 ──
-  const sheetScript = document.createElement('script');
-  sheetScript.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
-  sheetScript.onload = function() {
-    // Inject import button
-    function injectImportBtn() {
+// ── Function Definitions (global scope) ──
+
+function injectImportBtn() {
       const newEstBtn = Array.from(document.querySelectorAll('button')).find(b => b.textContent.includes('New Estimate'));
       if (!newEstBtn) { setTimeout(injectImportBtn, 500); return; }
       if (document.getElementById('agx-import-btn')) return;
@@ -30,9 +27,8 @@
       newEstBtn.parentElement.appendChild(fileInput);
       newEstBtn.parentElement.insertBefore(importBtn, newEstBtn.nextSibling);
     }
-    
-    // Inject export buttons with MutationObserver for persistence
-    function injectExportBtns() {
+
+function injectExportBtns() {
       const estimates = JSON.parse(localStorage.getItem('agx-estimates') || '[]');
       const delBtns = Array.from(document.querySelectorAll('button')).filter(function(b) { return b.textContent === 'Delete'; });
       delBtns.forEach(function(delBtn, idx) {
@@ -48,19 +44,8 @@
         td.appendChild(btn);
       });
     }
-    
-    // MutationObserver to re-inject export buttons on DOM changes
-    var exportObserver = new MutationObserver(function() {
-      clearTimeout(window._exportBtnTimer);
-      window._exportBtnTimer = setTimeout(injectExportBtns, 200);
-    });
-    exportObserver.observe(document.body, { childList: true, subtree: true });
-    
-    injectImportBtn();
-    injectExportBtns();
 
-    // ── IMPORT LOGIC ──
-    function processImportFile(file) {
+function processImportFile(file) {
       var reader = new FileReader();
       reader.onload = function(e) {
         var data = new Uint8Array(e.target.result);
@@ -83,8 +68,8 @@
       };
       reader.readAsArrayBuffer(file);
     }
-    
-    function parseReport(rows) {
+
+function parseReport(rows) {
       // Verify AGX header
       if (!rows[0] || !String(rows[0][0]).includes('AGX')) return null;
       
@@ -176,8 +161,7 @@
       return { estimate: est, lines: lines };
     }
 
-    // ── EXPORT LOGIC ──
-    function exportEstimate(estimateId) {
+function exportEstimate(estimateId) {
       var estimates = JSON.parse(localStorage.getItem('agx-estimates') || '[]');
       var allLines = JSON.parse(localStorage.getItem('agx-estimate-lines') || '[]');
       var est = estimates.find(function(e) { return e.id === estimateId; });
@@ -266,7 +250,24 @@
       XLSX.utils.book_append_sheet(wb, ws, 'Lead Report');
       XLSX.writeFile(wb, (est.title || 'Estimate') + ' - Lead Report.xlsx');
     }
-    
-  }; // end sheetScript.onload
-  document.head.appendChild(sheetScript);
 
+// ── SheetJS Loader + Initialization ──
+var sheetScript = document.createElement('script');
+sheetScript.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+sheetScript.onload = function() {
+
+    
+    // MutationObserver to re-inject export buttons on DOM changes
+    var exportObserver = new MutationObserver(function() {
+      clearTimeout(window._exportBtnTimer);
+      window._exportBtnTimer = setTimeout(injectExportBtns, 200);
+    });
+    exportObserver.observe(document.body, { childList: true, subtree: true });
+    
+    injectImportBtn();
+    injectExportBtns();
+
+    // ── IMPORT LOGIC ──
+    
+};
+document.head.appendChild(sheetScript);
