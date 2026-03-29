@@ -854,7 +854,7 @@ function parseReport(data) {
     const col0 = (aoa[i][0] || '').toString().trim();
 
     // Check for scope header pattern (SCOPE N: NAME)
-    const scopeHeaderMatch = col0.match(/^SCOPE\s\d+:\s\(.+)$/i);
+    const scopeHeaderMatch = col0.match(/^SCOPE\s\d+:\s\(.+\)$/i);
     if (scopeHeaderMatch) {
       currentSection = scopeHeaderMatch[1].trim();
       continue;
