@@ -127,7 +127,7 @@ function exportEstimate(estId) {
     { row: 10, label: 'Created Date', value: formatDateLong(estimate.created) },
     { row: 11, label: 'Salesperson', value: 'Scott Ryan' },
     { row: 12, label: 'Market', value: 'Tampa' },
-    { row: 13, label: 'Estimate ID', value: estimate.id || '—' }
+    { row: 13, label: 'Estimate ID', value: estimate.id || 'â' }
   ];
 
   leadFields.forEach(field => {
@@ -152,10 +152,10 @@ function exportEstimate(estId) {
     { row: 18, label: 'Management Co.', value: estimate.client },
     { row: 19, label: 'CAM', value: estimate.managerName },
     { row: 20, label: 'CAM Email', value: estimate.managerEmail },
-    { row: 21, label: 'On-Site Contact', value: '—' },
-    { row: 22, label: 'POC Phone', value: estimate.managerPhone || '—' },
-    { row: 23, label: 'POC Email', value: '—' },
-    { row: 24, label: 'Additional POC', value: '—' }
+    { row: 21, label: 'On-Site Contact', value: 'â' },
+    { row: 22, label: 'POC Phone', value: estimate.managerPhone || 'â' },
+    { row: 23, label: 'POC Email', value: 'â' },
+    { row: 24, label: 'Additional POC', value: 'â' }
   ];
 
   propFields.forEach(field => {
@@ -175,7 +175,7 @@ function exportEstimate(estId) {
 
   // ========== ROW 27: Scope of Work Content ==========
   row = 27;
-  ws['A27'] = cellValue(estimate.scopeOfWork || '—', 's');
+  ws['A27'] = cellValue(estimate.scopeOfWork || 'â', 's');
   merges.push('A27:G27');
 
   // ========== ROWS 28-29: Empty ==========
@@ -353,7 +353,7 @@ function downloadBlankTemplate() {
     { row: 10, label: 'Created Date', value: '' },
     { row: 11, label: 'Salesperson', value: 'Scott Ryan' },
     { row: 12, label: 'Market', value: 'Tampa' },
-    { row: 13, label: 'Estimate ID', value: '—' }
+    { row: 13, label: 'Estimate ID', value: 'â' }
   ];
 
   leadFields.forEach(field => {
@@ -378,10 +378,10 @@ function downloadBlankTemplate() {
     { row: 18, label: 'Management Co.', value: '' },
     { row: 19, label: 'CAM', value: '' },
     { row: 20, label: 'CAM Email', value: '' },
-    { row: 21, label: 'On-Site Contact', value: '—' },
+    { row: 21, label: 'On-Site Contact', value: 'â' },
     { row: 22, label: 'POC Phone', value: '' },
-    { row: 23, label: 'POC Email', value: '—' },
-    { row: 24, label: 'Additional POC', value: '—' }
+    { row: 23, label: 'POC Email', value: 'â' },
+    { row: 24, label: 'Additional POC', value: 'â' }
   ];
 
   propFields.forEach(field => {
@@ -604,7 +604,7 @@ function generateProposal(estId) {
       font-size: 14px;
     }
     .line-item:before {
-      content: "• ";
+      content: "â¢ ";
       color: #1B8541;
       font-weight: bold;
       margin-right: 8px;
@@ -936,12 +936,10 @@ function processImportFile(file) {
 let injectionTimeout;
 
 function injectImportBtn() {
-  // Look for estimates header or container
-  const header = document.querySelector('[data-role="estimates-header"]') ||
-                 document.querySelector('.estimates-header') ||
-                 document.querySelector('h1');
+  // Target the action-buttons div inside the estimates list view
+  const actionButtons = document.querySelector('#estimates-list-view .action-buttons');
 
-  if (!header) {
+  if (!actionButtons) {
     if (!injectionTimeout) {
       injectionTimeout = setTimeout(() => {
         injectionTimeout = null;
@@ -956,11 +954,6 @@ function injectImportBtn() {
     return;
   }
 
-  // Create and inject import button
-  const container = document.createElement('div');
-  container.style.display = 'inline-block';
-  container.style.marginLeft = '10px';
-
   const button = document.createElement('button');
   button.id = 'agx-import-btn';
   button.textContent = 'Import Lead Report';
@@ -972,6 +965,7 @@ function injectImportBtn() {
     border-radius: 4px;
     cursor: pointer;
     font-size: 14px;
+    margin-left: 8px;
   `;
 
   const fileInput = document.createElement('input');
@@ -990,18 +984,14 @@ function injectImportBtn() {
     }
   });
 
-  container.appendChild(button);
-  container.appendChild(fileInput);
-
-  header.parentNode.insertBefore(container, header.nextSibling);
+  actionButtons.appendChild(button);
+  actionButtons.appendChild(fileInput);
 }
 
 function injectTemplateBtn() {
-  const header = document.querySelector('[data-role="estimates-header"]') ||
-                 document.querySelector('.estimates-header') ||
-                 document.querySelector('h1');
+  const actionButtons = document.querySelector('#estimates-list-view .action-buttons');
 
-  if (!header) {
+  if (!actionButtons) {
     if (!injectionTimeout) {
       injectionTimeout = setTimeout(() => {
         injectionTimeout = null;
@@ -1016,13 +1006,9 @@ function injectTemplateBtn() {
     return;
   }
 
-  const container = document.createElement('div');
-  container.style.display = 'inline-block';
-  container.style.marginLeft = '10px';
-
   const button = document.createElement('button');
   button.id = 'agx-template-btn';
-  button.textContent = 'Download Blank Template';
+  button.textContent = 'Blank Template';
   button.style.cssText = `
     background-color: white;
     color: #1B3A5C;
@@ -1031,18 +1017,11 @@ function injectTemplateBtn() {
     border-radius: 4px;
     cursor: pointer;
     font-size: 14px;
+    margin-left: 8px;
   `;
 
   button.addEventListener('click', downloadBlankTemplate);
-
-  container.appendChild(button);
-
-  const importBtn = document.getElementById('agx-import-btn');
-  if (importBtn) {
-    importBtn.parentNode.parentNode.insertBefore(container, importBtn.parentNode.nextSibling);
-  } else {
-    header.parentNode.insertBefore(container, header.nextSibling);
-  }
+  actionButtons.appendChild(button);
 }
 
 let exportInjectTimeout;
@@ -1058,45 +1037,39 @@ function injectExportBtns() {
   }
   lastExportInjectTime = now;
 
-  // Look for estimate list items
-  const items = document.querySelectorAll('[data-estimate-id], .estimate-row, .estimate-item');
+  // Target table rows in the estimates table
+  const rows = document.querySelectorAll('#estimates-table tbody tr');
 
-  items.forEach(item => {
-    const estId = item.getAttribute('data-estimate-id') ||
-                  item.getAttribute('data-id') ||
-                  (item.querySelector('[data-id]') ? item.querySelector('[data-id]').getAttribute('data-id') : null);
-
-    if (!estId) return;
-
-    // Check if buttons already exist
-    if (item.querySelector('.agx-export-btn, .agx-proposal-btn')) {
+  rows.forEach(row => {
+    // Skip if buttons already injected
+    if (row.querySelector('.agx-export-btn, .agx-proposal-btn')) {
       return;
     }
 
-    // Find action area or end of item
-    let actionArea = item.querySelector('[data-role="actions"]') ||
-                     item.querySelector('.actions') ||
-                     item.querySelector('.item-actions');
+    // Extract estimate ID from the Edit button onclick: editEstimate('eXXXXX')
+    const editBtn = row.querySelector('button[onclick*="editEstimate"]');
+    if (!editBtn) return;
+    const match = editBtn.getAttribute('onclick').match(/editEstimate\(['"]([^'"]+)['"]\)/);
+    if (!match) return;
+    const estId = match[1];
 
-    if (!actionArea) {
-      actionArea = document.createElement('div');
-      actionArea.style.marginLeft = 'auto';
-      item.appendChild(actionArea);
-    }
+    // Find the last td (actions cell)
+    const lastTd = row.cells[row.cells.length - 1];
+    if (!lastTd) return;
 
     // Create proposal button
     const proposalBtn = document.createElement('button');
-    proposalBtn.className = 'agx-proposal-btn';
-    proposalBtn.textContent = 'Generate Proposal';
+    proposalBtn.className = 'agx-proposal-btn small';
+    proposalBtn.textContent = 'Proposal';
     proposalBtn.style.cssText = `
       background-color: #1B8541;
       color: white;
-      padding: 6px 12px;
+      padding: 4px 10px;
       border: none;
       border-radius: 3px;
       cursor: pointer;
       font-size: 12px;
-      margin-right: 8px;
+      margin-left: 4px;
     `;
     proposalBtn.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -1105,24 +1078,25 @@ function injectExportBtns() {
 
     // Create export button
     const exportBtn = document.createElement('button');
-    exportBtn.className = 'agx-export-btn';
-    exportBtn.textContent = 'Export Estimate';
+    exportBtn.className = 'agx-export-btn small';
+    exportBtn.textContent = 'Export';
     exportBtn.style.cssText = `
       background-color: #1B3A5C;
       color: white;
-      padding: 6px 12px;
+      padding: 4px 10px;
       border: none;
       border-radius: 3px;
       cursor: pointer;
       font-size: 12px;
+      margin-left: 4px;
     `;
     exportBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       exportEstimate(estId);
     });
 
-    actionArea.appendChild(proposalBtn);
-    actionArea.appendChild(exportBtn);
+    lastTd.appendChild(proposalBtn);
+    lastTd.appendChild(exportBtn);
   });
 }
 
