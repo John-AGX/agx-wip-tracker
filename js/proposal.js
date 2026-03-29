@@ -407,7 +407,7 @@ function downloadBlankTemplate() {
   // ========== ROWS 28-29: Empty ==========
   row = 28;
 
-  // ========== SAMPLE SCOPE 1  ==========
+  // ========== SAMPLE SCOPE 1 ==========
   row++;
   ws['A' + row] = cellValue('SCOPE 1: [SCOPE NAME]', 's');
   merges.push('A' + row + ':G' + row);
@@ -452,7 +452,7 @@ function downloadBlankTemplate() {
   // Subtotal Client row
   row++;
   merges.push('A' + row + ':E' + row);
-  ws['F' + row] = cellValuee('[SCOPE NAME] Client:', 's');
+  ws['F' + row] = cellValue('[SCOPE NAME] Client:', 's');
   ws['G' + row] = cellValue(`SUM(G${lineStartRow}:G${lineEndRow})`, 'f');
   const subtotalClientRow = row;
 
@@ -558,7 +558,7 @@ function generateProposal(estId) {
       color: white;
       padding: 30px;
       text-align: center;
-      margin-bottom: 300p;
+      margin-bottom: 30px;
     }
     .header h1 {
       font-size: 28px;
@@ -572,14 +572,14 @@ function generateProposal(estId) {
       font-size: 14px;
     }
     .intro {
-      margin-bottom: 300p;
+      margin-bottom: 30px;
       text-align: justify;
     }
     .intro p {
       margin-bottom: 10px;
     }
     .scope-section {
-      margin-bottom: 300p;
+      margin-bottom: 30px;
       page-break-inside: avoid;
     }
     .scope-title {
@@ -629,7 +629,7 @@ function generateProposal(estId) {
       color: #1B8541;
     }
     .assumptions {
-      margin-bottom: 300p;
+      margin-bottom: 30px;
       page-break-inside: avoid;
     }
     .assumptions h3 {
@@ -752,7 +752,7 @@ function generateProposal(estId) {
       <div class="assumption-item">All work to be completed during normal business hours</div>
       <div class="assumption-item">Price is valid for 30 days</div>
       <div class="assumption-item">Payment terms: 50% upon acceptance, 50% upon completion</div>
-      <div class="assumption-item">Any additional work beyond the agreed scope wi)l be quoted separately</div>
+      <div class="assumption-item">Any additional work beyond the agreed scope will be quoted separately</div>
       <div class="assumption-item">Client to provide reasonable access to work areas</div>
       <div class="assumption-item">AGX is not responsible for pre-existing conditions not included in scope</div>
       <div class="assumption-item">Permits, if required, are the responsibility of the client unless otherwise noted</div>
@@ -854,7 +854,7 @@ function parseReport(data) {
     const col0 = (aoa[i][0] || '').toString().trim();
 
     // Check for scope header pattern (SCOPE N: NAME)
-    const scopeHeaderMatch = col0.match(/^SCOPE\s+\d+:\s*(.+)$/i);
+    const scopeHeaderMatch = col0.match(/^SCOPE\s\d+:\s\(.+)$/i);
     if (scopeHeaderMatch) {
       currentSection = scopeHeaderMatch[1].trim();
       continue;
@@ -913,7 +913,7 @@ function processImportFile(file) {
       estimateLines.push(...lines);
       localStorage.setItem('agx-estimate-lines', JSON.stringify(estimateLines));
 
-      alert(`Estimate "${estimate.title}" imported successfully!`);
+      alert(`Estimate "${estimate.title}" imported successfully`);
 
       // Redirect to estimate editor if available
       if (window.location.hash && window.location.hash.includes('estimates')) {
@@ -945,7 +945,7 @@ function injectImportBtn() {
     if (!injectionTimeout) {
       injectionTimeout = setTimeout(() => {
         injectionTimeout = null;
-        injectImportBtn();
+        injectItImportBtn();
       }, 500);
     }
     return;
@@ -961,7 +961,7 @@ function injectImportBtn() {
   container.style.display = 'inline-block';
   container.style.marginLeft = '10px';
 
-  const button = document.createElement('buttdon');
+  const button = document.createElement('button');
   button.id = 'agx-import-btn';
   button.textContent = 'Import Lead Report';
   button.style.cssText = `
@@ -974,7 +974,7 @@ function injectImportBtn() {
     font-size: 14px;
   `;
 
-  const fileInput = document.createElement('iinput');
+  const fileInput = document.createElement('input');
   fileInput.type = 'file';
   fileInput.accept = '.xlsx';
   fileInput.style.display = 'none';
@@ -1132,8 +1132,8 @@ function injectExportBtns() {
 
 function injectNickNameField() {
   // Only inject if the client field exists and nickName field doesn't
-  var clientInput = document.getElementByID("editesteclient');
-  if (!clientInput || document.getElementByID("editeste nickName'))return;
+  var clientInput = document.getElementById('editEst_client');
+  if (!clientInput || document.getElementById('editEst_nickName')) return;
 
   var clientGroup = clientInput.closest('.form-group');
   if (!clientGroup) return;
@@ -1145,7 +1145,7 @@ function injectNickNameField() {
   label.textContent = 'Nick Name';
   var input = document.createElement('input');
   input.type = 'text';
-  input.id = 'editestenickName';
+  input.id = 'editEst_nickName';
   input.placeholder = 'Short name for proposals (e.g. Jane)';
   // Copy styling from client input
   input.className = clientInput.className;
@@ -1170,7 +1170,7 @@ function patchEditEstimate() {
       injectNickNameField();
       var estimates = JSON.parse(localStorage.getItem('agx-estimates') || '[]');
       var est = estimates.find(function(e) { return e.id === estId; });
-      var nickInput = document.getElementByID('editeste nickName');
+      var nickInput = document.getElementById('editEst_nickName');
       if (est && nickInput) {
         nickInput.value = est.nickName || '';
       }
@@ -1186,7 +1186,7 @@ function patchSaveEstimateEdits() {
   _origSaveEstimateEdits = saveEstimateEdits;
   window.saveEstimateEdits = function() {
     // Before saving, ensure nickName gets into the estimate object
-    var nickInput = document.getElementByID('editeste nickName');
+    var nickInput = document.getElementById('editEst_nickName');
     var nickVal = nickInput ? nickInput.value.trim() : '';
 
     // Call original save
@@ -1196,7 +1196,7 @@ function patchSaveEstimateEdits() {
     // Find which estimate was just saved (the one currently open)
     var estimates = JSON.parse(localStorage.getItem('agx-estimates') || '[]');
     // The most recently modified estimate - check by matching title from the form
-    var titleVal = document.getElementByID('editeste title')?.value;
+    var titleVal = document.getElementById('editEst_title')?.value;
     if (titleVal) {
       var est = estimates.find(function(e) { return e.title === titleVal; });
       if (est) {
@@ -1269,4 +1269,4 @@ if (typeof XLSX !== 'undefined') {
 setTimeout(function() {
   patchEditEstimate();
   patchSaveEstimateEdits();
-},
+}, 200);
