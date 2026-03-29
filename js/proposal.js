@@ -109,15 +109,16 @@ function exportEstimate(estId) {
   ws['A6'] = cellValue('Lead Information', 's');
   merges.push('A6:G6');
 
-  // ========== ROWS 7-13: Lead Information Fields ==========
+  // ========== ROWS 7-14: Lead Information Fields ==========
   const leadFields = [
     { row: 7, label: 'Title', value: estimate.title },
-    { row: 8, label: 'Project Type', value: estimate.jobType },
-    { row: 9, label: 'Status', value: estimate.status || 'Open' },
-    { row: 10, label: 'Created Date', value: formatDateLong(estimate.created) },
-    { row: 11, label: 'Salesperson', value: 'Scott Ryan' },
-    { row: 12, label: 'Market', value: 'Tampa' },
-    { row: 13, label: 'Estimate ID', value: estimate.id || '—' }
+    { row: 8, label: 'Nick Name', value: estimate.nickName || '—' },
+    { row: 9, label: 'Project Type', value: estimate.jobType },
+    { row: 10, label: 'Status', value: estimate.status || 'Open' },
+    { row: 11, label: 'Created Date', value: formatDateLong(estimate.created) },
+    { row: 12, label: 'Salesperson', value: 'Scott Ryan' },
+    { row: 13, label: 'Market', value: 'Tampa' },
+    { row: 14, label: 'Estimate ID', value: estimate.id || '—' }
   ];
   leadFields.forEach(field => {
     ws['A' + field.row] = cellValue(field.label, 's');
@@ -126,24 +127,24 @@ function exportEstimate(estId) {
     merges.push('D' + field.row + ':G' + field.row);
   });
 
-  // ========== ROW 14: Empty ==========
-  row = 14;
-
-  // ========== ROW 15: Property Information Header ==========
+  // ========== ROW 15: Empty ==========
   row = 15;
-  ws['A15'] = cellValue('Property Information', 's');
-  merges.push('A15:G15');
 
-  // ========== ROWS 16-23: Property Information Fields ==========
+  // ========== ROW 16: Property Information Header ==========
+  row = 16;
+  ws['A16'] = cellValue('Property Information', 's');
+  merges.push('A16:G16');
+
+  // ========== ROWS 17-24: Property Information Fields ==========
   const propFields = [
-    { row: 16, label: 'Community', value: estimate.community },
-    { row: 17, label: 'Property Address', value: estimate.propertyAddr },
-    { row: 18, label: 'Management Co.', value: estimate.client },
-    { row: 19, label: 'CAM', value: estimate.managerName },
-    { row: 20, label: 'CAM Email', value: estimate.managerEmail },
-    { row: 21, label: 'On-Site Contact', value: '—' },
-    { row: 22, label: 'POC Phone', value: estimate.managerPhone || '—' },
-    { row: 23, label: 'POC Email', value: '—' }
+    { row: 17, label: 'Community', value: estimate.community },
+    { row: 18, label: 'Property Address', value: estimate.propertyAddr },
+    { row: 19, label: 'Management Co.', value: estimate.client },
+    { row: 20, label: 'CAM', value: estimate.managerName },
+    { row: 21, label: 'CAM Email', value: estimate.managerEmail },
+    { row: 22, label: 'On-Site Contact', value: '—' },
+    { row: 23, label: 'POC Phone', value: estimate.managerPhone || '—' },
+    { row: 24, label: 'POC Email', value: '—' }
   ];
   propFields.forEach(field => {
     ws['A' + field.row] = cellValue(field.label, 's');
@@ -152,21 +153,21 @@ function exportEstimate(estId) {
     merges.push('D' + field.row + ':G' + field.row);
   });
 
-  // ========== ROW 24: Empty ==========
-  row = 24;
-
-  // ========== ROW 25: Scope of Work Header ==========
+  // ========== ROW 25: Empty ==========
   row = 25;
-  ws['A25'] = cellValue('Scope of Work', 's');
-  merges.push('A25:G25');
 
-  // ========== ROW 26: Scope of Work Content ==========
+  // ========== ROW 26: Scope of Work Header ==========
   row = 26;
-  ws['A26'] = cellValue(estimate.scopeOfWork || '—', 's');
+  ws['A26'] = cellValue('Scope of Work', 's');
   merges.push('A26:G26');
 
-  // ========== ROW 27: Empty ==========
+  // ========== ROW 27: Scope of Work Content ==========
   row = 27;
+  ws['A27'] = cellValue(estimate.scopeOfWork || '—', 's');
+  merges.push('A27:G27');
+
+  // ========== ROW 28: Empty ==========
+  row = 28;
 
   // ========== SCOPES SECTION ==========
   const scopeTotals = [];
@@ -492,7 +493,7 @@ function parseReport(data) {
     managerName: getFieldValue('CAM'),
     managerEmail: getFieldValue('CAM Email'),
     managerPhone: getFieldValue('POC Phone'),
-    nickName: '',
+    nickName: getFieldValue('Nick Name'),
     defaultMarkup: 100,
     scopeOfWork: '',
     created: new Date().toISOString()
