@@ -4103,164 +4103,275 @@
 
 // ── AGX Estimate Import/Export ──────────────────────────────────
 (function(){
+  // ── AGX Estimate Import/Export v2 ──
   const sheetScript = document.createElement('script');
   sheetScript.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
-  document.head.appendChild(sheetScript);
-  sheetScript.onload = function(){ injectEstimateIO(); };
-
-  function injectEstimateIO(){
-    // Hidden file input
-    if(!document.getElementById('agx-import-file')){
-      const fi = document.createElement('input');
-      fi.type='file'; fi.accept='.xlsx,.xls'; fi.style.display='none'; fi.id='agx-import-file';
-      fi.addEventListener('change', processImportFile);
-      document.body.appendChild(fi);
+  sheetScript.onload = function() {
+    // Inject import button
+    function injectImportBtn() {
+      const newEstBtn = Array.from(document.querySelectorAll('button')).find(b => b.textContent.includes('New Estimate'));
+      if (!newEstBtn) { setTimeout(injectImportBtn, 500); return; }
+      if (document.getElementById('agx-import-btn')) return;
+      
+      const importBtn = document.createElement('button');
+      importBtn.id = 'agx-import-btn';
+      importBtn.innerHTML = '\ud83d\udce5 Import xlsx';
+      importBtn.style.cssText = 'margin-left:12px;padding:8px 18px;background:#1B8541;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px;font-weight:bold;';
+      
+      const fileInput = document.createElement('input');
+      fileInput.type = 'file';
+      fileInput.accept = '.xlsx,.xls';
+      fileInput.style.display = 'none';
+      fileInput.addEventListener('change', function(e) {
+        const file = e.target.files[0];
+        if (!file) return;
+        processImportFile(file);
+        fileInput.value = '';
+      });
+      
+      importBtn.addEventListener('click', function() { fileInput.click(); });
+      newEstBtn.parentElement.appendChild(fileInput);
+      newEstBtn.parentElement.insertBefore(importBtn, newEstBtn.nextSibling);
     }
-    // Watch for Estimates tab render to add buttons
-    const obs = new MutationObserver(addIOButtons);
-    obs.observe(document.body, {childList:true, subtree:true});
-    addIOButtons();
-  }
+    
+    // Inject export buttons with MutationObserver for persistence
+    function injectExportBtns() {
+      const estimates = JSON.parse(localStorage.getItem('agx-estimates') || '[]');
+      const delBtns = Array.from(document.querySelectorAll('button')).filter(function(b) { return b.textContent === 'Delete'; });
+      delBtns.forEach(function(delBtn, idx) {
+        var td = delBtn.parentElement;
+        if (!td || td.querySelector('.agx-export-btn')) return;
+        var est = estimates[idx];
+        if (!est) return;
+        var btn = document.createElement('button');
+        btn.className = 'agx-export-btn';
+        btn.textContent = 'Export';
+        btn.style.cssText = 'margin-left:6px;padding:5px 12px;background:#1B3A5C;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:13px;font-weight:bold;';
+        btn.addEventListener('click', function() { exportEstimate(est.id); });
+        td.appendChild(btn);
+      });
+    }
+    
+    // MutationObserver to re-inject export buttons on DOM changes
+    var exportObserver = new MutationObserver(function() {
+      clearTimeout(window._exportBtnTimer);
+      window._exportBtnTimer = setTimeout(injectExportBtns, 200);
+    });
+    exportObserver.observe(document.body, { childList: true, subtree: true });
+    
+    injectImportBtn();
+    injectExportBtns();
 
-  function addIOButtons(){
-    const btn = Array.from(document.querySelectorAll('button')).find(b=>b.textContent.trim().includes('New Estimate'));
-    if(!btn || document.getElementById('agx-import-btn')) return;
-    const ib = document.createElement('button');
-    ib.id='agx-import-btn'; ib.innerHTML='&#x1F4E5; Import xlsx';
-    ib.style.cssText='margin-left:8px;padding:8px 16px;background:#1B8541;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600;font-size:14px;';
-    ib.onclick=()=>document.getElementById('agx-import-file').click();
-    btn.parentNode.insertBefore(ib, btn.nextSibling);
-    addExportBtns();
-  }
-
-  function addExportBtns(){
-    const ests = JSON.parse(localStorage.getItem('agx-estimates')||'[]');
-    document.querySelectorAll('button').forEach(btn=>{
-      if(btn.textContent.trim()==='Preview'){
-        const p=btn.parentElement;
-        if(p && !p.querySelector('.agx-exp-btn')){
-          const eb=document.createElement('button');
-          eb.className='agx-exp-btn'; eb.innerHTML='&#x1F4E4; Export';
-          eb.style.cssText='margin-left:4px;padding:4px 10px;background:#1B3A5C;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;';
-          const row=btn.closest('[style]');
-          if(row){
-            const titleEl=row.querySelector('div');
-            const t=titleEl?titleEl.textContent.trim():'';
-            const est=ests.find(e=>e.title===t);
-            if(est) eb.onclick=()=>exportEstimate(est.id);
+    // ── IMPORT LOGIC ──
+    function processImportFile(file) {
+      var reader = new FileReader();
+      reader.onload = function(e) {
+        var data = new Uint8Array(e.target.result);
+        var wb = XLSX.read(data, { type: 'array' });
+        var sheet = wb.Sheets[wb.SheetNames[0]];
+        var rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+        var parsed = parseReport(rows);
+        if (!parsed) { alert('Could not parse this file as an AGX Lead Report.'); return; }
+        
+        // Save to localStorage
+        var estimates = JSON.parse(localStorage.getItem('agx-estimates') || '[]');
+        var allLines = JSON.parse(localStorage.getItem('agx-estimate-lines') || '[]');
+        estimates.push(parsed.estimate);
+        allLines.push.apply(allLines, parsed.lines);
+        localStorage.setItem('agx-estimates', JSON.stringify(estimates));
+        localStorage.setItem('agx-estimate-lines', JSON.stringify(allLines));
+        
+        alert('Imported: ' + parsed.estimate.title + ' (' + parsed.lines.length + ' line items)');
+        location.reload();
+      };
+      reader.readAsArrayBuffer(file);
+    }
+    
+    function parseReport(rows) {
+      // Verify AGX header
+      if (!rows[0] || !String(rows[0][0]).includes('AGX')) return null;
+      
+      var est = {
+        id: 'est_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
+        title: '', jobType: '', client: '', community: '', propertyAddr: '',
+        billingAddr: '', managerName: '', managerEmail: '', managerPhone: '',
+        defaultMarkup: 100, scopeOfWork: '', status: 'draft',
+        created: new Date().toISOString()
+      };
+      
+      var lines = [];
+      var inScope = false;
+      var currentSection = '';
+      var scopeText = [];
+      var foundLineItems = false;
+      
+      for (var i = 0; i < rows.length; i++) {
+        var row = rows[i];
+        if (!row || row.length === 0) continue;
+        var a = String(row[0] || '').trim();
+        var d = String(row[3] || '').trim();
+        
+        // Lead info fields
+        if (a === 'Title' && d) est.title = d;
+        if (a === 'Project Type' && d) est.jobType = d;
+        if (a === 'Community' && d) est.community = d;
+        if (a === 'Property Address' && d) est.propertyAddr = d;
+        if (a === 'Management Co.' && d) est.client = d;
+        if (a === 'CAM' && d) est.managerName = d;
+        if (a === 'CAM Email' && d) est.managerEmail = d;
+        if (a === 'Manager Phone' && d) est.managerPhone = d;
+        if (a === 'Billing Address' && d) est.billingAddr = d;
+        
+        // Scope of work text
+        if (a === 'Scope of Work') { inScope = true; continue; }
+        if (inScope && a && !a.match(/^SCOPE\s+\d/i) && !a.match(/^Item\s*#/i)) {
+          scopeText.push(a);
+          continue;
+        }
+        if (inScope && (a.match(/^SCOPE\s+\d/i) || a.match(/^Item\s*#/i))) {
+          inScope = false;
+          est.scopeOfWork = scopeText.join('\n');
+        }
+        
+        // Scope/section headers
+        if (a.match(/^SCOPE\s+\d/i)) {
+          foundLineItems = true;
+          continue;
+        }
+        
+        // Column header row - skip
+        if (a === 'Item #' || a === 'Item') continue;
+        
+        // Section headers (text in col A, nothing meaningful in other cols)
+        if (foundLineItems && a && !a.match(/^\d/) && (row[2] === '' || row[2] === 0) && (row[4] === '' || row[4] === 0)) {
+          // Check if this looks like a section name (not a subtotal row)
+          if (!a.match(/subtotal|total|grand|base|client/i)) {
+            currentSection = a;
+            // Add a section marker line
+            lines.push({
+              id: 'ln_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
+              estimateId: est.id, section: currentSection,
+              description: '', qty: 0, unit: 'sqft', unitCost: 0, markup: est.defaultMarkup
+            });
+            continue;
           }
-          p.appendChild(eb);
+        }
+        
+        // Line items (start with number like 1.1, 1.2 etc)
+        if (foundLineItems && a.match(/^\d+\.\d+/)) {
+          var desc = String(row[1] || '');
+          var qty = parseFloat(row[2]) || 0;
+          var unit = String(row[3] || 'ea');
+          var unitCost = parseFloat(row[4]) || 0;
+          var markup = parseFloat(row[5]);
+          if (markup > 0 && markup < 1) markup = markup * 100;
+          else if (isNaN(markup)) markup = est.defaultMarkup;
+          
+          lines.push({
+            id: 'ln_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
+            estimateId: est.id, section: currentSection,
+            description: desc, qty: qty, unit: unit, unitCost: unitCost, markup: markup
+          });
         }
       }
-    });
-  }
-
-  function processImportFile(e){
-    const file=e.target.files[0]; if(!file) return;
-    const reader=new FileReader();
-    reader.onload=function(evt){
-      try{
-        const data=new Uint8Array(evt.target.result);
-        const wb=XLSX.read(data,{type:'array'});
-        const ws=wb.Sheets[wb.SheetNames[0]];
-        const rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:''});
-        const parsed=parseReport(rows);
-        if(!parsed){alert('Could not parse as AGX Lead Report.');return;}
-        const lc=parsed.lines.length;
-        const base=parsed.lines.reduce((s,l)=>s+(l.qty*l.unitCost),0);
-        const client=parsed.lines.reduce((s,l)=>s+(l.qty*l.unitCost*(1+l.markup/100)),0);
-        const msg='Import "'+parsed.est.title+'"?\n\nClient: '+parsed.est.client+'\nCommunity: '+parsed.est.community+'\nLine Items: '+lc+'\nBase Cost: $'+base.toLocaleString('en-US',{minimumFractionDigits:2})+'\nClient Price: $'+client.toLocaleString('en-US',{minimumFractionDigits:2});
-        if(confirm(msg)){
-          const ests=JSON.parse(localStorage.getItem('agx-estimates')||'[]');
-          ests.push(parsed.est);
-          localStorage.setItem('agx-estimates',JSON.stringify(ests));
-          const lines=JSON.parse(localStorage.getItem('agx-estimate-lines')||'[]');
-          lines.push(...parsed.lines);
-          localStorage.setItem('agx-estimate-lines',JSON.stringify(lines));
-          alert('Imported!'); location.reload();
-        }
-      }catch(err){alert('Error: '+err.message);}
-    };
-    reader.readAsArrayBuffer(file);
-    e.target.value='';
-  }
-
-  function parseReport(rows){
-    const est={id:'est_'+Date.now()+'_'+Math.random().toString(36).substr(2,6),title:'',jobType:'',client:'',community:'',propertyAddr:'',billingAddr:'',managerName:'',managerEmail:'',managerPhone:'',defaultMarkup:100,scopeOfWork:'',status:'draft',created:new Date().toISOString()};
-    const lines=[]; let curSec='',foundScope=false;
-    for(let i=0;i<rows.length;i++){
-      const r=rows[i], a=String(r[0]||'').trim(), b=String(r[1]||'').trim(), d=String(r[3]||'').trim();
-      if(a==='Title'&&d) est.title=d;
-      if(a==='Project Type'&&d) est.jobType=d;
-      if(a==='Community'&&d) est.community=d;
-      if(a==='Property Address'&&d) est.propertyAddr=d;
-      if(a==='Management Co.'&&d) est.client=d;
-      if(a==='CAM'&&d) est.managerName=d;
-      if(a==='CAM Email'&&d) est.managerEmail=d;
-      if(a==='POC Phone'&&d) est.managerPhone=d;
-      if(a==='Scope of Work'&&i+1<rows.length){const s=String(rows[i+1][0]||'').trim();if(s&&!s.startsWith('SCOPE')&&!s.startsWith('Item')) est.scopeOfWork=s;}
-      if(a.startsWith('SCOPE ')&&(a.includes('\u2014')||a.includes('-')||a.includes('\u2014'))){foundScope=true;curSec='';continue;}
-      if(a==='Item #'&&b==='Description'){continue;}
-      if(foundScope&&a&&!b&&!r[2]&&!r[4]&&!a.includes('Base:')&&!a.includes('Client:')&&!a.startsWith('GRAND')&&!a.startsWith('PROJECT')&&!a.startsWith('Scope ')&&!a.match(/^\d+\.\d+/)){
-        curSec=a;
-        lines.push({id:'el_'+Date.now()+'_'+Math.random().toString(36).substr(2,6),estimateId:est.id,section:a,description:'',qty:1,unit:'',unitCost:0,markup:100});
-        continue;
-      }
-      if(foundScope&&a.match(/^\d+\.\d+$/)){
-        const qty=parseFloat(r[2])||0, unit=String(r[3]||'').trim(), uc=parseFloat(r[4])||0;
-        const mr=parseFloat(r[5]); const mk=isNaN(mr)?100:Math.round(mr*100);
-        if(b&&qty>0) lines.push({id:'el_'+Date.now()+'_'+Math.random().toString(36).substr(2,6),estimateId:est.id,section:curSec,description:b,qty,unit,unitCost:uc,markup:mk});
-      }
+      
+      if (!est.title && rows[2]) est.title = String(rows[2][0] || 'Imported Estimate');
+      return { estimate: est, lines: lines };
     }
-    if(!est.title&&!lines.length) return null;
-    if(!est.title) est.title=rows[2]?String(rows[2][0]||'').trim():'Imported Estimate';
-    return {est,lines};
-  }
 
-  function exportEstimate(id){
-    const ests=JSON.parse(localStorage.getItem('agx-estimates')||'[]');
-    const allLines=JSON.parse(localStorage.getItem('agx-estimate-lines')||'[]');
-    const est=ests.find(e=>e.id===id); if(!est){alert('Not found');return;}
-    const el=allLines.filter(l=>l.estimateId===id);
-    const d=[];
-    d.push(['AGX CENTRAL FLORIDA','','','','','','']);
-    d.push(['Lead Report & Preliminary Estimate','','','','','','']);
-    d.push([est.title,'','','','','','']);
-    d.push(['','','','','','','']);
-    d.push([]);
-    d.push(['Lead Information','','','','','','']);
-    d.push(['Title','','',est.title,'','','']);
-    d.push(['Project Type','','',est.jobType||'Service & Repair','','','']);
-    d.push(['Status','','',est.status||'Open','','','']);
-    d.push(['Created Date','','',est.created?new Date(est.created).toLocaleDateString():'','','','']);
-    d.push([]);
-    d.push(['Property Information','','','','','','']);
-    d.push(['Community','','',est.community,'','','']);
-    d.push(['Property Address','','',est.propertyAddr,'','','']);
-    d.push(['Management Co.','','',est.client,'','','']);
-    d.push(['CAM','','',est.managerName,'','','']);
-    d.push(['CAM Email','','',est.managerEmail,'','','']);
-    d.push(['Manager Phone','','',est.managerPhone,'','','']);
-    d.push([]);
-    d.push(['Scope of Work','','','','','','']);
-    d.push([est.scopeOfWork||'','','','','','','']);
-    d.push([]);
-    d.push(['SCOPE 1','','','','','','']);
-    d.push(['Item #','Description','Qty','Unit','Unit Cost','Markup %','Total']);
-    let sn=1,in2=1,curS='',bt=0,ct=0;
-    el.forEach(l=>{
-      if(l.section&&l.section!==curS){curS=l.section;if(!l.description){d.push([l.section,'','','','','','']);in2=1;return;}}
-      if(l.description){const mk=(l.markup||100)/100;const lt=l.qty*l.unitCost*(1+mk);const lb=l.qty*l.unitCost;bt+=lb;ct+=lt;d.push([sn+'.'+in2,l.description,l.qty,l.unit,l.unitCost,mk,lt]);in2++;}
-    });
-    d.push([]);d.push(['','','','','','Base:',bt]);d.push(['','','','','','Client:',ct]);
-    d.push([]);d.push(['','','','','','GRAND TOTAL Base:',bt]);d.push(['','','','','','GRAND TOTAL Client:',ct]);
-    const ws=XLSX.utils.aoa_to_sheet(d);
-    ws['!cols']=[{wch:8},{wch:45},{wch:8},{wch:8},{wch:14},{wch:10},{wch:16}];
-    const wb2=XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb2,ws,'Lead Report');
-    XLSX.writeFile(wb2,(est.title||'Estimate')+' - Lead Report.xlsx');
-  }
-})();
+    // ── EXPORT LOGIC ──
+    function exportEstimate(estimateId) {
+      var estimates = JSON.parse(localStorage.getItem('agx-estimates') || '[]');
+      var allLines = JSON.parse(localStorage.getItem('agx-estimate-lines') || '[]');
+      var est = estimates.find(function(e) { return e.id === estimateId; });
+      if (!est) { alert('Estimate not found'); return; }
+      var estLines = allLines.filter(function(l) { return l.estimateId === estimateId; });
+      
+      var wb = XLSX.utils.book_new();
+      var wsData = [];
+      
+      // Header rows
+      wsData.push(['AGX CENTRAL FLORIDA','','','','','','']);
+      wsData.push(['Lead Report & Preliminary Estimate','','','','','','']);
+      wsData.push([est.title || '','','','','','','']);
+      wsData.push(['','','','','','','']);
+      wsData.push([]);
+      
+      // Lead Information
+      wsData.push(['Lead Information','','','','','','']);
+      wsData.push(['Title','','',est.title || '','','','']);
+      wsData.push(['Project Type','','',est.jobType || 'Service & Repair','','','']);
+      wsData.push(['Status','','',est.status || 'Open','','','']);
+      wsData.push(['Created Date','','',est.created ? new Date(est.created).toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'}) : '','','','']);
+      wsData.push([]);
+      
+      // Property Information
+      wsData.push(['Property Information','','','','','','']);
+      wsData.push(['Community','','',est.community || '','','','']);
+      wsData.push(['Property Address','','',est.propertyAddr || '','','','']);
+      wsData.push(['Management Co.','','',est.client || '','','','']);
+      wsData.push(['CAM','','',est.managerName || '','','','']);
+      wsData.push(['CAM Email','','',est.managerEmail || '','','','']);
+      wsData.push(['Manager Phone','','',est.managerPhone || '','','','']);
+      wsData.push(['Billing Address','','',est.billingAddr || '','','','']);
+      wsData.push([]);
+      
+      // Scope of Work
+      wsData.push(['Scope of Work','','','','','','']);
+      wsData.push([est.scopeOfWork || '','','','','','','']);
+      wsData.push([]);
+      
+      // Group lines by section
+      var sections = [];
+      var curSec = null;
+      estLines.forEach(function(line) {
+        if (line.section && (!curSec || line.section !== curSec.name)) {
+          curSec = { name: line.section, items: [] };
+          sections.push(curSec);
+        }
+        if (curSec && line.description) curSec.items.push(line);
+      });
+      if (sections.length === 0 && estLines.length > 0) {
+        sections.push({ name: 'Scope', items: estLines.filter(function(l) { return l.description; }) });
+      }
+      
+      var grandBase = 0, grandClient = 0;
+      sections.forEach(function(sec, sIdx) {
+        wsData.push(['SCOPE ' + (sIdx+1) + ': ' + sec.name,'','','','','','']);
+        wsData.push(['Item #','Description','Qty','Unit','Unit Cost','Markup','Total']);
+        var secBase = 0, secClient = 0;
+        sec.items.forEach(function(line, lIdx) {
+          var mkp = (line.markup != null ? line.markup : 100) / 100;
+          var lineBase = (line.qty||0) * (line.unitCost||0);
+          var lineTotal = lineBase * (1 + mkp);
+          secBase += lineBase;
+          secClient += lineTotal;
+          wsData.push([(sIdx+1)+'.'+(lIdx+1), line.description, line.qty||0, line.unit||'ea', line.unitCost||0, mkp, lineTotal]);
+        });
+        wsData.push([]);
+        wsData.push(['','','','','','Subtotal (Base):', secBase]);
+        wsData.push(['','','','','','Subtotal (Client):', secClient]);
+        wsData.push([]);
+        grandBase += secBase;
+        grandClient += secClient;
+      });
+      
+      wsData.push(['','','','','','GRAND TOTAL (Base):', grandBase]);
+      wsData.push(['','','','','','GRAND TOTAL (Client):', grandClient]);
+      
+      var ws = XLSX.utils.aoa_to_sheet(wsData);
+      ws['!cols'] = [{wch:10},{wch:50},{wch:8},{wch:8},{wch:14},{wch:20},{wch:18}];
+      ws['!merges'] = [
+        {s:{r:0,c:0},e:{r:0,c:6}},{s:{r:1,c:0},e:{r:1,c:6}},
+        {s:{r:2,c:0},e:{r:2,c:6}},{s:{r:3,c:0},e:{r:3,c:6}}
+      ];
+      
+      XLSX.utils.book_append_sheet(wb, ws, 'Lead Report');
+      XLSX.writeFile(wb, (est.title || 'Estimate') + ' - Lead Report.xlsx');
+    }
+    
+  }; // end sheetScript.onload
+  document.head.appendChild(sheetScript);
 
 </script>
 </body>
