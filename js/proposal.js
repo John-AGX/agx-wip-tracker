@@ -38,7 +38,7 @@ function injectExportBtns() {
         if (!est) return;
         var btn = document.createElement('button');
         btn.className = 'agx-export-btn';
-        btn.textContent = 'Export';
+        btn.textContent = 'Generate Proposal';
         btn.style.cssText = 'margin-left:6px;padding:5px 12px;background:#1B3A5C;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:13px;font-weight:bold;';
         btn.addEventListener('click', function() { exportEstimate(est.id); });
         td.appendChild(btn);
@@ -251,6 +251,102 @@ function exportEstimate(estimateId) {
       XLSX.writeFile(wb, (est.title || 'Estimate') + ' - Lead Report.xlsx');
     }
 
+
+function downloadBlankTemplate() {
+  if (typeof XLSX === 'undefined') { alert('SheetJS still loading, try again in a moment.'); return; }
+  
+  var wb = XLSX.utils.book_new();
+  var rows = [];
+  
+  // Header
+  rows.push(['AGX CENTRAL FLORIDA']);
+  rows.push(['Lead Report & Preliminary Estimate']);
+  rows.push(['']);
+  rows.push(['']);
+  
+  // Lead Information
+  rows.push(['LEAD INFORMATION']);
+  rows.push(['Title:', '', '', '']);
+  rows.push(['Project Type:', '', '', '']);
+  rows.push(['Community:', '', '', '']);
+  rows.push(['Lead Source:', '', '', '']);
+  rows.push(['']);
+  
+  // Property Information
+  rows.push(['PROPERTY INFORMATION']);
+  rows.push(['Property Address:', '', '', '']);
+  rows.push(['Billing Address:', '', '', '']);
+  rows.push(['Manager Name:', '', '', '']);
+  rows.push(['Manager Email:', '', '', '']);
+  rows.push(['Manager Phone:', '', '', '']);
+  rows.push(['']);
+  
+  // Scope of Work
+  rows.push(['SCOPE OF WORK']);
+  rows.push(['']);
+  rows.push(['']);
+  
+  // Line Items Header
+  rows.push(['SCOPE / LINE ITEMS']);
+  rows.push(['Item #', 'Description', 'Qty', 'Unit', 'Unit Cost', 'Markup %', 'Base Cost', 'Client Cost']);
+  
+  // Example section with blank rows
+  rows.push(['SECTION: General Work']);
+  rows.push(['1.1', '', '', '', '', '', '', '']);
+  rows.push(['1.2', '', '', '', '', '', '', '']);
+  rows.push(['1.3', '', '', '', '', '', '', '']);
+  rows.push(['', '', '', '', '', 'Subtotal (Base):', '', '']);
+  rows.push(['', '', '', '', '', 'Subtotal (Client):', '', '']);
+  rows.push(['']);
+  
+  // Second blank section
+  rows.push(['SECTION: Additional Work']);
+  rows.push(['2.1', '', '', '', '', '', '', '']);
+  rows.push(['2.2', '', '', '', '', '', '', '']);
+  rows.push(['2.3', '', '', '', '', '', '', '']);
+  rows.push(['', '', '', '', '', 'Subtotal (Base):', '', '']);
+  rows.push(['', '', '', '', '', 'Subtotal (Client):', '', '']);
+  rows.push(['']);
+  
+  // Grand totals
+  rows.push(['', '', '', '', '', 'Grand Total (Base):', '', '']);
+  rows.push(['', '', '', '', '', 'Grand Total (Client):', '', '']);
+  
+  var ws = XLSX.utils.aoa_to_sheet(rows);
+  
+  // Column widths
+  ws['!cols'] = [
+    {wch: 12}, {wch: 40}, {wch: 8}, {wch: 10}, {wch: 12}, {wch: 18}, {wch: 14}, {wch: 14}
+  ];
+  
+  // Merge header cells
+  ws['!merges'] = [
+    {s:{r:0,c:0}, e:{r:0,c:7}},
+    {s:{r:1,c:0}, e:{r:1,c:7}},
+    {s:{r:4,c:0}, e:{r:4,c:7}},
+    {s:{r:10,c:0}, e:{r:10,c:7}},
+    {s:{r:17,c:0}, e:{r:17,c:7}},
+    {s:{r:20,c:0}, e:{r:20,c:7}},
+  ];
+  
+  XLSX.utils.book_append_sheet(wb, ws, 'Lead Report');
+  XLSX.writeFile(wb, 'AGX_Blank_Lead_Report_Template.xlsx');
+}
+
+function injectTemplateBtn() {
+  if (document.getElementById('agx-template-btn')) return;
+  var importBtn = document.getElementById('agx-import-btn');
+  if (!importBtn) return;
+  
+  var btn = document.createElement('button');
+  btn.id = 'agx-template-btn';
+  btn.textContent = '\u{1f4cb} Blank Template';
+  btn.style.cssText = 'margin-left:8px;padding:6px 14px;background:#2c5282;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:0.95em;';
+  btn.onclick = function() { downloadBlankTemplate(); };
+  importBtn.parentNode.insertBefore(btn, importBtn.nextSibling);
+}
+
+
 // ── SheetJS Loader + Initialization ──
 var sheetScript = document.createElement('script');
 sheetScript.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
@@ -265,6 +361,7 @@ sheetScript.onload = function() {
     exportObserver.observe(document.body, { childList: true, subtree: true });
     
     injectImportBtn();
+  injectTemplateBtn();
     injectExportBtns();
 
     // ── IMPORT LOGIC ──
