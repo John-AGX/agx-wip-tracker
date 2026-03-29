@@ -1,540 +1,1272 @@
-// ── AGX Estimate Import/Export & Proposal Generator ──
+// AGX WIP Tracker - Proposal & Export Module
+// Handles export of estimates, proposal generation, and import of lead reports
 
-// ── Function Definitions (global scope) ──
+// ============================================================================
+// UTILITY FUNCTIONS
+// ============================================================================
 
-function injectImportBtn() {
-      const newEstBtn = Array.from(document.querySelectorAll('button')).find(b => b.textContent.includes('New Estimate'));
-      if (!newEstBtn) { setTimeout(injectImportBtn, 500); return; }
-      if (document.getElementById('agx-import-btn')) return;
-      
-      const importBtn = document.createElement('button');
-      importBtn.id = 'agx-import-btn';
-      importBtn.innerHTML = '\ud83d\udce5 Import xlsx';
-      importBtn.style.cssText = 'margin-left:12px;padding:8px 18px;background:#1B8541;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px;font-weight:bold;';
-      
-      const fileInput = document.createElement('input');
-      fileInput.type = 'file';
-      fileInput.accept = '.xlsx,.xls';
-      fileInput.style.display = 'none';
-      fileInput.addEventListener('change', function(e) {
-        const file = e.target.files[0];
-        if (!file) return;
-        processImportFile(file);
-        fileInput.value = '';
-      });
-      
-      importBtn.addEventListener('click', function() { fileInput.click(); });
-      newEstBtn.parentElement.appendChild(fileInput);
-      newEstBtn.parentElement.insertBefore(importBtn, newEstBtn.nextSibling);
-    }
-
-function injectExportBtns() {
-    var estimates = JSON.parse(localStorage.getItem('agx-estimates') || '[]');
-    var delBtns = Array.from(document.querySelectorAll('button')).filter(function(b) { return b.textContent === 'Delete'; });
-    delBtns.forEach(function(delBtn, idx) {
-      if (idx >= estimates.length) return;
-      var cell = delBtn.parentNode;
-      if (!cell) return;
-      if (cell.querySelector('.agx-proposal-btn')) return;
-      var estId = estimates[idx].id;
-      var propBtn = document.createElement('button');
-      propBtn.className = 'agx-proposal-btn';
-      propBtn.textContent = 'Generate Proposal';
-      propBtn.style.cssText = 'margin-left:6px;padding:4px 10px;background:#1B8541;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.85em;';
-      propBtn.onclick = function() { generateProposal(estId); };
-      cell.appendChild(propBtn);
-      var expBtn = document.createElement('button');
-      expBtn.className = 'agx-proposal-btn';
-      expBtn.textContent = 'Export Estimate';
-      expBtn.style.cssText = 'margin-left:6px;padding:4px 10px;background:#1B3A5C;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.85em;';
-      expBtn.onclick = function() { exportEstimate(estId); };
-      cell.appendChild(expBtn);
-    });
-  }
-
-function processImportFile(file) {
-      var reader = new FileReader();
-      reader.onload = function(e) {
-        var data = new Uint8Array(e.target.result);
-        var wb = XLSX.read(data, { type: 'array' });
-        var sheet = wb.Sheets[wb.SheetNames[0]];
-        var rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
-        var parsed = parseReport(rows);
-        if (!parsed) { alert('Could not parse this file as an AGX Lead Report.'); return; }
-        
-        // Save to localStorage
-        var estimates = JSON.parse(localStorage.getItem('agx-estimates') || '[]');
-        var allLines = JSON.parse(localStorage.getItem('agx-estimate-lines') || '[]');
-        estimates.push(parsed.estimate);
-        allLines.push.apply(allLines, parsed.lines);
-        localStorage.setItem('agx-estimates', JSON.stringify(estimates));
-        localStorage.setItem('agx-estimate-lines', JSON.stringify(allLines));
-        
-        alert('Imported: ' + parsed.estimate.title + ' (' + parsed.lines.length + ' line items)');
-        location.reload();
-      };
-      reader.readAsArrayBuffer(file);
-    }
-
-function parseReport(rows) {
-      // Verify AGX header
-      if (!rows[0] || !String(rows[0][0]).includes('AGX')) return null;
-      
-      var est = {
-        id: 'est_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
-        title: '', jobType: '', client: '', community: '', propertyAddr: '',
-        billingAddr: '', managerName: '', managerEmail: '', managerPhone: '',
-        defaultMarkup: 100, scopeOfWork: '', status: 'draft',
-        created: new Date().toISOString()
-      };
-      
-      var lines = [];
-      var inScope = false;
-      var currentSection = '';
-      var scopeText = [];
-      var foundLineItems = false;
-      
-      for (var i = 0; i < rows.length; i++) {
-        var row = rows[i];
-        if (!row || row.length === 0) continue;
-        var a = String(row[0] || '').trim();
-        var d = String(row[3] || '').trim();
-        
-        // Lead info fields
-        if (a === 'Title' && d) est.title = d;
-        if (a === 'Project Type' && d) est.jobType = d;
-        if (a === 'Community' && d) est.community = d;
-        if (a === 'Property Address' && d) est.propertyAddr = d;
-        if (a === 'Management Co.' && d) est.client = d;
-        if (a === 'CAM' && d) est.managerName = d;
-        if (a === 'CAM Email' && d) est.managerEmail = d;
-        if (a === 'Manager Phone' && d) est.managerPhone = d;
-        if (a === 'Billing Address' && d) est.billingAddr = d;
-        
-        // Scope of work text
-        if (a === 'Scope of Work') { inScope = true; continue; }
-        if (inScope && a && !a.match(/^SCOPE\s+\d/i) && !a.match(/^Item\s*#/i)) {
-          scopeText.push(a);
-          continue;
-        }
-        if (inScope && (a.match(/^SCOPE\s+\d/i) || a.match(/^Item\s*#/i))) {
-          inScope = false;
-          est.scopeOfWork = scopeText.join('\n');
-        }
-        
-        // Scope/section headers
-        if (a.match(/^SCOPE\s+\d/i)) {
-          foundLineItems = true;
-          continue;
-        }
-        
-        // Column header row - skip
-        if (a === 'Item #' || a === 'Item') continue;
-        
-        // Section headers (text in col A, nothing meaningful in other cols)
-        if (foundLineItems && a && !a.match(/^\d/) && (row[2] === '' || row[2] === 0) && (row[4] === '' || row[4] === 0)) {
-          // Check if this looks like a section name (not a subtotal row)
-          if (!a.match(/subtotal|total|grand|base|client/i)) {
-            currentSection = a;
-            // Add a section marker line
-            lines.push({
-              id: 'ln_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
-              estimateId: est.id, section: currentSection,
-              description: '', qty: 0, unit: 'sqft', unitCost: 0, markup: est.defaultMarkup
-            });
-            continue;
-          }
-        }
-        
-        // Line items (start with number like 1.1, 1.2 etc)
-        if (foundLineItems && a.match(/^\d+\.\d+/)) {
-          var desc = String(row[1] || '');
-          var qty = parseFloat(row[2]) || 0;
-          var unit = String(row[3] || 'ea');
-          var unitCost = parseFloat(row[4]) || 0;
-          var markup = parseFloat(row[5]);
-          if (markup > 0 && markup < 1) markup = markup * 100;
-          else if (isNaN(markup)) markup = est.defaultMarkup;
-          
-          lines.push({
-            id: 'ln_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
-            estimateId: est.id, section: currentSection,
-            description: desc, qty: qty, unit: unit, unitCost: unitCost, markup: markup
-          });
-        }
-      }
-      
-      if (!est.title && rows[2]) est.title = String(rows[2][0] || 'Imported Estimate');
-      return { estimate: est, lines: lines };
-    }
-
-function exportEstimate(estimateId) {
-      var estimates = JSON.parse(localStorage.getItem('agx-estimates') || '[]');
-      var allLines = JSON.parse(localStorage.getItem('agx-estimate-lines') || '[]');
-      var est = estimates.find(function(e) { return e.id === estimateId; });
-      if (!est) { alert('Estimate not found'); return; }
-      var estLines = allLines.filter(function(l) { return l.estimateId === estimateId; });
-      
-      var wb = XLSX.utils.book_new();
-      var wsData = [];
-      
-      // Header rows
-      wsData.push(['AGX CENTRAL FLORIDA','','','','','','']);
-      wsData.push(['Lead Report & Preliminary Estimate','','','','','','']);
-      wsData.push([est.title || '','','','','','','']);
-      wsData.push(['','','','','','','']);
-      wsData.push([]);
-      
-      // Lead Information
-      wsData.push(['Lead Information','','','','','','']);
-      wsData.push(['Title','','',est.title || '','','','']);
-      wsData.push(['Project Type','','',est.jobType || 'Service & Repair','','','']);
-      wsData.push(['Status','','',est.status || 'Open','','','']);
-      wsData.push(['Created Date','','',est.created ? new Date(est.created).toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'}) : '','','','']);
-      wsData.push([]);
-      
-      // Property Information
-      wsData.push(['Property Information','','','','','','']);
-      wsData.push(['Community','','',est.community || '','','','']);
-      wsData.push(['Property Address','','',est.propertyAddr || '','','','']);
-      wsData.push(['Management Co.','','',est.client || '','','','']);
-      wsData.push(['CAM','','',est.managerName || '','','','']);
-      wsData.push(['CAM Email','','',est.managerEmail || '','','','']);
-      wsData.push(['Manager Phone','','',est.managerPhone || '','','','']);
-      wsData.push(['Billing Address','','',est.billingAddr || '','','','']);
-      wsData.push([]);
-      
-      // Scope of Work
-      wsData.push(['Scope of Work','','','','','','']);
-      wsData.push([est.scopeOfWork || '','','','','','','']);
-      wsData.push([]);
-      
-      // Group lines by section
-      var sections = [];
-      var curSec = null;
-      estLines.forEach(function(line) {
-        if (line.section && (!curSec || line.section !== curSec.name)) {
-          curSec = { name: line.section, items: [] };
-          sections.push(curSec);
-        }
-        if (curSec && line.description) curSec.items.push(line);
-      });
-      if (sections.length === 0 && estLines.length > 0) {
-        sections.push({ name: 'Scope', items: estLines.filter(function(l) { return l.description; }) });
-      }
-      
-      var grandBase = 0, grandClient = 0;
-      sections.forEach(function(sec, sIdx) {
-        wsData.push(['SCOPE ' + (sIdx+1) + ': ' + sec.name,'','','','','','']);
-        wsData.push(['Item #','Description','Qty','Unit','Unit Cost','Markup','Total']);
-        var secBase = 0, secClient = 0;
-        sec.items.forEach(function(line, lIdx) {
-          var mkp = (line.markup != null ? line.markup : 100) / 100;
-          var lineBase = (line.qty||0) * (line.unitCost||0);
-          var lineTotal = lineBase * (1 + mkp);
-          secBase += lineBase;
-          secClient += lineTotal;
-          wsData.push([(sIdx+1)+'.'+(lIdx+1), line.description, line.qty||0, line.unit||'ea', line.unitCost||0, mkp, lineTotal]);
-        });
-        wsData.push([]);
-        wsData.push(['','','','','','Subtotal (Base):', secBase]);
-        wsData.push(['','','','','','Subtotal (Client):', secClient]);
-        wsData.push([]);
-        grandBase += secBase;
-        grandClient += secClient;
-      });
-      
-      wsData.push(['','','','','','GRAND TOTAL (Base):', grandBase]);
-      wsData.push(['','','','','','GRAND TOTAL (Client):', grandClient]);
-      
-      var ws = XLSX.utils.aoa_to_sheet(wsData);
-      ws['!cols'] = [{wch:10},{wch:50},{wch:8},{wch:8},{wch:14},{wch:20},{wch:18}];
-      ws['!merges'] = [
-        {s:{r:0,c:0},e:{r:0,c:6}},{s:{r:1,c:0},e:{r:1,c:6}},
-        {s:{r:2,c:0},e:{r:2,c:6}},{s:{r:3,c:0},e:{r:3,c:6}}
-      ];
-      
-      XLSX.utils.book_append_sheet(wb, ws, 'Lead Report');
-      XLSX.writeFile(wb, (est.title || 'Estimate') + ' - Lead Report.xlsx');
-    }
-
-
-
-function generateProposal(estimateId) {
-  var estimates = JSON.parse(localStorage.getItem('agx-estimates') || '[]');
-  var lines = JSON.parse(localStorage.getItem('agx-estimate-lines') || '[]');
-  var est = estimates.find(function(e) { return e.id === estimateId; });
-  if (!est) { alert('Estimate not found'); return; }
-  var estLines = lines.filter(function(l) { return l.estimateId === estimateId; });
-  
-  // Group lines by section
-  var sections = [];
-  var sectionMap = {};
-  estLines.forEach(function(line) {
-    var sec = line.section || 'General';
-    if (!sectionMap[sec]) {
-      sectionMap[sec] = [];
-      sections.push(sec);
-    }
-    sectionMap[sec].push(line);
-  });
-  
-  // Calculate total client price
-  var totalPrice = 0;
-  estLines.forEach(function(line) {
-    var base = (parseFloat(line.qty) || 0) * (parseFloat(line.unitCost) || 0);
-    var markup = parseFloat(line.markup) || parseFloat(est.defaultMarkup) || 0;
-    totalPrice += base * (1 + markup / 100);
-  });
-  
-  // Format currency
-  var priceStr = '$' + totalPrice.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-  
-  // Build date
-  var now = new Date();
-  var dateStr = (now.getMonth()+1) + '-' + now.getDate() + '-' + now.getFullYear();
-  
-  // Derive greeting - use client name first word + "Team"
-  var clientFirst = (est.client || 'Team').split(' ')[0].split('-')[0].trim();
-  var greeting = 'Dear ' + clientFirst + ' Team,';
-
-  // Build scope sections HTML
-  var scopeHtml = '';
-  sections.forEach(function(secName, idx) {
-    var secLabel = 'A' + (idx + 1) + '. ' + secName;
-    scopeHtml += '<p style="margin:18px 0 6px;font-weight:500;">' + secLabel + '</p>';
-    sectionMap[secName].forEach(function(line) {
-      if (line.description && line.description.trim()) {
-        scopeHtml += '<p style="margin:2px 0 2px 20px;">- ' + line.description + '</p>';
-      }
-    });
-  });
-  
-  // If there's also a scopeOfWork text, add it before the sections
-  var scopeIntro = '';
-  if (est.scopeOfWork && est.scopeOfWork.trim()) {
-    scopeIntro = '<p style="margin:0 0 12px;">' + est.scopeOfWork.replace(/\n/g, '<br>') + '</p>';
-  }
-
-  var html = '<!DOCTYPE html><html><head><meta charset="utf-8">';
-  html += '<title>Proposal for ' + (est.community || '') + ' - ' + (est.title || '') + '</title>';
-  html += '<style>';
-  html += 'body{font-family:Arial,Helvetica,sans-serif;font-size:11pt;color:#222;max-width:800px;margin:0 auto;padding:40px 50px;line-height:1.5;}';
-  html += '.header{text-align:center;margin-bottom:20px;}';
-  html += '.logo-text{font-size:32pt;font-weight:900;color:#1a1a2e;letter-spacing:3px;margin:0;}';
-  html += '.logo-sub{font-size:9pt;letter-spacing:8px;color:#555;margin:0 0 10px;}';
-  html += '.addr-line{text-align:center;font-size:9pt;color:#555;margin:8px 0 20px;}';
-  html += '.info-row{display:flex;justify-content:space-between;margin:10px 0;}';
-  html += '.info-left{text-align:left;} .info-right{text-align:right;}';
-  html += '.proposal-title{font-size:15pt;font-weight:700;margin:24px 0 16px;}';
-  html += '.greeting{font-weight:700;margin:16px 0;}';
-  html += 'hr{border:none;border-top:1.5px solid #ccc;margin:24px 0;}';
-  html += '.scope-heading{font-size:13pt;font-weight:700;margin:20px 0 8px;}';
-  html += '.total-price{text-align:right;font-size:15pt;font-weight:700;margin:30px 0 20px;}';
-  html += '.assumptions-title{font-weight:700;font-style:italic;text-decoration:underline;margin:20px 0 10px;}';
-  html += '.assumptions ol{padding-left:20px;} .assumptions li{margin:8px 0;font-size:10pt;}';
-  html += '.assumptions li ul{list-style:disc;margin:6px 0;} .assumptions li ul li{margin:4px 0;}';
-  html += '.sig-block{margin-top:40px;font-size:10pt;}';
-  html += '.sig-line{display:flex;align-items:center;margin:20px 0;} .sig-label{font-weight:700;width:100px;} .sig-rule{flex:1;border-bottom:1px solid #000;margin-left:10px;}';
-  html += '@media print{body{padding:20px 40px;} @page{margin:0.75in;}}';
-  html += '</style></head><body>';
-
-  // Logo header
-  html += '<div class="header">';
-  html += '<p class="logo-text">AGX</p>';
-  html += '<p class="logo-sub">A G &nbsp; E X T E R I O R S</p>';
-  html += '</div>';
-  html += '<p class="addr-line">13191 56th Court, Ste 102 &nbsp;&middot;&nbsp; Clearwater, FL 33760-4030 &nbsp;&middot;&nbsp; Phone: 813-725-5233</p>';
-  
-  // Client info row
-  html += '<div class="info-row"><div class="info-left">';
-  html += '<p style="margin:2px 0;">' + (est.client || '') + (est.community ? ' - ' + est.community : '') + '</p>';
-  if (est.managerPhone) html += '<p style="margin:2px 0;">Phone: ' + est.managerPhone + '</p>';
-  html += '<br>';
-  if (est.billingAddr) html += '<p style="margin:2px 0;">' + est.billingAddr.replace(/\n/g, '<br>') + '</p>';
-  html += '</div><div class="info-right">';
-  if (est.propertyAddr) {
-    html += '<p style="margin:2px 0;">Job Address:</p>';
-    html += '<p style="margin:2px 0;">' + est.propertyAddr.replace(/\n/g, '<br>') + '</p>';
-  }
-  html += '<p style="margin:8px 0 2px;"><strong>Print Date:</strong> &nbsp; ' + dateStr + '</p>';
-  html += '</div></div>';
-  
-  // Proposal title
-  html += '<p class="proposal-title">Proposal for ' + (est.community || '') + ' - ' + (est.title || '') + '</p>';
-  
-  // Greeting
-  html += '<p class="greeting">' + greeting + '</p>';
-  
-  // Intro paragraph with bold placeholders
-  var issueText = est.title || 'the requested work';
-  var communityText = est.community || 'your';
-  html += '<p>AG Exteriors is pleased to provide you with a proposal to complete the <strong>' + issueText + '</strong> needed by the <strong>' + communityText + '</strong> community.</p>';
-  
-  // Boilerplate
-  html += '<p>We proudly specialize in a wide range of exterior services, including roofing, siding, painting, deck rebuilding, and more\u2014delivering each with care and attention to detail. Backed by our leadership team with extensive experience in construction, development, and property management. AG Exteriors is committed to bringing a thoughtful, professional approach to every project. With this foundation, we\u2019re committed to providing high-quality work and dependable service on every project.</p>';
-
-  // Scope of Work
-  html += '<hr>';
-  html += '<p class="scope-heading">Scope of Work</p>';
-  html += scopeIntro;
-  html += scopeHtml;
-  
-  // Total Price
-  html += '<hr>';
-  html += '<p class="total-price">Total Price: &nbsp; ' + priceStr + '</p>';
-  
-  // Assumptions
-  html += '<div class="assumptions">';
-  html += '<p class="assumptions-title">Assumptions, Clarifications and Exclusions:</p>';
-  html += '<ol>';
-  html += '<li>This proposal may be withdrawn by AG Exteriors if not accepted within 30 days.</li>';
-  html += '<li>Pricing assumes unfettered access to the property during the project.</li>';
-  html += '<li>If AG Exteriors encounters unforeseen conditions that differ from those anticipated or ordinarily found to exist in the construction activities being provided, AG Exteriors retains the right to make an equitable adjustment to the pricing.</li>';
-  html += '<li>Client will provide electrical power and water at no charge.</li>';
-  html += '<li>Client will provide a location for dumpsters on site for trash and material disposal. AG Exteriors will provide the dumpsters for the entire job. However, if we are required to switch out dumpsters due to residents\u2019 use, AG Exteriors reserves the right to charge the Client accordingly.</li>';
-  html += '<li>Mold/Asbestos/Lead Paint: Any detection or remediation of mold, asbestos, and lead paint is specifically excluded from this proposal. Any costs associated with the detection and/or removal of mold, mold spores, asbestos, and lead paint are the responsibility of others.</li>';
-  html += '<li>Damage to the physical property that occurred prior to AG Exteriors\u2019 work not specifically called out in the scope of work is excluded.</li>';
-  html += '<li>Proposal excludes any engineering and/or permit fees. If any of these are required to complete the project, AG Exteriors will charge the client the cost of these fees plus an additional 10%.</li>';
-  html += '<li>Client acknowledges that markets are experiencing significant, industry-wide economic fluctuations, impacting the price of materials to be supplied in conjunction with the agreement. Client acknowledges that materials pricing has the potential to significantly increase between the time of the issuance of the underlying bid and the date of materials purchase for the Project. If the cost of any given material increases above the amount shown in the bid proposal for such material, this quote shall be adjusted upwards, and the Client will be responsible for the increased cost of the materials.';
-  html += '<ul><li>In order to mitigate the potential for material-based price increases, the Client has the option to pay for materials in advance of the job. Material costs are guaranteed if materials are paid for at the time the proposal is accepted.</li>';
-  html += '<li>Any prepayment of materials will be in addition to the normal deposit of 35%.</li></ul></li>';
-  html += '</ol></div>';
-
-  // Signature block
-  html += '<div class="sig-block">';
-  html += '<p>I confirm that my action here represents my electronic signature and is binding.</p>';
-  html += '<div class="sig-line"><span class="sig-label">Signature:</span><span class="sig-rule"></span></div>';
-  html += '<div class="sig-line"><span class="sig-label">Date:</span><span class="sig-rule"></span></div>';
-  html += '<div class="sig-line"><span class="sig-label">Print Name:</span><span class="sig-rule"></span></div>';
-  html += '</div>';
-  
-  html += '</body></html>';
-  
-  // Open in new window
-  var win = window.open('', '_blank');
-  if (win) {
-    win.document.write(html);
-    win.document.close();
-  } else {
-    alert('Pop-up blocked. Please allow pop-ups for this site.');
-  }
+function getEstimateData(estId) {
+  const estimates = JSON.parse(localStorage.getItem('agx-estimates') || '[]');
+  return estimates.find(e => e.id === estId);
 }
 
+function getEstimateLines(estId) {
+  const lines = JSON.parse(localStorage.getItem('agx-estimate-lines') || '[]');
+  return lines.filter(l => l.estimateId === estId);
+}
+
+function groupLinesBySection(lines) {
+  const grouped = {};
+  lines.forEach(line => {
+    const section = line.section || 'General';
+    if (!grouped[section]) {
+      grouped[section] = [];
+    }
+    grouped[section].push(line);
+  });
+  return grouped;
+}
+
+function formatDateShort(date) {
+  if (!date) return '';
+  const d = new Date(date);
+  return (d.getMonth() + 1).toString().padStart(2, '0') + '/' +
+         d.getDate().toString().padStart(2, '0') + '/' +
+         d.getFullYear();
+}
+
+function formatDateLong(date) {
+  if (!date) return '';
+  const d = new Date(date);
+  const months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  return months[d.getMonth()] + ' ' + d.getDate() + ', ' + d.getFullYear();
+}
+
+function extractIssueFromTitle(title, community) {
+  if (!title) return 'Work';
+  // If community is in title, remove it
+  if (community && title.includes(community)) {
+    return title.replace(community + ' - ', '').replace(community, '').trim();
+  }
+  return title;
+}
+
+// ============================================================================
+// CELL STYLING & FORMATTING HELPERS
+// ============================================================================
+
+const COLORS = {
+  agxGreen: '#1B8541',
+  agxDarkBlue: '#1B3A5C',
+  lightGreen: '#D5E8D9',
+  veryLightGreen: '#E8F5E9',
+  white: '#FFFFFF',
+  grayText: '#444444'
+};
+
+function cellValue(v, type = 's') {
+  if (type === 'n') return { t: 'n', v: v };
+  if (type === 'f') return { t: 'n', v: 0, f: v };
+  return { t: 's', v: v || '' };
+}
+
+// ============================================================================
+// EXPORT ESTIMATE FUNCTION
+// ============================================================================
+
+function exportEstimate(estId) {
+  const estimate = getEstimateData(estId);
+  if (!estimate) {
+    alert('Estimate not found');
+    return;
+  }
+
+  const lines = getEstimateLines(estId);
+  const grouped = groupLinesBySection(lines);
+  const sections = Object.keys(grouped);
+
+  // Create workbook and worksheet
+  const wb = XLSX.utils.book_new();
+  const ws = {};
+
+  let row = 1;
+
+  // ========== ROW 1: Title Header ==========
+  ws['A1'] = cellValue('AGX CENTRAL FLORIDA', 's');
+  const merges = [];
+  merges.push('A1:G1');
+  // Note: styling not applied in community edition
+
+  // ========== ROW 2: Subtitle ==========
+  row = 2;
+  ws['A2'] = cellValue('Lead Report & Preliminary Estimate', 's');
+  merges.push('A2:G2');
+
+  // ========== ROW 3: Project Name ==========
+  row = 3;
+  const projectTitle = estimate.community && estimate.title.includes(estimate.community)
+    ? estimate.title.replace(estimate.community + ' - ', '').replace(' - ' + estimate.community, '')
+    : estimate.title;
+  const row3Text = `${estimate.client || ''} - ${estimate.community || ''} - ${projectTitle}`;
+  ws['A3'] = cellValue(row3Text, 's');
+  merges.push('A3:G3');
+
+  // ========== ROWS 4-5: Empty ==========
+  row = 4;
+
+  // ========== ROW 6: Lead Information Header ==========
+  row = 6;
+  ws['A6'] = cellValue('Lead Information', 's');
+  merges.push('A6:G6');
+
+  // ========== ROWS 7-13: Lead Information Fields ==========
+  const leadFields = [
+    { row: 7, label: 'Title', value: estimate.title },
+    { row: 8, label: 'Project Type', value: estimate.jobType },
+    { row: 9, label: 'Status', value: estimate.status || 'Open' },
+    { row: 10, label: 'Created Date', value: formatDateLong(estimate.created) },
+    { row: 11, label: 'Salesperson', value: 'Scott Ryan' },
+    { row: 12, label: 'Market', value: 'Tampa' },
+    { row: 13, label: 'Estimate ID', value: estimate.id || '—' }
+  ];
+
+  leadFields.forEach(field => {
+    ws['A' + field.row] = cellValue(field.label, 's');
+    merges.push('A' + field.row + ':C' + field.row);
+    ws['D' + field.row] = cellValue(field.value, 's');
+    merges.push('D' + field.row + ':G' + field.row);
+  });
+
+  // ========== ROW 14: Empty ==========
+  row = 14;
+
+  // ========== ROW 15: Property Information Header ==========
+  row = 15;
+  ws['A15'] = cellValue('Property Information', 's');
+  merges.push('A15:G15');
+
+  // ========== ROWS 16-24: Property Information Fields ==========
+  const propFields = [
+    { row: 16, label: 'Community', value: estimate.community },
+    { row: 17, label: 'Property Address', value: estimate.propertyAddr },
+    { row: 18, label: 'Management Co.', value: estimate.client },
+    { row: 19, label: 'CAM', value: estimate.managerName },
+    { row: 20, label: 'CAM Email', value: estimate.managerEmail },
+    { row: 21, label: 'On-Site Contact', value: '—' },
+    { row: 22, label: 'POC Phone', value: estimate.managerPhone || '—' },
+    { row: 23, label: 'POC Email', value: '—' },
+    { row: 24, label: 'Additional POC', value: '—' }
+  ];
+
+  propFields.forEach(field => {
+    ws['A' + field.row] = cellValue(field.label, 's');
+    merges.push('A' + field.row + ':C' + field.row);
+    ws['D' + field.row] = cellValue(field.value, 's');
+    merges.push('D' + field.row + ':G' + field.row);
+  });
+
+  // ========== ROW 25: Empty ==========
+  row = 25;
+
+  // ========== ROW 26: Scope of Work Header ==========
+  row = 26;
+  ws['A26'] = cellValue('Scope of Work', 's');
+  merges.push('A26:G26');
+
+  // ========== ROW 27: Scope of Work Content ==========
+  row = 27;
+  ws['A27'] = cellValue(estimate.scopeOfWork || '—', 's');
+  merges.push('A27:G27');
+
+  // ========== ROWS 28-29: Empty ==========
+  row = 28;
+
+  // ========== SCOPES SECTION ==========
+  const scopeTotals = [];
+  let scopeIndex = 1;
+
+  sections.forEach(sectionName => {
+    const sectionLines = grouped[sectionName];
+
+    // Scope header row
+    row++;
+    const scopeHeaderText = `SCOPE ${scopeIndex}: ${sectionName.toUpperCase()}`;
+    ws['A' + row] = cellValue(scopeHeaderText, 's');
+    merges.push('A' + row + ':G' + row);
+    const scopeHeaderRow = row;
+
+    row++;
+    // Column headers: A="Item #", B="Description", C="Qty", D="Unit", E="Unit Cost", F="Markup %", G="Total"
+    ws['A' + row] = cellValue('Item #', 's');
+    ws['B' + row] = cellValue('Description', 's');
+    ws['C' + row] = cellValue('Qty', 's');
+    ws['D' + row] = cellValue('Unit', 's');
+    ws['E' + row] = cellValue('Unit Cost', 's');
+    ws['F' + row] = cellValue('Markup %', 's');
+    ws['G' + row] = cellValue('Total', 's');
+    const columnHeaderRow = row;
+
+    // Line items
+    const lineStartRow = row + 1;
+    let lineIndex = 1;
+    sectionLines.forEach(line => {
+      row++;
+      const itemNum = `${scopeIndex}.${lineIndex}`;
+      ws['A' + row] = cellValue(itemNum, 's');
+      ws['B' + row] = cellValue(line.description, 's');
+      ws['C' + row] = cellValue(line.qty, 'n');
+      ws['D' + row] = cellValue(line.unit, 's');
+      ws['E' + row] = cellValue(line.unitCost, 'n');
+      ws['F' + row] = cellValue(line.markup / 100, 'n');
+      // Formula: C*E*(1+F)
+      ws['G' + row] = cellValue(`C${row}*E${row}*(1+F${row})`, 'f');
+      lineIndex++;
+    });
+    const lineEndRow = row;
+
+    // Subtotal Base row
+    row++;
+    merges.push('A' + row + ':E' + row);
+    ws['F' + row] = cellValue(`${sectionName} Base:`, 's');
+    // Base = sum of (qty * unitCost) for all lines
+    let baseFormula = '';
+    for (let r = lineStartRow; r <= lineEndRow; r++) {
+      baseFormula += (baseFormula ? '+' : '') + `C${r}*E${r}`;
+    }
+    ws['G' + row] = cellValue(baseFormula || '0', 'f');
+    const subtotalBaseRow = row;
+
+    // Subtotal Client row
+    row++;
+    merges.push('A' + row + ':E' + row);
+    ws['F' + row] = cellValue(`${sectionName} Client:`, 's');
+    ws['G' + row] = cellValue(`SUM(G${lineStartRow}:G${lineEndRow})`, 'f');
+
+    scopeTotals.push({
+      scopeIndex: scopeIndex,
+      sectionName: sectionName,
+      lineStartRow: lineStartRow,
+      lineEndRow: lineEndRow,
+      subtotalClientRow: row
+    });
+
+    row += 2; // 2 empty rows between scopes
+    scopeIndex++;
+  });
+
+  // ========== PROJECT SUMMARY SECTION ==========
+  row++;
+  const summaryHeaderRow = row;
+  ws['A' + row] = cellValue('PROJECT SUMMARY', 's');
+  merges.push('A' + row + ':G' + row);
+
+  row++;
+  const summaryColHeaderRow = row;
+  ws['A' + row] = cellValue('Scope', 's');
+  merges.push('A' + row + ':E' + row);
+  ws['F' + row] = cellValue('Base Cost', 's');
+  ws['G' + row] = cellValue('Client Price', 's');
+
+  row++;
+  let grandTotalBaseFormula = '';
+  let grandTotalClientFormula = '';
+  scopeTotals.forEach((scope, idx) => {
+    ws['A' + row] = cellValue(`Scope ${scope.scopeIndex}: ${scope.sectionName}`, 's');
+    merges.push('A' + row + ':E' + row);
+    // Base cost formula
+    let baseCostFormula = '';
+    for (let r = scope.lineStartRow; r <= scope.lineEndRow; r++) {
+      baseCostFormula += (baseCostFormula ? '+' : '') + `C${r}*E${r}`;
+    }
+    ws['F' + row] = cellValue(baseCostFormula || '0', 'f');
+    ws['G' + row] = cellValue(`G${scope.subtotalClientRow}`, 'f');
+
+    grandTotalBaseFormula += (grandTotalBaseFormula ? '+' : '') + `F${row}`;
+    grandTotalClientFormula += (grandTotalClientFormula ? '+' : '') + `G${row}`;
+
+    row++;
+  });
+
+  // Grand total row
+  ws['A' + row] = cellValue('GRAND TOTAL', 's');
+  merges.push('A' + row + ':E' + row);
+  ws['F' + row] = cellValue(grandTotalBaseFormula || '0', 'f');
+  ws['G' + row] = cellValue(grandTotalClientFormula || '0', 'f');
+
+  // ========== SET WORKSHEET PROPERTIES ==========
+  ws['!ref'] = `A1:G${row}`;
+  ws['!merges'] = merges.map(m => XLSX.utils.decode_range(m));
+  ws['!cols'] = [
+    { wch: 8 },   // A
+    { wch: 45 },  // B
+    { wch: 8 },   // C
+    { wch: 8 },   // D
+    { wch: 14 },  // E
+    { wch: 10 },  // F
+    { wch: 16 }   // G
+  ];
+
+  // ========== CREATE WORKBOOK AND DOWNLOAD ==========
+  XLSX.utils.book_append_sheet(wb, ws, 'Lead Report');
+  const filename = `${estimate.title} - Lead Report.xlsx`;
+  XLSX.writeFile(wb, filename);
+}
+
+// ============================================================================
+// DOWNLOAD BLANK TEMPLATE FUNCTION
+// ============================================================================
 
 function downloadBlankTemplate() {
-  if (typeof XLSX === 'undefined') { alert('SheetJS still loading, try again in a moment.'); return; }
-  
-  var wb = XLSX.utils.book_new();
-  var rows = [];
-  
-  // Header
-  rows.push(['AGX CENTRAL FLORIDA']);
-  rows.push(['Lead Report & Preliminary Estimate']);
-  rows.push(['']);
-  rows.push(['']);
-  
-  // Lead Information
-  rows.push(['LEAD INFORMATION']);
-  rows.push(['Title:', '', '', '']);
-  rows.push(['Project Type:', '', '', '']);
-  rows.push(['Community:', '', '', '']);
-  rows.push(['Lead Source:', '', '', '']);
-  rows.push(['']);
-  
-  // Property Information
-  rows.push(['PROPERTY INFORMATION']);
-  rows.push(['Property Address:', '', '', '']);
-  rows.push(['Billing Address:', '', '', '']);
-  rows.push(['Manager Name:', '', '', '']);
-  rows.push(['Manager Email:', '', '', '']);
-  rows.push(['Manager Phone:', '', '', '']);
-  rows.push(['']);
-  
-  // Scope of Work
-  rows.push(['SCOPE OF WORK']);
-  rows.push(['']);
-  rows.push(['']);
-  
-  // Line Items Header
-  rows.push(['SCOPE / LINE ITEMS']);
-  rows.push(['Item #', 'Description', 'Qty', 'Unit', 'Unit Cost', 'Markup %', 'Base Cost', 'Client Cost']);
-  
-  // Example section with blank rows
-  rows.push(['SECTION: General Work']);
-  rows.push(['1.1', '', '', '', '', '', '', '']);
-  rows.push(['1.2', '', '', '', '', '', '', '']);
-  rows.push(['1.3', '', '', '', '', '', '', '']);
-  rows.push(['', '', '', '', '', 'Subtotal (Base):', '', '']);
-  rows.push(['', '', '', '', '', 'Subtotal (Client):', '', '']);
-  rows.push(['']);
-  
-  // Second blank section
-  rows.push(['SECTION: Additional Work']);
-  rows.push(['2.1', '', '', '', '', '', '', '']);
-  rows.push(['2.2', '', '', '', '', '', '', '']);
-  rows.push(['2.3', '', '', '', '', '', '', '']);
-  rows.push(['', '', '', '', '', 'Subtotal (Base):', '', '']);
-  rows.push(['', '', '', '', '', 'Subtotal (Client):', '', '']);
-  rows.push(['']);
-  
-  // Grand totals
-  rows.push(['', '', '', '', '', 'Grand Total (Base):', '', '']);
-  rows.push(['', '', '', '', '', 'Grand Total (Client):', '', '']);
-  
-  var ws = XLSX.utils.aoa_to_sheet(rows);
-  
-  // Column widths
+  const wb = XLSX.utils.book_new();
+  const ws = {};
+  const merges = [];
+
+  let row = 1;
+
+  // ========== ROW 1: Title Header ==========
+  ws['A1'] = cellValue('AGX CENTRAL FLORIDA', 's');
+  merges.push('A1:G1');
+
+  // ========== ROW 2: Subtitle ==========
+  row = 2;
+  ws['A2'] = cellValue('Lead Report & Preliminary Estimate', 's');
+  merges.push('A2:G2');
+
+  // ========== ROW 3: Project Name Placeholder ==========
+  row = 3;
+  ws['A3'] = cellValue('[Client] - [Community] - [Title]', 's');
+  merges.push('A3:G3');
+
+  // ========== ROWS 4-5: Empty ==========
+  row = 4;
+
+  // ========== ROW 6: Lead Information Header ==========
+  row = 6;
+  ws['A6'] = cellValue('Lead Information', 's');
+  merges.push('A6:G6');
+
+  // ========== ROWS 7-13: Lead Information Fields ==========
+  const leadFields = [
+    { row: 7, label: 'Title', value: '[Project Title]' },
+    { row: 8, label: 'Project Type', value: '[Type]' },
+    { row: 9, label: 'Status', value: 'Open' },
+    { row: 10, label: 'Created Date', value: '' },
+    { row: 11, label: 'Salesperson', value: 'Scott Ryan' },
+    { row: 12, label: 'Market', value: 'Tampa' },
+    { row: 13, label: 'Estimate ID', value: '—' }
+  ];
+
+  leadFields.forEach(field => {
+    ws['A' + field.row] = cellValue(field.label, 's');
+    merges.push('A' + field.row + ':C' + field.row);
+    ws['D' + field.row] = cellValue(field.value, 's');
+    merges.push('D' + field.row + ':G' + field.row);
+  });
+
+  // ========== ROW 14: Empty ==========
+  row = 14;
+
+  // ========== ROW 15: Property Information Header ==========
+  row = 15;
+  ws['A15'] = cellValue('Property Information', 's');
+  merges.push('A15:G15');
+
+  // ========== ROWS 16-24: Property Information Fields ==========
+  const propFields = [
+    { row: 16, label: 'Community', value: '' },
+    { row: 17, label: 'Property Address', value: '' },
+    { row: 18, label: 'Management Co.', value: '' },
+    { row: 19, label: 'CAM', value: '' },
+    { row: 20, label: 'CAM Email', value: '' },
+    { row: 21, label: 'On-Site Contact', value: '—' },
+    { row: 22, label: 'POC Phone', value: '' },
+    { row: 23, label: 'POC Email', value: '—' },
+    { row: 24, label: 'Additional POC', value: '—' }
+  ];
+
+  propFields.forEach(field => {
+    ws['A' + field.row] = cellValue(field.label, 's');
+    merges.push('A' + field.row + ':C' + field.row);
+    ws['D' + field.row] = cellValue(field.value, 's');
+    merges.push('D' + field.row + ':G' + field.row);
+  });
+
+  // ========== ROW 25: Empty ==========
+  row = 25;
+
+  // ========== ROW 26: Scope of Work Header ==========
+  row = 26;
+  ws['A26'] = cellValue('Scope of Work', 's');
+  merges.push('A26:G26');
+
+  // ========== ROW 27: Scope of Work Content ==========
+  row = 27;
+  ws['A27'] = cellValue('', 's');
+  merges.push('A27:G27');
+
+  // ========== ROWS 28-29: Empty ==========
+  row = 28;
+
+  // ========== SAMPLE SCOPE 1  ==========
+  row++;
+  ws['A' + row] = cellValue('SCOPE 1: [SCOPE NAME]', 's');
+  merges.push('A' + row + ':G' + row);
+  const scopeHeaderRow = row;
+
+  row++;
+  // Column headers
+  ws['A' + row] = cellValue('Item #', 's');
+  ws['B' + row] = cellValue('Description', 's');
+  ws['C' + row] = cellValue('Qty', 's');
+  ws['D' + row] = cellValue('Unit', 's');
+  ws['E' + row] = cellValue('Unit Cost', 's');
+  ws['F' + row] = cellValue('Markup %', 's');
+  ws['G' + row] = cellValue('Total', 's');
+  const columnHeaderRow = row;
+
+  // 5 sample line items
+  const lineStartRow = row + 1;
+  for (let i = 1; i <= 5; i++) {
+    row++;
+    ws['A' + row] = cellValue(`1.${i}`, 's');
+    ws['B' + row] = cellValue('', 's');
+    ws['C' + row] = cellValue('', 'n');
+    ws['D' + row] = cellValue('', 's');
+    ws['E' + row] = cellValue('', 'n');
+    ws['F' + row] = cellValue('', 'n');
+    ws['G' + row] = cellValue(`C${row}*E${row}*(1+F${row})`, 'f');
+  }
+  const lineEndRow = row;
+
+  // Subtotal Base row
+  row++;
+  merges.push('A' + row + ':E' + row);
+  ws['F' + row] = cellValue('[SCOPE NAME] Base:', 's');
+  let baseFormula = '';
+  for (let r = lineStartRow; r <= lineEndRow; r++) {
+    baseFormula += (baseFormula ? '+' : '') + `C${r}*E${r}`;
+  }
+  ws['G' + row] = cellValue(baseFormula || '0', 'f');
+  const subtotalBaseRow = row;
+
+  // Subtotal Client row
+  row++;
+  merges.push('A' + row + ':E' + row);
+  ws['F' + row] = cellValuee('[SCOPE NAME] Client:', 's');
+  ws['G' + row] = cellValue(`SUM(G${lineStartRow}:G${lineEndRow})`, 'f');
+  const subtotalClientRow = row;
+
+  row += 2;
+
+  // ========== PROJECT SUMMARY SECTION ==========
+  row++;
+  ws['A' + row] = cellValue('PROJECT SUMMARY', 's');
+  merges.push('A' + row + ':G' + row);
+
+  row++;
+  ws['A' + row] = cellValue('Scope', 's');
+  merges.push('A' + row + ':E' + row);
+  ws['F' + row] = cellValue('Base Cost', 's');
+  ws['G' + row] = cellValue('Client Price', 's');
+
+  row++;
+  ws['A' + row] = cellValue('Scope 1: [SCOPE NAME]', 's');
+  merges.push('A' + row + ':E' + row);
+  let baseCostFormula = '';
+  for (let r = lineStartRow; r <= lineEndRow; r++) {
+    baseCostFormula += (baseCostFormula ? '+' : '') + `C${r}*E${r}`;
+  }
+  ws['F' + row] = cellValue(baseCostFormula || '0', 'f');
+  ws['G' + row] = cellValue(`G${subtotalClientRow}`, 'f');
+  const summaryRowNum = row;
+
+  row++;
+  ws['A' + row] = cellValue('GRAND TOTAL', 's');
+  merges.push('A' + row + ':E' + row);
+  ws['F' + row] = cellValue(`F${summaryRowNum}`, 'f');
+  ws['G' + row] = cellValue(`G${summaryRowNum}`, 'f');
+
+  // ========== SET WORKSHEET PROPERTIES ==========
+  ws['!ref'] = `A1:G${row}`;
+  ws['!merges'] = merges.map(m => XLSX.utils.decode_range(m));
   ws['!cols'] = [
-    {wch: 12}, {wch: 40}, {wch: 8}, {wch: 10}, {wch: 12}, {wch: 18}, {wch: 14}, {wch: 14}
+    { wch: 8 },   // A
+    { wch: 45 },  // B
+    { wch: 8 },   // C
+    { wch: 8 },   // D
+    { wch: 14 },  // E
+    { wch: 10 },  // F
+    { wch: 16 }   // G
   ];
-  
-  // Merge header cells
-  ws['!merges'] = [
-    {s:{r:0,c:0}, e:{r:0,c:7}},
-    {s:{r:1,c:0}, e:{r:1,c:7}},
-    {s:{r:4,c:0}, e:{r:4,c:7}},
-    {s:{r:10,c:0}, e:{r:10,c:7}},
-    {s:{r:17,c:0}, e:{r:17,c:7}},
-    {s:{r:20,c:0}, e:{r:20,c:7}},
-  ];
-  
+
   XLSX.utils.book_append_sheet(wb, ws, 'Lead Report');
-  XLSX.writeFile(wb, 'AGX_Blank_Lead_Report_Template.xlsx');
+  XLSX.writeFile(wb, 'AGX_Blank_Template.xlsx');
+}
+
+// ============================================================================
+// GENERATE PROPOSAL FUNCTION
+// ============================================================================
+
+function generateProposal(estId) {
+  const estimate = getEstimateData(estId);
+  if (!estimate) {
+    alert('Estimate not found');
+    return;
+  }
+
+  const lines = getEstimateLines(estId);
+  const grouped = groupLinesBySection(lines);
+
+  // Extract issue from title
+  const issue = extractIssueFromTitle(estimate.title, estimate.community);
+  const nickName = estimate.nickName || estimate.client;
+  const community = estimate.community || 'the property';
+
+  // Calculate totals
+  let grandTotal = 0;
+  lines.forEach(line => {
+    const lineTotal = line.qty * line.unitCost * (1 + line.markup / 100);
+    grandTotal += lineTotal;
+  });
+
+  // Build HTML proposal
+  const html = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Proposal - ${estimate.title}</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      font-family: Arial, sans-serif;
+      color: #333;
+      line-height: 1.6;
+    }
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 20px;
+      background: white;
+    }
+    .header {
+      background-color: #1B8541;
+      color: white;
+      padding: 30px;
+      text-align: center;
+      margin-bottom: 300p;
+    }
+    .header h1 {
+      font-size: 28px;
+      margin: 0;
+      font-weight: bold;
+    }
+    .date-line {
+      text-align: right;
+      margin-bottom: 20px;
+      color: #666;
+      font-size: 14px;
+    }
+    .intro {
+      margin-bottom: 300p;
+      text-align: justify;
+    }
+    .intro p {
+      margin-bottom: 10px;
+    }
+    .scope-section {
+      margin-bottom: 300p;
+      page-break-inside: avoid;
+    }
+    .scope-title {
+      font-size: 16px;
+      font-weight: bold;
+      color: #1B3A5C;
+      margin-bottom: 10px;
+      border-bottom: 2px solid #1B8541;
+      padding-bottom: 5px;
+    }
+    .scope-description {
+      margin-bottom: 15px;
+      color: #666;
+      font-size: 14px;
+    }
+    .line-items {
+      margin-left: 20px;
+      margin-bottom: 15px;
+    }
+    .line-item {
+      margin-bottom: 8px;
+      font-size: 14px;
+    }
+    .line-item:before {
+      content: "• ";
+      color: #1B8541;
+      font-weight: bold;
+      margin-right: 8px;
+    }
+    .total-section {
+      margin-bottom: 40px;
+      page-break-inside: avoid;
+    }
+    .total-price {
+      background-color: #E8F5E9;
+      padding: 20px;
+      border-left: 4px solid #1B8541;
+      text-align: right;
+    }
+    .total-price p {
+      font-size: 14px;
+      margin-bottom: 10px;
+    }
+    .total-price .amount {
+      font-size: 32px;
+      font-weight: bold;
+      color: #1B8541;
+    }
+    .assumptions {
+      margin-bottom: 300p;
+      page-break-inside: avoid;
+    }
+    .assumptions h3 {
+      font-size: 16px;
+      font-weight: bold;
+      color: #1B3A5C;
+      margin-bottom: 15px;
+      border-bottom: 2px solid #1B8541;
+      padding-bottom: 5px;
+    }
+    .assumption-item {
+      margin-left: 20px;
+      margin-bottom: 12px;
+      font-size: 13px;
+      text-align: justify;
+    }
+    .assumption-item:before {
+      content: counter(assumption) ". ";
+      counter-increment: assumption;
+      font-weight: bold;
+      color: #1B8541;
+      margin-right: 8px;
+    }
+    .signature-block {
+      margin-top: 50px;
+      display: flex;
+      justify-content: space-between;
+      page-break-inside: avoid;
+    }
+    .sig-column {
+      width: 45%;
+      border-top: 1px solid #333;
+      padding-top: 10px;
+      text-align: center;
+      font-size: 12px;
+    }
+    .sig-label {
+      font-weight: bold;
+      margin-top: 5px;
+    }
+    .date-line-sig {
+      margin-top: 20px;
+      font-size: 12px;
+    }
+    .print-button {
+      margin-bottom: 20px;
+      text-align: center;
+    }
+    .print-button button {
+      background-color: #1B8541;
+      color: white;
+      padding: 10px 30px;
+      border: none;
+      font-size: 16px;
+      cursor: pointer;
+      border-radius: 4px;
+    }
+    .print-button button:hover {
+      background-color: #156e35;
+    }
+    @media print {
+      .print-button {
+        display: none;
+      }
+      body {
+        padding: 0;
+      }
+      .container {
+        padding: 0;
+        max-width: 100%;
+      }
+    }
+    counter-reset: assumption;
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="print-button">
+      <button onclick="window.print()">Print Proposal</button>
+    </div>
+
+    <div class="header">
+      <h1>AGX CENTRAL FLORIDA</h1>
+    </div>
+
+    <div class="date-line">
+      Date: ${formatDateShort(new Date())}
+    </div>
+
+    <div class="intro">
+      <p>Dear <strong>${nickName}</strong>,</p>
+      <p>AGX Central Florida is pleased to provide the following proposal for <strong>${issue}</strong> at <strong>${community}</strong>.</p>
+    </div>
+
+    ${Object.entries(grouped).map((entry, idx) => {
+      const [sectionName, sectionLines] = entry;
+      const scopeLetter = String.fromCharCode(65 + idx); // A, B, C, etc.
+      const scopeNum = idx + 1;
+      return `
+    <div class="scope-section">
+      <div class="scope-title">SCOPE ${scopeLetter}${scopeNum}: ${sectionName}</div>
+      <div class="line-items">
+        ${sectionLines.map(line => `
+        <div class="line-item">${line.description}</div>
+        `).join('')}
+      </div>
+    </div>
+      `;
+    }).join('')}
+
+    <div class="total-section">
+      <div class="total-price">
+        <p>TOTAL PRICE:</p>
+        <div class="amount">$${grandTotal.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</div>
+      </div>
+    </div>
+
+    <div class="assumptions">
+      <h3>Assumptions</h3>
+      <div class="assumption-item">All work to be completed during normal business hours</div>
+      <div class="assumption-item">Price is valid for 30 days</div>
+      <div class="assumption-item">Payment terms: 50% upon acceptance, 50% upon completion</div>
+      <div class="assumption-item">Any additional work beyond the agreed scope wi)l be quoted separately</div>
+      <div class="assumption-item">Client to provide reasonable access to work areas</div>
+      <div class="assumption-item">AGX is not responsible for pre-existing conditions not included in scope</div>
+      <div class="assumption-item">Permits, if required, are the responsibility of the client unless otherwise noted</div>
+      <div class="assumption-item">Material colors and styles to match existing as closely as possible</div>
+      <div class="assumption-item">Warranty: 1-year workmanship warranty from date of completion</div>
+    </div>
+
+    <div class="signature-block">
+      <div class="sig-column">
+        <div style="height: 40px;"></div>
+        <div class="sig-label">Client Signature</div>
+        <div class="date-line-sig">Date: _________________</div>
+      </div>
+      <div class="sig-column">
+        <div style="height: 40px;"></div>
+        <div class="sig-label">AGX Representative</div>
+        <div class="date-line-sig">Date: _________________</div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
+  `;
+
+  const newWindow = window.open('', '_blank');
+  newWindow.document.write(html);
+  newWindow.document.close();
+  setTimeout(() => {
+    newWindow.print();
+  }, 500);
+}
+
+// ============================================================================
+// PARSE REPORT FUNCTION (Import)
+// ============================================================================
+
+function parseReport(data) {
+  // Convert worksheet to array of arrays
+  const aoa = XLSX.utils.sheet_to_json(data, { header: 1 });
+
+  // Verify it's an AGX report
+  let isAgxReport = false;
+  for (let i = 0; i < Math.min(5, aoa.length); i++) {
+    if (aoa[i][0] && aoa[i][0].toString().toUpperCase().includes('AGX')) {
+      isAgxReport = true;
+      break;
+    }
+  }
+
+  if (!isAgxReport) {
+    alert('This does not appear to be an AGX Lead Report');
+    return null;
+  }
+
+  // Helper to get field value from label
+  function getFieldValue(label) {
+    for (let i = 0; i < aoa.length; i++) {
+      const col0 = aoa[i][0] ? aoa[i][0].toString().trim() : '';
+      if (col0.toLowerCase() === label.toLowerCase()) {
+        return (aoa[i][3] || '').toString().trim();
+      }
+    }
+    return '';
+  }
+
+  // Parse basic fields
+  const estimate = {
+    id: generateId(),
+    title: getFieldValue('Title'),
+    jobType: getFieldValue('Project Type'),
+    status: getFieldValue('Status') || 'Open',
+    client: getFieldValue('Management Co.'),
+    community: getFieldValue('Community'),
+    propertyAddr: getFieldValue('Property Address'),
+    billingAddr: '',
+    managerName: getFieldValue('CAM'),
+    managerEmail: getFieldValue('CAM Email'),
+    managerPhone: getFieldValue('POC Phone'),
+    nickName: '',
+    defaultMarkup: 100,
+    scopeOfWork: '',
+    created: new Date().toISOString()
+  };
+
+  // Find and parse scope of work
+  for (let i = 0; i < aoa.length; i++) {
+    const col0 = (aoa[i][0] || '').toString().trim();
+    if (col0.toLowerCase() === 'scope of work' && i + 1 < aoa.length) {
+      estimate.scopeOfWork = (aoa[i + 1][0] || '').toString().trim();
+      break;
+    }
+  }
+
+  // Parse line items - look for rows matching pattern like "1.1", "2.3", etc.
+  const lines = [];
+  let currentSection = 'General';
+
+  for (let i = 0; i < aoa.length; i++) {
+    const col0 = (aoa[i][0] || '').toString().trim();
+
+    // Check for scope header pattern (SCOPE N: NAME)
+    const scopeHeaderMatch = col0.match(/^SCOPE\s+\d+:\s*(.+)$/i);
+    if (scopeHeaderMatch) {
+      currentSection = scopeHeaderMatch[1].trim();
+      continue;
+    }
+
+    // Check for line item pattern (e.g., "1.1", "2.3")
+    const lineMatch = col0.match(/^(\d+\.\d+)$/);
+    if (lineMatch) {
+      const lineItem = {
+        id: generateId(),
+        estimateId: estimate.id,
+        section: currentSection,
+        description: (aoa[i][1] || '').toString().trim(),
+        qty: parseFloat(aoa[i][2]) || 0,
+        unit: (aoa[i][3] || '').toString().trim(),
+        unitCost: parseFloat(aoa[i][4]) || 0,
+        markup: (parseFloat(aoa[i][5]) || 0) * 100 // Convert from ratio to percentage
+      };
+      lines.push(lineItem);
+    }
+  }
+
+  return { estimate, lines };
+}
+
+function generateId() {
+  return 'id-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+}
+
+// ============================================================================
+// IMPORT FILE PROCESSING
+// ============================================================================
+
+function processImportFile(file) {
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      const data = new Uint8Array(e.target.result);
+      const workbook = XLSX.read(data, { type: 'array' });
+      const firstSheetName = workbook.SheetNames[0];
+      const worksheet = workbook.Sheets[firstSheetName];
+
+      const parsed = parseReport(worksheet);
+      if (!parsed) return;
+
+      const { estimate, lines } = parsed;
+
+      // Save to localStorage
+      const estimates = JSON.parse(localStorage.getItem('agx-estimates') || '[]');
+      estimates.push(estimate);
+      localStorage.setItem('agx-estimates', JSON.stringify(estimates));
+
+      const estimateLines = JSON.parse(localStorage.getItem('agx-estimate-lines') || '[]');
+      estimateLines.push(...lines);
+      localStorage.setItem('agx-estimate-lines', JSON.stringify(estimateLines));
+
+      alert(`Estimate "${estimate.title}" imported successfully!`);
+
+      // Redirect to estimate editor if available
+      if (window.location.hash && window.location.hash.includes('estimates')) {
+        location.hash = `#estimate/${estimate.id}`;
+      } else {
+        location.reload();
+      }
+    } catch (err) {
+      console.error('Import error:', err);
+      alert('Error importing file: ' + err.message);
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+// ============================================================================
+// DOM INJECTION FUNCTIONS
+// ============================================================================
+
+let injectionTimeout;
+
+function injectImportBtn() {
+  // Look for estimates header or container
+  const header = document.querySelector('[data-role="estimates-header"]') ||
+                 document.querySelector('.estimates-header') ||
+                 document.querySelector('h1');
+
+  if (!header) {
+    if (!injectionTimeout) {
+      injectionTimeout = setTimeout(() => {
+        injectionTimeout = null;
+        injectImportBtn();
+      }, 500);
+    }
+    return;
+  }
+
+  // Check if already injected
+  if (document.getElementById('agx-import-btn')) {
+    return;
+  }
+
+  // Create and inject import button
+  const container = document.createElement('div');
+  container.style.display = 'inline-block';
+  container.style.marginLeft = '10px';
+
+  const button = document.createElement('buttdon');
+  button.id = 'agx-import-btn';
+  button.textContent = 'Import Lead Report';
+  button.style.cssText = `
+    background-color: #1B8541;
+    color: white;
+    padding: 8px 16px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+  `;
+
+  const fileInput = document.createElement('iinput');
+  fileInput.type = 'file';
+  fileInput.accept = '.xlsx';
+  fileInput.style.display = 'none';
+  fileInput.id = 'agx-import-input';
+
+  button.addEventListener('click', () => {
+    fileInput.click();
+  });
+
+  fileInput.addEventListener('change', (e) => {
+    if (e.target.files[0]) {
+      processImportFile(e.target.files[0]);
+    }
+  });
+
+  container.appendChild(button);
+  container.appendChild(fileInput);
+
+  header.parentNode.insertBefore(container, header.nextSibling);
 }
 
 function injectTemplateBtn() {
-  if (document.getElementById('agx-template-btn')) return;
-  var importBtn = document.getElementById('agx-import-btn');
-  if (!importBtn) return;
-  
-  var btn = document.createElement('button');
-  btn.id = 'agx-template-btn';
-  btn.textContent = '\u{1f4cb} Blank Template';
-  btn.style.cssText = 'margin-left:8px;padding:6px 14px;background:#2c5282;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:0.95em;';
-  btn.onclick = function() { downloadBlankTemplate(); };
-  importBtn.parentNode.insertBefore(btn, importBtn.nextSibling);
+  const header = document.querySelector('[data-role="estimates-header"]') ||
+                 document.querySelector('.estimates-header') ||
+                 document.querySelector('h1');
+
+  if (!header) {
+    if (!injectionTimeout) {
+      injectionTimeout = setTimeout(() => {
+        injectionTimeout = null;
+        injectTemplateBtn();
+      }, 500);
+    }
+    return;
+  }
+
+  // Check if already injected
+  if (document.getElementById('agx-template-btn')) {
+    return;
+  }
+
+  const container = document.createElement('div');
+  container.style.display = 'inline-block';
+  container.style.marginLeft = '10px';
+
+  const button = document.createElement('button');
+  button.id = 'agx-template-btn';
+  button.textContent = 'Download Blank Template';
+  button.style.cssText = `
+    background-color: white;
+    color: #1B3A5C;
+    padding: 8px 16px;
+    border: 2px solid #1B3A5C;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+  `;
+
+  button.addEventListener('click', downloadBlankTemplate);
+
+  container.appendChild(button);
+
+  const importBtn = document.getElementById('agx-import-btn');
+  if (importBtn) {
+    importBtn.parentNode.parentNode.insertBefore(container, importBtn.parentNode.nextSibling);
+  } else {
+    header.parentNode.insertBefore(container, header.nextSibling);
+  }
 }
 
+let exportInjectTimeout;
+let lastExportInjectTime = 0;
+const EXPORT_INJECT_DEBOUNCE = 200;
 
-// ── SheetJS Loader + Initialization ──
-var sheetScript = document.createElement('script');
-sheetScript.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
-sheetScript.onload = function() {
+function injectExportBtns() {
+  const now = Date.now();
+  if (now - lastExportInjectTime < EXPORT_INJECT_DEBOUNCE) {
+    clearTimeout(exportInjectTimeout);
+    exportInjectTimeout = setTimeout(injectExportBtns, EXPORT_INJECT_DEBOUNCE);
+    return;
+  }
+  lastExportInjectTime = now;
 
-    
-    // MutationObserver to re-inject export buttons on DOM changes
-    var exportObserver = new MutationObserver(function() {
-      clearTimeout(window._exportBtnTimer);
-      window._exportBtnTimer = setTimeout(injectExportBtns, 200);
+  // Look for estimate list items
+  const items = document.querySelectorAll('[data-estimate-id], .estimate-row, .estimate-item');
+
+  items.forEach(item => {
+    const estId = item.getAttribute('data-estimate-id') ||
+                  item.getAttribute('data-id') ||
+                  (item.querySelector('[data-id]') ? item.querySelector('[data-id]').getAttribute('data-id') : null);
+
+    if (!estId) return;
+
+    // Check if buttons already exist
+    if (item.querySelector('.agx-export-btn, .agx-proposal-btn')) {
+      return;
+    }
+
+    // Find action area or end of item
+    let actionArea = item.querySelector('[data-role="actions"]') ||
+                     item.querySelector('.actions') ||
+                     item.querySelector('.item-actions');
+
+    if (!actionArea) {
+      actionArea = document.createElement('div');
+      actionArea.style.marginLeft = 'auto';
+      item.appendChild(actionArea);
+    }
+
+    // Create proposal button
+    const proposalBtn = document.createElement('button');
+    proposalBtn.className = 'agx-proposal-btn';
+    proposalBtn.textContent = 'Generate Proposal';
+    proposalBtn.style.cssText = `
+      background-color: #1B8541;
+      color: white;
+      padding: 6px 12px;
+      border: none;
+      border-radius: 3px;
+      cursor: pointer;
+      font-size: 12px;
+      margin-right: 8px;
+    `;
+    proposalBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      generateProposal(estId);
     });
-    exportObserver.observe(document.body, { childList: true, subtree: true });
-    
-    injectImportBtn();
-  injectTemplateBtn();
-    injectExportBtns();
 
-    // ── IMPORT LOGIC ──
-    
-};
-document.head.appendChild(sheetScript);
+    // Create export button
+    const exportBtn = document.createElement('button');
+    exportBtn.className = 'agx-export-btn';
+    exportBtn.textContent = 'Export Estimate';
+    exportBtn.style.cssText = `
+      background-color: #1B3A5C;
+      color: white;
+      padding: 6px 12px;
+      border: none;
+      border-radius: 3px;
+      cursor: pointer;
+      font-size: 12px;
+    `;
+    exportBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      exportEstimate(estId);
+    });
+
+    actionArea.appendChild(proposalBtn);
+    actionArea.appendChild(exportBtn);
+  });
+}
+
+// ============================================================================
+// NICK NAME FIELD INJECTION
+// ============================================================================
+
+function injectNickNameField() {
+  // Only inject if the client field exists and nickName field doesn't
+  var clientInput = document.getElementByID("editesteclient');
+  if (!clientInput || document.getElementByID("editeste nickName'))return;
+
+  var clientGroup = clientInput.closest('.form-group');
+  if (!clientGroup) return;
+
+  // Create the nickName form group matching existing structure
+  var nickGroup = document.createElement('div');
+  nickGroup.className = 'form-group';
+  var label = document.createElement('label');
+  label.textContent = 'Nick Name';
+  var input = document.createElement('input');
+  input.type = 'text';
+  input.id = 'editestenickName';
+  input.placeholder = 'Short name for proposals (e.g. Jane)';
+  // Copy styling from client input
+  input.className = clientInput.className;
+  input.style.cssText = clientInput.style.cssText;
+  nickGroup.appendChild(label);
+  nickGroup.appendChild(input);
+
+  // Insert after client group
+  clientGroup.parentNode.insertBefore(nickGroup, clientGroup.nextSibling);
+}
+
+// Patch editEstimate to populate nickName
+var _origEditEstimate = null;
+function patchEditEstimate() {
+  if (_origEditEstimate) return; // already patched
+  if (typeof editEstimate !== 'function') return;
+  _origEditEstimate = editEstimate;
+  window.editEstimate = function(estId) {
+    _origEditEstimate(estId);
+    // After original runs, inject nickName field and populate it
+    setTimeout(function() {
+      injectNickNameField();
+      var estimates = JSON.parse(localStorage.getItem('agx-estimates') || '[]');
+      var est = estimates.find(function(e) { return e.id === estId; });
+      var nickInput = document.getElementByID('editeste nickName');
+      if (est && nickInput) {
+        nickInput.value = est.nickName || '';
+      }
+    }, 50);
+  };
+}
+
+// Patch saveEstimateEdits to save nickName
+var _origSaveEstimateEdits = null;
+function patchSaveEstimateEdits() {
+  if (_origSaveEstimateEdits) return;
+  if (typeof saveEstimateEdits !== 'function') return;
+  _origSaveEstimateEdits = saveEstimateEdits;
+  window.saveEstimateEdits = function() {
+    // Before saving, ensure nickName gets into the estimate object
+    var nickInput = document.getElementByID('editeste nickName');
+    var nickVal = nickInput ? nickInput.value.trim() : '';
+
+    // Call original save
+    _origSaveEstimateEdits();
+
+    // Now patch the saved estimate to include nickName
+    // Find which estimate was just saved (the one currently open)
+    var estimates = JSON.parse(localStorage.getItem('agx-estimates') || '[]');
+    // The most recently modified estimate - check by matching title from the form
+    var titleVal = document.getElementByID('editeste title')?.value;
+    if (titleVal) {
+      var est = estimates.find(function(e) { return e.title === titleVal; });
+      if (est) {
+        est.nickName = nickVal;
+        localStorage.setItem('agx-estimates', JSON.stringify(estimates));
+      }
+    }
+  };
+}
+
+// ============================================================================
+// INITIALIZATION
+// ============================================================================
+
+(function loadSheetJS() {
+  if (typeof XLSX !== 'undefined') {
+    console.log('SheetJS already loaded');
+    patchEditEstimate();
+    patchSaveEstimateEdits();
+    if (typeof injectImportBtn === 'function') {
+      injectImportBtn();
+      injectExportBtns();
+      injectTemplateBtn();
+    }
+    return;
+  }
+
+  const s = document.createElement('script');
+  s.src = 'https://cdn.sheetjs.com/xlsx-0.20.0/package/dist/xlsx.full.min.js';
+  s.onload = function() {
+    console.log('SheetJS loaded from CDN');
+    patchEditEstimate();
+    patchSaveEstimateEdits();
+    injectImportBtn();
+    injectExportBtns();
+    injectTemplateBtn();
+
+    // Set up observer to reinject buttons when DOM changes
+    const observer = new MutationObserver(() => {
+      injectImportBtn();
+      injectExportBtns();
+      injectTemplateBtn();
+      injectNickNameField();
+    });
+
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: false
+    });
+  };
+  s.onerror = function() {
+    console.error('Failed to load SheetJS');
+  };
+  document.head.appendChild(s);
+})();
+
+// Also set up immediate injection if XLSX is already available
+if (typeof XLSX !== 'undefined') {
+  setTimeout(() => {
+    patchEditEstimate();
+    patchSaveEstimateEdits();
+    injectImportBtn();
+    injectExportBtns();
+    injectTemplateBtn();
+  }, 100);
+}
+
+// Also patch functions even before XLSX loads
+setTimeout(function() {
+  patchEditEstimate();
+  patchSaveEstimateEdits();
+},
