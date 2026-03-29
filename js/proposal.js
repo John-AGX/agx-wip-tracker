@@ -127,7 +127,7 @@ function exportEstimate(estId) {
     { row: 10, label: 'Created Date', value: formatDateLong(estimate.created) },
     { row: 11, label: 'Salesperson', value: 'Scott Ryan' },
     { row: 12, label: 'Market', value: 'Tampa' },
-    { row: 13, label: 'Estimate ID', value: estimate.id || 'â' }
+    { row: 13, label: 'Estimate ID', value: estimate.id || '—' }
   ];
 
   leadFields.forEach(field => {
@@ -152,10 +152,10 @@ function exportEstimate(estId) {
     { row: 18, label: 'Management Co.', value: estimate.client },
     { row: 19, label: 'CAM', value: estimate.managerName },
     { row: 20, label: 'CAM Email', value: estimate.managerEmail },
-    { row: 21, label: 'On-Site Contact', value: 'â' },
-    { row: 22, label: 'POC Phone', value: estimate.managerPhone || 'â' },
-    { row: 23, label: 'POC Email', value: 'â' },
-    { row: 24, label: 'Additional POC', value: 'â' }
+    { row: 21, label: 'On-Site Contact', value: '—' },
+    { row: 22, label: 'POC Phone', value: estimate.managerPhone || '—' },
+    { row: 23, label: 'POC Email', value: '—' },
+    { row: 24, label: 'Additional POC', value: '—' }
   ];
 
   propFields.forEach(field => {
@@ -175,7 +175,7 @@ function exportEstimate(estId) {
 
   // ========== ROW 27: Scope of Work Content ==========
   row = 27;
-  ws['A27'] = cellValue(estimate.scopeOfWork || 'â', 's');
+  ws['A27'] = cellValue(estimate.scopeOfWork || '—', 's');
   merges.push('A27:G27');
 
   // ========== ROWS 28-29: Empty ==========
@@ -353,7 +353,7 @@ function downloadBlankTemplate() {
     { row: 10, label: 'Created Date', value: '' },
     { row: 11, label: 'Salesperson', value: 'Scott Ryan' },
     { row: 12, label: 'Market', value: 'Tampa' },
-    { row: 13, label: 'Estimate ID', value: 'â' }
+    { row: 13, label: 'Estimate ID', value: '—' }
   ];
 
   leadFields.forEach(field => {
@@ -378,10 +378,10 @@ function downloadBlankTemplate() {
     { row: 18, label: 'Management Co.', value: '' },
     { row: 19, label: 'CAM', value: '' },
     { row: 20, label: 'CAM Email', value: '' },
-    { row: 21, label: 'On-Site Contact', value: 'â' },
+    { row: 21, label: 'On-Site Contact', value: '—' },
     { row: 22, label: 'POC Phone', value: '' },
-    { row: 23, label: 'POC Email', value: 'â' },
-    { row: 24, label: 'Additional POC', value: 'â' }
+    { row: 23, label: 'POC Email', value: '—' },
+    { row: 24, label: 'Additional POC', value: '—' }
   ];
 
   propFields.forEach(field => {
@@ -604,7 +604,7 @@ function generateProposal(estId) {
       font-size: 14px;
     }
     .line-item:before {
-      content: "â¢ ";
+      content: "• ";
       color: #1B8541;
       font-weight: bold;
       margin-right: 8px;
@@ -854,7 +854,7 @@ function parseReport(data) {
     const col0 = (aoa[i][0] || '').toString().trim();
 
     // Check for scope header pattern (SCOPE N: NAME)
-    const scopeHeaderMatch = col0.match(/^SCOPE\s+\d+:\s*(.+)$/i);
+    const scopeHeaderMatch = col0.match(/^SCOPE\s\d+:\s\(.+)$/i);
     if (scopeHeaderMatch) {
       currentSection = scopeHeaderMatch[1].trim();
       continue;
@@ -913,7 +913,7 @@ function processImportFile(file) {
       estimateLines.push(...lines);
       localStorage.setItem('agx-estimate-lines', JSON.stringify(estimateLines));
 
-      alert(`Estimate "${estimate.title}" imported successfully!`);
+      alert(`Estimate "${estimate.title}" imported successfully`);
 
       // Redirect to estimate editor if available
       if (window.location.hash && window.location.hash.includes('estimates')) {
@@ -1057,10 +1057,10 @@ function injectExportBtns() {
     const lastTd = row.cells[row.cells.length - 1];
     if (!lastTd) return;
 
-    // Create proposal button
+    // Create Generate Proposal button
     const proposalBtn = document.createElement('button');
     proposalBtn.className = 'agx-proposal-btn small';
-    proposalBtn.textContent = 'Proposal';
+    proposalBtn.textContent = 'Generate Proposal';
     proposalBtn.style.cssText = `
       background-color: #1B8541;
       color: white;
