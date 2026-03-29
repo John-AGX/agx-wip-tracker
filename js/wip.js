@@ -1,0 +1,1660 @@
+function renderWIPMain() {
+            renderJobsTable();
+            calculateWIPSummary();
+        }
+
+        // Calculate sub costs from the Subcontractors tab entries
+        function getSubCostForPhase(phaseId) {
+            // Sum billedToDate of all subs assigned directly to this phase
+            return appData.subs.filter(s => s.level === 'phase' && s.phaseId === phaseId)
+                .reduce((sum, s) => sum + (s.billedToDate || 0), 0);
+        }
+
+        function getSubCostForBuilding(buildingId, jobId) {
+            // 1. Subs assigned directly to this building
+            let total = appData.subs.filter(s => s.level === 'building' && s.buildingId === buildingId)
+                .reduce((sum, s) => sum + (s.billedToDate || 0), 0);
+            // 2. Job-level subs distributed by building budget %
+            const jobSubs = appData.subs.filter(s => s.level === 'job' && s.jobId === jobId);
+            if (jobSubs.length > 0) {
+                const buildings = appData.buildings.filter(b => b.jobId === jobId);
+                const totalBudget = buildings.reduce((sum, b) => sum + (b.budget || 0), 0);
+                if (totalBudget > 0) {
+                    const thisBldg = appData.buildings.find(b => b.id === buildingId);
+                    const bldgPct = (thisBldg?.budget || 0) / totalBudget;
+                    const jobSubTotal = jobSubs.reduce((sum, s) => sum + (s.billedToDate || 0), 0);
+                    total += jobSubTotal * bldgPct;
+                }
+            }
+            return total;
+        }
+
+        function getSubCostForJob(jobId) {
+            // All subs for this job, summed by billedToDate
+            return appData.subs.filter(s => s.jobId === jobId)
+                .reduce((sum, s) => sum + (s.billedToDate || 0), 0);
+        }
+
+        function getSubContractForPhase(phaseId) {
+            return appData.subs.filter(s => s.level === 'phase' && s.phaseId === phaseId)
+                .reduce((sum, s) => sum + (s.contractAmt || 0), 0);
+        }
+
+        function getSubContractForBuilding(buildingId, jobId) {
+            let total = appData.subs.filter(s => s.level === 'building' && s.buildingId === buildingId)
+                .reduce((sum, s) => sum + (s.contractAmt || 0), 0);
+            const jobSubs = appData.subs.filter(s => s.level === 'job' && s.jobId === jobId);
+            if (jobSubs.length > 0) {
+                const buildings = appData.buildings.filter(b => b.jobId === jobId);
+                const totalBudget = buildings.reduce((sum, b) => sum + (b.budget || 0), 0);
+                if (totalBudget > 0) {
+                    const thisBldg = appData.buildings.find(b => b.id === buildingId);
+                    const bldgPct = (thisBldg?.budget || 0) / totalBudget;
+                    const jobSubTotal = jobSubs.reduce((sum, s) => sum + (s.contractAmt || 0), 0);
+                    total += jobSubTotal * bldgPct;
+                }
+            }
+            return total;
+        }
+
+        // Auto-calculate building % complete from its phases (weighted by phaseBudget)
+        function calcBuildingPctComplete(buildingId, jobId) {
+            const bldgPhases = appData.phases.filter(p => p.jobId === jobId && p.buildingId === buildingId);
+            if (bldgPhases.length === 0) return 0;
+            const totalBudget = bldgPhases.reduce((s, p) => s + (p.phaseBudget || 0), 0);
+            if (totalBudget > 0) {
+                return bldgPhases.reduce((s, p) => s + (p.pctComplete || 0) * (p.phaseBudget || 0), 0) / totalBudget;
+            }
+            // Equal weight if no budgets set
+            return bldgPhases.reduce((s, p) => s + (p.pctComplete || 0), 0) / bldgPhases.length;
+        }
+
+        // Auto-calculate job % complete from buildings (weighted by budget) or phases if no buildings
+        function calcJobPctComplete(jobId) {
+            const buildings = appData.buildings.filter(b => b.jobId === jobId);
+            const phases = appData.phases.filter(p => p.jobId === jobId);
+            if (buildings.length > 0) {
+                // Calculate each building's pctComplete from its phases
+                const bldgData = buildings.map(b => ({
+                    budget: b.budget || 0,
+                    pct: calcBuildingPctComplete(b.id, jobId)
+                }));
+                const totalBudget = bldgData.reduce((s, d) => s + d.budget, 0);
+                if (totalBudget > 0) {
+                    return bldgData.reduce((s, d) => s + d.pct * d.budget, 0) / totalBudget;
+                }
+                return bldgData.reduce((s, d) => s + d.pct, 0) / bldgData.length;
+            } else if (phases.length > 0) {
+                // No buildings - use phases directly
+                const totalBudget = phases.reduce((s, p) => s + (p.phaseBudget || 0), 0);
+                if (totalBudget > 0) {
+                    return phases.reduce((s, p) => s + (p.pctComplete || 0) * (p.phaseBudget || 0), 0) / totalBudget;
+                }
+                return phases.reduce((s, p) => s + (p.pctComplete || 0), 0) / phases.length;
+            }
+            return appData.jobs.find(j => j.id === jobId)?.pctComplete || 0;
+        }
+
+        // Recalculate all sub $ fields on phases and buildings from subs entries
+        function recalcSubCosts(jobId) {
+            // Update phases
+            appData.phases.filter(p => p.jobId === jobId).forEach(p => {
+                p.sub = getSubCostForPhase(p.id);
+            });
+            // Update buildings
+            appData.buildings.filter(b => b.jobId === jobId).forEach(b => {
+                b.sub = getSubCostForBuilding(b.id, jobId);
+            });
+            // Update job-level sub cost
+            const job = appData.jobs.find(j => j.id === jobId);
+            if (job) {
+                // Job-level sub = sum of all job-level subs' billedToDate
+                job.sub = appData.subs.filter(s => s.level === 'job' && s.jobId === jobId)
+                    .reduce((sum, s) => sum + (s.billedToDate || 0), 0);
+            }
+        }
+
+        function getJobAccruedCosts(jobId) {
+            // Accrued = (Sub Contract × % Complete of assigned scope) - Billed to Date, min $0
+            let totalAccrued = 0;
+            const jobSubs = appData.subs.filter(s => s.jobId === jobId);
+            const job = appData.jobs.find(j => j.id === jobId);
+            
+            jobSubs.forEach(sub => {
+                let pctComplete = 0;
+                
+                if (sub.level === 'phase' && sub.phaseId) {
+                    // Use phase % complete
+                    const phase = appData.phases.find(p => p.id === sub.phaseId);
+                    pctComplete = phase ? (phase.pctComplete || 0) : 0;
+                } else if (sub.level === 'building' && sub.buildingId) {
+                    // Use weighted average of building's phases, or job % if no phases
+                    const bldgPhases = appData.phases.filter(p => p.jobId === jobId && p.buildingId === sub.buildingId);
+                    if (bldgPhases.length > 0) {
+                        const totalBudget = bldgPhases.reduce((s, p) => s + (p.phaseBudget || 0), 0);
+                        if (totalBudget > 0) {
+                            pctComplete = bldgPhases.reduce((s, p) => s + (p.pctComplete || 0) * (p.phaseBudget || 0), 0) / totalBudget;
+                        } else {
+                            pctComplete = bldgPhases.reduce((s, p) => s + (p.pctComplete || 0), 0) / bldgPhases.length;
+                        }
+                    } else {
+                        pctComplete = job ? (job.pctComplete || 0) : 0;
+                    }
+                } else {
+                    // Job-level sub or undefined level: use job % complete
+                    // If buildings exist, use weighted avg of all phases
+                    const allPhases = appData.phases.filter(p => p.jobId === jobId);
+                    if (allPhases.length > 0) {
+                        const totalBudget = allPhases.reduce((s, p) => s + (p.phaseBudget || 0), 0);
+                        if (totalBudget > 0) {
+                            pctComplete = allPhases.reduce((s, p) => s + (p.pctComplete || 0) * (p.phaseBudget || 0), 0) / totalBudget;
+                        } else {
+                            pctComplete = allPhases.reduce((s, p) => s + (p.pctComplete || 0), 0) / allPhases.length;
+                        }
+                    } else {
+                        pctComplete = job ? (job.pctComplete || 0) : 0;
+                    }
+                }
+                
+                const earned = (sub.contractAmt || 0) * (pctComplete / 100);
+                const accrued = Math.max(0, earned - (sub.billedToDate || 0));
+                totalAccrued += accrued;
+            });
+            
+            return totalAccrued;
+        }
+
+        function getJobTotalCost(jobId) {
+            // Phase-level costs
+            let phaseCost = 0;
+            appData.phases.filter(p => p.jobId === jobId).forEach(p => {
+                phaseCost += (p.materials || 0) + (p.labor || 0) + (p.sub || 0) + (p.equipment || 0);
+            });
+            // Building-level costs
+            let buildingCost = 0;
+            const jobBuildings = appData.buildings.filter(b => b.jobId === jobId);
+            jobBuildings.forEach(b => {
+                buildingCost += (b.materials || 0) + (b.labor || 0) + (b.sub || 0) + (b.equipment || 0);
+            });
+            // Job-level costs (exclude sub if buildings exist, since recalcSubCosts distributes job-level subs to buildings)
+            const job = appData.jobs.find(j => j.id === jobId);
+            let jobCost = 0;
+            if (job) {
+                const jobSub = (jobBuildings.length > 0) ? 0 : (job.sub || 0);
+                jobCost = (job.materials || 0) + (job.labor || 0) + jobSub + (job.equipment || 0);
+            }
+            return { phaseCost, buildingCost, jobCost, total: phaseCost + buildingCost + jobCost };
+        }
+
+        // ==================== WIP CALCULATIONS ====================
+        function getJobCOTotals(jobId) {
+            const cos = appData.changeOrders.filter(co => co.jobId === jobId);
+            return {
+                income: cos.reduce((sum, co) => sum + (co.income || 0), 0),
+                costs: cos.reduce((sum, co) => sum + (co.estimatedCosts || 0), 0),
+                count: cos.length
+            };
+        }
+
+        function getJobWIP(jobId) {
+            const job = appData.jobs.find(j => j.id === jobId);
+            if (!job) return {};
+            const co = getJobCOTotals(jobId);
+            const actualCosts = getJobTotalCost(jobId).total;
+            const contractIncome = job.contractAmount || 0;
+            const estimatedCosts = job.estimatedCosts || 0;
+            const totalIncome = contractIncome + co.income;
+            const totalEstCosts = estimatedCosts + co.costs;
+            const revisedCostChanges = job.revisedCostChanges || 0;
+            const revisedEstCosts = totalEstCosts + revisedCostChanges;
+            const asSoldProfit = contractIncome - estimatedCosts;
+            const asSoldMargin = contractIncome > 0 ? (asSoldProfit / contractIncome * 100) : 0;
+            const revisedProfit = totalIncome - revisedEstCosts;
+            const revisedMargin = totalIncome > 0 ? (revisedProfit / totalIncome * 100) : 0;
+            const pctComplete = job.pctComplete || 0;
+            const revenueEarned = totalIncome * (pctComplete / 100);
+            const jtdProfit = revenueEarned - actualCosts;
+            const jtdMargin = revenueEarned > 0 ? (jtdProfit / revenueEarned * 100) : 0;
+            const invoiced = job.invoicedToDate || 0;
+            const unbilled = revenueEarned - invoiced;
+            const backlog = totalIncome - revenueEarned;
+            const remainingCosts = revisedEstCosts - actualCosts;
+            return {
+                contractIncome, estimatedCosts, coIncome: co.income, coCosts: co.costs,
+                totalIncome, totalEstCosts, revisedCostChanges, revisedEstCosts,
+                asSoldProfit, asSoldMargin, revisedProfit, revisedMargin,
+                pctComplete, revenueEarned, actualCosts, jtdProfit, jtdMargin,
+                invoiced, unbilled, backlog, remainingCosts
+            };
+        }
+
+        function renderWipTab(jobId) {
+            const job = appData.jobs.find(j => j.id === jobId);
+            if (!job) return;
+            const w = getJobWIP(jobId);
+            document.getElementById('wipPctComplete').value = job.pctComplete || '';
+            document.getElementById('wipInvoicedToDate').value = job.invoicedToDate || '';
+            document.getElementById('wipRevisedCostChanges').value = job.revisedCostChanges || '';
+            document.getElementById('wipNotes').value = job.notes || '';
+
+            document.getElementById('wip-contract-income').textContent = formatCurrency(w.contractIncome);
+            document.getElementById('wip-co-income').textContent = formatCurrency(w.coIncome);
+            document.getElementById('wip-total-income').textContent = formatCurrency(w.totalIncome);
+            document.getElementById('wip-est-costs').textContent = formatCurrency(w.estimatedCosts);
+            document.getElementById('wip-co-costs').textContent = formatCurrency(w.coCosts);
+            document.getElementById('wip-revised-changes').textContent = formatCurrency(w.revisedCostChanges);
+            document.getElementById('wip-total-est-costs').textContent = formatCurrency(w.revisedEstCosts);
+            document.getElementById('wip-assold-profit').textContent = formatCurrency(w.asSoldProfit);
+            document.getElementById('wip-assold-profit').style.color = w.asSoldProfit >= 0 ? 'var(--green)' : 'var(--red)';
+            document.getElementById('wip-assold-margin').textContent = w.asSoldMargin.toFixed(1) + '%';
+            document.getElementById('wip-revised-profit').textContent = formatCurrency(w.revisedProfit);
+            document.getElementById('wip-revised-profit').style.color = w.revisedProfit >= 0 ? 'var(--green)' : 'var(--red)';
+            document.getElementById('wip-revised-margin').textContent = w.revisedMargin.toFixed(1) + '%';
+            document.getElementById('wip-pct-complete').textContent = w.pctComplete.toFixed(1) + '%';
+            document.getElementById('wip-revenue-earned').textContent = formatCurrency(w.revenueEarned);
+            document.getElementById('wip-jtd-profit').textContent = formatCurrency(w.jtdProfit);
+            document.getElementById('wip-jtd-profit').style.color = w.jtdProfit >= 0 ? 'var(--green)' : 'var(--red)';
+            document.getElementById('wip-jtd-margin').textContent = w.jtdMargin.toFixed(1) + '%';
+            document.getElementById('wip-invoiced').textContent = formatCurrency(w.invoiced);
+            document.getElementById('wip-unbilled').textContent = formatCurrency(w.unbilled);
+            document.getElementById('wip-unbilled').style.color = w.unbilled >= 0 ? 'var(--yellow)' : 'var(--red)';
+            document.getElementById('wip-backlog').textContent = formatCurrency(w.backlog);
+            document.getElementById('wip-actual-costs').textContent = formatCurrency(w.actualCosts);
+            document.getElementById('wip-revised-est-costs2').textContent = formatCurrency(w.revisedEstCosts);
+            document.getElementById('wip-remaining-costs').textContent = formatCurrency(w.remainingCosts);
+            document.getElementById('wip-remaining-costs').style.color = w.remainingCosts >= 0 ? 'var(--text)' : 'var(--red)';
+        }
+
+        function saveWipInputs() {
+            const job = appData.jobs.find(j => j.id === appState.currentJobId);
+            if (!job) return;
+            job.pctComplete = parseFloat(document.getElementById('wipPctComplete').value) || 0;
+            job.invoicedToDate = parseFloat(document.getElementById('wipInvoicedToDate').value) || 0;
+            job.revisedCostChanges = parseFloat(document.getElementById('wipRevisedCostChanges').value) || 0;
+            job.notes = document.getElementById('wipNotes').value.trim();
+            job.updatedAt = new Date().toISOString();
+            saveData();
+            renderJobDetail(appState.currentJobId);
+        }
+
+        // ==================== CHANGE ORDERS ====================
+        function openAddChangeOrderModal() {
+            document.getElementById('coModalHeader').textContent = 'Add Change Order';
+            document.getElementById('coSaveBtn').textContent = 'Add Change Order';
+            document.getElementById('coNumber').value = '';
+            document.getElementById('coDate').value = new Date().toISOString().split('T')[0];
+            document.getElementById('coDescription').value = '';
+            document.getElementById('coIncome').value = '';
+            document.getElementById('coCosts').value = '';
+            document.getElementById('coNotes').value = '';
+            appState.editCOId = null;
+            document.getElementById('coBuildingAllocRows').innerHTML = '';
+            updateCOAllocRemaining();
+            openModal('addCOModal');
+        }
+
+        function addCOBuildingRow(existingData) {
+            const container = document.getElementById('coBuildingAllocRows');
+            const buildings = appData.buildings.filter(b => b.jobId === appState.currentJobId);
+            if (buildings.length === 0) {
+                alert('Add buildings to this job first before allocating CO amounts.');
+                return;
+            }
+            const lt = String.fromCharCode(60);
+            const gt = String.fromCharCode(62);
+            const row = document.createElement('div');
+            row.className = 'form-row';
+            row.style.marginBottom = '8px';
+            row.style.alignItems = 'center';
+            let opts = lt + 'option value=""' + gt + '-- Select Building --' + lt + '/option' + gt;
+            buildings.forEach(b => {
+                const sel = existingData && existingData.buildingId === b.id ? ' selected' : '';
+                opts += lt + 'option value="' + b.id + '"' + sel + gt + b.name + lt + '/option' + gt;
+            });
+            const amt = existingData ? existingData.amount : '';
+            row.innerHTML = lt + 'div class="form-group" style="flex:1;"' + gt + lt + 'select class="co-bldg-select"' + gt + opts + lt + '/select' + gt + lt + '/div' + gt + lt + 'div class="form-group" style="flex:1;"' + gt + lt + 'input type="number" class="co-bldg-amount" placeholder="Amount $" step="0.01" value="' + amt + '" oninput="updateCOAllocRemaining()"' + gt + lt + '/div' + gt + lt + 'button type="button" class="danger small" onclick="this.parentElement.remove();updateCOAllocRemaining()" style="flex:0;padding:4px 10px;"' + gt + 'X' + lt + '/button' + gt;
+            container.appendChild(row);
+            updateCOAllocRemaining();
+        }
+
+        function updateCOAllocRemaining() {
+            const totalIncome = parseFloat(document.getElementById('coIncome').value) || 0;
+            const amounts = document.querySelectorAll('.co-bldg-amount');
+            let allocated = 0;
+            amounts.forEach(a => { allocated += parseFloat(a.value) || 0; });
+            const remaining = totalIncome - allocated;
+            const el = document.getElementById('coAllocRemaining');
+            if (el) {
+                el.textContent = 'Allocated: ' + formatCurrency(allocated) + ' of ' + formatCurrency(totalIncome) + ' | Remaining: ' + formatCurrency(remaining);
+                el.style.color = remaining < 0 ? 'var(--red)' : 'var(--text-dim)';
+            }
+        }
+
+        function getCOBuildingAllocations() {
+            const rows = document.querySelectorAll('#coBuildingAllocRows .form-row');
+            const allocs = [];
+            rows.forEach(row => {
+                const bldgId = row.querySelector('.co-bldg-select')?.value;
+                const amount = parseFloat(row.querySelector('.co-bldg-amount')?.value) || 0;
+                if (bldgId && amount > 0) {
+                    allocs.push({ buildingId: bldgId, amount: amount });
+                }
+            });
+            return allocs;
+        }
+
+        function saveCO() {
+            const desc = document.getElementById('coDescription').value.trim();
+            if (!desc) { alert('Enter a description'); return; }
+            const coData = {
+                jobId: appState.currentJobId,
+                coNumber: document.getElementById('coNumber').value.trim(),
+                description: desc,
+                income: parseFloat(document.getElementById('coIncome').value) || 0,
+                estimatedCosts: parseFloat(document.getElementById('coCosts').value) || 0,
+                date: document.getElementById('coDate').value,
+                notes: document.getElementById('coNotes').value.trim(),
+                buildingAllocations: getCOBuildingAllocations()
+            };
+            if (appState.editCOId) {
+                const idx = appData.changeOrders.findIndex(co => co.id === appState.editCOId);
+                if (idx >= 0) Object.assign(appData.changeOrders[idx], coData);
+            } else {
+                coData.id = 'co' + Date.now();
+                appData.changeOrders.push(coData);
+            }
+            // Auto-add CO allocations to building budgets
+            if (coData.buildingAllocations && coData.buildingAllocations.length > 0) {
+                coData.buildingAllocations.forEach(alloc => {
+                    const bldg = appData.buildings.find(b => b.id === alloc.buildingId);
+                    if (bldg) {
+                        bldg.budget = (bldg.budget || 0) + alloc.amount;
+                    }
+                });
+            }
+            saveData();
+            closeModal('addCOModal');
+            renderJobDetail(appState.currentJobId);
+        }
+
+        function editCO(coId) {
+            const co = appData.changeOrders.find(c => c.id === coId);
+            if (!co) return;
+            appState.editCOId = coId;
+            document.getElementById('coModalHeader').textContent = 'Edit Change Order';
+            document.getElementById('coSaveBtn').textContent = 'Update Change Order';
+            document.getElementById('coNumber').value = co.coNumber || '';
+            document.getElementById('coDate').value = co.date || '';
+            document.getElementById('coDescription').value = co.description || '';
+            document.getElementById('coIncome').value = co.income || '';
+            document.getElementById('coCosts').value = co.estimatedCosts || '';
+            document.getElementById('coNotes').value = co.notes || '';
+            // Load building allocations
+            document.getElementById('coBuildingAllocRows').innerHTML = '';
+            if (co.buildingAllocations && co.buildingAllocations.length > 0) {
+                co.buildingAllocations.forEach(alloc => {
+                    addCOBuildingRow(alloc);
+                });
+            }
+            updateCOAllocRemaining();
+            openModal('addCOModal');
+        }
+
+        function deleteCO(coId) {
+            if (!confirm('Delete this change order?')) return;
+            appData.changeOrders = appData.changeOrders.filter(co => co.id !== coId);
+            saveData();
+            renderJobDetail(appState.currentJobId);
+        }
+
+        function renderChangeOrders(jobId) {
+            const cos = appData.changeOrders.filter(co => co.jobId === jobId);
+            const tbody = document.querySelector('#co-table tbody');
+            tbody.innerHTML = '';
+            let totalInc = 0, totalCost = 0;
+            cos.forEach((co, idx) => {
+                const profit = (co.income || 0) - (co.estimatedCosts || 0);
+                totalInc += co.income || 0;
+                totalCost += co.estimatedCosts || 0;
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td>${co.coNumber || 'CO-' + (idx + 1)}</td>
+                    <td>${co.description}${co.notes ? '<br><span style="font-size: 11px; color: var(--text-dim);">' + co.notes + '</span>' : ''}</td>
+                    <td style="text-align: right;">${formatCurrency(co.income)}</td>
+                    <td style="text-align: right;">${formatCurrency(co.estimatedCosts)}</td>
+                    <td style="text-align: right; color: ${profit >= 0 ? 'var(--green)' : 'var(--red)'};">${formatCurrency(profit)}</td>
+                    <td>${co.date || '—'}</td>
+                    <td>
+                        <button class="small" onclick="event.stopPropagation(); editCO('${co.id}')">Edit</button>
+                        <button class="small secondary" onclick="event.stopPropagation(); deleteCO('${co.id}')">Del</button>
+                    </td>`;
+                tbody.appendChild(row);
+            });
+            document.getElementById('co-total-income').textContent = formatCurrency(totalInc);
+            document.getElementById('co-total-costs').textContent = formatCurrency(totalCost);
+            document.getElementById('co-total-profit').textContent = formatCurrency(totalInc - totalCost);
+            document.getElementById('co-total-profit').style.color = (totalInc - totalCost) >= 0 ? 'var(--green)' : 'var(--red)';
+        }
+
+        function calculateWIPSummary() {
+            let totalIncome = 0;
+            let totalCost = 0;
+            let activeJobs = appData.jobs.filter(j => ['New', 'In Progress', 'On Hold'].includes(j.status)).length;
+
+            appData.jobs.forEach(j => {
+                const w = getJobWIP(j.id);
+                totalIncome += w.totalIncome;
+                totalCost += w.actualCosts;
+            });
+
+            let totalProfit = totalIncome - totalCost;
+
+            document.getElementById('total-pipeline').textContent = formatCurrency(totalIncome);
+            document.getElementById('active-jobs').textContent = activeJobs;
+            document.getElementById('total-cost').textContent = formatCurrency(totalCost);
+            document.getElementById('total-profit').textContent = formatCurrency(totalProfit);
+        }
+
+        function getJobType(jobNumber) {
+            if (!jobNumber) return '';
+            const num = jobNumber.toUpperCase().trim();
+            if (num.startsWith('RV')) return 'RV';
+            if (num.startsWith('WO')) return 'WO';
+            if (num.startsWith('S')) return 'S';
+            return '';
+        }
+
+        function getJobTypeLabel(type) {
+            if (type === 'S') return 'Service';
+            if (type === 'RV') return 'Renovation';
+            if (type === 'WO') return 'Work Order';
+            return '';
+        }
+
+        function renderJobsTable() {
+            const tbody = document.querySelector('#jobs-table tbody');
+            tbody.innerHTML = '';
+
+            let jobs = appData.jobs;
+            const filter = appState.currentStatusFilter;
+            if (filter) {
+                jobs = jobs.filter(j => j.status === filter);
+            } else {
+                // "All Active" = hide Archived by default
+                jobs = jobs.filter(j => j.status !== 'Archived');
+            }
+
+            // Apply type filter
+            const typeFilter = appState.currentTypeFilter;
+            if (typeFilter) {
+                jobs = jobs.filter(j => (j.jobType || getJobTypeLabel(getJobType(j.jobNumber))) === typeFilter);
+            }
+
+            // Apply sorting
+            if (appState.sortColumn) {
+                const col = appState.sortColumn;
+                const dir = appState.sortDirection === 'asc' ? 1 : -1;
+                jobs = [...jobs].sort((a, b) => {
+                    let va, vb;
+                    switch(col) {
+                        case 'name':
+                            va = ((a.jobNumber || '') + ' ' + (a.title || '')).toLowerCase();
+                            vb = ((b.jobNumber || '') + ' ' + (b.title || '')).toLowerCase();
+                            return va.localeCompare(vb) * dir;
+                        case 'market':
+                            va = (a.market || '').toLowerCase();
+                            vb = (b.market || '').toLowerCase();
+                            return va.localeCompare(vb) * dir;
+                        case 'status':
+                            va = (a.status || '').toLowerCase();
+                            vb = (b.status || '').toLowerCase();
+                            return va.localeCompare(vb) * dir;
+                        case 'client':
+                            va = (a.client || '').toLowerCase();
+                            vb = (b.client || '').toLowerCase();
+                            return va.localeCompare(vb) * dir;
+                        case 'pm':
+                            va = (a.pm || '').toLowerCase();
+                            vb = (b.pm || '').toLowerCase();
+                            return va.localeCompare(vb) * dir;
+                        case 'contract':
+                            return (getJobWIP(a.id).totalIncome - getJobWIP(b.id).totalIncome) * dir;
+                        case 'pctcomplete':
+                            return ((a.pctComplete || 0) - (b.pctComplete || 0)) * dir;
+                        case 'profit':
+                            return (getJobWIP(a.id).jtdProfit - getJobWIP(b.id).jtdProfit) * dir;
+                        case 'margin':
+                            return (getJobWIP(a.id).jtdMargin - getJobWIP(b.id).jtdMargin) * dir;
+                        default:
+                            return 0;
+                    }
+                });
+            }
+
+            // Update sort indicator classes on headers
+            document.querySelectorAll('#jobs-table th.sortable').forEach(th => {
+                th.classList.remove('sort-asc', 'sort-desc');
+                if (th.dataset.sort === appState.sortColumn) {
+                    th.classList.add(appState.sortDirection === 'asc' ? 'sort-asc' : 'sort-desc');
+                }
+            });
+
+            jobs.forEach((job, index) => {
+                // Auto-calc % complete from phases/buildings
+                const _jp = appData.phases.filter(p => p.jobId === job.id);
+                const _jb = appData.buildings.filter(b => b.jobId === job.id);
+                if (_jp.length > 0 || _jb.length > 0) {
+                    recalcSubCosts(job.id);
+                    job.pctComplete = Math.round(calcJobPctComplete(job.id) * 10) / 10;
+                }
+                const w = getJobWIP(job.id);
+                const statusClass = job.status === 'On Hold' ? 'at-risk' : job.status === 'Completed' ? 'on-track' : job.status === 'Archived' ? 'not-started' : 'on-track';
+                const typeLabel = job.jobType ? `<span style="font-size: 11px; color: var(--text-dim); font-weight: normal; margin-left: 6px;">${job.jobType}${job.market ? ' - ' + job.market : ''}</span>` : '';
+
+                const row = document.createElement('tr');
+                row.style.cursor = 'pointer';
+                row.onclick = function() { editJob(job.id); };
+                row.innerHTML = `
+                    <td>${index + 1}</td>
+                    <td><strong>${job.jobNumber ? job.jobNumber + ' — ' : ''}${job.title}</strong>${typeLabel}</td>
+                    <td>${job.client || '—'}</td>
+                    <td>${job.pm || '—'}</td>
+                    <td><span class="badge ${statusClass}">${job.status}</span></td>
+                    <td style="text-align: right;">${formatCurrency(w.totalIncome)}</td>
+                    <td style="text-align: right;"><div class="progress-bar" style="margin-bottom: 2px; height: 6px;"><div class="progress-fill" style="width: ${w.pctComplete}%"></div></div><span style="font-size: 12px;">${w.pctComplete.toFixed(1)}%</span></td>
+                    <td style="text-align: right; color: ${w.jtdProfit >= 0 ? 'var(--green)' : 'var(--red)'};">${formatCurrency(w.jtdProfit)}</td>
+                    <td style="text-align: right;">${w.jtdMargin.toFixed(1)}%</td>
+                    <td style="text-align: center;">
+                        <button class="small" onclick="event.stopPropagation(); editJob('${job.id}')">Edit</button>
+                    </td>
+                `;
+                tbody.appendChild(row);
+            });
+        }
+
+        function sortJobsTable(column) {
+            if (appState.sortColumn === column) {
+                // Toggle direction, or clear if already desc
+                if (appState.sortDirection === 'asc') {
+                    appState.sortDirection = 'desc';
+                } else {
+                    appState.sortColumn = null;
+                    appState.sortDirection = null;
+                }
+            } else {
+                appState.sortColumn = column;
+                appState.sortDirection = 'asc';
+            }
+            renderJobsTable();
+        }
+
+        function filterJobs() {
+            appState.currentStatusFilter = document.getElementById('statusFilter').value;
+            appState.currentTypeFilter = document.getElementById('typeFilter').value;
+            renderJobsTable();
+        }
+
+        function openAddJobModal() {
+            document.getElementById('jobNumber').value = '';
+            document.getElementById('jobTitle').value = '';
+            document.getElementById('jobClient').value = '';
+            document.getElementById('jobPM').value = '';
+            document.getElementById('jobType').value = '';
+            document.getElementById('jobWorkType').value = '';
+            document.getElementById('jobMarket').value = '';
+            document.getElementById('jobContractAmount').value = '';
+            document.getElementById('jobEstimatedCosts').value = '';
+            document.getElementById('jobTargetMargin').value = '50';
+            document.getElementById('jobStatus').value = 'New';
+            document.getElementById('jobNotes').value = '';
+            openModal('addJobModal');
+        }
+
+        function saveJob() {
+            const title = document.getElementById('jobTitle').value.trim();
+            if (!title) { alert('Enter a job name'); return; }
+            const job = {
+                id: 'j' + Date.now(),
+                jobNumber: document.getElementById('jobNumber').value.trim(),
+                title: title,
+                client: document.getElementById('jobClient').value.trim(),
+                pm: document.getElementById('jobPM').value,
+                jobType: document.getElementById('jobType').value,
+                workType: document.getElementById('jobWorkType').value,
+                market: document.getElementById('jobMarket').value,
+                status: document.getElementById('jobStatus').value,
+                contractAmount: parseFloat(document.getElementById('jobContractAmount').value) || 0,
+                estimatedCosts: parseFloat(document.getElementById('jobEstimatedCosts').value) || 0,
+                targetMarginPct: parseFloat(document.getElementById('jobTargetMargin').value) || 50,
+                notes: document.getElementById('jobNotes').value.trim(),
+                pctComplete: 0,
+                invoicedToDate: 0,
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString()
+            };
+            appData.jobs.push(job);
+            saveData();
+            closeModal('addJobModal');
+            renderWIPMain();
+        }
+
+        function editJob(jobId) {
+            appState.currentJobId = jobId;
+            renderJobDetail(jobId);
+            document.getElementById('wip-main-view').style.display = 'none';
+            document.getElementById('wip-job-detail-view').style.display = 'block';
+        }
+
+        function backToWIPMain() {
+            document.getElementById('wip-main-view').style.display = 'block';
+            document.getElementById('wip-job-detail-view').style.display = 'none';
+            appState.currentJobId = null;
+            renderWIPMain();
+        }
+
+        function archiveCurrentJob() {
+            const job = appData.jobs.find(j => j.id === appState.currentJobId);
+            if (!job) return;
+            if (job.status === 'Archived') {
+                job.status = 'Completed';
+            } else {
+                if (!confirm('Archive this job? It will be hidden from the active list.')) return;
+                job.status = 'Archived';
+                job.archivedAt = new Date().toISOString();
+            }
+            job.updatedAt = new Date().toISOString();
+            saveData();
+            renderJobDetail(job.id);
+        }
+
+        function toggleEditJobInfo() {
+            const jobId = appState.currentJobId;
+            const job = appData.jobs.find(j => j.id === jobId);
+            if (!job) return;
+            const btn = document.getElementById('edit-job-info-btn');
+            const card = document.getElementById('job-info-card');
+            const isEditing = btn.textContent === 'Save';
+            if (isEditing) {
+                // Save mode - read inputs and save
+                job.jobNumber = document.getElementById('edit-jobNumber').value.trim();
+                job.title = document.getElementById('edit-jobTitle').value.trim();
+                job.client = document.getElementById('edit-jobClient').value.trim();
+                job.pm = document.getElementById('edit-jobPM').value;
+                const typeVal = document.getElementById('edit-jobType').value;
+                job.jobType = typeVal;
+                job.workType = document.getElementById('edit-jobWorkType').value;
+                job.market = document.getElementById('edit-jobMarket').value;
+                job.contractAmount = parseFloat(document.getElementById('edit-jobContract').value) || 0;
+                job.estimatedCosts = parseFloat(document.getElementById('edit-jobEstCosts').value) || 0;
+                job.targetMarginPct = parseFloat(document.getElementById('edit-jobMargin').value) || 50;
+                job.status = document.getElementById('edit-jobStatus').value;
+                job.notes = document.getElementById('edit-jobNotes').value.trim();
+                job.updatedAt = new Date().toISOString();
+                saveData();
+                // Restore the original grid HTML so renderJobDetail can populate it
+                const grid = document.getElementById('job-info-card').querySelector('div[style*="grid-template-columns"]');
+                if (grid) {
+                    const mkDiv = (lbl, id, extraStyle) => {
+                        const lt = String.fromCharCode(60);
+                        const gt = String.fromCharCode(62);
+                        return lt + 'div' + gt + lt + 'label style="font-size: 12px; color: var(--text-dim);"' + gt + lbl + lt + '/label' + gt + lt + 'div style="font-size: 14px; color: ' + (extraStyle || 'var(--text)') + ';" id="' + id + '"' + gt + lt + '/div' + gt + lt + '/div' + gt;
+                    };
+                    grid.innerHTML = mkDiv('Job Number','job-info-number') + mkDiv('Job Name','job-info-title') + mkDiv('Client','job-info-client') + mkDiv('PM','job-info-pm') + mkDiv('Type','job-info-type') + mkDiv('Work Type','job-info-worktype') + mkDiv('Market','job-info-market') + mkDiv('Contract (As Sold)','job-info-contract','var(--accent); font-weight: 700') + mkDiv('Est. Costs (As Sold)','job-info-estcosts') + mkDiv('Target Margin %','job-info-margin') + mkDiv('Status','job-info-status') + mkDiv('Notes','job-info-notes');
+                }
+                btn.textContent = 'Edit Job';
+                btn.style.background = 'var(--accent)';
+                renderJobDetail(jobId);
+            } else {
+                // Enter edit mode - replace displays with inputs
+                btn.textContent = 'Save';
+                btn.style.background = 'var(--green)';
+                const grid = card.querySelector('div[style*="grid-template-columns"]');
+                if (!grid) return;
+                const pmOpts = ['John','Noah','Henry'].map(p => 
+                    String.fromCharCode(60) + 'option' + (p === job.pm ? ' selected' : '') + String.fromCharCode(62) + p + String.fromCharCode(60) + '/option' + String.fromCharCode(62)
+                ).join('');
+                const typeOpts = ['Service','Renovation','Work Order'].map(t =>
+                    String.fromCharCode(60) + 'option' + (t === job.jobType ? ' selected' : '') + String.fromCharCode(62) + t + String.fromCharCode(60) + '/option' + String.fromCharCode(62)
+                ).join('');
+                const statusOpts = ['New','Backlog','In Progress','On Hold','Completed','Archived'].map(s =>
+                    String.fromCharCode(60) + 'option' + (s === job.status ? ' selected' : '') + String.fromCharCode(62) + s + String.fromCharCode(60) + '/option' + String.fromCharCode(62)
+                ).join('');
+                const marketOpts = ['Tampa','Orlando'].map(m =>
+                    String.fromCharCode(60) + 'option' + (m === job.market ? ' selected' : '') + String.fromCharCode(62) + m + String.fromCharCode(60) + '/option' + String.fromCharCode(62)
+                ).join('');
+                const inp = (id, val, type) => {
+                    type = type || 'text';
+                    return String.fromCharCode(60) + 'input id="' + id + '" type="' + type + '" value="' + (val || '') + '" style="width:100%;background:var(--input-bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 8px;font-size:13px;"' + String.fromCharCode(62);
+                };
+                const sel = (id, opts) => String.fromCharCode(60) + 'select id="' + id + '" style="width:100%;background:var(--input-bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 8px;font-size:13px;"' + String.fromCharCode(62) + opts + String.fromCharCode(60) + '/select' + String.fromCharCode(62);
+                const lbl = (txt) => String.fromCharCode(60) + 'label style="font-size:12px;color:var(--text-dim);"' + String.fromCharCode(62) + txt + String.fromCharCode(60) + '/label' + String.fromCharCode(62);
+                const d = (inner) => String.fromCharCode(60) + 'div' + String.fromCharCode(62) + inner + String.fromCharCode(60) + '/div' + String.fromCharCode(62);
+                grid.innerHTML = 
+                    d(lbl('Job Number') + inp('edit-jobNumber', job.jobNumber)) +
+                    d(lbl('Job Name') + inp('edit-jobTitle', job.title)) +
+                    d(lbl('Client') + inp('edit-jobClient', job.client)) +
+                    d(lbl('PM') + sel('edit-jobPM', pmOpts)) +
+                    d(lbl('Type') + sel('edit-jobType', typeOpts)) +
+                    d(lbl('Work Type') + inp('edit-jobWorkType', job.workType)) +
+                    d(lbl('Market') + sel('edit-jobMarket', marketOpts)) +
+                    d(lbl('Contract (As Sold)') + inp('edit-jobContract', job.contractAmount, 'number')) +
+                    d(lbl('Est. Costs (As Sold)') + inp('edit-jobEstCosts', job.estimatedCosts, 'number')) +
+                    d(lbl('Target Margin %') + inp('edit-jobMargin', job.targetMarginPct || 50, 'number')) +
+                    d(lbl('Status') + sel('edit-jobStatus', statusOpts)) +
+                    d(lbl('Notes') + inp('edit-jobNotes', job.notes));
+            }
+        }
+
+        function renderJobDetail(jobId) {
+            const job = appData.jobs.find(j => j.id === jobId);
+            if (!job) return;
+
+            // Recalculate sub costs from Subcontractors tab entries
+            recalcSubCosts(jobId);
+
+            // Auto-calculate % complete from phases/buildings
+            const hasPhases = appData.phases.filter(p => p.jobId === jobId).length > 0;
+            const hasBuildings = appData.buildings.filter(b => b.jobId === jobId).length > 0;
+            if (hasPhases || hasBuildings) {
+                job.pctComplete = Math.round(calcJobPctComplete(jobId) * 10) / 10;
+            }
+            saveData();
+
+            const w = getJobWIP(jobId);
+
+            document.getElementById('job-detail-title').textContent = (job.jobNumber ? job.jobNumber + ' — ' : '') + job.title;
+            const detailStatusClass = job.status === 'On Hold' ? 'at-risk' : job.status === 'Completed' ? 'on-track' : job.status === 'Archived' ? 'not-started' : 'on-track';
+            document.getElementById('job-detail-status').innerHTML = `<span class="badge ${detailStatusClass}">${job.status}</span>`;
+            document.getElementById('job-detail-contract').textContent = `Total Income: ${formatCurrency(w.totalIncome)}`;
+
+            document.getElementById('job-info-number').textContent = job.jobNumber || '—';
+            document.getElementById('job-info-title').textContent = job.title;
+            document.getElementById('job-info-client').textContent = job.client || '—';
+            document.getElementById('job-info-pm').textContent = job.pm || '—';
+            document.getElementById('job-info-type').textContent = job.jobType ? (job.jobType + (job.market ? ' - ' + job.market : '')) : '—';
+            document.getElementById('job-info-worktype').textContent = job.workType || '—';
+            document.getElementById('job-info-market').textContent = job.market || '—';
+            document.getElementById('job-info-contract').textContent = formatCurrency(job.contractAmount);
+            document.getElementById('job-info-estcosts').textContent = formatCurrency(job.estimatedCosts);
+            document.getElementById('job-info-margin').textContent = (job.targetMarginPct || 50) + '%';
+            const statusClass = job.status === 'On Hold' ? 'at-risk' : job.status === 'Completed' ? 'on-track' : job.status === 'Archived' ? 'not-started' : 'on-track';
+            document.getElementById('job-info-status').innerHTML = `<span class="badge ${statusClass}">${job.status}</span>`;
+            document.getElementById('job-info-notes').textContent = job.notes || '—';
+            document.getElementById('archive-job-btn').textContent = job.status === 'Archived' ? 'Unarchive Job' : 'Archive Job';
+
+            // Summary cards — WIP-based
+            const coInfo = w.coIncome > 0 ? `Contract: ${formatCurrency(w.contractIncome)} + CO: ${formatCurrency(w.coIncome)}` : '';
+            document.getElementById('job-summary-totalincome').textContent = formatCurrency(w.totalIncome);
+            document.getElementById('job-summary-income-breakdown').textContent = coInfo;
+            document.getElementById('job-summary-cost').textContent = formatCurrency(w.actualCosts);
+            const accruedCosts = getJobAccruedCosts(jobId);
+            document.getElementById('job-summary-accrued').textContent = formatCurrency(accruedCosts);
+            document.getElementById('job-summary-accrued-note').textContent = accruedCosts > 0 ? 'Earned but unbilled' : '';
+            document.getElementById('job-summary-pctcomplete').textContent = w.pctComplete.toFixed(1) + '%';
+            document.getElementById('job-summary-revenue').textContent = formatCurrency(w.revenueEarned);
+            document.getElementById('job-summary-profit').textContent = formatCurrency(w.jtdProfit);
+            document.getElementById('job-summary-profit').style.color = w.jtdProfit >= 0 ? 'var(--green)' : 'var(--red)';
+            const jtdMarginStr = w.jtdMargin.toFixed(1) + '%';
+            document.getElementById('job-summary-margin').textContent = jtdMarginStr;
+
+            // Re-render the currently active subtab
+            const activeSubTab = document.querySelector('.sub-tab-btn-job.active');
+            const activeTabName = activeSubTab ? activeSubTab.getAttribute('data-subtab') : 'job-overview';
+            switchJobSubTab(activeTabName);
+            renderWipTab(jobId);
+            renderChangeOrders(jobId);
+        }
+
+        function renderJobOverview(jobId) {
+            const buildings = appData.buildings.filter(b => b.jobId === jobId);
+            const phases = appData.phases.filter(p => p.jobId === jobId);
+            const tbody = document.querySelector('#job-overview-table tbody');
+            tbody.innerHTML = '';
+
+            // Show buildings grouped with their phases
+            buildings.forEach(bldg => {
+                const bldgPhases = phases.filter(p => p.buildingId === bldg.id);
+                if (bldgPhases.length === 0) {
+                    // Building with no phases — show building-level costs
+                    const bTotal = (bldg.materials || 0) + (bldg.labor || 0) + (bldg.sub || 0) + (bldg.equipment || 0);
+                    const bVar = (bldg.budget || 0) - bTotal;
+                    const bStatus = getStatus(bTotal, bldg.budget);
+                    const row = document.createElement('tr');
+                    row.style.cursor = 'pointer';
+                    row.title = 'Click to edit this building';
+                    row.onclick = function() { editBuilding(bldg.id); };
+                    row.innerHTML = '<td>' + (bldg.name || '') + '</td><td style="color: var(--text-dim); font-style: italic;">No phases</td><td>—</td><td style="text-align: right;">' + formatCurrency(bldg.materials) + '</td><td style="text-align: right;">' + formatCurrency(bldg.labor) + '</td><td style="text-align: right;">' + formatCurrency(bldg.sub) + '</td><td style="text-align: right;">' + formatCurrency(bldg.equipment) + '</td><td style="text-align: right;">' + formatCurrency(bTotal) + '</td><td style="text-align: right;">' + formatCurrency(bldg.budget) + '</td><td style="text-align: right; color: ' + (bVar >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + formatCurrency(bVar) + '</td><td><span class="badge ' + bStatus + '">' + bStatus.replace('-', ' ').toUpperCase() + '</span></td>';
+                    tbody.appendChild(row);
+                } else {
+                    bldgPhases.forEach(p => {
+                        const totalSpent = (p.materials || 0) + (p.labor || 0) + (p.sub || 0) + (p.equipment || 0);
+                        const variance = (p.phaseBudget || 0) - totalSpent;
+                        const status = getStatus(totalSpent, p.phaseBudget);
+                        const row = document.createElement('tr');
+                        row.style.cursor = 'pointer';
+                        row.title = 'Click to edit this phase';
+                        row.onclick = function() { editPhase(p.id); };
+                        row.innerHTML = '<td>' + (bldg.name || '') + '</td><td>' + p.phase + '</td><td><div class="progress-bar" style="margin-bottom: 4px;"><div class="progress-fill" style="width: ' + p.pctComplete + '%"></div></div>' + p.pctComplete + '%</td><td style="text-align: right;">' + formatCurrency(p.materials) + '</td><td style="text-align: right;">' + formatCurrency(p.labor) + '</td><td style="text-align: right;">' + formatCurrency(p.sub) + '</td><td style="text-align: right;">' + formatCurrency(p.equipment) + '</td><td style="text-align: right;">' + formatCurrency(totalSpent) + '</td><td style="text-align: right;">' + formatCurrency(p.phaseBudget) + '</td><td style="text-align: right; color: ' + (variance >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + formatCurrency(variance) + '</td><td><span class="badge ' + status + '">' + status.replace('-', ' ').toUpperCase() + '</span></td>';
+                        tbody.appendChild(row);
+                    });
+                }
+            });
+
+            // Show orphan phases (no building assigned)
+            const orphanPhases = phases.filter(p => !p.buildingId || !buildings.find(b => b.id === p.buildingId));
+            orphanPhases.forEach(p => {
+                const totalSpent = (p.materials || 0) + (p.labor || 0) + (p.sub || 0) + (p.equipment || 0);
+                const variance = (p.phaseBudget || 0) - totalSpent;
+                const status = getStatus(totalSpent, p.phaseBudget);
+                const row = document.createElement('tr');
+                row.style.cursor = 'pointer';
+                row.title = 'Click to edit this phase';
+                row.onclick = function() { editPhase(p.id); };
+                row.innerHTML = '<td style="color: var(--text-dim);">Unassigned</td><td>' + p.phase + '</td><td><div class="progress-bar" style="margin-bottom: 4px;"><div class="progress-fill" style="width: ' + p.pctComplete + '%"></div></div>' + p.pctComplete + '%</td><td style="text-align: right;">' + formatCurrency(p.materials) + '</td><td style="text-align: right;">' + formatCurrency(p.labor) + '</td><td style="text-align: right;">' + formatCurrency(p.sub) + '</td><td style="text-align: right;">' + formatCurrency(p.equipment) + '</td><td style="text-align: right;">' + formatCurrency(totalSpent) + '</td><td style="text-align: right;">' + formatCurrency(p.phaseBudget) + '</td><td style="text-align: right; color: ' + (variance >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + formatCurrency(variance) + '</td><td><span class="badge ' + status + '">' + status.replace('-', ' ').toUpperCase() + '</span></td>';
+                tbody.appendChild(row);
+            });
+        }
+
+        function renderJobBuildings(jobId) {
+            const buildings = appData.buildings.filter(b => b.jobId === jobId);
+            const container = document.getElementById('job-buildings-content');
+            container.innerHTML = '';
+
+            buildings.forEach(building => {
+                const phases = appData.phases.filter(p => p.buildingId === building.id);
+                let phaseCost = 0;
+                phases.forEach(p => {
+                    phaseCost += (p.materials || 0) + (p.labor || 0) + (p.sub || 0) + (p.equipment || 0);
+                });
+                const bldgDirectCost = (building.materials || 0) + (building.labor || 0) + (building.sub || 0) + (building.equipment || 0);
+                const buildingCost = phaseCost + bldgDirectCost;
+
+                const contractAmt = appData.jobs.find(j => j.id === jobId)?.contractAmount || 0;
+                const bldgPct = contractAmt > 0 ? ((building.budget || 0) / contractAmt * 100).toFixed(1) : '—';
+
+                const card = document.createElement('div');
+                card.className = 'card';
+                card.style.cursor = 'pointer';
+                card.title = 'Click to edit this building';
+                card.onclick = function() { editBuilding(building.id); };
+                card.innerHTML = `
+                    <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 15px;">
+                        <div>
+                            <h3 style="font-size: 18px; margin-bottom: 5px;">${building.name}</h3>
+                            <p style="font-size: 13px; color: var(--text-dim);">${building.address}</p>
+                        </div>
+                        <div style="text-align: right;"><span style="font-size: 15px; font-weight: 700; color: var(--green);">${calcBuildingPctComplete(building.id, jobId).toFixed(1)}% Complete</span><br><span style="font-size: 12px; color: var(--purple);">${bldgPct}% of Job</span></div>
+                    </div>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 15px;">
+                        <div>
+                            <div style="font-size: 12px; color: var(--text-dim);">Budget</div>
+                            <div style="font-size: 16px; font-weight: 600; color: var(--accent);">${formatCurrency(building.budget)}</div>
+                        </div>
+                        <div>
+                            <div style="font-size: 12px; color: var(--text-dim);">Spent</div>
+                            <div style="font-size: 16px; font-weight: 600; color: var(--accent);">${formatCurrency(buildingCost)}</div>
+                        </div>
+                        <div>
+                            <div style="font-size: 12px; color: var(--text-dim);">Variance</div>
+                            <div style="font-size: 16px; font-weight: 600; color: ${(building.budget - buildingCost) >= 0 ? 'var(--green)' : 'var(--red)'};">${formatCurrency(building.budget - buildingCost)}</div>
+                        </div>
+                    </div>
+                    <div style="margin-top: 15px;">
+                        <h4 style="margin-bottom: 10px; font-size: 13px; text-transform: uppercase; color: var(--text-dim);">Phases:</h4>
+                        <div style="display: grid; gap: 8px;">
+                            ${phases.map(p => {
+                                const pCost = (p.materials || 0) + (p.labor || 0) + (p.sub || 0) + (p.equipment || 0);
+                                return `
+                                    <div style="display: flex; justify-content: space-between; font-size: 13px;">
+                                        <span>${p.phase} (${p.pctComplete}%)</span>
+                                        <span>${formatCurrency(pCost)}</span>
+                                    </div>
+                                `;
+                            }).join('')}
+                        </div>
+                    </div>
+                `;
+                container.appendChild(card);
+            });
+        }
+
+        function renderJobPhases(jobId) {
+            const phases = appData.phases.filter(p => p.jobId === jobId);
+            const phaseGroups = {};
+
+            phases.forEach(p => {
+                if (!phaseGroups[p.phase]) {
+                    phaseGroups[p.phase] = [];
+                }
+                phaseGroups[p.phase].push(p);
+            });
+
+            const tbody = document.querySelector('#job-phases-table tbody');
+            tbody.innerHTML = '';
+
+            Object.keys(phaseGroups).forEach(phaseName => {
+                const phaseList = phaseGroups[phaseName];
+                const matTotal = phaseList.reduce((sum, p) => sum + (p.materials || 0), 0);
+                const labTotal = phaseList.reduce((sum, p) => sum + (p.labor || 0), 0);
+                const subTotal = phaseList.reduce((sum, p) => sum + (p.sub || 0), 0);
+                const equipTotal = phaseList.reduce((sum, p) => sum + (p.equipment || 0), 0);
+                const total = matTotal + labTotal + subTotal + equipTotal;
+                const avgPct = Math.round(phaseList.reduce((sum, p) => sum + (p.pctComplete || 0), 0) / phaseList.length);
+
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td>${phaseName}</td>
+                    <td style="text-align: right;">${formatCurrency(matTotal)}</td>
+                    <td style="text-align: right;">${formatCurrency(labTotal)}</td>
+                    <td style="text-align: right;">${formatCurrency(subTotal)}</td>
+                    <td style="text-align: right;">${formatCurrency(equipTotal)}</td>
+                    <td style="text-align: right;">${formatCurrency(total)}</td>
+                    <td style="text-align: right;">${avgPct}%</td>
+                `;
+                tbody.appendChild(row);
+            });
+        }
+
+        function renderJobSubs(jobId) {
+            const subs = appData.subs.filter(s => s.jobId === jobId);
+            const tbody = document.querySelector('#job-subs-table tbody');
+            tbody.innerHTML = '';
+
+            let totalContract = 0, totalBilled = 0;
+
+            subs.forEach(sub => {
+                const remaining = (sub.contractAmt || 0) - (sub.billedToDate || 0);
+                const pctBilled = sub.contractAmt > 0 ? ((sub.billedToDate / sub.contractAmt) * 100).toFixed(1) : 0;
+                const level = sub.level || 'building';
+                let assignedTo = '';
+                if (level === 'job') {
+                    assignedTo = 'All Buildings';
+                } else if (level === 'phase') {
+                    const building = appData.buildings.find(b => b.id === sub.buildingId);
+                    const phase = appData.phases.find(p => p.id === sub.phaseId);
+                    assignedTo = (building?.name || '?') + ' → ' + (phase?.phase || '?');
+                } else {
+                    const building = appData.buildings.find(b => b.id === sub.buildingId);
+                    assignedTo = building?.name || '';
+                }
+
+                const levelLabel = level === 'job' ? 'Job-Wide' : level === 'phase' ? 'Phase' : 'Building';
+                const levelColor = level === 'job' ? 'var(--purple)' : level === 'phase' ? 'var(--green)' : 'var(--accent)';
+
+                totalContract += sub.contractAmt || 0;
+                totalBilled += sub.billedToDate || 0;
+
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td><strong>${sub.name}</strong>${sub.notes ? '<br><span style="font-size:11px;color:var(--text-dim);">' + sub.notes + '</span>' : ''}</td>
+                    <td>${sub.trade}</td>
+                    <td><span style="color:${levelColor};font-size:12px;font-weight:600;">${levelLabel}</span></td>
+                    <td>${assignedTo}</td>
+                    <td style="text-align: right;">${formatCurrency(sub.contractAmt)}</td>
+                    <td style="text-align: right;">${formatCurrency(sub.billedToDate)}</td>
+                    <td style="text-align: right;">${formatCurrency(remaining)}</td>
+                    <td style="text-align: right;">${pctBilled}%</td>
+                    <td>
+                        <button class="small" onclick="editSub('${sub.id}')">Edit</button>
+                        <button class="small danger" onclick="deleteSub('${sub.id}')">Del</button>
+                    </td>
+                `;
+                tbody.appendChild(row);
+            });
+
+            // Summary
+            const totalRemaining = totalContract - totalBilled;
+            const totalPct = totalContract > 0 ? ((totalBilled / totalContract) * 100).toFixed(1) : 0;
+            document.getElementById('job-subs-summary').innerHTML = `
+                <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; text-align: center;">
+                    <div>
+                        <div style="font-size: 12px; color: var(--text-dim);">Total Subs</div>
+                        <div style="font-size: 20px; font-weight: 700; color: var(--accent);">${subs.length}</div>
+                    </div>
+                    <div>
+                        <div style="font-size: 12px; color: var(--text-dim);">Total Contract</div>
+                        <div style="font-size: 20px; font-weight: 700; color: var(--accent);">${formatCurrency(totalContract)}</div>
+                    </div>
+                    <div>
+                        <div style="font-size: 12px; color: var(--text-dim);">Total Billed</div>
+                        <div style="font-size: 20px; font-weight: 700; color: var(--green);">${formatCurrency(totalBilled)}</div>
+                    </div>
+                    <div>
+                        <div style="font-size: 12px; color: var(--text-dim);">Remaining</div>
+                        <div style="font-size: 20px; font-weight: 700; color: var(--orange);">${formatCurrency(totalRemaining)}</div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderJobLabor(jobId) {
+            const phases = appData.phases.filter(p => p.jobId === jobId);
+            const tbody = document.querySelector('#job-labor-table tbody');
+            tbody.innerHTML = '';
+
+            phases.forEach(p => {
+                const building = appData.buildings.find(b => b.id === p.buildingId);
+                const laborCost = p.labor || 0;
+                const computedLabor = (p.hoursTotal || 0) * (p.rate || 40);
+
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td>${building?.name || ''}</td>
+                    <td>${p.phase}</td>
+                    <td style="text-align: right;">${p.hoursWeek || 0}</td>
+                    <td style="text-align: right;">${p.hoursTotal || 0}</td>
+                    <td style="text-align: right;">${formatCurrency(p.rate || 40)}</td>
+                    <td style="text-align: right;">${formatCurrency(laborCost)}</td>
+                    <td style="text-align: right;">${formatCurrency(computedLabor)}</td>
+                `;
+                tbody.appendChild(row);
+            });
+        }
+
+        function renderJobWeekly(jobId) {
+            const phases = appData.phases.filter(p => p.jobId === jobId);
+            const container = document.getElementById('job-weekly-content');
+            container.innerHTML = '';
+
+            const card = document.createElement('div');
+            card.className = 'card';
+            card.innerHTML = `
+                <h3 style="margin-bottom: 20px;">Thursday WIP Meeting Accruals</h3>
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Building</th>
+                                <th>Phase</th>
+                                <th style="text-align: right;">Materials</th>
+                                <th style="text-align: right;">Labor</th>
+                                <th style="text-align: right;">Sub</th>
+                                <th style="text-align: right;">Equipment</th>
+                                <th style="text-align: right;">Total This Week</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${phases.map(p => {
+                                const building = appData.buildings.find(b => b.id === p.buildingId);
+                                const weeklyTotal = (p.weeklyMat || 0) + (p.weeklyLabor || 0) + (p.weeklySub || 0) + (p.weeklyEquip || 0);
+                                return `
+                                    <tr>
+                                        <td>${building?.name || ''}</td>
+                                        <td>${p.phase}</td>
+                                        <td style="text-align: right;">${formatCurrency(p.weeklyMat)}</td>
+                                        <td style="text-align: right;">${formatCurrency(p.weeklyLabor)}</td>
+                                        <td style="text-align: right;">${formatCurrency(p.weeklySub)}</td>
+                                        <td style="text-align: right;">${formatCurrency(p.weeklyEquip)}</td>
+                                        <td style="text-align: right; font-weight: 600;">${formatCurrency(weeklyTotal)}</td>
+                                    </tr>
+                                `;
+                            }).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+            container.appendChild(card);
+        }
+
+        function renderJobCosts(jobId) {
+            const job = appData.jobs.find(j => j.id === jobId);
+            if (!job) return;
+            document.getElementById('jobCostMaterials').value = job.materials || '';
+            document.getElementById('jobCostLabor').value = job.labor || '';
+            document.getElementById('jobCostSub').value = (job.sub || 0).toFixed(2);
+            document.getElementById('jobCostEquipment').value = job.equipment || '';
+            document.getElementById('jobCostHoursWeek').value = job.hoursWeek || '';
+            document.getElementById('jobCostHoursTotal').value = job.hoursTotal || '';
+            document.getElementById('jobCostRate').value = job.rate || 40;
+            updateJobCostSummary(jobId);
+        }
+
+        function saveJobCosts() {
+            const job = appData.jobs.find(j => j.id === appState.currentJobId);
+            if (!job) return;
+            job.materials = parseFloat(document.getElementById('jobCostMaterials').value) || 0;
+            // job.sub is auto-calculated from Subs tab by recalcSubCosts — don't overwrite
+            job.equipment = parseFloat(document.getElementById('jobCostEquipment').value) || 0;
+            job.hoursWeek = parseFloat(document.getElementById('jobCostHoursWeek').value) || 0;
+            job.hoursTotal = (parseFloat(document.getElementById('jobCostHoursTotal').value) || 0) + job.hoursWeek;
+            job.rate = parseFloat(document.getElementById('jobCostRate').value) || 40;
+            // Auto-calculate labor $ from total hours × rate
+            job.labor = job.hoursTotal * job.rate;
+            document.getElementById('jobCostLabor').value = job.labor.toFixed(2);
+            // Update total hours display and reset weekly hours
+            document.getElementById('jobCostHoursTotal').value = job.hoursTotal;
+            document.getElementById('jobCostHoursWeek').value = '';
+            saveData();
+            updateJobCostSummary(appState.currentJobId);
+            // Update the summary cards using WIP
+            renderJobDetail(appState.currentJobId);
+            // Show save confirmation
+            const statusEl = document.getElementById('jobCostSaveStatus');
+            if (statusEl) {
+                statusEl.textContent = 'Saved!';
+                statusEl.style.opacity = '1';
+                clearTimeout(statusEl._timer);
+                statusEl._timer = setTimeout(() => { statusEl.style.opacity = '0'; }, 2000);
+            }
+        }
+
+        function updateJobCostSummary(jobId) {
+            const job = appData.jobs.find(j => j.id === jobId);
+            if (!job) return;
+            const jobLevelTotal = (job.materials || 0) + (job.labor || 0) + (job.sub || 0) + (job.equipment || 0);
+            const computedLabor = (job.hoursTotal || 0) * (job.rate || 40);
+            const costs = getJobTotalCost(jobId);
+            const phaseBuildingCost = costs.phaseCost + costs.buildingCost;
+            document.getElementById('jobCostTotal').textContent = formatCurrency(jobLevelTotal);
+            document.getElementById('jobCostLaborBurden').textContent = formatCurrency(computedLabor);
+            document.getElementById('jobCostFromPhases').textContent = formatCurrency(phaseBuildingCost);
+        }
+
+        function getJobContractAmount() {
+            const job = appData.jobs.find(j => j.id === appState.currentJobId);
+            return job ? (job.contractAmount || 0) : 0;
+        }
+
+        function syncBuildingBudgetFromPct() {
+            const pct = parseFloat(document.getElementById('buildingBudgetPct').value) || 0;
+            const contractAmt = getJobContractAmount();
+            if (contractAmt > 0) {
+                const budget = (contractAmt * pct / 100);
+                document.getElementById('buildingBudget').value = budget.toFixed(2);
+                document.getElementById('buildingBudgetHint').textContent = pct + '% of ' + formatCurrency(contractAmt) + ' = ' + formatCurrency(budget);
+            }
+        }
+
+        function syncBuildingBudgetFromDollar() {
+            const dollars = parseFloat(document.getElementById('buildingBudget').value) || 0;
+            const contractAmt = getJobContractAmount();
+            if (contractAmt > 0) {
+                const pct = (dollars / contractAmt * 100);
+                document.getElementById('buildingBudgetPct').value = pct.toFixed(1);
+                document.getElementById('buildingBudgetHint').textContent = pct.toFixed(1) + '% of ' + formatCurrency(contractAmt) + ' = ' + formatCurrency(dollars);
+            }
+        }
+
+        function openAddBuildingToJobModal() {
+            appState.editBuildingId = null;
+            document.getElementById('buildingModalHeader').textContent = 'Add Building';
+            document.getElementById('saveBuildingBtn').textContent = 'Add Building';
+            document.getElementById('deleteBuildingBtn').style.display = 'none';
+            document.getElementById('buildingName').value = '';
+            document.getElementById('buildingBudgetPct').value = '';
+            document.getElementById('buildingBudget').value = '';
+            document.getElementById('buildingBudgetHint').textContent = 'Contract: ' + formatCurrency(getJobContractAmount());
+            document.getElementById('buildingAddress').value = '';
+            document.getElementById('buildingMaterials').value = '';
+            document.getElementById('buildingLabor').value = '';
+            document.getElementById('buildingSub').value = '0.00';
+            document.getElementById('buildingEquipment').value = '';
+            document.getElementById('buildingHoursWeek').value = '';
+            document.getElementById('buildingHoursTotal').value = '';
+            document.getElementById('buildingRate').value = '40';
+            document.getElementById('buildingWorkScope').value = 'in-house';
+            document.getElementById('buildingLocked').checked = false;
+            openModal('addBuildingModal');
+        }
+
+        function editBuilding(buildingId) {
+            const building = appData.buildings.find(b => b.id === buildingId);
+            if (!building) return;
+
+            appState.editBuildingId = buildingId;
+            document.getElementById('buildingModalHeader').textContent = 'Edit Building';
+            document.getElementById('saveBuildingBtn').textContent = 'Save Changes';
+            document.getElementById('deleteBuildingBtn').style.display = 'inline-block';
+            document.getElementById('buildingName').value = building.name || '';
+            document.getElementById('buildingBudget').value = building.budget || '';
+            document.getElementById('buildingAddress').value = building.address || '';
+            document.getElementById('buildingMaterials').value = building.materials || '';
+            document.getElementById('buildingLabor').value = building.labor || '';
+            document.getElementById('buildingSub').value = getSubCostForBuilding(building.id, building.jobId || appState.currentJobId).toFixed(2);
+            document.getElementById('buildingEquipment').value = building.equipment || '';
+            document.getElementById('buildingHoursWeek').value = '';
+            document.getElementById('buildingHoursTotal').value = building.hoursTotal || '';
+            document.getElementById('buildingRate').value = building.rate || 40;
+
+            const contractAmt = getJobContractAmount();
+            if (contractAmt > 0 && building.budget) {
+                const pct = (building.budget / contractAmt * 100);
+                document.getElementById('buildingBudgetPct').value = pct.toFixed(1);
+                document.getElementById('buildingBudgetHint').textContent = pct.toFixed(1) + '% of ' + formatCurrency(contractAmt) + ' = ' + formatCurrency(building.budget);
+            } else {
+                document.getElementById('buildingBudgetPct').value = building.budgetPct || '';
+                document.getElementById('buildingBudgetHint').textContent = 'Contract: ' + formatCurrency(contractAmt);
+            }
+            document.getElementById('buildingWorkScope').value = building.workScope || 'in-house';
+            document.getElementById('buildingLocked').checked = building.locked || false;
+            openModal('addBuildingModal');
+        }
+
+        function deleteBuilding() {
+            if (!appState.editBuildingId) return;
+            const phases = appData.phases.filter(p => p.buildingId === appState.editBuildingId);
+            if (phases.length > 0) {
+                if (!confirm('This building has ' + phases.length + ' phase(s). Delete the building AND all its phases?')) return;
+                appData.phases = appData.phases.filter(p => p.buildingId !== appState.editBuildingId);
+            } else {
+                if (!confirm('Delete this building?')) return;
+            }
+            appData.buildings = appData.buildings.filter(b => b.id !== appState.editBuildingId);
+            appState.editBuildingId = null;
+            saveData();
+            closeModal('addBuildingModal');
+            renderJobDetail(appState.currentJobId);
+        }
+
+        function autoBalancePhasePcts() {
+            const jobId = appState.currentJobId;
+            const buildingId = document.getElementById('phaseBuilding').value;
+            if (!buildingId) { alert('Select a building first'); return; }
+            const bldg = appData.buildings.find(b => b.id === buildingId);
+            if (!bldg || !bldg.budget) { alert('Building has no budget set'); return; }
+            const phases = appData.phases.filter(p => p.jobId === jobId && p.buildingId === buildingId);
+            const lockedBudget = phases.filter(p => p.locked).reduce((sum, p) => sum + (p.phaseBudget || 0), 0);
+            const unlocked = phases.filter(p => !p.locked);
+            if (unlocked.length === 0) return;
+            const remaining = Math.max(0, bldg.budget - lockedBudget);
+            const each = remaining / unlocked.length;
+            unlocked.forEach(p => {
+                p.phaseBudget = Math.round(each * 100) / 100;
+            });
+            saveData();
+            renderJobDetail(jobId);
+        }
+
+        function autoBalanceOnPhaseAdd(jobId, buildingId) {
+            if (!buildingId) return;
+            const bldg = appData.buildings.find(b => b.id === buildingId);
+            if (!bldg || !bldg.budget) return;
+            const phases = appData.phases.filter(p => p.jobId === jobId && p.buildingId === buildingId);
+            const lockedBudget = phases.filter(p => p.locked).reduce((sum, p) => sum + (p.phaseBudget || 0), 0);
+            const unlocked = phases.filter(p => !p.locked);
+            if (unlocked.length === 0) return;
+            const remaining = Math.max(0, bldg.budget - lockedBudget);
+            const each = Math.round(remaining / unlocked.length * 100) / 100;
+            unlocked.forEach(p => {
+                p.phaseBudget = each;
+            });
+        }
+
+        function autoBalanceBuildingPcts() {
+            const jobId = appState.currentJobId;
+            const buildings = appData.buildings.filter(b => b.jobId === jobId);
+            const lockedPct = buildings.filter(b => b.locked).reduce((sum, b) => sum + (b.budgetPct || 0), 0);
+            const unlocked = buildings.filter(b => !b.locked);
+            if (unlocked.length === 0) return;
+            const remaining = Math.max(0, 100 - lockedPct);
+            const each = remaining / unlocked.length;
+            const contractAmt = appData.jobs.find(j => j.id === jobId)?.contractAmount || 0;
+            unlocked.forEach(b => {
+                b.budgetPct = Math.round(each * 10) / 10;
+                b.budget = contractAmt > 0 ? Math.round(contractAmt * b.budgetPct / 100 * 100) / 100 : b.budget;
+            });
+            saveData();
+            renderJobDetail(jobId);
+        }
+
+        function autoBalanceOnBuildingAdd(jobId) {
+            const buildings = appData.buildings.filter(b => b.jobId === jobId);
+            const lockedPct = buildings.filter(b => b.locked).reduce((sum, b) => sum + (b.budgetPct || 0), 0);
+            const unlocked = buildings.filter(b => !b.locked);
+            if (unlocked.length === 0) return;
+            const remaining = Math.max(0, 100 - lockedPct);
+            const each = Math.round(remaining / unlocked.length * 10) / 10;
+            const contractAmt = appData.jobs.find(j => j.id === jobId)?.contractAmount || 0;
+            unlocked.forEach(b => {
+                b.budgetPct = each;
+                b.budget = contractAmt > 0 ? Math.round(contractAmt * each / 100 * 100) / 100 : b.budget;
+            });
+        }
+
+        function saveBuilding() {
+            // Validate building budget % doesn't exceed 100% for the job
+            const newBudgetPct = parseFloat(document.getElementById('buildingBudgetPct').value) || 0;
+            const jobBuildings = appData.buildings.filter(b => b.jobId === appState.currentJobId);
+            let existingPctTotal = jobBuildings.reduce((sum, b) => sum + (b.budgetPct || 0), 0);
+            if (appState.editBuildingId) {
+                const editBldg = jobBuildings.find(b => b.id === appState.editBuildingId);
+                if (editBldg) existingPctTotal -= (editBldg.budgetPct || 0);
+            }
+            if (existingPctTotal + newBudgetPct > 100) {
+                alert('Total building budget % cannot exceed 100%. Currently ' + existingPctTotal.toFixed(1) + '% allocated. Maximum you can add: ' + (100 - existingPctTotal).toFixed(1) + '%');
+                return;
+            }
+            const hoursWeek = parseFloat(document.getElementById('buildingHoursWeek').value) || 0;
+            const hoursTotal = (parseFloat(document.getElementById('buildingHoursTotal').value) || 0) + hoursWeek;
+            const rate = parseFloat(document.getElementById('buildingRate').value) || 40;
+            const formData = {
+                name: document.getElementById('buildingName').value,
+                budget: parseFloat(document.getElementById('buildingBudget').value) || 0,
+                budgetPct: parseFloat(document.getElementById('buildingBudgetPct').value) || 0,
+                address: document.getElementById('buildingAddress').value,
+                workScope: document.getElementById('buildingWorkScope').value || 'in-house',
+                locked: document.getElementById('buildingLocked').checked,
+                materials: parseFloat(document.getElementById('buildingMaterials').value) || 0,
+                labor: hoursTotal * rate,
+                sub: 0, // auto-calculated from Subs tab by recalcSubCosts
+                equipment: parseFloat(document.getElementById('buildingEquipment').value) || 0,
+                hoursWeek: hoursWeek,
+                hoursTotal: hoursTotal,
+                rate: rate
+            };
+
+            if (appState.editBuildingId) {
+                const idx = appData.buildings.findIndex(b => b.id === appState.editBuildingId);
+                if (idx !== -1) {
+                    Object.assign(appData.buildings[idx], formData);
+                }
+                appState.editBuildingId = null;
+            } else {
+                const building = Object.assign({
+                    id: 'b' + Date.now(),
+                    jobId: appState.currentJobId
+                }, formData);
+                appData.buildings.push(building);
+                autoBalanceOnBuildingAdd(appState.currentJobId);
+            }
+            saveData();
+            closeModal('addBuildingModal');
+            renderJobDetail(appState.currentJobId);
+        }
+
+        function getSelectedBuildingBudget() {
+            const buildingId = document.getElementById('phaseBuilding').value;
+            const building = appData.buildings.find(b => b.id === buildingId);
+            return building ? (building.budget || 0) : 0;
+        }
+
+        function syncBudgetFromPct() {
+            const pct = parseFloat(document.getElementById('phaseBudgetPct').value) || 0;
+            const bldgBudget = getSelectedBuildingBudget();
+            if (bldgBudget > 0) {
+                document.getElementById('phaseBudget').value = (bldgBudget * pct / 100).toFixed(2);
+            }
+        }
+
+        function syncBudgetFromDollar() {
+            const dollars = parseFloat(document.getElementById('phaseBudget').value) || 0;
+            const bldgBudget = getSelectedBuildingBudget();
+            if (bldgBudget > 0) {
+                document.getElementById('phaseBudgetPct').value = (dollars / bldgBudget * 100).toFixed(1);
+            }
+        }
+
+        function openAddPhaseToJobModal() {
+            appState.editPhaseId = null;
+            document.getElementById('phaseModalHeader').textContent = 'Add Phase Entry';
+            document.getElementById('savePhaseBtn').textContent = 'Add Phase';
+            document.getElementById('deletePhaseBtn').style.display = 'none';
+
+            const buildings = appData.buildings.filter(b => b.jobId === appState.currentJobId);
+            const select = document.getElementById('phaseBuilding');
+            select.innerHTML = '<option value="">-- Select Building --</option>';
+            buildings.forEach(b => {
+                const opt = document.createElement('option');
+                opt.value = b.id;
+                opt.textContent = b.name;
+                select.appendChild(opt);
+            });
+
+            populatePhaseTypeSelect();
+            document.getElementById('phaseType').value = '';
+            document.getElementById('phasePercent').value = '0';
+            document.getElementById('phaseMaterials').value = '';
+            document.getElementById('phaseLabor').value = '';
+            document.getElementById('phaseSub').value = '0.00';
+            document.getElementById('phaseEquipment').value = '';
+            document.getElementById('phaseBudgetPct').value = '';
+            document.getElementById('phaseBudget').value = '';
+            document.getElementById('phaseHoursWeek').value = '';
+            document.getElementById('phaseHoursTotal').value = '';
+            document.getElementById('phaseRate').value = '40';
+            document.getElementById('phaseNotes').value = '';
+            document.getElementById('phaseWorkScope').value = 'in-house';
+            document.getElementById('phaseLocked').checked = false;
+            openModal('addPhaseModal');
+        }
+
+        function editPhase(phaseId) {
+            const phase = appData.phases.find(p => p.id === phaseId);
+            if (!phase) return;
+
+            appState.editPhaseId = phaseId;
+            document.getElementById('phaseModalHeader').textContent = 'Edit Phase Entry';
+            document.getElementById('savePhaseBtn').textContent = 'Save Changes';
+            document.getElementById('deletePhaseBtn').style.display = 'inline-block';
+
+            const buildings = appData.buildings.filter(b => b.jobId === phase.jobId);
+            const select = document.getElementById('phaseBuilding');
+            select.innerHTML = '<option value="">-- Select Building --</option>';
+            buildings.forEach(b => {
+                const opt = document.createElement('option');
+                opt.value = b.id;
+                opt.textContent = b.name;
+                select.appendChild(opt);
+            });
+
+            select.value = phase.buildingId || '';
+            populatePhaseTypeSelect();
+            if (phase.phase && !Array.from(document.getElementById('phaseType').options).some(o => o.value === phase.phase)) {
+                const c = getCustomItems('agx-wip-custom-phases');
+                if (!c.includes(phase.phase)) { c.push(phase.phase); saveCustomItems('agx-wip-custom-phases', c); populatePhaseTypeSelect(); }
+            }
+            document.getElementById('phaseType').value = phase.phase || '';
+            document.getElementById('phasePercent').value = phase.pctComplete || 0;
+            document.getElementById('phaseMaterials').value = phase.materials || '';
+            document.getElementById('phaseLabor').value = phase.labor || '';
+            document.getElementById('phaseSub').value = getSubCostForPhase(phase.id).toFixed(2);
+            document.getElementById('phaseEquipment').value = phase.equipment || '';
+            document.getElementById('phaseBudget').value = phase.phaseBudget || '';
+            // Calculate and show the budget percentage
+            const bldg = appData.buildings.find(b => b.id === phase.buildingId);
+            const bldgBudget = bldg ? (bldg.budget || 0) : 0;
+            if (bldgBudget > 0 && phase.phaseBudget) {
+                document.getElementById('phaseBudgetPct').value = (phase.phaseBudget / bldgBudget * 100).toFixed(1);
+            } else {
+                document.getElementById('phaseBudgetPct').value = '';
+            }
+            document.getElementById('phaseHoursWeek').value = '';
+            document.getElementById('phaseHoursTotal').value = phase.hoursTotal || '';
+            document.getElementById('phaseRate').value = phase.rate || 40;
+            document.getElementById('phaseNotes').value = phase.notes || '';
+            document.getElementById('phaseWorkScope').value = phase.workScope || 'in-house';
+            document.getElementById('phaseLocked').checked = phase.locked || false;
+            openModal('addPhaseModal');
+        }
+
+        function deletePhase() {
+            if (!appState.editPhaseId) return;
+            if (!confirm('Delete this phase entry? This cannot be undone.')) return;
+            appData.phases = appData.phases.filter(p => p.id !== appState.editPhaseId);
+            appState.editPhaseId = null;
+            saveData();
+            closeModal('addPhaseModal');
+            renderJobDetail(appState.currentJobId);
+        }
+
+        function savePhase() {
+            // Validate phase budget doesn't exceed building budget
+            const selectedBuildingId = document.getElementById('phaseBuilding').value;
+            if (selectedBuildingId) {
+                const bldg = appData.buildings.find(b => b.id === selectedBuildingId);
+                if (bldg && bldg.budget > 0) {
+                    const newPhaseBudget = parseFloat(document.getElementById('phaseBudget').value) || 0;
+                    const bldgPhases = appData.phases.filter(p => p.jobId === appState.currentJobId && p.buildingId === selectedBuildingId);
+                    let existingBudgetTotal = bldgPhases.reduce((sum, p) => sum + (p.phaseBudget || 0), 0);
+                    if (appState.editPhaseId) {
+                        const editP = bldgPhases.find(p => p.id === appState.editPhaseId);
+                        if (editP) existingBudgetTotal -= (editP.phaseBudget || 0);
+                    }
+                    if (existingBudgetTotal + newPhaseBudget > bldg.budget * 1.001) {
+                        const remaining = bldg.budget - existingBudgetTotal;
+                        alert('Phase budgets cannot exceed building budget (' + formatCurrency(bldg.budget) + '). Currently ' + formatCurrency(existingBudgetTotal) + ' allocated. Remaining: ' + formatCurrency(remaining));
+                        return;
+                    }
+                }
+            }
+            const hoursWeek = parseFloat(document.getElementById('phaseHoursWeek').value) || 0;
+            const hoursTotal = (parseFloat(document.getElementById('phaseHoursTotal').value) || 0) + hoursWeek;
+            const rate = parseFloat(document.getElementById('phaseRate').value) || 40;
+            const formData = {
+                buildingId: document.getElementById('phaseBuilding').value,
+                phase: document.getElementById('phaseType').value,
+                workScope: document.getElementById('phaseWorkScope').value || 'in-house',
+                locked: document.getElementById('phaseLocked').checked,
+                pctComplete: parseFloat(document.getElementById('phasePercent').value) || 0,
+                materials: parseFloat(document.getElementById('phaseMaterials').value) || 0,
+                labor: hoursTotal * rate,
+                sub: 0, // auto-calculated from Subs tab by recalcSubCosts
+                equipment: parseFloat(document.getElementById('phaseEquipment').value) || 0,
+                phaseBudget: parseFloat(document.getElementById('phaseBudget').value) || 0,
+                hoursWeek: hoursWeek,
+                hoursTotal: hoursTotal,
+                rate: rate,
+                notes: document.getElementById('phaseNotes').value
+            };
+
+            if (appState.editPhaseId) {
+                const idx = appData.phases.findIndex(p => p.id === appState.editPhaseId);
+                if (idx !== -1) {
+                    Object.assign(appData.phases[idx], formData);
+                }
+                appState.editPhaseId = null;
+            } else {
+                const phase = Object.assign({
+                    id: 'p' + Date.now(),
+                    jobId: appState.currentJobId,
+                    weeklyMat: 0,
+                    weeklyLabor: 0,
+                    weeklySub: 0,
+                    weeklyEquip: 0,
+                    dateAdded: new Date().toISOString()
+                }, formData);
+                appData.phases.push(phase);
+                autoBalanceOnPhaseAdd(appState.currentJobId, phase.buildingId);
+            }
+            saveData();
+            closeModal('addPhaseModal');
+            renderJobDetail(appState.currentJobId);
+        }
+
+        function openAddSubToJobModal() {
+            appState.editSubId = null;
+            document.getElementById('subModalHeader').textContent = 'Add Subcontractor';
+            document.getElementById('subSaveBtn').textContent = 'Add Subcontractor';
+            populateSubBuildingSelect();
+            document.getElementById('subName').value = '';
+            populateSubTradeSelect();
+            document.getElementById('subTrade').value = '';
+            document.getElementById('subLevel').value = 'job';
+            document.getElementById('subContract').value = '';
+            document.getElementById('subBilled').value = '';
+            document.getElementById('subNotes').value = '';
+            subLevelChanged();
+            openModal('addSubModal');
+        }
+
+        function populateSubBuildingSelect() {
+            const buildings = appData.buildings.filter(b => b.jobId === appState.currentJobId);
+            const select = document.getElementById('subBuilding');
+            select.innerHTML = '<option value="">-- Select Building --</option>';
+            buildings.forEach(b => {
+                const opt = document.createElement('option');
+                opt.value = b.id;
+                opt.textContent = b.name;
+                select.appendChild(opt);
+            });
+        }
+
+        function subLevelChanged() {
+            const level = document.getElementById('subLevel').value;
+            document.getElementById('subBuildingGroup').style.display = (level === 'building' || level === 'phase') ? '' : 'none';
+            document.getElementById('subPhaseGroup').style.display = level === 'phase' ? '' : 'none';
+            if (level === 'building' || level === 'phase') {
+                subBuildingChanged();
+            }
+        }
+
+        function subBuildingChanged() {
+            const buildingId = document.getElementById('subBuilding').value;
+            const phaseSelect = document.getElementById('subPhase');
+            phaseSelect.innerHTML = '<option value="">-- Select Phase --</option>';
+            if (buildingId) {
+                const phases = appData.phases.filter(p => p.jobId === appState.currentJobId && p.buildingId === buildingId);
+                phases.forEach(p => {
+                    const opt = document.createElement('option');
+                    opt.value = p.id;
+                    opt.textContent = p.phase;
+                    phaseSelect.appendChild(opt);
+                });
+            }
+        }
+
+        function saveSub() {
+            const level = document.getElementById('subLevel').value;
+            const subData = {
+                jobId: appState.currentJobId,
+                name: document.getElementById('subName').value,
+                trade: document.getElementById('subTrade').value,
+                level: level,
+                buildingId: (level === 'building' || level === 'phase') ? document.getElementById('subBuilding').value : '',
+                phaseId: level === 'phase' ? document.getElementById('subPhase').value : '',
+                contractAmt: parseFloat(document.getElementById('subContract').value) || 0,
+                billedToDate: parseFloat(document.getElementById('subBilled').value) || 0,
+                notes: document.getElementById('subNotes').value
+            };
+
+            if (appState.editSubId) {
+                const idx = appData.subs.findIndex(s => s.id === appState.editSubId);
+                if (idx >= 0) {
+                    subData.id = appState.editSubId;
+                    appData.subs[idx] = subData;
+                }
+            } else {
+                subData.id = 's' + Date.now();
+                appData.subs.push(subData);
+            }
+            saveData();
+            closeModal('addSubModal');
+            renderJobDetail(appState.currentJobId);
+        }
+
+        function editSub(subId) {
+            const sub = appData.subs.find(s => s.id === subId);
+            if (!sub) return;
+            appState.editSubId = subId;
+            document.getElementById('subModalHeader').textContent = 'Edit Subcontractor';
+            document.getElementById('subSaveBtn').textContent = 'Save Changes';
+            populateSubBuildingSelect();
+            document.getElementById('subName').value = sub.name || '';
+            populateSubTradeSelect();
+            if (sub.trade && !Array.from(document.getElementById('subTrade').options).some(o => o.value === sub.trade)) {
+                const c = getCustomItems('agx-wip-custom-trades');
+                if (!c.includes(sub.trade)) { c.push(sub.trade); saveCustomItems('agx-wip-custom-trades', c); populateSubTradeSelect(); }
+            }
+            document.getElementById('subTrade').value = sub.trade || '';
+            document.getElementById('subLevel').value = sub.level || 'building';
+            document.getElementById('subContract').value = sub.contractAmt || '';
+            document.getElementById('subBilled').value = sub.billedToDate || '';
+            document.getElementById('subNotes').value = sub.notes || '';
+            subLevelChanged();
+            if (sub.buildingId) document.getElementById('subBuilding').value = sub.buildingId;
+            if (sub.level === 'phase') {
+                subBuildingChanged();
+                setTimeout(() => { document.getElementById('subPhase').value = sub.phaseId || ''; }, 50);
+            }
+            openModal('addSubModal');
+        }
+
+        function deleteSub(subId) {
+            if (!confirm('Delete this subcontractor?')) return;
+            appData.subs = appData.subs.filter(s => s.id !== subId);
+            saveData();
+            renderJobDetail(appState.currentJobId);
+        }
+
+        // ==================== ESTIMATES FUNCTIONS (FROM ORIGINAL FILE) ====================
+        
