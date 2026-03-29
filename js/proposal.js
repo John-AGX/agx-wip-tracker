@@ -854,7 +854,7 @@ function parseReport(data) {
     const col0 = (aoa[i][0] || '').toString().trim();
 
     // Check for scope header pattern (SCOPE N: NAME)
-    const scopeHeaderMatch = col0.match(/^SCOPE\s\d+:\s\(.+)$/i);
+    const scopeHeaderMatch = col0.match(/^SCOPE\s+\d+:\s*(.+)$/i);
     if (scopeHeaderMatch) {
       currentSection = scopeHeaderMatch[1].trim();
       continue;
@@ -913,7 +913,7 @@ function processImportFile(file) {
       estimateLines.push(...lines);
       localStorage.setItem('agx-estimate-lines', JSON.stringify(estimateLines));
 
-      alert(`Estimate "${estimate.title}" imported successfully`);
+      alert(`Estimate "${estimate.title}" imported successfully!`);
 
       // Redirect to estimate editor if available
       if (window.location.hash && window.location.hash.includes('estimates')) {
@@ -945,7 +945,7 @@ function injectImportBtn() {
     if (!injectionTimeout) {
       injectionTimeout = setTimeout(() => {
         injectionTimeout = null;
-        injectItImportBtn();
+        injectImportBtn();
       }, 500);
     }
     return;
