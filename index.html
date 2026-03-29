@@ -1086,7 +1086,7 @@
                                             <span id="wip-pct-complete">0%</span>
                                         </div>
                                         <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border);">
-                                            <span style="color: var(--text-dim);">Revenue Earned (Income ÃÂ %)</span>
+                                            <span style="color: var(--text-dim);">Revenue Earned (Income × %)</span>
                                             <span id="wip-revenue-earned">$0.00</span>
                                         </div>
                                         <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border);">
@@ -1172,7 +1172,7 @@
                                         <input type="number" id="jobCostMaterials" placeholder="0.00" step="0.01">
                                     </div>
                                     <div class="form-group">
-                                        <label>Labor $ (auto: hours ÃÂ rate)</label>
+                                        <label>Labor $ (auto: hours × rate)</label>
                                         <input type="number" id="jobCostLabor" placeholder="0.00" step="0.01" readonly style="opacity: 0.7; cursor: not-allowed;">
                                     </div>
                                     <div class="form-group">
@@ -1197,7 +1197,7 @@
                                     </div>
                                 </div>
                                 <div style="margin-top: 15px; display: flex; gap: 10px;">
-                                    <button class="primary" onclick="saveJobCosts()" style="flex: 0 0 auto;">Ã°ÂÂÂ¾ Save Costs</button>
+                                    <button class="primary" onclick="saveJobCosts()" style="flex: 0 0 auto;">💾 Save Costs</button>
                                     <span id="jobCostSaveStatus" style="font-size: 13px; color: var(--green); align-self: center; opacity: 0; transition: opacity 0.3s;"></span>
                                 </div>
                                 <div style="margin-top: 15px; padding: 15px; background: var(--surface2); border-radius: 8px;">
@@ -1207,7 +1207,7 @@
                                             <div style="font-size: 18px; font-weight: 700; color: var(--accent);" id="jobCostTotal">$0.00</div>
                                         </div>
                                         <div>
-                                            <div style="font-size: 12px; color: var(--text-dim);">Computed Labor (Hrs ÃÂ Rate)</div>
+                                            <div style="font-size: 12px; color: var(--text-dim);">Computed Labor (Hrs × Rate)</div>
                                             <div style="font-size: 18px; font-weight: 700; color: var(--accent);" id="jobCostLaborBurden">$0.00</div>
                                         </div>
                                         <div>
@@ -1279,7 +1279,7 @@
                                             <th style="text-align: right;">Total Hours</th>
                                             <th style="text-align: right;">Avg Rate</th>
                                             <th style="text-align: right;">Labor Cost</th>
-                                            <th style="text-align: right;">Computed (Hrs ÃÂ Rate)</th>
+                                            <th style="text-align: right;">Computed (Hrs × Rate)</th>
                                         </tr>
                                     </thead>
                                     <tbody></tbody>
@@ -1467,7 +1467,7 @@
                         <input type="number" id="buildingMaterials" placeholder="0.00" step="0.01">
                     </div>
                     <div class="form-group">
-                        <label>Labor $ (auto: hours ÃÂ rate)</label>
+                        <label>Labor $ (auto: hours × rate)</label>
                         <input type="number" id="buildingLabor" placeholder="0.00" step="0.01" readonly style="opacity: 0.7; cursor: not-allowed;">
                     </div>
                 </div>
@@ -1535,7 +1535,7 @@
                     <input type="number" id="phaseMaterials" placeholder="0.00" step="0.01">
                 </div>
                 <div class="form-group">
-                    <label>Labor $ (auto: hours ÃÂ rate)</label>
+                    <label>Labor $ (auto: hours × rate)</label>
                     <input type="number" id="phaseLabor" placeholder="0.00" step="0.01" readonly style="opacity: 0.7; cursor: not-allowed;">
                 </div>
             </div>
@@ -1906,7 +1906,7 @@
             overlay.innerHTML = lt + 'div style="background:var(--card-bg,#1a1a2e);border-radius:12px;padding:20px;min-width:300px;max-width:400px;border:1px solid var(--border,#333);"' + gt +
                 lt + 'div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:15px;"' + gt +
                 lt + 'h3 style="margin:0;color:var(--text,#fff);"' + gt + 'Manage Custom Items' + lt + '/h3' + gt +
-                lt + 'button onclick="closeManageList()" style="background:none;border:none;color:var(--text-dim,#888);font-size:20px;cursor:pointer;"' + gt + 'ÃÂ' + lt + '/button' + gt +
+                lt + 'button onclick="closeManageList()" style="background:none;border:none;color:var(--text-dim,#888);font-size:20px;cursor:pointer;"' + gt + '×' + lt + '/button' + gt +
                 lt + '/div' + gt +
                 lt + 'div style="max-height:300px;overflow-y:auto;"' + gt + listHtml + lt + '/div' + gt +
                 lt + '/div' + gt;
@@ -2271,7 +2271,7 @@
         }
 
         function getJobAccruedCosts(jobId) {
-            // Accrued = (Sub Contract ÃÂ % Complete of assigned scope) - Billed to Date, min $0
+            // Accrued = (Sub Contract × % Complete of assigned scope) - Billed to Date, min $0
             let totalAccrued = 0;
             const jobSubs = appData.subs.filter(s => s.jobId === jobId);
             const job = appData.jobs.find(j => j.id === jobId);
@@ -3274,7 +3274,7 @@
             job.hoursWeek = parseFloat(document.getElementById('jobCostHoursWeek').value) || 0;
             job.hoursTotal = (parseFloat(document.getElementById('jobCostHoursTotal').value) || 0) + job.hoursWeek;
             job.rate = parseFloat(document.getElementById('jobCostRate').value) || 40;
-            // Auto-calculate labor $ from total hours ÃÂ rate
+            // Auto-calculate labor $ from total hours × rate
             job.labor = job.hoursTotal * job.rate;
             document.getElementById('jobCostLabor').value = job.labor.toFixed(2);
             // Update total hours display and reset weekly hours
