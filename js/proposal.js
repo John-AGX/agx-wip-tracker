@@ -29,21 +29,28 @@ function injectImportBtn() {
     }
 
 function injectExportBtns() {
-      const estimates = JSON.parse(localStorage.getItem('agx-estimates') || '[]');
-      const delBtns = Array.from(document.querySelectorAll('button')).filter(function(b) { return b.textContent === 'Delete'; });
-      delBtns.forEach(function(delBtn, idx) {
-        var td = delBtn.parentElement;
-        if (!td || td.querySelector('.agx-export-btn')) return;
-        var est = estimates[idx];
-        if (!est) return;
-        var btn = document.createElement('button');
-        btn.className = 'agx-export-btn';
-        btn.textContent = 'Generate Proposal';
-        btn.style.cssText = 'margin-left:6px;padding:5px 12px;background:#1B3A5C;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:13px;font-weight:bold;';
-        btn.addEventListener('click', function() { exportEstimate(est.id); });
-        td.appendChild(btn);
-      });
-    }
+    var estimates = JSON.parse(localStorage.getItem('agx-estimates') || '[]');
+    var delBtns = Array.from(document.querySelectorAll('button')).filter(function(b) { return b.textContent === 'Delete'; });
+    delBtns.forEach(function(delBtn, idx) {
+      if (idx >= estimates.length) return;
+      var cell = delBtn.parentNode;
+      if (!cell) return;
+      if (cell.querySelector('.agx-proposal-btn')) return;
+      var estId = estimates[idx].id;
+      var propBtn = document.createElement('button');
+      propBtn.className = 'agx-proposal-btn';
+      propBtn.textContent = 'Generate Proposal';
+      propBtn.style.cssText = 'margin-left:6px;padding:4px 10px;background:#1B8541;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.85em;';
+      propBtn.onclick = function() { generateProposal(estId); };
+      cell.appendChild(propBtn);
+      var expBtn = document.createElement('button');
+      expBtn.className = 'agx-proposal-btn';
+      expBtn.textContent = 'Export Estimate';
+      expBtn.style.cssText = 'margin-left:6px;padding:4px 10px;background:#1B3A5C;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.85em;';
+      expBtn.onclick = function() { exportEstimate(estId); };
+      cell.appendChild(expBtn);
+    });
+  }
 
 function processImportFile(file) {
       var reader = new FileReader();
@@ -250,6 +257,169 @@ function exportEstimate(estimateId) {
       XLSX.utils.book_append_sheet(wb, ws, 'Lead Report');
       XLSX.writeFile(wb, (est.title || 'Estimate') + ' - Lead Report.xlsx');
     }
+
+
+
+function generateProposal(estimateId) {
+  var estimates = JSON.parse(localStorage.getItem('agx-estimates') || '[]');
+  var lines = JSON.parse(localStorage.getItem('agx-estimate-lines') || '[]');
+  var est = estimates.find(function(e) { return e.id === estimateId; });
+  if (!est) { alert('Estimate not found'); return; }
+  var estLines = lines.filter(function(l) { return l.estimateId === estimateId; });
+  
+  // Group lines by section
+  var sections = [];
+  var sectionMap = {};
+  estLines.forEach(function(line) {
+    var sec = line.section || 'General';
+    if (!sectionMap[sec]) {
+      sectionMap[sec] = [];
+      sections.push(sec);
+    }
+    sectionMap[sec].push(line);
+  });
+  
+  // Calculate total client price
+  var totalPrice = 0;
+  estLines.forEach(function(line) {
+    var base = (parseFloat(line.qty) || 0) * (parseFloat(line.unitCost) || 0);
+    var markup = parseFloat(line.markup) || parseFloat(est.defaultMarkup) || 0;
+    totalPrice += base * (1 + markup / 100);
+  });
+  
+  // Format currency
+  var priceStr = '$' + totalPrice.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  
+  // Build date
+  var now = new Date();
+  var dateStr = (now.getMonth()+1) + '-' + now.getDate() + '-' + now.getFullYear();
+  
+  // Derive greeting - use client name first word + "Team"
+  var clientFirst = (est.client || 'Team').split(' ')[0].split('-')[0].trim();
+  var greeting = 'Dear ' + clientFirst + ' Team,';
+
+  // Build scope sections HTML
+  var scopeHtml = '';
+  sections.forEach(function(secName, idx) {
+    var secLabel = 'A' + (idx + 1) + '. ' + secName;
+    scopeHtml += '<p style="margin:18px 0 6px;font-weight:500;">' + secLabel + '</p>';
+    sectionMap[secName].forEach(function(line) {
+      if (line.description && line.description.trim()) {
+        scopeHtml += '<p style="margin:2px 0 2px 20px;">- ' + line.description + '</p>';
+      }
+    });
+  });
+  
+  // If there's also a scopeOfWork text, add it before the sections
+  var scopeIntro = '';
+  if (est.scopeOfWork && est.scopeOfWork.trim()) {
+    scopeIntro = '<p style="margin:0 0 12px;">' + est.scopeOfWork.replace(/\n/g, '<br>') + '</p>';
+  }
+
+  var html = '<!DOCTYPE html><html><head><meta charset="utf-8">';
+  html += '<title>Proposal for ' + (est.community || '') + ' - ' + (est.title || '') + '</title>';
+  html += '<style>';
+  html += 'body{font-family:Arial,Helvetica,sans-serif;font-size:11pt;color:#222;max-width:800px;margin:0 auto;padding:40px 50px;line-height:1.5;}';
+  html += '.header{text-align:center;margin-bottom:20px;}';
+  html += '.logo-text{font-size:32pt;font-weight:900;color:#1a1a2e;letter-spacing:3px;margin:0;}';
+  html += '.logo-sub{font-size:9pt;letter-spacing:8px;color:#555;margin:0 0 10px;}';
+  html += '.addr-line{text-align:center;font-size:9pt;color:#555;margin:8px 0 20px;}';
+  html += '.info-row{display:flex;justify-content:space-between;margin:10px 0;}';
+  html += '.info-left{text-align:left;} .info-right{text-align:right;}';
+  html += '.proposal-title{font-size:15pt;font-weight:700;margin:24px 0 16px;}';
+  html += '.greeting{font-weight:700;margin:16px 0;}';
+  html += 'hr{border:none;border-top:1.5px solid #ccc;margin:24px 0;}';
+  html += '.scope-heading{font-size:13pt;font-weight:700;margin:20px 0 8px;}';
+  html += '.total-price{text-align:right;font-size:15pt;font-weight:700;margin:30px 0 20px;}';
+  html += '.assumptions-title{font-weight:700;font-style:italic;text-decoration:underline;margin:20px 0 10px;}';
+  html += '.assumptions ol{padding-left:20px;} .assumptions li{margin:8px 0;font-size:10pt;}';
+  html += '.assumptions li ul{list-style:disc;margin:6px 0;} .assumptions li ul li{margin:4px 0;}';
+  html += '.sig-block{margin-top:40px;font-size:10pt;}';
+  html += '.sig-line{display:flex;align-items:center;margin:20px 0;} .sig-label{font-weight:700;width:100px;} .sig-rule{flex:1;border-bottom:1px solid #000;margin-left:10px;}';
+  html += '@media print{body{padding:20px 40px;} @page{margin:0.75in;}}';
+  html += '</style></head><body>';
+
+  // Logo header
+  html += '<div class="header">';
+  html += '<p class="logo-text">AGX</p>';
+  html += '<p class="logo-sub">A G &nbsp; E X T E R I O R S</p>';
+  html += '</div>';
+  html += '<p class="addr-line">13191 56th Court, Ste 102 &nbsp;&middot;&nbsp; Clearwater, FL 33760-4030 &nbsp;&middot;&nbsp; Phone: 813-725-5233</p>';
+  
+  // Client info row
+  html += '<div class="info-row"><div class="info-left">';
+  html += '<p style="margin:2px 0;">' + (est.client || '') + (est.community ? ' - ' + est.community : '') + '</p>';
+  if (est.managerPhone) html += '<p style="margin:2px 0;">Phone: ' + est.managerPhone + '</p>';
+  html += '<br>';
+  if (est.billingAddr) html += '<p style="margin:2px 0;">' + est.billingAddr.replace(/\n/g, '<br>') + '</p>';
+  html += '</div><div class="info-right">';
+  if (est.propertyAddr) {
+    html += '<p style="margin:2px 0;">Job Address:</p>';
+    html += '<p style="margin:2px 0;">' + est.propertyAddr.replace(/\n/g, '<br>') + '</p>';
+  }
+  html += '<p style="margin:8px 0 2px;"><strong>Print Date:</strong> &nbsp; ' + dateStr + '</p>';
+  html += '</div></div>';
+  
+  // Proposal title
+  html += '<p class="proposal-title">Proposal for ' + (est.community || '') + ' - ' + (est.title || '') + '</p>';
+  
+  // Greeting
+  html += '<p class="greeting">' + greeting + '</p>';
+  
+  // Intro paragraph with bold placeholders
+  var issueText = est.title || 'the requested work';
+  var communityText = est.community || 'your';
+  html += '<p>AG Exteriors is pleased to provide you with a proposal to complete the <strong>' + issueText + '</strong> needed by the <strong>' + communityText + '</strong> community.</p>';
+  
+  // Boilerplate
+  html += '<p>We proudly specialize in a wide range of exterior services, including roofing, siding, painting, deck rebuilding, and more\u2014delivering each with care and attention to detail. Backed by our leadership team with extensive experience in construction, development, and property management. AG Exteriors is committed to bringing a thoughtful, professional approach to every project. With this foundation, we\u2019re committed to providing high-quality work and dependable service on every project.</p>';
+
+  // Scope of Work
+  html += '<hr>';
+  html += '<p class="scope-heading">Scope of Work</p>';
+  html += scopeIntro;
+  html += scopeHtml;
+  
+  // Total Price
+  html += '<hr>';
+  html += '<p class="total-price">Total Price: &nbsp; ' + priceStr + '</p>';
+  
+  // Assumptions
+  html += '<div class="assumptions">';
+  html += '<p class="assumptions-title">Assumptions, Clarifications and Exclusions:</p>';
+  html += '<ol>';
+  html += '<li>This proposal may be withdrawn by AG Exteriors if not accepted within 30 days.</li>';
+  html += '<li>Pricing assumes unfettered access to the property during the project.</li>';
+  html += '<li>If AG Exteriors encounters unforeseen conditions that differ from those anticipated or ordinarily found to exist in the construction activities being provided, AG Exteriors retains the right to make an equitable adjustment to the pricing.</li>';
+  html += '<li>Client will provide electrical power and water at no charge.</li>';
+  html += '<li>Client will provide a location for dumpsters on site for trash and material disposal. AG Exteriors will provide the dumpsters for the entire job. However, if we are required to switch out dumpsters due to residents\u2019 use, AG Exteriors reserves the right to charge the Client accordingly.</li>';
+  html += '<li>Mold/Asbestos/Lead Paint: Any detection or remediation of mold, asbestos, and lead paint is specifically excluded from this proposal. Any costs associated with the detection and/or removal of mold, mold spores, asbestos, and lead paint are the responsibility of others.</li>';
+  html += '<li>Damage to the physical property that occurred prior to AG Exteriors\u2019 work not specifically called out in the scope of work is excluded.</li>';
+  html += '<li>Proposal excludes any engineering and/or permit fees. If any of these are required to complete the project, AG Exteriors will charge the client the cost of these fees plus an additional 10%.</li>';
+  html += '<li>Client acknowledges that markets are experiencing significant, industry-wide economic fluctuations, impacting the price of materials to be supplied in conjunction with the agreement. Client acknowledges that materials pricing has the potential to significantly increase between the time of the issuance of the underlying bid and the date of materials purchase for the Project. If the cost of any given material increases above the amount shown in the bid proposal for such material, this quote shall be adjusted upwards, and the Client will be responsible for the increased cost of the materials.';
+  html += '<ul><li>In order to mitigate the potential for material-based price increases, the Client has the option to pay for materials in advance of the job. Material costs are guaranteed if materials are paid for at the time the proposal is accepted.</li>';
+  html += '<li>Any prepayment of materials will be in addition to the normal deposit of 35%.</li></ul></li>';
+  html += '</ol></div>';
+
+  // Signature block
+  html += '<div class="sig-block">';
+  html += '<p>I confirm that my action here represents my electronic signature and is binding.</p>';
+  html += '<div class="sig-line"><span class="sig-label">Signature:</span><span class="sig-rule"></span></div>';
+  html += '<div class="sig-line"><span class="sig-label">Date:</span><span class="sig-rule"></span></div>';
+  html += '<div class="sig-line"><span class="sig-label">Print Name:</span><span class="sig-rule"></span></div>';
+  html += '</div>';
+  
+  html += '</body></html>';
+  
+  // Open in new window
+  var win = window.open('', '_blank');
+  if (win) {
+    win.document.write(html);
+    win.document.close();
+  } else {
+    alert('Pop-up blocked. Please allow pop-ups for this site.');
+  }
+}
 
 
 function downloadBlankTemplate() {
