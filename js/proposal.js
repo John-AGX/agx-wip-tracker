@@ -78,222 +78,362 @@ function exportEstimate(estId) {
   const grouped = groupLinesBySection(lines);
   const sections = Object.keys(grouped);
 
-  const wb = XLSX.utils.book_new();
-  const ws = {};
-  let row = 1;
+  // Ensure ExcelJS is loaded
+  if (typeof ExcelJS === 'undefined') {
+    alert('ExcelJS is still loading. Please try again in a moment.');
+    return;
+  }
 
-  // ========== ROW 1: Title Header ==========
-  ws['A1'] = cellValue('AGX CENTRAL FLORIDA', 's');
-  const merges = [];
-  merges.push('A1:G1');
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'AGX Central Florida';
+  const ws = wb.addWorksheet('Lead Report');
 
-  // ========== ROW 2: Subtitle ==========
-  row = 2;
-  ws['A2'] = cellValue('Lead Report & Preliminary Estimate', 's');
-  merges.push('A2:G2');
+  // === AGX Brand Colors ===
+  const GREEN = '1B8541';
+  const DARK_TEAL = '1B3A5C';
+  const LABEL_BG = 'E8F5E9';
+  const ALT_ROW = 'F1F8F2';
+  const SECTION_BG = 'D5E8D9';
+  const BORDER_COLOR = 'CCCCCC';
+  const WHITE = 'FFFFFF';
 
-  // ========== ROW 3: Project Name ==========
-  row = 3;
-  const projectTitle = estimate.community && estimate.title.includes(estimate.community)
-    ? estimate.title.replace(estimate.community + ' - ', '').replace(' - ' + estimate.community, '')
-    : estimate.title;
-  const row3Text = `${estimate.client || ''} - ${estimate.community || ''} - ${projectTitle}`;
-  ws['A3'] = cellValue(row3Text, 's');
-  merges.push('A3:G3');
+  // === Helpers ===
+  const greenFill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF' + GREEN } };
+  const labelFill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF' + LABEL_BG } };
+  const altFill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF' + ALT_ROW } };
+  const sectionFill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF' + SECTION_BG } };
+  const thinBorder = {
+    top: { style: 'thin', color: { argb: 'FF' + BORDER_COLOR } },
+    left: { style: 'thin', color: { argb: 'FF' + BORDER_COLOR } },
+    bottom: { style: 'thin', color: { argb: 'FF' + BORDER_COLOR } },
+    right: { style: 'thin', color: { argb: 'FF' + BORDER_COLOR } }
+  };
+  const whiteFont = (size, bold) => ({ name: 'Arial', size: size, bold: !!bold, color: { argb: 'FF' + WHITE } });
+  const darkTealFont = (size, bold) => ({ name: 'Arial', size: size, bold: !!bold, color: { argb: 'FF' + DARK_TEAL } });
+  const bodyFont = { name: 'Arial', size: 10 };
+  const currencyFmt = '$#,##0.00';
+  const pctFmt = '0%';
 
-  // ========== ROWS 4-5: Empty ==========
-  row = 4;
+  function mergeAndStyle(r, c1, c2, value, font, fill, alignment) {
+    ws.mergeCells(r, c1, r, c2);
+    const cell = ws.getCell(r, c1);
+    cell.value = value;
+    if (font) cell.font = font;
+    if (fill) cell.fill = fill;
+    if (alignment) cell.alignment = alignment;
+  }
 
-  // ========== ROW 6: Lead Information Header ==========
+  function setInfoRow(r, label, value) {
+    ws.mergeCells(r, 1, r, 3);
+    ws.mergeCells(r, 4, r, 7);
+    const labelCell = ws.getCell(r, 1);
+    labelCell.value = label;
+    labelCell.font = { name: 'Arial', size: 10, bold: true };
+    labelCell.fill = labelFill;
+    labelCell.border = thinBorder;
+    const valCell = ws.getCell(r, 4);
+    valCell.value = value || '\u2014';
+    valCell.font = bodyFont;
+    valCell.border = thinBorder;
+  }
+
+  // === Column Widths ===
+  ws.getColumn(1).width = 8;   // A - Item #
+  ws.getColumn(2).width = 45;  // B - Description
+  ws.getColumn(3).width = 8;   // C - Qty
+  ws.getColumn(4).width = 8;   // D - Unit
+  ws.getColumn(5).width = 14;  // E - Unit Cost
+  ws.getColumn(6).width = 10;  // F - Markup %
+  ws.getColumn(7).width = 16;  // G - Total
+
+  // === ROW 1: AGX CENTRAL FLORIDA ===
+  mergeAndStyle(1, 1, 7, 'AGX CENTRAL FLORIDA', whiteFont(16, true), greenFill, { horizontal: 'center', vertical: 'middle' });
+  ws.getRow(1).height = 30;
+
+  // === ROW 2: Subtitle ===
+  mergeAndStyle(2, 1, 7, 'Lead Report & Preliminary Estimate', { name: 'Arial', size: 12, bold: true, color: { argb: 'FF' + DARK_TEAL } }, null, { horizontal: 'center' });
+
+  // === ROW 3: Lead Title ===
+  const projectTitle = estimate.title || 'Untitled Estimate';
+  const row3Text = projectTitle;
+  mergeAndStyle(3, 1, 7, row3Text, { name: 'Arial', size: 11, color: { argb: 'FF444444' } }, null, { horizontal: 'center' });
+
+  // === ROW 4: Green accent line ===
+  mergeAndStyle(4, 1, 7, '', null, greenFill, null);
+  ws.getRow(4).height = 4;
+
+  // === ROW 5: Empty ===
+  let row = 5;
+
+  // === ROW 6: Lead Information Header ===
   row = 6;
-  ws['A6'] = cellValue('Lead Information', 's');
-  merges.push('A6:G6');
+  mergeAndStyle(row, 1, 7, 'Lead Information', whiteFont(13, true), greenFill, { horizontal: 'left', vertical: 'middle' });
 
-  // ========== ROWS 7-14: Lead Information Fields ==========
+  // === ROWS 7-14: Lead Info Fields ===
+  const nickNameEl = document.querySelector('[data-field="nickName"]');
+  const nickNameVal = (nickNameEl && nickNameEl.value) ? nickNameEl.value : (estimate.nickName || '\u2014');
+
   const leadFields = [
-    { row: 7, label: 'Title', value: estimate.title },
-    { row: 8, label: 'Nick Name', value: estimate.nickName || '\u2014' },
-    { row: 9, label: 'Project Type', value: estimate.jobType },
-    { row: 10, label: 'Status', value: estimate.status || 'Open' },
-    { row: 11, label: 'Created Date', value: formatDateLong(estimate.created) },
-    { row: 12, label: 'Salesperson', value: 'Scott Ryan' },
-    { row: 13, label: 'Market', value: 'Tampa' },
-    { row: 14, label: 'Estimate ID', value: estimate.id || '\u2014' }
+    { row: 7, label: 'Title', value: estimate.title || '\u2014' },
+    { row: 8, label: 'Nick Name', value: nickNameVal },
+    { row: 9, label: 'Project Type', value: estimate.jobType || '\u2014' },
+    { row: 10, label: 'Status', value: estimate.status || '\u2014' },
+    { row: 11, label: 'Created Date', value: estimate.created ? formatDateShort(estimate.created) : '\u2014' },
+    { row: 12, label: 'Salesperson', value: '\u2014' },
+    { row: 13, label: 'Market', value: '\u2014' },
+    { row: 14, label: 'Estimate ID', value: estId }
   ];
-  leadFields.forEach(field => {
-    ws['A' + field.row] = cellValue(field.label, 's');
-    merges.push('A' + field.row + ':C' + field.row);
-    ws['D' + field.row] = cellValue(field.value, 's');
-    merges.push('D' + field.row + ':G' + field.row);
-  });
+  leadFields.forEach(f => setInfoRow(f.row, f.label, f.value));
 
-  // ========== ROW 15: Empty ==========
+  // === ROW 15: Empty ===
   row = 15;
 
-  // ========== ROW 16: Property Information Header ==========
+  // === ROW 16: Property Information Header ===
   row = 16;
-  ws['A16'] = cellValue('Property Information', 's');
-  merges.push('A16:G16');
+  mergeAndStyle(row, 1, 7, 'Property Information', whiteFont(13, true), greenFill, { horizontal: 'left', vertical: 'middle' });
 
-  // ========== ROWS 17-24: Property Information Fields ==========
+  // === ROWS 17-24: Property Info Fields ===
   const propFields = [
-    { row: 17, label: 'Community', value: estimate.community },
-    { row: 18, label: 'Property Address', value: estimate.propertyAddr },
-    { row: 19, label: 'Management Co.', value: estimate.client },
-    { row: 20, label: 'CAM', value: estimate.managerName },
-    { row: 21, label: 'CAM Email', value: estimate.managerEmail },
-    { row: 22, label: 'On-Site Contact', value: '\u2014' },
+    { row: 17, label: 'Community', value: estimate.community || '\u2014' },
+    { row: 18, label: 'Property Address', value: estimate.propertyAddr || '\u2014' },
+    { row: 19, label: 'Management Co.', value: estimate.client || '\u2014' },
+    { row: 20, label: 'CAM', value: '\u2014' },
+    { row: 21, label: 'CAM Email', value: '\u2014' },
+    { row: 22, label: 'On-Site Contact', value: estimate.managerName || '\u2014' },
     { row: 23, label: 'POC Phone', value: estimate.managerPhone || '\u2014' },
-    { row: 24, label: 'POC Email', value: '\u2014' }
+    { row: 24, label: 'POC Email', value: estimate.managerEmail || '\u2014' }
   ];
-  propFields.forEach(field => {
-    ws['A' + field.row] = cellValue(field.label, 's');
-    merges.push('A' + field.row + ':C' + field.row);
-    ws['D' + field.row] = cellValue(field.value, 's');
-    merges.push('D' + field.row + ':G' + field.row);
-  });
+  propFields.forEach(f => setInfoRow(f.row, f.label, f.value));
 
-  // ========== ROW 25: Empty ==========
+  // === ROW 25: Empty ===
   row = 25;
 
-  // ========== ROW 26: Scope of Work Header ==========
+  // === ROW 26: Scope of Work Header ===
   row = 26;
-  ws['A26'] = cellValue('Scope of Work', 's');
-  merges.push('A26:G26');
+  mergeAndStyle(row, 1, 7, 'Scope of Work', whiteFont(13, true), greenFill, { horizontal: 'left', vertical: 'middle' });
 
-  // ========== ROW 27: Scope of Work Content ==========
+  // === ROW 27: SOW Text ===
   row = 27;
-  ws['A27'] = cellValue(estimate.scopeOfWork || '\u2014', 's');
-  merges.push('A27:G27');
+  ws.mergeCells(row, 1, row, 7);
+  const sowCell = ws.getCell(row, 1);
+  sowCell.value = estimate.scopeOfWork || 'Scope TBD \u2014 pending site visit';
+  sowCell.font = bodyFont;
+  sowCell.alignment = { wrapText: true, vertical: 'top' };
 
-  // ========== ROW 28: Empty ==========
-  row = 28;
+  // === ROW 28: Empty ===
+  row = 29;
 
-  // ========== SCOPES SECTION ==========
-  const scopeTotals = [];
+  // === SCOPE SECTIONS ===
+  const scopeData = [];
   let scopeIndex = 1;
 
   sections.forEach(sectionName => {
     const sectionLines = grouped[sectionName];
 
     // Scope header row
+    const scopeHeaderText = 'SCOPE ' + scopeIndex + ': ' + (sectionName || 'General').toUpperCase();
+    mergeAndStyle(row, 1, 7, scopeHeaderText, whiteFont(13, true), greenFill, { horizontal: 'left', vertical: 'middle' });
     row++;
-    const scopeHeaderText = `SCOPE ${scopeIndex}: ${sectionName.toUpperCase()}`;
-    ws['A' + row] = cellValue(scopeHeaderText, 's');
-    merges.push('A' + row + ':G' + row);
-    const scopeHeaderRow = row;
 
-    row++;
     // Column headers
-    ws['A' + row] = cellValue('Item #', 's');
-    ws['B' + row] = cellValue('Description', 's');
-    ws['C' + row] = cellValue('Qty', 's');
-    ws['D' + row] = cellValue('Unit', 's');
-    ws['E' + row] = cellValue('Unit Cost', 's');
-    ws['F' + row] = cellValue('Markup %', 's');
-    ws['G' + row] = cellValue('Total', 's');
-    const columnHeaderRow = row;
+    const colHeaders = ['Item #', 'Description', 'Qty', 'Unit', 'Unit Cost', 'Markup %', 'Total'];
+    colHeaders.forEach((h, ci) => {
+      const cell = ws.getCell(row, ci + 1);
+      cell.value = h;
+      cell.font = whiteFont(10, true);
+      cell.fill = greenFill;
+      cell.border = thinBorder;
+      cell.alignment = { horizontal: 'center' };
+    });
+    const colHeaderRow = row;
+    row++;
 
     // Line items
-    const lineStartRow = row + 1;
+    const lineStartRow = row;
     let lineIndex = 1;
-    sectionLines.forEach(line => {
-      row++;
-      const itemNum = `${scopeIndex}.${lineIndex}`;
-      ws['A' + row] = cellValue(itemNum, 's');
-      ws['B' + row] = cellValue(line.description, 's');
-      ws['C' + row] = cellValue(line.qty, 'n');
-      ws['D' + row] = cellValue(line.unit, 's');
-      ws['E' + row] = cellValue(line.unitCost, 'n');
-      ws['F' + row] = cellValue(line.markup / 100, 'n');
-      ws['G' + row] = cellValue(`C${row}*E${row}*(1+F${row})`, 'f');
+    sectionLines.forEach((line, li) => {
+      const itemNum = scopeIndex + '.' + lineIndex;
+      const isAlt = li % 2 === 1;
+
+      const cellA = ws.getCell(row, 1);
+      cellA.value = itemNum;
+      cellA.font = bodyFont;
+      cellA.border = thinBorder;
+      cellA.alignment = { horizontal: 'center' };
+      if (isAlt) cellA.fill = altFill;
+
+      const cellB = ws.getCell(row, 2);
+      cellB.value = line.description || '';
+      cellB.font = bodyFont;
+      cellB.border = thinBorder;
+      if (isAlt) cellB.fill = altFill;
+
+      const cellC = ws.getCell(row, 3);
+      cellC.value = line.qty || 0;
+      cellC.font = bodyFont;
+      cellC.border = thinBorder;
+      cellC.alignment = { horizontal: 'center' };
+      if (isAlt) cellC.fill = altFill;
+
+      const cellD = ws.getCell(row, 4);
+      cellD.value = line.unit || 'ea';
+      cellD.font = bodyFont;
+      cellD.border = thinBorder;
+      cellD.alignment = { horizontal: 'center' };
+      if (isAlt) cellD.fill = altFill;
+
+      const cellE = ws.getCell(row, 5);
+      cellE.value = line.unitCost || 0;
+      cellE.font = bodyFont;
+      cellE.border = thinBorder;
+      cellE.numFmt = currencyFmt;
+      if (isAlt) cellE.fill = altFill;
+
+      const cellF = ws.getCell(row, 6);
+      cellF.value = (line.markup || 100) / 100;
+      cellF.font = bodyFont;
+      cellF.border = thinBorder;
+      cellF.numFmt = pctFmt;
+      cellF.alignment = { horizontal: 'center' };
+      if (isAlt) cellF.fill = altFill;
+
+      const cellG = ws.getCell(row, 7);
+      cellG.value = { formula: 'C' + row + '*E' + row + '*(1+F' + row + ')' };
+      cellG.font = bodyFont;
+      cellG.border = thinBorder;
+      cellG.numFmt = currencyFmt;
+      if (isAlt) cellG.fill = altFill;
+
       lineIndex++;
+      row++;
     });
-    const lineEndRow = row;
+    const lineEndRow = row - 1;
 
     // Subtotal Base row
-    row++;
-    merges.push('A' + row + ':E' + row);
-    ws['F' + row] = cellValue('Base:', 's');
-    let baseFormula = '';
-    for (let r = lineStartRow; r <= lineEndRow; r++) {
-      baseFormula += (baseFormula ? '+' : '') + `C${r}*E${r}`;
-    }
-    ws['G' + row] = cellValue(baseFormula || '0', 'f');
+    ws.mergeCells(row, 1, row, 5);
+    const baseLabel = ws.getCell(row, 6);
+    baseLabel.value = 'Base:';
+    baseLabel.font = { name: 'Arial', size: 10, bold: true };
+    baseLabel.fill = labelFill;
+    baseLabel.border = thinBorder;
+    baseLabel.alignment = { horizontal: 'right' };
+    const baseVal = ws.getCell(row, 7);
+    baseVal.value = { formula: 'SUMPRODUCT(C' + lineStartRow + ':C' + lineEndRow + ',E' + lineStartRow + ':E' + lineEndRow + ')' };
+    baseVal.font = { name: 'Arial', size: 10, bold: true };
+    baseVal.fill = labelFill;
+    baseVal.border = thinBorder;
+    baseVal.numFmt = currencyFmt;
     const subtotalBaseRow = row;
+    row++;
 
     // Subtotal Client row
-    row++;
-    merges.push('A' + row + ':E' + row);
-    ws['F' + row] = cellValue('Client:', 's');
-    ws['G' + row] = cellValue(`SUM(G${lineStartRow}:G${lineEndRow})`, 'f');
+    ws.mergeCells(row, 1, row, 5);
+    const clientLabel = ws.getCell(row, 6);
+    clientLabel.value = 'Client:';
+    clientLabel.font = whiteFont(10, true);
+    clientLabel.fill = greenFill;
+    clientLabel.border = thinBorder;
+    clientLabel.alignment = { horizontal: 'right' };
+    const clientVal = ws.getCell(row, 7);
+    clientVal.value = { formula: 'SUM(G' + lineStartRow + ':G' + lineEndRow + ')' };
+    clientVal.font = whiteFont(10, true);
+    clientVal.fill = greenFill;
+    clientVal.border = thinBorder;
+    clientVal.numFmt = currencyFmt;
+    const subtotalClientRow = row;
 
-    scopeTotals.push({
-      scopeIndex: scopeIndex,
-      sectionName: sectionName,
-      lineStartRow: lineStartRow,
-      lineEndRow: lineEndRow,
-      subtotalClientRow: row
+    scopeData.push({
+      name: sectionName || 'General',
+      subtotalBaseRow: subtotalBaseRow,
+      subtotalClientRow: subtotalClientRow
     });
 
     row += 2;
     scopeIndex++;
   });
 
-  // ========== PROJECT SUMMARY SECTION ==========
+  // === PROJECT SUMMARY SECTION ===
   row++;
-  const summaryHeaderRow = row;
-  ws['A' + row] = cellValue('PROJECT SUMMARY', 's');
-  merges.push('A' + row + ':G' + row);
+  mergeAndStyle(row, 1, 7, 'PROJECT SUMMARY', whiteFont(13, true), greenFill, { horizontal: 'left', vertical: 'middle' });
+  row++;
 
+  // Summary column headers
+  const sumHeaders = ['Scope', '', '', '', '', 'Base Cost', 'Client Price'];
+  sumHeaders.forEach((h, ci) => {
+    const cell = ws.getCell(row, ci + 1);
+    cell.value = h;
+    cell.font = whiteFont(10, true);
+    cell.fill = greenFill;
+    cell.border = thinBorder;
+    cell.alignment = { horizontal: 'center' };
+  });
+  ws.mergeCells(row, 1, row, 5);
   row++;
-  const summaryColHeaderRow = row;
-  ws['A' + row] = cellValue('Scope', 's');
-  merges.push('A' + row + ':E' + row);
-  ws['F' + row] = cellValue('Base Cost', 's');
-  ws['G' + row] = cellValue('Client Price', 's');
 
-  row++;
+  // Scope rows in summary
   let grandTotalBaseFormula = '';
   let grandTotalClientFormula = '';
+  scopeData.forEach(scope => {
+    ws.mergeCells(row, 1, row, 5);
+    const nameCell = ws.getCell(row, 1);
+    nameCell.value = scope.name;
+    nameCell.font = bodyFont;
+    nameCell.border = thinBorder;
 
-  scopeTotals.forEach((scope, idx) => {
-    ws['A' + row] = cellValue(`Scope ${scope.scopeIndex}: ${scope.sectionName}`, 's');
-    merges.push('A' + row + ':E' + row);
-    let baseCostFormula = '';
-    for (let r = scope.lineStartRow; r <= scope.lineEndRow; r++) {
-      baseCostFormula += (baseCostFormula ? '+' : '') + `C${r}*E${r}`;
-    }
-    ws['F' + row] = cellValue(baseCostFormula || '0', 'f');
-    ws['G' + row] = cellValue(`G${scope.subtotalClientRow}`, 'f');
-    grandTotalBaseFormula += (grandTotalBaseFormula ? '+' : '') + `F${row}`;
-    grandTotalClientFormula += (grandTotalClientFormula ? '+' : '') + `G${row}`;
+    const baseSumCell = ws.getCell(row, 6);
+    baseSumCell.value = { formula: 'G' + scope.subtotalBaseRow };
+    baseSumCell.font = bodyFont;
+    baseSumCell.border = thinBorder;
+    baseSumCell.numFmt = currencyFmt;
+
+    const clientSumCell = ws.getCell(row, 7);
+    clientSumCell.value = { formula: 'G' + scope.subtotalClientRow };
+    clientSumCell.font = bodyFont;
+    clientSumCell.border = thinBorder;
+    clientSumCell.numFmt = currencyFmt;
+
+    grandTotalBaseFormula += (grandTotalBaseFormula ? '+' : '') + 'F' + row;
+    grandTotalClientFormula += (grandTotalClientFormula ? '+' : '') + 'G' + row;
     row++;
   });
 
-  // Grand total row
-  ws['A' + row] = cellValue('GRAND TOTAL', 's');
-  merges.push('A' + row + ':E' + row);
-  ws['F' + row] = cellValue(grandTotalBaseFormula || '0', 'f');
-  ws['G' + row] = cellValue(grandTotalClientFormula || '0', 'f');
+  // Grand Total row
+  ws.mergeCells(row, 1, row, 5);
+  const gtLabel = ws.getCell(row, 1);
+  gtLabel.value = 'GRAND TOTAL';
+  gtLabel.font = darkTealFont(11, true);
+  gtLabel.fill = labelFill;
+  gtLabel.border = thinBorder;
 
-  // ========== SET WORKSHEET PROPERTIES ==========
-  ws['!ref'] = `A1:G${row}`;
-  ws['!merges'] = merges.map(m => XLSX.utils.decode_range(m));
-  ws['!cols'] = [
-    { wch: 8 },  // A
-    { wch: 45 }, // B
-    { wch: 8 },  // C
-    { wch: 8 },  // D
-    { wch: 14 }, // E
-    { wch: 10 }, // F
-    { wch: 16 }  // G
-  ];
+  const gtBase = ws.getCell(row, 6);
+  gtBase.value = { formula: grandTotalBaseFormula };
+  gtBase.font = darkTealFont(10, true);
+  gtBase.fill = labelFill;
+  gtBase.border = thinBorder;
+  gtBase.numFmt = currencyFmt;
 
-  XLSX.utils.book_append_sheet(wb, ws, 'Lead Report');
-  const filename = `${estimate.title} - Lead Report.xlsx`;
-  XLSX.writeFile(wb, filename);
+  const gtClient = ws.getCell(row, 7);
+  gtClient.value = { formula: grandTotalClientFormula };
+  gtClient.font = whiteFont(10, true);
+  gtClient.fill = greenFill;
+  gtClient.border = thinBorder;
+  gtClient.numFmt = currencyFmt;
+
+  // === Generate and download ===
+  wb.xlsx.writeBuffer().then(function(buffer) {
+    const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = (estimate.title || 'AGX_Estimate') + ' - Lead Report.xlsx';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  });
 }
+
+
 
 // ============================================================================
 // DOWNLOAD BLANK TEMPLATE FUNCTION
@@ -794,6 +934,7 @@ function patchSaveEstimateEdits() {
 // ============================================================================
 
 (function loadSheetJS() {
+  // Load SheetJS
   if (typeof XLSX !== 'undefined') {
     console.log('SheetJS already loaded');
     patchEditEstimate();
@@ -802,30 +943,31 @@ function patchSaveEstimateEdits() {
       injectImportBtn();
       injectExportBtns();
       injectTemplateBtn();
-    }
-    return;
-  }
-
-  const s = document.createElement('script');
-  s.src = 'https://cdn.sheetjs.com/xlsx-0.20.0/package/dist/xlsx.full.min.js';
-  s.onload = function() {
-    console.log('SheetJS loaded from CDN');
-    patchEditEstimate();
-    patchSaveEstimateEdits();
-    injectImportBtn();
-    injectExportBtns();
-    injectTemplateBtn();
-
-    const observer = new MutationObserver(() => {
-      injectImportBtn();
-      injectExportBtns();
-      injectTemplateBtn();
       injectNickNameField();
-    });
-    observer.observe(document.body, { childList: true, subtree: true, attributes: false });
-  };
-  s.onerror = function() { console.error('Failed to load SheetJS'); };
-  document.head.appendChild(s);
+    }
+  } else {
+    const script = document.createElement('script');
+    script.src = 'https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js';
+    script.onload = function() {
+      console.log('SheetJS loaded');
+      patchEditEstimate();
+      patchSaveEstimateEdits();
+      if (typeof injectImportBtn === 'function') {
+        injectImportBtn();
+        injectExportBtns();
+        injectTemplateBtn();
+        injectNickNameField();
+      }
+    };
+    document.head.appendChild(script);
+  }
+  // Load ExcelJS for styled exports
+  if (typeof ExcelJS === 'undefined') {
+    const ejs = document.createElement('script');
+    ejs.src = 'https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js';
+    ejs.onload = function() { console.log('ExcelJS loaded'); };
+    document.head.appendChild(ejs);
+  }
 })();
 
 if (typeof XLSX !== 'undefined') {
