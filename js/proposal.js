@@ -169,31 +169,31 @@ function exportEstimate(estId) {
   row = 6;
   mergeAndStyle(row, 1, 7, 'Lead Information', whiteFont(13, true), greenFill, { horizontal: 'left', vertical: 'middle' });
 
-  // === ROWS 7-14: Lead Info Fields ===
-  const nickNameEl = document.querySelector('[data-field="nickName"]');
-  const nickNameVal = (nickNameEl && nickNameEl.value) ? nickNameEl.value : (estimate.nickName || '\u2014');
-
+  // === ROWS 7-13: Lead Info Fields (7 fields, no Nick Name) ===
   const leadFields = [
     { row: 7, label: 'Title', value: estimate.title || '\u2014' },
-    { row: 8, label: 'Nick Name', value: nickNameVal },
-    { row: 9, label: 'Project Type', value: estimate.jobType || '\u2014' },
-    { row: 10, label: 'Status', value: estimate.status || '\u2014' },
-    { row: 11, label: 'Created Date', value: estimate.created ? formatDateShort(estimate.created) : '\u2014' },
-    { row: 12, label: 'Salesperson', value: '\u2014' },
-    { row: 13, label: 'Market', value: '\u2014' },
-    { row: 14, label: 'Estimate ID', value: estId }
+    { row: 8, label: 'Project Type', value: estimate.jobType || '\u2014' },
+    { row: 9, label: 'Status', value: estimate.status || '\u2014' },
+    { row: 10, label: 'Created Date', value: estimate.created ? formatDateShort(estimate.created) : '\u2014' },
+    { row: 11, label: 'Salesperson', value: '\u2014' },
+    { row: 12, label: 'Market', value: '\u2014' },
+    { row: 13, label: 'Estimate ID', value: estId }
   ];
   leadFields.forEach(f => setInfoRow(f.row, f.label, f.value));
 
-  // === ROW 15: Empty ===
-  row = 15;
+  // === ROW 14: Empty ===
+  row = 14;
 
-  // === ROW 16: Property Information Header ===
-  row = 16;
+  // === ROW 15: Property Information Header ===
+  row = 15;
   mergeAndStyle(row, 1, 7, 'Property Information', whiteFont(13, true), greenFill, { horizontal: 'left', vertical: 'middle' });
 
-  // === ROWS 17-24: Property Info Fields ===
+  // === ROWS 16-24: Property Info Fields (9 fields, Nick Name first) ===
+  const nickNameEl = document.querySelector('[data-field="nickName"]');
+  const nickNameVal = (nickNameEl && nickNameEl.value) ? nickNameEl.value : (estimate.nickName || '\u2014');
+
   const propFields = [
+    { row: 16, label: 'Nick Name', value: nickNameVal },
     { row: 17, label: 'Community', value: estimate.community || '\u2014' },
     { row: 18, label: 'Property Address', value: estimate.propertyAddr || '\u2014' },
     { row: 19, label: 'Management Co.', value: estimate.client || '\u2014' },
@@ -393,7 +393,7 @@ function exportEstimate(estId) {
     clientSumCell.numFmt = currencyFmt;
 
     grandTotalBaseFormula += (grandTotalBaseFormula ? '+' : '') + 'F' + row;
-    grandTotalClientFormula += (grandTotalClientFormula ? '+' : '') + 'G' + row;
+    grandTotalClientFormula += (grandEotalClientFormula ? '+' : '') + 'G' + row;
     row++;
   });
 
@@ -432,12 +432,6 @@ function exportEstimate(estId) {
     URL.revokeObjectURL(url);
   });
 }
-
-
-
-// ============================================================================
-// DOWNLOAD BLANK TEMPLATE FUNCTION
-// ============================================================================
 
 function downloadBlankTemplate() {
   const url = 'https://john-agx.github.io/agx-wip-tracker/templates/AGX_Blank_Template.xlsx';
