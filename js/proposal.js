@@ -112,13 +112,13 @@ function exportEstimate(estId) {
   // ========== ROWS 7-14: Lead Information Fields ==========
   const leadFields = [
     { row: 7, label: 'Title', value: estimate.title },
-    { row: 8, label: 'Nick Name', value: estimate.nickName || '—' },
+    { row: 8, label: 'Nick Name', value: estimate.nickName || '\u2014' },
     { row: 9, label: 'Project Type', value: estimate.jobType },
     { row: 10, label: 'Status', value: estimate.status || 'Open' },
     { row: 11, label: 'Created Date', value: formatDateLong(estimate.created) },
     { row: 12, label: 'Salesperson', value: 'Scott Ryan' },
     { row: 13, label: 'Market', value: 'Tampa' },
-    { row: 14, label: 'Estimate ID', value: estimate.id || '—' }
+    { row: 14, label: 'Estimate ID', value: estimate.id || '\u2014' }
   ];
   leadFields.forEach(field => {
     ws['A' + field.row] = cellValue(field.label, 's');
@@ -142,9 +142,9 @@ function exportEstimate(estId) {
     { row: 19, label: 'Management Co.', value: estimate.client },
     { row: 20, label: 'CAM', value: estimate.managerName },
     { row: 21, label: 'CAM Email', value: estimate.managerEmail },
-    { row: 22, label: 'On-Site Contact', value: '—' },
-    { row: 23, label: 'POC Phone', value: estimate.managerPhone || '—' },
-    { row: 24, label: 'POC Email', value: '—' }
+    { row: 22, label: 'On-Site Contact', value: '\u2014' },
+    { row: 23, label: 'POC Phone', value: estimate.managerPhone || '\u2014' },
+    { row: 24, label: 'POC Email', value: '\u2014' }
   ];
   propFields.forEach(field => {
     ws['A' + field.row] = cellValue(field.label, 's');
@@ -163,7 +163,7 @@ function exportEstimate(estId) {
 
   // ========== ROW 27: Scope of Work Content ==========
   row = 27;
-  ws['A27'] = cellValue(estimate.scopeOfWork || '—', 's');
+  ws['A27'] = cellValue(estimate.scopeOfWork || '\u2014', 's');
   merges.push('A27:G27');
 
   // ========== ROW 28: Empty ==========
@@ -357,7 +357,7 @@ function generateProposal(estId) {
     .scope-description { margin-bottom: 15px; color: #666; font-size: 14px; }
     .line-items { margin-left: 20px; margin-bottom: 15px; }
     .line-item { margin-bottom: 8px; font-size: 14px; }
-    .line-item:before { content: "• "; color: #1B8541; font-weight: bold; margin-right: 8px; }
+    .line-item:before { content: "\u2022 "; color: #1B8541; font-weight: bold; margin-right: 8px; }
     .total-section { margin-bottom: 40px; page-break-inside: avoid; }
     .total-price { background-color: #E8F5E9; padding: 20px; border-left: 4px solid #1B8541; text-align: right; }
     .total-price p { font-size: 14px; margin-bottom: 10px; }
