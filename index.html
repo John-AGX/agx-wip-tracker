@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AGX Central Florida ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ¢ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ WIP Tracker</title>
+    <title>AGX Central Florida &mdash; WIP Tracker</title>
     <link rel="stylesheet" href="css/styles.css?v=5">
 
 </head>
@@ -96,7 +96,7 @@
 
                     <div id="wip-job-detail-view" style="display: none;">
                         <div class="job-detail-header">
-                            <button class="secondary small" onclick="backToWIPMain()">ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ¢ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ Back to WIP</button>
+                            <button class="secondary small" onclick="backToWIPMain()">&larr; Back to WIP</button>
                             <div class="job-detail-info">
                                 <div class="job-detail-title" id="job-detail-title"></div>
                                 <div class="job-detail-meta">
@@ -333,7 +333,7 @@
                                             <span id="wip-pct-complete">0%</span>
                                         </div>
                                         <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border);">
-                                            <span style="color: var(--text-dim);">Revenue Earned (Income ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ %)</span>
+                                            <span style="color: var(--text-dim);">Revenue Earned (Income &times; %)</span>
                                             <span id="wip-revenue-earned">$0.00</span>
                                         </div>
                                         <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border);">
@@ -419,7 +419,7 @@
                                         <input type="number" id="jobCostMaterials" placeholder="0.00" step="0.01">
                                     </div>
                                     <div class="form-group">
-                                        <label>Labor $ (auto: hours ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ rate)</label>
+                                        <label>Labor $ (auto: hours &times; rate)</label>
                                         <input type="number" id="jobCostLabor" placeholder="0.00" step="0.01" readonly style="opacity: 0.7; cursor: not-allowed;">
                                     </div>
                                     <div class="form-group">
@@ -444,7 +444,7 @@
                                     </div>
                                 </div>
                                 <div style="margin-top: 15px; display: flex; gap: 10px;">
-                                    <button class="primary" onclick="saveJobCosts()" style="flex: 0 0 auto;">ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ°ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ¾ Save Costs</button>
+                                    <button class="primary" onclick="saveJobCosts()" style="flex: 0 0 auto;">&#x1F4BE; Save Costs</button>
                                     <span id="jobCostSaveStatus" style="font-size: 13px; color: var(--green); align-self: center; opacity: 0; transition: opacity 0.3s;"></span>
                                 </div>
                                 <div style="margin-top: 15px; padding: 15px; background: var(--surface2); border-radius: 8px;">
@@ -454,7 +454,7 @@
                                             <div style="font-size: 18px; font-weight: 700; color: var(--accent);" id="jobCostTotal">$0.00</div>
                                         </div>
                                         <div>
-                                            <div style="font-size: 12px; color: var(--text-dim);">Computed Labor (Hrs ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ Rate)</div>
+                                            <div style="font-size: 12px; color: var(--text-dim);">Computed Labor (Hrs &times; Rate)</div>
                                             <div style="font-size: 18px; font-weight: 700; color: var(--accent);" id="jobCostLaborBurden">$0.00</div>
                                         </div>
                                         <div>
@@ -526,7 +526,7 @@
                                             <th style="text-align: right;">Total Hours</th>
                                             <th style="text-align: right;">Avg Rate</th>
                                             <th style="text-align: right;">Labor Cost</th>
-                                            <th style="text-align: right;">Computed (Hrs ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ Rate)</th>
+                                            <th style="text-align: right;">Computed (Hrs &times; Rate)</th>
                                         </tr>
                                     </thead>
                                     <tbody></tbody>
@@ -714,7 +714,7 @@
                         <input type="number" id="buildingMaterials" placeholder="0.00" step="0.01">
                     </div>
                     <div class="form-group">
-                        <label>Labor $ (auto: hours ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ rate)</label>
+                        <label>Labor $ (auto: hours &times; rate)</label>
                         <input type="number" id="buildingLabor" placeholder="0.00" step="0.01" readonly style="opacity: 0.7; cursor: not-allowed;">
                     </div>
                 </div>
@@ -782,7 +782,7 @@
                     <input type="number" id="phaseMaterials" placeholder="0.00" step="0.01">
                 </div>
                 <div class="form-group">
-                    <label>Labor $ (auto: hours ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ rate)</label>
+                    <label>Labor $ (auto: hours &times; rate)</label>
                     <input type="number" id="phaseLabor" placeholder="0.00" step="0.01" readonly style="opacity: 0.7; cursor: not-allowed;">
                 </div>
             </div>
