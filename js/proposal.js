@@ -978,3 +978,44 @@ setTimeout(function() {
   patchEditEstimate();
   patchSaveEstimateEdits();
 }, 200);
+
+
+// === Auto-inject buttons when estimates table changes ===
+(function watchEstimatesTable() {
+  function tryInject() {
+    var table = document.getElementById('estimates-table');
+    if (!table) return;
+    var tbody = table.querySelector('tbody');
+    if (!tbody || tbody.rows.length === 0) return;
+    lastExportInjectTime = 0;
+    injectExportBtns();
+    injectTemplateBtn();
+    injectNickNameField();
+  }
+  var observer = new MutationObserver(function() {
+    setTimeout(tryInject, 100);
+  });
+  function startObserving() {
+    var table = document.getElementById('estimates-table');
+    if (table) {
+      var tbody = table.querySelector('tbody');
+      if (tbody) {
+        observer.observe(tbody, { childList: true, subtree: true });
+        tryInject();
+        return;
+      }
+    }
+    setTimeout(startObserving, 500);
+  }
+  if (document.readyState === 'complete') {
+    startObserving();
+  } else {
+    window.addEventListener('load', startObserving);
+  }
+  document.addEventListener('click', function(e) {
+    var t = e.target;
+    if (t && (t.getAttribute('data-tab') === 'estimates' || (t.textContent || '').trim() === 'Estimates')) {
+      setTimeout(tryInject, 300);
+    }
+  });
+})();
