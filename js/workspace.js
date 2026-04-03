@@ -1,5 +1,7 @@
 // ============================================================
-// AGX WIP Tracker — Workspace Spreadsheet Engine (v2)
+// AGX WIP Tracker — Workspace Spreadsheet Engine (v3)
+// v3 fix: click-to-select uses mousedown + preventDefault
+// so formula bar stays focused during reference mode
 // Enhanced with formula reference mode, grouped linkable fields,
 // and colored cell reference highlighting
 // ============================================================
@@ -776,7 +778,21 @@
 
   // ── Event Handlers ─────────────────────────────────────────
 
+  // v3: mousedown handler for reference mode click-to-select
+  function handleCellMouseDown(e) {
+    if (!grid.refMode) return;
+    const td = e.target.closest('td.ws-cell');
+    if (!td) return;
+    e.preventDefault(); // Prevent focus from leaving the formula bar
+    const r = parseInt(td.dataset.r);
+    const c = parseInt(td.dataset.c);
+    const cellRef = addr(r, c);
+    insertCellRefIntoFormula(cellRef);
+    selectCell(r, c);
+  }
+
   function handleCellClick(e) {
+    if (grid.refMode) return; // v3: already handled by mousedown
     const td = e.target.closest('td.ws-cell');
     if (!td) return;
     const r = parseInt(td.dataset.r);
@@ -1023,6 +1039,7 @@
     selectCell(0, 0);
 
     // ── Wire events ──
+    wsTable.addEventListener('mousedown', handleCellMouseDown); // v3: ref mode click-to-select
     wsTable.addEventListener('click', handleCellClick);
     wsTable.addEventListener('dblclick', handleCellDblClick);
     wsContainer.addEventListener('keydown', handleKeyDown);
