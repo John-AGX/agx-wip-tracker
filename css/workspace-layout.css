@@ -4,36 +4,58 @@
    Job header with inline metrics
    ============================================================ */
 
-/* ── Enhanced Header ─────────────────────────────────────── */
-.jh-metrics {
+/* ── Header Metrics Strip (always visible) ──────────────── */
+.jh-metrics-strip {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: 6px;
+  padding: 10px 14px;
   margin-top: 6px;
+  background: var(--surface, #1a1d27);
+  border: 1px solid var(--border, #2e3346);
+  border-radius: 10px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.25);
 }
 
-.jh-metric {
-  display: inline-flex;
+.jh-strip-card {
+  display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 4px;
-  font-size: 12px;
+  justify-content: center;
+  flex: 1 1 0;
+  min-width: 100px;
+  padding: 6px 10px;
+  border-radius: 7px;
+  background: var(--surface2, #242836);
+  border: 1px solid var(--border, #2e3346);
+  transition: border-color 0.2s;
 }
 
-.jh-metric-label {
+.jh-strip-card:hover {
+  border-color: rgba(79, 140, 255, 0.3);
+}
+
+.jh-strip-label {
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
   color: var(--text-dim, #8b90a5);
-  font-weight: 500;
+  white-space: nowrap;
+  margin-bottom: 2px;
 }
 
-.jh-metric-value {
+.jh-strip-value {
+  font-size: 16px;
   font-weight: 700;
   font-family: 'SF Mono', 'Fira Code', monospace;
-  font-size: 13px;
+  letter-spacing: -0.5px;
 }
 
-.jh-blue .jh-metric-value { color: var(--accent, #4f8cff); }
-.jh-green .jh-metric-value { color: var(--green, #34d399); }
-.jh-amber .jh-metric-value { color: #f59e0b; }
-.jh-cyan .jh-metric-value { color: #22d3ee; }
+.jh-blue .jh-strip-value { color: var(--accent, #4f8cff); }
+.jh-green .jh-strip-value { color: var(--green, #34d399); }
+.jh-amber .jh-strip-value { color: #f59e0b; }
+.jh-cyan .jh-strip-value { color: #22d3ee; }
 
 /* ── Two-Column Container ────────────────────────────────── */
 .ws-two-col {
@@ -118,51 +140,6 @@
   flex-direction: column;
   gap: 8px;
 }
-
-/* Right-side metrics (compact grid) */
-.ws-right-metrics {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  padding: 8px;
-  background: var(--surface, #1a1d27);
-  border: 1px solid var(--border, #2e3346);
-  border-radius: 8px;
-}
-
-.ds-metric-sm {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: 4px 10px;
-  border-radius: 5px;
-  background: var(--surface2, #242836);
-  border: 1px solid var(--border, #2e3346);
-  flex: 1 1 0;
-  min-width: 80px;
-}
-
-.ds-label-sm {
-  font-size: 8px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  color: var(--text-dim, #8b90a5);
-  white-space: nowrap;
-}
-
-.ds-value-sm {
-  font-size: 13px;
-  font-weight: 700;
-  font-family: 'SF Mono', 'Fira Code', monospace;
-  color: var(--text, #e4e6f0);
-}
-
-.ds-blue .ds-value-sm { color: var(--accent, #4f8cff); }
-.ds-green .ds-value-sm { color: var(--green, #34d399); }
-.ds-amber .ds-value-sm { color: #f59e0b; }
-.ds-cyan .ds-value-sm { color: #22d3ee; }
-.ds-default .ds-value-sm { color: var(--text, #e4e6f0); }
 
 /* ── Right Tab Buttons ───────────────────────────────────── */
 .ws-right-tabs {
@@ -313,5 +290,19 @@
   .ws-right-tab {
     font-size: 10px;
     padding: 5px 4px;
+  }
+
+  .jh-metrics-strip {
+    gap: 4px;
+    padding: 8px 10px;
+  }
+
+  .jh-strip-card {
+    min-width: 70px;
+    padding: 4px 6px;
+  }
+
+  .jh-strip-value {
+    font-size: 13px;
   }
 }
