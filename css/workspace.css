@@ -1,49 +1,436 @@
 /* ============================================================
-   AGX WIP Tracker — Workspace Spreadsheet Styles
+   AGX WIP Tracker — Workspace Spreadsheet Styles (v2)
    Dark theme matching the existing CSS variables
+   Enhanced with reference mode, grouped link panel
    ============================================================ */
 
-.ws-toolbar{display:flex;align-items:center;gap:8px;padding:6px 10px;background:var(--surface2,#242836);border:1px solid var(--border,#2e3346);border-radius:8px 8px 0 0;flex-wrap:wrap}
-.ws-cell-ref{font-family:'Courier New',monospace;font-size:13px;font-weight:600;color:var(--accent,#4f8cff);background:var(--bg,#0f1117);border:1px solid var(--border,#2e3346);border-radius:4px;padding:4px 10px;min-width:48px;text-align:center}
-.ws-formula-bar{flex:1;min-width:200px;font-family:'Courier New',monospace;font-size:13px;color:var(--text,#e4e6f0);background:var(--bg,#0f1117);border:1px solid var(--border,#2e3346);border-radius:4px;padding:5px 10px;outline:none;transition:border-color .2s}
-.ws-formula-bar:focus{border-color:var(--accent,#4f8cff);box-shadow:0 0 0 2px rgba(79,140,255,.15)}
-.ws-toolbar-actions{display:flex;align-items:center;gap:4px}
-.ws-separator{width:1px;height:20px;background:var(--border,#2e3346);margin:0 4px}
-.ws-btn{font-size:12px;padding:4px 10px;border:1px solid var(--border,#2e3346);border-radius:4px;background:var(--surface,#1a1d27);color:var(--text-dim,#8b90a5);cursor:pointer;transition:all .15s;white-space:nowrap}
-.ws-btn:hover{background:var(--surface2,#242836);color:var(--text,#e4e6f0);border-color:var(--accent-dim,#2a4a8a)}
-.ws-btn-fmt{font-weight:700;font-family:'Courier New',monospace;min-width:28px;text-align:center;padding:4px 6px}
-.ws-btn-save{background:rgba(27,133,65,.15);border-color:rgba(27,133,65,.3);color:#34d399}
-.ws-btn-save:hover{background:rgba(27,133,65,.25);border-color:#1B8541}
-.ws-link-panel{padding:10px 12px;background:var(--surface,#1a1d27);border:1px solid var(--border,#2e3346);border-top:none;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-.ws-link-title{font-size:12px;color:var(--text-dim,#8b90a5);white-space:nowrap}
-.ws-link-title span{color:var(--accent,#4f8cff);font-weight:600;font-family:'Courier New',monospace}
-.ws-link-options{display:flex;gap:4px;flex-wrap:wrap}
-.ws-link-opt{font-size:11px;padding:3px 8px;border:1px solid var(--border,#2e3346);border-radius:12px;background:transparent;color:var(--text-dim,#8b90a5);cursor:pointer;transition:all .15s}
-.ws-link-opt:hover{border-color:var(--accent,#4f8cff);color:var(--accent,#4f8cff)}
-.ws-link-opt.active{background:rgba(79,140,255,.15);border-color:var(--accent,#4f8cff);color:var(--accent,#4f8cff)}
-.ws-link-badge{display:inline-block;font-size:11px;padding:2px 8px;background:rgba(27,133,65,.2);border:1px solid rgba(27,133,65,.4);border-radius:10px;color:#34d399;font-weight:500}
-.ws-btn-unlink{font-size:11px;padding:2px 8px;color:var(--red,#f87171);border-color:rgba(248,113,113,.3)}
-.ws-btn-unlink:hover{background:rgba(248,113,113,.1);border-color:var(--red,#f87171)}
-.ws-grid-wrapper{overflow:auto;max-height:500px;border:1px solid var(--border,#2e3346);border-top:none;background:var(--bg,#0f1117);scrollbar-width:thin;scrollbar-color:var(--surface2,#242836) var(--bg,#0f1117)}
-.ws-grid-wrapper::-webkit-scrollbar{width:8px;height:8px}
-.ws-grid-wrapper::-webkit-scrollbar-track{background:var(--bg,#0f1117)}
-.ws-grid-wrapper::-webkit-scrollbar-thumb{background:var(--surface2,#242836);border-radius:4px}
-.ws-grid{border-collapse:collapse;width:max-content;font-family:'Courier New',monospace;font-size:12px;user-select:none}
-.ws-grid thead{position:sticky;top:0;z-index:3}
-.ws-corner{width:40px;min-width:40px;background:var(--surface2,#242836);border:1px solid var(--border,#2e3346);position:sticky;left:0;z-index:4}
-.ws-col-header{background:var(--surface2,#242836);color:var(--text-dim,#8b90a5);font-weight:600;font-size:11px;text-align:center;padding:5px 4px;border:1px solid var(--border,#2e3346);cursor:default;position:relative}
-.ws-col-header::after{content:'';position:absolute;right:0;top:4px;bottom:4px;width:3px;cursor:col-resize;background:transparent;transition:background .15s}
-.ws-col-header:hover::after{background:var(--accent-dim,#2a4a8a)}
-.ws-row-header{background:var(--surface2,#242836);color:var(--text-dim,#8b90a5);font-weight:600;font-size:11px;text-align:center;padding:4px 6px;border:1px solid var(--border,#2e3346);position:sticky;left:0;z-index:2;width:40px;min-width:40px}
-.ws-cell{padding:4px 8px;border:1px solid var(--border,#2e3346);color:var(--text,#e4e6f0);height:28px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:cell;transition:background .1s;position:relative}
-.ws-cell:hover{background:rgba(79,140,255,.04)}
-.ws-cell.ws-selected{outline:2px solid var(--accent,#4f8cff);outline-offset:-1px;background:rgba(79,140,255,.08);z-index:1}
-.ws-cell.ws-editing{outline:2px solid #34d399;outline-offset:-1px;background:var(--surface,#1a1d27);color:var(--text,#e4e6f0);overflow:visible;white-space:pre;cursor:text;z-index:1}
-.ws-cell.ws-number{text-align:right}
-.ws-cell.ws-linked{background:rgba(27,133,65,.08);border-color:rgba(27,133,65,.25)}
-.ws-cell.ws-linked::before{content:'';position:absolute;top:1px;right:1px;width:0;height:0;border-top:6px solid #1B8541;border-left:6px solid transparent}
-.ws-cell.ws-error{color:var(--red,#f87171);font-style:italic}
-.ws-statusbar{display:flex;justify-content:space-between;align-items:center;padding:4px 10px;background:var(--surface2,#242836);border:1px solid var(--border,#2e3346);border-top:none;border-radius:0 0 8px 8px;font-size:11px;color:var(--text-dim,#8b90a5)}
-#wsQuickCalc{font-family:'Courier New',monospace;color:var(--accent,#4f8cff)}
-#wsWorkspaceContainer{margin-top:16px;outline:none}
-@media(max-width:768px){.ws-toolbar{flex-direction:column;align-items:stretch}.ws-toolbar-actions{flex-wrap:wrap}.ws-formula-bar{min-width:100%}.ws-grid-wrapper{max-height:350px}}
+/* ── Toolbar ────────────────────────────────────────────── */
+
+.ws-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--surface2, #242836);
+  border: 1px solid var(--border, #2e3346);
+  border-radius: 8px 8px 0 0;
+  flex-wrap: wrap;
+}
+
+.ws-cell-ref {
+  font-family: 'Courier New', monospace;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent, #4f8cff);
+  background: var(--bg, #0f1117);
+  border: 1px solid var(--border, #2e3346);
+  border-radius: 4px;
+  padding: 4px 10px;
+  min-width: 48px;
+  text-align: center;
+}
+
+.ws-formula-bar {
+  flex: 1;
+  min-width: 200px;
+  font-family: 'Courier New', monospace;
+  font-size: 13px;
+  color: var(--text, #e4e6f0);
+  background: var(--bg, #0f1117);
+  border: 1px solid var(--border, #2e3346);
+  border-radius: 4px;
+  padding: 5px 10px;
+  outline: none;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.ws-formula-bar:focus {
+  border-color: var(--accent, #4f8cff);
+  box-shadow: 0 0 0 2px rgba(79, 140, 255, 0.15);
+}
+
+/* ── Reference Mode (formula bar indicator) ────────────── */
+
+.ws-formula-bar.ws-ref-mode {
+  border-color: #f59e0b;
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.2);
+  background: rgba(245, 158, 11, 0.04);
+}
+
+.ws-formula-bar.ws-ref-mode:focus {
+  border-color: #f59e0b;
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.25);
+}
+
+/* Reference highlighted cells in the grid */
+.ws-cell.ws-ref-highlight {
+  border-width: 2px !important;
+  border-style: solid !important;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.ws-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ws-separator {
+  width: 1px;
+  height: 20px;
+  background: var(--border, #2e3346);
+  margin: 0 4px;
+}
+
+.ws-btn {
+  font-size: 12px;
+  padding: 4px 10px;
+  border: 1px solid var(--border, #2e3346);
+  border-radius: 4px;
+  background: var(--surface, #1a1d27);
+  color: var(--text-dim, #8b90a5);
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.ws-btn:hover {
+  background: var(--surface2, #242836);
+  color: var(--text, #e4e6f0);
+  border-color: var(--accent-dim, #2a4a8a);
+}
+
+.ws-btn-fmt {
+  font-weight: 700;
+  font-family: 'Courier New', monospace;
+  min-width: 28px;
+  text-align: center;
+  padding: 4px 6px;
+}
+
+.ws-btn-save {
+  background: rgba(27, 133, 65, 0.15);
+  border-color: rgba(27, 133, 65, 0.3);
+  color: #34d399;
+}
+
+.ws-btn-save:hover {
+  background: rgba(27, 133, 65, 0.25);
+  border-color: #1B8541;
+}
+
+/* ── Link Panel (Grouped) ──────────────────────────────── */
+
+.ws-link-panel {
+  padding: 10px 12px;
+  background: var(--surface, #1a1d27);
+  border: 1px solid var(--border, #2e3346);
+  border-top: none;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.ws-link-title {
+  font-size: 12px;
+  color: var(--text-dim, #8b90a5);
+  white-space: nowrap;
+  margin-bottom: 8px;
+}
+
+.ws-link-title span {
+  color: var(--accent, #4f8cff);
+  font-weight: 600;
+  font-family: 'Courier New', monospace;
+}
+
+.ws-link-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* Field groups */
+.ws-link-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+  padding: 4px 0;
+  border-bottom: 1px solid rgba(46, 51, 70, 0.5);
+}
+
+.ws-link-group:last-child {
+  border-bottom: none;
+}
+
+.ws-link-group-header {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-dim, #8b90a5);
+  width: 100%;
+  margin-bottom: 2px;
+  opacity: 0.7;
+}
+
+.ws-link-opt {
+  font-size: 11px;
+  padding: 3px 8px;
+  border: 1px solid var(--border, #2e3346);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--text-dim, #8b90a5);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.ws-link-opt:hover {
+  border-color: var(--accent, #4f8cff);
+  color: var(--accent, #4f8cff);
+}
+
+.ws-link-opt.active {
+  background: rgba(79, 140, 255, 0.15);
+  border-color: var(--accent, #4f8cff);
+  color: var(--accent, #4f8cff);
+}
+
+.ws-link-active {
+  margin-top: 6px;
+}
+
+.ws-link-badge {
+  display: inline-block;
+  font-size: 11px;
+  padding: 2px 8px;
+  background: rgba(27, 133, 65, 0.2);
+  border: 1px solid rgba(27, 133, 65, 0.4);
+  border-radius: 10px;
+  color: #34d399;
+  font-weight: 500;
+}
+
+.ws-btn-unlink {
+  font-size: 11px;
+  padding: 2px 8px;
+  color: var(--red, #f87171);
+  border-color: rgba(248, 113, 113, 0.3);
+  margin-top: 6px;
+}
+
+.ws-btn-unlink:hover {
+  background: rgba(248, 113, 113, 0.1);
+  border-color: var(--red, #f87171);
+}
+
+/* ── Grid ───────────────────────────────────────────────── */
+
+.ws-grid-wrapper {
+  overflow: auto;
+  max-height: 500px;
+  border: 1px solid var(--border, #2e3346);
+  border-top: none;
+  background: var(--bg, #0f1117);
+  scrollbar-width: thin;
+  scrollbar-color: var(--surface2, #242836) var(--bg, #0f1117);
+}
+
+.ws-grid-wrapper::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.ws-grid-wrapper::-webkit-scrollbar-track {
+  background: var(--bg, #0f1117);
+}
+.ws-grid-wrapper::-webkit-scrollbar-thumb {
+  background: var(--surface2, #242836);
+  border-radius: 4px;
+}
+
+.ws-grid {
+  border-collapse: collapse;
+  width: max-content;
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  user-select: none;
+}
+
+/* ── Headers ────────────────────────────────────────────── */
+
+.ws-grid thead {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+}
+
+.ws-corner {
+  width: 40px;
+  min-width: 40px;
+  background: var(--surface2, #242836);
+  border: 1px solid var(--border, #2e3346);
+  position: sticky;
+  left: 0;
+  z-index: 4;
+}
+
+.ws-col-header {
+  background: var(--surface2, #242836);
+  color: var(--text-dim, #8b90a5);
+  font-weight: 600;
+  font-size: 11px;
+  text-align: center;
+  padding: 5px 4px;
+  border: 1px solid var(--border, #2e3346);
+  cursor: default;
+  position: relative;
+}
+
+.ws-col-header::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  top: 4px;
+  bottom: 4px;
+  width: 3px;
+  cursor: col-resize;
+  background: transparent;
+  transition: background 0.15s;
+}
+
+.ws-col-header:hover::after {
+  background: var(--accent-dim, #2a4a8a);
+}
+
+.ws-row-header {
+  background: var(--surface2, #242836);
+  color: var(--text-dim, #8b90a5);
+  font-weight: 600;
+  font-size: 11px;
+  text-align: center;
+  padding: 4px 6px;
+  border: 1px solid var(--border, #2e3346);
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  width: 40px;
+  min-width: 40px;
+}
+
+/* ── Cells ──────────────────────────────────────────────── */
+
+.ws-cell {
+  padding: 4px 8px;
+  border: 1px solid var(--border, #2e3346);
+  color: var(--text, #e4e6f0);
+  height: 28px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: cell;
+  transition: background 0.1s;
+  position: relative;
+}
+
+.ws-cell:hover {
+  background: rgba(79, 140, 255, 0.04);
+}
+
+.ws-cell.ws-selected {
+  outline: 2px solid var(--accent, #4f8cff);
+  outline-offset: -1px;
+  background: rgba(79, 140, 255, 0.08);
+  z-index: 1;
+}
+
+.ws-cell.ws-editing {
+  outline: 2px solid #34d399;
+  outline-offset: -1px;
+  background: var(--surface, #1a1d27);
+  color: var(--text, #e4e6f0);
+  overflow: visible;
+  white-space: pre;
+  cursor: text;
+  z-index: 1;
+}
+
+.ws-cell.ws-number {
+  text-align: right;
+}
+
+.ws-cell.ws-formula {
+  /* subtle indicator */
+}
+
+.ws-cell.ws-linked {
+  background: rgba(27, 133, 65, 0.08);
+  border-color: rgba(27, 133, 65, 0.25);
+}
+
+.ws-cell.ws-linked::before {
+  content: '';
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  width: 0;
+  height: 0;
+  border-top: 6px solid #1B8541;
+  border-left: 6px solid transparent;
+}
+
+.ws-cell.ws-error {
+  color: var(--red, #f87171);
+  font-style: italic;
+}
+
+/* ── Status Bar ─────────────────────────────────────────── */
+
+.ws-statusbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 10px;
+  background: var(--surface2, #242836);
+  border: 1px solid var(--border, #2e3346);
+  border-top: none;
+  border-radius: 0 0 8px 8px;
+  font-size: 11px;
+  color: var(--text-dim, #8b90a5);
+}
+
+#wsQuickCalc {
+  font-family: 'Courier New', monospace;
+  color: var(--accent, #4f8cff);
+}
+
+/* ── Workspace Container ────────────────────────────────── */
+
+#wsWorkspaceContainer {
+  margin-top: 16px;
+  outline: none;
+}
+
+/* ── Responsive ─────────────────────────────────────────── */
+
+@media (max-width: 768px) {
+  .ws-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .ws-toolbar-actions {
+    flex-wrap: wrap;
+  }
+
+  .ws-formula-bar {
+    min-width: 100%;
+  }
+
+  .ws-grid-wrapper {
+    max-height: 350px;
+  }
+
+  .ws-link-panel {
+    max-height: 200px;
+  }
+}
