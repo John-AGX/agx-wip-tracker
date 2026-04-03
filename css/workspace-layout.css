@@ -1,0 +1,317 @@
+/* ============================================================
+   AGX WIP Tracker — Step 2 Layout v2
+   Two-column: Workspace LEFT, Metrics+Tabs RIGHT
+   Job header with inline metrics
+   ============================================================ */
+
+/* ── Enhanced Header ─────────────────────────────────────── */
+.jh-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.jh-metric {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.jh-metric-label {
+  color: var(--text-dim, #8b90a5);
+  font-weight: 500;
+}
+
+.jh-metric-value {
+  font-weight: 700;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 13px;
+}
+
+.jh-blue .jh-metric-value { color: var(--accent, #4f8cff); }
+.jh-green .jh-metric-value { color: var(--green, #34d399); }
+.jh-amber .jh-metric-value { color: #f59e0b; }
+.jh-cyan .jh-metric-value { color: #22d3ee; }
+
+/* ── Two-Column Container ────────────────────────────────── */
+.ws-two-col {
+  display: flex;
+  gap: 12px;
+  margin-top: 8px;
+  min-height: 600px;
+}
+
+/* ── Left Column: Workspace ──────────────────────────────── */
+.ws-col-left {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface, #1a1d27);
+  border: 1px solid var(--border, #2e3346);
+  border-radius: 10px;
+  padding: 10px 12px;
+  box-shadow: 0 0 16px rgba(79, 140, 255, 0.05);
+}
+
+.ws-left-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border, #2e3346);
+}
+.ws-left-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text, #e4e6f0);
+}
+
+.ws-left-sub {
+  font-size: 10px;
+  color: var(--text-dim, #8b90a5);
+}
+
+/* Make workspace grid fill vertical space */
+.ws-col-left #wsWorkspaceContainer {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.ws-col-left .ws-grid-wrapper {
+  flex: 1;
+  max-height: none;
+  overflow: auto;
+}
+
+/* Override workspace grid for portrait layout */
+.ws-col-left .ws-toolbar {
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.ws-col-left .ws-formula-bar {
+  min-width: 0;
+  flex: 1 1 150px;
+}
+
+.ws-col-left .ws-toolbar-actions {
+  flex-wrap: wrap;
+  gap: 3px;
+}
+
+.ws-col-left .ws-btn {
+  padding: 3px 8px;
+  font-size: 11px;
+}
+
+/* ── Right Column: Metrics + Tabs ────────────────────────── */
+.ws-col-right {
+  flex: 0 0 440px;
+  min-width: 380px;
+  max-width: 500px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Right-side metrics (compact grid) */
+.ws-right-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 8px;
+  background: var(--surface, #1a1d27);
+  border: 1px solid var(--border, #2e3346);
+  border-radius: 8px;
+}
+
+.ds-metric-sm {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 5px;
+  background: var(--surface2, #242836);
+  border: 1px solid var(--border, #2e3346);
+  flex: 1 1 0;
+  min-width: 80px;
+}
+
+.ds-label-sm {
+  font-size: 8px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-dim, #8b90a5);
+  white-space: nowrap;
+}
+
+.ds-value-sm {
+  font-size: 13px;
+  font-weight: 700;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  color: var(--text, #e4e6f0);
+}
+
+.ds-blue .ds-value-sm { color: var(--accent, #4f8cff); }
+.ds-green .ds-value-sm { color: var(--green, #34d399); }
+.ds-amber .ds-value-sm { color: #f59e0b; }
+.ds-cyan .ds-value-sm { color: #22d3ee; }
+.ds-default .ds-value-sm { color: var(--text, #e4e6f0); }
+
+/* ── Right Tab Buttons ───────────────────────────────────── */
+.ws-right-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  background: var(--surface, #1a1d27);
+  border: 1px solid var(--border, #2e3346);
+  border-radius: 8px;
+  padding: 4px;
+}
+
+.ws-right-tab {
+  flex: 1 1 0;
+  padding: 6px 8px;
+  font-size: 11px;
+  font-weight: 500;
+  font-family: inherit;
+  text-align: center;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-dim, #8b90a5);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  white-space: nowrap;
+}
+
+.ws-right-tab:hover {
+  background: var(--surface2, #242836);
+  color: var(--text, #e4e6f0);
+}
+
+.ws-right-tab.active {
+  background: var(--accent, #4f8cff);
+  color: #fff;
+  font-weight: 600;
+}
+
+/* ── Right Tab Content ───────────────────────────────────── */
+.ws-right-content {
+  flex: 1;
+  background: var(--surface, #1a1d27);
+  border: 1px solid var(--border, #2e3346);
+  border-radius: 8px;
+  padding: 12px;
+  overflow-y: auto;
+  min-height: 300px;
+}
+
+.ws-right-panel {
+  animation: ws-fadeIn 0.2s ease;
+}
+
+@keyframes ws-fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Job Info Collapsible ────────────────────────────────── */
+.ws-job-info-details {
+  margin-bottom: 8px;
+  background: var(--surface2, #242836);
+  border: 1px solid var(--border, #2e3346);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.ws-job-info-summary {
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text, #e4e6f0);
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ws-job-info-summary::before {
+  content: '\25B6';
+  font-size: 8px;
+  color: var(--text-dim, #8b90a5);
+  transition: transform 0.2s;
+}
+
+.ws-job-info-details[open] .ws-job-info-summary::before {
+  transform: rotate(90deg);
+}
+
+.ws-job-info-summary::-webkit-details-marker {
+  display: none;
+}
+
+.ws-job-info-details .ws-accordion-content {
+  padding: 8px 12px 12px;
+}
+
+.ws-job-info-details .card {
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+  margin: 0;
+}
+
+/* ── Override cards inside right panels ───────────────────── */
+.ws-right-panel .card {
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  margin: 0;
+  padding: 0;
+}
+
+.ws-right-panel .table-container {
+  overflow-x: auto;
+}
+
+/* ── Hide old elements ───────────────────────────────────── */
+.ws-layout-applied > .sub-tabs { display: none !important; }
+.ws-layout-applied > .summary-grid { display: none !important; }
+.ws-layout-applied > .sub-tab-content-job { display: none !important; }
+.ws-layout-applied > .action-buttons { display: none !important; }
+.ws-layout-applied > #job-info-card { display: none !important; }
+
+/* ── Responsive ──────────────────────────────────────────── */
+@media (max-width: 900px) {
+  .ws-two-col {
+    flex-direction: column;
+  }
+
+  .ws-col-left {
+    flex: none;
+    max-width: 100%;
+    min-width: 0;
+    min-height: 350px;
+  }
+
+  .ws-col-right {
+    flex: none;
+    max-width: 100%;
+    min-width: 0;
+    min-height: 300px;
+  }
+
+  .ws-right-tab {
+    font-size: 10px;
+    padding: 5px 4px;
+  }
+}
