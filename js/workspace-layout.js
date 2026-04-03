@@ -61,10 +61,10 @@
     if (oldAccordions) oldAccordions.remove();
   }
 
-  // ── Build enhanced header ─────────────────────────────────
+  // ── Build enhanced header with full metrics strip ──────────
   function buildHeader(detail, job) {
     var header = detail.querySelector('.job-detail-header');
-    if (!header || header.querySelector('.jh-metrics')) return;
+    if (!header || detail.querySelector('.jh-metrics-strip')) return;
 
     // Extract key metric values from summary cards
     var summaryGrid = detail.querySelector('.summary-grid');
@@ -75,29 +75,35 @@
       if (lines.length >= 2) metricsMap[lines[0].toUpperCase()] = lines[1];
     });
 
-    // Build compact inline metrics
-    var metricsDiv = document.createElement('div');
-    metricsDiv.className = 'jh-metrics';
+    // Build full-width metrics strip in the header
+    var strip = document.createElement('div');
+    strip.className = 'jh-metrics-strip';
 
     var items = [
-      { label: 'Contract', value: metricsMap['TOTAL INCOME'] || '', cls: 'jh-blue' },
-      { label: 'Costs', value: metricsMap['ACTUAL COSTS'] || '', cls: 'jh-amber' },
-      { label: 'Complete', value: metricsMap['% COMPLETE'] || '', cls: 'jh-cyan' },
-      { label: 'Profit', value: metricsMap['GROSS PROFIT'] || '', cls: 'jh-green' },
-      { label: 'Margin', value: metricsMap['MARGIN %'] || '', cls: 'jh-green' }
+      { label: 'Total Income',    value: metricsMap['TOTAL INCOME'] || '$0.00',    cls: 'jh-blue' },
+      { label: 'Actual Costs',    value: metricsMap['ACTUAL COSTS'] || '$0.00',    cls: 'jh-amber' },
+      { label: 'Accrued Costs',   value: metricsMap['ACCRUED COSTS'] || '$0.00',   cls: 'jh-amber' },
+      { label: '% Complete',      value: metricsMap['% COMPLETE'] || '0%',         cls: 'jh-cyan' },
+      { label: 'Revenue Earned',  value: metricsMap['REVENUE EARNED'] || '$0.00',  cls: 'jh-blue' },
+      { label: 'Gross Profit',    value: metricsMap['GROSS PROFIT'] || '$0.00',    cls: 'jh-green' },
+      { label: 'Margin %',        value: metricsMap['MARGIN %'] || '0%',           cls: 'jh-green' }
     ];
 
     var html = '';
     items.forEach(function(item) {
-      if (item.value) {
-        html += '<span class="jh-metric ' + item.cls + '">' +
-          '<span class="jh-metric-label">' + item.label + '</span> ' +
-          '<span class="jh-metric-value">' + item.value + '</span>' +
-          '</span>';
-      }
+      html += '<div class="jh-strip-card ' + item.cls + '">' +
+        '<span class="jh-strip-label">' + item.label + '</span>' +
+        '<span class="jh-strip-value">' + item.value + '</span>' +
+        '</div>';
     });
-    metricsDiv.innerHTML = html;
-    header.appendChild(metricsDiv);
+    strip.innerHTML = html;
+
+    // Insert strip right after the header
+    if (header.nextSibling) {
+      header.parentNode.insertBefore(strip, header.nextSibling);
+    } else {
+      header.parentNode.appendChild(strip);
+    }
   }
 
   // ── Build the two-column layout ───────────────────────────
@@ -120,29 +126,7 @@
     var rightCol = document.createElement('div');
     rightCol.className = 'ws-col-right';
 
-    // Metrics strip inside right column
-    var summaryGrid = detail.querySelector('.summary-grid');
-    var metricCards = summaryGrid ? summaryGrid.querySelectorAll('.summary-card') : [];
-    var metricsHtml = '<div class="ws-right-metrics">';
-    metricCards.forEach(function(card) {
-      var lines = card.textContent.trim().split('\n').map(function(l) { return l.trim(); }).filter(Boolean);
-      var label = lines[0] || '';
-      var value = lines[1] || '';
-      var cls = 'ds-default';
-      var lbl = label.toUpperCase();
-      if (lbl.includes('INCOME') || lbl.includes('REVENUE')) cls = 'ds-blue';
-      else if (lbl.includes('COST')) cls = 'ds-amber';
-      else if (lbl.includes('PROFIT')) cls = 'ds-green';
-      else if (lbl.includes('MARGIN')) cls = 'ds-green';
-      else if (lbl.includes('COMPLETE')) cls = 'ds-cyan';
-      metricsHtml += '<div class="ds-metric-sm ' + cls + '">' +
-        '<span class="ds-label-sm">' + label + '</span>' +
-        '<span class="ds-value-sm">' + value + '</span>' +
-        '</div>';
-    });
-    metricsHtml += '</div>';
-
-    // Tab buttons
+    // Tab buttons (metrics strip now lives in header)
     var tabsHtml = '<div class="ws-right-tabs">';
     RIGHT_TABS.forEach(function(tab, i) {
       tabsHtml += '<button class="ws-right-tab' + (i === 0 ? ' active' : '') + '" data-panel="' + tab.id + '">' + tab.label + '</button>';
@@ -152,7 +136,7 @@
     // Tab content area
     var contentHtml = '<div class="ws-right-content" id="wsRightContent"></div>';
 
-    rightCol.innerHTML = metricsHtml + tabsHtml + contentHtml;
+    rightCol.innerHTML = tabsHtml + contentHtml;
 
     container.appendChild(leftCol);
     container.appendChild(rightCol);
@@ -248,10 +232,11 @@
     if (actionBtns) actionBtns.style.display = 'none';
     detail.querySelectorAll('.sub-tab-content-job').forEach(function(p) { p.style.display = 'none'; });
 
-    // Insert the layout
-    var header = detail.querySelector('.job-detail-header');
-    if (header && header.nextSibling) {
-      detail.insertBefore(layout, header.nextSibling);
+    // Insert the two-col layout after the metrics strip (which is after the header)
+    var metricsStrip = detail.querySelector('.jh-metrics-strip');
+    var insertAfter = metricsStrip || detail.querySelector('.job-detail-header');
+    if (insertAfter && insertAfter.nextSibling) {
+      detail.insertBefore(layout, insertAfter.nextSibling);
     } else {
       detail.appendChild(layout);
     }
@@ -301,6 +286,9 @@
       if (!document.getElementById('ws-two-col')) {
         layoutApplied = false;
         currentJobId = null;
+        // Also remove stale metrics strip so buildHeader re-creates it
+        var oldStrip = document.querySelector('.jh-metrics-strip');
+        if (oldStrip) oldStrip.remove();
         applyLayout();
       }
 
