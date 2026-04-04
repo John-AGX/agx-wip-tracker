@@ -37,8 +37,9 @@
   }
 
   function injectWorkspaceCSS() {
-    if (document.querySelector('link[href*="workspace.css"]')) return;
+    if (document.getElementById('ws-grid-css')) return;
     var link = document.createElement('link');
+    link.id = 'ws-grid-css';
     link.rel = 'stylesheet';
     link.href = 'css/workspace.css?v=19';
     document.head.appendChild(link);
