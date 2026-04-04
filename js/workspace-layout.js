@@ -1,10 +1,10 @@
 // ============================================================
-// AGX WIP Tracker Ã¢ÂÂ Layout Restructure v2 (Step 2)
+// AGX WIP Tracker — Layout Restructure v2 (Step 2)
 // Two-column layout:
 //   LEFT:  Workspace grid (portrait, always visible)
 //   RIGHT: Compact metrics strip + horizontal tab navigation
 // Job name + key costs in the main header bar
-// Replaces workspace-inject.js Ã¢ÂÂ load AFTER app.js + wip.js + workspace.js
+// Replaces workspace-inject.js — load AFTER app.js + wip.js + workspace.js
 // ============================================================
 
 (function () {
@@ -13,7 +13,7 @@
   let layoutApplied = false;
   let currentJobId = null;
 
-  // Ã¢ÂÂÃ¢ÂÂ Tab definitions for right panel Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
+  // ── Tab definitions for right panel ───────────────────────
   const RIGHT_TABS = [
     { id: 'job-wip',          label: 'WIP' },
     { id: 'job-costs',        label: 'Costs' },
@@ -26,7 +26,7 @@
     { id: 'job-weekly',       label: 'Accruals' }
   ];
 
-  // Ã¢ÂÂÃ¢ÂÂ CSS injection Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
+  // ── CSS injection ─────────────────────────────────────────
   function injectCSS() {
     if (document.getElementById('ws-layout-v2-css')) return;
     var link = document.createElement('link');
@@ -44,7 +44,7 @@
     document.head.appendChild(link);
   }
 
-  // Ã¢ÂÂÃ¢ÂÂ Cleanup old injections Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
+  // ── Cleanup old injections ────────────────────────────────
   function cleanup() {
     // Remove job bar from header
     var jobBar = document.getElementById("jh-job-bar");
@@ -195,7 +195,7 @@
     container.id = 'ws-two-col';
     container.className = 'ws-two-col';
 
-    // Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂ LEFT COLUMN: Workspace Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
+    // ─── LEFT COLUMN: Workspace ─────
     var leftCol = document.createElement('div');
     leftCol.className = 'ws-col-left';
     leftCol.innerHTML =
@@ -205,7 +205,7 @@
       '</div>' +
       '<div id="wsWorkspaceContainer" tabindex="0"></div>';
 
-    // Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂ RIGHT COLUMN: Metrics + Tabs Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
+    // ─── RIGHT COLUMN: Metrics + Tabs ─────
     var rightCol = document.createElement('div');
     rightCol.className = 'ws-col-right';
 
@@ -231,7 +231,7 @@
     return container;
   }
 
-  // Ã¢ÂÂÃ¢ÂÂ Move panels into right content area Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
+  // ── Move panels into right content area ───────────────────
   function populateRightPanels(detail) {
     var rc = document.getElementById('wsRightContent');
     if (!rc) return;
@@ -296,7 +296,7 @@
     rightContent.insertBefore(wrapper, rightContent.firstChild);
   }
 
-  // Ã¢ÂÂÃ¢ÂÂ Main layout application Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
+  // ── Main layout application ───────────────────────────────
   var _applyingLayout = false;
 
   function wireResizer() {
@@ -412,7 +412,7 @@
     }
   }
 
-  // Ã¢ÂÂÃ¢ÂÂ Observer Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
+  // ── Observer ──────────────────────────────────────────────
   function observe() {
     injectCSS();
 
@@ -446,7 +446,7 @@
     tryInitWorkspace();
   }
 
-  // Ã¢ÂÂÃ¢ÂÂ Init Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
+  // ── Init ──────────────────────────────────────────────────
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', observe);
   } else {
