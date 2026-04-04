@@ -41,7 +41,7 @@
     var link = document.createElement('link');
     link.id = 'ws-grid-css';
     link.rel = 'stylesheet';
-    link.href = 'css/workspace.css?v=19';
+    link.href = 'css/workspace.css?v=20';
     document.head.appendChild(link);
   }
 

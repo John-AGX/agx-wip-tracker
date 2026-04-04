@@ -15,6 +15,7 @@
   const EXPAND_BUFFER = 2; // rows/cols to add when typing at edge
   const COL_DEFAULT_WIDTH = 100;
   const ROW_HEIGHT = 28;
+  const UNDO_MAX = 50;
 
   // Reference mode colors (6 distinct colors for cell references)
   const REF_COLORS = [
@@ -28,12 +29,15 @@
     cells: {},       // { "A1": { raw: "=B1*2", value: 42, fmt: null }, ... }
     colWidths: {},   // { 0: 120, 1: 100, ... }
     selection: null,  // { r: 0, c: 0 }
+    selEnd: null,     // { r, c } for range selection end (null = single cell)
     editing: null,    // { r: 0, c: 0 }
     links: {},        // { "C5": "contractAmount", "D5": "estimatedCosts" }
     jobId: null,
     dirty: false,
     refMode: false,   // TRUE when entering a formula
-    refAnchor: null   // Which cell/formula bar started the formula { type: 'formulaBar'|'cell', r?, c? }
+    refAnchor: null,  // Which cell/formula bar started the formula
+    undoStack: [],
+    redoStack: []
   };
 
   let wsContainer = null;   // DOM root
@@ -348,10 +352,60 @@
     return result;
   }
 
+  // ── Formula Helpers ──────────────────────────────────────
+
+  /** Split function args by comma, respecting nested parens */
+  function splitArgs(str) {
+    var args = [], depth = 0, cur = '';
+    for (var i = 0; i < str.length; i++) {
+      if (str[i] === '(') depth++;
+      else if (str[i] === ')') depth--;
+      if (str[i] === ',' && depth === 0) { args.push(cur.trim()); cur = ''; }
+      else cur += str[i];
+    }
+    if (cur.trim()) args.push(cur.trim());
+    return args;
+  }
+
+  /** Collect numeric values from a range like A1:B5 */
+  function getRangeValues(rangeStr) {
+    var m = rangeStr.match(/^([A-Z]+\d+):([A-Z]+\d+)$/i);
+    if (!m) return [];
+    var s = parseAddr(m[1].toUpperCase()), e = parseAddr(m[2].toUpperCase());
+    if (!s || !e) return [];
+    var vals = [];
+    for (var r = Math.min(s.r, e.r); r <= Math.max(s.r, e.r); r++)
+      for (var c = Math.min(s.c, e.c); c <= Math.max(s.c, e.c); c++) {
+        var v = getCell(r, c).value;
+        if (typeof v === 'number') vals.push(v);
+      }
+    return vals;
+  }
+
+  /** Evaluate a single function call */
+  function evalFunction(name, argsStr) {
+    var args = splitArgs(argsStr);
+    switch (name) {
+      case 'SUM': { var v = getRangeValues(argsStr); return v.reduce(function (a, b) { return a + b; }, 0); }
+      case 'AVERAGE': { var v = getRangeValues(argsStr); return v.length ? v.reduce(function (a, b) { return a + b; }, 0) / v.length : 0; }
+      case 'MAX': { var v = getRangeValues(argsStr); return v.length ? Math.max.apply(null, v) : 0; }
+      case 'MIN': { var v = getRangeValues(argsStr); return v.length ? Math.min.apply(null, v) : 0; }
+      case 'COUNT': { return getRangeValues(argsStr).length; }
+      case 'ROUND': { return args.length >= 2 ? +safeEvalExpr(args[0]).toFixed(safeEvalExpr(args[1])) : Math.round(safeEvalExpr(args[0])); }
+      case 'ABS': { return Math.abs(safeEvalExpr(args[0])); }
+      case 'CEILING': { var v = safeEvalExpr(args[0]), s = args.length >= 2 ? safeEvalExpr(args[1]) : 1; return Math.ceil(v / s) * s; }
+      case 'FLOOR': { var v = safeEvalExpr(args[0]), s = args.length >= 2 ? safeEvalExpr(args[1]) : 1; return Math.floor(v / s) * s; }
+      case 'IF': {
+        if (args.length < 3) return '#ERR';
+        return safeEvalExpr(args[0]) ? safeEvalExpr(args[1]) : safeEvalExpr(args[2]);
+      }
+      default: return '#ERR';
+    }
+  }
+
   /** Evaluate a cell's raw value; detect formulas starting with '=' */
   function evaluate(raw) {
     if (typeof raw !== 'string' || !raw.startsWith('=')) {
-      // Plain value — try number
       if (raw === '' || raw === null || raw === undefined) return '';
       const n = Number(raw);
       return isNaN(n) ? raw : n;
@@ -360,8 +414,8 @@
     const expr = raw.substring(1);
 
     try {
-      // Replace cell references (A1, AB12, etc.) with their numeric values
-      const resolved = expr.replace(/\b([A-Z]+)(\d+)\b/gi, (match, col, row) => {
+      // Replace cell references with their numeric values
+      var resolved = expr.replace(/\b([A-Z]+)(\d+)\b/gi, function (match, col, row) {
         const ref = parseAddr(match.toUpperCase());
         if (!ref) return '0';
         const refCell = getCell(ref.r, ref.c);
@@ -369,91 +423,17 @@
         return (typeof v === 'number') ? v : (v === '' ? '0' : JSON.stringify(v));
       });
 
-      // Handle SUM(range)
-      const withFunctions = resolved.replace(/SUM\(([A-Z]+\d+):([A-Z]+\d+)\)/gi, (match, startRef, endRef) => {
-        const s = parseAddr(startRef.toUpperCase());
-        const e = parseAddr(endRef.toUpperCase());
-        if (!s || !e) return '0';
-        let total = 0;
-        for (let r = Math.min(s.r, e.r); r <= Math.max(s.r, e.r); r++) {
-          for (let c = Math.min(s.c, e.c); c <= Math.max(s.c, e.c); c++) {
-            const v = getCell(r, c).value;
-            if (typeof v === 'number') total += v;
-          }
-        }
-        return total;
-      });
+      // Iteratively resolve innermost function calls (supports nesting)
+      var maxIter = 50;
+      var funcRe = /([A-Z]+)\(([^()]*)\)/i;
+      while (funcRe.test(resolved) && maxIter-- > 0) {
+        resolved = resolved.replace(funcRe, function (match, fname, args) {
+          return evalFunction(fname.toUpperCase(), args);
+        });
+      }
 
-      // Handle AVERAGE(range)
-      const withAvg = withFunctions.replace(/AVERAGE\(([A-Z]+\d+):([A-Z]+\d+)\)/gi, (match, startRef, endRef) => {
-        const s = parseAddr(startRef.toUpperCase());
-        const e = parseAddr(endRef.toUpperCase());
-        if (!s || !e) return '0';
-        let total = 0, count = 0;
-        for (let r = Math.min(s.r, e.r); r <= Math.max(s.r, e.r); r++) {
-          for (let c = Math.min(s.c, e.c); c <= Math.max(s.c, e.c); c++) {
-            const v = getCell(r, c).value;
-            if (typeof v === 'number') { total += v; count++; }
-          }
-        }
-        return count > 0 ? total / count : 0;
-      });
-
-      // Handle MAX(range)
-      const withMax = withAvg.replace(/MAX\(([A-Z]+\d+):([A-Z]+\d+)\)/gi, (match, startRef, endRef) => {
-        const s = parseAddr(startRef.toUpperCase());
-        const e = parseAddr(endRef.toUpperCase());
-        if (!s || !e) return '0';
-        let max = -Infinity;
-        for (let r = Math.min(s.r, e.r); r <= Math.max(s.r, e.r); r++) {
-          for (let c = Math.min(s.c, e.c); c <= Math.max(s.c, e.c); c++) {
-            const v = getCell(r, c).value;
-            if (typeof v === 'number' && v > max) max = v;
-          }
-        }
-        return max === -Infinity ? 0 : max;
-      });
-
-      // Handle MIN(range)
-      const withMin = withMax.replace(/MIN\(([A-Z]+\d+):([A-Z]+\d+)\)/gi, (match, startRef, endRef) => {
-        const s = parseAddr(startRef.toUpperCase());
-        const e = parseAddr(endRef.toUpperCase());
-        if (!s || !e) return '0';
-        let min = Infinity;
-        for (let r = Math.min(s.r, e.r); r <= Math.max(s.r, e.r); r++) {
-          for (let c = Math.min(s.c, e.c); c <= Math.max(s.c, e.c); c++) {
-            const v = getCell(r, c).value;
-            if (typeof v === 'number' && v < min) min = v;
-          }
-        }
-        return min === Infinity ? 0 : min;
-      });
-
-      // Handle COUNT(range)
-      const withCount = withMin.replace(/COUNT\(([A-Z]+\d+):([A-Z]+\d+)\)/gi, (match, startRef, endRef) => {
-        const s = parseAddr(startRef.toUpperCase());
-        const e = parseAddr(endRef.toUpperCase());
-        if (!s || !e) return '0';
-        let count = 0;
-        for (let r = Math.min(s.r, e.r); r <= Math.max(s.r, e.r); r++) {
-          for (let c = Math.min(s.c, e.c); c <= Math.max(s.c, e.c); c++) {
-            const v = getCell(r, c).value;
-            if (typeof v === 'number') count++;
-          }
-        }
-        return count;
-      });
-
-      // Handle IF(condition, trueVal, falseVal)
-      const withIf = withCount.replace(/IF\((.+?),(.+?),(.+?)\)/gi, (match, cond, tVal, fVal) => {
-        try {
-          const condResult = safeEvalExpr(cond.trim());
-          return condResult ? safeEvalExpr(tVal.trim()) : safeEvalExpr(fVal.trim());
-        } catch (e) { return '#ERR'; }
-      });
-
-      // Evaluate the final expression
-      const result = safeEvalExpr(withIf);
+      // Evaluate final arithmetic expression
+      const result = safeEvalExpr(resolved);
       return (typeof result === 'number' && !isFinite(result)) ? '#DIV/0!' : result;
     } catch (e) {
       return '#ERR';
@@ -626,6 +606,10 @@
       <div class="ws-statusbar">
         <span id="wsStatus">Ready</span>
         <span id="wsQuickCalc"></span>
+        <span class="ws-statusbar-actions">
+          <button class="ws-btn ws-btn-add" id="wsAddRow" title="Add row">+ Row</button>
+          <button class="ws-btn ws-btn-add" id="wsAddCol" title="Add column">+ Col</button>
+        </span>
       </div>
     `;
   }
@@ -647,12 +631,21 @@
         const cell = grid.cells[key] || { raw: '', value: '', fmt: null };
         const val = displayVal(cell);
         const isSelected = grid.selection && grid.selection.r === r && grid.selection.c === c;
+        const isRangeSelected = !isSelected && inRange(r, c);
+        const rng = getSelRange();
         const isLinked = grid.links[key];
         const isError = cell.error;
         const isFormula = typeof cell.raw === 'string' && cell.raw.startsWith('=');
 
         let cls = 'ws-cell';
         if (isSelected) cls += ' ws-selected';
+        if (isRangeSelected) cls += ' ws-range-selected';
+        if (rng && (isSelected || isRangeSelected)) {
+          if (r === rng.r1) cls += ' ws-range-top';
+          if (r === rng.r2) cls += ' ws-range-bottom';
+          if (c === rng.c1) cls += ' ws-range-left';
+          if (c === rng.c2) cls += ' ws-range-right';
+        }
         if (isLinked) cls += ' ws-linked';
         if (isError) cls += ' ws-error';
         if (isFormula) cls += ' ws-formula';
@@ -684,25 +677,24 @@
 
   // ── Selection & Editing ────────────────────────────────────
 
-  function selectCell(r, c) {
-    const prev = grid.selection;
+  function selectCell(r, c, keepRange) {
     grid.selection = { r, c };
+    if (!keepRange) grid.selEnd = null;
 
-    // Update previous cell styling
-    if (prev) {
-      const prevTd = wsTable.querySelector(`td[data-r="${prev.r}"][data-c="${prev.c}"]`);
-      if (prevTd) prevTd.classList.remove('ws-selected');
-    }
-
-    // Update new cell styling
-    const td = wsTable.querySelector(`td[data-r="${r}"][data-c="${c}"]`);
-    if (td) td.classList.add('ws-selected');
+    renderSelectionClasses();
 
     // Update cell ref and formula bar
     const key = addr(r, c);
     if (formulaBar) formulaBar.value = getCell(r, c).raw || '';
     const refEl = document.getElementById('wsCellRef');
-    if (refEl) refEl.textContent = key;
+    if (refEl) {
+      var rng = getSelRange();
+      if (grid.selEnd && (rng.r1 !== rng.r2 || rng.c1 !== rng.c2)) {
+        refEl.textContent = addr(rng.r1, rng.c1) + ':' + addr(rng.r2, rng.c2);
+      } else {
+        refEl.textContent = key;
+      }
+    }
 
     // Update link panel display
     updateLinkPanel(key);
@@ -742,6 +734,7 @@
 
     const raw = td.textContent.trim();
     const cell = getCell(r, c);
+    pushUndo();
     cell.raw = raw;
 
     td.contentEditable = false;
@@ -883,11 +876,14 @@
     const el = document.getElementById('wsQuickCalc');
     if (!el || !grid.selection) return;
 
-    // Collect all numeric cells for quick stats
+    // Collect numeric values from selected range
+    const rng = getSelRange();
     const nums = [];
-    Object.values(grid.cells).forEach(cell => {
-      if (typeof cell.value === 'number') nums.push(cell.value);
-    });
+    for (var r = rng.r1; r <= rng.r2; r++)
+      for (var c = rng.c1; c <= rng.c2; c++) {
+        var cell = grid.cells[addr(r, c)];
+        if (cell && typeof cell.value === 'number') nums.push(cell.value);
+      }
 
     if (nums.length > 1) {
       const sum = nums.reduce((a, b) => a + b, 0);
@@ -898,40 +894,291 @@
     }
   }
 
-  // ── Event Handlers ─────────────────────────────────────────
+  // ── Undo / Redo ────────────────────────────────────────────
 
-  // v3: mousedown handler for reference mode click-to-select
-  function handleCellMouseDown(e) {
-    if (!grid.refMode) return;
-    const td = e.target.closest('td.ws-cell');
-    if (!td) return;
-    e.preventDefault(); // Prevent focus from leaving the formula bar
-    const r = parseInt(td.dataset.r);
-    const c = parseInt(td.dataset.c);
-    const cellRef = addr(r, c);
-    insertCellRefIntoFormula(cellRef);
-    selectCell(r, c);
+  function snapshotState() {
+    return {
+      cells: JSON.parse(JSON.stringify(grid.cells)),
+      links: JSON.parse(JSON.stringify(grid.links)),
+      rows: grid.rows, cols: grid.cols,
+      colWidths: JSON.parse(JSON.stringify(grid.colWidths))
+    };
   }
 
-  function handleCellClick(e) {
-    if (grid.refMode) return; // v3: already handled by mousedown
-    const td = e.target.closest('td.ws-cell');
-    if (!td) return;
-    const r = parseInt(td.dataset.r);
-    const c = parseInt(td.dataset.c);
+  function pushUndo() {
+    grid.undoStack.push(snapshotState());
+    if (grid.undoStack.length > UNDO_MAX) grid.undoStack.shift();
+    grid.redoStack = [];
+  }
 
-    // In reference mode, clicking a cell inserts its address into the formula
-    if (grid.refMode && formulaBar === document.activeElement) {
-      const cellRef = addr(r, c);
-      insertCellRefIntoFormula(cellRef);
+  function doUndo() {
+    if (!grid.undoStack.length) return;
+    grid.redoStack.push(snapshotState());
+    var s = grid.undoStack.pop();
+    grid.cells = s.cells; grid.links = s.links;
+    grid.rows = s.rows; grid.cols = s.cols; grid.colWidths = s.colWidths;
+    recalcAll(); renderGrid();
+    if (grid.selection) selectCell(grid.selection.r, grid.selection.c);
+    saveWorkspace();
+  }
+
+  function doRedo() {
+    if (!grid.redoStack.length) return;
+    grid.undoStack.push(snapshotState());
+    var s = grid.redoStack.pop();
+    grid.cells = s.cells; grid.links = s.links;
+    grid.rows = s.rows; grid.cols = s.cols; grid.colWidths = s.colWidths;
+    recalcAll(); renderGrid();
+    if (grid.selection) selectCell(grid.selection.r, grid.selection.c);
+    saveWorkspace();
+  }
+
+  // ── Range Selection Helpers ───────────────────────────────
+
+  function getSelRange() {
+    if (!grid.selection) return null;
+    var s = grid.selection;
+    if (!grid.selEnd) return { r1: s.r, c1: s.c, r2: s.r, c2: s.c };
+    var e = grid.selEnd;
+    return {
+      r1: Math.min(s.r, e.r), c1: Math.min(s.c, e.c),
+      r2: Math.max(s.r, e.r), c2: Math.max(s.c, e.c)
+    };
+  }
+
+  function inRange(r, c) {
+    var rng = getSelRange();
+    return rng && r >= rng.r1 && r <= rng.r2 && c >= rng.c1 && c <= rng.c2;
+  }
+
+  function renderSelectionClasses() {
+    if (!wsTable) return;
+    var rng = getSelRange();
+    wsTable.querySelectorAll('td.ws-cell').forEach(function (td) {
+      var r = parseInt(td.dataset.r), c = parseInt(td.dataset.c);
+      td.classList.remove('ws-selected', 'ws-range-selected', 'ws-range-top', 'ws-range-bottom', 'ws-range-left', 'ws-range-right');
+      if (!rng) return;
+      var active = grid.selection && grid.selection.r === r && grid.selection.c === c;
+      var inside = r >= rng.r1 && r <= rng.r2 && c >= rng.c1 && c <= rng.c2;
+      if (active) td.classList.add('ws-selected');
+      if (inside && !active) td.classList.add('ws-range-selected');
+      if (inside) {
+        if (r === rng.r1) td.classList.add('ws-range-top');
+        if (r === rng.r2) td.classList.add('ws-range-bottom');
+        if (c === rng.c1) td.classList.add('ws-range-left');
+        if (c === rng.c2) td.classList.add('ws-range-right');
+      }
+    });
+  }
+
+  // ── Formula Reference Adjustment ──────────────────────────
+
+  function adjustFormulaRefs(raw, rowDelta, colDelta) {
+    if (!raw || !raw.startsWith('=')) return raw;
+    return '=' + raw.substring(1).replace(/\b([A-Z]+)(\d+)\b/gi, function (match, colStr, rowStr) {
+      var r = parseInt(rowStr) + rowDelta;
+      var c = letterToCol(colStr.toUpperCase()) + colDelta;
+      if (r < 1 || c < 0) return '#REF!';
+      return colLetter(c) + r;
+    });
+  }
+
+  // ── Row / Column Insert & Delete ──────────────────────────
+
+  function shiftCellData(axis, position, delta) {
+    var newCells = {}, newLinks = {};
+    Object.keys(grid.cells).forEach(function (key) {
+      var ref = parseAddr(key);
+      if (!ref) return;
+      var r = ref.r, c = ref.c;
+      if (axis === 'row') {
+        if (delta < 0 && r === position) return; // deleted row
+        if (r >= position) r += delta;
+      } else {
+        if (delta < 0 && c === position) return; // deleted col
+        if (c >= position) c += delta;
+      }
+      if (r >= 0 && c >= 0) newCells[addr(r, c)] = grid.cells[key];
+    });
+    Object.keys(grid.links).forEach(function (key) {
+      var ref = parseAddr(key);
+      if (!ref) return;
+      var r = ref.r, c = ref.c;
+      if (axis === 'row') {
+        if (delta < 0 && r === position) return;
+        if (r >= position) r += delta;
+      } else {
+        if (delta < 0 && c === position) return;
+        if (c >= position) c += delta;
+      }
+      if (r >= 0 && c >= 0) newLinks[addr(r, c)] = grid.links[key];
+    });
+    grid.cells = newCells;
+    grid.links = newLinks;
+    // Shift colWidths for column operations
+    if (axis === 'col') {
+      var newW = {};
+      Object.keys(grid.colWidths).forEach(function (k) {
+        var ci = parseInt(k);
+        if (delta < 0 && ci === position) return;
+        if (ci >= position) ci += delta;
+        if (ci >= 0) newW[ci] = grid.colWidths[k];
+      });
+      grid.colWidths = newW;
+    }
+  }
+
+  function shiftFormulaRefs(axis, position, delta) {
+    Object.keys(grid.cells).forEach(function (key) {
+      var cell = grid.cells[key];
+      if (!cell.raw || !cell.raw.startsWith('=')) return;
+      cell.raw = '=' + cell.raw.substring(1).replace(/\b([A-Z]+)(\d+)\b/gi, function (match, colStr, rowStr) {
+        var r = parseInt(rowStr); // 1-indexed
+        var c = letterToCol(colStr.toUpperCase()); // 0-indexed
+        if (axis === 'row' && r >= position + 1) { r += delta; if (r < 1) return '#REF!'; }
+        if (axis === 'col' && c >= position) { c += delta; if (c < 0) return '#REF!'; }
+        return colLetter(c) + r;
+      });
+    });
+  }
+
+  function insertRow(atRow, direction) {
+    pushUndo();
+    var insertAt = direction === 'above' ? atRow : atRow + 1;
+    shiftCellData('row', insertAt, 1);
+    shiftFormulaRefs('row', insertAt, 1);
+    grid.rows++;
+    recalcAll(); renderGrid(); saveWorkspace();
+    if (grid.selection) selectCell(grid.selection.r, grid.selection.c);
+  }
+
+  function deleteRow(atRow) {
+    if (grid.rows <= 1) return;
+    pushUndo();
+    shiftCellData('row', atRow, -1);
+    shiftFormulaRefs('row', atRow, -1);
+    grid.rows = Math.max(grid.rows - 1, 1);
+    recalcAll(); renderGrid(); saveWorkspace();
+    if (grid.selection) {
+      var nr = Math.min(grid.selection.r, grid.rows - 1);
+      selectCell(nr, grid.selection.c);
+    }
+  }
+
+  function insertColumn(atCol, direction) {
+    pushUndo();
+    var insertAt = direction === 'left' ? atCol : atCol + 1;
+    shiftCellData('col', insertAt, 1);
+    shiftFormulaRefs('col', insertAt, 1);
+    grid.cols++;
+    recalcAll(); renderGrid(); saveWorkspace();
+    if (grid.selection) selectCell(grid.selection.r, grid.selection.c);
+  }
+
+  function deleteColumn(atCol) {
+    if (grid.cols <= 1) return;
+    pushUndo();
+    shiftCellData('col', atCol, -1);
+    shiftFormulaRefs('col', atCol, -1);
+    grid.cols = Math.max(grid.cols - 1, 1);
+    recalcAll(); renderGrid(); saveWorkspace();
+    if (grid.selection) {
+      var nc = Math.min(grid.selection.c, grid.cols - 1);
+      selectCell(grid.selection.r, nc);
+    }
+  }
+
+  // ── Context Menu ──────────────────────────────────────────
+
+  var ctxMenu = null;
+
+  function showContextMenu(x, y, items) {
+    closeContextMenu();
+    ctxMenu = document.createElement('div');
+    ctxMenu.className = 'ws-context-menu';
+    ctxMenu.style.left = x + 'px';
+    ctxMenu.style.top = y + 'px';
+    items.forEach(function (item) {
+      if (item === '---') {
+        var sep = document.createElement('div');
+        sep.className = 'ws-context-menu-separator';
+        ctxMenu.appendChild(sep);
+      } else {
+        var el = document.createElement('div');
+        el.className = 'ws-context-menu-item';
+        el.textContent = item.label;
+        el.addEventListener('click', function () { closeContextMenu(); item.action(); });
+        ctxMenu.appendChild(el);
+      }
+    });
+    document.body.appendChild(ctxMenu);
+    setTimeout(function () {
+      document.addEventListener('click', closeContextMenu, { once: true });
+      document.addEventListener('keydown', closeCtxOnEsc);
+    }, 0);
+  }
+
+  function closeContextMenu() {
+    if (ctxMenu && ctxMenu.parentNode) ctxMenu.parentNode.removeChild(ctxMenu);
+    ctxMenu = null;
+    document.removeEventListener('keydown', closeCtxOnEsc);
+  }
+
+  function closeCtxOnEsc(e) { if (e.key === 'Escape') closeContextMenu(); }
+
+  // ── Event Handlers ─────────────────────────────────────────
+
+  // ── Mouse selection state ──
+  var dragging = false;
+
+  function handleCellMouseDown(e) {
+    var td = e.target.closest('td.ws-cell');
+    if (!td) return;
+    var r = parseInt(td.dataset.r), c = parseInt(td.dataset.c);
+
+    // Reference mode: insert cell ref
+    if (grid.refMode) {
+      e.preventDefault();
+      insertCellRefIntoFormula(addr(r, c));
+      selectCell(r, c);
       return;
     }
 
-    if (grid.editing) {
-      commitEdit(grid.editing.r, grid.editing.c);
-    }
+    if (grid.editing) commitEdit(grid.editing.r, grid.editing.c);
 
-    selectCell(r, c);
+    if (e.shiftKey && grid.selection) {
+      // Shift+click extends selection
+      grid.selEnd = { r: r, c: c };
+      selectCell(grid.selection.r, grid.selection.c, true);
+    } else {
+      selectCell(r, c);
+    }
+    dragging = true;
+  }
+
+  function handleCellMouseMove(e) {
+    if (!dragging || grid.refMode) return;
+    var td = e.target.closest('td.ws-cell');
+    if (!td) return;
+    var r = parseInt(td.dataset.r), c = parseInt(td.dataset.c);
+    if (!grid.selection) return;
+    if (r !== (grid.selEnd ? grid.selEnd.r : grid.selection.r) || c !== (grid.selEnd ? grid.selEnd.c : grid.selection.c)) {
+      grid.selEnd = { r: r, c: c };
+      renderSelectionClasses();
+      // Update cell ref display for range
+      var rng = getSelRange();
+      var refEl = document.getElementById('wsCellRef');
+      if (refEl && rng) refEl.textContent = addr(rng.r1, rng.c1) + ':' + addr(rng.r2, rng.c2);
+      updateQuickCalc();
+    }
+  }
+
+  function handleCellMouseUp() {
+    dragging = false;
+  }
+
+  function handleCellClick(e) {
+    // Click is now handled by mousedown for selection
   }
 
   function handleCellDblClick(e) {
@@ -943,17 +1190,23 @@
   }
 
   function handleKeyDown(e) {
+    // Global shortcuts: undo/redo
+    if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+      e.preventDefault(); doUndo(); return;
+    }
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey) || (e.key === 'Z' && e.shiftKey))) {
+      e.preventDefault(); doRedo(); return;
+    }
+
     // If editing a cell
     if (grid.editing) {
       if (e.key === 'Enter') {
         e.preventDefault();
         commitEdit(grid.editing.r, grid.editing.c);
-        // Move down
         if (grid.selection.r < grid.rows - 1) selectCell(grid.selection.r + 1, grid.selection.c);
       } else if (e.key === 'Tab') {
         e.preventDefault();
         commitEdit(grid.editing.r, grid.editing.c);
-        // Move right
         if (grid.selection.c < grid.cols - 1) selectCell(grid.selection.r, grid.selection.c + 1);
       } else if (e.key === 'Escape') {
         e.preventDefault();
@@ -968,6 +1221,7 @@
         e.preventDefault();
         exitRefMode();
         if (grid.selection) {
+          pushUndo();
           const cell = getCell(grid.selection.r, grid.selection.c);
           cell.raw = formulaBar.value.trim();
           grid.dirty = true;
@@ -976,7 +1230,6 @@
           selectCell(grid.selection.r, grid.selection.c);
           pushLinkedValues();
           saveWorkspace();
-          // Move down
           if (grid.selection.r < grid.rows - 1) selectCell(grid.selection.r + 1, grid.selection.c);
         }
       } else if (e.key === 'Escape') {
@@ -1021,24 +1274,94 @@
       return;
     }
 
+    // Copy (Ctrl+C)
+    if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
+      e.preventDefault();
+      var rng = getSelRange();
+      var text = '';
+      for (var cr = rng.r1; cr <= rng.r2; cr++) {
+        var rowVals = [];
+        for (var cc = rng.c1; cc <= rng.c2; cc++) {
+          var ccell = grid.cells[addr(cr, cc)];
+          rowVals.push(ccell ? (ccell.raw || '') : '');
+        }
+        text += rowVals.join('\t') + '\n';
+      }
+      navigator.clipboard.writeText(text.trimEnd());
+      return;
+    }
+
+    // Cut (Ctrl+X)
+    if ((e.ctrlKey || e.metaKey) && e.key === 'x') {
+      e.preventDefault();
+      var rng = getSelRange();
+      var text = '';
+      for (var cr = rng.r1; cr <= rng.r2; cr++) {
+        var rowVals = [];
+        for (var cc = rng.c1; cc <= rng.c2; cc++) {
+          var ccell = grid.cells[addr(cr, cc)];
+          rowVals.push(ccell ? (ccell.raw || '') : '');
+        }
+        text += rowVals.join('\t') + '\n';
+      }
+      navigator.clipboard.writeText(text.trimEnd());
+      pushUndo();
+      for (var cr = rng.r1; cr <= rng.r2; cr++)
+        for (var cc = rng.c1; cc <= rng.c2; cc++) {
+          var ccell = getCell(cr, cc); ccell.raw = ''; ccell.value = ''; ccell.error = null;
+        }
+      grid.dirty = true; recalcAll(); renderGrid(); selectCell(r, c, !!grid.selEnd);
+      pushLinkedValues(); saveWorkspace();
+      return;
+    }
+
+    // Fill Down (Ctrl+D)
+    if ((e.ctrlKey || e.metaKey) && e.key === 'd') {
+      e.preventDefault();
+      var rng = getSelRange();
+      if (rng.r1 === rng.r2) return;
+      pushUndo();
+      for (var fc = rng.c1; fc <= rng.c2; fc++) {
+        var src = getCell(rng.r1, fc);
+        for (var fr = rng.r1 + 1; fr <= rng.r2; fr++) {
+          var tgt = getCell(fr, fc);
+          tgt.raw = adjustFormulaRefs(src.raw || '', fr - rng.r1, 0);
+          tgt.fmt = src.fmt;
+        }
+      }
+      grid.dirty = true; recalcAll(); renderGrid(); selectCell(r, c, true);
+      pushLinkedValues(); saveWorkspace();
+      return;
+    }
+
     switch (e.key) {
       case 'ArrowUp':
         e.preventDefault();
-        if (r > 0) selectCell(r - 1, c);
+        if (e.shiftKey) {
+          var er = (grid.selEnd || grid.selection).r;
+          if (er > 0) { grid.selEnd = { r: er - 1, c: (grid.selEnd || grid.selection).c }; selectCell(r, c, true); }
+        } else { if (r > 0) selectCell(r - 1, c); }
         break;
       case 'ArrowDown':
         e.preventDefault();
-        if (r < grid.rows - 1) selectCell(r + 1, c);
-        else { autoExpand(r + 1, c); selectCell(r + 1, c); }
+        if (e.shiftKey) {
+          var er = (grid.selEnd || grid.selection).r;
+          if (er < grid.rows - 1) { grid.selEnd = { r: er + 1, c: (grid.selEnd || grid.selection).c }; selectCell(r, c, true); }
+        } else { if (r < grid.rows - 1) selectCell(r + 1, c); else { autoExpand(r + 1, c); selectCell(r + 1, c); } }
         break;
       case 'ArrowLeft':
         e.preventDefault();
-        if (c > 0) selectCell(r, c - 1);
+        if (e.shiftKey) {
+          var ec = (grid.selEnd || grid.selection).c;
+          if (ec > 0) { grid.selEnd = { r: (grid.selEnd || grid.selection).r, c: ec - 1 }; selectCell(r, c, true); }
+        } else { if (c > 0) selectCell(r, c - 1); }
         break;
       case 'ArrowRight':
         e.preventDefault();
-        if (c < grid.cols - 1) selectCell(r, c + 1);
-        else { autoExpand(r, c + 1); selectCell(r, c + 1); }
+        if (e.shiftKey) {
+          var ec = (grid.selEnd || grid.selection).c;
+          if (ec < grid.cols - 1) { grid.selEnd = { r: (grid.selEnd || grid.selection).r, c: ec + 1 }; selectCell(r, c, true); }
+        } else { if (c < grid.cols - 1) selectCell(r, c + 1); else { autoExpand(r, c + 1); selectCell(r, c + 1); } }
         break;
       case 'Tab':
         e.preventDefault();
@@ -1052,16 +1375,16 @@
       case 'Delete':
       case 'Backspace':
         e.preventDefault();
-        const cell = getCell(r, c);
-        cell.raw = '';
-        cell.value = '';
-        cell.error = null;
+        pushUndo();
+        var rng = getSelRange();
+        for (var dr = rng.r1; dr <= rng.r2; dr++)
+          for (var dc = rng.c1; dc <= rng.c2; dc++) {
+            var dcell = getCell(dr, dc);
+            dcell.raw = ''; dcell.value = ''; dcell.error = null;
+          }
         grid.dirty = true;
-        recalcAll();
-        renderGrid();
-        selectCell(r, c);
-        pushLinkedValues();
-        saveWorkspace();
+        recalcAll(); renderGrid(); selectCell(r, c, !!grid.selEnd);
+        pushLinkedValues(); saveWorkspace();
         break;
       case 'F2':
         e.preventDefault();
@@ -1161,8 +1484,9 @@
     selectCell(0, 0);
 
     // ── Wire events ──
-    wsTable.addEventListener('mousedown', handleCellMouseDown); // v3: ref mode click-to-select
-    wsTable.addEventListener('click', handleCellClick);
+    wsTable.addEventListener('mousedown', handleCellMouseDown);
+    wsTable.addEventListener('mousemove', handleCellMouseMove);
+    document.addEventListener('mouseup', handleCellMouseUp);
     wsTable.addEventListener('dblclick', handleCellDblClick);
     wsContainer.addEventListener('keydown', handleKeyDown);
     formulaBar.addEventListener('focus', handleFormulaBarFocus);
@@ -1172,6 +1496,39 @@
     wsTable.addEventListener('mousedown', handleColResizeStart);
     document.addEventListener('mousemove', handleColResizeMove);
     document.addEventListener('mouseup', handleColResizeEnd);
+
+    // Context menu on headers
+    wsTable.addEventListener('contextmenu', function (e) {
+      var rowH = e.target.closest('td.ws-row-header');
+      var colH = e.target.closest('th.ws-col-header');
+      if (rowH) {
+        e.preventDefault();
+        var rowIdx = parseInt(rowH.parentElement.querySelector('td.ws-cell').dataset.r);
+        showContextMenu(e.clientX, e.clientY, [
+          { label: 'Insert Row Above', action: function () { insertRow(rowIdx, 'above'); } },
+          { label: 'Insert Row Below', action: function () { insertRow(rowIdx, 'below'); } },
+          '---',
+          { label: 'Delete Row', action: function () { deleteRow(rowIdx); } }
+        ]);
+      } else if (colH) {
+        e.preventDefault();
+        var colIdx = parseInt(colH.dataset.col);
+        showContextMenu(e.clientX, e.clientY, [
+          { label: 'Insert Column Left', action: function () { insertColumn(colIdx, 'left'); } },
+          { label: 'Insert Column Right', action: function () { insertColumn(colIdx, 'right'); } },
+          '---',
+          { label: 'Delete Column', action: function () { deleteColumn(colIdx); } }
+        ]);
+      }
+    });
+
+    // +Row / +Col buttons
+    document.getElementById('wsAddRow').addEventListener('click', function () {
+      insertRow(grid.rows - 1, 'below');
+    });
+    document.getElementById('wsAddCol').addEventListener('click', function () {
+      insertColumn(grid.cols - 1, 'right');
+    });
 
     // Toolbar buttons
     document.getElementById('wsLinkBtn').addEventListener('click', () => {
@@ -1187,7 +1544,8 @@
     });
 
     document.getElementById('wsClearBtn').addEventListener('click', () => {
-      if (confirm('Clear all workspace data? This cannot be undone.')) {
+      if (confirm('Clear all workspace data?')) {
+        pushUndo();
         grid.cells = {};
         grid.links = {};
         grid.rows = MIN_ROWS;
@@ -1232,7 +1590,7 @@
       e.preventDefault();
       const text = e.clipboardData.getData('text/plain');
       if (!text) return;
-
+      pushUndo();
       const rows = text.split('\n').map(r => r.split('\t'));
       const startR = grid.selection.r;
       const startC = grid.selection.c;

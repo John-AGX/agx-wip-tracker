@@ -422,6 +422,59 @@
   outline: none;
 }
 
+/* ── Range Selection ───────────────────────────────────── */
+
+.ws-cell.ws-range-selected {
+  background: rgba(79, 140, 255, 0.12);
+}
+
+.ws-cell.ws-range-top { border-top: 2px solid #4f8cff !important; }
+.ws-cell.ws-range-bottom { border-bottom: 2px solid #4f8cff !important; }
+.ws-cell.ws-range-left { border-left: 2px solid #4f8cff !important; }
+.ws-cell.ws-range-right { border-right: 2px solid #4f8cff !important; }
+
+/* ── Context Menu ──────────────────────────────────────── */
+
+.ws-context-menu {
+  position: fixed;
+  z-index: 1000;
+  background: #242836;
+  border: 1px solid #4a5568;
+  border-radius: 4px;
+  padding: 4px 0;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+  min-width: 160px;
+}
+
+.ws-context-menu-item {
+  padding: 6px 16px;
+  font-size: 12px;
+  color: #e4e6f0;
+  cursor: pointer;
+}
+
+.ws-context-menu-item:hover {
+  background: rgba(79, 140, 255, 0.15);
+}
+
+.ws-context-menu-separator {
+  height: 1px;
+  background: #3a4058;
+  margin: 4px 0;
+}
+
+/* ── Statusbar Actions ─────────────────────────────────── */
+
+.ws-statusbar-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.ws-btn-add {
+  font-size: 10px;
+  padding: 1px 6px;
+}
+
 /* ── Responsive ─────────────────────────────────────────── */
 
 @media (max-width: 768px) {
