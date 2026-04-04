@@ -806,53 +806,68 @@ function renderWIPMain() {
         }
 
         function renderJobOverview(jobId) {
+            const container = document.getElementById('job-overview');
+            if (!container) return;
+            container.innerHTML = '';
+
+            // ── Action buttons ──
+            const btnRow = document.createElement('div');
+            btnRow.style.cssText = 'display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap;';
+            btnRow.innerHTML = '<button class="small" onclick="openAddBuildingToJobModal()" style="font-size:11px;padding:4px 10px;">+ Building</button>' +
+                '<button class="small" onclick="openAddPhaseToJobModal()" style="font-size:11px;padding:4px 10px;">+ Phase</button>' +
+                '<button class="small" onclick="openAddSubToJobModal()" style="font-size:11px;padding:4px 10px;">+ Sub</button>' +
+                '<button class="small" onclick="openAddChangeOrderModal()" style="font-size:11px;padding:4px 10px;">+ Change Order</button>';
+            container.appendChild(btnRow);
+
+            // ── Building cards ──
             const buildings = appData.buildings.filter(b => b.jobId === jobId);
+            if (buildings.length > 0) {
+                const bldgSection = document.createElement('div');
+                bldgSection.id = 'job-buildings-content';
+                container.appendChild(bldgSection);
+                renderJobBuildings(jobId);
+            }
+
+            // ── Phase summary table ──
             const phases = appData.phases.filter(p => p.jobId === jobId);
-            const tbody = document.querySelector('#job-overview-table tbody');
-            tbody.innerHTML = '';
+            if (phases.length > 0) {
+                const phaseGroups = {};
+                phases.forEach(p => {
+                    if (!phaseGroups[p.phase]) phaseGroups[p.phase] = [];
+                    phaseGroups[p.phase].push(p);
+                });
 
-            // Show buildings grouped with their phases
-            buildings.forEach(bldg => {
-                const bldgPhases = phases.filter(p => p.buildingId === bldg.id);
-                if (bldgPhases.length === 0) {
-                    // Building with no phases — show building-level costs
-                    const bTotal = (bldg.materials || 0) + (bldg.labor || 0) + (bldg.sub || 0) + (bldg.equipment || 0);
-                    const bVar = (bldg.budget || 0) - bTotal;
-                    const bStatus = getStatus(bTotal, bldg.budget);
-                    const row = document.createElement('tr');
-                    row.style.cursor = 'pointer';
-                    row.title = 'Click to edit this building';
-                    row.onclick = function() { editBuilding(bldg.id); };
-                    row.innerHTML = '<td>' + escapeHTML(bldg.name || '') + '</td><td style="color: var(--text-dim); font-style: italic;">No phases</td><td>—</td><td style="text-align: right;">' + formatCurrency(bldg.materials) + '</td><td style="text-align: right;">' + formatCurrency(bldg.labor) + '</td><td style="text-align: right;">' + formatCurrency(bldg.sub) + '</td><td style="text-align: right;">' + formatCurrency(bldg.equipment) + '</td><td style="text-align: right;">' + formatCurrency(bTotal) + '</td><td style="text-align: right;">' + formatCurrency(bldg.budget) + '</td><td style="text-align: right; color: ' + (bVar >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + formatCurrency(bVar) + '</td><td><span class="badge ' + bStatus + '">' + bStatus.replace('-', ' ').toUpperCase() + '</span></td>';
-                    tbody.appendChild(row);
-                } else {
-                    bldgPhases.forEach(p => {
-                        const totalSpent = (p.materials || 0) + (p.labor || 0) + (p.sub || 0) + (p.equipment || 0);
-                        const variance = (p.phaseBudget || 0) - totalSpent;
-                        const status = getStatus(totalSpent, p.phaseBudget);
-                        const row = document.createElement('tr');
-                        row.style.cursor = 'pointer';
-                        row.title = 'Click to edit this phase';
-                        row.onclick = function() { editPhase(p.id); };
-                        row.innerHTML = '<td>' + escapeHTML(bldg.name || '') + '</td><td>' + escapeHTML(p.phase) + '</td><td><div class="progress-bar" style="margin-bottom: 4px;"><div class="progress-fill" style="width: ' + p.pctComplete + '%"></div></div>' + p.pctComplete + '%</td><td style="text-align: right;">' + formatCurrency(p.materials) + '</td><td style="text-align: right;">' + formatCurrency(p.labor) + '</td><td style="text-align: right;">' + formatCurrency(p.sub) + '</td><td style="text-align: right;">' + formatCurrency(p.equipment) + '</td><td style="text-align: right;">' + formatCurrency(totalSpent) + '</td><td style="text-align: right;">' + formatCurrency(p.phaseBudget) + '</td><td style="text-align: right; color: ' + (variance >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + formatCurrency(variance) + '</td><td><span class="badge ' + status + '">' + status.replace('-', ' ').toUpperCase() + '</span></td>';
-                        tbody.appendChild(row);
-                    });
-                }
-            });
+                let tableHtml = '<div style="margin-top:8px;"><div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--text-dim);margin-bottom:6px;">Phase Summary</div>' +
+                    '<div class="table-container"><table style="width:100%;font-size:11px;"><thead><tr>' +
+                    '<th style="text-align:left;">Phase</th><th style="text-align:right;">Mat</th><th style="text-align:right;">Lab</th><th style="text-align:right;">Sub</th><th style="text-align:right;">Equip</th><th style="text-align:right;">Total</th><th style="text-align:right;">Avg %</th>' +
+                    '</tr></thead><tbody>';
 
-            // Show orphan phases (no building assigned)
-            const orphanPhases = phases.filter(p => !p.buildingId || !buildings.find(b => b.id === p.buildingId));
-            orphanPhases.forEach(p => {
-                const totalSpent = (p.materials || 0) + (p.labor || 0) + (p.sub || 0) + (p.equipment || 0);
-                const variance = (p.phaseBudget || 0) - totalSpent;
-                const status = getStatus(totalSpent, p.phaseBudget);
-                const row = document.createElement('tr');
-                row.style.cursor = 'pointer';
-                row.title = 'Click to edit this phase';
-                row.onclick = function() { editPhase(p.id); };
-                row.innerHTML = '<td style="color: var(--text-dim);">Unassigned</td><td>' + escapeHTML(p.phase) + '</td><td><div class="progress-bar" style="margin-bottom: 4px;"><div class="progress-fill" style="width: ' + p.pctComplete + '%"></div></div>' + p.pctComplete + '%</td><td style="text-align: right;">' + formatCurrency(p.materials) + '</td><td style="text-align: right;">' + formatCurrency(p.labor) + '</td><td style="text-align: right;">' + formatCurrency(p.sub) + '</td><td style="text-align: right;">' + formatCurrency(p.equipment) + '</td><td style="text-align: right;">' + formatCurrency(totalSpent) + '</td><td style="text-align: right;">' + formatCurrency(p.phaseBudget) + '</td><td style="text-align: right; color: ' + (variance >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + formatCurrency(variance) + '</td><td><span class="badge ' + status + '">' + status.replace('-', ' ').toUpperCase() + '</span></td>';
-                tbody.appendChild(row);
-            });
+                Object.keys(phaseGroups).forEach(phaseName => {
+                    const list = phaseGroups[phaseName];
+                    const mat = list.reduce((s, p) => s + (p.materials || 0), 0);
+                    const lab = list.reduce((s, p) => s + (p.labor || 0), 0);
+                    const sub = list.reduce((s, p) => s + (p.sub || 0), 0);
+                    const eq = list.reduce((s, p) => s + (p.equipment || 0), 0);
+                    const tot = mat + lab + sub + eq;
+                    const avg = Math.round(list.reduce((s, p) => s + (p.pctComplete || 0), 0) / list.length);
+                    tableHtml += '<tr><td>' + escapeHTML(phaseName) + '</td>' +
+                        '<td style="text-align:right;">' + formatCurrency(mat) + '</td>' +
+                        '<td style="text-align:right;">' + formatCurrency(lab) + '</td>' +
+                        '<td style="text-align:right;">' + formatCurrency(sub) + '</td>' +
+                        '<td style="text-align:right;">' + formatCurrency(eq) + '</td>' +
+                        '<td style="text-align:right;font-weight:600;">' + formatCurrency(tot) + '</td>' +
+                        '<td style="text-align:right;">' + avg + '%</td></tr>';
+                });
+
+                tableHtml += '</tbody></table></div></div>';
+                const phaseDiv = document.createElement('div');
+                phaseDiv.innerHTML = tableHtml;
+                container.appendChild(phaseDiv);
+            }
+
+            if (buildings.length === 0 && phases.length === 0) {
+                container.innerHTML += '<div style="text-align:center;padding:30px;color:var(--text-dim);font-size:13px;">No buildings or phases yet. Use the buttons above to get started.</div>';
+            }
         }
 
         function renderJobBuildings(jobId) {

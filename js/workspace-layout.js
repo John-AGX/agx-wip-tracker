@@ -15,14 +15,11 @@
 
   // ── Tab definitions for right panel ───────────────────────
   const RIGHT_TABS = [
+    { id: 'job-overview',     label: 'Overview' },
     { id: 'job-wip',          label: 'WIP' },
     { id: 'job-costs',        label: 'Costs' },
-    { id: 'job-overview',     label: 'Overview' },
     { id: 'job-changeorders', label: 'CO\'s' },
-    { id: 'job-buildings',    label: 'Buildings' },
-    { id: 'job-phases',       label: 'Phases' },
     { id: 'job-subs',         label: 'Subs' },
-    { id: 'job-labor',        label: 'Labor' },
     { id: 'job-weekly',       label: 'Accruals' }
   ];
 
@@ -279,10 +276,7 @@
         var renderers = {
           'job-overview': 'renderJobOverview',
           'job-costs': 'renderJobCosts',
-          'job-buildings': 'renderJobBuildings',
-          'job-phases': 'renderJobPhases',
           'job-subs': 'renderJobSubs',
-          'job-labor': 'renderJobLabor',
           'job-weekly': 'renderJobWeekly',
           'job-changeorders': 'renderChangeOrders',
           'job-wip': 'renderWipTab'
