@@ -32,7 +32,7 @@
     var link = document.createElement('link');
     link.id = 'ws-layout-v2-css';
     link.rel = 'stylesheet';
-    link.href = 'css/workspace-layout.css?v=5';
+    link.href = 'css/workspace-layout.css?v=6';
     document.head.appendChild(link);
   }
 
@@ -46,73 +46,149 @@
 
   // ── Cleanup old injections ────────────────────────────────
   function cleanup() {
-    var oldBtn = document.querySelector('.sub-tab-btn-job[data-subtab="job-workspace"]');
-    if (oldBtn) oldBtn.remove();
-    var oldPanel = document.getElementById('job-workspace');
-    if (oldPanel) oldPanel.remove();
-    var oldWs = document.getElementById('wsJobCostsWorkspace');
-    if (oldWs) oldWs.remove();
-    // Remove old v1 layout elements
-    var oldStrip = document.getElementById('wip-dashboard-strip');
-    if (oldStrip) oldStrip.remove();
-    var oldCenter = document.getElementById('ws-center');
-    if (oldCenter) oldCenter.remove();
-    var oldAccordions = document.getElementById('ws-accordions');
-    if (oldAccordions) oldAccordions.remove();
-  }
+    // Remove job bar from header
+    var jobBar = document.getElementById("jh-job-bar");
+    if (jobBar) jobBar.remove();
 
-  // ── Build enhanced header with full metrics strip ──────────
-  function buildHeader(detail, job) {
-    var header = detail.querySelector('.job-detail-header');
-    if (!header || document.querySelector('.jh-metrics-strip')) return;
-
-    // Extract key metric values from summary cards
-    var summaryGrid = detail.querySelector('.summary-grid');
-    var cards = summaryGrid ? summaryGrid.querySelectorAll('.summary-card') : [];
-    var metricsMap = {};
-    cards.forEach(function(card) {
-      var lines = card.textContent.trim().split('\n').map(function(l) { return l.trim(); }).filter(Boolean);
-      if (lines.length >= 2) metricsMap[lines[0].toUpperCase()] = lines[1];
-    });
-
-    // Build full-width metrics strip in the header
-    var strip = document.createElement('div');
-    strip.className = 'jh-metrics-strip';
-
-    var items = [
-      { label: 'Total Income',    value: metricsMap['TOTAL INCOME'] || '$0.00',    cls: 'jh-blue' },
-      { label: 'Actual Costs',    value: metricsMap['ACTUAL COSTS'] || '$0.00',    cls: 'jh-amber' },
-      { label: 'Accrued Costs',   value: metricsMap['ACCRUED COSTS'] || '$0.00',   cls: 'jh-amber' },
-      { label: '% Complete',      value: metricsMap['% COMPLETE'] || '0%',         cls: 'jh-cyan' },
-      { label: 'Revenue Earned',  value: metricsMap['REVENUE EARNED'] || '$0.00',  cls: 'jh-blue' },
-      { label: 'Gross Profit',    value: metricsMap['GROSS PROFIT'] || '$0.00',    cls: 'jh-green' },
-      { label: 'Margin %',        value: metricsMap['MARGIN %'] || '0%',           cls: 'jh-green' }
-    ];
-
-    var html = '';
-    items.forEach(function(item) {
-      html += '<div class="jh-strip-card ' + item.cls + '">' +
-        '<span class="jh-strip-label">' + item.label + '</span>' +
-        '<span class="jh-strip-value">' + item.value + '</span>' +
-        '</div>';
-    });
-    strip.innerHTML = html;
-
-    // Insert strip into the sticky site <header> so it stays on top when scrolling
-    var siteHeader = document.querySelector('header');
-    if (siteHeader) {
-      siteHeader.appendChild(strip);
-    } else {
-      // Fallback: place after job-detail-header
-      if (header.nextSibling) {
-        header.parentNode.insertBefore(strip, header.nextSibling);
-      } else {
-        header.parentNode.appendChild(strip);
+    // Remove tab-metrics row and restore nav.tabs to header-content
+    var tabRow = document.getElementById("jh-tab-metrics-row");
+    if (tabRow) {
+      var nav = tabRow.querySelector("nav.tabs");
+      var headerContent = document.querySelector(".header-content");
+      if (nav && headerContent) {
+        headerContent.appendChild(nav);
+        nav.style.flex = "";
       }
+      tabRow.remove();
+    }
+
+    // Remove any stale metrics strip
+    var strip = document.querySelector(".jh-metrics-strip");
+    if (strip) strip.remove();
+
+    // Un-hide original job detail header
+    var detail = document.getElementById("wip-job-detail-view");
+    if (detail) {
+      var origHeader = detail.querySelector(".job-detail-header");
+      if (origHeader) origHeader.style.display = "";
+    }
+
+    // Remove two-col layout
+    var twoCol = document.getElementById("ws-two-col");
+    if (twoCol) {
+      var detail2 = document.getElementById("wip-job-detail-view");
+      if (detail2) { while (twoCol.firstChild) detail2.appendChild(twoCol.firstChild); }
+      twoCol.remove();
     }
   }
 
-  // ── Build the two-column layout ───────────────────────────
+  function buildHeader(detail, job) {
+    var siteHeader = document.querySelector("header");
+    if (!siteHeader || document.querySelector(".jh-metrics-strip")) return;
+    var headerContent = siteHeader.querySelector(".header-content");
+    var subtitle = headerContent ? headerContent.querySelector(".header-subtitle") : null;
+    var nav = headerContent ? headerContent.querySelector("nav.tabs") : null;
+
+    // ---- Extract metrics from WIP Calculations card ----
+    var wipCalcs = null;
+    var cards = detail.querySelectorAll(".card");
+    cards.forEach(function(c) {
+      var h = c.querySelector("h2, h3, h4");
+      if (h && h.textContent.trim() === "WIP Calculations") wipCalcs = c;
+    });
+    var allText = wipCalcs ? wipCalcs.textContent.replace(/\s+/g, " ").trim() : "";
+
+    function extractVal(text, label) {
+      var idx = text.indexOf(label);
+      if (idx === -1) return "--";
+      var after = text.substring(idx + label.length).trim();
+      var match = after.match(/^[\$\d,\.%\-]+/);
+      return match ? match[0] : "--";
+    }
+    // Revenue Earned has parenthetical label
+    var revVal = "--";
+    var revIdx = allText.indexOf("Revenue Earned");
+    if (revIdx > -1) {
+      var revMatch = allText.substring(revIdx).match(/\$[\d,\.]+/);
+      if (revMatch) revVal = revMatch[0];
+    }
+
+    var metricsData = [
+      { label: "Total Income", value: extractVal(allText, "Total Income") },
+      { label: "Est. Costs", value: extractVal(allText, "Total Est. Costs (Revised)") },
+      { label: "Actual Costs", value: extractVal(allText, "Actual Costs (from tracker)") },
+      { label: "Remaining", value: extractVal(allText, "Remaining Est. Costs") },
+      { label: "% Complete", value: extractVal(allText, "% Complete") },
+      { label: "Revenue Earned", value: revVal },
+      { label: "Invoiced", value: extractVal(allText, "Invoiced to Date") },
+      { label: "Unbilled", value: extractVal(allText, "Unbilled (Revenue - Invoiced)") },
+      { label: "Backlog", value: extractVal(allText, "Backlog (Income - Revenue)") },
+      { label: "Change Orders", value: extractVal(allText, "+ Change Orders") },
+      { label: "Gross Profit", value: extractVal(allText, "Revised Gross Profit") },
+      { label: "Margin %", value: extractVal(allText, "Revised Margin %") },
+      { label: "As-Sold Margin", value: extractVal(allText, "As Sold Margin %") }
+    ];
+
+    // ---- Job info bar ----
+    var jobBar = document.createElement("div");
+    jobBar.id = "jh-job-bar";
+    jobBar.className = "jh-job-bar";
+    var backBtn = document.createElement("button");
+    backBtn.className = "jh-back-btn";
+    backBtn.textContent = "\u2190 Back to WIP";
+    backBtn.addEventListener("click", function() {
+      var backLink = detail.querySelector("a[href], button");
+      if (backLink) backLink.click();
+    });
+    jobBar.appendChild(backBtn);
+
+    var jobTitle = document.createElement("span");
+    jobTitle.className = "jh-job-title";
+    var name = job ? (job.jobNumber || "") + " \u2014 " + (job.name || "") : "Job Detail";
+    jobTitle.textContent = name;
+    jobBar.appendChild(jobTitle);
+
+    var statusBadge = document.createElement("span");
+    statusBadge.className = "jh-status-badge";
+    statusBadge.textContent = job && job.status ? job.status : "In Progress";
+    jobBar.appendChild(statusBadge);
+
+    if (subtitle) { subtitle.after(jobBar); }
+    else if (headerContent) { headerContent.appendChild(jobBar); }
+
+    // ---- Metrics strip ----
+    var strip = document.createElement("div");
+    strip.className = "jh-metrics-strip";
+    metricsData.forEach(function(m) {
+      var card = document.createElement("div");
+      card.className = "jh-strip-card";
+      var lbl = document.createElement("div");
+      lbl.className = "jh-strip-label";
+      lbl.textContent = m.label;
+      var val = document.createElement("div");
+      val.className = "jh-strip-value";
+      val.textContent = m.value;
+      card.appendChild(lbl);
+      card.appendChild(val);
+      strip.appendChild(card);
+    });
+
+    // ---- Tab + metrics row ----
+    if (nav && headerContent) {
+      var tabRow = document.createElement("div");
+      tabRow.id = "jh-tab-metrics-row";
+      tabRow.className = "jh-tab-metrics-row";
+      nav.parentNode.insertBefore(tabRow, nav);
+      nav.style.flex = "0 0 auto";
+      tabRow.appendChild(nav);
+      tabRow.appendChild(strip);
+    }
+
+    // Hide original job-detail-header in page content
+    var origHeader = detail.querySelector(".job-detail-header");
+    if (origHeader) origHeader.style.display = "none";
+  }
+
   function buildLayout(detail) {
     var container = document.createElement('div');
     container.id = 'ws-two-col';
@@ -216,49 +292,50 @@
 
   // ── Main layout application ───────────────────────────────
   function applyLayout() {
-    var detail = document.getElementById('wip-job-detail-view');
-    if (!detail || detail.style.display === 'none') return false;
-    if (document.getElementById('ws-two-col')) return true;
+    var detail = document.getElementById("wip-job-detail-view");
+    if (!detail || detail.style.display === "none") return;
 
-    cleanup();
-    injectWorkspaceCSS();
+    // Already applied?
+    if (document.getElementById("ws-two-col")) return;
 
-    // Build enhanced header with metrics
-    buildHeader(detail);
+    // Clean stale elements from prior render
+    var staleBar = document.getElementById("jh-job-bar");
+    if (staleBar) staleBar.remove();
+    var staleRow = document.getElementById("jh-tab-metrics-row");
+    if (staleRow) {
+      var nav = staleRow.querySelector("nav.tabs");
+      var hc = document.querySelector(".header-content");
+      if (nav && hc) { hc.appendChild(nav); nav.style.flex = ""; }
+      staleRow.remove();
+    }
+    var staleStrip = document.querySelector(".jh-metrics-strip");
+    if (staleStrip) staleStrip.remove();
 
-    // Build two-column layout
-    var layout = buildLayout(detail);
-
-    // Hide old elements
-    var summaryGrid = detail.querySelector('.summary-grid');
-    if (summaryGrid) summaryGrid.style.display = 'none';
-    var subTabs = detail.querySelector('.sub-tabs');
-    if (subTabs) subTabs.style.display = 'none';
-    var actionBtns = detail.querySelector('.action-buttons');
-    if (actionBtns) actionBtns.style.display = 'none';
-    detail.querySelectorAll('.sub-tab-content-job').forEach(function(p) { p.style.display = 'none'; });
-
-    // Insert the two-col layout after the metrics strip (which is after the header)
-    var metricsStrip = detail.querySelector('.jh-metrics-strip');
-    var insertAfter = metricsStrip || detail.querySelector('.job-detail-header');
-    if (insertAfter && insertAfter.nextSibling) {
-      detail.insertBefore(layout, insertAfter.nextSibling);
+    // Determine job from app data
+    var job = null;
+    if (typeof window.appState !== "undefined" && window.appState.currentJob) {
+      job = window.appState.currentJob;
     } else {
-      detail.appendChild(layout);
+      var h = detail.querySelector(".job-detail-header h2, .job-detail-header h1");
+      if (h) {
+        var parts = h.textContent.split("\u2014");
+        job = { jobNumber: (parts[0]||"").trim(), name: (parts[1]||"").trim(), status: "In Progress" };
+      }
+      // Try to get status from badge
+      var badge = detail.querySelector(".status-badge, .badge");
+      if (badge && job) job.status = badge.textContent.trim();
     }
 
-    // Move panels into right content
-    var rightContent = layout.querySelector('#wsRightContent');
-    moveJobInfoToAccordion(detail, rightContent);
-    populateRightPanels(detail, rightContent);
-    wireTabSwitching(layout);
+    buildHeader(detail, job);
 
-    detail.classList.add('ws-layout-applied');
-    layoutApplied = true;
-    return true;
+    // Insert two-col layout after the (now hidden) job-detail-header
+    var anchor = detail.querySelector(".job-detail-header");
+    buildLayout(detail, anchor);
+    populateRightPanels(detail);
+    wireTabSwitching();
+    moveJobInfoToAccordion();
   }
 
-  // ── Workspace init ────────────────────────────────────────
   function tryInitWorkspace() {
     var container = document.getElementById('wsWorkspaceContainer');
     if (!container) return;
