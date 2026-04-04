@@ -10,7 +10,7 @@
   'use strict';
 
   // ── Constants ──────────────────────────────────────────────
-  const MIN_ROWS = 8;
+  const MIN_ROWS = 42;
   const MIN_COLS = 8;
   const EXPAND_BUFFER = 2; // rows/cols to add when typing at edge
   const COL_DEFAULT_WIDTH = 100;
