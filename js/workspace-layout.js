@@ -291,12 +291,16 @@
   }
 
   // ── Main layout application ───────────────────────────────
+  var _applyingLayout = false;
+
   function applyLayout() {
+    if (_applyingLayout) return;
+    _applyingLayout = true;
     var detail = document.getElementById("wip-job-detail-view");
     if (!detail || detail.style.display === "none") return;
 
     // Already applied?
-    if (document.getElementById("ws-two-col") || document.getElementById("jh-job-bar")) return;
+    if (document.getElementById("ws-two-col")) { _applyingLayout = false; return; }
 
     // Clean stale elements from prior render
     var staleBar = document.getElementById("jh-job-bar");
@@ -334,6 +338,7 @@
     populateRightPanels(detail);
     wireTabSwitching();
     moveJobInfoToAccordion();
+      _applyingLayout = false;
   }
 
   function tryInitWorkspace() {
