@@ -333,9 +333,18 @@
     buildHeader(detail, job);
 
     // Insert two-col layout after the (now hidden) job-detail-header
-    var anchor = detail.querySelector(".job-detail-header");
-    buildLayout(detail, anchor);
-    populateRightPanels(detail);
+    var layout = buildLayout(detail);
+        // Insert two-col after the job-detail-header
+        var anchor = detail.querySelector(".job-detail-header");
+        if (anchor && anchor.nextSibling) {
+          detail.insertBefore(layout, anchor.nextSibling);
+        } else {
+          detail.appendChild(layout);
+        }
+        // Hide old summary grid and original elements
+        var summaryGrid = detail.querySelector(".summary-grid");
+        if (summaryGrid) summaryGrid.style.display = "none";
+        populateRightPanels(detail);
     wireTabSwitching();
     moveJobInfoToAccordion();
       _applyingLayout = false;
