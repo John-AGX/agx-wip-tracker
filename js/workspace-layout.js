@@ -296,7 +296,7 @@
     if (!detail || detail.style.display === "none") return;
 
     // Already applied?
-    if (document.getElementById("ws-two-col")) return;
+    if (document.getElementById("ws-two-col") || document.getElementById("jh-job-bar")) return;
 
     // Clean stale elements from prior render
     var staleBar = document.getElementById("jh-job-bar");
