@@ -1397,7 +1397,15 @@
           startEditing(r, c);
           // Clear cell content and set to the typed char
           const td = wsTable.querySelector(`td[data-r="${r}"][data-c="${c}"]`);
-          if (td) td.textContent = e.key;
+          if (td) {
+            td.textContent = e.key;
+            var rng = document.createRange();
+            var sel = window.getSelection();
+            rng.selectNodeContents(td);
+            rng.collapse(false);
+            sel.removeAllRanges();
+            sel.addRange(rng);
+          }
           // If user started with '=', enter ref mode
           if (e.key === '=') {
             enterRefMode('cell');
