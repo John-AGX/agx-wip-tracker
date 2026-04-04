@@ -416,6 +416,7 @@
   // ── Observer ──────────────────────────────────────────────
   function observe() {
     injectCSS();
+    injectWorkspaceCSS();
 
     var observer = new MutationObserver(function() {
       var detail = document.getElementById('wip-job-detail-view');
