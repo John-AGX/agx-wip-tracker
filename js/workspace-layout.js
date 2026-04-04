@@ -322,11 +322,12 @@
     function onMouseMove(e) {
       var dx = e.clientX - startX;
       var newLeft = startLeftW + dx;
-      var newRight = startRightW - dx;
+      var containerW = container.offsetWidth - resizer.offsetWidth;
+      var newRight = containerW - newLeft;
       if (newLeft < minLeft || newRight < minRight) return;
-      leftCol.style.flex = 'none';
-      leftCol.style.width = newLeft + 'px';
-      rightCol.style.width = newRight + 'px';
+      leftCol.style.flex = '0 0 ' + newLeft + 'px';
+      rightCol.style.flex = '1 1 0';
+      rightCol.style.width = '';
     }
     function onMouseUp() {
       document.removeEventListener('mousemove', onMouseMove);
