@@ -866,53 +866,52 @@ function renderWIPMain() {
                 phases.forEach(p => {
                     phaseCost += (p.materials || 0) + (p.labor || 0) + (p.sub || 0) + (p.equipment || 0);
                 });
-                const bldgDirectCost = (building.materials || 0) + (building.labor || 0) + (building.sub || 0) + (building.equipment || 0);
+                const bMat = building.materials || 0, bLab = building.labor || 0, bSub = building.sub || 0, bEquip = building.equipment || 0;
+                const bldgDirectCost = bMat + bLab + bSub + bEquip;
                 const buildingCost = phaseCost + bldgDirectCost;
+                const variance = (building.budget || 0) - buildingCost;
 
                 const contractAmt = appData.jobs.find(j => j.id === jobId)?.contractAmount || 0;
                 const bldgPct = contractAmt > 0 ? ((building.budget || 0) / contractAmt * 100).toFixed(1) : '—';
+                const pctComplete = calcBuildingPctComplete(building.id, jobId).toFixed(1);
+                const scope = building.workScope || 'in-house';
+                const scopeColor = scope === 'sub' ? 'var(--purple)' : scope === 'both' ? '#f59e0b' : 'var(--accent)';
 
                 const card = document.createElement('div');
                 card.className = 'card';
-                card.style.cursor = 'pointer';
+                card.style.cssText = 'cursor:pointer;padding:10px 12px;margin-bottom:8px;';
                 card.title = 'Click to edit this building';
                 card.onclick = function() { editBuilding(building.id); };
                 card.innerHTML = `
-                    <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 15px;">
-                        <div>
-                            <h3 style="font-size: 18px; margin-bottom: 5px;">${escapeHTML(building.name)}</h3>
-                            <p style="font-size: 13px; color: var(--text-dim);">${escapeHTML(building.address)}</p>
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+                        <div style="min-width:0;flex:1;">
+                            <span style="font-size:14px;font-weight:700;">${escapeHTML(building.name)}</span>
+                            ${building.address ? '<span style="font-size:11px;color:var(--text-dim);margin-left:8px;">' + escapeHTML(building.address) + '</span>' : ''}
                         </div>
-                        <div style="text-align: right;"><span style="font-size: 15px; font-weight: 700; color: var(--green);">${calcBuildingPctComplete(building.id, jobId).toFixed(1)}% Complete</span><br><span style="font-size: 12px; color: var(--purple);">${bldgPct}% of Job</span></div>
-                    </div>
-                    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 15px;">
-                        <div>
-                            <div style="font-size: 12px; color: var(--text-dim);">Budget</div>
-                            <div style="font-size: 16px; font-weight: 600; color: var(--accent);">${formatCurrency(building.budget)}</div>
-                        </div>
-                        <div>
-                            <div style="font-size: 12px; color: var(--text-dim);">Spent</div>
-                            <div style="font-size: 16px; font-weight: 600; color: var(--accent);">${formatCurrency(buildingCost)}</div>
-                        </div>
-                        <div>
-                            <div style="font-size: 12px; color: var(--text-dim);">Variance</div>
-                            <div style="font-size: 16px; font-weight: 600; color: ${(building.budget - buildingCost) >= 0 ? 'var(--green)' : 'var(--red)'};">${formatCurrency(building.budget - buildingCost)}</div>
+                        <div style="text-align:right;flex-shrink:0;margin-left:8px;">
+                            <span style="font-size:13px;font-weight:700;color:var(--green);">${pctComplete}%</span>
+                            <span style="font-size:10px;color:var(--text-dim);margin-left:4px;">${bldgPct}% of job</span>
                         </div>
                     </div>
-                    <div style="margin-top: 15px;">
-                        <h4 style="margin-bottom: 10px; font-size: 13px; text-transform: uppercase; color: var(--text-dim);">Phases:</h4>
-                        <div style="display: grid; gap: 8px;">
-                            ${phases.map(p => {
-                                const pCost = (p.materials || 0) + (p.labor || 0) + (p.sub || 0) + (p.equipment || 0);
-                                return `
-                                    <div style="display: flex; justify-content: space-between; font-size: 13px;">
-                                        <span>${escapeHTML(p.phase)} (${p.pctComplete}%)</span>
-                                        <span>${formatCurrency(pCost)}</span>
-                                    </div>
-                                `;
-                            }).join('')}
-                        </div>
+                    <div style="display:flex;gap:12px;font-size:12px;margin-bottom:6px;">
+                        <div><span style="color:var(--text-dim);">Budget</span> <span style="font-weight:600;color:var(--accent);">${formatCurrency(building.budget)}</span></div>
+                        <div><span style="color:var(--text-dim);">Spent</span> <span style="font-weight:600;color:var(--accent);">${formatCurrency(buildingCost)}</span></div>
+                        <div><span style="color:var(--text-dim);">Var</span> <span style="font-weight:600;color:${variance >= 0 ? 'var(--green)' : 'var(--red)'};">${formatCurrency(variance)}</span></div>
+                        <div style="margin-left:auto;"><span style="font-size:10px;padding:1px 6px;border-radius:8px;background:rgba(79,140,255,0.1);color:${scopeColor};font-weight:600;text-transform:capitalize;">${escapeHTML(scope)}</span></div>
                     </div>
+                    <div style="display:flex;gap:10px;font-size:11px;color:var(--text-dim);margin-bottom:6px;">
+                        <span>Mat: <b style="color:var(--text);">${formatCurrency(bMat)}</b></span>
+                        <span>Lab: <b style="color:var(--text);">${formatCurrency(bLab)}</b></span>
+                        <span>Sub: <b style="color:var(--text);">${formatCurrency(bSub)}</b></span>
+                        <span>Equip: <b style="color:var(--text);">${formatCurrency(bEquip)}</b></span>
+                        ${(building.hoursTotal || building.rate) ? '<span style="margin-left:auto;">' + (building.hoursTotal || 0) + 'hrs' + (building.hoursWeek ? ' (' + building.hoursWeek + '/wk)' : '') + ' @ ' + formatCurrency(building.rate || 40) + '/hr</span>' : ''}
+                    </div>
+                    ${phases.length ? '<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:2px;">' + phases.map(p => {
+                        const pCost = (p.materials || 0) + (p.labor || 0) + (p.sub || 0) + (p.equipment || 0);
+                        const pColor = p.pctComplete >= 100 ? 'var(--green)' : p.pctComplete >= 50 ? '#f59e0b' : 'var(--text-dim)';
+                        return '<span style="font-size:10px;padding:2px 6px;border-radius:6px;background:var(--surface2);border:1px solid var(--border);white-space:nowrap;">' +
+                            escapeHTML(p.phase) + ' <b style="color:' + pColor + ';">' + p.pctComplete + '%</b> ' + formatCurrency(pCost) + '</span>';
+                    }).join('') + '</div>' : '<div style="font-size:11px;color:var(--text-dim);font-style:italic;">No phases</div>'}
                 `;
                 container.appendChild(card);
             });
