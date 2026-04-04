@@ -142,7 +142,7 @@
   max-width: 500px;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow-y: auto;
   gap: 8px;
 }
 
@@ -192,7 +192,7 @@
   border-radius: 8px;
   padding: 12px;
   overflow-y: auto;
-  min-height: 300px;
+  min-height: 0;
 }
 
 .ws-right-panel {
@@ -289,7 +289,7 @@
     flex: none;
     max-width: 100%;
     min-width: 0;
-    min-height: 300px;
+    min-height: 0;
   }
 
   .ws-right-tab {
