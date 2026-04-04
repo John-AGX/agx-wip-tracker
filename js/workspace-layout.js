@@ -320,13 +320,13 @@
     if (typeof window.appState !== "undefined" && window.appState.currentJob) {
       job = window.appState.currentJob;
     } else {
-      var h = detail.querySelector(".job-detail-header h2, .job-detail-header h1");
+      var h = detail.querySelector(".job-detail-title, .job-detail-header h2, .job-detail-header h1");
       if (h) {
         var parts = h.textContent.split("\u2014");
         job = { jobNumber: (parts[0]||"").trim(), name: (parts[1]||"").trim(), status: "In Progress" };
       }
       // Try to get status from badge
-      var badge = detail.querySelector(".status-badge, .badge");
+      var badge = detail.querySelector(".status-badge, .badge, [class*=\"status\"]");
       if (badge && job) job.status = badge.textContent.trim();
     }
 
