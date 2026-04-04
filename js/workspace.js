@@ -1393,6 +1393,7 @@
       default:
         // Start typing directly into cell
         if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+          e.preventDefault();
           startEditing(r, c);
           // Clear cell content and set to the typed char
           const td = wsTable.querySelector(`td[data-r="${r}"][data-c="${c}"]`);
