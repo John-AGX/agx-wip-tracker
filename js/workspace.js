@@ -481,30 +481,29 @@
   // ── Cell → Job Field Linking ───────────────────────────────
 
   const LINKABLE_FIELDS = [
-    // Revenue / Contract
-    { key: 'contractAmount', label: 'Contract Amount', fmt: 'currency', group: 'Revenue' },
-    { key: 'revisedContractAmount', label: 'Revised Contract', fmt: 'currency', group: 'Revenue' },
-    { key: 'invoicedToDate', label: 'Invoiced to Date', fmt: 'currency', group: 'Revenue' },
+    // Costs - Estimated
+    { key: 'estimatedCosts', label: 'Est. Costs (As Sold)', fmt: 'currency', group: 'Estimated Costs' },
+    { key: 'revisedCostChanges', label: 'Revised Cost Changes', fmt: 'currency', group: 'Estimated Costs' },
 
-    // Costs - As Sold
-    { key: 'estimatedCosts', label: 'Est. Costs (As Sold)', fmt: 'currency', group: 'Costs' },
-    { key: 'revisedCostChanges', label: 'Revised Cost Changes', fmt: 'currency', group: 'Costs' },
-
-    // Cost Breakdown
-    { key: 'materialsCost', label: 'Materials $', fmt: 'currency', group: 'Cost Breakdown' },
-    { key: 'laborCost', label: 'Labor $', fmt: 'currency', group: 'Cost Breakdown' },
-    { key: 'subcontractorCost', label: 'Subcontractor $', fmt: 'currency', group: 'Cost Breakdown' },
-    { key: 'equipmentCost', label: 'Equipment $', fmt: 'currency', group: 'Cost Breakdown' },
+    // Cost Breakdown — Job Level
+    { key: 'materials', label: 'Materials $', fmt: 'currency', group: 'Job Costs' },
+    { key: 'labor', label: 'Labor $', fmt: 'currency', group: 'Job Costs' },
+    { key: 'sub', label: 'Subcontractor $', fmt: 'currency', group: 'Job Costs' },
+    { key: 'equipment', label: 'Equipment $', fmt: 'currency', group: 'Job Costs' },
 
     // General Conditions & Overhead
     { key: 'generalConditions', label: 'General Conditions', fmt: 'currency', group: 'Overhead' },
     { key: 'overhead', label: 'Overhead', fmt: 'currency', group: 'Overhead' },
-    { key: 'profit', label: 'Profit', fmt: 'currency', group: 'Overhead' },
+    { key: 'profitAllowance', label: 'Profit Allowance', fmt: 'currency', group: 'Overhead' },
 
     // Labor
-    { key: 'laborHours', label: 'Labor Hours', fmt: null, group: 'Labor' },
-    { key: 'totalHours', label: 'Total Hours', fmt: null, group: 'Labor' },
-    { key: 'avgHourlyRate', label: 'Avg Hourly Rate', fmt: 'currency', group: 'Labor' },
+    { key: 'hoursWeek', label: 'Hours This Week', fmt: null, group: 'Labor' },
+    { key: 'hoursTotal', label: 'Total Hours', fmt: null, group: 'Labor' },
+    { key: 'rate', label: 'Hourly Rate', fmt: 'currency', group: 'Labor' },
+
+    // Revenue
+    { key: 'invoicedToDate', label: 'Invoiced to Date', fmt: 'currency', group: 'Revenue' },
+    { key: 'revisedContractAmount', label: 'Revised Contract', fmt: 'currency', group: 'Revenue' },
 
     // WIP Metrics
     { key: 'targetMarginPct', label: 'Target Margin %', fmt: 'percent', group: 'WIP Metrics' },
@@ -608,11 +607,11 @@
         <div class="ws-toolbar-actions">
           <button class="ws-btn ws-btn-fmt" data-fmt="currency" title="Currency format">$</button>
           <button class="ws-btn ws-btn-fmt" data-fmt="percent" title="Percent format">%</button>
-          <button class="ws-btn ws-btn-fmt" data-fmt="null" title="Clear format">×</button>
+          <button class="ws-btn ws-btn-fmt" data-fmt="null" title="Clear format">&times;</button>
           <span class="ws-separator"></span>
-          <button class="ws-btn" id="wsLinkBtn" title="Link cell → job field">🔗 Link</button>
-          <button class="ws-btn" id="wsClearBtn" title="Clear workspace">🗑️ Clear</button>
-          <button class="ws-btn ws-btn-save" id="wsSaveBtn" title="Save workspace">💾 Save</button>
+          <button class="ws-btn" id="wsLinkBtn" title="Link cell to job field">Link</button>
+          <button class="ws-btn" id="wsClearBtn" title="Clear workspace">Clear</button>
+          <button class="ws-btn ws-btn-save" id="wsSaveBtn" title="Save workspace">Save</button>
         </div>
       </div>
       <div class="ws-link-panel" id="wsLinkPanel" style="display:none;">
