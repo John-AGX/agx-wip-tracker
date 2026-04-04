@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AGX Central Florida Ã¢ÂÂ WIP Tracker</title>
+    <title>AGX Central Florida — WIP Tracker</title>
     <style>
         :root {
             --bg: #0f1117;
@@ -157,6 +157,15 @@
 
         button.secondary:hover {
             background: var(--surface);
+        }
+
+        button.primary {
+            background: var(--accent);
+            color: white;
+        }
+
+        button.primary:hover {
+            background: #6999ff;
         }
 
         button.danger {
@@ -325,19 +334,19 @@
         }
 
         th.sortable::after {
-            content: ' Ã¢ÂÂ';
+            content: ' ↕';
             opacity: 0.3;
             font-size: 11px;
         }
 
         th.sortable.sort-asc::after {
-            content: ' Ã¢ÂÂ²';
+            content: ' ▲';
             opacity: 0.8;
             color: var(--accent);
         }
 
         th.sortable.sort-desc::after {
-            content: ' Ã¢ÂÂ¼';
+            content: ' ▼';
             opacity: 0.8;
             color: var(--accent);
         }
@@ -356,7 +365,7 @@
             background: rgba(79, 140, 255, 0.05);
         }
 
-        table.totals-row td {
+        tr.totals-row td {
             background: var(--surface2);
             font-weight: 600;
             border-top: 2px solid var(--border);
@@ -849,7 +858,7 @@
 
                     <div id="wip-job-detail-view" style="display: none;">
                         <div class="job-detail-header">
-                            <button class="secondary small" onclick="backToWIPMain()">Ã¢ÂÂ Back to WIP</button>
+                            <button class="secondary small" onclick="backToWIPMain()">← Back to WIP</button>
                             <div class="job-detail-info">
                                 <div class="job-detail-title" id="job-detail-title"></div>
                                 <div class="job-detail-meta">
@@ -1086,7 +1095,7 @@
                                             <span id="wip-pct-complete">0%</span>
                                         </div>
                                         <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border);">
-                                            <span style="color: var(--text-dim);">Revenue Earned (Income ÃÂ %)</span>
+                                            <span style="color: var(--text-dim);">Revenue Earned (Income × %)</span>
                                             <span id="wip-revenue-earned">$0.00</span>
                                         </div>
                                         <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border);">
@@ -1172,7 +1181,7 @@
                                         <input type="number" id="jobCostMaterials" placeholder="0.00" step="0.01">
                                     </div>
                                     <div class="form-group">
-                                        <label>Labor $ (auto: hours ÃÂ rate)</label>
+                                        <label>Labor $ (auto: hours × rate)</label>
                                         <input type="number" id="jobCostLabor" placeholder="0.00" step="0.01" readonly style="opacity: 0.7; cursor: not-allowed;">
                                     </div>
                                     <div class="form-group">
@@ -1197,7 +1206,7 @@
                                     </div>
                                 </div>
                                 <div style="margin-top: 15px; display: flex; gap: 10px;">
-                                    <button class="primary" onclick="saveJobCosts()" style="flex: 0 0 auto;">Ã°ÂÂÂ¾ Save Costs</button>
+                                    <button class="primary" onclick="saveJobCosts()" style="flex: 0 0 auto;">💾 Save Costs</button>
                                     <span id="jobCostSaveStatus" style="font-size: 13px; color: var(--green); align-self: center; opacity: 0; transition: opacity 0.3s;"></span>
                                 </div>
                                 <div style="margin-top: 15px; padding: 15px; background: var(--surface2); border-radius: 8px;">
@@ -1207,7 +1216,7 @@
                                             <div style="font-size: 18px; font-weight: 700; color: var(--accent);" id="jobCostTotal">$0.00</div>
                                         </div>
                                         <div>
-                                            <div style="font-size: 12px; color: var(--text-dim);">Computed Labor (Hrs ÃÂ Rate)</div>
+                                            <div style="font-size: 12px; color: var(--text-dim);">Computed Labor (Hrs × Rate)</div>
                                             <div style="font-size: 18px; font-weight: 700; color: var(--accent);" id="jobCostLaborBurden">$0.00</div>
                                         </div>
                                         <div>
@@ -1279,7 +1288,7 @@
                                             <th style="text-align: right;">Total Hours</th>
                                             <th style="text-align: right;">Avg Rate</th>
                                             <th style="text-align: right;">Labor Cost</th>
-                                            <th style="text-align: right;">Computed (Hrs ÃÂ Rate)</th>
+                                            <th style="text-align: right;">Computed (Hrs × Rate)</th>
                                         </tr>
                                     </thead>
                                     <tbody></tbody>
@@ -1350,6 +1359,7 @@
                         <option value="">-- Select PM --</option>
                         <option value="John">John</option>
                         <option value="Noah">Noah</option>
+                        <option value="Henry">Henry</option>
                     </select>
                 </div>
             </div>
@@ -1404,6 +1414,7 @@
                     <label>Status</label>
                     <select id="jobStatus">
                         <option value="New">New</option>
+                        <option value="Backlog">Backlog</option>
                         <option value="In Progress">In Progress</option>
                         <option value="On Hold">On Hold</option>
                         <option value="Completed">Completed</option>
@@ -1467,7 +1478,7 @@
                         <input type="number" id="buildingMaterials" placeholder="0.00" step="0.01">
                     </div>
                     <div class="form-group">
-                        <label>Labor $ (auto: hours ÃÂ rate)</label>
+                        <label>Labor $ (auto: hours × rate)</label>
                         <input type="number" id="buildingLabor" placeholder="0.00" step="0.01" readonly style="opacity: 0.7; cursor: not-allowed;">
                     </div>
                 </div>
@@ -1535,7 +1546,7 @@
                     <input type="number" id="phaseMaterials" placeholder="0.00" step="0.01">
                 </div>
                 <div class="form-group">
-                    <label>Labor $ (auto: hours ÃÂ rate)</label>
+                    <label>Labor $ (auto: hours × rate)</label>
                     <input type="number" id="phaseLabor" placeholder="0.00" step="0.01" readonly style="opacity: 0.7; cursor: not-allowed;">
                 </div>
             </div>
@@ -1726,10 +1737,10 @@
                     <label>Manager Phone</label>
                     <input type="tel" id="estManagerPhone" placeholder="(555) 123-4567">
                 </div>
+            </div>
             <div class="form-group" style="margin-top:12px;">
               <label style="display:block;margin-bottom:4px;font-weight:600;color:var(--text);">Scope of Work</label>
               <textarea id="estScopeOfWork" rows="6" style="width:100%;font-family:Arial,sans-serif;font-size:13px;padding:8px;border:1px solid var(--border);border-radius:4px;resize:vertical;background:var(--surface);color:var(--text);" placeholder="Paste scope of work summary here..."></textarea>
-            </div>
             </div>
             <div class="form-group">
                 <label>Default Markup %</label>
@@ -1752,11 +1763,11 @@
             <div class="form-row" style="gap:8px;"><div class="form-group" style="flex:1.5;margin-bottom:4px;"><label style="font-size:11px;margin-bottom:2px;">Property Address</label><input type="text" id="editEst_propertyAddr" style="padding:6px 8px;font-size:13px;"></div><div class="form-group" style="flex:1.5;margin-bottom:4px;"><label style="font-size:11px;margin-bottom:2px;">Billing Address</label><input type="text" id="editEst_billingAddr" style="padding:6px 8px;font-size:13px;"></div><div class="form-group" style="flex:1;margin-bottom:4px;"><label style="font-size:11px;margin-bottom:2px;">Manager</label><input type="text" id="editEst_managerName" style="padding:6px 8px;font-size:13px;"></div><div class="form-group" style="flex:1;margin-bottom:4px;"><label style="font-size:11px;margin-bottom:2px;">Email</label><input type="email" id="editEst_managerEmail" style="padding:6px 8px;font-size:13px;"></div><div class="form-group" style="flex:0.7;margin-bottom:4px;"><label style="font-size:11px;margin-bottom:2px;">Phone</label><input type="tel" id="editEst_managerPhone" style="padding:6px 8px;font-size:13px;"></div></div>
           </div>
           <div style="background: var(--surface2); padding: 15px; border-radius: 4px;">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:15px;">
-            <div class="form-group" style="margin-top:12px;">
+            <div class="form-group" style="margin-bottom:15px;">
               <label style="display:block;margin-bottom:4px;font-weight:600;color:var(--text);">Scope of Work</label>
               <textarea id="editEst_scopeOfWork" rows="6" style="width:100%;font-family:Arial,sans-serif;font-size:13px;padding:8px;border:1px solid var(--border);border-radius:4px;resize:vertical;background:var(--surface);color:var(--text);" placeholder="Paste scope of work summary here..."></textarea>
             </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:15px;">
             <h3 style="margin:0;color:var(--text);">Line Items</h3><div><button onclick="addEstimateSection()" class="secondary small" style="margin-right:8px;">+ Section</button><button onclick="addEstimateLineRow(currentEditEstimateId)" class="secondary small">+ Line Item</button></div></div>
             <div style="overflow-x:auto;">
               <table id="editEstimate_lineItems" style="width:100%;border-collapse:collapse;font-size:13px;">
@@ -1786,6 +1797,11 @@
         // ==================== UTILITIES ====================
         const formatCurrency = (val) => {
             return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(val || 0);
+        };
+
+        const escapeHTML = (str) => {
+            if (!str) return '';
+            return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
         };
 
         const getStatus = (spent, budget) => {
@@ -1834,16 +1850,16 @@
             });
             // Custom options (with marker)
             if (custom.length > 0) {
-                html += lt + 'option disabled' + gt + 'Ã¢ÂÂÃ¢ÂÂ Custom Ã¢ÂÂÃ¢ÂÂ' + lt + '/option' + gt;
+                html += lt + 'option disabled' + gt + '── Custom ──' + lt + '/option' + gt;
                 custom.forEach(item => {
                     html += lt + 'option value="' + item + '"' + gt + item + lt + '/option' + gt;
                 });
             }
             // Action items
-            html += lt + 'option disabled' + gt + 'Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ' + lt + '/option' + gt;
+            html += lt + 'option disabled' + gt + '──────────────' + lt + '/option' + gt;
             html += lt + 'option value="__add_new__"' + gt + '+ Add New...' + lt + '/option' + gt;
             if (custom.length > 0) {
-                html += lt + 'option value="__manage__"' + gt + 'Ã¢ÂÂ Manage List...' + lt + '/option' + gt;
+                html += lt + 'option value="__manage__"' + gt + '⚙ Manage List...' + lt + '/option' + gt;
             }
             sel.innerHTML = html;
             // Restore previous value if it exists
@@ -1906,7 +1922,7 @@
             overlay.innerHTML = lt + 'div style="background:var(--card-bg,#1a1a2e);border-radius:12px;padding:20px;min-width:300px;max-width:400px;border:1px solid var(--border,#333);"' + gt +
                 lt + 'div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:15px;"' + gt +
                 lt + 'h3 style="margin:0;color:var(--text,#fff);"' + gt + 'Manage Custom Items' + lt + '/h3' + gt +
-                lt + 'button onclick="closeManageList()" style="background:none;border:none;color:var(--text-dim,#888);font-size:20px;cursor:pointer;"' + gt + 'ÃÂ' + lt + '/button' + gt +
+                lt + 'button onclick="closeManageList()" style="background:none;border:none;color:var(--text-dim,#888);font-size:20px;cursor:pointer;"' + gt + '×' + lt + '/button' + gt +
                 lt + '/div' + gt +
                 lt + 'div style="max-height:300px;overflow-y:auto;"' + gt + listHtml + lt + '/div' + gt +
                 lt + '/div' + gt;
@@ -2271,7 +2287,7 @@
         }
 
         function getJobAccruedCosts(jobId) {
-            // Accrued = (Sub Contract ÃÂ % Complete of assigned scope) - Billed to Date, min $0
+            // Accrued = (Sub Contract × % Complete of assigned scope) - Billed to Date, min $0
             let totalAccrued = 0;
             const jobSubs = appData.subs.filter(s => s.jobId === jobId);
             const job = appData.jobs.find(j => j.id === jobId);
@@ -2354,7 +2370,7 @@
 
         function getJobWIP(jobId) {
             const job = appData.jobs.find(j => j.id === jobId);
-            if (!job) return {};
+            if (!job) return { contractIncome: 0, estimatedCosts: 0, coIncome: 0, coCosts: 0, totalIncome: 0, totalEstCosts: 0, revisedCostChanges: 0, revisedEstCosts: 0, asSoldProfit: 0, asSoldMargin: 0, revisedProfit: 0, revisedMargin: 0, pctComplete: 0, revenueEarned: 0, actualCosts: 0, jtdProfit: 0, jtdMargin: 0, invoiced: 0, unbilled: 0, backlog: 0, remainingCosts: 0 };
             const co = getJobCOTotals(jobId);
             const actualCosts = getJobTotalCost(jobId).total;
             const contractIncome = job.contractAmount || 0;
@@ -2514,12 +2530,24 @@
             };
             if (appState.editCOId) {
                 const idx = appData.changeOrders.findIndex(co => co.id === appState.editCOId);
-                if (idx >= 0) Object.assign(appData.changeOrders[idx], coData);
+                if (idx >= 0) {
+                    // Subtract old allocations before applying new ones
+                    const oldCO = appData.changeOrders[idx];
+                    if (oldCO.buildingAllocations && oldCO.buildingAllocations.length > 0) {
+                        oldCO.buildingAllocations.forEach(alloc => {
+                            const bldg = appData.buildings.find(b => b.id === alloc.buildingId);
+                            if (bldg) {
+                                bldg.budget = (bldg.budget || 0) - alloc.amount;
+                            }
+                        });
+                    }
+                    Object.assign(appData.changeOrders[idx], coData);
+                }
             } else {
                 coData.id = 'co' + Date.now();
                 appData.changeOrders.push(coData);
             }
-            // Auto-add CO allocations to building budgets
+            // Add CO allocations to building budgets
             if (coData.buildingAllocations && coData.buildingAllocations.length > 0) {
                 coData.buildingAllocations.forEach(alloc => {
                     const bldg = appData.buildings.find(b => b.id === alloc.buildingId);
@@ -2575,11 +2603,11 @@
                 const row = document.createElement('tr');
                 row.innerHTML = `
                     <td>${co.coNumber || 'CO-' + (idx + 1)}</td>
-                    <td>${co.description}${co.notes ? '<br><span style="font-size: 11px; color: var(--text-dim);">' + co.notes + '</span>' : ''}</td>
+                    <td>${escapeHTML(co.description)}${co.notes ? '<br><span style="font-size: 11px; color: var(--text-dim);">' + escapeHTML(co.notes) + '</span>' : ''}</td>
                     <td style="text-align: right;">${formatCurrency(co.income)}</td>
                     <td style="text-align: right;">${formatCurrency(co.estimatedCosts)}</td>
                     <td style="text-align: right; color: ${profit >= 0 ? 'var(--green)' : 'var(--red)'};">${formatCurrency(profit)}</td>
-                    <td>${co.date || 'Ã¢ÂÂ'}</td>
+                    <td>${co.date || '—'}</td>
                     <td>
                         <button class="small" onclick="event.stopPropagation(); editCO('${co.id}')">Edit</button>
                         <button class="small secondary" onclick="event.stopPropagation(); deleteCO('${co.id}')">Del</button>
@@ -2705,16 +2733,16 @@
                 }
                 const w = getJobWIP(job.id);
                 const statusClass = job.status === 'On Hold' ? 'at-risk' : job.status === 'Completed' ? 'on-track' : job.status === 'Archived' ? 'not-started' : 'on-track';
-                const typeLabel = job.jobType ? `<span style="font-size: 11px; color: var(--text-dim); font-weight: normal; margin-left: 6px;">${job.jobType}${job.market ? ' - ' + job.market : ''}</span>` : '';
+                const typeLabel = job.jobType ? `<span style="font-size: 11px; color: var(--text-dim); font-weight: normal; margin-left: 6px;">${escapeHTML(job.jobType)}${job.market ? ' - ' + escapeHTML(job.market) : ''}</span>` : '';
 
                 const row = document.createElement('tr');
                 row.style.cursor = 'pointer';
                 row.onclick = function() { editJob(job.id); };
                 row.innerHTML = `
                     <td>${index + 1}</td>
-                    <td><strong>${job.jobNumber ? job.jobNumber + ' Ã¢ÂÂ ' : ''}${job.title}</strong>${typeLabel}</td>
-                    <td>${job.client || 'Ã¢ÂÂ'}</td>
-                    <td>${job.pm || 'Ã¢ÂÂ'}</td>
+                    <td><strong>${job.jobNumber ? escapeHTML(job.jobNumber) + ' — ' : ''}${escapeHTML(job.title)}</strong>${typeLabel}</td>
+                    <td>${job.client || '—'}</td>
+                    <td>${job.pm || '—'}</td>
                     <td><span class="badge ${statusClass}">${job.status}</span></td>
                     <td style="text-align: right;">${formatCurrency(w.totalIncome)}</td>
                     <td style="text-align: right;"><div class="progress-bar" style="margin-bottom: 2px; height: 6px;"><div class="progress-fill" style="width: ${w.pctComplete}%"></div></div><span style="font-size: 12px;">${w.pctComplete.toFixed(1)}%</span></td>
@@ -2866,7 +2894,7 @@
                 btn.style.background = 'var(--green)';
                 const grid = card.querySelector('div[style*="grid-template-columns"]');
                 if (!grid) return;
-                const pmOpts = ['John','Noah','Henry'].map(p => 
+                const pmOpts = ['John','Noah','Henry'].map(p =>
                     String.fromCharCode(60) + 'option' + (p === job.pm ? ' selected' : '') + String.fromCharCode(62) + p + String.fromCharCode(60) + '/option' + String.fromCharCode(62)
                 ).join('');
                 const typeOpts = ['Service','Renovation','Work Order'].map(t =>
@@ -2875,14 +2903,14 @@
                 const statusOpts = ['New','Backlog','In Progress','On Hold','Completed','Archived'].map(s =>
                     String.fromCharCode(60) + 'option' + (s === job.status ? ' selected' : '') + String.fromCharCode(62) + s + String.fromCharCode(60) + '/option' + String.fromCharCode(62)
                 ).join('');
-                const marketOpts = ['Tampa','Orlando'].map(m =>
+                const marketOpts = ['Orlando','Tampa','Denver','Other'].map(m =>
                     String.fromCharCode(60) + 'option' + (m === job.market ? ' selected' : '') + String.fromCharCode(62) + m + String.fromCharCode(60) + '/option' + String.fromCharCode(62)
                 ).join('');
                 const inp = (id, val, type) => {
                     type = type || 'text';
-                    return String.fromCharCode(60) + 'input id="' + id + '" type="' + type + '" value="' + (val || '') + '" style="width:100%;background:var(--input-bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 8px;font-size:13px;"' + String.fromCharCode(62);
+                    return String.fromCharCode(60) + 'input id="' + id + '" type="' + type + '" value="' + (val || '') + '" style="width:100%;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 8px;font-size:13px;"' + String.fromCharCode(62);
                 };
-                const sel = (id, opts) => String.fromCharCode(60) + 'select id="' + id + '" style="width:100%;background:var(--input-bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 8px;font-size:13px;"' + String.fromCharCode(62) + opts + String.fromCharCode(60) + '/select' + String.fromCharCode(62);
+                const sel = (id, opts) => String.fromCharCode(60) + 'select id="' + id + '" style="width:100%;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 8px;font-size:13px;"' + String.fromCharCode(62) + opts + String.fromCharCode(60) + '/select' + String.fromCharCode(62);
                 const lbl = (txt) => String.fromCharCode(60) + 'label style="font-size:12px;color:var(--text-dim);"' + String.fromCharCode(62) + txt + String.fromCharCode(60) + '/label' + String.fromCharCode(62);
                 const d = (inner) => String.fromCharCode(60) + 'div' + String.fromCharCode(62) + inner + String.fromCharCode(60) + '/div' + String.fromCharCode(62);
                 grid.innerHTML = 
@@ -2914,31 +2942,30 @@
             if (hasPhases || hasBuildings) {
                 job.pctComplete = Math.round(calcJobPctComplete(jobId) * 10) / 10;
             }
-            saveData();
 
             const w = getJobWIP(jobId);
 
-            document.getElementById('job-detail-title').textContent = (job.jobNumber ? job.jobNumber + ' Ã¢ÂÂ ' : '') + job.title;
+            document.getElementById('job-detail-title').textContent = (job.jobNumber ? job.jobNumber + ' — ' : '') + job.title;
             const detailStatusClass = job.status === 'On Hold' ? 'at-risk' : job.status === 'Completed' ? 'on-track' : job.status === 'Archived' ? 'not-started' : 'on-track';
             document.getElementById('job-detail-status').innerHTML = `<span class="badge ${detailStatusClass}">${job.status}</span>`;
             document.getElementById('job-detail-contract').textContent = `Total Income: ${formatCurrency(w.totalIncome)}`;
 
-            document.getElementById('job-info-number').textContent = job.jobNumber || 'Ã¢ÂÂ';
+            document.getElementById('job-info-number').textContent = job.jobNumber || '—';
             document.getElementById('job-info-title').textContent = job.title;
-            document.getElementById('job-info-client').textContent = job.client || 'Ã¢ÂÂ';
-            document.getElementById('job-info-pm').textContent = job.pm || 'Ã¢ÂÂ';
-            document.getElementById('job-info-type').textContent = job.jobType ? (job.jobType + (job.market ? ' - ' + job.market : '')) : 'Ã¢ÂÂ';
-            document.getElementById('job-info-worktype').textContent = job.workType || 'Ã¢ÂÂ';
-            document.getElementById('job-info-market').textContent = job.market || 'Ã¢ÂÂ';
+            document.getElementById('job-info-client').textContent = job.client || '—';
+            document.getElementById('job-info-pm').textContent = job.pm || '—';
+            document.getElementById('job-info-type').textContent = job.jobType ? (job.jobType + (job.market ? ' - ' + job.market : '')) : '—';
+            document.getElementById('job-info-worktype').textContent = job.workType || '—';
+            document.getElementById('job-info-market').textContent = job.market || '—';
             document.getElementById('job-info-contract').textContent = formatCurrency(job.contractAmount);
             document.getElementById('job-info-estcosts').textContent = formatCurrency(job.estimatedCosts);
             document.getElementById('job-info-margin').textContent = (job.targetMarginPct || 50) + '%';
             const statusClass = job.status === 'On Hold' ? 'at-risk' : job.status === 'Completed' ? 'on-track' : job.status === 'Archived' ? 'not-started' : 'on-track';
             document.getElementById('job-info-status').innerHTML = `<span class="badge ${statusClass}">${job.status}</span>`;
-            document.getElementById('job-info-notes').textContent = job.notes || 'Ã¢ÂÂ';
+            document.getElementById('job-info-notes').textContent = job.notes || '—';
             document.getElementById('archive-job-btn').textContent = job.status === 'Archived' ? 'Unarchive Job' : 'Archive Job';
 
-            // Summary cards Ã¢ÂÂ WIP-based
+            // Summary cards — WIP-based
             const coInfo = w.coIncome > 0 ? `Contract: ${formatCurrency(w.contractIncome)} + CO: ${formatCurrency(w.coIncome)}` : '';
             document.getElementById('job-summary-totalincome').textContent = formatCurrency(w.totalIncome);
             document.getElementById('job-summary-income-breakdown').textContent = coInfo;
@@ -2971,7 +2998,7 @@
             buildings.forEach(bldg => {
                 const bldgPhases = phases.filter(p => p.buildingId === bldg.id);
                 if (bldgPhases.length === 0) {
-                    // Building with no phases Ã¢ÂÂ show building-level costs
+                    // Building with no phases — show building-level costs
                     const bTotal = (bldg.materials || 0) + (bldg.labor || 0) + (bldg.sub || 0) + (bldg.equipment || 0);
                     const bVar = (bldg.budget || 0) - bTotal;
                     const bStatus = getStatus(bTotal, bldg.budget);
@@ -2979,7 +3006,7 @@
                     row.style.cursor = 'pointer';
                     row.title = 'Click to edit this building';
                     row.onclick = function() { editBuilding(bldg.id); };
-                    row.innerHTML = '<td>' + (bldg.name || '') + '</td><td style="color: var(--text-dim); font-style: italic;">No phases</td><td>Ã¢ÂÂ</td><td style="text-align: right;">' + formatCurrency(bldg.materials) + '</td><td style="text-align: right;">' + formatCurrency(bldg.labor) + '</td><td style="text-align: right;">' + formatCurrency(bldg.sub) + '</td><td style="text-align: right;">' + formatCurrency(bldg.equipment) + '</td><td style="text-align: right;">' + formatCurrency(bTotal) + '</td><td style="text-align: right;">' + formatCurrency(bldg.budget) + '</td><td style="text-align: right; color: ' + (bVar >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + formatCurrency(bVar) + '</td><td><span class="badge ' + bStatus + '">' + bStatus.replace('-', ' ').toUpperCase() + '</span></td>';
+                    row.innerHTML = '<td>' + (bldg.name || '') + '</td><td style="color: var(--text-dim); font-style: italic;">No phases</td><td>—</td><td style="text-align: right;">' + formatCurrency(bldg.materials) + '</td><td style="text-align: right;">' + formatCurrency(bldg.labor) + '</td><td style="text-align: right;">' + formatCurrency(bldg.sub) + '</td><td style="text-align: right;">' + formatCurrency(bldg.equipment) + '</td><td style="text-align: right;">' + formatCurrency(bTotal) + '</td><td style="text-align: right;">' + formatCurrency(bldg.budget) + '</td><td style="text-align: right; color: ' + (bVar >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + formatCurrency(bVar) + '</td><td><span class="badge ' + bStatus + '">' + bStatus.replace('-', ' ').toUpperCase() + '</span></td>';
                     tbody.appendChild(row);
                 } else {
                     bldgPhases.forEach(p => {
@@ -3026,7 +3053,7 @@
                 const buildingCost = phaseCost + bldgDirectCost;
 
                 const contractAmt = appData.jobs.find(j => j.id === jobId)?.contractAmount || 0;
-                const bldgPct = contractAmt > 0 ? ((building.budget || 0) / contractAmt * 100).toFixed(1) : 'Ã¢ÂÂ';
+                const bldgPct = contractAmt > 0 ? ((building.budget || 0) / contractAmt * 100).toFixed(1) : '—';
 
                 const card = document.createElement('div');
                 card.className = 'card';
@@ -3128,7 +3155,7 @@
                 } else if (level === 'phase') {
                     const building = appData.buildings.find(b => b.id === sub.buildingId);
                     const phase = appData.phases.find(p => p.id === sub.phaseId);
-                    assignedTo = (building?.name || '?') + ' Ã¢ÂÂ ' + (phase?.phase || '?');
+                    assignedTo = (building?.name || '?') + ' → ' + (phase?.phase || '?');
                 } else {
                     const building = appData.buildings.find(b => b.id === sub.buildingId);
                     assignedTo = building?.name || '';
@@ -3142,7 +3169,7 @@
 
                 const row = document.createElement('tr');
                 row.innerHTML = `
-                    <td><strong>${sub.name}</strong>${sub.notes ? '<br><span style="font-size:11px;color:var(--text-dim);">' + sub.notes + '</span>' : ''}</td>
+                    <td><strong>${escapeHTML(sub.name)}</strong>${sub.notes ? '<br><span style="font-size:11px;color:var(--text-dim);">' + escapeHTML(sub.notes) + '</span>' : ''}</td>
                     <td>${sub.trade}</td>
                     <td><span style="color:${levelColor};font-size:12px;font-weight:600;">${levelLabel}</span></td>
                     <td>${assignedTo}</td>
@@ -3259,7 +3286,7 @@
             document.getElementById('jobCostLabor').value = job.labor || '';
             document.getElementById('jobCostSub').value = (job.sub || 0).toFixed(2);
             document.getElementById('jobCostEquipment').value = job.equipment || '';
-            document.getElementById('jobCostHoursWeek').value = job.hoursWeek || '';
+            document.getElementById('jobCostHoursWeek').value = '';
             document.getElementById('jobCostHoursTotal').value = job.hoursTotal || '';
             document.getElementById('jobCostRate').value = job.rate || 40;
             updateJobCostSummary(jobId);
@@ -3269,12 +3296,12 @@
             const job = appData.jobs.find(j => j.id === appState.currentJobId);
             if (!job) return;
             job.materials = parseFloat(document.getElementById('jobCostMaterials').value) || 0;
-            // job.sub is auto-calculated from Subs tab by recalcSubCosts Ã¢ÂÂ don't overwrite
+            // job.sub is auto-calculated from Subs tab by recalcSubCosts — don't overwrite
             job.equipment = parseFloat(document.getElementById('jobCostEquipment').value) || 0;
             job.hoursWeek = parseFloat(document.getElementById('jobCostHoursWeek').value) || 0;
             job.hoursTotal = (parseFloat(document.getElementById('jobCostHoursTotal').value) || 0) + job.hoursWeek;
             job.rate = parseFloat(document.getElementById('jobCostRate').value) || 40;
-            // Auto-calculate labor $ from total hours ÃÂ rate
+            // Auto-calculate labor $ from total hours × rate
             job.labor = job.hoursTotal * job.rate;
             document.getElementById('jobCostLabor').value = job.labor.toFixed(2);
             // Update total hours display and reset weekly hours
@@ -3819,12 +3846,12 @@
 
             appData.estimates.forEach(est => {
                 const lines = appData.estimateLines.filter(l => l.estimateId === est.id);
-                let baseCost = 0;
+                let baseCost = 0, clientPrice = 0;
                 lines.forEach(l => {
-                    baseCost += (l.qty || 0) * (l.unitCost || 0);
+                    const base = (l.qty || 0) * (l.unitCost || 0);
+                    baseCost += base;
+                    clientPrice += base * (1 + (l.markup || 0) / 100);
                 });
-
-                const clientPrice = baseCost * (1 + (est.defaultMarkup || 0) / 100);
 
                 const row = document.createElement('tr');
                 row.innerHTML = `
@@ -3935,13 +3962,13 @@
     h += '<div><strong>Community:</strong> ' + (estimate.community || '') + '</div>';
     h += '<div><strong>Property:</strong> ' + (estimate.propertyAddr || '') + '</div>';
     h += '<div><strong>Date:</strong> ' + new Date().toLocaleDateString() + '</div></div>';
-    h += '<table style="width:100%;border-collapse:collapse;margin-bottom:20px;font-size:13px;">';
     // Scope of Work display
     if (estimate.scopeOfWork) {
-      h += '<div style="margin-bottom:16px;"><h4 style="color:var(--text);margin-bottom:8px;">Scope of Work</h4>' +
-        '<pre style="white-space:pre-wrap;font-family:Arial,sans-serif;font-size:13px;padding:12px;background:var(--surface2);border-radius:4px;border:1px solid var(--border);">' +
+      h += '<div style="margin-bottom:16px;"><h4 style="color:#333;margin-bottom:8px;">Scope of Work</h4>' +
+        '<pre style="white-space:pre-wrap;font-family:Arial,sans-serif;font-size:13px;padding:12px;background:#f9f9f9;border-radius:4px;border:1px solid #ddd;color:#333;">' +
         estimate.scopeOfWork.replace(/</g,"&lt;").replace(/>/g,"&gt;") + '</pre></div>';
     }
+    h += '<table style="width:100%;border-collapse:collapse;margin-bottom:20px;font-size:13px;">';
     h += '<thead><tr style="background:#f5f5f5;"><th style="border:1px solid #ccc;padding:8px;text-align:left;">Description</th>';
     h += '<th style="border:1px solid #ccc;padding:8px;text-align:center;width:70px;">Qty</th>';
     h += '<th style="border:1px solid #ccc;padding:8px;text-align:center;width:70px;">Unit</th>';
@@ -4094,7 +4121,24 @@
     }
 
     function exportWIPToCSV() {
-            alert('Export to CSV');
+            const headers = ['Job #','Job Name','Client','PM','Status','Type','Market','Total Income','% Complete','Actual Costs','Gross Profit','Margin %'];
+            const rows = [];
+            appData.jobs.filter(j => j.status !== 'Archived').forEach(j => {
+                const w = getJobWIP(j.id);
+                rows.push([
+                    j.jobNumber || '', j.title || '', j.client || '', j.pm || '',
+                    j.status || '', j.jobType || '', j.market || '',
+                    w.totalIncome.toFixed(2), w.pctComplete.toFixed(1),
+                    w.actualCosts.toFixed(2), w.jtdProfit.toFixed(2), w.jtdMargin.toFixed(1)
+                ]);
+            });
+            const csvContent = [headers, ...rows].map(r => r.map(c => '"' + String(c).replace(/"/g, '""') + '"').join(',')).join('\n');
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = 'AGX_WIP_Report_' + new Date().toISOString().split('T')[0] + '.csv';
+            link.click();
+            URL.revokeObjectURL(link.href);
         }
 
         // ==================== START APP ====================
