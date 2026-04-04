@@ -1,10 +1,10 @@
 /* ============================================================
-   AGX WIP Tracker — Step 2 Layout v2
+   AGX WIP Tracker â Step 2 Layout v2
    Two-column: Workspace LEFT, Metrics+Tabs RIGHT
    Job header with inline metrics
    ============================================================ */
 
-/* ── Header Metrics Strip (always visible) ──────────────── */
+/* ââ Header Metrics Strip (always visible) ââââââââââââââââ */
 .jh-metrics-strip {
   display: flex;
   flex-wrap: wrap;
@@ -58,7 +58,7 @@
 .jh-amber .jh-strip-value { color: #f59e0b; }
 .jh-cyan .jh-strip-value { color: #22d3ee; }
 
-/* ── Two-Column Container ────────────────────────────────── */
+/* ââ Two-Column Container ââââââââââââââââââââââââââââââââââ */
 .ws-two-col {
   display: flex;
   gap: 12px;
@@ -66,7 +66,7 @@
   min-height: 600px;
 }
 
-/* ── Left Column: Workspace ──────────────────────────────── */
+/* ââ Left Column: Workspace ââââââââââââââââââââââââââââââââ */
 .ws-col-left {
   flex: 1 1 0;
   min-width: 0;
@@ -132,7 +132,7 @@
   font-size: 11px;
 }
 
-/* ── Right Column: Metrics + Tabs ────────────────────────── */
+/* ââ Right Column: Metrics + Tabs ââââââââââââââââââââââââââ */
 .ws-col-right {
   flex: 0 0 440px;
   min-width: 380px;
@@ -142,7 +142,7 @@
   gap: 8px;
 }
 
-/* ── Right Tab Buttons ───────────────────────────────────── */
+/* ââ Right Tab Buttons âââââââââââââââââââââââââââââââââââââ */
 .ws-right-tabs {
   display: flex;
   flex-wrap: wrap;
@@ -180,7 +180,7 @@
   font-weight: 600;
 }
 
-/* ── Right Tab Content ───────────────────────────────────── */
+/* ââ Right Tab Content âââââââââââââââââââââââââââââââââââââ */
 .ws-right-content {
   flex: 1;
   background: var(--surface, #1a1d27);
@@ -200,7 +200,7 @@
   to { opacity: 1; transform: translateY(0); }
 }
 
-/* ── Job Info Collapsible ────────────────────────────────── */
+/* ââ Job Info Collapsible ââââââââââââââââââââââââââââââââââ */
 .ws-job-info-details {
   margin-bottom: 8px;
   background: var(--surface2, #242836);
@@ -248,7 +248,7 @@
   margin: 0;
 }
 
-/* ── Override cards inside right panels ───────────────────── */
+/* ââ Override cards inside right panels âââââââââââââââââââââ */
 .ws-right-panel .card {
   border: none;
   background: transparent;
@@ -261,14 +261,14 @@
   overflow-x: auto;
 }
 
-/* ── Hide old elements ───────────────────────────────────── */
+/* ââ Hide old elements âââââââââââââââââââââââââââââââââââââ */
 .ws-layout-applied > .sub-tabs { display: none !important; }
 .ws-layout-applied > .summary-grid { display: none !important; }
 .ws-layout-applied > .sub-tab-content-job { display: none !important; }
 .ws-layout-applied > .action-buttons { display: none !important; }
 .ws-layout-applied > #job-info-card { display: none !important; }
 
-/* ── Responsive ──────────────────────────────────────────── */
+/* ââ Responsive ââââââââââââââââââââââââââââââââââââââââââââ */
 @media (max-width: 900px) {
   .ws-two-col {
     flex-direction: column;
@@ -308,7 +308,7 @@
   }
 }
 
-/* ── Job Header Bar (inside sticky green header) ── */
+/* ââ Job Header Bar (inside sticky green header) ââ */
 .jh-job-bar {
   display: flex;
   align-items: center;
@@ -350,7 +350,7 @@
   white-space: nowrap;
 }
 
-/* ── Tab + Metrics Row ── */
+/* ââ Tab + Metrics Row ââ */
 .jh-tab-metrics-row {
   display: flex;
   align-items: center;
@@ -358,7 +358,7 @@
   width: 100%;
 }
 
-/* ── Metrics Strip (13 cards) ── */
+/* ââ Metrics Strip (13 cards) ââ */
 .jh-metrics-strip {
   display: flex;
   flex-wrap: nowrap;
@@ -396,4 +396,68 @@
   font-weight: 700;
   color: #fff;
   white-space: nowrap;
+}
+
+
+/* ===== Viewport-filling layout ===== */
+.ws-two-col {
+  height: calc(100vh - 260px);
+  overflow: hidden;
+}
+.ws-col-left {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.ws-col-right {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+#wsRightContent {
+  flex: 1;
+  overflow-y: auto;
+}
+#wsWorkspaceContainer {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+#wsGridWrapper {
+  flex: 1;
+  overflow: auto;
+}
+.ws-grid-wrapper table {
+  width: 100%;
+}
+
+/* ===== Draggable resizer ===== */
+.ws-resizer {
+  width: 8px;
+  cursor: col-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  position: relative;
+  z-index: 5;
+  transition: background 0.15s;
+}
+.ws-resizer:hover,
+.ws-resizer-active {
+  background: rgba(59, 130, 246, 0.15);
+}
+.ws-resizer::before {
+  content: '';
+  width: 2px;
+  height: 40px;
+  background: rgba(255,255,255,0.2);
+  border-radius: 2px;
+  transition: background 0.15s, height 0.15s;
+}
+.ws-resizer:hover::before,
+.ws-resizer-active::before {
+  background: rgba(59, 130, 246, 0.7);
+  height: 60px;
 }
