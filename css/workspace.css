@@ -422,6 +422,23 @@
   outline: none;
 }
 
+/* ── Linked Input Badges ───────────────────────────────── */
+
+.ws-linked-badge {
+  display: inline-block;
+  font-size: 10px;
+  padding: 1px 6px;
+  margin-left: 6px;
+  background: rgba(27, 133, 65, 0.2);
+  border: 1px solid rgba(27, 133, 65, 0.4);
+  border-radius: 8px;
+  color: #34d399;
+  font-weight: 600;
+  font-family: 'Courier New', monospace;
+  vertical-align: middle;
+  letter-spacing: 0.3px;
+}
+
 /* ── Range Selection ───────────────────────────────────── */
 
 .ws-cell.ws-range-selected {

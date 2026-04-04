@@ -273,6 +273,22 @@
         allPanels.forEach(function(p) { p.style.display = 'none'; });
         var target = document.getElementById(targetId);
         if (target) target.style.display = 'block';
+        // Call render function for the tab content
+        var jobId = (typeof appState !== 'undefined') ? appState.currentJobId : null;
+        if (!jobId) return;
+        var renderers = {
+          'job-overview': 'renderJobOverview',
+          'job-costs': 'renderJobCosts',
+          'job-buildings': 'renderJobBuildings',
+          'job-phases': 'renderJobPhases',
+          'job-subs': 'renderJobSubs',
+          'job-labor': 'renderJobLabor',
+          'job-weekly': 'renderJobWeekly',
+          'job-changeorders': 'renderChangeOrders',
+          'job-wip': 'renderWipTab'
+        };
+        var fn = renderers[targetId];
+        if (fn && typeof window[fn] === 'function') window[fn](jobId);
       };
     });
   }

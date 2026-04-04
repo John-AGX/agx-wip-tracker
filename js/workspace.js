@@ -520,12 +520,56 @@
 
     if (changed && typeof saveData === 'function') {
       saveData();
-      // Refresh the job detail view if it exists
       if (typeof renderJobDetail === 'function' && appState && appState.currentJobId === grid.jobId) {
-        // Don't re-render (would destroy workspace), just update summary cards
         updateJobSummaryCards(job);
       }
     }
+    updateLinkedIndicators();
+  }
+
+  /** Map linkable field keys to their DOM input IDs */
+  var FIELD_INPUT_MAP = {
+    materials: 'jobCostMaterials',
+    labor: 'jobCostLabor',
+    equipment: 'jobCostEquipment',
+    sub: 'jobCostSub',
+    hoursWeek: 'jobCostHoursWeek',
+    hoursTotal: 'jobCostHoursTotal',
+    rate: 'jobCostRate',
+    estimatedCosts: 'edit-jobEstCosts',
+    targetMarginPct: 'edit-jobMargin'
+  };
+
+  /** Show "← Cell A5" badges on inputs linked to workspace cells */
+  function updateLinkedIndicators() {
+    // Clear all existing badges
+    document.querySelectorAll('.ws-linked-badge').forEach(function (el) { el.remove(); });
+    document.querySelectorAll('[data-ws-linked]').forEach(function (el) {
+      el.removeAttribute('data-ws-linked');
+      el.style.borderColor = '';
+    });
+
+    // Add badges for active links
+    Object.entries(grid.links).forEach(function (entry) {
+      var cellAddr = entry[0], fieldKey = entry[1];
+      var inputId = FIELD_INPUT_MAP[fieldKey];
+      if (!inputId) return;
+      var input = document.getElementById(inputId);
+      if (!input) return;
+
+      // Style the input
+      input.setAttribute('data-ws-linked', cellAddr);
+      input.style.borderColor = 'rgba(27, 133, 65, 0.5)';
+
+      // Find the label and add badge
+      var label = input.parentElement ? input.parentElement.querySelector('label') : null;
+      if (label) {
+        var badge = document.createElement('span');
+        badge.className = 'ws-linked-badge';
+        badge.textContent = '← ' + cellAddr;
+        label.appendChild(badge);
+      }
+    });
   }
 
   /** Update summary cards without full re-render */
@@ -1491,6 +1535,9 @@
 
     // Select first cell
     selectCell(0, 0);
+
+    // Show linked cell indicators on cost inputs
+    setTimeout(updateLinkedIndicators, 500);
 
     // ── Wire events ──
     wsTable.addEventListener('mousedown', handleCellMouseDown);
