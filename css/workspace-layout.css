@@ -9,12 +9,13 @@
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  padding: 10px 14px;
-  margin-top: 6px;
-  background: var(--surface, #1a1d27);
-  border: 1px solid var(--border, #2e3346);
-  border-radius: 10px;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.25);
+  padding: 8px 20px 10px;
+  margin: 0;
+  background: rgba(0, 0, 0, 0.3);
+  border: none;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 0;
+  box-shadow: inset 0 1px 4px rgba(0, 0, 0, 0.2);
 }
 
 .jh-strip-card {
@@ -24,15 +25,15 @@
   justify-content: center;
   flex: 1 1 0;
   min-width: 100px;
-  padding: 6px 10px;
-  border-radius: 7px;
-  background: var(--surface2, #242836);
-  border: 1px solid var(--border, #2e3346);
-  transition: border-color 0.2s;
+  padding: 5px 10px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  transition: background 0.2s;
 }
 
 .jh-strip-card:hover {
-  border-color: rgba(79, 140, 255, 0.3);
+  background: rgba(0, 0, 0, 0.5);
 }
 
 .jh-strip-label {
