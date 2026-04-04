@@ -1,10 +1,10 @@
 // ============================================================
-// AGX WIP Tracker â Layout Restructure v2 (Step 2)
+// AGX WIP Tracker Ã¢ÂÂ Layout Restructure v2 (Step 2)
 // Two-column layout:
 //   LEFT:  Workspace grid (portrait, always visible)
 //   RIGHT: Compact metrics strip + horizontal tab navigation
 // Job name + key costs in the main header bar
-// Replaces workspace-inject.js â load AFTER app.js + wip.js + workspace.js
+// Replaces workspace-inject.js Ã¢ÂÂ load AFTER app.js + wip.js + workspace.js
 // ============================================================
 
 (function () {
@@ -13,7 +13,7 @@
   let layoutApplied = false;
   let currentJobId = null;
 
-  // ââ Tab definitions for right panel âââââââââââââââââââââââ
+  // Ã¢ÂÂÃ¢ÂÂ Tab definitions for right panel Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
   const RIGHT_TABS = [
     { id: 'job-wip',          label: 'WIP' },
     { id: 'job-costs',        label: 'Costs' },
@@ -26,7 +26,7 @@
     { id: 'job-weekly',       label: 'Accruals' }
   ];
 
-  // ââ CSS injection âââââââââââââââââââââââââââââââââââââââââ
+  // Ã¢ÂÂÃ¢ÂÂ CSS injection Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
   function injectCSS() {
     if (document.getElementById('ws-layout-v2-css')) return;
     var link = document.createElement('link');
@@ -44,7 +44,7 @@
     document.head.appendChild(link);
   }
 
-  // ââ Cleanup old injections ââââââââââââââââââââââââââââââââ
+  // Ã¢ÂÂÃ¢ÂÂ Cleanup old injections Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
   function cleanup() {
     // Remove job bar from header
     var jobBar = document.getElementById("jh-job-bar");
@@ -194,7 +194,7 @@
     container.id = 'ws-two-col';
     container.className = 'ws-two-col';
 
-    // âââ LEFT COLUMN: Workspace âââââ
+    // Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂ LEFT COLUMN: Workspace Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
     var leftCol = document.createElement('div');
     leftCol.className = 'ws-col-left';
     leftCol.innerHTML =
@@ -204,7 +204,7 @@
       '</div>' +
       '<div id="wsWorkspaceContainer" tabindex="0"></div>';
 
-    // âââ RIGHT COLUMN: Metrics + Tabs âââââ
+    // Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂ RIGHT COLUMN: Metrics + Tabs Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
     var rightCol = document.createElement('div');
     rightCol.className = 'ws-col-right';
 
@@ -226,23 +226,32 @@
     return container;
   }
 
-  // ââ Move panels into right content area âââââââââââââââââââ
+  // Ã¢ÂÂÃ¢ÂÂ Move panels into right content area Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
   function populateRightPanels(detail) {
     var rc = document.getElementById('wsRightContent');
     if (!rc) return;
-    /* Move all sub-tab-content-job panels into the right content area */
-    var panels = detail.querySelectorAll('.sub-tab-content-job');
-    panels.forEach(function(p) { rc.appendChild(p); });
-    /* Also move any ws-right-panel elements (like job-wip) */
-    var extraPanels = detail.querySelectorAll('.ws-right-panel');
-    extraPanels.forEach(function(p) { rc.appendChild(p); });
-    /* Hide all panels, then show the one matching the active tab */
-    var allPanels = Array.from(rc.children);
-    allPanels.forEach(function(p) { p.style.display = 'none'; });
-    var activeTab = document.querySelector('.ws-right-tab.active');
-    var activeId = activeTab ? activeTab.getAttribute('data-panel') : 'job-wip';
-    var target = document.getElementById(activeId);
-    if (target) target.style.display = 'block';
+    var attempts = 0;
+    var maxAttempts = 20;
+    function tryMove() {
+      var panels = detail.querySelectorAll('.sub-tab-content-job');
+      var extraPanels = detail.querySelectorAll('.ws-right-panel');
+      var total = panels.length + extraPanels.length;
+      if (total === 0 && attempts < maxAttempts) {
+        attempts++;
+        setTimeout(tryMove, 150);
+        return;
+      }
+      panels.forEach(function(p) { rc.appendChild(p); });
+      extraPanels.forEach(function(p) { rc.appendChild(p); });
+      var allPanels = Array.from(rc.children);
+      allPanels.forEach(function(p) { p.style.display = 'none'; });
+      var activeTab = document.querySelector('.ws-right-tab.active');
+      var activeId = activeTab ? activeTab.getAttribute('data-panel') : 'job-wip';
+      var target = document.getElementById(activeId);
+      if (target) target.style.display = 'block';
+      wireTabSwitching();
+    }
+    tryMove();
   }
 
   function wireTabSwitching() {
@@ -282,7 +291,7 @@
     rightContent.insertBefore(wrapper, rightContent.firstChild);
   }
 
-  // ââ Main layout application âââââââââââââââââââââââââââââââ
+  // Ã¢ÂÂÃ¢ÂÂ Main layout application Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
   var _applyingLayout = false;
 
   function applyLayout() {
@@ -358,7 +367,7 @@
     }
   }
 
-  // ââ Observer ââââââââââââââââââââââââââââââââââââââââââââââ
+  // Ã¢ÂÂÃ¢ÂÂ Observer Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
   function observe() {
     injectCSS();
 
@@ -392,7 +401,7 @@
     tryInitWorkspace();
   }
 
-  // ââ Init ââââââââââââââââââââââââââââââââââââââââââââââââââ
+  // Ã¢ÂÂÃ¢ÂÂ Init Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', observe);
   } else {
