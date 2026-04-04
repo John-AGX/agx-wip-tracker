@@ -294,10 +294,10 @@
   var _applyingLayout = false;
 
   function applyLayout() {
-    if (_applyingLayout) return;
-    _applyingLayout = true;
     var detail = document.getElementById("wip-job-detail-view");
     if (!detail || detail.style.display === "none") return;
+    if (_applyingLayout) return;
+    _applyingLayout = true;
 
     // Already applied?
     if (document.getElementById("ws-two-col")) { _applyingLayout = false; return; }
