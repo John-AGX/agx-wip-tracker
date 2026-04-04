@@ -64,7 +64,7 @@
   // ── Build enhanced header with full metrics strip ──────────
   function buildHeader(detail, job) {
     var header = detail.querySelector('.job-detail-header');
-    if (!header || detail.querySelector('.jh-metrics-strip')) return;
+    if (!header || document.querySelector('.jh-metrics-strip')) return;
 
     // Extract key metric values from summary cards
     var summaryGrid = detail.querySelector('.summary-grid');
@@ -98,11 +98,17 @@
     });
     strip.innerHTML = html;
 
-    // Insert strip right after the header
-    if (header.nextSibling) {
-      header.parentNode.insertBefore(strip, header.nextSibling);
+    // Insert strip into the sticky site <header> so it stays on top when scrolling
+    var siteHeader = document.querySelector('header');
+    if (siteHeader) {
+      siteHeader.appendChild(strip);
     } else {
-      header.parentNode.appendChild(strip);
+      // Fallback: place after job-detail-header
+      if (header.nextSibling) {
+        header.parentNode.insertBefore(strip, header.nextSibling);
+      } else {
+        header.parentNode.appendChild(strip);
+      }
     }
   }
 
@@ -280,6 +286,9 @@
           layoutApplied = false;
           currentJobId = null;
         }
+        // Remove metrics strip from site header when job is closed
+        var staleStrip = document.querySelector('header .jh-metrics-strip');
+        if (staleStrip) staleStrip.remove();
         return;
       }
 
