@@ -64,6 +64,8 @@
   gap: 12px;
   margin-top: 8px;
   min-height: 600px;
+  height: calc(100vh - 260px);
+  overflow: hidden;
 }
 
 /* ââ Left Column: Workspace ââââââââââââââââââââââââââââââââ */
@@ -72,6 +74,7 @@
   min-width: 0;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
   background: var(--surface, #1a1d27);
   border: 1px solid var(--border, #2e3346);
   border-radius: 10px;
@@ -139,6 +142,7 @@
   max-width: 500px;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
   gap: 8px;
 }
 
@@ -399,21 +403,7 @@
 }
 
 
-/* ===== Viewport-filling layout ===== */
-.ws-two-col {
-  height: calc(100vh - 260px);
-  overflow: hidden;
-}
-.ws-col-left {
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-.ws-col-right {
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
+/* ===== Viewport-filling ID overrides ===== */
 #wsRightContent {
   flex: 1;
   overflow-y: auto;

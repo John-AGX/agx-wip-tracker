@@ -226,6 +226,128 @@
 
   // ── Formula Engine ─────────────────────────────────────────
 
+  /** Safe arithmetic expression evaluator - replaces Function()/eval() */
+  function safeEvalExpr(expr) {
+    var tokens = [];
+    var str = expr.trim();
+    var i = 0;
+
+    // Tokenize
+    while (i < str.length) {
+      if (str[i] === ' ') { i++; continue; }
+
+      // Number (including decimals and negative after operator/start)
+      if (/[0-9.]/.test(str[i]) ||
+          (str[i] === '-' && (tokens.length === 0 || typeof tokens[tokens.length - 1] === 'string'))) {
+        var num = '';
+        if (str[i] === '-') { num = '-'; i++; }
+        while (i < str.length && /[0-9.eE]/.test(str[i])) { num += str[i]; i++; }
+        var parsed = Number(num);
+        if (isNaN(parsed)) throw new Error('Invalid number');
+        tokens.push(parsed);
+        continue;
+      }
+
+      // Two-char operators
+      if (i + 1 < str.length) {
+        var two = str[i] + str[i + 1];
+        if (two === '>=' || two === '<=' || two === '==' || two === '!=') {
+          tokens.push(two); i += 2; continue;
+        }
+      }
+
+      // Single-char operators and parens
+      if ('+-*/%()><'.indexOf(str[i]) !== -1) {
+        tokens.push(str[i]); i++; continue;
+      }
+
+      // Ternary
+      if (str[i] === '?' || str[i] === ':') {
+        tokens.push(str[i]); i++; continue;
+      }
+
+      throw new Error('Unexpected character: ' + str[i]);
+    }
+
+    // Recursive descent parser
+    var pos = 0;
+    function peek() { return pos < tokens.length ? tokens[pos] : null; }
+    function consume() { return tokens[pos++]; }
+
+    function parseTernary() {
+      var left = parseComparison();
+      if (peek() === '?') {
+        consume();
+        var trueVal = parseTernary();
+        if (peek() !== ':') throw new Error('Expected :');
+        consume();
+        var falseVal = parseTernary();
+        return left ? trueVal : falseVal;
+      }
+      return left;
+    }
+
+    function parseComparison() {
+      var left = parseAddSub();
+      while (peek() === '>' || peek() === '<' || peek() === '>=' || peek() === '<=' || peek() === '==' || peek() === '!=') {
+        var op = consume();
+        var right = parseAddSub();
+        if (op === '>') left = left > right ? 1 : 0;
+        else if (op === '<') left = left < right ? 1 : 0;
+        else if (op === '>=') left = left >= right ? 1 : 0;
+        else if (op === '<=') left = left <= right ? 1 : 0;
+        else if (op === '==') left = left == right ? 1 : 0;
+        else if (op === '!=') left = left != right ? 1 : 0;
+      }
+      return left;
+    }
+
+    function parseAddSub() {
+      var left = parseMulDiv();
+      while (peek() === '+' || peek() === '-') {
+        var op = consume();
+        var right = parseMulDiv();
+        left = op === '+' ? left + right : left - right;
+      }
+      return left;
+    }
+
+    function parseMulDiv() {
+      var left = parseUnary();
+      while (peek() === '*' || peek() === '/' || peek() === '%') {
+        var op = consume();
+        var right = parseUnary();
+        if (op === '*') left = left * right;
+        else if (op === '/') left = right === 0 ? Infinity : left / right;
+        else left = left % right;
+      }
+      return left;
+    }
+
+    function parseUnary() {
+      if (peek() === '-') { consume(); return -parsePrimary(); }
+      if (peek() === '+') { consume(); return parsePrimary(); }
+      return parsePrimary();
+    }
+
+    function parsePrimary() {
+      var t = peek();
+      if (typeof t === 'number') { consume(); return t; }
+      if (t === '(') {
+        consume();
+        var val = parseTernary();
+        if (peek() !== ')') throw new Error('Expected )');
+        consume();
+        return val;
+      }
+      throw new Error('Unexpected token: ' + t);
+    }
+
+    var result = parseTernary();
+    if (pos < tokens.length) throw new Error('Unexpected trailing tokens');
+    return result;
+  }
+
   /** Evaluate a cell's raw value; detect formulas starting with '=' */
   function evaluate(raw) {
     if (typeof raw !== 'string' || !raw.startsWith('=')) {
@@ -325,12 +447,13 @@
       // Handle IF(condition, trueVal, falseVal)
       const withIf = withCount.replace(/IF\((.+?),(.+?),(.+?)\)/gi, (match, cond, tVal, fVal) => {
         try {
-          return Function('"use strict"; return (' + cond.trim() + ') ? (' + tVal.trim() + ') : (' + fVal.trim() + ')')();
+          const condResult = safeEvalExpr(cond.trim());
+          return condResult ? safeEvalExpr(tVal.trim()) : safeEvalExpr(fVal.trim());
         } catch (e) { return '#ERR'; }
       });
 
       // Evaluate the final expression
-      const result = Function('"use strict"; return (' + withIf + ')')();
+      const result = safeEvalExpr(withIf);
       return (typeof result === 'number' && !isFinite(result)) ? '#DIV/0!' : result;
     } catch (e) {
       return '#ERR';
@@ -444,14 +567,14 @@
       colWidths: grid.colWidths,
       links: grid.links
     };
-    const allWs = JSON.parse(localStorage.getItem('agx-workspaces') || '{}');
+    const allWs = safeLoadJSON('agx-workspaces', {});
     allWs[grid.jobId] = data;
     localStorage.setItem('agx-workspaces', JSON.stringify(allWs));
     grid.dirty = false;
   }
 
   function loadWorkspace(jobId) {
-    const allWs = JSON.parse(localStorage.getItem('agx-workspaces') || '{}');
+    const allWs = safeLoadJSON('agx-workspaces', {});
     const saved = allWs[jobId];
     if (saved) {
       grid.rows = Math.max(saved.rows || MIN_ROWS, MIN_ROWS);

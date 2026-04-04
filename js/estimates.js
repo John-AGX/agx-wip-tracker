@@ -13,15 +13,15 @@ function renderEstimatesList() {
 
                 const row = document.createElement('tr');
                 row.innerHTML = `
-                    <td><strong>${est.title}</strong></td>
-                    <td>${est.client} - ${est.community}</td>
+                    <td><strong>${escapeHTML(est.title)}</strong></td>
+                    <td>${escapeHTML(est.client)} - ${escapeHTML(est.community)}</td>
                     <td style="text-align: right;">${formatCurrency(baseCost)}</td>
                     <td style="text-align: right;">${est.defaultMarkup}%</td>
                     <td style="text-align: right;">${formatCurrency(clientPrice)}</td>
                     <td style="text-align: center;">
-                        <button class="small" onclick="editEstimate('${est.id}')">Edit</button>
-                        <button class="small" onclick="previewEstimate('${est.id}')">Preview</button>
-                        <button class="small danger" onclick="deleteEstimate('${est.id}')">Delete</button>
+                        <button class="small" onclick="editEstimate('${escapeHTML(est.id)}')">Edit</button>
+                        <button class="small" onclick="previewEstimate('${escapeHTML(est.id)}')">Preview</button>
+                        <button class="small danger" onclick="deleteEstimate('${escapeHTML(est.id)}')">Delete</button>
                     </td>
                 `;
                 tbody.appendChild(row);
@@ -135,7 +135,7 @@ function renderEstimatesList() {
     const renderLine = (line) => {
       const base = (line.qty || 0) * (line.unitCost || 0);
       const client = base * (1 + (line.markup || 0) / 100);
-      return '<tr><td style="border:1px solid #ccc;padding:8px;">' + (line.description || '') + '</td>' +
+      return '<tr><td style="border:1px solid #ccc;padding:8px;">' + escapeHTML(line.description || '') + '</td>' +
         '<td style="border:1px solid #ccc;padding:8px;text-align:center;">' + (line.qty || 0) + '</td>' +
         '<td style="border:1px solid #ccc;padding:8px;text-align:center;">' + (line.unit || '') + '</td>' +
         '<td style="border:1px solid #ccc;padding:8px;text-align:right;">' + formatCurrency(line.unitCost || 0) + '</td>' +
@@ -254,7 +254,7 @@ function renderEstimatesList() {
     Object.keys(sections).forEach(name => {
       const hdr = document.createElement('tr');
       hdr.className = 'section-header';
-      hdr.innerHTML = '<td colspan="5" style="padding:10px 8px;">' + name + '</td><td colspan="2" style="padding:10px 8px;text-align:right;"><button class="secondary small" onclick="addEstimateLineRow(currentEditEstimateId, \'' + name.replace(/'/g, "\\'") + '\')" style="font-size:11px;padding:3px 8px;">+ Line Item</button></td>';
+      hdr.innerHTML = '<td colspan="5" style="padding:10px 8px;">' + escapeHTML(name) + '</td><td colspan="2" style="padding:10px 8px;text-align:right;"><button class="secondary small" onclick="addEstimateLineRow(currentEditEstimateId, \'' + escapeHTML(name).replace(/'/g, "\\'") + '\')" style="font-size:11px;padding:3px 8px;">+ Line Item</button></td>';
       tbody.appendChild(hdr);
       sections[name].forEach(l => tbody.appendChild(createEditLineItemRow(l)));
     });
@@ -268,7 +268,7 @@ function renderEstimatesList() {
     const units = ['sqft','lf','ea','hr','ls','sf','sy','cf','cy','gal'];
     let unitOpts = '';
     units.forEach(u => { unitOpts += '<option value="' + u + '"' + (line.unit === u ? ' selected' : '') + '>' + u + '</option>'; });
-    row.innerHTML = '<td style="padding:8px;"><input type="text" data-field="description" value="' + (line.description || '').replace(/"/g, '&quot;') + '" placeholder="Item description" oninput="recalcEstimateTotals()" style="width:100%;"></td>' +
+    row.innerHTML = '<td style="padding:8px;"><input type="text" data-field="description" value="' + escapeHTML(line.description || '') + '" placeholder="Item description" oninput="recalcEstimateTotals()" style="width:100%;"></td>' +
       '<td style="padding:8px;"><input type="number" data-field="qty" value="' + (line.qty || 1) + '" min="0" step="0.01" oninput="recalcEstimateTotals()" style="width:100%;text-align:center;"></td>' +
       '<td style="padding:8px;"><select data-field="unit" style="width:100%;">' + unitOpts + '</select></td>' +
       '<td style="padding:8px;"><input type="number" data-field="unitCost" value="' + (line.unitCost || 0) + '" min="0" step="0.01" oninput="recalcEstimateTotals()" style="width:100%;text-align:right;"></td>' +

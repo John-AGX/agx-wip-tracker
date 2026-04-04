@@ -309,7 +309,7 @@ function renderWIPMain() {
             let opts = lt + 'option value=""' + gt + '-- Select Building --' + lt + '/option' + gt;
             buildings.forEach(b => {
                 const sel = existingData && existingData.buildingId === b.id ? ' selected' : '';
-                opts += lt + 'option value="' + b.id + '"' + sel + gt + b.name + lt + '/option' + gt;
+                opts += lt + 'option value="' + escapeHTML(b.id) + '"' + sel + gt + escapeHTML(b.name) + lt + '/option' + gt;
             });
             const amt = existingData ? existingData.amount : '';
             row.innerHTML = lt + 'div class="form-group" style="flex:1;"' + gt + lt + 'select class="co-bldg-select"' + gt + opts + lt + '/select' + gt + lt + '/div' + gt + lt + 'div class="form-group" style="flex:1;"' + gt + lt + 'input type="number" class="co-bldg-amount" placeholder="Amount $" step="0.01" value="' + amt + '" oninput="updateCOAllocRemaining()"' + gt + lt + '/div' + gt + lt + 'button type="button" class="danger small" onclick="this.parentElement.remove();updateCOAllocRemaining()" style="flex:0;padding:4px 10px;"' + gt + 'X' + lt + '/button' + gt;
@@ -418,15 +418,15 @@ function renderWIPMain() {
                 totalCost += co.estimatedCosts || 0;
                 const row = document.createElement('tr');
                 row.innerHTML = `
-                    <td>${co.coNumber || 'CO-' + (idx + 1)}</td>
-                    <td>${co.description}${co.notes ? '<br><span style="font-size: 11px; color: var(--text-dim);">' + co.notes + '</span>' : ''}</td>
+                    <td>${escapeHTML(co.coNumber) || 'CO-' + (idx + 1)}</td>
+                    <td>${escapeHTML(co.description)}${co.notes ? '<br><span style="font-size: 11px; color: var(--text-dim);">' + escapeHTML(co.notes) + '</span>' : ''}</td>
                     <td style="text-align: right;">${formatCurrency(co.income)}</td>
                     <td style="text-align: right;">${formatCurrency(co.estimatedCosts)}</td>
                     <td style="text-align: right; color: ${profit >= 0 ? 'var(--green)' : 'var(--red)'};">${formatCurrency(profit)}</td>
-                    <td>${co.date || '—'}</td>
+                    <td>${escapeHTML(co.date) || '—'}</td>
                     <td>
-                        <button class="small" onclick="event.stopPropagation(); editCO('${co.id}')">Edit</button>
-                        <button class="small secondary" onclick="event.stopPropagation(); deleteCO('${co.id}')">Del</button>
+                        <button class="small" onclick="event.stopPropagation(); editCO('${escapeHTML(co.id)}')">Edit</button>
+                        <button class="small secondary" onclick="event.stopPropagation(); deleteCO('${escapeHTML(co.id)}')">Del</button>
                     </td>`;
                 tbody.appendChild(row);
             });
@@ -549,23 +549,23 @@ function renderWIPMain() {
                 }
                 const w = getJobWIP(job.id);
                 const statusClass = job.status === 'On Hold' ? 'at-risk' : job.status === 'Completed' ? 'on-track' : job.status === 'Archived' ? 'not-started' : 'on-track';
-                const typeLabel = job.jobType ? `<span style="font-size: 11px; color: var(--text-dim); font-weight: normal; margin-left: 6px;">${job.jobType}${job.market ? ' - ' + job.market : ''}</span>` : '';
+                const typeLabel = job.jobType ? `<span style="font-size: 11px; color: var(--text-dim); font-weight: normal; margin-left: 6px;">${escapeHTML(job.jobType)}${job.market ? ' - ' + escapeHTML(job.market) : ''}</span>` : '';
 
                 const row = document.createElement('tr');
                 row.style.cursor = 'pointer';
                 row.onclick = function() { editJob(job.id); };
                 row.innerHTML = `
                     <td>${index + 1}</td>
-                    <td><strong>${job.jobNumber ? job.jobNumber + ' — ' : ''}${job.title}</strong>${typeLabel}</td>
-                    <td>${job.client || '—'}</td>
-                    <td>${job.pm || '—'}</td>
-                    <td><span class="badge ${statusClass}">${job.status}</span></td>
+                    <td><strong>${job.jobNumber ? escapeHTML(job.jobNumber) + ' — ' : ''}${escapeHTML(job.title)}</strong>${typeLabel}</td>
+                    <td>${escapeHTML(job.client) || '—'}</td>
+                    <td>${escapeHTML(job.pm) || '—'}</td>
+                    <td><span class="badge ${statusClass}">${escapeHTML(job.status)}</span></td>
                     <td style="text-align: right;">${formatCurrency(w.totalIncome)}</td>
                     <td style="text-align: right;"><div class="progress-bar" style="margin-bottom: 2px; height: 6px;"><div class="progress-fill" style="width: ${w.pctComplete}%"></div></div><span style="font-size: 12px;">${w.pctComplete.toFixed(1)}%</span></td>
                     <td style="text-align: right; color: ${w.jtdProfit >= 0 ? 'var(--green)' : 'var(--red)'};">${formatCurrency(w.jtdProfit)}</td>
                     <td style="text-align: right;">${w.jtdMargin.toFixed(1)}%</td>
                     <td style="text-align: center;">
-                        <button class="small" onclick="event.stopPropagation(); editJob('${job.id}')">Edit</button>
+                        <button class="small" onclick="event.stopPropagation(); editJob('${escapeHTML(job.id)}')">Edit</button>
                     </td>
                 `;
                 tbody.appendChild(row);
@@ -724,7 +724,7 @@ function renderWIPMain() {
                 ).join('');
                 const inp = (id, val, type) => {
                     type = type || 'text';
-                    return String.fromCharCode(60) + 'input id="' + id + '" type="' + type + '" value="' + (val || '') + '" style="width:100%;background:var(--input-bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 8px;font-size:13px;"' + String.fromCharCode(62);
+                    return String.fromCharCode(60) + 'input id="' + id + '" type="' + type + '" value="' + escapeHTML(val || '') + '" style="width:100%;background:var(--input-bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 8px;font-size:13px;"' + String.fromCharCode(62);
                 };
                 const sel = (id, opts) => String.fromCharCode(60) + 'select id="' + id + '" style="width:100%;background:var(--input-bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 8px;font-size:13px;"' + String.fromCharCode(62) + opts + String.fromCharCode(60) + '/select' + String.fromCharCode(62);
                 const lbl = (txt) => String.fromCharCode(60) + 'label style="font-size:12px;color:var(--text-dim);"' + String.fromCharCode(62) + txt + String.fromCharCode(60) + '/label' + String.fromCharCode(62);
@@ -764,7 +764,7 @@ function renderWIPMain() {
 
             document.getElementById('job-detail-title').textContent = (job.jobNumber ? job.jobNumber + ' — ' : '') + job.title;
             const detailStatusClass = job.status === 'On Hold' ? 'at-risk' : job.status === 'Completed' ? 'on-track' : job.status === 'Archived' ? 'not-started' : 'on-track';
-            document.getElementById('job-detail-status').innerHTML = `<span class="badge ${detailStatusClass}">${job.status}</span>`;
+            document.getElementById('job-detail-status').innerHTML = `<span class="badge ${detailStatusClass}">${escapeHTML(job.status)}</span>`;
             document.getElementById('job-detail-contract').textContent = `Total Income: ${formatCurrency(w.totalIncome)}`;
 
             document.getElementById('job-info-number').textContent = job.jobNumber || '—';
@@ -778,7 +778,7 @@ function renderWIPMain() {
             document.getElementById('job-info-estcosts').textContent = formatCurrency(job.estimatedCosts);
             document.getElementById('job-info-margin').textContent = (job.targetMarginPct || 50) + '%';
             const statusClass = job.status === 'On Hold' ? 'at-risk' : job.status === 'Completed' ? 'on-track' : job.status === 'Archived' ? 'not-started' : 'on-track';
-            document.getElementById('job-info-status').innerHTML = `<span class="badge ${statusClass}">${job.status}</span>`;
+            document.getElementById('job-info-status').innerHTML = `<span class="badge ${statusClass}">${escapeHTML(job.status)}</span>`;
             document.getElementById('job-info-notes').textContent = job.notes || '—';
             document.getElementById('archive-job-btn').textContent = job.status === 'Archived' ? 'Unarchive Job' : 'Archive Job';
 
@@ -823,7 +823,7 @@ function renderWIPMain() {
                     row.style.cursor = 'pointer';
                     row.title = 'Click to edit this building';
                     row.onclick = function() { editBuilding(bldg.id); };
-                    row.innerHTML = '<td>' + (bldg.name || '') + '</td><td style="color: var(--text-dim); font-style: italic;">No phases</td><td>—</td><td style="text-align: right;">' + formatCurrency(bldg.materials) + '</td><td style="text-align: right;">' + formatCurrency(bldg.labor) + '</td><td style="text-align: right;">' + formatCurrency(bldg.sub) + '</td><td style="text-align: right;">' + formatCurrency(bldg.equipment) + '</td><td style="text-align: right;">' + formatCurrency(bTotal) + '</td><td style="text-align: right;">' + formatCurrency(bldg.budget) + '</td><td style="text-align: right; color: ' + (bVar >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + formatCurrency(bVar) + '</td><td><span class="badge ' + bStatus + '">' + bStatus.replace('-', ' ').toUpperCase() + '</span></td>';
+                    row.innerHTML = '<td>' + escapeHTML(bldg.name || '') + '</td><td style="color: var(--text-dim); font-style: italic;">No phases</td><td>—</td><td style="text-align: right;">' + formatCurrency(bldg.materials) + '</td><td style="text-align: right;">' + formatCurrency(bldg.labor) + '</td><td style="text-align: right;">' + formatCurrency(bldg.sub) + '</td><td style="text-align: right;">' + formatCurrency(bldg.equipment) + '</td><td style="text-align: right;">' + formatCurrency(bTotal) + '</td><td style="text-align: right;">' + formatCurrency(bldg.budget) + '</td><td style="text-align: right; color: ' + (bVar >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + formatCurrency(bVar) + '</td><td><span class="badge ' + bStatus + '">' + bStatus.replace('-', ' ').toUpperCase() + '</span></td>';
                     tbody.appendChild(row);
                 } else {
                     bldgPhases.forEach(p => {
@@ -834,7 +834,7 @@ function renderWIPMain() {
                         row.style.cursor = 'pointer';
                         row.title = 'Click to edit this phase';
                         row.onclick = function() { editPhase(p.id); };
-                        row.innerHTML = '<td>' + (bldg.name || '') + '</td><td>' + p.phase + '</td><td><div class="progress-bar" style="margin-bottom: 4px;"><div class="progress-fill" style="width: ' + p.pctComplete + '%"></div></div>' + p.pctComplete + '%</td><td style="text-align: right;">' + formatCurrency(p.materials) + '</td><td style="text-align: right;">' + formatCurrency(p.labor) + '</td><td style="text-align: right;">' + formatCurrency(p.sub) + '</td><td style="text-align: right;">' + formatCurrency(p.equipment) + '</td><td style="text-align: right;">' + formatCurrency(totalSpent) + '</td><td style="text-align: right;">' + formatCurrency(p.phaseBudget) + '</td><td style="text-align: right; color: ' + (variance >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + formatCurrency(variance) + '</td><td><span class="badge ' + status + '">' + status.replace('-', ' ').toUpperCase() + '</span></td>';
+                        row.innerHTML = '<td>' + escapeHTML(bldg.name || '') + '</td><td>' + escapeHTML(p.phase) + '</td><td><div class="progress-bar" style="margin-bottom: 4px;"><div class="progress-fill" style="width: ' + p.pctComplete + '%"></div></div>' + p.pctComplete + '%</td><td style="text-align: right;">' + formatCurrency(p.materials) + '</td><td style="text-align: right;">' + formatCurrency(p.labor) + '</td><td style="text-align: right;">' + formatCurrency(p.sub) + '</td><td style="text-align: right;">' + formatCurrency(p.equipment) + '</td><td style="text-align: right;">' + formatCurrency(totalSpent) + '</td><td style="text-align: right;">' + formatCurrency(p.phaseBudget) + '</td><td style="text-align: right; color: ' + (variance >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + formatCurrency(variance) + '</td><td><span class="badge ' + status + '">' + status.replace('-', ' ').toUpperCase() + '</span></td>';
                         tbody.appendChild(row);
                     });
                 }
@@ -850,7 +850,7 @@ function renderWIPMain() {
                 row.style.cursor = 'pointer';
                 row.title = 'Click to edit this phase';
                 row.onclick = function() { editPhase(p.id); };
-                row.innerHTML = '<td style="color: var(--text-dim);">Unassigned</td><td>' + p.phase + '</td><td><div class="progress-bar" style="margin-bottom: 4px;"><div class="progress-fill" style="width: ' + p.pctComplete + '%"></div></div>' + p.pctComplete + '%</td><td style="text-align: right;">' + formatCurrency(p.materials) + '</td><td style="text-align: right;">' + formatCurrency(p.labor) + '</td><td style="text-align: right;">' + formatCurrency(p.sub) + '</td><td style="text-align: right;">' + formatCurrency(p.equipment) + '</td><td style="text-align: right;">' + formatCurrency(totalSpent) + '</td><td style="text-align: right;">' + formatCurrency(p.phaseBudget) + '</td><td style="text-align: right; color: ' + (variance >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + formatCurrency(variance) + '</td><td><span class="badge ' + status + '">' + status.replace('-', ' ').toUpperCase() + '</span></td>';
+                row.innerHTML = '<td style="color: var(--text-dim);">Unassigned</td><td>' + escapeHTML(p.phase) + '</td><td><div class="progress-bar" style="margin-bottom: 4px;"><div class="progress-fill" style="width: ' + p.pctComplete + '%"></div></div>' + p.pctComplete + '%</td><td style="text-align: right;">' + formatCurrency(p.materials) + '</td><td style="text-align: right;">' + formatCurrency(p.labor) + '</td><td style="text-align: right;">' + formatCurrency(p.sub) + '</td><td style="text-align: right;">' + formatCurrency(p.equipment) + '</td><td style="text-align: right;">' + formatCurrency(totalSpent) + '</td><td style="text-align: right;">' + formatCurrency(p.phaseBudget) + '</td><td style="text-align: right; color: ' + (variance >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + formatCurrency(variance) + '</td><td><span class="badge ' + status + '">' + status.replace('-', ' ').toUpperCase() + '</span></td>';
                 tbody.appendChild(row);
             });
         }
@@ -880,8 +880,8 @@ function renderWIPMain() {
                 card.innerHTML = `
                     <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 15px;">
                         <div>
-                            <h3 style="font-size: 18px; margin-bottom: 5px;">${building.name}</h3>
-                            <p style="font-size: 13px; color: var(--text-dim);">${building.address}</p>
+                            <h3 style="font-size: 18px; margin-bottom: 5px;">${escapeHTML(building.name)}</h3>
+                            <p style="font-size: 13px; color: var(--text-dim);">${escapeHTML(building.address)}</p>
                         </div>
                         <div style="text-align: right;"><span style="font-size: 15px; font-weight: 700; color: var(--green);">${calcBuildingPctComplete(building.id, jobId).toFixed(1)}% Complete</span><br><span style="font-size: 12px; color: var(--purple);">${bldgPct}% of Job</span></div>
                     </div>
@@ -906,7 +906,7 @@ function renderWIPMain() {
                                 const pCost = (p.materials || 0) + (p.labor || 0) + (p.sub || 0) + (p.equipment || 0);
                                 return `
                                     <div style="display: flex; justify-content: space-between; font-size: 13px;">
-                                        <span>${p.phase} (${p.pctComplete}%)</span>
+                                        <span>${escapeHTML(p.phase)} (${p.pctComplete}%)</span>
                                         <span>${formatCurrency(pCost)}</span>
                                     </div>
                                 `;
@@ -943,7 +943,7 @@ function renderWIPMain() {
 
                 const row = document.createElement('tr');
                 row.innerHTML = `
-                    <td>${phaseName}</td>
+                    <td>${escapeHTML(phaseName)}</td>
                     <td style="text-align: right;">${formatCurrency(matTotal)}</td>
                     <td style="text-align: right;">${formatCurrency(labTotal)}</td>
                     <td style="text-align: right;">${formatCurrency(subTotal)}</td>
@@ -986,17 +986,17 @@ function renderWIPMain() {
 
                 const row = document.createElement('tr');
                 row.innerHTML = `
-                    <td><strong>${sub.name}</strong>${sub.notes ? '<br><span style="font-size:11px;color:var(--text-dim);">' + sub.notes + '</span>' : ''}</td>
-                    <td>${sub.trade}</td>
+                    <td><strong>${escapeHTML(sub.name)}</strong>${sub.notes ? '<br><span style="font-size:11px;color:var(--text-dim);">' + escapeHTML(sub.notes) + '</span>' : ''}</td>
+                    <td>${escapeHTML(sub.trade)}</td>
                     <td><span style="color:${levelColor};font-size:12px;font-weight:600;">${levelLabel}</span></td>
-                    <td>${assignedTo}</td>
+                    <td>${escapeHTML(assignedTo)}</td>
                     <td style="text-align: right;">${formatCurrency(sub.contractAmt)}</td>
                     <td style="text-align: right;">${formatCurrency(sub.billedToDate)}</td>
                     <td style="text-align: right;">${formatCurrency(remaining)}</td>
                     <td style="text-align: right;">${pctBilled}%</td>
                     <td>
-                        <button class="small" onclick="editSub('${sub.id}')">Edit</button>
-                        <button class="small danger" onclick="deleteSub('${sub.id}')">Del</button>
+                        <button class="small" onclick="editSub('${escapeHTML(sub.id)}')">Edit</button>
+                        <button class="small danger" onclick="deleteSub('${escapeHTML(sub.id)}')">Del</button>
                     </td>
                 `;
                 tbody.appendChild(row);
@@ -1039,8 +1039,8 @@ function renderWIPMain() {
 
                 const row = document.createElement('tr');
                 row.innerHTML = `
-                    <td>${building?.name || ''}</td>
-                    <td>${p.phase}</td>
+                    <td>${escapeHTML(building?.name) || ''}</td>
+                    <td>${escapeHTML(p.phase)}</td>
                     <td style="text-align: right;">${p.hoursWeek || 0}</td>
                     <td style="text-align: right;">${p.hoursTotal || 0}</td>
                     <td style="text-align: right;">${formatCurrency(p.rate || 40)}</td>

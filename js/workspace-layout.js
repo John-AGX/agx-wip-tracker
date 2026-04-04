@@ -32,7 +32,7 @@
     var link = document.createElement('link');
     link.id = 'ws-layout-v2-css';
     link.rel = 'stylesheet';
-    link.href = 'css/workspace-layout.css?v=9';
+    link.href = 'css/workspace-layout.css?v=17';
     document.head.appendChild(link);
   }
 
@@ -392,7 +392,7 @@
         populateRightPanels(detail);
       wireResizer();
     wireTabSwitching();
-    moveJobInfoToAccordion();
+    moveJobInfoToAccordion(detail, document.getElementById('wsRightContent'));
       _applyingLayout = false;
   }
 

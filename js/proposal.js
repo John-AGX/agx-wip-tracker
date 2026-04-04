@@ -6,12 +6,12 @@
 // ============================================================================
 
 function getEstimateData(estId) {
-  const estimates = JSON.parse(localStorage.getItem('agx-estimates') || '[]');
+  const estimates = safeLoadJSON('agx-estimates', []);
   return estimates.find(e => e.id === estId);
 }
 
 function getEstimateLines(estId) {
-  const lines = JSON.parse(localStorage.getItem('agx-estimate-lines') || '[]');
+  const lines = safeLoadJSON('agx-estimate-lines', []);
   return lines.filter(l => l.estimateId === estId);
 }
 
@@ -695,11 +695,11 @@ function processImportFile(file) {
 
       const { estimate, lines } = parsed;
 
-      const estimates = JSON.parse(localStorage.getItem('agx-estimates') || '[]');
+      const estimates = safeLoadJSON('agx-estimates', []);
       estimates.push(estimate);
       localStorage.setItem('agx-estimates', JSON.stringify(estimates));
 
-      const estimateLines = JSON.parse(localStorage.getItem('agx-estimate-lines') || '[]');
+      const estimateLines = safeLoadJSON('agx-estimate-lines', []);
       estimateLines.push(...lines);
       localStorage.setItem('agx-estimate-lines', JSON.stringify(estimateLines));
 
@@ -894,7 +894,7 @@ function patchEditEstimate() {
     _origEditEstimate(estId);
     setTimeout(function() {
       injectNickNameField();
-      var estimates = JSON.parse(localStorage.getItem('agx-estimates') || '[]');
+      var estimates = safeLoadJSON('agx-estimates', []);
       var est = estimates.find(function(e) { return e.id === estId; });
       var nickInput = document.getElementById('editEst_nickName');
       if (est && nickInput) { nickInput.value = est.nickName || ''; }
@@ -911,7 +911,7 @@ function patchSaveEstimateEdits() {
     var nickInput = document.getElementById('editEst_nickName');
     var nickVal = nickInput ? nickInput.value.trim() : '';
     _origSaveEstimateEdits();
-    var estimates = JSON.parse(localStorage.getItem('agx-estimates') || '[]');
+    var estimates = safeLoadJSON('agx-estimates', []);
     var titleVal = document.getElementById('editEst_title')?.value;
     if (titleVal) {
       var est = estimates.find(function(e) { return e.title === titleVal; });

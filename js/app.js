@@ -6,6 +6,27 @@
             return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(val || 0);
         };
 
+        function safeLoadJSON(key, fallback) {
+            try {
+                const raw = localStorage.getItem(key);
+                if (raw === null) return fallback;
+                return JSON.parse(raw);
+            } catch (e) {
+                console.warn('Corrupted localStorage key:', key, e);
+                return fallback;
+            }
+        }
+
+        function escapeHTML(str) {
+            if (str === null || str === undefined) return '';
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
         const getStatus = (spent, budget) => {
             if (budget <= 0) return 'on-track';
             const pct = (spent / budget) * 100;
@@ -32,7 +53,7 @@
         ];
 
         function getCustomItems(key) {
-            return JSON.parse(localStorage.getItem(key) || '[]');
+            return safeLoadJSON(key, []);
         }
         function saveCustomItems(key, items) {
             localStorage.setItem(key, JSON.stringify(items));
@@ -250,14 +271,14 @@
         };
 
         function loadData() {
-            appData.jobs = JSON.parse(localStorage.getItem('agx-wip-jobs') || '[]');
-            appData.buildings = JSON.parse(localStorage.getItem('agx-wip-buildings') || '[]');
-            appData.phases = JSON.parse(localStorage.getItem('agx-wip-phases') || '[]');
-            appData.subs = JSON.parse(localStorage.getItem('agx-wip-subs') || '[]');
-            appData.changeOrders = JSON.parse(localStorage.getItem('agx-wip-changeorders') || '[]');
-            appData.estimates = JSON.parse(localStorage.getItem('agx-estimates') || '[]');
-            appData.estimateLines = JSON.parse(localStorage.getItem('agx-estimate-lines') || '[]');
-            appData.estimateAlternates = JSON.parse(localStorage.getItem('agx-estimate-alternates') || '[]');
+            appData.jobs = safeLoadJSON('agx-wip-jobs', []);
+            appData.buildings = safeLoadJSON('agx-wip-buildings', []);
+            appData.phases = safeLoadJSON('agx-wip-phases', []);
+            appData.subs = safeLoadJSON('agx-wip-subs', []);
+            appData.changeOrders = safeLoadJSON('agx-wip-changeorders', []);
+            appData.estimates = safeLoadJSON('agx-estimates', []);
+            appData.estimateLines = safeLoadJSON('agx-estimate-lines', []);
+            appData.estimateAlternates = safeLoadJSON('agx-estimate-alternates', []);
         }
 
         function saveData() {
