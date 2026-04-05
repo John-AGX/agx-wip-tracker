@@ -348,6 +348,9 @@
     var jobInfo = detail.querySelector('#job-info-card');
     if (!jobInfo) return;
 
+    // Clear the display:none that applyLayout set
+    jobInfo.style.display = '';
+
     // Make it collapsible at the top of the right content
     var wrapper = document.createElement('details');
     wrapper.className = 'ws-job-info-details';
