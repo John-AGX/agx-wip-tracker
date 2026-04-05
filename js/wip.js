@@ -918,44 +918,7 @@ function renderWIPMain() {
                 renderJobBuildings(jobId);
             }
 
-            // ── Phase summary table ──
-            const phases = appData.phases.filter(p => p.jobId === jobId);
-            if (phases.length > 0) {
-                const phaseGroups = {};
-                phases.forEach(p => {
-                    if (!phaseGroups[p.phase]) phaseGroups[p.phase] = [];
-                    phaseGroups[p.phase].push(p);
-                });
-
-                let tableHtml = '<div style="margin-top:8px;"><div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--text-dim);margin-bottom:6px;">Phase Summary</div>' +
-                    '<div class="table-container"><table style="width:100%;font-size:11px;"><thead><tr>' +
-                    '<th style="text-align:left;">Phase</th><th style="text-align:right;">Mat</th><th style="text-align:right;">Lab</th><th style="text-align:right;">Sub</th><th style="text-align:right;">Equip</th><th style="text-align:right;">Total</th><th style="text-align:right;">Avg %</th>' +
-                    '</tr></thead><tbody>';
-
-                Object.keys(phaseGroups).forEach(phaseName => {
-                    const list = phaseGroups[phaseName];
-                    const mat = list.reduce((s, p) => s + (p.materials || 0), 0);
-                    const lab = list.reduce((s, p) => s + (p.labor || 0), 0);
-                    const sub = list.reduce((s, p) => s + (p.sub || 0), 0);
-                    const eq = list.reduce((s, p) => s + (p.equipment || 0), 0);
-                    const tot = mat + lab + sub + eq;
-                    const avg = Math.round(list.reduce((s, p) => s + (p.pctComplete || 0), 0) / list.length);
-                    tableHtml += '<tr><td>' + escapeHTML(phaseName) + '</td>' +
-                        '<td style="text-align:right;">' + formatCurrency(mat) + '</td>' +
-                        '<td style="text-align:right;">' + formatCurrency(lab) + '</td>' +
-                        '<td style="text-align:right;">' + formatCurrency(sub) + '</td>' +
-                        '<td style="text-align:right;">' + formatCurrency(eq) + '</td>' +
-                        '<td style="text-align:right;font-weight:600;">' + formatCurrency(tot) + '</td>' +
-                        '<td style="text-align:right;">' + avg + '%</td></tr>';
-                });
-
-                tableHtml += '</tbody></table></div></div>';
-                const phaseDiv = document.createElement('div');
-                phaseDiv.innerHTML = tableHtml;
-                container.appendChild(phaseDiv);
-            }
-
-            if (buildings.length === 0 && phases.length === 0) {
+            if (buildings.length === 0) {
                 container.innerHTML += '<div style="text-align:center;padding:30px;color:var(--text-dim);font-size:13px;">No buildings or phases yet. Use the buttons above to get started.</div>';
             }
         }
@@ -1011,12 +974,15 @@ function renderWIPMain() {
                         <span>Equip: <b style="color:var(--text);">${formatCurrency(bEquip)}</b></span>
                         ${(building.hoursTotal || building.rate) ? '<span style="margin-left:auto;">' + (building.hoursTotal || 0) + 'hrs' + (building.hoursWeek ? ' (' + building.hoursWeek + '/wk)' : '') + ' @ ' + formatCurrency(building.rate || 40) + '/hr</span>' : ''}
                     </div>
-                    ${phases.length ? '<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:2px;">' + phases.map(p => {
+                    <div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:2px;">
+                    ${phases.map(p => {
                         const pCost = (p.materials || 0) + (p.labor || 0) + (p.sub || 0) + (p.equipment || 0);
                         const pColor = p.pctComplete >= 100 ? 'var(--green)' : p.pctComplete >= 50 ? '#f59e0b' : 'var(--text-dim)';
-                        return '<span style="font-size:10px;padding:2px 6px;border-radius:6px;background:var(--surface2);border:1px solid var(--border);white-space:nowrap;">' +
-                            escapeHTML(p.phase) + ' <b style="color:' + pColor + ';">' + p.pctComplete + '%</b> ' + formatCurrency(pCost) + '</span>';
-                    }).join('') + '</div>' : '<div style="font-size:11px;color:var(--text-dim);font-style:italic;">No phases</div>'}
+                        return '<button onclick="event.stopPropagation(); editPhase(\'' + escapeHTML(p.id) + '\')" style="font-size:10px;padding:2px 6px;border-radius:6px;background:var(--surface2);border:1px solid var(--border);white-space:nowrap;cursor:pointer;color:var(--text);transition:all 0.12s;" onmouseover="this.style.borderColor=\'var(--accent)\'" onmouseout="this.style.borderColor=\'var(--border)\'">' +
+                            escapeHTML(p.phase) + ' <b style="color:' + pColor + ';">' + p.pctComplete + '%</b> ' + formatCurrency(pCost) + '</button>';
+                    }).join('')}
+                    <button onclick="event.stopPropagation(); openAddPhaseToJobModal('${escapeHTML(building.id)}')" style="font-size:10px;padding:2px 6px;border-radius:6px;background:var(--surface);border:1px dashed var(--border);white-space:nowrap;cursor:pointer;color:var(--text-dim);transition:all 0.12s;" onmouseover="this.style.borderColor='var(--accent)';this.style.color='var(--text)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text-dim)'">+ Phase</button>
+                    </div>
                 `;
                 container.appendChild(card);
             });
@@ -1488,7 +1454,7 @@ function renderWIPMain() {
             }
         }
 
-        function openAddPhaseToJobModal() {
+        function openAddPhaseToJobModal(preselectedBuildingId) {
             appState.editPhaseId = null;
             document.getElementById('phaseModalHeader').textContent = 'Add Phase Entry';
             document.getElementById('savePhaseBtn').innerHTML = '&#x1F4CB; Add Phase';
@@ -1501,6 +1467,7 @@ function renderWIPMain() {
                 const opt = document.createElement('option');
                 opt.value = b.id;
                 opt.textContent = b.name;
+                if (preselectedBuildingId && b.id === preselectedBuildingId) opt.selected = true;
                 select.appendChild(opt);
             });
 
