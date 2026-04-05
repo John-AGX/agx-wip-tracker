@@ -77,9 +77,6 @@
 
         /* THEME TOGGLE */
         .theme-toggle {
-            position: absolute;
-            top: 6px;
-            right: 8px;
             background: rgba(255,255,255,0.12);
             border: 1px solid rgba(255,255,255,0.2);
             color: #fff;
@@ -88,13 +85,13 @@
             height: 22px;
             font-size: 12px;
             cursor: pointer;
-            z-index: 10;
             transition: background 0.15s;
             line-height: 1;
             padding: 0;
             display: flex;
             align-items: center;
             justify-content: center;
+            flex-shrink: 0;
         }
         .theme-toggle:hover {
             background: rgba(255,255,255,0.25);
@@ -115,25 +112,37 @@
             margin: 0 auto;
         }
 
+        .header-top {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
         .header-title {
-            margin-bottom: 2px;
             line-height: 1;
         }
         .header-logo {
-            height: 32px;
+            height: 36px;
             width: auto;
         }
 
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
         .header-subtitle {
-            font-size: 12px;
-            color: var(--text-dim);
+            font-size: 11px;
+            color: rgba(255,255,255,0.5);
+            letter-spacing: 0.5px;
         }
 
         /* NAVIGATION */
         nav.tabs {
             display: flex;
             gap: 0;
-            margin-top: 6px;
+            margin-top: 4px;
             border-bottom: 1px solid var(--border);
         }
 
