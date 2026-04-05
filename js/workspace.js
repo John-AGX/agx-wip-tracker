@@ -1003,6 +1003,7 @@
       for (var c = rng.c1; c <= rng.c2; c++) {
         var cell = getCell(r, c);
         cell.style = {};
+        cell.fmt = null;
       }
     grid.dirty = true;
     renderGrid();
