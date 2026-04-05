@@ -698,10 +698,12 @@
         <button class="ws-btn" id="wsUnmergeBtn" title="Unmerge cells">&#x2702; Unmerge</button>
       </div>
       <div class="ws-link-panel" id="wsLinkPanel" style="display:none;">
-        <div class="ws-link-title">Link <span id="wsLinkCell">A1</span> → Job Field</div>
+        <div class="ws-link-header">
+          <div class="ws-link-title">Link <span id="wsLinkCell">A1</span> → Job Field</div>
+          <div class="ws-link-active" id="wsLinkActive"></div>
+          <button class="ws-btn ws-btn-unlink" id="wsUnlinkBtn" style="display:none;">&#x1F517; Unlink</button>
+        </div>
         <div class="ws-link-options" id="wsLinkOptions"></div>
-        <div class="ws-link-active" id="wsLinkActive"></div>
-        <button class="ws-btn ws-btn-unlink" id="wsUnlinkBtn" style="display:none;">Unlink</button>
       </div>
       <div class="ws-grid-wrapper" id="wsGridWrapper">
         <table class="ws-grid" id="wsGrid"></table>
@@ -1041,10 +1043,10 @@
     if (currentLink) {
       const field = LINKABLE_FIELDS.find(f => f.key === currentLink);
       if (activeEl) {
-        activeEl.innerHTML = `<span class="ws-link-badge">→ ${field ? field.label : currentLink}</span>`;
-        activeEl.style.display = 'block';
+        activeEl.innerHTML = `<span class="ws-link-badge">\u2192 ${field ? field.label : currentLink}</span>`;
+        activeEl.style.display = 'inline-flex';
       }
-      if (unlinkBtn) unlinkBtn.style.display = 'inline-block';
+      if (unlinkBtn) unlinkBtn.style.display = 'inline-flex';
     } else {
       if (activeEl) activeEl.style.display = 'none';
       if (unlinkBtn) unlinkBtn.style.display = 'none';

@@ -225,11 +225,21 @@
   overflow-y: auto;
 }
 
+.ws-link-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
 .ws-link-title {
   font-size: 11px;
   color: var(--text-dim, #8b90a5);
   white-space: nowrap;
-  margin-bottom: 6px;
+}
+
+.ws-link-active {
+  display: none;
 }
 
 .ws-link-title span {
@@ -288,10 +298,6 @@
   background: rgba(79, 140, 255, 0.15);
   border-color: var(--accent, #4f8cff);
   color: var(--accent, #4f8cff);
-}
-
-.ws-link-active {
-  margin-top: 4px;
 }
 
 .ws-link-badge {
