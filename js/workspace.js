@@ -729,7 +729,7 @@
 
     // Update cell ref and formula bar
     const key = addr(r, c);
-    if (formulaBar) formulaBar.value = getCell(r, c).raw || '';
+    if (formulaBar && !grid.refMode) formulaBar.value = getCell(r, c).raw || '';
     const refEl = document.getElementById('wsCellRef');
     if (refEl) {
       var rng = getSelRange();
