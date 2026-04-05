@@ -419,7 +419,7 @@ function renderWIPMain() {
 
         function openAddChangeOrderModal() {
             document.getElementById('coModalHeader').textContent = 'Add Change Order';
-            document.getElementById('coSaveBtn').textContent = 'Add Change Order';
+            document.getElementById('coSaveBtn').innerHTML = '&#x1F4DD; Add Change Order';
             document.getElementById('coNumber').value = '';
             document.getElementById('coDate').value = new Date().toISOString().split('T')[0];
             document.getElementById('coDescription').value = '';
@@ -470,7 +470,7 @@ function renderWIPMain() {
             if (!co) return;
             appState.editCOId = coId;
             document.getElementById('coModalHeader').textContent = 'Edit Change Order';
-            document.getElementById('coSaveBtn').textContent = 'Update Change Order';
+            document.getElementById('coSaveBtn').innerHTML = '&#x1F4BE; Update Change Order';
             document.getElementById('coNumber').value = co.coNumber || '';
             document.getElementById('coDate').value = co.date || '';
             document.getElementById('coDescription').value = co.description || '';
@@ -515,8 +515,8 @@ function renderWIPMain() {
                     <td style="text-align: right; color: ${profit >= 0 ? 'var(--green)' : 'var(--red)'};">${formatCurrency(profit)}</td>
                     <td>${escapeHTML(co.date) || '—'}</td>
                     <td>
-                        <button class="small" onclick="event.stopPropagation(); editCO('${escapeHTML(co.id)}')">Edit</button>
-                        <button class="small secondary" onclick="event.stopPropagation(); deleteCO('${escapeHTML(co.id)}')">Del</button>
+                        <button class="small" onclick="event.stopPropagation(); editCO('${escapeHTML(co.id)}')">&#x270F;&#xFE0F; Edit</button>
+                        <button class="small danger" onclick="event.stopPropagation(); deleteCO('${escapeHTML(co.id)}')">&#x1F5D1; Del</button>
                     </td>`;
                 tbody.appendChild(row);
             });
@@ -655,7 +655,7 @@ function renderWIPMain() {
                     <td style="text-align: right; color: ${w.jtdProfit >= 0 ? 'var(--green)' : 'var(--red)'};">${formatCurrency(w.jtdProfit)}</td>
                     <td style="text-align: right;">${w.jtdMargin.toFixed(1)}%</td>
                     <td style="text-align: center;">
-                        <button class="small" onclick="event.stopPropagation(); editJob('${escapeHTML(job.id)}')">Edit</button>
+                        <button class="small" onclick="event.stopPropagation(); editJob('${escapeHTML(job.id)}')">&#x270F;&#xFE0F; Edit</button>
                     </td>
                 `;
                 tbody.appendChild(row);
@@ -763,7 +763,7 @@ function renderWIPMain() {
             if (!job) return;
             const btn = document.getElementById('edit-job-info-btn');
             const card = document.getElementById('job-info-card');
-            const isEditing = btn.textContent === 'Save';
+            const isEditing = btn.textContent.includes('Save');
             if (isEditing) {
                 // Save mode - read inputs and save
                 job.jobNumber = document.getElementById('edit-jobNumber').value.trim();
@@ -791,12 +791,12 @@ function renderWIPMain() {
                     };
                     grid.innerHTML = mkDiv('Job Number','job-info-number') + mkDiv('Job Name','job-info-title') + mkDiv('Client','job-info-client') + mkDiv('PM','job-info-pm') + mkDiv('Type','job-info-type') + mkDiv('Work Type','job-info-worktype') + mkDiv('Market','job-info-market') + mkDiv('Contract (As Sold)','job-info-contract','var(--accent); font-weight: 700') + mkDiv('Est. Costs (As Sold)','job-info-estcosts') + mkDiv('Target Margin %','job-info-margin') + mkDiv('Status','job-info-status') + mkDiv('Notes','job-info-notes');
                 }
-                btn.textContent = 'Edit Job';
+                btn.innerHTML = '&#x270F;&#xFE0F; Edit Job';
                 btn.style.background = 'var(--accent)';
                 renderJobDetail(jobId);
             } else {
                 // Enter edit mode - replace displays with inputs
-                btn.textContent = 'Save';
+                btn.innerHTML = '&#x1F4BE; Save';
                 btn.style.background = 'var(--green)';
                 const grid = card.querySelector('div[style*="grid-template-columns"]');
                 if (!grid) return;
@@ -906,10 +906,10 @@ function renderWIPMain() {
             // ── Action buttons ──
             const btnRow = document.createElement('div');
             btnRow.style.cssText = 'display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap;';
-            btnRow.innerHTML = '<button class="small" onclick="openAddBuildingToJobModal()" style="font-size:11px;padding:4px 10px;">+ Building</button>' +
-                '<button class="small" onclick="openAddPhaseToJobModal()" style="font-size:11px;padding:4px 10px;">+ Phase</button>' +
-                '<button class="small" onclick="openAddSubToJobModal()" style="font-size:11px;padding:4px 10px;">+ Sub</button>' +
-                '<button class="small" onclick="openAddChangeOrderModal()" style="font-size:11px;padding:4px 10px;">+ Change Order</button>';
+            btnRow.innerHTML = '<button class="small" onclick="openAddBuildingToJobModal()" style="font-size:11px;padding:4px 10px;">&#x1F3D7; Building</button>' +
+                '<button class="small" onclick="openAddPhaseToJobModal()" style="font-size:11px;padding:4px 10px;">&#x1F4CB; Phase</button>' +
+                '<button class="small" onclick="openAddSubToJobModal()" style="font-size:11px;padding:4px 10px;">&#x1F477; Sub</button>' +
+                '<button class="small" onclick="openAddChangeOrderModal()" style="font-size:11px;padding:4px 10px;">&#x1F4DD; Change Order</button>';
             container.appendChild(btnRow);
 
             // ── Building cards ──
@@ -1102,8 +1102,8 @@ function renderWIPMain() {
                     <td style="text-align: right;">${formatCurrency(remaining)}</td>
                     <td style="text-align: right;">${pctBilled}%</td>
                     <td>
-                        <button class="small" onclick="editSub('${escapeHTML(sub.id)}')">Edit</button>
-                        <button class="small danger" onclick="deleteSub('${escapeHTML(sub.id)}')">Del</button>
+                        <button class="small" onclick="editSub('${escapeHTML(sub.id)}')">&#x270F;&#xFE0F; Edit</button>
+                        <button class="small danger" onclick="deleteSub('${escapeHTML(sub.id)}')">&#x1F5D1; Del</button>
                     </td>
                 `;
                 tbody.appendChild(row);
@@ -1285,7 +1285,7 @@ function renderWIPMain() {
         function openAddBuildingToJobModal() {
             appState.editBuildingId = null;
             document.getElementById('buildingModalHeader').textContent = 'Add Building';
-            document.getElementById('saveBuildingBtn').textContent = 'Add Building';
+            document.getElementById('saveBuildingBtn').innerHTML = '&#x1F3D7; Add Building';
             document.getElementById('deleteBuildingBtn').style.display = 'none';
             document.getElementById('buildingName').value = '';
             document.getElementById('buildingBudgetPct').value = '';
@@ -1310,7 +1310,7 @@ function renderWIPMain() {
 
             appState.editBuildingId = buildingId;
             document.getElementById('buildingModalHeader').textContent = 'Edit Building';
-            document.getElementById('saveBuildingBtn').textContent = 'Save Changes';
+            document.getElementById('saveBuildingBtn').innerHTML = '&#x1F4BE; Save Changes';
             document.getElementById('deleteBuildingBtn').style.display = 'inline-block';
             document.getElementById('buildingName').value = building.name || '';
             document.getElementById('buildingBudget').value = building.budget || '';
@@ -1494,7 +1494,7 @@ function renderWIPMain() {
         function openAddPhaseToJobModal() {
             appState.editPhaseId = null;
             document.getElementById('phaseModalHeader').textContent = 'Add Phase Entry';
-            document.getElementById('savePhaseBtn').textContent = 'Add Phase';
+            document.getElementById('savePhaseBtn').innerHTML = '&#x1F4CB; Add Phase';
             document.getElementById('deletePhaseBtn').style.display = 'none';
 
             const buildings = appData.buildings.filter(b => b.jobId === appState.currentJobId);
@@ -1531,7 +1531,7 @@ function renderWIPMain() {
 
             appState.editPhaseId = phaseId;
             document.getElementById('phaseModalHeader').textContent = 'Edit Phase Entry';
-            document.getElementById('savePhaseBtn').textContent = 'Save Changes';
+            document.getElementById('savePhaseBtn').innerHTML = '&#x1F4BE; Save Changes';
             document.getElementById('deletePhaseBtn').style.display = 'inline-block';
 
             const buildings = appData.buildings.filter(b => b.jobId === phase.jobId);
@@ -1651,7 +1651,7 @@ function renderWIPMain() {
         function openAddSubToJobModal() {
             appState.editSubId = null;
             document.getElementById('subModalHeader').textContent = 'Add Subcontractor';
-            document.getElementById('subSaveBtn').textContent = 'Add Subcontractor';
+            document.getElementById('subSaveBtn').innerHTML = '&#x1F477; Add Subcontractor';
             populateSubBuildingSelect();
             document.getElementById('subName').value = '';
             populateSubTradeSelect();
@@ -1734,7 +1734,7 @@ function renderWIPMain() {
             if (!sub) return;
             appState.editSubId = subId;
             document.getElementById('subModalHeader').textContent = 'Edit Subcontractor';
-            document.getElementById('subSaveBtn').textContent = 'Save Changes';
+            document.getElementById('subSaveBtn').innerHTML = '&#x1F4BE; Save Changes';
             populateSubBuildingSelect();
             document.getElementById('subName').value = sub.name || '';
             populateSubTradeSelect();

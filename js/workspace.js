@@ -663,9 +663,9 @@
           <button class="ws-btn ws-btn-fmt" data-fmt="percent" title="Percent format">%</button>
           <button class="ws-btn ws-btn-fmt" data-fmt="null" title="Clear format">&times;</button>
           <span class="ws-separator"></span>
-          <button class="ws-btn" id="wsLinkBtn" title="Link cell to job field">Link</button>
-          <button class="ws-btn" id="wsClearBtn" title="Clear workspace">Clear</button>
-          <button class="ws-btn ws-btn-save" id="wsSaveBtn" title="Save workspace">Save</button>
+          <button class="ws-btn" id="wsLinkBtn" title="Link cell to job field">&#x1F517; Link</button>
+          <button class="ws-btn" id="wsClearBtn" title="Clear workspace">&#x1F5D1; Clear</button>
+          <button class="ws-btn ws-btn-save" id="wsSaveBtn" title="Save workspace">&#x1F4BE; Save</button>
         </div>
       </div>
       <div class="ws-toolbar-fmt" id="wsToolbarFmt">
@@ -694,8 +694,8 @@
         <span class="ws-separator"></span>
         <button class="ws-btn ws-fmt-toggle" id="wsWrapBtn" data-style="wrap" title="Wrap text">&#x21B5;</button>
         <span class="ws-separator"></span>
-        <button class="ws-btn" id="wsMergeBtn" title="Merge cells">Merge</button>
-        <button class="ws-btn" id="wsUnmergeBtn" title="Unmerge cells">Unmerge</button>
+        <button class="ws-btn" id="wsMergeBtn" title="Merge cells">&#x1F500; Merge</button>
+        <button class="ws-btn" id="wsUnmergeBtn" title="Unmerge cells">&#x2702; Unmerge</button>
       </div>
       <div class="ws-link-panel" id="wsLinkPanel" style="display:none;">
         <div class="ws-link-title">Link <span id="wsLinkCell">A1</span> → Job Field</div>

@@ -28,9 +28,9 @@
                 <div id="wip" class="tab-content active">
                     <div id="wip-main-view">
                         <div class="action-buttons">
-                            <button onclick="openAddJobModal()">+ Add Job</button>
-                            <button onclick="exportWIPToCSV()" class="secondary">Export to CSV</button>
-                            <button onclick="window.print()" class="secondary">Print Report</button>
+                            <button onclick="openAddJobModal()">&#x2795; Add Job</button>
+                            <button onclick="exportWIPToCSV()" class="secondary">&#x1F4E4; Export CSV</button>
+                            <button onclick="window.print()" class="secondary">&#x1F5A8; Print Report</button>
                         </div>
 
                         <div class="summary-grid">
@@ -112,8 +112,8 @@
                             <div style="display: flex; justify-content: space-between; align-items: start; flex-wrap: wrap; gap: 10px; margin-bottom: 15px;">
                                 <h3 style="margin: 0;">Job Information</h3>
                                 <div style="display: flex; gap: 8px;">
-                                    <button class="small" onclick="toggleEditJobInfo()" id="edit-job-info-btn" style="background: var(--accent); color: #fff;">Edit Job</button>
-                        <button class="small secondary" onclick="archiveCurrentJob()" id="archive-job-btn">Archive Job</button>
+                                    <button class="small" onclick="toggleEditJobInfo()" id="edit-job-info-btn" style="background: var(--accent); color: #fff;">&#x270F;&#xFE0F; Edit Job</button>
+                        <button class="small secondary" onclick="archiveCurrentJob()" id="archive-job-btn">&#x1F4E6; Archive Job</button>
                                 </div>
                             </div>
                             <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 15px;">
@@ -202,9 +202,9 @@
                         </div>
 
                         <div class="action-buttons">
-                            <button onclick="openAddBuildingToJobModal()">+ Add Building</button>
-                            <button onclick="openAddPhaseToJobModal()">+ Add Phase</button>
-                            <button onclick="openAddSubToJobModal()">+ Add Subcontractor</button>
+                            <button onclick="openAddBuildingToJobModal()">&#x1F3D7; Add Building</button>
+                            <button onclick="openAddPhaseToJobModal()">&#x1F4CB; Add Phase</button>
+                            <button onclick="openAddSubToJobModal()">&#x1F477; Add Sub</button>
                         </div>
 
                         <div class="sub-tabs">
@@ -247,7 +247,7 @@
                                         <input type="text" id="wipNotes" placeholder="Weekly notes...">
                                     </div>
                                 </div>
-                                <button onclick="saveWipInputs()" style="margin-top: 10px;">Save WIP</button>
+                                <button onclick="saveWipInputs()" style="margin-top: 10px;">&#x1F4BE; Save WIP</button>
                             </div>
                             <div class="card">
                                 <h3 style="margin-bottom: 15px;">WIP Calculations</h3>
@@ -360,7 +360,7 @@
                         <!-- Change Orders -->
                         <div id="job-changeorders" class="sub-tab-content-job">
                             <div class="action-buttons" style="margin-bottom: 15px;">
-                                <button onclick="openAddChangeOrderModal()">+ Add Change Order</button>
+                                <button onclick="openAddChangeOrderModal()">&#x1F4DD; Add Change Order</button>
                             </div>
                             <div class="table-container">
                                 <table id="co-table">
@@ -526,7 +526,7 @@
                 <div id="estimates" class="tab-content">
                     <div id="estimates-list-view">
                         <div class="action-buttons">
-                            <button onclick="openNewEstimateForm()">+ New Estimate</button>
+                            <button onclick="openNewEstimateForm()">&#x1F4C4; New Estimate</button>
                         </div>
 
                         <div class="table-container">
@@ -644,8 +644,8 @@
                 </div>
             </div>
             <div class="modal-footer">
-                <button class="secondary" onclick="closeModal('addJobModal')">Cancel</button>
-                <button onclick="saveJob()">Add Job</button>
+                <button class="secondary" onclick="closeModal('addJobModal')">&#x2716; Cancel</button>
+                <button onclick="saveJob()">&#x2795; Add Job</button>
             </div>
         </div>
     </div>
@@ -673,7 +673,7 @@
                     <input type="checkbox" id="buildingLocked" style="width: 16px; height: 16px;">
                     Lock this building's % (exclude from auto-balance)
                 </label>
-                <button type="button" class="small secondary" onclick="autoBalanceBuildingPcts()" style="margin-left: auto;">Auto-Balance %</button>
+                <button type="button" class="small secondary" onclick="autoBalanceBuildingPcts()" style="margin-left: auto;">&#x2696; Auto-Balance %</button>
             </div>
             <div class="form-group">
                 <label>Address</label>
@@ -727,9 +727,9 @@
                 </div>
             </div>
             <div class="modal-footer">
-                <button class="danger small" id="deleteBuildingBtn" onclick="deleteBuilding()" style="margin-right: auto; display: none;">Delete Building</button>
-                <button class="secondary" onclick="closeModal('addBuildingModal')">Cancel</button>
-                <button onclick="saveBuilding()" id="saveBuildingBtn">Add Building</button>
+                <button class="danger small" id="deleteBuildingBtn" onclick="deleteBuilding()" style="margin-right: auto; display: none;">&#x1F5D1; Delete</button>
+                <button class="secondary" onclick="closeModal('addBuildingModal')">&#x2716; Cancel</button>
+                <button onclick="saveBuilding()" id="saveBuildingBtn">&#x1F4BE; Save</button>
             </div>
         </div>
     </div>
@@ -792,7 +792,7 @@
                     <input type="checkbox" id="phaseLocked" style="width: 16px; height: 16px;">
                     Lock this phase's % (exclude from auto-balance)
                 </label>
-                <button type="button" class="small secondary" onclick="autoBalancePhasePcts()" style="margin-left: auto;">Auto-Balance %</button>
+                <button type="button" class="small secondary" onclick="autoBalancePhasePcts()" style="margin-left: auto;">&#x2696; Auto-Balance %</button>
             </div>
             <div class="form-row">
                 <div class="form-group">
@@ -815,9 +815,9 @@
                 <textarea id="phaseNotes" placeholder="Any notes or issues to discuss..."></textarea>
             </div>
             <div class="modal-footer">
-                <button class="danger small" id="deletePhaseBtn" onclick="deletePhase()" style="margin-right: auto; display: none;">Delete Phase</button>
-                <button class="secondary" onclick="closeModal('addPhaseModal')">Cancel</button>
-                <button onclick="savePhase()" id="savePhaseBtn">Add Phase</button>
+                <button class="danger small" id="deletePhaseBtn" onclick="deletePhase()" style="margin-right: auto; display: none;">&#x1F5D1; Delete</button>
+                <button class="secondary" onclick="closeModal('addPhaseModal')">&#x2716; Cancel</button>
+                <button onclick="savePhase()" id="savePhaseBtn">&#x1F4BE; Save</button>
             </div>
         </div>
     </div>
@@ -864,8 +864,8 @@
                 <input type="text" id="subNotes" placeholder="Optional notes">
             </div>
             <div class="modal-footer">
-                <button class="secondary" onclick="closeModal('addSubModal')">Cancel</button>
-                <button onclick="saveSub()" id="subSaveBtn">Add Subcontractor</button>
+                <button class="secondary" onclick="closeModal('addSubModal')">&#x2716; Cancel</button>
+                <button onclick="saveSub()" id="subSaveBtn">&#x1F4BE; Save</button>
             </div>
         </div>
     </div>
@@ -913,13 +913,13 @@
                     </div>
                     <div id="coAllocRowsContainer" style="display:none;">
                         <div id="coAllocRows"></div>
-                        <button type="button" class="small" onclick="addCOAllocRow()" style="margin-top: 8px;">+ Add Allocation</button>
+                        <button type="button" class="small" onclick="addCOAllocRow()" style="margin-top: 8px;">&#x2795; Add Allocation</button>
                         <div id="coAllocRemaining" style="font-size: 12px; color: var(--text-dim); margin-top: 8px;"></div>
                     </div>
                 </div>
                 <div class="modal-footer">
-                <button class="secondary" onclick="closeModal('addCOModal')">Cancel</button>
-                <button onclick="saveCO()" id="coSaveBtn">Add Change Order</button>
+                <button class="secondary" onclick="closeModal('addCOModal')">&#x2716; Cancel</button>
+                <button onclick="saveCO()" id="coSaveBtn">&#x1F4BE; Save</button>
             </div>
         </div>
     </div>
@@ -974,8 +974,8 @@
                 <input type="number" id="estDefaultMarkup" value="100" step="0.1">
             </div>
             <div class="modal-footer">
-                <button class="secondary" onclick="closeModal('newEstimateModal')">Cancel</button>
-                <button onclick="createNewEstimate()">Create Estimate</button>
+                <button class="secondary" onclick="closeModal('newEstimateModal')">&#x2716; Cancel</button>
+                <button onclick="createNewEstimate()">&#x1F4C4; Create Estimate</button>
             </div>
         </div>
     </div>
@@ -995,7 +995,7 @@
               <label style="display:block;margin-bottom:4px;font-weight:600;color:var(--text);">Scope of Work</label>
               <textarea id="editEst_scopeOfWork" rows="6" style="width:100%;font-family:Arial,sans-serif;font-size:13px;padding:8px;border:1px solid var(--border);border-radius:4px;resize:vertical;background:var(--surface);color:var(--text);" placeholder="Paste scope of work summary here..."></textarea>
             </div>
-            <h3 style="margin:0;color:var(--text);">Line Items</h3><div><button onclick="addEstimateSection()" class="secondary small" style="margin-right:8px;">+ Section</button><button onclick="addEstimateLineRow(currentEditEstimateId)" class="secondary small">+ Line Item</button></div></div>
+            <h3 style="margin:0;color:var(--text);">Line Items</h3><div><button onclick="addEstimateSection()" class="secondary small" style="margin-right:8px;">&#x2795; Section</button><button onclick="addEstimateLineRow(currentEditEstimateId)" class="secondary small">&#x2795; Line Item</button></div></div>
             <div style="overflow-x:auto;">
               <table id="editEstimate_lineItems" style="width:100%;border-collapse:collapse;font-size:13px;">
                 <thead><tr style="background:var(--surface);"><th style="padding:8px;text-align:left;color:var(--text-dim);">Description</th><th style="padding:8px;text-align:center;color:var(--text-dim);width:80px;">Qty</th><th style="padding:8px;text-align:center;color:var(--text-dim);width:80px;">Unit</th><th style="padding:8px;text-align:right;color:var(--text-dim);width:100px;">Unit Cost</th><th style="padding:8px;text-align:center;color:var(--text-dim);width:80px;">Markup %</th><th style="padding:8px;text-align:right;color:var(--text-dim);width:110px;">Line Total</th><th style="padding:8px;width:40px;"></th></tr></thead>
@@ -1008,14 +1008,14 @@
             </div>
           </div>
         </div>
-        <div class="modal-footer"><button onclick="closeModal('editEstimateModal')" class="secondary">Cancel</button><button onclick="saveEstimateEdits()" style="background:var(--green);">Save Changes</button></div>
+        <div class="modal-footer"><button onclick="closeModal('editEstimateModal')" class="secondary">&#x2716; Cancel</button><button onclick="saveEstimateEdits()" style="background:var(--green);">&#x1F4BE; Save Changes</button></div>
       </div>
     </div>
     <div id="estimatePreviewModal" class="modal">
       <div class="modal-content" style="max-width:900px;max-height:90vh;overflow-y:auto;background:white;color:black;">
         <div class="modal-header" style="background:white;color:black;border-bottom:2px solid #ddd;">Estimate Preview</div>
         <div id="estimatePreview_content" style="padding:40px;background:white;color:black;"></div>
-        <div class="modal-footer" style="background:white;border-top:2px solid #ddd;"><button onclick="window.print()" style="background:var(--accent);color:white;">Print</button><button onclick="closeModal('estimatePreviewModal')" class="secondary">Close</button></div>
+        <div class="modal-footer" style="background:white;border-top:2px solid #ddd;"><button onclick="window.print()" style="background:var(--accent);color:white;">&#x1F5A8; Print</button><button onclick="closeModal('estimatePreviewModal')" class="secondary">&#x2716; Close</button></div>
       </div>
     </div>
     <script src="js/app.js?v=18"></script>
