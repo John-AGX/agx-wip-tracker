@@ -32,8 +32,8 @@
             --surface: #ffffff;
             --surface2: #e8eaef;
             --border: #d1d5db;
-            --text: #1f2937;
-            --text-dim: #6b7280;
+            --text: #111827;
+            --text-dim: #4b5563;
             --accent: #2563eb;
             --accent-dim: #93b4f5;
             --green: #059669;
@@ -46,7 +46,7 @@
             --row-alt: #f9fafb;
             --row-hover: #f3f4f6;
             --grid-header-bg: #e5e7eb;
-            --grid-header-text: #374151;
+            --grid-header-text: #1f2937;
             --grid-border: #d1d5db;
             --scrollbar-thumb: #9ca3af;
             --context-bg: #ffffff;
