@@ -464,6 +464,7 @@
       wireResizer();
     wireTabSwitching();
     moveJobInfoToAccordion(detail, document.getElementById('wsRightContent'));
+      layoutApplied = true;
       _applyingLayout = false;
   }
 
@@ -522,7 +523,29 @@
       }
 
       if (!document.getElementById('ws-two-col')) {
-        cleanup();
+        // Clear stale header elements so buildHeader can re-create them
+        var oldInfo = document.querySelector('.jh-job-info');
+        if (oldInfo) {
+          var sub = oldInfo.parentElement;
+          oldInfo.remove();
+          if (sub && sub.classList.contains('header-subtitle')) {
+            var st = sub.querySelector('span');
+            var txt = st ? st.textContent : '';
+            sub.textContent = txt;
+            sub.style.display = '';
+            sub.style.alignItems = '';
+          }
+        }
+        var oldTabRow = document.getElementById('jh-tab-metrics-row');
+        if (oldTabRow) {
+          var nav2 = oldTabRow.querySelector('nav.tabs');
+          var hc2 = document.querySelector('.header-content');
+          if (nav2 && hc2) { hc2.appendChild(nav2); nav2.style.flex = ''; }
+          oldTabRow.remove();
+        }
+        var oldStrip = document.querySelector('.jh-metrics-strip');
+        if (oldStrip) oldStrip.remove();
+
         layoutApplied = false;
         currentJobId = null;
         applyLayout();
