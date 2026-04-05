@@ -22,6 +22,34 @@
     '#4f8cff', '#34d399', '#f59e0b', '#ef4444', '#a78bfa', '#ec4899'
   ];
 
+  // Color palette for fill/font pickers
+  const COLOR_PALETTE = [
+    '#ffffff', '#000000', '#f87171', '#fb923c', '#fbbf24', '#34d399',
+    '#4f8cff', '#a78bfa', '#ec4899', '#6b7280',
+    '#fecaca', '#1f2937', '#dc2626', '#ea580c', '#d97706', '#059669',
+    '#2563eb', '#7c3aed', '#db2777', '#374151',
+    '#fee2e2', '#111827', '#991b1b', '#9a3412', '#92400e', '#065f46',
+    '#1e40af', '#5b21b6', '#9d174d', '#1e2130'
+  ];
+
+  // Cell style presets
+  const CELL_STYLES = [
+    { name: 'Header', style: { bold: true, bg: '#2563eb', color: '#ffffff', align: 'center' } },
+    { name: 'Header Dark', style: { bold: true, bg: '#1f2937', color: '#ffffff', align: 'center' } },
+    { name: 'Header Green', style: { bold: true, bg: '#059669', color: '#ffffff', align: 'center' } },
+    { name: 'Subheader', style: { bold: true, bg: '#374151', color: '#e4e6f0', align: 'left' } },
+    { name: 'Total Row', style: { bold: true, bg: '#1e2130', color: '#4f8cff', align: 'right' } },
+    { name: 'Highlight', style: { bg: '#fef3c7', color: '#92400e' } },
+    { name: 'Success', style: { bg: '#d1fae5', color: '#065f46' } },
+    { name: 'Warning', style: { bg: '#fee2e2', color: '#991b1b' } },
+    { name: 'Subtle', style: { bg: '#f3f4f6', color: '#374151' } },
+    { name: 'Plain', style: {} }
+  ];
+
+  // Recent colors (max 3 each for fill and font)
+  var recentFillColors = [];
+  var recentFontColors = [];
+
   // ── State ──────────────────────────────────────────────────
   let grid = {
     rows: MIN_ROWS,
@@ -680,17 +708,36 @@
         <button class="ws-btn ws-fmt-align" data-align="center" title="Align center">&#x2194;</button>
         <button class="ws-btn ws-fmt-align" data-align="right" title="Align right">&#x2192;</button>
         <span class="ws-separator"></span>
-        <label class="ws-color-btn" title="Fill color">
-          <span class="ws-color-icon">&#x25A0;</span>
-          <span class="ws-color-swatch" id="wsFillSwatch"></span>
-          <input type="color" id="wsFillColor" value="#1e2130" />
-        </label>
-        <label class="ws-color-btn" title="Font color">
-          <span class="ws-color-icon ws-color-icon-text">A</span>
-          <span class="ws-color-swatch" id="wsFontSwatch"></span>
-          <input type="color" id="wsFontColor" value="#e4e6f0" />
-        </label>
+        <div class="ws-color-dropdown" id="wsFillDropdown">
+          <button class="ws-btn ws-btn-icon ws-color-trigger" id="wsFillBtn" title="Fill color">
+            <span class="ws-color-icon">&#x25A0;</span>
+            <span class="ws-color-swatch" id="wsFillSwatch"></span>
+          </button>
+          <div class="ws-color-panel" id="wsFillPanel">
+            <div class="ws-color-grid" id="wsFillGrid"></div>
+            <div class="ws-color-recent-label">Recent</div>
+            <div class="ws-color-recent" id="wsFillRecent"></div>
+            <div class="ws-color-custom"><label>Custom <input type="color" id="wsFillCustom" value="#1e2130" /></label></div>
+          </div>
+        </div>
+        <div class="ws-color-dropdown" id="wsFontDropdown">
+          <button class="ws-btn ws-btn-icon ws-color-trigger" id="wsFontBtn" title="Font color">
+            <span class="ws-color-icon ws-color-icon-text">A</span>
+            <span class="ws-color-swatch" id="wsFontSwatch"></span>
+          </button>
+          <div class="ws-color-panel" id="wsFontPanel">
+            <div class="ws-color-grid" id="wsFontGrid"></div>
+            <div class="ws-color-recent-label">Recent</div>
+            <div class="ws-color-recent" id="wsFontRecent"></div>
+            <div class="ws-color-custom"><label>Custom <input type="color" id="wsFontCustom" value="#e4e6f0" /></label></div>
+          </div>
+        </div>
         <button class="ws-btn ws-btn-icon" id="wsClearFmtBtn" title="Clear formatting">&#x2718;</button>
+        <span class="ws-separator"></span>
+        <div class="ws-color-dropdown" id="wsStyleDropdown">
+          <button class="ws-btn ws-btn-icon" id="wsStyleBtn" title="Cell styles">&#x1F3A8; Style</button>
+          <div class="ws-color-panel ws-style-panel" id="wsStylePanel"></div>
+        </div>
         <span class="ws-separator"></span>
         <button class="ws-btn ws-fmt-toggle" id="wsWrapBtn" data-style="wrap" title="Wrap text">&#x21B5;</button>
         <span class="ws-separator"></span>
@@ -820,6 +867,97 @@
     var span = getMergeSpan(r, c);
     if (span) { w = 0; for (var mc = c; mc < c + span.colspan; mc++) w += (grid.colWidths[mc] || COL_DEFAULT_WIDTH); }
     td.setAttribute('style', buildCellStyle(cell, w));
+  }
+
+  // ── Color Palette Helpers ──────────────────────────────────
+
+  function buildColorGrid(containerId, callback) {
+    var container = document.getElementById(containerId);
+    if (!container) return;
+    container.innerHTML = '';
+    COLOR_PALETTE.forEach(function (c) {
+      var swatch = document.createElement('div');
+      swatch.className = 'ws-palette-swatch';
+      swatch.style.background = c;
+      if (c === '#ffffff') swatch.style.border = '1px solid var(--border)';
+      swatch.title = c;
+      swatch.addEventListener('click', function () { callback(c); });
+      container.appendChild(swatch);
+    });
+  }
+
+  function buildRecentColors(containerId, recentArr, callback) {
+    var container = document.getElementById(containerId);
+    if (!container) return;
+    container.innerHTML = '';
+    if (recentArr.length === 0) {
+      container.innerHTML = '<span style="font-size:9px;color:var(--text-dim);">None yet</span>';
+      return;
+    }
+    recentArr.forEach(function (c) {
+      var swatch = document.createElement('div');
+      swatch.className = 'ws-palette-swatch';
+      swatch.style.background = c;
+      swatch.title = c;
+      swatch.addEventListener('click', function () { callback(c); });
+      container.appendChild(swatch);
+    });
+  }
+
+  function addRecentColor(arr, color) {
+    var idx = arr.indexOf(color);
+    if (idx > -1) arr.splice(idx, 1);
+    arr.unshift(color);
+    if (arr.length > 3) arr.length = 3;
+  }
+
+  function buildStylePanel() {
+    var panel = document.getElementById('wsStylePanel');
+    if (!panel) return;
+    panel.innerHTML = '';
+    CELL_STYLES.forEach(function (preset) {
+      var btn = document.createElement('div');
+      btn.className = 'ws-style-preset';
+      var s = preset.style;
+      btn.style.background = s.bg || 'var(--cell-bg)';
+      btn.style.color = s.color || 'var(--text)';
+      if (s.bold) btn.style.fontWeight = '700';
+      if (s.italic) btn.style.fontStyle = 'italic';
+      if (s.align) btn.style.textAlign = s.align;
+      btn.textContent = preset.name;
+      btn.addEventListener('click', function () {
+        applyStylePreset(preset.style);
+        closeColorPanels();
+      });
+      panel.appendChild(btn);
+    });
+  }
+
+  function applyStylePreset(presetStyle) {
+    pushUndo();
+    var rng = getSelRange();
+    if (!rng) return;
+    for (var r = rng.r1; r <= rng.r2; r++)
+      for (var c = rng.c1; c <= rng.c2; c++) {
+        var cell = getCell(r, c);
+        cell.style = JSON.parse(JSON.stringify(presetStyle));
+      }
+    grid.dirty = true;
+    renderGrid();
+    if (grid.selection) selectCell(grid.selection.r, grid.selection.c, !!grid.selEnd);
+    saveWorkspace();
+  }
+
+  function closeColorPanels() {
+    document.querySelectorAll('.ws-color-panel').forEach(function (p) { p.style.display = 'none'; });
+  }
+
+  function toggleColorPanel(panelId) {
+    var panel = document.getElementById(panelId);
+    if (!panel) return;
+    var isOpen = panel.style.display === 'block';
+    closeColorPanels();
+    if (!isOpen) panel.style.display = 'block';
   }
 
   // ── Style Helpers ──────────────────────────────────────────
@@ -1971,14 +2109,54 @@
       });
     });
 
-    // Fill color
-    document.getElementById('wsFillColor').addEventListener('input', (e) => {
-      applyStyleToSelection('bg', e.target.value);
+    // Fill color palette
+    function applyFillColor(c) {
+      addRecentColor(recentFillColors, c);
+      applyStyleToSelection('bg', c);
+      var swatch = document.getElementById('wsFillSwatch');
+      if (swatch) swatch.style.background = c;
+      closeColorPanels();
+      buildRecentColors('wsFillRecent', recentFillColors, applyFillColor);
+    }
+    document.getElementById('wsFillBtn').addEventListener('click', function (e) {
+      e.stopPropagation();
+      buildRecentColors('wsFillRecent', recentFillColors, applyFillColor);
+      toggleColorPanel('wsFillPanel');
+    });
+    buildColorGrid('wsFillGrid', applyFillColor);
+    document.getElementById('wsFillCustom').addEventListener('input', function (e) {
+      applyFillColor(e.target.value);
     });
 
-    // Font color
-    document.getElementById('wsFontColor').addEventListener('input', (e) => {
-      applyStyleToSelection('color', e.target.value);
+    // Font color palette
+    function applyFontColor(c) {
+      addRecentColor(recentFontColors, c);
+      applyStyleToSelection('color', c);
+      var swatch = document.getElementById('wsFontSwatch');
+      if (swatch) swatch.style.background = c;
+      closeColorPanels();
+      buildRecentColors('wsFontRecent', recentFontColors, applyFontColor);
+    }
+    document.getElementById('wsFontBtn').addEventListener('click', function (e) {
+      e.stopPropagation();
+      buildRecentColors('wsFontRecent', recentFontColors, applyFontColor);
+      toggleColorPanel('wsFontPanel');
+    });
+    buildColorGrid('wsFontGrid', applyFontColor);
+    document.getElementById('wsFontCustom').addEventListener('input', function (e) {
+      applyFontColor(e.target.value);
+    });
+
+    // Cell styles
+    document.getElementById('wsStyleBtn').addEventListener('click', function (e) {
+      e.stopPropagation();
+      buildStylePanel();
+      toggleColorPanel('wsStylePanel');
+    });
+
+    // Close panels when clicking outside
+    document.addEventListener('click', function (e) {
+      if (!e.target.closest('.ws-color-dropdown')) closeColorPanels();
     });
 
     // Clear formatting
