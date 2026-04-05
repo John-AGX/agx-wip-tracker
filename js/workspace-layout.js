@@ -273,8 +273,8 @@
     leftCol.className = 'ws-col-left';
     leftCol.innerHTML =
       '<div class="ws-left-header">' +
-        '<span class="ws-left-title">Workspace</span>' +
-        '<span class="ws-left-sub">Formulas \u00b7 Cell\u2192Job Linking</span>' +
+        '<img src="images/logo-color.png" alt="AGX" class="ws-left-logo" />' +
+        '<span class="ws-left-sub">Workspace \u00b7 Formulas \u00b7 Cell\u2192Job Linking</span>' +
       '</div>' +
       '<div id="wsWorkspaceContainer" tabindex="0"></div>';
 

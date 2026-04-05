@@ -84,16 +84,15 @@
 
 .ws-left-header {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
   margin-bottom: 8px;
   padding-bottom: 6px;
   border-bottom: 1px solid var(--border, #2e3346);
 }
-.ws-left-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text, #e4e6f0);
+.ws-left-logo {
+  height: 22px;
+  width: auto;
 }
 
 .ws-left-sub {
