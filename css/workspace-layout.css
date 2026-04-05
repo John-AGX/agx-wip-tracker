@@ -315,8 +315,6 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 3px 0;
-  justify-content: flex-end;
 }
 .jh-back-btn {
   background: rgba(0,0,0,0.4);

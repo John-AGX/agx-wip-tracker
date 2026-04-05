@@ -144,9 +144,10 @@
       { label: "As-Sold Margin", value: extractVal(allText, "As Sold Margin %") }
     ];
 
-    // ---- Job info bar (own row below header-top) ----
+    // ---- Job info (appended into header-right, below subtitle) ----
     var name = job ? (job.jobNumber || "") + " \u2014 " + (job.name || "") : "Job Detail";
-    if (headerContent) {
+    var headerRight = siteHeader.querySelector(".header-right");
+    if (headerRight) {
       var jobInfo = document.createElement("div");
       jobInfo.className = "jh-job-info";
 
@@ -169,10 +170,7 @@
       statusBadge.textContent = job && job.status ? job.status : "In Progress";
       jobInfo.appendChild(statusBadge);
 
-      // Insert after header-top, before nav.tabs
-      var navEl = headerContent.querySelector("nav.tabs");
-      if (navEl) headerContent.insertBefore(jobInfo, navEl);
-      else headerContent.appendChild(jobInfo);
+      headerRight.appendChild(jobInfo);
     }
 
     // ---- Metrics strip ----
