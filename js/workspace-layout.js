@@ -188,6 +188,45 @@
     if (origHeader) origHeader.style.display = "none";
   }
 
+  /** Refresh the sticky header metrics strip with current WIP data */
+  function refreshHeaderMetrics() {
+    var strip = document.querySelector('.jh-metrics-strip');
+    if (!strip || !currentJobId) return;
+    if (typeof getJobWIP !== 'function' || typeof formatCurrency !== 'function') return;
+    var w = getJobWIP(currentJobId);
+    var map = {
+      'Total Income': formatCurrency(w.totalIncome),
+      'Est. Costs': formatCurrency(w.revisedEstCosts),
+      'Actual Costs': formatCurrency(w.actualCosts),
+      'Remaining': formatCurrency(w.remainingCosts),
+      '% Complete': w.pctComplete.toFixed(1) + '%',
+      'Revenue Earned': formatCurrency(w.revenueEarned),
+      'Invoiced': formatCurrency(w.invoiced),
+      'Unbilled': formatCurrency(w.unbilled),
+      'Backlog': formatCurrency(w.backlog),
+      'Change Orders': formatCurrency(w.coIncome),
+      'Gross Profit': formatCurrency(w.revisedProfit),
+      'Margin %': w.revisedMargin.toFixed(1) + '%',
+      'As-Sold Margin': w.asSoldMargin.toFixed(1) + '%'
+    };
+    strip.querySelectorAll('.jh-strip-card').forEach(function (card) {
+      var lbl = card.querySelector('.jh-strip-label');
+      var val = card.querySelector('.jh-strip-value');
+      if (lbl && val && map[lbl.textContent]) val.textContent = map[lbl.textContent];
+    });
+    // Also update job title + status in job bar
+    if (typeof appData !== 'undefined') {
+      var job = appData.jobs.find(function (j) { return j.id === currentJobId; });
+      if (job) {
+        var titleEl = document.querySelector('.jh-job-title');
+        if (titleEl) titleEl.textContent = (job.jobNumber || '') + ' \u2014 ' + (job.title || '');
+        var statusEl = document.querySelector('.jh-status-badge');
+        if (statusEl) statusEl.textContent = job.status || 'In Progress';
+      }
+    }
+  }
+  window.refreshHeaderMetrics = refreshHeaderMetrics;
+
   function buildLayout(detail) {
     var container = document.createElement('div');
     container.id = 'ws-two-col';

@@ -893,6 +893,9 @@ function renderWIPMain() {
             switchJobSubTab(activeTabName);
             renderWipTab(jobId);
             renderChangeOrders(jobId);
+
+            // Refresh sticky header metrics strip
+            if (typeof refreshHeaderMetrics === 'function') refreshHeaderMetrics();
         }
 
         function renderJobOverview(jobId) {

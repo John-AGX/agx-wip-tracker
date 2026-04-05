@@ -315,8 +315,8 @@
 .jh-job-bar {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 6px 20px 4px;
+  gap: 10px;
+  padding: 5px 20px 4px;
   background: rgba(0,0,0,0.2);
   border-top: 1px solid rgba(255,255,255,0.06);
 }
@@ -331,16 +331,19 @@
   white-space: nowrap;
   font-family: inherit;
   transition: background 0.15s;
+  flex-shrink: 0;
 }
 .jh-back-btn:hover { background: rgba(0,0,0,0.6); }
 .jh-job-title {
-  font-size: 18px;
+  font-size: 15px;
   font-weight: 700;
   color: #fff;
-  flex: 1;
+  flex: 0 1 33%;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  text-align: right;
+  margin-left: auto;
 }
 .jh-status-badge {
   background: #1b8541;
@@ -351,6 +354,7 @@
   font-weight: 600;
   text-transform: uppercase;
   white-space: nowrap;
+  flex-shrink: 0;
 }
 
 /* ââ Tab + Metrics Row ââ */
@@ -382,7 +386,7 @@
   background: rgba(0,0,0,0.35);
   border: 1px solid rgba(255,255,255,0.08);
   border-radius: 6px;
-  padding: 3px 8px;
+  padding: 5px 12px;
   text-align: center;
   flex: 0 1 auto;
   min-width: 0;
@@ -395,7 +399,7 @@
   white-space: nowrap;
 }
 .jh-strip-value {
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 700;
   color: #fff;
   white-space: nowrap;
