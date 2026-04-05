@@ -1076,22 +1076,22 @@ function renderWIPMain() {
             const totalRemaining = totalContract - totalBilled;
             const totalPct = totalContract > 0 ? ((totalBilled / totalContract) * 100).toFixed(1) : 0;
             document.getElementById('job-subs-summary').innerHTML = `
-                <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; text-align: center;">
+                <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; text-align: center;">
                     <div>
-                        <div style="font-size: 12px; color: var(--text-dim);">Total Subs</div>
-                        <div style="font-size: 20px; font-weight: 700; color: var(--accent);">${subs.length}</div>
+                        <div style="font-size: 10px; color: var(--text-dim);">Total Subs</div>
+                        <div style="font-size: 15px; font-weight: 700; color: var(--accent);">${subs.length}</div>
                     </div>
                     <div>
-                        <div style="font-size: 12px; color: var(--text-dim);">Total Contract</div>
-                        <div style="font-size: 20px; font-weight: 700; color: var(--accent);">${formatCurrency(totalContract)}</div>
+                        <div style="font-size: 10px; color: var(--text-dim);">Total Contract</div>
+                        <div style="font-size: 15px; font-weight: 700; color: var(--accent);">${formatCurrency(totalContract)}</div>
                     </div>
                     <div>
-                        <div style="font-size: 12px; color: var(--text-dim);">Total Billed</div>
-                        <div style="font-size: 20px; font-weight: 700; color: var(--green);">${formatCurrency(totalBilled)}</div>
+                        <div style="font-size: 10px; color: var(--text-dim);">Total Billed</div>
+                        <div style="font-size: 15px; font-weight: 700; color: var(--green);">${formatCurrency(totalBilled)}</div>
                     </div>
                     <div>
-                        <div style="font-size: 12px; color: var(--text-dim);">Remaining</div>
-                        <div style="font-size: 20px; font-weight: 700; color: var(--orange);">${formatCurrency(totalRemaining)}</div>
+                        <div style="font-size: 10px; color: var(--text-dim);">Remaining</div>
+                        <div style="font-size: 15px; font-weight: 700; color: var(--orange);">${formatCurrency(totalRemaining)}</div>
                     </div>
                 </div>
             `;
@@ -1129,7 +1129,7 @@ function renderWIPMain() {
             const card = document.createElement('div');
             card.className = 'card';
             card.innerHTML = `
-                <h3 style="margin-bottom: 20px;">Thursday WIP Meeting Accruals</h3>
+                <h3 style="margin-bottom: 8px; font-size: 14px;">Thursday WIP Meeting Accruals</h3>
                 <div class="table-container">
                     <table>
                         <thead>

@@ -381,22 +381,22 @@
         /* TABLES */
         .table-container {
             overflow-x: auto;
-            margin-bottom: 20px;
+            margin-bottom: 10px;
         }
 
         table {
             width: 100%;
             border-collapse: collapse;
-            font-size: 14px;
+            font-size: 12px;
         }
 
         th {
             background: var(--surface2);
             color: var(--text-dim);
-            padding: 12px;
+            padding: 6px 8px;
             text-align: left;
             font-weight: 600;
-            font-size: 12px;
+            font-size: 11px;
             text-transform: uppercase;
             letter-spacing: 0.5px;
             border-bottom: 1px solid var(--border);
@@ -434,7 +434,7 @@
         }
 
         td {
-            padding: 12px;
+            padding: 6px 8px;
             border-bottom: 1px solid var(--border);
             font-variant-numeric: tabular-nums;
         }

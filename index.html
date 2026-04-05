@@ -228,8 +228,8 @@
 
                         <!-- WIP Tab -->
                         <div id="job-wip" class="sub-tab-content-job">
-                            <div class="card" style="margin-bottom: 20px;">
-                                <h3 style="margin-bottom: 15px;">WIP Inputs</h3>
+                            <div class="card" style="margin-bottom: 10px;">
+                                <h3 style="margin-bottom: 6px; font-size: 14px;">WIP Inputs</h3>
                                 <div class="form-row">
                                     <div class="form-group">
                                         <label>Job to Date % Complete</label>
@@ -254,15 +254,15 @@
                                 <button onclick="saveWipInputs()" style="margin-top: 10px;">&#x1F4BE; Save WIP</button>
                             </div>
                             <div class="card">
-                                <h3 style="margin-bottom: 15px;">WIP Calculations</h3>
-                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                                <h3 style="margin-bottom: 8px; font-size: 14px;">WIP Calculations</h3>
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
                                     <div>
-                                        <h4 style="color: var(--accent); margin-bottom: 10px; font-size: 13px; text-transform: uppercase;">Income</h4>
-                                        <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border);">
+                                        <h4 style="color: var(--accent); margin-bottom: 4px; font-size: 11px; text-transform: uppercase;">Income</h4>
+                                        <div style="display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid var(--border); font-size: 12px;">
                                             <span style="color: var(--text-dim);">Contract (As Sold)</span>
                                             <span id="wip-contract-income">$0.00</span>
                                         </div>
-                                        <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border);">
+                                        <div style="display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid var(--border); font-size: 12px;">
                                             <span style="color: var(--text-dim);">+ Change Orders</span>
                                             <span id="wip-co-income">$0.00</span>
                                         </div>
@@ -272,16 +272,16 @@
                                         </div>
                                     </div>
                                     <div>
-                                        <h4 style="color: var(--accent); margin-bottom: 10px; font-size: 13px; text-transform: uppercase;">Estimated Costs</h4>
-                                        <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border);">
+                                        <h4 style="color: var(--accent); margin-bottom: 4px; font-size: 11px; text-transform: uppercase;">Estimated Costs</h4>
+                                        <div style="display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid var(--border); font-size: 12px;">
                                             <span style="color: var(--text-dim);">Est. Costs (As Sold)</span>
                                             <span id="wip-est-costs">$0.00</span>
                                         </div>
-                                        <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border);">
+                                        <div style="display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid var(--border); font-size: 12px;">
                                             <span style="color: var(--text-dim);">+ CO Est. Costs</span>
                                             <span id="wip-co-costs">$0.00</span>
                                         </div>
-                                        <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border);">
+                                        <div style="display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid var(--border); font-size: 12px;">
                                             <span style="color: var(--text-dim);">+ Revised Changes</span>
                                             <span id="wip-revised-changes">$0.00</span>
                                         </div>
@@ -291,18 +291,18 @@
                                         </div>
                                     </div>
                                 </div>
-                                <div style="margin-top: 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                                <div style="margin-top: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
                                     <div>
                                         <h4 style="color: var(--green); margin-bottom: 10px; font-size: 13px; text-transform: uppercase;">Profit & Margin</h4>
-                                        <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border);">
+                                        <div style="display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid var(--border); font-size: 12px;">
                                             <span style="color: var(--text-dim);">As Sold Gross Profit</span>
                                             <span id="wip-assold-profit">$0.00</span>
                                         </div>
-                                        <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border);">
+                                        <div style="display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid var(--border); font-size: 12px;">
                                             <span style="color: var(--text-dim);">As Sold Margin %</span>
                                             <span id="wip-assold-margin">0%</span>
                                         </div>
-                                        <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border);">
+                                        <div style="display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid var(--border); font-size: 12px;">
                                             <span style="color: var(--text-dim);">Revised Gross Profit</span>
                                             <span id="wip-revised-profit">$0.00</span>
                                         </div>
@@ -313,27 +313,27 @@
                                     </div>
                                     <div>
                                         <h4 style="color: var(--yellow); margin-bottom: 10px; font-size: 13px; text-transform: uppercase;">Revenue & Billing</h4>
-                                        <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border);">
+                                        <div style="display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid var(--border); font-size: 12px;">
                                             <span style="color: var(--text-dim);">% Complete</span>
                                             <span id="wip-pct-complete">0%</span>
                                         </div>
-                                        <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border);">
+                                        <div style="display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid var(--border); font-size: 12px;">
                                             <span style="color: var(--text-dim);">Revenue Earned (Income &times; %)</span>
                                             <span id="wip-revenue-earned">$0.00</span>
                                         </div>
-                                        <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border);">
+                                        <div style="display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid var(--border); font-size: 12px;">
                                             <span style="color: var(--text-dim);">JTD Gross Profit</span>
                                             <span id="wip-jtd-profit">$0.00</span>
                                         </div>
-                                        <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border);">
+                                        <div style="display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid var(--border); font-size: 12px;">
                                             <span style="color: var(--text-dim);">JTD Margin %</span>
                                             <span id="wip-jtd-margin">0%</span>
                                         </div>
-                                        <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border);">
+                                        <div style="display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid var(--border); font-size: 12px;">
                                             <span style="color: var(--text-dim);">Invoiced to Date</span>
                                             <span id="wip-invoiced">$0.00</span>
                                         </div>
-                                        <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border);">
+                                        <div style="display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid var(--border); font-size: 12px;">
                                             <span style="color: var(--text-dim);">Unbilled (Revenue - Invoiced)</span>
                                             <span id="wip-unbilled">$0.00</span>
                                         </div>
@@ -343,13 +343,13 @@
                                         </div>
                                     </div>
                                 </div>
-                                <div style="margin-top: 20px;">
+                                <div style="margin-top: 10px;">
                                     <h4 style="color: var(--orange); margin-bottom: 10px; font-size: 13px; text-transform: uppercase;">Actual Costs vs Estimated</h4>
-                                    <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border);">
+                                    <div style="display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid var(--border); font-size: 12px;">
                                         <span style="color: var(--text-dim);">Actual Costs (from tracker)</span>
                                         <span id="wip-actual-costs">$0.00</span>
                                     </div>
-                                    <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border);">
+                                    <div style="display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid var(--border); font-size: 12px;">
                                         <span style="color: var(--text-dim);">Revised Est. Costs</span>
                                         <span id="wip-revised-est-costs2">$0.00</span>
                                     </div>
@@ -363,7 +363,7 @@
 
                         <!-- Change Orders -->
                         <div id="job-changeorders" class="sub-tab-content-job">
-                            <div class="action-buttons" style="margin-bottom: 15px;">
+                            <div class="action-buttons" style="margin-bottom: 8px;">
                                 <button onclick="openAddChangeOrderModal()">&#x1F4DD; Add Change Order</button>
                             </div>
                             <div class="table-container">
@@ -395,10 +395,10 @@
 
                         <!-- Job Costs (direct job-level) -->
                         <div id="job-costs" class="sub-tab-content-job">
-                            <div class="card" style="margin-bottom: 20px;">
-                                <h3 style="margin-bottom: 5px;">Job-Level Costs</h3>
-                                <p style="font-size: 13px; color: var(--text-dim); margin-bottom: 20px;">Enter costs directly on the job for smaller jobs or general overhead. These are added to building/phase costs in the total.</p>
-                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                            <div class="card" style="margin-bottom: 10px;">
+                                <h3 style="margin-bottom: 4px; font-size: 14px;">Job-Level Costs</h3>
+                                <p style="font-size: 11px; color: var(--text-dim); margin-bottom: 10px;">Direct job costs added to building/phase costs in the total.</p>
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
                                     <div class="form-group">
                                         <label>Materials $</label>
                                         <input type="number" id="jobCostMaterials" placeholder="0.00" step="0.01">
@@ -428,23 +428,23 @@
                                         <input type="number" id="jobCostRate" placeholder="40.00" step="0.01" value="40">
                                     </div>
                                 </div>
-                                <div style="margin-top: 15px; display: flex; gap: 10px;">
+                                <div style="margin-top: 8px; display: flex; gap: 8px;">
                                     <button class="primary" onclick="saveJobCosts()" style="flex: 0 0 auto;">&#x1F4BE; Save Costs</button>
-                                    <span id="jobCostSaveStatus" style="font-size: 13px; color: var(--green); align-self: center; opacity: 0; transition: opacity 0.3s;"></span>
+                                    <span id="jobCostSaveStatus" style="font-size: 11px; color: var(--green); align-self: center; opacity: 0; transition: opacity 0.3s;"></span>
                                 </div>
-                                <div style="margin-top: 15px; padding: 15px; background: var(--surface2); border-radius: 8px;">
-                                    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px;">
+                                <div style="margin-top: 8px; padding: 8px; background: var(--surface2); border-radius: 6px;">
+                                    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px;">
                                         <div>
-                                            <div style="font-size: 12px; color: var(--text-dim);">Job-Level Total</div>
-                                            <div style="font-size: 18px; font-weight: 700; color: var(--accent);" id="jobCostTotal">$0.00</div>
+                                            <div style="font-size: 10px; color: var(--text-dim);">Job-Level Total</div>
+                                            <div style="font-size: 15px; font-weight: 700; color: var(--accent);" id="jobCostTotal">$0.00</div>
                                         </div>
                                         <div>
-                                            <div style="font-size: 12px; color: var(--text-dim);">Computed Labor (Hrs &times; Rate)</div>
-                                            <div style="font-size: 18px; font-weight: 700; color: var(--accent);" id="jobCostLaborBurden">$0.00</div>
+                                            <div style="font-size: 10px; color: var(--text-dim);">Computed Labor</div>
+                                            <div style="font-size: 15px; font-weight: 700; color: var(--accent);" id="jobCostLaborBurden">$0.00</div>
                                         </div>
                                         <div>
-                                            <div style="font-size: 12px; color: var(--text-dim);">Phase/Building Costs</div>
-                                            <div style="font-size: 18px; font-weight: 700; color: var(--text-dim);" id="jobCostFromPhases">$0.00</div>
+                                            <div style="font-size: 10px; color: var(--text-dim);">Phase/Bldg Costs</div>
+                                            <div style="font-size: 15px; font-weight: 700; color: var(--text-dim);" id="jobCostFromPhases">$0.00</div>
                                         </div>
                                     </div>
                                 </div>
@@ -496,7 +496,7 @@
                                     <tbody></tbody>
                                 </table>
                             </div>
-                            <div id="job-subs-summary" style="margin-top: 15px; padding: 15px; background: var(--surface2); border-radius: 8px;"></div>
+                            <div id="job-subs-summary" style="margin-top: 8px; padding: 8px; background: var(--surface2); border-radius: 6px;"></div>
                         </div>
 
                         <!-- Job Labor & Burden -->
