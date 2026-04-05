@@ -492,21 +492,39 @@
       var detail = document.getElementById('wip-job-detail-view');
       if (!detail || detail.style.display === 'none') {
         if (layoutApplied) {
+          cleanup();
           layoutApplied = false;
           currentJobId = null;
         }
-        // Remove metrics strip from site header when job is closed
+        // Also catch stale elements if cleanup missed them
         var staleStrip = document.querySelector('header .jh-metrics-strip');
         if (staleStrip) staleStrip.remove();
+        var staleInfo = document.querySelector('.jh-job-info');
+        if (staleInfo) {
+          var sub = staleInfo.parentElement;
+          staleInfo.remove();
+          if (sub && sub.classList.contains('header-subtitle')) {
+            var st = sub.querySelector('span');
+            var txt = st ? st.textContent : '';
+            sub.textContent = txt;
+            sub.style.display = '';
+            sub.style.alignItems = '';
+          }
+        }
+        var staleTabRow = document.getElementById('jh-tab-metrics-row');
+        if (staleTabRow) {
+          var nav = staleTabRow.querySelector('nav.tabs');
+          var hc = document.querySelector('.header-content');
+          if (nav && hc) { hc.appendChild(nav); nav.style.flex = ''; }
+          staleTabRow.remove();
+        }
         return;
       }
 
       if (!document.getElementById('ws-two-col')) {
+        cleanup();
         layoutApplied = false;
         currentJobId = null;
-        // Also remove stale metrics strip so buildHeader re-creates it
-        var oldStrip = document.querySelector('.jh-metrics-strip');
-        if (oldStrip) oldStrip.remove();
         applyLayout();
       }
 
