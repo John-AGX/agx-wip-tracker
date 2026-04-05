@@ -792,12 +792,12 @@ function renderWIPMain() {
                     grid.innerHTML = mkDiv('Job Number','job-info-number') + mkDiv('Job Name','job-info-title') + mkDiv('Client','job-info-client') + mkDiv('PM','job-info-pm') + mkDiv('Type','job-info-type') + mkDiv('Work Type','job-info-worktype') + mkDiv('Market','job-info-market') + mkDiv('Contract (As Sold)','job-info-contract','var(--accent); font-weight: 700') + mkDiv('Est. Costs (As Sold)','job-info-estcosts') + mkDiv('Target Margin %','job-info-margin') + mkDiv('Status','job-info-status') + mkDiv('Notes','job-info-notes');
                 }
                 btn.innerHTML = '&#x270F;&#xFE0F; Edit Job';
-                btn.style.background = 'var(--accent)';
+                btn.className = 'small primary';
                 renderJobDetail(jobId);
             } else {
                 // Enter edit mode - replace displays with inputs
                 btn.innerHTML = '&#x1F4BE; Save';
-                btn.style.background = 'var(--green)';
+                btn.className = 'small primary';
                 const grid = card.querySelector('div[style*="grid-template-columns"]');
                 if (!grid) return;
                 const pmOpts = ['John','Noah','Henry'].map(p => 

@@ -112,7 +112,7 @@
                             <div style="display: flex; justify-content: space-between; align-items: start; flex-wrap: wrap; gap: 10px; margin-bottom: 15px;">
                                 <h3 style="margin: 0;">Job Information</h3>
                                 <div style="display: flex; gap: 8px;">
-                                    <button class="small" onclick="toggleEditJobInfo()" id="edit-job-info-btn" style="background: var(--accent); color: #fff;">&#x270F;&#xFE0F; Edit Job</button>
+                                    <button class="small primary" onclick="toggleEditJobInfo()" id="edit-job-info-btn">&#x270F;&#xFE0F; Edit Job</button>
                         <button class="small secondary" onclick="archiveCurrentJob()" id="archive-job-btn">&#x1F4E6; Archive Job</button>
                                 </div>
                             </div>
@@ -1008,14 +1008,14 @@
             </div>
           </div>
         </div>
-        <div class="modal-footer"><button onclick="closeModal('editEstimateModal')" class="secondary">&#x2716; Cancel</button><button onclick="saveEstimateEdits()" style="background:var(--green);">&#x1F4BE; Save Changes</button></div>
+        <div class="modal-footer"><button onclick="closeModal('editEstimateModal')" class="secondary">&#x2716; Cancel</button><button onclick="saveEstimateEdits()" class="primary">&#x1F4BE; Save Changes</button></div>
       </div>
     </div>
     <div id="estimatePreviewModal" class="modal">
       <div class="modal-content" style="max-width:900px;max-height:90vh;overflow-y:auto;background:white;color:black;">
         <div class="modal-header" style="background:white;color:black;border-bottom:2px solid #ddd;">Estimate Preview</div>
         <div id="estimatePreview_content" style="padding:40px;background:white;color:black;"></div>
-        <div class="modal-footer" style="background:white;border-top:2px solid #ddd;"><button onclick="window.print()" style="background:var(--accent);color:white;">&#x1F5A8; Print</button><button onclick="closeModal('estimatePreviewModal')" class="secondary">&#x2716; Close</button></div>
+        <div class="modal-footer" style="background:white;border-top:2px solid #ddd;"><button onclick="window.print()" class="primary">&#x1F5A8; Print</button><button onclick="closeModal('estimatePreviewModal')" class="secondary">&#x2716; Close</button></div>
       </div>
     </div>
     <script src="js/app.js?v=18"></script>
