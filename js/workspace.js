@@ -871,10 +871,17 @@
 
   // ── Color Palette Helpers ──────────────────────────────────
 
-  function buildColorGrid(containerId, callback) {
+  function buildColorGrid(containerId, callback, noFillLabel) {
     var container = document.getElementById(containerId);
     if (!container) return;
     container.innerHTML = '';
+    // "No Fill" / "No Color" button
+    var noFill = document.createElement('div');
+    noFill.className = 'ws-palette-nofill';
+    noFill.textContent = noFillLabel || 'No Fill';
+    noFill.addEventListener('click', function () { callback(null); });
+    container.appendChild(noFill);
+    // Color swatches
     COLOR_PALETTE.forEach(function (c) {
       var swatch = document.createElement('div');
       swatch.className = 'ws-palette-swatch';
@@ -971,7 +978,11 @@
       for (var c = rng.c1; c <= rng.c2; c++) {
         var cell = getCell(r, c);
         if (!cell.style) cell.style = {};
-        cell.style[prop] = value;
+        if (value === null || value === undefined || value === false) {
+          delete cell.style[prop];
+        } else {
+          cell.style[prop] = value;
+        }
       }
     }
     grid.dirty = true;
@@ -2112,10 +2123,10 @@
 
     // Fill color palette
     function applyFillColor(c) {
-      addRecentColor(recentFillColors, c);
+      if (c) addRecentColor(recentFillColors, c);
       applyStyleToSelection('bg', c);
       var swatch = document.getElementById('wsFillSwatch');
-      if (swatch) swatch.style.background = c;
+      if (swatch) swatch.style.background = c || 'transparent';
       closeColorPanels();
       buildRecentColors('wsFillRecent', recentFillColors, applyFillColor);
     }
@@ -2124,17 +2135,17 @@
       buildRecentColors('wsFillRecent', recentFillColors, applyFillColor);
       toggleColorPanel('wsFillPanel');
     });
-    buildColorGrid('wsFillGrid', applyFillColor);
+    buildColorGrid('wsFillGrid', applyFillColor, 'No Fill');
     document.getElementById('wsFillCustom').addEventListener('input', function (e) {
       applyFillColor(e.target.value);
     });
 
     // Font color palette
     function applyFontColor(c) {
-      addRecentColor(recentFontColors, c);
+      if (c) addRecentColor(recentFontColors, c);
       applyStyleToSelection('color', c);
       var swatch = document.getElementById('wsFontSwatch');
-      if (swatch) swatch.style.background = c;
+      if (swatch) swatch.style.background = c || 'transparent';
       closeColorPanels();
       buildRecentColors('wsFontRecent', recentFontColors, applyFontColor);
     }
@@ -2143,7 +2154,7 @@
       buildRecentColors('wsFontRecent', recentFontColors, applyFontColor);
       toggleColorPanel('wsFontPanel');
     });
-    buildColorGrid('wsFontGrid', applyFontColor);
+    buildColorGrid('wsFontGrid', applyFontColor, 'No Color');
     document.getElementById('wsFontCustom').addEventListener('input', function (e) {
       applyFontColor(e.target.value);
     });
