@@ -15,6 +15,102 @@
   border-radius: 6px 6px 0 0;
 }
 
+/* ── Formatting Toolbar ────────────────────────────────── */
+
+.ws-toolbar-fmt {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 6px;
+  background: var(--surface2, #242836);
+  border: 1px solid var(--border, #2e3346);
+  border-top: none;
+  flex-wrap: wrap;
+}
+
+/* When formatting toolbar follows main toolbar, remove rounded bottom corners */
+.ws-toolbar:has(+ .ws-toolbar-fmt) {
+  border-bottom: none;
+}
+
+.ws-btn-icon {
+  font-size: 13px;
+  min-width: 24px;
+  text-align: center;
+  padding: 2px 4px;
+  line-height: 1.2;
+}
+
+.ws-fmt-toggle,
+.ws-fmt-align {
+  font-size: 12px;
+  min-width: 24px;
+  text-align: center;
+  padding: 2px 5px;
+  line-height: 1.4;
+}
+
+.ws-fmt-toggle.ws-active,
+.ws-fmt-align.ws-active {
+  background: rgba(79, 140, 255, 0.2);
+  border-color: #4f8cff;
+  color: #e4e6f0;
+}
+
+/* Color picker buttons */
+.ws-color-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px 4px;
+  border: 1px solid var(--border, #2e3346);
+  border-radius: 3px;
+  background: var(--surface, #1a1d27);
+  color: var(--text-dim, #8b90a5);
+  transition: all 0.12s;
+}
+
+.ws-color-btn:hover {
+  background: var(--surface2, #242836);
+  color: var(--text, #e4e6f0);
+  border-color: var(--accent-dim, #2a4a8a);
+}
+
+.ws-color-btn input[type="color"] {
+  width: 0;
+  height: 0;
+  padding: 0;
+  border: none;
+  opacity: 0;
+  position: absolute;
+}
+
+.ws-color-icon {
+  font-size: 14px;
+  line-height: 1;
+}
+
+.ws-color-icon-text {
+  font-weight: 700;
+  font-size: 12px;
+}
+
+.ws-color-swatch {
+  width: 14px;
+  height: 14px;
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 2px;
+  display: inline-block;
+}
+
+/* Merged cells */
+.ws-cell.ws-merged {
+  z-index: 1;
+  overflow: hidden;
+}
+
 .ws-cell-ref {
   font-family: 'Courier New', monospace;
   font-size: 12px;
@@ -387,11 +483,11 @@
   font-style: italic;
 }
 
-/* Alternating row tint for readability */
-.ws-grid tbody tr:nth-child(even) .ws-cell {
+/* Alternating row tint for readability (only when no custom bg via inline style) */
+.ws-grid tbody tr:nth-child(even) .ws-cell:not([style*="background"]) {
   background: #1b1f32;
 }
-.ws-grid tbody tr:nth-child(even) .ws-cell:hover {
+.ws-grid tbody tr:nth-child(even) .ws-cell:not([style*="background"]):hover {
   background: #252a3e;
 }
 

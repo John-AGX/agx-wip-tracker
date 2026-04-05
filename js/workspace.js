@@ -26,12 +26,13 @@
   let grid = {
     rows: MIN_ROWS,
     cols: MIN_COLS,
-    cells: {},       // { "A1": { raw: "=B1*2", value: 42, fmt: null }, ... }
+    cells: {},       // { "A1": { raw: "=B1*2", value: 42, fmt: null, style: {} }, ... }
     colWidths: {},   // { 0: 120, 1: 100, ... }
     selection: null,  // { r: 0, c: 0 }
     selEnd: null,     // { r, c } for range selection end (null = single cell)
     editing: null,    // { r: 0, c: 0 }
     links: {},        // { "C5": "contractAmount", "D5": "estimatedCosts" }
+    merges: [],       // [{ r1, c1, r2, c2 }, ...] merged cell ranges
     jobId: null,
     dirty: false,
     refMode: false,   // TRUE when entering a formula
@@ -81,7 +82,7 @@
   /** Get cell data (never undefined) */
   function getCell(r, c) {
     const key = addr(r, c);
-    if (!grid.cells[key]) grid.cells[key] = { raw: '', value: '', fmt: null };
+    if (!grid.cells[key]) grid.cells[key] = { raw: '', value: '', fmt: null, style: {} };
     return grid.cells[key];
   }
 
@@ -439,8 +440,11 @@
     try {
       // Replace cell references with their numeric values
       var resolved = expr.replace(/\b([A-Z]+)(\d+)\b/gi, function (match, col, row) {
-        const ref = parseAddr(match.toUpperCase());
+        var ref = parseAddr(match.toUpperCase());
         if (!ref) return '0';
+        // Redirect merged cells to origin
+        var m = getMerge(ref.r, ref.c);
+        if (m) ref = { r: m.r1, c: m.c1 };
         const refCell = getCell(ref.r, ref.c);
         const v = refCell.value;
         return (typeof v === 'number') ? v : (v === '' ? '0' : JSON.stringify(v));
@@ -611,7 +615,8 @@
       cols: grid.cols,
       cells: grid.cells,
       colWidths: grid.colWidths,
-      links: grid.links
+      links: grid.links,
+      merges: grid.merges
     };
     const allWs = safeLoadJSON('agx-workspaces', {});
     allWs[grid.jobId] = data;
@@ -628,12 +633,14 @@
       grid.cells = saved.cells || {};
       grid.colWidths = saved.colWidths || {};
       grid.links = saved.links || {};
+      grid.merges = saved.merges || [];
     } else {
       grid.rows = MIN_ROWS;
       grid.cols = MIN_COLS;
       grid.cells = {};
       grid.colWidths = {};
       grid.links = {};
+      grid.merges = [];
     }
     grid.jobId = jobId;
     grid.selection = null;
@@ -661,6 +668,35 @@
           <button class="ws-btn ws-btn-save" id="wsSaveBtn" title="Save workspace">Save</button>
         </div>
       </div>
+      <div class="ws-toolbar-fmt" id="wsToolbarFmt">
+        <button class="ws-btn ws-btn-icon" id="wsUndoBtn" title="Undo (Ctrl+Z)">&#x21A9;</button>
+        <button class="ws-btn ws-btn-icon" id="wsRedoBtn" title="Redo (Ctrl+Y)">&#x21AA;</button>
+        <span class="ws-separator"></span>
+        <button class="ws-btn ws-fmt-toggle" id="wsBoldBtn" data-style="bold" title="Bold (Ctrl+B)"><b>B</b></button>
+        <button class="ws-btn ws-fmt-toggle" id="wsItalicBtn" data-style="italic" title="Italic (Ctrl+I)"><i>I</i></button>
+        <button class="ws-btn ws-fmt-toggle" id="wsUnderlineBtn" data-style="underline" title="Underline (Ctrl+U)"><u>U</u></button>
+        <span class="ws-separator"></span>
+        <button class="ws-btn ws-fmt-align" data-align="left" title="Align left">&#x2190;</button>
+        <button class="ws-btn ws-fmt-align" data-align="center" title="Align center">&#x2194;</button>
+        <button class="ws-btn ws-fmt-align" data-align="right" title="Align right">&#x2192;</button>
+        <span class="ws-separator"></span>
+        <label class="ws-color-btn" title="Fill color">
+          <span class="ws-color-icon">&#x25A0;</span>
+          <span class="ws-color-swatch" id="wsFillSwatch"></span>
+          <input type="color" id="wsFillColor" value="#1e2130" />
+        </label>
+        <label class="ws-color-btn" title="Font color">
+          <span class="ws-color-icon ws-color-icon-text">A</span>
+          <span class="ws-color-swatch" id="wsFontSwatch"></span>
+          <input type="color" id="wsFontColor" value="#e4e6f0" />
+        </label>
+        <button class="ws-btn ws-btn-icon" id="wsClearFmtBtn" title="Clear formatting">&#x2718;</button>
+        <span class="ws-separator"></span>
+        <button class="ws-btn ws-fmt-toggle" id="wsWrapBtn" data-style="wrap" title="Wrap text">&#x21B5;</button>
+        <span class="ws-separator"></span>
+        <button class="ws-btn" id="wsMergeBtn" title="Merge cells">Merge</button>
+        <button class="ws-btn" id="wsUnmergeBtn" title="Unmerge cells">Unmerge</button>
+      </div>
       <div class="ws-link-panel" id="wsLinkPanel" style="display:none;">
         <div class="ws-link-title">Link <span id="wsLinkCell">A1</span> → Job Field</div>
         <div class="ws-link-options" id="wsLinkOptions"></div>
@@ -681,8 +717,24 @@
     `;
   }
 
+  /** Build inline style string from cell.style */
+  function buildCellStyle(cell, w) {
+    var st = 'width:' + w + 'px;min-width:' + w + 'px;';
+    var s = cell.style || {};
+    if (s.bg) st += 'background:' + s.bg + ';';
+    if (s.color) st += 'color:' + s.color + ';';
+    if (s.bold) st += 'font-weight:700;';
+    if (s.italic) st += 'font-style:italic;';
+    if (s.underline) st += 'text-decoration:underline;';
+    if (s.align) st += 'text-align:' + s.align + ';';
+    if (s.wrap) st += 'white-space:normal;word-wrap:break-word;';
+    return st;
+  }
+
   function renderGrid() {
     if (!wsTable) return;
+
+    var hidden = buildHiddenSet();
 
     let html = '<thead><tr><th class="ws-corner"></th>';
     for (let c = 0; c < grid.cols; c++) {
@@ -694,8 +746,11 @@
     for (let r = 0; r < grid.rows; r++) {
       html += `<tr><td class="ws-row-header">${r + 1}</td>`;
       for (let c = 0; c < grid.cols; c++) {
+        // Skip hidden merged cells
+        if (hidden[r + ',' + c]) continue;
+
         const key = addr(r, c);
-        const cell = grid.cells[key] || { raw: '', value: '', fmt: null };
+        const cell = grid.cells[key] || { raw: '', value: '', fmt: null, style: {} };
         const val = displayVal(cell);
         const isSelected = grid.selection && grid.selection.r === r && grid.selection.c === c;
         const isRangeSelected = !isSelected && inRange(r, c);
@@ -716,10 +771,22 @@
         if (isLinked) cls += ' ws-linked';
         if (isError) cls += ' ws-error';
         if (isFormula) cls += ' ws-formula';
-        if (typeof cell.value === 'number') cls += ' ws-number';
+        if (typeof cell.value === 'number' && !(cell.style && cell.style.align)) cls += ' ws-number';
 
-        const w = grid.colWidths[c] || COL_DEFAULT_WIDTH;
-        html += `<td class="${cls}" data-r="${r}" data-c="${c}" style="width:${w}px;min-width:${w}px;">${val}</td>`;
+        // Merge attributes
+        var span = getMergeSpan(r, c);
+        var mergeW = grid.colWidths[c] || COL_DEFAULT_WIDTH;
+        if (span) {
+          cls += ' ws-merged';
+          // Sum widths for merged columns
+          mergeW = 0;
+          for (var mc = c; mc < c + span.colspan; mc++) mergeW += (grid.colWidths[mc] || COL_DEFAULT_WIDTH);
+        }
+
+        var st = buildCellStyle(cell, mergeW);
+        var attrs = span ? ` colspan="${span.colspan}" rowspan="${span.rowspan}"` : '';
+
+        html += `<td class="${cls}" data-r="${r}" data-c="${c}" style="${st}"${attrs}>${val}</td>`;
       }
       html += '</tr>';
     }
@@ -731,7 +798,7 @@
     const td = wsTable.querySelector(`td[data-r="${r}"][data-c="${c}"]`);
     if (!td) return;
     const key = addr(r, c);
-    const cell = grid.cells[key] || { raw: '', value: '', fmt: null };
+    const cell = grid.cells[key] || { raw: '', value: '', fmt: null, style: {} };
     td.textContent = displayVal(cell);
 
     td.className = 'ws-cell';
@@ -739,12 +806,109 @@
     if (grid.links[key]) td.classList.add('ws-linked');
     if (cell.error) td.classList.add('ws-error');
     if (typeof cell.raw === 'string' && cell.raw.startsWith('=')) td.classList.add('ws-formula');
-    if (typeof cell.value === 'number') td.classList.add('ws-number');
+    if (typeof cell.value === 'number' && !(cell.style && cell.style.align)) td.classList.add('ws-number');
+    if (getMergeSpan(r, c)) td.classList.add('ws-merged');
+
+    // Apply inline styles
+    var w = grid.colWidths[c] || COL_DEFAULT_WIDTH;
+    var span = getMergeSpan(r, c);
+    if (span) { w = 0; for (var mc = c; mc < c + span.colspan; mc++) w += (grid.colWidths[mc] || COL_DEFAULT_WIDTH); }
+    td.setAttribute('style', buildCellStyle(cell, w));
+  }
+
+  // ── Style Helpers ──────────────────────────────────────────
+
+  /** Apply a style property to all cells in selection */
+  function applyStyleToSelection(prop, value) {
+    pushUndo();
+    var rng = getSelRange();
+    if (!rng) return;
+    for (var r = rng.r1; r <= rng.r2; r++) {
+      for (var c = rng.c1; c <= rng.c2; c++) {
+        var cell = getCell(r, c);
+        if (!cell.style) cell.style = {};
+        cell.style[prop] = value;
+      }
+    }
+    grid.dirty = true;
+    renderGrid();
+    if (grid.selection) selectCell(grid.selection.r, grid.selection.c, !!grid.selEnd);
+    saveWorkspace();
+  }
+
+  /** Toggle a boolean style property on the selection */
+  function toggleStyleOnSelection(prop) {
+    var rng = getSelRange();
+    if (!rng) return;
+    // Check if ALL cells have the property set
+    var allSet = true;
+    for (var r = rng.r1; r <= rng.r2 && allSet; r++)
+      for (var c = rng.c1; c <= rng.c2 && allSet; c++) {
+        var cell = getCell(r, c);
+        if (!cell.style || !cell.style[prop]) allSet = false;
+      }
+    applyStyleToSelection(prop, allSet ? false : true);
+  }
+
+  /** Clear all formatting from selection */
+  function clearFormattingOnSelection() {
+    pushUndo();
+    var rng = getSelRange();
+    if (!rng) return;
+    for (var r = rng.r1; r <= rng.r2; r++)
+      for (var c = rng.c1; c <= rng.c2; c++) {
+        var cell = getCell(r, c);
+        cell.style = {};
+      }
+    grid.dirty = true;
+    renderGrid();
+    if (grid.selection) selectCell(grid.selection.r, grid.selection.c, !!grid.selEnd);
+    saveWorkspace();
+  }
+
+  /** Update formatting toolbar button states to reflect current selection */
+  function updateFmtToolbar() {
+    if (!grid.selection) return;
+    var cell = getCell(grid.selection.r, grid.selection.c);
+    var s = cell.style || {};
+
+    // Toggle buttons
+    var boldBtn = document.getElementById('wsBoldBtn');
+    var italicBtn = document.getElementById('wsItalicBtn');
+    var underlineBtn = document.getElementById('wsUnderlineBtn');
+    var wrapBtn = document.getElementById('wsWrapBtn');
+    if (boldBtn) boldBtn.classList.toggle('ws-active', !!s.bold);
+    if (italicBtn) italicBtn.classList.toggle('ws-active', !!s.italic);
+    if (underlineBtn) underlineBtn.classList.toggle('ws-active', !!s.underline);
+    if (wrapBtn) wrapBtn.classList.toggle('ws-active', !!s.wrap);
+
+    // Alignment buttons
+    var alignBtns = document.querySelectorAll('.ws-fmt-align');
+    alignBtns.forEach(function (btn) {
+      btn.classList.toggle('ws-active', s.align === btn.dataset.align);
+    });
+
+    // Color swatches
+    var fillSwatch = document.getElementById('wsFillSwatch');
+    var fontSwatch = document.getElementById('wsFontSwatch');
+    if (fillSwatch) fillSwatch.style.background = s.bg || '#1e2130';
+    if (fontSwatch) fontSwatch.style.background = s.color || '#e4e6f0';
+
+    // Merge/unmerge button states
+    var mergeBtn = document.getElementById('wsMergeBtn');
+    var unmergeBtn = document.getElementById('wsUnmergeBtn');
+    var hasMerge = getMerge(grid.selection.r, grid.selection.c);
+    if (mergeBtn) mergeBtn.classList.toggle('ws-active', !!hasMerge);
+    if (unmergeBtn) unmergeBtn.style.opacity = hasMerge ? '1' : '0.4';
   }
 
   // ── Selection & Editing ────────────────────────────────────
 
   function selectCell(r, c, keepRange) {
+    // Redirect to merge origin if selecting a hidden merged cell
+    var merge = getMerge(r, c);
+    if (merge && (r !== merge.r1 || c !== merge.c1)) { r = merge.r1; c = merge.c1; }
+
     grid.selection = { r, c };
     if (!keepRange) grid.selEnd = null;
 
@@ -768,6 +932,9 @@
 
     // Update quick calc
     updateQuickCalc();
+
+    // Update formatting toolbar state
+    updateFmtToolbar();
   }
 
   function startEditing(r, c) {
@@ -967,6 +1134,7 @@
     return {
       cells: JSON.parse(JSON.stringify(grid.cells)),
       links: JSON.parse(JSON.stringify(grid.links)),
+      merges: JSON.parse(JSON.stringify(grid.merges)),
       rows: grid.rows, cols: grid.cols,
       colWidths: JSON.parse(JSON.stringify(grid.colWidths))
     };
@@ -982,7 +1150,7 @@
     if (!grid.undoStack.length) return;
     grid.redoStack.push(snapshotState());
     var s = grid.undoStack.pop();
-    grid.cells = s.cells; grid.links = s.links;
+    grid.cells = s.cells; grid.links = s.links; grid.merges = s.merges || [];
     grid.rows = s.rows; grid.cols = s.cols; grid.colWidths = s.colWidths;
     recalcAll(); renderGrid();
     if (grid.selection) selectCell(grid.selection.r, grid.selection.c);
@@ -993,7 +1161,7 @@
     if (!grid.redoStack.length) return;
     grid.undoStack.push(snapshotState());
     var s = grid.redoStack.pop();
-    grid.cells = s.cells; grid.links = s.links;
+    grid.cells = s.cells; grid.links = s.links; grid.merges = s.merges || [];
     grid.rows = s.rows; grid.cols = s.cols; grid.colWidths = s.colWidths;
     recalcAll(); renderGrid();
     if (grid.selection) selectCell(grid.selection.r, grid.selection.c);
@@ -1036,6 +1204,77 @@
         if (c === rng.c2) td.classList.add('ws-range-right');
       }
     });
+  }
+
+  // ── Merge Helpers ──────────────────────────────────────────
+
+  /** Find the merge range containing cell (r, c), or null */
+  function getMerge(r, c) {
+    for (var i = 0; i < grid.merges.length; i++) {
+      var m = grid.merges[i];
+      if (r >= m.r1 && r <= m.r2 && c >= m.c1 && c <= m.c2) return m;
+    }
+    return null;
+  }
+
+  /** True if cell is part of a merge but NOT the top-left origin */
+  function isMergeHidden(r, c) {
+    var m = getMerge(r, c);
+    return m && (r !== m.r1 || c !== m.c1);
+  }
+
+  /** Build a Set of hidden cell keys for fast lookup during rendering */
+  function buildHiddenSet() {
+    var hidden = {};
+    grid.merges.forEach(function (m) {
+      for (var r = m.r1; r <= m.r2; r++)
+        for (var c = m.c1; c <= m.c2; c++)
+          if (r !== m.r1 || c !== m.c1) hidden[r + ',' + c] = true;
+    });
+    return hidden;
+  }
+
+  /** Get merge info for origin cell (colspan/rowspan) */
+  function getMergeSpan(r, c) {
+    for (var i = 0; i < grid.merges.length; i++) {
+      var m = grid.merges[i];
+      if (r === m.r1 && c === m.c1) return { colspan: m.c2 - m.c1 + 1, rowspan: m.r2 - m.r1 + 1 };
+    }
+    return null;
+  }
+
+  /** Merge the current selection range */
+  function mergeSelection() {
+    var rng = getSelRange();
+    if (!rng || (rng.r1 === rng.r2 && rng.c1 === rng.c2)) return; // need >1 cell
+    // Check no overlap with existing merges
+    for (var i = 0; i < grid.merges.length; i++) {
+      var m = grid.merges[i];
+      if (!(rng.r2 < m.r1 || rng.r1 > m.r2 || rng.c2 < m.c1 || rng.c1 > m.c2)) {
+        // Overlapping — remove old merge first
+        grid.merges.splice(i, 1);
+        i--;
+      }
+    }
+    pushUndo();
+    grid.merges.push({ r1: rng.r1, c1: rng.c1, r2: rng.r2, c2: rng.c2 });
+    grid.dirty = true;
+    renderGrid();
+    selectCell(rng.r1, rng.c1);
+    saveWorkspace();
+  }
+
+  /** Unmerge cells at current selection */
+  function unmergeSelection() {
+    if (!grid.selection) return;
+    var m = getMerge(grid.selection.r, grid.selection.c);
+    if (!m) return;
+    pushUndo();
+    grid.merges = grid.merges.filter(function (mg) { return mg !== m; });
+    grid.dirty = true;
+    renderGrid();
+    selectCell(grid.selection.r, grid.selection.c);
+    saveWorkspace();
   }
 
   // ── Formula Reference Adjustment ──────────────────────────
@@ -1203,6 +1442,10 @@
     if (!td) return;
     var r = parseInt(td.dataset.r), c = parseInt(td.dataset.c);
 
+    // Redirect to merge origin if clicking a merged cell
+    var merge = getMerge(r, c);
+    if (merge) { r = merge.r1; c = merge.c1; }
+
     // Reference mode: insert cell ref
     if (grid.refMode) {
       e.preventDefault();
@@ -1263,6 +1506,13 @@
     }
     if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey) || (e.key === 'Z' && e.shiftKey))) {
       e.preventDefault(); doRedo(); return;
+    }
+
+    // Formatting shortcuts (work even while not editing)
+    if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+      if (e.key === 'b' || e.key === 'B') { e.preventDefault(); toggleStyleOnSelection('bold'); return; }
+      if (e.key === 'i' || e.key === 'I') { e.preventDefault(); toggleStyleOnSelection('italic'); return; }
+      if (e.key === 'u' || e.key === 'U') { e.preventDefault(); toggleStyleOnSelection('underline'); return; }
     }
 
     // If editing a cell
@@ -1394,6 +1644,7 @@
           var tgt = getCell(fr, fc);
           tgt.raw = adjustFormulaRefs(src.raw || '', fr - rng.r1, 0);
           tgt.fmt = src.fmt;
+          tgt.style = JSON.parse(JSON.stringify(src.style || {}));
         }
       }
       grid.dirty = true; recalcAll(); renderGrid(); selectCell(r, c, true);
@@ -1627,6 +1878,7 @@
         pushUndo();
         grid.cells = {};
         grid.links = {};
+        grid.merges = [];
         grid.rows = MIN_ROWS;
         grid.cols = MIN_COLS;
         grid.colWidths = {};
@@ -1648,6 +1900,46 @@
         saveWorkspace();
       });
     });
+
+    // Formatting toolbar
+    document.getElementById('wsUndoBtn').addEventListener('click', doUndo);
+    document.getElementById('wsRedoBtn').addEventListener('click', doRedo);
+
+    // Bold / Italic / Underline / Wrap toggles
+    wsContainer.querySelectorAll('.ws-fmt-toggle').forEach(btn => {
+      btn.addEventListener('click', () => {
+        var prop = btn.dataset.style;
+        if (prop) toggleStyleOnSelection(prop);
+      });
+    });
+
+    // Alignment buttons
+    wsContainer.querySelectorAll('.ws-fmt-align').forEach(btn => {
+      btn.addEventListener('click', () => {
+        var align = btn.dataset.align;
+        if (!grid.selection) return;
+        var cell = getCell(grid.selection.r, grid.selection.c);
+        var current = (cell.style || {}).align;
+        applyStyleToSelection('align', current === align ? null : align);
+      });
+    });
+
+    // Fill color
+    document.getElementById('wsFillColor').addEventListener('input', (e) => {
+      applyStyleToSelection('bg', e.target.value);
+    });
+
+    // Font color
+    document.getElementById('wsFontColor').addEventListener('input', (e) => {
+      applyStyleToSelection('color', e.target.value);
+    });
+
+    // Clear formatting
+    document.getElementById('wsClearFmtBtn').addEventListener('click', clearFormattingOnSelection);
+
+    // Merge / Unmerge
+    document.getElementById('wsMergeBtn').addEventListener('click', mergeSelection);
+    document.getElementById('wsUnmergeBtn').addEventListener('click', unmergeSelection);
 
     // Link options
     document.getElementById('wsLinkOptions').addEventListener('click', (e) => {
