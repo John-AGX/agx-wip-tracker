@@ -208,23 +208,46 @@
    * Insert a cell reference into the formula bar at cursor position
    */
   function insertCellRefIntoFormula(cellRef) {
-    if (formulaBar !== document.activeElement) return;
+    // If formula bar is focused, insert into formula bar
+    if (formulaBar === document.activeElement) {
+      const cursorPos = formulaBar.selectionStart;
+      const content = formulaBar.value;
+      formulaBar.value = content.slice(0, cursorPos) + cellRef + content.slice(cursorPos);
+      const newPos = cursorPos + cellRef.length;
+      formulaBar.selectionStart = newPos;
+      formulaBar.selectionEnd = newPos;
+      if (grid.refMode && content.startsWith('=')) {
+        applyRefHighlights(formulaBar.value.substring(1));
+      }
+      return;
+    }
 
-    const input = formulaBar;
-    const cursorPos = input.selectionStart;
-    const content = input.value;
-
-    // Insert the reference
-    input.value = content.slice(0, cursorPos) + cellRef + content.slice(cursorPos);
-
-    // Move cursor after inserted reference
-    const newPos = cursorPos + cellRef.length;
-    input.selectionStart = newPos;
-    input.selectionEnd = newPos;
-
-    // Update highlights
-    if (grid.refMode && content.startsWith('=')) {
-      applyRefHighlights(input.value.substring(1));
+    // If editing a cell, insert into the cell and sync to formula bar
+    if (grid.editing) {
+      const td = wsTable.querySelector(`td[data-r="${grid.editing.r}"][data-c="${grid.editing.c}"]`);
+      if (!td) return;
+      const sel = window.getSelection();
+      const content = td.textContent;
+      let cursorPos = content.length;
+      if (sel.rangeCount > 0) {
+        const range = sel.getRangeAt(0);
+        if (td.contains(range.startContainer)) cursorPos = range.startOffset;
+      }
+      td.textContent = content.slice(0, cursorPos) + cellRef + content.slice(cursorPos);
+      // Place cursor after inserted ref
+      const newPos = cursorPos + cellRef.length;
+      const range = document.createRange();
+      if (td.firstChild) {
+        range.setStart(td.firstChild, newPos);
+        range.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(range);
+      }
+      // Sync to formula bar
+      if (formulaBar) formulaBar.value = td.textContent;
+      if (grid.refMode && td.textContent.startsWith('=')) {
+        applyRefHighlights(td.textContent.substring(1));
+      }
     }
   }
 
