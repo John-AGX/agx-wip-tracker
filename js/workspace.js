@@ -772,6 +772,7 @@
         if (isError) cls += ' ws-error';
         if (isFormula) cls += ' ws-formula';
         if (typeof cell.value === 'number' && !(cell.style && cell.style.align)) cls += ' ws-number';
+        if (cell.note) cls += ' ws-has-note';
 
         // Merge attributes
         var span = getMergeSpan(r, c);
@@ -785,8 +786,9 @@
 
         var st = buildCellStyle(cell, mergeW);
         var attrs = span ? ` colspan="${span.colspan}" rowspan="${span.rowspan}"` : '';
+        var noteAttr = cell.note ? ` title="${cell.note.replace(/"/g, '&amp;quot;')}"` : '';
 
-        html += `<td class="${cls}" data-r="${r}" data-c="${c}" style="${st}"${attrs}>${val}</td>`;
+        html += `<td class="${cls}" data-r="${r}" data-c="${c}" style="${st}"${attrs}${noteAttr}>${val}</td>`;
       }
       html += '</tr>';
     }
@@ -807,7 +809,9 @@
     if (cell.error) td.classList.add('ws-error');
     if (typeof cell.raw === 'string' && cell.raw.startsWith('=')) td.classList.add('ws-formula');
     if (typeof cell.value === 'number' && !(cell.style && cell.style.align)) td.classList.add('ws-number');
+    if (cell.note) td.classList.add('ws-has-note');
     if (getMergeSpan(r, c)) td.classList.add('ws-merged');
+    td.title = cell.note || '';
 
     // Apply inline styles
     var w = grid.colWidths[c] || COL_DEFAULT_WIDTH;
@@ -1394,6 +1398,34 @@
     }
   }
 
+  // ── Cell Notes ─────────────────────────────────────────────
+
+  function promptNote(r, c) {
+    var cell = getCell(r, c);
+    var text = prompt('Cell note:', cell.note || '');
+    if (text === null) return; // cancelled
+    pushUndo();
+    if (text) {
+      cell.note = text;
+    } else {
+      delete cell.note;
+    }
+    grid.dirty = true;
+    renderGrid();
+    selectCell(r, c);
+    saveWorkspace();
+  }
+
+  function deleteNote(r, c) {
+    var cell = getCell(r, c);
+    if (!cell.note) return;
+    pushUndo();
+    delete cell.note;
+    grid.dirty = true;
+    refreshCell(r, c);
+    saveWorkspace();
+  }
+
   // ── Context Menu ──────────────────────────────────────────
 
   var ctxMenu = null;
@@ -1827,11 +1859,24 @@
     document.addEventListener('mousemove', handleColResizeMove);
     document.addEventListener('mouseup', handleColResizeEnd);
 
-    // Context menu on headers
+    // Context menu on cells and headers
     wsTable.addEventListener('contextmenu', function (e) {
+      var cellTd = e.target.closest('td.ws-cell');
       var rowH = e.target.closest('td.ws-row-header');
       var colH = e.target.closest('th.ws-col-header');
-      if (rowH) {
+      if (cellTd) {
+        e.preventDefault();
+        var cr = parseInt(cellTd.dataset.r), cc = parseInt(cellTd.dataset.c);
+        var cellObj = getCell(cr, cc);
+        var items = [];
+        if (cellObj.note) {
+          items.push({ label: 'Edit Note', action: function () { promptNote(cr, cc); } });
+          items.push({ label: 'Delete Note', action: function () { deleteNote(cr, cc); } });
+        } else {
+          items.push({ label: 'Add Note', action: function () { promptNote(cr, cc); } });
+        }
+        showContextMenu(e.clientX, e.clientY, items);
+      } else if (rowH) {
         e.preventDefault();
         var rowIdx = parseInt(rowH.parentElement.querySelector('td.ws-cell').dataset.r);
         showContextMenu(e.clientX, e.clientY, [

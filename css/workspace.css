@@ -463,19 +463,31 @@
 }
 
 .ws-cell.ws-linked {
-  background: rgba(27, 133, 65, 0.1);
-  border-color: rgba(27, 133, 65, 0.35);
+  /* Only the corner triangle indicates linked status — no bg/border override */
 }
 
 .ws-cell.ws-linked::before {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  border-bottom: 5px solid #1B8541;
+  border-right: 5px solid transparent;
+}
+
+/* Cell note indicator — red triangle top-right (like Excel) */
+.ws-cell.ws-has-note::after {
   content: '';
   position: absolute;
   top: 0;
   right: 0;
   width: 0;
   height: 0;
-  border-top: 5px solid #1B8541;
-  border-left: 5px solid transparent;
+  border-top: 6px solid #ef4444;
+  border-left: 6px solid transparent;
+  pointer-events: none;
 }
 
 .ws-cell.ws-error {
