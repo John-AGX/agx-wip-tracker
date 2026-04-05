@@ -53,8 +53,8 @@
 .ws-fmt-toggle.ws-active,
 .ws-fmt-align.ws-active {
   background: rgba(79, 140, 255, 0.2);
-  border-color: #4f8cff;
-  color: #e4e6f0;
+  border-color: var(--accent);
+  color: var(--text);
 }
 
 /* Color picker buttons */
@@ -323,11 +323,11 @@
 .ws-grid-wrapper {
   overflow: auto;
   max-height: 500px;
-  border: 1px solid #4a5568;
+  border: 1px solid var(--grid-border);
   border-top: none;
-  background: #1a1d27;
+  background: var(--surface);
   scrollbar-width: thin;
-  scrollbar-color: #3a3f50 #1a1d27;
+  scrollbar-color: var(--scrollbar-thumb) var(--surface);
 }
 
 .ws-grid-wrapper::-webkit-scrollbar {
@@ -335,10 +335,10 @@
   height: 8px;
 }
 .ws-grid-wrapper::-webkit-scrollbar-track {
-  background: #1a1d27;
+  background: var(--surface);
 }
 .ws-grid-wrapper::-webkit-scrollbar-thumb {
-  background: #3a3f50;
+  background: var(--scrollbar-thumb);
   border-radius: 4px;
 }
 
@@ -361,23 +361,23 @@
 .ws-corner {
   width: 40px;
   min-width: 40px;
-  background: #2d3348;
-  border: 1px solid #4a5568;
-  border-bottom: 2px solid #4a5568;
+  background: var(--grid-header-bg);
+  border: 1px solid var(--grid-border);
+  border-bottom: 2px solid var(--grid-border);
   position: sticky;
   left: 0;
   z-index: 4;
 }
 
 .ws-col-header {
-  background: #2d3348;
-  color: #c4c9db;
+  background: var(--grid-header-bg);
+  color: var(--grid-header-text);
   font-weight: 600;
   font-size: 11px;
   text-align: center;
   padding: 4px 4px;
-  border: 1px solid #4a5568;
-  border-bottom: 2px solid #4a5568;
+  border: 1px solid var(--grid-border);
+  border-bottom: 2px solid var(--grid-border);
   cursor: default;
   position: relative;
   letter-spacing: 0.5px;
@@ -400,14 +400,14 @@
 }
 
 .ws-row-header {
-  background: #2d3348;
-  color: #c4c9db;
+  background: var(--grid-header-bg);
+  color: var(--grid-header-text);
   font-weight: 500;
   font-size: 11px;
   text-align: center;
   padding: 3px 6px;
-  border: 1px solid #4a5568;
-  border-right: 2px solid #4a5568;
+  border: 1px solid var(--grid-border);
+  border-right: 2px solid var(--grid-border);
   position: sticky;
   left: 0;
   z-index: 2;
@@ -419,8 +419,8 @@
 
 .ws-cell {
   padding: 2px 6px;
-  border: 1px solid #3a4058;
-  color: #e4e6f0;
+  border: 1px solid var(--cell-border);
+  color: var(--text);
   height: 24px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -428,26 +428,26 @@
   cursor: cell;
   transition: background 0.08s;
   position: relative;
-  background: #1e2130;
+  background: var(--cell-bg);
   font-size: 12px;
 }
 
 .ws-cell:hover {
-  background: #252a3e;
+  background: var(--row-hover);
 }
 
 .ws-cell.ws-selected {
-  outline: 2px solid #4f8cff;
+  outline: 2px solid var(--accent);
   outline-offset: -1px;
   background: rgba(79, 140, 255, 0.1);
   z-index: 1;
 }
 
 .ws-cell.ws-editing {
-  outline: 2px solid #34d399;
+  outline: 2px solid var(--green);
   outline-offset: -1px;
-  background: #1a1d27;
-  color: #e4e6f0;
+  background: var(--surface);
+  color: var(--text);
   overflow: visible;
   white-space: pre;
   cursor: text;
@@ -497,10 +497,10 @@
 
 /* Alternating row tint for readability (only when no custom bg via inline style) */
 .ws-grid tbody tr:nth-child(even) .ws-cell:not([style*="background"]) {
-  background: #1b1f32;
+  background: var(--row-alt);
 }
 .ws-grid tbody tr:nth-child(even) .ws-cell:not([style*="background"]):hover {
-  background: #252a3e;
+  background: var(--row-hover);
 }
 
 /* ── Status Bar ─────────────────────────────────────────── */
@@ -510,12 +510,12 @@
   justify-content: space-between;
   align-items: center;
   padding: 3px 8px;
-  background: #2d3348;
-  border: 1px solid #4a5568;
+  background: var(--grid-header-bg);
+  border: 1px solid var(--grid-border);
   border-top: none;
   border-radius: 0 0 4px 4px;
   font-size: 11px;
-  color: #8b90a5;
+  color: var(--text-dim);
 }
 
 #wsQuickCalc {
@@ -553,18 +553,18 @@
   background: rgba(79, 140, 255, 0.12);
 }
 
-.ws-cell.ws-range-top { border-top: 2px solid #4f8cff !important; }
-.ws-cell.ws-range-bottom { border-bottom: 2px solid #4f8cff !important; }
-.ws-cell.ws-range-left { border-left: 2px solid #4f8cff !important; }
-.ws-cell.ws-range-right { border-right: 2px solid #4f8cff !important; }
+.ws-cell.ws-range-top { border-top: 2px solid var(--accent) !important; }
+.ws-cell.ws-range-bottom { border-bottom: 2px solid var(--accent) !important; }
+.ws-cell.ws-range-left { border-left: 2px solid var(--accent) !important; }
+.ws-cell.ws-range-right { border-right: 2px solid var(--accent) !important; }
 
 /* ── Context Menu ──────────────────────────────────────── */
 
 .ws-context-menu {
   position: fixed;
   z-index: 1000;
-  background: #242836;
-  border: 1px solid #4a5568;
+  background: var(--context-bg);
+  border: 1px solid var(--grid-border);
   border-radius: 4px;
   padding: 4px 0;
   box-shadow: 0 4px 12px rgba(0,0,0,0.4);
@@ -574,7 +574,7 @@
 .ws-context-menu-item {
   padding: 6px 16px;
   font-size: 12px;
-  color: #e4e6f0;
+  color: var(--text);
   cursor: pointer;
 }
 
@@ -584,7 +584,7 @@
 
 .ws-context-menu-separator {
   height: 1px;
-  background: #3a4058;
+  background: var(--scrollbar-thumb);
   margin: 4px 0;
 }
 

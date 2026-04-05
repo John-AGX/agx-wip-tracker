@@ -55,8 +55,8 @@
 
 .jh-blue .jh-strip-value { color: var(--accent, #4f8cff); }
 .jh-green .jh-strip-value { color: var(--green, #34d399); }
-.jh-amber .jh-strip-value { color: #f59e0b; }
-.jh-cyan .jh-strip-value { color: #22d3ee; }
+.jh-amber .jh-strip-value { color: var(--yellow); }
+.jh-cyan .jh-strip-value { color: var(--accent); }
 
 /* ââ Two-Column Container ââââââââââââââââââââââââââââââââââ */
 .ws-two-col {

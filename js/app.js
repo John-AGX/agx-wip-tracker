@@ -1,6 +1,31 @@
 
     let currentEditEstimateId = null;
 
+        // ==================== THEME TOGGLE ====================
+        (function() {
+            var saved = localStorage.getItem('agx-theme');
+            if (saved === 'light') document.body.classList.add('light-mode');
+            else if (!saved && window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) {
+                document.body.classList.add('light-mode');
+            }
+            function updateIcon() {
+                var btn = document.getElementById('theme-toggle');
+                if (btn) btn.textContent = document.body.classList.contains('light-mode') ? '\u263E' : '\u2600';
+            }
+            updateIcon();
+            document.addEventListener('DOMContentLoaded', function() {
+                updateIcon();
+                var btn = document.getElementById('theme-toggle');
+                if (!btn) return;
+                btn.addEventListener('click', function() {
+                    document.body.classList.toggle('light-mode');
+                    var isLight = document.body.classList.contains('light-mode');
+                    localStorage.setItem('agx-theme', isLight ? 'light' : 'dark');
+                    updateIcon();
+                });
+            });
+        })();
+
         // ==================== UTILITIES ====================
         const formatCurrency = (val) => {
             return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(val || 0);
