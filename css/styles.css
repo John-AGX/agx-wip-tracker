@@ -78,20 +78,23 @@
         /* THEME TOGGLE */
         .theme-toggle {
             position: absolute;
-            top: 8px;
+            top: 6px;
             right: 8px;
             background: rgba(255,255,255,0.12);
             border: 1px solid rgba(255,255,255,0.2);
             color: #fff;
             border-radius: 50%;
-            width: 30px;
-            height: 30px;
-            font-size: 15px;
+            width: 22px;
+            height: 22px;
+            font-size: 12px;
             cursor: pointer;
             z-index: 10;
             transition: background 0.15s;
             line-height: 1;
             padding: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
         }
         .theme-toggle:hover {
             background: rgba(255,255,255,0.25);
@@ -101,7 +104,7 @@
         header {
             background: linear-gradient(135deg, #0d1f12 0%, #14351d 40%, #1B8541 100%);
             border-bottom: 3px solid #3B8542;
-            padding: 20px 30px;
+            padding: 10px 30px 6px;
             position: sticky;
             top: 0;
             z-index: 100;
@@ -113,9 +116,9 @@
         }
 
         .header-title {
-            font-size: 26px;
+            font-size: 20px;
             font-weight: 700;
-            margin-bottom: 15px;
+            margin-bottom: 2px;
             color: #ffffff;
             letter-spacing: 1px;
             text-shadow: 0 1px 3px rgba(0,0,0,0.3);
@@ -126,7 +129,7 @@
         }
 
         .header-subtitle {
-            font-size: 14px;
+            font-size: 12px;
             color: var(--text-dim);
         }
 
@@ -134,7 +137,7 @@
         nav.tabs {
             display: flex;
             gap: 0;
-            margin-top: 15px;
+            margin-top: 6px;
             border-bottom: 1px solid var(--border);
         }
 
@@ -142,10 +145,10 @@
             background: transparent;
             border: none;
             color: var(--text-dim);
-            padding: 12px 24px;
+            padding: 6px 20px;
             cursor: pointer;
-            font-size: 15px;
-            border-bottom: 3px solid transparent;
+            font-size: 13px;
+            border-bottom: 2px solid transparent;
             transition: all 0.3s ease;
         }
 
@@ -157,6 +160,7 @@
             color: #5ddb7e;
             border-bottom-color: #5ddb7e;
         }
+
 
         /* MAIN CONTENT */
         main {
