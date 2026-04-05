@@ -493,36 +493,43 @@
       var detail = document.getElementById('wip-job-detail-view');
       if (!detail || detail.style.display === 'none') {
         if (layoutApplied) {
-          cleanup();
+          // Only clean header elements — leave the two-col layout inside the hidden detail view
+          var jobInfo = document.querySelector('.jh-job-info');
+          if (jobInfo) {
+            var sub = jobInfo.parentElement;
+            jobInfo.remove();
+            if (sub && sub.classList.contains('header-subtitle')) {
+              var st = sub.querySelector('span');
+              var txt = st ? st.textContent : '';
+              sub.textContent = txt;
+              sub.style.display = '';
+              sub.style.alignItems = '';
+            }
+          }
+          var tabRow = document.getElementById('jh-tab-metrics-row');
+          if (tabRow) {
+            var nav = tabRow.querySelector('nav.tabs');
+            var hc = document.querySelector('.header-content');
+            if (nav && hc) { hc.appendChild(nav); nav.style.flex = ''; }
+            tabRow.remove();
+          }
+          var strip = document.querySelector('.jh-metrics-strip');
+          if (strip) strip.remove();
           layoutApplied = false;
           currentJobId = null;
-        }
-        // Also catch stale elements if cleanup missed them
-        var staleStrip = document.querySelector('header .jh-metrics-strip');
-        if (staleStrip) staleStrip.remove();
-        var staleInfo = document.querySelector('.jh-job-info');
-        if (staleInfo) {
-          var sub = staleInfo.parentElement;
-          staleInfo.remove();
-          if (sub && sub.classList.contains('header-subtitle')) {
-            var st = sub.querySelector('span');
-            var txt = st ? st.textContent : '';
-            sub.textContent = txt;
-            sub.style.display = '';
-            sub.style.alignItems = '';
-          }
-        }
-        var staleTabRow = document.getElementById('jh-tab-metrics-row');
-        if (staleTabRow) {
-          var nav = staleTabRow.querySelector('nav.tabs');
-          var hc = document.querySelector('.header-content');
-          if (nav && hc) { hc.appendChild(nav); nav.style.flex = ''; }
-          staleTabRow.remove();
         }
         return;
       }
 
-      if (!document.getElementById('ws-two-col')) {
+      // Detail view visible — check if layout needs rebuilding
+      var existingLayout = document.getElementById('ws-two-col');
+      if (existingLayout && !layoutApplied) {
+        // Stale layout from a previous job session — remove it
+        existingLayout.remove();
+        existingLayout = null;
+      }
+
+      if (!existingLayout) {
         // Clear stale header elements so buildHeader can re-create them
         var oldInfo = document.querySelector('.jh-job-info');
         if (oldInfo) {
