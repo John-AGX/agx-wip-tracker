@@ -44,20 +44,9 @@
 
   // ── Cleanup old injections ────────────────────────────────
   function cleanup() {
-    // Remove job info from subtitle row and restore subtitle text
+    // Remove job info bar
     var jobInfo = document.querySelector(".jh-job-info");
-    if (jobInfo) {
-      var subtitle = jobInfo.parentElement;
-      jobInfo.remove();
-      // Restore subtitle to plain text
-      if (subtitle && subtitle.classList.contains("header-subtitle")) {
-        var subText = subtitle.querySelector("span");
-        var txt = subText ? subText.textContent : "";
-        subtitle.textContent = txt;
-        subtitle.style.display = "";
-        subtitle.style.alignItems = "";
-      }
-    }
+    if (jobInfo) jobInfo.remove();
 
     // Remove tab-metrics row and restore nav.tabs to header-content
     var tabRow = document.getElementById("jh-tab-metrics-row");
@@ -155,18 +144,10 @@
       { label: "As-Sold Margin", value: extractVal(allText, "As Sold Margin %") }
     ];
 
-    // ---- Job info (inserted into subtitle row) ----
+    // ---- Job info bar (own row below header-top) ----
     var name = job ? (job.jobNumber || "") + " \u2014 " + (job.name || "") : "Job Detail";
-    if (subtitle) {
-      var subtitleText = subtitle.textContent;
-      subtitle.textContent = "";
-      subtitle.style.display = "flex";
-      subtitle.style.alignItems = "center";
-      var subText = document.createElement("span");
-      subText.textContent = subtitleText;
-      subtitle.appendChild(subText);
-
-      var jobInfo = document.createElement("span");
+    if (headerContent) {
+      var jobInfo = document.createElement("div");
       jobInfo.className = "jh-job-info";
 
       var backBtn = document.createElement("button");
@@ -188,7 +169,10 @@
       statusBadge.textContent = job && job.status ? job.status : "In Progress";
       jobInfo.appendChild(statusBadge);
 
-      subtitle.appendChild(jobInfo);
+      // Insert after header-top, before nav.tabs
+      var navEl = headerContent.querySelector("nav.tabs");
+      if (navEl) headerContent.insertBefore(jobInfo, navEl);
+      else headerContent.appendChild(jobInfo);
     }
 
     // ---- Metrics strip ----
@@ -435,17 +419,7 @@
 
     // Clean stale header elements from prior render
     var staleInfo = document.querySelector(".jh-job-info");
-    if (staleInfo) {
-      var stSub = staleInfo.parentElement;
-      staleInfo.remove();
-      if (stSub && stSub.classList.contains("header-subtitle")) {
-        var stSpan = stSub.querySelector("span");
-        var stTxt = stSpan ? stSpan.textContent : stSub.textContent;
-        stSub.textContent = stTxt;
-        stSub.style.display = "";
-        stSub.style.alignItems = "";
-      }
-    }
+    if (staleInfo) staleInfo.remove();
     var staleRow = document.getElementById("jh-tab-metrics-row");
     if (staleRow) {
       var nav = staleRow.querySelector("nav.tabs");

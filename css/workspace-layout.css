@@ -312,11 +312,10 @@
 
 /* ââ Job Header Bar (inside sticky green header) ââ */
 .jh-job-info {
-  margin-left: auto;
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-shrink: 0;
+  padding: 3px 0;
 }
 .jh-back-btn {
   background: rgba(0,0,0,0.4);
