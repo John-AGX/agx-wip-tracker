@@ -417,9 +417,19 @@
     // Already applied?
     if (document.getElementById("ws-two-col")) { _applyingLayout = false; return; }
 
-    // Clean stale elements from prior render
+    // Clean stale header elements from prior render
     var staleInfo = document.querySelector(".jh-job-info");
-    if (staleInfo) staleInfo.remove();
+    if (staleInfo) {
+      var stSub = staleInfo.parentElement;
+      staleInfo.remove();
+      if (stSub && stSub.classList.contains("header-subtitle")) {
+        var stSpan = stSub.querySelector("span");
+        var stTxt = stSpan ? stSpan.textContent : stSub.textContent;
+        stSub.textContent = stTxt;
+        stSub.style.display = "";
+        stSub.style.alignItems = "";
+      }
+    }
     var staleRow = document.getElementById("jh-tab-metrics-row");
     if (staleRow) {
       var nav = staleRow.querySelector("nav.tabs");
@@ -485,80 +495,42 @@
   }
 
   // ── Observer ──────────────────────────────────────────────
+  let _observerBusy = false;
+
   function observe() {
     injectCSS();
     injectWorkspaceCSS();
 
     var observer = new MutationObserver(function() {
-      var detail = document.getElementById('wip-job-detail-view');
-      if (!detail || detail.style.display === 'none') {
-        if (layoutApplied) {
-          // Only clean header elements — leave the two-col layout inside the hidden detail view
-          var jobInfo = document.querySelector('.jh-job-info');
-          if (jobInfo) {
-            var sub = jobInfo.parentElement;
-            jobInfo.remove();
-            if (sub && sub.classList.contains('header-subtitle')) {
-              var st = sub.querySelector('span');
-              var txt = st ? st.textContent : '';
-              sub.textContent = txt;
-              sub.style.display = '';
-              sub.style.alignItems = '';
-            }
+      if (_observerBusy) return;
+      _observerBusy = true;
+
+      try {
+        var detail = document.getElementById('wip-job-detail-view');
+        var detailVisible = detail && detail.style.display !== 'none';
+
+        if (!detailVisible) {
+          // Job closed — clean up everything
+          if (layoutApplied) {
+            cleanup();
+            layoutApplied = false;
+            currentJobId = null;
           }
-          var tabRow = document.getElementById('jh-tab-metrics-row');
-          if (tabRow) {
-            var nav = tabRow.querySelector('nav.tabs');
-            var hc = document.querySelector('.header-content');
-            if (nav && hc) { hc.appendChild(nav); nav.style.flex = ''; }
-            tabRow.remove();
-          }
-          var strip = document.querySelector('.jh-metrics-strip');
-          if (strip) strip.remove();
-          layoutApplied = false;
-          currentJobId = null;
+          return;
         }
-        return;
-      }
 
-      // Detail view visible — check if layout needs rebuilding
-      var existingLayout = document.getElementById('ws-two-col');
-      if (existingLayout && !layoutApplied) {
-        // Stale layout from a previous job session — remove it
-        existingLayout.remove();
-        existingLayout = null;
-      }
-
-      if (!existingLayout) {
-        // Clear stale header elements so buildHeader can re-create them
-        var oldInfo = document.querySelector('.jh-job-info');
-        if (oldInfo) {
-          var sub = oldInfo.parentElement;
-          oldInfo.remove();
-          if (sub && sub.classList.contains('header-subtitle')) {
-            var st = sub.querySelector('span');
-            var txt = st ? st.textContent : '';
-            sub.textContent = txt;
-            sub.style.display = '';
-            sub.style.alignItems = '';
-          }
+        // Job detail is visible — ensure layout is applied
+        if (!layoutApplied) {
+          // Remove any stale ws-two-col left from a previous session
+          var stale = document.getElementById('ws-two-col');
+          if (stale) stale.remove();
+          applyLayout();
         }
-        var oldTabRow = document.getElementById('jh-tab-metrics-row');
-        if (oldTabRow) {
-          var nav2 = oldTabRow.querySelector('nav.tabs');
-          var hc2 = document.querySelector('.header-content');
-          if (nav2 && hc2) { hc2.appendChild(nav2); nav2.style.flex = ''; }
-          oldTabRow.remove();
-        }
-        var oldStrip = document.querySelector('.jh-metrics-strip');
-        if (oldStrip) oldStrip.remove();
 
-        layoutApplied = false;
-        currentJobId = null;
-        applyLayout();
+        tryInitWorkspace();
+      } finally {
+        _observerBusy = false;
       }
-
-      tryInitWorkspace();
     });
 
     observer.observe(document.body, { childList: true, subtree: true });
