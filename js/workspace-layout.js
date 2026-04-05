@@ -75,21 +75,17 @@
     var strip = document.querySelector(".jh-metrics-strip");
     if (strip) strip.remove();
 
-    // Un-hide original job detail header
+    // Un-hide original job detail header and elements
     var detail = document.getElementById("wip-job-detail-view");
     if (detail) {
       var origHeader = detail.querySelector(".job-detail-header");
       if (origHeader) origHeader.style.display = "";
     }
+    ['.action-buttons', '.sub-tabs', '#job-info-card'].forEach(function(sel) { var el = document.querySelector(sel); if (el) el.style.display = ''; });
 
-    // Remove two-col layout
-      ['.action-buttons', '.sub-tabs', '#job-info-card'].forEach(function(sel) { var el = document.querySelector(sel); if (el) el.style.display = ''; });
+    // Remove two-col layout entirely (buildLayout creates fresh content)
     var twoCol = document.getElementById("ws-two-col");
-    if (twoCol) {
-      var detail2 = document.getElementById("wip-job-detail-view");
-      if (detail2) { while (twoCol.firstChild) detail2.appendChild(twoCol.firstChild); }
-      twoCol.remove();
-    }
+    if (twoCol) twoCol.remove();
   }
 
   function buildHeader(detail, job) {
