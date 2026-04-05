@@ -44,9 +44,20 @@
 
   // ── Cleanup old injections ────────────────────────────────
   function cleanup() {
-    // Remove job bar from header
-    var jobBar = document.getElementById("jh-job-bar");
-    if (jobBar) jobBar.remove();
+    // Remove job info from subtitle row and restore subtitle text
+    var jobInfo = document.querySelector(".jh-job-info");
+    if (jobInfo) {
+      var subtitle = jobInfo.parentElement;
+      jobInfo.remove();
+      // Restore subtitle to plain text
+      if (subtitle && subtitle.classList.contains("header-subtitle")) {
+        var subText = subtitle.querySelector("span");
+        var txt = subText ? subText.textContent : "";
+        subtitle.textContent = txt;
+        subtitle.style.display = "";
+        subtitle.style.alignItems = "";
+      }
+    }
 
     // Remove tab-metrics row and restore nav.tabs to header-content
     var tabRow = document.getElementById("jh-tab-metrics-row");
@@ -128,32 +139,41 @@
       { label: "As-Sold Margin", value: extractVal(allText, "As Sold Margin %") }
     ];
 
-    // ---- Job info bar ----
-    var jobBar = document.createElement("div");
-    jobBar.id = "jh-job-bar";
-    jobBar.className = "jh-job-bar";
-    var backBtn = document.createElement("button");
-    backBtn.className = "jh-back-btn";
-    backBtn.textContent = "\u2190 Back to WIP";
-    backBtn.addEventListener("click", function() {
-      var backLink = detail.querySelector("a[href], button");
-      if (backLink) backLink.click();
-    });
-    jobBar.appendChild(backBtn);
-
-    var jobTitle = document.createElement("span");
-    jobTitle.className = "jh-job-title";
+    // ---- Job info (inserted into subtitle row) ----
     var name = job ? (job.jobNumber || "") + " \u2014 " + (job.name || "") : "Job Detail";
-    jobTitle.textContent = name;
-    jobBar.appendChild(jobTitle);
+    if (subtitle) {
+      var subtitleText = subtitle.textContent;
+      subtitle.textContent = "";
+      subtitle.style.display = "flex";
+      subtitle.style.alignItems = "center";
+      var subText = document.createElement("span");
+      subText.textContent = subtitleText;
+      subtitle.appendChild(subText);
 
-    var statusBadge = document.createElement("span");
-    statusBadge.className = "jh-status-badge";
-    statusBadge.textContent = job && job.status ? job.status : "In Progress";
-    jobBar.appendChild(statusBadge);
+      var jobInfo = document.createElement("span");
+      jobInfo.className = "jh-job-info";
 
-    if (subtitle) { subtitle.after(jobBar); }
-    else if (headerContent) { headerContent.appendChild(jobBar); }
+      var backBtn = document.createElement("button");
+      backBtn.className = "jh-back-btn";
+      backBtn.textContent = "\u2190 Back to WIP";
+      backBtn.addEventListener("click", function() {
+        var backLink = detail.querySelector("a[href], button");
+        if (backLink) backLink.click();
+      });
+      jobInfo.appendChild(backBtn);
+
+      var jobTitle = document.createElement("span");
+      jobTitle.className = "jh-job-title";
+      jobTitle.textContent = name;
+      jobInfo.appendChild(jobTitle);
+
+      var statusBadge = document.createElement("span");
+      statusBadge.className = "jh-status-badge";
+      statusBadge.textContent = job && job.status ? job.status : "In Progress";
+      jobInfo.appendChild(statusBadge);
+
+      subtitle.appendChild(jobInfo);
+    }
 
     // ---- Metrics strip ----
     var strip = document.createElement("div");
@@ -398,8 +418,8 @@
     if (document.getElementById("ws-two-col")) { _applyingLayout = false; return; }
 
     // Clean stale elements from prior render
-    var staleBar = document.getElementById("jh-job-bar");
-    if (staleBar) staleBar.remove();
+    var staleInfo = document.querySelector(".jh-job-info");
+    if (staleInfo) staleInfo.remove();
     var staleRow = document.getElementById("jh-tab-metrics-row");
     if (staleRow) {
       var nav = staleRow.querySelector("nav.tabs");
