@@ -83,8 +83,15 @@
     }
     ['.action-buttons', '.sub-tabs', '#job-info-card'].forEach(function(sel) { var el = document.querySelector(sel); if (el) el.style.display = ''; });
 
-    // Remove two-col layout entirely (buildLayout creates fresh content)
+    // Move sub-tab content panels back to detail before destroying two-col
     var twoCol = document.getElementById("ws-two-col");
+    if (twoCol && detail) {
+      var panels = twoCol.querySelectorAll('.sub-tab-content-job');
+      panels.forEach(function(p) {
+        p.style.display = '';
+        detail.appendChild(p);
+      });
+    }
     if (twoCol) twoCol.remove();
   }
 
