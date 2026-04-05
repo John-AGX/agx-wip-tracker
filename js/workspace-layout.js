@@ -86,11 +86,24 @@
     // Move sub-tab content panels back to detail before destroying two-col
     var twoCol = document.getElementById("ws-two-col");
     if (twoCol && detail) {
+      // Rescue sub-tab panels
       var panels = twoCol.querySelectorAll('.sub-tab-content-job');
       panels.forEach(function(p) {
         p.style.display = '';
         detail.appendChild(p);
       });
+      // Rescue job-info-card (moved into a <details> accordion)
+      var jobInfoCard = twoCol.querySelector('#job-info-card');
+      if (jobInfoCard) {
+        jobInfoCard.style.display = '';
+        jobInfoCard.style.border = '';
+        jobInfoCard.style.boxShadow = '';
+        jobInfoCard.classList.remove('ws-accordion-content');
+        detail.appendChild(jobInfoCard);
+      }
+      // Remove the accordion wrapper
+      var accordion = twoCol.querySelector('.ws-job-info-details');
+      if (accordion) accordion.remove();
     }
     if (twoCol) twoCol.remove();
   }
