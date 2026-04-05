@@ -654,9 +654,6 @@ function renderWIPMain() {
                     <td style="text-align: right;"><div class="progress-bar" style="margin-bottom: 2px; height: 6px;"><div class="progress-fill" style="width: ${w.pctComplete}%"></div></div><span style="font-size: 12px;">${w.pctComplete.toFixed(1)}%</span></td>
                     <td style="text-align: right; color: ${w.jtdProfit >= 0 ? 'var(--green)' : 'var(--red)'};">${formatCurrency(w.jtdProfit)}</td>
                     <td style="text-align: right;">${w.jtdMargin.toFixed(1)}%</td>
-                    <td style="text-align: center;">
-                        <button class="small" onclick="event.stopPropagation(); editJob('${escapeHTML(job.id)}')">&#x270F;&#xFE0F; Edit</button>
-                    </td>
                 `;
                 tbody.appendChild(row);
             });
