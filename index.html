@@ -855,17 +855,17 @@
                 <label>Assignment Level</label>
                 <select id="subLevel" onchange="subLevelChanged()">
                     <option value="job">Job-Wide (costs split by building %)</option>
-                    <option value="building">Building</option>
-                    <option value="phase">Phase</option>
+                    <option value="building">Specific Buildings</option>
+                    <option value="phase">Specific Phases</option>
                 </select>
             </div>
             <div class="form-group" id="subBuildingGroup" style="display:none;">
-                <label>Building</label>
-                <select id="subBuilding" onchange="subBuildingChanged()"></select>
+                <label>Select Buildings</label>
+                <div id="subBuildingChecks" style="display:flex;flex-wrap:wrap;gap:6px;padding:4px 0;"></div>
             </div>
             <div class="form-group" id="subPhaseGroup" style="display:none;">
-                <label>Phase</label>
-                <select id="subPhase"></select>
+                <label>Select Phases</label>
+                <div id="subPhaseChecks" style="display:flex;flex-wrap:wrap;gap:6px;padding:4px 0;"></div>
             </div>
             <div class="form-row">
                 <div class="form-group">

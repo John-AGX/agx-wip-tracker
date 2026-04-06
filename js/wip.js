@@ -5,15 +5,26 @@ function renderWIPMain() {
 
         // Calculate sub costs from the Subcontractors tab entries
         function getSubCostForPhase(phaseId) {
-            // Sum billedToDate of all subs assigned directly to this phase
-            return appData.subs.filter(s => s.level === 'phase' && s.phaseId === phaseId)
-                .reduce((sum, s) => sum + (s.billedToDate || 0), 0);
+            // Sum billedToDate of all subs assigned to this phase (supports multi-phase assignment)
+            let total = 0;
+            appData.subs.filter(s => s.level === 'phase').forEach(s => {
+                var pIds = s.phaseIds || (s.phaseId ? [s.phaseId] : []);
+                if (pIds.includes(phaseId)) {
+                    total += (s.billedToDate || 0) / pIds.length; // split equally among assigned phases
+                }
+            });
+            return total;
         }
 
         function getSubCostForBuilding(buildingId, jobId) {
-            // 1. Subs assigned directly to this building
-            let total = appData.subs.filter(s => s.level === 'building' && s.buildingId === buildingId)
-                .reduce((sum, s) => sum + (s.billedToDate || 0), 0);
+            // 1. Subs assigned directly to this building (supports multi-building assignment)
+            let total = 0;
+            appData.subs.filter(s => s.level === 'building').forEach(s => {
+                var bIds = s.buildingIds || (s.buildingId ? [s.buildingId] : []);
+                if (bIds.includes(buildingId)) {
+                    total += (s.billedToDate || 0) / bIds.length;
+                }
+            });
             // 2. Job-level subs distributed by building budget %
             const jobSubs = appData.subs.filter(s => s.level === 'job' && s.jobId === jobId);
             if (jobSubs.length > 0) {
@@ -42,13 +53,24 @@ function renderWIPMain() {
         }
 
         function getSubContractForPhase(phaseId) {
-            return appData.subs.filter(s => s.level === 'phase' && s.phaseId === phaseId)
-                .reduce((sum, s) => sum + (s.contractAmt || 0), 0);
+            let total = 0;
+            appData.subs.filter(s => s.level === 'phase').forEach(s => {
+                var pIds = s.phaseIds || (s.phaseId ? [s.phaseId] : []);
+                if (pIds.includes(phaseId)) {
+                    total += (s.contractAmt || 0) / pIds.length;
+                }
+            });
+            return total;
         }
 
         function getSubContractForBuilding(buildingId, jobId) {
-            let total = appData.subs.filter(s => s.level === 'building' && s.buildingId === buildingId)
-                .reduce((sum, s) => sum + (s.contractAmt || 0), 0);
+            let total = 0;
+            appData.subs.filter(s => s.level === 'building').forEach(s => {
+                var bIds = s.buildingIds || (s.buildingId ? [s.buildingId] : []);
+                if (bIds.includes(buildingId)) {
+                    total += (s.contractAmt || 0) / bIds.length;
+                }
+            });
             const jobSubs = appData.subs.filter(s => s.level === 'job' && s.jobId === jobId);
             if (jobSubs.length > 0) {
                 const thisBldg = appData.buildings.find(b => b.id === buildingId);
@@ -1668,7 +1690,7 @@ function renderWIPMain() {
             appState.editSubId = null;
             document.getElementById('subModalHeader').textContent = 'Add Subcontractor';
             document.getElementById('subSaveBtn').innerHTML = '&#x1F477; Add Subcontractor';
-            populateSubBuildingSelect();
+            populateSubBuildingChecks();
             document.getElementById('subName').value = '';
             populateSubTradeSelect();
             document.getElementById('subTrade').value = '';
@@ -1680,15 +1702,15 @@ function renderWIPMain() {
             openModal('addSubModal');
         }
 
-        function populateSubBuildingSelect() {
+        function populateSubBuildingChecks(selectedIds) {
             const buildings = appData.buildings.filter(b => b.jobId === appState.currentJobId);
-            const select = document.getElementById('subBuilding');
-            select.innerHTML = '<option value="">-- Select Building --</option>';
+            const container = document.getElementById('subBuildingChecks');
+            if (!container) return;
+            container.innerHTML = '';
             buildings.forEach(b => {
-                const opt = document.createElement('option');
-                opt.value = b.id;
-                opt.textContent = b.name;
-                select.appendChild(opt);
+                var checked = selectedIds && selectedIds.includes(b.id) ? ' checked' : '';
+                container.innerHTML += '<label style="display:flex;align-items:center;gap:3px;font-size:11px;cursor:pointer;padding:2px 6px;border:1px solid var(--border);border-radius:4px;background:var(--surface2);">' +
+                    '<input type="checkbox" class="sub-bldg-chk" value="' + b.id + '"' + checked + ' style="width:13px;height:13px;" onchange="subBuildingCheckChanged()">' + escapeHTML(b.name) + '</label>';
             });
         }
 
@@ -1697,34 +1719,44 @@ function renderWIPMain() {
             document.getElementById('subBuildingGroup').style.display = (level === 'building' || level === 'phase') ? '' : 'none';
             document.getElementById('subPhaseGroup').style.display = level === 'phase' ? '' : 'none';
             if (level === 'building' || level === 'phase') {
-                subBuildingChanged();
+                populateSubBuildingChecks();
+                if (level === 'phase') subBuildingCheckChanged();
             }
         }
 
-        function subBuildingChanged() {
-            const buildingId = document.getElementById('subBuilding').value;
-            const phaseSelect = document.getElementById('subPhase');
-            phaseSelect.innerHTML = '<option value="">-- Select Phase --</option>';
-            if (buildingId) {
-                const phases = appData.phases.filter(p => p.jobId === appState.currentJobId && p.buildingId === buildingId);
+        function subBuildingCheckChanged() {
+            const level = document.getElementById('subLevel').value;
+            if (level !== 'phase') return;
+            const checkedBldgs = Array.from(document.querySelectorAll('.sub-bldg-chk:checked')).map(c => c.value);
+            const container = document.getElementById('subPhaseChecks');
+            if (!container) return;
+            container.innerHTML = '';
+            checkedBldgs.forEach(bId => {
+                const bldg = appData.buildings.find(b => b.id === bId);
+                const phases = appData.phases.filter(p => p.jobId === appState.currentJobId && p.buildingId === bId);
                 phases.forEach(p => {
-                    const opt = document.createElement('option');
-                    opt.value = p.id;
-                    opt.textContent = p.phase;
-                    phaseSelect.appendChild(opt);
+                    container.innerHTML += '<label style="display:flex;align-items:center;gap:3px;font-size:11px;cursor:pointer;padding:2px 6px;border:1px solid var(--border);border-radius:4px;background:var(--surface2);">' +
+                        '<input type="checkbox" class="sub-phase-chk" value="' + p.id + '" style="width:13px;height:13px;">' +
+                        (bldg ? escapeHTML(bldg.name) + ' \u203A ' : '') + escapeHTML(p.phase) + '</label>';
                 });
-            }
+            });
         }
 
         function saveSub() {
             const level = document.getElementById('subLevel').value;
+            const buildingIds = (level === 'building' || level === 'phase')
+                ? Array.from(document.querySelectorAll('.sub-bldg-chk:checked')).map(c => c.value) : [];
+            const phaseIds = level === 'phase'
+                ? Array.from(document.querySelectorAll('.sub-phase-chk:checked')).map(c => c.value) : [];
             const subData = {
                 jobId: appState.currentJobId,
                 name: document.getElementById('subName').value,
                 trade: document.getElementById('subTrade').value,
                 level: level,
-                buildingId: (level === 'building' || level === 'phase') ? document.getElementById('subBuilding').value : '',
-                phaseId: level === 'phase' ? document.getElementById('subPhase').value : '',
+                buildingId: buildingIds[0] || '',
+                buildingIds: buildingIds,
+                phaseId: phaseIds[0] || '',
+                phaseIds: phaseIds,
                 contractAmt: parseFloat(document.getElementById('subContract').value) || 0,
                 billedToDate: parseFloat(document.getElementById('subBilled').value) || 0,
                 notes: document.getElementById('subNotes').value
@@ -1751,7 +1783,6 @@ function renderWIPMain() {
             appState.editSubId = subId;
             document.getElementById('subModalHeader').textContent = 'Edit Subcontractor';
             document.getElementById('subSaveBtn').innerHTML = '&#x1F4BE; Save Changes';
-            populateSubBuildingSelect();
             document.getElementById('subName').value = sub.name || '';
             populateSubTradeSelect();
             if (sub.trade && !Array.from(document.getElementById('subTrade').options).some(o => o.value === sub.trade)) {
@@ -1763,12 +1794,27 @@ function renderWIPMain() {
             document.getElementById('subContract').value = sub.contractAmt || '';
             document.getElementById('subBilled').value = sub.billedToDate || '';
             document.getElementById('subNotes').value = sub.notes || '';
+            // Restore building/phase checkboxes
+            var bldgIds = sub.buildingIds || (sub.buildingId ? [sub.buildingId] : []);
+            var phaseIds = sub.phaseIds || (sub.phaseId ? [sub.phaseId] : []);
+            populateSubBuildingChecks(bldgIds);
             subLevelChanged();
-            if (sub.buildingId) document.getElementById('subBuilding').value = sub.buildingId;
-            if (sub.level === 'phase') {
-                subBuildingChanged();
-                setTimeout(() => { document.getElementById('subPhase').value = sub.phaseId || ''; }, 50);
-            }
+            // Re-check the buildings after subLevelChanged rebuilt them
+            setTimeout(function () {
+                bldgIds.forEach(function (id) {
+                    var chk = document.querySelector('.sub-bldg-chk[value="' + id + '"]');
+                    if (chk) chk.checked = true;
+                });
+                if (sub.level === 'phase') {
+                    subBuildingCheckChanged();
+                    setTimeout(function () {
+                        phaseIds.forEach(function (id) {
+                            var chk = document.querySelector('.sub-phase-chk[value="' + id + '"]');
+                            if (chk) chk.checked = true;
+                        });
+                    }, 30);
+                }
+            }, 30);
             openModal('addSubModal');
         }
 
