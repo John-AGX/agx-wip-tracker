@@ -151,48 +151,37 @@ function renderWIPMain() {
             let totalAccrued = 0;
             const jobSubs = appData.subs.filter(s => s.jobId === jobId);
             const job = appData.jobs.find(j => j.id === jobId);
-            
+
             jobSubs.forEach(sub => {
                 let pctComplete = 0;
-                
-                if (sub.level === 'phase' && sub.phaseId) {
-                    // Use phase % complete
-                    const phase = appData.phases.find(p => p.id === sub.phaseId);
-                    pctComplete = phase ? (phase.pctComplete || 0) : 0;
-                } else if (sub.level === 'building' && sub.buildingId) {
-                    // Use weighted average of building's phases, or job % if no phases
-                    const bldgPhases = appData.phases.filter(p => p.jobId === jobId && p.buildingId === sub.buildingId);
-                    if (bldgPhases.length > 0) {
-                        const totalBudget = bldgPhases.reduce((s, p) => s + (p.phaseBudget || 0), 0);
-                        if (totalBudget > 0) {
-                            pctComplete = bldgPhases.reduce((s, p) => s + (p.pctComplete || 0) * (p.phaseBudget || 0), 0) / totalBudget;
-                        } else {
-                            pctComplete = bldgPhases.reduce((s, p) => s + (p.pctComplete || 0), 0) / bldgPhases.length;
-                        }
-                    } else {
-                        pctComplete = job ? (job.pctComplete || 0) : 0;
-                    }
+                var phaseIds = sub.phaseIds || (sub.phaseId ? [sub.phaseId] : []);
+                var buildingIds = sub.buildingIds || (sub.buildingId ? [sub.buildingId] : []);
+
+                if (sub.level === 'phase' && phaseIds.length > 0) {
+                    // Average % complete across assigned phases
+                    let totalPct = 0;
+                    phaseIds.forEach(pid => {
+                        const phase = appData.phases.find(p => p.id === pid);
+                        totalPct += phase ? (phase.pctComplete || 0) : 0;
+                    });
+                    pctComplete = totalPct / phaseIds.length;
+                } else if (sub.level === 'building' && buildingIds.length > 0) {
+                    // Average building % complete across assigned buildings
+                    let totalPct = 0;
+                    buildingIds.forEach(bid => {
+                        totalPct += calcBuildingPctComplete(bid, jobId);
+                    });
+                    pctComplete = totalPct / buildingIds.length;
                 } else {
-                    // Job-level sub or undefined level: use job % complete
-                    // If buildings exist, use weighted avg of all phases
-                    const allPhases = appData.phases.filter(p => p.jobId === jobId);
-                    if (allPhases.length > 0) {
-                        const totalBudget = allPhases.reduce((s, p) => s + (p.phaseBudget || 0), 0);
-                        if (totalBudget > 0) {
-                            pctComplete = allPhases.reduce((s, p) => s + (p.pctComplete || 0) * (p.phaseBudget || 0), 0) / totalBudget;
-                        } else {
-                            pctComplete = allPhases.reduce((s, p) => s + (p.pctComplete || 0), 0) / allPhases.length;
-                        }
-                    } else {
-                        pctComplete = job ? (job.pctComplete || 0) : 0;
-                    }
+                    // Job-level: use job % complete
+                    pctComplete = job ? (job.pctComplete || 0) : 0;
                 }
-                
+
                 const earned = (sub.contractAmt || 0) * (pctComplete / 100);
                 const accrued = Math.max(0, earned - (sub.billedToDate || 0));
                 totalAccrued += accrued;
             });
-            
+
             return totalAccrued;
         }
 
