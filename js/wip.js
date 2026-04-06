@@ -810,6 +810,25 @@ function renderWIPMain() {
             renderJobDetail(job.id);
         }
 
+        function deleteCurrentJob() {
+            const jobId = appState.currentJobId;
+            const job = appData.jobs.find(j => j.id === jobId);
+            if (!job) return;
+            if (!confirm('Permanently delete "' + (job.title || 'this job') + '" and all its buildings, phases, subs, and change orders? This cannot be undone.')) return;
+            // Remove all related data
+            appData.buildings = appData.buildings.filter(b => b.jobId !== jobId);
+            appData.phases = appData.phases.filter(p => p.jobId !== jobId);
+            appData.subs = appData.subs.filter(s => s.jobId !== jobId);
+            appData.changeOrders = appData.changeOrders.filter(c => c.jobId !== jobId);
+            appData.jobs = appData.jobs.filter(j => j.id !== jobId);
+            // Remove workspace data
+            var allWs = safeLoadJSON('agx-workspaces', {});
+            delete allWs[jobId];
+            localStorage.setItem('agx-workspaces', JSON.stringify(allWs));
+            saveData();
+            backToWIPMain();
+        }
+
         function toggleEditJobInfo() {
             const jobId = appState.currentJobId;
             const job = appData.jobs.find(j => j.id === jobId);

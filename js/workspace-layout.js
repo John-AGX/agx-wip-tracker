@@ -346,8 +346,12 @@
   }
 
   function moveJobInfoToAccordion(detail, rightContent) {
-    var jobInfo = detail.querySelector('#job-info-card');
+    if (!rightContent) return;
+    // Search document-wide in case the card isn't inside detail
+    var jobInfo = document.getElementById('job-info-card');
     if (!jobInfo) return;
+    // Don't move if already in an accordion
+    if (jobInfo.closest('.ws-job-info-details')) return;
 
     // Clear the display:none that applyLayout set
     jobInfo.style.display = '';
