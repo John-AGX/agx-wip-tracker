@@ -130,18 +130,18 @@
 
     var metricsData = [
       { label: "Total Income", value: extractVal(allText, "Total Income") },
-      { label: "Est. Costs", value: extractVal(allText, "Total Est. Costs (Revised)") },
+      { label: "Est. Costs (Rev.)", value: extractVal(allText, "Total Est. Costs (Revised)") },
       { label: "Actual Costs", value: extractVal(allText, "Actual Costs (from tracker)") },
-      { label: "Remaining", value: extractVal(allText, "Remaining Est. Costs") },
+      { label: "Remaining Costs", value: extractVal(allText, "Remaining Est. Costs") },
       { label: "% Complete", value: extractVal(allText, "% Complete") },
       { label: "Revenue Earned", value: revVal },
+      { label: "Accrued", value: "--" },
       { label: "Invoiced", value: extractVal(allText, "Invoiced to Date") },
       { label: "Unbilled", value: extractVal(allText, "Unbilled (Revenue - Invoiced)") },
-      { label: "Backlog", value: extractVal(allText, "Backlog (Income - Revenue)") },
       { label: "Change Orders", value: extractVal(allText, "+ Change Orders") },
       { label: "Gross Profit", value: extractVal(allText, "Revised Gross Profit") },
-      { label: "Margin %", value: extractVal(allText, "Revised Margin %") },
-      { label: "As-Sold Margin", value: extractVal(allText, "As Sold Margin %") }
+      { label: "Margin JTD", value: extractVal(allText, "Revised Margin %") },
+      { label: "Backlog", value: extractVal(allText, "Backlog (Income - Revenue)") }
     ];
 
     // ---- Job info (appended into header-right, below subtitle) ----
@@ -212,20 +212,21 @@
     if (!strip || !currentJobId) return;
     if (typeof getJobWIP !== 'function' || typeof formatCurrency !== 'function') return;
     var w = getJobWIP(currentJobId);
+    var accrued = (typeof getJobAccruedCosts === 'function') ? getJobAccruedCosts(currentJobId) : 0;
     var map = {
       'Total Income': formatCurrency(w.totalIncome),
-      'Est. Costs': formatCurrency(w.revisedEstCosts),
+      'Est. Costs (Rev.)': formatCurrency(w.revisedEstCosts),
       'Actual Costs': formatCurrency(w.actualCosts),
-      'Remaining': formatCurrency(w.remainingCosts),
+      'Remaining Costs': formatCurrency(w.remainingCosts),
       '% Complete': w.pctComplete.toFixed(1) + '%',
       'Revenue Earned': formatCurrency(w.revenueEarned),
+      'Accrued': formatCurrency(accrued),
       'Invoiced': formatCurrency(w.invoiced),
       'Unbilled': formatCurrency(w.unbilled),
-      'Backlog': formatCurrency(w.backlog),
       'Change Orders': formatCurrency(w.coIncome),
       'Gross Profit': formatCurrency(w.revisedProfit),
-      'Margin %': w.revisedMargin.toFixed(1) + '%',
-      'As-Sold Margin': w.asSoldMargin.toFixed(1) + '%'
+      'Margin JTD': w.jtdMargin.toFixed(1) + '%',
+      'Backlog': formatCurrency(w.backlog)
     };
     strip.querySelectorAll('.jh-strip-card').forEach(function (card) {
       var lbl = card.querySelector('.jh-strip-label');
