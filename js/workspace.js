@@ -596,7 +596,8 @@
     var job = appData.jobs.find(function (j) { return j.id === grid.jobId; });
     if (!job) return;
 
-    var changed = false;
+    // Group linked cells by target+field so multiple cells can SUM into one field
+    var grouped = {};
     Object.entries(grid.links).forEach(function (entry) {
       var cellAddr = entry[0], linkObj = entry[1];
       if (!linkObj || !linkObj.field) return;
@@ -604,6 +605,15 @@
       if (!ref) return;
       var cell = getCell(ref.r, ref.c);
       if (typeof cell.value !== 'number') return;
+      var key = (linkObj.level || 'job') + ':' + (linkObj.targetId || '') + ':' + linkObj.field;
+      if (!grouped[key]) grouped[key] = { linkObj: linkObj, values: [] };
+      grouped[key].values.push(cell.value);
+    });
+
+    var changed = false;
+    Object.values(grouped).forEach(function (g) {
+      var linkObj = g.linkObj;
+      var total = g.values.reduce(function (s, v) { return s + v; }, 0);
 
       var target = null;
       if (linkObj.level === 'job') {
@@ -619,7 +629,7 @@
       }
 
       if (target) {
-        target[linkObj.field] = cell.value;
+        target[linkObj.field] = total;
         changed = true;
       }
     });
@@ -887,9 +897,13 @@
 
         var st = buildCellStyle(cell, mergeW);
         var attrs = span ? ` colspan="${span.colspan}" rowspan="${span.rowspan}"` : '';
-        var noteAttr = cell.note ? ` title="${cell.note.replace(/"/g, '&amp;quot;')}"` : '';
+        var titleParts = [];
+        if (cell.note) titleParts.push(cell.note);
+        var linkObj = grid.links[key];
+        if (linkObj && linkObj.field) titleParts.push('\u{1F517} ' + getLinkLabel(linkObj));
+        var titleAttr = titleParts.length ? ' title="' + titleParts.join('\n').replace(/"/g, '&amp;quot;') + '"' : '';
 
-        html += `<td class="${cls}" data-r="${r}" data-c="${c}" style="${st}"${attrs}${noteAttr}>${val}</td>`;
+        html += `<td class="${cls}" data-r="${r}" data-c="${c}" style="${st}"${attrs}${titleAttr}>${val}</td>`;
       }
       html += '</tr>';
     }
@@ -912,7 +926,11 @@
     if (typeof cell.value === 'number' && !(cell.style && cell.style.align)) td.classList.add('ws-number');
     if (cell.note) td.classList.add('ws-has-note');
     if (getMergeSpan(r, c)) td.classList.add('ws-merged');
-    td.title = cell.note || '';
+    var titleParts = [];
+    if (cell.note) titleParts.push(cell.note);
+    var linkObj = grid.links[key];
+    if (linkObj && linkObj.field) titleParts.push('\u{1F517} ' + getLinkLabel(linkObj));
+    td.title = titleParts.join('\n');
 
     // Apply inline styles
     var w = grid.colWidths[c] || COL_DEFAULT_WIDTH;
@@ -1345,15 +1363,6 @@
   }
 
   function setLink(cellAddr, linkObj) {
-    // Remove any existing link to this exact target+field
-    Object.keys(grid.links).forEach(function (key) {
-      var existing = grid.links[key];
-      if (existing && existing.field === linkObj.field && existing.level === linkObj.level &&
-          (linkObj.level === 'job' || existing.targetId === linkObj.targetId)) {
-        delete grid.links[key];
-      }
-    });
-
     var fieldDef = findFieldDef(linkObj);
     grid.links[cellAddr] = linkObj;
     var parsed = parseAddr(cellAddr);

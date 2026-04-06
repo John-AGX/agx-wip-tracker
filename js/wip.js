@@ -1261,15 +1261,13 @@ function renderWIPMain() {
             const job = appData.jobs.find(j => j.id === appState.currentJobId);
             if (!job) return;
             job.materials = parseFloat(document.getElementById('jobCostMaterials').value) || 0;
+            job.labor = parseFloat(document.getElementById('jobCostLabor').value) || 0;
             // job.sub is auto-calculated from Subs tab by recalcSubCosts — don't overwrite
             job.equipment = parseFloat(document.getElementById('jobCostEquipment').value) || 0;
             job.generalConditions = parseFloat(document.getElementById('jobCostGC').value) || 0;
             job.hoursWeek = parseFloat(document.getElementById('jobCostHoursWeek').value) || 0;
             job.hoursTotal = (parseFloat(document.getElementById('jobCostHoursTotal').value) || 0) + job.hoursWeek;
             job.rate = parseFloat(document.getElementById('jobCostRate').value) || 40;
-            // Auto-calculate labor $ from total hours × rate
-            job.labor = job.hoursTotal * job.rate;
-            document.getElementById('jobCostLabor').value = job.labor.toFixed(2);
             // Update total hours display and reset weekly hours
             document.getElementById('jobCostHoursTotal').value = job.hoursTotal;
             document.getElementById('jobCostHoursWeek').value = '';
