@@ -244,6 +244,7 @@ function renderWIPMain() {
             if (!job) return;
             const w = getJobWIP(jobId);
             document.getElementById('wipPctComplete').value = job.pctComplete || '';
+            document.getElementById('wipPctManual').checked = job.pctCompleteManual || false;
             document.getElementById('wipInvoicedToDate').value = job.invoicedToDate || '';
             document.getElementById('wipRevisedCostChanges').value = job.revisedCostChanges || '';
             document.getElementById('wipNotes').value = job.notes || '';
@@ -279,13 +280,44 @@ function renderWIPMain() {
         function saveWipInputs() {
             const job = appData.jobs.find(j => j.id === appState.currentJobId);
             if (!job) return;
-            job.pctComplete = parseFloat(document.getElementById('wipPctComplete').value) || 0;
+            const newPct = parseFloat(document.getElementById('wipPctComplete').value) || 0;
+            const isManual = document.getElementById('wipPctManual').checked;
+            job.pctCompleteManual = isManual;
+
+            // If manual override and % increased, auto-distribute to buildings/phases
+            if (isManual && newPct > (job.pctComplete || 0)) {
+                distributeJobPctComplete(appState.currentJobId, newPct);
+            }
+
+            job.pctComplete = newPct;
             job.invoicedToDate = parseFloat(document.getElementById('wipInvoicedToDate').value) || 0;
             job.revisedCostChanges = parseFloat(document.getElementById('wipRevisedCostChanges').value) || 0;
             job.notes = document.getElementById('wipNotes').value.trim();
             job.updatedAt = new Date().toISOString();
             saveData();
             renderJobDetail(appState.currentJobId);
+        }
+
+        /** Distribute job-level % complete down to buildings and phases proportionally */
+        function distributeJobPctComplete(jobId, targetPct) {
+            const buildings = appData.buildings.filter(b => b.jobId === jobId);
+            const phases = appData.phases.filter(p => p.jobId === jobId);
+
+            if (buildings.length > 0) {
+                // Distribute to buildings, then each building distributes to its phases
+                buildings.forEach(b => {
+                    const bldgPhases = phases.filter(p => p.buildingId === b.id);
+                    if (bldgPhases.length > 0) {
+                        bldgPhases.forEach(p => {
+                            p.pctComplete = Math.min(100, Math.max(p.pctComplete || 0, targetPct));
+                        });
+                    }
+                });
+            } else if (phases.length > 0) {
+                phases.forEach(p => {
+                    p.pctComplete = Math.min(100, Math.max(p.pctComplete || 0, targetPct));
+                });
+            }
         }
 
         // ==================== CHANGE ORDERS ====================
@@ -646,7 +678,9 @@ function renderWIPMain() {
                 const _jb = appData.buildings.filter(b => b.jobId === job.id);
                 if (_jp.length > 0 || _jb.length > 0) {
                     recalcSubCosts(job.id);
-                    job.pctComplete = Math.round(calcJobPctComplete(job.id) * 10) / 10;
+                    if (!job.pctCompleteManual) {
+                        job.pctComplete = Math.round(calcJobPctComplete(job.id) * 10) / 10;
+                    }
                 }
                 const w = getJobWIP(job.id);
                 const statusClass = job.status === 'On Hold' ? 'at-risk' : job.status === 'Completed' ? 'on-track' : job.status === 'Archived' ? 'not-started' : 'on-track';
@@ -850,11 +884,13 @@ function renderWIPMain() {
             // Recalculate sub costs from Subcontractors tab entries
             recalcSubCosts(jobId);
 
-            // Auto-calculate % complete from phases/buildings
-            const hasPhases = appData.phases.filter(p => p.jobId === jobId).length > 0;
-            const hasBuildings = appData.buildings.filter(b => b.jobId === jobId).length > 0;
-            if (hasPhases || hasBuildings) {
-                job.pctComplete = Math.round(calcJobPctComplete(jobId) * 10) / 10;
+            // Auto-calculate % complete from phases/buildings (unless manual override)
+            if (!job.pctCompleteManual) {
+                const hasPhases = appData.phases.filter(p => p.jobId === jobId).length > 0;
+                const hasBuildings = appData.buildings.filter(b => b.jobId === jobId).length > 0;
+                if (hasPhases || hasBuildings) {
+                    job.pctComplete = Math.round(calcJobPctComplete(jobId) * 10) / 10;
+                }
             }
             saveData();
 
