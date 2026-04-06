@@ -365,6 +365,41 @@
   opacity: 0.7;
 }
 
+/* Expandable link level groups (buildings, phases, subs, COs) */
+.ws-link-level {
+  margin: 4px 0;
+}
+
+.ws-link-level-header {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--accent);
+  cursor: pointer;
+  padding: 3px 0;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.ws-link-target {
+  margin-left: 8px;
+  margin-bottom: 2px;
+}
+
+.ws-link-target-header {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text);
+  cursor: pointer;
+  padding: 2px 0;
+}
+
+.ws-link-target-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin: 2px 0 4px 8px;
+}
+
 .ws-link-opt {
   font-size: 10px;
   padding: 2px 7px;

@@ -515,54 +515,111 @@
 
   // ── Cell → Job Field Linking ───────────────────────────────
 
-  const LINKABLE_FIELDS = [
-    // Costs - Estimated
-    { key: 'estimatedCosts', label: 'Est. Costs (As Sold)', fmt: 'currency', group: 'Estimated Costs' },
-    { key: 'revisedCostChanges', label: 'Revised Cost Changes', fmt: 'currency', group: 'Estimated Costs' },
-
-    // Cost Breakdown — Job Level
-    { key: 'materials', label: 'Materials $', fmt: 'currency', group: 'Job Costs' },
-    { key: 'labor', label: 'Labor $', fmt: 'currency', group: 'Job Costs' },
-    { key: 'sub', label: 'Subcontractor $', fmt: 'currency', group: 'Job Costs' },
-    { key: 'equipment', label: 'Equipment $', fmt: 'currency', group: 'Job Costs' },
-    { key: 'generalConditions', label: 'General Conditions $', fmt: 'currency', group: 'Job Costs' },
-
-    // Overhead
-    { key: 'overhead', label: 'Overhead', fmt: 'currency', group: 'Overhead' },
-    { key: 'profitAllowance', label: 'Profit Allowance', fmt: 'currency', group: 'Overhead' },
-
-    // Revenue
-    { key: 'invoicedToDate', label: 'Invoiced to Date', fmt: 'currency', group: 'Revenue' },
-    { key: 'revisedContractAmount', label: 'Revised Contract', fmt: 'currency', group: 'Revenue' },
-
-    // WIP Metrics
-    { key: 'targetMarginPct', label: 'Target Margin %', fmt: 'percent', group: 'WIP Metrics' },
-    { key: 'pctComplete', label: '% Complete', fmt: 'percent', group: 'WIP Metrics' },
+  // ── Linkable Fields (multi-level) ────────────────────────────
+  const JOB_FIELDS = [
+    { key: 'revisedCostChanges', label: 'Revised Cost Changes', fmt: 'currency' },
+    { key: 'materials', label: 'Materials $', fmt: 'currency' },
+    { key: 'labor', label: 'Labor $', fmt: 'currency' },
+    { key: 'sub', label: 'Subcontractor $', fmt: 'currency' },
+    { key: 'equipment', label: 'Equipment $', fmt: 'currency' },
+    { key: 'generalConditions', label: 'General Conditions $', fmt: 'currency' },
+    { key: 'invoicedToDate', label: 'Invoiced to Date', fmt: 'currency' },
+    { key: 'pctComplete', label: '% Complete', fmt: 'percent' },
   ];
 
-  /** Get unique group names from LINKABLE_FIELDS */
-  function getFieldGroups() {
-    const groups = {};
-    LINKABLE_FIELDS.forEach(field => {
-      if (!groups[field.group]) groups[field.group] = [];
-      groups[field.group].push(field);
-    });
-    return groups;
+  const BUILDING_FIELDS = [
+    { key: 'budget', label: 'Budget $', fmt: 'currency' },
+    { key: 'materials', label: 'Materials $', fmt: 'currency' },
+    { key: 'labor', label: 'Labor $', fmt: 'currency' },
+    { key: 'equipment', label: 'Equipment $', fmt: 'currency' },
+  ];
+
+  const PHASE_FIELDS = [
+    { key: 'materials', label: 'Materials $', fmt: 'currency' },
+    { key: 'labor', label: 'Labor $', fmt: 'currency' },
+    { key: 'equipment', label: 'Equipment $', fmt: 'currency' },
+  ];
+
+  const SUB_FIELDS = [
+    { key: 'contractAmt', label: 'Contract Amount', fmt: 'currency' },
+    { key: 'billedToDate', label: 'Billed to Date', fmt: 'currency' },
+  ];
+
+  const CO_FIELDS = [
+    { key: 'estimatedCosts', label: 'Estimated Costs', fmt: 'currency' },
+  ];
+
+  /** Get a flat list of all field definitions for looking up fmt by key */
+  function findFieldDef(linkObj) {
+    var lists = { job: JOB_FIELDS, building: BUILDING_FIELDS, phase: PHASE_FIELDS, sub: SUB_FIELDS, co: CO_FIELDS };
+    var fields = lists[linkObj.level] || JOB_FIELDS;
+    return fields.find(function (f) { return f.key === linkObj.field; });
   }
 
-  /** Push linked cell values into the current job */
+  /** Get display label for a link object */
+  function getLinkLabel(linkObj) {
+    var fieldDef = findFieldDef(linkObj);
+    var fieldLabel = fieldDef ? fieldDef.label : linkObj.field;
+    if (linkObj.level === 'job') return fieldLabel;
+    var targetName = '';
+    if (typeof appData !== 'undefined') {
+      if (linkObj.level === 'building') {
+        var b = appData.buildings.find(function (x) { return x.id === linkObj.targetId; });
+        targetName = b ? b.name : '?';
+      } else if (linkObj.level === 'phase') {
+        var p = appData.phases.find(function (x) { return x.id === linkObj.targetId; });
+        targetName = p ? p.phase : '?';
+      } else if (linkObj.level === 'sub') {
+        var s = appData.subs.find(function (x) { return x.id === linkObj.targetId; });
+        targetName = s ? s.name : '?';
+      } else if (linkObj.level === 'co') {
+        var co = appData.changeOrders.find(function (x) { return x.id === linkObj.targetId; });
+        targetName = co ? (co.coNumber || co.description || '?') : '?';
+      }
+    }
+    return targetName + ' → ' + fieldLabel;
+  }
+
+  /** Migrate old string-format links to new object format */
+  function migrateLinks() {
+    Object.keys(grid.links).forEach(function (cellAddr) {
+      var val = grid.links[cellAddr];
+      if (typeof val === 'string') {
+        grid.links[cellAddr] = { field: val, level: 'job' };
+      }
+    });
+  }
+
+  /** Push linked cell values into the appropriate target objects */
   function pushLinkedValues() {
     if (!grid.jobId || typeof appData === 'undefined') return;
-    const job = appData.jobs.find(j => j.id === grid.jobId);
+    var job = appData.jobs.find(function (j) { return j.id === grid.jobId; });
     if (!job) return;
 
-    let changed = false;
-    Object.entries(grid.links).forEach(([cellAddr, fieldKey]) => {
-      const ref = parseAddr(cellAddr);
+    var changed = false;
+    Object.entries(grid.links).forEach(function (entry) {
+      var cellAddr = entry[0], linkObj = entry[1];
+      if (!linkObj || !linkObj.field) return;
+      var ref = parseAddr(cellAddr);
       if (!ref) return;
-      const cell = getCell(ref.r, ref.c);
-      if (typeof cell.value === 'number') {
-        job[fieldKey] = cell.value;
+      var cell = getCell(ref.r, ref.c);
+      if (typeof cell.value !== 'number') return;
+
+      var target = null;
+      if (linkObj.level === 'job') {
+        target = job;
+      } else if (linkObj.level === 'building' && linkObj.targetId) {
+        target = appData.buildings.find(function (b) { return b.id === linkObj.targetId; });
+      } else if (linkObj.level === 'phase' && linkObj.targetId) {
+        target = appData.phases.find(function (p) { return p.id === linkObj.targetId; });
+      } else if (linkObj.level === 'sub' && linkObj.targetId) {
+        target = appData.subs.find(function (s) { return s.id === linkObj.targetId; });
+      } else if (linkObj.level === 'co' && linkObj.targetId) {
+        target = appData.changeOrders.find(function (c) { return c.id === linkObj.targetId; });
+      }
+
+      if (target) {
+        target[linkObj.field] = cell.value;
         changed = true;
       }
     });
@@ -576,15 +633,13 @@
     updateLinkedIndicators();
   }
 
-  /** Map linkable field keys to their DOM input IDs */
+  /** Map job-level field keys to their DOM input IDs */
   var FIELD_INPUT_MAP = {
     materials: 'jobCostMaterials',
     labor: 'jobCostLabor',
     equipment: 'jobCostEquipment',
     generalConditions: 'jobCostGC',
     sub: 'jobCostSub',
-    estimatedCosts: 'edit-jobEstCosts',
-    targetMarginPct: 'edit-jobMargin',
     revisedCostChanges: 'wipRevisedCostChanges',
     invoicedToDate: 'wipInvoicedToDate',
     pctComplete: 'wipPctComplete'
@@ -599,10 +654,11 @@
       el.style.borderColor = '';
     });
 
-    // Add badges for active links
+    // Add badges for active links (only job-level have DOM inputs)
     Object.entries(grid.links).forEach(function (entry) {
-      var cellAddr = entry[0], fieldKey = entry[1];
-      var inputId = FIELD_INPUT_MAP[fieldKey];
+      var cellAddr = entry[0], linkObj = entry[1];
+      if (!linkObj || linkObj.level !== 'job') return;
+      var inputId = FIELD_INPUT_MAP[linkObj.field];
       if (!inputId) return;
       var input = document.getElementById(inputId);
       if (!input) return;
@@ -671,6 +727,7 @@
     grid.refMode = false;
     grid.refAnchor = null;
     grid.dirty = false;
+    migrateLinks();
     recalcAll();
   }
 
@@ -1176,19 +1233,19 @@
   // ── Link Panel ─────────────────────────────────────────────
 
   function updateLinkPanel(cellAddr) {
-    const panel = document.getElementById('wsLinkPanel');
-    const cellLabel = document.getElementById('wsLinkCell');
-    const activeEl = document.getElementById('wsLinkActive');
-    const unlinkBtn = document.getElementById('wsUnlinkBtn');
+    var panel = document.getElementById('wsLinkPanel');
+    var cellLabel = document.getElementById('wsLinkCell');
+    var activeEl = document.getElementById('wsLinkActive');
+    var unlinkBtn = document.getElementById('wsUnlinkBtn');
     if (!panel) return;
 
     if (cellLabel) cellLabel.textContent = cellAddr;
 
-    const currentLink = grid.links[cellAddr];
-    if (currentLink) {
-      const field = LINKABLE_FIELDS.find(f => f.key === currentLink);
+    var currentLink = grid.links[cellAddr];
+    if (currentLink && currentLink.field) {
+      var label = getLinkLabel(currentLink);
       if (activeEl) {
-        activeEl.innerHTML = `<span class="ws-link-badge">\u2192 ${field ? field.label : currentLink}</span>`;
+        activeEl.innerHTML = '<span class="ws-link-badge">\u2192 ' + label + '</span>';
         activeEl.style.display = 'inline-flex';
       }
       if (unlinkBtn) unlinkBtn.style.display = 'inline-flex';
@@ -1198,45 +1255,112 @@
     }
   }
 
+  function renderFieldButtons(fields, cellAddr, level, targetId) {
+    var html = '';
+    fields.forEach(function (f) {
+      var linkObj = grid.links[cellAddr];
+      var isActive = linkObj && linkObj.field === f.key && linkObj.level === level && (level === 'job' || linkObj.targetId === targetId);
+      html += '<button class="ws-link-opt ' + (isActive ? 'active' : '') + '" data-field="' + f.key + '" data-level="' + level + '"' +
+        (targetId ? ' data-target="' + targetId + '"' : '') + '>' + f.label + '</button>';
+    });
+    return html;
+  }
+
   function showLinkPanel() {
-    const panel = document.getElementById('wsLinkPanel');
-    const optionsEl = document.getElementById('wsLinkOptions');
+    var panel = document.getElementById('wsLinkPanel');
+    var optionsEl = document.getElementById('wsLinkOptions');
     if (!panel || !grid.selection) return;
 
     panel.style.display = 'block';
-    const cellAddr = addr(grid.selection.r, grid.selection.c);
+    var cellAddr = addr(grid.selection.r, grid.selection.c);
+    var html = '';
 
-    // Group fields by group name and render with collapsible sections
-    const groups = getFieldGroups();
-    let html = '';
+    // Job-level fields (always visible)
+    html += '<div class="ws-link-group">';
+    html += '<div class="ws-link-group-header">Job Level</div>';
+    html += renderFieldButtons(JOB_FIELDS, cellAddr, 'job', null);
+    html += '</div>';
 
-    Object.entries(groups).forEach(([groupName, fields]) => {
-      html += `<div class="ws-link-group">
-        <div class="ws-link-group-header">${groupName}</div>`;
+    if (typeof appData !== 'undefined') {
+      // Buildings
+      var buildings = appData.buildings.filter(function (b) { return b.jobId === grid.jobId; });
+      if (buildings.length > 0) {
+        html += '<details class="ws-link-level"><summary class="ws-link-level-header">Buildings</summary>';
+        buildings.forEach(function (b) {
+          html += '<details class="ws-link-target"><summary class="ws-link-target-header">' + (b.name || 'Unnamed') + '</summary>';
+          html += '<div class="ws-link-target-fields">' + renderFieldButtons(BUILDING_FIELDS, cellAddr, 'building', b.id) + '</div>';
+          html += '</details>';
+        });
+        html += '</details>';
+      }
 
-      fields.forEach(f => {
-        const isActive = grid.links[cellAddr] === f.key;
-        html += `<button class="ws-link-opt ${isActive ? 'active' : ''}" data-field="${f.key}">${f.label}</button>`;
-      });
+      // Phases (grouped by building)
+      var phases = appData.phases.filter(function (p) { return p.jobId === grid.jobId; });
+      if (phases.length > 0) {
+        html += '<details class="ws-link-level"><summary class="ws-link-level-header">Phases</summary>';
+        var phasesByBldg = {};
+        phases.forEach(function (p) {
+          var bldg = appData.buildings.find(function (b) { return b.id === p.buildingId; });
+          var bName = bldg ? bldg.name : 'Unassigned';
+          if (!phasesByBldg[bName]) phasesByBldg[bName] = [];
+          phasesByBldg[bName].push(p);
+        });
+        Object.keys(phasesByBldg).forEach(function (bName) {
+          phasesByBldg[bName].forEach(function (p) {
+            html += '<details class="ws-link-target"><summary class="ws-link-target-header">' + bName + ' \u203A ' + (p.phase || '?') + '</summary>';
+            html += '<div class="ws-link-target-fields">' + renderFieldButtons(PHASE_FIELDS, cellAddr, 'phase', p.id) + '</div>';
+            html += '</details>';
+          });
+        });
+        html += '</details>';
+      }
 
-      html += `</div>`;
-    });
+      // Subcontractors
+      var subs = appData.subs.filter(function (s) { return s.jobId === grid.jobId; });
+      if (subs.length > 0) {
+        html += '<details class="ws-link-level"><summary class="ws-link-level-header">Subcontractors</summary>';
+        subs.forEach(function (s) {
+          html += '<details class="ws-link-target"><summary class="ws-link-target-header">' + (s.name || 'Unnamed') + ' (' + (s.trade || '') + ')</summary>';
+          html += '<div class="ws-link-target-fields">' + renderFieldButtons(SUB_FIELDS, cellAddr, 'sub', s.id) + '</div>';
+          html += '</details>';
+        });
+        html += '</details>';
+      }
+
+      // Change Orders
+      var cos = appData.changeOrders.filter(function (c) { return c.jobId === grid.jobId; });
+      if (cos.length > 0) {
+        html += '<details class="ws-link-level"><summary class="ws-link-level-header">Change Orders</summary>';
+        cos.forEach(function (c) {
+          html += '<details class="ws-link-target"><summary class="ws-link-target-header">' + (c.coNumber || '') + ' \u2014 ' + (c.description || '') + '</summary>';
+          html += '<div class="ws-link-target-fields">' + renderFieldButtons(CO_FIELDS, cellAddr, 'co', c.id) + '</div>';
+          html += '</details>';
+        });
+        html += '</details>';
+      }
+    }
 
     if (optionsEl) optionsEl.innerHTML = html;
-
     updateLinkPanel(cellAddr);
   }
 
-  function setLink(cellAddr, fieldKey) {
-    // Remove any existing link to this field
-    Object.entries(grid.links).forEach(([key, val]) => {
-      if (val === fieldKey) delete grid.links[key];
+  function setLink(cellAddr, linkObj) {
+    // Remove any existing link to this exact target+field
+    Object.keys(grid.links).forEach(function (key) {
+      var existing = grid.links[key];
+      if (existing && existing.field === linkObj.field && existing.level === linkObj.level &&
+          (linkObj.level === 'job' || existing.targetId === linkObj.targetId)) {
+        delete grid.links[key];
+      }
     });
 
-    const field = LINKABLE_FIELDS.find(f => f.key === fieldKey);
-    grid.links[cellAddr] = fieldKey;
-    const cell = getCell(parseAddr(cellAddr).r, parseAddr(cellAddr).c);
-    if (field) cell.fmt = field.fmt;
+    var fieldDef = findFieldDef(linkObj);
+    grid.links[cellAddr] = linkObj;
+    var parsed = parseAddr(cellAddr);
+    if (parsed) {
+      var cell = getCell(parsed.r, parsed.c);
+      if (fieldDef) cell.fmt = fieldDef.fmt;
+    }
 
     grid.dirty = true;
     saveWorkspace();
@@ -2177,9 +2301,10 @@
     document.getElementById('wsLinkOptions').addEventListener('click', (e) => {
       const btn = e.target.closest('.ws-link-opt');
       if (!btn || !grid.selection) return;
-      const fieldKey = btn.dataset.field;
+      const linkObj = { field: btn.dataset.field, level: btn.dataset.level };
+      if (btn.dataset.target) linkObj.targetId = btn.dataset.target;
       const cellAddr = addr(grid.selection.r, grid.selection.c);
-      setLink(cellAddr, fieldKey);
+      setLink(cellAddr, linkObj);
     });
 
     document.getElementById('wsUnlinkBtn').addEventListener('click', () => {
