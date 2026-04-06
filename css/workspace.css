@@ -192,6 +192,12 @@
   display: inline-block;
 }
 
+/* Cell move indicator */
+.ws-cell.ws-move-target {
+  outline: 2px dashed var(--accent) !important;
+  outline-offset: -1px;
+}
+
 /* Merged cells */
 .ws-cell.ws-merged {
   z-index: 1;

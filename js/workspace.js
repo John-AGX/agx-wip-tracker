@@ -1739,6 +1739,74 @@
 
   // ── Mouse selection state ──
   var dragging = false;
+  var moving = null; // { startR, startC, rng } when edge-dragging to move cells
+
+  /** Check if mouse is near the edge of the selected cell/range */
+  function isOnSelectionEdge(td, e) {
+    if (!grid.selection || grid.editing) return false;
+    var r = parseInt(td.dataset.r), c = parseInt(td.dataset.c);
+    var rng = getSelRange();
+    if (!rng) return false;
+    // Must be on the border of the selection range
+    var onRange = r >= rng.r1 && r <= rng.r2 && c >= rng.c1 && c <= rng.c2;
+    if (!onRange) return false;
+    var onEdge = r === rng.r1 || r === rng.r2 || c === rng.c1 || c === rng.c2;
+    if (!onEdge) return false;
+    // Check pixel proximity to td border (6px threshold)
+    var rect = td.getBoundingClientRect();
+    var mx = e.clientX, my = e.clientY;
+    var t = 6;
+    return mx - rect.left < t || rect.right - mx < t || my - rect.top < t || rect.bottom - my < t;
+  }
+
+  /** Move cell data (raw, value, fmt, style, note) + links from source range to dest */
+  function moveCells(srcRng, destR, destC) {
+    pushUndo();
+    var rows = srcRng.r2 - srcRng.r1 + 1;
+    var cols = srcRng.c2 - srcRng.c1 + 1;
+
+    // Collect source data
+    var srcData = [];
+    var srcLinks = {};
+    for (var r = 0; r < rows; r++) {
+      srcData[r] = [];
+      for (var c = 0; c < cols; c++) {
+        var sr = srcRng.r1 + r, sc = srcRng.c1 + c;
+        var key = addr(sr, sc);
+        srcData[r][c] = JSON.parse(JSON.stringify(grid.cells[key] || { raw: '', value: '', fmt: null, style: {} }));
+        if (grid.links[key]) {
+          srcLinks[r + ',' + c] = JSON.parse(JSON.stringify(grid.links[key]));
+          delete grid.links[key];
+        }
+        // Clear source
+        delete grid.cells[key];
+      }
+    }
+
+    // Place at destination
+    for (var r = 0; r < rows; r++) {
+      for (var c = 0; c < cols; c++) {
+        var dr = destR + r, dc = destC + c;
+        var key = addr(dr, dc);
+        grid.cells[key] = srcData[r][c];
+        if (srcLinks[r + ',' + c]) {
+          grid.links[key] = srcLinks[r + ',' + c];
+        }
+      }
+    }
+
+    // Expand grid if needed
+    if (destR + rows > grid.rows) grid.rows = destR + rows + 2;
+    if (destC + cols > grid.cols) grid.cols = destC + cols + 2;
+
+    grid.dirty = true;
+    recalcAll();
+    renderGrid();
+    grid.selEnd = rows > 1 || cols > 1 ? { r: destR + rows - 1, c: destC + cols - 1 } : null;
+    selectCell(destR, destC, !!grid.selEnd);
+    pushLinkedValues();
+    saveWorkspace();
+  }
 
   function handleCellMouseDown(e) {
     var td = e.target.closest('td.ws-cell');
@@ -1757,10 +1825,17 @@
       return;
     }
 
+    // Edge grab: start move drag
+    if (isOnSelectionEdge(td, e)) {
+      e.preventDefault();
+      moving = { startR: r, startC: c, rng: getSelRange() };
+      document.body.style.cursor = 'move';
+      return;
+    }
+
     if (grid.editing) commitEdit(grid.editing.r, grid.editing.c);
 
     if (e.shiftKey && grid.selection) {
-      // Shift+click extends selection
       grid.selEnd = { r: r, c: c };
       selectCell(grid.selection.r, grid.selection.c, true);
     } else {
@@ -1770,15 +1845,30 @@
   }
 
   function handleCellMouseMove(e) {
-    if (!dragging || grid.refMode) return;
     var td = e.target.closest('td.ws-cell');
+
+    // Show move cursor when hovering selection edge
+    if (!dragging && !moving && td && !grid.editing && !grid.refMode) {
+      td.style.cursor = isOnSelectionEdge(td, e) ? 'move' : '';
+    }
+
+    // Move drag in progress — show target highlight
+    if (moving) {
+      wsTable.querySelectorAll('.ws-move-target').forEach(function (el) { el.classList.remove('ws-move-target'); });
+      if (td) {
+        td.style.cursor = 'move';
+        td.classList.add('ws-move-target');
+      }
+      return;
+    }
+
+    if (!dragging || grid.refMode) return;
     if (!td) return;
     var r = parseInt(td.dataset.r), c = parseInt(td.dataset.c);
     if (!grid.selection) return;
     if (r !== (grid.selEnd ? grid.selEnd.r : grid.selection.r) || c !== (grid.selEnd ? grid.selEnd.c : grid.selection.c)) {
       grid.selEnd = { r: r, c: c };
       renderSelectionClasses();
-      // Update cell ref display for range
       var rng = getSelRange();
       var refEl = document.getElementById('wsCellRef');
       if (refEl && rng) refEl.textContent = addr(rng.r1, rng.c1) + ':' + addr(rng.r2, rng.c2);
@@ -1786,7 +1876,22 @@
     }
   }
 
-  function handleCellMouseUp() {
+  function handleCellMouseUp(e) {
+    if (moving) {
+      var td = e.target.closest ? e.target.closest('td.ws-cell') : null;
+      if (td) {
+        var r = parseInt(td.dataset.r), c = parseInt(td.dataset.c);
+        var rng = moving.rng;
+        // Only move if destination is different from source
+        if (r !== rng.r1 || c !== rng.c1) {
+          moveCells(rng, r, c);
+        }
+      }
+      moving = null;
+      document.body.style.cursor = '';
+      wsTable.querySelectorAll('.ws-move-target').forEach(function (el) { el.classList.remove('ws-move-target'); });
+      return;
+    }
     dragging = false;
   }
 
