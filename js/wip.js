@@ -17,13 +17,19 @@ function renderWIPMain() {
             // 2. Job-level subs distributed by building budget %
             const jobSubs = appData.subs.filter(s => s.level === 'job' && s.jobId === jobId);
             if (jobSubs.length > 0) {
-                const buildings = appData.buildings.filter(b => b.jobId === jobId);
+                const thisBldg = appData.buildings.find(b => b.id === buildingId);
+                // Skip if building is excluded from distribution
+                if (thisBldg && thisBldg.excludeFromSubDist) return total;
+                const buildings = appData.buildings.filter(b => b.jobId === jobId && !b.excludeFromSubDist);
+                if (buildings.length === 0) return total;
                 const totalBudget = buildings.reduce((sum, b) => sum + (b.budget || 0), 0);
+                const jobSubTotal = jobSubs.reduce((sum, s) => sum + (s.billedToDate || 0), 0);
                 if (totalBudget > 0) {
-                    const thisBldg = appData.buildings.find(b => b.id === buildingId);
                     const bldgPct = (thisBldg?.budget || 0) / totalBudget;
-                    const jobSubTotal = jobSubs.reduce((sum, s) => sum + (s.billedToDate || 0), 0);
                     total += jobSubTotal * bldgPct;
+                } else {
+                    // Equal distribution when no budgets set
+                    total += jobSubTotal / buildings.length;
                 }
             }
             return total;
@@ -45,13 +51,17 @@ function renderWIPMain() {
                 .reduce((sum, s) => sum + (s.contractAmt || 0), 0);
             const jobSubs = appData.subs.filter(s => s.level === 'job' && s.jobId === jobId);
             if (jobSubs.length > 0) {
-                const buildings = appData.buildings.filter(b => b.jobId === jobId);
+                const thisBldg = appData.buildings.find(b => b.id === buildingId);
+                if (thisBldg && thisBldg.excludeFromSubDist) return total;
+                const buildings = appData.buildings.filter(b => b.jobId === jobId && !b.excludeFromSubDist);
+                if (buildings.length === 0) return total;
                 const totalBudget = buildings.reduce((sum, b) => sum + (b.budget || 0), 0);
+                const jobSubTotal = jobSubs.reduce((sum, s) => sum + (s.contractAmt || 0), 0);
                 if (totalBudget > 0) {
-                    const thisBldg = appData.buildings.find(b => b.id === buildingId);
                     const bldgPct = (thisBldg?.budget || 0) / totalBudget;
-                    const jobSubTotal = jobSubs.reduce((sum, s) => sum + (s.contractAmt || 0), 0);
                     total += jobSubTotal * bldgPct;
+                } else {
+                    total += jobSubTotal / buildings.length;
                 }
             }
             return total;
@@ -165,18 +175,19 @@ function renderWIPMain() {
         }
 
         function getJobTotalCost(jobId) {
-            // Phase-level costs
+            // Phase-level costs (tracked per phase)
             let phaseCost = 0;
             appData.phases.filter(p => p.jobId === jobId).forEach(p => {
                 phaseCost += (p.materials || 0) + (p.labor || 0) + (p.sub || 0) + (p.equipment || 0);
             });
-            // Building-level costs
+            // Building-level direct costs (overhead/general NOT covered by phases)
+            // Sub costs on buildings include distributed job-level subs, so always count them
             let buildingCost = 0;
             const jobBuildings = appData.buildings.filter(b => b.jobId === jobId);
             jobBuildings.forEach(b => {
                 buildingCost += (b.materials || 0) + (b.labor || 0) + (b.sub || 0) + (b.equipment || 0);
             });
-            // Job-level costs (exclude sub if buildings exist, since recalcSubCosts distributes job-level subs to buildings)
+            // Job-level costs (exclude sub if buildings exist — already distributed)
             const job = appData.jobs.find(j => j.id === jobId);
             let jobCost = 0;
             if (job) {
@@ -1264,6 +1275,7 @@ function renderWIPMain() {
             document.getElementById('buildingRate').value = '40';
             document.getElementById('buildingWorkScope').value = 'in-house';
             document.getElementById('buildingLocked').checked = false;
+            document.getElementById('buildingExcludeSubDist').checked = false;
             openModal('addBuildingModal');
         }
 
@@ -1297,6 +1309,7 @@ function renderWIPMain() {
             }
             document.getElementById('buildingWorkScope').value = building.workScope || 'in-house';
             document.getElementById('buildingLocked').checked = building.locked || false;
+            document.getElementById('buildingExcludeSubDist').checked = building.excludeFromSubDist || false;
             openModal('addBuildingModal');
         }
 
@@ -1404,6 +1417,7 @@ function renderWIPMain() {
                 address: document.getElementById('buildingAddress').value,
                 workScope: document.getElementById('buildingWorkScope').value || 'in-house',
                 locked: document.getElementById('buildingLocked').checked,
+                excludeFromSubDist: document.getElementById('buildingExcludeSubDist').checked,
                 materials: parseFloat(document.getElementById('buildingMaterials').value) || 0,
                 labor: hoursTotal * rate,
                 sub: 0, // auto-calculated from Subs tab by recalcSubCosts

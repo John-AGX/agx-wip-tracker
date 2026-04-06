@@ -531,11 +531,6 @@
     { key: 'overhead', label: 'Overhead', fmt: 'currency', group: 'Overhead' },
     { key: 'profitAllowance', label: 'Profit Allowance', fmt: 'currency', group: 'Overhead' },
 
-    // Labor
-    { key: 'hoursWeek', label: 'Hours This Week', fmt: null, group: 'Labor' },
-    { key: 'hoursTotal', label: 'Total Hours', fmt: null, group: 'Labor' },
-    { key: 'rate', label: 'Hourly Rate', fmt: 'currency', group: 'Labor' },
-
     // Revenue
     { key: 'invoicedToDate', label: 'Invoiced to Date', fmt: 'currency', group: 'Revenue' },
     { key: 'revisedContractAmount', label: 'Revised Contract', fmt: 'currency', group: 'Revenue' },
@@ -543,7 +538,6 @@
     // WIP Metrics
     { key: 'targetMarginPct', label: 'Target Margin %', fmt: 'percent', group: 'WIP Metrics' },
     { key: 'pctComplete', label: '% Complete', fmt: 'percent', group: 'WIP Metrics' },
-    { key: 'costToComplete', label: 'Cost to Complete', fmt: 'currency', group: 'WIP Metrics' },
   ];
 
   /** Get unique group names from LINKABLE_FIELDS */
@@ -588,11 +582,11 @@
     labor: 'jobCostLabor',
     equipment: 'jobCostEquipment',
     sub: 'jobCostSub',
-    hoursWeek: 'jobCostHoursWeek',
-    hoursTotal: 'jobCostHoursTotal',
-    rate: 'jobCostRate',
     estimatedCosts: 'edit-jobEstCosts',
-    targetMarginPct: 'edit-jobMargin'
+    targetMarginPct: 'edit-jobMargin',
+    revisedCostChanges: 'wipRevisedCostChanges',
+    invoicedToDate: 'wipInvoicedToDate',
+    pctComplete: 'wipPctComplete'
   };
 
   /** Show "← Cell A5" badges on inputs linked to workspace cells */

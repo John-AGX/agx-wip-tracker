@@ -675,7 +675,11 @@
             <div class="form-row" style="align-items: center; margin-bottom: 16px;">
                 <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer;">
                     <input type="checkbox" id="buildingLocked" style="width: 16px; height: 16px;">
-                    Lock this building's % (exclude from auto-balance)
+                    Lock % (exclude from auto-balance)
+                </label>
+                <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer;">
+                    <input type="checkbox" id="buildingExcludeSubDist" style="width: 16px; height: 16px;">
+                    Exclude from sub distribution
                 </label>
                 <button type="button" class="small secondary" onclick="autoBalanceBuildingPcts()" style="margin-left: auto;">&#x2696; Auto-Balance %</button>
             </div>
