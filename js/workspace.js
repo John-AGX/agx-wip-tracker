@@ -525,9 +525,9 @@
     { key: 'labor', label: 'Labor $', fmt: 'currency', group: 'Job Costs' },
     { key: 'sub', label: 'Subcontractor $', fmt: 'currency', group: 'Job Costs' },
     { key: 'equipment', label: 'Equipment $', fmt: 'currency', group: 'Job Costs' },
+    { key: 'generalConditions', label: 'General Conditions $', fmt: 'currency', group: 'Job Costs' },
 
-    // General Conditions & Overhead
-    { key: 'generalConditions', label: 'General Conditions', fmt: 'currency', group: 'Overhead' },
+    // Overhead
     { key: 'overhead', label: 'Overhead', fmt: 'currency', group: 'Overhead' },
     { key: 'profitAllowance', label: 'Profit Allowance', fmt: 'currency', group: 'Overhead' },
 
@@ -581,6 +581,7 @@
     materials: 'jobCostMaterials',
     labor: 'jobCostLabor',
     equipment: 'jobCostEquipment',
+    generalConditions: 'jobCostGC',
     sub: 'jobCostSub',
     estimatedCosts: 'edit-jobEstCosts',
     targetMarginPct: 'edit-jobMargin',

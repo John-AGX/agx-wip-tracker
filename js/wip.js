@@ -192,7 +192,7 @@ function renderWIPMain() {
             let jobCost = 0;
             if (job) {
                 const jobSub = (jobBuildings.length > 0) ? 0 : (job.sub || 0);
-                jobCost = (job.materials || 0) + (job.labor || 0) + jobSub + (job.equipment || 0);
+                jobCost = (job.materials || 0) + (job.labor || 0) + jobSub + (job.equipment || 0) + (job.generalConditions || 0);
             }
             return { phaseCost, buildingCost, jobCost, total: phaseCost + buildingCost + jobCost };
         }
@@ -1184,6 +1184,7 @@ function renderWIPMain() {
             document.getElementById('jobCostLabor').value = job.labor || '';
             document.getElementById('jobCostSub').value = (job.sub || 0).toFixed(2);
             document.getElementById('jobCostEquipment').value = job.equipment || '';
+            document.getElementById('jobCostGC').value = job.generalConditions || '';
             document.getElementById('jobCostHoursWeek').value = job.hoursWeek || '';
             document.getElementById('jobCostHoursTotal').value = job.hoursTotal || '';
             document.getElementById('jobCostRate').value = job.rate || 40;
@@ -1196,6 +1197,7 @@ function renderWIPMain() {
             job.materials = parseFloat(document.getElementById('jobCostMaterials').value) || 0;
             // job.sub is auto-calculated from Subs tab by recalcSubCosts — don't overwrite
             job.equipment = parseFloat(document.getElementById('jobCostEquipment').value) || 0;
+            job.generalConditions = parseFloat(document.getElementById('jobCostGC').value) || 0;
             job.hoursWeek = parseFloat(document.getElementById('jobCostHoursWeek').value) || 0;
             job.hoursTotal = (parseFloat(document.getElementById('jobCostHoursTotal').value) || 0) + job.hoursWeek;
             job.rate = parseFloat(document.getElementById('jobCostRate').value) || 40;
