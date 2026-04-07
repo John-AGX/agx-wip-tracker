@@ -1,0 +1,284 @@
+/* ============================================================
+   AGX Node Graph — Visual Cost Flow Editor (Beta)
+   ============================================================ */
+
+#nodeGraphTab {
+  display: none;
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  z-index: 500;
+  background: #0a0d14;
+  overflow: hidden;
+}
+
+#nodeGraphTab.active {
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Top bar ── */
+.ng-topbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 14px;
+  background: #111520;
+  border-bottom: 1px solid #1e2536;
+  flex-shrink: 0;
+  z-index: 10;
+}
+
+.ng-topbar-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #e4e6f0;
+  letter-spacing: 0.5px;
+}
+
+.ng-topbar-sub {
+  font-size: 10px;
+  color: #5a6078;
+}
+
+.ng-close-btn {
+  margin-left: auto;
+  background: rgba(248,113,113,0.1);
+  border: 1px solid rgba(248,113,113,0.3);
+  color: #f87171;
+  border-radius: 4px;
+  padding: 3px 10px;
+  font-size: 11px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.ng-close-btn:hover {
+  background: rgba(248,113,113,0.25);
+}
+
+.ng-add-btn {
+  background: rgba(79,140,255,0.1);
+  border: 1px solid rgba(79,140,255,0.3);
+  color: #4f8cff;
+  border-radius: 4px;
+  padding: 3px 10px;
+  font-size: 11px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.ng-add-btn:hover {
+  background: rgba(79,140,255,0.25);
+}
+
+/* ── Canvas ── */
+.ng-canvas-wrap {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+  cursor: grab;
+}
+
+.ng-canvas-wrap:active {
+  cursor: grabbing;
+}
+
+.ng-canvas {
+  position: absolute;
+  top: 0; left: 0;
+  width: 10000px;
+  height: 10000px;
+  background:
+    radial-gradient(circle at 1px 1px, #1a1f2e 1px, transparent 0) 0 0 / 30px 30px;
+  transform-origin: 0 0;
+}
+
+/* ── SVG wire layer ── */
+.ng-wires {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.ng-wire {
+  fill: none;
+  stroke-width: 2.5;
+  pointer-events: stroke;
+  cursor: pointer;
+}
+
+.ng-wire:hover {
+  stroke-width: 4;
+  filter: drop-shadow(0 0 4px currentColor);
+}
+
+.ng-wire-preview {
+  fill: none;
+  stroke: #4f8cff;
+  stroke-width: 2;
+  stroke-dasharray: 6 4;
+  pointer-events: none;
+}
+
+/* ── Nodes ── */
+.ng-node {
+  position: absolute;
+  min-width: 160px;
+  background: #151926;
+  border: 1px solid #2a3050;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+  z-index: 2;
+  cursor: move;
+  user-select: none;
+}
+
+.ng-node:hover {
+  border-color: #3a4870;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.6);
+}
+
+.ng-node.ng-selected {
+  border-color: #4f8cff;
+  box-shadow: 0 0 0 2px rgba(79,140,255,0.3), 0 4px 20px rgba(0,0,0,0.5);
+}
+
+.ng-node-header {
+  padding: 6px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-radius: 7px 7px 0 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ng-node-header .ng-icon {
+  font-size: 13px;
+}
+
+/* Node type colors */
+.ng-node-data .ng-node-header { background: rgba(79,140,255,0.15); color: #4f8cff; border-bottom: 1px solid rgba(79,140,255,0.2); }
+.ng-node-cost .ng-node-header { background: rgba(52,211,153,0.15); color: #34d399; border-bottom: 1px solid rgba(52,211,153,0.2); }
+.ng-node-math .ng-node-header { background: rgba(167,139,250,0.15); color: #a78bfa; border-bottom: 1px solid rgba(167,139,250,0.2); }
+.ng-node-output .ng-node-header { background: rgba(251,191,36,0.15); color: #fbbf24; border-bottom: 1px solid rgba(251,191,36,0.2); }
+
+.ng-node-body {
+  padding: 8px 10px;
+}
+
+/* ── Ports ── */
+.ng-port-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 3px 0;
+  font-size: 10px;
+  color: #8b90a5;
+}
+
+.ng-port {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid #4a5068;
+  background: #0a0d14;
+  cursor: crosshair;
+  position: relative;
+  flex-shrink: 0;
+  transition: all 0.12s;
+}
+
+.ng-port:hover {
+  border-color: #4f8cff;
+  background: #4f8cff;
+  box-shadow: 0 0 8px rgba(79,140,255,0.5);
+  transform: scale(1.3);
+}
+
+.ng-port-in {
+  margin-left: -15px;
+  margin-right: 6px;
+}
+
+.ng-port-out {
+  margin-right: -15px;
+  margin-left: 6px;
+}
+
+.ng-port.ng-connected {
+  background: #4f8cff;
+  border-color: #4f8cff;
+}
+
+.ng-port-label {
+  flex: 1;
+}
+
+.ng-port-value {
+  font-family: 'Courier New', monospace;
+  font-size: 10px;
+  color: #4f8cff;
+  font-weight: 600;
+}
+
+/* ── Node value display ── */
+.ng-node-value {
+  padding: 4px 10px 6px;
+  font-family: 'Courier New', monospace;
+  font-size: 14px;
+  font-weight: 700;
+  color: #e4e6f0;
+  text-align: center;
+  border-top: 1px solid #1e2536;
+}
+
+.ng-node-value input {
+  background: #0d1019;
+  border: 1px solid #2a3050;
+  color: #e4e6f0;
+  font-family: 'Courier New', monospace;
+  font-size: 13px;
+  padding: 3px 6px;
+  border-radius: 3px;
+  width: 100%;
+  text-align: center;
+}
+
+.ng-node-value input:focus {
+  border-color: #4f8cff;
+  outline: none;
+}
+
+/* ── Minimap ── */
+.ng-minimap {
+  position: absolute;
+  bottom: 12px;
+  right: 12px;
+  width: 160px;
+  height: 100px;
+  background: rgba(10,13,20,0.85);
+  border: 1px solid #2a3050;
+  border-radius: 6px;
+  z-index: 10;
+  overflow: hidden;
+}
+
+/* ── Zoom indicator ── */
+.ng-zoom {
+  position: absolute;
+  bottom: 12px;
+  left: 12px;
+  font-size: 10px;
+  color: #5a6078;
+  background: rgba(10,13,20,0.85);
+  border: 1px solid #2a3050;
+  border-radius: 4px;
+  padding: 3px 8px;
+  z-index: 10;
+}

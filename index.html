@@ -16,6 +16,7 @@
                     <div class="header-title"><img src="images/logo-white.png" alt="AGX AG Exteriors" class="header-logo" /></div>
                     <div class="header-right">
                         <span class="header-subtitle">Estimating &amp; Project Tracking</span>
+                        <button id="node-graph-btn" class="theme-toggle" title="Node Graph (Beta)" onclick="openNodeGraph()" style="font-size:10px;">&#x26A1;</button>
                         <button id="theme-toggle" class="theme-toggle" title="Toggle light/dark mode"></button>
                     </div>
                 </div>
@@ -1044,5 +1045,23 @@
 
     <script src="js/workspace.js?v=20"></script>
     <script src="js/workspace-layout.js?v=19"></script>
+
+    <!-- Node Graph (Beta) -->
+    <link rel="stylesheet" href="css/nodegraph.css" />
+    <div id="nodeGraphTab">
+      <div class="ng-topbar">
+        <span class="ng-topbar-title">&#x26A1; Node Graph</span>
+        <span class="ng-topbar-sub">Visual Cost Flow Editor (Beta)</span>
+        <button class="ng-add-btn">+ Add Node</button>
+        <button class="ng-add-btn ng-populate-btn">&#x1F504; Load Job Data</button>
+        <button class="ng-close-btn">&#x2716; Close</button>
+      </div>
+      <div class="ng-canvas-wrap">
+        <div class="ng-canvas"></div>
+        <svg class="ng-wires"></svg>
+        <div class="ng-zoom">100%</div>
+      </div>
+    </div>
+    <script src="js/nodegraph.js"></script>
 </body>
 </html>
