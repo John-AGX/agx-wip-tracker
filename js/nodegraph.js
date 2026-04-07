@@ -460,7 +460,10 @@
     var job = appData.jobs.find(function (j) { return j.id === jobId; });
     if (!job) return;
 
-    var x = 100, y = 100;
+    // Place nodes in the center of the viewport
+    var cx = canvas ? (-panX + (canvas.clientWidth || 800) / 2) / zoom : 5000;
+    var cy = canvas ? (-panY + (canvas.clientHeight || 600) / 2) / zoom : 5000;
+    var x = cx - 400, y = cy - 200;
 
     // Buildings
     var buildings = appData.buildings.filter(function (b) { return b.jobId === jobId; });
