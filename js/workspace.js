@@ -756,6 +756,7 @@
           <button class="ws-btn" id="wsLinkBtn" title="Link cell to job field">&#x1F517; Link</button>
           <button class="ws-btn" id="wsClearBtn" title="Clear workspace">&#x1F5D1; Clear</button>
           <button class="ws-btn ws-btn-save" id="wsSaveBtn" title="Save workspace">&#x1F4BE; Save</button>
+          <button class="ws-btn" id="wsNodeGraphBtn" title="Node Graph (Beta)">&#x26A1;</button>
         </div>
       </div>
       <div class="ws-toolbar-fmt" id="wsToolbarFmt">
@@ -2301,6 +2302,10 @@
       saveWorkspace();
       const status = document.getElementById('wsStatus');
       if (status) { status.textContent = '✓ Saved'; setTimeout(() => status.textContent = 'Ready', 2000); }
+    });
+
+    document.getElementById('wsNodeGraphBtn').addEventListener('click', () => {
+      if (typeof openNodeGraph === 'function') openNodeGraph(grid.jobId);
     });
 
     document.getElementById('wsClearBtn').addEventListener('click', () => {

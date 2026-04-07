@@ -14,6 +14,7 @@
   var canvas, canvasEl, wiresSvg, previewLine;
   var panX = -4500, panY = -4700; // start near center of 10000x10000
   var zoom = 1;
+  var currentJobId = null;
   var draggingNode = null;
   var dragOffset = { x: 0, y: 0 };
   var wiringFrom = null; // { nodeId, portIndex, portType, el }
@@ -453,8 +454,8 @@
 
   // ── Auto-populate from job data ──
   function populateFromJob() {
-    if (typeof appData === 'undefined' || typeof appState === 'undefined') return;
-    var jobId = appState.currentJobId;
+    if (typeof appData === 'undefined') return;
+    var jobId = currentJobId || (typeof appState !== 'undefined' ? appState.currentJobId : null);
     if (!jobId) return;
     var job = appData.jobs.find(function (j) { return j.id === jobId; });
     if (!job) return;
@@ -527,12 +528,19 @@
   }
 
   // ── Public API ──
-  window.openNodeGraph = function () {
+  window.openNodeGraph = function (jobId) {
     var tab = document.getElementById('nodeGraphTab');
     if (!tab) return;
     tab.classList.add('active');
     if (!canvas) init();
-    if (nodes.length === 0) {
+    // If a different job, reload
+    if (jobId && jobId !== currentJobId) {
+      currentJobId = jobId;
+      nodes = []; wires = []; nextId = 1;
+      populateFromJob();
+      render();
+    } else if (nodes.length === 0) {
+      currentJobId = jobId || (typeof appState !== 'undefined' ? appState.currentJobId : null);
       populateFromJob();
       render();
     }
