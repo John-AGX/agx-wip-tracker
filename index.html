@@ -1051,14 +1051,20 @@
       <div class="ng-topbar">
         <span class="ng-topbar-title">&#x26A1; Node Graph</span>
         <span class="ng-topbar-sub">Visual Cost Flow Editor (Beta)</span>
-        <button class="ng-toolbar-btn ng-add-btn">+ Add Node</button>
-        <button class="ng-toolbar-btn ng-populate-btn">&#x1F504; Load Job Data</button>
-        <button class="ng-close-btn">&#x2716; Close</button>
+        <div class="ng-search">
+          <input type="text" placeholder="Search nodes..." />
+          <div class="ng-search-results"></div>
+        </div>
+        <span class="ng-topbar-spacer"></span>
+        <button class="ng-tbtn ng-populate-btn">&#x1F504; Load Job</button>
+        <button class="ng-tbtn-danger ng-close-btn">&#x2716; Close</button>
       </div>
       <div class="ng-canvas-wrap">
+        <canvas class="ng-grid-canvas"></canvas>
         <div class="ng-canvas"></div>
         <canvas class="ng-wire-canvas"></canvas>
         <div class="ng-zoom">100%</div>
+        <div class="ng-help">Drag port &#x2192; port to wire &nbsp;|&nbsp; Scroll to zoom &nbsp;|&nbsp; Right-click wire to delete &nbsp;|&nbsp; Del key removes node</div>
       </div>
     </div>
     <script src="js/nodegraph.js"></script>
