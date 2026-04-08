@@ -49,6 +49,11 @@
 .ng-t-math .ng-hdr{background:linear-gradient(135deg,rgba(99,102,241,.2),rgba(99,102,241,.08));color:#818cf8}
 .ng-t-watch .ng-hdr{background:linear-gradient(135deg,rgba(251,191,36,.15),rgba(251,191,36,.05));color:#fbbf24}
 .ng-t-note .ng-hdr{background:linear-gradient(135deg,rgba(156,163,175,.15),rgba(156,163,175,.05));color:#9ca3af}
+/* Master nodes */
+.ng-t-job .ng-hdr{background:linear-gradient(135deg,rgba(59,130,246,.25),rgba(59,130,246,.1));color:#60a5fa}
+.ng-t-job{min-width:220px;border-color:#2563eb40}
+.ng-t-wip .ng-hdr{background:linear-gradient(135deg,rgba(251,191,36,.2),rgba(236,72,153,.1));color:#fbbf24}
+.ng-t-wip{min-width:260px;border-color:#f59e0b40}
 /* Ports */
 .ng-ports{padding:4px 0}
 .ng-node.ng-coll .ng-ports{display:none}

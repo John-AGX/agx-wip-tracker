@@ -20,12 +20,25 @@ var DEFS = {
   sub2:  { cat:'math', icon:'\u2212',    label:'Subtract',     ins:[{n:'A',t:PT.C},{n:'B',t:PT.C}], outs:[{n:'Result',t:PT.C}] },
   mul:   { cat:'math', icon:'\u00D7',    label:'Multiply',     ins:[{n:'A',t:PT.A},{n:'B',t:PT.N}], outs:[{n:'Result',t:PT.C}] },
   pct:   { cat:'math', icon:'%',         label:'Percent',      ins:[{n:'Val',t:PT.C},{n:'%',t:PT.P}], outs:[{n:'Result',t:PT.C}] },
+  // ── Master Nodes ──
+  job:   { cat:'job',  icon:'\u{1F4BC}', label:'Job',
+    ins:[],
+    outs:[{n:'Contract',t:PT.C},{n:'CO Income',t:PT.C},{n:'Total Income',t:PT.C},{n:'Est. Costs',t:PT.C},{n:'CO Costs',t:PT.C},{n:'Rev. Est. Costs',t:PT.C}],
+    master:true, hasFields:true,
+    fields:['contractAmount','coIncome','totalIncome','estimatedCosts','coCosts','revisedEstCosts','revisedCostChanges','targetMarginPct']
+  },
+  wip:   { cat:'wip',  icon:'\u{1F4CA}', label:'WIP Metrics',
+    ins:[{n:'Total Income',t:PT.C},{n:'Actual Costs',t:PT.C},{n:'% Complete',t:PT.P},{n:'Invoiced',t:PT.C},{n:'Est. Costs (Rev.)',t:PT.C}],
+    outs:[{n:'Revenue Earned',t:PT.C},{n:'Gross Profit',t:PT.C},{n:'Margin JTD',t:PT.P},{n:'Remaining Costs',t:PT.C},{n:'Unbilled',t:PT.C},{n:'Backlog',t:PT.C},{n:'Accrued',t:PT.C}],
+    master:true
+  },
   watch: { cat:'watch',icon:'\u{1F4CA}', label:'Watch',        ins:[{n:'Value',t:PT.A}], outs:[], nameEdit:true },
   note:  { cat:'note', icon:'\u{1F4CC}', label:'Note',         ins:[], outs:[] },
 };
 
 // ── Category tree for sidebar ──
 var CATS = [
+  { name:'Master',    items:['job','wip'] },
   { name:'Structure', items:['t1','t2'] },
   { name:'Costs',     items:['cost'] },
   { name:'Subs & COs',items:['sub','co'] },
@@ -55,6 +68,7 @@ function addNode(type, x, y, label, data){
     items: [],        // sub-items for cost nodes [{date:'',amount:0}]
     pctComplete: 0,   // for T1/T2 progress bar
     budget: 0,        // for T1/T2
+    jobFields: {},    // for job node editable fields
   };
   if(data){
     if(data._val != null) n.value = data._val;
@@ -105,6 +119,47 @@ function getOutput(n, pi){
     _comp[n.id] = false; return v;
   }
 
+  // Job node: outputs revenue lines from stored job data
+  if(n.type === 'job' && n.data){
+    var jd = n.data;
+    var contract = jd.contractAmount || n.jobFields.contractAmount || 0;
+    var coInc = n.jobFields.coIncome || 0;
+    var estCosts = jd.estimatedCosts || n.jobFields.estimatedCosts || 0;
+    var coCosts = n.jobFields.coCosts || 0;
+    var revChanges = jd.revisedCostChanges || n.jobFields.revisedCostChanges || 0;
+    var totalIncome = contract + coInc;
+    var revEstCosts = estCosts + coCosts + revChanges;
+    // Outputs: Contract, CO Income, Total Income, Est. Costs, CO Costs, Rev. Est. Costs
+    var jobOuts = [contract, coInc, totalIncome, estCosts, coCosts, revEstCosts];
+    v = jobOuts[pi] || 0;
+    _comp[n.id] = false; return v;
+  }
+
+  // WIP node: computes all metrics from inputs
+  if(n.type === 'wip'){
+    // Collect wired inputs: Total Income, Actual Costs, % Complete, Invoiced, Est. Costs (Rev.)
+    var wipIns = [0,0,0,0,0];
+    wires.forEach(function(w){
+      if(w.toNode === n.id){
+        var fn = findNode(w.fromNode);
+        if(fn) wipIns[w.toPort] = (wipIns[w.toPort]||0) + getOutput(fn, w.fromPort);
+      }
+    });
+    var totalInc = wipIns[0], actualCosts = wipIns[1], pctComp = wipIns[2];
+    var invoiced = wipIns[3], estCostsRev = wipIns[4];
+    var revEarned = totalInc * (pctComp / 100);
+    var grossProfit = revEarned - actualCosts;
+    var marginJTD = revEarned > 0 ? (grossProfit / revEarned * 100) : 0;
+    var remaining = estCostsRev - actualCosts;
+    var unbilled = revEarned - invoiced;
+    var backlog = totalInc - revEarned;
+    var accrued = Math.max(0, revEarned - invoiced);
+    // Outputs: Revenue Earned, Gross Profit, Margin JTD, Remaining Costs, Unbilled, Backlog, Accrued
+    var wipOuts = [revEarned, grossProfit, marginJTD, remaining, unbilled, backlog, accrued];
+    v = wipOuts[pi] || 0;
+    _comp[n.id] = false; return v;
+  }
+
   // Math nodes: collect inputs
   var ins = (d.ins || []).map(function(){ return 0; });
   wires.forEach(function(w){
@@ -139,7 +194,7 @@ function saveGraph(){
       return {
         id:n.id, type:n.type, x:n.x, y:n.y, label:n.label,
         value:n.value, collapsed:n.collapsed, noteText:n.noteText,
-        items:n.items, pctComplete:n.pctComplete, budget:n.budget,
+        items:n.items, pctComplete:n.pctComplete, budget:n.budget, jobFields:n.jobFields||{},
         dataId: n.data ? n.data.id : null
       };
     }),
@@ -176,6 +231,7 @@ function loadGraph(){
       items:sn.items||[],
       pctComplete:sn.pctComplete||0,
       budget:sn.budget||0,
+      jobFields:sn.jobFields||{},
     };
     nodes.push(n);
   });
