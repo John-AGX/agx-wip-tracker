@@ -68,8 +68,8 @@ function renderNodes(){
     if(d.hasProg){
       var pct = n.pctComplete || 0;
       var progColor = pct>=100?'#34d399':pct>=50?'#fbbf24':'#4f8cff';
-      h+='<div class="ng-progress"><div class="ng-progress-fill" style="width:'+pct+'%;background:'+progColor+'"></div></div>';
-      h+='<div class="ng-progress-label">'+pct.toFixed(0)+'% complete'+(n.budget?' \u00b7 Budget: '+E.fmtC(n.budget):'')+'</div>';
+      h+='<div class="ng-progress"><div class="ng-progress-fill" style="width:'+Math.min(pct,100)+'%;background:'+progColor+'"></div></div>';
+      h+='<div class="ng-progress-label"><input type="number" class="ng-pct-input" data-node="'+n.id+'" data-field="pctComplete" value="'+pct+'" min="0" max="100" step="1" />% complete'+(n.budget?' \u00b7 Budget: '+E.fmtC(n.budget):'')+'</div>';
     }
 
     // Sub-items (type-specific layout)
@@ -88,12 +88,12 @@ function renderNodes(){
         var nid3=n.id, pre='data-node="'+nid3+'" data-idx="'+idx+'"';
         h+='<div class="ng-subitem">';
         if(iType==='labor'){
-          h+='<input class="ng-si-f ng-si-date" '+pre+' data-field="date" value="'+(item.date||'')+'" placeholder="WO 4/6" />';
+          h+='<input class="ng-si-f ng-si-date" type="date" '+pre+' data-field="date" value="'+(item.date||'')+'" />';
           h+='<input class="ng-si-f ng-si-sm" type="number" '+pre+' data-field="hours" value="'+(item.hours||0)+'" step="0.5" />';
           h+='<input class="ng-si-f ng-si-sm" type="number" '+pre+' data-field="rate" value="'+(item.rate||65)+'" step="0.01" />';
           h+='<span class="ng-si-val">'+E.fmtC((item.hours||0)*(item.rate||65))+'</span>';
         } else if(iType==='mat'){
-          h+='<input class="ng-si-f ng-si-date" '+pre+' data-field="date" value="'+(item.date||'')+'" placeholder="Date" />';
+          h+='<input class="ng-si-f ng-si-date" type="date" '+pre+' data-field="date" value="'+(item.date||'')+'" />';
           h+='<input class="ng-si-f ng-si-sm" type="number" '+pre+' data-field="qty" value="'+(item.qty||0)+'" step="0.01" />';
           h+='<select class="ng-si-f ng-si-sel" '+pre+' data-field="unit">';
           UNITS.forEach(function(u){h+='<option'+(item.unit===u?' selected':'')+'>'+u+'</option>';});
@@ -101,16 +101,16 @@ function renderNodes(){
           h+='<input class="ng-si-f ng-si-sm" type="number" '+pre+' data-field="unitCost" value="'+(item.unitCost||0)+'" step="0.01" />';
           h+='<span class="ng-si-val">'+E.fmtC((item.qty||0)*(item.unitCost||0))+'</span>';
         } else if(iType==='gc'){
-          h+='<input class="ng-si-f ng-si-date" '+pre+' data-field="date" value="'+(item.date||'')+'" placeholder="WO 4/6" />';
+          h+='<input class="ng-si-f ng-si-date" type="date" '+pre+' data-field="date" value="'+(item.date||'')+'" />';
           h+='<input class="ng-si-f" '+pre+' data-field="vendor" value="'+(item.vendor||'')+'" placeholder="Vendor" style="flex:1" />';
           h+='<input class="ng-si-f ng-si-sm" type="number" '+pre+' data-field="amount" value="'+(item.amount||0)+'" step="0.01" />';
         } else if(iType==='other'){
-          h+='<input class="ng-si-f ng-si-date" '+pre+' data-field="date" value="'+(item.date||'')+'" placeholder="Date" />';
+          h+='<input class="ng-si-f ng-si-date" type="date" '+pre+' data-field="date" value="'+(item.date||'')+'" />';
           h+='<input class="ng-si-f ng-si-sm" type="number" '+pre+' data-field="qty" value="'+(item.qty||0)+'" step="0.01" />';
           h+='<input class="ng-si-f ng-si-sm" type="number" '+pre+' data-field="unitCost" value="'+(item.unitCost||0)+'" step="0.01" />';
           h+='<span class="ng-si-val">'+E.fmtC((item.qty||0)*(item.unitCost||0))+'</span>';
         } else if(iType==='sub'){
-          h+='<input class="ng-si-f ng-si-date" '+pre+' data-field="date" value="'+(item.date||'')+'" placeholder="Date" />';
+          h+='<input class="ng-si-f ng-si-date" type="date" '+pre+' data-field="date" value="'+(item.date||'')+'" />';
           h+='<input class="ng-si-f" '+pre+' data-field="desc" value="'+(item.desc||'')+'" placeholder="Description" style="flex:1" />';
           h+='<input class="ng-si-f ng-si-sm" type="number" '+pre+' data-field="amount" value="'+(item.amount||0)+'" step="0.01" />';
         }
@@ -401,6 +401,8 @@ function initEvents(){
             else n.items[idx][f]=t.value;
           }
         }
+        else if(t.dataset.field==='pctComplete') n.pctComplete=Math.max(0,Math.min(100,parseFloat(t.value)||0));
+        else if(t.dataset.jfield){ if(!n.jobFields)n.jobFields={}; n.jobFields[t.dataset.jfield]=parseFloat(t.value)||0; }
         else n.value=parseFloat(t.value)||0;
       }
       editingId=null; render();
@@ -436,6 +438,8 @@ function initEvents(){
       } else if(t.dataset.jfield){
         if(!n.jobFields) n.jobFields={};
         n.jobFields[t.dataset.jfield]=parseFloat(t.value)||0;
+      } else if(t.dataset.field==='pctComplete'){
+        n.pctComplete=Math.max(0,Math.min(100,parseFloat(t.value)||0));
       } else {
         n.value=parseFloat(t.value)||0;
       }
@@ -504,7 +508,7 @@ function populate(){
   var phases=appData.phases.filter(function(p2){return p2.jobId===jid;});
   phases.forEach(function(ph,i){
     var bl=appData.buildings.find(function(b){return b.id===ph.buildingId;});
-    var n=E.addNode('t2',sx+230,sy+i*140,(bl?bl.name+' \u203A ':'')+ph.phase,ph);
+    var n=E.addNode('t2',sx+230,sy+i*140,ph.phase+(bl?' \u203A '+bl.name:''),ph);
     if(n) n.pctComplete=ph.pctComplete||0;
     // Auto-wire T2→T1
     if(bl&&n){
