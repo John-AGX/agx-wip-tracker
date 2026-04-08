@@ -308,13 +308,15 @@ function initEvents(){
       return;
     }
     var nel=e.target.closest('.ng-node');
-    if(nel&&!e.target.closest('input')&&!e.target.closest('textarea')){
+    if(nel&&!e.target.closest('input')&&!e.target.closest('textarea')&&!e.target.closest('[data-rename]')){
       e.stopPropagation();
       var nid2=nel.getAttribute('data-id'),n3=E.findNode(nid2);if(!n3)return;
-      selN=nid2;dragN=nid2;
+      // Deselect old, select new without full re-render
+      if(selN&&selN!==nid2){var old=canvasEl.querySelector('[data-id="'+selN+'"]');if(old)old.classList.remove('ng-sel');}
+      selN=nid2; dragN=nid2;
+      nel.classList.add('ng-sel');
       var p=E.pan();
       dragOff={x:e.clientX/z()-p.x-n3.x, y:e.clientY/z()-p.y-n3.y};
-      render();
     }
   });
 

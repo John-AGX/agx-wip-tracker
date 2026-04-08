@@ -11,11 +11,11 @@ function canConn(a,b){ return a===b||a===PT.A||b===PT.A||(a===PT.N&&b===PT.C); }
 
 // ── Node Definitions ──
 var DEFS = {
-  t1:    { cat:'t1',   icon:'\u{1F3D7}', label:'Tier 1',       ins:[{n:'Costs',t:PT.C}], outs:[{n:'Total',t:PT.C}], hasProg:true },
-  t2:    { cat:'t2',   icon:'\u{1F4CB}', label:'Tier 2',       ins:[{n:'Costs',t:PT.C}], outs:[{n:'Total',t:PT.C}], hasProg:true },
+  t1:    { cat:'t1',   icon:'\u{1F3D7}', label:'Tier 1',       ins:[{n:'Costs',t:PT.C}], outs:[{n:'Total',t:PT.C}], hasProg:true, hasItems:true, nameEdit:true },
+  t2:    { cat:'t2',   icon:'\u{1F4CB}', label:'Tier 2',       ins:[{n:'Costs',t:PT.C}], outs:[{n:'Total',t:PT.C}], hasProg:true, hasItems:true, nameEdit:true },
   cost:  { cat:'cost', icon:'\u{1F4B2}', label:'Cost',         ins:[], outs:[{n:'Total',t:PT.C}], hasItems:true, nameEdit:true },
-  sub:   { cat:'sub',  icon:'\u{1F477}', label:'Sub',          ins:[], outs:[{n:'Billed',t:PT.C}] },
-  co:    { cat:'co',   icon:'\u{1F4DD}', label:'Change Order', ins:[], outs:[{n:'Income',t:PT.C},{n:'Costs',t:PT.C}] },
+  sub:   { cat:'sub',  icon:'\u{1F477}', label:'Sub',          ins:[], outs:[{n:'Billed',t:PT.C}], hasItems:true, nameEdit:true },
+  co:    { cat:'co',   icon:'\u{1F4DD}', label:'Change Order', ins:[], outs:[{n:'Income',t:PT.C},{n:'Costs',t:PT.C}], hasItems:true, nameEdit:true },
   sum:   { cat:'math', icon:'\u2211',    label:'SUM',          ins:[{n:'A',t:PT.A},{n:'B',t:PT.A},{n:'C',t:PT.A},{n:'D',t:PT.A}], outs:[{n:'Result',t:PT.C}] },
   sub2:  { cat:'math', icon:'\u2212',    label:'Subtract',     ins:[{n:'A',t:PT.C},{n:'B',t:PT.C}], outs:[{n:'Result',t:PT.C}] },
   mul:   { cat:'math', icon:'\u00D7',    label:'Multiply',     ins:[{n:'A',t:PT.A},{n:'B',t:PT.N}], outs:[{n:'Result',t:PT.C}] },
@@ -89,27 +89,31 @@ function getOutput(n, pi){
   _comp[n.id] = true;
   var d = DEFS[n.type], v = 0;
 
-  // Cost node with sub-items: total = sum of items
-  if(d && d.hasItems){
-    v = n.items.reduce(function(s, item){ return s + (item.amount || 0); }, 0);
-    if(v === 0) v = n.value || 0; // fallback to direct value if no items
+  // Items total (used by cost, t1, t2, sub, co)
+  var itemsTotal = (n.items && n.items.length > 0) ? n.items.reduce(function(s, item){ return s + (item.amount || 0); }, 0) : 0;
+
+  // Cost node: items total or direct value
+  if(n.type === 'cost'){
+    v = itemsTotal || n.value || 0;
     _comp[n.id] = false; return v;
   }
 
-  // Data nodes (sub, co): use stored data
-  if(n.type === 'sub' && n.data){
-    v = n.data.billedToDate || 0;
-    _comp[n.id] = false; return v;
-  }
-  if(n.type === 'co' && n.data){
-    var outs = d.outs;
-    if(outs[pi] && outs[pi].n === 'Income') v = n.data.income || 0;
-    else if(outs[pi] && outs[pi].n === 'Costs') v = n.data.estimatedCosts || 0;
+  // Sub: items total or stored billedToDate
+  if(n.type === 'sub'){
+    v = itemsTotal || (n.data ? n.data.billedToDate || 0 : 0);
     _comp[n.id] = false; return v;
   }
 
-  // T1/T2: sum of wired inputs
+  // CO: items feed into first output (Income), second uses data
+  if(n.type === 'co'){
+    if(pi === 0) v = itemsTotal || (n.data ? n.data.income || 0 : 0);
+    else v = n.data ? n.data.estimatedCosts || 0 : 0;
+    _comp[n.id] = false; return v;
+  }
+
+  // T1/T2: sum of wired inputs + own items
   if(n.type === 't1' || n.type === 't2'){
+    v = itemsTotal;
     wires.forEach(function(w){
       if(w.toNode === n.id){
         var fn = findNode(w.fromNode);
