@@ -1,5 +1,5 @@
 /* ============================================================
-   AGX Node Graph — Dynamo-Style Visual Programming (Beta) v3
+   AGX Node Graph v4 — Dynamo-Style with Category Browser
    ============================================================ */
 
 #nodeGraphTab { display:none; position:fixed; top:0;left:0;right:0;bottom:0; z-index:500; background:#0b0e16; overflow:hidden; font-family:'Segoe UI',system-ui,sans-serif; }
@@ -10,91 +10,109 @@
 .ng-topbar-title { font-size:13px; font-weight:700; color:#e4e6f0; }
 .ng-topbar-sub { font-size:10px; color:#4a5068; }
 .ng-topbar-spacer { flex:1; }
-
 .ng-tbtn { background:rgba(79,140,255,0.08); border:1px solid rgba(79,140,255,0.25); color:#6aa3ff; border-radius:4px; padding:3px 10px; font-size:11px; cursor:pointer; font-weight:600; transition:all 0.12s; }
 .ng-tbtn:hover { background:rgba(79,140,255,0.2); }
-.ng-tbtn-danger { background:rgba(248,113,113,0.08); border-color:rgba(248,113,113,0.25); color:#f87171; }
-.ng-tbtn-danger:hover { background:rgba(248,113,113,0.2); }
+.ng-tbtn-close { background:rgba(248,113,113,0.08); border:1px solid rgba(248,113,113,0.25); color:#f87171; border-radius:4px; padding:3px 10px; font-size:11px; cursor:pointer; font-weight:600; }
+.ng-tbtn-close:hover { background:rgba(248,113,113,0.2); }
 
-/* ── Search ── */
-.ng-search { position:relative; }
-.ng-search input { background:#0d1019; border:1px solid #1c2236; color:#e4e6f0; border-radius:4px; padding:4px 8px 4px 24px; font-size:11px; width:180px; outline:none; }
-.ng-search input:focus { border-color:#4f8cff; }
-.ng-search::before { content:'\1F50D'; position:absolute; left:6px; top:50%; transform:translateY(-50%); font-size:10px; pointer-events:none; }
-.ng-search-results { position:absolute; top:100%; left:0; right:0; background:#151926; border:1px solid #1c2236; border-radius:0 0 6px 6px; max-height:250px; overflow-y:auto; z-index:30; display:none; }
-.ng-search-results.active { display:block; }
-.ng-search-item { padding:5px 10px; font-size:11px; color:#c4c9db; cursor:pointer; display:flex; align-items:center; gap:6px; }
-.ng-search-item:hover { background:#1e2536; color:#fff; }
-.ng-search-cat { font-size:8px; padding:1px 5px; border-radius:3px; font-weight:600; text-transform:uppercase; }
-.ng-cat-data { background:rgba(79,140,255,0.15); color:#4f8cff; }
-.ng-cat-cost { background:rgba(52,211,153,0.15); color:#34d399; }
-.ng-cat-math { background:rgba(167,139,250,0.15); color:#a78bfa; }
-.ng-cat-output { background:rgba(251,191,36,0.15); color:#fbbf24; }
-.ng-cat-watch { background:rgba(236,72,153,0.15); color:#ec4899; }
+/* ── Main layout ── */
+.ng-main { display:flex; flex:1; overflow:hidden; }
 
-/* ── Canvas ── */
-.ng-canvas-wrap { flex:1; position:relative; overflow:hidden; cursor:grab; }
-.ng-canvas-wrap.ng-panning { cursor:grabbing; }
+/* ── Category Sidebar ── */
+.ng-sidebar { width:200px; background:#0d1019; border-right:1px solid #1c2236; overflow-y:auto; flex-shrink:0; z-index:5; }
+.ng-sidebar-header { padding:8px 10px; font-size:10px; font-weight:700; color:#4a5068; text-transform:uppercase; letter-spacing:0.5px; border-bottom:1px solid #1c2236; }
+.ng-sidebar-search { padding:6px 8px; border-bottom:1px solid #1c2236; }
+.ng-sidebar-search input { width:100%; background:#0b0e16; border:1px solid #1c2236; color:#e4e6f0; border-radius:4px; padding:4px 8px; font-size:11px; outline:none; }
+.ng-sidebar-search input:focus { border-color:#4f8cff; }
+
+.ng-cat { }
+.ng-cat-header { padding:6px 10px; font-size:10px; font-weight:700; color:#6a7090; cursor:pointer; display:flex; align-items:center; gap:5px; text-transform:uppercase; letter-spacing:0.4px; transition:color 0.1s; }
+.ng-cat-header:hover { color:#e4e6f0; }
+.ng-cat-arrow { font-size:7px; transition:transform 0.15s; }
+.ng-cat.ng-open .ng-cat-arrow { transform:rotate(90deg); }
+.ng-cat-items { display:none; padding:0 0 4px; }
+.ng-cat.ng-open .ng-cat-items { display:block; }
+
+.ng-cat-item { padding:4px 10px 4px 22px; font-size:11px; color:#8899bb; cursor:grab; display:flex; align-items:center; gap:6px; transition:all 0.1s; border-radius:3px; margin:0 4px; }
+.ng-cat-item:hover { background:#151d30; color:#e4e6f0; }
+.ng-cat-item .ng-ci-icon { font-size:13px; }
+.ng-cat-badge { font-size:8px; padding:1px 4px; border-radius:3px; font-weight:600; margin-left:auto; }
+
+/* Category badge colors */
+.ng-cb-data { background:rgba(79,140,255,0.12); color:#4f8cff; }
+.ng-cb-cost { background:rgba(52,211,153,0.12); color:#34d399; }
+.ng-cb-unit { background:rgba(251,191,36,0.12); color:#fbbf24; }
+.ng-cb-math { background:rgba(167,139,250,0.12); color:#a78bfa; }
+.ng-cb-output { background:rgba(236,72,153,0.12); color:#ec4899; }
+.ng-cb-note { background:rgba(156,163,175,0.12); color:#9ca3af; }
+
+/* ── Canvas area ── */
+.ng-canvas-area { flex:1; position:relative; overflow:hidden; cursor:grab; }
+.ng-canvas-area.ng-panning { cursor:grabbing; }
 .ng-canvas { position:absolute; top:0;left:0; width:20000px; height:20000px; transform-origin:0 0; }
 .ng-grid-canvas { position:absolute; top:0;left:0; z-index:0; }
 .ng-wire-canvas { position:absolute; top:0;left:0; pointer-events:none; z-index:1; }
 
 /* ── Nodes ── */
-.ng-node { position:absolute; min-width:180px; max-width:280px; background:#13172a; border:2px solid #242e50; border-radius:10px; box-shadow:0 2px 12px rgba(0,0,0,0.5); z-index:3; cursor:move; user-select:none; }
+.ng-node { position:absolute; min-width:170px; max-width:280px; background:#12162a; border:2px solid #242e50; border-radius:10px; box-shadow:0 2px 12px rgba(0,0,0,0.5); z-index:3; cursor:move; user-select:none; }
 .ng-node:hover { border-color:#3350a0; }
-.ng-node.ng-selected { border-color:#4f8cff; box-shadow:0 0 0 3px rgba(79,140,255,0.15),0 4px 20px rgba(0,0,0,0.4); }
-.ng-node.ng-collapsed .ng-node-ports { display:none; }
-.ng-node.ng-collapsed { min-width:140px; }
+.ng-node.ng-sel { border-color:#4f8cff; box-shadow:0 0 0 3px rgba(79,140,255,0.15),0 4px 20px rgba(0,0,0,0.4); }
 
 /* Header */
-.ng-node-header { padding:7px 10px; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.6px; border-radius:8px 8px 0 0; display:flex; align-items:center; gap:5px; cursor:move; }
-.ng-node-header .ng-icon { font-size:13px; }
-.ng-collapse-btn { margin-left:auto; font-size:8px; cursor:pointer; opacity:0.5; transition:opacity 0.12s; padding:2px; }
-.ng-collapse-btn:hover { opacity:1; }
+.ng-hdr { padding:7px 10px; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.6px; border-radius:8px 8px 0 0; display:flex; align-items:center; gap:5px; cursor:move; }
+.ng-hdr .ng-hi { font-size:13px; }
+.ng-hdr-name { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ng-cbtn { margin-left:auto; font-size:8px; cursor:pointer; opacity:0.5; padding:2px; }
+.ng-cbtn:hover { opacity:1; }
 
 /* Type colors */
-.ng-t-data .ng-node-header    { background:linear-gradient(135deg,rgba(79,140,255,0.2),rgba(79,140,255,0.08)); color:#6aa3ff; }
-.ng-t-cost .ng-node-header    { background:linear-gradient(135deg,rgba(52,211,153,0.2),rgba(52,211,153,0.08)); color:#34d399; }
-.ng-t-math .ng-node-header    { background:linear-gradient(135deg,rgba(167,139,250,0.2),rgba(167,139,250,0.08)); color:#a78bfa; }
-.ng-t-output .ng-node-header  { background:linear-gradient(135deg,rgba(251,191,36,0.2),rgba(251,191,36,0.08)); color:#fbbf24; }
-.ng-t-watch .ng-node-header   { background:linear-gradient(135deg,rgba(236,72,153,0.2),rgba(236,72,153,0.08)); color:#ec4899; }
+.ng-t-data .ng-hdr    { background:linear-gradient(135deg,rgba(79,140,255,0.2),rgba(79,140,255,0.08)); color:#6aa3ff; }
+.ng-t-cost .ng-hdr    { background:linear-gradient(135deg,rgba(52,211,153,0.2),rgba(52,211,153,0.08)); color:#34d399; }
+.ng-t-unit .ng-hdr    { background:linear-gradient(135deg,rgba(251,191,36,0.2),rgba(251,191,36,0.08)); color:#fbbf24; }
+.ng-t-math .ng-hdr    { background:linear-gradient(135deg,rgba(167,139,250,0.2),rgba(167,139,250,0.08)); color:#a78bfa; }
+.ng-t-output .ng-hdr  { background:linear-gradient(135deg,rgba(236,72,153,0.2),rgba(236,72,153,0.08)); color:#ec4899; }
+.ng-t-note .ng-hdr    { background:linear-gradient(135deg,rgba(156,163,175,0.15),rgba(156,163,175,0.05)); color:#9ca3af; }
 
-/* Ports section */
-.ng-node-ports { padding:4px 0; }
+/* Ports */
+.ng-ports { padding:4px 0; }
+.ng-node.ng-coll .ng-ports { display:none; }
+.ng-node.ng-coll .ng-edit-val { display:none; }
+.ng-node.ng-coll .ng-unit-body { display:none; }
 
-.ng-port-row { display:flex; align-items:center; padding:2px 0; min-height:22px; position:relative; }
+.ng-pr { display:flex; align-items:center; padding:2px 0; min-height:20px; }
+.ng-p { width:12px; height:12px; border-radius:50%; border:2px solid #3a4570; background:#0b0e16; cursor:crosshair; flex-shrink:0; transition:all 0.1s; z-index:5; }
+.ng-p:hover { border-color:#4f8cff; background:#4f8cff; box-shadow:0 0 8px rgba(79,140,255,0.6); transform:scale(1.35); }
+.ng-p.ng-pc { background:#4f8cff; border-color:#4f8cff; }
+.ng-pi { margin-left:-7px; margin-right:6px; }
+.ng-po { margin-right:-7px; margin-left:6px; }
+.ng-p-currency { border-color:#34d399; } .ng-p-currency.ng-pc { background:#34d399; border-color:#34d399; }
+.ng-p-percent { border-color:#fbbf24; } .ng-p-percent.ng-pc { background:#fbbf24; border-color:#fbbf24; }
+.ng-p-number { border-color:#a78bfa; } .ng-p-number.ng-pc { background:#a78bfa; border-color:#a78bfa; }
+.ng-pl { font-size:10px; color:#6a7090; flex:1; }
+.ng-pv { font-family:'Courier New',monospace; font-size:10px; color:#8899cc; font-weight:600; text-align:right; }
 
-.ng-port { width:12px; height:12px; border-radius:50%; border:2px solid #3a4570; background:#0b0e16; cursor:crosshair; flex-shrink:0; transition:all 0.1s; z-index:5; }
-.ng-port:hover { border-color:#4f8cff; background:#4f8cff; box-shadow:0 0 8px rgba(79,140,255,0.6); transform:scale(1.35); }
-.ng-port.ng-connected { background:#4f8cff; border-color:#4f8cff; }
-.ng-port-in { margin-left:-7px; margin-right:6px; }
-.ng-port-out { margin-right:-7px; margin-left:6px; }
+/* Watch value display */
+.ng-wv { padding:6px 10px; font-family:'Courier New',monospace; font-size:20px; font-weight:700; text-align:center; color:#e4e6f0; background:#0d1019; margin:0 8px 8px; border-radius:6px; border:1px solid #1c2236; }
+.ng-wv.ng-vp { color:#34d399; }
+.ng-wv.ng-vn { color:#f87171; }
 
-/* Port type indicators */
-.ng-port-currency { border-color:#34d399; }
-.ng-port-currency.ng-connected { background:#34d399; border-color:#34d399; }
-.ng-port-percent { border-color:#fbbf24; }
-.ng-port-percent.ng-connected { background:#fbbf24; border-color:#fbbf24; }
-.ng-port-number { border-color:#a78bfa; }
-.ng-port-number.ng-connected { background:#a78bfa; border-color:#a78bfa; }
-
-.ng-port-label { font-size:10px; color:#6a7090; flex:1; }
-.ng-port-val { font-family:'Courier New',monospace; font-size:10px; color:#8899cc; font-weight:600; text-align:right; }
-
-/* Watch / Display node value */
-.ng-watch-value { padding:6px 10px; font-family:'Courier New',monospace; font-size:20px; font-weight:700; text-align:center; color:#e4e6f0; background:#0d1019; margin:0 8px 8px; border-radius:6px; border:1px solid #1c2236; min-height:28px; }
-.ng-watch-value.ng-val-pos { color:#34d399; }
-.ng-watch-value.ng-val-neg { color:#f87171; }
-
-/* Editable node input */
+/* Editable input */
 .ng-edit-val { padding:4px 8px 6px; }
-.ng-edit-val input { width:100%; background:#0d1019; border:1px solid #1c2236; color:#e4e6f0; font-family:'Courier New',monospace; font-size:15px; font-weight:700; padding:5px 8px; border-radius:5px; text-align:center; outline:none; }
+.ng-edit-val input { width:100%; background:#0d1019; border:1px solid #1c2236; color:#e4e6f0; font-family:'Courier New',monospace; font-size:14px; font-weight:700; padding:4px 8px; border-radius:5px; text-align:center; outline:none; }
 .ng-edit-val input:focus { border-color:#4f8cff; box-shadow:0 0 0 2px rgba(79,140,255,0.15); }
 
-/* ── Node Groups ── */
-.ng-group { position:absolute; background:rgba(79,140,255,0.04); border:1px dashed rgba(79,140,255,0.2); border-radius:12px; z-index:0; min-width:100px; min-height:80px; }
-.ng-group-label { position:absolute; top:-18px; left:8px; font-size:10px; font-weight:600; color:rgba(79,140,255,0.5); text-transform:uppercase; letter-spacing:0.5px; }
+/* Unit cost node body */
+.ng-unit-body { padding:4px 10px 8px; display:grid; grid-template-columns:1fr 1fr; gap:4px; }
+.ng-unit-body label { font-size:9px; color:#5a6078; text-transform:uppercase; }
+.ng-unit-body input { width:100%; background:#0d1019; border:1px solid #1c2236; color:#e4e6f0; font-family:'Courier New',monospace; font-size:12px; padding:3px 6px; border-radius:3px; text-align:center; outline:none; }
+.ng-unit-body input:focus { border-color:#4f8cff; }
+.ng-unit-total { grid-column:1/-1; font-family:'Courier New',monospace; font-size:16px; font-weight:700; color:#fbbf24; text-align:center; padding:4px 0 2px; }
+
+/* Sticky note node */
+.ng-note-body { padding:6px 10px 8px; }
+.ng-note-body textarea { width:100%; min-height:60px; background:#0d1019; border:1px solid #1c2236; color:#c4c9db; font-size:11px; padding:6px 8px; border-radius:4px; resize:vertical; outline:none; font-family:inherit; line-height:1.4; }
+.ng-note-body textarea:focus { border-color:#4f8cff; }
 
 /* ── HUD ── */
 .ng-zoom { position:absolute; bottom:10px; left:10px; font-size:10px; color:#4a5068; background:rgba(11,14,22,0.85); border:1px solid #1c2236; border-radius:4px; padding:3px 8px; z-index:10; }
-.ng-help { position:absolute; bottom:10px; right:10px; font-size:9px; color:#3a4060; background:rgba(11,14,22,0.85); border:1px solid #1c2236; border-radius:4px; padding:5px 10px; z-index:10; line-height:1.6; }
+.ng-help { position:absolute; bottom:10px; right:10px; font-size:9px; color:#3a4060; background:rgba(11,14,22,0.85); border:1px solid #1c2236; border-radius:4px; padding:4px 10px; z-index:10; line-height:1.5; }
