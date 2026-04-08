@@ -56,6 +56,7 @@ var panX=0,panY=0,zoom=1,jobId=null;
 var dragN=null,dragOff={x:0,y:0};
 var wiringFrom=null,wireMouse=null;
 var selN=null,isPan=false,panSt={x:0,y:0};
+var editingNodeId=null; // track which node has input focus
 var SNAP=15;
 
 function gid(){return 'n'+(nid++);}
@@ -165,10 +166,16 @@ function drawWires(){
 }
 
 function renderNodes(){
-  canvasEl.querySelectorAll('.ng-node').forEach(function(el){el.remove();});
+  // Remove all nodes EXCEPT the one being edited
+  canvasEl.querySelectorAll('.ng-node').forEach(function(el){
+    if(editingNodeId && el.getAttribute('data-id')===editingNodeId) return;
+    el.remove();
+  });
   _comp={};
   nodes.forEach(function(n){
     var d=D[n.type];if(!d)return;
+    // Skip re-rendering the node being edited
+    if(editingNodeId===n.id) return;
     var div=document.createElement('div');
     div.className='ng-node ng-t-'+n.cat+(selN===n.id?' ng-sel':'')+(n.collapsed?' ng-coll':'');
     div.setAttribute('data-id',n.id);
@@ -177,17 +184,24 @@ function renderNodes(){
     var h='<div class="ng-hdr"><span class="ng-hi">'+d.icon+'</span><span class="ng-hdr-name">'+n.label+'</span>';
     if(canCollapse)h+='<span class="ng-cbtn" data-coll="'+n.id+'">'+(n.collapsed?'\u25B6':'\u25BC')+'</span>';
     h+='</div>';
-    // Ports
-    if(d.ins||d.outs){
+    // Ports — inputs on left, outputs on right
+    var hasIns=(d.ins&&d.ins.length>0), hasOuts=(d.outs&&d.outs.length>0);
+    if(hasIns||hasOuts){
       h+='<div class="ng-ports">';
       var mx=Math.max((d.ins||[]).length,(d.outs||[]).length);
       for(var i=0;i<mx;i++){
         h+='<div class="ng-pr">';
-        if(d.ins&&i<d.ins.length){var ip=d.ins[i],ic=wires.some(function(w){return w.toNode===n.id&&w.toPort===i;});
+        // Left side: input port
+        if(hasIns&&i<d.ins.length){
+          var ip=d.ins[i],ic=wires.some(function(w){return w.toNode===n.id&&w.toPort===i;});
           h+='<div class="ng-p ng-pi ng-p-'+ip.t+(ic?' ng-pc':'')+'" data-node="'+n.id+'" data-pi="'+i+'" data-dir="in" data-type="'+ip.t+'"></div>';
           h+='<span class="ng-pl">'+ip.n+'</span>';
-        }else{h+='<span></span><span></span>';}
-        if(d.outs&&i<d.outs.length){var op=d.outs[i],oc=wires.some(function(w){return w.fromNode===n.id&&w.fromPort===i;}),ov=getOut(n,i);
+        } else if(hasIns) {
+          h+='<span style="width:12px"></span><span></span>';
+        }
+        // Right side: output port
+        if(hasOuts&&i<d.outs.length){
+          var op=d.outs[i],oc=wires.some(function(w){return w.fromNode===n.id&&w.fromPort===i;}),ov=getOut(n,i);
           h+='<span class="ng-pv">'+fV(ov,op.t)+'</span>';
           h+='<div class="ng-p ng-po ng-p-'+op.t+(oc?' ng-pc':'')+'" data-node="'+n.id+'" data-pi="'+i+'" data-dir="out" data-type="'+op.t+'"></div>';
         }
@@ -300,6 +314,26 @@ function initEvents(){
       selN=nid2;dragN=nid2;dragOff={x:e.clientX/zoom-panX-n.x,y:e.clientY/zoom-panY-n.y};render();
     }
   });
+  // Track focus for editing — prevents re-render from stealing input
+  canvasEl.addEventListener('focusin',function(e){
+    var t=e.target;
+    if((t.tagName==='INPUT'||t.tagName==='TEXTAREA')&&t.dataset.node) editingNodeId=t.dataset.node;
+  });
+  canvasEl.addEventListener('focusout',function(e){
+    var t=e.target;
+    if((t.tagName==='INPUT'||t.tagName==='TEXTAREA')&&t.dataset.node){
+      var n=find(t.dataset.node);
+      if(n){
+        if(t.dataset.field==='unitPrice')n.unitPrice=parseFloat(t.value)||0;
+        else if(t.dataset.field==='qty')n.qty=parseFloat(t.value)||0;
+        else if(t.tagName==='TEXTAREA')n.noteText=t.value;
+        else n.value=parseFloat(t.value)||0;
+      }
+      editingNodeId=null;
+      render();
+    }
+  });
+  // Live update for unit cost totals without full re-render
   canvasEl.addEventListener('input',function(e){
     var t=e.target;
     if(t.tagName==='INPUT'&&t.dataset.node){
@@ -307,7 +341,10 @@ function initEvents(){
       if(t.dataset.field==='unitPrice')n.unitPrice=parseFloat(t.value)||0;
       else if(t.dataset.field==='qty')n.qty=parseFloat(t.value)||0;
       else n.value=parseFloat(t.value)||0;
-      render();
+      // Update just the unit total display and wires without full re-render
+      var el=canvasEl.querySelector('[data-id="'+n.id+'"] .ng-unit-total');
+      if(el)el.textContent=fC((n.unitPrice||0)*(n.qty||0));
+      drawWires();
     }
     if(t.tagName==='TEXTAREA'&&t.dataset.node){var n2=find(t.dataset.node);if(n2)n2.noteText=t.value;}
   });
