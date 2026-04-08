@@ -35,7 +35,7 @@ function renderNodes(){
     div.style.left=n.x+'px'; div.style.top=n.y+'px';
 
     var canColl = n.type!=='note';
-    var h='<div class="ng-hdr"><span class="ng-hi">'+d.icon+'</span><span class="ng-hdr-name">'+n.label+'</span>';
+    var h='<div class="ng-hdr"><span class="ng-hi">'+d.icon+'</span><span class="ng-hdr-name" data-rename="'+n.id+'" title="Double-click to rename">'+n.label+'</span>';
     if(canColl) h+='<span class="ng-cbtn" data-coll="'+n.id+'">'+(n.collapsed?'\u25B6':'\u25BC')+'</span>';
     h+='</div>';
 
@@ -72,22 +72,20 @@ function renderNodes(){
       h+='<div class="ng-progress-label">'+pct.toFixed(0)+'% complete'+(n.budget?' \u00b7 Budget: '+E.fmtC(n.budget):'')+'</div>';
     }
 
-    // Cost sub-items
+    // Cost sub-items (inline editable)
     if(d.hasItems){
       h+='<div class="ng-subitems">';
       n.items.forEach(function(item,idx){
         h+='<div class="ng-subitem">';
-        h+='<span class="ng-subitem-date">'+(item.date||'—')+'</span>';
-        h+='<span class="ng-subitem-val">'+E.fmtC(item.amount||0)+'</span>';
+        h+='<input class="ng-si-date" data-node="'+n.id+'" data-idx="'+idx+'" data-field="date" value="'+(item.date||'')+'" placeholder="Date" />';
+        h+='<input class="ng-si-amt" type="number" data-node="'+n.id+'" data-idx="'+idx+'" data-field="amount" value="'+(item.amount||0)+'" step="0.01" />';
         h+='<span class="ng-subitem-del" data-node="'+n.id+'" data-idx="'+idx+'">\u2716</span>';
         h+='</div>';
       });
       h+='<div class="ng-add-sub" data-node="'+n.id+'">+ Add Entry</div>';
       var itemTotal = n.items.reduce(function(s,i){return s+(i.amount||0);},0);
-      if(n.items.length>0) h+='<div class="ng-sub-total">'+E.fmtC(itemTotal)+'</div>';
+      h+='<div class="ng-sub-total">'+E.fmtC(itemTotal)+'</div>';
       h+='</div>';
-      // Fallback editable value if no items
-      if(n.items.length===0) h+='<div class="ng-edit-val"><input type="number" value="'+(n.value||0)+'" data-node="'+n.id+'"/></div>';
     }
 
     // Sub: show contract info
@@ -257,17 +255,12 @@ function initEvents(){
     if(port){e.stopPropagation();wiringFrom={nid:port.getAttribute('data-node'),pi:parseInt(port.getAttribute('data-pi'))};return;}
     var cb=e.target.closest('.ng-cbtn');
     if(cb){e.stopPropagation();var cn=E.findNode(cb.getAttribute('data-coll'));if(cn){cn.collapsed=!cn.collapsed;render();}return;}
-    // Add sub-item
+    // Add sub-item (inline — just adds a blank row)
     var addSub=e.target.closest('.ng-add-sub');
     if(addSub){
       e.stopPropagation();
       var n=E.findNode(addSub.getAttribute('data-node'));
-      if(n){
-        var date=prompt('Date (e.g. 4/7):','');
-        var amt=parseFloat(prompt('Amount:','0'))||0;
-        if(date!==null) n.items.push({date:date,amount:amt});
-        render();
-      }
+      if(n){ n.items.push({date:'',amount:0}); render(); }
       return;
     }
     // Delete sub-item
@@ -290,6 +283,27 @@ function initEvents(){
     }
   });
 
+  // Double-click to rename node
+  canvasEl.addEventListener('dblclick',function(e){
+    var nameEl=e.target.closest('[data-rename]');
+    if(nameEl){
+      e.stopPropagation();
+      var n=E.findNode(nameEl.getAttribute('data-rename'));
+      if(!n) return;
+      var inp=document.createElement('input');
+      inp.type='text'; inp.value=n.label;
+      inp.style.cssText='font-size:10px;font-weight:700;text-transform:uppercase;background:#0d1019;border:1px solid #4f8cff;color:#e4e6f0;border-radius:3px;padding:1px 4px;width:100%;outline:none;letter-spacing:.6px;';
+      nameEl.textContent='';
+      nameEl.appendChild(inp);
+      inp.focus(); inp.select();
+      editingId=n.id;
+      function finish(){ n.label=inp.value||n.label; editingId=null; render(); }
+      inp.addEventListener('blur',finish);
+      inp.addEventListener('keydown',function(ev){ if(ev.key==='Enter'){ev.preventDefault();finish();} });
+      return;
+    }
+  });
+
   canvasEl.addEventListener('focusin',function(e){
     var t=e.target;
     if((t.tagName==='INPUT'||t.tagName==='TEXTAREA')&&t.dataset.node) editingId=t.dataset.node;
@@ -300,6 +314,14 @@ function initEvents(){
       var n=E.findNode(t.dataset.node);
       if(n){
         if(t.tagName==='TEXTAREA') n.noteText=t.value;
+        else if(t.dataset.idx!=null&&t.dataset.field){
+          // Sub-item field edit
+          var idx=parseInt(t.dataset.idx);
+          if(n.items&&n.items[idx]){
+            if(t.dataset.field==='amount') n.items[idx].amount=parseFloat(t.value)||0;
+            else n.items[idx][t.dataset.field]=t.value;
+          }
+        }
         else n.value=parseFloat(t.value)||0;
       }
       editingId=null; render();
@@ -309,7 +331,20 @@ function initEvents(){
     var t=e.target;
     if(t.tagName==='INPUT'&&t.dataset.node){
       var n=E.findNode(t.dataset.node);
-      if(n) n.value=parseFloat(t.value)||0;
+      if(!n) return;
+      if(t.dataset.idx!=null&&t.dataset.field){
+        // Live update sub-item
+        var idx=parseInt(t.dataset.idx);
+        if(n.items&&n.items[idx]){
+          if(t.dataset.field==='amount') n.items[idx].amount=parseFloat(t.value)||0;
+          else n.items[idx][t.dataset.field]=t.value;
+        }
+        // Update total display
+        var totalEl=canvasEl.querySelector('[data-id="'+n.id+'"] .ng-sub-total');
+        if(totalEl) totalEl.textContent=E.fmtC(n.items.reduce(function(s,i){return s+(i.amount||0);},0));
+      } else {
+        n.value=parseFloat(t.value)||0;
+      }
     }
     if(t.tagName==='TEXTAREA'&&t.dataset.node){
       var n2=E.findNode(t.dataset.node);
