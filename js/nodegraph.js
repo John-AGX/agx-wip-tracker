@@ -10,9 +10,9 @@ function canConn(a,b){return a===b||a===PT.A||b===PT.A||(a===PT.N&&b===PT.C);}
 
 // ── Node definitions ──
 var D={
-  building:  {cat:'data',icon:'\u{1F3D7}',label:'Building',  ins:[],outs:[{n:'Budget',t:PT.C},{n:'Materials',t:PT.C},{n:'Labor',t:PT.C},{n:'Equipment',t:PT.C},{n:'Sub',t:PT.C},{n:'Total',t:PT.C}]},
-  phase:     {cat:'data',icon:'\u{1F4CB}',label:'Phase',     ins:[],outs:[{n:'Materials',t:PT.C},{n:'Labor',t:PT.C},{n:'Equipment',t:PT.C},{n:'Sub',t:PT.C},{n:'Total',t:PT.C},{n:'%',t:PT.P}]},
-  sub:       {cat:'data',icon:'\u{1F477}',label:'Sub',        ins:[],outs:[{n:'Contract',t:PT.C},{n:'Billed',t:PT.C},{n:'Remaining',t:PT.C}]},
+  building:  {cat:'data',icon:'\u{1F3D7}',label:'Building',  ins:[{n:'Costs',t:PT.C}],outs:[{n:'Total',t:PT.C}], showBudget:true},
+  phase:     {cat:'data',icon:'\u{1F4CB}',label:'Phase',     ins:[{n:'Costs',t:PT.C}],outs:[{n:'Total',t:PT.C}]},
+  sub:       {cat:'data',icon:'\u{1F477}',label:'Sub',        ins:[],outs:[{n:'Billed',t:PT.C}]},
   co:        {cat:'data',icon:'\u{1F4DD}',label:'Change Order',ins:[],outs:[{n:'Income',t:PT.C},{n:'Est.Costs',t:PT.C}]},
   value:     {cat:'cost',icon:'\u{1F4B2}',label:'Value',      ins:[],outs:[{n:'Value',t:PT.C}],edit:true},
   materials: {cat:'cost',icon:'\u{1F9F1}',label:'Materials',   ins:[],outs:[{n:'$',t:PT.C}],edit:true},
@@ -79,18 +79,17 @@ function getOut(n,pi){
   if(d&&d.cat==='unit'){v=(n.unitPrice||0)*(n.qty||0);_comp[n.id]=false;return v;}
   if(n.cat==='data'&&n.data){
     var dd=n.data,outs=d.outs,lbl=outs[pi]?outs[pi].n:'';
-    if(lbl==='Budget')v=dd.budget||0;
-    else if(lbl==='Materials')v=dd.materials||0;
-    else if(lbl==='Labor')v=dd.labor||0;
-    else if(lbl==='Equipment')v=dd.equipment||0;
-    else if(lbl==='Sub')v=dd.sub||0;
-    else if(lbl==='Contract')v=dd.contractAmt||0;
-    else if(lbl==='Billed')v=dd.billedToDate||0;
-    else if(lbl==='Remaining')v=(dd.contractAmt||0)-(dd.billedToDate||0);
+    // Building/Phase: output = sum of wired inputs (costs fed in)
+    if(n.type==='building'||n.type==='phase'){
+      var costIn=0;
+      wires.forEach(function(w){if(w.toNode===n.id){var fn=find(w.fromNode);if(fn)costIn+=getOut(fn,w.fromPort);}});
+      v=costIn;
+      _comp[n.id]=false;return v;
+    }
+    // Sub: just output billed to date
+    if(lbl==='Billed')v=dd.billedToDate||0;
     else if(lbl==='Income')v=dd.income||0;
     else if(lbl==='Est.Costs')v=dd.estimatedCosts||0;
-    else if(lbl==='%')v=dd.pctComplete||0;
-    else if(lbl==='Total')v=(dd.materials||0)+(dd.labor||0)+(dd.sub||0)+(dd.equipment||0);
     _comp[n.id]=false;return v;
   }
   var ins=(d.ins||[]).map(function(){return 0;});
@@ -211,10 +210,19 @@ function renderNodes(){
     }
     // Editable value
     if(d.edit)h+='<div class="ng-edit-val"><input type="number" value="'+(n.value||0)+'" data-node="'+n.id+'"/></div>';
+    // Building/Phase: show budget and total
+    if((n.type==='building'||n.type==='phase')&&n.data){
+      var bTotal=getOut(n,0);
+      var bCls=bTotal>0?' ng-vp':'';
+      h+='<div class="ng-wv'+bCls+'">'+fC(bTotal)+'</div>';
+      if(d.showBudget&&n.data.budget)h+='<div style="text-align:center;font-size:9px;color:#5a6078;padding:0 10px 6px;">Budget: '+fC(n.data.budget)+'</div>';
+    }
     // Unit cost body
     if(d.cat==='unit')h+='<div class="ng-unit-body"><label>$/'+d.unit+'</label><label>Qty</label><input type="number" value="'+(n.unitPrice||0)+'" data-node="'+n.id+'" data-field="unitPrice" step="0.01"/><input type="number" value="'+(n.qty||0)+'" data-node="'+n.id+'" data-field="qty" step="0.01"/><div class="ng-unit-total">'+fC((n.unitPrice||0)*(n.qty||0))+'</div></div>';
     // Watch display
     if(n.type==='watch'){var wv=getOut(n,0),cls=wv>0?' ng-vp':wv<0?' ng-vn':'';h+='<div class="ng-wv'+cls+'">'+fC(wv)+'</div>';}
+    // Sub: show contract and billed
+    if(n.type==='sub'&&n.data){h+='<div style="text-align:center;font-size:9px;color:#5a6078;padding:0 10px 6px;">Contract: '+fC(n.data.contractAmt||0)+'</div>';}
     // Sticky note
     if(n.type==='note')h+='<div class="ng-note-body"><textarea data-node="'+n.id+'" placeholder="Type a note...">'+(n.noteText||'')+'</textarea></div>';
     div.innerHTML=h;
