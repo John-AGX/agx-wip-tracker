@@ -82,7 +82,10 @@
 .ng-node.ng-coll .ng-note-body { display:none; }
 /* Keep persistent port indicators on collapsed nodes */
 .ng-coll-ports { display:none; padding:4px 0; }
-.ng-node.ng-coll .ng-coll-ports { display:flex; justify-content:space-between; align-items:center; padding:2px 0; min-height:16px; }
+.ng-node.ng-coll .ng-coll-ports { display:flex; justify-content:space-between; align-items:center; padding:4px 0; min-height:20px; }
+.ng-coll-ports .ng-p { background:#4f8cff; border-color:#4f8cff; position:static; margin:0; }
+.ng-coll-ports .ng-pi { margin-left:-7px; }
+.ng-coll-ports .ng-po { margin-right:-7px; }
 
 .ng-pr { display:flex; align-items:center; padding:2px 0; min-height:20px; }
 .ng-p { width:12px; height:12px; border-radius:50%; border:2px solid #3a4570; background:#0b0e16; cursor:crosshair; flex-shrink:0; transition:all 0.1s; z-index:5; }

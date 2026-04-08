@@ -273,9 +273,9 @@ function renderNodes(){
     var hasIns2=(d.ins&&d.ins.length>0),hasOuts2=(d.outs&&d.outs.length>0);
     if(hasIns2||hasOuts2){
       h+='<div class="ng-coll-ports">';
-      if(hasIns2) h+='<div class="ng-p ng-pi ng-p-'+d.ins[0].t+'" data-node="'+n.id+'" data-pi="0" data-dir="in" data-type="'+d.ins[0].t+'" style="position:relative;left:-7px;"></div>';
+      if(hasIns2) h+='<div class="ng-p ng-pi ng-pc ng-p-'+d.ins[0].t+'" data-node="'+n.id+'" data-pi="0" data-dir="in" data-type="'+d.ins[0].t+'"></div>';
       else h+='<span></span>';
-      if(hasOuts2) h+='<div class="ng-p ng-po ng-p-'+d.outs[0].t+'" data-node="'+n.id+'" data-pi="0" data-dir="out" data-type="'+d.outs[0].t+'" style="position:relative;right:-7px;"></div>';
+      if(hasOuts2) h+='<div class="ng-p ng-po ng-pc ng-p-'+d.outs[0].t+'" data-node="'+n.id+'" data-pi="0" data-dir="out" data-type="'+d.outs[0].t+'"></div>';
       h+='</div>';
     }
     div.innerHTML=h;
