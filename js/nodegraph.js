@@ -242,9 +242,10 @@ function renderNodes(){
         } else if(hasIns) {
           h+='<span style="width:12px"></span><span></span>';
         }
-        // Right side: output port
+        // Right side: output port — push to right when no inputs
         if(hasOuts&&i<d.outs.length){
           var op=d.outs[i],oc=wires.some(function(w){return w.fromNode===n.id&&w.fromPort===i;}),ov=getOut(n,i);
+          if(!hasIns) h+='<span class="ng-pl" style="flex:1">'+op.n+'</span>';
           h+='<span class="ng-pv">'+fV(ov,op.t)+'</span>';
           h+='<div class="ng-p ng-po ng-p-'+op.t+(oc?' ng-pc':'')+'" data-node="'+n.id+'" data-pi="'+i+'" data-dir="out" data-type="'+op.t+'"></div>';
         }
