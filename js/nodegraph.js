@@ -62,12 +62,49 @@ var SNAP=15;
 function gid(){return 'n'+(nid++);}
 function addN(type,x,y,label,data){
   var d=D[type]; if(!d) return null;
-  var n={id:gid(),type:type,cat:d.cat,x:Math.round(x/SNAP)*SNAP,y:Math.round(y/SNAP)*SNAP,label:label||d.label,data:data||{},value:0,collapsed:false};
+  var n={id:gid(),type:type,cat:d.cat,x:Math.round(x/SNAP)*SNAP,y:Math.round(y/SNAP)*SNAP,label:label||d.label,data:data||{},value:0,collapsed:false,noteText:''};
   if(d.cat==='unit'){n.unitPrice=0;n.qty=0;}
   if(data&&data._val!=null) n.value=data._val;
   nodes.push(n); return n;
 }
 function find(id){return nodes.find(function(n){return n.id===id;});}
+
+// ── Save / Load graph state ──
+function saveGraph(){
+  if(!jobId) return;
+  var state={
+    nodes:nodes.map(function(n){return{id:n.id,type:n.type,x:n.x,y:n.y,label:n.label,value:n.value,collapsed:n.collapsed,unitPrice:n.unitPrice,qty:n.qty,noteText:n.noteText,dataId:n.data?n.data.id:null};}),
+    wires:wires,
+    panX:panX,panY:panY,zoom:zoom,nid:nid
+  };
+  var all=JSON.parse(localStorage.getItem('agx-nodegraphs')||'{}');
+  all[jobId]=state;
+  localStorage.setItem('agx-nodegraphs',JSON.stringify(all));
+}
+
+function loadGraph(){
+  if(!jobId) return false;
+  var all=JSON.parse(localStorage.getItem('agx-nodegraphs')||'{}');
+  var state=all[jobId];
+  if(!state||!state.nodes||!state.nodes.length) return false;
+  nodes=[];wires=state.wires||[];nid=state.nid||1;
+  panX=state.panX||0;panY=state.panY||0;zoom=state.zoom||1;
+  state.nodes.forEach(function(sn){
+    var d=D[sn.type];if(!d) return;
+    // Reconnect to live job data if available
+    var data={};
+    if(sn.dataId&&typeof appData!=='undefined'){
+      if(sn.type==='building') data=appData.buildings.find(function(b){return b.id===sn.dataId;})||{};
+      else if(sn.type==='phase') data=appData.phases.find(function(p){return p.id===sn.dataId;})||{};
+      else if(sn.type==='sub') data=appData.subs.find(function(s){return s.id===sn.dataId;})||{};
+      else if(sn.type==='co') data=appData.changeOrders.find(function(c){return c.id===sn.dataId;})||{};
+    }
+    var n={id:sn.id,type:sn.type,cat:d.cat,x:sn.x,y:sn.y,label:sn.label,data:data,value:sn.value||0,collapsed:sn.collapsed||false,noteText:sn.noteText||''};
+    if(d.cat==='unit'){n.unitPrice=sn.unitPrice||0;n.qty=sn.qty||0;}
+    nodes.push(n);
+  });
+  return true;
+}
 
 // ── Value computation ──
 var _comp={};
@@ -112,17 +149,24 @@ function pPos(nid2,pi,dir){
   var n=find(nid2);if(!n)return{x:0,y:0};
   var el=canvasEl.querySelector('[data-id="'+nid2+'"]');
   if(!el)return{x:n.x,y:n.y+20};
-  var w=el.offsetWidth/zoom,h=el.offsetHeight/zoom;
-  // Collapsed: all ports converge to center
-  if(n.collapsed){
-    return dir==='out'?{x:n.x+w,y:n.y+h/2}:{x:n.x,y:n.y+h/2};
-  }
-  var port=el.querySelector('.ng-p[data-pi="'+pi+'"][data-dir="'+dir+'"]');
+  // Find the actual port element (works for both expanded and collapsed states)
+  // For collapsed nodes, the collapsed port indicators are used
+  var sel=dir==='out'?'.ng-po':'.ng-pi';
+  var ports=el.querySelectorAll(sel);
+  var port=null;
+  // Find visible port matching pi — in collapsed state there's only pi=0
+  ports.forEach(function(p){
+    if(p.offsetParent!==null||p.closest('.ng-coll-ports')){
+      if(parseInt(p.getAttribute('data-pi'))===pi||(n.collapsed&&parseInt(p.getAttribute('data-pi'))===0)) port=p;
+    }
+  });
   if(port){
     var nr=el.getBoundingClientRect(),pr=port.getBoundingClientRect();
-    return{x:n.x+(pr.left+pr.width/2-nr.left)/zoom,y:n.y+(pr.top+pr.height/2-nr.top)/zoom};
+    if(pr.width>0)return{x:n.x+(pr.left+pr.width/2-nr.left)/zoom,y:n.y+(pr.top+pr.height/2-nr.top)/zoom};
   }
-  return dir==='out'?{x:n.x+w,y:n.y+20+pi*20}:{x:n.x,y:n.y+20+pi*20};
+  // Fallback
+  var w=el.offsetWidth/zoom,h=el.offsetHeight/zoom;
+  return dir==='out'?{x:n.x+w,y:n.y+h/2}:{x:n.x,y:n.y+h/2};
 }
 
 // ── Drawing ──
@@ -225,12 +269,21 @@ function renderNodes(){
     if(n.type==='sub'&&n.data){h+='<div style="text-align:center;font-size:9px;color:#5a6078;padding:0 10px 6px;">Contract: '+fC(n.data.contractAmt||0)+'</div>';}
     // Sticky note
     if(n.type==='note')h+='<div class="ng-note-body"><textarea data-node="'+n.id+'" placeholder="Type a note...">'+(n.noteText||'')+'</textarea></div>';
+    // Collapsed port indicators (always visible)
+    var hasIns2=(d.ins&&d.ins.length>0),hasOuts2=(d.outs&&d.outs.length>0);
+    if(hasIns2||hasOuts2){
+      h+='<div class="ng-coll-ports">';
+      if(hasIns2) h+='<div class="ng-p ng-pi ng-p-'+d.ins[0].t+'" data-node="'+n.id+'" data-pi="0" data-dir="in" data-type="'+d.ins[0].t+'" style="position:relative;left:-7px;"></div>';
+      else h+='<span></span>';
+      if(hasOuts2) h+='<div class="ng-p ng-po ng-p-'+d.outs[0].t+'" data-node="'+n.id+'" data-pi="0" data-dir="out" data-type="'+d.outs[0].t+'" style="position:relative;right:-7px;"></div>';
+      h+='</div>';
+    }
     div.innerHTML=h;
     canvasEl.appendChild(div);
   });
 }
 
-function render(){renderNodes();drawGrid();drawWires();var z=document.querySelector('.ng-zoom');if(z)z.textContent=Math.round(zoom*100)+'%';}
+function render(){renderNodes();drawGrid();drawWires();saveGraph();var z=document.querySelector('.ng-zoom');if(z)z.textContent=Math.round(zoom*100)+'%';}
 function applyTx(){canvasEl.style.transform='translate('+(panX*zoom)+'px,'+(panY*zoom)+'px) scale('+zoom+')';}
 
 // ── Sidebar ──
@@ -402,7 +455,7 @@ function init(){
   wireC=tab.querySelector('.ng-wire-canvas');wireCtx=wireC.getContext('2d');
   gridC=tab.querySelector('.ng-grid-canvas');gridCtx=gridC.getContext('2d');
   buildSidebar();initEvents();applyTx();
-  tab.querySelector('.ng-tbtn-close').addEventListener('click',function(){tab.classList.remove('active');});
+  tab.querySelector('.ng-tbtn-close').addEventListener('click',function(){saveGraph();tab.classList.remove('active');});
   var pb=tab.querySelector('.ng-populate-btn');
   if(pb)pb.addEventListener('click',function(){nodes=[];wires=[];nid=1;populate();render();});
 }
@@ -410,8 +463,14 @@ function init(){
 window.openNodeGraph=function(jid){
   var tab=document.getElementById('nodeGraphTab');if(!tab)return;
   tab.classList.add('active');if(!wrap)init();resize();
-  if(jid&&jid!==jobId){jobId=jid;nodes=[];wires=[];nid=1;populate();render();}
-  else if(nodes.length===0){jobId=jid||(typeof appState!=='undefined'?appState.currentJobId:null);populate();render();}
-  else render();
+  if(jid&&jid!==jobId){
+    jobId=jid;nodes=[];wires=[];nid=1;
+    if(!loadGraph()){populate();}
+    applyTx();render();
+  } else if(nodes.length===0){
+    jobId=jid||(typeof appState!=='undefined'?appState.currentJobId:null);
+    if(!loadGraph()){populate();}
+    applyTx();render();
+  } else render();
 };
 })();
