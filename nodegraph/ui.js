@@ -336,7 +336,18 @@ function initEvents(){
     if(addSub){
       e.stopPropagation();
       var n=E.findNode(addSub.getAttribute('data-node'));
-      if(n){ n.items.push({date:'',amount:0}); render(); }
+      if(n){
+        var d2=E.DEFS[n.type], iT=d2?d2.itemType:'';
+        var newItem={date:''};
+        if(iT==='labor'){newItem.hours=0;newItem.rate=65;}
+        else if(iT==='mat'){newItem.qty=0;newItem.unit='each';newItem.unitCost=0;}
+        else if(iT==='gc'){newItem.vendor='';newItem.amount=0;}
+        else if(iT==='other'){newItem.qty=0;newItem.unitCost=0;}
+        else if(iT==='sub'){newItem.desc='';newItem.amount=0;}
+        else{newItem.amount=0;}
+        n.items.push(newItem);
+        render();
+      }
       return;
     }
     // Delete sub-item
