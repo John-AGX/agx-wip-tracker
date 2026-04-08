@@ -149,23 +149,23 @@ function pPos(nid2,pi,dir){
   var n=find(nid2);if(!n)return{x:0,y:0};
   var el=canvasEl.querySelector('[data-id="'+nid2+'"]');
   if(!el)return{x:n.x,y:n.y+20};
-  // Find the actual port element (works for both expanded and collapsed states)
-  // For collapsed nodes, the collapsed port indicators are used
-  var sel=dir==='out'?'.ng-po':'.ng-pi';
-  var ports=el.querySelectorAll(sel);
+  var nr=el.getBoundingClientRect();
+  // Find the correct port: match data-pi and data-dir, prefer visible ones
+  var allPorts=el.querySelectorAll('.ng-p[data-dir="'+dir+'"]');
   var port=null;
-  // Find visible port matching pi — in collapsed state there's only pi=0
-  ports.forEach(function(p){
-    if(p.offsetParent!==null||p.closest('.ng-coll-ports')){
-      if(parseInt(p.getAttribute('data-pi'))===pi||(n.collapsed&&parseInt(p.getAttribute('data-pi'))===0)) port=p;
-    }
+  allPorts.forEach(function(p){
+    var ppi=parseInt(p.getAttribute('data-pi'));
+    // Exact match
+    if(ppi===pi&&p.getBoundingClientRect().width>0) port=p;
+    // Collapsed: only pi=0 is visible, use it for all port indices
+    if(n.collapsed&&p.getBoundingClientRect().width>0&&!port) port=p;
   });
   if(port){
-    var nr=el.getBoundingClientRect(),pr=port.getBoundingClientRect();
-    if(pr.width>0)return{x:n.x+(pr.left+pr.width/2-nr.left)/zoom,y:n.y+(pr.top+pr.height/2-nr.top)/zoom};
+    var pr=port.getBoundingClientRect();
+    return{x:n.x+(pr.left+pr.width/2-nr.left)/zoom,y:n.y+(pr.top+pr.height/2-nr.top)/zoom};
   }
-  // Fallback
-  var w=el.offsetWidth/zoom,h=el.offsetHeight/zoom;
+  // Fallback: edge center
+  var w=nr.width/zoom,h=nr.height/zoom;
   return dir==='out'?{x:n.x+w,y:n.y+h/2}:{x:n.x,y:n.y+h/2};
 }
 
@@ -270,13 +270,18 @@ function renderNodes(){
     if(n.type==='sub'&&n.data){h+='<div style="text-align:center;font-size:9px;color:#5a6078;padding:0 10px 6px;">Contract: '+fC(n.data.contractAmt||0)+'</div>';}
     // Sticky note
     if(n.type==='note')h+='<div class="ng-note-body"><textarea data-node="'+n.id+'" placeholder="Type a note...">'+(n.noteText||'')+'</textarea></div>';
-    // Collapsed port indicators (always visible)
+    // Collapsed row: port indicators + mini total value
     var hasIns2=(d.ins&&d.ins.length>0),hasOuts2=(d.outs&&d.outs.length>0);
     if(hasIns2||hasOuts2){
-      h+='<div class="ng-coll-ports">';
+      var collVal=hasOuts2?getOut(n,0):0;
+      // For watch nodes, get the input value
+      if(n.type==='watch'){var wvx=0;wires.forEach(function(w){if(w.toNode===n.id){var fn=find(w.fromNode);if(fn)wvx+=getOut(fn,w.fromPort);}});collVal=wvx;}
+      h+='<div class="ng-coll-row">';
       if(hasIns2) h+='<div class="ng-p ng-pi ng-pc ng-p-'+d.ins[0].t+'" data-node="'+n.id+'" data-pi="0" data-dir="in" data-type="'+d.ins[0].t+'"></div>';
-      else h+='<span></span>';
+      else h+='<span style="width:12px"></span>';
+      h+='<span class="ng-coll-val">'+fC(collVal)+'</span>';
       if(hasOuts2) h+='<div class="ng-p ng-po ng-pc ng-p-'+d.outs[0].t+'" data-node="'+n.id+'" data-pi="0" data-dir="out" data-type="'+d.outs[0].t+'"></div>';
+      else h+='<span style="width:12px"></span>';
       h+='</div>';
     }
     div.innerHTML=h;
