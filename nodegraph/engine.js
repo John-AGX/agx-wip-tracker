@@ -11,11 +11,14 @@ function canConn(a,b){ return a===b||a===PT.A||b===PT.A||(a===PT.N&&b===PT.C); }
 
 // ── Node Definitions ──
 var DEFS = {
-  t1:    { cat:'t1',   icon:'\u{1F3D7}', label:'Tier 1',       ins:[{n:'Costs',t:PT.C}], outs:[{n:'Total',t:PT.C}], hasProg:true, hasItems:true, nameEdit:true },
-  t2:    { cat:'t2',   icon:'\u{1F4CB}', label:'Tier 2',       ins:[{n:'Costs',t:PT.C}], outs:[{n:'Total',t:PT.C}], hasProg:true, hasItems:true, nameEdit:true },
-  cost:  { cat:'cost', icon:'\u{1F4B2}', label:'Cost',         ins:[], outs:[{n:'Total',t:PT.C}], hasItems:true, nameEdit:true },
-  sub:   { cat:'sub',  icon:'\u{1F477}', label:'Sub',          ins:[], outs:[{n:'Billed',t:PT.C}], hasItems:true, nameEdit:true },
-  co:    { cat:'co',   icon:'\u{1F4DD}', label:'Change Order', ins:[], outs:[{n:'Income',t:PT.C},{n:'Costs',t:PT.C}], hasItems:true, nameEdit:true },
+  t1:    { cat:'t1',   icon:'\u{1F3D7}', label:'Tier 1',       ins:[{n:'Costs',t:PT.C}], outs:[{n:'Total',t:PT.C}], hasProg:true, nameEdit:true },
+  t2:    { cat:'t2',   icon:'\u{1F4CB}', label:'Tier 2',       ins:[{n:'Costs',t:PT.C}], outs:[{n:'Total',t:PT.C}], hasProg:true, nameEdit:true },
+  labor: { cat:'cost', icon:'\u{1F6E0}', label:'Labor',        ins:[], outs:[{n:'Total',t:PT.C}], hasItems:true, nameEdit:true, itemType:'labor' },
+  mat:   { cat:'cost', icon:'\u{1F9F1}', label:'Materials',    ins:[], outs:[{n:'Total',t:PT.C}], hasItems:true, nameEdit:true, itemType:'mat' },
+  gc:    { cat:'cost', icon:'\u{1F3E2}', label:'Gen. Conditions', ins:[], outs:[{n:'Total',t:PT.C}], hasItems:true, nameEdit:true, itemType:'gc' },
+  other: { cat:'cost', icon:'\u{1F4CC}', label:'Other',        ins:[], outs:[{n:'Total',t:PT.C}], hasItems:true, nameEdit:true, itemType:'other' },
+  sub:   { cat:'sub',  icon:'\u{1F477}', label:'Sub',          ins:[], outs:[{n:'Billed',t:PT.C}], hasItems:true, nameEdit:true, itemType:'sub' },
+  co:    { cat:'co',   icon:'\u{1F4DD}', label:'Change Order', ins:[], outs:[{n:'Income',t:PT.C},{n:'Costs',t:PT.C}], nameEdit:true },
   sum:   { cat:'math', icon:'\u2211',    label:'SUM',          ins:[{n:'A',t:PT.A},{n:'B',t:PT.A},{n:'C',t:PT.A},{n:'D',t:PT.A}], outs:[{n:'Result',t:PT.C}] },
   sub2:  { cat:'math', icon:'\u2212',    label:'Subtract',     ins:[{n:'A',t:PT.C},{n:'B',t:PT.C}], outs:[{n:'Result',t:PT.C}] },
   mul:   { cat:'math', icon:'\u00D7',    label:'Multiply',     ins:[{n:'A',t:PT.A},{n:'B',t:PT.N}], outs:[{n:'Result',t:PT.C}] },
@@ -40,7 +43,7 @@ var DEFS = {
 var CATS = [
   { name:'Master',    items:['job','wip'] },
   { name:'Structure', items:['t1','t2'] },
-  { name:'Costs',     items:['cost'] },
+  { name:'Costs',     items:['labor','mat','gc','other'] },
   { name:'Subs & COs',items:['sub','co'] },
   { name:'Math',      items:['sum','sub2','mul','pct'] },
   { name:'Output',    items:['watch'] },
@@ -89,18 +92,26 @@ function getOutput(n, pi){
   _comp[n.id] = true;
   var d = DEFS[n.type], v = 0;
 
-  // Items total (used by cost, t1, t2, sub, co)
-  var itemsTotal = (n.items && n.items.length > 0) ? n.items.reduce(function(s, item){ return s + (item.amount || 0); }, 0) : 0;
+  // Items total — varies by item type
+  var itemsTotal = 0;
+  if(n.items && n.items.length > 0){
+    var iType = d ? d.itemType : '';
+    n.items.forEach(function(item){
+      if(iType === 'labor') itemsTotal += (item.hours || 0) * (item.rate || 65);
+      else if(iType === 'mat' || iType === 'other') itemsTotal += (item.qty || 0) * (item.unitCost || 0);
+      else itemsTotal += (item.amount || 0);
+    });
+  }
 
-  // Cost node: items total or direct value
-  if(n.type === 'cost'){
+  // Cost nodes (labor, mat, gc, other): items total or direct value
+  if(n.type === 'labor' || n.type === 'mat' || n.type === 'gc' || n.type === 'other'){
     v = itemsTotal || n.value || 0;
     _comp[n.id] = false; return v;
   }
 
-  // Sub: items total or stored billedToDate
+  // Sub: items = addenda to contract. Billed from data.
   if(n.type === 'sub'){
-    v = itemsTotal || (n.data ? n.data.billedToDate || 0 : 0);
+    v = (n.data ? n.data.billedToDate || 0 : 0);
     _comp[n.id] = false; return v;
   }
 

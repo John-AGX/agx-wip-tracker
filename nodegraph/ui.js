@@ -72,19 +72,60 @@ function renderNodes(){
       h+='<div class="ng-progress-label">'+pct.toFixed(0)+'% complete'+(n.budget?' \u00b7 Budget: '+E.fmtC(n.budget):'')+'</div>';
     }
 
-    // Cost sub-items (inline editable)
+    // Sub-items (type-specific layout)
     if(d.hasItems){
+      var iType = d.itemType || '';
+      var UNITS = ['each','SF','LF','gal','bag','box','ton','yd\u00B3','roll','hr'];
       h+='<div class="ng-subitems">';
+      // Header row
+      if(iType==='labor') h+='<div class="ng-si-hdr"><span>Week Of</span><span>Hrs</span><span>Rate</span><span>Total</span><span></span></div>';
+      else if(iType==='mat') h+='<div class="ng-si-hdr"><span>Date</span><span>Qty</span><span>Unit</span><span>$/Unit</span><span>Total</span><span></span></div>';
+      else if(iType==='gc') h+='<div class="ng-si-hdr"><span>Week Of</span><span>Vendor</span><span>Amount</span><span></span></div>';
+      else if(iType==='other') h+='<div class="ng-si-hdr"><span>Date</span><span>Qty</span><span>$/Unit</span><span>Total</span><span></span></div>';
+      else if(iType==='sub') h+='<div class="ng-si-hdr"><span>Date</span><span>Description</span><span>Amount</span><span></span></div>';
+
       n.items.forEach(function(item,idx){
+        var nid3=n.id, pre='data-node="'+nid3+'" data-idx="'+idx+'"';
         h+='<div class="ng-subitem">';
-        h+='<input class="ng-si-date" data-node="'+n.id+'" data-idx="'+idx+'" data-field="date" value="'+(item.date||'')+'" placeholder="Date" />';
-        h+='<input class="ng-si-amt" type="number" data-node="'+n.id+'" data-idx="'+idx+'" data-field="amount" value="'+(item.amount||0)+'" step="0.01" />';
-        h+='<span class="ng-subitem-del" data-node="'+n.id+'" data-idx="'+idx+'">\u2716</span>';
+        if(iType==='labor'){
+          h+='<input class="ng-si-f ng-si-date" '+pre+' data-field="date" value="'+(item.date||'')+'" placeholder="WO 4/6" />';
+          h+='<input class="ng-si-f ng-si-sm" type="number" '+pre+' data-field="hours" value="'+(item.hours||0)+'" step="0.5" />';
+          h+='<input class="ng-si-f ng-si-sm" type="number" '+pre+' data-field="rate" value="'+(item.rate||65)+'" step="0.01" />';
+          h+='<span class="ng-si-val">'+E.fmtC((item.hours||0)*(item.rate||65))+'</span>';
+        } else if(iType==='mat'){
+          h+='<input class="ng-si-f ng-si-date" '+pre+' data-field="date" value="'+(item.date||'')+'" placeholder="Date" />';
+          h+='<input class="ng-si-f ng-si-sm" type="number" '+pre+' data-field="qty" value="'+(item.qty||0)+'" step="0.01" />';
+          h+='<select class="ng-si-f ng-si-sel" '+pre+' data-field="unit">';
+          UNITS.forEach(function(u){h+='<option'+(item.unit===u?' selected':'')+'>'+u+'</option>';});
+          h+='</select>';
+          h+='<input class="ng-si-f ng-si-sm" type="number" '+pre+' data-field="unitCost" value="'+(item.unitCost||0)+'" step="0.01" />';
+          h+='<span class="ng-si-val">'+E.fmtC((item.qty||0)*(item.unitCost||0))+'</span>';
+        } else if(iType==='gc'){
+          h+='<input class="ng-si-f ng-si-date" '+pre+' data-field="date" value="'+(item.date||'')+'" placeholder="WO 4/6" />';
+          h+='<input class="ng-si-f" '+pre+' data-field="vendor" value="'+(item.vendor||'')+'" placeholder="Vendor" style="flex:1" />';
+          h+='<input class="ng-si-f ng-si-sm" type="number" '+pre+' data-field="amount" value="'+(item.amount||0)+'" step="0.01" />';
+        } else if(iType==='other'){
+          h+='<input class="ng-si-f ng-si-date" '+pre+' data-field="date" value="'+(item.date||'')+'" placeholder="Date" />';
+          h+='<input class="ng-si-f ng-si-sm" type="number" '+pre+' data-field="qty" value="'+(item.qty||0)+'" step="0.01" />';
+          h+='<input class="ng-si-f ng-si-sm" type="number" '+pre+' data-field="unitCost" value="'+(item.unitCost||0)+'" step="0.01" />';
+          h+='<span class="ng-si-val">'+E.fmtC((item.qty||0)*(item.unitCost||0))+'</span>';
+        } else if(iType==='sub'){
+          h+='<input class="ng-si-f ng-si-date" '+pre+' data-field="date" value="'+(item.date||'')+'" placeholder="Date" />';
+          h+='<input class="ng-si-f" '+pre+' data-field="desc" value="'+(item.desc||'')+'" placeholder="Description" style="flex:1" />';
+          h+='<input class="ng-si-f ng-si-sm" type="number" '+pre+' data-field="amount" value="'+(item.amount||0)+'" step="0.01" />';
+        }
+        h+='<span class="ng-subitem-del" data-node="'+nid3+'" data-idx="'+idx+'">\u2716</span>';
         h+='</div>';
       });
       h+='<div class="ng-add-sub" data-node="'+n.id+'">+ Add Entry</div>';
-      var itemTotal = n.items.reduce(function(s,i){return s+(i.amount||0);},0);
+      // Total
+      var itemTotal=E.getOutput(n,0);
       h+='<div class="ng-sub-total">'+E.fmtC(itemTotal)+'</div>';
+      // Sub addenda: show contract + addenda total
+      if(iType==='sub'&&n.data){
+        var addendaTotal=n.items.reduce(function(s,i){return s+(i.amount||0);},0);
+        h+='<div style="font-size:9px;color:#6a7090;text-align:center;padding:0 0 4px;">Contract: '+E.fmtC(n.data.contractAmt||0)+' + Addenda: '+E.fmtC(addendaTotal)+'</div>';
+      }
       h+='</div>';
     }
 
@@ -343,7 +384,7 @@ function initEvents(){
 
   canvasEl.addEventListener('focusin',function(e){
     var t=e.target;
-    if((t.tagName==='INPUT'||t.tagName==='TEXTAREA')&&t.dataset.node) editingId=t.dataset.node;
+    if((t.tagName==='INPUT'||t.tagName==='TEXTAREA'||t.tagName==='SELECT')&&t.dataset.node) editingId=t.dataset.node;
   });
   canvasEl.addEventListener('focusout',function(e){
     var t=e.target;
@@ -355,8 +396,9 @@ function initEvents(){
           // Sub-item field edit
           var idx=parseInt(t.dataset.idx);
           if(n.items&&n.items[idx]){
-            if(t.dataset.field==='amount') n.items[idx].amount=parseFloat(t.value)||0;
-            else n.items[idx][t.dataset.field]=t.value;
+            var f=t.dataset.field;
+            if(f==='amount'||f==='hours'||f==='rate'||f==='qty'||f==='unitCost') n.items[idx][f]=parseFloat(t.value)||0;
+            else n.items[idx][f]=t.value;
           }
         }
         else n.value=parseFloat(t.value)||0;
@@ -370,21 +412,38 @@ function initEvents(){
       var n=E.findNode(t.dataset.node);
       if(!n) return;
       if(t.dataset.idx!=null&&t.dataset.field){
-        // Live update sub-item
         var idx=parseInt(t.dataset.idx);
         if(n.items&&n.items[idx]){
-          if(t.dataset.field==='amount') n.items[idx].amount=parseFloat(t.value)||0;
-          else n.items[idx][t.dataset.field]=t.value;
+          var f=t.dataset.field;
+          if(f==='amount'||f==='hours'||f==='rate'||f==='qty'||f==='unitCost') n.items[idx][f]=parseFloat(t.value)||0;
+          else n.items[idx][f]=t.value;
         }
-        // Update total display
+        // Update total display + row total
+        E.resetComp();
         var totalEl=canvasEl.querySelector('[data-id="'+n.id+'"] .ng-sub-total');
-        if(totalEl) totalEl.textContent=E.fmtC(n.items.reduce(function(s,i){return s+(i.amount||0);},0));
+        if(totalEl) totalEl.textContent=E.fmtC(E.getOutput(n,0));
+        // Update inline row totals
+        var rowTotals=canvasEl.querySelectorAll('[data-id="'+n.id+'"] .ng-si-val');
+        n.items.forEach(function(item,ri){
+          if(rowTotals[ri]){
+            var d2=E.DEFS[n.type],iT=d2?d2.itemType:'';
+            var rv=0;
+            if(iT==='labor') rv=(item.hours||0)*(item.rate||65);
+            else if(iT==='mat'||iT==='other') rv=(item.qty||0)*(item.unitCost||0);
+            rowTotals[ri].textContent=E.fmtC(rv);
+          }
+        });
       } else if(t.dataset.jfield){
         if(!n.jobFields) n.jobFields={};
         n.jobFields[t.dataset.jfield]=parseFloat(t.value)||0;
       } else {
         n.value=parseFloat(t.value)||0;
       }
+    }
+    // Handle select (unit dropdown)
+    if(t.tagName==='SELECT'&&t.dataset.node&&t.dataset.idx!=null){
+      var ns=E.findNode(t.dataset.node);
+      if(ns&&ns.items){var si=parseInt(t.dataset.idx);if(ns.items[si])ns.items[si][t.dataset.field]=t.value;}
     }
     if(t.tagName==='TEXTAREA'&&t.dataset.node){
       var n2=E.findNode(t.dataset.node);
