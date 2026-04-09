@@ -598,6 +598,14 @@
     var job = appData.jobs.find(function (j) { return j.id === grid.jobId; });
     if (!job) return;
 
+    // Collect ALL field keys that have ever been linked (to zero them if no links remain)
+    var allFieldKeys = {};
+    Object.values(grid.links).forEach(function (linkObj) {
+      if (!linkObj || !linkObj.field) return;
+      var key = (linkObj.level || 'job') + ':' + (linkObj.targetId || '') + ':' + linkObj.field;
+      allFieldKeys[key] = linkObj;
+    });
+
     // Group linked cells by target+field so multiple cells can SUM into one field
     var grouped = {};
     Object.entries(grid.links).forEach(function (entry) {
@@ -613,9 +621,11 @@
     });
 
     var changed = false;
-    Object.values(grouped).forEach(function (g) {
-      var linkObj = g.linkObj;
-      var total = g.values.reduce(function (s, v) { return s + v; }, 0);
+
+    // Write summed values for all grouped fields
+    Object.keys(allFieldKeys).forEach(function (key) {
+      var linkObj = allFieldKeys[key];
+      var total = grouped[key] ? grouped[key].values.reduce(function (s, v) { return s + v; }, 0) : 0;
 
       var target = null;
       if (linkObj.level === 'job') {
@@ -636,11 +646,8 @@
       }
     });
 
-    if (changed && typeof saveData === 'function') {
+    if (typeof saveData === 'function') {
       saveData();
-      if (typeof renderJobDetail === 'function' && appState && appState.currentJobId === grid.jobId) {
-        updateJobSummaryCards(job);
-      }
     }
     updateLinkedIndicators();
   }
@@ -1380,15 +1387,25 @@
     renderGrid();
     selectCell(grid.selection.r, grid.selection.c);
     pushLinkedValues();
+    // Refresh the job detail view and header metrics
+    if (typeof renderJobDetail === 'function' && typeof appState !== 'undefined' && appState.currentJobId) {
+      renderJobDetail(appState.currentJobId);
+    }
   }
 
   function unlinkCell(cellAddr) {
     delete grid.links[cellAddr];
     grid.dirty = true;
     saveWorkspace();
+    // Recalculate — the unlinked field needs to be re-summed from remaining links
+    pushLinkedValues();
     updateLinkPanel(cellAddr);
     renderGrid();
     selectCell(grid.selection.r, grid.selection.c);
+    // Refresh the job detail view and header metrics
+    if (typeof renderJobDetail === 'function' && typeof appState !== 'undefined' && appState.currentJobId) {
+      renderJobDetail(appState.currentJobId);
+    }
   }
 
   // ── Quick Calc (statusbar) ─────────────────────────────────
