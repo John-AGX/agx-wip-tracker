@@ -148,10 +148,24 @@ function renderNodes(){
       E.wires().forEach(function(w){if(w.toNode===n.id){var fn=E.findNode(w.fromNode);if(fn)subIns[w.toPort]=(subIns[w.toPort]||0)+E.getOutput(fn,w.fromPort);}});
       var poAmt=subIns[0],invAmt=subIns[1];
       var accrued=E.getOutput(n,1);
+      // Find what % the accrual is using (from connected T1/T2)
+      var subPct = n.pctComplete || 0;
+      var pctSource = 'manual';
+      E.wires().forEach(function(w){
+        if(w.fromNode===n.id){
+          var tgt=E.findNode(w.toNode);
+          if(tgt&&(tgt.type==='t1'||tgt.type==='t2')&&tgt.pctComplete>0){subPct=tgt.pctComplete;pctSource=tgt.label;}
+          if(tgt&&tgt.type==='sum'){
+            E.wires().forEach(function(w2){if(w2.fromNode===tgt.id){var t2=E.findNode(w2.toNode);if(t2&&(t2.type==='t1'||t2.type==='t2')&&t2.pctComplete>0){subPct=t2.pctComplete;pctSource=t2.label;}}});
+          }
+        }
+      });
       h+='<div style="padding:4px 10px 6px;font-size:10px;">';
       h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">PO Contract <span style="color:#8899cc;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(poAmt)+'</span></div>';
       h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Invoiced <span style="color:#34d399;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(invAmt)+'</span></div>';
-      h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Accrued <span style="color:#fbbf24;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(accrued)+'</span></div>';
+      h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">% Complete <span style="color:#fbbf24;font-weight:600;font-family:\'Courier New\',monospace;">'+subPct.toFixed(1)+'%</span></div>';
+      if(pctSource!=='manual') h+='<div style="font-size:8px;color:#4a5068;text-align:right;padding:0 0 2px;">from '+pctSource+'</div>';
+      h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;border-top:1px solid #1a1f30;margin-top:2px;">Accrued <span style="color:#fbbf24;font-weight:700;font-family:\'Courier New\',monospace;">'+E.fmtC(accrued)+'</span></div>';
       h+='</div>';
     }
 

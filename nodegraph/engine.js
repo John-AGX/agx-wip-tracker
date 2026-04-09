@@ -139,8 +139,34 @@ function getOutput(n, pi){
     if(pi === 0) v = invoiced; // Billed output = invoiced amount
     else if(pi === 1){
       // Accrued = (contract × % complete of connected scope) - invoiced
-      // For now use node's pctComplete as proxy; user can wire T1/T2 pct later
+      // Find % complete from connected T1/T2 (trace Sub output wires → find T1/T2 target)
       var pctComp = n.pctComplete || 0;
+      wires.forEach(function(w){
+        if(w.fromNode === n.id){
+          var target = findNode(w.toNode);
+          if(target && (target.type === 't1' || target.type === 't2') && target.pctComplete > 0){
+            pctComp = target.pctComplete;
+          }
+        }
+      });
+      // Also check if Sub is wired into a SUM that's wired into a T1/T2
+      if(pctComp === 0){
+        wires.forEach(function(w){
+          if(w.fromNode === n.id){
+            var mid = findNode(w.toNode);
+            if(mid && mid.type === 'sum'){
+              wires.forEach(function(w2){
+                if(w2.fromNode === mid.id){
+                  var t = findNode(w2.toNode);
+                  if(t && (t.type === 't1' || t.type === 't2') && t.pctComplete > 0){
+                    pctComp = t.pctComplete;
+                  }
+                }
+              });
+            }
+          }
+        });
+      }
       var earned = poContract * (pctComp / 100);
       v = Math.max(0, earned - invoiced);
     }
