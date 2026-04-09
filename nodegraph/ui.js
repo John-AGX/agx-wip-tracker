@@ -81,7 +81,7 @@ function renderNodes(){
       h+='<div class="ng-subitems">';
       // Header row
       if(iType==='labor') h+='<div class="ng-si-hdr"><span>Week Of</span><span>Hrs</span><span>Rate</span><span>Total</span><span></span></div>';
-      else if(iType==='mat') h+='<div class="ng-si-hdr"><span>Date</span><span>Qty</span><span>Unit</span><span>$/Unit</span><span>Total</span><span></span></div>';
+      else if(iType==='mat') h+='<div class="ng-si-hdr"><span>Date</span><span>Amount</span><span></span></div>';
       else if(iType==='gc') h+='<div class="ng-si-hdr"><span>Week Of</span><span>Vendor</span><span>Amount</span><span></span></div>';
       else if(iType==='other') h+='<div class="ng-si-hdr"><span>Date</span><span>Qty</span><span>$/Unit</span><span>Total</span><span></span></div>';
       else if(iType==='sub') h+='<div class="ng-si-hdr"><span>Date</span><span>Description</span><span>Amount</span><span></span></div>';
@@ -98,12 +98,7 @@ function renderNodes(){
           h+='<span class="ng-si-val">'+E.fmtC((item.hours||0)*(item.rate||65))+'</span>';
         } else if(iType==='mat'){
           h+='<input class="ng-si-f ng-si-date" type="date" '+pre+' data-field="date" value="'+(item.date||'')+'" />';
-          h+='<input class="ng-si-f ng-si-sm" type="number" '+pre+' data-field="qty" value="'+(item.qty||0)+'" step="0.01" />';
-          h+='<select class="ng-si-f ng-si-sel" '+pre+' data-field="unit">';
-          UNITS.forEach(function(u){h+='<option'+(item.unit===u?' selected':'')+'>'+u+'</option>';});
-          h+='</select>';
-          h+='<input class="ng-si-f ng-si-sm" type="number" '+pre+' data-field="unitCost" value="'+(item.unitCost||0)+'" step="0.01" />';
-          h+='<span class="ng-si-val">'+E.fmtC((item.qty||0)*(item.unitCost||0))+'</span>';
+          h+='<input class="ng-si-f ng-si-sm" type="number" '+pre+' data-field="amount" value="'+(item.amount||0)+'" step="0.01" style="flex:1" />';
         } else if(iType==='gc'){
           h+='<input class="ng-si-f ng-si-date" type="date" '+pre+' data-field="date" value="'+(item.date||'')+'" />';
           h+='<input class="ng-si-f" '+pre+' data-field="vendor" value="'+(item.vendor||'')+'" placeholder="Vendor" style="flex:1" />';
@@ -375,7 +370,7 @@ function initEvents(){
         var d2=E.DEFS[n.type], iT=d2?d2.itemType:'';
         var newItem={date:''};
         if(iT==='labor'){newItem.hours=0;newItem.rate=65;}
-        else if(iT==='mat'){newItem.qty=0;newItem.unit='each';newItem.unitCost=0;}
+        else if(iT==='mat'){newItem.amount=0;}
         else if(iT==='gc'){newItem.vendor='';newItem.amount=0;}
         else if(iT==='other'){newItem.qty=0;newItem.unitCost=0;}
         else if(iT==='sub'){newItem.desc='';newItem.amount=0;}

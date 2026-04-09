@@ -100,7 +100,7 @@ function getOutput(n, pi){
     var iType = d ? d.itemType : '';
     n.items.forEach(function(item){
       if(iType === 'labor') itemsTotal += (item.hours || 0) * (item.rate || 65);
-      else if(iType === 'mat' || iType === 'other') itemsTotal += (item.qty || 0) * (item.unitCost || 0);
+      else if(iType === 'other') itemsTotal += (item.qty || 0) * (item.unitCost || 0);
       else itemsTotal += (item.amount || 0);
     });
   }
