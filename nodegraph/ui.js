@@ -76,6 +76,8 @@ function renderNodes(){
     if(d.hasItems){
       var iType = d.itemType || '';
       var UNITS = ['each','SF','LF','gal','bag','box','ton','yd\u00B3','roll','hr'];
+      // PO: base contract input
+      if(iType==='po') h+='<div class="ng-edit-val"><label style="font-size:9px;color:#6a7090;display:block;text-align:center;">Base Contract</label><input type="number" value="'+(n.value||0)+'" data-node="'+n.id+'" step="0.01" /></div>';
       h+='<div class="ng-subitems">';
       // Header row
       if(iType==='labor') h+='<div class="ng-si-hdr"><span>Week Of</span><span>Hrs</span><span>Rate</span><span>Total</span><span></span></div>';
@@ -83,6 +85,8 @@ function renderNodes(){
       else if(iType==='gc') h+='<div class="ng-si-hdr"><span>Week Of</span><span>Vendor</span><span>Amount</span><span></span></div>';
       else if(iType==='other') h+='<div class="ng-si-hdr"><span>Date</span><span>Qty</span><span>$/Unit</span><span>Total</span><span></span></div>';
       else if(iType==='sub') h+='<div class="ng-si-hdr"><span>Date</span><span>Description</span><span>Amount</span><span></span></div>';
+      else if(iType==='po') h+='<div class="ng-si-hdr"><span>Date</span><span>Amendment</span><span>Amount</span><span></span></div>';
+      else if(iType==='inv') h+='<div class="ng-si-hdr"><span>Date</span><span>Invoice #</span><span>Amount</span><span></span></div>';
 
       n.items.forEach(function(item,idx){
         var nid3=n.id, pre='data-node="'+nid3+'" data-idx="'+idx+'"';
@@ -113,6 +117,14 @@ function renderNodes(){
           h+='<input class="ng-si-f ng-si-date" type="date" '+pre+' data-field="date" value="'+(item.date||'')+'" />';
           h+='<input class="ng-si-f" '+pre+' data-field="desc" value="'+(item.desc||'')+'" placeholder="Description" style="flex:1" />';
           h+='<input class="ng-si-f ng-si-sm" type="number" '+pre+' data-field="amount" value="'+(item.amount||0)+'" step="0.01" />';
+        } else if(iType==='po'){
+          h+='<input class="ng-si-f ng-si-date" type="date" '+pre+' data-field="date" value="'+(item.date||'')+'" />';
+          h+='<input class="ng-si-f" '+pre+' data-field="desc" value="'+(item.desc||'')+'" placeholder="Amendment desc" style="flex:1" />';
+          h+='<input class="ng-si-f ng-si-sm" type="number" '+pre+' data-field="amount" value="'+(item.amount||0)+'" step="0.01" />';
+        } else if(iType==='inv'){
+          h+='<input class="ng-si-f ng-si-date" type="date" '+pre+' data-field="date" value="'+(item.date||'')+'" />';
+          h+='<input class="ng-si-f" '+pre+' data-field="invNum" value="'+(item.invNum||'')+'" placeholder="Inv #" style="flex:1" />';
+          h+='<input class="ng-si-f ng-si-sm" type="number" '+pre+' data-field="amount" value="'+(item.amount||0)+'" step="0.01" />';
         }
         h+='<span class="ng-subitem-del" data-node="'+nid3+'" data-idx="'+idx+'">\u2716</span>';
         h+='</div>';
@@ -121,17 +133,26 @@ function renderNodes(){
       // Total
       var itemTotal=E.getOutput(n,0);
       h+='<div class="ng-sub-total">'+E.fmtC(itemTotal)+'</div>';
-      // Sub addenda: show contract + addenda total
-      if(iType==='sub'&&n.data){
-        var addendaTotal=n.items.reduce(function(s,i){return s+(i.amount||0);},0);
-        h+='<div style="font-size:9px;color:#6a7090;text-align:center;padding:0 0 4px;">Contract: '+E.fmtC(n.data.contractAmt||0)+' + Addenda: '+E.fmtC(addendaTotal)+'</div>';
+      // PO: show base contract + amendments
+      if(iType==='po'){
+        var amendTotal=n.items.reduce(function(s,i){return s+(i.amount||0);},0);
+        h+='<div style="font-size:9px;color:#6a7090;text-align:center;padding:0 0 4px;">Base: '+E.fmtC(n.value||0)+' + Amendments: '+E.fmtC(amendTotal)+' = '+E.fmtC((n.value||0)+amendTotal)+'</div>';
       }
       h+='</div>';
     }
 
-    // Sub: show contract info
-    if(n.type==='sub'&&n.data){
-      h+='<div class="ng-progress-label">Contract: '+E.fmtC(n.data.contractAmt||0)+'</div>';
+    // Sub: show PO contract, invoiced, accrued from wired inputs
+    if(n.type==='sub'){
+      E.resetComp();
+      var subIns=[0,0];
+      E.wires().forEach(function(w){if(w.toNode===n.id){var fn=E.findNode(w.fromNode);if(fn)subIns[w.toPort]=(subIns[w.toPort]||0)+E.getOutput(fn,w.fromPort);}});
+      var poAmt=subIns[0],invAmt=subIns[1];
+      var accrued=E.getOutput(n,1);
+      h+='<div style="padding:4px 10px 6px;font-size:10px;">';
+      h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">PO Contract <span style="color:#8899cc;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(poAmt)+'</span></div>';
+      h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Invoiced <span style="color:#34d399;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(invAmt)+'</span></div>';
+      h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Accrued <span style="color:#fbbf24;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(accrued)+'</span></div>';
+      h+='</div>';
     }
 
     // T1/T2: show total
@@ -344,6 +365,8 @@ function initEvents(){
         else if(iT==='gc'){newItem.vendor='';newItem.amount=0;}
         else if(iT==='other'){newItem.qty=0;newItem.unitCost=0;}
         else if(iT==='sub'){newItem.desc='';newItem.amount=0;}
+        else if(iT==='po'){newItem.desc='';newItem.amount=0;}
+        else if(iT==='inv'){newItem.invNum='';newItem.amount=0;}
         else{newItem.amount=0;}
         n.items.push(newItem);
         render();

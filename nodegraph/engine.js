@@ -17,7 +17,9 @@ var DEFS = {
   mat:   { cat:'cost', icon:'\u{1F9F1}', label:'Materials',    ins:[], outs:[{n:'Total',t:PT.C}], hasItems:true, nameEdit:true, itemType:'mat' },
   gc:    { cat:'cost', icon:'\u{1F3E2}', label:'Gen. Conditions', ins:[], outs:[{n:'Total',t:PT.C}], hasItems:true, nameEdit:true, itemType:'gc' },
   other: { cat:'cost', icon:'\u{1F4CC}', label:'Other',        ins:[], outs:[{n:'Total',t:PT.C}], hasItems:true, nameEdit:true, itemType:'other' },
-  sub:   { cat:'sub',  icon:'\u{1F477}', label:'Sub',          ins:[], outs:[{n:'Billed',t:PT.C}], hasItems:true, nameEdit:true, itemType:'sub' },
+  sub:   { cat:'sub',  icon:'\u{1F477}', label:'Sub',          ins:[{n:'PO Contract',t:PT.C},{n:'Invoiced',t:PT.C}], outs:[{n:'Billed',t:PT.C},{n:'Accrued',t:PT.C}], nameEdit:true, hasProg:true },
+  po:    { cat:'sub',  icon:'\u{1F4C4}', label:'Purchase Order', ins:[], outs:[{n:'Contract',t:PT.C}], hasItems:true, nameEdit:true, itemType:'po' },
+  inv:   { cat:'sub',  icon:'\u{1F4B3}', label:'Invoice',       ins:[], outs:[{n:'Invoiced',t:PT.C}], hasItems:true, nameEdit:true, itemType:'inv' },
   co:    { cat:'co',   icon:'\u{1F4DD}', label:'Change Order', ins:[], outs:[{n:'Income',t:PT.C},{n:'Costs',t:PT.C}], nameEdit:true },
   sum:   { cat:'math', icon:'\u2211',    label:'SUM',          ins:[{n:'A',t:PT.A},{n:'B',t:PT.A},{n:'C',t:PT.A},{n:'D',t:PT.A}], outs:[{n:'Result',t:PT.C}] },
   sub2:  { cat:'math', icon:'\u2212',    label:'Subtract',     ins:[{n:'A',t:PT.C},{n:'B',t:PT.C}], outs:[{n:'Result',t:PT.C}] },
@@ -44,7 +46,7 @@ var CATS = [
   { name:'Master',    items:['job','wip'] },
   { name:'Structure', items:['t1','t2'] },
   { name:'Costs',     items:['labor','mat','gc','other'] },
-  { name:'Subs & COs',items:['sub','co'] },
+  { name:'Subs & COs',items:['sub','po','inv','co'] },
   { name:'Math',      items:['sum','sub2','mul','pct'] },
   { name:'Output',    items:['watch'] },
   { name:'Notes',     items:['note'] },
@@ -109,9 +111,39 @@ function getOutput(n, pi){
     _comp[n.id] = false; return v;
   }
 
-  // Sub: items = addenda to contract. Billed from data.
+  // Purchase Order: contract amount + amendment items
+  if(n.type === 'po'){
+    v = (n.value || 0) + itemsTotal; // base contract + amendments
+    _comp[n.id] = false; return v;
+  }
+
+  // Invoice: sum of invoice entries
+  if(n.type === 'inv'){
+    v = itemsTotal;
+    _comp[n.id] = false; return v;
+  }
+
+  // Sub: receives PO Contract (in 0) and Invoiced (in 1)
+  // Output 0 = Billed (invoiced amount)
+  // Output 1 = Accrued (earned based on % but not yet invoiced)
   if(n.type === 'sub'){
-    v = (n.data ? n.data.billedToDate || 0 : 0);
+    var subIns = [0,0];
+    wires.forEach(function(w){
+      if(w.toNode === n.id){
+        var fn = findNode(w.fromNode);
+        if(fn) subIns[w.toPort] = (subIns[w.toPort]||0) + getOutput(fn, w.fromPort);
+      }
+    });
+    var poContract = subIns[0] || 0;
+    var invoiced = subIns[1] || 0;
+    if(pi === 0) v = invoiced; // Billed output = invoiced amount
+    else if(pi === 1){
+      // Accrued = (contract × % complete of connected scope) - invoiced
+      // For now use node's pctComplete as proxy; user can wire T1/T2 pct later
+      var pctComp = n.pctComplete || 0;
+      var earned = poContract * (pctComp / 100);
+      v = Math.max(0, earned - invoiced);
+    }
     _comp[n.id] = false; return v;
   }
 
