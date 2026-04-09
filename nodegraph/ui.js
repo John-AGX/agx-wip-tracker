@@ -46,17 +46,22 @@ function renderNodes(){
       var mx=Math.max((d.ins||[]).length,(d.outs||[]).length);
       for(var i=0;i<mx;i++){
         h+='<div class="ng-pr">';
+        // Input port + label (left side)
         if(hasIns&&i<d.ins.length){
           var ip=d.ins[i], ic=wires.some(function(w){return w.toNode===n.id&&w.toPort===i;});
           h+='<div class="ng-p ng-pi ng-p-'+ip.t+(ic?' ng-pc':'')+'" data-node="'+n.id+'" data-pi="'+i+'" data-dir="in" data-type="'+ip.t+'"></div>';
-          h+='<span class="ng-pl">'+ip.n+'</span>';
+          h+='<span class="ng-pl" style="text-align:left">'+ip.n+'</span>';
         } else if(hasIns){
-          h+='<span style="width:12px"></span><span></span>';
+          h+='<span style="width:13px;flex-shrink:0"></span><span class="ng-pl"></span>';
         }
+        // Spacer between input and output
+        if(hasIns&&hasOuts) h+='<span style="flex:1;min-width:10px"></span>';
+        // Output label + value + port (right side)
         if(hasOuts&&i<d.outs.length){
           var op=d.outs[i], oc=wires.some(function(w){return w.fromNode===n.id&&w.fromPort===i;}), ov=E.getOutput(n,i);
-          if(!hasIns) h+='<span class="ng-pl" style="flex:1">'+op.n+'</span>';
-          h+='<span class="ng-pv">'+E.fmtV(ov,op.t)+'</span>';
+          if(!hasIns) h+='<span class="ng-pl" style="text-align:left;flex:1">'+op.n+'</span>';
+          else h+='<span class="ng-pl" style="text-align:right;flex:0">'+op.n+'</span>';
+          h+='<span class="ng-pv" style="margin-left:4px">'+E.fmtV(ov,op.t)+'</span>';
           h+='<div class="ng-p ng-po ng-p-'+op.t+(oc?' ng-pc':'')+'" data-node="'+n.id+'" data-pi="'+i+'" data-dir="out" data-type="'+op.t+'"></div>';
         }
         h+='</div>';

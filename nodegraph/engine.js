@@ -375,11 +375,15 @@ function portPos(nid2, pi, dir){
 // ── Grid Drawing ──
 function drawGrid(ctx, w, h){
   ctx.clearRect(0,0,w,h);
+  // Read theme colors from computed styles
+  var style = getComputedStyle(document.documentElement);
+  var dotColor = style.getPropertyValue('--ng-grid-dot').trim() || '#161b2a';
+  var lineColor = style.getPropertyValue('--ng-grid-line').trim() || '#141828';
   var s = SNAP*2*zoom, ox = (panX*zoom)%s, oy = (panY*zoom)%s;
-  ctx.fillStyle = '#161b2a';
+  ctx.fillStyle = dotColor;
   for(var x=ox;x<w;x+=s) for(var y=oy;y<h;y+=s) ctx.fillRect(x-.5,y-.5,1,1);
   var m=s*5, omx=(panX*zoom)%m, omy=(panY*zoom)%m;
-  ctx.strokeStyle='#141828'; ctx.lineWidth=1; ctx.beginPath();
+  ctx.strokeStyle=lineColor; ctx.lineWidth=1; ctx.beginPath();
   for(var x2=omx;x2<w;x2+=m){ctx.moveTo(x2,0);ctx.lineTo(x2,h);}
   for(var y2=omy;y2<h;y2+=m){ctx.moveTo(0,y2);ctx.lineTo(w,y2);}
   ctx.stroke();
