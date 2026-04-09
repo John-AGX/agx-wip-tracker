@@ -531,12 +531,14 @@
     { key: 'budget', label: 'Budget $', fmt: 'currency' },
     { key: 'materials', label: 'Materials $', fmt: 'currency' },
     { key: 'labor', label: 'Labor $', fmt: 'currency' },
+    { key: 'sub', label: 'Subcontractor $', fmt: 'currency' },
     { key: 'equipment', label: 'Equipment $', fmt: 'currency' },
   ];
 
   const PHASE_FIELDS = [
     { key: 'materials', label: 'Materials $', fmt: 'currency' },
     { key: 'labor', label: 'Labor $', fmt: 'currency' },
+    { key: 'sub', label: 'Subcontractor $', fmt: 'currency' },
     { key: 'equipment', label: 'Equipment $', fmt: 'currency' },
   ];
 
@@ -2228,8 +2230,12 @@
     // Select first cell
     selectCell(0, 0);
 
-    // Show linked cell indicators on cost inputs
-    setTimeout(updateLinkedIndicators, 500);
+    // Show linked cell indicators on cost inputs and push linked values
+    setTimeout(function(){
+      pushLinkedValues();
+      updateLinkedIndicators();
+      if (typeof refreshHeaderMetrics === 'function') refreshHeaderMetrics();
+    }, 500);
 
     // ── Wire events ──
     wsTable.addEventListener('mousedown', handleCellMouseDown);
