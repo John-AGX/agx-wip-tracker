@@ -136,7 +136,9 @@ function renderNodes(){
       // PO: show base contract + amendments
       if(iType==='po'){
         var amendTotal=n.items.reduce(function(s,i){return s+(i.amount||0);},0);
-        h+='<div style="font-size:9px;color:#6a7090;text-align:center;padding:0 0 4px;">Base: '+E.fmtC(n.value||0)+' + Amendments: '+E.fmtC(amendTotal)+' = '+E.fmtC((n.value||0)+amendTotal)+'</div>';
+        var poInvoiced=E.getOutput(n,1);
+        h+='<div style="font-size:9px;color:#6a7090;text-align:center;padding:0 0 2px;">Base: '+E.fmtC(n.value||0)+' + Amendments: '+E.fmtC(amendTotal)+' = '+E.fmtC((n.value||0)+amendTotal)+'</div>';
+        if(poInvoiced>0) h+='<div style="font-size:9px;color:#34d399;text-align:center;padding:0 0 4px;">Invoiced: '+E.fmtC(poInvoiced)+' \u2192 Actual Cost</div>';
       }
       h+='</div>';
     }
@@ -160,9 +162,10 @@ function renderNodes(){
           }
         }
       });
+      var actualCost=E.getOutput(n,0);
       h+='<div style="padding:4px 10px 6px;font-size:10px;">';
       h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">PO Contract <span style="color:#8899cc;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(poAmt)+'</span></div>';
-      h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Invoiced <span style="color:#34d399;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(invAmt)+'</span></div>';
+      h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Invoiced (Actual) <span style="color:#34d399;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(invAmt)+'</span></div>';
       h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">% Complete <span style="color:#fbbf24;font-weight:600;font-family:\'Courier New\',monospace;">'+subPct.toFixed(1)+'%</span></div>';
       if(pctSource!=='manual') h+='<div style="font-size:8px;color:#4a5068;text-align:right;padding:0 0 2px;">from '+pctSource+'</div>';
       h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;border-top:1px solid #1a1f30;margin-top:2px;">Accrued <span style="color:#fbbf24;font-weight:700;font-family:\'Courier New\',monospace;">'+E.fmtC(accrued)+'</span></div>';

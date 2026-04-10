@@ -17,8 +17,8 @@ var DEFS = {
   mat:   { cat:'cost', icon:'\u{1F9F1}', label:'Materials',    ins:[], outs:[{n:'Total',t:PT.C}], hasItems:true, nameEdit:true, itemType:'mat' },
   gc:    { cat:'cost', icon:'\u{1F3E2}', label:'Gen. Conditions', ins:[], outs:[{n:'Total',t:PT.C}], hasItems:true, nameEdit:true, itemType:'gc' },
   other: { cat:'cost', icon:'\u{1F4CC}', label:'Other',        ins:[], outs:[{n:'Total',t:PT.C}], hasItems:true, nameEdit:true, itemType:'other' },
-  sub:   { cat:'sub',  icon:'\u{1F477}', label:'Sub',          ins:[{n:'PO Contract',t:PT.C},{n:'Invoiced',t:PT.C}], outs:[{n:'Billed',t:PT.C},{n:'Accrued',t:PT.C}], nameEdit:true, hasProg:true },
-  po:    { cat:'sub',  icon:'\u{1F4C4}', label:'Purchase Order', ins:[], outs:[{n:'Contract',t:PT.C}], hasItems:true, nameEdit:true, itemType:'po' },
+  sub:   { cat:'sub',  icon:'\u{1F477}', label:'Sub',          ins:[{n:'PO Contract',t:PT.C},{n:'Invoiced',t:PT.C}], outs:[{n:'Actual Cost',t:PT.C},{n:'Accrued',t:PT.C}], nameEdit:true, hasProg:true },
+  po:    { cat:'sub',  icon:'\u{1F4C4}', label:'Purchase Order', ins:[{n:'Invoiced',t:PT.C}], outs:[{n:'Contract',t:PT.C},{n:'Invoiced',t:PT.C}], hasItems:true, nameEdit:true, itemType:'po' },
   inv:   { cat:'sub',  icon:'\u{1F4B3}', label:'Invoice',       ins:[], outs:[{n:'Invoiced',t:PT.C}], hasItems:true, nameEdit:true, itemType:'inv' },
   co:    { cat:'co',   icon:'\u{1F4DD}', label:'Change Order', ins:[], outs:[{n:'Income',t:PT.C},{n:'Costs',t:PT.C}], nameEdit:true },
   sum:   { cat:'math', icon:'\u2211',    label:'SUM',          ins:[{n:'A',t:PT.A},{n:'B',t:PT.A},{n:'C',t:PT.A},{n:'D',t:PT.A}], outs:[{n:'Result',t:PT.C}] },
@@ -111,9 +111,20 @@ function getOutput(n, pi){
     _comp[n.id] = false; return v;
   }
 
-  // Purchase Order: contract amount + amendment items
+  // Purchase Order: contract = base + amendments. Passes through invoiced from input.
   if(n.type === 'po'){
-    v = (n.value || 0) + itemsTotal; // base contract + amendments
+    if(pi === 0){
+      // Output 0: Contract = base value + amendment items
+      v = (n.value || 0) + itemsTotal;
+    } else if(pi === 1){
+      // Output 1: Invoiced = sum of wired Invoice inputs
+      wires.forEach(function(w){
+        if(w.toNode === n.id){
+          var fn = findNode(w.fromNode);
+          if(fn) v += getOutput(fn, w.fromPort);
+        }
+      });
+    }
     _comp[n.id] = false; return v;
   }
 
@@ -124,7 +135,7 @@ function getOutput(n, pi){
   }
 
   // Sub: receives PO Contract (in 0) and Invoiced (in 1)
-  // Output 0 = Billed (invoiced amount)
+  // Output 0 = Actual Cost (invoiced amount — work that's been billed)
   // Output 1 = Accrued (earned based on % but not yet invoiced)
   if(n.type === 'sub'){
     var subIns = [0,0];
@@ -136,7 +147,7 @@ function getOutput(n, pi){
     });
     var poContract = subIns[0] || 0;
     var invoiced = subIns[1] || 0;
-    if(pi === 0) v = invoiced; // Billed output = invoiced amount
+    if(pi === 0) v = invoiced; // Actual Cost = invoiced (billed work becomes actual cost)
     else if(pi === 1){
       // Accrued = (contract × % complete of connected scope) - invoiced
       // Find % complete from connected T1/T2 (trace Sub output wires → find T1/T2 target)
