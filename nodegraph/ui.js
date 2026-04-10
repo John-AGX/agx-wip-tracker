@@ -11,6 +11,25 @@ var wiringFrom=null, wireMouse=null;
 var selN=null, isPan=false, panSt={x:0,y:0};
 var editingId=null;
 
+// ── Update T2 labels based on connected T1 ──
+function updateTierLabels(){
+  var nodes=E.nodes(), wires=E.wires();
+  nodes.forEach(function(n){
+    if(n.type!=='t2') return;
+    // Get base name (strip any existing " › ..." suffix)
+    var baseName = n.label.split(' \u203A ')[0].trim();
+    // Find if this T2's output is wired to a T1
+    var t1Name = '';
+    wires.forEach(function(w){
+      if(w.fromNode===n.id){
+        var target=E.findNode(w.toNode);
+        if(target&&target.type==='t1') t1Name=target.label;
+      }
+    });
+    n.label = t1Name ? baseName+' \u203A '+t1Name : baseName;
+  });
+}
+
 // ── Resize canvases ──
 function resize(){
   wireC.width=wrap.clientWidth; wireC.height=wrap.clientHeight;
@@ -247,6 +266,7 @@ function renderNodes(){
 }
 
 function render(){
+  updateTierLabels();
   renderNodes();
   E.drawGrid(gridCtx, gridC.width, gridC.height);
   E.drawWires(wireCtx, wrap, wiringFrom, wireMouse);
