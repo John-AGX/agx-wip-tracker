@@ -11,7 +11,7 @@ function canConn(a,b){ return a===b||a===PT.A||b===PT.A||(a===PT.N&&b===PT.C); }
 
 // ── Node Definitions ──
 var DEFS = {
-  t1:    { cat:'t1',   icon:'\u{1F3D7}', label:'Tier 1',       ins:[{n:'Costs',t:PT.C}], outs:[{n:'Total',t:PT.C},{n:'%',t:PT.P}], hasProg:true, nameEdit:true },
+  t1:    { cat:'t1',   icon:'\u{1F3D7}', label:'Tier 1',       ins:[{n:'Costs',t:PT.C}], outs:[{n:'Total',t:PT.C},{n:'%',t:PT.P},{n:'Revenue',t:PT.C},{n:'Est. Costs',t:PT.C}], hasProg:true, nameEdit:true },
   t2:    { cat:'t2',   icon:'\u{1F4CB}', label:'Tier 2',       ins:[{n:'Costs',t:PT.C}], outs:[{n:'Total',t:PT.C},{n:'%',t:PT.P}], hasProg:true, nameEdit:true },
   labor: { cat:'cost', icon:'\u{1F6E0}', label:'Labor',        ins:[], outs:[{n:'Total',t:PT.C}], hasItems:true, nameEdit:true, itemType:'labor' },
   mat:   { cat:'cost', icon:'\u{1F9F1}', label:'Materials',    ins:[], outs:[{n:'Total',t:PT.C}], hasItems:true, nameEdit:true, itemType:'mat' },
@@ -191,7 +191,8 @@ function getOutput(n, pi){
     _comp[n.id] = false; return v;
   }
 
-  // T1/T2: output 0 = total costs, output 1 = % complete
+  // T1: output 0=total costs, 1=% complete, 2=allocated revenue, 3=allocated est costs
+  // T2: output 0=total costs, 1=% complete
   if(n.type === 't1' || n.type === 't2'){
     if(pi === 0){
       v = itemsTotal;
@@ -203,6 +204,25 @@ function getOutput(n, pi){
       });
     } else if(pi === 1){
       v = n.pctComplete || 0;
+    } else if(n.type === 't1' && (pi === 2 || pi === 3)){
+      // Find the Job node by tracing downstream: T1 → SUM → Job or T1 → Job
+      var jobNode = null;
+      var allT1s = nodes.filter(function(nd){ return nd.type === 't1'; });
+      // Find Job node connected downstream
+      nodes.forEach(function(nd){ if(nd.type === 'job') jobNode = nd; });
+      if(jobNode){
+        var totalBudget = allT1s.reduce(function(s,t){ return s + (t.budget || 0); }, 0);
+        var myPct = totalBudget > 0 ? (n.budget || 0) / totalBudget : (allT1s.length > 0 ? 1 / allT1s.length : 0);
+        if(pi === 2){
+          // Allocated Revenue = Total Income × budget %
+          var totalIncome = getOutput(jobNode, 2); // Job output 2 = Total Income
+          v = totalIncome * myPct;
+        } else if(pi === 3){
+          // Allocated Est. Costs = Rev. Est. Costs × budget %
+          var revEstCosts = getOutput(jobNode, 5); // Job output 5 = Rev. Est. Costs
+          v = revEstCosts * myPct;
+        }
+      }
     }
     _comp[n.id] = false; return v;
   }

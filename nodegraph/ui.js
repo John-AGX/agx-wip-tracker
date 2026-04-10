@@ -194,10 +194,24 @@ function renderNodes(){
       h+='</div>';
     }
 
-    // T1/T2: show total
+    // T1/T2: show total + allocated revenue/costs for T1
     if(n.type==='t1'||n.type==='t2'){
       var tv=E.getOutput(n,0), tcls=tv>0?' ng-vp':'';
       h+='<div class="ng-wv'+tcls+'" style="font-size:16px;margin:2px 8px 6px;padding:4px 8px;">'+E.fmtC(tv)+'</div>';
+      if(n.type==='t1'){
+        E.resetComp();
+        var allocRev=E.getOutput(n,2), allocCost=E.getOutput(n,3);
+        var allT1s=E.nodes().filter(function(nd){return nd.type==='t1';});
+        var totalBudget=allT1s.reduce(function(s,t){return s+(t.budget||0);},0);
+        var budgetPct=totalBudget>0?((n.budget||0)/totalBudget*100):0;
+        if(allocRev>0||allocCost>0){
+          h+='<div style="padding:2px 10px 6px;font-size:10px;">';
+          h+='<div style="display:flex;justify-content:space-between;padding:1px 0;color:var(--ng-dim);">Budget Share <span style="color:#fbbf24;font-weight:600;">'+budgetPct.toFixed(1)+'%</span></div>';
+          h+='<div style="display:flex;justify-content:space-between;padding:1px 0;color:var(--ng-dim);">Alloc. Revenue <span style="color:#34d399;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(allocRev)+'</span></div>';
+          h+='<div style="display:flex;justify-content:space-between;padding:1px 0;color:var(--ng-dim);">Alloc. Est. Costs <span style="color:#8899cc;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(allocCost)+'</span></div>';
+          h+='</div>';
+        }
+      }
     }
 
     // Job node: show editable revenue fields
