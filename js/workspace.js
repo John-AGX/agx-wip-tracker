@@ -1850,7 +1850,10 @@
     if (grid.refMode) {
       e.preventDefault();
       insertCellRefIntoFormula(addr(r, c));
-      selectCell(r, c);
+      // Re-focus formula bar so next click continues inserting
+      if (grid.refAnchor && grid.refAnchor.type === 'formulaBar') {
+        formulaBar.focus();
+      }
       return;
     }
 
@@ -2473,7 +2476,22 @@
           if (r >= grid.rows) grid.rows = r + EXPAND_BUFFER;
           if (c >= grid.cols) grid.cols = c + EXPAND_BUFFER;
           const cell = getCell(r, c);
-          cell.raw = val.trim();
+          // Clean Excel formatting: strip $, commas, %, trailing whitespace
+          var clean = val.trim();
+          var numTest = clean.replace(/^\$/, '').replace(/,/g, '').trim();
+          if (numTest.endsWith('%')) {
+            var pctVal = parseFloat(numTest.replace('%', ''));
+            if (!isNaN(pctVal)) { cell.raw = String(pctVal / 100); cell.fmt = 'percent'; }
+            else cell.raw = clean;
+          } else {
+            var numVal = Number(numTest);
+            if (numTest !== '' && !isNaN(numVal)) {
+              cell.raw = String(numVal);
+              if (clean.startsWith('$')) cell.fmt = 'currency';
+            } else {
+              cell.raw = clean;
+            }
+          }
         });
       });
 
