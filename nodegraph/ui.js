@@ -682,6 +682,76 @@ function init(){
     E.setNodes([]); E.setWires([]); E.setNid(1);
     populate(); render();
   });
+
+  // Collapse all
+  var cab=tab.querySelector('.ng-collapse-all-btn');
+  if(cab) cab.addEventListener('click',function(){
+    E.nodes().forEach(function(n){ if(n.type!=='note') n.collapsed=true; });
+    render();
+  });
+
+  // Expand all
+  var eab=tab.querySelector('.ng-expand-all-btn');
+  if(eab) eab.addEventListener('click',function(){
+    E.nodes().forEach(function(n){ n.collapsed=false; });
+    render();
+  });
+
+  // Auto arrange
+  var aab=tab.querySelector('.ng-arrange-btn');
+  if(aab) aab.addEventListener('click',function(){ autoArrange(); render(); });
+}
+
+// ── Auto Arrange ──
+function autoArrange(){
+  var nodes=E.nodes(), wires=E.wires();
+  if(!nodes.length) return;
+
+  // Assign columns by node type (left to right flow)
+  var colMap={ t2:0, t1:1, labor:2, mat:2, gc:2, other:2, inv:2, po:3, sub:3, co:3, cost:2, sum:4, job:5, wip:6, watch:7, note:8 };
+
+  // Group nodes by column
+  var columns={};
+  nodes.forEach(function(n){
+    var col=colMap[n.type]!=null?colMap[n.type]:5;
+    if(!columns[col]) columns[col]=[];
+    columns[col].push(n);
+  });
+
+  // Sort columns by key
+  var colKeys=Object.keys(columns).map(Number).sort(function(a,b){return a-b;});
+
+  // Calculate viewport center
+  var p=E.pan(),z=E.zm();
+  var cx=-p.x+(wrap?wrap.clientWidth/2/z:500);
+  var cy=-p.y+(wrap?wrap.clientHeight/2/z:300);
+
+  // Layout each column
+  var SNAP=E.SNAP;
+  var colWidth=240;
+  var rowGap=30; // gap between nodes in same column
+  var startX=cx-(colKeys.length*colWidth)/2;
+
+  colKeys.forEach(function(colIdx,ci){
+    var col=columns[colIdx];
+    var totalH=0;
+    // Estimate height per node
+    col.forEach(function(n){
+      var h=n.collapsed?40:120;
+      if(E.DEFS[n.type]&&E.DEFS[n.type].hasItems&&n.items&&n.items.length) h+=n.items.length*24;
+      if(E.DEFS[n.type]&&E.DEFS[n.type].master) h=200;
+      n._estH=h;
+      totalH+=h+rowGap;
+    });
+    var startY=cy-totalH/2;
+    var y=startY;
+    col.forEach(function(n){
+      n.x=Math.round((startX+ci*colWidth)/SNAP)*SNAP;
+      n.y=Math.round(y/SNAP)*SNAP;
+      y+=n._estH+rowGap;
+      delete n._estH;
+    });
+  });
 }
 
 // ── Public ──
