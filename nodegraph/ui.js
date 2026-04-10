@@ -73,8 +73,11 @@ function renderNodes(){
     if(d.hasProg){
       var pct = n.pctComplete || 0;
       var progColor = pct>=100?'#34d399':pct>=50?'#fbbf24':'#4f8cff';
+      h+='<div class="ng-progress-wrap">';
       h+='<div class="ng-progress"><div class="ng-progress-fill" style="width:'+Math.min(pct,100)+'%;background:'+progColor+'"></div></div>';
-      h+='<div class="ng-progress-label"><input type="number" class="ng-pct-input" data-node="'+n.id+'" data-field="pctComplete" value="'+pct+'" min="0" max="100" step="1" />% complete'+(n.budget?' \u00b7 Budget: '+E.fmtC(n.budget):'')+'</div>';
+      h+='<input type="range" class="ng-pct-slider" data-node="'+n.id+'" data-field="pctComplete" value="'+pct+'" min="0" max="100" step="1" />';
+      h+='</div>';
+      h+='<div class="ng-progress-label"><span class="ng-pct-val">'+pct.toFixed(0)+'%</span> complete'+(n.budget?' \u00b7 Budget: '+E.fmtC(n.budget):'')+'</div>';
     }
 
     // Sub-items (type-specific layout)
@@ -491,6 +494,15 @@ function initEvents(){
         n.jobFields[t.dataset.jfield]=parseFloat(t.value)||0;
       } else if(t.dataset.field==='pctComplete'){
         n.pctComplete=Math.max(0,Math.min(100,parseFloat(t.value)||0));
+        var nodeEl=canvasEl.querySelector('[data-id="'+n.id+'"]');
+        if(nodeEl){
+          var fill=nodeEl.querySelector('.ng-progress-fill');
+          var lbl=nodeEl.querySelector('.ng-pct-val');
+          var pc=n.pctComplete;
+          if(fill){fill.style.width=Math.min(pc,100)+'%';fill.style.background=pc>=100?'#34d399':pc>=50?'#fbbf24':'#4f8cff';}
+          if(lbl)lbl.textContent=pc.toFixed(0)+'%';
+        }
+        E.drawWires(wireCtx,wrap,wiringFrom,wireMouse);
       } else {
         n.value=parseFloat(t.value)||0;
       }

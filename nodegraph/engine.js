@@ -11,8 +11,8 @@ function canConn(a,b){ return a===b||a===PT.A||b===PT.A||(a===PT.N&&b===PT.C); }
 
 // ── Node Definitions ──
 var DEFS = {
-  t1:    { cat:'t1',   icon:'\u{1F3D7}', label:'Tier 1',       ins:[{n:'Costs',t:PT.C}], outs:[{n:'Total',t:PT.C}], hasProg:true, nameEdit:true },
-  t2:    { cat:'t2',   icon:'\u{1F4CB}', label:'Tier 2',       ins:[{n:'Costs',t:PT.C}], outs:[{n:'Total',t:PT.C}], hasProg:true, nameEdit:true },
+  t1:    { cat:'t1',   icon:'\u{1F3D7}', label:'Tier 1',       ins:[{n:'Costs',t:PT.C}], outs:[{n:'Total',t:PT.C},{n:'%',t:PT.P}], hasProg:true, nameEdit:true },
+  t2:    { cat:'t2',   icon:'\u{1F4CB}', label:'Tier 2',       ins:[{n:'Costs',t:PT.C}], outs:[{n:'Total',t:PT.C},{n:'%',t:PT.P}], hasProg:true, nameEdit:true },
   labor: { cat:'cost', icon:'\u{1F6E0}', label:'Labor',        ins:[], outs:[{n:'Total',t:PT.C}], hasItems:true, nameEdit:true, itemType:'labor' },
   mat:   { cat:'cost', icon:'\u{1F9F1}', label:'Materials',    ins:[], outs:[{n:'Total',t:PT.C}], hasItems:true, nameEdit:true, itemType:'mat' },
   gc:    { cat:'cost', icon:'\u{1F3E2}', label:'Gen. Conditions', ins:[], outs:[{n:'Total',t:PT.C}], hasItems:true, nameEdit:true, itemType:'gc' },
@@ -191,15 +191,19 @@ function getOutput(n, pi){
     _comp[n.id] = false; return v;
   }
 
-  // T1/T2: sum of wired inputs + own items
+  // T1/T2: output 0 = total costs, output 1 = % complete
   if(n.type === 't1' || n.type === 't2'){
-    v = itemsTotal;
-    wires.forEach(function(w){
-      if(w.toNode === n.id){
-        var fn = findNode(w.fromNode);
-        if(fn) v += getOutput(fn, w.fromPort);
-      }
-    });
+    if(pi === 0){
+      v = itemsTotal;
+      wires.forEach(function(w){
+        if(w.toNode === n.id){
+          var fn = findNode(w.fromNode);
+          if(fn) v += getOutput(fn, w.fromPort);
+        }
+      });
+    } else if(pi === 1){
+      v = n.pctComplete || 0;
+    }
     _comp[n.id] = false; return v;
   }
 
