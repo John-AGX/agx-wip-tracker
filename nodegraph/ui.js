@@ -708,7 +708,7 @@ function autoArrange(){
   if(!nodes.length) return;
 
   // Assign columns by node type (left to right flow)
-  var colMap={ t2:0, t1:1, labor:2, mat:2, gc:2, other:2, inv:2, po:3, sub:3, co:3, cost:2, sum:4, job:5, wip:6, watch:7, note:8 };
+  var colMap={ inv:0, po:0, sub:1, co:1, labor:2, mat:2, gc:2, other:2, cost:2, t2:3, t1:4, sum:5, job:6, wip:7, watch:8, note:9 };
 
   // Group nodes by column
   var columns={};
