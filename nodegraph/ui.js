@@ -728,8 +728,8 @@ function autoArrange(){
 
   // Layout each column
   var SNAP=E.SNAP;
-  var colWidth=240;
-  var rowGap=30; // gap between nodes in same column
+  var colWidth=300;
+  var rowGap=60; // gap between nodes in same column
   var startX=cx-(colKeys.length*colWidth)/2;
 
   colKeys.forEach(function(colIdx,ci){
