@@ -528,7 +528,10 @@ function initEvents(){
 
   canvasEl.addEventListener('focusin',function(e){
     var t=e.target;
-    if((t.tagName==='INPUT'||t.tagName==='TEXTAREA'||t.tagName==='SELECT')&&t.dataset.node) editingId=t.dataset.node;
+    if((t.tagName==='INPUT'||t.tagName==='TEXTAREA'||t.tagName==='SELECT')&&t.dataset.node){
+      editingId=t.dataset.node;
+      if(t.type==='number') setTimeout(function(){ t.select(); },0);
+    }
   });
   canvasEl.addEventListener('focusout',function(e){
     var t=e.target;
