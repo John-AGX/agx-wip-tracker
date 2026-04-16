@@ -60,8 +60,55 @@ var SNAP = 15;
 
 function genId(){ return 'n'+(nid++); }
 
+/** Create a real appData entry when a node is created from sidebar */
+function createDataEntry(type, label){
+  if(typeof appData === 'undefined' || !jobId) return {};
+  var id, entry;
+  var ts = new Date().toISOString();
+
+  if(type === 't1'){
+    id = 'b' + Date.now();
+    entry = { id:id, jobId:jobId, name:label||'New Building', address:'', budget:0, budgetPct:0, materials:0, labor:0, sub:0, equipment:0, hoursWeek:0, hoursTotal:0, rate:40, workScope:'in-house', locked:false, excludeFromSubDist:false };
+    appData.buildings.push(entry);
+    if(typeof saveData === 'function') saveData();
+    return entry;
+  }
+
+  if(type === 't2'){
+    id = 'p' + Date.now();
+    entry = { id:id, jobId:jobId, buildingId:'', phase:label||'New Phase', workScope:'in-house', locked:false, pctComplete:0, materials:0, labor:0, sub:0, equipment:0, phaseBudget:0, hoursWeek:0, hoursTotal:0, rate:40, notes:'', dateAdded:ts };
+    appData.phases.push(entry);
+    if(typeof saveData === 'function') saveData();
+    return entry;
+  }
+
+  if(type === 'sub'){
+    id = 's' + Date.now();
+    entry = { id:id, jobId:jobId, name:label||'New Sub', trade:'', level:'job', buildingId:'', buildingIds:[], phaseId:'', phaseIds:[], contractAmt:0, billedToDate:0, notes:'' };
+    appData.subs.push(entry);
+    if(typeof saveData === 'function') saveData();
+    return entry;
+  }
+
+  if(type === 'co'){
+    id = 'co' + Date.now();
+    entry = { id:id, jobId:jobId, coNumber:'CO-'+(appData.changeOrders.filter(function(c){return c.jobId===jobId;}).length+1), description:label||'', income:0, estimatedCosts:0, date:ts.split('T')[0], notes:'' };
+    appData.changeOrders.push(entry);
+    if(typeof saveData === 'function') saveData();
+    return entry;
+  }
+
+  return {};
+}
+
 function addNode(type, x, y, label, data){
   var d = DEFS[type]; if(!d) return null;
+
+  // If no data provided AND we have appData, create real data entry
+  if(!data && typeof appData !== 'undefined' && jobId){
+    data = createDataEntry(type, label);
+  }
+
   var n = {
     id: genId(), type: type, cat: d.cat,
     x: Math.round(x/SNAP)*SNAP, y: Math.round(y/SNAP)*SNAP,
@@ -70,10 +117,10 @@ function addNode(type, x, y, label, data){
     value: 0,
     collapsed: false,
     noteText: '',
-    items: [],        // sub-items for cost nodes [{date:'',amount:0}]
-    pctComplete: 0,   // for T1/T2 progress bar
-    budget: 0,        // for T1/T2
-    jobFields: {},    // for job node editable fields
+    items: [],
+    pctComplete: 0,
+    budget: 0,
+    jobFields: {},
   };
   if(data){
     if(data._val != null) n.value = data._val;

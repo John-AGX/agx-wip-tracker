@@ -16,17 +16,26 @@ function updateTierLabels(){
   var nodes=E.nodes(), wires=E.wires();
   nodes.forEach(function(n){
     if(n.type!=='t2') return;
-    // Get base name (strip any existing " › ..." suffix)
     var baseName = n.label.split(' \u203A ')[0].trim();
-    // Find if this T2's output is wired to a T1
-    var t1Name = '';
+    var t1Name = '', t1Data = null;
     wires.forEach(function(w){
       if(w.fromNode===n.id){
         var target=E.findNode(w.toNode);
-        if(target&&target.type==='t1') t1Name=target.label;
+        if(target&&target.type==='t1'){ t1Name=target.label.split(' \u203A ')[0].trim(); t1Data=target.data; }
       }
     });
     n.label = t1Name ? baseName+' \u203A '+t1Name : baseName;
+    // Sync phase buildingId to connected T1's building
+    if(n.data && n.data.id && typeof appData !== 'undefined'){
+      var phase = appData.phases.find(function(p){return p.id===n.data.id;});
+      if(phase){
+        var newBldgId = t1Data && t1Data.id ? t1Data.id : '';
+        if(phase.buildingId !== newBldgId){
+          phase.buildingId = newBldgId;
+          if(typeof saveData === 'function') saveData();
+        }
+      }
+    }
   });
 }
 
@@ -572,6 +581,15 @@ function initEvents(){
   document.addEventListener('keydown',function(e){
     if(!document.getElementById('nodeGraphTab').classList.contains('active')) return;
     if(e.key==='Delete'&&selN&&document.activeElement.tagName!=='INPUT'&&document.activeElement.tagName!=='TEXTAREA'){
+      var delNode=E.findNode(selN);
+      // Delete from appData if it has a linked data entry
+      if(delNode&&delNode.data&&delNode.data.id&&typeof appData!=='undefined'){
+        if(delNode.type==='t1') appData.buildings=appData.buildings.filter(function(b){return b.id!==delNode.data.id;});
+        else if(delNode.type==='t2') appData.phases=appData.phases.filter(function(p){return p.id!==delNode.data.id;});
+        else if(delNode.type==='sub') appData.subs=appData.subs.filter(function(s){return s.id!==delNode.data.id;});
+        else if(delNode.type==='co') appData.changeOrders=appData.changeOrders.filter(function(c){return c.id!==delNode.data.id;});
+        if(typeof saveData==='function') saveData();
+      }
       var ws=E.wires();
       E.setWires(ws.filter(function(w){return w.fromNode!==selN&&w.toNode!==selN;}));
       E.setNodes(E.nodes().filter(function(n){return n.id!==selN;}));
@@ -604,6 +622,9 @@ function pushToJob(){
     if(n.type!=='t1') return;
     var bldg=n.data&&n.data.id?appData.buildings.find(function(b){return b.id===n.data.id;}):null;
     if(!bldg) return;
+    // Sync name
+    var bName=n.label.split(' \u203A ')[0].trim();
+    if(bName) bldg.name=bName;
     // Budget from node
     if(n.budget) bldg.budget=n.budget;
     // % complete
@@ -635,6 +656,8 @@ function pushToJob(){
     if(n.type!=='t2') return;
     var phase=n.data&&n.data.id?appData.phases.find(function(p){return p.id===n.data.id;}):null;
     if(!phase) return;
+    var pName=n.label.split(' \u203A ')[0].trim();
+    if(pName) phase.phase=pName;
     phase.pctComplete=n.pctComplete||0;
     // Sum costs from wired cost nodes
     var mat=0,lab=0,equip=0;
@@ -657,6 +680,7 @@ function pushToJob(){
     if(n.type!=='sub') return;
     var sub=n.data&&n.data.id?appData.subs.find(function(s){return s.id===n.data.id;}):null;
     if(!sub) return;
+    if(n.label) sub.name=n.label;
     // Get invoiced amount from wired inputs
     var invoiced=0;
     wires.forEach(function(w){
