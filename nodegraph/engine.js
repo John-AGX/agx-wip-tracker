@@ -255,9 +255,11 @@ function fmtP(v){ return v.toFixed(1)+'%'; }
 function fmtV(v,t){ return t===PT.P ? fmtP(v) : t===PT.C ? fmtC(v) : v.toLocaleString(); }
 
 // ── Save / Load ──
+var GRAPH_VER = 2; // bump to force re-populate on next open
 function saveGraph(){
   if(!jobId) return;
   var state = {
+    ver: GRAPH_VER,
     nodes: nodes.map(function(n){
       return {
         id:n.id, type:n.type, x:n.x, y:n.y, label:n.label,
@@ -279,6 +281,7 @@ function loadGraph(){
   var all = JSON.parse(localStorage.getItem('agx-nodegraphs') || '{}');
   var state = all[jobId];
   if(!state || !state.nodes || !state.nodes.length) return false;
+  if((state.ver||0) < GRAPH_VER) return false; // stale version → re-populate
 
   nodes = []; wires = state.wires || []; nid = state.nid || 1;
   panX = state.panX || 0; panY = state.panY || 0; zoom = state.zoom || 1;
