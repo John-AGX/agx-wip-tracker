@@ -82,12 +82,14 @@ function renderNodes(){
   nodes.forEach(function(n){
     var d=E.DEFS[n.type]; if(!d) return;
     if(editingId===n.id) return;
+    // Watches are never collapsed — always show the flashy KPI
+    if(n.type==='watch') n.collapsed=false;
     var div=document.createElement('div');
     div.className='ng-node ng-t-'+n.cat+(selN===n.id?' ng-sel':'')+(n.collapsed?' ng-coll':'');
     div.setAttribute('data-id',n.id);
     div.style.left=n.x+'px'; div.style.top=n.y+'px';
 
-    var canColl = n.type!=='note';
+    var canColl = n.type!=='note' && n.type!=='watch';
     var h='<div class="ng-hdr"><span class="ng-hi">'+d.icon+'</span><span class="ng-hdr-name" data-rename="'+n.id+'" title="Double-click to rename">'+n.label+'</span>';
     if(canColl) h+='<span class="ng-cbtn" data-coll="'+n.id+'">'+(n.collapsed?'\u25B6':'\u25BC')+'</span>';
     h+='</div>';
@@ -923,6 +925,35 @@ function autoArrange(){
       y+=n._estH+rowGap;
       delete n._estH;
     });
+  });
+
+  // Re-fan the watch nodes around the (possibly moved) WIP so the octopus stays intact
+  refanWatches();
+}
+
+// Reposition all watches wired to WIP into the octopus fan around WIP's current spot.
+function refanWatches(){
+  var nodes=E.nodes();
+  var wipNode=nodes.find(function(n){return n.type==='wip';});
+  if(!wipNode) return;
+  var wipDef=E.DEFS.wip; if(!wipDef||!wipDef.outs) return;
+  var wipOuts=wipDef.outs;
+  var portWatch={};
+  E.wires().forEach(function(w){
+    if(w.fromNode===wipNode.id){
+      var t=E.findNode(w.toNode);
+      if(t&&t.type==='watch') portWatch[w.fromPort]=t;
+    }
+  });
+  var wipCx=wipNode.x+160, wipCy=wipNode.y+220;
+  var radius=780, count=wipOuts.length, arcSpan=170, arcStart=-arcSpan/2;
+  var SNAP=E.SNAP;
+  wipOuts.forEach(function(op,i){
+    var w=portWatch[i]; if(!w) return;
+    var angleDeg=count>1?arcStart+arcSpan*i/(count-1):0;
+    var a=angleDeg*Math.PI/180;
+    w.x=Math.round((wipCx+Math.cos(a)*radius)/SNAP)*SNAP;
+    w.y=Math.round((wipCy+Math.sin(a)*radius-70)/SNAP)*SNAP;
   });
 }
 
