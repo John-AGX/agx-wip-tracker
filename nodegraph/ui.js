@@ -801,19 +801,22 @@ function populate(){
     });
   }
 
-  // Col 5: Watch nodes — octopus layout fanning out to the right of WIP
-  var watchLabels=['Total Income','Actual Costs','Gross Profit','Margin JTD'];
-  var watchPorts=[0,1,3,4];
-  var wipCx = sx+700+160;   // approx WIP node horizontal center
-  var wipCy = sy+50+200;    // approx WIP node vertical center
-  var radius = 500;
-  var angles = [-55,-18,18,55]; // degrees — fan tentacles out to the right
-  watchLabels.forEach(function(lbl,i){
-    var a = angles[i]*Math.PI/180;
+  // Col 5: Watch nodes — one per WIP output, octopus fan to the right
+  var wipDef = E.DEFS.wip;
+  var wipOuts = wipDef ? wipDef.outs : [];
+  var wipCx = sx+700+160;
+  var wipCy = sy+50+220;
+  var radius = 520;
+  var count = wipOuts.length;
+  var arcSpan = 140; // total arc degrees
+  var arcStart = -arcSpan/2;
+  wipOuts.forEach(function(op,i){
+    var angleDeg = count>1 ? arcStart + arcSpan*i/(count-1) : 0;
+    var a = angleDeg*Math.PI/180;
     var wx = wipCx + Math.cos(a)*radius;
-    var wy = wipCy + Math.sin(a)*radius - 80; // -80 offset so the node (≈160h) centers on target
-    var w=E.addNode('watch',wx,wy,lbl);
-    if(w&&wipNode) E.wires().push({fromNode:wipNode.id,fromPort:watchPorts[i],toNode:w.id,toPort:0});
+    var wy = wipCy + Math.sin(a)*radius - 70;
+    var w = E.addNode('watch',wx,wy,op.n);
+    if(w&&wipNode) E.wires().push({fromNode:wipNode.id,fromPort:i,toNode:w.id,toPort:0});
   });
 }
 
