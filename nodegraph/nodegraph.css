@@ -70,6 +70,10 @@ body.light-mode{--ng-bg:#f0f2f5;--ng-surface:#ffffff;--ng-surface2:#e8eaef;--ng-
 .ng-p-currency{border-color:#34d399}.ng-p-currency.ng-pc{background:#34d399;border-color:#34d399}
 .ng-p-percent{border-color:#fbbf24}.ng-p-percent.ng-pc{background:#fbbf24;border-color:#fbbf24}
 .ng-p-number{border-color:#a78bfa}.ng-p-number.ng-pc{background:#a78bfa;border-color:#a78bfa}
+.ng-pv-top,.ng-pv-bot{position:absolute;left:50%;transform:translateX(-50%);width:16px;height:16px;border-width:2px}
+.ng-pv-top{top:-8px}
+.ng-pv-bot{bottom:-8px}
+.ng-pv-top:hover,.ng-pv-bot:hover{transform:translateX(-50%) scale(1.4)}
 /* Port labels — input labels left-aligned, output labels right-aligned */
 .ng-pl{font-size:11px;color:var(--ng-dim);flex:1}
 .ng-pv{font-family:'Courier New',monospace;font-size:11px;color:#8899cc;font-weight:600;text-align:right}

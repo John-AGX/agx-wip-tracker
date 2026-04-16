@@ -96,13 +96,15 @@ function renderNodes(){
 
     // Ports
     var hasIns=(d.ins&&d.ins.length>0), hasOuts=(d.outs&&d.outs.length>0);
+    // WIP's input ports 1 and 2 render vertically (top/bottom) rather than in the left-side grid
+    var isWip = n.type==='wip';
     if(hasIns||hasOuts){
       h+='<div class="ng-ports">';
       var mx=Math.max((d.ins||[]).length,(d.outs||[]).length);
       for(var i=0;i<mx;i++){
         h+='<div class="ng-pr">';
         // Input port + label (left side)
-        if(hasIns&&i<d.ins.length){
+        if(hasIns&&i<d.ins.length&&!(isWip&&(i===1||i===2))){
           var ip=d.ins[i], ic=wires.some(function(w){return w.toNode===n.id&&w.toPort===i;});
           h+='<div class="ng-p ng-pi ng-p-'+ip.t+(ic?' ng-pc':'')+'" data-node="'+n.id+'" data-pi="'+i+'" data-dir="in" data-type="'+ip.t+'"></div>';
           h+='<span class="ng-pl" style="text-align:left">'+ip.n+'</span>';
@@ -292,6 +294,14 @@ function renderNodes(){
         h+='<span class="ng-coll-val" style="text-align:center;width:100%">'+E.fmtC(collVal)+'</span>';
       }
       h+='</div>';
+    }
+
+    // WIP vertical top/bottom input ports (stack-from-above + stack-from-below)
+    if(n.type==='wip' && !n.collapsed){
+      var ctop=wires.some(function(w){return w.toNode===n.id&&w.toPort===1;});
+      var cbot=wires.some(function(w){return w.toNode===n.id&&w.toPort===2;});
+      h+='<div class="ng-p ng-pv-top ng-p-currency'+(ctop?' ng-pc':'')+'" data-node="'+n.id+'" data-pi="1" data-dir="in" data-type="currency" title="+ Costs / COs (top)"></div>';
+      h+='<div class="ng-p ng-pv-bot ng-p-currency'+(cbot?' ng-pc':'')+'" data-node="'+n.id+'" data-pi="2" data-dir="in" data-type="currency" title="+ Costs / COs (bottom)"></div>';
     }
 
     div.innerHTML=h;
@@ -772,6 +782,43 @@ function pushToJob(){
   job.labor=jobLab;
   job.equipment=jobEquip;
   job.generalConditions=jobGC;
+
+  // CO nodes → sync income back to appData.changeOrders, and backflow wired CO revenue
+  // into the target node's budget field (job.contractAmount / building.budget / phase.phaseBudget).
+  // Uses per-target `coRevFromNG` tracking to keep the operation idempotent across repeated saves.
+  var coTargets = {}; // targetNodeId -> sum of wired CO income
+  nodes.forEach(function(co){
+    if(co.type!=='co') return;
+    var income = E.getOutput(co, 0);
+    // Sync CO income to its appData entry
+    if(co.data && co.data.id){
+      var entry = appData.changeOrders.find(function(c){return c.id===co.data.id;});
+      if(entry) entry.income = income;
+    }
+    // Find what this CO is wired into
+    wires.forEach(function(w){
+      if(w.fromNode!==co.id) return;
+      var target = E.findNode(w.toNode); if(!target) return;
+      if(target.type==='t1'||target.type==='t2'||target.type==='wip'){
+        coTargets[target.id] = (coTargets[target.id]||0) + income;
+      }
+    });
+  });
+  nodes.forEach(function(n){
+    var wiredCO = coTargets[n.id] || 0;
+    var prevApplied = n._coRevApplied || 0;
+    var delta = wiredCO - prevApplied;
+    if(n.type==='t1' && n.data && n.data.id){
+      var bldg = appData.buildings.find(function(b){return b.id===n.data.id;});
+      if(bldg){ bldg.budget = (bldg.budget||0) + delta; n._coRevApplied = wiredCO; }
+    } else if(n.type==='t2' && n.data && n.data.id){
+      var phase = appData.phases.find(function(p){return p.id===n.data.id;});
+      if(phase){ phase.phaseBudget = (phase.phaseBudget||0) + delta; n._coRevApplied = wiredCO; }
+    } else if(n.type==='wip'){
+      job.contractAmount = (job.contractAmount||0) + delta;
+      n._coRevApplied = wiredCO;
+    }
+  });
 
   if(typeof saveData==='function') saveData();
 }

@@ -26,7 +26,7 @@ var DEFS = {
   mul:   { cat:'math', icon:'×',    label:'Multiply',     ins:[{n:'A',t:PT.A},{n:'B',t:PT.N}], outs:[{n:'Result',t:PT.C}] },
   pct:   { cat:'math', icon:'%',         label:'Percent',      ins:[{n:'Val',t:PT.C},{n:'%',t:PT.P}], outs:[{n:'Result',t:PT.C}] },
   wip:   { cat:'wip',  icon:'📊', label:'WIP',
-    ins:[{n:'Costs',t:PT.C}],
+    ins:[{n:'Costs',t:PT.C},{n:'+ Top',t:PT.C},{n:'+ Bottom',t:PT.C}],
     outs:[{n:'Total Income',t:PT.C},{n:'Actual Costs',t:PT.C},{n:'Revenue Earned',t:PT.C},{n:'Gross Profit',t:PT.C},{n:'Margin JTD',t:PT.P},{n:'Remaining',t:PT.C},{n:'Accrued',t:PT.C},{n:'Unbilled',t:PT.C},{n:'Backlog',t:PT.C}],
     master:true, hasFields:true
   },
@@ -187,17 +187,26 @@ function getOutput(n, pi){
     _comp[n.id] = false; return v;
   }
 
-  // T1/T2: single output = sum of wired inputs + own items
+  // T1/T2: single output = sum of wired COST inputs + own items.
+  // CO inputs don't add to cost total; they accumulate as revenue additions on the node.
   if(n.type === 't1' || n.type === 't2'){
     v = itemsTotal;
+    var coRev = 0;
     wires.forEach(function(w){
-      if(w.toNode === n.id){ var fn = findNode(w.fromNode); if(fn) v += getOutput(fn, w.fromPort); }
+      if(w.toNode === n.id){
+        var fn = findNode(w.fromNode); if(!fn) return;
+        var amt = getOutput(fn, w.fromPort);
+        if(fn.type === 'co') coRev += amt;
+        else v += amt;
+      }
     });
+    n.coRevenue = coRev;
     _comp[n.id] = false; return v;
   }
 
 
-  // WIP node: T1s wire into Costs input. Revenue fields stored in jobFields.
+  // WIP node: accepts inputs on Costs (pi=0), Top (pi=1), Bottom (pi=2).
+  // Any wired CO node adds to coIncomeWired (revenue). Everything else adds to actualCosts.
   if(n.type === 'wip'){
     var jf = n.jobFields || {};
     var contract = jf.contractAmount || 0;
@@ -207,13 +216,19 @@ function getOutput(n, pi){
     var revChanges = jf.revisedCostChanges || 0;
     var invoiced = jf.invoicedToDate || 0;
     var pctComp = jf.pctComplete || 0;
-    var totalIncome = contract + coIncome;
-    var revEstCosts = estCosts + coCosts + revChanges;
-    // Sum all wired cost inputs
     var actualCosts = 0;
+    var coIncomeWired = 0;
     wires.forEach(function(w){
-      if(w.toNode === n.id){ var fn = findNode(w.fromNode); if(fn) actualCosts += getOutput(fn, w.fromPort); }
+      if(w.toNode === n.id){
+        var fn = findNode(w.fromNode); if(!fn) return;
+        var amt = getOutput(fn, w.fromPort);
+        if(fn.type === 'co') coIncomeWired += amt;
+        else actualCosts += amt;
+      }
     });
+    n.coRevenue = coIncomeWired;
+    var totalIncome = contract + coIncome + coIncomeWired;
+    var revEstCosts = estCosts + coCosts + revChanges;
     var revEarned = totalIncome * (pctComp / 100);
     var grossProfit = revEarned - actualCosts;
     var marginJTD = revEarned > 0 ? (grossProfit / revEarned * 100) : 0;
@@ -255,7 +270,7 @@ function fmtP(v){ return v.toFixed(1)+'%'; }
 function fmtV(v,t){ return t===PT.P ? fmtP(v) : t===PT.C ? fmtC(v) : v.toLocaleString(); }
 
 // ── Save / Load ──
-var GRAPH_VER = 3; // bump to force re-populate on next open
+var GRAPH_VER = 4; // bump to force re-populate on next open
 function saveGraph(){
   if(!jobId) return;
   var state = {
@@ -265,6 +280,7 @@ function saveGraph(){
         id:n.id, type:n.type, x:n.x, y:n.y, label:n.label,
         value:n.value, collapsed:n.collapsed, noteText:n.noteText,
         items:n.items, pctComplete:n.pctComplete, budget:n.budget, jobFields:n.jobFields||{},
+        _coRevApplied: n._coRevApplied||0,
         dataId: n.data ? n.data.id : null
       };
     }),
@@ -304,6 +320,7 @@ function loadGraph(){
       pctComplete:sn.pctComplete||0,
       budget:sn.budget||0,
       jobFields:sn.jobFields||{},
+      _coRevApplied:sn._coRevApplied||0,
     };
     nodes.push(n);
   });
@@ -323,10 +340,16 @@ function drawWires(ctx, wrap, wiringFrom, wireMouse){
     var tn = findNode(w.toNode), td = DEFS[tn?tn.type:''];
     var tp = td && td.ins && td.ins[w.toPort] ? td.ins[w.toPort].t : PT.A;
     var col = WCOL[tp] || '#4f8cff';
-    var dx = Math.max(Math.abs(p2.x-p1.x)*0.4, 50);
-    ctx.beginPath();
-    ctx.moveTo(p1.x, p1.y);
-    ctx.bezierCurveTo(p1.x+dx, p1.y, p2.x-dx, p2.y, p2.x, p2.y);
+    // Detect vertical approach: WIP's top (pi=1) and bottom (pi=2) ports
+    var vertIn = tn && tn.type==='wip' && (w.toPort===1||w.toPort===2);
+    ctx.beginPath(); ctx.moveTo(p1.x, p1.y);
+    if(vertIn){
+      var vy = w.toPort===1 ? -60 : 60; // approach top from above, bottom from below
+      ctx.bezierCurveTo(p1.x+60, p1.y, p2.x, p2.y+vy, p2.x, p2.y);
+    } else {
+      var dx = Math.max(Math.abs(p2.x-p1.x)*0.4, 50);
+      ctx.bezierCurveTo(p1.x+dx, p1.y, p2.x-dx, p2.y, p2.x, p2.y);
+    }
     ctx.strokeStyle = col; ctx.lineWidth = 2.5;
     ctx.shadowColor = col; ctx.shadowBlur = 4;
     ctx.stroke(); ctx.shadowBlur = 0;
