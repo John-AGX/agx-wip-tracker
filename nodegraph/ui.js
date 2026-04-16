@@ -241,8 +241,10 @@ function renderNodes(){
     if(n.type==='wip'){
       var jf=n.jobFields||{};
       h+='<div class="ng-subitems" style="max-height:none;">';
-      [{k:'contractAmount',l:'Contract Amount'},{k:'coIncome',l:'CO Income'},{k:'estimatedCosts',l:'Est. Costs'},{k:'coCosts',l:'CO Costs'},{k:'revisedCostChanges',l:'Revised Changes'},{k:'invoicedToDate',l:'Invoiced to Date'},{k:'pctComplete',l:'% Complete'}].forEach(function(r){
-        h+='<div class="ng-subitem"><span style="flex:1;color:var(--ng-dim);font-size:10px;">'+r.l+'</span><input class="ng-si-sm" type="number" data-node="'+n.id+'" data-jfield="'+r.k+'" value="'+(jf[r.k]||0)+'" step="0.01" /></div>';
+      [{k:'contractAmount',l:'Contract Amount',t:'c'},{k:'coIncome',l:'CO Income',t:'c'},{k:'estimatedCosts',l:'Est. Costs',t:'c'},{k:'coCosts',l:'CO Costs',t:'c'},{k:'revisedCostChanges',l:'Revised Changes',t:'c'},{k:'invoicedToDate',l:'Invoiced to Date',t:'c'},{k:'pctComplete',l:'% Complete',t:'p'}].forEach(function(r){
+        var raw=jf[r.k]||0;
+        var disp=r.t==='p'?raw.toFixed(1)+'%':E.fmtC(raw);
+        h+='<div class="ng-subitem ng-wip-row"><span class="ng-wip-lbl">'+r.l+'</span><span class="ng-wip-chip" data-wip-edit="'+n.id+'" data-wip-key="'+r.k+'" data-wip-type="'+r.t+'" title="Click to edit">'+disp+'</span></div>';
       });
       h+='</div>';
       // Metrics display
@@ -470,6 +472,39 @@ function initEvents(){
       });
       // Stop further mousedown propagation on the input itself
       inp.addEventListener('mousedown',function(ev){ev.stopPropagation();});
+      return;
+    }
+    // Click WIP field chip → reveal editable input
+    var wc=e.target.closest('[data-wip-edit]');
+    if(wc && !e.target.closest('input')){
+      e.preventDefault(); e.stopPropagation();
+      var wn=E.findNode(wc.getAttribute('data-wip-edit'));
+      if(!wn) return;
+      var wkey=wc.getAttribute('data-wip-key');
+      var wtyp=wc.getAttribute('data-wip-type');
+      if(!wn.jobFields) wn.jobFields={};
+      editingId=wn.id;
+      var winp=document.createElement('input');
+      winp.type='number'; winp.step=wtyp==='p'?'0.1':'0.01';
+      if(wtyp==='p'){winp.min=0;winp.max=100;}
+      winp.value=wn.jobFields[wkey]||0;
+      winp.className='ng-wip-chip-input';
+      wc.textContent=''; wc.appendChild(winp);
+      setTimeout(function(){ winp.focus(); winp.select(); }, 0);
+      var wdone=false;
+      function wfinish(){
+        if(wdone) return; wdone=true;
+        var nv=parseFloat(winp.value)||0;
+        if(wtyp==='p') nv=Math.max(0,Math.min(100,nv));
+        wn.jobFields[wkey]=nv;
+        editingId=null; render();
+      }
+      winp.addEventListener('blur',wfinish);
+      winp.addEventListener('keydown',function(ev){
+        if(ev.key==='Enter'){ev.preventDefault();winp.blur();}
+        else if(ev.key==='Escape'){ev.preventDefault();wdone=true;editingId=null;render();}
+      });
+      winp.addEventListener('mousedown',function(ev){ev.stopPropagation();});
       return;
     }
     // Add sub-item (inline — just adds a blank row)

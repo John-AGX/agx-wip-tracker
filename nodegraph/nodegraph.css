@@ -57,7 +57,12 @@ body.light-mode{--ng-bg:#f0f2f5;--ng-surface:#ffffff;--ng-surface2:#e8eaef;--ng-
 .ng-t-job .ng-hdr{background:linear-gradient(135deg,rgba(59,130,246,.25),rgba(59,130,246,.1));color:#60a5fa}
 .ng-t-job{min-width:240px;border-color:#2563eb40}
 .ng-t-wip .ng-hdr{background:linear-gradient(135deg,rgba(251,191,36,.2),rgba(236,72,153,.1));color:#fbbf24}
-.ng-t-wip{min-width:280px;border-color:#f59e0b40}
+.ng-t-wip{min-width:340px;border-color:#f59e0b40}
+.ng-wip-row{gap:10px}
+.ng-wip-lbl{flex:1;color:var(--ng-dim);font-size:10px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ng-wip-chip{display:inline-block;min-width:120px;text-align:right;font-family:'Courier New',monospace;font-size:12px;font-weight:700;color:#fbbf24;background:var(--ng-input);border:1px solid var(--ng-border2);border-radius:4px;padding:3px 8px;cursor:pointer;transition:all .12s;flex-shrink:0;user-select:none}
+.ng-wip-chip:hover{border-color:#4f8cff;color:#fff;box-shadow:0 0 0 2px rgba(79,140,255,.15)}
+.ng-wip-chip-input{width:120px;font-family:'Courier New',monospace;font-size:12px;font-weight:700;color:#fbbf24;background:var(--ng-input);border:1px solid #4f8cff;border-radius:4px;padding:3px 8px;outline:none;text-align:right;box-shadow:0 0 0 2px rgba(79,140,255,.2)}
 /* Ports */
 .ng-ports{padding:6px 0}
 .ng-node.ng-coll .ng-ports{display:none}
