@@ -290,6 +290,7 @@ function renderNodes(){
 
 function render(){
   updateTierLabels();
+  pushToJobSilent();
   renderNodes();
   E.drawGrid(gridCtx, gridC.width, gridC.height);
   E.drawWires(wireCtx, wrap, wiringFrom, wireMouse);
@@ -718,16 +719,17 @@ function pushToJob(){
     else if(n.type==='gc') jobGC+=val;
     else if(n.type==='other') jobEquip+=val;
   });
-  job.materials=(job.materials||0)+jobMat; // don't overwrite if workspace links also set this
-  job.labor=(job.labor||0)+jobLab;
-  job.equipment=(job.equipment||0)+jobEquip;
-  job.generalConditions=(job.generalConditions||0)+jobGC;
+  job.materials=jobMat;
+  job.labor=jobLab;
+  job.equipment=jobEquip;
+  job.generalConditions=jobGC;
 
-  // Save and refresh
   if(typeof saveData==='function') saveData();
-  if(typeof renderJobDetail==='function'&&typeof appState!=='undefined'&&appState.currentJobId){
-    renderJobDetail(appState.currentJobId);
-  }
+}
+
+/** Silent sync — called on every render, no UI refresh */
+function pushToJobSilent(){
+  try { pushToJob(); } catch(e){}
 }
 
 // ── Populate from job ──
@@ -834,14 +836,6 @@ function init(){
   });
 
   // Push to job
-  var pushBtn=tab.querySelector('.ng-push-btn');
-  if(pushBtn) pushBtn.addEventListener('click',function(){
-    pushToJob();
-    var status=pushBtn.textContent;
-    pushBtn.textContent='\u2714 Pushed!';
-    setTimeout(function(){pushBtn.innerHTML='&#x1F4E4; Push to Job';},1500);
-  });
-
   // Collapse all
   var cab=tab.querySelector('.ng-collapse-all-btn');
   if(cab) cab.addEventListener('click',function(){
