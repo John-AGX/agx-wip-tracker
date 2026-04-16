@@ -806,9 +806,9 @@ function populate(){
   var wipOuts = wipDef ? wipDef.outs : [];
   var wipCx = sx+700+160;
   var wipCy = sy+50+220;
-  var radius = 520;
+  var radius = 780;
   var count = wipOuts.length;
-  var arcSpan = 140; // total arc degrees
+  var arcSpan = 170; // total arc degrees — wider so tentacles clear each other
   var arcStart = -arcSpan/2;
   wipOuts.forEach(function(op,i){
     var angleDeg = count>1 ? arcStart + arcSpan*i/(count-1) : 0;
@@ -861,11 +861,15 @@ function init(){
 
 // ── Auto Arrange ──
 function autoArrange(){
-  var nodes=E.nodes(), wires=E.wires();
+  var allNodes=E.nodes(), wires=E.wires();
+  if(!allNodes.length) return;
+
+  // Watch and note nodes keep their positions (user-placed / octopus fan)
+  var nodes=allNodes.filter(function(n){return n.type!=='watch'&&n.type!=='note';});
   if(!nodes.length) return;
 
   // Assign columns by node type (left to right flow)
-  var colMap={ inv:0, po:0, sub:1, co:1, labor:2, mat:2, gc:2, other:2, cost:2, t2:3, t1:4, sum:5, job:6, wip:7, watch:8, note:9 };
+  var colMap={ inv:0, po:0, sub:1, co:1, labor:2, mat:2, gc:2, other:2, cost:2, t2:3, t1:4, sum:5, job:6, wip:7 };
 
   // Group nodes by column
   var columns={};
@@ -942,7 +946,7 @@ function ensureWatchFan(){
   wipOuts.forEach(function(_,i){ if(!wired[i]) missing.push(i); });
   if(missing.length===0) return false;
   var wipCx=wipNode.x+160, wipCy=wipNode.y+220;
-  var radius=520, count=wipOuts.length, arcSpan=140, arcStart=-arcSpan/2;
+  var radius=780, count=wipOuts.length, arcSpan=170, arcStart=-arcSpan/2;
   missing.forEach(function(portIdx){
     var angleDeg=count>1?arcStart+arcSpan*portIdx/(count-1):0;
     var a=angleDeg*Math.PI/180;
