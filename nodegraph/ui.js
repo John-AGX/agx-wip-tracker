@@ -296,8 +296,8 @@ function renderNodes(){
       h+='</div>';
     }
 
-    // WIP vertical top/bottom input ports (stack-from-above + stack-from-below)
-    if(n.type==='wip' && !n.collapsed){
+    // WIP vertical top/bottom input ports (always visible, even collapsed)
+    if(n.type==='wip'){
       var ctop=wires.some(function(w){return w.toNode===n.id&&w.toPort===1;});
       var cbot=wires.some(function(w){return w.toNode===n.id&&w.toPort===2;});
       h+='<div class="ng-p ng-pv-top ng-p-currency'+(ctop?' ng-pc':'')+'" data-node="'+n.id+'" data-pi="1" data-dir="in" data-type="currency" title="+ Costs / COs (top)"></div>';
