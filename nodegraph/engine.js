@@ -17,7 +17,7 @@ var DEFS = {
   mat:   { cat:'cost', icon:'🧱', label:'Materials',    ins:[], outs:[{n:'Total',t:PT.C}], hasItems:true, nameEdit:true, itemType:'mat' },
   gc:    { cat:'cost', icon:'🏢', label:'Gen. Conditions', ins:[], outs:[{n:'Total',t:PT.C}], hasItems:true, nameEdit:true, itemType:'gc' },
   other: { cat:'cost', icon:'📌', label:'Other',        ins:[], outs:[{n:'Total',t:PT.C}], hasItems:true, nameEdit:true, itemType:'other' },
-  sub:   { cat:'sub',  icon:'👷', label:'Sub',          ins:[{n:'Costs',t:PT.C}], outs:[{n:'Total',t:PT.C}], nameEdit:true, hasProg:true },
+  sub:   { cat:'sub',  icon:'👷', label:'Sub',          ins:[{n:'Costs',t:PT.C}], outs:[{n:'Total',t:PT.C}], nameEdit:true },
   po:    { cat:'sub',  icon:'📄', label:'Purchase Order', ins:[{n:'Invoiced',t:PT.C}], outs:[{n:'Total',t:PT.C}], hasItems:true, nameEdit:true, itemType:'po' },
   inv:   { cat:'sub',  icon:'💳', label:'Invoice',       ins:[], outs:[{n:'Total',t:PT.C}], hasItems:true, nameEdit:true, itemType:'inv' },
   co:    { cat:'co',   icon:'📝', label:'Change Order', ins:[], outs:[{n:'Income',t:PT.C}], nameEdit:true, hasItems:true, itemType:'co' },
@@ -150,9 +150,19 @@ function getOutput(n, pi){
     _comp[n.id] = false; return v;
   }
 
-  // Purchase Order: single output = base value + items total
+  // Purchase Order: output = invoiced amount if Invoice wired in, else base + items (contract total).
+  // When nothing is wired, the PO's full contract amount counts toward actual costs as a committed figure.
+  // When an Invoice is wired, the actual billed amount is used instead.
   if(n.type === 'po'){
-    v = (n.value || 0) + itemsTotal;
+    var invWired = 0, hasInvWire = false;
+    wires.forEach(function(w){
+      if(w.toNode === n.id){
+        var fn = findNode(w.fromNode); if(!fn) return;
+        invWired += getOutput(fn, w.fromPort);
+        hasInvWire = true;
+      }
+    });
+    v = hasInvWire ? invWired : ((n.value || 0) + itemsTotal);
     _comp[n.id] = false; return v;
   }
 
