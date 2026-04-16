@@ -1223,6 +1223,11 @@
     // Push linked values
     pushLinkedValues();
 
+    // Refresh job detail view and header metrics
+    if (typeof renderJobDetail === 'function' && typeof appState !== 'undefined' && appState.currentJobId) {
+      renderJobDetail(appState.currentJobId);
+    }
+
     // Auto-expand if at edge
     autoExpand(r, c);
 
@@ -1987,6 +1992,7 @@
           selectCell(grid.selection.r, grid.selection.c);
           pushLinkedValues();
           saveWorkspace();
+          if (typeof renderJobDetail === 'function' && typeof appState !== 'undefined' && appState.currentJobId) renderJobDetail(appState.currentJobId);
           if (grid.selection.r < grid.rows - 1) selectCell(grid.selection.r + 1, grid.selection.c);
         }
       } else if (e.key === 'Escape') {
@@ -2331,7 +2337,15 @@
     });
 
     document.getElementById('wsNodeGraphBtn').addEventListener('click', () => {
-      if (typeof openNodeGraph === 'function') openNodeGraph(grid.jobId);
+      var ngTab = document.getElementById('nodeGraphTab');
+      if (!ngTab) return;
+      if (ngTab.classList.contains('active')) {
+        // Switch back to spreadsheet
+        ngTab.classList.remove('active');
+      } else {
+        // Switch to node graph
+        if (typeof openNodeGraph === 'function') openNodeGraph(grid.jobId);
+      }
     });
 
     document.getElementById('wsClearBtn').addEventListener('click', () => {
