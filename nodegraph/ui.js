@@ -735,11 +735,22 @@ function autoArrange(){
   colKeys.forEach(function(colIdx,ci){
     var col=columns[colIdx];
     var totalH=0;
-    // Estimate height per node
+    // Estimate height per node (generous for expanded state)
     col.forEach(function(n){
-      var h=n.collapsed?40:120;
-      if(E.DEFS[n.type]&&E.DEFS[n.type].hasItems&&n.items&&n.items.length) h+=n.items.length*24;
-      if(E.DEFS[n.type]&&E.DEFS[n.type].master) h=200;
+      var d=E.DEFS[n.type];
+      var h=50; // header + collapsed row
+      if(!n.collapsed){
+        h=80; // header + ports base
+        var numPorts=Math.max((d&&d.ins?d.ins.length:0),(d&&d.outs?d.outs.length:0));
+        h+=numPorts*26; // port rows
+        if(d&&d.hasProg) h+=50; // slider + label
+        if(d&&d.hasItems) h+=40+(n.items?n.items.length*30:0); // sub-items + add button + total
+        if(d&&d.master) h=280; // job/wip nodes are tall
+        if(n.type==='watch') h=140;
+        if(n.type==='note') h=120;
+        if(n.type==='t1') h+=60; // allocation display
+        if(n.type==='sub') h+=80; // PO/invoice/accrued display
+      }
       n._estH=h;
       totalH+=h+rowGap;
     });
