@@ -921,6 +921,9 @@ function autoArrange(){
 // ── Public ──
 window.openNodeGraph=function(jid){
   var tab=document.getElementById('nodeGraphTab'); if(!tab) return;
+  // Position below the sticky header
+  var header=document.querySelector('header');
+  if(header) tab.style.top=header.offsetHeight+'px';
   tab.classList.add('active');
   if(!wrap) init();
   resize();

@@ -1,5 +1,5 @@
 /* AGX Node Graph v5 — T1/T2, Cost w/ sub-items, progress bars */
-#nodeGraphTab{display:none;position:fixed;top:0;left:0;right:0;bottom:0;z-index:500;background:var(--ng-bg,#0b0e16);overflow:hidden;font-family:'Segoe UI',system-ui,sans-serif}
+#nodeGraphTab{display:none;position:fixed;left:0;right:0;bottom:0;z-index:99;background:var(--ng-bg,#0b0e16);overflow:hidden;font-family:'Segoe UI',system-ui,sans-serif}
 #nodeGraphTab.active{display:flex;flex-direction:column}
 /* Theme vars */
 :root{--ng-bg:#0b0e16;--ng-surface:#12162a;--ng-surface2:#10141e;--ng-border:#242e50;--ng-border2:#1c2236;--ng-text:#e4e6f0;--ng-dim:#6a7090;--ng-dim2:#4a5068;--ng-input:#0d1019;--ng-grid-dot:#161b2a;--ng-grid-line:#141828;--ng-port-bg:#0b0e16;--ng-shadow:rgba(0,0,0,.5)}
