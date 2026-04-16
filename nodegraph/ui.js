@@ -923,6 +923,37 @@ function autoArrange(){
 }
 
 // ── Public ──
+function ensureWatchFan(){
+  // For any WIP output port without a Watch already wired, add one in the octopus fan.
+  var nodes=E.nodes();
+  var wipNode=nodes.find(function(n){return n.type==='wip';});
+  if(!wipNode) return false;
+  var wipDef=E.DEFS.wip;
+  if(!wipDef||!wipDef.outs) return false;
+  var wipOuts=wipDef.outs;
+  var wired={};
+  E.wires().forEach(function(w){
+    if(w.fromNode===wipNode.id){
+      var t=E.findNode(w.toNode);
+      if(t&&t.type==='watch') wired[w.fromPort]=true;
+    }
+  });
+  var missing=[];
+  wipOuts.forEach(function(_,i){ if(!wired[i]) missing.push(i); });
+  if(missing.length===0) return false;
+  var wipCx=wipNode.x+160, wipCy=wipNode.y+220;
+  var radius=520, count=wipOuts.length, arcSpan=140, arcStart=-arcSpan/2;
+  missing.forEach(function(portIdx){
+    var angleDeg=count>1?arcStart+arcSpan*portIdx/(count-1):0;
+    var a=angleDeg*Math.PI/180;
+    var wx=wipCx+Math.cos(a)*radius;
+    var wy=wipCy+Math.sin(a)*radius-70;
+    var w=E.addNode('watch',wx,wy,wipOuts[portIdx].n);
+    if(w) E.wires().push({fromNode:wipNode.id,fromPort:portIdx,toNode:w.id,toPort:0});
+  });
+  return true;
+}
+
 window.openNodeGraph=function(jid){
   var tab=document.getElementById('nodeGraphTab'); if(!tab) return;
   // Position below the sticky header
@@ -935,12 +966,15 @@ window.openNodeGraph=function(jid){
     E.job(jid);
     E.setNodes([]); E.setWires([]); E.setNid(1);
     if(!E.loadGraph()){ populate(); }
+    ensureWatchFan();
     applyTx(); render();
   } else if(E.nodes().length===0){
     E.job(jid||(typeof appState!=='undefined'?appState.currentJobId:null));
     if(!E.loadGraph()){ populate(); }
+    ensureWatchFan();
     applyTx(); render();
   } else {
+    ensureWatchFan();
     render();
   }
 };
