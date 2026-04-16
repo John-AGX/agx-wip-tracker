@@ -17,8 +17,8 @@ var DEFS = {
   mat:   { cat:'cost', icon:'🧱', label:'Materials',    ins:[], outs:[{n:'Total',t:PT.C}], hasItems:true, nameEdit:true, itemType:'mat' },
   gc:    { cat:'cost', icon:'🏢', label:'Gen. Conditions', ins:[], outs:[{n:'Total',t:PT.C}], hasItems:true, nameEdit:true, itemType:'gc' },
   other: { cat:'cost', icon:'📌', label:'Other',        ins:[], outs:[{n:'Total',t:PT.C}], hasItems:true, nameEdit:true, itemType:'other' },
-  sub:   { cat:'sub',  icon:'👷', label:'Sub',          ins:[{n:'PO Contract',t:PT.C},{n:'Invoiced',t:PT.C}], outs:[{n:'Actual Cost',t:PT.C}], nameEdit:true, hasProg:true },
-  po:    { cat:'sub',  icon:'📄', label:'Purchase Order', ins:[{n:'Invoiced',t:PT.C}], outs:[{n:'Contract',t:PT.C},{n:'Invoiced',t:PT.C}], hasItems:true, nameEdit:true, itemType:'po' },
+  sub:   { cat:'sub',  icon:'👷', label:'Sub',          ins:[{n:'Costs',t:PT.C}], outs:[{n:'Total',t:PT.C}], nameEdit:true, hasProg:true },
+  po:    { cat:'sub',  icon:'📄', label:'Purchase Order', ins:[], outs:[{n:'Total',t:PT.C}], hasItems:true, nameEdit:true, itemType:'po' },
   inv:   { cat:'sub',  icon:'💳', label:'Invoice',       ins:[], outs:[{n:'Total',t:PT.C}], hasItems:true, nameEdit:true, itemType:'inv' },
   co:    { cat:'co',   icon:'📝', label:'Change Order', ins:[], outs:[{n:'Income',t:PT.C}], nameEdit:true, hasItems:true, itemType:'co' },
   sum:   { cat:'math', icon:'∑',    label:'SUM',          ins:[{n:'A',t:PT.A},{n:'B',t:PT.A},{n:'C',t:PT.A},{n:'D',t:PT.A}], outs:[{n:'Result',t:PT.C}] },
@@ -150,20 +150,9 @@ function getOutput(n, pi){
     _comp[n.id] = false; return v;
   }
 
-  // Purchase Order: contract = base + amendments. Passes through invoiced from input.
+  // Purchase Order: single output = base value + items total
   if(n.type === 'po'){
-    if(pi === 0){
-      // Output 0: Contract = base value + amendment items
-      v = (n.value || 0) + itemsTotal;
-    } else if(pi === 1){
-      // Output 1: Invoiced = sum of wired Invoice inputs
-      wires.forEach(function(w){
-        if(w.toNode === n.id){
-          var fn = findNode(w.fromNode);
-          if(fn) v += getOutput(fn, w.fromPort);
-        }
-      });
-    }
+    v = (n.value || 0) + itemsTotal;
     _comp[n.id] = false; return v;
   }
 
@@ -173,10 +162,10 @@ function getOutput(n, pi){
     _comp[n.id] = false; return v;
   }
 
-  // Sub: single output = invoiced amount (actual cost)
+  // Sub: single output = sum of wired cost inputs
   if(n.type === 'sub'){
     wires.forEach(function(w){
-      if(w.toNode === n.id && w.toPort === 1){ var fn = findNode(w.fromNode); if(fn) v += getOutput(fn, w.fromPort); }
+      if(w.toNode === n.id){ var fn = findNode(w.fromNode); if(fn) v += getOutput(fn, w.fromPort); }
     });
     _comp[n.id] = false; return v;
   }
@@ -270,7 +259,7 @@ function fmtP(v){ return v.toFixed(1)+'%'; }
 function fmtV(v,t){ return t===PT.P ? fmtP(v) : t===PT.C ? fmtC(v) : v.toLocaleString(); }
 
 // ── Save / Load ──
-var GRAPH_VER = 4; // bump to force re-populate on next open
+var GRAPH_VER = 5; // bump to force re-populate on next open
 function saveGraph(){
   if(!jobId) return;
   var state = {

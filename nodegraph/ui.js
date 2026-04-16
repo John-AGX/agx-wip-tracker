@@ -776,24 +776,15 @@ function pushToJob(){
     var sub=n.data&&n.data.id?appData.subs.find(function(s){return s.id===n.data.id;}):null;
     if(!sub) return;
     if(n.label) sub.name=n.label;
-    // Get invoiced amount from wired inputs
-    var invoiced=0;
+    // Sum all wired cost inputs (single port 0)
+    var total=0;
     wires.forEach(function(w){
-      if(w.toNode===n.id&&w.toPort===1){
+      if(w.toNode===n.id){
         var src=E.findNode(w.fromNode);
-        if(src) invoiced+=E.getOutput(src,w.fromPort);
+        if(src) total+=E.getOutput(src,w.fromPort);
       }
     });
-    if(invoiced) sub.billedToDate=invoiced;
-    // Get PO contract from wired inputs
-    var poContract=0;
-    wires.forEach(function(w){
-      if(w.toNode===n.id&&w.toPort===0){
-        var src=E.findNode(w.fromNode);
-        if(src) poContract+=E.getOutput(src,w.fromPort);
-      }
-    });
-    if(poContract) sub.contractAmt=poContract;
+    if(total) sub.contractAmt=total;
   });
 
   // Job-level costs: sum all cost nodes NOT wired to any T1/T2
