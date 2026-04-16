@@ -73,17 +73,13 @@ body.light-mode{--ng-bg:#f0f2f5;--ng-surface:#ffffff;--ng-surface2:#e8eaef;--ng-
 /* Port labels — input labels left-aligned, output labels right-aligned */
 .ng-pl{font-size:11px;color:var(--ng-dim);flex:1}
 .ng-pv{font-family:'Courier New',monospace;font-size:11px;color:#8899cc;font-weight:600;text-align:right}
-/* Progress bar */
-/* Progress bar + slider */
-.ng-progress-wrap{padding:4px 12px 2px}
-.ng-progress{height:7px;background:var(--ng-input);border-radius:4px;overflow:hidden;margin-bottom:2px}
+/* Progress bar — click to edit */
+.ng-progress-wrap{padding:6px 12px 4px;cursor:pointer}
+.ng-progress-wrap:hover .ng-progress{box-shadow:0 0 0 1px rgba(79,140,255,.4)}
+.ng-progress{height:9px;background:var(--ng-input);border-radius:5px;overflow:hidden;border:1px solid var(--ng-border2)}
 .ng-progress-fill{height:100%;border-radius:4px;transition:width .3s}
-.ng-pct-slider{width:100%;height:14px;-webkit-appearance:none;appearance:none;background:transparent;cursor:pointer;margin:0;padding:0}
-.ng-pct-slider::-webkit-slider-runnable-track{height:4px;background:var(--ng-border2);border-radius:2px}
-.ng-pct-slider::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;border-radius:50%;background:#4f8cff;border:2px solid var(--ng-surface);margin-top:-5px;box-shadow:0 0 4px rgba(79,140,255,.3)}
-.ng-pct-slider::-moz-range-track{height:4px;background:var(--ng-border2);border-radius:2px;border:none}
-.ng-pct-slider::-moz-range-thumb{width:14px;height:14px;border-radius:50%;background:#4f8cff;border:2px solid var(--ng-surface);box-shadow:0 0 4px rgba(79,140,255,.3)}
-.ng-progress-label{font-size:10px;color:var(--ng-dim2);text-align:center;padding:0 0 4px;display:flex;align-items:center;justify-content:center;gap:3px}
+.ng-progress-label{font-size:10px;color:var(--ng-dim2);text-align:center;padding:0 0 4px;display:flex;align-items:center;justify-content:center;gap:3px;cursor:pointer}
+.ng-progress-label:hover .ng-pct-val{color:#fff;text-shadow:0 0 8px rgba(251,191,36,.6)}
 .ng-pct-val{font-family:'Courier New',monospace;font-weight:700;color:#fbbf24;font-size:11px}
 /* Watch value */
 .ng-wv{padding:8px 14px;font-family:'Courier New',monospace;font-size:24px;font-weight:700;text-align:center;color:var(--ng-text);background:var(--ng-input);margin:4px 10px 8px;border-radius:6px;border:1px solid var(--ng-border2);min-width:110px}

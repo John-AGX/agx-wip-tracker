@@ -124,15 +124,14 @@ function renderNodes(){
       h+='</div>';
     }
 
-    // Progress bar (T1/T2)
+    // Progress bar (T1/T2/Sub) — click bar or pct to edit
     if(d.hasProg){
       var pct = n.pctComplete || 0;
       var progColor = pct>=100?'#34d399':pct>=50?'#fbbf24':'#4f8cff';
-      h+='<div class="ng-progress-wrap">';
+      h+='<div class="ng-progress-wrap" data-prog-edit="'+n.id+'" title="Click to edit %">';
       h+='<div class="ng-progress"><div class="ng-progress-fill" style="width:'+Math.min(pct,100)+'%;background:'+progColor+'"></div></div>';
-      h+='<input type="range" class="ng-pct-slider" data-node="'+n.id+'" data-field="pctComplete" value="'+pct+'" min="0" max="100" step="1" />';
       h+='</div>';
-      h+='<div class="ng-progress-label"><span class="ng-pct-val">'+pct.toFixed(0)+'%</span> complete'+(n.budget?' \u00b7 Budget: '+E.fmtC(n.budget):'')+'</div>';
+      h+='<div class="ng-progress-label" data-prog-edit="'+n.id+'" title="Click to edit %"><span class="ng-pct-val">'+pct.toFixed(0)+'%</span> complete'+(n.budget?' \u00b7 Budget: '+E.fmtC(n.budget):'')+'</div>';
     }
 
     // Sub-items (type-specific layout)
@@ -398,7 +397,7 @@ function initEvents(){
   wrap.addEventListener('mouseup',function(e){
     isPan=false; wrap.classList.remove('ng-panning'); dragN=null;
     if(wiringFrom){
-      var tp=e.target.closest('.ng-pi');
+      var tp=e.target.closest('[data-dir="in"]');
       if(tp){
         var toId=tp.getAttribute('data-node'), toPort=parseInt(tp.getAttribute('data-pi'));
         var toType=tp.getAttribute('data-type');
@@ -425,10 +424,37 @@ function initEvents(){
   },{passive:false});
 
   canvasEl.addEventListener('mousedown',function(e){
-    var port=e.target.closest('.ng-po');
+    var port=e.target.closest('[data-dir="out"]');
     if(port){e.stopPropagation();wiringFrom={nid:port.getAttribute('data-node'),pi:parseInt(port.getAttribute('data-pi'))};return;}
     var cb=e.target.closest('.ng-cbtn');
     if(cb){e.stopPropagation();var cn=E.findNode(cb.getAttribute('data-coll'));if(cn){cn.collapsed=!cn.collapsed;render();}return;}
+    // Click progress bar / label to edit %
+    var pe=e.target.closest('[data-prog-edit]');
+    if(pe && !e.target.closest('input')){
+      e.stopPropagation();
+      var pn=E.findNode(pe.getAttribute('data-prog-edit'));
+      if(!pn) return;
+      var nodeEl=canvasEl.querySelector('[data-id="'+pn.id+'"]');
+      var pctSpan=nodeEl?nodeEl.querySelector('.ng-pct-val'):null;
+      if(!pctSpan) return;
+      var inp=document.createElement('input');
+      inp.type='number'; inp.min=0; inp.max=100; inp.step=1;
+      inp.value=Math.round(pn.pctComplete||0);
+      inp.style.cssText='width:50px;font-family:\'Courier New\',monospace;font-weight:700;background:var(--ng-input);border:1px solid #4f8cff;color:#fbbf24;border-radius:3px;padding:1px 4px;outline:none;text-align:right';
+      pctSpan.textContent=''; pctSpan.appendChild(inp);
+      inp.focus(); inp.select();
+      editingId=pn.id;
+      function finish(){
+        pn.pctComplete=Math.max(0,Math.min(100,parseFloat(inp.value)||0));
+        editingId=null; render();
+      }
+      inp.addEventListener('blur',finish);
+      inp.addEventListener('keydown',function(ev){
+        if(ev.key==='Enter'){ev.preventDefault();finish();}
+        else if(ev.key==='Escape'){ev.preventDefault();editingId=null;render();}
+      });
+      return;
+    }
     // Add sub-item (inline — just adds a blank row)
     var addSub=e.target.closest('.ng-add-sub');
     if(addSub){
