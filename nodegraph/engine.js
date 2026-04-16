@@ -18,7 +18,7 @@ var DEFS = {
   gc:    { cat:'cost', icon:'🏢', label:'Gen. Conditions', ins:[], outs:[{n:'Total',t:PT.C}], hasItems:true, nameEdit:true, itemType:'gc' },
   other: { cat:'cost', icon:'📌', label:'Other',        ins:[], outs:[{n:'Total',t:PT.C}], hasItems:true, nameEdit:true, itemType:'other' },
   sub:   { cat:'sub',  icon:'👷', label:'Sub',          ins:[{n:'Costs',t:PT.C}], outs:[{n:'Total',t:PT.C}], nameEdit:true, hasProg:true },
-  po:    { cat:'sub',  icon:'📄', label:'Purchase Order', ins:[], outs:[{n:'Total',t:PT.C}], hasItems:true, nameEdit:true, itemType:'po' },
+  po:    { cat:'sub',  icon:'📄', label:'Purchase Order', ins:[{n:'Invoiced',t:PT.C}], outs:[{n:'Total',t:PT.C}], hasItems:true, nameEdit:true, itemType:'po' },
   inv:   { cat:'sub',  icon:'💳', label:'Invoice',       ins:[], outs:[{n:'Total',t:PT.C}], hasItems:true, nameEdit:true, itemType:'inv' },
   co:    { cat:'co',   icon:'📝', label:'Change Order', ins:[], outs:[{n:'Income',t:PT.C}], nameEdit:true, hasItems:true, itemType:'co' },
   sum:   { cat:'math', icon:'∑',    label:'SUM',          ins:[{n:'A',t:PT.A},{n:'B',t:PT.A},{n:'C',t:PT.A},{n:'D',t:PT.A}], outs:[{n:'Result',t:PT.C}] },
@@ -259,7 +259,7 @@ function fmtP(v){ return v.toFixed(1)+'%'; }
 function fmtV(v,t){ return t===PT.P ? fmtP(v) : t===PT.C ? fmtC(v) : v.toLocaleString(); }
 
 // ── Save / Load ──
-var GRAPH_VER = 5; // bump to force re-populate on next open
+var GRAPH_VER = 6; // bump to force re-populate on next open
 function saveGraph(){
   if(!jobId) return;
   var state = {
