@@ -255,7 +255,7 @@ function fmtP(v){ return v.toFixed(1)+'%'; }
 function fmtV(v,t){ return t===PT.P ? fmtP(v) : t===PT.C ? fmtC(v) : v.toLocaleString(); }
 
 // ── Save / Load ──
-var GRAPH_VER = 2; // bump to force re-populate on next open
+var GRAPH_VER = 3; // bump to force re-populate on next open
 function saveGraph(){
   if(!jobId) return;
   var state = {

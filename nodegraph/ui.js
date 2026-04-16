@@ -275,16 +275,23 @@ function renderNodes(){
     // Note
     if(n.type==='note') h+='<div class="ng-note-body"><textarea data-node="'+n.id+'" placeholder="Type a note...">'+(n.noteText||'')+'</textarea></div>';
 
-    // Collapsed row: mini total + port circles on node edges — ONLY when collapsed
+    // Collapsed row: progress bar + total + port circles — ONLY when collapsed
     if(n.collapsed && (hasIns||hasOuts)){
       var collVal = hasOuts ? E.getOutput(n,0) : 0;
       if(n.type==='watch'){collVal=0;E.wires().forEach(function(w){if(w.toNode===n.id){var fn=E.findNode(w.fromNode);if(fn)collVal+=E.getOutput(fn,w.fromPort);}});}
       // Port circles positioned absolutely on the node
       if(hasIns) h+='<div class="ng-coll-pi ng-p" data-node="'+n.id+'" data-pi="0" data-dir="in" data-type="'+d.ins[0].t+'"></div>';
       if(hasOuts) h+='<div class="ng-coll-po ng-p" data-node="'+n.id+'" data-pi="0" data-dir="out" data-type="'+d.outs[0].t+'"></div>';
-      // Value row
       h+='<div class="ng-coll-row">';
-      h+='<span class="ng-coll-val">'+E.fmtC(collVal)+'</span>';
+      // Progress bar for T1/T2/Sub
+      if(d.hasProg){
+        var cpct = n.pctComplete||0;
+        var cpColor = cpct>=100?'#34d399':cpct>=50?'#fbbf24':'#4f8cff';
+        h+='<div class="ng-coll-prog"><div class="ng-coll-prog-fill" style="width:'+Math.min(cpct,100)+'%;background:'+cpColor+'"></div></div>';
+        h+='<div class="ng-coll-info"><span class="ng-coll-pct">'+cpct.toFixed(0)+'%</span><span class="ng-coll-val">'+E.fmtC(collVal)+'</span></div>';
+      } else {
+        h+='<span class="ng-coll-val" style="text-align:center;width:100%">'+E.fmtC(collVal)+'</span>';
+      }
       h+='</div>';
     }
 
@@ -756,7 +763,7 @@ function populate(){
   var bldgs=appData.buildings.filter(function(b){return b.jobId===jid;});
   bldgs.forEach(function(b,i){
     var n=E.addNode('t1',sx,sy+i*180,b.name||'Building',b);
-    if(n){n.budget=b.budget||0; n.pctComplete=0;}
+    if(n){n.budget=b.budget||0; n.pctComplete=b.pctComplete||0;}
   });
 
   // Col 2: T2 (phases) — wire to their T1
@@ -772,9 +779,20 @@ function populate(){
     }
   });
 
-  // Col 3: Subs
+  // Col 3: Subs — wire to their T1 via buildingId
   var subs=appData.subs.filter(function(s){return s.jobId===jid;});
-  subs.forEach(function(s,i){E.addNode('sub',sx+460,sy+i*110,s.name||'Sub',s);});
+  subs.forEach(function(s,i){
+    var sn=E.addNode('sub',sx+460,sy+i*110,s.name||'Sub',s);
+    if(sn){
+      sn.pctComplete=s.pctComplete||0;
+      // Auto-wire Sub→T1 (Actual Cost → Costs)
+      var bids=s.buildingIds||(s.buildingId?[s.buildingId]:[]);
+      if(bids.length>0){
+        var t1=E.nodes().find(function(nd){return nd.type==='t1'&&nd.data&&bids.indexOf(nd.data.id)>-1;});
+        if(t1) E.wires().push({fromNode:sn.id,fromPort:0,toNode:t1.id,toPort:0});
+      }
+    }
+  });
 
   // Col 3 (lower): COs
   var cos=appData.changeOrders.filter(function(c){return c.jobId===jid;});
