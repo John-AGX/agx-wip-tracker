@@ -273,16 +273,16 @@ function renderNodes(){
     // Note
     if(n.type==='note') h+='<div class="ng-note-body"><textarea data-node="'+n.id+'" placeholder="Type a note...">'+(n.noteText||'')+'</textarea></div>';
 
-    // Collapsed row with ports + mini total
+    // Collapsed row: mini total + port circles on node edges
     if(hasIns||hasOuts){
       var collVal = hasOuts ? E.getOutput(n,0) : 0;
       if(n.type==='watch'){collVal=0;E.wires().forEach(function(w){if(w.toNode===n.id){var fn=E.findNode(w.fromNode);if(fn)collVal+=E.getOutput(fn,w.fromPort);}});}
+      // Port circles positioned absolutely on the node
+      if(hasIns) h+='<div class="ng-coll-pi ng-p" data-node="'+n.id+'" data-pi="0" data-dir="in" data-type="'+d.ins[0].t+'"></div>';
+      if(hasOuts) h+='<div class="ng-coll-po ng-p" data-node="'+n.id+'" data-pi="0" data-dir="out" data-type="'+d.outs[0].t+'"></div>';
+      // Value row
       h+='<div class="ng-coll-row">';
-      if(hasIns) h+='<div class="ng-p ng-pi ng-pc ng-p-'+d.ins[0].t+'" data-node="'+n.id+'" data-pi="0" data-dir="in" data-type="'+d.ins[0].t+'"></div>';
-      else h+='<span style="width:12px"></span>';
       h+='<span class="ng-coll-val">'+E.fmtC(collVal)+'</span>';
-      if(hasOuts) h+='<div class="ng-p ng-po ng-pc ng-p-'+d.outs[0].t+'" data-node="'+n.id+'" data-pi="0" data-dir="out" data-type="'+d.outs[0].t+'"></div>';
-      else h+='<span style="width:12px"></span>';
       h+='</div>';
     }
 

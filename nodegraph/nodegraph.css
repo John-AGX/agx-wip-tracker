@@ -120,8 +120,8 @@ body.light-mode{--ng-bg:#f0f2f5;--ng-surface:#ffffff;--ng-surface2:#e8eaef;--ng-
 .ng-add-sub:hover{color:#6aa3ff;text-decoration:underline}
 .ng-sub-total{font-family:'Courier New',monospace;font-size:15px;font-weight:700;color:#fbbf24;text-align:center;padding:5px 12px 6px;border-top:1px solid var(--ng-border2)}
 /* Collapsed row */
-.ng-coll-row{display:none;position:relative}
-.ng-node.ng-coll .ng-coll-row{display:flex;justify-content:space-between;align-items:center;padding:8px 0;min-height:28px}
+.ng-coll-row{display:none}
+.ng-node.ng-coll .ng-coll-row{display:flex;justify-content:center;align-items:center;padding:6px 0}
 .ng-node.ng-coll .ng-ports{display:none}
 .ng-node.ng-coll .ng-edit-val{display:none}
 .ng-node.ng-coll .ng-progress-wrap{display:none}
@@ -130,9 +130,9 @@ body.light-mode{--ng-bg:#f0f2f5;--ng-surface:#ffffff;--ng-surface2:#e8eaef;--ng-
 .ng-node.ng-coll .ng-subitems{display:none}
 .ng-node.ng-coll .ng-wv{display:none}
 .ng-node.ng-coll .ng-watch-kpi{display:none}
-.ng-coll-row .ng-p{background:#4f8cff;border-color:#4f8cff;position:absolute;top:50%;transform:translateY(-50%)}
-.ng-coll-row .ng-pi{left:-7px}
-.ng-coll-row .ng-po{right:-7px}
+/* Collapsed ports sit on the node edges, centered to full node height */
+.ng-node.ng-coll .ng-coll-pi{position:absolute;left:-5px;top:50%;transform:translateY(-50%);width:10px;height:10px;border-radius:50%;background:#4f8cff;border:2px solid #4f8cff;cursor:crosshair;z-index:5}
+.ng-node.ng-coll .ng-coll-po{position:absolute;right:-5px;top:50%;transform:translateY(-50%);width:10px;height:10px;border-radius:50%;background:#4f8cff;border:2px solid #4f8cff;cursor:crosshair;z-index:5}
 .ng-coll-val{font-family:'Courier New',monospace;font-size:13px;font-weight:700;color:#8899cc;text-align:center;flex:1;padding:0 6px}
 /* Note */
 .ng-note-body{padding:8px 12px 10px}
