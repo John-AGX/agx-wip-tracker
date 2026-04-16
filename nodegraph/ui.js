@@ -431,28 +431,35 @@ function initEvents(){
     // Click progress bar / label to edit %
     var pe=e.target.closest('[data-prog-edit]');
     if(pe && !e.target.closest('input')){
+      e.preventDefault();
       e.stopPropagation();
       var pn=E.findNode(pe.getAttribute('data-prog-edit'));
       if(!pn) return;
       var nodeEl=canvasEl.querySelector('[data-id="'+pn.id+'"]');
       var pctSpan=nodeEl?nodeEl.querySelector('.ng-pct-val'):null;
       if(!pctSpan) return;
+      editingId=pn.id; // set BEFORE any DOM manipulation that could trigger render
       var inp=document.createElement('input');
       inp.type='number'; inp.min=0; inp.max=100; inp.step=1;
       inp.value=Math.round(pn.pctComplete||0);
-      inp.style.cssText='width:50px;font-family:\'Courier New\',monospace;font-weight:700;background:var(--ng-input);border:1px solid #4f8cff;color:#fbbf24;border-radius:3px;padding:1px 4px;outline:none;text-align:right';
+      inp.dataset.progInput='1';
+      inp.style.cssText='width:54px;font-family:\'Courier New\',monospace;font-weight:700;background:var(--ng-input);border:1px solid #4f8cff;color:#fbbf24;border-radius:3px;padding:1px 4px;outline:none;text-align:right;font-size:11px';
       pctSpan.textContent=''; pctSpan.appendChild(inp);
-      inp.focus(); inp.select();
-      editingId=pn.id;
+      // Focus on next tick so the mousedown finishes first and doesn't steal focus
+      setTimeout(function(){ inp.focus(); inp.select(); }, 0);
+      var done=false;
       function finish(){
+        if(done) return; done=true;
         pn.pctComplete=Math.max(0,Math.min(100,parseFloat(inp.value)||0));
         editingId=null; render();
       }
       inp.addEventListener('blur',finish);
       inp.addEventListener('keydown',function(ev){
-        if(ev.key==='Enter'){ev.preventDefault();finish();}
-        else if(ev.key==='Escape'){ev.preventDefault();editingId=null;render();}
+        if(ev.key==='Enter'){ev.preventDefault();inp.blur();}
+        else if(ev.key==='Escape'){ev.preventDefault();done=true;editingId=null;render();}
       });
+      // Stop further mousedown propagation on the input itself
+      inp.addEventListener('mousedown',function(ev){ev.stopPropagation();});
       return;
     }
     // Add sub-item (inline — just adds a blank row)
