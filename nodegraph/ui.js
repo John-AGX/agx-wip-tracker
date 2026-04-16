@@ -266,7 +266,7 @@ function renderNodes(){
       var isPercent=false;
       E.wires().forEach(function(w){if(w.toNode===n.id){var fn=E.findNode(w.fromNode);if(fn){var fd=E.DEFS[fn.type];if(fd&&fd.outs&&fd.outs[w.fromPort]&&fd.outs[w.fromPort].t===E.PT.P)isPercent=true;}}});
       var wvFmt=isPercent?E.fmtP(wv):E.fmtC(wv);
-      h+='<div class="ng-watch-kpi'+wcls+'">'+wvFmt+'</div>';
+      h+='<div class="ng-watch-kpi'+wcls+'"><span class="ng-watch-kpi-val">'+wvFmt+'</span></div>';
       h+='<div class="ng-wv-label">'+n.label+'</div>';
     }
 
