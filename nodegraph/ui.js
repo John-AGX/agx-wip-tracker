@@ -39,6 +39,31 @@ function updateTierLabels(){
   });
 }
 
+// ── Auto-calculate T1 % complete from connected T2s ──
+function updateT1Progress(){
+  var nodes=E.nodes(), wires=E.wires();
+  nodes.forEach(function(n){
+    if(n.type!=='t1') return;
+    // Find all T2s wired into this T1
+    var t2s=[];
+    wires.forEach(function(w){
+      if(w.toNode===n.id){
+        var src=E.findNode(w.fromNode);
+        if(src&&src.type==='t2') t2s.push(src);
+      }
+    });
+    if(t2s.length===0) return; // keep manual % if no T2s connected
+    // Weighted average by budget, or simple average if no budgets
+    var totalBudget=t2s.reduce(function(s,t){return s+(t.budget||0);},0);
+    if(totalBudget>0){
+      n.pctComplete=t2s.reduce(function(s,t){return s+(t.pctComplete||0)*(t.budget||0);},0)/totalBudget;
+    } else {
+      n.pctComplete=t2s.reduce(function(s,t){return s+(t.pctComplete||0);},0)/t2s.length;
+    }
+    n.pctComplete=Math.round(n.pctComplete*10)/10;
+  });
+}
+
 // ── Resize canvases ──
 function resize(){
   wireC.width=wrap.clientWidth; wireC.height=wrap.clientHeight;
@@ -268,6 +293,7 @@ function renderNodes(){
 
 function render(){
   updateTierLabels();
+  updateT1Progress();
   pushToJobSilent();
   renderNodes();
   E.drawGrid(gridCtx, gridC.width, gridC.height);
