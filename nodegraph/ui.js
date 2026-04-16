@@ -273,8 +273,8 @@ function renderNodes(){
     // Note
     if(n.type==='note') h+='<div class="ng-note-body"><textarea data-node="'+n.id+'" placeholder="Type a note...">'+(n.noteText||'')+'</textarea></div>';
 
-    // Collapsed row: mini total + port circles on node edges
-    if(hasIns||hasOuts){
+    // Collapsed row: mini total + port circles on node edges — ONLY when collapsed
+    if(n.collapsed && (hasIns||hasOuts)){
       var collVal = hasOuts ? E.getOutput(n,0) : 0;
       if(n.type==='watch'){collVal=0;E.wires().forEach(function(w){if(w.toNode===n.id){var fn=E.findNode(w.fromNode);if(fn)collVal+=E.getOutput(fn,w.fromPort);}});}
       // Port circles positioned absolutely on the node
@@ -801,11 +801,18 @@ function populate(){
     });
   }
 
-  // Col 5: Watch nodes for key metrics
+  // Col 5: Watch nodes — octopus layout fanning out to the right of WIP
   var watchLabels=['Total Income','Actual Costs','Gross Profit','Margin JTD'];
   var watchPorts=[0,1,3,4];
+  var wipCx = sx+700+160;   // approx WIP node horizontal center
+  var wipCy = sy+50+200;    // approx WIP node vertical center
+  var radius = 500;
+  var angles = [-55,-18,18,55]; // degrees — fan tentacles out to the right
   watchLabels.forEach(function(lbl,i){
-    var w=E.addNode('watch',sx+1000,sy+i*140,lbl);
+    var a = angles[i]*Math.PI/180;
+    var wx = wipCx + Math.cos(a)*radius;
+    var wy = wipCy + Math.sin(a)*radius - 80; // -80 offset so the node (≈160h) centers on target
+    var w=E.addNode('watch',wx,wy,lbl);
     if(w&&wipNode) E.wires().push({fromNode:wipNode.id,fromPort:watchPorts[i],toNode:w.id,toPort:0});
   });
 }

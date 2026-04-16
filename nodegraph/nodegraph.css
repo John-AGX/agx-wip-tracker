@@ -89,13 +89,18 @@ body.light-mode{--ng-bg:#f0f2f5;--ng-surface:#ffffff;--ng-surface2:#e8eaef;--ng-
 .ng-wv{padding:8px 14px;font-family:'Courier New',monospace;font-size:24px;font-weight:700;text-align:center;color:var(--ng-text);background:var(--ng-input);margin:4px 10px 8px;border-radius:6px;border:1px solid var(--ng-border2);min-width:110px}
 .ng-wv.ng-vp{color:#34d399}
 .ng-wv.ng-vn{color:#f87171}
-/* Flashy Watch KPI */
-.ng-watch-kpi{padding:14px 16px;font-family:'Courier New',monospace;font-size:28px;font-weight:700;text-align:center;color:#e4e6f0;background:linear-gradient(135deg,#0d1019,#141830);margin:6px 10px 4px;border-radius:8px;border:1px solid #2a3050;min-width:120px;letter-spacing:1px;text-shadow:0 0 10px rgba(79,140,255,.3)}
-.ng-watch-kpi.ng-vp{color:#34d399;text-shadow:0 0 12px rgba(52,211,153,.4);border-color:rgba(52,211,153,.3)}
-.ng-watch-kpi.ng-vn{color:#f87171;text-shadow:0 0 12px rgba(248,113,113,.4);border-color:rgba(248,113,113,.3)}
-.ng-t-watch{min-width:200px}
-.ng-t-watch .ng-hdr{background:linear-gradient(135deg,rgba(79,140,255,.15),rgba(52,211,153,.1));color:#6aa3ff}
-.ng-wv-label{font-size:10px;color:var(--ng-dim2);text-align:center;padding:0 12px 6px;text-transform:uppercase;letter-spacing:.4px}
+/* Flashy Watch KPI — octopus tentacle displays */
+.ng-watch-kpi{padding:22px 24px;font-family:'Courier New',monospace;font-size:40px;font-weight:800;text-align:center;color:#fbbf24;background:linear-gradient(135deg,#05080f 0%,#1a1230 50%,#0a1424 100%);margin:10px 14px 6px;border-radius:12px;border:2px solid rgba(251,191,36,.4);min-width:210px;letter-spacing:2px;text-shadow:0 0 18px rgba(251,191,36,.7),0 0 36px rgba(251,191,36,.35);box-shadow:inset 0 0 24px rgba(251,191,36,.08),0 0 22px rgba(251,191,36,.18),0 4px 16px rgba(0,0,0,.5);position:relative;overflow:hidden;animation:ng-kpi-pulse-amber 2.8s ease-in-out infinite}
+.ng-watch-kpi::before{content:"";position:absolute;inset:0;background:linear-gradient(120deg,transparent 30%,rgba(255,255,255,.06) 50%,transparent 70%);animation:ng-kpi-shine 5s ease-in-out infinite;pointer-events:none}
+@keyframes ng-kpi-pulse-amber{0%,100%{box-shadow:inset 0 0 24px rgba(251,191,36,.08),0 0 22px rgba(251,191,36,.18),0 4px 16px rgba(0,0,0,.5)}50%{box-shadow:inset 0 0 32px rgba(251,191,36,.18),0 0 38px rgba(251,191,36,.42),0 4px 16px rgba(0,0,0,.5)}}
+@keyframes ng-kpi-pulse-green{0%,100%{box-shadow:inset 0 0 24px rgba(52,211,153,.08),0 0 22px rgba(52,211,153,.18),0 4px 16px rgba(0,0,0,.5)}50%{box-shadow:inset 0 0 32px rgba(52,211,153,.2),0 0 38px rgba(52,211,153,.48),0 4px 16px rgba(0,0,0,.5)}}
+@keyframes ng-kpi-pulse-red{0%,100%{box-shadow:inset 0 0 24px rgba(248,113,113,.08),0 0 22px rgba(248,113,113,.18),0 4px 16px rgba(0,0,0,.5)}50%{box-shadow:inset 0 0 32px rgba(248,113,113,.2),0 0 38px rgba(248,113,113,.48),0 4px 16px rgba(0,0,0,.5)}}
+@keyframes ng-kpi-shine{0%,100%{transform:translateX(-100%)}50%{transform:translateX(100%)}}
+.ng-watch-kpi.ng-vp{color:#34d399;border-color:rgba(52,211,153,.5);text-shadow:0 0 18px rgba(52,211,153,.7),0 0 36px rgba(52,211,153,.35);animation:ng-kpi-pulse-green 2.8s ease-in-out infinite;background:linear-gradient(135deg,#05080f 0%,#0a2418 50%,#0a1424 100%)}
+.ng-watch-kpi.ng-vn{color:#f87171;border-color:rgba(248,113,113,.5);text-shadow:0 0 18px rgba(248,113,113,.7),0 0 36px rgba(248,113,113,.35);animation:ng-kpi-pulse-red 2.8s ease-in-out infinite;background:linear-gradient(135deg,#05080f 0%,#2a0e14 50%,#0a1424 100%)}
+.ng-t-watch{min-width:260px;border-color:rgba(251,191,36,.3)}
+.ng-t-watch .ng-hdr{background:linear-gradient(135deg,rgba(251,191,36,.25),rgba(236,72,153,.15));color:#fbbf24;text-shadow:0 0 8px rgba(251,191,36,.4)}
+.ng-wv-label{font-size:11px;color:#fbbf24;text-align:center;padding:0 12px 10px;text-transform:uppercase;letter-spacing:1px;font-weight:700;opacity:.85}
 /* Editable input */
 .ng-edit-val{padding:6px 10px 8px}
 .ng-edit-val label{font-size:10px;color:var(--ng-dim2);display:block;text-align:center;margin-bottom:3px}
