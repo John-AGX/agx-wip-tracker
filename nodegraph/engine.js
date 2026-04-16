@@ -150,19 +150,10 @@ function getOutput(n, pi){
     _comp[n.id] = false; return v;
   }
 
-  // Purchase Order: output = invoiced amount if Invoice wired in, else base + items (contract total).
-  // When nothing is wired, the PO's full contract amount counts toward actual costs as a committed figure.
-  // When an Invoice is wired, the actual billed amount is used instead.
+  // Purchase Order: output = full contract total (base + items). Actual vs accrued split
+  // happens in getActual / getAccrued based on whether an invoice is wired in.
   if(n.type === 'po'){
-    var invWired = 0, hasInvWire = false;
-    wires.forEach(function(w){
-      if(w.toNode === n.id){
-        var fn = findNode(w.fromNode); if(!fn) return;
-        invWired += getOutput(fn, w.fromPort);
-        hasInvWire = true;
-      }
-    });
-    v = hasInvWire ? invWired : ((n.value || 0) + itemsTotal);
+    v = (n.value || 0) + itemsTotal;
     _comp[n.id] = false; return v;
   }
 
@@ -205,7 +196,8 @@ function getOutput(n, pi){
 
 
   // WIP node: accepts inputs on Costs (pi=0), Top (pi=1), Bottom (pi=2).
-  // Any wired CO node adds to coIncomeWired (revenue). Everything else adds to actualCosts.
+  // CO nodes contribute to revenue; other wired sources contribute to actual (billed) and
+  // accrued (committed, not yet billed) cost tracks via getActual / getAccrued.
   if(n.type === 'wip'){
     var jf = n.jobFields || {};
     var contract = jf.contractAmount || 0;
@@ -216,13 +208,13 @@ function getOutput(n, pi){
     var invoiced = jf.invoicedToDate || 0;
     var pctComp = jf.pctComplete || 0;
     var actualCosts = 0;
+    var accruedCosts = 0;
     var coIncomeWired = 0;
     wires.forEach(function(w){
       if(w.toNode === n.id){
         var fn = findNode(w.fromNode); if(!fn) return;
-        var amt = getOutput(fn, w.fromPort);
-        if(fn.type === 'co') coIncomeWired += amt;
-        else actualCosts += amt;
+        if(fn.type === 'co') coIncomeWired += getOutput(fn, w.fromPort);
+        else { actualCosts += getActual(fn); accruedCosts += getAccrued(fn); }
       }
     });
     n.coRevenue = coIncomeWired;
@@ -232,10 +224,9 @@ function getOutput(n, pi){
     var grossProfit = revEarned - actualCosts;
     var marginJTD = revEarned > 0 ? (grossProfit / revEarned * 100) : 0;
     var remaining = revEstCosts - actualCosts;
-    var accrued = Math.max(0, revEarned - invoiced);
     var unbilled = revEarned - invoiced;
     var backlog = totalIncome - revEarned;
-    var wipOuts = [totalIncome, actualCosts, revEarned, grossProfit, marginJTD, remaining, accrued, unbilled, backlog];
+    var wipOuts = [totalIncome, actualCosts, revEarned, grossProfit, marginJTD, remaining, accruedCosts, unbilled, backlog];
     v = wipOuts[pi] || 0;
     _comp[n.id] = false; return v;
   }
@@ -261,7 +252,81 @@ function getOutput(n, pi){
   return v;
 }
 
-function resetComp(){ _comp = {}; }
+function resetComp(){ _comp = {}; _compA = {}; _compAc = {}; }
+
+// ── Actual vs Accrued cost split ──
+// getActual(n): the billed / spent portion flowing out of this node.
+// getAccrued(n): the committed-but-not-yet-billed portion flowing out of this node.
+// Cost nodes (labor/mat/gc/other/inv) are always actual. POs split based on wired invoices:
+//   actual = sum of wired invoice amounts
+//   accrued = max(0, contract_total - invoiced)
+// Sub/T1/T2 aggregate children (excluding CO nodes which are revenue, not cost).
+var _compA = {}, _compAc = {};
+
+function _itemsTotal(n){
+  var d = DEFS[n.type]; if(!d || !n.items) return 0;
+  var iType = d.itemType || '', t = 0;
+  n.items.forEach(function(item){
+    if(iType === 'labor') t += (item.hours||0) * (item.rate||65);
+    else if(iType === 'other') t += (item.qty||0) * (item.unitCost||0);
+    else t += (item.amount||0);
+  });
+  return t;
+}
+
+function getActual(n){
+  if(!n) return 0;
+  if(_compA[n.id]) return 0;
+  _compA[n.id] = true;
+  var v = 0, iT = _itemsTotal(n);
+  if(n.type==='labor'||n.type==='mat'||n.type==='gc'||n.type==='other'){ v = iT || n.value || 0; }
+  else if(n.type==='inv'){ v = iT; }
+  else if(n.type==='po'){
+    // Sum wired Invoice amounts on the PO's input port
+    wires.forEach(function(w){
+      if(w.toNode===n.id){ var fn=findNode(w.fromNode); if(fn) v += getOutput(fn, w.fromPort); }
+    });
+  }
+  else if(n.type==='sub'){
+    wires.forEach(function(w){
+      if(w.toNode===n.id){ var fn=findNode(w.fromNode); if(fn) v += getActual(fn); }
+    });
+  }
+  else if(n.type==='t1'||n.type==='t2'){
+    v = iT;
+    wires.forEach(function(w){
+      if(w.toNode===n.id){ var fn=findNode(w.fromNode); if(!fn||fn.type==='co') return; v += getActual(fn); }
+    });
+  }
+  _compA[n.id] = false;
+  return v;
+}
+
+function getAccrued(n){
+  if(!n) return 0;
+  if(_compAc[n.id]) return 0;
+  _compAc[n.id] = true;
+  var v = 0, iT = _itemsTotal(n);
+  if(n.type==='po'){
+    var contract = (n.value||0) + iT, invSum = 0;
+    wires.forEach(function(w){
+      if(w.toNode===n.id){ var fn=findNode(w.fromNode); if(fn) invSum += getOutput(fn, w.fromPort); }
+    });
+    v = Math.max(0, contract - invSum);
+  }
+  else if(n.type==='sub'){
+    wires.forEach(function(w){
+      if(w.toNode===n.id){ var fn=findNode(w.fromNode); if(fn) v += getAccrued(fn); }
+    });
+  }
+  else if(n.type==='t1'||n.type==='t2'){
+    wires.forEach(function(w){
+      if(w.toNode===n.id){ var fn=findNode(w.fromNode); if(!fn||fn.type==='co') return; v += getAccrued(fn); }
+    });
+  }
+  _compAc[n.id] = false;
+  return v;
+}
 
 // ── Formatting ──
 function fmtC(v){ return '$'+v.toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:0}); }
@@ -422,7 +487,7 @@ return {
   zm:function(z){ if(z!=null)zoom=z; return zoom; },
   job:function(j){ if(j!=null)jobId=j; return jobId; },
   canConn:canConn, addNode:addNode, findNode:findNode,
-  getOutput:getOutput, resetComp:resetComp,
+  getOutput:getOutput, getActual:getActual, getAccrued:getAccrued, resetComp:resetComp,
   fmtC:fmtC, fmtP:fmtP, fmtV:fmtV,
   saveGraph:saveGraph, loadGraph:loadGraph,
   drawWires:drawWires, drawGrid:drawGrid,
