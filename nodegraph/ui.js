@@ -580,6 +580,132 @@ function initEvents(){
   });
 }
 
+// ── Push node data back to job ──
+function pushToJob(){
+  if(typeof appData==='undefined') return;
+  var jid=E.job(); if(!jid) return;
+  var job=appData.jobs.find(function(j){return j.id===jid;});
+  if(!job) return;
+  var nodes=E.nodes(), wires=E.wires();
+
+  // Job Revenue node → job fields
+  nodes.forEach(function(n){
+    if(n.type==='job'&&n.jobFields){
+      var jf=n.jobFields;
+      if(jf.contractAmount!=null) job.contractAmount=jf.contractAmount;
+      if(jf.estimatedCosts!=null) job.estimatedCosts=jf.estimatedCosts;
+      if(jf.revisedCostChanges!=null) job.revisedCostChanges=jf.revisedCostChanges;
+      if(jf.targetMarginPct!=null) job.targetMarginPct=jf.targetMarginPct;
+    }
+  });
+
+  // T1 nodes → buildings (match by data.id or by label)
+  nodes.forEach(function(n){
+    if(n.type!=='t1') return;
+    var bldg=n.data&&n.data.id?appData.buildings.find(function(b){return b.id===n.data.id;}):null;
+    if(!bldg) return;
+    // Budget from node
+    if(n.budget) bldg.budget=n.budget;
+    // % complete
+    bldg.pctComplete=n.pctComplete||0;
+    // Sum costs from wired cost nodes
+    var mat=0,lab=0,equip=0,gc=0;
+    wires.forEach(function(w){
+      if(w.toNode!==n.id) return;
+      var src=E.findNode(w.fromNode);
+      if(!src) return;
+      // Check what type of cost node is wired in
+      if(src.type==='t2'){
+        // T2 costs roll into building via the total
+      } else {
+        var val=E.getOutput(src,w.fromPort);
+        if(src.type==='labor') lab+=val;
+        else if(src.type==='mat') mat+=val;
+        else if(src.type==='gc') gc+=val;
+        else if(src.type==='other') equip+=val;
+      }
+    });
+    if(mat) bldg.materials=mat;
+    if(lab) bldg.labor=lab;
+    if(equip) bldg.equipment=equip;
+  });
+
+  // T2 nodes → phases (match by data.id)
+  nodes.forEach(function(n){
+    if(n.type!=='t2') return;
+    var phase=n.data&&n.data.id?appData.phases.find(function(p){return p.id===n.data.id;}):null;
+    if(!phase) return;
+    phase.pctComplete=n.pctComplete||0;
+    // Sum costs from wired cost nodes
+    var mat=0,lab=0,equip=0;
+    wires.forEach(function(w){
+      if(w.toNode!==n.id) return;
+      var src=E.findNode(w.fromNode);
+      if(!src) return;
+      var val=E.getOutput(src,w.fromPort);
+      if(src.type==='labor') lab+=val;
+      else if(src.type==='mat') mat+=val;
+      else if(src.type==='other') equip+=val;
+    });
+    if(mat) phase.materials=mat;
+    if(lab) phase.labor=lab;
+    if(equip) phase.equipment=equip;
+  });
+
+  // Sub nodes → subs (match by data.id)
+  nodes.forEach(function(n){
+    if(n.type!=='sub') return;
+    var sub=n.data&&n.data.id?appData.subs.find(function(s){return s.id===n.data.id;}):null;
+    if(!sub) return;
+    // Get invoiced amount from wired inputs
+    var invoiced=0;
+    wires.forEach(function(w){
+      if(w.toNode===n.id&&w.toPort===1){
+        var src=E.findNode(w.fromNode);
+        if(src) invoiced+=E.getOutput(src,w.fromPort);
+      }
+    });
+    if(invoiced) sub.billedToDate=invoiced;
+    // Get PO contract from wired inputs
+    var poContract=0;
+    wires.forEach(function(w){
+      if(w.toNode===n.id&&w.toPort===0){
+        var src=E.findNode(w.fromNode);
+        if(src) poContract+=E.getOutput(src,w.fromPort);
+      }
+    });
+    if(poContract) sub.contractAmt=poContract;
+  });
+
+  // Job-level costs: sum all cost nodes NOT wired to any T1/T2
+  var jobMat=0,jobLab=0,jobEquip=0,jobGC=0;
+  nodes.forEach(function(n){
+    if(n.type!=='labor'&&n.type!=='mat'&&n.type!=='gc'&&n.type!=='other') return;
+    // Check if this cost node is wired to a T1 or T2
+    var wiredToTier=wires.some(function(w){
+      if(w.fromNode!==n.id) return false;
+      var target=E.findNode(w.toNode);
+      return target&&(target.type==='t1'||target.type==='t2');
+    });
+    if(wiredToTier) return; // already counted at building/phase level
+    var val=E.getOutput(n,0);
+    if(n.type==='labor') jobLab+=val;
+    else if(n.type==='mat') jobMat+=val;
+    else if(n.type==='gc') jobGC+=val;
+    else if(n.type==='other') jobEquip+=val;
+  });
+  job.materials=(job.materials||0)+jobMat; // don't overwrite if workspace links also set this
+  job.labor=(job.labor||0)+jobLab;
+  job.equipment=(job.equipment||0)+jobEquip;
+  job.generalConditions=(job.generalConditions||0)+jobGC;
+
+  // Save and refresh
+  if(typeof saveData==='function') saveData();
+  if(typeof renderJobDetail==='function'&&typeof appState!=='undefined'&&appState.currentJobId){
+    renderJobDetail(appState.currentJobId);
+  }
+}
+
 // ── Populate from job ──
 function populate(){
   if(typeof appData==='undefined') return;
@@ -681,6 +807,15 @@ function init(){
   if(pb) pb.addEventListener('click',function(){
     E.setNodes([]); E.setWires([]); E.setNid(1);
     populate(); render();
+  });
+
+  // Push to job
+  var pushBtn=tab.querySelector('.ng-push-btn');
+  if(pushBtn) pushBtn.addEventListener('click',function(){
+    pushToJob();
+    var status=pushBtn.textContent;
+    pushBtn.textContent='\u2714 Pushed!';
+    setTimeout(function(){pushBtn.innerHTML='&#x1F4E4; Push to Job';},1500);
   });
 
   // Collapse all
