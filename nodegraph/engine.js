@@ -11,39 +11,31 @@ function canConn(a,b){ return a===b||a===PT.A||b===PT.A||(a===PT.N&&b===PT.C); }
 
 // ── Node Definitions ──
 var DEFS = {
-  t1:    { cat:'t1',   icon:'\u{1F3D7}', label:'Tier 1',       ins:[{n:'Costs',t:PT.C}], outs:[{n:'Total',t:PT.C},{n:'%',t:PT.P},{n:'Revenue',t:PT.C},{n:'Est. Costs',t:PT.C}], hasProg:true, nameEdit:true },
-  t2:    { cat:'t2',   icon:'\u{1F4CB}', label:'Tier 2',       ins:[{n:'Costs',t:PT.C}], outs:[{n:'Total',t:PT.C},{n:'%',t:PT.P}], hasProg:true, nameEdit:true },
-  labor: { cat:'cost', icon:'\u{1F6E0}', label:'Labor',        ins:[], outs:[{n:'Total',t:PT.C}], hasItems:true, nameEdit:true, itemType:'labor' },
-  mat:   { cat:'cost', icon:'\u{1F9F1}', label:'Materials',    ins:[], outs:[{n:'Total',t:PT.C}], hasItems:true, nameEdit:true, itemType:'mat' },
-  gc:    { cat:'cost', icon:'\u{1F3E2}', label:'Gen. Conditions', ins:[], outs:[{n:'Total',t:PT.C}], hasItems:true, nameEdit:true, itemType:'gc' },
-  other: { cat:'cost', icon:'\u{1F4CC}', label:'Other',        ins:[], outs:[{n:'Total',t:PT.C}], hasItems:true, nameEdit:true, itemType:'other' },
-  sub:   { cat:'sub',  icon:'\u{1F477}', label:'Sub',          ins:[{n:'PO Contract',t:PT.C},{n:'Invoiced',t:PT.C}], outs:[{n:'Actual Cost',t:PT.C},{n:'Accrued',t:PT.C}], nameEdit:true, hasProg:true },
-  po:    { cat:'sub',  icon:'\u{1F4C4}', label:'Purchase Order', ins:[{n:'Invoiced',t:PT.C}], outs:[{n:'Contract',t:PT.C},{n:'Invoiced',t:PT.C}], hasItems:true, nameEdit:true, itemType:'po' },
-  inv:   { cat:'sub',  icon:'\u{1F4B3}', label:'Invoice',       ins:[], outs:[{n:'Invoiced',t:PT.C}], hasItems:true, nameEdit:true, itemType:'inv' },
-  co:    { cat:'co',   icon:'\u{1F4DD}', label:'Change Order', ins:[], outs:[{n:'Income',t:PT.C},{n:'Costs',t:PT.C}], nameEdit:true },
-  sum:   { cat:'math', icon:'\u2211',    label:'SUM',          ins:[{n:'A',t:PT.A},{n:'B',t:PT.A},{n:'C',t:PT.A},{n:'D',t:PT.A}], outs:[{n:'Result',t:PT.C}] },
-  sub2:  { cat:'math', icon:'\u2212',    label:'Subtract',     ins:[{n:'A',t:PT.C},{n:'B',t:PT.C}], outs:[{n:'Result',t:PT.C}] },
-  mul:   { cat:'math', icon:'\u00D7',    label:'Multiply',     ins:[{n:'A',t:PT.A},{n:'B',t:PT.N}], outs:[{n:'Result',t:PT.C}] },
+  t1:    { cat:'t1',   icon:'🏗', label:'Tier 1',       ins:[{n:'Costs',t:PT.C}], outs:[{n:'Total',t:PT.C}], hasProg:true, nameEdit:true },
+  t2:    { cat:'t2',   icon:'📋', label:'Tier 2',       ins:[{n:'Costs',t:PT.C}], outs:[{n:'Total',t:PT.C}], hasProg:true, nameEdit:true },
+  labor: { cat:'cost', icon:'🛠', label:'Labor',        ins:[], outs:[{n:'Total',t:PT.C}], hasItems:true, nameEdit:true, itemType:'labor' },
+  mat:   { cat:'cost', icon:'🧱', label:'Materials',    ins:[], outs:[{n:'Total',t:PT.C}], hasItems:true, nameEdit:true, itemType:'mat' },
+  gc:    { cat:'cost', icon:'🏢', label:'Gen. Conditions', ins:[], outs:[{n:'Total',t:PT.C}], hasItems:true, nameEdit:true, itemType:'gc' },
+  other: { cat:'cost', icon:'📌', label:'Other',        ins:[], outs:[{n:'Total',t:PT.C}], hasItems:true, nameEdit:true, itemType:'other' },
+  sub:   { cat:'sub',  icon:'👷', label:'Sub',          ins:[{n:'PO Contract',t:PT.C},{n:'Invoiced',t:PT.C}], outs:[{n:'Actual Cost',t:PT.C}], nameEdit:true, hasProg:true },
+  po:    { cat:'sub',  icon:'📄', label:'Purchase Order', ins:[{n:'Invoiced',t:PT.C}], outs:[{n:'Contract',t:PT.C},{n:'Invoiced',t:PT.C}], hasItems:true, nameEdit:true, itemType:'po' },
+  inv:   { cat:'sub',  icon:'💳', label:'Invoice',       ins:[], outs:[{n:'Total',t:PT.C}], hasItems:true, nameEdit:true, itemType:'inv' },
+  co:    { cat:'co',   icon:'📝', label:'Change Order', ins:[], outs:[{n:'Income',t:PT.C}], nameEdit:true, hasItems:true, itemType:'co' },
+  sum:   { cat:'math', icon:'∑',    label:'SUM',          ins:[{n:'A',t:PT.A},{n:'B',t:PT.A},{n:'C',t:PT.A},{n:'D',t:PT.A}], outs:[{n:'Result',t:PT.C}] },
+  sub2:  { cat:'math', icon:'−',    label:'Subtract',     ins:[{n:'A',t:PT.C},{n:'B',t:PT.C}], outs:[{n:'Result',t:PT.C}] },
+  mul:   { cat:'math', icon:'×',    label:'Multiply',     ins:[{n:'A',t:PT.A},{n:'B',t:PT.N}], outs:[{n:'Result',t:PT.C}] },
   pct:   { cat:'math', icon:'%',         label:'Percent',      ins:[{n:'Val',t:PT.C},{n:'%',t:PT.P}], outs:[{n:'Result',t:PT.C}] },
-  // ── Master Nodes ──
-  job:   { cat:'job',  icon:'\u{1F4BC}', label:'Job',
-    ins:[],
-    outs:[{n:'Contract',t:PT.C},{n:'CO Income',t:PT.C},{n:'Total Income',t:PT.C},{n:'Est. Costs',t:PT.C},{n:'CO Costs',t:PT.C},{n:'Rev. Est. Costs',t:PT.C}],
-    master:true, hasFields:true,
-    fields:['contractAmount','coIncome','totalIncome','estimatedCosts','coCosts','revisedEstCosts','revisedCostChanges','targetMarginPct']
+  wip:   { cat:'wip',  icon:'📊', label:'WIP',
+    ins:[{n:'Costs',t:PT.C}],
+    outs:[{n:'Total Income',t:PT.C},{n:'Actual Costs',t:PT.C},{n:'Revenue Earned',t:PT.C},{n:'Gross Profit',t:PT.C},{n:'Margin JTD',t:PT.P},{n:'Remaining',t:PT.C},{n:'Accrued',t:PT.C},{n:'Unbilled',t:PT.C},{n:'Backlog',t:PT.C}],
+    master:true, hasFields:true
   },
-  wip:   { cat:'wip',  icon:'\u{1F4CA}', label:'WIP Metrics',
-    ins:[{n:'Total Income',t:PT.C},{n:'Actual Costs',t:PT.C},{n:'% Complete',t:PT.P},{n:'Invoiced',t:PT.C},{n:'Est. Costs (Rev.)',t:PT.C}],
-    outs:[{n:'Revenue Earned',t:PT.C},{n:'Gross Profit',t:PT.C},{n:'Margin JTD',t:PT.P},{n:'Remaining Costs',t:PT.C},{n:'Unbilled',t:PT.C},{n:'Backlog',t:PT.C},{n:'Accrued',t:PT.C}],
-    master:true
-  },
-  watch: { cat:'watch',icon:'\u{1F4CA}', label:'Watch',        ins:[{n:'Value',t:PT.A}], outs:[], nameEdit:true },
-  note:  { cat:'note', icon:'\u{1F4CC}', label:'Note',         ins:[], outs:[] },
+  watch: { cat:'watch',icon:'📊', label:'Watch',        ins:[{n:'Value',t:PT.A}], outs:[], nameEdit:true },
+  note:  { cat:'note', icon:'📌', label:'Note',         ins:[], outs:[] },
 };
-
 // ── Category tree for sidebar ──
 var CATS = [
-  { name:'Master',    items:['job','wip'] },
+  { name:'Master',    items:['wip'] },
   { name:'Structure', items:['t1','t2'] },
   { name:'Costs',     items:['labor','mat','gc','other'] },
   { name:'Subs & COs',items:['sub','po','inv','co'] },
@@ -181,139 +173,60 @@ function getOutput(n, pi){
     _comp[n.id] = false; return v;
   }
 
-  // Sub: receives PO Contract (in 0) and Invoiced (in 1)
-  // Output 0 = Actual Cost (invoiced amount — work that's been billed)
-  // Output 1 = Accrued (earned based on % but not yet invoiced)
+  // Sub: single output = invoiced amount (actual cost)
   if(n.type === 'sub'){
-    var subIns = [0,0];
     wires.forEach(function(w){
-      if(w.toNode === n.id){
-        var fn = findNode(w.fromNode);
-        if(fn) subIns[w.toPort] = (subIns[w.toPort]||0) + getOutput(fn, w.fromPort);
-      }
+      if(w.toNode === n.id && w.toPort === 1){ var fn = findNode(w.fromNode); if(fn) v += getOutput(fn, w.fromPort); }
     });
-    var poContract = subIns[0] || 0;
-    var invoiced = subIns[1] || 0;
-    if(pi === 0) v = invoiced; // Actual Cost = invoiced (billed work becomes actual cost)
-    else if(pi === 1){
-      // Accrued = (contract × % complete of connected scope) - invoiced
-      // Find % complete from connected T1/T2 (trace Sub output wires → find T1/T2 target)
-      var pctComp = n.pctComplete || 0;
-      wires.forEach(function(w){
-        if(w.fromNode === n.id){
-          var target = findNode(w.toNode);
-          if(target && (target.type === 't1' || target.type === 't2') && target.pctComplete > 0){
-            pctComp = target.pctComplete;
-          }
-        }
-      });
-      // Also check if Sub is wired into a SUM that's wired into a T1/T2
-      if(pctComp === 0){
-        wires.forEach(function(w){
-          if(w.fromNode === n.id){
-            var mid = findNode(w.toNode);
-            if(mid && mid.type === 'sum'){
-              wires.forEach(function(w2){
-                if(w2.fromNode === mid.id){
-                  var t = findNode(w2.toNode);
-                  if(t && (t.type === 't1' || t.type === 't2') && t.pctComplete > 0){
-                    pctComp = t.pctComplete;
-                  }
-                }
-              });
-            }
-          }
-        });
-      }
-      var earned = poContract * (pctComp / 100);
-      v = Math.max(0, earned - invoiced);
-    }
     _comp[n.id] = false; return v;
   }
 
-  // CO: items feed into first output (Income), second uses data
+  // CO: single output = income from items or data
   if(n.type === 'co'){
-    if(pi === 0) v = itemsTotal || (n.data ? n.data.income || 0 : 0);
-    else v = n.data ? n.data.estimatedCosts || 0 : 0;
+    v = itemsTotal || (n.data ? n.data.income || 0 : 0);
     _comp[n.id] = false; return v;
   }
 
-  // T1: output 0=total costs, 1=% complete, 2=allocated revenue, 3=allocated est costs
-  // T2: output 0=total costs, 1=% complete
+  // T1/T2: single output = sum of wired inputs + own items
   if(n.type === 't1' || n.type === 't2'){
-    if(pi === 0){
-      v = itemsTotal;
-      wires.forEach(function(w){
-        if(w.toNode === n.id){
-          var fn = findNode(w.fromNode);
-          if(fn) v += getOutput(fn, w.fromPort);
-        }
-      });
-    } else if(pi === 1){
-      v = n.pctComplete || 0;
-    } else if(n.type === 't1' && (pi === 2 || pi === 3)){
-      // Find the Job node by tracing downstream: T1 → SUM → Job or T1 → Job
-      var jobNode = null;
-      var allT1s = nodes.filter(function(nd){ return nd.type === 't1'; });
-      // Find Job node connected downstream
-      nodes.forEach(function(nd){ if(nd.type === 'job') jobNode = nd; });
-      if(jobNode){
-        var totalBudget = allT1s.reduce(function(s,t){ return s + (t.budget || 0); }, 0);
-        var myPct = totalBudget > 0 ? (n.budget || 0) / totalBudget : (allT1s.length > 0 ? 1 / allT1s.length : 0);
-        if(pi === 2){
-          // Allocated Revenue = Total Income × budget %
-          var totalIncome = getOutput(jobNode, 2); // Job output 2 = Total Income
-          v = totalIncome * myPct;
-        } else if(pi === 3){
-          // Allocated Est. Costs = Rev. Est. Costs × budget %
-          var revEstCosts = getOutput(jobNode, 5); // Job output 5 = Rev. Est. Costs
-          v = revEstCosts * myPct;
-        }
-      }
-    }
-    _comp[n.id] = false; return v;
-  }
-
-  // Job node: outputs revenue lines from stored job data
-  if(n.type === 'job' && n.data){
-    var jd = n.data;
-    var contract = jd.contractAmount || n.jobFields.contractAmount || 0;
-    var coInc = n.jobFields.coIncome || 0;
-    var estCosts = jd.estimatedCosts || n.jobFields.estimatedCosts || 0;
-    var coCosts = n.jobFields.coCosts || 0;
-    var revChanges = jd.revisedCostChanges || n.jobFields.revisedCostChanges || 0;
-    var totalIncome = contract + coInc;
-    var revEstCosts = estCosts + coCosts + revChanges;
-    // Outputs: Contract, CO Income, Total Income, Est. Costs, CO Costs, Rev. Est. Costs
-    var jobOuts = [contract, coInc, totalIncome, estCosts, coCosts, revEstCosts];
-    v = jobOuts[pi] || 0;
-    _comp[n.id] = false; return v;
-  }
-
-  // WIP node: computes all metrics from inputs
-  if(n.type === 'wip'){
-    // Collect wired inputs: Total Income, Actual Costs, % Complete, Invoiced, Est. Costs (Rev.)
-    var wipIns = [0,0,0,0,0];
+    v = itemsTotal;
     wires.forEach(function(w){
-      if(w.toNode === n.id){
-        var fn = findNode(w.fromNode);
-        if(fn) wipIns[w.toPort] = (wipIns[w.toPort]||0) + getOutput(fn, w.fromPort);
-      }
+      if(w.toNode === n.id){ var fn = findNode(w.fromNode); if(fn) v += getOutput(fn, w.fromPort); }
     });
-    var totalInc = wipIns[0], actualCosts = wipIns[1], pctComp = wipIns[2];
-    var invoiced = wipIns[3], estCostsRev = wipIns[4];
-    var revEarned = totalInc * (pctComp / 100);
+    _comp[n.id] = false; return v;
+  }
+
+
+  // WIP node: T1s wire into Costs input. Revenue fields stored in jobFields.
+  if(n.type === 'wip'){
+    var jf = n.jobFields || {};
+    var contract = jf.contractAmount || 0;
+    var coIncome = jf.coIncome || 0;
+    var estCosts = jf.estimatedCosts || 0;
+    var coCosts = jf.coCosts || 0;
+    var revChanges = jf.revisedCostChanges || 0;
+    var invoiced = jf.invoicedToDate || 0;
+    var pctComp = jf.pctComplete || 0;
+    var totalIncome = contract + coIncome;
+    var revEstCosts = estCosts + coCosts + revChanges;
+    // Sum all wired cost inputs
+    var actualCosts = 0;
+    wires.forEach(function(w){
+      if(w.toNode === n.id){ var fn = findNode(w.fromNode); if(fn) actualCosts += getOutput(fn, w.fromPort); }
+    });
+    var revEarned = totalIncome * (pctComp / 100);
     var grossProfit = revEarned - actualCosts;
     var marginJTD = revEarned > 0 ? (grossProfit / revEarned * 100) : 0;
-    var remaining = estCostsRev - actualCosts;
-    var unbilled = revEarned - invoiced;
-    var backlog = totalInc - revEarned;
+    var remaining = revEstCosts - actualCosts;
     var accrued = Math.max(0, revEarned - invoiced);
-    // Outputs: Revenue Earned, Gross Profit, Margin JTD, Remaining Costs, Unbilled, Backlog, Accrued
-    var wipOuts = [revEarned, grossProfit, marginJTD, remaining, unbilled, backlog, accrued];
+    var unbilled = revEarned - invoiced;
+    var backlog = totalIncome - revEarned;
+    var wipOuts = [totalIncome, actualCosts, revEarned, grossProfit, marginJTD, remaining, accrued, unbilled, backlog];
     v = wipOuts[pi] || 0;
     _comp[n.id] = false; return v;
   }
+
+  // Job node removed — revenue fields now in WIP node
 
   // Math nodes: collect inputs
   var ins = (d.ins || []).map(function(){ return 0; });
@@ -374,9 +287,10 @@ function loadGraph(){
     var d = DEFS[sn.type]; if(!d) return;
     var data = {};
     if(sn.dataId && typeof appData !== 'undefined'){
-      if(sn.type === 'sub') data = appData.subs.find(function(s){ return s.id === sn.dataId; }) || {};
-      else if(sn.type === 'co') data = appData.changeOrders.find(function(c){ return c.id === sn.dataId; }) || {};
-    }
+      if(sn.type === 't1') data = appData.buildings.find(function(b){ return b.id === sn.dataId; }) || {};
+      else if(sn.type === 't2') data = appData.phases.find(function(p){ return p.id === sn.dataId; }) || {};
+      else if(sn.type === 'sub') data = appData.subs.find(function(s){ return s.id === sn.dataId; }) || {};
+      else if(sn.type === 'co') data = appData.changeOrders.find(function(c){ return c.id === sn.dataId; }) || {};}
     var n = {
       id:sn.id, type:sn.type, cat:d.cat,
       x:sn.x, y:sn.y, label:sn.label,

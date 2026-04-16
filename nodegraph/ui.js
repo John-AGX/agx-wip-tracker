@@ -203,49 +203,23 @@ function renderNodes(){
       h+='</div>';
     }
 
-    // T1/T2: show total + allocated revenue/costs for T1
+    // T1/T2: show total
     if(n.type==='t1'||n.type==='t2'){
       var tv=E.getOutput(n,0), tcls=tv>0?' ng-vp':'';
       h+='<div class="ng-wv'+tcls+'" style="font-size:16px;margin:2px 8px 6px;padding:4px 8px;">'+E.fmtC(tv)+'</div>';
-      if(n.type==='t1'){
-        E.resetComp();
-        var allocRev=E.getOutput(n,2), allocCost=E.getOutput(n,3);
-        var allT1s=E.nodes().filter(function(nd){return nd.type==='t1';});
-        var totalBudget=allT1s.reduce(function(s,t){return s+(t.budget||0);},0);
-        var budgetPct=totalBudget>0?((n.budget||0)/totalBudget*100):0;
-        if(allocRev>0||allocCost>0){
-          h+='<div style="padding:2px 10px 6px;font-size:10px;">';
-          h+='<div style="display:flex;justify-content:space-between;padding:1px 0;color:var(--ng-dim);">Budget Share <span style="color:#fbbf24;font-weight:600;">'+budgetPct.toFixed(1)+'%</span></div>';
-          h+='<div style="display:flex;justify-content:space-between;padding:1px 0;color:var(--ng-dim);">Alloc. Revenue <span style="color:#34d399;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(allocRev)+'</span></div>';
-          h+='<div style="display:flex;justify-content:space-between;padding:1px 0;color:var(--ng-dim);">Alloc. Est. Costs <span style="color:#8899cc;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(allocCost)+'</span></div>';
-          h+='</div>';
-        }
-      }
     }
 
-    // Job node: show editable revenue fields
-    if(n.type==='job'){
+    // WIP node: editable revenue fields + metrics display
+    if(n.type==='wip'){
       var jf=n.jobFields||{};
       h+='<div class="ng-subitems" style="max-height:none;">';
-      var jobRows=[
-        {k:'contractAmount',l:'Contract Amount'},
-        {k:'estimatedCosts',l:'Est. Costs (As Sold)'},
-        {k:'revisedCostChanges',l:'Revised Cost Changes'},
-        {k:'targetMarginPct',l:'Target Margin %'},
-      ];
-      jobRows.forEach(function(r){
-        h+='<div class="ng-subitem">';
-        h+='<span class="ng-si-date" style="width:auto;flex:1;background:none;border:none;color:#6a7090;">'+r.l+'</span>';
-        h+='<input class="ng-si-amt" data-node="'+n.id+'" data-jfield="'+r.k+'" value="'+(jf[r.k]||n.data[r.k]||0)+'" step="0.01" />';
-        h+='</div>';
+      [{k:'contractAmount',l:'Contract Amount'},{k:'coIncome',l:'CO Income'},{k:'estimatedCosts',l:'Est. Costs'},{k:'coCosts',l:'CO Costs'},{k:'revisedCostChanges',l:'Revised Changes'},{k:'invoicedToDate',l:'Invoiced to Date'},{k:'pctComplete',l:'% Complete'}].forEach(function(r){
+        h+='<div class="ng-subitem"><span style="flex:1;color:var(--ng-dim);font-size:10px;">'+r.l+'</span><input class="ng-si-sm" type="number" data-node="'+n.id+'" data-jfield="'+r.k+'" value="'+(jf[r.k]||0)+'" step="0.01" /></div>';
       });
       h+='</div>';
-    }
-
-    // WIP node: show metric outputs as large values
-    if(n.type==='wip'){
+      // Metrics display
       var wipD=E.DEFS.wip;
-      h+='<div style="padding:4px 10px 6px;">';
+      h+='<div style="padding:4px 10px 6px;border-top:1px solid var(--ng-border2);">';
       wipD.outs.forEach(function(op,oi){
         var ov=E.getOutput(n,oi);
         var cls=ov>0?' style="color:#34d399"':ov<0?' style="color:#f87171"':'';
@@ -258,12 +232,16 @@ function renderNodes(){
       h+='</div>';
     }
 
-    // Watch: large display
+    // Watch: flashy KPI display
     if(n.type==='watch'){
       var wv=0;
       E.wires().forEach(function(w){if(w.toNode===n.id){var fn=E.findNode(w.fromNode);if(fn)wv+=E.getOutput(fn,w.fromPort);}});
       var wcls=wv>0?' ng-vp':wv<0?' ng-vn':'';
-      h+='<div class="ng-wv'+wcls+'">'+E.fmtC(wv)+'</div>';
+      // Detect if it's a percentage value
+      var isPercent=false;
+      E.wires().forEach(function(w){if(w.toNode===n.id){var fn=E.findNode(w.fromNode);if(fn){var fd=E.DEFS[fn.type];if(fd&&fd.outs&&fd.outs[w.fromPort]&&fd.outs[w.fromPort].t===E.PT.P)isPercent=true;}}});
+      var wvFmt=isPercent?E.fmtP(wv):E.fmtC(wv);
+      h+='<div class="ng-watch-kpi'+wcls+'">'+wvFmt+'</div>';
       h+='<div class="ng-wv-label">'+n.label+'</div>';
     }
 
@@ -776,44 +754,34 @@ function populate(){
     E.addNode('co',sx+460,sy+subs.length*110+40+i*110,(c.coNumber||'CO')+' '+c.description,c);
   });
 
-  // Col 4: SUM node — auto-wire all T1s into it
-  var sumNode=E.addNode('sum',sx+700,sy+50,'Total Costs');
-  if(sumNode){
-    var portIdx=0;
+  // Col 4: WIP node — T1s wire directly in, revenue fields inside
+  var coArr=appData.changeOrders.filter(function(c){return c.jobId===jid;});
+  var coInc=coArr.reduce(function(s,c){return s+(c.income||0);},0);
+  var coCst=coArr.reduce(function(s,c){return s+(c.estimatedCosts||0);},0);
+  var wipNode=E.addNode('wip',sx+700,sy+50,'WIP');
+  if(wipNode){
+    wipNode.jobFields={
+      contractAmount:job.contractAmount||0,
+      coIncome:coInc,
+      estimatedCosts:job.estimatedCosts||0,
+      coCosts:coCst,
+      revisedCostChanges:job.revisedCostChanges||0,
+      invoicedToDate:job.invoicedToDate||0,
+      pctComplete:job.pctComplete||0,
+    };
+    // Wire all T1s directly into WIP
     E.nodes().forEach(function(nd){
-      if(nd.type==='t1'&&portIdx<4){
-        E.wires().push({fromNode:nd.id,fromPort:0,toNode:sumNode.id,toPort:portIdx});
-        portIdx++;
-      }
+      if(nd.type==='t1') E.wires().push({fromNode:nd.id,fromPort:0,toNode:wipNode.id,toPort:0});
     });
   }
 
-  // Col 5: Job node (revenue lines) — pre-fill from job data
-  var co=appData.changeOrders.filter(function(c){return c.jobId===jid;});
-  var coInc=co.reduce(function(s,c){return s+(c.income||0);},0);
-  var coCst=co.reduce(function(s,c){return s+(c.estimatedCosts||0);},0);
-  var jobNode=E.addNode('job',sx+700,sy+300,'Job Revenue',job);
-  if(jobNode){
-    jobNode.jobFields={
-      contractAmount:job.contractAmount||0,
-      estimatedCosts:job.estimatedCosts||0,
-      revisedCostChanges:job.revisedCostChanges||0,
-      targetMarginPct:job.targetMarginPct||0,
-      coIncome:coInc,
-      coCosts:coCst,
-    };
-  }
-
-  // Col 6: WIP Metrics node — pre-wire from Job + SUM
-  var wipNode=E.addNode('wip',sx+1000,sy+50,'WIP Metrics');
-  if(wipNode&&jobNode){
-    // Wire: Job.Total Income → WIP.Total Income (in port 0)
-    E.wires().push({fromNode:jobNode.id,fromPort:2,toNode:wipNode.id,toPort:0});
-    // Wire: SUM.Result → WIP.Actual Costs (in port 1)
-    if(sumNode) E.wires().push({fromNode:sumNode.id,fromPort:0,toNode:wipNode.id,toPort:1});
-    // Wire: Job.Rev. Est. Costs → WIP.Est. Costs (in port 4)
-    E.wires().push({fromNode:jobNode.id,fromPort:5,toNode:wipNode.id,toPort:4});
-  }
+  // Col 5: Watch nodes for key metrics
+  var watchLabels=['Total Income','Actual Costs','Gross Profit','Margin JTD'];
+  var watchPorts=[0,1,3,4];
+  watchLabels.forEach(function(lbl,i){
+    var w=E.addNode('watch',sx+1000,sy+i*140,lbl);
+    if(w&&wipNode) E.wires().push({fromNode:wipNode.id,fromPort:watchPorts[i],toNode:w.id,toPort:0});
+  });
 }
 
 // ── Init ──
