@@ -729,9 +729,9 @@ function pushToJob(){
         else if(src.type==='other') equip+=val;
       }
     });
-    if(mat) bldg.materials=mat;
-    if(lab) bldg.labor=lab;
-    if(equip) bldg.equipment=equip;
+    bldg.materials=mat;
+    bldg.labor=lab;
+    bldg.equipment=equip;
   });
 
   // T2 nodes → phases (match by data.id)
@@ -753,26 +753,22 @@ function pushToJob(){
       else if(src.type==='mat') mat+=val;
       else if(src.type==='other') equip+=val;
     });
-    if(mat) phase.materials=mat;
-    if(lab) phase.labor=lab;
-    if(equip) phase.equipment=equip;
+    phase.materials=mat;
+    phase.labor=lab;
+    phase.equipment=equip;
   });
 
   // Sub nodes → subs (match by data.id)
+  // contractAmt = sum of wired costs (PO contracts + direct invoices)
+  // billedToDate = actual billed portion (getActual follows invoices only)
   nodes.forEach(function(n){
     if(n.type!=='sub') return;
     var sub=n.data&&n.data.id?appData.subs.find(function(s){return s.id===n.data.id;}):null;
     if(!sub) return;
     if(n.label) sub.name=n.label;
-    // Sum all wired cost inputs (single port 0)
-    var total=0;
-    wires.forEach(function(w){
-      if(w.toNode===n.id){
-        var src=E.findNode(w.fromNode);
-        if(src) total+=E.getOutput(src,w.fromPort);
-      }
-    });
-    if(total) sub.contractAmt=total;
+    E.resetComp();
+    sub.contractAmt=E.getOutput(n,0);
+    sub.billedToDate=E.getActual(n);
   });
 
   // Job-level costs: sum all cost nodes NOT wired to any T1/T2
@@ -834,7 +830,9 @@ function pushToJob(){
     }
   });
 
+  if(typeof recalcSubCosts==='function') recalcSubCosts(jid);
   if(typeof saveData==='function') saveData();
+  if(typeof refreshHeaderMetrics==='function') refreshHeaderMetrics();
 }
 
 /** Silent sync — called on every render, no UI refresh */

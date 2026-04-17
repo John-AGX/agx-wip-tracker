@@ -186,39 +186,24 @@ function renderWIPMain() {
         }
 
         function getJobTotalCost(jobId) {
-            const allPhases = appData.phases.filter(p => p.jobId === jobId);
-            const jobBuildings = appData.buildings.filter(b => b.jobId === jobId);
-
-            // Phase-level costs
+            // Phase-level costs (tracked per phase)
             let phaseCost = 0;
-            allPhases.forEach(p => {
+            appData.phases.filter(p => p.jobId === jobId).forEach(p => {
                 phaseCost += (p.materials || 0) + (p.labor || 0) + (p.sub || 0) + (p.equipment || 0);
             });
-
-            // Building-level costs — if a building has phases, phases provide the
-            // materials/labor/equipment breakdown so skip those on the building to
-            // avoid double-counting. Building sub is auto-calculated from a separate
-            // subs dataset and is always safe to include.
+            // Building-level direct costs (overhead/general NOT covered by phases).
+            // Node graph writes costs wired directly to T1 here; costs wired to T2 go to phases.
             let buildingCost = 0;
+            const jobBuildings = appData.buildings.filter(b => b.jobId === jobId);
             jobBuildings.forEach(b => {
-                const hasPhases = allPhases.some(p => p.buildingId === b.id);
-                if (hasPhases) {
-                    buildingCost += (b.sub || 0);
-                } else {
-                    buildingCost += (b.materials || 0) + (b.labor || 0) + (b.sub || 0) + (b.equipment || 0);
-                }
+                buildingCost += (b.materials || 0) + (b.labor || 0) + (b.sub || 0) + (b.equipment || 0);
             });
-
-            // Job-level costs — if buildings exist, materials/labor/equipment/sub
-            // are already tracked below. Only add generalConditions as job overhead.
+            // Job-level costs (exclude sub if buildings exist — already distributed)
             const job = appData.jobs.find(j => j.id === jobId);
             let jobCost = 0;
             if (job) {
-                if (jobBuildings.length > 0) {
-                    jobCost = (job.generalConditions || 0);
-                } else {
-                    jobCost = (job.materials || 0) + (job.labor || 0) + (job.sub || 0) + (job.equipment || 0) + (job.generalConditions || 0);
-                }
+                const jobSub = (jobBuildings.length > 0) ? 0 : (job.sub || 0);
+                jobCost = (job.materials || 0) + (job.labor || 0) + jobSub + (job.equipment || 0) + (job.generalConditions || 0);
             }
             return { phaseCost, buildingCost, jobCost, total: phaseCost + buildingCost + jobCost };
         }
@@ -1027,9 +1012,8 @@ function renderWIPMain() {
                     phaseCost += (p.materials || 0) + (p.labor || 0) + (p.sub || 0) + (p.equipment || 0);
                 });
                 const bMat = building.materials || 0, bLab = building.labor || 0, bSub = building.sub || 0, bEquip = building.equipment || 0;
-                const buildingCost = phases.length > 0
-                    ? phaseCost + bSub
-                    : bMat + bLab + bSub + bEquip;
+                const bldgDirectCost = bMat + bLab + bSub + bEquip;
+                const buildingCost = phaseCost + bldgDirectCost;
                 const variance = (building.budget || 0) - buildingCost;
 
                 const contractAmt = appData.jobs.find(j => j.id === jobId)?.contractAmount || 0;
