@@ -825,8 +825,13 @@ function pushToJob(){
       var phase = appData.phases.find(function(p){return p.id===n.data.id;});
       if(phase){ phase.phaseBudget = (phase.phaseBudget||0) + delta; n._coRevApplied = wiredCO; }
     } else if(n.type==='wip'){
-      job.contractAmount = (job.contractAmount||0) + delta;
-      n._coRevApplied = wiredCO;
+      // Previously backflowed CO income to job.contractAmount, but that
+      // double-counted because getJobCOTotals already sums changeOrders.income
+      // and getJobWIP computes totalIncome = contractAmount + co.income.
+      // Undo any prior backflow so the sticky metrics match.
+      var prevApplied = n._coRevApplied || 0;
+      if(prevApplied) job.contractAmount = (job.contractAmount||0) - prevApplied;
+      n._coRevApplied = 0;
     }
   });
 
