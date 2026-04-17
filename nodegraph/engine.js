@@ -150,10 +150,15 @@ function getOutput(n, pi){
     _comp[n.id] = false; return v;
   }
 
-  // Purchase Order: output = full contract total (base + items). Actual vs accrued split
-  // happens in getActual / getAccrued based on whether an invoice is wired in.
+  // Purchase Order: output = actual cost (invoiced amount if Invoice wired, else 0).
+  // Contract total is displayed on the node body separately. The accrued portion
+  // (contract - invoiced) flows through getAccrued, not getOutput.
   if(n.type === 'po'){
-    v = (n.value || 0) + itemsTotal;
+    wires.forEach(function(w){
+      if(w.toNode === n.id){ var fn = findNode(w.fromNode); if(fn) v += getOutput(fn, w.fromPort); }
+    });
+    n._poContract = (n.value || 0) + itemsTotal;
+    n._poInvoiced = v;
     _comp[n.id] = false; return v;
   }
 

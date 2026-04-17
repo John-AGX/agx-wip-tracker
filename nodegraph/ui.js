@@ -192,42 +192,29 @@ function renderNodes(){
       // Total
       var itemTotal=E.getOutput(n,0);
       h+='<div class="ng-sub-total">'+E.fmtC(itemTotal)+'</div>';
-      // PO: show base contract + amendments
+      // PO: show contract vs invoiced vs accrued breakdown
       if(iType==='po'){
-        var amendTotal=n.items.reduce(function(s,i){return s+(i.amount||0);},0);
-        var poInvoiced=E.getOutput(n,1);
-        h+='<div style="font-size:9px;color:#6a7090;text-align:center;padding:0 0 2px;">Base: '+E.fmtC(n.value||0)+' + Amendments: '+E.fmtC(amendTotal)+' = '+E.fmtC((n.value||0)+amendTotal)+'</div>';
-        if(poInvoiced>0) h+='<div style="font-size:9px;color:#34d399;text-align:center;padding:0 0 4px;">Invoiced: '+E.fmtC(poInvoiced)+' \u2192 Actual Cost</div>';
+        E.resetComp();
+        E.getOutput(n,0); // triggers _poContract / _poInvoiced calculation
+        var poContract=n._poContract||0, poInv=n._poInvoiced||0;
+        var poAccrued=Math.max(0,poContract-poInv);
+        h+='<div style="padding:2px 10px 4px;font-size:10px;border-top:1px solid var(--ng-border2);">';
+        h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Contract <span style="color:#8899cc;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(poContract)+'</span></div>';
+        h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Invoiced (Actual) <span style="color:#34d399;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(poInv)+'</span></div>';
+        h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Accrued <span style="color:#fbbf24;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(poAccrued)+'</span></div>';
+        h+='</div>';
       }
       h+='</div>';
     }
 
-    // Sub: show PO contract, invoiced, accrued from wired inputs
+    // Sub: show actual vs accrued from wired cost children
     if(n.type==='sub'){
       E.resetComp();
-      var subIns=[0,0];
-      E.wires().forEach(function(w){if(w.toNode===n.id){var fn=E.findNode(w.fromNode);if(fn)subIns[w.toPort]=(subIns[w.toPort]||0)+E.getOutput(fn,w.fromPort);}});
-      var poAmt=subIns[0],invAmt=subIns[1];
-      var accrued=E.getOutput(n,1);
-      // Find what % the accrual is using (from connected T1/T2)
-      var subPct = n.pctComplete || 0;
-      var pctSource = 'manual';
-      E.wires().forEach(function(w){
-        if(w.fromNode===n.id){
-          var tgt=E.findNode(w.toNode);
-          if(tgt&&(tgt.type==='t1'||tgt.type==='t2')&&tgt.pctComplete>0){subPct=tgt.pctComplete;pctSource=tgt.label;}
-          if(tgt&&tgt.type==='sum'){
-            E.wires().forEach(function(w2){if(w2.fromNode===tgt.id){var t2=E.findNode(w2.toNode);if(t2&&(t2.type==='t1'||t2.type==='t2')&&t2.pctComplete>0){subPct=t2.pctComplete;pctSource=t2.label;}}});
-          }
-        }
-      });
-      var actualCost=E.getOutput(n,0);
+      var subActual=E.getActual(n);
+      var subAccrued=E.getAccrued(n);
       h+='<div style="padding:4px 10px 6px;font-size:10px;">';
-      h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">PO Contract <span style="color:#8899cc;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(poAmt)+'</span></div>';
-      h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Invoiced (Actual) <span style="color:#34d399;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(invAmt)+'</span></div>';
-      h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">% Complete <span style="color:#fbbf24;font-weight:600;font-family:\'Courier New\',monospace;">'+subPct.toFixed(1)+'%</span></div>';
-      if(pctSource!=='manual') h+='<div style="font-size:8px;color:#4a5068;text-align:right;padding:0 0 2px;">from '+pctSource+'</div>';
-      h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;border-top:1px solid #1a1f30;margin-top:2px;">Accrued <span style="color:#fbbf24;font-weight:700;font-family:\'Courier New\',monospace;">'+E.fmtC(accrued)+'</span></div>';
+      h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Actual (Invoiced) <span style="color:#34d399;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(subActual)+'</span></div>';
+      h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Accrued (Committed) <span style="color:#fbbf24;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(subAccrued)+'</span></div>';
       h+='</div>';
     }
 
