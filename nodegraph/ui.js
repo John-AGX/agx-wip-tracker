@@ -140,17 +140,18 @@ function renderNodes(){
     if(d.hasItems){
       var iType = d.itemType || '';
       var UNITS = ['each','SF','LF','gal','bag','box','ton','yd\u00B3','roll','hr'];
-      // PO: base contract input
+      // PO: base contract input / Labor: QuickBooks total input
       if(iType==='po') h+='<div class="ng-edit-val"><label style="font-size:9px;color:#6a7090;display:block;text-align:center;">Base Contract</label><input type="number" value="'+(n.value||0)+'" data-node="'+n.id+'" step="0.01" /></div>';
+      else if(iType==='labor') h+='<div class="ng-edit-val"><label style="font-size:9px;color:#6a7090;display:block;text-align:center;">QuickBooks Total (used if no weekly entries)</label><input type="number" value="'+(n.value||0)+'" data-node="'+n.id+'" step="0.01" placeholder="0.00" /></div>';
       h+='<div class="ng-subitems">';
       // Header row
-      if(iType==='labor') h+='<div class="ng-si-hdr"><span>Week Of</span><span>Hrs</span><span>Rate</span><span>Total</span><span></span></div>';
-      else if(iType==='mat') h+='<div class="ng-si-hdr"><span>Date</span><span>Amount</span><span></span></div>';
-      else if(iType==='gc') h+='<div class="ng-si-hdr"><span>Week Of</span><span>Vendor</span><span>Amount</span><span></span></div>';
-      else if(iType==='other') h+='<div class="ng-si-hdr"><span>Date</span><span>Qty</span><span>$/Unit</span><span>Total</span><span></span></div>';
-      else if(iType==='sub') h+='<div class="ng-si-hdr"><span>Date</span><span>Description</span><span>Amount</span><span></span></div>';
-      else if(iType==='po') h+='<div class="ng-si-hdr"><span>Date</span><span>Amendment</span><span>Amount</span><span></span></div>';
-      else if(iType==='inv') h+='<div class="ng-si-hdr"><span>Date</span><span>Invoice #</span><span>Amount</span><span></span></div>';
+      if(iType==='labor') h+='<div class="ng-si-hdr"><span class="hd hd-date">Week Of</span><span class="hd hd-sm">Hrs</span><span class="hd hd-sm">Rate</span><span class="hd hd-sm">Total</span><span class="hd hd-del"></span></div>';
+      else if(iType==='mat') h+='<div class="ng-si-hdr"><span class="hd hd-date">Date</span><span class="hd hd-flex">Amount</span><span class="hd hd-del"></span></div>';
+      else if(iType==='gc') h+='<div class="ng-si-hdr"><span class="hd hd-date">Week Of</span><span class="hd hd-flex">Vendor</span><span class="hd hd-sm">Amount</span><span class="hd hd-del"></span></div>';
+      else if(iType==='other') h+='<div class="ng-si-hdr"><span class="hd hd-date">Date</span><span class="hd hd-sm">Qty</span><span class="hd hd-sm">$/Unit</span><span class="hd hd-sm">Total</span><span class="hd hd-del"></span></div>';
+      else if(iType==='sub') h+='<div class="ng-si-hdr"><span class="hd hd-date">Date</span><span class="hd hd-flex">Description</span><span class="hd hd-sm">Amount</span><span class="hd hd-del"></span></div>';
+      else if(iType==='po') h+='<div class="ng-si-hdr"><span class="hd hd-date">Date</span><span class="hd hd-flex">Amendment</span><span class="hd hd-sm">Amount</span><span class="hd hd-del"></span></div>';
+      else if(iType==='inv') h+='<div class="ng-si-hdr"><span class="hd hd-date">Date</span><span class="hd hd-flex">Invoice #</span><span class="hd hd-sm">Amount</span><span class="hd hd-del"></span></div>';
 
       n.items.forEach(function(item,idx){
         var nid3=n.id, pre='data-node="'+nid3+'" data-idx="'+idx+'"';

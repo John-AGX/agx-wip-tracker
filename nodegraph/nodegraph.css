@@ -121,6 +121,11 @@ body.light-mode{--ng-bg:#f0f2f5;--ng-surface:#ffffff;--ng-surface2:#e8eaef;--ng-
 .ng-subitem:last-child{border-bottom:none}
 .ng-si-hdr{display:flex;gap:5px;padding:0 0 3px;font-size:9px;color:var(--ng-dim2);text-transform:uppercase;letter-spacing:.3px;border-bottom:1px solid var(--ng-border2);margin-bottom:3px}
 .ng-si-hdr span{flex:1;min-width:0}
+.ng-si-hdr .hd{flex:none}
+.ng-si-hdr .hd-date{width:105px}
+.ng-si-hdr .hd-sm{width:55px;text-align:right}
+.ng-si-hdr .hd-flex{flex:1;min-width:0}
+.ng-si-hdr .hd-del{width:17px}
 .ng-si-f{background:var(--ng-input);border:1px solid var(--ng-border2);color:var(--ng-dim);font-size:11px;padding:3px 5px;border-radius:3px;outline:none;font-family:inherit;min-width:0}
 .ng-si-f:focus{border-color:#4f8cff}
 .ng-si-date{width:105px;flex-shrink:0}
