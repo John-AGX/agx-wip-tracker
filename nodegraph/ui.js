@@ -91,6 +91,7 @@ function renderNodes(){
 
     var canColl = n.type!=='note' && n.type!=='watch';
     var h='<div class="ng-hdr"><span class="ng-hi">'+d.icon+'</span><span class="ng-hdr-name" data-rename="'+n.id+'" title="Double-click to rename">'+n.label+'</span>';
+    if(canColl) h+='<span class="ng-dupbtn" data-dup="'+n.id+'" title="Duplicate node">\u29C9</span>';
     if(canColl) h+='<span class="ng-cbtn" data-coll="'+n.id+'">'+(n.collapsed?'\u25B6':'\u25BC')+'</span>';
     h+='</div>';
 
@@ -426,6 +427,8 @@ function initEvents(){
   canvasEl.addEventListener('mousedown',function(e){
     var port=e.target.closest('[data-dir="out"]');
     if(port){e.stopPropagation();wiringFrom={nid:port.getAttribute('data-node'),pi:parseInt(port.getAttribute('data-pi'))};return;}
+    var db=e.target.closest('.ng-dupbtn');
+    if(db){e.stopPropagation();duplicateNode(db.getAttribute('data-dup'));return;}
     var cb=e.target.closest('.ng-cbtn');
     if(cb){e.stopPropagation();var cn=E.findNode(cb.getAttribute('data-coll'));if(cn){cn.collapsed=!cn.collapsed;render();}return;}
     // Click progress bar / label to edit %
@@ -679,6 +682,26 @@ function initEvents(){
       selN=null;render();
     }
   });
+}
+
+// ── Duplicate a node ──
+function duplicateNode(nodeId){
+  var src=E.findNode(nodeId); if(!src) return;
+  var d=E.DEFS[src.type]; if(!d) return;
+  if(d.master) return; // don't duplicate WIP
+  var nn=E.addNode(src.type, src.x+40, src.y+40, src.label);
+  if(!nn) return;
+  nn.value=src.value;
+  nn.budget=src.budget;
+  nn.pctComplete=src.pctComplete;
+  nn.noteText=src.noteText||'';
+  if(src.items&&src.items.length){
+    nn.items=JSON.parse(JSON.stringify(src.items));
+  }
+  if(src.jobFields&&Object.keys(src.jobFields).length){
+    nn.jobFields=JSON.parse(JSON.stringify(src.jobFields));
+  }
+  render();
 }
 
 // ── Push node data back to job ──
