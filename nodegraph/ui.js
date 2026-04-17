@@ -830,6 +830,15 @@ function pushToJob(){
     }
   });
 
+  // Persist WIP node's computed actual + accrued onto the job so the
+  // sticky header can display them directly instead of re-deriving.
+  var wipNode=nodes.find(function(n){return n.type==='wip';});
+  if(wipNode){
+    E.resetComp();
+    job.ngActualCosts=E.getOutput(wipNode,1);
+    job.ngAccruedCosts=E.getOutput(wipNode,6);
+  }
+
   if(typeof recalcSubCosts==='function') recalcSubCosts(jid);
   if(typeof saveData==='function') saveData();
   if(typeof refreshHeaderMetrics==='function') refreshHeaderMetrics();

@@ -147,10 +147,12 @@ function renderWIPMain() {
         }
 
         function getJobAccruedCosts(jobId) {
-            // Accrued = (Sub Contract × % Complete of assigned scope) - Billed to Date, min $0
+            const job = appData.jobs.find(j => j.id === jobId);
+            if (job && job.ngAccruedCosts != null) return job.ngAccruedCosts;
+
+            // Fallback: % complete-weighted accrual from subs tab
             let totalAccrued = 0;
             const jobSubs = appData.subs.filter(s => s.jobId === jobId);
-            const job = appData.jobs.find(j => j.id === jobId);
 
             jobSubs.forEach(sub => {
                 let pctComplete = 0;
@@ -158,7 +160,6 @@ function renderWIPMain() {
                 var buildingIds = sub.buildingIds || (sub.buildingId ? [sub.buildingId] : []);
 
                 if (sub.level === 'phase' && phaseIds.length > 0) {
-                    // Average % complete across assigned phases
                     let totalPct = 0;
                     phaseIds.forEach(pid => {
                         const phase = appData.phases.find(p => p.id === pid);
@@ -166,14 +167,12 @@ function renderWIPMain() {
                     });
                     pctComplete = totalPct / phaseIds.length;
                 } else if (sub.level === 'building' && buildingIds.length > 0) {
-                    // Average building % complete across assigned buildings
                     let totalPct = 0;
                     buildingIds.forEach(bid => {
                         totalPct += calcBuildingPctComplete(bid, jobId);
                     });
                     pctComplete = totalPct / buildingIds.length;
                 } else {
-                    // Job-level: use job % complete
                     pctComplete = job ? (job.pctComplete || 0) : 0;
                 }
 
@@ -222,7 +221,7 @@ function renderWIPMain() {
             const job = appData.jobs.find(j => j.id === jobId);
             if (!job) return {};
             const co = getJobCOTotals(jobId);
-            const actualCosts = getJobTotalCost(jobId).total;
+            const actualCosts = (job.ngActualCosts != null) ? job.ngActualCosts : getJobTotalCost(jobId).total;
             const contractIncome = job.contractAmount || 0;
             const estimatedCosts = job.estimatedCosts || 0;
             const totalIncome = contractIncome + co.income;
