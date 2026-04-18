@@ -15,12 +15,14 @@
 
   // ── Tab definitions for right panel ───────────────────────
   const RIGHT_TABS = [
-    { id: 'job-overview',     label: 'Overview' },
-    { id: 'job-wip',          label: 'WIP' },
-    { id: 'job-costs',        label: 'Costs' },
-    { id: 'job-changeorders', label: 'CO\'s' },
-    { id: 'job-subs',         label: 'Subs' },
-    { id: 'job-weekly',       label: 'Accruals' }
+    { id: 'job-overview',      label: 'Overview' },
+    { id: 'job-wip',           label: 'WIP' },
+    { id: 'job-costs',         label: 'Costs' },
+    { id: 'job-changeorders',  label: 'CO\'s' },
+    { id: 'job-purchaseorders',label: 'PO\'s' },
+    { id: 'job-invoices',      label: 'Invoices' },
+    { id: 'job-subs',          label: 'Subs' },
+    { id: 'job-weekly',        label: 'Accruals' }
   ];
 
   // ── CSS injection ─────────────────────────────────────────
@@ -29,7 +31,7 @@
     var link = document.createElement('link');
     link.id = 'ws-layout-v2-css';
     link.rel = 'stylesheet';
-    link.href = 'css/workspace-layout.css?v=19';
+    link.href = 'css/workspace-layout.css?v=20';
     document.head.appendChild(link);
   }
 
@@ -305,7 +307,7 @@
       panels.forEach(function(p) { rc.appendChild(p); });
       extraPanels.forEach(function(p) { rc.appendChild(p); });
       var allPanels = Array.from(rc.children);
-      allPanels.forEach(function(p) { p.style.display = 'none'; });
+      allPanels.forEach(function(p) { if (!p.classList.contains('ws-job-info-details')) p.style.display = 'none'; });
       var activeTab = document.querySelector('.ws-right-tab.active');
       var activeId = activeTab ? activeTab.getAttribute('data-panel') : 'job-wip';
       var target = document.getElementById(activeId);
@@ -325,7 +327,7 @@
         this.classList.add('active');
         var targetId = this.getAttribute('data-panel');
         var allPanels = Array.from(rc.children);
-        allPanels.forEach(function(p) { p.style.display = 'none'; });
+        allPanels.forEach(function(p) { if (!p.classList.contains('ws-job-info-details')) p.style.display = 'none'; });
         var target = document.getElementById(targetId);
         if (target) target.style.display = 'block';
         // Call render function for the tab content
@@ -337,6 +339,8 @@
           'job-subs': 'renderJobSubs',
           'job-weekly': 'renderJobWeekly',
           'job-changeorders': 'renderChangeOrders',
+          'job-purchaseorders': 'renderPurchaseOrders',
+          'job-invoices': 'renderInvoices',
           'job-wip': 'renderWipTab'
         };
         var fn = renderers[targetId];
