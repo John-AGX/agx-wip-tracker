@@ -6,14 +6,15 @@ var NG = (function(){
 
 var PT = { C:'currency', P:'percent', N:'number', A:'any' };
 var WCOL = { currency:'#34d399', percent:'#fbbf24', number:'#a78bfa', any:'#4f8cff' };
-// Wire color by SOURCE node type
+// Wire color by SOURCE node type — matches node header colors
 var SRCCOL = {
-  labor:'#fb923c', mat:'#60a5fa', gc:'#fbbf24', other:'#94a3b8',
-  sub:'#a78bfa', po:'#c4b5fd', inv:'#22d3ee',
-  co:'#f472b6',
-  t1:'#34d399', t2:'#6ee7b7',
-  sum:'#e4e6f0', sub2:'#e4e6f0', mul:'#e4e6f0', pct:'#e4e6f0',
-  wip:'#4f8cff', watch:'#8b90a5'
+  labor:'#fbbf24', mat:'#fbbf24', gc:'#fbbf24', other:'#fbbf24',
+  sub:'#a78bfa', po:'#a78bfa', inv:'#a78bfa',
+  co:'#ec4899',
+  t1:'#6aa3ff', t2:'#34d399',
+  sum:'#818cf8', sub2:'#818cf8', mul:'#818cf8', pct:'#818cf8',
+  wip:'#fbbf24', watch:'#fbbf24',
+  job:'#60a5fa'
 };
 
 function canConn(a,b){ return a===b||a===PT.A||b===PT.A||(a===PT.N&&b===PT.C); }

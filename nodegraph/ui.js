@@ -1041,18 +1041,17 @@ function autoArrange(){
     return srcs;
   }
 
-  // Fan inputs around a target. outAngle is the center direction (degrees)
-  // of the fan. yScale compresses the fan vertically for an elliptical shape.
-  // Auto-extends radius (and widens arc if needed) so siblings don't overlap.
-  // Angles are clamped to [120°,240°] so children never swing past 11/7 o'clock.
-  var FAN_MIN=120, FAN_MAX=240;
-  function fanInputs(target, radius, arcSpan, outAngle, yScale){
+  // Fan inputs around a target — inverse octopus mirroring the watch fan.
+  // Auto-extends radius so siblings don't overlap each other.
+  // Angles are clamped to [95°,265°] so children stay on the left hemisphere.
+  var FAN_MIN=95, FAN_MAX=265;
+  function fanInputs(target, radius, arcSpan, outAngle){
     var srcs=inputsOf(target.id).filter(function(s){return !placed[s.id];});
     if(!srcs.length) return [];
     var tcx=target.x+160, tcy=target.y+(target.type==='wip'?220:100);
     var count=srcs.length;
 
-    // Clamp arc to never exceed [FAN_MIN, FAN_MAX]
+    // Clamp arc to the left-hemisphere window
     outAngle=Math.max(FAN_MIN,Math.min(FAN_MAX,outAngle));
     var arcLow=outAngle-arcSpan/2;
     var arcHigh=outAngle+arcSpan/2;
@@ -1062,20 +1061,22 @@ function autoArrange(){
     outAngle=(arcLow+arcHigh)/2;
     if(arcSpan<0) arcSpan=0;
 
-    // Compute required radius so consecutive siblings clear each other.
+    // Auto-extend radius so siblings clear each other
     if(count>1){
-      var maxH=0;
-      srcs.forEach(function(s){ var h=estNodeHeight(s); if(h>maxH) maxH=h; });
-      var needSep=maxH+30;
-      var effYScale=Math.max(yScale,0.4);
+      var maxH=0, maxW=0;
+      srcs.forEach(function(s){
+        var h=estNodeHeight(s); if(h>maxH) maxH=h;
+      });
+      maxW=340;
+      var needSep=Math.max(maxH,maxW)+40;
       var stepRad=(arcSpan/(count-1))*Math.PI/180;
       if(stepRad>0){
-        var reqR=needSep/(2*Math.sin(stepRad/2)*effYScale);
-        var MAX_R=1400;
+        var reqR=needSep/(2*Math.sin(stepRad/2));
+        var MAX_R=1800;
         if(reqR>MAX_R) reqR=MAX_R;
         if(reqR>radius) radius=reqR;
       }
-      if(radius<340) radius=340;
+      if(radius<380) radius=380;
     }
 
     var arcStart=-arcSpan/2;
@@ -1085,7 +1086,7 @@ function autoArrange(){
       var angleDeg=count>1?arcStart+arcSpan*i/(count-1):0;
       var a=(outAngle+angleDeg)*Math.PI/180;
       s.x=Math.round((tcx+Math.cos(a)*radius-160)/SNAP)*SNAP;
-      s.y=Math.round((tcy+Math.sin(a)*radius*yScale-100)/SNAP)*SNAP;
+      s.y=Math.round((tcy+Math.sin(a)*radius-100)/SNAP)*SNAP;
       var childAngle=Math.atan2(s.y+100-tcy, s.x+160-tcx)*180/Math.PI;
       childAngle=Math.max(FAN_MIN,Math.min(FAN_MAX,childAngle));
       result.push({node:s, angle:childAngle});
@@ -1094,13 +1095,13 @@ function autoArrange(){
   }
 
   function fanParams(t){
-    if(t==='wip')  return {r:720, arc:175, y:0.42};
-    if(t==='t1')   return {r:460, arc:80, y:0.55};
-    if(t==='sum')  return {r:420, arc:70, y:0.55};
-    if(t==='job')  return {r:420, arc:70, y:0.55};
-    if(t==='t2')   return {r:400, arc:70, y:0.6};
-    if(t==='sub')  return {r:360, arc:60, y:0.65};
-    return {r:320, arc:55, y:0.65};
+    if(t==='wip')  return {r:780, arc:170};
+    if(t==='t1')   return {r:680, arc:90};
+    if(t==='sum')  return {r:560, arc:80};
+    if(t==='job')  return {r:560, arc:80};
+    if(t==='t2')   return {r:520, arc:75};
+    if(t==='sub')  return {r:460, arc:65};
+    return {r:400, arc:55};
   }
 
   var wipNode=nodes.find(function(n){return n.type==='wip';});
@@ -1116,7 +1117,7 @@ function autoArrange(){
     while(queue.length && guard++ < 200){
       var item=queue.shift();
       var fp=fanParams(item.node.type);
-      var children=fanInputs(item.node, fp.r, fp.arc, item.angle, fp.y);
+      var children=fanInputs(item.node, fp.r, fp.arc, item.angle);
       for(var ci=0;ci<children.length;ci++) queue.push(children[ci]);
     }
   }
