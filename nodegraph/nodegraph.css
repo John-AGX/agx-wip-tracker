@@ -41,9 +41,9 @@ body.light-mode{--ng-bg:#f0f2f5;--ng-surface:#ffffff;--ng-surface2:#e8eaef;--ng-
 .ng-node.ng-sel{border-color:#4f8cff;box-shadow:0 0 0 3px rgba(79,140,255,.25),0 0 24px rgba(79,140,255,.55),0 4px 20px var(--ng-shadow)}
 .ng-node.ng-connected{border-color:#fbbf24;box-shadow:0 0 0 2px rgba(251,191,36,.25),0 0 18px rgba(251,191,36,.45),0 2px 12px var(--ng-shadow)}
 /* Header */
-.ng-hdr{padding:10px 14px;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;border-radius:8px 8px 0 0;display:flex;align-items:center;gap:7px;cursor:move}
-.ng-hdr .ng-hi{font-size:16px}
-.ng-hdr-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ng-hdr{padding:8px 14px;font-size:15px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;border-radius:8px 8px 0 0;display:flex;align-items:center;gap:7px;cursor:move}
+.ng-hdr .ng-hi{font-size:17px}
+.ng-hdr-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-shadow:0 1px 2px rgba(0,0,0,.35)}
 .ng-dupbtn{margin-left:auto;font-size:10px;cursor:pointer;opacity:.35;padding:2px}
 .ng-dupbtn:hover{opacity:1;color:#4f8cff}
 .ng-cbtn{font-size:9px;cursor:pointer;opacity:.5;padding:2px;margin-left:2px}
