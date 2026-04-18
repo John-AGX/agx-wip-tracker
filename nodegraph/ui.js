@@ -1086,7 +1086,7 @@ function autoArrange(){
   }
 
   function fanParams(t){
-    if(t==='wip')  return {r:950, arc:150, y:0.4};
+    if(t==='wip')  return {r:720, arc:175, y:0.42};
     if(t==='t1')   return {r:650, arc:50, y:0.5};
     if(t==='sum')  return {r:550, arc:45, y:0.5};
     if(t==='job')  return {r:550, arc:45, y:0.5};
