@@ -317,6 +317,60 @@ function applyTx(){
   canvasEl.style.transform='translate('+(p.x*z)+'px,'+(p.y*z)+'px) scale('+z+')';
 }
 
+// ── Data Picker — select existing job data to load as a node ──
+function getJobEntries(type){
+  if(typeof appData==='undefined'||!E.job()) return [];
+  var jid=E.job();
+  if(type==='co') return (appData.changeOrders||[]).filter(function(c){return c.jobId===jid;});
+  if(type==='t1') return (appData.buildings||[]).filter(function(b){return b.jobId===jid;});
+  if(type==='t2') return (appData.phases||[]).filter(function(p){return p.jobId===jid;});
+  if(type==='sub') return (appData.subs||[]).filter(function(s){return s.jobId===jid;});
+  return [];
+}
+function entryLabel(type,e){
+  if(type==='co') return (e.coNumber||'CO')+' '+(e.description||'').substring(0,40);
+  if(type==='t1') return e.name||'Building';
+  if(type==='t2') return e.phase||'Phase';
+  if(type==='sub') return e.name||'Sub';
+  return e.name||e.id||'';
+}
+function alreadyLoaded(type,entry){
+  var nodes=E.nodes();
+  return nodes.some(function(n){return n.type===type&&n.data&&n.data.id===entry.id;});
+}
+function showDataPicker(type, cb){
+  var entries=getJobEntries(type).filter(function(e){return !alreadyLoaded(type,e);});
+  var tab=document.getElementById('nodeGraphTab'); if(!tab) return cb(null);
+  // Build picker overlay
+  var overlay=document.createElement('div');
+  overlay.className='ng-picker-overlay';
+  var box=document.createElement('div');
+  box.className='ng-picker-box';
+  var title=E.DEFS[type]?E.DEFS[type].label:'Node';
+  box.innerHTML='<div class="ng-picker-title">Load '+title+' from Job Data</div>';
+  var list=document.createElement('div');
+  list.className='ng-picker-list';
+  entries.forEach(function(e){
+    var row=document.createElement('div');
+    row.className='ng-picker-item';
+    row.textContent=entryLabel(type,e);
+    row.addEventListener('click',function(){ tab.removeChild(overlay); cb(e); });
+    list.appendChild(row);
+  });
+  // "New" option at the bottom
+  var newRow=document.createElement('div');
+  newRow.className='ng-picker-item ng-picker-new';
+  newRow.textContent='+ Create New '+title;
+  newRow.addEventListener('click',function(){ tab.removeChild(overlay); cb(null); });
+  list.appendChild(newRow);
+  box.appendChild(list);
+  // Cancel on overlay click
+  overlay.addEventListener('click',function(ev){ if(ev.target===overlay){ tab.removeChild(overlay); } });
+  overlay.appendChild(box);
+  tab.appendChild(overlay);
+}
+var PICKABLE_TYPES={co:1,t1:1,t2:1,sub:1};
+
 // ── Sidebar ──
 function buildSidebar(){
   var sb=document.querySelector('.ng-sidebar'); if(!sb) return;
@@ -341,12 +395,26 @@ function buildSidebar(){
     if(item){
       var type=item.getAttribute('data-type');
       var d=E.DEFS[type]; if(!d) return;
-      var label=d.label;
-      if(d.nameEdit) label=prompt('Name:',label)||label;
       var p=E.pan(),z=E.zm();
       var cx=-p.x+wrap.clientWidth/2/z, cy=-p.y+wrap.clientHeight/2/z;
-      E.addNode(type,cx-85,cy-30,label);
-      render();
+      if(PICKABLE_TYPES[type] && E.job()){
+        showDataPicker(type, function(entry){
+          if(entry){
+            var lbl=entryLabel(type,entry);
+            E.addNode(type,cx-85,cy-30,lbl,entry);
+          } else {
+            var label=d.label;
+            if(d.nameEdit) label=prompt('Name:',label)||label;
+            E.addNode(type,cx-85,cy-30,label);
+          }
+          render();
+        });
+      } else {
+        var label=d.label;
+        if(d.nameEdit) label=prompt('Name:',label)||label;
+        E.addNode(type,cx-85,cy-30,label);
+        render();
+      }
     }
   });
 
