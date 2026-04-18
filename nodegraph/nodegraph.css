@@ -31,10 +31,10 @@ body.light-mode{--ng-bg:#f0f2f5;--ng-surface:#ffffff;--ng-surface2:#e8eaef;--ng-
 /* Canvas */
 .ng-canvas-area{flex:1;position:relative;overflow:hidden;cursor:grab}
 .ng-canvas-area.ng-panning{cursor:grabbing}
-.ng-canvas{position:absolute;top:0;left:0;width:20000px;height:20000px;transform-origin:0 0}
+.ng-canvas{position:absolute;top:0;left:0;width:20000px;height:20000px;transform-origin:0 0;z-index:5}
 .ng-grid-canvas,.ng-wire-canvas{position:absolute;top:0;left:0}
 .ng-grid-canvas{z-index:0}
-.ng-wire-canvas{pointer-events:none;z-index:1}
+.ng-wire-canvas{pointer-events:none;z-index:2}
 /* Nodes */
 .ng-node{position:absolute;min-width:190px;max-width:420px;background:var(--ng-surface);border:2px solid var(--ng-border);border-radius:10px;box-shadow:0 2px 12px var(--ng-shadow);z-index:10;cursor:move;user-select:none}
 .ng-node:hover{border-color:#3350a0}

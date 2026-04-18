@@ -1055,19 +1055,18 @@ function autoArrange(){
     if(count>1){
       var maxH=0;
       srcs.forEach(function(s){ var h=estNodeHeight(s); if(h>maxH) maxH=h; });
-      var needSep=maxH+50;
-      var effYScale=Math.max(yScale,0.35);
+      var needSep=maxH+30;
+      var effYScale=Math.max(yScale,0.4);
       var stepRad=(arcSpan/(count-1))*Math.PI/180;
       var reqR=needSep/(2*Math.sin(stepRad/2)*effYScale);
-      var MAX_R=2400;
+      var MAX_R=1400;
       // If required radius is unreasonable, widen the arc first
-      while(reqR>MAX_R && arcSpan<160){
-        arcSpan+=10;
+      while(reqR>MAX_R && arcSpan<140){
+        arcSpan+=8;
         stepRad=(arcSpan/(count-1))*Math.PI/180;
         reqR=needSep/(2*Math.sin(stepRad/2)*effYScale);
       }
       if(reqR>radius) radius=reqR;
-      // Horizontal minimum — keep children clear of the parent node itself
       if(radius<340) radius=340;
     }
 
@@ -1087,12 +1086,12 @@ function autoArrange(){
 
   function fanParams(t){
     if(t==='wip')  return {r:720, arc:175, y:0.42};
-    if(t==='t1')   return {r:650, arc:50, y:0.5};
-    if(t==='sum')  return {r:550, arc:45, y:0.5};
-    if(t==='job')  return {r:550, arc:45, y:0.5};
-    if(t==='t2')   return {r:520, arc:45, y:0.5};
-    if(t==='sub')  return {r:460, arc:40, y:0.6};
-    return {r:400, arc:35, y:0.6};
+    if(t==='t1')   return {r:460, arc:80, y:0.55};
+    if(t==='sum')  return {r:420, arc:70, y:0.55};
+    if(t==='job')  return {r:420, arc:70, y:0.55};
+    if(t==='t2')   return {r:400, arc:70, y:0.6};
+    if(t==='sub')  return {r:360, arc:60, y:0.65};
+    return {r:320, arc:55, y:0.65};
   }
 
   var wipNode=nodes.find(function(n){return n.type==='wip';});
