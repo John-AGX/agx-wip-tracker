@@ -1064,13 +1064,13 @@ function autoArrange(){
   }
 
   function fanParams(t){
-    if(t==='wip')  return {r:600, arc:120};
-    if(t==='t1')   return {r:500, arc:100};
-    if(t==='sum')  return {r:450, arc:90};
-    if(t==='job')  return {r:450, arc:90};
-    if(t==='t2')   return {r:450, arc:90};
-    if(t==='sub')  return {r:380, arc:80};
-    return {r:350, arc:70};
+    if(t==='wip')  return {r:850, arc:170};
+    if(t==='t1')   return {r:620, arc:55};
+    if(t==='sum')  return {r:550, arc:50};
+    if(t==='job')  return {r:550, arc:50};
+    if(t==='t2')   return {r:520, arc:50};
+    if(t==='sub')  return {r:460, arc:45};
+    return {r:400, arc:40};
   }
 
   var wipNode=nodes.find(function(n){return n.type==='wip';});
