@@ -1161,8 +1161,12 @@ function autoArrange(){
   }
 
   // Fan inputs — elliptical layout, yScale compresses vertically.
-  function fanInputs(target, radius, arcSpan, outAngle, yScale){
-    var srcs=inputsOf(target.id).filter(function(s){return !placed[s.id];});
+  function fanInputs(target, radius, arcSpan, outAngle, yScale, skipTypes){
+    var srcs=inputsOf(target.id).filter(function(s){
+      if(placed[s.id]) return false;
+      if(skipTypes && skipTypes[s.type]) return false;
+      return true;
+    });
     if(!srcs.length) return [];
     var tcx=target.x+160, tcy=target.y+(target.type==='wip'?220:100);
     var count=srcs.length;
@@ -1180,13 +1184,31 @@ function autoArrange(){
     return result;
   }
 
+  // Trail placement — SUBs cascade outward along the parent's angle (rocket trail)
+  function trailInputs(target, spacing, outAngle, onlySubs){
+    var allSrcs=inputsOf(target.id).filter(function(s){return !placed[s.id];});
+    var srcs=onlySubs ? allSrcs.filter(function(s){return s.type==='sub';}) : allSrcs;
+    if(!srcs.length) return [];
+    var tcx=target.x+160, tcy=target.y+100;
+    var a=outAngle*Math.PI/180;
+    var result=[];
+    srcs.forEach(function(s,i){
+      placed[s.id]=true;
+      var dist=spacing*(i+1);
+      s.x=Math.round((tcx+Math.cos(a)*dist-160)/SNAP)*SNAP;
+      s.y=Math.round((tcy+Math.sin(a)*dist-100)/SNAP)*SNAP;
+      result.push({node:s, angle:outAngle});
+    });
+    return result;
+  }
+
   function fanParams(t){
     if(t==='wip')  return {r:950, arc:150, y:0.4};
-    if(t==='t1')   return {r:650, arc:50, y:0.5};
+    if(t==='t1')   return {r:700, arc:80, y:0.5};
     if(t==='sum')  return {r:550, arc:45, y:0.5};
     if(t==='job')  return {r:550, arc:45, y:0.5};
     if(t==='t2')   return {r:520, arc:45, y:0.5};
-    if(t==='sub')  return {r:460, arc:40, y:0.6};
+    if(t==='sub')  return {r:460, arc:50, y:0.5};
     return {r:400, arc:35, y:0.6};
   }
 
@@ -1198,12 +1220,23 @@ function autoArrange(){
     wipNode.y=Math.round((cy-200)/SNAP)*SNAP;
 
     // BFS backwards from WIP — each child carries its outward angle
+    // T2s: fan non-SUB children normally, then trail SUBs outward
     var queue=[{node:wipNode, angle:180}];
     var guard=0;
     while(queue.length && guard++ < 200){
       var item=queue.shift();
-      var fp=fanParams(item.node.type);
-      var children=fanInputs(item.node, fp.r, fp.arc, item.angle, fp.y);
+      var children;
+      if(item.node.type==='t2'){
+        // Fan non-SUB children (labor, mat, gc, etc.) normally; SUBs reserved for trail
+        var fp=fanParams('t2');
+        children=fanInputs(item.node, fp.r, fp.arc, item.angle, fp.y, {sub:true});
+        // Trail SUBs outward like a rocket trail
+        var trailed=trailInputs(item.node, 380, item.angle, true);
+        for(var ti=0;ti<trailed.length;ti++) children.push(trailed[ti]);
+      } else {
+        var fp2=fanParams(item.node.type);
+        children=fanInputs(item.node, fp2.r, fp2.arc, item.angle, fp2.y);
+      }
       for(var ci=0;ci<children.length;ci++) queue.push(children[ci]);
     }
   }
@@ -1220,7 +1253,7 @@ function autoArrange(){
         }
       }
     });
-    var NW=340; // horizontal spacing (~node width + gap)
+    var NW=340;
     function placeGills(arr, yPos){
       var n=arr.length;
       arr.forEach(function(g,i){
@@ -1230,33 +1263,59 @@ function autoArrange(){
         g.y=Math.round(yPos/SNAP)*SNAP;
       });
     }
-    // WIP is ~280px tall; stack gills clear of WIP body, and clear of T1 fan (T1s are horizontal left of WIP)
     if(topGills.length) placeGills(topGills, wipNode.y-220);
     if(botGills.length) placeGills(botGills, wipNode.y+420);
   }
 
-  // Change Orders: place in rib columns above and below the T2 area
+  // Change Orders: weave into open spaces near their wire targets
   var cos=nodes.filter(function(n){return n.type==='co';});
-  if(cos.length && wipNode){
-    // Find T2 region bounds (fall back to T1s, then WIP)
-    var t2s=nodes.filter(function(n){return n.type==='t2' && placed[n.id];});
-    var refs=t2s.length ? t2s : nodes.filter(function(n){return n.type==='t1' && placed[n.id];});
-    var minT2X=Infinity, minT2Y=Infinity, maxT2Y=-Infinity;
-    refs.forEach(function(n){
-      if(n.x<minT2X) minT2X=n.x;
-      if(n.y<minT2Y) minT2Y=n.y;
-      if(n.y>maxT2Y) maxT2Y=n.y;
+  if(cos.length){
+    var occupied=[];
+    nodes.forEach(function(n){
+      if(placed[n.id]) occupied.push({x:n.x, y:n.y, w:320, h:estNodeHeight(n)});
     });
-    if(minT2X===Infinity){ minT2X=wipNode.x-900; minT2Y=wipNode.y-100; maxT2Y=wipNode.y+100; }
-    var coX=minT2X-380; // past the T2 column
-    var vSpacing=140;
-    var half=Math.ceil(cos.length/2);
-    cos.forEach(function(c,i){
-      placed[c.id]=true;
-      var above=i<half;
-      var slot=above?i:(i-half);
-      c.x=Math.round(coX/SNAP)*SNAP;
-      c.y=Math.round((above?(minT2Y-140-slot*vSpacing):(maxT2Y+140+slot*vSpacing))/SNAP)*SNAP;
+    var GAP=40;
+    function isOpen(x,y,w,h){
+      for(var k=0;k<occupied.length;k++){
+        var o=occupied[k];
+        if(x<o.x+o.w+GAP && x+w>o.x-GAP && y<o.y+o.h+GAP && y+h>o.y-GAP) return false;
+      }
+      return true;
+    }
+    cos.forEach(function(c){
+      var target=null;
+      wires.forEach(function(w){
+        if(w.fromNode===c.id){
+          var t=E.findNode(w.toNode);
+          if(t && placed[t.id]) target=t;
+        }
+      });
+      if(!target) target=wipNode||nodes[0];
+      var ch=estNodeHeight(c);
+      var bx=target.x-360, by=target.y;
+      var found=false;
+      for(var ring=0;ring<25&&!found;ring++){
+        var step=180;
+        for(var dy=-ring;dy<=ring&&!found;dy++){
+          for(var dx=-ring;dx<=ring&&!found;dx++){
+            if(Math.abs(dx)!==ring&&Math.abs(dy)!==ring) continue;
+            var tx=bx+dx*step, ty=by+dy*step;
+            if(isOpen(tx,ty,320,ch)){
+              c.x=Math.round(tx/SNAP)*SNAP;
+              c.y=Math.round(ty/SNAP)*SNAP;
+              placed[c.id]=true;
+              occupied.push({x:c.x, y:c.y, w:320, h:ch});
+              found=true;
+            }
+          }
+        }
+      }
+      if(!found){
+        c.x=Math.round((target.x-360)/SNAP)*SNAP;
+        c.y=Math.round((target.y+200)/SNAP)*SNAP;
+        placed[c.id]=true;
+        occupied.push({x:c.x, y:c.y, w:320, h:ch});
+      }
     });
   }
 
