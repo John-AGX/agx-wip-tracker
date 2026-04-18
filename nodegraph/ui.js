@@ -1043,11 +1043,34 @@ function autoArrange(){
 
   // Fan inputs around a target. outAngle is the center direction (degrees)
   // of the fan. yScale compresses the fan vertically for an elliptical shape.
+  // Auto-extends radius (and widens arc if needed) so siblings don't overlap.
   function fanInputs(target, radius, arcSpan, outAngle, yScale){
     var srcs=inputsOf(target.id).filter(function(s){return !placed[s.id];});
     if(!srcs.length) return [];
     var tcx=target.x+160, tcy=target.y+(target.type==='wip'?220:100);
     var count=srcs.length;
+
+    // Compute required radius so consecutive siblings clear each other.
+    // Separation along the arc ≈ 2*r*sin(step/2); vertical component uses yScale.
+    if(count>1){
+      var maxH=0;
+      srcs.forEach(function(s){ var h=estNodeHeight(s); if(h>maxH) maxH=h; });
+      var needSep=maxH+50;
+      var effYScale=Math.max(yScale,0.35);
+      var stepRad=(arcSpan/(count-1))*Math.PI/180;
+      var reqR=needSep/(2*Math.sin(stepRad/2)*effYScale);
+      var MAX_R=2400;
+      // If required radius is unreasonable, widen the arc first
+      while(reqR>MAX_R && arcSpan<160){
+        arcSpan+=10;
+        stepRad=(arcSpan/(count-1))*Math.PI/180;
+        reqR=needSep/(2*Math.sin(stepRad/2)*effYScale);
+      }
+      if(reqR>radius) radius=reqR;
+      // Horizontal minimum — keep children clear of the parent node itself
+      if(radius<340) radius=340;
+    }
+
     var arcStart=-arcSpan/2;
     var result=[];
     srcs.forEach(function(s,i){
@@ -1126,9 +1149,9 @@ function estNodeHeight(n){
 }
 
 function resolveOverlaps(ns, anchor){
-  var NW=320, MARGIN=24;
+  var NW=320, MARGIN=32;
   var SNAP=E.SNAP;
-  for(var iter=0; iter<60; iter++){
+  for(var iter=0; iter<200; iter++){
     var moved=false;
     for(var i=0;i<ns.length;i++){
       for(var j=i+1;j<ns.length;j++){
