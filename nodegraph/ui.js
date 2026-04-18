@@ -1119,14 +1119,14 @@ function init(){
 
   // Auto arrange
   var aab=tab.querySelector('.ng-arrange-btn');
-  if(aab) aab.addEventListener('click',function(){ autoArrange(); render(); });
+  if(aab) aab.addEventListener('click',function(){ autoArrange(selN); render(); });
 }
 
 // ── Auto Arrange ──
 // Inverse octopus fan: source nodes radiate outward from their downstream
 // targets, mirroring how watch nodes fan from WIP outputs but in reverse.
 // Each sub-fan follows the outward direction of its branch so fans don't overlap.
-function autoArrange(){
+function autoArrange(selectedId){
   var allNodes=E.nodes(), wires=E.wires();
   if(!allNodes.length) return;
 
@@ -1214,62 +1214,35 @@ function autoArrange(){
 
   var wipNode=nodes.find(function(n){return n.type==='wip';});
 
-  if(wipNode){
-    placed[wipNode.id]=true;
-    wipNode.x=Math.round(cx/SNAP)*SNAP;
-    wipNode.y=Math.round((cy-200)/SNAP)*SNAP;
-
-    // BFS backwards from WIP — each child carries its outward angle
-    // T2s: fan non-SUB children normally, then trail SUBs outward
-    var queue=[{node:wipNode, angle:180}];
-    var guard=0;
-    while(queue.length && guard++ < 200){
-      var item=queue.shift();
-      var children;
-      if(item.node.type==='t2'){
-        // Fan non-SUB children (labor, mat, gc, etc.) normally; SUBs reserved for trail
-        var fp=fanParams('t2');
-        children=fanInputs(item.node, fp.r, fp.arc, item.angle, fp.y, {sub:true});
-        // Trail SUBs outward like a rocket trail
-        var trailed=trailInputs(item.node, 380, item.angle, true);
-        for(var ti=0;ti<trailed.length;ti++) children.push(trailed[ti]);
-      } else {
-        var fp2=fanParams(item.node.type);
-        children=fanInputs(item.node, fp2.r, fp2.arc, item.angle, fp2.y);
-      }
-      for(var ci=0;ci<children.length;ci++) queue.push(children[ci]);
-    }
-  }
-
-  // Gills: nodes feeding into WIP's + Top / + Bottom ports go directly above/below WIP
-  if(wipNode){
+  // Place gills (WIP top/bottom port connections) for a given WIP-like target
+  function placeGillsForTarget(target){
     var topGills=[], botGills=[], gillSeen={};
     wires.forEach(function(w){
-      if(w.toNode===wipNode.id && (w.toPort===1 || w.toPort===2)){
+      if(w.toNode===target.id && (w.toPort===1 || w.toPort===2)){
         var s=E.findNode(w.fromNode);
-        if(s && !gillSeen[s.id] && s.type!=='watch' && s.type!=='note'){
+        if(s && !gillSeen[s.id] && s.type!=='watch' && s.type!=='note' && !placed[s.id]){
           gillSeen[s.id]=true;
           (w.toPort===1 ? topGills : botGills).push(s);
         }
       }
     });
     var NW=340;
-    function placeGills(arr, yPos){
+    function doPlace(arr, yPos){
       var n=arr.length;
       arr.forEach(function(g,i){
         placed[g.id]=true;
         var offset=(i-(n-1)/2)*NW;
-        g.x=Math.round((wipNode.x+offset)/SNAP)*SNAP;
+        g.x=Math.round((target.x+offset)/SNAP)*SNAP;
         g.y=Math.round(yPos/SNAP)*SNAP;
       });
     }
-    if(topGills.length) placeGills(topGills, wipNode.y-220);
-    if(botGills.length) placeGills(botGills, wipNode.y+420);
+    if(topGills.length) doPlace(topGills, target.y-220);
+    if(botGills.length) doPlace(botGills, target.y+420);
   }
 
-  // Change Orders: weave into open spaces near their wire targets
-  var cos=nodes.filter(function(n){return n.type==='co';});
-  if(cos.length){
+  // Weave an array of CO nodes into open spots near their wire targets
+  function weaveCOsAmong(coNodes){
+    if(!coNodes.length) return;
     var occupied=[];
     nodes.forEach(function(n){
       if(placed[n.id]) occupied.push({x:n.x, y:n.y, w:320, h:estNodeHeight(n)});
@@ -1282,7 +1255,7 @@ function autoArrange(){
       }
       return true;
     }
-    cos.forEach(function(c){
+    coNodes.forEach(function(c){
       var target=null;
       wires.forEach(function(w){
         if(w.fromNode===c.id){
@@ -1319,6 +1292,105 @@ function autoArrange(){
     });
   }
 
+  // ── Scoped mode: arrange only the selected node's direct inputs ──
+  if(selectedId){
+    var target=E.findNode(selectedId);
+    if(!target || target.type==='watch' || target.type==='note') return;
+
+    // Lock everything in place first, then unlock the direct children we'll move
+    nodes.forEach(function(n){ placed[n.id]=true; });
+
+    // Outward angle: from WIP center to target center (extending away from WIP).
+    // For WIP itself, use 180 (fan left). Other standalone roots default to 180.
+    var outAngle=180;
+    if(target.type!=='wip' && wipNode && wipNode.id!==target.id){
+      var tcx=target.x+160, tcy=target.y+100;
+      var wcx=wipNode.x+160, wcy=wipNode.y+220;
+      outAngle=Math.atan2(tcy-wcy, tcx-wcx)*180/Math.PI;
+    }
+
+    // Collect direct children — split into fan/trail/gill/CO groups
+    var fanChildren=[], coChildren=[], topGills=[], botGills=[];
+    var seenCh={};
+    wires.forEach(function(w){
+      if(w.toNode!==target.id) return;
+      var s=E.findNode(w.fromNode);
+      if(!s || seenCh[s.id] || s.type==='watch' || s.type==='note') return;
+      seenCh[s.id]=true;
+      if(s.type==='co'){ coChildren.push(s); return; }
+      if(target.type==='wip' && w.toPort===1){ topGills.push(s); return; }
+      if(target.type==='wip' && w.toPort===2){ botGills.push(s); return; }
+      fanChildren.push(s);
+    });
+
+    // Unmark the children we intend to place so fanInputs will accept them
+    fanChildren.forEach(function(s){ placed[s.id]=false; });
+    topGills.concat(botGills).forEach(function(s){ placed[s.id]=false; });
+    coChildren.forEach(function(s){ placed[s.id]=false; });
+
+    // Fan arrangement based on target type
+    if(target.type==='wip'){
+      var fp=fanParams('wip');
+      fanInputs(target, fp.r, fp.arc, 180, fp.y);
+      placeGillsForTarget(target);
+    } else if(target.type==='t2'){
+      var fp=fanParams('t2');
+      fanInputs(target, fp.r, fp.arc, outAngle, fp.y, {sub:true});
+      trailInputs(target, 380, outAngle, true);
+    } else {
+      var fp=fanParams(target.type);
+      fanInputs(target, fp.r, fp.arc, outAngle, fp.y);
+    }
+
+    // Weave CO children into open spots
+    weaveCOsAmong(coChildren);
+
+    // Resolve overlaps — only allow the just-placed children to move
+    var movedSet={};
+    fanChildren.forEach(function(s){ movedSet[s.id]=true; });
+    topGills.concat(botGills).forEach(function(s){ movedSet[s.id]=true; });
+    coChildren.forEach(function(s){ movedSet[s.id]=true; });
+    resolveOverlaps(nodes, null, movedSet);
+
+    refanWatches();
+    return;
+  }
+
+  // ── Full-tree mode ──
+  if(wipNode){
+    placed[wipNode.id]=true;
+    wipNode.x=Math.round(cx/SNAP)*SNAP;
+    wipNode.y=Math.round((cy-200)/SNAP)*SNAP;
+
+    // BFS backwards from WIP — each child carries its outward angle
+    // T2s: fan non-SUB children normally, then trail SUBs outward
+    var queue=[{node:wipNode, angle:180}];
+    var guard=0;
+    while(queue.length && guard++ < 200){
+      var item=queue.shift();
+      var children;
+      if(item.node.type==='t2'){
+        // Fan non-SUB children (labor, mat, gc, etc.) normally; SUBs reserved for trail
+        var fp=fanParams('t2');
+        children=fanInputs(item.node, fp.r, fp.arc, item.angle, fp.y, {sub:true});
+        // Trail SUBs outward like a rocket trail
+        var trailed=trailInputs(item.node, 380, item.angle, true);
+        for(var ti=0;ti<trailed.length;ti++) children.push(trailed[ti]);
+      } else {
+        var fp2=fanParams(item.node.type);
+        children=fanInputs(item.node, fp2.r, fp2.arc, item.angle, fp2.y);
+      }
+      for(var ci=0;ci<children.length;ci++) queue.push(children[ci]);
+    }
+  }
+
+  // Gills: nodes feeding into WIP's + Top / + Bottom ports go directly above/below WIP
+  if(wipNode) placeGillsForTarget(wipNode);
+
+  // Change Orders: weave into open spaces near their wire targets
+  var cos=nodes.filter(function(n){return n.type==='co';});
+  weaveCOsAmong(cos);
+
   // Orphans: place in bottom-left corner of the fan spread
   var orphans=nodes.filter(function(n){return !placed[n.id];});
   if(orphans.length){
@@ -1354,7 +1426,7 @@ function estNodeHeight(n){
   return h;
 }
 
-function resolveOverlaps(ns, anchor){
+function resolveOverlaps(ns, anchor, movedSet){
   var NW=320, MARGIN=32;
   var SNAP=E.SNAP;
   for(var iter=0; iter<200; iter++){
@@ -1372,8 +1444,15 @@ function resolveOverlaps(ns, anchor){
         if(adx<minDx && ady<minDy){
           var overlapX=minDx-adx;
           var overlapY=minDy-ady;
-          var aFixed=(anchor&&a.id===anchor.id);
-          var bFixed=(anchor&&b.id===anchor.id);
+          var aFixed, bFixed;
+          if(movedSet){
+            // Scoped mode: everything that wasn't just moved is anchored
+            aFixed=!movedSet[a.id];
+            bFixed=!movedSet[b.id];
+          } else {
+            aFixed=(anchor&&a.id===anchor.id);
+            bFixed=(anchor&&b.id===anchor.id);
+          }
           if(overlapY<=overlapX){
             var sy=dy<0?-1:(dy>0?1:1);
             if(!aFixed && !bFixed){ a.y-=sy*overlapY/2; b.y+=sy*overlapY/2; }
