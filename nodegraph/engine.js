@@ -423,6 +423,14 @@ function loadGraph(){
 }
 
 // ── Wire Drawing ──
+function hexToRgba(hex, a){
+  var h = hex.replace('#','');
+  if(h.length===3) h = h[0]+h[0]+h[1]+h[1]+h[2]+h[2];
+  var r = parseInt(h.substring(0,2),16);
+  var g = parseInt(h.substring(2,4),16);
+  var b = parseInt(h.substring(4,6),16);
+  return 'rgba('+r+','+g+','+b+','+a+')';
+}
 function drawWires(ctx, wrap, wiringFrom, wireMouse){
   ctx.clearRect(0, 0, wrap.clientWidth, wrap.clientHeight);
   ctx.save();
@@ -446,8 +454,14 @@ function drawWires(ctx, wrap, wiringFrom, wireMouse){
       var dx = Math.max(Math.abs(p2.x-p1.x)*0.4, 50);
       ctx.bezierCurveTo(p1.x+dx, p1.y, p2.x-dx, p2.y, p2.x, p2.y);
     }
-    ctx.strokeStyle = col; ctx.lineWidth = 3;
-    ctx.shadowColor = col; ctx.shadowBlur = 6;
+    // Gradient: faded at ends (near nodes), full opacity in middle
+    var grad = ctx.createLinearGradient(p1.x, p1.y, p2.x, p2.y);
+    grad.addColorStop(0,    hexToRgba(col, 0.20));
+    grad.addColorStop(0.18, hexToRgba(col, 1.00));
+    grad.addColorStop(0.82, hexToRgba(col, 1.00));
+    grad.addColorStop(1,    hexToRgba(col, 0.20));
+    ctx.strokeStyle = grad; ctx.lineWidth = 3;
+    ctx.shadowColor = col; ctx.shadowBlur = 4;
     ctx.stroke(); ctx.shadowBlur = 0;
   });
 
