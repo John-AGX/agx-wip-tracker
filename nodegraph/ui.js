@@ -1042,9 +1042,8 @@ function autoArrange(){
   }
 
   // Fan inputs around a target. outAngle is the center direction (degrees)
-  // of the fan — each branch continues in its own outward direction so
-  // sub-fans from different parents don't cross each other.
-  function fanInputs(target, radius, arcSpan, outAngle){
+  // of the fan. yScale compresses the fan vertically for an elliptical shape.
+  function fanInputs(target, radius, arcSpan, outAngle, yScale){
     var srcs=inputsOf(target.id).filter(function(s){return !placed[s.id];});
     if(!srcs.length) return [];
     var tcx=target.x+160, tcy=target.y+(target.type==='wip'?220:100);
@@ -1056,7 +1055,7 @@ function autoArrange(){
       var angleDeg=count>1?arcStart+arcSpan*i/(count-1):0;
       var a=(outAngle+angleDeg)*Math.PI/180;
       s.x=Math.round((tcx+Math.cos(a)*radius-160)/SNAP)*SNAP;
-      s.y=Math.round((tcy+Math.sin(a)*radius-100)/SNAP)*SNAP;
+      s.y=Math.round((tcy+Math.sin(a)*radius*yScale-100)/SNAP)*SNAP;
       var childAngle=Math.atan2(s.y+100-tcy, s.x+160-tcx)*180/Math.PI;
       result.push({node:s, angle:childAngle});
     });
@@ -1064,13 +1063,13 @@ function autoArrange(){
   }
 
   function fanParams(t){
-    if(t==='wip')  return {r:850, arc:170};
-    if(t==='t1')   return {r:620, arc:55};
-    if(t==='sum')  return {r:550, arc:50};
-    if(t==='job')  return {r:550, arc:50};
-    if(t==='t2')   return {r:520, arc:50};
-    if(t==='sub')  return {r:460, arc:45};
-    return {r:400, arc:40};
+    if(t==='wip')  return {r:950, arc:150, y:0.4};
+    if(t==='t1')   return {r:650, arc:50, y:0.5};
+    if(t==='sum')  return {r:550, arc:45, y:0.5};
+    if(t==='job')  return {r:550, arc:45, y:0.5};
+    if(t==='t2')   return {r:520, arc:45, y:0.5};
+    if(t==='sub')  return {r:460, arc:40, y:0.6};
+    return {r:400, arc:35, y:0.6};
   }
 
   var wipNode=nodes.find(function(n){return n.type==='wip';});
@@ -1086,7 +1085,7 @@ function autoArrange(){
     while(queue.length && guard++ < 200){
       var item=queue.shift();
       var fp=fanParams(item.node.type);
-      var children=fanInputs(item.node, fp.r, fp.arc, item.angle);
+      var children=fanInputs(item.node, fp.r, fp.arc, item.angle, fp.y);
       for(var ci=0;ci<children.length;ci++) queue.push(children[ci]);
     }
   }
