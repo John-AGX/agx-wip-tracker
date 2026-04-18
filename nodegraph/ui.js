@@ -1149,6 +1149,10 @@ function autoArrange(){
         }
       }
     });
+    // Order: inv, po, sub grouped together; COs excluded (placed separately)
+    var typeRank={inv:1, po:2, sub:3, t1:4, t2:5, labor:6, mat:7, gc:8, other:9, sum:10, sub2:10, mul:10, pct:10, job:11};
+    srcs=srcs.filter(function(s){return s.type!=='co';});
+    srcs.sort(function(a,b){return (typeRank[a.type]||99)-(typeRank[b.type]||99);});
     return srcs;
   }
 
@@ -1198,6 +1202,31 @@ function autoArrange(){
       var children=fanInputs(item.node, fp.r, fp.arc, item.angle, fp.y);
       for(var ci=0;ci<children.length;ci++) queue.push(children[ci]);
     }
+  }
+
+  // Change Orders: place in rib columns above and below the T2 area
+  var cos=nodes.filter(function(n){return n.type==='co';});
+  if(cos.length && wipNode){
+    // Find T2 region bounds (fall back to T1s, then WIP)
+    var t2s=nodes.filter(function(n){return n.type==='t2' && placed[n.id];});
+    var refs=t2s.length ? t2s : nodes.filter(function(n){return n.type==='t1' && placed[n.id];});
+    var minT2X=Infinity, minT2Y=Infinity, maxT2Y=-Infinity;
+    refs.forEach(function(n){
+      if(n.x<minT2X) minT2X=n.x;
+      if(n.y<minT2Y) minT2Y=n.y;
+      if(n.y>maxT2Y) maxT2Y=n.y;
+    });
+    if(minT2X===Infinity){ minT2X=wipNode.x-900; minT2Y=wipNode.y-100; maxT2Y=wipNode.y+100; }
+    var coX=minT2X-380; // past the T2 column
+    var vSpacing=140;
+    var half=Math.ceil(cos.length/2);
+    cos.forEach(function(c,i){
+      placed[c.id]=true;
+      var above=i<half;
+      var slot=above?i:(i-half);
+      c.x=Math.round(coX/SNAP)*SNAP;
+      c.y=Math.round((above?(minT2Y-140-slot*vSpacing):(maxT2Y+140+slot*vSpacing))/SNAP)*SNAP;
+    });
   }
 
   // Orphans: place in bottom-left corner of the fan spread
