@@ -1012,13 +1012,13 @@ function init(){
 }
 
 // ── Auto Arrange ──
-// Inverse octopus fan: source nodes radiate to the LEFT of their downstream
-// targets, mirroring how watch nodes fan to the RIGHT of WIP outputs.
+// Inverse octopus fan: source nodes radiate outward from their downstream
+// targets, mirroring how watch nodes fan from WIP outputs but in reverse.
+// Each sub-fan follows the outward direction of its branch so fans don't overlap.
 function autoArrange(){
   var allNodes=E.nodes(), wires=E.wires();
   if(!allNodes.length) return;
 
-  // Watch and note nodes keep their positions (user-placed / octopus fan)
   var nodes=allNodes.filter(function(n){return n.type!=='watch'&&n.type!=='note';});
   if(!nodes.length) return;
 
@@ -1041,33 +1041,36 @@ function autoArrange(){
     return srcs;
   }
 
-  // Fan a target's input sources in an arc to the left of the target.
-  // angle 180° = straight left; arcSpan opens above/below that axis.
-  function fanInputs(target, radius, arcSpan){
+  // Fan inputs around a target. outAngle is the center direction (degrees)
+  // of the fan — each branch continues in its own outward direction so
+  // sub-fans from different parents don't cross each other.
+  function fanInputs(target, radius, arcSpan, outAngle){
     var srcs=inputsOf(target.id).filter(function(s){return !placed[s.id];});
     if(!srcs.length) return [];
-    var tcx=target.x+160, tcy=target.y+(target.type==='wip'?220:80);
+    var tcx=target.x+160, tcy=target.y+(target.type==='wip'?220:100);
     var count=srcs.length;
     var arcStart=-arcSpan/2;
+    var result=[];
     srcs.forEach(function(s,i){
       placed[s.id]=true;
       var angleDeg=count>1?arcStart+arcSpan*i/(count-1):0;
-      var a=(180+angleDeg)*Math.PI/180;
+      var a=(outAngle+angleDeg)*Math.PI/180;
       s.x=Math.round((tcx+Math.cos(a)*radius-160)/SNAP)*SNAP;
-      s.y=Math.round((tcy+Math.sin(a)*radius-80)/SNAP)*SNAP;
+      s.y=Math.round((tcy+Math.sin(a)*radius-100)/SNAP)*SNAP;
+      var childAngle=Math.atan2(s.y+100-tcy, s.x+160-tcx)*180/Math.PI;
+      result.push({node:s, angle:childAngle});
     });
-    return srcs;
+    return result;
   }
 
-  // Per-type radius/arc — deeper levels get tighter fans
   function fanParams(t){
-    if(t==='wip')  return {r:780, arc:170};
-    if(t==='t1')   return {r:600, arc:160};
-    if(t==='sum')  return {r:500, arc:150};
-    if(t==='job')  return {r:500, arc:150};
-    if(t==='t2')   return {r:520, arc:150};
-    if(t==='sub')  return {r:420, arc:140};
-    return {r:380, arc:130};
+    if(t==='wip')  return {r:600, arc:120};
+    if(t==='t1')   return {r:500, arc:100};
+    if(t==='sum')  return {r:450, arc:90};
+    if(t==='job')  return {r:450, arc:90};
+    if(t==='t2')   return {r:450, arc:90};
+    if(t==='sub')  return {r:380, arc:80};
+    return {r:350, arc:70};
   }
 
   var wipNode=nodes.find(function(n){return n.type==='wip';});
@@ -1077,28 +1080,32 @@ function autoArrange(){
     wipNode.x=Math.round(cx/SNAP)*SNAP;
     wipNode.y=Math.round((cy-200)/SNAP)*SNAP;
 
-    // BFS backwards from WIP, fanning each target's inputs in an arc
-    var queue=[wipNode];
+    // BFS backwards from WIP — each child carries its outward angle
+    var queue=[{node:wipNode, angle:180}];
     var guard=0;
     while(queue.length && guard++ < 200){
-      var node=queue.shift();
-      var fp=fanParams(node.type);
-      var children=fanInputs(node, fp.r, fp.arc);
-      queue=queue.concat(children);
+      var item=queue.shift();
+      var fp=fanParams(item.node.type);
+      var children=fanInputs(item.node, fp.r, fp.arc, item.angle);
+      for(var ci=0;ci<children.length;ci++) queue.push(children[ci]);
     }
   }
 
-  // Orphans (no path to WIP): stack vertically far to the left
+  // Orphans: place in bottom-left corner of the fan spread
   var orphans=nodes.filter(function(n){return !placed[n.id];});
   if(orphans.length){
-    var oy=cy-orphans.length*90/2;
+    var minX=Infinity, maxY=-Infinity;
+    nodes.forEach(function(n){
+      if(placed[n.id]){ if(n.x<minX) minX=n.x; if(n.y>maxY) maxY=n.y; }
+    });
+    if(minX===Infinity){ minX=cx-600; maxY=cy; }
+    var ox=minX, oy=maxY+120;
     orphans.forEach(function(n,i){
-      n.x=Math.round((cx-2000)/SNAP)*SNAP;
-      n.y=Math.round((oy+i*100)/SNAP)*SNAP;
+      n.x=Math.round((ox+(i%4)*340)/SNAP)*SNAP;
+      n.y=Math.round((oy+Math.floor(i/4)*120)/SNAP)*SNAP;
     });
   }
 
-  // Re-fan the watch nodes around the (possibly moved) WIP so the octopus stays intact
   refanWatches();
 }
 
