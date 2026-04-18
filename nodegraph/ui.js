@@ -1044,29 +1044,37 @@ function autoArrange(){
   // Fan inputs around a target. outAngle is the center direction (degrees)
   // of the fan. yScale compresses the fan vertically for an elliptical shape.
   // Auto-extends radius (and widens arc if needed) so siblings don't overlap.
+  // Angles are clamped to [120°,240°] so children never swing past 11/7 o'clock.
+  var FAN_MIN=120, FAN_MAX=240;
   function fanInputs(target, radius, arcSpan, outAngle, yScale){
     var srcs=inputsOf(target.id).filter(function(s){return !placed[s.id];});
     if(!srcs.length) return [];
     var tcx=target.x+160, tcy=target.y+(target.type==='wip'?220:100);
     var count=srcs.length;
 
+    // Clamp arc to never exceed [FAN_MIN, FAN_MAX]
+    outAngle=Math.max(FAN_MIN,Math.min(FAN_MAX,outAngle));
+    var arcLow=outAngle-arcSpan/2;
+    var arcHigh=outAngle+arcSpan/2;
+    if(arcLow<FAN_MIN) arcLow=FAN_MIN;
+    if(arcHigh>FAN_MAX) arcHigh=FAN_MAX;
+    arcSpan=arcHigh-arcLow;
+    outAngle=(arcLow+arcHigh)/2;
+    if(arcSpan<0) arcSpan=0;
+
     // Compute required radius so consecutive siblings clear each other.
-    // Separation along the arc ≈ 2*r*sin(step/2); vertical component uses yScale.
     if(count>1){
       var maxH=0;
       srcs.forEach(function(s){ var h=estNodeHeight(s); if(h>maxH) maxH=h; });
       var needSep=maxH+30;
       var effYScale=Math.max(yScale,0.4);
       var stepRad=(arcSpan/(count-1))*Math.PI/180;
-      var reqR=needSep/(2*Math.sin(stepRad/2)*effYScale);
-      var MAX_R=1400;
-      // If required radius is unreasonable, widen the arc first
-      while(reqR>MAX_R && arcSpan<140){
-        arcSpan+=8;
-        stepRad=(arcSpan/(count-1))*Math.PI/180;
-        reqR=needSep/(2*Math.sin(stepRad/2)*effYScale);
+      if(stepRad>0){
+        var reqR=needSep/(2*Math.sin(stepRad/2)*effYScale);
+        var MAX_R=1400;
+        if(reqR>MAX_R) reqR=MAX_R;
+        if(reqR>radius) radius=reqR;
       }
-      if(reqR>radius) radius=reqR;
       if(radius<340) radius=340;
     }
 
@@ -1079,6 +1087,7 @@ function autoArrange(){
       s.x=Math.round((tcx+Math.cos(a)*radius-160)/SNAP)*SNAP;
       s.y=Math.round((tcy+Math.sin(a)*radius*yScale-100)/SNAP)*SNAP;
       var childAngle=Math.atan2(s.y+100-tcy, s.x+160-tcx)*180/Math.PI;
+      childAngle=Math.max(FAN_MIN,Math.min(FAN_MAX,childAngle));
       result.push({node:s, angle:childAngle});
     });
     return result;
