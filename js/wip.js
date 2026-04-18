@@ -1209,6 +1209,99 @@ function renderWIPMain() {
             if (buildings.length === 0) {
                 container.innerHTML += '<div style="text-align:center;padding:30px;color:var(--text-dim);font-size:13px;">No buildings or phases yet. Use the buttons above to get started.</div>';
             }
+
+            // ── Change Orders summary ──
+            const cos = appData.changeOrders.filter(c => c.jobId === jobId);
+            if (cos.length > 0) {
+                const coSection = document.createElement('div');
+                coSection.style.cssText = 'margin-top:14px;';
+                let coTotalInc = 0, coTotalCost = 0;
+                cos.forEach(c => { coTotalInc += c.income || 0; coTotalCost += c.estimatedCosts || 0; });
+                var coRows = cos.map(c => {
+                    const profit = (c.income || 0) - (c.estimatedCosts || 0);
+                    return `<div class="card" style="cursor:pointer;padding:8px 12px;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;gap:12px;" onclick="editCO('${escapeHTML(c.id)}')" title="Click to edit">
+                        <div style="min-width:0;flex:1;">
+                            <div style="font-size:13px;font-weight:600;">${escapeHTML(c.coNumber || 'CO')} — ${escapeHTML(c.description || '')}</div>
+                            ${c.date ? '<div style="font-size:10px;color:var(--text-dim);">' + escapeHTML(c.date) + '</div>' : ''}
+                        </div>
+                        <div style="display:flex;gap:14px;font-size:12px;flex-shrink:0;">
+                            <div><span style="color:var(--text-dim);">Inc</span> <b style="color:var(--green);">${formatCurrency(c.income)}</b></div>
+                            <div><span style="color:var(--text-dim);">Cost</span> <b>${formatCurrency(c.estimatedCosts)}</b></div>
+                            <div><span style="color:var(--text-dim);">Profit</span> <b style="color:${profit >= 0 ? 'var(--green)' : 'var(--red)'};">${formatCurrency(profit)}</b></div>
+                        </div>
+                    </div>`;
+                }).join('');
+                coSection.innerHTML = `
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+                        <h3 style="font-size:13px;margin:0;">&#x1F4DD; Change Orders (${cos.length})</h3>
+                        <div style="font-size:12px;color:var(--text-dim);">Total Inc: <b style="color:var(--green);">${formatCurrency(coTotalInc)}</b> &nbsp; Profit: <b style="color:${(coTotalInc-coTotalCost)>=0?'var(--green)':'var(--red)'};">${formatCurrency(coTotalInc-coTotalCost)}</b></div>
+                    </div>
+                    ${coRows}`;
+                container.appendChild(coSection);
+            }
+
+            // ── Purchase Orders summary ──
+            const pos = appData.purchaseOrders.filter(p => p.jobId === jobId);
+            if (pos.length > 0) {
+                const poSection = document.createElement('div');
+                poSection.style.cssText = 'margin-top:14px;';
+                let poTotalAmt = 0, poTotalBilled = 0;
+                pos.forEach(p => { poTotalAmt += p.amount || 0; poTotalBilled += p.billedToDate || 0; });
+                var poRows = pos.map(p => {
+                    const remaining = (p.amount || 0) - (p.billedToDate || 0);
+                    const statusColor = p.status === 'Closed' ? 'var(--green)' : p.status === 'Partial' ? 'var(--yellow)' : 'var(--accent)';
+                    return `<div class="card" style="cursor:pointer;padding:8px 12px;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;gap:12px;" onclick="editPO('${escapeHTML(p.id)}')" title="Click to edit">
+                        <div style="min-width:0;flex:1;">
+                            <div style="font-size:13px;font-weight:600;">${escapeHTML(p.poNumber || 'PO')} — ${escapeHTML(p.vendor || '')}</div>
+                            ${p.description ? '<div style="font-size:11px;color:var(--text-dim);">' + escapeHTML(p.description) + '</div>' : ''}
+                        </div>
+                        <div style="display:flex;gap:14px;font-size:12px;align-items:center;flex-shrink:0;">
+                            <div><span style="color:var(--text-dim);">Amt</span> <b>${formatCurrency(p.amount)}</b></div>
+                            <div><span style="color:var(--text-dim);">Billed</span> <b>${formatCurrency(p.billedToDate)}</b></div>
+                            <div><span style="color:var(--text-dim);">Rem</span> <b style="color:${remaining > 0 ? 'var(--yellow)' : 'var(--green)'};">${formatCurrency(remaining)}</b></div>
+                            <span style="font-size:10px;padding:2px 8px;border-radius:10px;background:rgba(79,140,255,0.1);color:${statusColor};font-weight:600;">${escapeHTML(p.status || 'Open')}</span>
+                        </div>
+                    </div>`;
+                }).join('');
+                poSection.innerHTML = `
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+                        <h3 style="font-size:13px;margin:0;">&#x1F4C4; Purchase Orders (${pos.length})</h3>
+                        <div style="font-size:12px;color:var(--text-dim);">Total: <b>${formatCurrency(poTotalAmt)}</b> &nbsp; Billed: <b>${formatCurrency(poTotalBilled)}</b> &nbsp; Rem: <b style="color:${(poTotalAmt-poTotalBilled)>0?'var(--yellow)':'var(--green)'};">${formatCurrency(poTotalAmt-poTotalBilled)}</b></div>
+                    </div>
+                    ${poRows}`;
+                container.appendChild(poSection);
+            }
+
+            // ── Invoices summary ──
+            const invs = appData.invoices.filter(i => i.jobId === jobId);
+            if (invs.length > 0) {
+                const invSection = document.createElement('div');
+                invSection.style.cssText = 'margin-top:14px;';
+                let invTotalAmt = 0, invTotalPaid = 0;
+                invs.forEach(i => { invTotalAmt += i.amount || 0; if (i.status === 'Paid') invTotalPaid += i.amount || 0; });
+                var invRows = invs.map(i => {
+                    const statusColor = i.status === 'Paid' ? 'var(--green)' : i.status === 'Sent' ? 'var(--yellow)' : 'var(--text-dim)';
+                    return `<div class="card" style="cursor:pointer;padding:8px 12px;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;gap:12px;" onclick="editInvoice('${escapeHTML(i.id)}')" title="Click to edit">
+                        <div style="min-width:0;flex:1;">
+                            <div style="font-size:13px;font-weight:600;">${escapeHTML(i.invNumber || 'INV')} — ${escapeHTML(i.vendor || '')}</div>
+                            ${i.description ? '<div style="font-size:11px;color:var(--text-dim);">' + escapeHTML(i.description) + '</div>' : ''}
+                        </div>
+                        <div style="display:flex;gap:14px;font-size:12px;align-items:center;flex-shrink:0;">
+                            <div><span style="color:var(--text-dim);">Amt</span> <b>${formatCurrency(i.amount)}</b></div>
+                            ${i.date ? '<div><span style="color:var(--text-dim);">Date</span> <b>' + escapeHTML(i.date) + '</b></div>' : ''}
+                            ${i.dueDate ? '<div><span style="color:var(--text-dim);">Due</span> <b>' + escapeHTML(i.dueDate) + '</b></div>' : ''}
+                            <span style="font-size:10px;padding:2px 8px;border-radius:10px;background:rgba(79,140,255,0.1);color:${statusColor};font-weight:600;">${escapeHTML(i.status || 'Draft')}</span>
+                        </div>
+                    </div>`;
+                }).join('');
+                invSection.innerHTML = `
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+                        <h3 style="font-size:13px;margin:0;">&#x1F4B3; Invoices (${invs.length})</h3>
+                        <div style="font-size:12px;color:var(--text-dim);">Total: <b>${formatCurrency(invTotalAmt)}</b> &nbsp; Paid: <b style="color:var(--green);">${formatCurrency(invTotalPaid)}</b> &nbsp; Outstanding: <b style="color:var(--yellow);">${formatCurrency(invTotalAmt-invTotalPaid)}</b></div>
+                    </div>
+                    ${invRows}`;
+                container.appendChild(invSection);
+            }
         }
 
         function renderJobBuildings(jobId) {
