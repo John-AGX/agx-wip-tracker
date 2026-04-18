@@ -6,6 +6,15 @@ var NG = (function(){
 
 var PT = { C:'currency', P:'percent', N:'number', A:'any' };
 var WCOL = { currency:'#34d399', percent:'#fbbf24', number:'#a78bfa', any:'#4f8cff' };
+// Wire color by SOURCE node type
+var SRCCOL = {
+  labor:'#fb923c', mat:'#60a5fa', gc:'#fbbf24', other:'#94a3b8',
+  sub:'#a78bfa', po:'#c4b5fd', inv:'#22d3ee',
+  co:'#f472b6',
+  t1:'#34d399', t2:'#6ee7b7',
+  sum:'#e4e6f0', sub2:'#e4e6f0', mul:'#e4e6f0', pct:'#e4e6f0',
+  wip:'#4f8cff', watch:'#8b90a5'
+};
 
 function canConn(a,b){ return a===b||a===PT.A||b===PT.A||(a===PT.N&&b===PT.C); }
 
@@ -408,7 +417,8 @@ function drawWires(ctx, wrap, wiringFrom, wireMouse){
     var p2 = portPos(w.toNode, w.toPort, 'in');
     var tn = findNode(w.toNode), td = DEFS[tn?tn.type:''];
     var tp = td && td.ins && td.ins[w.toPort] ? td.ins[w.toPort].t : PT.A;
-    var col = WCOL[tp] || '#4f8cff';
+    var fn = findNode(w.fromNode);
+    var col = (fn && SRCCOL[fn.type]) || WCOL[tp] || '#4f8cff';
     // Detect vertical approach: WIP's top (pi=1) and bottom (pi=2) ports
     var vertIn = tn && tn.type==='wip' && (w.toPort===1||w.toPort===2);
     ctx.beginPath(); ctx.moveTo(p1.x, p1.y);
@@ -429,10 +439,12 @@ function drawWires(ctx, wrap, wiringFrom, wireMouse){
     var p1 = portPos(wiringFrom.nid, wiringFrom.pi, 'out');
     var mx = wireMouse.x/zoom - panX, my = wireMouse.y/zoom - panY;
     var dx = Math.max(Math.abs(mx-p1.x)*0.4, 50);
+    var wf = findNode(wiringFrom.nid);
+    var pcol = (wf && SRCCOL[wf.type]) || '#4f8cff';
     ctx.beginPath();
     ctx.moveTo(p1.x, p1.y);
     ctx.bezierCurveTo(p1.x+dx, p1.y, mx-dx, my, mx, my);
-    ctx.strokeStyle = '#4f8cff'; ctx.lineWidth = 2;
+    ctx.strokeStyle = pcol; ctx.lineWidth = 2;
     ctx.setLineDash([6,4]); ctx.stroke(); ctx.setLineDash([]);
   }
   ctx.restore();
@@ -482,7 +494,7 @@ function drawGrid(ctx, w, h){
 
 // ── Public API ──
 return {
-  PT:PT, DEFS:DEFS, CATS:CATS, WCOL:WCOL, SNAP:SNAP,
+  PT:PT, DEFS:DEFS, CATS:CATS, WCOL:WCOL, SRCCOL:SRCCOL, SNAP:SNAP,
   nodes:function(){ return nodes; },
   wires:function(){ return wires; },
   setNodes:function(n){ nodes=n; },
