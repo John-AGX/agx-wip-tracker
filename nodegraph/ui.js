@@ -1012,6 +1012,8 @@ function init(){
 }
 
 // ── Auto Arrange ──
+// Inverse octopus fan: source nodes radiate to the LEFT of their downstream
+// targets, mirroring how watch nodes fan to the RIGHT of WIP outputs.
 function autoArrange(){
   var allNodes=E.nodes(), wires=E.wires();
   if(!allNodes.length) return;
@@ -1020,62 +1022,81 @@ function autoArrange(){
   var nodes=allNodes.filter(function(n){return n.type!=='watch'&&n.type!=='note';});
   if(!nodes.length) return;
 
-  // Assign columns by node type (left to right flow)
-  var colMap={ inv:0, po:0, sub:1, co:1, labor:2, mat:2, gc:2, other:2, cost:2, t2:3, t1:4, sum:5, job:6, wip:7 };
-
-  // Group nodes by column
-  var columns={};
-  nodes.forEach(function(n){
-    var col=colMap[n.type]!=null?colMap[n.type]:5;
-    if(!columns[col]) columns[col]=[];
-    columns[col].push(n);
-  });
-
-  // Sort columns by key
-  var colKeys=Object.keys(columns).map(Number).sort(function(a,b){return a-b;});
-
-  // Calculate viewport center
   var p=E.pan(),z=E.zm();
   var cx=-p.x+(wrap?wrap.clientWidth/2/z:500);
   var cy=-p.y+(wrap?wrap.clientHeight/2/z:300);
-
-  // Layout each column
   var SNAP=E.SNAP;
-  var colWidth=300;
-  var rowGap=60; // gap between nodes in same column
-  var startX=cx-(colKeys.length*colWidth)/2;
+  var placed={};
 
-  colKeys.forEach(function(colIdx,ci){
-    var col=columns[colIdx];
-    var totalH=0;
-    // Estimate height per node (generous for expanded state)
-    col.forEach(function(n){
-      var d=E.DEFS[n.type];
-      var h=50; // header + collapsed row
-      if(!n.collapsed){
-        h=80; // header + ports base
-        var numPorts=Math.max((d&&d.ins?d.ins.length:0),(d&&d.outs?d.outs.length:0));
-        h+=numPorts*26; // port rows
-        if(d&&d.hasProg) h+=50; // slider + label
-        if(d&&d.hasItems) h+=40+(n.items?n.items.length*30:0); // sub-items + add button + total
-        if(d&&d.master) h=280; // job/wip nodes are tall
-        if(n.type==='watch') h=140;
-        if(n.type==='note') h=120;
-        if(n.type==='t1') h+=60; // allocation display
-        if(n.type==='sub') h+=80; // PO/invoice/accrued display
+  function inputsOf(targetId){
+    var srcs=[], seen={};
+    wires.forEach(function(w){
+      if(w.toNode===targetId){
+        var s=E.findNode(w.fromNode);
+        if(s&&!seen[s.id]&&s.type!=='watch'&&s.type!=='note'){
+          seen[s.id]=true; srcs.push(s);
+        }
       }
-      n._estH=h;
-      totalH+=h+rowGap;
     });
-    var startY=cy-totalH/2;
-    var y=startY;
-    col.forEach(function(n){
-      n.x=Math.round((startX+ci*colWidth)/SNAP)*SNAP;
-      n.y=Math.round(y/SNAP)*SNAP;
-      y+=n._estH+rowGap;
-      delete n._estH;
+    return srcs;
+  }
+
+  // Fan a target's input sources in an arc to the left of the target.
+  // angle 180° = straight left; arcSpan opens above/below that axis.
+  function fanInputs(target, radius, arcSpan){
+    var srcs=inputsOf(target.id).filter(function(s){return !placed[s.id];});
+    if(!srcs.length) return [];
+    var tcx=target.x+160, tcy=target.y+(target.type==='wip'?220:80);
+    var count=srcs.length;
+    var arcStart=-arcSpan/2;
+    srcs.forEach(function(s,i){
+      placed[s.id]=true;
+      var angleDeg=count>1?arcStart+arcSpan*i/(count-1):0;
+      var a=(180+angleDeg)*Math.PI/180;
+      s.x=Math.round((tcx+Math.cos(a)*radius-160)/SNAP)*SNAP;
+      s.y=Math.round((tcy+Math.sin(a)*radius-80)/SNAP)*SNAP;
     });
-  });
+    return srcs;
+  }
+
+  // Per-type radius/arc — deeper levels get tighter fans
+  function fanParams(t){
+    if(t==='wip')  return {r:780, arc:170};
+    if(t==='t1')   return {r:600, arc:160};
+    if(t==='sum')  return {r:500, arc:150};
+    if(t==='job')  return {r:500, arc:150};
+    if(t==='t2')   return {r:520, arc:150};
+    if(t==='sub')  return {r:420, arc:140};
+    return {r:380, arc:130};
+  }
+
+  var wipNode=nodes.find(function(n){return n.type==='wip';});
+
+  if(wipNode){
+    placed[wipNode.id]=true;
+    wipNode.x=Math.round(cx/SNAP)*SNAP;
+    wipNode.y=Math.round((cy-200)/SNAP)*SNAP;
+
+    // BFS backwards from WIP, fanning each target's inputs in an arc
+    var queue=[wipNode];
+    var guard=0;
+    while(queue.length && guard++ < 200){
+      var node=queue.shift();
+      var fp=fanParams(node.type);
+      var children=fanInputs(node, fp.r, fp.arc);
+      queue=queue.concat(children);
+    }
+  }
+
+  // Orphans (no path to WIP): stack vertically far to the left
+  var orphans=nodes.filter(function(n){return !placed[n.id];});
+  if(orphans.length){
+    var oy=cy-orphans.length*90/2;
+    orphans.forEach(function(n,i){
+      n.x=Math.round((cx-2000)/SNAP)*SNAP;
+      n.y=Math.round((oy+i*100)/SNAP)*SNAP;
+    });
+  }
 
   // Re-fan the watch nodes around the (possibly moved) WIP so the octopus stays intact
   refanWatches();
