@@ -325,6 +325,8 @@ function getJobEntries(type){
   if(type==='t1') return (appData.buildings||[]).filter(function(b){return b.jobId===jid;});
   if(type==='t2') return (appData.phases||[]).filter(function(p){return p.jobId===jid;});
   if(type==='sub') return (appData.subs||[]).filter(function(s){return s.jobId===jid;});
+  if(type==='po') return (appData.purchaseOrders||[]).filter(function(p){return p.jobId===jid;});
+  if(type==='inv') return (appData.invoices||[]).filter(function(i){return i.jobId===jid;});
   return [];
 }
 function entryLabel(type,e){
@@ -332,6 +334,8 @@ function entryLabel(type,e){
   if(type==='t1') return e.name||'Building';
   if(type==='t2') return e.phase||'Phase';
   if(type==='sub') return e.name||'Sub';
+  if(type==='po') return (e.poNumber||'PO')+' '+(e.vendor||'').substring(0,40);
+  if(type==='inv') return (e.invNumber||'INV')+' '+(e.vendor||'').substring(0,40);
   return e.name||e.id||'';
 }
 function findLoadedNode(type,entry){
@@ -387,7 +391,7 @@ function showDataPicker(type, cb){
   overlay.appendChild(box);
   tab.appendChild(overlay);
 }
-var PICKABLE_TYPES={co:1,t1:1,t2:1,sub:1};
+var PICKABLE_TYPES={co:1,t1:1,t2:1,sub:1,po:1,inv:1};
 
 // ── Sidebar ──
 function buildSidebar(){

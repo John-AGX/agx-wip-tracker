@@ -579,6 +579,214 @@ function renderWIPMain() {
             document.getElementById('co-total-profit').style.color = (totalInc - totalCost) >= 0 ? 'var(--green)' : 'var(--red)';
         }
 
+        // ==================== PURCHASE ORDERS ====================
+        function getJobPOTotals(jobId) {
+            const pos = appData.purchaseOrders.filter(po => po.jobId === jobId);
+            return {
+                amount: pos.reduce((sum, po) => sum + (po.amount || 0), 0),
+                billed: pos.reduce((sum, po) => sum + (po.billedToDate || 0), 0),
+                count: pos.length
+            };
+        }
+
+        function openAddPOModal() {
+            document.getElementById('poModalHeader').textContent = 'Add Purchase Order';
+            document.getElementById('poSaveBtn').innerHTML = '&#x1F4C4; Add Purchase Order';
+            document.getElementById('poNumber').value = '';
+            document.getElementById('poDate').value = new Date().toISOString().split('T')[0];
+            document.getElementById('poVendor').value = '';
+            document.getElementById('poDescription').value = '';
+            document.getElementById('poAmount').value = '';
+            document.getElementById('poBilled').value = '';
+            document.getElementById('poStatus').value = 'Open';
+            document.getElementById('poNotes').value = '';
+            appState.editPOId = null;
+            openModal('addPOModal');
+        }
+
+        function savePO() {
+            const vendor = document.getElementById('poVendor').value.trim();
+            if (!vendor) { alert('Enter a vendor name'); return; }
+            const poData = {
+                jobId: appState.currentJobId,
+                poNumber: document.getElementById('poNumber').value.trim(),
+                vendor: vendor,
+                description: document.getElementById('poDescription').value.trim(),
+                amount: parseFloat(document.getElementById('poAmount').value) || 0,
+                billedToDate: parseFloat(document.getElementById('poBilled').value) || 0,
+                date: document.getElementById('poDate').value,
+                status: document.getElementById('poStatus').value,
+                notes: document.getElementById('poNotes').value.trim()
+            };
+            if (appState.editPOId) {
+                const idx = appData.purchaseOrders.findIndex(po => po.id === appState.editPOId);
+                if (idx >= 0) Object.assign(appData.purchaseOrders[idx], poData);
+            } else {
+                poData.id = 'po' + Date.now();
+                appData.purchaseOrders.push(poData);
+            }
+            saveData();
+            closeModal('addPOModal');
+            renderJobDetail(appState.currentJobId);
+        }
+
+        function editPO(poId) {
+            const po = appData.purchaseOrders.find(p => p.id === poId);
+            if (!po) return;
+            appState.editPOId = poId;
+            document.getElementById('poModalHeader').textContent = 'Edit Purchase Order';
+            document.getElementById('poSaveBtn').innerHTML = '&#x1F4BE; Update Purchase Order';
+            document.getElementById('poNumber').value = po.poNumber || '';
+            document.getElementById('poDate').value = po.date || '';
+            document.getElementById('poVendor').value = po.vendor || '';
+            document.getElementById('poDescription').value = po.description || '';
+            document.getElementById('poAmount').value = po.amount || '';
+            document.getElementById('poBilled').value = po.billedToDate || '';
+            document.getElementById('poStatus').value = po.status || 'Open';
+            document.getElementById('poNotes').value = po.notes || '';
+            openModal('addPOModal');
+        }
+
+        function deletePO(poId) {
+            if (!confirm('Delete this purchase order?')) return;
+            appData.purchaseOrders = appData.purchaseOrders.filter(p => p.id !== poId);
+            saveData();
+            renderJobDetail(appState.currentJobId);
+        }
+
+        function renderPurchaseOrders(jobId) {
+            const pos = appData.purchaseOrders.filter(po => po.jobId === jobId);
+            const tbody = document.querySelector('#po-table tbody');
+            tbody.innerHTML = '';
+            let totalAmt = 0, totalBilled = 0;
+            pos.forEach((po, idx) => {
+                const remaining = (po.amount || 0) - (po.billedToDate || 0);
+                totalAmt += po.amount || 0;
+                totalBilled += po.billedToDate || 0;
+                const statusColor = po.status === 'Closed' ? 'var(--green)' : po.status === 'Partial' ? 'var(--yellow)' : 'var(--accent)';
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td>${escapeHTML(po.poNumber) || 'PO-' + (idx + 1)}</td>
+                    <td>${escapeHTML(po.vendor)}</td>
+                    <td>${escapeHTML(po.description)}${po.notes ? '<br><span style="font-size: 11px; color: var(--text-dim);">' + escapeHTML(po.notes) + '</span>' : ''}</td>
+                    <td style="text-align: right;">${formatCurrency(po.amount)}</td>
+                    <td style="text-align: right;">${formatCurrency(po.billedToDate)}</td>
+                    <td style="text-align: right; color: ${remaining > 0 ? 'var(--yellow)' : 'var(--green)'};">${formatCurrency(remaining)}</td>
+                    <td><span style="color: ${statusColor}; font-weight: 600; font-size: 12px;">${escapeHTML(po.status)}</span></td>
+                    <td>${escapeHTML(po.date) || '—'}</td>
+                    <td>
+                        <button class="small" onclick="event.stopPropagation(); editPO('${escapeHTML(po.id)}')">&#x270F;&#xFE0F; Edit</button>
+                        <button class="small danger" onclick="event.stopPropagation(); deletePO('${escapeHTML(po.id)}')">&#x1F5D1; Del</button>
+                    </td>`;
+                tbody.appendChild(row);
+            });
+            document.getElementById('po-total-amount').textContent = formatCurrency(totalAmt);
+            document.getElementById('po-total-billed').textContent = formatCurrency(totalBilled);
+            document.getElementById('po-total-remaining').textContent = formatCurrency(totalAmt - totalBilled);
+            document.getElementById('po-total-remaining').style.color = (totalAmt - totalBilled) > 0 ? 'var(--yellow)' : 'var(--green)';
+        }
+
+        // ==================== INVOICES ====================
+        function getJobInvTotals(jobId) {
+            const invs = appData.invoices.filter(inv => inv.jobId === jobId);
+            return {
+                amount: invs.reduce((sum, inv) => sum + (inv.amount || 0), 0),
+                paid: invs.filter(inv => inv.status === 'Paid').reduce((sum, inv) => sum + (inv.amount || 0), 0),
+                count: invs.length
+            };
+        }
+
+        function openAddInvoiceModal() {
+            document.getElementById('invModalHeader').textContent = 'Add Invoice';
+            document.getElementById('invSaveBtn').innerHTML = '&#x1F4B3; Add Invoice';
+            document.getElementById('invNumber').value = '';
+            document.getElementById('invDate').value = new Date().toISOString().split('T')[0];
+            document.getElementById('invDueDate').value = '';
+            document.getElementById('invVendor').value = '';
+            document.getElementById('invDescription').value = '';
+            document.getElementById('invAmount').value = '';
+            document.getElementById('invStatus').value = 'Draft';
+            document.getElementById('invNotes').value = '';
+            appState.editInvId = null;
+            openModal('addInvModal');
+        }
+
+        function saveInvoice() {
+            const vendor = document.getElementById('invVendor').value.trim();
+            if (!vendor) { alert('Enter a vendor name'); return; }
+            const invData = {
+                jobId: appState.currentJobId,
+                invNumber: document.getElementById('invNumber').value.trim(),
+                vendor: vendor,
+                description: document.getElementById('invDescription').value.trim(),
+                amount: parseFloat(document.getElementById('invAmount').value) || 0,
+                date: document.getElementById('invDate').value,
+                dueDate: document.getElementById('invDueDate').value,
+                status: document.getElementById('invStatus').value,
+                notes: document.getElementById('invNotes').value.trim()
+            };
+            if (appState.editInvId) {
+                const idx = appData.invoices.findIndex(inv => inv.id === appState.editInvId);
+                if (idx >= 0) Object.assign(appData.invoices[idx], invData);
+            } else {
+                invData.id = 'inv' + Date.now();
+                appData.invoices.push(invData);
+            }
+            saveData();
+            closeModal('addInvModal');
+            renderJobDetail(appState.currentJobId);
+        }
+
+        function editInvoice(invId) {
+            const inv = appData.invoices.find(i => i.id === invId);
+            if (!inv) return;
+            appState.editInvId = invId;
+            document.getElementById('invModalHeader').textContent = 'Edit Invoice';
+            document.getElementById('invSaveBtn').innerHTML = '&#x1F4BE; Update Invoice';
+            document.getElementById('invNumber').value = inv.invNumber || '';
+            document.getElementById('invDate').value = inv.date || '';
+            document.getElementById('invDueDate').value = inv.dueDate || '';
+            document.getElementById('invVendor').value = inv.vendor || '';
+            document.getElementById('invDescription').value = inv.description || '';
+            document.getElementById('invAmount').value = inv.amount || '';
+            document.getElementById('invStatus').value = inv.status || 'Draft';
+            document.getElementById('invNotes').value = inv.notes || '';
+            openModal('addInvModal');
+        }
+
+        function deleteInvoice(invId) {
+            if (!confirm('Delete this invoice?')) return;
+            appData.invoices = appData.invoices.filter(i => i.id !== invId);
+            saveData();
+            renderJobDetail(appState.currentJobId);
+        }
+
+        function renderInvoices(jobId) {
+            const invs = appData.invoices.filter(inv => inv.jobId === jobId);
+            const tbody = document.querySelector('#inv-table tbody');
+            tbody.innerHTML = '';
+            let totalAmt = 0;
+            invs.forEach((inv, idx) => {
+                totalAmt += inv.amount || 0;
+                const statusColor = inv.status === 'Paid' ? 'var(--green)' : inv.status === 'Sent' ? 'var(--yellow)' : 'var(--text-dim)';
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td>${escapeHTML(inv.invNumber) || 'INV-' + (idx + 1)}</td>
+                    <td>${escapeHTML(inv.vendor)}</td>
+                    <td>${escapeHTML(inv.description)}${inv.notes ? '<br><span style="font-size: 11px; color: var(--text-dim);">' + escapeHTML(inv.notes) + '</span>' : ''}</td>
+                    <td style="text-align: right;">${formatCurrency(inv.amount)}</td>
+                    <td><span style="color: ${statusColor}; font-weight: 600; font-size: 12px;">${escapeHTML(inv.status)}</span></td>
+                    <td>${escapeHTML(inv.date) || '—'}</td>
+                    <td>${escapeHTML(inv.dueDate) || '—'}</td>
+                    <td>
+                        <button class="small" onclick="event.stopPropagation(); editInvoice('${escapeHTML(inv.id)}')">&#x270F;&#xFE0F; Edit</button>
+                        <button class="small danger" onclick="event.stopPropagation(); deleteInvoice('${escapeHTML(inv.id)}')">&#x1F5D1; Del</button>
+                    </td>`;
+                tbody.appendChild(row);
+            });
+            document.getElementById('inv-total-amount').textContent = formatCurrency(totalAmt);
+        }
+
         function calculateWIPSummary() {
             let totalIncome = 0;
             let totalCost = 0;
@@ -966,6 +1174,8 @@ function renderWIPMain() {
             switchJobSubTab(activeTabName);
             renderWipTab(jobId);
             renderChangeOrders(jobId);
+            renderPurchaseOrders(jobId);
+            renderInvoices(jobId);
 
             // Refresh sticky header metrics strip
             if (typeof refreshHeaderMetrics === 'function') refreshHeaderMetrics();
@@ -982,7 +1192,9 @@ function renderWIPMain() {
             btnRow.innerHTML = '<button class="small" onclick="openAddBuildingToJobModal()" style="font-size:11px;padding:4px 10px;">&#x1F3D7; Building</button>' +
                 '<button class="small" onclick="openAddPhaseToJobModal()" style="font-size:11px;padding:4px 10px;">&#x1F4CB; Phase</button>' +
                 '<button class="small" onclick="openAddSubToJobModal()" style="font-size:11px;padding:4px 10px;">&#x1F477; Sub</button>' +
-                '<button class="small" onclick="openAddChangeOrderModal()" style="font-size:11px;padding:4px 10px;">&#x1F4DD; Change Order</button>';
+                '<button class="small" onclick="openAddChangeOrderModal()" style="font-size:11px;padding:4px 10px;">&#x1F4DD; Change Order</button>' +
+                '<button class="small" onclick="openAddPOModal()" style="font-size:11px;padding:4px 10px;">&#x1F4C4; Purchase Order</button>' +
+                '<button class="small" onclick="openAddInvoiceModal()" style="font-size:11px;padding:4px 10px;">&#x1F4B3; Invoice</button>';
             container.appendChild(btnRow);
 
             // ── Building cards ──

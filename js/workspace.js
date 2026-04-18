@@ -551,9 +551,18 @@
     { key: 'estimatedCosts', label: 'Estimated Costs', fmt: 'currency' },
   ];
 
+  const PO_FIELDS = [
+    { key: 'amount', label: 'Amount', fmt: 'currency' },
+    { key: 'billedToDate', label: 'Billed to Date', fmt: 'currency' },
+  ];
+
+  const INV_FIELDS = [
+    { key: 'amount', label: 'Amount', fmt: 'currency' },
+  ];
+
   /** Get a flat list of all field definitions for looking up fmt by key */
   function findFieldDef(linkObj) {
-    var lists = { job: JOB_FIELDS, building: BUILDING_FIELDS, phase: PHASE_FIELDS, sub: SUB_FIELDS, co: CO_FIELDS };
+    var lists = { job: JOB_FIELDS, building: BUILDING_FIELDS, phase: PHASE_FIELDS, sub: SUB_FIELDS, co: CO_FIELDS, po: PO_FIELDS, inv: INV_FIELDS };
     var fields = lists[linkObj.level] || JOB_FIELDS;
     return fields.find(function (f) { return f.key === linkObj.field; });
   }
@@ -577,6 +586,12 @@
       } else if (linkObj.level === 'co') {
         var co = appData.changeOrders.find(function (x) { return x.id === linkObj.targetId; });
         targetName = co ? (co.coNumber || co.description || '?') : '?';
+      } else if (linkObj.level === 'po') {
+        var po = appData.purchaseOrders.find(function (x) { return x.id === linkObj.targetId; });
+        targetName = po ? (po.poNumber || po.vendor || '?') : '?';
+      } else if (linkObj.level === 'inv') {
+        var inv = appData.invoices.find(function (x) { return x.id === linkObj.targetId; });
+        targetName = inv ? (inv.invNumber || inv.vendor || '?') : '?';
       }
     }
     return targetName + ' → ' + fieldLabel;
@@ -638,6 +653,10 @@
         target = appData.subs.find(function (s) { return s.id === linkObj.targetId; });
       } else if (linkObj.level === 'co' && linkObj.targetId) {
         target = appData.changeOrders.find(function (c) { return c.id === linkObj.targetId; });
+      } else if (linkObj.level === 'po' && linkObj.targetId) {
+        target = appData.purchaseOrders.find(function (p) { return p.id === linkObj.targetId; });
+      } else if (linkObj.level === 'inv' && linkObj.targetId) {
+        target = appData.invoices.find(function (i) { return i.id === linkObj.targetId; });
       }
 
       if (target) {
@@ -1367,6 +1386,30 @@
         cos.forEach(function (c) {
           html += '<details class="ws-link-target"><summary class="ws-link-target-header">' + (c.coNumber || '') + ' \u2014 ' + (c.description || '') + '</summary>';
           html += '<div class="ws-link-target-fields">' + renderFieldButtons(CO_FIELDS, cellAddr, 'co', c.id) + '</div>';
+          html += '</details>';
+        });
+        html += '</details>';
+      }
+
+      // Purchase Orders
+      var pos = appData.purchaseOrders.filter(function (p) { return p.jobId === grid.jobId; });
+      if (pos.length > 0) {
+        html += '<details class="ws-link-level"><summary class="ws-link-level-header">Purchase Orders</summary>';
+        pos.forEach(function (p) {
+          html += '<details class="ws-link-target"><summary class="ws-link-target-header">' + (p.poNumber || '') + ' \u2014 ' + (p.vendor || '') + '</summary>';
+          html += '<div class="ws-link-target-fields">' + renderFieldButtons(PO_FIELDS, cellAddr, 'po', p.id) + '</div>';
+          html += '</details>';
+        });
+        html += '</details>';
+      }
+
+      // Invoices
+      var invs = appData.invoices.filter(function (i) { return i.jobId === grid.jobId; });
+      if (invs.length > 0) {
+        html += '<details class="ws-link-level"><summary class="ws-link-level-header">Invoices</summary>';
+        invs.forEach(function (i) {
+          html += '<details class="ws-link-target"><summary class="ws-link-target-header">' + (i.invNumber || '') + ' \u2014 ' + (i.vendor || '') + '</summary>';
+          html += '<div class="ws-link-target-fields">' + renderFieldButtons(INV_FIELDS, cellAddr, 'inv', i.id) + '</div>';
           html += '</details>';
         });
         html += '</details>';

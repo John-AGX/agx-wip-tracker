@@ -267,6 +267,8 @@
             else if (subtabName === 'job-buildings') renderJobBuildings(currentJobId);
             else if (subtabName === 'job-phases') renderJobPhases(currentJobId);
             else if (subtabName === 'job-subs') renderJobSubs(currentJobId);
+            else if (subtabName === 'job-purchaseorders') renderPurchaseOrders(currentJobId);
+            else if (subtabName === 'job-invoices') renderInvoices(currentJobId);
             else if (subtabName === 'job-labor') renderJobLabor(currentJobId);
             else if (subtabName === 'job-weekly') renderJobWeekly(currentJobId);
         }
@@ -278,6 +280,8 @@
             phases: [],
             subs: [],
             changeOrders: [],
+            purchaseOrders: [],
+            invoices: [],
             estimates: [],
             estimateLines: [],
             estimateAlternates: []
@@ -292,7 +296,9 @@
             editPhaseId: null,
             editBuildingId: null,
             editSubId: null,
-            editCOId: null
+            editCOId: null,
+            editPOId: null,
+            editInvId: null
         };
 
         function loadData() {
@@ -301,6 +307,8 @@
             appData.phases = safeLoadJSON('agx-wip-phases', []);
             appData.subs = safeLoadJSON('agx-wip-subs', []);
             appData.changeOrders = safeLoadJSON('agx-wip-changeorders', []);
+            appData.purchaseOrders = safeLoadJSON('agx-wip-purchaseorders', []);
+            appData.invoices = safeLoadJSON('agx-wip-invoices', []);
             appData.estimates = safeLoadJSON('agx-estimates', []);
             appData.estimateLines = safeLoadJSON('agx-estimate-lines', []);
             appData.estimateAlternates = safeLoadJSON('agx-estimate-alternates', []);
@@ -312,6 +320,8 @@
             localStorage.setItem('agx-wip-phases', JSON.stringify(appData.phases));
             localStorage.setItem('agx-wip-subs', JSON.stringify(appData.subs));
             localStorage.setItem('agx-wip-changeorders', JSON.stringify(appData.changeOrders));
+            localStorage.setItem('agx-wip-purchaseorders', JSON.stringify(appData.purchaseOrders));
+            localStorage.setItem('agx-wip-invoices', JSON.stringify(appData.invoices));
             localStorage.setItem('agx-estimates', JSON.stringify(appData.estimates));
             localStorage.setItem('agx-estimate-lines', JSON.stringify(appData.estimateLines));
             localStorage.setItem('agx-estimate-alternates', JSON.stringify(appData.estimateAlternates));
@@ -412,6 +422,20 @@
             appData.changeOrders = [
                 { id: 'co1', jobId: 'j1', coNumber: 'CO-001', description: 'Additional waterproofing - Building A', income: 85000, estimatedCosts: 52000, date: '2026-02-15', notes: 'Client approved' },
                 { id: 'co2', jobId: 'j1', coNumber: 'CO-002', description: 'Extended parking lot scope', income: 125000, estimatedCosts: 78000, date: '2026-03-01', notes: '' }
+            ];
+
+            // Sample Purchase Orders
+            appData.purchaseOrders = [
+                { id: 'po1', jobId: 'j1', poNumber: 'PO-001', vendor: 'Apex Electrical', description: 'Main electrical panel + conduit', amount: 145000, billedToDate: 72500, date: '2026-01-20', status: 'Open', notes: 'Net 30' },
+                { id: 'po2', jobId: 'j1', poNumber: 'PO-002', vendor: 'Summit Plumbing', description: 'Plumbing rough-in materials', amount: 89000, billedToDate: 89000, date: '2026-02-05', status: 'Closed', notes: '' },
+                { id: 'po3', jobId: 'j1', poNumber: 'PO-003', vendor: 'CoolAir Mechanical', description: 'HVAC units - Building B', amount: 210000, billedToDate: 63000, date: '2026-03-10', status: 'Open', notes: 'Partial shipment received' }
+            ];
+
+            // Sample Invoices
+            appData.invoices = [
+                { id: 'inv1', jobId: 'j1', invNumber: 'INV-001', vendor: 'Apex Electrical', description: 'Electrical rough-in progress billing', amount: 72500, date: '2026-02-20', dueDate: '2026-03-22', status: 'Paid', notes: '' },
+                { id: 'inv2', jobId: 'j1', invNumber: 'INV-002', vendor: 'CoolAir Mechanical', description: 'HVAC unit delivery - partial', amount: 63000, date: '2026-03-15', dueDate: '2026-04-14', status: 'Sent', notes: 'Awaiting approval' },
+                { id: 'inv3', jobId: 'j1', invNumber: 'INV-003', vendor: 'IronWorks Steel', description: 'Structural steel fabrication', amount: 156000, date: '2026-04-01', dueDate: '2026-05-01', status: 'Draft', notes: '' }
             ];
 
             saveData();

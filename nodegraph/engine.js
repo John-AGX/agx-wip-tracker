@@ -100,6 +100,22 @@ function createDataEntry(type, label){
     return entry;
   }
 
+  if(type === 'po'){
+    id = 'po' + Date.now();
+    entry = { id:id, jobId:jobId, poNumber:'PO-'+(appData.purchaseOrders.filter(function(p){return p.jobId===jobId;}).length+1), vendor:label||'', description:'', amount:0, billedToDate:0, date:ts.split('T')[0], status:'Open', notes:'' };
+    appData.purchaseOrders.push(entry);
+    if(typeof saveData === 'function') saveData();
+    return entry;
+  }
+
+  if(type === 'inv'){
+    id = 'inv' + Date.now();
+    entry = { id:id, jobId:jobId, invNumber:'INV-'+(appData.invoices.filter(function(i){return i.jobId===jobId;}).length+1), vendor:label||'', description:'', amount:0, date:ts.split('T')[0], dueDate:'', status:'Draft', notes:'' };
+    appData.invoices.push(entry);
+    if(typeof saveData === 'function') saveData();
+    return entry;
+  }
+
   return {};
 }
 
