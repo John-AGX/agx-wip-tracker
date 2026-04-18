@@ -1105,7 +1105,68 @@ function autoArrange(){
     });
   }
 
+  // Resolve overlaps — push colliding nodes apart. WIP stays anchored.
+  resolveOverlaps(nodes, wipNode);
+
   refanWatches();
+}
+
+function estNodeHeight(n){
+  var d=E.DEFS[n.type]; if(!d) return 100;
+  if(d.master) return 280;
+  if(n.collapsed) return 55;
+  var h=80;
+  var numPorts=Math.max((d.ins?d.ins.length:0),(d.outs?d.outs.length:0));
+  h+=numPorts*26;
+  if(d.hasProg) h+=50;
+  if(d.hasItems) h+=40+(n.items?n.items.length*30:0);
+  if(n.type==='t1') h+=60;
+  if(n.type==='sub') h+=80;
+  return h;
+}
+
+function resolveOverlaps(ns, anchor){
+  var NW=320, MARGIN=24;
+  var SNAP=E.SNAP;
+  for(var iter=0; iter<60; iter++){
+    var moved=false;
+    for(var i=0;i<ns.length;i++){
+      for(var j=i+1;j<ns.length;j++){
+        var a=ns[i], b=ns[j];
+        var ah=estNodeHeight(a), bh=estNodeHeight(b);
+        var acx=a.x+NW/2, acy=a.y+ah/2;
+        var bcx=b.x+NW/2, bcy=b.y+bh/2;
+        var dx=bcx-acx, dy=bcy-acy;
+        var minDx=NW+MARGIN;
+        var minDy=(ah+bh)/2+MARGIN;
+        var adx=Math.abs(dx), ady=Math.abs(dy);
+        if(adx<minDx && ady<minDy){
+          var overlapX=minDx-adx;
+          var overlapY=minDy-ady;
+          var aFixed=(anchor&&a.id===anchor.id);
+          var bFixed=(anchor&&b.id===anchor.id);
+          if(overlapY<=overlapX){
+            var sy=dy<0?-1:(dy>0?1:1);
+            if(!aFixed && !bFixed){ a.y-=sy*overlapY/2; b.y+=sy*overlapY/2; }
+            else if(aFixed){ b.y+=sy*overlapY; }
+            else { a.y-=sy*overlapY; }
+          } else {
+            var sx=dx<0?-1:(dx>0?1:1);
+            if(!aFixed && !bFixed){ a.x-=sx*overlapX/2; b.x+=sx*overlapX/2; }
+            else if(aFixed){ b.x+=sx*overlapX; }
+            else { a.x-=sx*overlapX; }
+          }
+          moved=true;
+        }
+      }
+    }
+    if(!moved) break;
+  }
+  // Re-snap to grid
+  ns.forEach(function(n){
+    n.x=Math.round(n.x/SNAP)*SNAP;
+    n.y=Math.round(n.y/SNAP)*SNAP;
+  });
 }
 
 // Reposition all watches wired to WIP into the octopus fan around WIP's current spot.
