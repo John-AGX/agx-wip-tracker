@@ -334,12 +334,25 @@ function entryLabel(type,e){
   if(type==='sub') return e.name||'Sub';
   return e.name||e.id||'';
 }
-function alreadyLoaded(type,entry){
+function findLoadedNode(type,entry){
   var nodes=E.nodes();
-  return nodes.some(function(n){return n.type===type&&n.data&&n.data.id===entry.id;});
+  for(var i=0;i<nodes.length;i++){
+    var n=nodes[i];
+    if(n.type===type&&n.data&&n.data.id===entry.id) return n;
+  }
+  return null;
+}
+function focusNode(n){
+  if(!wrap) return;
+  var z=E.zm();
+  var cx=-(n.x+85)+wrap.clientWidth/2/z;
+  var cy=-(n.y+30)+wrap.clientHeight/2/z;
+  E.pan(cx,cy);
+  applyTx();
+  render();
 }
 function showDataPicker(type, cb){
-  var entries=getJobEntries(type).filter(function(e){return !alreadyLoaded(type,e);});
+  var entries=getJobEntries(type);
   var tab=document.getElementById('nodeGraphTab'); if(!tab) return cb(null);
   // Build picker overlay
   var overlay=document.createElement('div');
@@ -351,10 +364,15 @@ function showDataPicker(type, cb){
   var list=document.createElement('div');
   list.className='ng-picker-list';
   entries.forEach(function(e){
+    var existing=findLoadedNode(type,e);
     var row=document.createElement('div');
-    row.className='ng-picker-item';
-    row.textContent=entryLabel(type,e);
-    row.addEventListener('click',function(){ tab.removeChild(overlay); cb(e); });
+    row.className='ng-picker-item'+(existing?' ng-picker-loaded':'');
+    row.textContent=entryLabel(type,e)+(existing?'  (on graph)':'');
+    row.addEventListener('click',function(){
+      tab.removeChild(overlay);
+      if(existing){ focusNode(existing); cb(null,true); }
+      else { cb(e); }
+    });
     list.appendChild(row);
   });
   // "New" option at the bottom
@@ -398,7 +416,8 @@ function buildSidebar(){
       var p=E.pan(),z=E.zm();
       var cx=-p.x+wrap.clientWidth/2/z, cy=-p.y+wrap.clientHeight/2/z;
       if(PICKABLE_TYPES[type] && E.job()){
-        showDataPicker(type, function(entry){
+        showDataPicker(type, function(entry, focused){
+          if(focused) return;
           if(entry){
             var lbl=entryLabel(type,entry);
             E.addNode(type,cx-85,cy-30,lbl,entry);

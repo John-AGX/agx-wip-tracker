@@ -175,6 +175,8 @@ body.light-mode{--ng-bg:#f0f2f5;--ng-surface:#ffffff;--ng-surface2:#e8eaef;--ng-
 .ng-picker-item:hover{background:rgba(79,140,255,.1);color:var(--ng-text)}
 .ng-picker-new{color:#4f8cff;font-weight:600}
 .ng-picker-new:hover{background:rgba(79,140,255,.15)}
+.ng-picker-loaded{opacity:.55;font-style:italic}
+.ng-picker-loaded:hover{opacity:.85;background:rgba(52,211,153,.08)}
 /* HUD */
 .ng-zoom{position:absolute;bottom:10px;left:10px;font-size:11px;color:var(--ng-dim2);background:var(--ng-surface);border:1px solid var(--ng-border2);border-radius:4px;padding:4px 10px;z-index:10}
 .ng-help{position:absolute;bottom:10px;right:10px;font-size:10px;color:var(--ng-dim2);background:var(--ng-surface);border:1px solid var(--ng-border2);border-radius:4px;padding:5px 12px;z-index:10;line-height:1.5}
