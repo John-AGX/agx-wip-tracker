@@ -429,8 +429,8 @@ function drawWires(ctx, wrap, wiringFrom, wireMouse){
       var dx = Math.max(Math.abs(p2.x-p1.x)*0.4, 50);
       ctx.bezierCurveTo(p1.x+dx, p1.y, p2.x-dx, p2.y, p2.x, p2.y);
     }
-    ctx.strokeStyle = col; ctx.lineWidth = 2.5;
-    ctx.shadowColor = col; ctx.shadowBlur = 4;
+    ctx.strokeStyle = col; ctx.lineWidth = 3;
+    ctx.shadowColor = col; ctx.shadowBlur = 6;
     ctx.stroke(); ctx.shadowBlur = 0;
   });
 
