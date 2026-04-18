@@ -71,6 +71,24 @@ function resize(){
 }
 
 // ── Render ──
+function getConnectedIds(nid){
+  if(!nid) return {};
+  var ids={};
+  E.wires().forEach(function(w){
+    if(w.fromNode===nid) ids[w.toNode]=1;
+    if(w.toNode===nid) ids[w.fromNode]=1;
+  });
+  return ids;
+}
+function updateConnectedHighlight(){
+  if(!canvasEl) return;
+  var connected=getConnectedIds(selN);
+  canvasEl.querySelectorAll('.ng-node').forEach(function(el){
+    var id=el.getAttribute('data-id');
+    if(connected[id]) el.classList.add('ng-connected');
+    else el.classList.remove('ng-connected');
+  });
+}
 function renderNodes(){
   var nodes=E.nodes(), wires=E.wires();
   canvasEl.querySelectorAll('.ng-node').forEach(function(el){
@@ -79,13 +97,14 @@ function renderNodes(){
   });
   E.resetComp();
 
+  var connectedIds=getConnectedIds(selN);
   nodes.forEach(function(n){
     var d=E.DEFS[n.type]; if(!d) return;
     if(editingId===n.id) return;
     // Watches are never collapsed — always show the flashy KPI
     if(n.type==='watch') n.collapsed=false;
     var div=document.createElement('div');
-    div.className='ng-node ng-t-'+n.cat+(selN===n.id?' ng-sel':'')+(n.collapsed?' ng-coll':'');
+    div.className='ng-node ng-t-'+n.cat+(selN===n.id?' ng-sel':'')+(connectedIds[n.id]?' ng-connected':'')+(n.collapsed?' ng-coll':'');
     div.setAttribute('data-id',n.id);
     div.style.left=n.x+'px'; div.style.top=n.y+'px';
 
@@ -627,6 +646,7 @@ function initEvents(){
       if(selN&&selN!==nid2){var old=canvasEl.querySelector('[data-id="'+selN+'"]');if(old)old.classList.remove('ng-sel');}
       selN=nid2; dragN=nid2;
       nel.classList.add('ng-sel');
+      updateConnectedHighlight();
       var p=E.pan();
       dragOff={x:e.clientX/z()-p.x-n3.x, y:e.clientY/z()-p.y-n3.y};
     }
