@@ -106,7 +106,7 @@ body.light-mode{--ng-bg:#f0f2f5;--ng-surface:#ffffff;--ng-surface2:#e8eaef;--ng-
 @keyframes ng-kpi-shine{0%,100%{transform:translateX(-100%)}50%{transform:translateX(100%)}}
 .ng-watch-kpi.ng-vp{color:#34d399;border-color:rgba(52,211,153,.5);text-shadow:0 0 18px rgba(52,211,153,.7),0 0 36px rgba(52,211,153,.35);animation:ng-kpi-pulse-green 2.8s ease-in-out infinite;background:linear-gradient(135deg,#05080f 0%,#0a2418 50%,#0a1424 100%)}
 .ng-watch-kpi.ng-vn{color:#f87171;border-color:rgba(248,113,113,.5);text-shadow:0 0 18px rgba(248,113,113,.7),0 0 36px rgba(248,113,113,.35);animation:ng-kpi-pulse-red 2.8s ease-in-out infinite;background:linear-gradient(135deg,#05080f 0%,#2a0e14 50%,#0a1424 100%)}
-.ng-t-watch{min-width:260px;border-color:rgba(251,191,36,.3);position:relative}
+.ng-t-watch{min-width:260px;border-color:rgba(251,191,36,.3)}
 .ng-t-watch .ng-hdr{background:linear-gradient(135deg,rgba(251,191,36,.25),rgba(236,72,153,.15));color:#fbbf24;text-shadow:0 0 8px rgba(251,191,36,.4)}
 .ng-t-watch .ng-ports{position:absolute;left:0;top:50%;transform:translateY(-50%);padding:0;pointer-events:none;width:auto}
 .ng-t-watch .ng-pr{padding:0;min-height:0}
