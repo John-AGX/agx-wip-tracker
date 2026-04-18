@@ -454,12 +454,15 @@ function drawWires(ctx, wrap, wiringFrom, wireMouse){
       var dx = Math.max(Math.abs(p2.x-p1.x)*0.4, 50);
       ctx.bezierCurveTo(p1.x+dx, p1.y, p2.x-dx, p2.y, p2.x, p2.y);
     }
-    // Gradient: faded at ends (near nodes), full opacity in middle
+    // Gradient: breathing fade — bright near nodes, dips in middle
     var grad = ctx.createLinearGradient(p1.x, p1.y, p2.x, p2.y);
-    grad.addColorStop(0,    hexToRgba(col, 0.20));
-    grad.addColorStop(0.18, hexToRgba(col, 1.00));
-    grad.addColorStop(0.82, hexToRgba(col, 1.00));
-    grad.addColorStop(1,    hexToRgba(col, 0.20));
+    grad.addColorStop(0,    hexToRgba(col, 0.15));
+    grad.addColorStop(0.15, hexToRgba(col, 0.85));
+    grad.addColorStop(0.35, hexToRgba(col, 0.45));
+    grad.addColorStop(0.50, hexToRgba(col, 0.30));
+    grad.addColorStop(0.65, hexToRgba(col, 0.45));
+    grad.addColorStop(0.85, hexToRgba(col, 0.85));
+    grad.addColorStop(1,    hexToRgba(col, 0.15));
     ctx.strokeStyle = grad; ctx.lineWidth = 3;
     ctx.shadowColor = col; ctx.shadowBlur = 4;
     ctx.stroke(); ctx.shadowBlur = 0;
