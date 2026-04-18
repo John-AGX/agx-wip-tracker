@@ -1140,17 +1140,21 @@ function autoArrange(){
   var placed={};
 
   function inputsOf(targetId){
+    var tgt=E.findNode(targetId);
+    var isWip=tgt && tgt.type==='wip';
     var srcs=[], seen={};
     wires.forEach(function(w){
       if(w.toNode===targetId){
+        // For WIP: exclude top/bottom gill connections; they're placed separately
+        if(isWip && (w.toPort===1 || w.toPort===2)) return;
         var s=E.findNode(w.fromNode);
         if(s&&!seen[s.id]&&s.type!=='watch'&&s.type!=='note'){
           seen[s.id]=true; srcs.push(s);
         }
       }
     });
-    // Order: inv, po, sub grouped together; COs excluded (placed separately)
-    var typeRank={inv:1, po:2, sub:3, t1:4, t2:5, labor:6, mat:7, gc:8, other:9, sum:10, sub2:10, mul:10, pct:10, job:11};
+    // Fan order: T1/T2 first (primary hierarchy), then sub/po/inv; COs excluded
+    var typeRank={t1:1, t2:2, sub:3, po:4, inv:5, labor:6, mat:7, gc:8, other:9, sum:10, sub2:10, mul:10, pct:10, job:11};
     srcs=srcs.filter(function(s){return s.type!=='co';});
     srcs.sort(function(a,b){return (typeRank[a.type]||99)-(typeRank[b.type]||99);});
     return srcs;
@@ -1202,6 +1206,33 @@ function autoArrange(){
       var children=fanInputs(item.node, fp.r, fp.arc, item.angle, fp.y);
       for(var ci=0;ci<children.length;ci++) queue.push(children[ci]);
     }
+  }
+
+  // Gills: nodes feeding into WIP's + Top / + Bottom ports go directly above/below WIP
+  if(wipNode){
+    var topGills=[], botGills=[], gillSeen={};
+    wires.forEach(function(w){
+      if(w.toNode===wipNode.id && (w.toPort===1 || w.toPort===2)){
+        var s=E.findNode(w.fromNode);
+        if(s && !gillSeen[s.id] && s.type!=='watch' && s.type!=='note'){
+          gillSeen[s.id]=true;
+          (w.toPort===1 ? topGills : botGills).push(s);
+        }
+      }
+    });
+    var NW=340; // horizontal spacing (~node width + gap)
+    function placeGills(arr, yPos){
+      var n=arr.length;
+      arr.forEach(function(g,i){
+        placed[g.id]=true;
+        var offset=(i-(n-1)/2)*NW;
+        g.x=Math.round((wipNode.x+offset)/SNAP)*SNAP;
+        g.y=Math.round(yPos/SNAP)*SNAP;
+      });
+    }
+    // WIP is ~280px tall; stack gills clear of WIP body, and clear of T1 fan (T1s are horizontal left of WIP)
+    if(topGills.length) placeGills(topGills, wipNode.y-220);
+    if(botGills.length) placeGills(botGills, wipNode.y+420);
   }
 
   // Change Orders: place in rib columns above and below the T2 area
