@@ -1041,44 +1041,12 @@ function autoArrange(){
     return srcs;
   }
 
-  // Fan inputs around a target — inverse octopus mirroring the watch fan.
-  // Auto-extends radius so siblings don't overlap each other.
-  // Angles are clamped to [95°,265°] so children stay on the left hemisphere.
-  var FAN_MIN=95, FAN_MAX=265;
-  function fanInputs(target, radius, arcSpan, outAngle){
+  // Fan inputs — elliptical layout, yScale compresses vertically.
+  function fanInputs(target, radius, arcSpan, outAngle, yScale){
     var srcs=inputsOf(target.id).filter(function(s){return !placed[s.id];});
     if(!srcs.length) return [];
     var tcx=target.x+160, tcy=target.y+(target.type==='wip'?220:100);
     var count=srcs.length;
-
-    // Clamp arc to the left-hemisphere window
-    outAngle=Math.max(FAN_MIN,Math.min(FAN_MAX,outAngle));
-    var arcLow=outAngle-arcSpan/2;
-    var arcHigh=outAngle+arcSpan/2;
-    if(arcLow<FAN_MIN) arcLow=FAN_MIN;
-    if(arcHigh>FAN_MAX) arcHigh=FAN_MAX;
-    arcSpan=arcHigh-arcLow;
-    outAngle=(arcLow+arcHigh)/2;
-    if(arcSpan<0) arcSpan=0;
-
-    // Auto-extend radius so siblings clear each other
-    if(count>1){
-      var maxH=0, maxW=0;
-      srcs.forEach(function(s){
-        var h=estNodeHeight(s); if(h>maxH) maxH=h;
-      });
-      maxW=340;
-      var needSep=Math.max(maxH,maxW)+40;
-      var stepRad=(arcSpan/(count-1))*Math.PI/180;
-      if(stepRad>0){
-        var reqR=needSep/(2*Math.sin(stepRad/2));
-        var MAX_R=1800;
-        if(reqR>MAX_R) reqR=MAX_R;
-        if(reqR>radius) radius=reqR;
-      }
-      if(radius<380) radius=380;
-    }
-
     var arcStart=-arcSpan/2;
     var result=[];
     srcs.forEach(function(s,i){
@@ -1086,22 +1054,21 @@ function autoArrange(){
       var angleDeg=count>1?arcStart+arcSpan*i/(count-1):0;
       var a=(outAngle+angleDeg)*Math.PI/180;
       s.x=Math.round((tcx+Math.cos(a)*radius-160)/SNAP)*SNAP;
-      s.y=Math.round((tcy+Math.sin(a)*radius-100)/SNAP)*SNAP;
+      s.y=Math.round((tcy+Math.sin(a)*radius*yScale-100)/SNAP)*SNAP;
       var childAngle=Math.atan2(s.y+100-tcy, s.x+160-tcx)*180/Math.PI;
-      childAngle=Math.max(FAN_MIN,Math.min(FAN_MAX,childAngle));
       result.push({node:s, angle:childAngle});
     });
     return result;
   }
 
   function fanParams(t){
-    if(t==='wip')  return {r:780, arc:170};
-    if(t==='t1')   return {r:680, arc:90};
-    if(t==='sum')  return {r:560, arc:80};
-    if(t==='job')  return {r:560, arc:80};
-    if(t==='t2')   return {r:520, arc:75};
-    if(t==='sub')  return {r:460, arc:65};
-    return {r:400, arc:55};
+    if(t==='wip')  return {r:950, arc:150, y:0.4};
+    if(t==='t1')   return {r:650, arc:50, y:0.5};
+    if(t==='sum')  return {r:550, arc:45, y:0.5};
+    if(t==='job')  return {r:550, arc:45, y:0.5};
+    if(t==='t2')   return {r:520, arc:45, y:0.5};
+    if(t==='sub')  return {r:460, arc:40, y:0.6};
+    return {r:400, arc:35, y:0.6};
   }
 
   var wipNode=nodes.find(function(n){return n.type==='wip';});
@@ -1117,7 +1084,7 @@ function autoArrange(){
     while(queue.length && guard++ < 200){
       var item=queue.shift();
       var fp=fanParams(item.node.type);
-      var children=fanInputs(item.node, fp.r, fp.arc, item.angle);
+      var children=fanInputs(item.node, fp.r, fp.arc, item.angle, fp.y);
       for(var ci=0;ci<children.length;ci++) queue.push(children[ci]);
     }
   }
