@@ -1625,6 +1625,7 @@ function renderWIPMain() {
             var hint = pct.toFixed(1) + '% of job (' + formatCurrency(total) + ' total)';
             if (coBudget) hint += ' \u00b7 includes ' + formatCurrency(coBudget) + ' from COs';
             document.getElementById('buildingBudgetHint').textContent = hint;
+            updatePhaseBreakdownRemaining();
         }
 
         function openAddBuildingToJobModal() {
@@ -1647,6 +1648,7 @@ function renderWIPMain() {
             document.getElementById('buildingWorkScope').value = 'in-house';
             document.getElementById('buildingLocked').checked = false;
             document.getElementById('buildingExcludeSubDist').checked = false;
+            document.getElementById('buildingPhaseBreakdown').style.display = 'none';
             openModal('addBuildingModal');
         }
 
@@ -1673,7 +1675,88 @@ function renderWIPMain() {
             document.getElementById('buildingWorkScope').value = building.workScope || 'in-house';
             document.getElementById('buildingLocked').checked = building.locked || false;
             document.getElementById('buildingExcludeSubDist').checked = building.excludeFromSubDist || false;
+            renderBuildingPhaseBreakdown(buildingId);
             openModal('addBuildingModal');
+        }
+
+        function renderBuildingPhaseBreakdown(buildingId) {
+            const wrap = document.getElementById('buildingPhaseBreakdown');
+            const rowsEl = document.getElementById('bldgPhaseRows');
+            if (!buildingId) { wrap.style.display = 'none'; return; }
+            const phases = appData.phases.filter(p => p.buildingId === buildingId);
+            if (phases.length === 0 && !appState.editBuildingId) { wrap.style.display = 'none'; return; }
+            wrap.style.display = 'block';
+            rowsEl.innerHTML = '';
+
+            phases.forEach(function(p) {
+                const asSold = p.asSoldPhaseBudget || p.phaseBudget || 0;
+                const co = p.coPhaseBudget || 0;
+                const total = asSold + co;
+                const row = document.createElement('div');
+                row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--border);';
+                row.innerHTML =
+                    '<span style="flex:1;font-size:13px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTML(p.phase) +
+                    ' <span style="font-size:10px;color:' + (p.pctComplete >= 100 ? 'var(--green)' : p.pctComplete >= 50 ? '#f59e0b' : 'var(--text-dim)') + ';">' + (p.pctComplete||0) + '%</span></span>' +
+                    '<input type="number" data-phase-id="' + p.id + '" value="' + asSold + '" step="0.01" style="width:110px;font-size:12px;padding:4px 6px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);text-align:right;" oninput="onPhaseBreakdownInput(this)">' +
+                    (co ? '<span style="font-size:10px;color:var(--green);white-space:nowrap;">+' + formatCurrency(co) + ' CO</span>' : '') +
+                    '<span style="font-size:12px;font-weight:600;color:var(--accent);width:90px;text-align:right;">' + formatCurrency(total) + '</span>' +
+                    '<button type="button" onclick="removePhaseFromBreakdown(\'' + p.id + '\')" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:14px;padding:2px 4px;" title="Delete phase">&times;</button>';
+                rowsEl.appendChild(row);
+            });
+
+            updatePhaseBreakdownRemaining();
+        }
+
+        function onPhaseBreakdownInput(input) {
+            const phaseId = input.getAttribute('data-phase-id');
+            const phase = appData.phases.find(p => p.id === phaseId);
+            if (!phase) return;
+            const val = parseFloat(input.value) || 0;
+            phase.asSoldPhaseBudget = val;
+            phase.phaseBudget = val + (phase.coPhaseBudget || 0);
+            const totalSpan = input.parentElement.querySelector('span[style*="width:90px"]');
+            if (totalSpan) totalSpan.textContent = formatCurrency(phase.phaseBudget);
+            updatePhaseBreakdownRemaining();
+        }
+
+        function updatePhaseBreakdownRemaining() {
+            const el = document.getElementById('bldgPhaseRemaining');
+            if (!el || !appState.editBuildingId) return;
+            const bldgBudget = parseFloat(document.getElementById('buildingBudget').value) || 0;
+            const phases = appData.phases.filter(p => p.buildingId === appState.editBuildingId);
+            const allocated = phases.reduce((s, p) => s + (p.asSoldPhaseBudget || p.phaseBudget || 0), 0);
+            const remaining = bldgBudget - allocated;
+            el.textContent = 'Allocated: ' + formatCurrency(allocated) + ' · Remaining: ' + formatCurrency(remaining);
+            el.style.color = remaining < 0 ? 'var(--red)' : remaining === 0 ? 'var(--green)' : 'var(--yellow)';
+        }
+
+        function addPhaseFromBuildingModal() {
+            if (!appState.editBuildingId) return;
+            const phaseName = prompt('Phase name (e.g., Electrical, Plumbing):');
+            if (!phaseName || !phaseName.trim()) return;
+            const phase = {
+                id: 'p' + Date.now(),
+                jobId: appState.currentJobId,
+                buildingId: appState.editBuildingId,
+                phase: phaseName.trim(),
+                workScope: 'in-house',
+                locked: false,
+                pctComplete: 0,
+                materials: 0, labor: 0, sub: 0, equipment: 0,
+                asSoldPhaseBudget: 0,
+                coPhaseBudget: 0,
+                phaseBudget: 0,
+                hoursWeek: 0, hoursTotal: 0, rate: 40,
+                notes: ''
+            };
+            appData.phases.push(phase);
+            renderBuildingPhaseBreakdown(appState.editBuildingId);
+        }
+
+        function removePhaseFromBreakdown(phaseId) {
+            if (!confirm('Delete this phase?')) return;
+            appData.phases = appData.phases.filter(p => p.id !== phaseId);
+            renderBuildingPhaseBreakdown(appState.editBuildingId);
         }
 
         function deleteBuilding() {
