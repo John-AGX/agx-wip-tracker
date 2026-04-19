@@ -306,10 +306,17 @@ function renderNodes(){
       h+='</div>';
     }
 
-    // T1/T2: show total
+    // T1/T2: show actual / accrued / committed breakdown
     if(n.type==='t1'||n.type==='t2'){
-      var tv=E.getOutput(n,0), tcls=tv>0?' ng-vp':'';
-      h+='<div class="ng-wv'+tcls+'" style="font-size:16px;margin:2px 8px 6px;padding:4px 8px;">'+E.fmtC(tv)+'</div>';
+      E.resetComp();
+      var tActual=E.getActual(n);
+      var tAccrued=E.getAccrued(n);
+      var tCommitted=tActual+tAccrued;
+      h+='<div style="padding:4px 10px 6px;font-size:10px;">';
+      h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Actual (Invoiced) <span style="color:#34d399;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(tActual)+'</span></div>';
+      h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Accrued (Committed) <span style="color:#fbbf24;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(tAccrued)+'</span></div>';
+      h+='<div style="display:flex;justify-content:space-between;padding:3px 0 2px;border-top:1px solid var(--ng-border2);margin-top:2px;color:#6a7090;font-weight:600;">Committed <span style="color:var(--text);font-weight:700;font-family:\'Courier New\',monospace;">'+E.fmtC(tCommitted)+'</span></div>';
+      h+='</div>';
     }
 
     // WIP node: editable revenue fields + metrics display
@@ -357,6 +364,11 @@ function renderNodes(){
     if(n.collapsed && (hasIns||hasOuts)){
       var collVal = hasOuts ? E.getOutput(n,0) : 0;
       if(n.type==='watch'){collVal=0;E.wires().forEach(function(w){if(w.toNode===n.id){var fn=E.findNode(w.fromNode);if(fn)collVal+=E.getOutput(fn,w.fromPort);}});}
+      // For T1/T2 collapsed, show committed (actual + accrued) instead of invoiced only
+      if(n.type==='t1'||n.type==='t2'){
+        E.resetComp();
+        collVal = E.getActual(n) + E.getAccrued(n);
+      }
       // Port circles positioned absolutely on the node
       if(hasIns) h+='<div class="ng-coll-pi ng-p" data-node="'+n.id+'" data-pi="0" data-dir="in" data-type="'+d.ins[0].t+'"></div>';
       if(hasOuts) h+='<div class="ng-coll-po ng-p" data-node="'+n.id+'" data-pi="0" data-dir="out" data-type="'+d.outs[0].t+'"></div>';
@@ -368,7 +380,7 @@ function renderNodes(){
         h+='<div class="ng-coll-inline">';
         if(n.budget) h+='<span class="ng-cv-bud">'+E.fmtC(n.budget)+'</span><span class="ng-coll-sep">|</span>';
         h+='<span class="ng-coll-pct">'+cpct.toFixed(0)+'%</span><span class="ng-coll-sep">|</span>';
-        h+='<span class="ng-coll-val">'+E.fmtC(collVal)+'</span>';
+        h+='<span class="ng-coll-val" title="Committed (Actual + Accrued)">'+E.fmtC(collVal)+'</span>';
         h+='</div>';
       } else if(n.type==='po'){
         E.resetComp(); E.getOutput(n,0);
