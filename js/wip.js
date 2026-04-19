@@ -1238,16 +1238,10 @@ function renderWIPMain() {
                     const gCost = g.records.reduce((s, r) => s + (r.materials || 0) + (r.labor || 0) + (r.sub || 0) + (r.equipment || 0), 0);
                     const gProfit = gRev - gCost;
                     const avgPct = Math.round(g.records.reduce((s, r) => s + (r.pctComplete || 0), 0) / count);
-                    const bldgNames = g.records.map(r => {
-                        const b = appData.buildings.find(bb => bb.id === r.buildingId);
-                        return b ? b.name : null;
-                    }).filter(Boolean);
-                    const bldgLabel = bldgNames.length ? bldgNames.join(', ') : (count + ' record' + (count>1?'s':''));
                     const dupBadge = count > 1 ? ' <span style="font-size:10px;padding:1px 6px;border-radius:8px;background:rgba(251,191,36,0.15);color:var(--yellow);font-weight:600;" title="' + count + ' duplicate records">' + count + 'x</span>' : '';
                     return '<div class="card" style="cursor:pointer;padding:8px 12px;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;gap:12px;" onclick="openManagePhasesModal()" title="Click to manage phases">' +
                         '<div style="min-width:0;flex:1;">' +
-                            '<div style="font-size:13px;font-weight:600;">' + escapeHTML(g.name) + dupBadge + '</div>' +
-                            '<div style="font-size:10px;color:var(--text-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTML(bldgLabel) + '</div>' +
+                            '<div style="font-size:15px;font-weight:700;">' + escapeHTML(g.name) + dupBadge + '</div>' +
                         '</div>' +
                         '<div style="display:flex;gap:14px;font-size:12px;flex-shrink:0;">' +
                             '<div><span style="color:var(--text-dim);">Rev</span> <b style="color:var(--green);">' + formatCurrency(gRev) + '</b></div>' +
