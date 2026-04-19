@@ -14,6 +14,20 @@ var editingId=null;
 // ── Update T2/Sub labels based on connected T1 / phase data ──
 function updateTierLabels(){
   var nodes=E.nodes(), wires=E.wires();
+  // Aggregate sub→phase/building connections across all node instances of the same sub data
+  var subAgg = {}; // subDataId -> { phaseIds:Set, bldgIds:Set }
+  nodes.forEach(function(n){
+    if(n.type!=='sub' || !n.data || !n.data.id) return;
+    var key = n.data.id;
+    if(!subAgg[key]) subAgg[key] = { phaseIds: {}, bldgIds: {} };
+    wires.forEach(function(w){
+      if(w.fromNode===n.id){
+        var target=E.findNode(w.toNode);
+        if(target && target.type==='t2' && target.data && target.data.id) subAgg[key].phaseIds[target.data.id] = 1;
+        else if(target && target.type==='t1' && target.data && target.data.id) subAgg[key].bldgIds[target.data.id] = 1;
+      }
+    });
+  });
   nodes.forEach(function(n){
     if(n.type==='t2'){
       var baseName = n.label.split(' \u203A ')[0].trim();
@@ -38,17 +52,18 @@ function updateTierLabels(){
     } else if(n.type==='sub'){
       var subBase = n.label.split(' \u203A ')[0].trim();
       var suffix = '';
-      // Derive label from wire connections, not stored data
+      // Derive label + sync data from wire connections
       var connPhases = [], connBldgs = [];
+      var connPhaseIds = [], connBldgIds = [];
       wires.forEach(function(w){
         if(w.fromNode===n.id){
           var target=E.findNode(w.toNode);
           if(target && target.type==='t2'){
-            var pName = target.label.split(' \u203A ')[0].trim();
-            connPhases.push(pName);
+            connPhases.push(target.label.split(' \u203A ')[0].trim());
+            if(target.data && target.data.id) connPhaseIds.push(target.data.id);
           } else if(target && target.type==='t1'){
-            var bName = target.label.split(' \u203A ')[0].trim();
-            connBldgs.push(bName);
+            connBldgs.push(target.label.split(' \u203A ')[0].trim());
+            if(target.data && target.data.id) connBldgIds.push(target.data.id);
           }
         }
       });
@@ -59,6 +74,36 @@ function updateTierLabels(){
       n.label = suffix ? subBase+' \u203A '+suffix : subBase;
     }
   });
+  // Sync aggregated sub→phase/building connections back to data
+  if(typeof appData !== 'undefined'){
+    var anyDirty = false;
+    Object.keys(subAgg).forEach(function(subId){
+      var sub = appData.subs.find(function(s){return s.id===subId;});
+      if(!sub) return;
+      var agg = subAgg[subId];
+      var pIds = Object.keys(agg.phaseIds);
+      var bIds = Object.keys(agg.bldgIds);
+      var derivedBldgs = pIds.map(function(pid){
+        var ph = appData.phases.find(function(p){return p.id===pid;});
+        return ph ? ph.buildingId : null;
+      }).filter(Boolean);
+      var newLevel = pIds.length>0 ? 'phase' : (bIds.length>0 ? 'building' : (sub.level||'building'));
+      var finalBldgs = newLevel==='phase' ? derivedBldgs : bIds;
+      finalBldgs = finalBldgs.filter(function(id,i){return finalBldgs.indexOf(id)===i;});
+      var sortedNew = pIds.slice().sort().join(',');
+      var sortedOld = (sub.phaseIds||[]).slice().sort().join(',');
+      var dirty = false;
+      if(sortedNew !== sortedOld){ sub.phaseIds = pIds; dirty = true; }
+      var sortedNewB = finalBldgs.slice().sort().join(',');
+      var sortedOldB = (sub.buildingIds||[]).slice().sort().join(',');
+      if(sortedNewB !== sortedOldB){ sub.buildingIds = finalBldgs; dirty = true; }
+      if((pIds.length>0 || bIds.length>0) && sub.level !== newLevel){ sub.level = newLevel; dirty = true; }
+      if(sub.phaseId){ delete sub.phaseId; dirty = true; }
+      if(sub.buildingId){ delete sub.buildingId; dirty = true; }
+      if(dirty) anyDirty = true;
+    });
+    if(anyDirty && typeof saveData === 'function') saveData();
+  }
 }
 
 // ── Auto-calculate T1 % complete from connected T2s ──
