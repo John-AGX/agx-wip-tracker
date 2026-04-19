@@ -1441,7 +1441,7 @@ function estNodeHeight(n){
   var d=E.DEFS[n.type]; if(!d) return 100;
   if(d.master) return 280;
   if(n.collapsed){
-    if(d.hasProg) return 60;
+    if(d.hasProg) return 68;
     if(n.type==='po'||n.type==='co') return 70;
     return 55;
   }

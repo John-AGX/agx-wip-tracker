@@ -156,10 +156,11 @@ body.light-mode{--ng-bg:#f0f2f5;--ng-surface:#ffffff;--ng-surface2:#e8eaef;--ng-
 .ng-coll-prog{height:5px;background:var(--ng-input);border-radius:3px;overflow:hidden;width:100%}
 .ng-coll-prog-fill{height:100%;border-radius:3px;transition:width .3s}
 .ng-coll-info{display:flex;justify-content:space-between;align-items:center}
-.ng-coll-inline{display:flex;align-items:center;justify-content:center;gap:6px;font-family:'Courier New',monospace;font-size:11px;font-weight:700}
-.ng-coll-inline .ng-cv-bud{font-size:11px}
-.ng-coll-inline .ng-coll-val{font-size:11px}
-.ng-coll-sep{color:#4a5068;font-weight:400}
+.ng-coll-inline{display:flex;align-items:center;justify-content:center;gap:12px;font-family:'Courier New',monospace;font-size:13px;font-weight:700;padding:2px 0}
+.ng-coll-inline .ng-cv-bud{font-size:13px}
+.ng-coll-inline .ng-coll-val{font-size:13px}
+.ng-coll-inline .ng-coll-pct{font-size:13px}
+.ng-coll-sep{color:#4a5068;font-weight:400;font-size:13px}
 .ng-coll-pct{font-family:'Courier New',monospace;font-size:11px;font-weight:700;color:#fbbf24}
 /* Collapsed ports sit on the node edges, centered to full node height */
 .ng-node.ng-coll .ng-coll-pi{position:absolute;left:-5px;top:50%;transform:translateY(-50%);width:10px;height:10px;border-radius:50%;background:#4f8cff;border:2px solid #4f8cff;cursor:crosshair;z-index:5}
