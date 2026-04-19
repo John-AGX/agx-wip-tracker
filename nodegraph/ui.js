@@ -294,12 +294,23 @@ function renderNodes(){
       if(hasIns) h+='<div class="ng-coll-pi ng-p" data-node="'+n.id+'" data-pi="0" data-dir="in" data-type="'+d.ins[0].t+'"></div>';
       if(hasOuts) h+='<div class="ng-coll-po ng-p" data-node="'+n.id+'" data-pi="0" data-dir="out" data-type="'+d.outs[0].t+'"></div>';
       h+='<div class="ng-coll-row">';
-      // Progress bar for T1/T2/Sub
       if(d.hasProg){
         var cpct = n.pctComplete||0;
         var cpColor = cpct>=100?'#34d399':cpct>=50?'#fbbf24':'#4f8cff';
         h+='<div class="ng-coll-prog"><div class="ng-coll-prog-fill" style="width:'+Math.min(cpct,100)+'%;background:'+cpColor+'"></div></div>';
         h+='<div class="ng-coll-info"><span class="ng-coll-pct">'+cpct.toFixed(0)+'%</span><span class="ng-coll-val">'+E.fmtC(collVal)+'</span></div>';
+        if(n.budget) h+='<div class="ng-coll-detail"><span class="ng-coll-lbl">Budget</span><span class="ng-coll-val ng-cv-bud">'+E.fmtC(n.budget)+'</span></div>';
+      } else if(n.type==='po'){
+        E.resetComp(); E.getOutput(n,0);
+        var poC=n._poContract||0, poI=n._poInvoiced||0;
+        h+='<div class="ng-coll-detail"><span class="ng-coll-lbl">Contract</span><span class="ng-coll-val">'+E.fmtC(poC)+'</span></div>';
+        h+='<div class="ng-coll-detail"><span class="ng-coll-lbl">Invoiced</span><span class="ng-coll-val ng-cv-grn">'+E.fmtC(poI)+'</span></div>';
+      } else if(n.type==='co'){
+        var coCost=n.data?n.data.estimatedCosts||0:0;
+        h+='<div class="ng-coll-detail"><span class="ng-coll-lbl">Income</span><span class="ng-coll-val ng-cv-grn">'+E.fmtC(collVal)+'</span></div>';
+        if(coCost) h+='<div class="ng-coll-detail"><span class="ng-coll-lbl">Est. Cost</span><span class="ng-coll-val ng-cv-yel">'+E.fmtC(coCost)+'</span></div>';
+      } else if(n.type==='inv'){
+        h+='<div class="ng-coll-detail"><span class="ng-coll-lbl">Amount</span><span class="ng-coll-val">'+E.fmtC(collVal)+'</span></div>';
       } else {
         h+='<span class="ng-coll-val" style="text-align:center;width:100%">'+E.fmtC(collVal)+'</span>';
       }
@@ -1415,7 +1426,11 @@ function autoArrange(selectedId){
 function estNodeHeight(n){
   var d=E.DEFS[n.type]; if(!d) return 100;
   if(d.master) return 280;
-  if(n.collapsed) return 55;
+  if(n.collapsed){
+    if(d.hasProg && n.budget) return 75;
+    if(n.type==='po'||n.type==='co') return 70;
+    return 55;
+  }
   var h=80;
   var numPorts=Math.max((d.ins?d.ins.length:0),(d.outs?d.outs.length:0));
   h+=numPorts*26;

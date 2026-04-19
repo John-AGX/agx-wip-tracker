@@ -161,6 +161,12 @@ body.light-mode{--ng-bg:#f0f2f5;--ng-surface:#ffffff;--ng-surface2:#e8eaef;--ng-
 .ng-node.ng-coll .ng-coll-pi{position:absolute;left:-5px;top:50%;transform:translateY(-50%);width:10px;height:10px;border-radius:50%;background:#4f8cff;border:2px solid #4f8cff;cursor:crosshair;z-index:5}
 .ng-node.ng-coll .ng-coll-po{position:absolute;right:-5px;top:50%;transform:translateY(-50%);width:10px;height:10px;border-radius:50%;background:#4f8cff;border:2px solid #4f8cff;cursor:crosshair;z-index:5}
 .ng-coll-val{font-family:'Courier New',monospace;font-size:14px;font-weight:700;color:#8899cc;text-align:right}
+.ng-coll-detail{display:flex;justify-content:space-between;align-items:center;gap:6px}
+.ng-coll-lbl{font-size:9px;color:#6a7090;text-transform:uppercase;letter-spacing:.3px;white-space:nowrap}
+.ng-coll-detail .ng-coll-val{font-size:12px}
+.ng-cv-bud{color:#a78bfa}
+.ng-cv-grn{color:#34d399}
+.ng-cv-yel{color:#fbbf24}
 /* Note */
 .ng-note-body{padding:8px 12px 10px}
 .ng-node.ng-coll .ng-note-body{display:none}
