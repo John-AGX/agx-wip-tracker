@@ -316,46 +316,47 @@
         .modal-content {
             background: var(--surface);
             border: 1px solid var(--border);
-            border-radius: 12px;
-            padding: 20px 28px;
-            max-width: 720px;
-            width: 92%;
-            max-height: 85vh;
+            border-radius: 10px;
+            padding: 14px 18px;
+            max-width: 960px;
+            width: 94%;
+            max-height: 78vh;
             overflow-y: auto;
             box-shadow: 0 12px 40px rgba(0,0,0,0.35);
+            font-size: 13px;
         }
 
         .modal-header {
-            font-size: 17px;
+            font-size: 15px;
             font-weight: 700;
-            margin-bottom: 16px;
+            margin-bottom: 10px;
             color: var(--text);
-            padding-bottom: 10px;
+            padding-bottom: 8px;
             border-bottom: 1px solid var(--border);
         }
 
         .modal-footer {
             display: flex;
-            gap: 10px;
+            gap: 8px;
             justify-content: flex-end;
-            margin-top: 18px;
-            padding-top: 14px;
+            margin-top: 12px;
+            padding-top: 10px;
             border-top: 1px solid var(--border);
         }
 
         /* FORMS */
         .form-group {
-            margin-bottom: 12px;
+            margin-bottom: 8px;
         }
 
         label {
             display: block;
-            margin-bottom: 4px;
-            font-size: 11px;
+            margin-bottom: 3px;
+            font-size: 10px;
             font-weight: 600;
             color: var(--text-dim);
             text-transform: uppercase;
-            letter-spacing: 0.3px;
+            letter-spacing: 0.4px;
         }
 
         input, select, textarea {
@@ -363,8 +364,8 @@
             background: var(--bg);
             border: 1px solid var(--border);
             color: var(--text);
-            padding: 8px 12px;
-            border-radius: 6px;
+            padding: 6px 10px;
+            border-radius: 5px;
             font-size: 13px;
             font-family: inherit;
             transition: border-color 0.15s, box-shadow 0.15s;
@@ -378,13 +379,29 @@
 
         textarea {
             resize: vertical;
-            min-height: 60px;
+            min-height: 52px;
         }
 
         .form-row {
             display: grid;
             grid-template-columns: 1fr 1fr;
-            gap: 12px;
+            gap: 10px;
+        }
+
+        .modal-content h3,
+        .modal-content h4 {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+            margin: 10px 0 6px;
+        }
+
+        .modal-content hr {
+            border: none;
+            border-top: 1px solid var(--border);
+            margin: 10px 0;
         }
 
         /* TABLES */
