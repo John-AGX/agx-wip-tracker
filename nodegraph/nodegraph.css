@@ -3,7 +3,7 @@
 #nodeGraphTab.active{display:flex;flex-direction:column}
 /* Theme vars */
 :root{--ng-bg:#0b0e16;--ng-surface:#12162a;--ng-surface2:#10141e;--ng-border:#242e50;--ng-border2:#1c2236;--ng-text:#e4e6f0;--ng-dim:#6a7090;--ng-dim2:#4a5068;--ng-input:#0d1019;--ng-grid-dot:#161b2a;--ng-grid-line:#141828;--ng-port-bg:#0b0e16;--ng-shadow:rgba(0,0,0,.5)}
-body.light-mode{--ng-bg:#f0f2f5;--ng-surface:#ffffff;--ng-surface2:#e8eaef;--ng-border:#6b7280;--ng-border2:#9ca3af;--ng-text:#1f2937;--ng-dim:#4b5563;--ng-dim2:#6b7280;--ng-input:#f9fafb;--ng-grid-dot:#e0e3e8;--ng-grid-line:#eceef2;--ng-port-bg:#f0f2f5;--ng-shadow:rgba(0,0,0,.12)}
+body.light-mode{--ng-bg:#f0f2f5;--ng-surface:#ffffff;--ng-surface2:#e8eaef;--ng-border:#6b7280;--ng-border2:#9ca3af;--ng-text:#1f2937;--ng-dim:#4b5563;--ng-dim2:#6b7280;--ng-input:#f9fafb;--ng-grid-dot:#e6e8ec;--ng-grid-line:#edeff2;--ng-port-bg:#f0f2f5;--ng-shadow:rgba(0,0,0,.12)}
 
 /* Light-mode overrides for hardcoded dark-mode colors */
 body.light-mode .ng-node{border-width:1.5px}
