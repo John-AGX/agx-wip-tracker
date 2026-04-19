@@ -218,13 +218,11 @@ function renderNodes(){
       // PO: show contract vs invoiced vs accrued breakdown
       if(iType==='po'){
         E.resetComp();
-        E.getOutput(n,0); // triggers _poContract / _poInvoiced calculation
+        E.getOutput(n,0);
         var poContract=n._poContract||0, poInv=n._poInvoiced||0;
-        var poAccrued=Math.max(0,poContract-poInv);
         h+='<div style="padding:2px 10px 4px;font-size:10px;border-top:1px solid var(--ng-border2);">';
         h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Contract <span style="color:#8899cc;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(poContract)+'</span></div>';
-        h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Invoiced (Actual) <span style="color:#34d399;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(poInv)+'</span></div>';
-        h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Accrued <span style="color:#fbbf24;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(poAccrued)+'</span></div>';
+        h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Invoiced <span style="color:#34d399;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(poInv)+'</span></div>';
         h+='</div>';
       }
       h+='</div>';
