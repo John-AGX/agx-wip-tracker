@@ -941,22 +941,29 @@ function pushToJob(){
   // CO nodes → sync income back to appData.changeOrders, and backflow wired CO revenue
   // into the target node's budget field (job.contractAmount / building.budget / phase.phaseBudget).
   // Uses per-target `coRevFromNG` tracking to keep the operation idempotent across repeated saves.
-  var coTargets = {}; // targetNodeId -> sum of wired CO income
+  var coTargets = {}; // targetNodeId -> sum of wired CO income (split across targets)
   nodes.forEach(function(co){
     if(co.type!=='co') return;
     var income = E.getOutput(co, 0);
-    // Sync CO income to its appData entry
+    // Sync CO income to its appData entry (total, not split)
     if(co.data && co.data.id){
       var entry = appData.changeOrders.find(function(c){return c.id===co.data.id;});
       if(entry) entry.income = income;
     }
-    // Find what this CO is wired into
+    // Find unique T1/T2/WIP targets this CO connects to
+    var targetIds = {};
     wires.forEach(function(w){
       if(w.fromNode!==co.id) return;
       var target = E.findNode(w.toNode); if(!target) return;
-      if(target.type==='t1'||target.type==='t2'||target.type==='wip'){
-        coTargets[target.id] = (coTargets[target.id]||0) + income;
+      if(target.type==='t1' || target.type==='t2' || target.type==='wip'){
+        targetIds[target.id] = true;
       }
+    });
+    var ids = Object.keys(targetIds);
+    if(ids.length === 0) return;
+    var share = income / ids.length;
+    ids.forEach(function(tid){
+      coTargets[tid] = (coTargets[tid]||0) + share;
     });
   });
   nodes.forEach(function(n){
