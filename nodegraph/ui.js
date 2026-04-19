@@ -792,21 +792,84 @@ function initEvents(){
   document.addEventListener('keydown',function(e){
     if(!document.getElementById('nodeGraphTab').classList.contains('active')) return;
     if(e.key==='Delete'&&selN&&document.activeElement.tagName!=='INPUT'&&document.activeElement.tagName!=='TEXTAREA'){
+      e.preventDefault();
       var delNode=E.findNode(selN);
-      // Delete from appData if it has a linked data entry
-      if(delNode&&delNode.data&&delNode.data.id&&typeof appData!=='undefined'){
-        if(delNode.type==='t1') appData.buildings=appData.buildings.filter(function(b){return b.id!==delNode.data.id;});
-        else if(delNode.type==='t2') appData.phases=appData.phases.filter(function(p){return p.id!==delNode.data.id;});
-        else if(delNode.type==='sub') appData.subs=appData.subs.filter(function(s){return s.id!==delNode.data.id;});
-        else if(delNode.type==='co') appData.changeOrders=appData.changeOrders.filter(function(c){return c.id!==delNode.data.id;});
-        if(typeof saveData==='function') saveData();
-      }
-      var ws=E.wires();
-      E.setWires(ws.filter(function(w){return w.fromNode!==selN&&w.toNode!==selN;}));
-      E.setNodes(E.nodes().filter(function(n){return n.id!==selN;}));
-      selN=null;render();
+      if(!delNode) return;
+      showDeleteDialog(delNode);
     }
   });
+}
+
+function showDeleteDialog(delNode){
+  var existing=document.getElementById('ng-delete-dialog');
+  if(existing) existing.remove();
+
+  var typeLabels={t1:'Building',t2:'Phase',sub:'Sub',co:'Change Order',po:'Purchase Order',inv:'Invoice',wip:'WIP'};
+  var typeName=typeLabels[delNode.type]||delNode.type;
+  var hasData=delNode.data&&delNode.data.id&&typeof appData!=='undefined';
+
+  var overlay=document.createElement('div');
+  overlay.id='ng-delete-dialog';
+  overlay.className='ng-del-overlay';
+
+  var box=document.createElement('div');
+  box.className='ng-del-box';
+
+  var title=document.createElement('div');
+  title.className='ng-del-title';
+  title.textContent='Delete "'+delNode.label+'"';
+  box.appendChild(title);
+
+  var sub=document.createElement('div');
+  sub.className='ng-del-sub';
+  sub.textContent=typeName+(hasData?' \u2014 This item has job data attached.':' \u2014 Graph-only node.');
+  box.appendChild(sub);
+
+  var btns=document.createElement('div');
+  btns.className='ng-del-btns';
+
+  var removeBtn=document.createElement('button');
+  removeBtn.className='ng-del-btn ng-del-remove';
+  removeBtn.textContent='Remove from Graph';
+  removeBtn.title='Removes the node from the graph but keeps the data in the job';
+  removeBtn.addEventListener('click',function(){
+    var ws=E.wires();
+    E.setWires(ws.filter(function(w){return w.fromNode!==delNode.id&&w.toNode!==delNode.id;}));
+    E.setNodes(E.nodes().filter(function(n){return n.id!==delNode.id;}));
+    selN=null;overlay.remove();render();
+  });
+  btns.appendChild(removeBtn);
+
+  if(hasData){
+    var deleteBtn=document.createElement('button');
+    deleteBtn.className='ng-del-btn ng-del-permanent';
+    deleteBtn.textContent='Delete from Job';
+    deleteBtn.title='Permanently removes the node AND deletes the data from the job';
+    deleteBtn.addEventListener('click',function(){
+      if(delNode.type==='t1') appData.buildings=appData.buildings.filter(function(b){return b.id!==delNode.data.id;});
+      else if(delNode.type==='t2') appData.phases=appData.phases.filter(function(p){return p.id!==delNode.data.id;});
+      else if(delNode.type==='sub') appData.subs=appData.subs.filter(function(s){return s.id!==delNode.data.id;});
+      else if(delNode.type==='co') appData.changeOrders=appData.changeOrders.filter(function(c){return c.id!==delNode.data.id;});
+      if(typeof saveData==='function') saveData();
+      var ws=E.wires();
+      E.setWires(ws.filter(function(w){return w.fromNode!==delNode.id&&w.toNode!==delNode.id;}));
+      E.setNodes(E.nodes().filter(function(n){return n.id!==delNode.id;}));
+      selN=null;overlay.remove();render();
+    });
+    btns.appendChild(deleteBtn);
+  }
+
+  var cancelBtn=document.createElement('button');
+  cancelBtn.className='ng-del-btn ng-del-cancel';
+  cancelBtn.textContent='Cancel';
+  cancelBtn.addEventListener('click',function(){overlay.remove();});
+  btns.appendChild(cancelBtn);
+
+  box.appendChild(btns);
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
+
+  overlay.addEventListener('click',function(e){if(e.target===overlay)overlay.remove();});
 }
 
 // ── Duplicate a node ──

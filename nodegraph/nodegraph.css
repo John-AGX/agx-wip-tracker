@@ -172,6 +172,19 @@ body.light-mode{--ng-bg:#f0f2f5;--ng-surface:#ffffff;--ng-surface2:#e8eaef;--ng-
 .ng-cv-bud{color:#a78bfa}
 .ng-cv-grn{color:#34d399}
 .ng-cv-yel{color:#fbbf24}
+/* Delete dialog */
+.ng-del-overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;display:flex;align-items:center;justify-content:center}
+.ng-del-box{background:#1a1d27;border:1px solid #2e3346;border-radius:10px;min-width:340px;max-width:420px;padding:24px;box-shadow:0 8px 32px rgba(0,0,0,.5)}
+.ng-del-title{font-size:16px;font-weight:700;color:#e4e6f0;margin-bottom:6px}
+.ng-del-sub{font-size:12px;color:#8b90a5;margin-bottom:20px}
+.ng-del-btns{display:flex;flex-direction:column;gap:8px}
+.ng-del-btn{padding:10px 16px;border:none;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;transition:background .15s}
+.ng-del-remove{background:#2a4a8a;color:#e4e6f0}
+.ng-del-remove:hover{background:#3b5fad}
+.ng-del-permanent{background:#7f1d1d;color:#fca5a5}
+.ng-del-permanent:hover{background:#991b1b}
+.ng-del-cancel{background:#242836;color:#8b90a5;border:1px solid #2e3346}
+.ng-del-cancel:hover{background:#2e3346}
 /* Note */
 .ng-note-body{padding:8px 12px 10px}
 .ng-node.ng-coll .ng-note-body{display:none}
