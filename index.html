@@ -760,6 +760,16 @@
                     <button type="button" class="small secondary" id="bldgAddPhaseBtn" onclick="addPhaseFromBuildingModal()" style="font-size:11px;">+ Add Phase</button>
                 </div>
             </div>
+            <div id="buildingCOBreakdown" style="display:none; border:1px solid var(--border); border-radius:8px; padding:12px; margin-bottom:16px; background:var(--surface);">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                    <h4 style="font-size:13px; color:var(--text-dim); text-transform:uppercase; margin:0;">Change Orders</h4>
+                    <span id="bldgCOTotals" style="font-size:12px; font-weight:600;"></span>
+                </div>
+                <div id="bldgCORows"></div>
+                <div style="display:flex; gap:8px; margin-top:8px;">
+                    <button type="button" class="small secondary" id="bldgAddCOBtn" onclick="addCOFromBuildingModal()" style="font-size:11px;">+ Add CO</button>
+                </div>
+            </div>
             <div class="form-row" style="align-items: center; margin-bottom: 16px;">
                 <input type="hidden" id="buildingLocked" value="">
                 <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer;">
@@ -1215,7 +1225,7 @@
       </div>
     </div>
     <script src="js/app.js?v=22"></script>
-    <script src="js/wip.js?v=25"></script>
+    <script src="js/wip.js?v=26"></script>
     <script src="js/estimates.js?v=18"></script>
     <script src="js/proposal.js?v=18"></script>
 
@@ -1223,7 +1233,7 @@
     <script src="js/workspace-layout.js?v=20"></script>
 
     <!-- Node Graph (Beta) -->
-    <link rel="stylesheet" href="nodegraph/nodegraph.css?v=65" />
+    <link rel="stylesheet" href="nodegraph/nodegraph.css?v=66" />
     <div id="nodeGraphTab">
       <div class="ng-topbar">
         <span class="ng-topbar-title">&#x26A1; Node Graph</span>
@@ -1247,6 +1257,6 @@
       </div>
     </div>
     <script src="nodegraph/engine.js?v=48"></script>
-    <script src="nodegraph/ui.js?v=84"></script>
+    <script src="nodegraph/ui.js?v=85"></script>
 </body>
 </html>

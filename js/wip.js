@@ -1676,6 +1676,7 @@ function renderWIPMain() {
             document.getElementById('buildingLocked').checked = building.locked || false;
             document.getElementById('buildingExcludeSubDist').checked = building.excludeFromSubDist || false;
             renderBuildingPhaseBreakdown(buildingId);
+            renderBuildingCOBreakdown(buildingId);
             openModal('addBuildingModal');
         }
 
@@ -1757,6 +1758,99 @@ function renderWIPMain() {
             if (!confirm('Delete this phase?')) return;
             appData.phases = appData.phases.filter(p => p.id !== phaseId);
             renderBuildingPhaseBreakdown(appState.editBuildingId);
+        }
+
+        function cosForBuilding(buildingId) {
+            if (!buildingId) return [];
+            const phaseIds = appData.phases.filter(p => p.buildingId === buildingId).map(p => p.id);
+            return appData.changeOrders.filter(function(c) {
+                if (!c.allocations || !c.allocations.length) return false;
+                return c.allocations.some(function(a) {
+                    return a.buildingId === buildingId || (a.phaseId && phaseIds.indexOf(a.phaseId) > -1);
+                });
+            });
+        }
+
+        function renderBuildingCOBreakdown(buildingId) {
+            const wrap = document.getElementById('buildingCOBreakdown');
+            const rowsEl = document.getElementById('bldgCORows');
+            if (!wrap || !rowsEl) return;
+            if (!buildingId) { wrap.style.display = 'none'; return; }
+            wrap.style.display = 'block';
+            rowsEl.innerHTML = '';
+            const cos = cosForBuilding(buildingId);
+            if (cos.length === 0) {
+                rowsEl.innerHTML = '<div style="font-size:12px;color:var(--text-dim);padding:6px 2px;">No change orders linked to this building yet.</div>';
+            }
+            cos.forEach(function(co) {
+                const inc = co.income || 0;
+                const cost = co.estimatedCosts || 0;
+                const row = document.createElement('div');
+                row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--border);';
+                row.innerHTML =
+                    '<span style="flex:1;font-size:13px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' +
+                    (co.coNumber ? '<span style="font-size:10px;color:var(--text-dim);margin-right:4px;">' + escapeHTML(co.coNumber) + '</span>' : '') +
+                    escapeHTML(co.description || 'CO') + '</span>' +
+                    '<input type="number" data-co-id="' + co.id + '" data-field="income" value="' + inc + '" step="0.01" title="Income (budget add)" style="width:100px;font-size:12px;padding:4px 6px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--green);text-align:right;" oninput="onCOBreakdownInput(this)">' +
+                    '<input type="number" data-co-id="' + co.id + '" data-field="estimatedCosts" value="' + cost + '" step="0.01" title="Estimated cost" style="width:100px;font-size:12px;padding:4px 6px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--yellow);text-align:right;" oninput="onCOBreakdownInput(this)">' +
+                    '<button type="button" onclick="removeCOFromBreakdown(\'' + co.id + '\')" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:14px;padding:2px 4px;" title="Delete CO">&times;</button>';
+                rowsEl.appendChild(row);
+            });
+            updateCOBreakdownTotals(buildingId);
+        }
+
+        function updateCOBreakdownTotals(buildingId) {
+            const el = document.getElementById('bldgCOTotals');
+            if (!el) return;
+            const cos = cosForBuilding(buildingId);
+            const inc = cos.reduce((s, c) => s + (c.income || 0), 0);
+            const cost = cos.reduce((s, c) => s + (c.estimatedCosts || 0), 0);
+            el.textContent = 'Income: ' + formatCurrency(inc) + ' · Cost: ' + formatCurrency(cost);
+            el.style.color = 'var(--text-dim)';
+        }
+
+        function onCOBreakdownInput(input) {
+            const coId = input.getAttribute('data-co-id');
+            const field = input.getAttribute('data-field');
+            const co = appData.changeOrders.find(c => c.id === coId);
+            if (!co) return;
+            const val = parseFloat(input.value) || 0;
+            co[field] = val;
+            updateCOBreakdownTotals(appState.editBuildingId);
+        }
+
+        function addCOFromBuildingModal() {
+            if (!appState.editBuildingId) return;
+            const desc = prompt('CO description:');
+            if (!desc || !desc.trim()) return;
+            const incomeStr = prompt('Income (budget addition) $:', '0');
+            const costStr = prompt('Estimated cost $:', '0');
+            const co = {
+                id: 'co' + Date.now(),
+                jobId: appState.currentJobId,
+                coNumber: '',
+                description: desc.trim(),
+                income: parseFloat(incomeStr) || 0,
+                estimatedCosts: parseFloat(costStr) || 0,
+                date: new Date().toISOString().split('T')[0],
+                notes: '',
+                allocationType: 'building',
+                allocations: [{
+                    buildingId: appState.editBuildingId,
+                    income: parseFloat(incomeStr) || 0,
+                    estimatedCosts: parseFloat(costStr) || 0
+                }]
+            };
+            appData.changeOrders.push(co);
+            if (typeof saveData === 'function') saveData();
+            renderBuildingCOBreakdown(appState.editBuildingId);
+        }
+
+        function removeCOFromBreakdown(coId) {
+            if (!confirm('Delete this change order?')) return;
+            appData.changeOrders = appData.changeOrders.filter(c => c.id !== coId);
+            if (typeof saveData === 'function') saveData();
+            renderBuildingCOBreakdown(appState.editBuildingId);
         }
 
         function deleteBuilding() {

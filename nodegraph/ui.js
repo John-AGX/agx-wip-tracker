@@ -109,7 +109,9 @@ function renderNodes(){
     div.style.left=n.x+'px'; div.style.top=n.y+'px';
 
     var canColl = n.type!=='note' && n.type!=='watch';
+    var canEdit = (n.type==='t1'||n.type==='t2'||n.type==='sub'||n.type==='co'||n.type==='po'||n.type==='inv') && n.data && n.data.id;
     var h='<div class="ng-hdr"><span class="ng-hi">'+d.icon+'</span><span class="ng-hdr-name" data-rename="'+n.id+'" title="Double-click to rename">'+n.label+'</span>';
+    if(canEdit) h+='<span class="ng-editbtn" data-edit="'+n.id+'" title="Edit details">\u2699</span>';
     if(canColl) h+='<span class="ng-dupbtn" data-dup="'+n.id+'" title="Duplicate node">\u29C9</span>';
     if(canColl) h+='<span class="ng-cbtn" data-coll="'+n.id+'">'+(n.collapsed?'\u25B6':'\u25BC')+'</span>';
     h+='</div>';
@@ -457,7 +459,8 @@ function buildSidebar(){
           if(focused) return;
           if(entry){
             var lbl=entryLabel(type,entry);
-            E.addNode(type,cx-85,cy-30,lbl,entry);
+            var newNode=E.addNode(type,cx-85,cy-30,lbl,entry);
+            if(newNode) autoWireFromData(newNode, entry);
           } else {
             var label=d.label;
             if(d.nameEdit) label=prompt('Name:',label)||label;
@@ -551,6 +554,20 @@ function initEvents(){
   canvasEl.addEventListener('mousedown',function(e){
     var port=e.target.closest('[data-dir="out"]');
     if(port){e.stopPropagation();wiringFrom={nid:port.getAttribute('data-node'),pi:parseInt(port.getAttribute('data-pi'))};return;}
+    var eb=e.target.closest('.ng-editbtn');
+    if(eb){
+      e.stopPropagation();
+      var en=E.findNode(eb.getAttribute('data-edit'));
+      if(en && en.data && en.data.id){
+        if(en.type==='t1' && typeof editBuilding==='function') editBuilding(en.data.id);
+        else if(en.type==='t2' && typeof editPhase==='function') editPhase(en.data.id);
+        else if(en.type==='sub' && typeof editSub==='function') editSub(en.data.id);
+        else if(en.type==='co' && typeof editCO==='function') editCO(en.data.id);
+        else if(en.type==='po' && typeof editPO==='function') editPO(en.data.id);
+        else if(en.type==='inv' && typeof editInvoice==='function') editInvoice(en.data.id);
+      }
+      return;
+    }
     var db=e.target.closest('.ng-dupbtn');
     if(db){e.stopPropagation();duplicateNode(db.getAttribute('data-dup'));return;}
     var cb=e.target.closest('.ng-cbtn');
@@ -1074,6 +1091,63 @@ function pushToJob(){
 /** Silent sync — called on every render, no UI refresh */
 function pushToJobSilent(){
   try { pushToJob(); } catch(e){}
+}
+
+// Auto-wire a newly added node based on its data relationships,
+// mirroring the wiring logic used in populate() — so picker-added
+// nodes connect to their parent automatically.
+function autoWireFromData(n, entry){
+  if(!n || !entry) return;
+  var nodes=E.nodes(), wires=E.wires();
+  var addWire=function(fromId,fromPort,toId,toPort){
+    wires.push({fromNode:fromId,fromPort:fromPort||0,toNode:toId,toPort:toPort||0});
+  };
+  if(n.type==='t1'){
+    // Building → wire to WIP Costs port (0)
+    var wipNode=nodes.find(function(nd){return nd.type==='wip';});
+    if(wipNode) addWire(n.id,0,wipNode.id,0);
+  } else if(n.type==='t2'){
+    // Phase → wire to parent T1 (by buildingId)
+    if(entry.buildingId){
+      var t1=nodes.find(function(nd){return nd.type==='t1'&&nd.data&&nd.data.id===entry.buildingId;});
+      if(t1) addWire(n.id,0,t1.id,0);
+    }
+  } else if(n.type==='sub'){
+    // Sub → wire to parent T1(s) (by buildingIds)
+    var bids=entry.buildingIds||(entry.buildingId?[entry.buildingId]:[]);
+    bids.forEach(function(bid){
+      var t1=nodes.find(function(nd){return nd.type==='t1'&&nd.data&&nd.data.id===bid;});
+      if(t1) addWire(n.id,0,t1.id,0);
+    });
+  } else if(n.type==='co'){
+    // CO → wire to targets based on allocations
+    if(entry.allocationType==='job' || !entry.allocations || !entry.allocations.length){
+      var wipNode2=nodes.find(function(nd){return nd.type==='wip';});
+      if(wipNode2) addWire(n.id,0,wipNode2.id,1); // top CO port
+    } else {
+      entry.allocations.forEach(function(a){
+        if(a.phaseId){
+          var t2=nodes.find(function(nd){return nd.type==='t2'&&nd.data&&nd.data.id===a.phaseId;});
+          if(t2) addWire(n.id,0,t2.id,0);
+        } else if(a.buildingId){
+          var t1=nodes.find(function(nd){return nd.type==='t1'&&nd.data&&nd.data.id===a.buildingId;});
+          if(t1) addWire(n.id,0,t1.id,0);
+        }
+      });
+    }
+  } else if(n.type==='po'){
+    // PO → wire to parent Sub (by subId)
+    if(entry.subId){
+      var sub=nodes.find(function(nd){return nd.type==='sub'&&nd.data&&nd.data.id===entry.subId;});
+      if(sub) addWire(n.id,0,sub.id,0);
+    }
+  } else if(n.type==='inv'){
+    // Invoice → wire to parent PO (by poId)
+    if(entry.poId){
+      var po=nodes.find(function(nd){return nd.type==='po'&&nd.data&&nd.data.id===entry.poId;});
+      if(po) addWire(n.id,0,po.id,0);
+    }
+  }
 }
 
 // ── Populate from job ──
