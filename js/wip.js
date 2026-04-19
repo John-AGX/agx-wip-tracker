@@ -2080,6 +2080,7 @@ function renderWIPMain() {
 
             populatePhaseTypeSelect();
             document.getElementById('phaseType').value = '';
+            document.getElementById('phaseAsSoldRevenue').value = '';
             document.getElementById('phasePercent').value = '0';
             document.getElementById('phaseMaterials').value = '';
             document.getElementById('phaseLabor').value = '';
@@ -2093,6 +2094,8 @@ function renderWIPMain() {
             document.getElementById('phaseNotes').value = '';
             document.getElementById('phaseWorkScope').value = 'in-house';
             document.getElementById('phaseLocked').checked = false;
+            document.getElementById('phaseBuildingWrap').style.display = '';
+            document.getElementById('phaseConnectedWrap').style.display = 'none';
             openModal('addPhaseModal');
         }
 
@@ -2114,14 +2117,58 @@ function renderWIPMain() {
                 opt.textContent = b.name;
                 select.appendChild(opt);
             });
-
             select.value = phase.buildingId || '';
+
+            // Determine graph wire connections. If the phase has multiple wired
+            // buildings, show the connection list and hide the single-building
+            // selector — connections are managed in the node graph.
+            let wiredBldgs = [];
+            if (typeof NG !== 'undefined') {
+                try {
+                    const ngNodes = NG.nodes();
+                    const ngWires = NG.wires();
+                    const t2 = ngNodes.find(n => n.type === 't2' && n.data && n.data.id === phase.id);
+                    if (t2) {
+                        ngWires.forEach(w => {
+                            if (w.fromNode === t2.id) {
+                                const t1 = ngNodes.find(n => n.id === w.toNode && n.type === 't1');
+                                if (t1 && t1.data) {
+                                    wiredBldgs.push({ name: (t1.data.name || 'Building'), pct: w.allocPct != null ? w.allocPct : 0 });
+                                }
+                            }
+                        });
+                    }
+                } catch(e) {}
+            }
+            const hasMulti = wiredBldgs.length > 1;
+            document.getElementById('phaseBuildingWrap').style.display = hasMulti ? 'none' : '';
+            const connWrap = document.getElementById('phaseConnectedWrap');
+            if (wiredBldgs.length > 0) {
+                connWrap.style.display = '';
+                const totalPct = wiredBldgs.reduce((s, b) => s + b.pct, 0);
+                const pctOk = Math.abs(totalPct - 100) < 0.1 || totalPct === 0;
+                document.getElementById('phaseConnectedList').innerHTML =
+                    wiredBldgs.map(b =>
+                        '<div style="display:flex;justify-content:space-between;padding:3px 0;">' +
+                        '<span>' + escapeHTML(b.name) + '</span>' +
+                        '<span style="color:var(--yellow);font-family:\'Courier New\',monospace;">' + b.pct.toFixed(1) + '%</span>' +
+                        '</div>'
+                    ).join('') +
+                    '<div style="display:flex;justify-content:space-between;padding:4px 0 0;border-top:1px solid var(--border);margin-top:4px;font-weight:600;">' +
+                        '<span>Total</span>' +
+                        '<span style="color:' + (pctOk ? 'var(--green)' : 'var(--red)') + ';font-family:\'Courier New\',monospace;">' + totalPct.toFixed(1) + '% ' + (pctOk ? '\u2713' : '\u26A0') + '</span>' +
+                    '</div>';
+            } else {
+                connWrap.style.display = 'none';
+            }
+
             populatePhaseTypeSelect();
             if (phase.phase && !Array.from(document.getElementById('phaseType').options).some(o => o.value === phase.phase)) {
                 const c = getCustomItems('agx-wip-custom-phases');
                 if (!c.includes(phase.phase)) { c.push(phase.phase); saveCustomItems('agx-wip-custom-phases', c); populatePhaseTypeSelect(); }
             }
             document.getElementById('phaseType').value = phase.phase || '';
+            document.getElementById('phaseAsSoldRevenue').value = phase.asSoldRevenue || '';
             document.getElementById('phasePercent').value = phase.pctComplete || 0;
             document.getElementById('phaseMaterials').value = phase.materials || '';
             document.getElementById('phaseLabor').value = phase.labor || '';
@@ -2360,8 +2407,12 @@ function renderWIPMain() {
             const asSoldVal = parseFloat(document.getElementById('phaseBudget').value) || 0;
             const existingCO = appState.editPhaseId
                 ? (appData.phases.find(p => p.id === appState.editPhaseId)?.coPhaseBudget || 0) : 0;
+            const asSoldRevenue = parseFloat(document.getElementById('phaseAsSoldRevenue').value) || 0;
+            // If phase is wired to multiple buildings in the graph, keep buildingId empty.
+            const isMultiWired = document.getElementById('phaseConnectedWrap').style.display !== 'none'
+                && document.getElementById('phaseBuildingWrap').style.display === 'none';
             const formData = {
-                buildingId: document.getElementById('phaseBuilding').value,
+                buildingId: isMultiWired ? '' : document.getElementById('phaseBuilding').value,
                 phase: document.getElementById('phaseType').value,
                 workScope: document.getElementById('phaseWorkScope').value || 'in-house',
                 locked: document.getElementById('phaseLocked').checked,
@@ -2370,6 +2421,7 @@ function renderWIPMain() {
                 labor: hoursTotal * rate,
                 sub: 0,
                 equipment: parseFloat(document.getElementById('phaseEquipment').value) || 0,
+                asSoldRevenue: asSoldRevenue,
                 asSoldPhaseBudget: asSoldVal,
                 coPhaseBudget: existingCO,
                 phaseBudget: asSoldVal + existingCO,
@@ -2383,6 +2435,20 @@ function renderWIPMain() {
                 const idx = appData.phases.findIndex(p => p.id === appState.editPhaseId);
                 if (idx !== -1) {
                     Object.assign(appData.phases[idx], formData);
+                    // Sync revenue + name to graph T2 node if present
+                    if (typeof NG !== 'undefined') {
+                        try {
+                            const ngNodes = NG.nodes();
+                            ngNodes.forEach(n => {
+                                if (n.type === 't2' && n.data && n.data.id === appState.editPhaseId) {
+                                    n.revenue = asSoldRevenue;
+                                    n.pctComplete = formData.pctComplete;
+                                    // Preserve the " › Building" / " +N" suffix by keeping whatever label updateTierLabels derived
+                                }
+                            });
+                            NG.saveGraph();
+                        } catch(e) {}
+                    }
                 }
                 appState.editPhaseId = null;
             } else {

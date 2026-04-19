@@ -31,18 +31,23 @@ function updateTierLabels(){
   nodes.forEach(function(n){
     if(n.type==='t2'){
       var baseName = n.label.split(' \u203A ')[0].trim();
-      var t1Name = '', t1Data = null;
+      var t1s = [];
       wires.forEach(function(w){
         if(w.fromNode===n.id){
           var target=E.findNode(w.toNode);
-          if(target&&target.type==='t1'){ t1Name=target.label.split(' \u203A ')[0].trim(); t1Data=target.data; }
+          if(target&&target.type==='t1'){ t1s.push({ name:target.label.split(' \u203A ')[0].trim(), data:target.data }); }
         }
       });
-      n.label = t1Name ? baseName+' \u203A '+t1Name : baseName;
+      // 0 connections → just name; 1 connection → name › bldg; 2+ → name +N
+      if(t1s.length===0) n.label = baseName;
+      else if(t1s.length===1) n.label = baseName+' \u203A '+t1s[0].name;
+      else n.label = baseName+' +'+t1s.length;
       if(n.data && n.data.id && typeof appData !== 'undefined'){
         var phase = appData.phases.find(function(p){return p.id===n.data.id;});
         if(phase){
-          var newBldgId = t1Data && t1Data.id ? t1Data.id : '';
+          // Only track a single buildingId when exactly one T1 is connected;
+          // clear it when the phase spans multiple buildings via the graph.
+          var newBldgId = t1s.length===1 && t1s[0].data && t1s[0].data.id ? t1s[0].data.id : '';
           if(phase.buildingId !== newBldgId){
             phase.buildingId = newBldgId;
             if(typeof saveData === 'function') saveData();
