@@ -30,8 +30,8 @@ function updateTierLabels(){
   });
   nodes.forEach(function(n){
     if(n.type==='t2'){
-      // Strip ' › Building' suffix OR ' +N' multi-count suffix from prior labels
-      var baseName = n.label.split(' \u203A ')[0].trim().replace(/\s+\+\d+$/, '').trim();
+      // Strip ' › Building' suffix OR all accumulated ' +N' suffixes from prior labels
+      var baseName = n.label.split(' \u203A ')[0].trim().replace(/(\s+\+\d+)+$/g, '').trim();
       var t1s = [];
       wires.forEach(function(w){
         if(w.fromNode===n.id){
@@ -56,12 +56,12 @@ function updateTierLabels(){
         }
       }
     } else if(n.type==='sub'){
-      var subBase = n.label.split(' \u203A ')[0].trim().replace(/\s+\+\d+$/, '').trim();
+      var subBase = n.label.split(' \u203A ')[0].trim().replace(/(\s+\+\d+)+$/g, '').trim();
       var suffix = '';
       // Derive label + sync data from wire connections
       var connPhases = [], connBldgs = [];
       var connPhaseIds = [], connBldgIds = [];
-      var cleanName = function(lbl){ return lbl.split(' \u203A ')[0].trim().replace(/\s+\+\d+$/, '').trim(); };
+      var cleanName = function(lbl){ return lbl.split(' \u203A ')[0].trim().replace(/(\s+\+\d+)+$/g, '').trim(); };
       wires.forEach(function(w){
         if(w.fromNode===n.id){
           var target=E.findNode(w.toNode);
