@@ -1422,12 +1422,21 @@ function renderWIPMain() {
                 if (level === 'job') {
                     assignedTo = 'All Buildings';
                 } else if (level === 'phase') {
-                    const building = appData.buildings.find(b => b.id === sub.buildingId);
-                    const phase = appData.phases.find(p => p.id === sub.phaseId);
-                    assignedTo = (building?.name || '?') + ' → ' + (phase?.phase || '?');
+                    var pIds = sub.phaseIds || (sub.phaseId ? [sub.phaseId] : []);
+                    var phLabels = pIds.map(function(pid){
+                        var ph = appData.phases.find(function(p){return p.id===pid;});
+                        if(!ph) return null;
+                        var bldg = appData.buildings.find(function(b){return b.id===ph.buildingId;});
+                        return (bldg ? bldg.name : '?') + ' → ' + ph.phase;
+                    }).filter(Boolean);
+                    assignedTo = phLabels.length > 0 ? phLabels.join(', ') : '?';
                 } else {
-                    const building = appData.buildings.find(b => b.id === sub.buildingId);
-                    assignedTo = building?.name || '';
+                    var bIds = sub.buildingIds || (sub.buildingId ? [sub.buildingId] : []);
+                    var bLabels = bIds.map(function(bid){
+                        var b = appData.buildings.find(function(bb){return bb.id===bid;});
+                        return b ? b.name : null;
+                    }).filter(Boolean);
+                    assignedTo = bLabels.length > 0 ? bLabels.join(', ') : '';
                 }
 
                 const levelLabel = level === 'job' ? 'Job-Wide' : level === 'phase' ? 'Phase' : 'Building';

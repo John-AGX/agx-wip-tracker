@@ -1051,17 +1051,35 @@ function pushToJob(){
     phase.equipment=equip;
   });
 
-  // Sub nodes → subs (match by data.id)
-  // contractAmt = sum of wired costs (PO contracts + direct invoices)
-  // billedToDate = actual billed portion (getActual follows invoices only)
+  // Sub nodes → subs: aggregate across all node instances of the same sub
+  // contractAmt = sum of PO contract values; billedToDate = sum of invoiced amounts
+  var subTotals = {};
   nodes.forEach(function(n){
-    if(n.type!=='sub') return;
-    var sub=n.data&&n.data.id?appData.subs.find(function(s){return s.id===n.data.id;}):null;
-    if(!sub) return;
-    if(n.label) sub.name=n.label;
+    if(n.type!=='sub' || !n.data || !n.data.id) return;
+    var key = n.data.id;
+    if(!subTotals[key]) subTotals[key] = { contract: 0, billed: 0, accrued: 0, name: n.label.split(' \u203A ')[0].trim() };
     E.resetComp();
-    sub.contractAmt=E.getOutput(n,0);
-    sub.billedToDate=E.getActual(n);
+    wires.forEach(function(w){
+      if(w.toNode !== n.id) return;
+      var src = E.findNode(w.fromNode);
+      if(!src) return;
+      if(src.type === 'po'){
+        E.resetComp();
+        E.getOutput(src, 0);
+        subTotals[key].contract += src._poContract || 0;
+        subTotals[key].billed += src._poInvoiced || 0;
+      }
+    });
+    E.resetComp();
+    subTotals[key].accrued += E.getAccrued(n);
+  });
+  Object.keys(subTotals).forEach(function(subId){
+    var sub = appData.subs.find(function(s){ return s.id === subId; });
+    if(!sub) return;
+    sub.name = subTotals[subId].name;
+    sub.contractAmt = subTotals[subId].contract;
+    sub.billedToDate = subTotals[subId].billed;
+    sub.accruedAmt = subTotals[subId].accrued;
   });
 
   // Job-level costs: sum all cost nodes NOT wired to any T1/T2
