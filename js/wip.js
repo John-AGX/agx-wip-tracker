@@ -1210,6 +1210,68 @@ function renderWIPMain() {
                 container.innerHTML += '<div style="text-align:center;padding:30px;color:var(--text-dim);font-size:13px;">No buildings or phases yet. Use the buttons above to get started.</div>';
             }
 
+            // ── Phases summary ──
+            const jobPhases = appData.phases.filter(p => p.jobId === jobId);
+            const phSection = document.createElement('div');
+            phSection.style.cssText = 'margin-top:14px;';
+            // Group by phase name (case-insensitive)
+            const phGroups = {};
+            jobPhases.forEach(p => {
+                const k = (p.phase || 'Unnamed').trim().toLowerCase();
+                if (!phGroups[k]) phGroups[k] = { name: p.phase || 'Unnamed', records: [] };
+                phGroups[k].records.push(p);
+            });
+            const groupKeys = Object.keys(phGroups).sort();
+            let totalPhRev = 0, totalPhCost = 0;
+            groupKeys.forEach(k => {
+                phGroups[k].records.forEach(r => {
+                    totalPhRev += r.asSoldRevenue || 0;
+                    totalPhCost += (r.materials || 0) + (r.labor || 0) + (r.sub || 0) + (r.equipment || 0);
+                });
+            });
+            let phRowsHtml = '';
+            if (groupKeys.length > 0) {
+                phRowsHtml = groupKeys.map(k => {
+                    const g = phGroups[k];
+                    const count = g.records.length;
+                    const gRev = g.records.reduce((s, r) => s + (r.asSoldRevenue || 0), 0);
+                    const gCost = g.records.reduce((s, r) => s + (r.materials || 0) + (r.labor || 0) + (r.sub || 0) + (r.equipment || 0), 0);
+                    const gProfit = gRev - gCost;
+                    const avgPct = Math.round(g.records.reduce((s, r) => s + (r.pctComplete || 0), 0) / count);
+                    const bldgNames = g.records.map(r => {
+                        const b = appData.buildings.find(bb => bb.id === r.buildingId);
+                        return b ? b.name : null;
+                    }).filter(Boolean);
+                    const bldgLabel = bldgNames.length ? bldgNames.join(', ') : (count + ' record' + (count>1?'s':''));
+                    const dupBadge = count > 1 ? ' <span style="font-size:10px;padding:1px 6px;border-radius:8px;background:rgba(251,191,36,0.15);color:var(--yellow);font-weight:600;" title="' + count + ' duplicate records">' + count + 'x</span>' : '';
+                    return '<div class="card" style="cursor:pointer;padding:8px 12px;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;gap:12px;" onclick="openManagePhasesModal()" title="Click to manage phases">' +
+                        '<div style="min-width:0;flex:1;">' +
+                            '<div style="font-size:13px;font-weight:600;">' + escapeHTML(g.name) + dupBadge + '</div>' +
+                            '<div style="font-size:10px;color:var(--text-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTML(bldgLabel) + '</div>' +
+                        '</div>' +
+                        '<div style="display:flex;gap:14px;font-size:12px;flex-shrink:0;">' +
+                            '<div><span style="color:var(--text-dim);">Rev</span> <b style="color:var(--green);">' + formatCurrency(gRev) + '</b></div>' +
+                            '<div><span style="color:var(--text-dim);">Cost</span> <b>' + formatCurrency(gCost) + '</b></div>' +
+                            '<div><span style="color:var(--text-dim);">Profit</span> <b style="color:' + (gProfit >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + formatCurrency(gProfit) + '</b></div>' +
+                            '<div><span style="color:var(--text-dim);">%</span> <b>' + avgPct + '%</b></div>' +
+                        '</div>' +
+                    '</div>';
+                }).join('');
+            } else {
+                phRowsHtml = '<div style="padding:12px;text-align:center;color:var(--text-dim);font-size:12px;">No phases yet. Click + Phase above to add one.</div>';
+            }
+            const totalPhProfit = totalPhRev - totalPhCost;
+            phSection.innerHTML =
+                '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">' +
+                    '<h3 style="font-size:13px;margin:0;">&#x1F4CB; Phases (' + groupKeys.length + ')</h3>' +
+                    '<div style="display:flex;gap:12px;align-items:center;">' +
+                        '<div style="font-size:12px;color:var(--text-dim);">Rev: <b style="color:var(--green);">' + formatCurrency(totalPhRev) + '</b> &nbsp; Cost: <b>' + formatCurrency(totalPhCost) + '</b> &nbsp; Profit: <b style="color:' + (totalPhProfit >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + formatCurrency(totalPhProfit) + '</b></div>' +
+                        '<button class="small secondary" onclick="openManagePhasesModal()" style="font-size:11px;padding:4px 10px;">Manage</button>' +
+                    '</div>' +
+                '</div>' +
+                phRowsHtml;
+            container.appendChild(phSection);
+
             // ── Change Orders summary ──
             const cos = appData.changeOrders.filter(c => c.jobId === jobId);
             if (cos.length > 0) {
