@@ -30,7 +30,7 @@ var DEFS = {
   sub:   { cat:'sub',  icon:'👷', label:'Sub',          ins:[{n:'Costs',t:PT.C}], outs:[{n:'Total',t:PT.C}], nameEdit:true },
   po:    { cat:'sub',  icon:'📄', label:'Purchase Order', ins:[{n:'Invoiced',t:PT.C}], outs:[{n:'Total',t:PT.C}], hasItems:true, nameEdit:true, itemType:'po' },
   inv:   { cat:'sub',  icon:'💳', label:'Invoice',       ins:[], outs:[{n:'Total',t:PT.C}], hasItems:true, nameEdit:true, itemType:'inv' },
-  co:    { cat:'co',   icon:'📝', label:'Change Order', ins:[], outs:[{n:'Income',t:PT.C}], nameEdit:true, hasItems:true, itemType:'co' },
+  co:    { cat:'co',   icon:'📝', label:'Change Order', ins:[{n:'Costs',t:PT.C}], outs:[{n:'Income',t:PT.C}], nameEdit:true, hasItems:true, itemType:'co' },
   sum:   { cat:'math', icon:'∑',    label:'SUM',          ins:[{n:'A',t:PT.A},{n:'B',t:PT.A},{n:'C',t:PT.A},{n:'D',t:PT.A}], outs:[{n:'Result',t:PT.C}] },
   sub2:  { cat:'math', icon:'−',    label:'Subtract',     ins:[{n:'A',t:PT.C},{n:'B',t:PT.C}], outs:[{n:'Result',t:PT.C}] },
   mul:   { cat:'math', icon:'×',    label:'Multiply',     ins:[{n:'A',t:PT.A},{n:'B',t:PT.N}], outs:[{n:'Result',t:PT.C}] },
@@ -333,10 +333,17 @@ function getActual(n){
       if(w.toNode===n.id){ var fn=findNode(w.fromNode); if(fn) v += getActual(fn); }
     });
   }
+  else if(n.type==='co'){
+    // CO actual costs = sum of wired cost children (mini-P&L)
+    wires.forEach(function(w){
+      if(w.toNode===n.id){ var fn=findNode(w.fromNode); if(fn) v += getActual(fn); }
+    });
+  }
   else if(n.type==='t1'||n.type==='t2'){
     v = iT;
+    // Include CO actual costs so CO work rolls up to the building/phase
     wires.forEach(function(w){
-      if(w.toNode===n.id){ var fn=findNode(w.fromNode); if(!fn||fn.type==='co') return; v += getActual(fn); }
+      if(w.toNode===n.id){ var fn=findNode(w.fromNode); if(!fn) return; v += getActual(fn); }
     });
   }
   _compA[n.id] = false;
@@ -352,7 +359,7 @@ function getAncestorPct(n){
       if(!parent) return;
       if((parent.type==='t1'||parent.type==='t2') && parent.pctComplete!=null){
         pct=parent.pctComplete;
-      } else if(parent.type==='sub'){
+      } else if(parent.type==='sub'||parent.type==='co'){
         pct=getAncestorPct(parent);
       }
     }
@@ -378,9 +385,15 @@ function getAccrued(n){
       if(w.toNode===n.id){ var fn=findNode(w.fromNode); if(fn) v += getAccrued(fn); }
     });
   }
-  else if(n.type==='t1'||n.type==='t2'){
+  else if(n.type==='co'){
     wires.forEach(function(w){
-      if(w.toNode===n.id){ var fn=findNode(w.fromNode); if(!fn||fn.type==='co') return; v += getAccrued(fn); }
+      if(w.toNode===n.id){ var fn=findNode(w.fromNode); if(fn) v += getAccrued(fn); }
+    });
+  }
+  else if(n.type==='t1'||n.type==='t2'){
+    // Include CO accrued so CO committed-not-billed rolls up
+    wires.forEach(function(w){
+      if(w.toNode===n.id){ var fn=findNode(w.fromNode); if(!fn) return; v += getAccrued(fn); }
     });
   }
   _compAc[n.id] = false;

@@ -306,6 +306,23 @@ function renderNodes(){
       h+='</div>';
     }
 
+    // CO: mini P&L — income vs actual/accrued costs
+    if(n.type==='co'){
+      E.resetComp();
+      var coIncome=E.getOutput(n,0);
+      E.resetComp();
+      var coActual=E.getActual(n);
+      var coAccrued=E.getAccrued(n);
+      var coGP=coIncome-(coActual+coAccrued);
+      var gpColor=coGP>=0?'#34d399':'#f87171';
+      h+='<div style="padding:4px 10px 6px;font-size:10px;">';
+      h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Income <span style="color:#34d399;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(coIncome)+'</span></div>';
+      h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Actual Cost <span style="color:#f87171;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(coActual)+'</span></div>';
+      h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Accrued Cost <span style="color:#fbbf24;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(coAccrued)+'</span></div>';
+      h+='<div style="display:flex;justify-content:space-between;padding:3px 0 2px;border-top:1px solid var(--ng-border2);margin-top:2px;color:#6a7090;font-weight:600;">Gross Profit <span style="color:'+gpColor+';font-weight:700;font-family:\'Courier New\',monospace;">'+E.fmtC(coGP)+'</span></div>';
+      h+='</div>';
+    }
+
     // T1/T2: show actual / accrued / committed breakdown
     if(n.type==='t1'||n.type==='t2'){
       E.resetComp();
@@ -388,9 +405,12 @@ function renderNodes(){
         h+='<div class="ng-coll-detail"><span class="ng-coll-lbl">Contract</span><span class="ng-coll-val">'+E.fmtC(poC)+'</span></div>';
         h+='<div class="ng-coll-detail"><span class="ng-coll-lbl">Invoiced</span><span class="ng-coll-val ng-cv-grn">'+E.fmtC(poI)+'</span></div>';
       } else if(n.type==='co'){
-        var coCost=n.data?n.data.estimatedCosts||0:0;
+        E.resetComp();
+        var coA=E.getActual(n);
+        var coAc=E.getAccrued(n);
+        var coCommitted=coA+coAc;
         h+='<div class="ng-coll-detail"><span class="ng-coll-lbl">Income</span><span class="ng-coll-val ng-cv-grn">'+E.fmtC(collVal)+'</span></div>';
-        if(coCost) h+='<div class="ng-coll-detail"><span class="ng-coll-lbl">Est. Cost</span><span class="ng-coll-val ng-cv-yel">'+E.fmtC(coCost)+'</span></div>';
+        h+='<div class="ng-coll-detail"><span class="ng-coll-lbl">Committed</span><span class="ng-coll-val ng-cv-yel" title="Actual + Accrued">'+E.fmtC(coCommitted)+'</span></div>';
       } else if(n.type==='inv'){
         h+='<div class="ng-coll-detail"><span class="ng-coll-lbl">Amount</span><span class="ng-coll-val">'+E.fmtC(collVal)+'</span></div>';
       } else {
@@ -1123,10 +1143,15 @@ function pushToJob(){
   nodes.forEach(function(co){
     if(co.type!=='co') return;
     var income = E.getOutput(co, 0);
-    // Sync CO income to its appData entry (total, not split)
+    // Sync CO income + actual/accrued costs back to its appData entry
     if(co.data && co.data.id){
       var entry = appData.changeOrders.find(function(c){return c.id===co.data.id;});
-      if(entry) entry.income = income;
+      if(entry){
+        entry.income = income;
+        E.resetComp();
+        entry.actualCost = E.getActual(co);
+        entry.accruedCost = E.getAccrued(co);
+      }
     }
     // Find unique T1/T2/WIP targets this CO connects to
     var targetIds = {};
@@ -1689,6 +1714,7 @@ function estNodeHeight(n){
   if(d.hasItems) h+=40+(n.items?n.items.length*30:0);
   if(n.type==='t1') h+=60;
   if(n.type==='sub') h+=80;
+  if(n.type==='co') h+=90;
   return h;
 }
 
