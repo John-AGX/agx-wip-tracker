@@ -1386,6 +1386,7 @@ function renderWIPMain() {
 
             Object.keys(phaseGroups).forEach(phaseName => {
                 const phaseList = phaseGroups[phaseName];
+                const revTotal = phaseList.reduce((sum, p) => sum + (p.asSoldRevenue || 0), 0);
                 const matTotal = phaseList.reduce((sum, p) => sum + (p.materials || 0), 0);
                 const labTotal = phaseList.reduce((sum, p) => sum + (p.labor || 0), 0);
                 const subTotal = phaseList.reduce((sum, p) => sum + (p.sub || 0), 0);
@@ -1396,6 +1397,7 @@ function renderWIPMain() {
                 const row = document.createElement('tr');
                 row.innerHTML = `
                     <td>${escapeHTML(phaseName)}</td>
+                    <td style="text-align: right;">${formatCurrency(revTotal)}</td>
                     <td style="text-align: right;">${formatCurrency(matTotal)}</td>
                     <td style="text-align: right;">${formatCurrency(labTotal)}</td>
                     <td style="text-align: right;">${formatCurrency(subTotal)}</td>
@@ -2088,6 +2090,192 @@ function renderWIPMain() {
             saveData();
             closeModal('addPhaseModal');
             renderJobDetail(appState.currentJobId);
+        }
+
+        // ── Manage Phases Modal ──
+        function openManagePhasesModal() {
+            renderManagePhasesList();
+            document.getElementById('managePhasesModal').classList.add('active');
+        }
+
+        function renderManagePhasesList() {
+            const jobId = appState.currentJobId;
+            const list = document.getElementById('managePhasesList');
+            const phases = (appData.phases || []).filter(p => p.jobId === jobId);
+            if (!phases.length) {
+                list.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-dim);">No phases for this job yet.</div>';
+                return;
+            }
+            // Group by phase name (case-insensitive)
+            const groups = {};
+            phases.forEach(p => {
+                const key = (p.phase || 'Unnamed').trim().toLowerCase();
+                if (!groups[key]) groups[key] = { name: p.phase || 'Unnamed', records: [] };
+                groups[key].records.push(p);
+            });
+            let html = '';
+            Object.keys(groups).sort().forEach(key => {
+                const g = groups[key];
+                const count = g.records.length;
+                const totalRev = g.records.reduce((s, r) => s + (r.asSoldRevenue || 0), 0);
+                const isDup = count > 1;
+                const bldgNames = g.records.map(r => {
+                    const b = appData.buildings.find(bb => bb.id === r.buildingId);
+                    return b ? b.name : '(no building)';
+                });
+                html += '<div style="border:1px solid var(--border);border-radius:6px;padding:10px 12px;margin-bottom:8px;background:var(--surface);">';
+                html += '<div style="display:flex;gap:10px;align-items:center;">';
+                html += '<input type="text" data-mp-name="' + key + '" value="' + escapeHTML(g.name) + '" style="flex:1;padding:6px 8px;background:var(--input-bg,#0f1117);color:var(--text);border:1px solid var(--border);border-radius:4px;font-size:13px;font-weight:600;" />';
+                html += '<div style="font-size:11px;color:var(--text-dim);white-space:nowrap;">' + count + ' record' + (count > 1 ? 's' : '') + '</div>';
+                html += '<input type="number" data-mp-rev="' + key + '" value="' + totalRev.toFixed(2) + '" step="0.01" style="width:120px;padding:6px 8px;background:var(--input-bg,#0f1117);color:var(--text);border:1px solid var(--border);border-radius:4px;font-size:13px;text-align:right;" title="Total revenue" />';
+                if (isDup) {
+                    html += '<button class="btn btn-primary small" style="padding:5px 10px;font-size:11px;" onclick="mergePhaseGroup(\'' + key + '\')">Merge</button>';
+                } else {
+                    html += '<button class="btn btn-secondary small" style="padding:5px 10px;font-size:11px;" onclick="saveManagedPhase(\'' + key + '\')">Save</button>';
+                }
+                html += '<button class="btn danger small" style="padding:5px 10px;font-size:11px;" onclick="deletePhaseGroup(\'' + key + '\')">&#x1F5D1;</button>';
+                html += '</div>';
+                if (isDup) {
+                    html += '<div style="font-size:10px;color:var(--text-dim);margin-top:6px;padding-top:6px;border-top:1px dashed var(--border);">';
+                    html += '<span style="color:var(--yellow);">&#9888; Duplicate</span> &mdash; Buildings: ' + escapeHTML(bldgNames.join(', '));
+                    html += '<br>Merging creates 1 record and auto-wires to all ' + count + ' buildings at ' + (100/count).toFixed(1) + '% allocation each.';
+                    html += '</div>';
+                }
+                html += '</div>';
+            });
+            list.innerHTML = html;
+        }
+
+        function mergePhaseGroup(key) {
+            const jobId = appState.currentJobId;
+            const phases = (appData.phases || []).filter(p => p.jobId === jobId && (p.phase || 'Unnamed').trim().toLowerCase() === key);
+            if (phases.length < 2) return;
+            const nameInput = document.querySelector('[data-mp-name="' + key + '"]');
+            const revInput = document.querySelector('[data-mp-rev="' + key + '"]');
+            const newName = nameInput ? nameInput.value.trim() : phases[0].phase;
+            const newRev = revInput ? (parseFloat(revInput.value) || 0) : phases.reduce((s, r) => s + (r.asSoldRevenue || 0), 0);
+            // Keep the first record, absorb the rest
+            const keeper = phases[0];
+            const absorbed = phases.slice(1);
+            keeper.phase = newName;
+            keeper.asSoldRevenue = newRev;
+            keeper.materials = phases.reduce((s, r) => s + (r.materials || 0), 0);
+            keeper.labor = phases.reduce((s, r) => s + (r.labor || 0), 0);
+            keeper.sub = phases.reduce((s, r) => s + (r.sub || 0), 0);
+            keeper.equipment = phases.reduce((s, r) => s + (r.equipment || 0), 0);
+            keeper.buildingId = ''; // phase now spans buildings via graph wires
+            // Collect all building IDs from the absorbed records to auto-wire later
+            const bldgIds = phases.map(p => p.buildingId).filter(Boolean);
+            // Redirect any subs/POs referencing absorbed phase IDs to the keeper
+            const absorbedIds = absorbed.map(a => a.id);
+            (appData.subs || []).forEach(s => {
+                if (s.phaseId && absorbedIds.indexOf(s.phaseId) !== -1) s.phaseId = keeper.id;
+                if (s.phaseIds) s.phaseIds = s.phaseIds.map(pid => absorbedIds.indexOf(pid) !== -1 ? keeper.id : pid);
+            });
+            // Remove absorbed phases
+            appData.phases = appData.phases.filter(p => absorbedIds.indexOf(p.id) === -1);
+            saveData();
+            // Rewire graph if it exists
+            mergeUpdateGraph(keeper.id, absorbedIds, bldgIds);
+            renderManagePhasesList();
+            renderJobDetail(jobId);
+        }
+
+        function saveManagedPhase(key) {
+            const jobId = appState.currentJobId;
+            const phase = (appData.phases || []).find(p => p.jobId === jobId && (p.phase || 'Unnamed').trim().toLowerCase() === key);
+            if (!phase) return;
+            const nameInput = document.querySelector('[data-mp-name="' + key + '"]');
+            const revInput = document.querySelector('[data-mp-rev="' + key + '"]');
+            if (nameInput) phase.phase = nameInput.value.trim();
+            if (revInput) phase.asSoldRevenue = parseFloat(revInput.value) || 0;
+            saveData();
+            // Sync revenue to node graph if present
+            if (typeof NG !== 'undefined') {
+                try {
+                    const ngNodes = NG.nodes();
+                    ngNodes.forEach(n => {
+                        if (n.type === 't2' && n.data && n.data.id === phase.id) {
+                            n.revenue = phase.asSoldRevenue;
+                            n.label = phase.phase;
+                        }
+                    });
+                    NG.saveGraph();
+                } catch(e) {}
+            }
+            renderManagePhasesList();
+            renderJobDetail(jobId);
+        }
+
+        function deletePhaseGroup(key) {
+            const jobId = appState.currentJobId;
+            const phases = (appData.phases || []).filter(p => p.jobId === jobId && (p.phase || 'Unnamed').trim().toLowerCase() === key);
+            if (!phases.length) return;
+            if (!confirm('Delete ' + phases.length + ' phase record(s) in this group? This cannot be undone.')) return;
+            const ids = phases.map(p => p.id);
+            appData.phases = appData.phases.filter(p => ids.indexOf(p.id) === -1);
+            saveData();
+            // Remove corresponding nodes from graph
+            if (typeof NG !== 'undefined') {
+                try {
+                    const ngNodes = NG.nodes();
+                    const ngWires = NG.wires();
+                    const nodeIdsToRemove = ngNodes.filter(n => n.type === 't2' && n.data && ids.indexOf(n.data.id) !== -1).map(n => n.id);
+                    NG.setNodes(ngNodes.filter(n => nodeIdsToRemove.indexOf(n.id) === -1));
+                    NG.setWires(ngWires.filter(w => nodeIdsToRemove.indexOf(w.fromNode) === -1 && nodeIdsToRemove.indexOf(w.toNode) === -1));
+                    NG.saveGraph();
+                } catch(e) {}
+            }
+            renderManagePhasesList();
+            renderJobDetail(jobId);
+        }
+
+        // After merging phase records in appData, consolidate matching graph nodes
+        // and auto-create allocation wires to the original buildings.
+        function mergeUpdateGraph(keeperId, absorbedIds, bldgIds) {
+            if (typeof NG === 'undefined') return;
+            try {
+                const ngNodes = NG.nodes();
+                const ngWires = NG.wires();
+                // Find all T2 nodes that were for any of the phase records
+                const allIds = [keeperId].concat(absorbedIds);
+                const t2Nodes = ngNodes.filter(n => n.type === 't2' && n.data && allIds.indexOf(n.data.id) !== -1);
+                if (!t2Nodes.length) return;
+                // Keep the first T2 node, redirect wires from others, then delete others
+                const keeperNode = t2Nodes[0];
+                keeperNode.data.id = keeperId;
+                // Pull revenue from the keeper phase record
+                const keeperPhase = appData.phases.find(p => p.id === keeperId);
+                if (keeperPhase) {
+                    keeperNode.revenue = keeperPhase.asSoldRevenue || 0;
+                    keeperNode.label = keeperPhase.phase || keeperNode.label;
+                }
+                const removeIds = t2Nodes.slice(1).map(n => n.id);
+                // Redirect any wires pointing to/from absorbed t2 nodes to the keeper
+                ngWires.forEach(w => {
+                    if (removeIds.indexOf(w.fromNode) !== -1) w.fromNode = keeperNode.id;
+                    if (removeIds.indexOf(w.toNode) !== -1) w.toNode = keeperNode.id;
+                });
+                // Dedupe wires
+                const seen = {};
+                const deduped = [];
+                ngWires.forEach(w => {
+                    const k = w.fromNode + '|' + w.fromPort + '|' + w.toNode + '|' + w.toPort;
+                    if (!seen[k]) { seen[k] = true; deduped.push(w); }
+                });
+                NG.setWires(deduped);
+                NG.setNodes(ngNodes.filter(n => removeIds.indexOf(n.id) === -1));
+                // Ensure the keeper is wired to each original building (T1 node)
+                const finalWires = NG.wires();
+                (bldgIds || []).forEach(bid => {
+                    const t1 = NG.nodes().find(n => n.type === 't1' && n.data && n.data.id === bid);
+                    if (!t1) return;
+                    const exists = finalWires.some(w => w.fromNode === keeperNode.id && w.toNode === t1.id);
+                    if (!exists) finalWires.push({ fromNode: keeperNode.id, fromPort: 0, toNode: t1.id, toPort: 0 });
+                });
+                NG.rebalancePhaseAllocations(keeperNode.id);
+                NG.saveGraph();
+            } catch(e) { console.error('mergeUpdateGraph failed', e); }
         }
 
         function savePhase() {
