@@ -11,30 +11,56 @@ var wiringFrom=null, wireMouse=null;
 var selN=null, isPan=false, panSt={x:0,y:0};
 var editingId=null;
 
-// ── Update T2 labels based on connected T1 ──
+// ── Update T2/Sub labels based on connected T1 / phase data ──
 function updateTierLabels(){
   var nodes=E.nodes(), wires=E.wires();
   nodes.forEach(function(n){
-    if(n.type!=='t2') return;
-    var baseName = n.label.split(' \u203A ')[0].trim();
-    var t1Name = '', t1Data = null;
-    wires.forEach(function(w){
-      if(w.fromNode===n.id){
-        var target=E.findNode(w.toNode);
-        if(target&&target.type==='t1'){ t1Name=target.label.split(' \u203A ')[0].trim(); t1Data=target.data; }
-      }
-    });
-    n.label = t1Name ? baseName+' \u203A '+t1Name : baseName;
-    // Sync phase buildingId to connected T1's building
-    if(n.data && n.data.id && typeof appData !== 'undefined'){
-      var phase = appData.phases.find(function(p){return p.id===n.data.id;});
-      if(phase){
-        var newBldgId = t1Data && t1Data.id ? t1Data.id : '';
-        if(phase.buildingId !== newBldgId){
-          phase.buildingId = newBldgId;
-          if(typeof saveData === 'function') saveData();
+    if(n.type==='t2'){
+      var baseName = n.label.split(' \u203A ')[0].trim();
+      var t1Name = '', t1Data = null;
+      wires.forEach(function(w){
+        if(w.fromNode===n.id){
+          var target=E.findNode(w.toNode);
+          if(target&&target.type==='t1'){ t1Name=target.label.split(' \u203A ')[0].trim(); t1Data=target.data; }
+        }
+      });
+      n.label = t1Name ? baseName+' \u203A '+t1Name : baseName;
+      if(n.data && n.data.id && typeof appData !== 'undefined'){
+        var phase = appData.phases.find(function(p){return p.id===n.data.id;});
+        if(phase){
+          var newBldgId = t1Data && t1Data.id ? t1Data.id : '';
+          if(phase.buildingId !== newBldgId){
+            phase.buildingId = newBldgId;
+            if(typeof saveData === 'function') saveData();
+          }
         }
       }
+    } else if(n.type==='sub'){
+      var subBase = n.label.split(' \u203A ')[0].trim();
+      var suffix = '';
+      if(n.data && n.data.id && typeof appData !== 'undefined'){
+        var sub = appData.subs.find(function(s){return s.id===n.data.id;});
+        if(sub){
+          var pIds = sub.phaseIds || (sub.phaseId ? [sub.phaseId] : []);
+          if(sub.level==='phase' && pIds.length>0){
+            var phNames = pIds.map(function(pid){
+              var ph = appData.phases.find(function(p){return p.id===pid;});
+              return ph ? ph.phase : null;
+            }).filter(Boolean);
+            if(phNames.length===1) suffix = phNames[0];
+            else if(phNames.length>1) suffix = phNames[0]+' +'+(phNames.length-1);
+          } else if(sub.level==='building'){
+            var bIds = sub.buildingIds || (sub.buildingId ? [sub.buildingId] : []);
+            var bNames = bIds.map(function(bid){
+              var b = appData.buildings.find(function(bb){return bb.id===bid;});
+              return b ? b.name : null;
+            }).filter(Boolean);
+            if(bNames.length===1) suffix = bNames[0];
+            else if(bNames.length>1) suffix = bNames[0]+' +'+(bNames.length-1);
+          }
+        }
+      }
+      n.label = suffix ? subBase+' \u203A '+suffix : subBase;
     }
   });
 }
