@@ -973,6 +973,7 @@ function pushToJob(){
       if(bldg){
         bldg.coBudget = wiredCO;
         bldg.budget = (bldg.asSoldBudget||0) + bldg.coBudget;
+        n.budget = bldg.budget;
         n._coRevApplied = wiredCO;
       }
     } else if(n.type==='t2' && n.data && n.data.id){
@@ -980,6 +981,7 @@ function pushToJob(){
       if(phase){
         phase.coPhaseBudget = wiredCO;
         phase.phaseBudget = (phase.asSoldPhaseBudget||0) + phase.coPhaseBudget;
+        n.budget = phase.phaseBudget;
         n._coRevApplied = wiredCO;
       }
     } else if(n.type==='wip'){
@@ -1034,7 +1036,7 @@ function populate(){
   phases.forEach(function(ph,i){
     var bl=appData.buildings.find(function(b){return b.id===ph.buildingId;});
     var n=E.addNode('t2',sx+230,sy+i*140,ph.phase+(bl?' \u203A '+bl.name:''),ph);
-    if(n) n.pctComplete=ph.pctComplete||0;
+    if(n){n.budget=ph.phaseBudget||0; n.pctComplete=ph.pctComplete||0;}
     // Auto-wire T2→T1
     if(bl&&n){
       var t1=E.nodes().find(function(nd){return nd.type==='t1'&&nd.data&&nd.data.id===bl.id;});
