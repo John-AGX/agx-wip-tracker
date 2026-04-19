@@ -22,6 +22,7 @@
                     var isLight = document.body.classList.contains('light-mode');
                     localStorage.setItem('agx-theme', isLight ? 'light' : 'dark');
                     updateIcon();
+                    document.dispatchEvent(new CustomEvent('agx-theme-change', { detail: { isLight: isLight } }));
                 });
             });
         })();

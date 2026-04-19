@@ -1208,6 +1208,11 @@ function init(){
   // Auto arrange
   var aab=tab.querySelector('.ng-arrange-btn');
   if(aab) aab.addEventListener('click',function(){ autoArrange(selN); render(); });
+
+  // Redraw grid when theme changes so new colors take effect
+  document.addEventListener('agx-theme-change', function(){
+    if(gridC && gridCtx) E.drawGrid(gridCtx, gridC.width, gridC.height);
+  });
 }
 
 // ── Auto Arrange ──
