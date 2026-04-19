@@ -53,9 +53,9 @@ function updateTierLabels(){
         }
       });
       if(connPhases.length===1) suffix = connPhases[0];
-      else if(connPhases.length>1) suffix = connPhases[0]+' +'+(connPhases.length-1);
+      else if(connPhases.length>1) suffix = connPhases[0]+' +'+connPhases.length;
       else if(connBldgs.length===1) suffix = connBldgs[0];
-      else if(connBldgs.length>1) suffix = connBldgs[0]+' +'+(connBldgs.length-1);
+      else if(connBldgs.length>1) suffix = connBldgs[0]+' +'+connBldgs.length;
       n.label = suffix ? subBase+' \u203A '+suffix : subBase;
     }
   });
