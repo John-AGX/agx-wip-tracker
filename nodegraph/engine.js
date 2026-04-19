@@ -144,6 +144,16 @@ function addNode(type, x, y, label, data){
     if(data._val != null) n.value = data._val;
     if(data.budget) n.budget = data.budget;
     if(data.pctComplete) n.pctComplete = data.pctComplete;
+    // Map real-data fields to node state by type
+    if(type === 'po' && data.amount != null) n.value = data.amount;
+    if(type === 'inv' && data.amount != null){
+      n.items.push({
+        date: data.date || '',
+        invNum: data.invNumber || data.invNum || '',
+        amount: data.amount || 0,
+      });
+    }
+    if(type === 'co' && data.income != null) n.value = 0; // CO uses data.income via getOutput
   }
   nodes.push(n);
   return n;
@@ -422,14 +432,26 @@ function loadGraph(){
       if(sn.type === 't1') data = appData.buildings.find(function(b){ return b.id === sn.dataId; }) || {};
       else if(sn.type === 't2') data = appData.phases.find(function(p){ return p.id === sn.dataId; }) || {};
       else if(sn.type === 'sub') data = appData.subs.find(function(s){ return s.id === sn.dataId; }) || {};
-      else if(sn.type === 'co') data = appData.changeOrders.find(function(c){ return c.id === sn.dataId; }) || {};}
+      else if(sn.type === 'co') data = appData.changeOrders.find(function(c){ return c.id === sn.dataId; }) || {};
+      else if(sn.type === 'po') data = (appData.purchaseOrders||[]).find(function(p){ return p.id === sn.dataId; }) || {};
+      else if(sn.type === 'inv') data = (appData.invoices||[]).find(function(i){ return i.id === sn.dataId; }) || {};
+    }
+    var savedItems = sn.items || [];
+    var savedValue = sn.value || 0;
+    // Re-hydrate from data if saved state is empty (upgrading old graphs)
+    if(sn.type === 'po' && data.amount != null && !savedValue && savedItems.length === 0){
+      savedValue = data.amount;
+    }
+    if(sn.type === 'inv' && data.amount != null && savedItems.length === 0){
+      savedItems = [{ date: data.date||'', invNum: data.invNumber||data.invNum||'', amount: data.amount||0 }];
+    }
     var n = {
       id:sn.id, type:sn.type, cat:d.cat,
       x:sn.x, y:sn.y, label:sn.label,
-      data:data, value:sn.value||0,
+      data:data, value:savedValue,
       collapsed:sn.collapsed||false,
       noteText:sn.noteText||'',
-      items:sn.items||[],
+      items:savedItems,
       pctComplete:sn.pctComplete||0,
       budget:sn.budget||0,
       jobFields:sn.jobFields||{},
