@@ -741,20 +741,17 @@
             </div>
             <div class="form-row">
                 <div class="form-group">
-                    <label>% of Job</label>
-                    <input type="number" id="buildingBudgetPct" placeholder="0" step="0.1" min="0" max="100" oninput="syncBuildingBudgetFromPct()">
+                    <label>As-Sold Budget $</label>
+                    <input type="number" id="buildingBudget" placeholder="0.00" step="0.01" oninput="syncBuildingBudgetFromDollar()">
                 </div>
                 <div class="form-group">
-                    <label>Building Budget $</label>
-                    <input type="number" id="buildingBudget" placeholder="0.00" step="0.01" oninput="syncBuildingBudgetFromDollar()">
+                    <label>% of Job</label>
+                    <input type="text" id="buildingBudgetPct" readonly style="background:var(--surface);color:var(--text-dim);cursor:default;">
                 </div>
             </div>
             <div id="buildingBudgetHint" style="font-size: 12px; color: var(--text-dim); margin-top: -12px; margin-bottom: 16px;"></div>
             <div class="form-row" style="align-items: center; margin-bottom: 16px;">
-                <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer;">
-                    <input type="checkbox" id="buildingLocked" style="width: 16px; height: 16px;">
-                    Lock % (exclude from auto-balance)
-                </label>
+                <input type="hidden" id="buildingLocked" value="">
                 <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer;">
                     <input type="checkbox" id="buildingExcludeSubDist" style="width: 16px; height: 16px;">
                     Exclude from sub distribution
@@ -865,12 +862,12 @@
             </div>
             <div class="form-row">
                 <div class="form-group">
-                    <label>Budget % of Building</label>
-                    <input type="number" id="phaseBudgetPct" placeholder="0" step="0.1" min="0" max="100" oninput="syncBudgetFromPct()">
+                    <label>As-Sold Phase Budget $</label>
+                    <input type="number" id="phaseBudget" placeholder="0.00" step="0.01" oninput="syncBudgetFromDollar()">
                 </div>
                 <div class="form-group">
-                    <label>Phase Budget $</label>
-                    <input type="number" id="phaseBudget" placeholder="0.00" step="0.01" oninput="syncBudgetFromDollar()">
+                    <label>% of Building</label>
+                    <input type="text" id="phaseBudgetPct" readonly style="background:var(--surface);color:var(--text-dim);cursor:default;">
                 </div>
             </div>
             <div class="form-row" style="align-items: center; margin-bottom: 16px;">
@@ -1208,8 +1205,8 @@
         <div class="modal-footer" style="background:white;border-top:2px solid #ddd;"><button onclick="window.print()" class="primary">&#x1F5A8; Print</button><button onclick="closeModal('estimatePreviewModal')" class="secondary">&#x2716; Close</button></div>
       </div>
     </div>
-    <script src="js/app.js?v=20"></script>
-    <script src="js/wip.js?v=23"></script>
+    <script src="js/app.js?v=21"></script>
+    <script src="js/wip.js?v=24"></script>
     <script src="js/estimates.js?v=18"></script>
     <script src="js/proposal.js?v=18"></script>
 
@@ -1240,7 +1237,7 @@
         </div>
       </div>
     </div>
-    <script src="nodegraph/engine.js?v=47"></script>
-    <script src="nodegraph/ui.js?v=77"></script>
+    <script src="nodegraph/engine.js?v=48"></script>
+    <script src="nodegraph/ui.js?v=78"></script>
 </body>
 </html>

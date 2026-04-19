@@ -1320,8 +1320,9 @@ function renderWIPMain() {
                 const buildingCost = phaseCost + bldgDirectCost;
                 const variance = (building.budget || 0) - buildingCost;
 
-                const contractAmt = appData.jobs.find(j => j.id === jobId)?.contractAmount || 0;
-                const bldgPct = contractAmt > 0 ? ((building.budget || 0) / contractAmt * 100).toFixed(1) : '—';
+                const allBldgs = appData.buildings.filter(b => b.jobId === jobId);
+                const totalBudget = allBldgs.reduce((s, b) => s + (b.budget || 0), 0);
+                const bldgPct = totalBudget > 0 ? ((building.budget || 0) / totalBudget * 100).toFixed(1) : '—';
                 const pctComplete = calcBuildingPctComplete(building.id, jobId).toFixed(1);
                 const scope = building.workScope || 'in-house';
                 const scopeColor = scope === 'sub' ? 'var(--purple)' : scope === 'both' ? '#f59e0b' : 'var(--accent)';
@@ -1343,7 +1344,7 @@ function renderWIPMain() {
                         </div>
                     </div>
                     <div style="display:flex;gap:12px;font-size:12px;margin-bottom:6px;">
-                        <div><span style="color:var(--text-dim);">Budget</span> <span style="font-weight:600;color:var(--accent);">${formatCurrency(building.budget)}</span></div>
+                        <div><span style="color:var(--text-dim);">Budget</span> <span style="font-weight:600;color:var(--accent);">${formatCurrency(building.budget)}</span>${(building.coBudget ? ' <span style="font-size:10px;color:var(--green);">(+' + formatCurrency(building.coBudget) + ' CO)</span>' : '')}</div>
                         <div><span style="color:var(--text-dim);">Spent</span> <span style="font-weight:600;color:var(--accent);">${formatCurrency(buildingCost)}</span></div>
                         <div><span style="color:var(--text-dim);">Var</span> <span style="font-weight:600;color:${variance >= 0 ? 'var(--green)' : 'var(--red)'};">${formatCurrency(variance)}</span></div>
                         <div style="margin-left:auto;"><span style="font-size:10px;padding:1px 6px;border-radius:8px;background:rgba(79,140,255,0.1);color:${scopeColor};font-weight:600;text-transform:capitalize;">${escapeHTML(scope)}</span></div>
@@ -1607,23 +1608,23 @@ function renderWIPMain() {
         }
 
         function syncBuildingBudgetFromPct() {
-            const pct = parseFloat(document.getElementById('buildingBudgetPct').value) || 0;
-            const contractAmt = getJobContractAmount();
-            if (contractAmt > 0) {
-                const budget = (contractAmt * pct / 100);
-                document.getElementById('buildingBudget').value = budget.toFixed(2);
-                document.getElementById('buildingBudgetHint').textContent = pct + '% of ' + formatCurrency(contractAmt) + ' = ' + formatCurrency(budget);
-            }
+            syncBuildingBudgetFromDollar();
         }
 
         function syncBuildingBudgetFromDollar() {
             const dollars = parseFloat(document.getElementById('buildingBudget').value) || 0;
-            const contractAmt = getJobContractAmount();
-            if (contractAmt > 0) {
-                const pct = (dollars / contractAmt * 100);
-                document.getElementById('buildingBudgetPct').value = pct.toFixed(1);
-                document.getElementById('buildingBudgetHint').textContent = pct.toFixed(1) + '% of ' + formatCurrency(contractAmt) + ' = ' + formatCurrency(dollars);
-            }
+            const allBldgs = appData.buildings.filter(b => b.jobId === appState.currentJobId);
+            const editId = appState.editBuildingId;
+            const otherBudget = allBldgs.reduce(function(s, b) {
+                return s + (b.id === editId ? 0 : (b.budget || 0));
+            }, 0);
+            const total = otherBudget + dollars;
+            const pct = total > 0 ? (dollars / total * 100) : 0;
+            document.getElementById('buildingBudgetPct').value = pct.toFixed(1);
+            const coBudget = editId ? (allBldgs.find(b => b.id === editId)?.coBudget || 0) : 0;
+            var hint = pct.toFixed(1) + '% of job (' + formatCurrency(total) + ' total)';
+            if (coBudget) hint += ' \u00b7 includes ' + formatCurrency(coBudget) + ' from COs';
+            document.getElementById('buildingBudgetHint').textContent = hint;
         }
 
         function openAddBuildingToJobModal() {
@@ -1658,7 +1659,7 @@ function renderWIPMain() {
             document.getElementById('saveBuildingBtn').innerHTML = '&#x1F4BE; Save Changes';
             document.getElementById('deleteBuildingBtn').style.display = 'inline-block';
             document.getElementById('buildingName').value = building.name || '';
-            document.getElementById('buildingBudget').value = building.budget || '';
+            document.getElementById('buildingBudget').value = building.asSoldBudget || building.budget || '';
             document.getElementById('buildingAddress').value = building.address || '';
             document.getElementById('buildingMaterials').value = building.materials || '';
             document.getElementById('buildingLabor').value = building.labor || '';
@@ -1668,15 +1669,7 @@ function renderWIPMain() {
             document.getElementById('buildingHoursTotal').value = building.hoursTotal || '';
             document.getElementById('buildingRate').value = building.rate || 40;
 
-            const contractAmt = getJobContractAmount();
-            if (contractAmt > 0 && building.budget) {
-                const pct = (building.budget / contractAmt * 100);
-                document.getElementById('buildingBudgetPct').value = pct.toFixed(1);
-                document.getElementById('buildingBudgetHint').textContent = pct.toFixed(1) + '% of ' + formatCurrency(contractAmt) + ' = ' + formatCurrency(building.budget);
-            } else {
-                document.getElementById('buildingBudgetPct').value = building.budgetPct || '';
-                document.getElementById('buildingBudgetHint').textContent = 'Contract: ' + formatCurrency(contractAmt);
-            }
+            syncBuildingBudgetFromDollar();
             document.getElementById('buildingWorkScope').value = building.workScope || 'in-house';
             document.getElementById('buildingLocked').checked = building.locked || false;
             document.getElementById('buildingExcludeSubDist').checked = building.excludeFromSubDist || false;
@@ -1765,25 +1758,17 @@ function renderWIPMain() {
         }
 
         function saveBuilding() {
-            // Validate building budget % doesn't exceed 100% for the job
-            const newBudgetPct = parseFloat(document.getElementById('buildingBudgetPct').value) || 0;
-            const jobBuildings = appData.buildings.filter(b => b.jobId === appState.currentJobId);
-            let existingPctTotal = jobBuildings.reduce((sum, b) => sum + (b.budgetPct || 0), 0);
-            if (appState.editBuildingId) {
-                const editBldg = jobBuildings.find(b => b.id === appState.editBuildingId);
-                if (editBldg) existingPctTotal -= (editBldg.budgetPct || 0);
-            }
-            if (existingPctTotal + newBudgetPct > 100) {
-                alert('Total building budget % cannot exceed 100%. Currently ' + existingPctTotal.toFixed(1) + '% allocated. Maximum you can add: ' + (100 - existingPctTotal).toFixed(1) + '%');
-                return;
-            }
             const hoursWeek = parseFloat(document.getElementById('buildingHoursWeek').value) || 0;
             const hoursTotal = (parseFloat(document.getElementById('buildingHoursTotal').value) || 0) + hoursWeek;
             const rate = parseFloat(document.getElementById('buildingRate').value) || 40;
+            const asSoldVal = parseFloat(document.getElementById('buildingBudget').value) || 0;
+            const existingCO = appState.editBuildingId
+                ? (appData.buildings.find(b => b.id === appState.editBuildingId)?.coBudget || 0) : 0;
             const formData = {
                 name: document.getElementById('buildingName').value,
-                budget: parseFloat(document.getElementById('buildingBudget').value) || 0,
-                budgetPct: parseFloat(document.getElementById('buildingBudgetPct').value) || 0,
+                asSoldBudget: asSoldVal,
+                coBudget: existingCO,
+                budget: asSoldVal + existingCO,
                 address: document.getElementById('buildingAddress').value,
                 workScope: document.getElementById('buildingWorkScope').value || 'in-house',
                 locked: document.getElementById('buildingLocked').checked,
@@ -1809,7 +1794,6 @@ function renderWIPMain() {
                     jobId: appState.currentJobId
                 }, formData);
                 appData.buildings.push(building);
-                autoBalanceOnBuildingAdd(appState.currentJobId);
             }
             saveData();
             closeModal('addBuildingModal');
@@ -1823,19 +1807,14 @@ function renderWIPMain() {
         }
 
         function syncBudgetFromPct() {
-            const pct = parseFloat(document.getElementById('phaseBudgetPct').value) || 0;
-            const bldgBudget = getSelectedBuildingBudget();
-            if (bldgBudget > 0) {
-                document.getElementById('phaseBudget').value = (bldgBudget * pct / 100).toFixed(2);
-            }
+            syncBudgetFromDollar();
         }
 
         function syncBudgetFromDollar() {
             const dollars = parseFloat(document.getElementById('phaseBudget').value) || 0;
             const bldgBudget = getSelectedBuildingBudget();
-            if (bldgBudget > 0) {
-                document.getElementById('phaseBudgetPct').value = (dollars / bldgBudget * 100).toFixed(1);
-            }
+            const pct = bldgBudget > 0 ? (dollars / bldgBudget * 100) : 0;
+            document.getElementById('phaseBudgetPct').value = pct.toFixed(1);
         }
 
         function openAddPhaseToJobModal(preselectedBuildingId) {
@@ -1904,15 +1883,8 @@ function renderWIPMain() {
             document.getElementById('phaseLabor').value = phase.labor || '';
             document.getElementById('phaseSub').value = getSubCostForPhase(phase.id).toFixed(2);
             document.getElementById('phaseEquipment').value = phase.equipment || '';
-            document.getElementById('phaseBudget').value = phase.phaseBudget || '';
-            // Calculate and show the budget percentage
-            const bldg = appData.buildings.find(b => b.id === phase.buildingId);
-            const bldgBudget = bldg ? (bldg.budget || 0) : 0;
-            if (bldgBudget > 0 && phase.phaseBudget) {
-                document.getElementById('phaseBudgetPct').value = (phase.phaseBudget / bldgBudget * 100).toFixed(1);
-            } else {
-                document.getElementById('phaseBudgetPct').value = '';
-            }
+            document.getElementById('phaseBudget').value = phase.asSoldPhaseBudget || phase.phaseBudget || '';
+            syncBudgetFromDollar();
             document.getElementById('phaseHoursWeek').value = '';
             document.getElementById('phaseHoursTotal').value = phase.hoursTotal || '';
             document.getElementById('phaseRate').value = phase.rate || 40;
@@ -1955,6 +1927,9 @@ function renderWIPMain() {
             const hoursWeek = parseFloat(document.getElementById('phaseHoursWeek').value) || 0;
             const hoursTotal = (parseFloat(document.getElementById('phaseHoursTotal').value) || 0) + hoursWeek;
             const rate = parseFloat(document.getElementById('phaseRate').value) || 40;
+            const asSoldVal = parseFloat(document.getElementById('phaseBudget').value) || 0;
+            const existingCO = appState.editPhaseId
+                ? (appData.phases.find(p => p.id === appState.editPhaseId)?.coPhaseBudget || 0) : 0;
             const formData = {
                 buildingId: document.getElementById('phaseBuilding').value,
                 phase: document.getElementById('phaseType').value,
@@ -1963,9 +1938,11 @@ function renderWIPMain() {
                 pctComplete: parseFloat(document.getElementById('phasePercent').value) || 0,
                 materials: parseFloat(document.getElementById('phaseMaterials').value) || 0,
                 labor: hoursTotal * rate,
-                sub: 0, // auto-calculated from Subs tab by recalcSubCosts
+                sub: 0,
                 equipment: parseFloat(document.getElementById('phaseEquipment').value) || 0,
-                phaseBudget: parseFloat(document.getElementById('phaseBudget').value) || 0,
+                asSoldPhaseBudget: asSoldVal,
+                coPhaseBudget: existingCO,
+                phaseBudget: asSoldVal + existingCO,
                 hoursWeek: hoursWeek,
                 hoursTotal: hoursTotal,
                 rate: rate,

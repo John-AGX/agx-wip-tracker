@@ -333,6 +333,23 @@ function getActual(n){
   return v;
 }
 
+// Find the pctComplete of the nearest ancestor T1 or T2
+function getAncestorPct(n){
+  var pct = 100;
+  wires.forEach(function(w){
+    if(w.fromNode===n.id){
+      var parent=findNode(w.toNode);
+      if(!parent) return;
+      if((parent.type==='t1'||parent.type==='t2') && parent.pctComplete!=null){
+        pct=parent.pctComplete;
+      } else if(parent.type==='sub'){
+        pct=getAncestorPct(parent);
+      }
+    }
+  });
+  return pct;
+}
+
 function getAccrued(n){
   if(!n) return 0;
   if(_compAc[n.id]) return 0;
@@ -343,7 +360,8 @@ function getAccrued(n){
     wires.forEach(function(w){
       if(w.toNode===n.id){ var fn=findNode(w.fromNode); if(fn) invSum += getOutput(fn, w.fromPort); }
     });
-    v = Math.max(0, contract - invSum);
+    var pct = getAncestorPct(n);
+    v = Math.max(0, contract * (pct/100) - invSum);
   }
   else if(n.type==='sub'){
     wires.forEach(function(w){

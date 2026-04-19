@@ -211,7 +211,27 @@
             setupEventListeners();
             seedDataIfNeeded();
             backfillSampleData();
+            migrateBudgetFields();
             renderWIPMain();
+        }
+
+        function migrateBudgetFields() {
+            var changed = false;
+            appData.buildings.forEach(function(b) {
+                if (b.asSoldBudget == null && b.budget) {
+                    b.asSoldBudget = b.budget;
+                    b.coBudget = 0;
+                    changed = true;
+                }
+            });
+            appData.phases.forEach(function(p) {
+                if (p.asSoldPhaseBudget == null && p.phaseBudget) {
+                    p.asSoldPhaseBudget = p.phaseBudget;
+                    p.coPhaseBudget = 0;
+                    changed = true;
+                }
+            });
+            if (changed) saveData();
         }
 
         function backfillSampleData() {

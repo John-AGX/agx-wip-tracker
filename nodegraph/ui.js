@@ -961,19 +961,21 @@ function pushToJob(){
   });
   nodes.forEach(function(n){
     var wiredCO = coTargets[n.id] || 0;
-    var prevApplied = n._coRevApplied || 0;
-    var delta = wiredCO - prevApplied;
     if(n.type==='t1' && n.data && n.data.id){
       var bldg = appData.buildings.find(function(b){return b.id===n.data.id;});
-      if(bldg){ bldg.budget = (bldg.budget||0) + delta; n._coRevApplied = wiredCO; }
+      if(bldg){
+        bldg.coBudget = wiredCO;
+        bldg.budget = (bldg.asSoldBudget||0) + bldg.coBudget;
+        n._coRevApplied = wiredCO;
+      }
     } else if(n.type==='t2' && n.data && n.data.id){
       var phase = appData.phases.find(function(p){return p.id===n.data.id;});
-      if(phase){ phase.phaseBudget = (phase.phaseBudget||0) + delta; n._coRevApplied = wiredCO; }
+      if(phase){
+        phase.coPhaseBudget = wiredCO;
+        phase.phaseBudget = (phase.asSoldPhaseBudget||0) + phase.coPhaseBudget;
+        n._coRevApplied = wiredCO;
+      }
     } else if(n.type==='wip'){
-      // Previously backflowed CO income to job.contractAmount, but that
-      // double-counted because getJobCOTotals already sums changeOrders.income
-      // and getJobWIP computes totalIncome = contractAmount + co.income.
-      // Undo any prior backflow so the sticky metrics match.
       var prevApplied = n._coRevApplied || 0;
       if(prevApplied) job.contractAmount = (job.contractAmount||0) - prevApplied;
       n._coRevApplied = 0;
