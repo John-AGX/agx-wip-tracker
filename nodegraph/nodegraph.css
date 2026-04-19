@@ -8,17 +8,17 @@ body.light-mode{--ng-bg:#f0f2f5;--ng-surface:#ffffff;--ng-surface2:#e8eaef;--ng-
 /* Light-mode overrides for hardcoded dark-mode colors */
 body.light-mode .ng-node{border-width:1.5px}
 body.light-mode .ng-node:hover{border-color:#1f2937}
-body.light-mode .ng-hdr-name{text-shadow:0 1px 3px rgba(0,0,0,.4)}
-body.light-mode .ng-t-t1 .ng-hdr{background:linear-gradient(135deg,#1e40af,#2563eb);color:#dbeafe}
-body.light-mode .ng-t-t2 .ng-hdr{background:linear-gradient(135deg,#047857,#059669);color:#d1fae5}
-body.light-mode .ng-t-cost .ng-hdr{background:linear-gradient(135deg,#92400e,#b45309);color:#fef3c7}
-body.light-mode .ng-t-sub .ng-hdr{background:linear-gradient(135deg,#5b21b6,#7c3aed);color:#ede9fe}
-body.light-mode .ng-t-co .ng-hdr{background:linear-gradient(135deg,#9d174d,#db2777);color:#fce7f3}
-body.light-mode .ng-t-math .ng-hdr{background:linear-gradient(135deg,#3730a3,#4f46e5);color:#e0e7ff}
-body.light-mode .ng-t-watch .ng-hdr{background:linear-gradient(135deg,#92400e,#b45309);color:#fef3c7;text-shadow:0 1px 3px rgba(0,0,0,.3)}
-body.light-mode .ng-t-note .ng-hdr{background:linear-gradient(135deg,#374151,#4b5563);color:#f3f4f6}
-body.light-mode .ng-t-job .ng-hdr{background:linear-gradient(135deg,#1e3a8a,#1d4ed8);color:#dbeafe}
-body.light-mode .ng-t-wip .ng-hdr{background:linear-gradient(135deg,#92400e,#9d174d);color:#fef3c7}
+body.light-mode .ng-hdr-name{text-shadow:none}
+body.light-mode .ng-t-t1 .ng-hdr{background:linear-gradient(135deg,rgba(30,64,175,.45),rgba(30,64,175,.18));color:#1e3a8a}
+body.light-mode .ng-t-t2 .ng-hdr{background:linear-gradient(135deg,rgba(5,150,105,.45),rgba(5,150,105,.18));color:#064e3b}
+body.light-mode .ng-t-cost .ng-hdr{background:linear-gradient(135deg,rgba(180,83,9,.45),rgba(180,83,9,.18));color:#78350f}
+body.light-mode .ng-t-sub .ng-hdr{background:linear-gradient(135deg,rgba(124,58,237,.45),rgba(124,58,237,.18));color:#4c1d95}
+body.light-mode .ng-t-co .ng-hdr{background:linear-gradient(135deg,rgba(219,39,119,.45),rgba(219,39,119,.18));color:#831843}
+body.light-mode .ng-t-math .ng-hdr{background:linear-gradient(135deg,rgba(79,70,229,.45),rgba(79,70,229,.18));color:#312e81}
+body.light-mode .ng-t-watch .ng-hdr{background:linear-gradient(135deg,rgba(180,83,9,.4),rgba(219,39,119,.22));color:#78350f}
+body.light-mode .ng-t-note .ng-hdr{background:linear-gradient(135deg,rgba(75,85,99,.35),rgba(75,85,99,.15));color:#1f2937}
+body.light-mode .ng-t-job .ng-hdr{background:linear-gradient(135deg,rgba(37,99,235,.5),rgba(37,99,235,.22));color:#1e3a8a}
+body.light-mode .ng-t-wip .ng-hdr{background:linear-gradient(135deg,rgba(180,83,9,.45),rgba(219,39,119,.25));color:#78350f}
 body.light-mode .ng-wip-chip{color:#b45309}
 body.light-mode .ng-pv{color:#374151}
 body.light-mode .ng-si-sm{color:#374151}
