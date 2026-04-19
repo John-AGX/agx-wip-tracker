@@ -329,8 +329,46 @@ function renderNodes(){
       var tActual=E.getActual(n);
       var tAccrued=E.getAccrued(n);
       h+='<div style="padding:4px 10px 6px;font-size:10px;">';
+      // T2 (Phase): editable revenue + per-building allocation breakdown
+      if(n.type==='t2'){
+        var phaseRev=n.revenue||0;
+        h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Revenue <span class="ng-phase-rev" data-phase-rev="'+n.id+'" title="Click to edit" style="color:#4f8cff;font-weight:600;font-family:\'Courier New\',monospace;cursor:pointer;">'+E.fmtC(phaseRev)+'</span></div>';
+        // Allocation breakdown per connected building
+        var aw=E.getPhaseAllocWires(n.id);
+        if(aw.length){
+          E.rebalancePhaseAllocations(n.id);
+          var totalPct=0;
+          h+='<div style="margin-top:4px;padding-top:4px;border-top:1px solid var(--ng-border2);">';
+          aw.forEach(function(w){
+            var b=E.findNode(w.toNode); if(!b) return;
+            var bname=(b.label||'Building').split(' \u203A ')[0].trim();
+            var pct=w.allocPct||0; totalPct+=pct;
+            var share=phaseRev*(pct/100);
+            h+='<div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;color:#6a7090;font-size:9px;">';
+            h+='<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+bname+'</span>';
+            h+='<span class="ng-alloc-pct" data-alloc-phase="'+n.id+'" data-alloc-bldg="'+w.toNode+'" title="Click to edit %" style="color:#fbbf24;cursor:pointer;font-family:\'Courier New\',monospace;margin-right:6px;">'+pct.toFixed(1)+'%</span>';
+            h+='<span style="color:#34d399;font-family:\'Courier New\',monospace;min-width:60px;text-align:right;">'+E.fmtC(share)+'</span>';
+            h+='</div>';
+          });
+          var pctOk=Math.abs(totalPct-100)<0.01;
+          var warnColor=pctOk?'#34d399':'#f87171';
+          h+='<div style="display:flex;justify-content:space-between;padding:3px 0 1px;border-top:1px solid var(--ng-border2);margin-top:2px;color:#6a7090;font-size:9px;font-weight:600;">';
+          h+='<span>Total</span>';
+          h+='<span style="color:'+warnColor+';font-family:\'Courier New\',monospace;">'+totalPct.toFixed(1)+'% '+(pctOk?'\u2713':'\u26a0')+'</span>';
+          h+='</div></div>';
+        }
+        h+='<div style="margin-top:4px;padding-top:4px;border-top:1px solid var(--ng-border2);">';
+      }
       h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Actual <span style="color:#34d399;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(tActual)+'</span></div>';
       h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Accrued <span style="color:#fbbf24;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(tAccrued)+'</span></div>';
+      // T1 (Building): show allocated revenue from connected phases
+      if(n.type==='t1'){
+        var bRev=E.getBuildingAllocatedRevenue(n);
+        if(bRev>0){
+          h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Rev Allocated <span style="color:#4f8cff;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(bRev)+'</span></div>';
+        }
+      }
+      if(n.type==='t2') h+='</div>';
       h+='</div>';
     }
 
@@ -629,7 +667,12 @@ function initEvents(){
         if(toId!==wiringFrom.nid && E.canConn(fromType,toType)){
           var ws=E.wires();
           var dup=ws.some(function(w){return w.fromNode===wiringFrom.nid&&w.fromPort===wiringFrom.pi&&w.toNode===toId&&w.toPort===toPort;});
-          if(!dup) ws.push({fromNode:wiringFrom.nid,fromPort:wiringFrom.pi,toNode:toId,toPort:toPort});
+          if(!dup){
+            ws.push({fromNode:wiringFrom.nid,fromPort:wiringFrom.pi,toNode:toId,toPort:toPort});
+            // If this is a phase→building wire, rebalance revenue allocations
+            var tn=E.findNode(toId);
+            if(fn&&fn.type==='t2'&&tn&&tn.type==='t1') E.rebalancePhaseAllocations(fn.id);
+          }
         }
       }
       wiringFrom=null;wireMouse=null;render();
@@ -732,6 +775,65 @@ function initEvents(){
         else if(ev.key==='Escape'){ev.preventDefault();wdone=true;editingId=null;render();}
       });
       winp.addEventListener('mousedown',function(ev){ev.stopPropagation();});
+      return;
+    }
+    // Click phase revenue → edit
+    var prc=e.target.closest('[data-phase-rev]');
+    if(prc && !e.target.closest('input')){
+      e.preventDefault(); e.stopPropagation();
+      var prn=E.findNode(prc.getAttribute('data-phase-rev'));
+      if(!prn) return;
+      editingId=prn.id;
+      var prInp=document.createElement('input');
+      prInp.type='number'; prInp.step='0.01'; prInp.min=0;
+      prInp.value=prn.revenue||0;
+      prInp.className='ng-wip-chip-input';
+      prc.textContent=''; prc.appendChild(prInp);
+      setTimeout(function(){ prInp.focus(); prInp.select(); }, 0);
+      var prDone=false;
+      function prFinish(){
+        if(prDone) return; prDone=true;
+        prn.revenue=Math.max(0,parseFloat(prInp.value)||0);
+        editingId=null; render();
+      }
+      prInp.addEventListener('blur',prFinish);
+      prInp.addEventListener('keydown',function(ev){
+        if(ev.key==='Enter'){ev.preventDefault();prInp.blur();}
+        else if(ev.key==='Escape'){ev.preventDefault();prDone=true;editingId=null;render();}
+      });
+      prInp.addEventListener('mousedown',function(ev){ev.stopPropagation();});
+      return;
+    }
+    // Click allocation % → edit (marks wire as manual, rebalances auto wires)
+    var apc=e.target.closest('[data-alloc-phase]');
+    if(apc && !e.target.closest('input')){
+      e.preventDefault(); e.stopPropagation();
+      var aphId=apc.getAttribute('data-alloc-phase');
+      var abId=apc.getAttribute('data-alloc-bldg');
+      var aWire=E.wires().find(function(w){ return w.fromNode===aphId && w.toNode===abId; });
+      if(!aWire) return;
+      editingId=aphId;
+      var apInp=document.createElement('input');
+      apInp.type='number'; apInp.step='0.1'; apInp.min=0; apInp.max=100;
+      apInp.value=(aWire.allocPct||0).toFixed(1);
+      apInp.className='ng-wip-chip-input';
+      apc.textContent=''; apc.appendChild(apInp);
+      setTimeout(function(){ apInp.focus(); apInp.select(); }, 0);
+      var apDone=false;
+      function apFinish(){
+        if(apDone) return; apDone=true;
+        var nv=Math.max(0,Math.min(100,parseFloat(apInp.value)||0));
+        aWire.allocPct=nv;
+        aWire._auto=false;
+        E.rebalancePhaseAllocations(aphId);
+        editingId=null; render();
+      }
+      apInp.addEventListener('blur',apFinish);
+      apInp.addEventListener('keydown',function(ev){
+        if(ev.key==='Enter'){ev.preventDefault();apInp.blur();}
+        else if(ev.key==='Escape'){ev.preventDefault();apDone=true;editingId=null;render();}
+      });
+      apInp.addEventListener('mousedown',function(ev){ev.stopPropagation();});
       return;
     }
     // Add sub-item (inline — just adds a blank row)
@@ -898,7 +1000,14 @@ function initEvents(){
         if(dd<cd){cd=dd;ci=i;}
       }
     });
-    if(ci>=0){ws.splice(ci,1);render();}
+    if(ci>=0){
+      var removed=ws[ci];
+      ws.splice(ci,1);
+      // If a phase→building wire was removed, rebalance remaining allocations
+      var rfn=E.findNode(removed.fromNode), rtn=E.findNode(removed.toNode);
+      if(rfn&&rfn.type==='t2'&&rtn&&rtn.type==='t1') E.rebalancePhaseAllocations(rfn.id);
+      render();
+    }
   });
 
   document.addEventListener('keydown',function(e){
@@ -1065,6 +1174,7 @@ function pushToJob(){
     var pName=n.label.split(' \u203A ')[0].trim();
     if(pName) phase.phase=pName;
     phase.pctComplete=n.pctComplete||0;
+    phase.asSoldRevenue=n.revenue||0;
     // Sum costs from wired cost nodes
     var mat=0,lab=0,equip=0;
     wires.forEach(function(w){

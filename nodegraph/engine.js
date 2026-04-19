@@ -78,7 +78,7 @@ function createDataEntry(type, label){
 
   if(type === 't2'){
     id = 'p' + Date.now();
-    entry = { id:id, jobId:jobId, buildingId:'', phase:label||'New Phase', workScope:'in-house', locked:false, pctComplete:0, materials:0, labor:0, sub:0, equipment:0, phaseBudget:0, hoursWeek:0, hoursTotal:0, rate:40, notes:'', dateAdded:ts };
+    entry = { id:id, jobId:jobId, buildingId:'', phase:label||'New Phase', workScope:'in-house', locked:false, pctComplete:0, materials:0, labor:0, sub:0, equipment:0, phaseBudget:0, asSoldRevenue:0, hoursWeek:0, hoursTotal:0, rate:40, notes:'', dateAdded:ts };
     appData.phases.push(entry);
     if(typeof saveData === 'function') saveData();
     return entry;
@@ -138,12 +138,14 @@ function addNode(type, x, y, label, data){
     items: [],
     pctComplete: 0,
     budget: 0,
+    revenue: 0,
     jobFields: {},
   };
   if(data){
     if(data._val != null) n.value = data._val;
     if(data.budget) n.budget = data.budget;
     if(data.pctComplete) n.pctComplete = data.pctComplete;
+    if(type === 't2' && data.asSoldRevenue != null) n.revenue = data.asSoldRevenue;
     // Map real-data fields to node state by type
     if(type === 'po' && data.amount != null) n.value = data.amount;
     if(type === 'inv' && data.amount != null){
@@ -383,6 +385,61 @@ function getAncestorPct(n, _seen){
   return results.reduce(function(s, r){ return s + r.pct * r.weight; }, 0) / totalWeight;
 }
 
+// ── Phase revenue allocation helpers ──
+// A T2 (phase) node allocates its revenue across its wired T1 (building) ancestors
+// using the allocPct field on each phase→building wire. Allocations are pct values
+// (0-100) that should total 100 across all T1 wires from that phase.
+
+// Return wires from T2 phase node to T1 building nodes (outgoing, connecting to Costs port)
+function getPhaseAllocWires(t2Id){
+  return wires.filter(function(w){
+    if(w.fromNode !== t2Id) return false;
+    var parent = findNode(w.toNode);
+    return parent && parent.type === 't1';
+  });
+}
+
+// Split freely-available percentage equally across all `_auto` (non-manual) wires.
+// Wires the user has explicitly set (_auto=false) keep their pct; auto wires
+// absorb the remainder (100 - sum-of-manual) equally.
+function rebalancePhaseAllocations(t2Id){
+  var aw = getPhaseAllocWires(t2Id);
+  if(!aw.length) return;
+  // Treat wires without _auto flag as auto by default (new wires start auto)
+  aw.forEach(function(w){ if(w._auto == null) w._auto = true; });
+  var manualSum = 0, autoWires = [];
+  aw.forEach(function(w){
+    if(w._auto) autoWires.push(w);
+    else manualSum += (w.allocPct || 0);
+  });
+  if(autoWires.length > 0){
+    var each = Math.max(0, 100 - manualSum) / autoWires.length;
+    autoWires.forEach(function(w){ w.allocPct = each; });
+  }
+}
+
+// Revenue allocated from one T2 phase to a specific T1 building via the wire.
+function getPhaseRevenueToBuilding(t2n, t1Id){
+  if(!t2n || t2n.type !== 't2') return 0;
+  var rev = t2n.revenue || 0;
+  var w = wires.find(function(w){ return w.fromNode === t2n.id && w.toNode === t1Id; });
+  if(!w) return 0;
+  var pct = (w.allocPct != null) ? w.allocPct : 0;
+  return rev * (pct / 100);
+}
+
+// Total phase-allocated revenue landing on a T1 building.
+function getBuildingAllocatedRevenue(t1n){
+  if(!t1n || t1n.type !== 't1') return 0;
+  var total = 0;
+  wires.forEach(function(w){
+    if(w.toNode !== t1n.id) return;
+    var src = findNode(w.fromNode);
+    if(src && src.type === 't2') total += getPhaseRevenueToBuilding(src, t1n.id);
+  });
+  return total;
+}
+
 function getAccrued(n){
   if(!n) return 0;
   if(_compAc[n.id]) return 0;
@@ -422,7 +479,7 @@ function fmtP(v){ return v.toFixed(1)+'%'; }
 function fmtV(v,t){ return t===PT.P ? fmtP(v) : t===PT.C ? fmtC(v) : v.toLocaleString(); }
 
 // ── Save / Load ──
-var GRAPH_VER = 6; // bump to force re-populate on next open
+var GRAPH_VER = 7; // bump to force re-populate on next open
 function saveGraph(){
   if(!jobId) return;
   var state = {
@@ -431,7 +488,7 @@ function saveGraph(){
       return {
         id:n.id, type:n.type, x:n.x, y:n.y, label:n.label,
         value:n.value, collapsed:n.collapsed, noteText:n.noteText,
-        items:n.items, pctComplete:n.pctComplete, budget:n.budget, jobFields:n.jobFields||{},
+        items:n.items, pctComplete:n.pctComplete, budget:n.budget, revenue:n.revenue||0, jobFields:n.jobFields||{},
         _coRevApplied: n._coRevApplied||0,
         dataId: n.data ? n.data.id : null
       };
@@ -483,6 +540,7 @@ function loadGraph(){
       items:savedItems,
       pctComplete:sn.pctComplete||0,
       budget:sn.budget||0,
+      revenue: (sn.revenue!=null ? sn.revenue : (data.asSoldRevenue||0)),
       jobFields:sn.jobFields||{},
       _coRevApplied:sn._coRevApplied||0,
     };
@@ -608,6 +666,8 @@ return {
   job:function(j){ if(j!=null)jobId=j; return jobId; },
   canConn:canConn, addNode:addNode, findNode:findNode,
   getOutput:getOutput, getActual:getActual, getAccrued:getAccrued, resetComp:resetComp,
+  getPhaseAllocWires:getPhaseAllocWires, rebalancePhaseAllocations:rebalancePhaseAllocations,
+  getPhaseRevenueToBuilding:getPhaseRevenueToBuilding, getBuildingAllocatedRevenue:getBuildingAllocatedRevenue,
   fmtC:fmtC, fmtP:fmtP, fmtV:fmtV,
   saveGraph:saveGraph, loadGraph:loadGraph,
   drawWires:drawWires, drawGrid:drawGrid,
