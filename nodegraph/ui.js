@@ -298,8 +298,11 @@ function renderNodes(){
         var cpct = n.pctComplete||0;
         var cpColor = cpct>=100?'#34d399':cpct>=50?'#fbbf24':'#4f8cff';
         h+='<div class="ng-coll-prog"><div class="ng-coll-prog-fill" style="width:'+Math.min(cpct,100)+'%;background:'+cpColor+'"></div></div>';
-        h+='<div class="ng-coll-info"><span class="ng-coll-pct">'+cpct.toFixed(0)+'%</span><span class="ng-coll-val">'+E.fmtC(collVal)+'</span></div>';
-        if(n.budget) h+='<div class="ng-coll-detail"><span class="ng-coll-lbl">Budget</span><span class="ng-coll-val ng-cv-bud">'+E.fmtC(n.budget)+'</span></div>';
+        h+='<div class="ng-coll-inline">';
+        if(n.budget) h+='<span class="ng-cv-bud">'+E.fmtC(n.budget)+'</span><span class="ng-coll-sep">|</span>';
+        h+='<span class="ng-coll-pct">'+cpct.toFixed(0)+'%</span><span class="ng-coll-sep">|</span>';
+        h+='<span class="ng-coll-val">'+E.fmtC(collVal)+'</span>';
+        h+='</div>';
       } else if(n.type==='po'){
         E.resetComp(); E.getOutput(n,0);
         var poC=n._poContract||0, poI=n._poInvoiced||0;
@@ -1438,7 +1441,7 @@ function estNodeHeight(n){
   var d=E.DEFS[n.type]; if(!d) return 100;
   if(d.master) return 280;
   if(n.collapsed){
-    if(d.hasProg && n.budget) return 75;
+    if(d.hasProg) return 60;
     if(n.type==='po'||n.type==='co') return 70;
     return 55;
   }
