@@ -350,21 +350,37 @@ function getActual(n){
   return v;
 }
 
-// Find the pctComplete of the nearest ancestor T1 or T2
-function getAncestorPct(n){
-  var pct = 100;
+// Find weighted-average pctComplete across all ancestor T1/T2 phases.
+// When a PO/sub serves multiple phases, the contract is conceptually allocated
+// proportionally to phase budgets; accrual = sum(phaseAlloc * phasePct).
+// This is equivalent to contract * (weighted-avg pct), bounding total accrual
+// at contract when all phases hit 100%.
+function getAncestorPct(n, _seen){
+  _seen = _seen || {};
+  if(_seen[n.id]) return null;
+  _seen[n.id] = true;
+  var results = [];
   wires.forEach(function(w){
     if(w.fromNode===n.id){
       var parent=findNode(w.toNode);
       if(!parent) return;
       if((parent.type==='t1'||parent.type==='t2') && parent.pctComplete!=null){
-        pct=parent.pctComplete;
+        results.push({ pct: parent.pctComplete, weight: parent.budget || 0 });
       } else if(parent.type==='sub'||parent.type==='co'){
-        pct=getAncestorPct(parent);
+        var sub = getAncestorPct(parent, _seen);
+        if(sub != null) results.push({ pct: sub, weight: parent.budget || 0 });
       }
     }
   });
-  return pct;
+  if(results.length === 0) return 100;
+  var totalWeight = results.reduce(function(s, r){ return s + r.weight; }, 0);
+  if(totalWeight === 0){
+    // No budgets set — equal split
+    return results.reduce(function(s, r){ return s + r.pct; }, 0) / results.length;
+  }
+  // Phases without budgets contribute 0 to numerator but also 0 to denominator,
+  // so they're effectively ignored when other phases have budgets.
+  return results.reduce(function(s, r){ return s + r.pct * r.weight; }, 0) / totalWeight;
 }
 
 function getAccrued(n){
