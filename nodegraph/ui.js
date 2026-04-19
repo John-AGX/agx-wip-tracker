@@ -38,28 +38,24 @@ function updateTierLabels(){
     } else if(n.type==='sub'){
       var subBase = n.label.split(' \u203A ')[0].trim();
       var suffix = '';
-      if(n.data && n.data.id && typeof appData !== 'undefined'){
-        var sub = appData.subs.find(function(s){return s.id===n.data.id;});
-        if(sub){
-          var pIds = sub.phaseIds || (sub.phaseId ? [sub.phaseId] : []);
-          if(sub.level==='phase' && pIds.length>0){
-            var phNames = pIds.map(function(pid){
-              var ph = appData.phases.find(function(p){return p.id===pid;});
-              return ph ? ph.phase : null;
-            }).filter(Boolean);
-            if(phNames.length===1) suffix = phNames[0];
-            else if(phNames.length>1) suffix = phNames[0]+' +'+(phNames.length-1);
-          } else if(sub.level==='building'){
-            var bIds = sub.buildingIds || (sub.buildingId ? [sub.buildingId] : []);
-            var bNames = bIds.map(function(bid){
-              var b = appData.buildings.find(function(bb){return bb.id===bid;});
-              return b ? b.name : null;
-            }).filter(Boolean);
-            if(bNames.length===1) suffix = bNames[0];
-            else if(bNames.length>1) suffix = bNames[0]+' +'+(bNames.length-1);
+      // Derive label from wire connections, not stored data
+      var connPhases = [], connBldgs = [];
+      wires.forEach(function(w){
+        if(w.fromNode===n.id){
+          var target=E.findNode(w.toNode);
+          if(target && target.type==='t2'){
+            var pName = target.label.split(' \u203A ')[0].trim();
+            connPhases.push(pName);
+          } else if(target && target.type==='t1'){
+            var bName = target.label.split(' \u203A ')[0].trim();
+            connBldgs.push(bName);
           }
         }
-      }
+      });
+      if(connPhases.length===1) suffix = connPhases[0];
+      else if(connPhases.length>1) suffix = connPhases[0]+' +'+(connPhases.length-1);
+      else if(connBldgs.length===1) suffix = connBldgs[0];
+      else if(connBldgs.length>1) suffix = connBldgs[0]+' +'+(connBldgs.length-1);
       n.label = suffix ? subBase+' \u203A '+suffix : subBase;
     }
   });
