@@ -1030,22 +1030,6 @@
                 <label>Notes</label>
                 <input type="text" id="coNotes" placeholder="Optional notes">
             </div>
-            <div id="coAllocSection" style="border-top: 1px solid var(--border); margin: 16px 0; padding-top: 16px;">
-                    <h4 style="font-size: 13px; color: var(--text-dim); text-transform: uppercase; margin-bottom: 12px;">Allocation</h4>
-                    <div class="form-group" style="margin-bottom: 10px;">
-                        <label>Allocation Level</label>
-                        <select id="coAllocLevel" onchange="coAllocLevelChanged()">
-                            <option value="job">Job-Wide (no building/phase budget impact)</option>
-                            <option value="building">Allocate to Buildings</option>
-                            <option value="phase">Allocate to Phases</option>
-                        </select>
-                    </div>
-                    <div id="coAllocRowsContainer" style="display:none;">
-                        <div id="coAllocRows"></div>
-                        <button type="button" class="small" onclick="addCOAllocRow()" style="margin-top: 8px;">&#x2795; Add Allocation</button>
-                        <div id="coAllocRemaining" style="font-size: 12px; color: var(--text-dim); margin-top: 8px;"></div>
-                    </div>
-                </div>
                 <div class="modal-footer">
                 <button class="secondary" onclick="closeModal('addCOModal')">&#x2716; Cancel</button>
                 <button onclick="saveCO()" id="coSaveBtn">&#x1F4BE; Save</button>
@@ -1252,7 +1236,7 @@
       </div>
     </div>
     <script src="js/app.js?v=22"></script>
-    <script src="js/wip.js?v=31"></script>
+    <script src="js/wip.js?v=32"></script>
     <script src="js/estimates.js?v=18"></script>
     <script src="js/proposal.js?v=18"></script>
 
@@ -1284,6 +1268,6 @@
       </div>
     </div>
     <script src="nodegraph/engine.js?v=61"></script>
-    <script src="nodegraph/ui.js?v=105"></script>
+    <script src="nodegraph/ui.js?v=106"></script>
 </body>
 </html>

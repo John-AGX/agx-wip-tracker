@@ -371,105 +371,6 @@ function renderWIPMain() {
         }
 
         // ── CO Modal Functions ──
-        function coAllocLevelChanged() {
-            var level = document.getElementById('coAllocLevel').value;
-            var container = document.getElementById('coAllocRowsContainer');
-            if (level === 'job') {
-                container.style.display = 'none';
-                document.getElementById('coAllocRows').innerHTML = '';
-            } else {
-                container.style.display = 'block';
-            }
-        }
-
-        function addCOAllocRow(existingData) {
-            var container = document.getElementById('coAllocRows');
-            var level = document.getElementById('coAllocLevel').value;
-            var buildings = appData.buildings.filter(b => b.jobId === appState.currentJobId);
-            if (buildings.length === 0) { alert('Add buildings first.'); return; }
-
-            var row = document.createElement('div');
-            row.className = 'form-row';
-            row.style.cssText = 'margin-bottom:8px;align-items:center;gap:6px;';
-
-            // Building select
-            var bldgOpts = '<option value="">-- Building --</option>';
-            buildings.forEach(b => {
-                var sel = existingData && existingData.buildingId === b.id ? ' selected' : '';
-                bldgOpts += '<option value="' + escapeHTML(b.id) + '"' + sel + '>' + escapeHTML(b.name) + '</option>';
-            });
-
-            var html = '<div class="form-group" style="flex:1;"><select class="co-alloc-bldg" onchange="coBldgAllocChanged(this)">' + bldgOpts + '</select></div>';
-
-            // Phase select (if phase level)
-            if (level === 'phase') {
-                var phaseOpts = '<option value="">-- Phase --</option>';
-                if (existingData && existingData.buildingId) {
-                    var bPhases = appData.phases.filter(p => p.jobId === appState.currentJobId && p.buildingId === existingData.buildingId);
-                    bPhases.forEach(p => {
-                        var sel = existingData.phaseId === p.id ? ' selected' : '';
-                        phaseOpts += '<option value="' + escapeHTML(p.id) + '"' + sel + '>' + escapeHTML(p.phase) + '</option>';
-                    });
-                }
-                html += '<div class="form-group" style="flex:1;"><select class="co-alloc-phase">' + phaseOpts + '</select></div>';
-            }
-
-            html += '<div class="form-group" style="flex:0 0 90px;"><input type="number" class="co-alloc-income" placeholder="Income $" step="0.01" value="' + (existingData ? (existingData.income || '') : '') + '" oninput="updateCOAllocRemaining()"></div>';
-            html += '<div class="form-group" style="flex:0 0 90px;"><input type="number" class="co-alloc-costs" placeholder="Costs $" step="0.01" value="' + (existingData ? (existingData.costs || '') : '') + '" oninput="updateCOAllocRemaining()"></div>';
-            html += '<button type="button" class="danger small" onclick="this.parentElement.remove();updateCOAllocRemaining()" style="flex:0;padding:4px 10px;">X</button>';
-
-            row.innerHTML = html;
-            container.appendChild(row);
-            updateCOAllocRemaining();
-        }
-
-        function coBldgAllocChanged(sel) {
-            var level = document.getElementById('coAllocLevel').value;
-            if (level !== 'phase') return;
-            var row = sel.closest('.form-row');
-            var phaseSel = row.querySelector('.co-alloc-phase');
-            if (!phaseSel) return;
-            phaseSel.innerHTML = '<option value="">-- Phase --</option>';
-            var bldgId = sel.value;
-            if (bldgId) {
-                var phases = appData.phases.filter(p => p.jobId === appState.currentJobId && p.buildingId === bldgId);
-                phases.forEach(p => {
-                    phaseSel.innerHTML += '<option value="' + escapeHTML(p.id) + '">' + escapeHTML(p.phase) + '</option>';
-                });
-            }
-        }
-
-        function updateCOAllocRemaining() {
-            var totalIncome = parseFloat(document.getElementById('coIncome').value) || 0;
-            var totalCosts = parseFloat(document.getElementById('coCosts').value) || 0;
-            var allocIncome = 0, allocCosts = 0;
-            document.querySelectorAll('.co-alloc-income').forEach(a => { allocIncome += parseFloat(a.value) || 0; });
-            document.querySelectorAll('.co-alloc-costs').forEach(a => { allocCosts += parseFloat(a.value) || 0; });
-            var el = document.getElementById('coAllocRemaining');
-            if (el) {
-                el.textContent = 'Income: ' + formatCurrency(allocIncome) + ' of ' + formatCurrency(totalIncome) +
-                    ' | Costs: ' + formatCurrency(allocCosts) + ' of ' + formatCurrency(totalCosts);
-                el.style.color = (allocIncome > totalIncome || allocCosts > totalCosts) ? 'var(--red)' : 'var(--text-dim)';
-            }
-        }
-
-        function getCOAllocationsFromModal() {
-            var rows = document.querySelectorAll('#coAllocRows .form-row');
-            var allocs = [];
-            rows.forEach(row => {
-                var bldgId = row.querySelector('.co-alloc-bldg')?.value;
-                var phaseId = row.querySelector('.co-alloc-phase')?.value || null;
-                var income = parseFloat(row.querySelector('.co-alloc-income')?.value) || 0;
-                var costs = parseFloat(row.querySelector('.co-alloc-costs')?.value) || 0;
-                if (bldgId && (income > 0 || costs > 0)) {
-                    var alloc = { buildingId: bldgId, income: income, costs: costs };
-                    if (phaseId) alloc.phaseId = phaseId;
-                    allocs.push(alloc);
-                }
-            });
-            return allocs;
-        }
-
         function openAddChangeOrderModal() {
             document.getElementById('coModalHeader').textContent = 'Add Change Order';
             document.getElementById('coSaveBtn').innerHTML = '&#x1F4DD; Add Change Order';
@@ -480,16 +381,12 @@ function renderWIPMain() {
             document.getElementById('coCosts').value = '';
             document.getElementById('coNotes').value = '';
             appState.editCOId = null;
-            document.getElementById('coAllocLevel').value = 'job';
-            document.getElementById('coAllocRows').innerHTML = '';
-            coAllocLevelChanged();
             openModal('addCOModal');
         }
 
         function saveCO() {
             const desc = document.getElementById('coDescription').value.trim();
             if (!desc) { alert('Enter a description'); return; }
-            var allocLevel = document.getElementById('coAllocLevel').value;
             const coData = {
                 jobId: appState.currentJobId,
                 coNumber: document.getElementById('coNumber').value.trim(),
@@ -498,8 +395,8 @@ function renderWIPMain() {
                 estimatedCosts: parseFloat(document.getElementById('coCosts').value) || 0,
                 date: document.getElementById('coDate').value,
                 notes: document.getElementById('coNotes').value.trim(),
-                allocationType: allocLevel,
-                allocations: allocLevel === 'job' ? [] : getCOAllocationsFromModal()
+                allocationType: 'job',
+                allocations: []
             };
             // Reverse old budget impact when editing
             if (appState.editCOId) {
@@ -530,14 +427,6 @@ function renderWIPMain() {
             document.getElementById('coIncome').value = co.income || '';
             document.getElementById('coCosts').value = co.estimatedCosts || '';
             document.getElementById('coNotes').value = co.notes || '';
-            // Detect allocation type (backward compatible)
-            var allocs = getCOAllocations(co);
-            var allocType = co.allocationType || (allocs.length > 0 ? (allocs.some(a => a.phaseId) ? 'phase' : 'building') : 'job');
-            document.getElementById('coAllocLevel').value = allocType;
-            coAllocLevelChanged();
-            document.getElementById('coAllocRows').innerHTML = '';
-            allocs.forEach(alloc => addCOAllocRow(alloc));
-            updateCOAllocRemaining();
             openModal('addCOModal');
         }
 
