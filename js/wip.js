@@ -1319,17 +1319,78 @@ function renderWIPMain() {
             });
         }
 
+        function lookupConnDetails(item) {
+            var d = item.data;
+            if (!d || !d.id) return '';
+            var type = item.nodeType;
+            if (type === 't2') {
+                var ph = appData.phases.find(function(p) { return p.id === d.id; });
+                if (!ph) return '';
+                var cost = (ph.materials || 0) + (ph.labor || 0) + (ph.sub || 0) + (ph.equipment || 0);
+                var pColor = ph.pctComplete >= 100 ? 'var(--green)' : ph.pctComplete >= 50 ? '#f59e0b' : 'var(--text-dim)';
+                return '<span style="color:var(--text-dim);font-size:10px;">Rev: <b style="color:var(--green);">' + formatCurrency(ph.asSoldRevenue || 0) + '</b> Cost: <b>' + formatCurrency(cost) + '</b> <b style="color:' + pColor + ';">' + (ph.pctComplete || 0) + '%</b></span>';
+            }
+            if (type === 't1') {
+                var bldg = appData.buildings.find(function(b) { return b.id === d.id; });
+                if (!bldg) return '';
+                return '<span style="color:var(--text-dim);font-size:10px;">Budget: <b style="color:var(--accent);">' + formatCurrency(bldg.budget || 0) + '</b></span>';
+            }
+            if (type === 'sub') {
+                var sub = appData.subs.find(function(s) { return s.id === d.id; });
+                if (!sub) return '';
+                return '<span style="color:var(--text-dim);font-size:10px;">Contract: <b style="color:var(--accent);">' + formatCurrency(sub.contractAmt || 0) + '</b> Billed: <b style="color:var(--green);">' + formatCurrency(sub.billedToDate || 0) + '</b></span>';
+            }
+            if (type === 'co') {
+                var co = appData.changeOrders.find(function(c) { return c.id === d.id; });
+                if (!co) return '';
+                var allocStr = item.allocPct != null && item.allocPct !== 100 ? ' (' + item.allocPct + '%)' : '';
+                return '<span style="color:var(--text-dim);font-size:10px;">Inc: <b style="color:var(--green);">' + formatCurrency(co.income || 0) + '</b>' + allocStr + ' Cost: <b>' + formatCurrency(co.estimatedCosts || 0) + '</b></span>';
+            }
+            if (type === 'po') {
+                var po = appData.purchaseOrders.find(function(p) { return p.id === d.id; });
+                if (!po) return '';
+                return '<span style="color:var(--text-dim);font-size:10px;">Amt: <b>' + formatCurrency(po.amount || 0) + '</b> Billed: <b style="color:var(--green);">' + formatCurrency(po.billedToDate || 0) + '</b></span>';
+            }
+            if (type === 'inv') {
+                var inv = appData.invoices.find(function(iv) { return iv.id === d.id; });
+                if (!inv) return '';
+                return '<span style="color:var(--text-dim);font-size:10px;">Amt: <b>' + formatCurrency(inv.amount || 0) + '</b></span>';
+            }
+            return '';
+        }
+
+        function connTypeIcon(type) {
+            var icons = { t1: '&#x1F3D7;', t2: '&#x1F4CB;', sub: '&#x1F477;', co: '&#x1F4DD;', po: '&#x1F4C4;', inv: '&#x1F4B3;', wip: '&#x1F4CA;', watch: '&#x1F4CA;' };
+            return icons[type] || '';
+        }
+
         function renderConnectionList(conns) {
             if (!conns.length) return '<div style="font-size:11px;color:var(--text-dim);font-style:italic;">Not placed on graph yet</div>';
             var html = '<div style="display:flex;flex-direction:column;gap:3px;">';
-            conns.forEach(function(c, i) {
-                var wireDesc = [];
-                c.targets.forEach(function(t) { wireDesc.push('<span style="color:var(--green);">&rarr; ' + escapeHTML(t.label) + '</span>'); });
-                c.sources.forEach(function(s) { wireDesc.push('<span style="color:var(--accent);">' + escapeHTML(s.label) + ' &rarr;</span>'); });
-                html += '<div style="font-size:11px;padding:4px 8px;background:var(--surface);border:1px solid var(--border);border-radius:4px;display:flex;align-items:center;gap:8px;">' +
-                    '<span style="color:var(--purple);font-weight:600;">#' + (i + 1) + '</span>' +
-                    (wireDesc.length ? wireDesc.join(' ') : '<span style="color:var(--text-dim);">Unconnected</span>') +
-                    '</div>';
+            conns.forEach(function(c, ci) {
+                // Collect all connected items (targets and sources)
+                var items = [];
+                c.targets.forEach(function(t) { items.push({ dir: 'out', item: t }); });
+                c.sources.forEach(function(s) { items.push({ dir: 'in', item: s }); });
+                if (items.length === 0) {
+                    html += '<div style="font-size:11px;padding:4px 8px;background:var(--surface);border:1px solid var(--border);border-radius:4px;color:var(--text-dim);">' +
+                        '<span style="color:var(--purple);font-weight:600;">#' + (ci + 1) + '</span> Unconnected</div>';
+                    return;
+                }
+                items.forEach(function(entry) {
+                    var it = entry.item;
+                    var arrow = entry.dir === 'out' ? '&rarr;' : '&larr;';
+                    var arrowColor = entry.dir === 'out' ? 'var(--green)' : 'var(--accent)';
+                    var details = lookupConnDetails(it);
+                    html += '<div style="font-size:11px;padding:5px 10px;background:var(--surface);border:1px solid var(--border);border-radius:6px;display:flex;align-items:center;justify-content:space-between;gap:8px;">' +
+                        '<div style="display:flex;align-items:center;gap:6px;">' +
+                        '<span style="color:' + arrowColor + ';">' + arrow + '</span>' +
+                        '<span>' + connTypeIcon(it.nodeType) + '</span>' +
+                        '<span style="font-weight:600;color:var(--text);">' + escapeHTML(it.label) + '</span>' +
+                        '</div>' +
+                        (details ? '<div>' + details + '</div>' : '') +
+                        '</div>';
+                });
             });
             html += '</div>';
             return html;
@@ -1354,11 +1415,11 @@ function renderWIPMain() {
                 var inWires = wires.filter(function(w) { return w.toNode === n.id; });
                 var targets = outWires.map(function(w) {
                     var tn = NG.findNode(w.toNode);
-                    return tn ? { label: tn.label, type: tn.type, port: w.toPort } : null;
+                    return tn ? { label: tn.label, type: tn.type, port: w.toPort, data: tn.data, nodeType: tn.type } : null;
                 }).filter(Boolean);
                 var sources = inWires.map(function(w) {
                     var fn = NG.findNode(w.fromNode);
-                    return fn ? { label: fn.label, type: fn.type, port: w.fromPort } : null;
+                    return fn ? { label: fn.label, type: fn.type, port: w.fromPort, data: fn.data, nodeType: fn.type, allocPct: w.allocPct } : null;
                 }).filter(Boolean);
                 conns.push({ nodeId: n.id, label: n.label, targets: targets, sources: sources });
             });
@@ -1387,21 +1448,7 @@ function renderWIPMain() {
         }
 
         function renderConnectionBadges(conns) {
-            if (!conns.length) return '<span style="font-size:11px;color:var(--text-dim);font-style:italic;">Not on graph</span>';
-            var html = '';
-            conns.forEach(function(c, i) {
-                var arrows = [];
-                c.targets.forEach(function(t) {
-                    arrows.push('&rarr; ' + escapeHTML(t.label));
-                });
-                c.sources.forEach(function(s) {
-                    arrows.push(escapeHTML(s.label) + ' &rarr;');
-                });
-                var label = arrows.length ? arrows.join(', ') : 'No connections';
-                html += '<div style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;margin:2px;border-radius:4px;background:var(--surface);border:1px solid var(--border);font-size:11px;color:var(--text);">' +
-                    '<span style="color:var(--accent);">#' + (i + 1) + '</span> ' + label + '</div>';
-            });
-            return html;
+            return renderConnectionList(conns);
         }
 
         function renderOverviewPhasesInto(container, jobId, phases) {
