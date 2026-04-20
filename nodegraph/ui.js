@@ -316,7 +316,7 @@ function renderNodes(){
     }
 
     // CO: mini P&L — income vs actual/accrued costs
-    if(n.type==='co'){
+    if(n.type==='co' && !n.collapsed){
       E.resetComp();
       var coIncome=E.getOutput(n,0);
       E.resetComp();
@@ -332,8 +332,8 @@ function renderNodes(){
       h+='</div>';
     }
 
-    // T1/T2: show actual + accrued
-    if(n.type==='t1'||n.type==='t2'){
+    // T1/T2: show actual + accrued (expanded only)
+    if((n.type==='t1'||n.type==='t2') && !n.collapsed){
       E.resetComp();
       var tActual=E.getActual(n);
       var tAccrued=E.getAccrued(n);
@@ -444,13 +444,38 @@ function renderNodes(){
       if(hasIns) h+='<div class="ng-coll-pi ng-p" data-node="'+n.id+'" data-pi="0" data-dir="in" data-type="'+d.ins[0].t+'"></div>';
       if(hasOuts) h+='<div class="ng-coll-po ng-p" data-node="'+n.id+'" data-pi="0" data-dir="out" data-type="'+d.outs[0].t+'"></div>';
       h+='<div class="ng-coll-row">';
-      if(d.hasProg){
-        var cpct = n.pctComplete||0;
+      if(n.type==='t1'||n.type==='t2'){
+        // Use same computed pct as expanded view
+        var cpct;
+        if(n.type==='t2'){
+          var _caw=E.getPhaseAllocWires(n.id);
+          var _chp=_caw.some(function(w){ return w.pctComplete!=null; });
+          cpct=(_caw.length && _chp) ? E.getT2WeightedPct(n) : (n.pctComplete||0);
+        } else {
+          var _ctw=[]; E.wires().forEach(function(w){ if(w.toNode===n.id){ var s=E.findNode(w.fromNode); if(s&&s.type==='t2') _ctw.push(w); }});
+          var _cthp=_ctw.some(function(w){ return w.pctComplete!=null; });
+          cpct=(_ctw.length && _cthp) ? E.getT1WeightedPct(n) : (n.pctComplete||0);
+        }
         var cpColor = cpct>=100?'#34d399':cpct>=50?'#fbbf24':'#4f8cff';
+        E.resetComp(); var tAct=E.getActual(n);
+        var tAcc=E.getAccrued(n);
+        var tRev = (n.type==='t2') ? (n.revenue||0) : E.getBuildingAllocatedRevenue(n);
+        var tRevEarned = tRev * (cpct/100);
+        h+='<div class="ng-coll-t12">';
         h+='<div class="ng-coll-prog"><div class="ng-coll-prog-fill" style="width:'+Math.min(cpct,100)+'%;background:'+cpColor+'"></div></div>';
+        h+='<div class="ng-coll-pctrow"><span class="ng-coll-pct">'+cpct.toFixed(0)+'%</span></div>';
+        h+='<div class="ng-coll-kv"><span class="ng-coll-lbl">Actual</span><span class="ng-coll-val ng-cv-grn">'+E.fmtC(tAct)+'</span></div>';
+        h+='<div class="ng-coll-kv"><span class="ng-coll-lbl">Accrued</span><span class="ng-coll-val ng-cv-yel">'+E.fmtC(tAcc)+'</span></div>';
+        h+='<div class="ng-coll-kv"><span class="ng-coll-lbl">Revenue</span><span class="ng-coll-val ng-cv-blu">'+E.fmtC(tRev)+'</span></div>';
+        h+='<div class="ng-coll-kv"><span class="ng-coll-lbl">Rev Earned</span><span class="ng-coll-val ng-cv-blu">'+E.fmtC(tRevEarned)+'</span></div>';
+        h+='</div>';
+      } else if(d.hasProg){
+        var cpct2 = n.pctComplete||0;
+        var cpColor2 = cpct2>=100?'#34d399':cpct2>=50?'#fbbf24':'#4f8cff';
+        h+='<div class="ng-coll-prog"><div class="ng-coll-prog-fill" style="width:'+Math.min(cpct2,100)+'%;background:'+cpColor2+'"></div></div>';
         h+='<div class="ng-coll-inline">';
         if(n.budget) h+='<span class="ng-cv-bud">'+E.fmtC(n.budget)+'</span><span class="ng-coll-sep">|</span>';
-        h+='<span class="ng-coll-pct">'+cpct.toFixed(0)+'%</span><span class="ng-coll-sep">|</span>';
+        h+='<span class="ng-coll-pct">'+cpct2.toFixed(0)+'%</span><span class="ng-coll-sep">|</span>';
         h+='<span class="ng-coll-val">'+E.fmtC(collVal)+'</span>';
         h+='</div>';
       } else if(n.type==='po'){
