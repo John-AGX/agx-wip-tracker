@@ -118,23 +118,9 @@ function updateT1Progress(){
   var nodes=E.nodes(), wires=E.wires();
   nodes.forEach(function(n){
     if(n.type!=='t1') return;
-    // Find all T2s wired into this T1
-    var t2s=[];
-    wires.forEach(function(w){
-      if(w.toNode===n.id){
-        var src=E.findNode(w.fromNode);
-        if(src&&src.type==='t2') t2s.push(src);
-      }
-    });
-    if(t2s.length===0) return; // keep manual % if no T2s connected
-    // Weighted average by budget, or simple average if no budgets
-    var totalBudget=t2s.reduce(function(s,t){return s+(t.budget||0);},0);
-    if(totalBudget>0){
-      n.pctComplete=t2s.reduce(function(s,t){return s+(t.pctComplete||0)*(t.budget||0);},0)/totalBudget;
-    } else {
-      n.pctComplete=t2s.reduce(function(s,t){return s+(t.pctComplete||0);},0)/t2s.length;
-    }
-    n.pctComplete=Math.round(n.pctComplete*10)/10;
+    // Compute T1 pct from connected T2 wire-level pctCompletes
+    var cp = E.getT1WeightedPct(n);
+    n.pctComplete = Math.round(cp * 10) / 10;
   });
 }
 
@@ -224,23 +210,28 @@ function renderNodes(){
 
     // Progress bar (T1/T2/CO/Sub) — click bar or pct to edit
     if(d.hasProg){
-      // For T2 phases: if wires have per-building pct, show weighted average (read-only)
-      var t2Weighted=false, pct;
+      var _computed=false, pct;
       if(n.type==='t2'){
         var _aw=E.getPhaseAllocWires(n.id);
         var _hasWirePct=_aw.some(function(w){ return w.pctComplete!=null; });
-        if(_aw.length && _hasWirePct){ pct=E.getT2WeightedPct(n); t2Weighted=true; }
+        if(_aw.length && _hasWirePct){ pct=E.getT2WeightedPct(n); _computed=true; }
+        else pct=n.pctComplete||0;
+      } else if(n.type==='t1'){
+        // T1 computes from connected T2 wire pcts
+        var _t1w=[]; E.wires().forEach(function(w){ if(w.toNode===n.id){ var s=E.findNode(w.fromNode); if(s&&s.type==='t2') _t1w.push(w); }});
+        var _hasT1Pct=_t1w.some(function(w){ return w.pctComplete!=null; });
+        if(_t1w.length && _hasT1Pct){ pct=E.getT1WeightedPct(n); _computed=true; }
         else pct=n.pctComplete||0;
       } else {
         pct=n.pctComplete||0;
       }
       var progColor = pct>=100?'#34d399':pct>=50?'#fbbf24':'#4f8cff';
-      var progTitle = t2Weighted?'Weighted from per-building % (edit in phase body)':'Click to edit %';
-      var progAttr = t2Weighted?'':' data-prog-edit="'+n.id+'"';
+      var progTitle = _computed?'Averaged from phase % complete':'Click to edit %';
+      var progAttr = _computed?'':' data-prog-edit="'+n.id+'"';
       h+='<div class="ng-progress-wrap"'+progAttr+' title="'+progTitle+'">';
       h+='<div class="ng-progress"><div class="ng-progress-fill" style="width:'+Math.min(pct,100)+'%;background:'+progColor+'"></div></div>';
       h+='</div>';
-      h+='<div class="ng-progress-label"'+progAttr+' title="'+progTitle+'"><span class="ng-pct-val">'+pct.toFixed(0)+'%</span> '+(t2Weighted?'weighted':'complete')+(n.budget?' \u00b7 Budget: '+E.fmtC(n.budget):'')+'</div>';
+      h+='<div class="ng-progress-label"'+progAttr+' title="'+progTitle+'"><span class="ng-pct-val">'+pct.toFixed(0)+'%</span> '+(_computed?'avg':'complete')+(n.budget?' \u00b7 Budget: '+E.fmtC(n.budget):'')+'</div>';
     }
 
     // Sub-items (type-specific layout)
