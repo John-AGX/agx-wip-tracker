@@ -659,6 +659,37 @@ function showDataPicker(type, cb){
   tab.appendChild(overlay);
 }
 var PICKABLE_TYPES={co:1,t1:1,t2:1,sub:1,po:1,inv:1};
+// Map node type → app modal id + opener function (defined in js/wip.js, on window)
+var CREATE_MODAL={
+  co:  {modal:'addCOModal',       opener:'openAddChangeOrderModal'},
+  t1:  {modal:'addBuildingModal', opener:'openAddBuildingToJobModal'},
+  t2:  {modal:'addPhaseModal',    opener:'openAddPhaseToJobModal'},
+  sub: {modal:'addSubModal',      opener:'openAddSubToJobModal'},
+  po:  {modal:'addPOModal',       opener:'openAddPOModal'},
+  inv: {modal:'addInvModal',      opener:'openAddInvoiceModal'}
+};
+// Open the same overview-panel modal used to create entities; on save (modal closes
+// with a new entry present), invoke cb(newEntry). On cancel, cb(null).
+function openEntityCreateModal(type, cb){
+  var spec=CREATE_MODAL[type]; if(!spec) return cb(null);
+  var fn=window[spec.opener];
+  var modalEl=document.getElementById(spec.modal);
+  if(typeof fn!=='function' || !modalEl) return cb(null);
+  // Snapshot existing IDs so we can detect the new entry after save
+  var before={};
+  getJobEntries(type).forEach(function(e){ before[e.id]=1; });
+  fn();
+  // Watch for the modal to close (display: none)
+  var obs=new MutationObserver(function(){
+    var disp=modalEl.style.display;
+    if(disp==='none' || disp===''){
+      obs.disconnect();
+      var newOnes=getJobEntries(type).filter(function(e){ return !before[e.id]; });
+      cb(newOnes[0]||null);
+    }
+  });
+  obs.observe(modalEl, {attributes:true, attributeFilter:['style','class']});
+}
 
 // ── Sidebar ──
 function buildSidebar(){
@@ -693,12 +724,18 @@ function buildSidebar(){
             var lbl=entryLabel(type,entry);
             var newNode=E.addNode(type,cx-85,cy-30,lbl,entry);
             if(newNode) autoWireFromData(newNode, entry);
+            render();
           } else {
-            var label=d.label;
-            if(d.nameEdit) label=prompt('Name:',label)||label;
-            E.addNode(type,cx-85,cy-30,label);
+            // "+ Create New" — open the same overview-panel modal
+            openEntityCreateModal(type, function(newEntry){
+              if(newEntry){
+                var lbl=entryLabel(type,newEntry);
+                var newNode=E.addNode(type,cx-85,cy-30,lbl,newEntry);
+                if(newNode) autoWireFromData(newNode, newEntry);
+                render();
+              }
+            });
           }
-          render();
         });
       } else {
         var label=d.label;

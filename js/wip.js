@@ -371,105 +371,6 @@ function renderWIPMain() {
         }
 
         // ── CO Modal Functions ──
-        function coAllocLevelChanged() {
-            var level = document.getElementById('coAllocLevel').value;
-            var container = document.getElementById('coAllocRowsContainer');
-            if (level === 'job') {
-                container.style.display = 'none';
-                document.getElementById('coAllocRows').innerHTML = '';
-            } else {
-                container.style.display = 'block';
-            }
-        }
-
-        function addCOAllocRow(existingData) {
-            var container = document.getElementById('coAllocRows');
-            var level = document.getElementById('coAllocLevel').value;
-            var buildings = appData.buildings.filter(b => b.jobId === appState.currentJobId);
-            if (buildings.length === 0) { alert('Add buildings first.'); return; }
-
-            var row = document.createElement('div');
-            row.className = 'form-row';
-            row.style.cssText = 'margin-bottom:8px;align-items:center;gap:6px;';
-
-            // Building select
-            var bldgOpts = '<option value="">-- Building --</option>';
-            buildings.forEach(b => {
-                var sel = existingData && existingData.buildingId === b.id ? ' selected' : '';
-                bldgOpts += '<option value="' + escapeHTML(b.id) + '"' + sel + '>' + escapeHTML(b.name) + '</option>';
-            });
-
-            var html = '<div class="form-group" style="flex:1;"><select class="co-alloc-bldg" onchange="coBldgAllocChanged(this)">' + bldgOpts + '</select></div>';
-
-            // Phase select (if phase level)
-            if (level === 'phase') {
-                var phaseOpts = '<option value="">-- Phase --</option>';
-                if (existingData && existingData.buildingId) {
-                    var bPhases = appData.phases.filter(p => p.jobId === appState.currentJobId && p.buildingId === existingData.buildingId);
-                    bPhases.forEach(p => {
-                        var sel = existingData.phaseId === p.id ? ' selected' : '';
-                        phaseOpts += '<option value="' + escapeHTML(p.id) + '"' + sel + '>' + escapeHTML(p.phase) + '</option>';
-                    });
-                }
-                html += '<div class="form-group" style="flex:1;"><select class="co-alloc-phase">' + phaseOpts + '</select></div>';
-            }
-
-            html += '<div class="form-group" style="flex:0 0 90px;"><input type="number" class="co-alloc-income" placeholder="Income $" step="0.01" value="' + (existingData ? (existingData.income || '') : '') + '" oninput="updateCOAllocRemaining()"></div>';
-            html += '<div class="form-group" style="flex:0 0 90px;"><input type="number" class="co-alloc-costs" placeholder="Costs $" step="0.01" value="' + (existingData ? (existingData.costs || '') : '') + '" oninput="updateCOAllocRemaining()"></div>';
-            html += '<button type="button" class="danger small" onclick="this.parentElement.remove();updateCOAllocRemaining()" style="flex:0;padding:4px 10px;">X</button>';
-
-            row.innerHTML = html;
-            container.appendChild(row);
-            updateCOAllocRemaining();
-        }
-
-        function coBldgAllocChanged(sel) {
-            var level = document.getElementById('coAllocLevel').value;
-            if (level !== 'phase') return;
-            var row = sel.closest('.form-row');
-            var phaseSel = row.querySelector('.co-alloc-phase');
-            if (!phaseSel) return;
-            phaseSel.innerHTML = '<option value="">-- Phase --</option>';
-            var bldgId = sel.value;
-            if (bldgId) {
-                var phases = appData.phases.filter(p => p.jobId === appState.currentJobId && p.buildingId === bldgId);
-                phases.forEach(p => {
-                    phaseSel.innerHTML += '<option value="' + escapeHTML(p.id) + '">' + escapeHTML(p.phase) + '</option>';
-                });
-            }
-        }
-
-        function updateCOAllocRemaining() {
-            var totalIncome = parseFloat(document.getElementById('coIncome').value) || 0;
-            var totalCosts = parseFloat(document.getElementById('coCosts').value) || 0;
-            var allocIncome = 0, allocCosts = 0;
-            document.querySelectorAll('.co-alloc-income').forEach(a => { allocIncome += parseFloat(a.value) || 0; });
-            document.querySelectorAll('.co-alloc-costs').forEach(a => { allocCosts += parseFloat(a.value) || 0; });
-            var el = document.getElementById('coAllocRemaining');
-            if (el) {
-                el.textContent = 'Income: ' + formatCurrency(allocIncome) + ' of ' + formatCurrency(totalIncome) +
-                    ' | Costs: ' + formatCurrency(allocCosts) + ' of ' + formatCurrency(totalCosts);
-                el.style.color = (allocIncome > totalIncome || allocCosts > totalCosts) ? 'var(--red)' : 'var(--text-dim)';
-            }
-        }
-
-        function getCOAllocationsFromModal() {
-            var rows = document.querySelectorAll('#coAllocRows .form-row');
-            var allocs = [];
-            rows.forEach(row => {
-                var bldgId = row.querySelector('.co-alloc-bldg')?.value;
-                var phaseId = row.querySelector('.co-alloc-phase')?.value || null;
-                var income = parseFloat(row.querySelector('.co-alloc-income')?.value) || 0;
-                var costs = parseFloat(row.querySelector('.co-alloc-costs')?.value) || 0;
-                if (bldgId && (income > 0 || costs > 0)) {
-                    var alloc = { buildingId: bldgId, income: income, costs: costs };
-                    if (phaseId) alloc.phaseId = phaseId;
-                    allocs.push(alloc);
-                }
-            });
-            return allocs;
-        }
-
         function openAddChangeOrderModal() {
             document.getElementById('coModalHeader').textContent = 'Add Change Order';
             document.getElementById('coSaveBtn').innerHTML = '&#x1F4DD; Add Change Order';
@@ -480,16 +381,12 @@ function renderWIPMain() {
             document.getElementById('coCosts').value = '';
             document.getElementById('coNotes').value = '';
             appState.editCOId = null;
-            document.getElementById('coAllocLevel').value = 'job';
-            document.getElementById('coAllocRows').innerHTML = '';
-            coAllocLevelChanged();
             openModal('addCOModal');
         }
 
         function saveCO() {
             const desc = document.getElementById('coDescription').value.trim();
             if (!desc) { alert('Enter a description'); return; }
-            var allocLevel = document.getElementById('coAllocLevel').value;
             const coData = {
                 jobId: appState.currentJobId,
                 coNumber: document.getElementById('coNumber').value.trim(),
@@ -498,8 +395,8 @@ function renderWIPMain() {
                 estimatedCosts: parseFloat(document.getElementById('coCosts').value) || 0,
                 date: document.getElementById('coDate').value,
                 notes: document.getElementById('coNotes').value.trim(),
-                allocationType: allocLevel,
-                allocations: allocLevel === 'job' ? [] : getCOAllocationsFromModal()
+                allocationType: 'job',
+                allocations: []
             };
             // Reverse old budget impact when editing
             if (appState.editCOId) {
@@ -530,14 +427,6 @@ function renderWIPMain() {
             document.getElementById('coIncome').value = co.income || '';
             document.getElementById('coCosts').value = co.estimatedCosts || '';
             document.getElementById('coNotes').value = co.notes || '';
-            // Detect allocation type (backward compatible)
-            var allocs = getCOAllocations(co);
-            var allocType = co.allocationType || (allocs.length > 0 ? (allocs.some(a => a.phaseId) ? 'phase' : 'building') : 'job');
-            document.getElementById('coAllocLevel').value = allocType;
-            coAllocLevelChanged();
-            document.getElementById('coAllocRows').innerHTML = '';
-            allocs.forEach(alloc => addCOAllocRow(alloc));
-            updateCOAllocRemaining();
             openModal('addCOModal');
         }
 
@@ -1426,104 +1315,178 @@ function renderWIPMain() {
             });
         }
 
+        function getNodeGraphConnections(type, dataId) {
+            if (typeof NG === 'undefined') return [];
+            var nodes = NG.nodes(), wires = NG.wires();
+            var instances = nodes.filter(function(n) { return n.type === type && n.data && n.data.id === dataId; });
+            var conns = [];
+            instances.forEach(function(n) {
+                var outWires = wires.filter(function(w) { return w.fromNode === n.id; });
+                var inWires = wires.filter(function(w) { return w.toNode === n.id; });
+                var targets = outWires.map(function(w) {
+                    var tn = NG.findNode(w.toNode);
+                    return tn ? { label: tn.label, type: tn.type, port: w.toPort } : null;
+                }).filter(Boolean);
+                var sources = inWires.map(function(w) {
+                    var fn = NG.findNode(w.fromNode);
+                    return fn ? { label: fn.label, type: fn.type, port: w.fromPort } : null;
+                }).filter(Boolean);
+                conns.push({ nodeId: n.id, label: n.label, targets: targets, sources: sources });
+            });
+            return conns;
+        }
+
+        function renderConnectionBadges(conns) {
+            if (!conns.length) return '<span style="font-size:11px;color:var(--text-dim);font-style:italic;">Not on graph</span>';
+            var html = '';
+            conns.forEach(function(c, i) {
+                var arrows = [];
+                c.targets.forEach(function(t) {
+                    arrows.push('&rarr; ' + escapeHTML(t.label));
+                });
+                c.sources.forEach(function(s) {
+                    arrows.push(escapeHTML(s.label) + ' &rarr;');
+                });
+                var label = arrows.length ? arrows.join(', ') : 'No connections';
+                html += '<div style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;margin:2px;border-radius:4px;background:var(--surface);border:1px solid var(--border);font-size:11px;color:var(--text);">' +
+                    '<span style="color:var(--accent);">#' + (i + 1) + '</span> ' + label + '</div>';
+            });
+            return html;
+        }
+
         function renderJobPhases(jobId) {
             const phases = appData.phases.filter(p => p.jobId === jobId);
-            const phaseGroups = {};
+            const container = document.getElementById('job-phases-cards');
+            if (!container) return;
+            container.innerHTML = '';
 
+            const phaseGroups = {};
             phases.forEach(p => {
-                if (!phaseGroups[p.phase]) {
-                    phaseGroups[p.phase] = [];
-                }
-                phaseGroups[p.phase].push(p);
+                var key = p.phase || 'Unnamed';
+                if (!phaseGroups[key]) phaseGroups[key] = [];
+                phaseGroups[key].push(p);
             });
 
-            const tbody = document.querySelector('#job-phases-table tbody');
-            tbody.innerHTML = '';
+            if (Object.keys(phaseGroups).length === 0) {
+                container.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-dim);font-size:13px;">No phases yet.</div>';
+                return;
+            }
 
             Object.keys(phaseGroups).forEach(phaseName => {
                 const phaseList = phaseGroups[phaseName];
-                const revTotal = phaseList.reduce((sum, p) => sum + (p.asSoldRevenue || 0), 0);
-                const matTotal = phaseList.reduce((sum, p) => sum + (p.materials || 0), 0);
-                const labTotal = phaseList.reduce((sum, p) => sum + (p.labor || 0), 0);
-                const subTotal = phaseList.reduce((sum, p) => sum + (p.sub || 0), 0);
-                const equipTotal = phaseList.reduce((sum, p) => sum + (p.equipment || 0), 0);
-                const total = matTotal + labTotal + subTotal + equipTotal;
-                const avgPct = Math.round(phaseList.reduce((sum, p) => sum + (p.pctComplete || 0), 0) / phaseList.length);
+                const revTotal = phaseList.reduce((s, p) => s + (p.asSoldRevenue || 0), 0);
+                const matTotal = phaseList.reduce((s, p) => s + (p.materials || 0), 0);
+                const labTotal = phaseList.reduce((s, p) => s + (p.labor || 0), 0);
+                const subTotal = phaseList.reduce((s, p) => s + (p.sub || 0), 0);
+                const equipTotal = phaseList.reduce((s, p) => s + (p.equipment || 0), 0);
+                const costTotal = matTotal + labTotal + subTotal + equipTotal;
+                const avgPct = Math.round(phaseList.reduce((s, p) => s + (p.pctComplete || 0), 0) / phaseList.length);
+                const uid = 'ph-grp-' + phaseName.replace(/\W/g, '_');
 
-                const row = document.createElement('tr');
-                row.innerHTML = `
-                    <td>${escapeHTML(phaseName)}</td>
-                    <td style="text-align: right;">${formatCurrency(revTotal)}</td>
-                    <td style="text-align: right;">${formatCurrency(matTotal)}</td>
-                    <td style="text-align: right;">${formatCurrency(labTotal)}</td>
-                    <td style="text-align: right;">${formatCurrency(subTotal)}</td>
-                    <td style="text-align: right;">${formatCurrency(equipTotal)}</td>
-                    <td style="text-align: right;">${formatCurrency(total)}</td>
-                    <td style="text-align: right;">${avgPct}%</td>
-                `;
-                tbody.appendChild(row);
+                var card = document.createElement('div');
+                card.style.cssText = 'background:var(--surface);border:1px solid var(--border);border-radius:8px;margin-bottom:8px;overflow:hidden;';
+
+                var hdr = '<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;cursor:pointer;user-select:none;" onclick="var d=document.getElementById(\'' + uid + '\');d.style.display=d.style.display===\'none\'?\'block\':\'none\';this.querySelector(\'.ph-arrow\').textContent=d.style.display===\'none\'?\'\\u25B6\':\'\\u25BC\';">' +
+                    '<div style="display:flex;align-items:center;gap:10px;">' +
+                    '<span class="ph-arrow" style="font-size:10px;color:var(--text-dim);">&#x25B6;</span>' +
+                    '<span style="font-weight:700;font-size:14px;color:var(--text);">' + escapeHTML(phaseName) + '</span>' +
+                    '<span style="font-size:11px;color:var(--text-dim);">' + phaseList.length + ' instance' + (phaseList.length > 1 ? 's' : '') + '</span>' +
+                    '</div>' +
+                    '<div style="display:flex;gap:16px;font-size:12px;">' +
+                    '<span style="color:var(--text-dim);">Revenue: <strong style="color:var(--green);">' + formatCurrency(revTotal) + '</strong></span>' +
+                    '<span style="color:var(--text-dim);">Costs: <strong style="color:var(--orange);">' + formatCurrency(costTotal) + '</strong></span>' +
+                    '<span style="color:var(--text-dim);">Avg: <strong style="color:var(--accent);">' + avgPct + '%</strong></span>' +
+                    '</div></div>';
+
+                var body = '<div id="' + uid + '" style="display:none;border-top:1px solid var(--border);padding:10px 14px;">';
+                phaseList.forEach(function(p) {
+                    var bldg = appData.buildings.find(function(b) { return b.id === p.buildingId; });
+                    var bldgName = bldg ? bldg.name : '?';
+                    var conns = getNodeGraphConnections('t2', p.id);
+                    body += '<div style="padding:6px 0;border-bottom:1px solid var(--border);">' +
+                        '<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px;">' +
+                        '<div>' +
+                        '<span style="font-size:13px;font-weight:600;color:var(--text);">' + escapeHTML(bldgName) + '</span>' +
+                        '<span style="font-size:11px;color:var(--text-dim);margin-left:8px;">Rev: ' + formatCurrency(p.asSoldRevenue || 0) + ' | Mat: ' + formatCurrency(p.materials || 0) + ' | Lab: ' + formatCurrency(p.labor || 0) + ' | Sub: ' + formatCurrency(p.sub || 0) + ' | Equip: ' + formatCurrency(p.equipment || 0) + '</span>' +
+                        '</div>' +
+                        '<div>' +
+                        '<button class="small" onclick="editPhase(\'' + escapeHTML(p.id) + '\')" style="font-size:10px;padding:2px 8px;">&#x270F;&#xFE0F; Edit</button>' +
+                        '</div></div>' +
+                        '<div style="margin-top:4px;">' + renderConnectionBadges(conns) + '</div>' +
+                        '</div>';
+                });
+                body += '</div>';
+                card.innerHTML = hdr + body;
+                container.appendChild(card);
             });
         }
 
         function renderJobSubs(jobId) {
             const subs = appData.subs.filter(s => s.jobId === jobId);
-            const tbody = document.querySelector('#job-subs-table tbody');
-            tbody.innerHTML = '';
+            const container = document.getElementById('job-subs-cards');
+            if (!container) return;
+            container.innerHTML = '';
 
             let totalContract = 0, totalBilled = 0;
 
+            if (subs.length === 0) {
+                container.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-dim);font-size:13px;">No subcontractors yet.</div>';
+            }
+
             subs.forEach(sub => {
-                const remaining = (sub.contractAmt || 0) - (sub.billedToDate || 0);
-                const pctBilled = sub.contractAmt > 0 ? ((sub.billedToDate / sub.contractAmt) * 100).toFixed(1) : 0;
-                const level = sub.level || 'building';
-                let assignedTo = '';
-                if (level === 'job') {
-                    assignedTo = 'All Buildings';
-                } else if (level === 'phase') {
-                    var pIds = sub.phaseIds || (sub.phaseId ? [sub.phaseId] : []);
-                    var phLabels = pIds.map(function(pid){
-                        var ph = appData.phases.find(function(p){return p.id===pid;});
-                        if(!ph) return null;
-                        var bldg = appData.buildings.find(function(b){return b.id===ph.buildingId;});
-                        return (bldg ? bldg.name : '?') + ' → ' + ph.phase;
-                    }).filter(Boolean);
-                    assignedTo = phLabels.length > 0 ? phLabels.join(', ') : '?';
-                } else {
-                    var bIds = sub.buildingIds || (sub.buildingId ? [sub.buildingId] : []);
-                    var bLabels = bIds.map(function(bid){
-                        var b = appData.buildings.find(function(bb){return bb.id===bid;});
-                        return b ? b.name : null;
-                    }).filter(Boolean);
-                    assignedTo = bLabels.length > 0 ? bLabels.join(', ') : '';
+                const contract = sub.contractAmt || 0;
+                const billed = sub.billedToDate || 0;
+                const remaining = contract - billed;
+                const pctBilled = contract > 0 ? ((billed / contract) * 100).toFixed(1) : '0.0';
+                totalContract += contract;
+                totalBilled += billed;
+
+                const conns = getNodeGraphConnections('sub', sub.id);
+                const uid = 'sub-grp-' + sub.id.replace(/\W/g, '_');
+
+                var card = document.createElement('div');
+                card.style.cssText = 'background:var(--surface);border:1px solid var(--border);border-radius:8px;margin-bottom:8px;overflow:hidden;';
+
+                var hdr = '<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;cursor:pointer;user-select:none;" onclick="var d=document.getElementById(\'' + uid + '\');d.style.display=d.style.display===\'none\'?\'block\':\'none\';this.querySelector(\'.ph-arrow\').textContent=d.style.display===\'none\'?\'\\u25B6\':\'\\u25BC\';">' +
+                    '<div style="display:flex;align-items:center;gap:10px;">' +
+                    '<span class="ph-arrow" style="font-size:10px;color:var(--text-dim);">&#x25B6;</span>' +
+                    '<span style="font-weight:700;font-size:14px;color:var(--text);">' + escapeHTML(sub.name) + '</span>' +
+                    '<span style="font-size:11px;color:var(--text-dim);">' + escapeHTML(sub.trade || '') + '</span>' +
+                    (conns.length > 0 ? '<span style="font-size:10px;padding:1px 6px;border-radius:10px;background:var(--accent-dim);color:var(--accent);">' + conns.length + ' node' + (conns.length > 1 ? 's' : '') + '</span>' : '') +
+                    '</div>' +
+                    '<div style="display:flex;gap:16px;font-size:12px;align-items:center;">' +
+                    '<span style="color:var(--text-dim);">Contract: <strong style="color:var(--accent);">' + formatCurrency(contract) + '</strong></span>' +
+                    '<span style="color:var(--text-dim);">Billed: <strong style="color:var(--green);">' + formatCurrency(billed) + '</strong></span>' +
+                    '<span style="color:var(--text-dim);">Rem: <strong style="color:var(--orange);">' + formatCurrency(remaining) + '</strong></span>' +
+                    '<span style="color:var(--text-dim);">' + pctBilled + '%</span>' +
+                    '<button class="small" onclick="event.stopPropagation();editSub(\'' + escapeHTML(sub.id) + '\')" style="font-size:10px;padding:2px 8px;">&#x270F;&#xFE0F; Edit</button>' +
+                    '</div></div>';
+
+                var body = '<div id="' + uid + '" style="display:none;border-top:1px solid var(--border);padding:10px 14px;">';
+                if (sub.notes) {
+                    body += '<div style="font-size:11px;color:var(--text-dim);margin-bottom:8px;">' + escapeHTML(sub.notes) + '</div>';
                 }
-
-                const levelLabel = level === 'job' ? 'Job-Wide' : level === 'phase' ? 'Phase' : 'Building';
-                const levelColor = level === 'job' ? 'var(--purple)' : level === 'phase' ? 'var(--green)' : 'var(--accent)';
-
-                totalContract += sub.contractAmt || 0;
-                totalBilled += sub.billedToDate || 0;
-
-                const row = document.createElement('tr');
-                row.innerHTML = `
-                    <td><strong>${escapeHTML(sub.name)}</strong>${sub.notes ? '<br><span style="font-size:11px;color:var(--text-dim);">' + escapeHTML(sub.notes) + '</span>' : ''}</td>
-                    <td>${escapeHTML(sub.trade)}</td>
-                    <td><span style="color:${levelColor};font-size:12px;font-weight:600;">${levelLabel}</span></td>
-                    <td>${escapeHTML(assignedTo)}</td>
-                    <td style="text-align: right;">${formatCurrency(sub.contractAmt)}</td>
-                    <td style="text-align: right;">${formatCurrency(sub.billedToDate)}</td>
-                    <td style="text-align: right;">${formatCurrency(remaining)}</td>
-                    <td style="text-align: right;">${pctBilled}%</td>
-                    <td>
-                        <button class="small" onclick="editSub('${escapeHTML(sub.id)}')">&#x270F;&#xFE0F; Edit</button>
-                        <button class="small danger" onclick="deleteSub('${escapeHTML(sub.id)}')">&#x1F5D1; Del</button>
-                    </td>
-                `;
-                tbody.appendChild(row);
+                body += '<div style="font-size:12px;font-weight:600;color:var(--text-dim);margin-bottom:6px;">Node Graph Connections</div>';
+                if (conns.length === 0) {
+                    body += '<div style="font-size:11px;color:var(--text-dim);font-style:italic;">Not placed on graph yet</div>';
+                } else {
+                    conns.forEach(function(c, i) {
+                        var wireDesc = [];
+                        c.targets.forEach(function(t) { wireDesc.push('<span style="color:var(--green);">&rarr; ' + escapeHTML(t.label) + '</span>'); });
+                        c.sources.forEach(function(s) { wireDesc.push('<span style="color:var(--accent);">' + escapeHTML(s.label) + ' &rarr;</span>'); });
+                        body += '<div style="padding:4px 8px;margin:3px 0;background:var(--surface2);border-radius:4px;font-size:11px;display:flex;align-items:center;gap:8px;">' +
+                            '<span style="color:var(--purple);font-weight:600;">Instance #' + (i + 1) + '</span>' +
+                            (wireDesc.length ? wireDesc.join(' ') : '<span style="color:var(--text-dim);">Unconnected</span>') +
+                            '</div>';
+                    });
+                }
+                body += '</div>';
+                card.innerHTML = hdr + body;
+                container.appendChild(card);
             });
 
             // Summary
             const totalRemaining = totalContract - totalBilled;
-            const totalPct = totalContract > 0 ? ((totalBilled / totalContract) * 100).toFixed(1) : 0;
             document.getElementById('job-subs-summary').innerHTML = `
                 <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; text-align: center;">
                     <div>
