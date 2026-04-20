@@ -1485,6 +1485,10 @@ function pushToJobSilent(){
   try { pushToJob(); } catch(e){}
 }
 
+// Expose so wip.js can trigger a recompute when showing overview/metrics
+// without the user needing to open the node graph tab first.
+window.ngPushToJob = pushToJobSilent;
+
 // Auto-wire a newly added node based on its data relationships,
 // mirroring the wiring logic used in populate() — so picker-added
 // nodes connect to their parent automatically.
