@@ -301,7 +301,7 @@ function renderNodes(){
         E.resetComp();
         E.getOutput(n,0);
         var poContract=n._poContract||0, poInv=n._poInvoiced||0;
-        h+='<div style="padding:2px 10px 4px;font-size:10px;border-top:1px solid var(--ng-border2);">';
+        h+='<div style="padding:2px 10px 4px;font-size:12px;border-top:1px solid var(--ng-border2);">';
         h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Contract <span style="color:#8899cc;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(poContract)+'</span></div>';
         h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Invoiced <span style="color:#34d399;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(poInv)+'</span></div>';
         h+='</div>';
@@ -314,7 +314,7 @@ function renderNodes(){
       E.resetComp();
       var subActual=E.getActual(n);
       var subAccrued=E.getAccrued(n);
-      h+='<div style="padding:4px 10px 6px;font-size:10px;">';
+      h+='<div style="padding:4px 10px 6px;font-size:12px;">';
       h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Actual <span style="color:#34d399;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(subActual)+'</span></div>';
       h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Accrued <span style="color:#fbbf24;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(subAccrued)+'</span></div>';
       h+='</div>';
@@ -329,7 +329,7 @@ function renderNodes(){
       var coAccrued=E.getAccrued(n);
       var coGP=coIncome-(coActual+coAccrued);
       var gpColor=coGP>=0?'#34d399':'#f87171';
-      h+='<div style="padding:4px 10px 6px;font-size:10px;">';
+      h+='<div style="padding:4px 10px 6px;font-size:12px;">';
       h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Income <span style="color:#34d399;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(coIncome)+'</span></div>';
       h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Actual <span style="color:#f87171;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(coActual)+'</span></div>';
       h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Accrued <span style="color:#fbbf24;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(coAccrued)+'</span></div>';
@@ -375,7 +375,7 @@ function renderNodes(){
       E.resetComp();
       var tActual=E.getActual(n);
       var tAccrued=E.getAccrued(n);
-      h+='<div style="padding:4px 10px 6px;font-size:10px;">';
+      h+='<div style="padding:4px 10px 6px;font-size:12px;">';
       // T2 (Phase): editable revenue + per-building allocation breakdown
       if(n.type==='t2'){
         var phaseRev=n.revenue||0;
@@ -451,9 +451,9 @@ function renderNodes(){
         var ov=E.getOutput(n,oi);
         var cls=ov>0?' style="color:#34d399"':ov<0?' style="color:#f87171"':'';
         var fmt=op.t===E.PT.P?E.fmtP(ov):E.fmtC(ov);
-        h+='<div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid #1a1f30;font-size:11px;">';
+        h+='<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #1a1f30;font-size:14px;">';
         h+='<span style="color:#6a7090;">'+op.n+'</span>';
-        h+='<span style="font-family:\'Courier New\',monospace;font-weight:700;"'+cls+'>'+fmt+'</span>';
+        h+='<span style="font-family:\'Courier New\',monospace;font-weight:700;font-size:15px;"'+cls+'>'+fmt+'</span>';
         h+='</div>';
       });
       h+='</div>';
