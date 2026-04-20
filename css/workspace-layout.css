@@ -249,12 +249,32 @@
   }
 
   .jh-strip-card {
-    min-width: 70px;
+    min-width: 52px;
     padding: 4px 6px;
   }
 
   .jh-strip-value {
-    font-size: 13px;
+    font-size: 12px;
+  }
+
+  .jh-strip-label {
+    font-size: 8px;
+  }
+}
+
+@media (max-width: 900px) {
+  .jh-strip-card {
+    min-width: 44px;
+    padding: 3px 4px;
+  }
+  .jh-strip-value {
+    font-size: 11px;
+  }
+  .jh-strip-label {
+    font-size: 7px;
+  }
+  .jh-metrics-strip {
+    gap: 3px;
   }
 }
 
@@ -310,7 +330,7 @@
 /* ââ Metrics Strip (13 cards) ââ */
 .jh-metrics-strip {
   display: flex;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   gap: 4px;
   padding: 0;
   margin: 0;
@@ -334,8 +354,8 @@
   border-radius: 6px;
   padding: 8px 14px;
   text-align: center;
-  flex: 0 0 auto;
-  min-width: 78px;
+  flex: 0 1 auto;
+  min-width: 58px;
   transition: background 0.15s;
 }
 .jh-strip-card:hover { background: rgba(0,0,0,0.5); }
