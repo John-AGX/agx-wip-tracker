@@ -4,59 +4,7 @@
    Job header with inline metrics
    ============================================================ */
 
-/* ââ Header Metrics Strip (always visible) ââââââââââââââââ */
-.jh-metrics-strip {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding: 8px 20px 10px;
-  margin: 0;
-  background: rgba(0, 0, 0, 0.3);
-  border: none;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 0;
-  box-shadow: inset 0 1px 4px rgba(0, 0, 0, 0.2);
-}
-
-.jh-strip-card {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  flex: 1 1 0;
-  min-width: 100px;
-  padding: 5px 10px;
-  border-radius: 6px;
-  background: rgba(0, 0, 0, 0.35);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  transition: background 0.2s;
-}
-
-.jh-strip-card:hover {
-  background: rgba(0, 0, 0, 0.5);
-}
-
-.jh-strip-label {
-  font-size: 9px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.6px;
-  color: var(--text-dim, #8b90a5);
-  white-space: nowrap;
-  margin-bottom: 2px;
-}
-
-.jh-strip-value {
-  font-size: 16px;
-  font-weight: 700;
-  font-family: 'SF Mono', 'Fira Code', monospace;
-  letter-spacing: -0.5px;
-}
-
-.jh-blue .jh-strip-value { color: var(--accent, #4f8cff); }
-.jh-green .jh-strip-value { color: var(--green, #34d399); }
-.jh-amber .jh-strip-value { color: var(--yellow); }
-.jh-cyan .jh-strip-value { color: var(--accent); }
+/* Metrics strip styles live below in the "Tab + Metrics Row" block. */
 
 /* ââ Two-Column Container ââââââââââââââââââââââââââââââââââ */
 .ws-two-col {
@@ -377,26 +325,36 @@
 .jh-metrics-strip::-webkit-scrollbar { height: 3px; }
 .jh-metrics-strip::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 2px; }
 .jh-strip-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
   background: rgba(0,0,0,0.35);
   border: 1px solid rgba(255,255,255,0.08);
   border-radius: 6px;
   padding: 8px 14px;
   text-align: center;
-  flex: 0 1 auto;
-  min-width: 0;
+  flex: 0 0 auto;
+  min-width: 78px;
+  transition: background 0.15s;
 }
+.jh-strip-card:hover { background: rgba(0,0,0,0.5); }
 .jh-strip-label {
   font-size: 9px;
-  color: rgba(255,255,255,0.5);
+  font-weight: 600;
+  color: rgba(255,255,255,0.55);
   text-transform: uppercase;
   letter-spacing: 0.5px;
   white-space: nowrap;
+  margin-bottom: 2px;
 }
 .jh-strip-value {
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 700;
   color: #fff;
   white-space: nowrap;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  letter-spacing: -0.3px;
 }
 
 
