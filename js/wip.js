@@ -1073,6 +1073,9 @@ function renderWIPMain() {
         function renderJobOverview(jobId) {
             const container = document.getElementById('job-overview');
             if (!container) return;
+            // Recompute node graph values (job.ngActualCosts, per-phase costs)
+            // so cards display allocation-weighted totals reflecting current wires.
+            ensureNGComputed(jobId);
             container.innerHTML = '';
 
             // ── Action buttons ──
@@ -1282,17 +1285,14 @@ function renderWIPMain() {
                 if (wiredPhases.length === 0) {
                     body += '<div style="font-size:11px;color:var(--text-dim);font-style:italic;margin-bottom:6px;">No phases wired to this building in the node graph</div>';
                 } else {
-                    body += '<div style="display:flex;flex-direction:column;gap:3px;margin-bottom:6px;">';
+                    body += '<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px;">';
                     wiredPhases.forEach(function(wp) {
                         var p = wp.phase;
-                        var rev = (p.asSoldRevenue || 0) * wp.allocPct / 100;
                         var pCost = ((p.materials || 0) + (p.labor || 0) + (p.sub || 0) + (p.equipment || 0)) * wp.allocPct / 100;
                         var pColor = p.pctComplete >= 100 ? 'var(--green)' : p.pctComplete >= 50 ? '#f59e0b' : 'var(--text-dim)';
-                        var allocStr = wp.allocPct !== 100 ? ' <span style="font-size:10px;color:var(--text-dim);">(' + wp.allocPct + '%)</span>' : '';
-                        body += '<div onclick="event.stopPropagation();editPhase(\'' + escapeHTML(p.id) + '\')" style="cursor:pointer;font-size:11px;padding:4px 8px;background:var(--surface);border:1px solid var(--border);border-radius:4px;display:flex;justify-content:space-between;gap:8px;align-items:center;">' +
-                            '<span><b>' + escapeHTML(p.phase) + '</b>' + allocStr + '</span>' +
-                            '<span style="color:var(--text-dim);font-size:10px;">Rev: <b style="color:var(--green);">' + formatCurrency(rev) + '</b> Cost: <b>' + formatCurrency(pCost) + '</b> <b style="color:' + pColor + ';">' + (p.pctComplete || 0) + '%</b></span>' +
-                            '</div>';
+                        var allocStr = wp.allocPct !== 100 ? ' (' + wp.allocPct + '%)' : '';
+                        body += '<button onclick="event.stopPropagation();editPhase(\'' + escapeHTML(p.id) + '\')" style="font-size:10px;padding:3px 8px;border-radius:6px;background:var(--surface);border:1px solid var(--border);white-space:nowrap;cursor:pointer;color:var(--text);">' +
+                            escapeHTML(p.phase) + allocStr + ' <b style="color:' + pColor + ';">' + (p.pctComplete || 0) + '%</b> ' + formatCurrency(pCost) + '</button>';
                     });
                     body += '</div>';
                 }
@@ -1403,6 +1403,17 @@ function renderWIPMain() {
             NG.job(jobId);
             NG.setNodes([]); NG.setWires([]); NG.setNid(1);
             return NG.loadGraph();
+        }
+
+        // Loads the graph AND runs a silent compute so job.ngActualCosts /
+        // ngAccruedCosts / phase costs are current before overview + sticky
+        // metrics read them. Safe to call repeatedly.
+        function ensureNGComputed(jobId) {
+            if (!ensureNGLoaded(jobId)) return false;
+            if (typeof window.ngPushToJob === 'function') {
+                try { window.ngPushToJob(); } catch (e) {}
+            }
+            return true;
         }
 
         function getNodeGraphConnections(type, dataId) {

@@ -12,6 +12,7 @@
 
   let layoutApplied = false;
   let currentJobId = null;
+  let _ngComputing = false;
 
   // ── Tab definitions for right panel ───────────────────────
   const RIGHT_TABS = [
@@ -213,6 +214,12 @@
     var strip = document.querySelector('.jh-metrics-strip');
     if (!strip || !currentJobId) return;
     if (typeof getJobWIP !== 'function' || typeof formatCurrency !== 'function') return;
+    // Ensure node graph values are current before reading them.
+    // Skip if pushToJob itself triggered us (avoid infinite recursion).
+    if (!_ngComputing && typeof ensureNGComputed === 'function') {
+      _ngComputing = true;
+      try { ensureNGComputed(currentJobId); } finally { _ngComputing = false; }
+    }
     var w = getJobWIP(currentJobId);
     var accrued = (typeof getJobAccruedCosts === 'function') ? getJobAccruedCosts(currentJobId) : 0;
     var map = {
