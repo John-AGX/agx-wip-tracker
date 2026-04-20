@@ -452,25 +452,30 @@ function getBuildingAllocatedRevenue(t1n){
 
 // Weighted-average pctComplete across a T2 phase's outgoing T1 wires.
 // Each wire can hold its own pctComplete; weights are wire.allocPct.
-// Falls back to the T2's own pctComplete when no wires or no alloc sum.
+// Falls back to the T2's own pctComplete when NO wires have been set at all.
+// Once any wire has a pct, unset wires count as 0% so partial progress
+// is reflected proportionally across all allocations.
 function getT2WeightedPct(t2n){
   if(!t2n || t2n.type !== 't2') return (t2n && t2n.pctComplete) || 0;
   var aw = getPhaseAllocWires(t2n.id);
   if(!aw.length) return t2n.pctComplete || 0;
-  var sumW = 0, sumPct = 0, anyPct = false;
-  aw.forEach(function(w){
-    var aw2 = (w.allocPct != null) ? w.allocPct : 0;
-    var pc = (w.pctComplete != null) ? w.pctComplete : null;
-    if(pc != null){ anyPct = true; sumPct += pc * aw2; sumW += aw2; }
-  });
+  var anyPct = aw.some(function(w){ return w.pctComplete != null; });
   if(!anyPct) return t2n.pctComplete || 0;
-  if(sumW === 0) return t2n.pctComplete || 0;
+  var sumW = 0, sumPct = 0;
+  aw.forEach(function(w){
+    var ap = (w.allocPct != null) ? w.allocPct : 0;
+    var pc = (w.pctComplete != null) ? w.pctComplete : 0;
+    sumPct += pc * ap; sumW += ap;
+  });
+  if(sumW === 0) return 0;
   return sumPct / sumW;
 }
 
 // Weighted-average pctComplete for a T1 building from all connected T2 wires.
 // Each incoming T2→T1 wire carries its own pctComplete; weights are allocPct.
 // Falls back to the T1's own pctComplete when no T2 wires have pct set.
+// Once any wire has a pct, unset wires count as 0% so partial progress is
+// reflected proportionally across all incoming phase allocations.
 function getT1WeightedPct(t1n){
   if(!t1n || t1n.type !== 't1') return (t1n && t1n.pctComplete) || 0;
   var incoming = [];
@@ -480,14 +485,15 @@ function getT1WeightedPct(t1n){
     if(src && src.type === 't2') incoming.push(w);
   });
   if(!incoming.length) return t1n.pctComplete || 0;
-  var sumW = 0, sumPct = 0, anyPct = false;
+  var anyPct = incoming.some(function(w){ return w.pctComplete != null; });
+  if(!anyPct) return t1n.pctComplete || 0;
+  var sumW = 0, sumPct = 0;
   incoming.forEach(function(w){
     var ap = (w.allocPct != null) ? w.allocPct : 0;
-    var pc = (w.pctComplete != null) ? w.pctComplete : null;
-    if(pc != null){ anyPct = true; sumPct += pc * ap; sumW += ap; }
+    var pc = (w.pctComplete != null) ? w.pctComplete : 0;
+    sumPct += pc * ap; sumW += ap;
   });
-  if(!anyPct) return t1n.pctComplete || 0;
-  if(sumW === 0) return t1n.pctComplete || 0;
+  if(sumW === 0) return 0;
   return sumPct / sumW;
 }
 
