@@ -466,8 +466,8 @@ function renderNodes(){
         h+='<div class="ng-coll-pctrow"><span class="ng-coll-pct">'+cpct.toFixed(0)+'%</span></div>';
         h+='<div class="ng-coll-kv"><span class="ng-coll-lbl">Actual</span><span class="ng-coll-val ng-cv-grn">'+E.fmtC(tAct)+'</span></div>';
         h+='<div class="ng-coll-kv"><span class="ng-coll-lbl">Accrued</span><span class="ng-coll-val ng-cv-yel">'+E.fmtC(tAcc)+'</span></div>';
-        h+='<div class="ng-coll-kv"><span class="ng-coll-lbl">Revenue</span><span class="ng-coll-val ng-cv-blu">'+E.fmtC(tRev)+'</span></div>';
-        h+='<div class="ng-coll-kv"><span class="ng-coll-lbl">Rev Earned</span><span class="ng-coll-val ng-cv-blu">'+E.fmtC(tRevEarned)+'</span></div>';
+        h+='<div class="ng-coll-kv"><span class="ng-coll-lbl">Alloc. Rev</span><span class="ng-coll-val ng-cv-blu">'+E.fmtC(tRev)+'</span></div>';
+        h+='<div class="ng-coll-kv"><span class="ng-coll-lbl">Rev. Earned</span><span class="ng-coll-val ng-cv-blu">'+E.fmtC(tRevEarned)+'</span></div>';
         h+='</div>';
       } else if(d.hasProg){
         var cpct2 = n.pctComplete||0;
