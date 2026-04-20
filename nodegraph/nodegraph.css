@@ -153,7 +153,9 @@ body.light-mode .ng-del-cancel:hover{background:#e5e7eb}
 .ng-watch-kpi.ng-vp{color:#34d399;border-color:rgba(52,211,153,.5);text-shadow:0 0 18px rgba(52,211,153,.7),0 0 36px rgba(52,211,153,.35);animation:ng-kpi-pulse-green 2.8s ease-in-out infinite;background:linear-gradient(135deg,#05080f 0%,#0a2418 50%,#0a1424 100%)}
 .ng-watch-kpi.ng-vn{color:#f87171;border-color:rgba(248,113,113,.5);text-shadow:0 0 18px rgba(248,113,113,.7),0 0 36px rgba(248,113,113,.35);animation:ng-kpi-pulse-red 2.8s ease-in-out infinite;background:linear-gradient(135deg,#05080f 0%,#2a0e14 50%,#0a1424 100%)}
 .ng-t-watch{min-width:260px;border-color:rgba(251,191,36,.3)}
-.ng-t-watch .ng-hdr{background:linear-gradient(135deg,rgba(251,191,36,.25),rgba(236,72,153,.15));color:#fbbf24;text-shadow:0 0 8px rgba(251,191,36,.4)}
+.ng-t-watch .ng-hdr{background:linear-gradient(135deg,rgba(251,191,36,.25),rgba(236,72,153,.15));color:#fbbf24;text-shadow:0 0 8px rgba(251,191,36,.4);font-size:22px;padding:12px 16px}
+.ng-t-watch .ng-hdr .ng-hi{font-size:26px}
+.ng-t-watch .ng-hdr-name{font-size:22px;letter-spacing:1px}
 .ng-t-watch .ng-p.ng-pi{position:absolute;left:-7px;top:50%;transform:translateY(-50%)}
 .ng-wv-label{font-size:11px;color:#fbbf24;text-align:center;padding:0 12px 10px;text-transform:uppercase;letter-spacing:1px;font-weight:700;opacity:.85}
 /* Editable input */
