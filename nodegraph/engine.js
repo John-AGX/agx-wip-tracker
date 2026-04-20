@@ -10,7 +10,7 @@ var WCOL = { currency:'#34d399', percent:'#fbbf24', number:'#a78bfa', any:'#4f8c
 var SRCCOL = {
   labor:'#fbbf24', mat:'#fbbf24', gc:'#fbbf24', other:'#fbbf24',
   sub:'#a78bfa', po:'#22d3ee', inv:'#f472b6',
-  co:'#ec4899',
+  co:'#fb7185',
   t1:'#6aa3ff', t2:'#34d399',
   sum:'#818cf8', sub2:'#818cf8', mul:'#818cf8', pct:'#818cf8',
   wip:'#fbbf24', watch:'#fbbf24',
