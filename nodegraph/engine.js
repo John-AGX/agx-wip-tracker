@@ -253,7 +253,8 @@ function getOutput(n, pi){
     var coCosts = jf.coCosts || 0;
     var revChanges = jf.revisedCostChanges || 0;
     var invoiced = jf.invoicedToDate || 0;
-    var pctComp = jf.pctComplete || 0;
+    var computedPct = getWIPWeightedPct(n);
+    var pctComp = (computedPct != null) ? computedPct : (jf.pctComplete || 0);
     var actualCosts = 0;
     var accruedCosts = 0;
     var coIncomeWired = 0;
@@ -571,6 +572,56 @@ function getT1WeightedPct(t1n){
   return sumPct / sumW;
 }
 
+// Revenue-weighted pctComplete for a WIP node, rolled up from connected
+// T1/T2/CO sources. Each source contributes its own weighted pct times its
+// allocated revenue dollars. Returns null when no source has any pct data,
+// signaling the caller to fall back to the manually-entered WIP pct.
+function getWIPWeightedPct(wipn){
+  if(!wipn || wipn.type !== 'wip') return null;
+  var rollup = [];
+  var anySrcPct = false;
+  wires.forEach(function(w){
+    if(w.toNode !== wipn.id) return;
+    var src = findNode(w.fromNode); if(!src) return;
+    if(src.type === 't1'){
+      var t1Pct = getT1WeightedPct(src);
+      var t1Rev = getBuildingAllocatedRevenue(src);
+      // Detect whether any T2/CO wire feeding this T1 has a wire-level pct
+      var hasAny = wires.some(function(ww){
+        if(ww.toNode !== src.id) return false;
+        var ss = findNode(ww.fromNode);
+        return ss && (ss.type === 't2' || ss.type === 'co') && ww.pctComplete != null;
+      });
+      if(hasAny) anySrcPct = true;
+      else if(src.pctComplete != null && src.pctComplete !== 0) anySrcPct = true;
+      rollup.push({pct: t1Pct, rev: t1Rev});
+    } else if(src.type === 't2'){
+      var t2Pct = getT2WeightedPct(src);
+      var aw = getPhaseAllocWires(src.id);
+      var hasAny2 = aw.some(function(ww){ return ww.pctComplete != null; });
+      if(hasAny2) anySrcPct = true;
+      else if(src.pctComplete != null && src.pctComplete !== 0) anySrcPct = true;
+      rollup.push({pct: t2Pct, rev: src.revenue || 0});
+    } else if(src.type === 'co'){
+      _comp = {}; var coInc = getOutput(src, 0);
+      var ap = (w.allocPct != null) ? w.allocPct : 100;
+      var coPct = getT2WeightedPct(src);
+      var coAw = getCOAllocWires(src.id);
+      var hasAny3 = coAw.some(function(ww){ return ww.pctComplete != null; });
+      if(hasAny3) anySrcPct = true;
+      else if(src.pctComplete != null && src.pctComplete !== 0) anySrcPct = true;
+      rollup.push({pct: coPct, rev: coInc * (ap / 100)});
+    }
+  });
+  if(!rollup.length || !anySrcPct) return null;
+  var sumW = 0, sumPct = 0;
+  rollup.forEach(function(r){ sumPct += r.pct * r.rev; sumW += r.rev; });
+  if(sumW === 0){
+    return rollup.reduce(function(s,r){ return s + r.pct; }, 0) / rollup.length;
+  }
+  return sumPct / sumW;
+}
+
 // Share of a T2/CO node's totals (actual, accrued) attributable to a specific
 // parent. Split = (wire.allocPct × wire.pctComplete) / sum(allocPct × pctComplete)
 // across all the node's outgoing allocation wires. When no wire has pctComplete
@@ -850,7 +901,7 @@ return {
   getPhaseRevenueToBuilding:getPhaseRevenueToBuilding, getCOIncomeToParent:getCOIncomeToParent,
   getBuildingAllocatedRevenue:getBuildingAllocatedRevenue,
   getT2WeightedPct:getT2WeightedPct, getT1WeightedPct:getT1WeightedPct,
-  getT2ShareToT1:getT2ShareToT1,
+  getWIPWeightedPct:getWIPWeightedPct, getT2ShareToT1:getT2ShareToT1,
   fmtC:fmtC, fmtP:fmtP, fmtV:fmtV,
   saveGraph:saveGraph, loadGraph:loadGraph,
   drawWires:drawWires, drawGrid:drawGrid,
