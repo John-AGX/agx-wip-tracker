@@ -217,6 +217,13 @@ body.light-mode .ng-del-cancel:hover{background:#e5e7eb}
 .ng-cv-bud{color:#a78bfa}
 .ng-cv-grn{color:#34d399}
 .ng-cv-yel{color:#fbbf24}
+.ng-cv-blu{color:#4f8cff}
+/* Collapsed T1/T2 multi-row KPI */
+.ng-node.ng-coll .ng-coll-t12{display:flex;flex-direction:column;gap:3px;width:100%;padding:2px 4px}
+.ng-coll-pctrow{display:flex;justify-content:center;padding:0 0 2px}
+.ng-coll-kv{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:1px 0}
+.ng-coll-kv .ng-coll-val{font-size:11px;text-align:right;flex:0 0 auto}
+.ng-coll-kv .ng-coll-lbl{font-size:9px}
 /* Delete dialog */
 .ng-del-overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;display:flex;align-items:center;justify-content:center}
 .ng-del-box{background:#1a1d27;border:1px solid #2e3346;border-radius:10px;min-width:340px;max-width:420px;padding:24px;box-shadow:0 8px 32px rgba(0,0,0,.5)}
