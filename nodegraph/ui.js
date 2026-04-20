@@ -217,10 +217,15 @@ function renderNodes(){
         if(_aw.length && _hasWirePct){ pct=E.getT2WeightedPct(n); _computed=true; }
         else pct=n.pctComplete||0;
       } else if(n.type==='t1'){
-        // T1 computes from connected T2 wire pcts
-        var _t1w=[]; E.wires().forEach(function(w){ if(w.toNode===n.id){ var s=E.findNode(w.fromNode); if(s&&s.type==='t2') _t1w.push(w); }});
+        // T1 computes from connected T2/CO wire pcts
+        var _t1w=[]; E.wires().forEach(function(w){ if(w.toNode===n.id){ var s=E.findNode(w.fromNode); if(s&&(s.type==='t2'||s.type==='co')) _t1w.push(w); }});
         var _hasT1Pct=_t1w.some(function(w){ return w.pctComplete!=null; });
         if(_t1w.length && _hasT1Pct){ pct=E.getT1WeightedPct(n); _computed=true; }
+        else pct=n.pctComplete||0;
+      } else if(n.type==='co'){
+        var _coAw=E.getCOAllocWires(n.id);
+        var _hasCoWirePct=_coAw.some(function(w){ return w.pctComplete!=null; });
+        if(_coAw.length && _hasCoWirePct){ pct=E.getT2WeightedPct(n); _computed=true; }
         else pct=n.pctComplete||0;
       } else {
         pct=n.pctComplete||0;
@@ -315,7 +320,7 @@ function renderNodes(){
       h+='</div>';
     }
 
-    // CO: mini P&L — income vs actual/accrued costs
+    // CO: mini P&L — income vs actual/accrued costs + allocation table
     if(n.type==='co' && !n.collapsed){
       E.resetComp();
       var coIncome=E.getOutput(n,0);
@@ -329,6 +334,39 @@ function renderNodes(){
       h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Actual <span style="color:#f87171;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(coActual)+'</span></div>';
       h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Accrued <span style="color:#fbbf24;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(coAccrued)+'</span></div>';
       h+='<div style="display:flex;justify-content:space-between;padding:3px 0 2px;border-top:1px solid var(--ng-border2);margin-top:2px;color:#6a7090;font-weight:600;">Gross Profit <span style="color:'+gpColor+';font-weight:700;font-family:\'Courier New\',monospace;">'+E.fmtC(coGP)+'</span></div>';
+      // CO allocation breakdown per connected target (T1/T2/WIP)
+      var coAw=E.getCOAllocWires(n.id);
+      if(coAw.length){
+        E.rebalanceCOAllocations(n.id);
+        var coTotalPct=0;
+        h+='<div style="margin-top:4px;padding-top:4px;border-top:1px solid var(--ng-border2);">';
+        h+='<div style="display:flex;justify-content:space-between;align-items:center;padding:1px 0 3px;color:#8b90a5;font-size:8px;text-transform:uppercase;letter-spacing:0.5px;gap:4px;">';
+        h+='<span style="flex:1;">Target</span>';
+        h+='<span style="min-width:42px;text-align:right;">Alloc</span>';
+        h+='<span style="min-width:38px;text-align:right;padding-left:4px;">% Cmp</span>';
+        h+='<span style="min-width:60px;text-align:right;">Share</span>';
+        h+='</div>';
+        coAw.forEach(function(w){
+          var tgt=E.findNode(w.toNode); if(!tgt) return;
+          var tname=(tgt.label||tgt.type).split(' \u203A ')[0].trim();
+          var pct=w.allocPct||0; coTotalPct+=pct;
+          var share=coIncome*(pct/100);
+          var wpc=(w.pctComplete!=null)?w.pctComplete:0;
+          var wpcColor=wpc>=100?'#34d399':wpc>=50?'#fbbf24':'#4f8cff';
+          h+='<div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;color:#6a7090;font-size:9px;gap:4px;">';
+          h+='<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+tname+'</span>';
+          h+='<span class="ng-alloc-pct" data-alloc-phase="'+n.id+'" data-alloc-bldg="'+w.toNode+'" title="Click to edit allocation %" style="color:#fbbf24;cursor:pointer;font-family:\'Courier New\',monospace;min-width:42px;text-align:right;">'+pct.toFixed(1)+'%</span>';
+          h+='<span class="ng-wire-pct" data-wire-pct-phase="'+n.id+'" data-wire-pct-bldg="'+w.toNode+'" title="Click to edit % complete" style="color:'+wpcColor+';cursor:pointer;font-family:\'Courier New\',monospace;min-width:38px;text-align:right;border-left:1px dotted var(--ng-border2);padding-left:4px;">'+wpc.toFixed(0)+'%</span>';
+          h+='<span style="color:#34d399;font-family:\'Courier New\',monospace;min-width:60px;text-align:right;">'+E.fmtC(share)+'</span>';
+          h+='</div>';
+        });
+        var coPctOk=Math.abs(coTotalPct-100)<0.01;
+        var coWarnColor=coPctOk?'#34d399':'#f87171';
+        h+='<div style="display:flex;justify-content:space-between;padding:3px 0 1px;border-top:1px solid var(--ng-border2);margin-top:2px;color:#6a7090;font-size:9px;font-weight:600;">';
+        h+='<span>Total</span>';
+        h+='<span style="color:'+coWarnColor+';font-family:\'Courier New\',monospace;">'+coTotalPct.toFixed(1)+'% '+(coPctOk?'\u2713':'\u26a0')+'</span>';
+        h+='</div></div>';
+      }
       h+='</div>';
     }
 
@@ -452,7 +490,7 @@ function renderNodes(){
           var _chp=_caw.some(function(w){ return w.pctComplete!=null; });
           cpct=(_caw.length && _chp) ? E.getT2WeightedPct(n) : (n.pctComplete||0);
         } else {
-          var _ctw=[]; E.wires().forEach(function(w){ if(w.toNode===n.id){ var s=E.findNode(w.fromNode); if(s&&s.type==='t2') _ctw.push(w); }});
+          var _ctw=[]; E.wires().forEach(function(w){ if(w.toNode===n.id){ var s=E.findNode(w.fromNode); if(s&&(s.type==='t2'||s.type==='co')) _ctw.push(w); }});
           var _cthp=_ctw.some(function(w){ return w.pctComplete!=null; });
           cpct=(_ctw.length && _cthp) ? E.getT1WeightedPct(n) : (n.pctComplete||0);
         }
@@ -469,6 +507,25 @@ function renderNodes(){
         h+='<div class="ng-coll-kv"><span class="ng-coll-lbl">Alloc. Rev</span><span class="ng-coll-val ng-cv-blu">'+E.fmtC(tRev)+'</span></div>';
         h+='<div class="ng-coll-kv"><span class="ng-coll-lbl">Rev. Earned</span><span class="ng-coll-val ng-cv-blu">'+E.fmtC(tRevEarned)+'</span></div>';
         h+='</div>';
+      } else if(n.type==='co'){
+        // CO collapsed: show income, actual, accrued, GP — like a mini P&L
+        var _coAw2=E.getCOAllocWires(n.id);
+        var _coHp=_coAw2.some(function(w){ return w.pctComplete!=null; });
+        var coPct=(_coAw2.length && _coHp) ? E.getT2WeightedPct(n) : (n.pctComplete||0);
+        var coPColor = coPct>=100?'#34d399':coPct>=50?'#fbbf24':'#4f8cff';
+        E.resetComp(); var coInc=E.getOutput(n,0);
+        E.resetComp(); var coAct2=E.getActual(n);
+        var coAcc2=E.getAccrued(n);
+        var coGP2=coInc-(coAct2+coAcc2);
+        var gpC2=coGP2>=0?'#34d399':'#f87171';
+        h+='<div class="ng-coll-t12">';
+        h+='<div class="ng-coll-prog"><div class="ng-coll-prog-fill" style="width:'+Math.min(coPct,100)+'%;background:'+coPColor+'"></div></div>';
+        h+='<div class="ng-coll-pctrow"><span class="ng-coll-pct">'+coPct.toFixed(0)+'%</span></div>';
+        h+='<div class="ng-coll-kv"><span class="ng-coll-lbl">Income</span><span class="ng-coll-val ng-cv-grn">'+E.fmtC(coInc)+'</span></div>';
+        h+='<div class="ng-coll-kv"><span class="ng-coll-lbl">Actual</span><span class="ng-coll-val ng-cv-grn">'+E.fmtC(coAct2)+'</span></div>';
+        h+='<div class="ng-coll-kv"><span class="ng-coll-lbl">Accrued</span><span class="ng-coll-val ng-cv-yel">'+E.fmtC(coAcc2)+'</span></div>';
+        h+='<div class="ng-coll-kv"><span class="ng-coll-lbl">Gross Profit</span><span class="ng-coll-val" style="color:'+gpC2+'">'+E.fmtC(coGP2)+'</span></div>';
+        h+='</div>';
       } else if(d.hasProg){
         var cpct2 = n.pctComplete||0;
         var cpColor2 = cpct2>=100?'#34d399':cpct2>=50?'#fbbf24':'#4f8cff';
@@ -483,13 +540,6 @@ function renderNodes(){
         var poC=n._poContract||0, poI=n._poInvoiced||0;
         h+='<div class="ng-coll-detail"><span class="ng-coll-lbl">Contract</span><span class="ng-coll-val">'+E.fmtC(poC)+'</span></div>';
         h+='<div class="ng-coll-detail"><span class="ng-coll-lbl">Invoiced</span><span class="ng-coll-val ng-cv-grn">'+E.fmtC(poI)+'</span></div>';
-      } else if(n.type==='co'){
-        E.resetComp();
-        var coA=E.getActual(n);
-        var coAc=E.getAccrued(n);
-        var coCommitted=coA+coAc;
-        h+='<div class="ng-coll-detail"><span class="ng-coll-lbl">Income</span><span class="ng-coll-val ng-cv-grn">'+E.fmtC(collVal)+'</span></div>';
-        h+='<div class="ng-coll-detail"><span class="ng-coll-lbl">Committed</span><span class="ng-coll-val ng-cv-yel" title="Actual + Accrued">'+E.fmtC(coCommitted)+'</span></div>';
       } else if(n.type==='inv'){
         h+='<div class="ng-coll-detail"><span class="ng-coll-lbl">Amount</span><span class="ng-coll-val">'+E.fmtC(collVal)+'</span></div>';
       } else {
@@ -868,7 +918,9 @@ function initEvents(){
         var nv=Math.max(0,Math.min(100,parseFloat(apInp.value)||0));
         aWire.allocPct=nv;
         aWire._auto=false;
-        E.rebalancePhaseAllocations(aphId);
+        var _apSrc=E.findNode(aphId);
+        if(_apSrc && _apSrc.type==='co') E.rebalanceCOAllocations(aphId);
+        else E.rebalancePhaseAllocations(aphId);
         editingId=null; render();
       }
       apInp.addEventListener('blur',apFinish);
