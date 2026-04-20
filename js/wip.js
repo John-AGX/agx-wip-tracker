@@ -1217,10 +1217,13 @@ function renderWIPMain() {
             container.innerHTML = '';
 
             buildings.forEach(building => {
-                const phases = appData.phases.filter(p => p.buildingId === building.id);
+                const wiredPhases = getPhasesWiredToBuilding(building.id);
+                const phases = wiredPhases.map(function(wp) { return wp.phase; });
                 let phaseCost = 0;
-                phases.forEach(p => {
-                    phaseCost += (p.materials || 0) + (p.labor || 0) + (p.sub || 0) + (p.equipment || 0);
+                wiredPhases.forEach(wp => {
+                    var p = wp.phase;
+                    var pct = (wp.allocPct != null ? wp.allocPct : 100) / 100;
+                    phaseCost += ((p.materials || 0) + (p.labor || 0) + (p.sub || 0) + (p.equipment || 0)) * pct;
                 });
                 const bMat = building.materials || 0, bLab = building.labor || 0, bSub = building.sub || 0, bEquip = building.equipment || 0;
                 const bldgDirectCost = bMat + bLab + bSub + bEquip;
@@ -1277,17 +1280,22 @@ function renderWIPMain() {
                     ((building.hoursTotal || building.rate) ? '<span style="margin-left:auto;">' + (building.hoursTotal || 0) + 'hrs' + (building.hoursWeek ? ' (' + building.hoursWeek + '/wk)' : '') + ' @ ' + formatCurrency(building.rate || 40) + '/hr</span>' : '') +
                     '</div>';
 
-                // Phases
-                body += '<div style="font-size:11px;font-weight:600;color:var(--text-dim);margin-top:8px;margin-bottom:4px;">PHASES (' + phases.length + ')</div>';
-                if (phases.length === 0) {
-                    body += '<div style="font-size:11px;color:var(--text-dim);font-style:italic;margin-bottom:6px;">No phases yet</div>';
+                // Phases (from node graph wiring)
+                body += '<div style="font-size:11px;font-weight:600;color:var(--text-dim);margin-top:8px;margin-bottom:4px;">PHASES (' + wiredPhases.length + ')</div>';
+                if (wiredPhases.length === 0) {
+                    body += '<div style="font-size:11px;color:var(--text-dim);font-style:italic;margin-bottom:6px;">No phases wired to this building in the node graph</div>';
                 } else {
-                    body += '<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px;">';
-                    phases.forEach(function(p) {
-                        const pCost = (p.materials || 0) + (p.labor || 0) + (p.sub || 0) + (p.equipment || 0);
-                        const pColor = p.pctComplete >= 100 ? 'var(--green)' : p.pctComplete >= 50 ? '#f59e0b' : 'var(--text-dim)';
-                        body += '<button onclick="event.stopPropagation();editPhase(\'' + escapeHTML(p.id) + '\')" style="font-size:10px;padding:3px 8px;border-radius:6px;background:var(--surface);border:1px solid var(--border);white-space:nowrap;cursor:pointer;color:var(--text);">' +
-                            escapeHTML(p.phase) + ' <b style="color:' + pColor + ';">' + p.pctComplete + '%</b> ' + formatCurrency(pCost) + '</button>';
+                    body += '<div style="display:flex;flex-direction:column;gap:3px;margin-bottom:6px;">';
+                    wiredPhases.forEach(function(wp) {
+                        var p = wp.phase;
+                        var rev = (p.asSoldRevenue || 0) * wp.allocPct / 100;
+                        var pCost = ((p.materials || 0) + (p.labor || 0) + (p.sub || 0) + (p.equipment || 0)) * wp.allocPct / 100;
+                        var pColor = p.pctComplete >= 100 ? 'var(--green)' : p.pctComplete >= 50 ? '#f59e0b' : 'var(--text-dim)';
+                        var allocStr = wp.allocPct !== 100 ? ' <span style="font-size:10px;color:var(--text-dim);">(' + wp.allocPct + '%)</span>' : '';
+                        body += '<div onclick="event.stopPropagation();editPhase(\'' + escapeHTML(p.id) + '\')" style="cursor:pointer;font-size:11px;padding:4px 8px;background:var(--surface);border:1px solid var(--border);border-radius:4px;display:flex;justify-content:space-between;gap:8px;align-items:center;">' +
+                            '<span><b>' + escapeHTML(p.phase) + '</b>' + allocStr + '</span>' +
+                            '<span style="color:var(--text-dim);font-size:10px;">Rev: <b style="color:var(--green);">' + formatCurrency(rev) + '</b> Cost: <b>' + formatCurrency(pCost) + '</b> <b style="color:' + pColor + ';">' + (p.pctComplete || 0) + '%</b></span>' +
+                            '</div>';
                     });
                     body += '</div>';
                 }
@@ -1308,10 +1316,6 @@ function renderWIPMain() {
                     });
                     body += '</div>';
                 }
-
-                // Node graph connections
-                body += '<div style="font-size:11px;font-weight:600;color:var(--text-dim);margin-top:8px;margin-bottom:4px;">NODE GRAPH CONNECTIONS</div>';
-                body += renderConnectionList(conns);
 
                 body += '</div>';
                 card.innerHTML = header + body;
@@ -1443,6 +1447,31 @@ function renderWIPMain() {
                 var coEntry = appData.changeOrders.find(function(c) { return c.id === src.data.id; });
                 if (!coEntry) return;
                 results.push({ co: coEntry, allocPct: w.allocPct != null ? w.allocPct : 100 });
+            });
+            return results;
+        }
+
+        // Find phases (T2 nodes) wired to a particular building (T1 node) in the node graph.
+        // Returns array of { phase (appData entry), allocPct, t2NodeId }, deduplicated by phase.id.
+        function getPhasesWiredToBuilding(buildingId) {
+            if (typeof NG === 'undefined') return [];
+            ensureNGLoaded(appState.currentJobId);
+            var nodes = NG.nodes(), wires = NG.wires();
+            var t1Nodes = nodes.filter(function(n) { return n.type === 't1' && n.data && n.data.id === buildingId; });
+            var t1Ids = {};
+            t1Nodes.forEach(function(n) { t1Ids[n.id] = 1; });
+            var seen = {};
+            var results = [];
+            wires.forEach(function(w) {
+                if (!t1Ids[w.toNode]) return;
+                var src = NG.findNode(w.fromNode);
+                if (!src || src.type !== 't2' || !src.data || !src.data.id) return;
+                var phEntry = appData.phases.find(function(p) { return p.id === src.data.id; });
+                if (!phEntry) return;
+                var key = phEntry.id + '|' + src.id;
+                if (seen[key]) return;
+                seen[key] = 1;
+                results.push({ phase: phEntry, allocPct: w.allocPct != null ? w.allocPct : 100, t2NodeId: src.id });
             });
             return results;
         }
