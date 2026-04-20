@@ -431,11 +431,17 @@ function renderNodes(){
     // WIP node: editable revenue fields + metrics display
     if(n.type==='wip'){
       var jf=n.jobFields||{};
+      var wipComputedPct=E.getWIPWeightedPct(n);
       h+='<div class="ng-subitems" style="max-height:none;">';
       [{k:'contractAmount',l:'Contract Amount',t:'c'},{k:'coIncome',l:'CO Income',t:'c'},{k:'estimatedCosts',l:'Est. Costs',t:'c'},{k:'coCosts',l:'CO Costs',t:'c'},{k:'revisedCostChanges',l:'Revised Changes',t:'c'},{k:'invoicedToDate',l:'Invoiced to Date',t:'c'},{k:'pctComplete',l:'% Complete',t:'p'}].forEach(function(r){
         var raw=jf[r.k]||0;
-        var disp=r.t==='p'?raw.toFixed(1)+'%':E.fmtC(raw);
-        h+='<div class="ng-subitem ng-wip-row"><span class="ng-wip-lbl">'+r.l+'</span><span class="ng-wip-chip" data-wip-edit="'+n.id+'" data-wip-key="'+r.k+'" data-wip-type="'+r.t+'" title="Click to edit">'+disp+'</span></div>';
+        if(r.k==='pctComplete' && wipComputedPct!=null){
+          var dispC=wipComputedPct.toFixed(1)+'% avg';
+          h+='<div class="ng-subitem ng-wip-row"><span class="ng-wip-lbl">'+r.l+'</span><span class="ng-wip-chip" title="Averaged from connected phases/buildings/COs" style="cursor:default;opacity:0.85;">'+dispC+'</span></div>';
+        } else {
+          var disp=r.t==='p'?raw.toFixed(1)+'%':E.fmtC(raw);
+          h+='<div class="ng-subitem ng-wip-row"><span class="ng-wip-lbl">'+r.l+'</span><span class="ng-wip-chip" data-wip-edit="'+n.id+'" data-wip-key="'+r.k+'" data-wip-type="'+r.t+'" title="Click to edit">'+disp+'</span></div>';
+        }
       });
       h+='</div>';
       // Metrics display
