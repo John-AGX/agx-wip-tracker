@@ -39,10 +39,9 @@ function updateTierLabels(){
           if(target&&target.type==='t1'){ t1s.push({ name:target.label.split(' \u203A ')[0].trim(), data:target.data }); }
         }
       });
-      // 0 connections → just name; 1 connection → name › bldg; 2+ → name +N
-      if(t1s.length===0) n.label = baseName;
-      else if(t1s.length===1) n.label = baseName+' \u203A '+t1s[0].name;
-      else n.label = baseName+' +'+t1s.length;
+      // 0 or 2+ connections → just name; 1 connection → name › bldg
+      if(t1s.length===1) n.label = baseName+' \u203A '+t1s[0].name;
+      else n.label = baseName;
       if(n.data && n.data.id && typeof appData !== 'undefined'){
         var phase = appData.phases.find(function(p){return p.id===n.data.id;});
         if(phase){
@@ -75,9 +74,7 @@ function updateTierLabels(){
         }
       });
       if(connPhases.length===1) suffix = connPhases[0];
-      else if(connPhases.length>1) suffix = connPhases[0]+' +'+connPhases.length;
       else if(connBldgs.length===1) suffix = connBldgs[0];
-      else if(connBldgs.length>1) suffix = connBldgs[0]+' +'+connBldgs.length;
       n.label = suffix ? subBase+' \u203A '+suffix : subBase;
     }
   });
