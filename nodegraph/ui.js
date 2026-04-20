@@ -164,7 +164,7 @@ function renderNodes(){
     // Watches are never collapsed — always show the flashy KPI
     if(n.type==='watch') n.collapsed=false;
     var div=document.createElement('div');
-    div.className='ng-node ng-t-'+n.cat+(selN===n.id?' ng-sel':'')+(connectedIds[n.id]?' ng-connected':'')+(n.collapsed?' ng-coll':'');
+    div.className='ng-node ng-t-'+n.cat+' ng-tt-'+n.type+(selN===n.id?' ng-sel':'')+(connectedIds[n.id]?' ng-connected':'')+(n.collapsed?' ng-coll':'');
     div.setAttribute('data-id',n.id);
     div.style.left=n.x+'px'; div.style.top=n.y+'px';
 
