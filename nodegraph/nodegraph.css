@@ -13,6 +13,8 @@ body.light-mode .ng-t-t1 .ng-hdr{background:linear-gradient(135deg,rgba(37,99,23
 body.light-mode .ng-t-t2 .ng-hdr{background:linear-gradient(135deg,rgba(5,150,105,.55),rgba(5,150,105,.18));color:#064e3b;box-shadow:inset 0 0 18px rgba(5,150,105,.22)}
 body.light-mode .ng-t-cost .ng-hdr{background:linear-gradient(135deg,rgba(217,119,6,.55),rgba(217,119,6,.18));color:#78350f;box-shadow:inset 0 0 18px rgba(217,119,6,.22)}
 body.light-mode .ng-t-sub .ng-hdr{background:linear-gradient(135deg,rgba(124,58,237,.55),rgba(124,58,237,.18));color:#4c1d95;box-shadow:inset 0 0 18px rgba(124,58,237,.22)}
+body.light-mode .ng-tt-po .ng-hdr{background:linear-gradient(135deg,rgba(8,145,178,.5),rgba(8,145,178,.18));color:#155e75;box-shadow:inset 0 0 18px rgba(8,145,178,.22)}
+body.light-mode .ng-tt-inv .ng-hdr{background:linear-gradient(135deg,rgba(219,39,119,.5),rgba(219,39,119,.18));color:#831843;box-shadow:inset 0 0 18px rgba(219,39,119,.22)}
 body.light-mode .ng-t-co .ng-hdr{background:linear-gradient(135deg,rgba(219,39,119,.55),rgba(219,39,119,.18));color:#831843;box-shadow:inset 0 0 18px rgba(219,39,119,.22)}
 body.light-mode .ng-t-math .ng-hdr{background:linear-gradient(135deg,rgba(79,70,229,.55),rgba(79,70,229,.18));color:#312e81;box-shadow:inset 0 0 18px rgba(79,70,229,.22)}
 body.light-mode .ng-t-watch .ng-hdr{background:linear-gradient(135deg,rgba(217,119,6,.5),rgba(219,39,119,.25));color:#78350f;box-shadow:inset 0 0 20px rgba(217,119,6,.28)}
@@ -83,8 +85,8 @@ body.light-mode .ng-del-cancel:hover{background:#e5e7eb}
 .ng-node.ng-sel{border-color:#4f8cff;box-shadow:0 0 0 3px rgba(79,140,255,.25),0 0 24px rgba(79,140,255,.55),0 4px 20px var(--ng-shadow)}
 .ng-node.ng-connected{border-color:#fbbf24;box-shadow:0 0 0 2px rgba(251,191,36,.25),0 0 18px rgba(251,191,36,.45),0 2px 12px var(--ng-shadow)}
 /* Header */
-.ng-hdr{padding:8px 14px;font-size:15px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;border-radius:8px 8px 0 0;display:flex;align-items:center;gap:7px;cursor:move}
-.ng-hdr .ng-hi{font-size:17px}
+.ng-hdr{padding:9px 14px;font-size:18px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;border-radius:8px 8px 0 0;display:flex;align-items:center;gap:7px;cursor:move}
+.ng-hdr .ng-hi{font-size:20px}
 .ng-hdr-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-shadow:0 1px 2px rgba(0,0,0,.35)}
 .ng-editbtn{font-size:11px;cursor:pointer;opacity:.45;padding:2px}
 .ng-editbtn:hover{opacity:1;color:#fbbf24}
@@ -98,6 +100,8 @@ body.light-mode .ng-del-cancel:hover{background:#e5e7eb}
 .ng-t-t2 .ng-hdr{background:linear-gradient(135deg,rgba(52,211,153,.2),rgba(52,211,153,.08));color:#34d399}
 .ng-t-cost .ng-hdr{background:linear-gradient(135deg,rgba(251,191,36,.2),rgba(251,191,36,.08));color:#fbbf24}
 .ng-t-sub .ng-hdr{background:linear-gradient(135deg,rgba(167,139,250,.2),rgba(167,139,250,.08));color:#a78bfa}
+.ng-tt-po .ng-hdr{background:linear-gradient(135deg,rgba(34,211,238,.22),rgba(34,211,238,.08));color:#22d3ee}
+.ng-tt-inv .ng-hdr{background:linear-gradient(135deg,rgba(244,114,182,.22),rgba(244,114,182,.08));color:#f472b6}
 .ng-t-co .ng-hdr{background:linear-gradient(135deg,rgba(236,72,153,.2),rgba(236,72,153,.08));color:#ec4899}
 .ng-t-math .ng-hdr{background:linear-gradient(135deg,rgba(99,102,241,.2),rgba(99,102,241,.08));color:#818cf8}
 .ng-t-watch .ng-hdr{background:linear-gradient(135deg,rgba(251,191,36,.15),rgba(251,191,36,.05));color:#fbbf24}
