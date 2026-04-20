@@ -1237,7 +1237,6 @@ function renderWIPMain() {
                 const scope = building.workScope || 'in-house';
                 const scopeColor = scope === 'sub' ? 'var(--purple)' : scope === 'both' ? '#f59e0b' : 'var(--accent)';
 
-                const conns = getNodeGraphConnections('t1', building.id);
                 const cosWired = getCOsConnectedTo('t1', building.id);
                 const uid = 'bldg-grp-' + building.id.replace(/\W/g, '_');
 
@@ -1252,8 +1251,6 @@ function renderWIPMain() {
                                 <span class="bldg-arrow" style="font-size:10px;color:var(--text-dim);">&#x25B6;</span>
                                 <span style="font-size:14px;font-weight:700;">${escapeHTML(building.name)}</span>
                                 ${building.address ? '<span style="font-size:11px;color:var(--text-dim);">' + escapeHTML(building.address) + '</span>' : ''}
-                                ${conns.length > 0 ? '<span style="font-size:10px;padding:1px 6px;border-radius:10px;background:var(--accent-dim);color:var(--accent);">' + conns.length + ' node' + (conns.length > 1 ? 's' : '') + '</span>' : ''}
-                                ${cosWired.length > 0 ? '<span style="font-size:10px;padding:1px 6px;border-radius:10px;background:rgba(236,72,153,0.15);color:#ec4899;">' + cosWired.length + ' CO</span>' : ''}
                             </div>
                             <div style="text-align:right;flex-shrink:0;margin-left:8px;display:flex;align-items:center;gap:8px;">
                                 <span style="font-size:13px;font-weight:700;color:var(--green);">${pctComplete}%</span>
