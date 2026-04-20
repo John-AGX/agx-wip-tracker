@@ -341,11 +341,26 @@ function getActual(n){
       if(w.toNode===n.id){ var fn=findNode(w.fromNode); if(fn) v += getActual(fn); }
     });
   }
-  else if(n.type==='t1'||n.type==='t2'){
+  else if(n.type==='t2'){
     v = iT;
     // Include CO actual costs so CO work rolls up to the building/phase
     wires.forEach(function(w){
       if(w.toNode===n.id){ var fn=findNode(w.fromNode); if(!fn) return; v += getActual(fn); }
+    });
+  }
+  else if(n.type==='t1'){
+    v = iT;
+    // For incoming T2 phase wires, take only this building's share of the
+    // phase's actual. Other incoming sources (CO, sub, etc.) roll up in full.
+    wires.forEach(function(w){
+      if(w.toNode!==n.id) return;
+      var fn=findNode(w.fromNode); if(!fn) return;
+      if(fn.type==='t2'){
+        var share = getT2ShareToT1(fn, n.id);
+        v += getActual(fn) * share;
+      } else {
+        v += getActual(fn);
+      }
     });
   }
   _compA[n.id] = false;
@@ -472,7 +487,10 @@ function getT2WeightedPct(t2n){
 }
 
 // Weighted-average pctComplete for a T1 building from all connected T2 wires.
-// Each incoming T2→T1 wire carries its own pctComplete; weights are allocPct.
+// Each incoming T2→T1 wire carries its own pctComplete; weights are the
+// dollar-amount of revenue allocated to this T1 from each phase
+// (allocPct × phase.revenue). This way a phase contributing more revenue
+// to the building has more influence on the building's weighted pct.
 // Falls back to the T1's own pctComplete when no T2 wires have pct set.
 // Once any wire has a pct, unset wires count as 0% so partial progress is
 // reflected proportionally across all incoming phase allocations.
@@ -482,19 +500,60 @@ function getT1WeightedPct(t1n){
   wires.forEach(function(w){
     if(w.toNode !== t1n.id) return;
     var src = findNode(w.fromNode);
-    if(src && src.type === 't2') incoming.push(w);
+    if(src && src.type === 't2') incoming.push({w:w, src:src});
   });
   if(!incoming.length) return t1n.pctComplete || 0;
-  var anyPct = incoming.some(function(w){ return w.pctComplete != null; });
+  var anyPct = incoming.some(function(r){ return r.w.pctComplete != null; });
   if(!anyPct) return t1n.pctComplete || 0;
   var sumW = 0, sumPct = 0;
-  incoming.forEach(function(w){
-    var ap = (w.allocPct != null) ? w.allocPct : 0;
-    var pc = (w.pctComplete != null) ? w.pctComplete : 0;
-    sumPct += pc * ap; sumW += ap;
+  incoming.forEach(function(r){
+    var ap = (r.w.allocPct != null) ? r.w.allocPct : 0;
+    var rev = (r.src.revenue || 0);
+    var weight = ap * rev; // dollar-weighted
+    var pc = (r.w.pctComplete != null) ? r.w.pctComplete : 0;
+    sumPct += pc * weight; sumW += weight;
   });
-  if(sumW === 0) return 0;
+  if(sumW === 0){
+    // Fallback: plain allocPct weighting when no revenue info
+    var sW=0,sP=0;
+    incoming.forEach(function(r){
+      var ap = (r.w.allocPct != null) ? r.w.allocPct : 0;
+      var pc = (r.w.pctComplete != null) ? r.w.pctComplete : 0;
+      sP += pc*ap; sW += ap;
+    });
+    return sW === 0 ? 0 : sP/sW;
+  }
   return sumPct / sumW;
+}
+
+// Share of a T2 phase's totals (actual, accrued) attributable to a specific T1
+// building. Split = (wire.allocPct × wire.pctComplete) / sum(allocPct × pctComplete)
+// across all the phase's outgoing T1 wires. When no wire has pctComplete set,
+// falls back to pure allocPct split. Returns 0..1.
+function getT2ShareToT1(t2n, t1Id){
+  if(!t2n || t2n.type !== 't2') return 0;
+  var aw = getPhaseAllocWires(t2n.id);
+  if(!aw.length) return 0;
+  var anyPct = aw.some(function(w){ return w.pctComplete != null; });
+  var myW = wires.find(function(w){ return w.fromNode === t2n.id && w.toNode === t1Id; });
+  if(!myW) return 0;
+  if(anyPct){
+    var tot = 0, mine = 0;
+    aw.forEach(function(w){
+      var ap = (w.allocPct != null) ? w.allocPct : 0;
+      var pc = (w.pctComplete != null) ? w.pctComplete : 0;
+      var prod = ap * pc;
+      tot += prod;
+      if(w === myW) mine = prod;
+    });
+    if(tot === 0) return 0;
+    return mine / tot;
+  }
+  // Fallback: alloc-only split
+  var sumA = 0;
+  aw.forEach(function(w){ sumA += (w.allocPct != null) ? w.allocPct : 0; });
+  if(sumA === 0) return 0;
+  return ((myW.allocPct != null) ? myW.allocPct : 0) / sumA;
 }
 
 function getAccrued(n){
@@ -520,10 +579,24 @@ function getAccrued(n){
       if(w.toNode===n.id){ var fn=findNode(w.fromNode); if(fn) v += getAccrued(fn); }
     });
   }
-  else if(n.type==='t1'||n.type==='t2'){
+  else if(n.type==='t2'){
     // Include CO accrued so CO committed-not-billed rolls up
     wires.forEach(function(w){
       if(w.toNode===n.id){ var fn=findNode(w.fromNode); if(!fn) return; v += getAccrued(fn); }
+    });
+  }
+  else if(n.type==='t1'){
+    // For incoming T2 phase wires, take only this building's share of the
+    // phase's accrual. Other sources roll up in full.
+    wires.forEach(function(w){
+      if(w.toNode!==n.id) return;
+      var fn=findNode(w.fromNode); if(!fn) return;
+      if(fn.type==='t2'){
+        var share = getT2ShareToT1(fn, n.id);
+        v += getAccrued(fn) * share;
+      } else {
+        v += getAccrued(fn);
+      }
     });
   }
   _compAc[n.id] = false;
@@ -726,6 +799,7 @@ return {
   getPhaseAllocWires:getPhaseAllocWires, rebalancePhaseAllocations:rebalancePhaseAllocations,
   getPhaseRevenueToBuilding:getPhaseRevenueToBuilding, getBuildingAllocatedRevenue:getBuildingAllocatedRevenue,
   getT2WeightedPct:getT2WeightedPct, getT1WeightedPct:getT1WeightedPct,
+  getT2ShareToT1:getT2ShareToT1,
   fmtC:fmtC, fmtP:fmtP, fmtV:fmtV,
   saveGraph:saveGraph, loadGraph:loadGraph,
   drawWires:drawWires, drawGrid:drawGrid,
