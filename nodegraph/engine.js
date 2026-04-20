@@ -30,7 +30,7 @@ var DEFS = {
   sub:   { cat:'sub',  icon:'👷', label:'Sub',          ins:[{n:'Costs',t:PT.C}], outs:[{n:'Total',t:PT.C}], nameEdit:true },
   po:    { cat:'sub',  icon:'📄', label:'Purchase Order', ins:[{n:'Invoiced',t:PT.C}], outs:[{n:'Total',t:PT.C}], hasItems:true, nameEdit:true, itemType:'po' },
   inv:   { cat:'sub',  icon:'💳', label:'Invoice',       ins:[], outs:[{n:'Total',t:PT.C}], hasItems:true, nameEdit:true, itemType:'inv' },
-  co:    { cat:'co',   icon:'📝', label:'Change Order', ins:[{n:'Costs',t:PT.C}], outs:[{n:'Income',t:PT.C}], nameEdit:true, hasItems:true, itemType:'co' },
+  co:    { cat:'co',   icon:'📝', label:'Change Order', ins:[{n:'Costs',t:PT.C}], outs:[{n:'Income',t:PT.C}], hasProg:true, nameEdit:true, hasItems:true, itemType:'co' },
   sum:   { cat:'math', icon:'∑',    label:'SUM',          ins:[{n:'A',t:PT.A},{n:'B',t:PT.A},{n:'C',t:PT.A},{n:'D',t:PT.A}], outs:[{n:'Result',t:PT.C}] },
   sub2:  { cat:'math', icon:'−',    label:'Subtract',     ins:[{n:'A',t:PT.C},{n:'B',t:PT.C}], outs:[{n:'Result',t:PT.C}] },
   mul:   { cat:'math', icon:'×',    label:'Multiply',     ins:[{n:'A',t:PT.A},{n:'B',t:PT.N}], outs:[{n:'Result',t:PT.C}] },
@@ -366,11 +366,20 @@ function getAncestorPct(n, _seen){
     if(w.fromNode===n.id){
       var parent=findNode(w.toNode);
       if(!parent) return;
-      if((parent.type==='t1'||parent.type==='t2') && parent.pctComplete!=null){
+      if(parent.type==='t2'){
+        // Prefer wire-level pctComplete (alloc-weighted) when available
+        var wp = getT2WeightedPct(parent);
+        if(wp != null) results.push({ pct: wp, weight: parent.budget || 0 });
+      } else if(parent.type==='t1' && parent.pctComplete!=null){
         results.push({ pct: parent.pctComplete, weight: parent.budget || 0 });
       } else if(parent.type==='sub'||parent.type==='co'){
-        var sub = getAncestorPct(parent, _seen);
-        if(sub != null) results.push({ pct: sub, weight: parent.budget || 0 });
+        // CO with its own pctComplete acts as a leaf progress source
+        if(parent.type==='co' && parent.pctComplete!=null){
+          results.push({ pct: parent.pctComplete, weight: parent.budget || 0 });
+        } else {
+          var sub = getAncestorPct(parent, _seen);
+          if(sub != null) results.push({ pct: sub, weight: parent.budget || 0 });
+        }
       }
     }
   });
@@ -438,6 +447,24 @@ function getBuildingAllocatedRevenue(t1n){
     if(src && src.type === 't2') total += getPhaseRevenueToBuilding(src, t1n.id);
   });
   return total;
+}
+
+// Weighted-average pctComplete across a T2 phase's outgoing T1 wires.
+// Each wire can hold its own pctComplete; weights are wire.allocPct.
+// Falls back to the T2's own pctComplete when no wires or no alloc sum.
+function getT2WeightedPct(t2n){
+  if(!t2n || t2n.type !== 't2') return (t2n && t2n.pctComplete) || 0;
+  var aw = getPhaseAllocWires(t2n.id);
+  if(!aw.length) return t2n.pctComplete || 0;
+  var sumW = 0, sumPct = 0, anyPct = false;
+  aw.forEach(function(w){
+    var aw2 = (w.allocPct != null) ? w.allocPct : 0;
+    var pc = (w.pctComplete != null) ? w.pctComplete : null;
+    if(pc != null){ anyPct = true; sumPct += pc * aw2; sumW += aw2; }
+  });
+  if(!anyPct) return t2n.pctComplete || 0;
+  if(sumW === 0) return t2n.pctComplete || 0;
+  return sumPct / sumW;
 }
 
 function getAccrued(n){
@@ -668,6 +695,7 @@ return {
   getOutput:getOutput, getActual:getActual, getAccrued:getAccrued, resetComp:resetComp,
   getPhaseAllocWires:getPhaseAllocWires, rebalancePhaseAllocations:rebalancePhaseAllocations,
   getPhaseRevenueToBuilding:getPhaseRevenueToBuilding, getBuildingAllocatedRevenue:getBuildingAllocatedRevenue,
+  getT2WeightedPct:getT2WeightedPct,
   fmtC:fmtC, fmtP:fmtP, fmtV:fmtV,
   saveGraph:saveGraph, loadGraph:loadGraph,
   drawWires:drawWires, drawGrid:drawGrid,
