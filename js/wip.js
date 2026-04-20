@@ -1459,8 +1459,7 @@ function renderWIPMain() {
                     '<span style="color:var(--text-dim);">Billed: <strong style="color:var(--green);">' + formatCurrency(billed) + '</strong></span>' +
                     '<span style="color:var(--text-dim);">Rem: <strong style="color:var(--orange);">' + formatCurrency(remaining) + '</strong></span>' +
                     '<span style="color:var(--text-dim);">' + pctBilled + '%</span>' +
-                    '<button class="small" onclick="event.stopPropagation();editSub(\'' + escapeHTML(sub.id) + '\')" style="font-size:10px;padding:2px 8px;">&#x270F;&#xFE0F;</button>' +
-                    '<button class="small danger" onclick="event.stopPropagation();deleteSub(\'' + escapeHTML(sub.id) + '\')" style="font-size:10px;padding:2px 8px;">&#x1F5D1;</button>' +
+                    '<button class="small" onclick="event.stopPropagation();editSub(\'' + escapeHTML(sub.id) + '\')" style="font-size:10px;padding:2px 8px;">&#x270F;&#xFE0F; Edit</button>' +
                     '</div></div>';
 
                 var body = '<div id="' + uid + '" style="display:none;border-top:1px solid var(--border);padding:10px 14px;">';
