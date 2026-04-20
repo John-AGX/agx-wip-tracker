@@ -1099,61 +1099,23 @@ function renderWIPMain() {
                 container.innerHTML += '<div style="text-align:center;padding:30px;color:var(--text-dim);font-size:13px;">No buildings or phases yet. Use the buttons above to get started.</div>';
             }
 
-            // ── Phases summary ──
+            // ── Phases summary (grouped, expandable, with node connections) ──
             const jobPhases = appData.phases.filter(p => p.jobId === jobId);
             const phSection = document.createElement('div');
             phSection.style.cssText = 'margin-top:14px;';
-            // Group by phase name (case-insensitive)
-            const phGroups = {};
-            jobPhases.forEach(p => {
-                const k = (p.phase || 'Unnamed').trim().toLowerCase();
-                if (!phGroups[k]) phGroups[k] = { name: p.phase || 'Unnamed', records: [] };
-                phGroups[k].records.push(p);
-            });
-            const groupKeys = Object.keys(phGroups).sort();
-            let totalPhRev = 0, totalPhCost = 0;
-            groupKeys.forEach(k => {
-                phGroups[k].records.forEach(r => {
-                    totalPhRev += r.asSoldRevenue || 0;
-                    totalPhCost += (r.materials || 0) + (r.labor || 0) + (r.sub || 0) + (r.equipment || 0);
-                });
-            });
-            let phRowsHtml = '';
-            if (groupKeys.length > 0) {
-                phRowsHtml = groupKeys.map(k => {
-                    const g = phGroups[k];
-                    const count = g.records.length;
-                    const gRev = g.records.reduce((s, r) => s + (r.asSoldRevenue || 0), 0);
-                    const gCost = g.records.reduce((s, r) => s + (r.materials || 0) + (r.labor || 0) + (r.sub || 0) + (r.equipment || 0), 0);
-                    const gProfit = gRev - gCost;
-                    const avgPct = Math.round(g.records.reduce((s, r) => s + (r.pctComplete || 0), 0) / count);
-                    const dupBadge = count > 1 ? ' <span style="font-size:10px;padding:1px 6px;border-radius:8px;background:rgba(251,191,36,0.15);color:var(--yellow);font-weight:600;" title="' + count + ' duplicate records">' + count + 'x</span>' : '';
-                    return '<div class="card" style="cursor:pointer;padding:8px 12px;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;gap:12px;" onclick="openManagePhasesModal()" title="Click to manage phases">' +
-                        '<div style="min-width:0;flex:1;">' +
-                            '<div style="font-size:15px;font-weight:700;">' + escapeHTML(g.name) + dupBadge + '</div>' +
-                        '</div>' +
-                        '<div style="display:flex;gap:14px;font-size:12px;flex-shrink:0;">' +
-                            '<div><span style="color:var(--text-dim);">Rev</span> <b style="color:var(--green);">' + formatCurrency(gRev) + '</b></div>' +
-                            '<div><span style="color:var(--text-dim);">Cost</span> <b>' + formatCurrency(gCost) + '</b></div>' +
-                            '<div><span style="color:var(--text-dim);">Profit</span> <b style="color:' + (gProfit >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + formatCurrency(gProfit) + '</b></div>' +
-                            '<div><span style="color:var(--text-dim);">%</span> <b>' + avgPct + '%</b></div>' +
-                        '</div>' +
-                    '</div>';
-                }).join('');
-            } else {
-                phRowsHtml = '<div style="padding:12px;text-align:center;color:var(--text-dim);font-size:12px;">No phases yet. Click + Phase above to add one.</div>';
-            }
-            const totalPhProfit = totalPhRev - totalPhCost;
-            phSection.innerHTML =
-                '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">' +
-                    '<h3 style="font-size:13px;margin:0;">&#x1F4CB; Phases (' + groupKeys.length + ')</h3>' +
-                    '<div style="display:flex;gap:12px;align-items:center;">' +
-                        '<div style="font-size:12px;color:var(--text-dim);">Rev: <b style="color:var(--green);">' + formatCurrency(totalPhRev) + '</b> &nbsp; Cost: <b>' + formatCurrency(totalPhCost) + '</b> &nbsp; Profit: <b style="color:' + (totalPhProfit >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + formatCurrency(totalPhProfit) + '</b></div>' +
-                        '<button class="small secondary" onclick="openManagePhasesModal()" style="font-size:11px;padding:4px 10px;">Manage</button>' +
-                    '</div>' +
-                '</div>' +
-                phRowsHtml;
+            phSection.id = 'job-overview-phases';
+            renderOverviewPhasesInto(phSection, jobId, jobPhases);
             container.appendChild(phSection);
+
+            // ── Subcontractors summary (cards with expandable connections) ──
+            const jobSubs = appData.subs.filter(s => s.jobId === jobId);
+            if (jobSubs.length > 0) {
+                const subsSection = document.createElement('div');
+                subsSection.style.cssText = 'margin-top:14px;';
+                subsSection.id = 'job-overview-subs';
+                renderOverviewSubsInto(subsSection, jobId, jobSubs);
+                container.appendChild(subsSection);
+            }
 
             // ── Change Orders summary ──
             const cos = appData.changeOrders.filter(c => c.jobId === jobId);
@@ -1272,51 +1234,118 @@ function renderWIPMain() {
                 const scope = building.workScope || 'in-house';
                 const scopeColor = scope === 'sub' ? 'var(--purple)' : scope === 'both' ? '#f59e0b' : 'var(--accent)';
 
+                const conns = getNodeGraphConnections('t1', building.id);
+                const cosWired = getCOsConnectedTo('t1', building.id);
+                const uid = 'bldg-grp-' + building.id.replace(/\W/g, '_');
+
                 const card = document.createElement('div');
                 card.className = 'card';
-                card.style.cssText = 'cursor:pointer;padding:10px 12px;margin-bottom:8px;';
-                card.title = 'Click to edit this building';
-                card.onclick = function() { editBuilding(building.id); };
-                card.innerHTML = `
-                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-                        <div style="min-width:0;flex:1;">
-                            <span style="font-size:14px;font-weight:700;">${escapeHTML(building.name)}</span>
-                            ${building.address ? '<span style="font-size:11px;color:var(--text-dim);margin-left:8px;">' + escapeHTML(building.address) + '</span>' : ''}
+                card.style.cssText = 'padding:0;margin-bottom:8px;overflow:hidden;';
+
+                const header = `
+                    <div style="padding:10px 12px;cursor:pointer;user-select:none;" onclick="var d=document.getElementById('${uid}');d.style.display=d.style.display==='none'?'block':'none';this.querySelector('.bldg-arrow').textContent=d.style.display==='none'?'\u25B6':'\u25BC';">
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+                            <div style="min-width:0;flex:1;display:flex;align-items:center;gap:8px;">
+                                <span class="bldg-arrow" style="font-size:10px;color:var(--text-dim);">&#x25B6;</span>
+                                <span style="font-size:14px;font-weight:700;">${escapeHTML(building.name)}</span>
+                                ${building.address ? '<span style="font-size:11px;color:var(--text-dim);">' + escapeHTML(building.address) + '</span>' : ''}
+                                ${conns.length > 0 ? '<span style="font-size:10px;padding:1px 6px;border-radius:10px;background:var(--accent-dim);color:var(--accent);">' + conns.length + ' node' + (conns.length > 1 ? 's' : '') + '</span>' : ''}
+                                ${cosWired.length > 0 ? '<span style="font-size:10px;padding:1px 6px;border-radius:10px;background:rgba(236,72,153,0.15);color:#ec4899;">' + cosWired.length + ' CO</span>' : ''}
+                            </div>
+                            <div style="text-align:right;flex-shrink:0;margin-left:8px;display:flex;align-items:center;gap:8px;">
+                                <span style="font-size:13px;font-weight:700;color:var(--green);">${pctComplete}%</span>
+                                <span style="font-size:10px;color:var(--text-dim);">${bldgPct}% of job</span>
+                                <button class="small" onclick="event.stopPropagation();editBuilding('${escapeHTML(building.id)}')" style="font-size:10px;padding:2px 8px;">&#x270F;&#xFE0F; Edit</button>
+                            </div>
                         </div>
-                        <div style="text-align:right;flex-shrink:0;margin-left:8px;">
-                            <span style="font-size:13px;font-weight:700;color:var(--green);">${pctComplete}%</span>
-                            <span style="font-size:10px;color:var(--text-dim);margin-left:4px;">${bldgPct}% of job</span>
+                        <div style="display:flex;gap:12px;font-size:12px;margin-bottom:6px;">
+                            <div><span style="color:var(--text-dim);">Budget</span> <span style="font-weight:600;color:var(--accent);">${formatCurrency(building.budget)}</span>${(building.coBudget ? ' <span style="font-size:10px;color:var(--green);">(+' + formatCurrency(building.coBudget) + ' CO)</span>' : '')}</div>
+                            <div><span style="color:var(--text-dim);">Spent</span> <span style="font-weight:600;color:var(--accent);">${formatCurrency(buildingCost)}</span></div>
+                            <div><span style="color:var(--text-dim);">Var</span> <span style="font-weight:600;color:${variance >= 0 ? 'var(--green)' : 'var(--red)'};">${formatCurrency(variance)}</span></div>
+                            <div style="margin-left:auto;"><span style="font-size:10px;padding:1px 6px;border-radius:8px;background:rgba(79,140,255,0.1);color:${scopeColor};font-weight:600;text-transform:capitalize;">${escapeHTML(scope)}</span></div>
                         </div>
-                    </div>
-                    <div style="display:flex;gap:12px;font-size:12px;margin-bottom:6px;">
-                        <div><span style="color:var(--text-dim);">Budget</span> <span style="font-weight:600;color:var(--accent);">${formatCurrency(building.budget)}</span>${(building.coBudget ? ' <span style="font-size:10px;color:var(--green);">(+' + formatCurrency(building.coBudget) + ' CO)</span>' : '')}</div>
-                        <div><span style="color:var(--text-dim);">Spent</span> <span style="font-weight:600;color:var(--accent);">${formatCurrency(buildingCost)}</span></div>
-                        <div><span style="color:var(--text-dim);">Var</span> <span style="font-weight:600;color:${variance >= 0 ? 'var(--green)' : 'var(--red)'};">${formatCurrency(variance)}</span></div>
-                        <div style="margin-left:auto;"><span style="font-size:10px;padding:1px 6px;border-radius:8px;background:rgba(79,140,255,0.1);color:${scopeColor};font-weight:600;text-transform:capitalize;">${escapeHTML(scope)}</span></div>
-                    </div>
-                    <div style="display:flex;gap:10px;font-size:11px;color:var(--text-dim);margin-bottom:6px;">
-                        <span>Mat: <b style="color:var(--text);">${formatCurrency(bMat)}</b></span>
-                        <span>Lab: <b style="color:var(--text);">${formatCurrency(bLab)}</b></span>
-                        <span>Sub: <b style="color:var(--text);">${formatCurrency(bSub)}</b></span>
-                        <span>Equip: <b style="color:var(--text);">${formatCurrency(bEquip)}</b></span>
-                        ${(building.hoursTotal || building.rate) ? '<span style="margin-left:auto;">' + (building.hoursTotal || 0) + 'hrs' + (building.hoursWeek ? ' (' + building.hoursWeek + '/wk)' : '') + ' @ ' + formatCurrency(building.rate || 40) + '/hr</span>' : ''}
-                    </div>
-                    <div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:2px;">
-                    ${phases.map(p => {
+                    </div>`;
+
+                let body = `<div id="${uid}" style="display:none;border-top:1px solid var(--border);padding:10px 12px;background:var(--surface2);">`;
+
+                // Cost breakdown
+                body += '<div style="display:flex;gap:10px;font-size:11px;color:var(--text-dim);margin-bottom:8px;flex-wrap:wrap;">' +
+                    '<span>Mat: <b style="color:var(--text);">' + formatCurrency(bMat) + '</b></span>' +
+                    '<span>Lab: <b style="color:var(--text);">' + formatCurrency(bLab) + '</b></span>' +
+                    '<span>Sub: <b style="color:var(--text);">' + formatCurrency(bSub) + '</b></span>' +
+                    '<span>Equip: <b style="color:var(--text);">' + formatCurrency(bEquip) + '</b></span>' +
+                    ((building.hoursTotal || building.rate) ? '<span style="margin-left:auto;">' + (building.hoursTotal || 0) + 'hrs' + (building.hoursWeek ? ' (' + building.hoursWeek + '/wk)' : '') + ' @ ' + formatCurrency(building.rate || 40) + '/hr</span>' : '') +
+                    '</div>';
+
+                // Phases
+                body += '<div style="font-size:11px;font-weight:600;color:var(--text-dim);margin-top:8px;margin-bottom:4px;">PHASES (' + phases.length + ')</div>';
+                if (phases.length === 0) {
+                    body += '<div style="font-size:11px;color:var(--text-dim);font-style:italic;margin-bottom:6px;">No phases yet</div>';
+                } else {
+                    body += '<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px;">';
+                    phases.forEach(function(p) {
                         const pCost = (p.materials || 0) + (p.labor || 0) + (p.sub || 0) + (p.equipment || 0);
                         const pColor = p.pctComplete >= 100 ? 'var(--green)' : p.pctComplete >= 50 ? '#f59e0b' : 'var(--text-dim)';
-                        return '<button onclick="event.stopPropagation(); editPhase(\'' + escapeHTML(p.id) + '\')" style="font-size:10px;padding:2px 6px;border-radius:6px;background:var(--surface2);border:1px solid var(--border);white-space:nowrap;cursor:pointer;color:var(--text);transition:all 0.12s;" onmouseover="this.style.borderColor=\'var(--accent)\'" onmouseout="this.style.borderColor=\'var(--border)\'">' +
+                        body += '<button onclick="event.stopPropagation();editPhase(\'' + escapeHTML(p.id) + '\')" style="font-size:10px;padding:3px 8px;border-radius:6px;background:var(--surface);border:1px solid var(--border);white-space:nowrap;cursor:pointer;color:var(--text);">' +
                             escapeHTML(p.phase) + ' <b style="color:' + pColor + ';">' + p.pctComplete + '%</b> ' + formatCurrency(pCost) + '</button>';
-                    }).join('')}
-                    <button onclick="event.stopPropagation(); openAddPhaseToJobModal('${escapeHTML(building.id)}')" style="font-size:10px;padding:2px 6px;border-radius:6px;background:var(--surface);border:1px dashed var(--border);white-space:nowrap;cursor:pointer;color:var(--text-dim);transition:all 0.12s;" onmouseover="this.style.borderColor='var(--accent)';this.style.color='var(--text)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text-dim)'">+ Phase</button>
-                    </div>
-                `;
+                    });
+                    body += '</div>';
+                }
+                body += '<button onclick="event.stopPropagation();openAddPhaseToJobModal(\'' + escapeHTML(building.id) + '\')" style="font-size:10px;padding:3px 8px;border-radius:6px;background:var(--surface);border:1px dashed var(--border);cursor:pointer;color:var(--text-dim);margin-bottom:8px;">+ Phase</button>';
+
+                // Change Orders wired to this building
+                body += '<div style="font-size:11px;font-weight:600;color:var(--text-dim);margin-top:8px;margin-bottom:4px;">CHANGE ORDERS (' + cosWired.length + ')</div>';
+                if (cosWired.length === 0) {
+                    body += '<div style="font-size:11px;color:var(--text-dim);font-style:italic;margin-bottom:6px;">No COs wired to this building</div>';
+                } else {
+                    body += '<div style="display:flex;flex-direction:column;gap:3px;margin-bottom:6px;">';
+                    cosWired.forEach(function(item) {
+                        const c = item.co;
+                        body += '<div onclick="event.stopPropagation();editCO(\'' + escapeHTML(c.id) + '\')" style="cursor:pointer;font-size:11px;padding:4px 8px;background:var(--surface);border:1px solid var(--border);border-radius:4px;display:flex;justify-content:space-between;gap:8px;">' +
+                            '<span><b>' + escapeHTML(c.coNumber || 'CO') + '</b> ' + escapeHTML((c.description || '').substring(0, 60)) + '</span>' +
+                            '<span style="color:var(--text-dim);">Inc: <b style="color:var(--green);">' + formatCurrency((c.income || 0) * item.allocPct / 100) + '</b> (' + item.allocPct + '%)</span>' +
+                            '</div>';
+                    });
+                    body += '</div>';
+                }
+
+                // Node graph connections
+                body += '<div style="font-size:11px;font-weight:600;color:var(--text-dim);margin-top:8px;margin-bottom:4px;">NODE GRAPH CONNECTIONS</div>';
+                body += renderConnectionList(conns);
+
+                body += '</div>';
+                card.innerHTML = header + body;
                 container.appendChild(card);
             });
         }
 
+        function renderConnectionList(conns) {
+            if (!conns.length) return '<div style="font-size:11px;color:var(--text-dim);font-style:italic;">Not placed on graph yet</div>';
+            var html = '<div style="display:flex;flex-direction:column;gap:3px;">';
+            conns.forEach(function(c, i) {
+                var wireDesc = [];
+                c.targets.forEach(function(t) { wireDesc.push('<span style="color:var(--green);">&rarr; ' + escapeHTML(t.label) + '</span>'); });
+                c.sources.forEach(function(s) { wireDesc.push('<span style="color:var(--accent);">' + escapeHTML(s.label) + ' &rarr;</span>'); });
+                html += '<div style="font-size:11px;padding:4px 8px;background:var(--surface);border:1px solid var(--border);border-radius:4px;display:flex;align-items:center;gap:8px;">' +
+                    '<span style="color:var(--purple);font-weight:600;">#' + (i + 1) + '</span>' +
+                    (wireDesc.length ? wireDesc.join(' ') : '<span style="color:var(--text-dim);">Unconnected</span>') +
+                    '</div>';
+            });
+            html += '</div>';
+            return html;
+        }
+
+        function ensureNGLoaded(jobId) {
+            if (typeof NG === 'undefined' || !jobId) return false;
+            if (NG.job() === jobId && NG.nodes().length > 0) return true;
+            NG.job(jobId);
+            NG.setNodes([]); NG.setWires([]); NG.setNid(1);
+            return NG.loadGraph();
+        }
+
         function getNodeGraphConnections(type, dataId) {
             if (typeof NG === 'undefined') return [];
+            ensureNGLoaded(appState.currentJobId);
             var nodes = NG.nodes(), wires = NG.wires();
             var instances = nodes.filter(function(n) { return n.type === type && n.data && n.data.id === dataId; });
             var conns = [];
@@ -1334,6 +1363,27 @@ function renderWIPMain() {
                 conns.push({ nodeId: n.id, label: n.label, targets: targets, sources: sources });
             });
             return conns;
+        }
+
+        // Find COs that wire (in node graph) to a particular T1/T2 by data.id.
+        // Returns array of { co (appData entry), wireAllocPct }.
+        function getCOsConnectedTo(targetType, targetDataId) {
+            if (typeof NG === 'undefined') return [];
+            ensureNGLoaded(appState.currentJobId);
+            var nodes = NG.nodes(), wires = NG.wires();
+            var targetNodes = nodes.filter(function(n) { return n.type === targetType && n.data && n.data.id === targetDataId; });
+            var targetIds = {};
+            targetNodes.forEach(function(n) { targetIds[n.id] = 1; });
+            var results = [];
+            wires.forEach(function(w) {
+                if (!targetIds[w.toNode]) return;
+                var src = NG.findNode(w.fromNode);
+                if (!src || src.type !== 'co' || !src.data || !src.data.id) return;
+                var coEntry = appData.changeOrders.find(function(c) { return c.id === src.data.id; });
+                if (!coEntry) return;
+                results.push({ co: coEntry, allocPct: w.allocPct != null ? w.allocPct : 100 });
+            });
+            return results;
         }
 
         function renderConnectionBadges(conns) {
@@ -1354,12 +1404,8 @@ function renderWIPMain() {
             return html;
         }
 
-        function renderJobPhases(jobId) {
-            const phases = appData.phases.filter(p => p.jobId === jobId);
-            const container = document.getElementById('job-phases-cards');
-            if (!container) return;
+        function renderOverviewPhasesInto(container, jobId, phases) {
             container.innerHTML = '';
-
             const phaseGroups = {};
             phases.forEach(p => {
                 var key = p.phase || 'Unnamed';
@@ -1367,12 +1413,29 @@ function renderWIPMain() {
                 phaseGroups[key].push(p);
             });
 
-            if (Object.keys(phaseGroups).length === 0) {
-                container.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-dim);font-size:13px;">No phases yet.</div>';
+            const groupKeys = Object.keys(phaseGroups).sort();
+            let totalRev = 0, totalCost = 0;
+            groupKeys.forEach(k => {
+                phaseGroups[k].forEach(r => {
+                    totalRev += r.asSoldRevenue || 0;
+                    totalCost += (r.materials || 0) + (r.labor || 0) + (r.sub || 0) + (r.equipment || 0);
+                });
+            });
+            const totalProfit = totalRev - totalCost;
+
+            const headerHTML =
+                '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">' +
+                    '<h3 style="font-size:13px;margin:0;">&#x1F4CB; Phases (' + groupKeys.length + ')</h3>' +
+                    '<div style="font-size:12px;color:var(--text-dim);">Rev: <b style="color:var(--green);">' + formatCurrency(totalRev) + '</b> &nbsp; Cost: <b>' + formatCurrency(totalCost) + '</b> &nbsp; Profit: <b style="color:' + (totalProfit >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + formatCurrency(totalProfit) + '</b></div>' +
+                '</div>';
+            container.innerHTML = headerHTML;
+
+            if (groupKeys.length === 0) {
+                container.innerHTML += '<div style="padding:12px;text-align:center;color:var(--text-dim);font-size:12px;">No phases yet. Click + Phase above to add one.</div>';
                 return;
             }
 
-            Object.keys(phaseGroups).forEach(phaseName => {
+            groupKeys.forEach(phaseName => {
                 const phaseList = phaseGroups[phaseName];
                 const revTotal = phaseList.reduce((s, p) => s + (p.asSoldRevenue || 0), 0);
                 const matTotal = phaseList.reduce((s, p) => s + (p.materials || 0), 0);
@@ -1384,21 +1447,21 @@ function renderWIPMain() {
                 const uid = 'ph-grp-' + phaseName.replace(/\W/g, '_');
 
                 var card = document.createElement('div');
-                card.style.cssText = 'background:var(--surface);border:1px solid var(--border);border-radius:8px;margin-bottom:8px;overflow:hidden;';
+                card.style.cssText = 'background:var(--surface);border:1px solid var(--border);border-radius:8px;margin-bottom:6px;overflow:hidden;';
 
-                var hdr = '<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;cursor:pointer;user-select:none;" onclick="var d=document.getElementById(\'' + uid + '\');d.style.display=d.style.display===\'none\'?\'block\':\'none\';this.querySelector(\'.ph-arrow\').textContent=d.style.display===\'none\'?\'\\u25B6\':\'\\u25BC\';">' +
+                var hdr = '<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;cursor:pointer;user-select:none;" onclick="var d=document.getElementById(\'' + uid + '\');d.style.display=d.style.display===\'none\'?\'block\':\'none\';this.querySelector(\'.ph-arrow\').textContent=d.style.display===\'none\'?\'\\u25B6\':\'\\u25BC\';">' +
                     '<div style="display:flex;align-items:center;gap:10px;">' +
                     '<span class="ph-arrow" style="font-size:10px;color:var(--text-dim);">&#x25B6;</span>' +
                     '<span style="font-weight:700;font-size:14px;color:var(--text);">' + escapeHTML(phaseName) + '</span>' +
                     '<span style="font-size:11px;color:var(--text-dim);">' + phaseList.length + ' instance' + (phaseList.length > 1 ? 's' : '') + '</span>' +
                     '</div>' +
-                    '<div style="display:flex;gap:16px;font-size:12px;">' +
-                    '<span style="color:var(--text-dim);">Revenue: <strong style="color:var(--green);">' + formatCurrency(revTotal) + '</strong></span>' +
-                    '<span style="color:var(--text-dim);">Costs: <strong style="color:var(--orange);">' + formatCurrency(costTotal) + '</strong></span>' +
+                    '<div style="display:flex;gap:14px;font-size:12px;">' +
+                    '<span style="color:var(--text-dim);">Rev: <strong style="color:var(--green);">' + formatCurrency(revTotal) + '</strong></span>' +
+                    '<span style="color:var(--text-dim);">Cost: <strong style="color:var(--orange);">' + formatCurrency(costTotal) + '</strong></span>' +
                     '<span style="color:var(--text-dim);">Avg: <strong style="color:var(--accent);">' + avgPct + '%</strong></span>' +
                     '</div></div>';
 
-                var body = '<div id="' + uid + '" style="display:none;border-top:1px solid var(--border);padding:10px 14px;">';
+                var body = '<div id="' + uid + '" style="display:none;border-top:1px solid var(--border);padding:8px 12px;background:var(--surface2);">';
                 phaseList.forEach(function(p) {
                     var bldg = appData.buildings.find(function(b) { return b.id === p.buildingId; });
                     var bldgName = bldg ? bldg.name : '?';
@@ -1409,10 +1472,9 @@ function renderWIPMain() {
                         '<span style="font-size:13px;font-weight:600;color:var(--text);">' + escapeHTML(bldgName) + '</span>' +
                         '<span style="font-size:11px;color:var(--text-dim);margin-left:8px;">Rev: ' + formatCurrency(p.asSoldRevenue || 0) + ' | Mat: ' + formatCurrency(p.materials || 0) + ' | Lab: ' + formatCurrency(p.labor || 0) + ' | Sub: ' + formatCurrency(p.sub || 0) + ' | Equip: ' + formatCurrency(p.equipment || 0) + '</span>' +
                         '</div>' +
-                        '<div>' +
                         '<button class="small" onclick="editPhase(\'' + escapeHTML(p.id) + '\')" style="font-size:10px;padding:2px 8px;">&#x270F;&#xFE0F; Edit</button>' +
-                        '</div></div>' +
-                        '<div style="margin-top:4px;">' + renderConnectionBadges(conns) + '</div>' +
+                        '</div>' +
+                        '<div style="margin-top:4px;">' + renderConnectionList(conns) + '</div>' +
                         '</div>';
                 });
                 body += '</div>';
@@ -1421,16 +1483,25 @@ function renderWIPMain() {
             });
         }
 
-        function renderJobSubs(jobId) {
-            const subs = appData.subs.filter(s => s.jobId === jobId);
-            const container = document.getElementById('job-subs-cards');
-            if (!container) return;
-            container.innerHTML = '';
+        function renderJobPhases(jobId) {
+            const phases = appData.phases.filter(p => p.jobId === jobId);
+            const container = document.getElementById('job-phases-cards');
+            if (container) renderOverviewPhasesInto(container, jobId, phases);
+        }
 
+        function renderOverviewSubsInto(container, jobId, subs) {
+            container.innerHTML = '';
             let totalContract = 0, totalBilled = 0;
 
+            const headerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">' +
+                '<h3 style="font-size:13px;margin:0;">&#x1F477; Subcontractors (' + subs.length + ')</h3>' +
+                '<div id="' + container.id + '-totals" style="font-size:12px;color:var(--text-dim);"></div>' +
+                '</div>';
+            container.innerHTML = headerHTML;
+
             if (subs.length === 0) {
-                container.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-dim);font-size:13px;">No subcontractors yet.</div>';
+                container.innerHTML += '<div style="padding:12px;text-align:center;color:var(--text-dim);font-size:12px;">No subcontractors yet.</div>';
+                return;
             }
 
             subs.forEach(sub => {
@@ -1485,28 +1556,20 @@ function renderWIPMain() {
                 container.appendChild(card);
             });
 
-            // Summary
+            // Inline totals in section header
             const totalRemaining = totalContract - totalBilled;
-            document.getElementById('job-subs-summary').innerHTML = `
-                <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; text-align: center;">
-                    <div>
-                        <div style="font-size: 10px; color: var(--text-dim);">Total Subs</div>
-                        <div style="font-size: 15px; font-weight: 700; color: var(--accent);">${subs.length}</div>
-                    </div>
-                    <div>
-                        <div style="font-size: 10px; color: var(--text-dim);">Total Contract</div>
-                        <div style="font-size: 15px; font-weight: 700; color: var(--accent);">${formatCurrency(totalContract)}</div>
-                    </div>
-                    <div>
-                        <div style="font-size: 10px; color: var(--text-dim);">Total Billed</div>
-                        <div style="font-size: 15px; font-weight: 700; color: var(--green);">${formatCurrency(totalBilled)}</div>
-                    </div>
-                    <div>
-                        <div style="font-size: 10px; color: var(--text-dim);">Remaining</div>
-                        <div style="font-size: 15px; font-weight: 700; color: var(--orange);">${formatCurrency(totalRemaining)}</div>
-                    </div>
-                </div>
-            `;
+            const totalsEl = document.getElementById(container.id + '-totals');
+            if (totalsEl) {
+                totalsEl.innerHTML = 'Contract: <b style="color:var(--accent);">' + formatCurrency(totalContract) +
+                    '</b> &nbsp; Billed: <b style="color:var(--green);">' + formatCurrency(totalBilled) +
+                    '</b> &nbsp; Rem: <b style="color:var(--orange);">' + formatCurrency(totalRemaining) + '</b>';
+            }
+        }
+
+        function renderJobSubs(jobId) {
+            const subs = appData.subs.filter(s => s.jobId === jobId);
+            const container = document.getElementById('job-subs-cards');
+            if (container) renderOverviewSubsInto(container, jobId, subs);
         }
 
         function renderJobLabor(jobId) {
