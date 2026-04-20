@@ -222,14 +222,25 @@ function renderNodes(){
       h+='</div>';
     }
 
-    // Progress bar (T1/T2/Sub) — click bar or pct to edit
+    // Progress bar (T1/T2/CO/Sub) — click bar or pct to edit
     if(d.hasProg){
-      var pct = n.pctComplete || 0;
+      // For T2 phases: if wires have per-building pct, show weighted average (read-only)
+      var t2Weighted=false, pct;
+      if(n.type==='t2'){
+        var _aw=E.getPhaseAllocWires(n.id);
+        var _hasWirePct=_aw.some(function(w){ return w.pctComplete!=null; });
+        if(_aw.length && _hasWirePct){ pct=E.getT2WeightedPct(n); t2Weighted=true; }
+        else pct=n.pctComplete||0;
+      } else {
+        pct=n.pctComplete||0;
+      }
       var progColor = pct>=100?'#34d399':pct>=50?'#fbbf24':'#4f8cff';
-      h+='<div class="ng-progress-wrap" data-prog-edit="'+n.id+'" title="Click to edit %">';
+      var progTitle = t2Weighted?'Weighted from per-building % (edit in phase body)':'Click to edit %';
+      var progAttr = t2Weighted?'':' data-prog-edit="'+n.id+'"';
+      h+='<div class="ng-progress-wrap"'+progAttr+' title="'+progTitle+'">';
       h+='<div class="ng-progress"><div class="ng-progress-fill" style="width:'+Math.min(pct,100)+'%;background:'+progColor+'"></div></div>';
       h+='</div>';
-      h+='<div class="ng-progress-label" data-prog-edit="'+n.id+'" title="Click to edit %"><span class="ng-pct-val">'+pct.toFixed(0)+'%</span> complete'+(n.budget?' \u00b7 Budget: '+E.fmtC(n.budget):'')+'</div>';
+      h+='<div class="ng-progress-label"'+progAttr+' title="'+progTitle+'"><span class="ng-pct-val">'+pct.toFixed(0)+'%</span> '+(t2Weighted?'weighted':'complete')+(n.budget?' \u00b7 Budget: '+E.fmtC(n.budget):'')+'</div>';
     }
 
     // Sub-items (type-specific layout)
@@ -346,14 +357,23 @@ function renderNodes(){
           E.rebalancePhaseAllocations(n.id);
           var totalPct=0;
           h+='<div style="margin-top:4px;padding-top:4px;border-top:1px solid var(--ng-border2);">';
+          h+='<div style="display:flex;justify-content:space-between;align-items:center;padding:1px 0 3px;color:#8b90a5;font-size:8px;text-transform:uppercase;letter-spacing:0.5px;gap:4px;">';
+          h+='<span style="flex:1;">Building</span>';
+          h+='<span style="min-width:42px;text-align:right;">Alloc</span>';
+          h+='<span style="min-width:38px;text-align:right;padding-left:4px;">% Cmp</span>';
+          h+='<span style="min-width:60px;text-align:right;">Share</span>';
+          h+='</div>';
           aw.forEach(function(w){
             var b=E.findNode(w.toNode); if(!b) return;
             var bname=(b.label||'Building').split(' \u203A ')[0].trim();
             var pct=w.allocPct||0; totalPct+=pct;
             var share=phaseRev*(pct/100);
-            h+='<div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;color:#6a7090;font-size:9px;">';
+            var wpc=(w.pctComplete!=null)?w.pctComplete:0;
+            var wpcColor=wpc>=100?'#34d399':wpc>=50?'#fbbf24':'#4f8cff';
+            h+='<div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;color:#6a7090;font-size:9px;gap:4px;">';
             h+='<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+bname+'</span>';
-            h+='<span class="ng-alloc-pct" data-alloc-phase="'+n.id+'" data-alloc-bldg="'+w.toNode+'" title="Click to edit %" style="color:#fbbf24;cursor:pointer;font-family:\'Courier New\',monospace;margin-right:6px;">'+pct.toFixed(1)+'%</span>';
+            h+='<span class="ng-alloc-pct" data-alloc-phase="'+n.id+'" data-alloc-bldg="'+w.toNode+'" title="Click to edit allocation %" style="color:#fbbf24;cursor:pointer;font-family:\'Courier New\',monospace;min-width:42px;text-align:right;">'+pct.toFixed(1)+'%</span>';
+            h+='<span class="ng-wire-pct" data-wire-pct-phase="'+n.id+'" data-wire-pct-bldg="'+w.toNode+'" title="Click to edit % complete" style="color:'+wpcColor+';cursor:pointer;font-family:\'Courier New\',monospace;min-width:38px;text-align:right;border-left:1px dotted var(--ng-border2);padding-left:4px;">'+wpc.toFixed(0)+'%</span>';
             h+='<span style="color:#34d399;font-family:\'Courier New\',monospace;min-width:60px;text-align:right;">'+E.fmtC(share)+'</span>';
             h+='</div>';
           });
@@ -841,6 +861,35 @@ function initEvents(){
         else if(ev.key==='Escape'){ev.preventDefault();apDone=true;editingId=null;render();}
       });
       apInp.addEventListener('mousedown',function(ev){ev.stopPropagation();});
+      return;
+    }
+    // Click per-wire % complete → edit
+    var wpc=e.target.closest('[data-wire-pct-phase]');
+    if(wpc && !e.target.closest('input')){
+      e.preventDefault(); e.stopPropagation();
+      var wpPhId=wpc.getAttribute('data-wire-pct-phase');
+      var wpBId=wpc.getAttribute('data-wire-pct-bldg');
+      var wpWire=E.wires().find(function(w){ return w.fromNode===wpPhId && w.toNode===wpBId; });
+      if(!wpWire) return;
+      editingId=wpPhId;
+      var wpInp=document.createElement('input');
+      wpInp.type='number'; wpInp.step='1'; wpInp.min=0; wpInp.max=100;
+      wpInp.value=Math.round(wpWire.pctComplete||0);
+      wpInp.className='ng-wip-chip-input';
+      wpc.textContent=''; wpc.appendChild(wpInp);
+      setTimeout(function(){ wpInp.focus(); wpInp.select(); }, 0);
+      var wpDone=false;
+      function wpFinish(){
+        if(wpDone) return; wpDone=true;
+        wpWire.pctComplete=Math.max(0,Math.min(100,parseFloat(wpInp.value)||0));
+        editingId=null; render();
+      }
+      wpInp.addEventListener('blur',wpFinish);
+      wpInp.addEventListener('keydown',function(ev){
+        if(ev.key==='Enter'){ev.preventDefault();wpInp.blur();}
+        else if(ev.key==='Escape'){ev.preventDefault();wpDone=true;editingId=null;render();}
+      });
+      wpInp.addEventListener('mousedown',function(ev){ev.stopPropagation();});
       return;
     }
     // Add sub-item (inline — just adds a blank row)
