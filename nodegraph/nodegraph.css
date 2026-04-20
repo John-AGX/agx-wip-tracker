@@ -15,7 +15,7 @@ body.light-mode .ng-t-cost .ng-hdr{background:linear-gradient(135deg,rgba(217,11
 body.light-mode .ng-t-sub .ng-hdr{background:linear-gradient(135deg,rgba(124,58,237,.55),rgba(124,58,237,.18));color:#4c1d95;box-shadow:inset 0 0 18px rgba(124,58,237,.22)}
 body.light-mode .ng-tt-po .ng-hdr{background:linear-gradient(135deg,rgba(8,145,178,.5),rgba(8,145,178,.18));color:#155e75;box-shadow:inset 0 0 18px rgba(8,145,178,.22)}
 body.light-mode .ng-tt-inv .ng-hdr{background:linear-gradient(135deg,rgba(219,39,119,.5),rgba(219,39,119,.18));color:#831843;box-shadow:inset 0 0 18px rgba(219,39,119,.22)}
-body.light-mode .ng-t-co .ng-hdr{background:linear-gradient(135deg,rgba(219,39,119,.55),rgba(219,39,119,.18));color:#831843;box-shadow:inset 0 0 18px rgba(219,39,119,.22)}
+body.light-mode .ng-t-co .ng-hdr{background:linear-gradient(135deg,rgba(220,38,38,.55),rgba(220,38,38,.18));color:#7f1d1d;box-shadow:inset 0 0 18px rgba(220,38,38,.22)}
 body.light-mode .ng-t-math .ng-hdr{background:linear-gradient(135deg,rgba(79,70,229,.55),rgba(79,70,229,.18));color:#312e81;box-shadow:inset 0 0 18px rgba(79,70,229,.22)}
 body.light-mode .ng-t-watch .ng-hdr{background:linear-gradient(135deg,rgba(217,119,6,.5),rgba(219,39,119,.25));color:#78350f;box-shadow:inset 0 0 20px rgba(217,119,6,.28)}
 body.light-mode .ng-t-note .ng-hdr{background:linear-gradient(135deg,rgba(75,85,99,.4),rgba(75,85,99,.15));color:#1f2937;box-shadow:inset 0 0 16px rgba(75,85,99,.18)}
@@ -102,7 +102,7 @@ body.light-mode .ng-del-cancel:hover{background:#e5e7eb}
 .ng-t-sub .ng-hdr{background:linear-gradient(135deg,rgba(167,139,250,.2),rgba(167,139,250,.08));color:#a78bfa}
 .ng-tt-po .ng-hdr{background:linear-gradient(135deg,rgba(34,211,238,.22),rgba(34,211,238,.08));color:#22d3ee}
 .ng-tt-inv .ng-hdr{background:linear-gradient(135deg,rgba(244,114,182,.22),rgba(244,114,182,.08));color:#f472b6}
-.ng-t-co .ng-hdr{background:linear-gradient(135deg,rgba(236,72,153,.2),rgba(236,72,153,.08));color:#ec4899}
+.ng-t-co .ng-hdr{background:linear-gradient(135deg,rgba(244,63,94,.28),rgba(220,38,38,.12));color:#fb7185}
 .ng-t-math .ng-hdr{background:linear-gradient(135deg,rgba(99,102,241,.2),rgba(99,102,241,.08));color:#818cf8}
 .ng-t-watch .ng-hdr{background:linear-gradient(135deg,rgba(251,191,36,.15),rgba(251,191,36,.05));color:#fbbf24}
 .ng-t-note .ng-hdr{background:linear-gradient(135deg,rgba(156,163,175,.15),rgba(156,163,175,.05));color:#9ca3af}
