@@ -31,7 +31,7 @@
     var link = document.createElement('link');
     link.id = 'ws-layout-v2-css';
     link.rel = 'stylesheet';
-    link.href = 'css/workspace-layout.css?v=20';
+    link.href = 'css/workspace-layout.css?v=21';
     document.head.appendChild(link);
   }
 
