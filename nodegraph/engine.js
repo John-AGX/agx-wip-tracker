@@ -720,6 +720,7 @@ function saveGraph(){
         value:n.value, collapsed:n.collapsed, noteText:n.noteText,
         items:n.items, pctComplete:n.pctComplete, budget:n.budget, revenue:n.revenue||0, jobFields:n.jobFields||{},
         _coRevApplied: n._coRevApplied||0,
+        allocTarget: n.allocTarget||null,
         dataId: n.data ? n.data.id : null
       };
     }),
@@ -773,6 +774,7 @@ function loadGraph(){
       revenue: (sn.revenue!=null ? sn.revenue : (data.asSoldRevenue||0)),
       jobFields:sn.jobFields||{},
       _coRevApplied:sn._coRevApplied||0,
+      allocTarget:sn.allocTarget||null,
     };
     nodes.push(n);
   });

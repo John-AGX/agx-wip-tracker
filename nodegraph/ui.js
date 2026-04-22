@@ -315,6 +315,50 @@ function renderNodes(){
       h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Actual <span style="color:#34d399;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(subActual)+'</span></div>';
       h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Accrued <span style="color:#fbbf24;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(subAccrued)+'</span></div>';
       h+='</div>';
+      // Scope breakdown — show each wired target with PO totals and + button
+      if(!n.collapsed){
+        var subTargets=[];
+        E.wires().forEach(function(w){
+          if(w.fromNode!==n.id) return;
+          var tgt=E.findNode(w.toNode);
+          if(tgt && (tgt.type==='t2'||tgt.type==='t1'||tgt.type==='co')){
+            subTargets.push(tgt);
+          }
+        });
+        if(subTargets.length){
+          // Sum POs by allocTarget for each target
+          var poNodes=[];
+          E.wires().forEach(function(w){
+            if(w.toNode!==n.id) return;
+            var src=E.findNode(w.fromNode);
+            if(src && src.type==='po') poNodes.push(src);
+          });
+          h+='<div style="padding:4px 10px 6px;border-top:1px solid var(--ng-border2);">';
+          h+='<div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#8b90a5;margin-bottom:4px;">Scope Breakdown</div>';
+          subTargets.forEach(function(tgt){
+            var tname=(tgt.label||tgt.type).split(' › ')[0].trim();
+            var tIcon=tgt.type==='t2'?'📋':tgt.type==='t1'?'🏗':'📄';
+            var tDataId=tgt.data&&tgt.data.id?tgt.data.id:'';
+            // Sum POs targeting this specific scope
+            var poAmt=0, poBilled=0, poCount=0;
+            poNodes.forEach(function(po){
+              var at=po.allocTarget;
+              if(at && at.type===tgt.type && at.id===tDataId){
+                var poEntry=(typeof appData!=='undefined')? appData.purchaseOrders.find(function(p){return p.id===(po.data&&po.data.id);}):null;
+                if(poEntry){ poAmt+=(poEntry.amount||0); poBilled+=(poEntry.billedToDate||0); poCount++; }
+              }
+            });
+            h+='<div style="display:flex;justify-content:space-between;align-items:center;padding:3px 0;font-size:10px;color:#c4c9db;">';
+            h+='<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+tIcon+' '+tname+'</span>';
+            if(poCount>0){
+              h+='<span style="color:#6a7090;font-size:9px;font-family:\'Courier New\',monospace;margin-right:6px;">'+poCount+' PO '+E.fmtC(poAmt)+'</span>';
+            }
+            h+='<span class="ng-sub-add-po" data-sub-node="'+n.id+'" data-target-type="'+tgt.type+'" data-target-id="'+tDataId+'" data-target-node="'+tgt.id+'" title="Create PO for '+tname+'" style="cursor:pointer;color:#4f8cff;font-size:14px;font-weight:700;line-height:1;">+</span>';
+            h+='</div>';
+          });
+          h+='</div>';
+        }
+      }
     }
 
     // CO: mini P&L — income vs actual/accrued costs + allocation table
@@ -998,6 +1042,35 @@ function initEvents(){
         else if(ev.key==='Escape'){ev.preventDefault();wpDone=true;editingId=null;render();}
       });
       wpInp.addEventListener('mousedown',function(ev){ev.stopPropagation();});
+      return;
+    }
+    // Create PO scoped to a sub's target phase/CO/T1
+    var subAddPO=e.target.closest('.ng-sub-add-po');
+    if(subAddPO){
+      e.stopPropagation();
+      var subNodeId=subAddPO.getAttribute('data-sub-node');
+      var tgtType=subAddPO.getAttribute('data-target-type');
+      var tgtId=subAddPO.getAttribute('data-target-id');
+      var subNode=E.findNode(subNodeId);
+      if(!subNode) return;
+      openEntityCreateModal('po', function(newEntry){
+        if(!newEntry) return;
+        // Store allocTarget on the PO appData entry
+        newEntry.allocTarget={type:tgtType, id:tgtId};
+        newEntry.subId=subNode.data&&subNode.data.id?subNode.data.id:'';
+        if(typeof saveData==='function') saveData();
+        // Create PO node wired to this sub
+        var p2=E.pan(),z2=E.zm();
+        var pcx=subNode.x-300, pcy=subNode.y+80;
+        var lbl=entryLabel('po',newEntry);
+        var poNode=E.addNode('po',pcx,pcy,lbl,newEntry);
+        if(poNode){
+          poNode.allocTarget={type:tgtType, id:tgtId};
+          E.wires().push({fromNode:poNode.id,fromPort:0,toNode:subNode.id,toPort:0});
+          E.saveGraph();
+        }
+        render();
+      });
       return;
     }
     // Add sub-item (inline — just adds a blank row)
