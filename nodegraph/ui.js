@@ -1702,6 +1702,39 @@ function autoArrange(selectedId){
   var SNAP=E.SNAP;
   var placed={};
 
+  // Measure how deep a sub-tree is below a given node (for middle-out ordering).
+  function chainDepth(nodeId, visited){
+    if(!visited) visited={};
+    if(visited[nodeId]) return 0;
+    visited[nodeId]=true;
+    var maxD=0;
+    wires.forEach(function(w){
+      if(w.toNode===nodeId){
+        var s=E.findNode(w.fromNode);
+        if(s && s.type!=='watch' && s.type!=='note'){
+          var d=1+chainDepth(s.id, visited);
+          if(d>maxD) maxD=d;
+        }
+      }
+    });
+    return maxD;
+  }
+
+  // Reorder an array so the first item is in the center, then alternate L/R.
+  function middleOut(arr){
+    if(arr.length<=2) return arr;
+    var result=new Array(arr.length);
+    var mid=Math.floor(arr.length/2);
+    var li=mid-1, ri=mid+1;
+    result[mid]=arr[0];
+    for(var k=1;k<arr.length;k++){
+      if(k%2===1 && ri<arr.length) result[ri++]=arr[k];
+      else if(li>=0) result[li--]=arr[k];
+      else result[ri++]=arr[k];
+    }
+    return result;
+  }
+
   function inputsOf(targetId){
     var tgt=E.findNode(targetId);
     var isWip=tgt && tgt.type==='wip';
@@ -1731,6 +1764,9 @@ function autoArrange(selectedId){
       return true;
     });
     if(!srcs.length) return [];
+    // Sort by chain depth (deepest first), then reorder middle-out
+    srcs.sort(function(a,b){ return chainDepth(b.id) - chainDepth(a.id); });
+    srcs = middleOut(srcs);
     var tcx=target.x+160, tcy=target.y+(target.type==='wip'?220:100);
     var count=srcs.length;
     var arcStart=-arcSpan/2;
@@ -1766,7 +1802,7 @@ function autoArrange(selectedId){
   }
 
   function fanParams(t){
-    if(t==='wip')  return {r:950, arc:150, y:0.4};
+    if(t==='wip')  return {r:950, arc:90, y:0.45};
     if(t==='t1')   return {r:700, arc:80, y:0.5};
     if(t==='sum')  return {r:550, arc:45, y:0.5};
     if(t==='job')  return {r:550, arc:45, y:0.5};
@@ -1894,7 +1930,7 @@ function autoArrange(selectedId){
     // Fan arrangement based on target type
     if(target.type==='wip'){
       var fp=fanParams('wip');
-      fanInputs(target, fp.r, fp.arc, 180, fp.y);
+      fanInputs(target, fp.r, fp.arc, 165, fp.y);
       placeGillsForTarget(target);
     } else if(target.type==='t2'){
       var fp=fanParams('t2');
@@ -1927,7 +1963,7 @@ function autoArrange(selectedId){
 
     // BFS backwards from WIP — each child carries its outward angle
     // T2s: fan non-SUB children normally, then trail SUBs outward
-    var queue=[{node:wipNode, angle:180}];
+    var queue=[{node:wipNode, angle:165}];
     var guard=0;
     while(queue.length && guard++ < 200){
       var item=queue.shift();
@@ -2060,7 +2096,7 @@ function refanWatches(){
     }
   });
   var wipCx=wipNode.x+160, wipCy=wipNode.y+220;
-  var radius=780, count=wipOuts.length, arcSpan=170, arcStart=-arcSpan/2;
+  var radius=1100, count=wipOuts.length, arcSpan=210, arcStart=-arcSpan/2;
   var SNAP=E.SNAP;
   wipOuts.forEach(function(op,i){
     var w=portWatch[i]; if(!w) return;
@@ -2091,7 +2127,7 @@ function ensureWatchFan(){
   wipOuts.forEach(function(_,i){ if(!wired[i]) missing.push(i); });
   if(missing.length===0) return false;
   var wipCx=wipNode.x+160, wipCy=wipNode.y+220;
-  var radius=780, count=wipOuts.length, arcSpan=170, arcStart=-arcSpan/2;
+  var radius=1100, count=wipOuts.length, arcSpan=210, arcStart=-arcSpan/2;
   missing.forEach(function(portIdx){
     var angleDeg=count>1?arcStart+arcSpan*portIdx/(count-1):0;
     var a=angleDeg*Math.PI/180;
