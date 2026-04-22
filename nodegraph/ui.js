@@ -1358,6 +1358,23 @@ function pushToJob(){
   if(!job) return;
   var nodes=E.nodes(), wires=E.wires();
 
+  // Sync WIP node's jobFields from current appData before computing outputs,
+  // so the engine always uses the latest values the user entered on the WIP tab.
+  var wipNode0=nodes.find(function(n){return n.type==='wip';});
+  if(wipNode0){
+    var coArr0=appData.changeOrders.filter(function(c){return c.jobId===jid;});
+    var coInc0=coArr0.reduce(function(s,c){return s+(c.income||0);},0);
+    var coCst0=coArr0.reduce(function(s,c){return s+(c.estimatedCosts||0);},0);
+    if(!wipNode0.jobFields) wipNode0.jobFields={};
+    wipNode0.jobFields.contractAmount=job.contractAmount||0;
+    wipNode0.jobFields.coIncome=coInc0;
+    wipNode0.jobFields.estimatedCosts=job.estimatedCosts||0;
+    wipNode0.jobFields.coCosts=coCst0;
+    wipNode0.jobFields.revisedCostChanges=job.revisedCostChanges||0;
+    wipNode0.jobFields.invoicedToDate=job.invoicedToDate||0;
+    if(job.pctCompleteManual) wipNode0.jobFields.pctComplete=job.pctComplete||0;
+  }
+
   // Job Revenue node → job fields
   nodes.forEach(function(n){
     if(n.type==='job'&&n.jobFields){
@@ -1539,13 +1556,26 @@ function pushToJob(){
     }
   });
 
-  // Persist WIP node's computed actual + accrued onto the job so the
+  // Persist WIP node's computed values onto the job so the
   // sticky header can display them directly instead of re-deriving.
   var wipNode=nodes.find(function(n){return n.type==='wip';});
   if(wipNode){
     E.resetComp();
+    var wipTotalIncome=E.getOutput(wipNode,0);
+    E.resetComp();
     job.ngActualCosts=E.getOutput(wipNode,1);
+    E.resetComp();
+    var wipRevEarned=E.getOutput(wipNode,2);
+    E.resetComp();
     job.ngAccruedCosts=E.getOutput(wipNode,6);
+    // Sync computed % complete (budget-weighted from phases/buildings)
+    // back to the job unless user is overriding manually.
+    if(!job.pctCompleteManual){
+      var wipPct=E.getWIPWeightedPct(wipNode);
+      if(wipPct!=null){
+        job.pctComplete=Math.round(wipPct*10)/10;
+      }
+    }
   }
 
   if(typeof recalcSubCosts==='function') recalcSubCosts(jid);
