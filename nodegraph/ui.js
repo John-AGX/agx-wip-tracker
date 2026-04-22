@@ -1690,6 +1690,7 @@ function init(){
 // targets, mirroring how watch nodes fan from WIP outputs but in reverse.
 // Each sub-fan follows the outward direction of its branch so fans don't overlap.
 function autoArrange(selectedId){
+  if(!selectedId) return; // Only arrange nodes connected to the selected node
   var allNodes=E.nodes(), wires=E.wires();
   if(!allNodes.length) return;
 
@@ -1950,65 +1951,9 @@ function autoArrange(selectedId){
     topGills.concat(botGills).forEach(function(s){ movedSet[s.id]=true; });
     coChildren.forEach(function(s){ movedSet[s.id]=true; });
     resolveOverlaps(nodes, null, movedSet);
-
-    refanWatches();
     return;
   }
 
-  // ── Full-tree mode ──
-  if(wipNode){
-    placed[wipNode.id]=true;
-    wipNode.x=Math.round(cx/SNAP)*SNAP;
-    wipNode.y=Math.round((cy-200)/SNAP)*SNAP;
-
-    // BFS backwards from WIP — each child carries its outward angle
-    // T2s: fan non-SUB children normally, then trail SUBs outward
-    var queue=[{node:wipNode, angle:165}];
-    var guard=0;
-    while(queue.length && guard++ < 200){
-      var item=queue.shift();
-      var children;
-      if(item.node.type==='t2'){
-        // Fan non-SUB children (labor, mat, gc, etc.) normally; SUBs reserved for trail
-        var fp=fanParams('t2');
-        children=fanInputs(item.node, fp.r, fp.arc, item.angle, fp.y, {sub:true});
-        // Trail SUBs outward like a rocket trail
-        var trailed=trailInputs(item.node, 380, item.angle, true);
-        for(var ti=0;ti<trailed.length;ti++) children.push(trailed[ti]);
-      } else {
-        var fp2=fanParams(item.node.type);
-        children=fanInputs(item.node, fp2.r, fp2.arc, item.angle, fp2.y);
-      }
-      for(var ci=0;ci<children.length;ci++) queue.push(children[ci]);
-    }
-  }
-
-  // Gills: nodes feeding into WIP's + Top / + Bottom ports go directly above/below WIP
-  if(wipNode) placeGillsForTarget(wipNode);
-
-  // Change Orders: weave into open spaces near their wire targets
-  var cos=nodes.filter(function(n){return n.type==='co';});
-  weaveCOsAmong(cos);
-
-  // Orphans: place in bottom-left corner of the fan spread
-  var orphans=nodes.filter(function(n){return !placed[n.id];});
-  if(orphans.length){
-    var minX=Infinity, maxY=-Infinity;
-    nodes.forEach(function(n){
-      if(placed[n.id]){ if(n.x<minX) minX=n.x; if(n.y>maxY) maxY=n.y; }
-    });
-    if(minX===Infinity){ minX=cx-600; maxY=cy; }
-    var ox=minX, oy=maxY+120;
-    orphans.forEach(function(n,i){
-      n.x=Math.round((ox+(i%4)*340)/SNAP)*SNAP;
-      n.y=Math.round((oy+Math.floor(i/4)*120)/SNAP)*SNAP;
-    });
-  }
-
-  // Resolve overlaps — push colliding nodes apart. WIP stays anchored.
-  resolveOverlaps(nodes, wipNode);
-
-  refanWatches();
 }
 
 function estNodeHeight(n){
