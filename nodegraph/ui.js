@@ -1372,7 +1372,7 @@ function pushToJob(){
     wipNode0.jobFields.coCosts=coCst0;
     wipNode0.jobFields.revisedCostChanges=job.revisedCostChanges||0;
     wipNode0.jobFields.invoicedToDate=job.invoicedToDate||0;
-    if(job.pctCompleteManual) wipNode0.jobFields.pctComplete=job.pctComplete||0;
+    wipNode0.jobFields.pctComplete=job.pctComplete||0;
   }
 
   // Job Revenue node → job fields
@@ -1657,6 +1657,118 @@ function autoWireFromData(n, entry){
 }
 
 // ── Populate from job ──
+// Sync: add missing nodes from appData without moving existing ones.
+// Scans buildings, phases, subs, COs, POs, invoices, job-level costs.
+function syncFromData(){
+  if(typeof appData==='undefined') return;
+  var jid=E.job();
+  if(!jid&&typeof appState!=='undefined') jid=appState.currentJobId;
+  if(!jid) return;
+  var job=appData.jobs.find(function(j){return j.id===jid;});
+  if(!job) return;
+  var nodes=E.nodes(), wires=E.wires();
+
+  // Index existing node data IDs by type
+  function existingIds(type){
+    var ids={};
+    nodes.forEach(function(n){ if(n.type===type&&n.data&&n.data.id) ids[n.data.id]=n; });
+    return ids;
+  }
+  var t1Map=existingIds('t1'), t2Map=existingIds('t2'), subMap=existingIds('sub');
+  var coMap=existingIds('co'), poMap=existingIds('po'), invMap=existingIds('inv');
+
+  var wipNode=nodes.find(function(n){return n.type==='wip';});
+  // If no WIP node, populate from scratch
+  if(!wipNode){ populate(); return; }
+
+  // Placement: find bottom-right edge of existing nodes
+  var maxX=-Infinity, maxY=-Infinity;
+  nodes.forEach(function(n){ if(n.x>maxX) maxX=n.x; if(n.y>maxY) maxY=n.y; });
+  var newX=maxX+400, newY=100;
+  var addCount=0;
+  function nextPos(){ var pos={x:newX, y:newY+addCount*140}; addCount++; return pos; }
+
+  // Buildings
+  appData.buildings.filter(function(b){return b.jobId===jid;}).forEach(function(b){
+    if(t1Map[b.id]) return;
+    var pos=nextPos();
+    var n=E.addNode('t1',pos.x,pos.y,b.name||'Building',b);
+    if(n){ n.budget=b.budget||0; n.pctComplete=b.pctComplete||0; wires.push({fromNode:n.id,fromPort:0,toNode:wipNode.id,toPort:0}); t1Map[b.id]=n; }
+  });
+
+  // Phases
+  appData.phases.filter(function(p){return p.jobId===jid;}).forEach(function(ph){
+    if(t2Map[ph.id]) return;
+    var bl=appData.buildings.find(function(b){return b.id===ph.buildingId;});
+    var pos=nextPos();
+    var n=E.addNode('t2',pos.x,pos.y,ph.phase+(bl?' › '+bl.name:''),ph);
+    if(n){
+      n.budget=ph.phaseBudget||0; n.pctComplete=ph.pctComplete||0; n.revenue=ph.asSoldRevenue||0;
+      if(bl&&t1Map[bl.id]) wires.push({fromNode:n.id,fromPort:0,toNode:t1Map[bl.id].id,toPort:0});
+      t2Map[ph.id]=n;
+    }
+  });
+
+  // Subs
+  appData.subs.filter(function(s){return s.jobId===jid;}).forEach(function(s){
+    if(subMap[s.id]) return;
+    var pos=nextPos();
+    var sn=E.addNode('sub',pos.x,pos.y,s.name||'Sub',s);
+    if(sn){
+      sn.pctComplete=s.pctComplete||0;
+      var bids=s.buildingIds||(s.buildingId?[s.buildingId]:[]);
+      if(bids.length>0){
+        var t1=null;
+        bids.forEach(function(bid){ if(t1Map[bid]) t1=t1Map[bid]; });
+        if(t1) wires.push({fromNode:sn.id,fromPort:0,toNode:t1.id,toPort:0});
+      } else {
+        wires.push({fromNode:sn.id,fromPort:0,toNode:wipNode.id,toPort:0});
+      }
+      subMap[s.id]=sn;
+    }
+  });
+
+  // Change Orders
+  appData.changeOrders.filter(function(c){return c.jobId===jid;}).forEach(function(c){
+    if(coMap[c.id]) return;
+    var pos=nextPos();
+    E.addNode('co',pos.x,pos.y,(c.coNumber||'CO')+' '+(c.description||''),c);
+  });
+
+  // Purchase Orders
+  (appData.purchaseOrders||[]).filter(function(p){return p.jobId===jid;}).forEach(function(p){
+    if(poMap[p.id]) return;
+    var pos=nextPos();
+    var pn=E.addNode('po',pos.x,pos.y,p.vendor||'PO',p);
+    if(pn){
+      pn.value=p.amount||0;
+      if(p.subId&&subMap[p.subId]) wires.push({fromNode:pn.id,fromPort:0,toNode:subMap[p.subId].id,toPort:0});
+    }
+  });
+
+  // Invoices
+  (appData.invoices||[]).filter(function(i){return i.jobId===jid;}).forEach(function(i){
+    if(invMap[i.id]) return;
+    var pos=nextPos();
+    var inv=E.addNode('inv',pos.x,pos.y,i.invNumber||'Invoice',i);
+    if(inv&&i.poId&&poMap[i.poId]) wires.push({fromNode:inv.id,fromPort:0,toNode:poMap[i.poId].id,toPort:0});
+  });
+
+  // Sync WIP jobFields
+  var coArr=appData.changeOrders.filter(function(c){return c.jobId===jid;});
+  wipNode.jobFields=wipNode.jobFields||{};
+  wipNode.jobFields.contractAmount=job.contractAmount||0;
+  wipNode.jobFields.coIncome=coArr.reduce(function(s,c){return s+(c.income||0);},0);
+  wipNode.jobFields.estimatedCosts=job.estimatedCosts||0;
+  wipNode.jobFields.coCosts=coArr.reduce(function(s,c){return s+(c.estimatedCosts||0);},0);
+  wipNode.jobFields.revisedCostChanges=job.revisedCostChanges||0;
+  wipNode.jobFields.invoicedToDate=job.invoicedToDate||0;
+  wipNode.jobFields.pctComplete=job.pctComplete||0;
+
+  ensureWatchFan();
+  E.saveGraph();
+}
+
 function populate(){
   if(typeof appData==='undefined') return;
   var jid=E.job();
@@ -1824,6 +1936,18 @@ function init(){
   if(eab) eab.addEventListener('click',function(){
     E.nodes().forEach(function(n){ n.collapsed=false; });
     render();
+  });
+
+  // Sync from data — add missing nodes without moving existing ones
+  var syncBtn=tab.querySelector('.ng-sync-btn');
+  if(syncBtn) syncBtn.addEventListener('click',function(){ syncFromData(); render(); });
+
+  // Reset graph — wipe and rebuild
+  var resetBtn=tab.querySelector('.ng-reset-btn');
+  if(resetBtn) resetBtn.addEventListener('click',function(){
+    if(!confirm('Reset graph? This will delete all node positions and rebuild from job data.')) return;
+    E.setNodes([]); E.setWires([]); E.setNid(1);
+    populate(); ensureWatchFan(); render();
   });
 
   // Auto arrange
