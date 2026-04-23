@@ -1477,7 +1477,11 @@ function pushToJob(){
   });
 
   // Job-level costs: sum all cost nodes NOT wired to any T1/T2
+  // Job-level cost nodes — only overwrite appData if at least one
+  // job-level cost node exists in the graph. Otherwise preserve
+  // manually-entered values from the WIP tab.
   var jobMat=0,jobLab=0,jobEquip=0,jobGC=0;
+  var hasJobCostNodes=false;
   nodes.forEach(function(n){
     if(n.type!=='labor'&&n.type!=='mat'&&n.type!=='gc'&&n.type!=='other') return;
     // Check if this cost node is wired to a T1 or T2
@@ -1487,16 +1491,19 @@ function pushToJob(){
       return target&&(target.type==='t1'||target.type==='t2');
     });
     if(wiredToTier) return; // already counted at building/phase level
+    hasJobCostNodes=true;
     var val=E.getOutput(n,0);
     if(n.type==='labor') jobLab+=val;
     else if(n.type==='mat') jobMat+=val;
     else if(n.type==='gc') jobGC+=val;
     else if(n.type==='other') jobEquip+=val;
   });
-  job.materials=jobMat;
-  job.labor=jobLab;
-  job.equipment=jobEquip;
-  job.generalConditions=jobGC;
+  if(hasJobCostNodes){
+    job.materials=jobMat;
+    job.labor=jobLab;
+    job.equipment=jobEquip;
+    job.generalConditions=jobGC;
+  }
 
   // CO nodes → sync income back to appData.changeOrders, and backflow wired CO revenue
   // into the target node's budget field (job.contractAmount / building.budget / phase.phaseBudget).
@@ -1722,6 +1729,47 @@ function populate(){
     // Wire all T1s directly into WIP
     E.nodes().forEach(function(nd){
       if(nd.type==='t1') E.wires().push({fromNode:nd.id,fromPort:0,toNode:wipNode.id,toPort:0});
+    });
+
+    // Job-level cost nodes — create Labor/Material/GC/Equipment nodes
+    // for any job-level costs that exist, wired directly to WIP.
+    var jcx=sx+460, jcy=sy+subs.length*110+cos.length*110+80;
+    var jcIdx=0;
+    if(job.labor||job.hoursTotal){
+      var ln=E.addNode('labor',jcx,jcy+jcIdx*120,'Job Labor');
+      if(ln){ ln.value=job.labor||0; E.wires().push({fromNode:ln.id,fromPort:0,toNode:wipNode.id,toPort:0}); }
+      jcIdx++;
+    }
+    if(job.materials){
+      var mn=E.addNode('mat',jcx,jcy+jcIdx*120,'Job Materials');
+      if(mn){ mn.value=job.materials; E.wires().push({fromNode:mn.id,fromPort:0,toNode:wipNode.id,toPort:0}); }
+      jcIdx++;
+    }
+    if(job.equipment){
+      var en=E.addNode('other',jcx,jcy+jcIdx*120,'Job Equipment');
+      if(en){ en.value=job.equipment; E.wires().push({fromNode:en.id,fromPort:0,toNode:wipNode.id,toPort:0}); }
+      jcIdx++;
+    }
+    if(job.generalConditions){
+      var gn=E.addNode('gc',jcx,jcy+jcIdx*120,'Job General Conditions');
+      if(gn){ gn.value=job.generalConditions; E.wires().push({fromNode:gn.id,fromPort:0,toNode:wipNode.id,toPort:0}); }
+      jcIdx++;
+    }
+    // Job-level sub costs — create a Sub node + PO for each job-level sub
+    var jobSubs=appData.subs.filter(function(s){return s.jobId===jid && s.level==='job';});
+    jobSubs.forEach(function(s,i){
+      var existingSub=E.nodes().find(function(nd){return nd.type==='sub'&&nd.data&&nd.data.id===s.id;});
+      if(existingSub) return; // already added in the subs section above
+      var sn=E.addNode('sub',jcx,jcy+jcIdx*120,s.name||'Sub',s);
+      if(sn){
+        E.wires().push({fromNode:sn.id,fromPort:0,toNode:wipNode.id,toPort:0});
+        // Create a PO node for this sub with the contract amount
+        if(s.contractAmt){
+          var pn=E.addNode('po',jcx-280,jcy+jcIdx*120,(s.name||'Sub')+' PO',{id:'po_auto_'+s.id,jobId:jid,vendor:s.name||'',amount:s.contractAmt||0,billedToDate:s.billedToDate||0});
+          if(pn){ pn.value=s.contractAmt||0; E.wires().push({fromNode:pn.id,fromPort:0,toNode:sn.id,toPort:0}); }
+        }
+      }
+      jcIdx++;
     });
   }
 
