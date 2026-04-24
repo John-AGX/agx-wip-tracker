@@ -2078,7 +2078,7 @@ function autoArrange(selectedId){
   }
 
   function fanParams(t){
-    if(t==='wip')  return {r:950, arc:90, y:0.45};
+    if(t==='wip')  return {r:950, arc:120, y:0.55};
     if(t==='t1')   return {r:700, arc:80, y:0.5};
     if(t==='sum')  return {r:550, arc:45, y:0.5};
     if(t==='job')  return {r:550, arc:45, y:0.5};
@@ -2206,7 +2206,7 @@ function autoArrange(selectedId){
     // Fan arrangement based on target type
     if(target.type==='wip'){
       var fp=fanParams('wip');
-      fanInputs(target, fp.r, fp.arc, 165, fp.y);
+      fanInputs(target, fp.r, fp.arc, 180, fp.y);
       placeGillsForTarget(target);
     } else if(target.type==='t2'){
       var fp=fanParams('t2');
