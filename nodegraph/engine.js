@@ -543,7 +543,7 @@ function getT1WeightedPct(t1n){
     var src = findNode(w.fromNode);
     if(src && (src.type === 't2' || src.type === 'co')) incoming.push({w:w, src:src});
   });
-  if(!incoming.length) return t1n.pctComplete || 0;
+  if(!incoming.length) return 0;
   var anyPct = incoming.some(function(r){ return r.w.pctComplete != null; });
   if(!anyPct) return t1n.pctComplete || 0;
   var sumW = 0, sumPct = 0;

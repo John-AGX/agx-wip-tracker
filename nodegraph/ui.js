@@ -115,9 +115,16 @@ function updateT1Progress(){
   var nodes=E.nodes(), wires=E.wires();
   nodes.forEach(function(n){
     if(n.type!=='t1') return;
-    // Compute T1 pct from connected T2 wire-level pctCompletes
-    var cp = E.getT1WeightedPct(n);
-    n.pctComplete = Math.round(cp * 10) / 10;
+    var hasT2CO = wires.some(function(w){
+      if(w.toNode !== n.id) return false;
+      var src = E.findNode(w.fromNode);
+      return src && (src.type === 't2' || src.type === 'co');
+    });
+    if(hasT2CO){
+      n.pctComplete = Math.round(E.getT1WeightedPct(n) * 10) / 10;
+    } else {
+      n.pctComplete = 0;
+    }
   });
 }
 
