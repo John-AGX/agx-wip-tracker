@@ -544,11 +544,9 @@ function getT1WeightedPct(t1n){
     if(src && (src.type === 't2' || src.type === 'co')) incoming.push({w:w, src:src});
   });
   if(!incoming.length) return 0;
-  var anyPct = incoming.some(function(r){ return r.w.pctComplete != null; });
-  if(!anyPct) return t1n.pctComplete || 0;
   var sumW = 0, sumPct = 0;
   incoming.forEach(function(r){
-    var ap = (r.w.allocPct != null) ? r.w.allocPct : 0;
+    var ap = (r.w.allocPct != null) ? r.w.allocPct : 100;
     var rev;
     if(r.src.type === 'co'){
       _comp = {}; rev = getOutput(r.src, 0);
@@ -556,14 +554,15 @@ function getT1WeightedPct(t1n){
       rev = (r.src.revenue || 0);
     }
     var weight = ap * rev;
-    var pc = (r.w.pctComplete != null) ? r.w.pctComplete : 0;
+    // Use wire-level pctComplete if set, otherwise fall back to source node's pctComplete
+    var pc = (r.w.pctComplete != null) ? r.w.pctComplete : (r.src.pctComplete || 0);
     sumPct += pc * weight; sumW += weight;
   });
   if(sumW === 0){
     var sW=0,sP=0;
     incoming.forEach(function(r){
-      var ap = (r.w.allocPct != null) ? r.w.allocPct : 0;
-      var pc = (r.w.pctComplete != null) ? r.w.pctComplete : 0;
+      var ap = (r.w.allocPct != null) ? r.w.allocPct : 100;
+      var pc = (r.w.pctComplete != null) ? r.w.pctComplete : (r.src.pctComplete || 0);
       sP += pc*ap; sW += ap;
     });
     return sW === 0 ? 0 : sP/sW;
