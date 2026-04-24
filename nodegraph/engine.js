@@ -37,7 +37,7 @@ var DEFS = {
   pct:   { cat:'math', icon:'%',         label:'Percent',      ins:[{n:'Val',t:PT.C},{n:'%',t:PT.P}], outs:[{n:'Result',t:PT.C}] },
   wip:   { cat:'wip',  icon:'📊', label:'WIP',
     ins:[{n:'Costs',t:PT.C},{n:'+ Top',t:PT.C},{n:'+ Bottom',t:PT.C}],
-    outs:[{n:'Total Income',t:PT.C},{n:'Actual Costs',t:PT.C},{n:'Revenue Earned',t:PT.C},{n:'Gross Profit',t:PT.C},{n:'Margin JTD',t:PT.P},{n:'Remaining',t:PT.C},{n:'Accrued',t:PT.C},{n:'Unbilled',t:PT.C},{n:'Backlog',t:PT.C}],
+    outs:[{n:'Total Income',t:PT.C},{n:'Actual Costs',t:PT.C},{n:'Revenue Earned',t:PT.C},{n:'Gross Profit',t:PT.C},{n:'Margin JTD',t:PT.P},{n:'Remaining',t:PT.C},{n:'Accrued',t:PT.C},{n:'Backlog',t:PT.C}],
     master:true, hasFields:true
   },
   watch: { cat:'watch',icon:'📊', label:'Watch',        ins:[{n:'Value',t:PT.A}], outs:[], nameEdit:true },
@@ -275,9 +275,8 @@ function getOutput(n, pi){
     var grossProfit = revEarned - actualCosts;
     var marginJTD = revEarned > 0 ? (grossProfit / revEarned * 100) : 0;
     var remaining = revEstCosts - actualCosts;
-    var unbilled = revEarned - invoiced;
     var backlog = totalIncome - revEarned;
-    var wipOuts = [totalIncome, actualCosts, revEarned, grossProfit, marginJTD, remaining, accruedCosts, unbilled, backlog];
+    var wipOuts = [totalIncome, actualCosts, revEarned, grossProfit, marginJTD, remaining, accruedCosts, backlog];
     v = wipOuts[pi] || 0;
     _comp[n.id] = false; return v;
   }
@@ -709,7 +708,7 @@ function fmtP(v){ return v.toFixed(1)+'%'; }
 function fmtV(v,t){ return t===PT.P ? fmtP(v) : t===PT.C ? fmtC(v) : v.toLocaleString(); }
 
 // ── Save / Load ──
-var GRAPH_VER = 7; // bump to force re-populate on next open
+var GRAPH_VER = 8; // bump to force re-populate on next open
 function saveGraph(){
   if(!jobId) return;
   var state = {
