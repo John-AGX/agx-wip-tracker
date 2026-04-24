@@ -115,16 +115,7 @@ function updateT1Progress(){
   var nodes=E.nodes(), wires=E.wires();
   nodes.forEach(function(n){
     if(n.type!=='t1') return;
-    var hasT2CO = wires.some(function(w){
-      if(w.toNode !== n.id) return false;
-      var src = E.findNode(w.fromNode);
-      return src && (src.type === 't2' || src.type === 'co');
-    });
-    if(hasT2CO){
-      n.pctComplete = Math.round(E.getT1WeightedPct(n) * 10) / 10;
-    } else {
-      n.pctComplete = 0;
-    }
+    n.pctComplete = Math.round(E.getT1WeightedPct(n) * 10) / 10;
   });
 }
 
@@ -223,8 +214,7 @@ function renderNodes(){
       } else if(n.type==='t1'){
         // T1 computes from connected T2/CO wire pcts
         var _t1w=[]; E.wires().forEach(function(w){ if(w.toNode===n.id){ var s=E.findNode(w.fromNode); if(s&&(s.type==='t2'||s.type==='co')) _t1w.push(w); }});
-        var _hasT1Pct=_t1w.some(function(w){ return w.pctComplete!=null; });
-        if(_t1w.length && _hasT1Pct){ pct=E.getT1WeightedPct(n); _computed=true; }
+        if(_t1w.length){ pct=E.getT1WeightedPct(n); _computed=true; }
         else pct=n.pctComplete||0;
       } else if(n.type==='co'){
         var _coAw=E.getCOAllocWires(n.id);
@@ -375,10 +365,15 @@ function renderNodes(){
       E.resetComp();
       var coActual=E.getActual(n);
       var coAccrued=E.getAccrued(n);
-      var coGP=coIncome-(coActual+coAccrued);
+      var coPctComp=E.getT2WeightedPct(n);
+      var coRevEarned=coIncome*(coPctComp/100);
+      var coGP=coRevEarned-(coActual+coAccrued);
       var gpColor=coGP>=0?'#34d399':'#f87171';
+      var coPctColor=coPctComp>=100?'#34d399':coPctComp>=50?'#fbbf24':'#4f8cff';
       h+='<div style="padding:4px 10px 6px;font-size:12px;">';
       h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Income <span style="color:#34d399;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(coIncome)+'</span></div>';
+      h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">% Complete <span style="color:'+coPctColor+';font-weight:600;font-family:\'Courier New\',monospace;">'+coPctComp.toFixed(1)+'%</span></div>';
+      h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Rev. Earned <span style="color:#4f8cff;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(coRevEarned)+'</span></div>';
       h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Actual <span style="color:#f87171;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(coActual)+'</span></div>';
       h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Accrued <span style="color:#fbbf24;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(coAccrued)+'</span></div>';
       h+='<div style="display:flex;justify-content:space-between;padding:3px 0 2px;border-top:1px solid var(--ng-border2);margin-top:2px;color:#6a7090;font-weight:600;">Gross Profit <span style="color:'+gpColor+';font-weight:700;font-family:\'Courier New\',monospace;">'+E.fmtC(coGP)+'</span></div>';
