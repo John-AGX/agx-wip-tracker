@@ -389,10 +389,11 @@ function renderNodes(){
         var coTotalPct=0;
         h+='<div style="margin-top:4px;padding-top:4px;border-top:1px solid var(--ng-border2);">';
         h+='<div style="display:flex;justify-content:space-between;align-items:center;padding:1px 0 3px;color:#8b90a5;font-size:8px;text-transform:uppercase;letter-spacing:0.5px;gap:4px;">';
+        h+='<span style="width:14px;"></span>';
         h+='<span style="flex:1;">Target</span>';
         h+='<span style="min-width:42px;text-align:right;">Alloc</span>';
         h+='<span style="min-width:38px;text-align:right;padding-left:4px;">% Cmp</span>';
-        h+='<span style="min-width:60px;text-align:right;">Share</span>';
+        h+='<span style="min-width:64px;text-align:right;">Share</span>';
         h+='</div>';
         coAw.forEach(function(w){
           var tgt=E.findNode(w.toNode); if(!tgt) return;
@@ -401,11 +402,14 @@ function renderNodes(){
           var share=coIncome*(pct/100);
           var wpc=(w.pctComplete!=null)?w.pctComplete:0;
           var wpcColor=wpc>=100?'#34d399':wpc>=50?'#fbbf24':'#4f8cff';
+          var isLocked=!w._auto;
+          var lockColor=isLocked?'#fbbf24':'#3a4570';
           h+='<div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;color:#6a7090;font-size:9px;gap:4px;">';
+          h+='<span class="ng-alloc-lock" data-lock-co="'+n.id+'" data-lock-wire="'+w.toNode+'" title="'+(isLocked?'Unlock':'Lock')+' this allocation" style="cursor:pointer;font-size:10px;color:'+lockColor+';width:14px;text-align:center;">'+(isLocked?'\uD83D\uDD12':'\uD83D\uDD13')+'</span>';
           h+='<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+tname+'</span>';
           h+='<span class="ng-alloc-pct" data-alloc-phase="'+n.id+'" data-alloc-bldg="'+w.toNode+'" title="Click to edit allocation %" style="color:#fbbf24;cursor:pointer;font-family:\'Courier New\',monospace;min-width:42px;text-align:right;">'+pct.toFixed(1)+'%</span>';
           h+='<span class="ng-wire-pct" data-wire-pct-phase="'+n.id+'" data-wire-pct-bldg="'+w.toNode+'" title="Click to edit % complete" style="color:'+wpcColor+';cursor:pointer;font-family:\'Courier New\',monospace;min-width:38px;text-align:right;border-left:1px dotted var(--ng-border2);padding-left:4px;">'+wpc.toFixed(0)+'%</span>';
-          h+='<span style="color:#34d399;font-family:\'Courier New\',monospace;min-width:60px;text-align:right;">'+E.fmtC(share)+'</span>';
+          h+='<span class="ng-alloc-share" data-share-co="'+n.id+'" data-share-wire="'+w.toNode+'" data-share-income="'+coIncome+'" title="Click to edit $ share" style="color:#34d399;cursor:pointer;font-family:\'Courier New\',monospace;min-width:64px;text-align:right;">'+E.fmtC(share)+'</span>';
           h+='</div>';
         });
         var coPctOk=Math.abs(coTotalPct-100)<0.01;
@@ -435,10 +439,11 @@ function renderNodes(){
           var totalPct=0;
           h+='<div style="margin-top:4px;padding-top:4px;border-top:1px solid var(--ng-border2);">';
           h+='<div style="display:flex;justify-content:space-between;align-items:center;padding:1px 0 3px;color:#8b90a5;font-size:8px;text-transform:uppercase;letter-spacing:0.5px;gap:4px;">';
+          h+='<span style="width:14px;"></span>';
           h+='<span style="flex:1;">Building</span>';
           h+='<span style="min-width:42px;text-align:right;">Alloc</span>';
           h+='<span style="min-width:38px;text-align:right;padding-left:4px;">% Cmp</span>';
-          h+='<span style="min-width:60px;text-align:right;">Share</span>';
+          h+='<span style="min-width:64px;text-align:right;">Share</span>';
           h+='</div>';
           aw.forEach(function(w){
             var b=E.findNode(w.toNode); if(!b) return;
@@ -447,11 +452,14 @@ function renderNodes(){
             var share=phaseRev*(pct/100);
             var wpc=(w.pctComplete!=null)?w.pctComplete:0;
             var wpcColor=wpc>=100?'#34d399':wpc>=50?'#fbbf24':'#4f8cff';
+            var isLocked=!w._auto;
+            var lockColor=isLocked?'#fbbf24':'#3a4570';
             h+='<div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;color:#6a7090;font-size:9px;gap:4px;">';
+            h+='<span class="ng-alloc-lock" data-lock-co="'+n.id+'" data-lock-wire="'+w.toNode+'" title="'+(isLocked?'Unlock':'Lock')+' this allocation" style="cursor:pointer;font-size:10px;color:'+lockColor+';width:14px;text-align:center;">'+(isLocked?'\uD83D\uDD12':'\uD83D\uDD13')+'</span>';
             h+='<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+bname+'</span>';
             h+='<span class="ng-alloc-pct" data-alloc-phase="'+n.id+'" data-alloc-bldg="'+w.toNode+'" title="Click to edit allocation %" style="color:#fbbf24;cursor:pointer;font-family:\'Courier New\',monospace;min-width:42px;text-align:right;">'+pct.toFixed(1)+'%</span>';
             h+='<span class="ng-wire-pct" data-wire-pct-phase="'+n.id+'" data-wire-pct-bldg="'+w.toNode+'" title="Click to edit % complete" style="color:'+wpcColor+';cursor:pointer;font-family:\'Courier New\',monospace;min-width:38px;text-align:right;border-left:1px dotted var(--ng-border2);padding-left:4px;">'+wpc.toFixed(0)+'%</span>';
-            h+='<span style="color:#34d399;font-family:\'Courier New\',monospace;min-width:60px;text-align:right;">'+E.fmtC(share)+'</span>';
+            h+='<span class="ng-alloc-share" data-share-co="'+n.id+'" data-share-wire="'+w.toNode+'" data-share-income="'+phaseRev+'" title="Click to edit $ share" style="color:#34d399;cursor:pointer;font-family:\'Courier New\',monospace;min-width:64px;text-align:right;">'+E.fmtC(share)+'</span>';
             h+='</div>';
           });
           var pctOk=Math.abs(totalPct-100)<0.01;
@@ -1020,6 +1028,57 @@ function initEvents(){
         else if(ev.key==='Escape'){ev.preventDefault();apDone=true;editingId=null;render();}
       });
       apInp.addEventListener('mousedown',function(ev){ev.stopPropagation();});
+      return;
+    }
+    // Click lock icon → toggle locked/unlocked
+    var lockEl=e.target.closest('.ng-alloc-lock');
+    if(lockEl){
+      e.stopPropagation();
+      var lCoId=lockEl.getAttribute('data-lock-co');
+      var lWireId=lockEl.getAttribute('data-lock-wire');
+      var lWire=E.wires().find(function(w){ return w.fromNode===lCoId && w.toNode===lWireId; });
+      if(lWire){
+        lWire._auto=!lWire._auto;
+        var lSrc=E.findNode(lCoId);
+        if(lSrc && lSrc.type==='co') E.rebalanceCOAllocations(lCoId);
+        else E.rebalancePhaseAllocations(lCoId);
+        render();
+      }
+      return;
+    }
+    // Click share $ → edit dollar amount, recalc % from it
+    var shareEl=e.target.closest('.ng-alloc-share');
+    if(shareEl && !e.target.closest('input')){
+      e.preventDefault(); e.stopPropagation();
+      var shCoId=shareEl.getAttribute('data-share-co');
+      var shWireId=shareEl.getAttribute('data-share-wire');
+      var shIncome=parseFloat(shareEl.getAttribute('data-share-income'))||0;
+      var shWire=E.wires().find(function(w){ return w.fromNode===shCoId && w.toNode===shWireId; });
+      if(!shWire || shIncome<=0) return;
+      editingId=shCoId;
+      var shInp=document.createElement('input');
+      shInp.type='number'; shInp.step='0.01'; shInp.min=0;
+      shInp.value=((shWire.allocPct||0)/100*shIncome).toFixed(2);
+      shInp.className='ng-wip-chip-input';
+      shareEl.textContent=''; shareEl.appendChild(shInp);
+      setTimeout(function(){ shInp.focus(); shInp.select(); }, 0);
+      var shDone=false;
+      function shFinish(){
+        if(shDone) return; shDone=true;
+        var dollarVal=Math.max(0,parseFloat(shInp.value)||0);
+        shWire.allocPct=Math.min(100,(dollarVal/shIncome)*100);
+        shWire._auto=false;
+        var shSrc=E.findNode(shCoId);
+        if(shSrc && shSrc.type==='co') E.rebalanceCOAllocations(shCoId);
+        else E.rebalancePhaseAllocations(shCoId);
+        editingId=null; render();
+      }
+      shInp.addEventListener('blur',shFinish);
+      shInp.addEventListener('keydown',function(ev){
+        if(ev.key==='Enter'){ev.preventDefault();shInp.blur();}
+        else if(ev.key==='Escape'){ev.preventDefault();shDone=true;editingId=null;render();}
+      });
+      shInp.addEventListener('mousedown',function(ev){ev.stopPropagation();});
       return;
     }
     // Click per-wire % complete → edit
