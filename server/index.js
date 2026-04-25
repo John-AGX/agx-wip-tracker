@@ -1,6 +1,19 @@
 const express = require('express');
 const path = require('path');
 const cookieParser = require('cookie-parser');
+const fs = require('fs');
+
+// Load .env if it exists
+const envPath = path.join(__dirname, '..', '.env');
+if (fs.existsSync(envPath)) {
+  fs.readFileSync(envPath, 'utf8').split('\n').forEach(function(line) {
+    line = line.trim();
+    if (!line || line.startsWith('#')) return;
+    var eq = line.indexOf('=');
+    if (eq > 0) process.env[line.substring(0, eq).trim()] = line.substring(eq + 1).trim();
+  });
+}
+
 const { getDb } = require('./db');
 const authRoutes = require('./routes/auth-routes');
 const jobRoutes = require('./routes/job-routes');
