@@ -1086,7 +1086,8 @@ function renderWIPMain() {
                 '<button class="small" onclick="openAddSubToJobModal()" style="font-size:11px;padding:4px 10px;">&#x1F477; Sub</button>' +
                 '<button class="small" onclick="openAddChangeOrderModal()" style="font-size:11px;padding:4px 10px;">&#x1F4DD; Change Order</button>' +
                 '<button class="small" onclick="openAddPOModal()" style="font-size:11px;padding:4px 10px;">&#x1F4C4; Purchase Order</button>' +
-                '<button class="small" onclick="openAddInvoiceModal()" style="font-size:11px;padding:4px 10px;">&#x1F4B3; Invoice</button>';
+                '<button class="small" onclick="openAddInvoiceModal()" style="font-size:11px;padding:4px 10px;">&#x1F4B3; Invoice</button>' +
+                '<button class="small" onclick="openCloseWeekModal(\'' + escapeHTML(jobId) + '\')" style="font-size:11px;padding:4px 10px;background:var(--green);color:#fff;border:none;">&#x1F4C5; Close Week</button>';
             container.appendChild(btnRow);
 
             // ── Building cards ──
@@ -1212,6 +1213,210 @@ function renderWIPMain() {
                     ${invRows}`;
                 container.appendChild(invSection);
             }
+
+            // ── Weekly WIP History ──
+            renderWeeklyBreakdown(container, jobId);
+        }
+
+        // ==================== WEEKLY SNAPSHOT / CLOSE WEEK ====================
+        function captureWeekSnapshot(jobId, weekOf) {
+            const job = appData.jobs.find(j => j.id === jobId);
+            if (!job) return null;
+            ensureNGComputed(jobId);
+            const w = getJobWIP(jobId);
+            const accrued = getJobAccruedCosts(jobId);
+            const buildings = appData.buildings.filter(b => b.jobId === jobId);
+            const phases = appData.phases.filter(p => p.jobId === jobId);
+            const cos = appData.changeOrders.filter(c => c.jobId === jobId);
+            const subs = appData.subs.filter(s => s.jobId === jobId);
+            const pos = (appData.purchaseOrders || []).filter(p => p.jobId === jobId);
+
+            return {
+                weekOf: weekOf,
+                closedAt: new Date().toISOString(),
+                job: {
+                    pctComplete: w.pctComplete,
+                    totalIncome: w.totalIncome,
+                    contractIncome: w.contractIncome,
+                    estimatedCosts: w.estimatedCosts,
+                    revisedEstCosts: w.revisedEstCosts,
+                    actualCosts: w.actualCosts,
+                    accrued: accrued,
+                    revEarned: w.revenueEarned,
+                    invoiced: w.invoiced,
+                    coIncome: w.coIncome,
+                    grossProfit: w.revisedProfit,
+                    backlog: w.backlog
+                },
+                buildings: buildings.map(function(b) {
+                    var bPct = calcBuildingPctComplete(b.id, jobId);
+                    var bCost = (b.materials||0)+(b.labor||0)+(b.sub||0)+(b.equipment||0);
+                    return { id:b.id, name:b.name, pctComplete:bPct, budget:b.budget||0, cost:bCost };
+                }),
+                phases: phases.map(function(p) {
+                    var pCost = (p.materials||0)+(p.labor||0)+(p.sub||0)+(p.equipment||0);
+                    return { id:p.id, name:p.phase, pctComplete:p.pctComplete||0, revenue:p.asSoldRevenue||0, cost:pCost, buildingId:p.buildingId };
+                }),
+                changeOrders: cos.map(function(c) {
+                    return { id:c.id, coNumber:c.coNumber, income:c.income||0, estimatedCosts:c.estimatedCosts||0, pctComplete:c.pctComplete||0 };
+                }),
+                subs: subs.map(function(s) {
+                    return { id:s.id, name:s.name, contractAmt:s.contractAmt||0, billedToDate:s.billedToDate||0, accruedAmt:s.accruedAmt||0 };
+                }),
+                purchaseOrders: pos.map(function(p) {
+                    return { id:p.id, vendor:p.vendor, amount:p.amount||0, billedToDate:p.billedToDate||0 };
+                })
+            };
+        }
+
+        function closeWeek(jobId, weekOf) {
+            const job = appData.jobs.find(j => j.id === jobId);
+            if (!job) return;
+            if (!job.weeklySnapshots) job.weeklySnapshots = [];
+            var existing = job.weeklySnapshots.findIndex(function(s) { return s.weekOf === weekOf; });
+            if (existing >= 0) {
+                if (!confirm('A snapshot for week ' + weekOf + ' already exists. Overwrite?')) return;
+                job.weeklySnapshots[existing] = captureWeekSnapshot(jobId, weekOf);
+            } else {
+                job.weeklySnapshots.push(captureWeekSnapshot(jobId, weekOf));
+            }
+            job.weeklySnapshots.sort(function(a, b) { return a.weekOf < b.weekOf ? -1 : 1; });
+            saveData();
+            renderJobDetail(jobId);
+        }
+
+        function openCloseWeekModal(jobId) {
+            var today = new Date();
+            var dayOfWeek = today.getDay();
+            var friday = new Date(today);
+            friday.setDate(today.getDate() + (5 - dayOfWeek + 7) % 7);
+            if (dayOfWeek > 5) friday.setDate(friday.getDate() - 7);
+            var defaultDate = friday.toISOString().split('T')[0];
+
+            var overlay = document.createElement('div');
+            overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:9999;display:flex;align-items:center;justify-content:center;';
+            var box = document.createElement('div');
+            box.style.cssText = 'background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px;min-width:320px;max-width:400px;';
+            box.innerHTML = '<h3 style="margin:0 0 12px;font-size:15px;">Close Week</h3>' +
+                '<p style="font-size:12px;color:var(--text-dim);margin:0 0 12px;">Captures a snapshot of all WIP data for this period. This records current % complete, revenue earned, costs, and change order status.</p>' +
+                '<label style="font-size:12px;color:var(--text-dim);display:block;margin-bottom:4px;">Week Ending</label>' +
+                '<input type="date" id="closeWeekDate" value="' + defaultDate + '" style="width:100%;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px;margin-bottom:16px;" />' +
+                '<div style="display:flex;gap:8px;justify-content:flex-end;">' +
+                '<button onclick="this.closest(\'div\').closest(\'div\').closest(\'div\').remove()" style="padding:6px 16px;border-radius:6px;background:var(--surface2);border:1px solid var(--border);color:var(--text);cursor:pointer;">Cancel</button>' +
+                '<button id="closeWeekBtn" style="padding:6px 16px;border-radius:6px;background:var(--accent);border:none;color:#fff;cursor:pointer;font-weight:600;">Close Week</button>' +
+                '</div>';
+            overlay.appendChild(box);
+            overlay.addEventListener('click', function(e) { if (e.target === overlay) overlay.remove(); });
+            document.body.appendChild(overlay);
+            document.getElementById('closeWeekBtn').addEventListener('click', function() {
+                var dt = document.getElementById('closeWeekDate').value;
+                if (!dt) { alert('Select a week ending date'); return; }
+                closeWeek(jobId, dt);
+                overlay.remove();
+            });
+        }
+
+        function renderWeeklyBreakdown(container, jobId) {
+            const job = appData.jobs.find(j => j.id === jobId);
+            if (!job || !job.weeklySnapshots || !job.weeklySnapshots.length) return;
+            var snaps = job.weeklySnapshots;
+
+            var section = document.createElement('div');
+            section.style.cssText = 'margin-top:14px;';
+
+            var headerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">' +
+                '<h3 style="font-size:13px;margin:0;">&#x1F4C5; Weekly WIP History (' + snaps.length + ')</h3>' +
+                '</div>';
+
+            // Table header
+            var html = headerHTML +
+                '<div class="card" style="padding:0;overflow-x:auto;">' +
+                '<table style="width:100%;border-collapse:collapse;font-size:11px;">' +
+                '<thead><tr style="background:var(--surface2);">' +
+                '<th style="padding:6px 8px;text-align:left;border-bottom:1px solid var(--border);white-space:nowrap;">Week</th>' +
+                '<th style="padding:6px 8px;text-align:right;border-bottom:1px solid var(--border);">% Cmp</th>' +
+                '<th style="padding:6px 8px;text-align:right;border-bottom:1px solid var(--border);">Rev Earned</th>' +
+                '<th style="padding:6px 8px;text-align:right;border-bottom:1px solid var(--border);color:var(--green);">&#916; Rev</th>' +
+                '<th style="padding:6px 8px;text-align:right;border-bottom:1px solid var(--border);">Actual Costs</th>' +
+                '<th style="padding:6px 8px;text-align:right;border-bottom:1px solid var(--border);color:var(--red);">&#916; Costs</th>' +
+                '<th style="padding:6px 8px;text-align:right;border-bottom:1px solid var(--border);">Gross Profit</th>' +
+                '<th style="padding:6px 8px;text-align:right;border-bottom:1px solid var(--border);">Backlog</th>' +
+                '</tr></thead><tbody>';
+
+            snaps.forEach(function(snap, i) {
+                var prev = i > 0 ? snaps[i - 1] : null;
+                var dRev = snap.job.revEarned - (prev ? prev.job.revEarned : 0);
+                var dCost = snap.job.actualCosts - (prev ? prev.job.actualCosts : 0);
+                var dRevColor = dRev >= 0 ? 'var(--green)' : 'var(--red)';
+                var dCostColor = dCost > 0 ? 'var(--red)' : 'var(--green)';
+                var pctColor = snap.job.pctComplete >= 100 ? 'var(--green)' : snap.job.pctComplete >= 50 ? '#f59e0b' : 'var(--text-dim)';
+                var uid = 'wk-detail-' + jobId.replace(/\W/g, '_') + '-' + i;
+
+                html += '<tr style="cursor:pointer;border-bottom:1px solid var(--border);" onclick="var d=document.getElementById(\'' + uid + '\');d.style.display=d.style.display===\'none\'?\'table-row\':\'none\';">' +
+                    '<td style="padding:6px 8px;font-weight:600;white-space:nowrap;">' + escapeHTML(snap.weekOf) + '</td>' +
+                    '<td style="padding:6px 8px;text-align:right;color:' + pctColor + ';">' + snap.job.pctComplete.toFixed(1) + '%</td>' +
+                    '<td style="padding:6px 8px;text-align:right;">' + formatCurrency(snap.job.revEarned) + '</td>' +
+                    '<td style="padding:6px 8px;text-align:right;font-weight:600;color:' + dRevColor + ';">' + (dRev >= 0 ? '+' : '') + formatCurrency(dRev) + '</td>' +
+                    '<td style="padding:6px 8px;text-align:right;">' + formatCurrency(snap.job.actualCosts) + '</td>' +
+                    '<td style="padding:6px 8px;text-align:right;font-weight:600;color:' + dCostColor + ';">' + (dCost >= 0 ? '+' : '') + formatCurrency(dCost) + '</td>' +
+                    '<td style="padding:6px 8px;text-align:right;color:' + (snap.job.grossProfit >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + formatCurrency(snap.job.grossProfit) + '</td>' +
+                    '<td style="padding:6px 8px;text-align:right;">' + formatCurrency(snap.job.backlog) + '</td>' +
+                    '</tr>';
+
+                // Expandable detail row
+                html += '<tr id="' + uid + '" style="display:none;"><td colspan="8" style="padding:8px 12px;background:var(--surface2);">';
+
+                // Phase detail
+                if (snap.phases && snap.phases.length) {
+                    html += '<div style="font-size:10px;font-weight:600;color:var(--text-dim);margin-bottom:4px;">PHASES</div>';
+                    html += '<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px;">';
+                    snap.phases.forEach(function(p) {
+                        var pColor = p.pctComplete >= 100 ? 'var(--green)' : p.pctComplete >= 50 ? '#f59e0b' : 'var(--text-dim)';
+                        html += '<span style="font-size:9px;padding:2px 6px;border-radius:4px;background:var(--surface);border:1px solid var(--border);">' +
+                            escapeHTML(p.name) + ' <b style="color:' + pColor + ';">' + p.pctComplete.toFixed(0) + '%</b> Rev: ' + formatCurrency(p.revenue) + ' Cost: ' + formatCurrency(p.cost) + '</span>';
+                    });
+                    html += '</div>';
+                }
+
+                // Building detail
+                if (snap.buildings && snap.buildings.length) {
+                    html += '<div style="font-size:10px;font-weight:600;color:var(--text-dim);margin-bottom:4px;">BUILDINGS</div>';
+                    html += '<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px;">';
+                    snap.buildings.forEach(function(b) {
+                        html += '<span style="font-size:9px;padding:2px 6px;border-radius:4px;background:var(--surface);border:1px solid var(--border);">' +
+                            escapeHTML(b.name) + ' ' + b.pctComplete.toFixed(0) + '% Budget: ' + formatCurrency(b.budget) + ' Cost: ' + formatCurrency(b.cost) + '</span>';
+                    });
+                    html += '</div>';
+                }
+
+                // CO detail
+                if (snap.changeOrders && snap.changeOrders.length) {
+                    html += '<div style="font-size:10px;font-weight:600;color:var(--text-dim);margin-bottom:4px;">CHANGE ORDERS</div>';
+                    html += '<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px;">';
+                    snap.changeOrders.forEach(function(c) {
+                        html += '<span style="font-size:9px;padding:2px 6px;border-radius:4px;background:var(--surface);border:1px solid var(--border);">' +
+                            escapeHTML(c.coNumber || 'CO') + ' Inc: ' + formatCurrency(c.income) + ' Cost: ' + formatCurrency(c.estimatedCosts) + '</span>';
+                    });
+                    html += '</div>';
+                }
+
+                // Sub detail
+                if (snap.subs && snap.subs.length) {
+                    html += '<div style="font-size:10px;font-weight:600;color:var(--text-dim);margin-bottom:4px;">SUBS</div>';
+                    html += '<div style="display:flex;flex-wrap:wrap;gap:4px;">';
+                    snap.subs.forEach(function(s) {
+                        html += '<span style="font-size:9px;padding:2px 6px;border-radius:4px;background:var(--surface);border:1px solid var(--border);">' +
+                            escapeHTML(s.name) + ' Contract: ' + formatCurrency(s.contractAmt) + ' Billed: ' + formatCurrency(s.billedToDate) + '</span>';
+                    });
+                    html += '</div>';
+                }
+
+                html += '</td></tr>';
+            });
+
+            html += '</tbody></table></div>';
+            section.innerHTML = html;
+            container.appendChild(section);
         }
 
         function renderJobBuildings(jobId) {
