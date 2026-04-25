@@ -1,29 +1,33 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
-const { getDb } = require('../db');
+const { pool } = require('../db');
 const { signToken, requireAuth, requireRole } = require('../auth');
 
 const router = express.Router();
 
 // POST /api/auth/login
-router.post('/login', (req, res) => {
-  const { email, password } = req.body;
-  if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
+router.post('/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
 
-  const db = getDb();
-  const user = db.prepare('SELECT * FROM users WHERE email = ? AND active = 1').get(email.toLowerCase().trim());
-  if (!user) return res.status(401).json({ error: 'Invalid credentials' });
+    const { rows } = await pool.query('SELECT * FROM users WHERE email = $1 AND active = true', [email.toLowerCase().trim()]);
+    const user = rows[0];
+    if (!user) return res.status(401).json({ error: 'Invalid credentials' });
 
-  if (!bcrypt.compareSync(password, user.password_hash)) {
-    return res.status(401).json({ error: 'Invalid credentials' });
+    if (!bcrypt.compareSync(password, user.password_hash)) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    const token = signToken(user);
+    res.cookie('token', token, { httpOnly: true, sameSite: 'lax', maxAge: 7 * 24 * 60 * 60 * 1000 });
+    res.json({
+      token,
+      user: { id: user.id, email: user.email, name: user.name, role: user.role }
+    });
+  } catch (e) {
+    res.status(500).json({ error: 'Server error' });
   }
-
-  const token = signToken(user);
-  res.cookie('token', token, { httpOnly: true, sameSite: 'lax', maxAge: 7 * 24 * 60 * 60 * 1000 });
-  res.json({
-    token,
-    user: { id: user.id, email: user.email, name: user.name, role: user.role }
-  });
 });
 
 // POST /api/auth/logout
@@ -38,62 +42,77 @@ router.get('/me', requireAuth, (req, res) => {
 });
 
 // POST /api/auth/register (admin only)
-router.post('/register', requireAuth, requireRole('admin'), (req, res) => {
-  const { email, password, name, role } = req.body;
-  if (!email || !password || !name) {
-    return res.status(400).json({ error: 'Email, password, and name required' });
+router.post('/register', requireAuth, requireRole('admin'), async (req, res) => {
+  try {
+    const { email, password, name, role } = req.body;
+    if (!email || !password || !name) {
+      return res.status(400).json({ error: 'Email, password, and name required' });
+    }
+    const validRoles = ['admin', 'corporate', 'pm'];
+    const userRole = validRoles.includes(role) ? role : 'pm';
+
+    const existing = await pool.query('SELECT id FROM users WHERE email = $1', [email.toLowerCase().trim()]);
+    if (existing.rows.length) return res.status(409).json({ error: 'Email already registered' });
+
+    const hash = bcrypt.hashSync(password, 10);
+    const result = await pool.query(
+      'INSERT INTO users (email, password_hash, name, role) VALUES ($1, $2, $3, $4) RETURNING id',
+      [email.toLowerCase().trim(), hash, name, userRole]
+    );
+
+    res.json({ id: result.rows[0].id, email: email.toLowerCase().trim(), name, role: userRole });
+  } catch (e) {
+    res.status(500).json({ error: 'Server error' });
   }
-  const validRoles = ['admin', 'corporate', 'pm'];
-  const userRole = validRoles.includes(role) ? role : 'pm';
-
-  const db = getDb();
-  const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(email.toLowerCase().trim());
-  if (existing) return res.status(409).json({ error: 'Email already registered' });
-
-  const hash = bcrypt.hashSync(password, 10);
-  const result = db.prepare(
-    'INSERT INTO users (email, password_hash, name, role) VALUES (?, ?, ?, ?)'
-  ).run(email.toLowerCase().trim(), hash, name, userRole);
-
-  res.json({ id: result.lastInsertRowid, email: email.toLowerCase().trim(), name, role: userRole });
 });
 
 // GET /api/auth/users (admin only)
-router.get('/users', requireAuth, requireRole('admin'), (req, res) => {
-  const db = getDb();
-  const users = db.prepare('SELECT id, email, name, role, active, created_at FROM users').all();
-  res.json({ users });
+router.get('/users', requireAuth, requireRole('admin'), async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT id, email, name, role, active, created_at FROM users');
+    res.json({ users: rows });
+  } catch (e) {
+    res.status(500).json({ error: 'Server error' });
+  }
 });
 
 // PUT /api/auth/users/:id (admin only)
-router.put('/users/:id', requireAuth, requireRole('admin'), (req, res) => {
-  const { name, role, active } = req.body;
-  const db = getDb();
-  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
-  if (!user) return res.status(404).json({ error: 'User not found' });
+router.put('/users/:id', requireAuth, requireRole('admin'), async (req, res) => {
+  try {
+    const { name, role, active } = req.body;
+    const { rows } = await pool.query('SELECT * FROM users WHERE id = $1', [req.params.id]);
+    const user = rows[0];
+    if (!user) return res.status(404).json({ error: 'User not found' });
 
-  db.prepare(
-    'UPDATE users SET name = ?, role = ?, active = ?, updated_at = datetime(\'now\') WHERE id = ?'
-  ).run(name || user.name, role || user.role, active != null ? active : user.active, req.params.id);
+    await pool.query(
+      'UPDATE users SET name = $1, role = $2, active = $3, updated_at = NOW() WHERE id = $4',
+      [name || user.name, role || user.role, active != null ? active : user.active, req.params.id]
+    );
 
-  res.json({ ok: true });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: 'Server error' });
+  }
 });
 
 // PUT /api/auth/password (change own password)
-router.put('/password', requireAuth, (req, res) => {
-  const { currentPassword, newPassword } = req.body;
-  if (!currentPassword || !newPassword) return res.status(400).json({ error: 'Both passwords required' });
+router.put('/password', requireAuth, async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    if (!currentPassword || !newPassword) return res.status(400).json({ error: 'Both passwords required' });
 
-  const db = getDb();
-  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
-  if (!bcrypt.compareSync(currentPassword, user.password_hash)) {
-    return res.status(401).json({ error: 'Current password incorrect' });
+    const { rows } = await pool.query('SELECT * FROM users WHERE id = $1', [req.user.id]);
+    if (!bcrypt.compareSync(currentPassword, rows[0].password_hash)) {
+      return res.status(401).json({ error: 'Current password incorrect' });
+    }
+
+    await pool.query('UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2',
+      [bcrypt.hashSync(newPassword, 10), req.user.id]);
+
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: 'Server error' });
   }
-
-  db.prepare('UPDATE users SET password_hash = ?, updated_at = datetime(\'now\') WHERE id = ?')
-    .run(bcrypt.hashSync(newPassword, 10), req.user.id);
-
-  res.json({ ok: true });
 });
 
 module.exports = router;
