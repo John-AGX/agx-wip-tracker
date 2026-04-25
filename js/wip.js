@@ -3126,6 +3126,156 @@ function renderWIPMain() {
             renderJobDetail(appState.currentJobId);
         }
 
+        // ==================== CLOSE WEEK ALL JOBS ====================
+        function closeWeekAllJobs() {
+            var today = new Date();
+            var dayOfWeek = today.getDay();
+            var friday = new Date(today);
+            friday.setDate(today.getDate() + (5 - dayOfWeek + 7) % 7);
+            if (dayOfWeek > 5) friday.setDate(friday.getDate() - 7);
+            var defaultDate = friday.toISOString().split('T')[0];
+
+            var activeJobs = appData.jobs.filter(function(j) { return j.status !== 'Archived' && j.status !== 'Completed'; });
+
+            var overlay = document.createElement('div');
+            overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:9999;display:flex;align-items:center;justify-content:center;';
+            var box = document.createElement('div');
+            box.style.cssText = 'background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px;min-width:360px;max-width:460px;';
+            box.innerHTML = '<h3 style="margin:0 0 12px;font-size:15px;">Close Week — All Active Jobs</h3>' +
+                '<p style="font-size:12px;color:var(--text-dim);margin:0 0 12px;">This will capture a WIP snapshot for <b>' + activeJobs.length + ' active job' + (activeJobs.length !== 1 ? 's' : '') + '</b> at their current state.</p>' +
+                '<label style="font-size:12px;color:var(--text-dim);display:block;margin-bottom:4px;">Week Ending</label>' +
+                '<input type="date" id="closeWeekAllDate" value="' + defaultDate + '" style="width:100%;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px;margin-bottom:12px;" />' +
+                '<div style="max-height:200px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:6px;margin-bottom:16px;">';
+            activeJobs.forEach(function(j) {
+                var hasSnap = j.weeklySnapshots && j.weeklySnapshots.some(function(s) { return s.weekOf === defaultDate; });
+                box.innerHTML += '<div style="font-size:11px;padding:3px 0;display:flex;justify-content:space-between;">' +
+                    '<span>' + escapeHTML((j.jobNumber ? j.jobNumber + ' — ' : '') + (j.title || 'Untitled')) + '</span>' +
+                    (hasSnap ? '<span style="color:var(--yellow);font-size:10px;">exists</span>' : '') +
+                    '</div>';
+            });
+            box.innerHTML += '</div>' +
+                '<div style="display:flex;gap:8px;justify-content:flex-end;">' +
+                '<button onclick="this.closest(\'div\').closest(\'div\').closest(\'div\').remove()" style="padding:6px 16px;border-radius:6px;background:var(--surface2);border:1px solid var(--border);color:var(--text);cursor:pointer;">Cancel</button>' +
+                '<button id="closeWeekAllBtn" style="padding:6px 16px;border-radius:6px;background:var(--green);border:none;color:#fff;cursor:pointer;font-weight:600;">Close Week for All</button>' +
+                '</div>';
+            overlay.appendChild(box);
+            overlay.addEventListener('click', function(e) { if (e.target === overlay) overlay.remove(); });
+            document.body.appendChild(overlay);
+
+            document.getElementById('closeWeekAllBtn').addEventListener('click', function() {
+                var dt = document.getElementById('closeWeekAllDate').value;
+                if (!dt) { alert('Select a week ending date'); return; }
+                var count = 0;
+                activeJobs.forEach(function(j) {
+                    if (!j.weeklySnapshots) j.weeklySnapshots = [];
+                    var existing = j.weeklySnapshots.findIndex(function(s) { return s.weekOf === dt; });
+                    var snap = captureWeekSnapshot(j.id, dt);
+                    if (existing >= 0) j.weeklySnapshots[existing] = snap;
+                    else j.weeklySnapshots.push(snap);
+                    j.weeklySnapshots.sort(function(a, b) { return a.weekOf < b.weekOf ? -1 : 1; });
+                    count++;
+                });
+                saveData();
+                overlay.remove();
+                alert('Closed week ' + dt + ' for ' + count + ' jobs.');
+                renderWIPMain();
+            });
+        }
+
+        function showArchivedJobs() {
+            document.querySelectorAll('.tab-content').forEach(function(tc) { tc.classList.remove('active'); });
+            document.querySelectorAll('.tab-btn').forEach(function(btn) { btn.classList.remove('active'); });
+            document.getElementById('archived').classList.add('active');
+            document.querySelector('[data-tab="archived"]').classList.add('active');
+            renderArchivedJobs();
+        }
+
+        // ==================== ARCHIVED JOBS ====================
+        function renderArchivedJobs() {
+            var container = document.getElementById('archived-jobs-list');
+            if (!container) return;
+            container.innerHTML = '';
+
+            var archived = appData.jobs.filter(function(j) { return j.status === 'Archived'; });
+
+            var html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">' +
+                '<h2 style="font-size:18px;margin:0;">Archived Jobs (' + archived.length + ')</h2></div>';
+
+            if (archived.length === 0) {
+                html += '<div class="card" style="padding:30px;text-align:center;color:var(--text-dim);">No archived jobs. Archive a job by setting its status to "Archived" in the job editor.</div>';
+                container.innerHTML = html;
+                return;
+            }
+
+            archived.forEach(function(job) {
+                var w = getJobWIP(job.id);
+                var profit = (w.revenueEarned || 0) - (w.actualCosts || 0);
+                var margin = w.revenueEarned > 0 ? (profit / w.revenueEarned * 100) : 0;
+                var snapCount = (job.weeklySnapshots || []).length;
+                var marginColor = margin >= 15 ? 'var(--green)' : margin >= 0 ? 'var(--yellow)' : 'var(--red)';
+
+                html += '<div class="card" style="padding:12px 14px;margin-bottom:8px;">';
+                html += '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;">';
+
+                // Left: job info
+                html += '<div style="flex:1;min-width:0;">';
+                html += '<div style="font-size:14px;font-weight:600;margin-bottom:2px;">' + escapeHTML((job.jobNumber ? job.jobNumber + ' — ' : '') + (job.title || 'Untitled')) + '</div>';
+                html += '<div style="font-size:11px;color:var(--text-dim);margin-bottom:6px;">' +
+                    (job.client ? escapeHTML(job.client) + ' &middot; ' : '') +
+                    (job.pm ? 'PM: ' + escapeHTML(job.pm) + ' &middot; ' : '') +
+                    snapCount + ' weekly snapshots</div>';
+
+                // KPIs row
+                html += '<div style="display:flex;gap:14px;font-size:11px;flex-wrap:wrap;">';
+                html += '<div><span style="color:var(--text-dim);">Income</span> <b>' + formatCurrency(w.totalIncome) + '</b></div>';
+                html += '<div><span style="color:var(--text-dim);">Rev Earned</span> <b style="color:var(--green);">' + formatCurrency(w.revenueEarned) + '</b></div>';
+                html += '<div><span style="color:var(--text-dim);">Costs</span> <b style="color:var(--red);">' + formatCurrency(w.actualCosts) + '</b></div>';
+                html += '<div><span style="color:var(--text-dim);">Profit</span> <b style="color:' + (profit >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + formatCurrency(profit) + '</b></div>';
+                html += '<div><span style="color:var(--text-dim);">Margin</span> <b style="color:' + marginColor + ';">' + margin.toFixed(1) + '%</b></div>';
+                html += '<div><span style="color:var(--text-dim);">Complete</span> <b>' + (w.pctComplete || 0).toFixed(1) + '%</b></div>';
+                html += '</div>';
+                html += '</div>';
+
+                // Right: action buttons
+                html += '<div style="display:flex;flex-direction:column;gap:4px;flex-shrink:0;">';
+                html += '<button onclick="editJob(\'' + escapeHTML(job.id) + '\')" class="small" style="font-size:10px;padding:4px 10px;">Edit</button>';
+                html += '<button onclick="restoreJob(\'' + escapeHTML(job.id) + '\')" class="small" style="font-size:10px;padding:4px 10px;background:var(--green);color:#fff;border:none;">Restore</button>';
+                html += '<button onclick="deleteArchivedJob(\'' + escapeHTML(job.id) + '\')" class="small" style="font-size:10px;padding:4px 10px;background:var(--red);color:#fff;border:none;">Delete</button>';
+                html += '</div>';
+
+                html += '</div></div>';
+            });
+
+            container.innerHTML = html;
+        }
+
+        function restoreJob(jobId) {
+            var job = appData.jobs.find(function(j) { return j.id === jobId; });
+            if (!job) return;
+            job.status = 'In Progress';
+            saveData();
+            renderArchivedJobs();
+        }
+
+        function deleteArchivedJob(jobId) {
+            if (!confirm('Permanently delete this job and all its data? This cannot be undone.')) return;
+            appData.jobs = appData.jobs.filter(function(j) { return j.id !== jobId; });
+            appData.buildings = appData.buildings.filter(function(b) { return b.jobId !== jobId; });
+            appData.phases = appData.phases.filter(function(p) { return p.jobId !== jobId; });
+            appData.changeOrders = appData.changeOrders.filter(function(c) { return c.jobId !== jobId; });
+            appData.subs = appData.subs.filter(function(s) { return s.jobId !== jobId; });
+            appData.purchaseOrders = (appData.purchaseOrders || []).filter(function(p) { return p.jobId !== jobId; });
+            appData.invoices = (appData.invoices || []).filter(function(i) { return i.jobId !== jobId; });
+            // Remove node graph
+            try {
+                var all = JSON.parse(localStorage.getItem('agx-nodegraphs') || '{}');
+                delete all[jobId];
+                localStorage.setItem('agx-nodegraphs', JSON.stringify(all));
+            } catch (e) {}
+            saveData();
+            renderArchivedJobs();
+        }
+
         // ==================== INSIGHTS DASHBOARD ====================
         function renderInsightsDashboard() {
             var container = document.getElementById('insights-dashboard');
