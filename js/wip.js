@@ -1324,99 +1324,302 @@ function renderWIPMain() {
             var section = document.createElement('div');
             section.style.cssText = 'margin-top:14px;';
 
-            var headerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">' +
-                '<h3 style="font-size:13px;margin:0;">&#x1F4C5; Weekly WIP History (' + snaps.length + ')</h3>' +
-                '</div>';
+            var html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">' +
+                '<h3 style="font-size:13px;margin:0;">&#x1F4C5; Weekly WIP Insights (' + snaps.length + ' weeks)</h3></div>';
 
-            // Table header
-            var html = headerHTML +
-                '<div class="card" style="padding:0;overflow-x:auto;">' +
-                '<table style="width:100%;border-collapse:collapse;font-size:11px;">' +
-                '<thead><tr style="background:var(--surface2);">' +
-                '<th style="padding:6px 8px;text-align:left;border-bottom:1px solid var(--border);white-space:nowrap;">Week</th>' +
-                '<th style="padding:6px 8px;text-align:right;border-bottom:1px solid var(--border);">% Cmp</th>' +
-                '<th style="padding:6px 8px;text-align:right;border-bottom:1px solid var(--border);">Rev Earned</th>' +
-                '<th style="padding:6px 8px;text-align:right;border-bottom:1px solid var(--border);color:var(--green);">&#916; Rev</th>' +
-                '<th style="padding:6px 8px;text-align:right;border-bottom:1px solid var(--border);">Actual Costs</th>' +
-                '<th style="padding:6px 8px;text-align:right;border-bottom:1px solid var(--border);color:var(--red);">&#916; Costs</th>' +
-                '<th style="padding:6px 8px;text-align:right;border-bottom:1px solid var(--border);">Gross Profit</th>' +
-                '<th style="padding:6px 8px;text-align:right;border-bottom:1px solid var(--border);">Backlog</th>' +
-                '</tr></thead><tbody>';
+            html += '<div class="card" style="padding:14px;">';
 
+            // ─── Section 1: Timeline Cards (horizontal scroll strip) ───
+            html += '<div style="margin-bottom:16px;">';
+            html += '<div style="font-size:11px;font-weight:600;color:var(--text-dim);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px;">Period Summary</div>';
+            html += '<div style="display:flex;gap:8px;overflow-x:auto;padding-bottom:6px;">';
             snaps.forEach(function(snap, i) {
                 var prev = i > 0 ? snaps[i - 1] : null;
                 var dRev = snap.job.revEarned - (prev ? prev.job.revEarned : 0);
                 var dCost = snap.job.actualCosts - (prev ? prev.job.actualCosts : 0);
-                var dRevColor = dRev >= 0 ? 'var(--green)' : 'var(--red)';
-                var dCostColor = dCost > 0 ? 'var(--red)' : 'var(--green)';
-                var pctColor = snap.job.pctComplete >= 100 ? 'var(--green)' : snap.job.pctComplete >= 50 ? '#f59e0b' : 'var(--text-dim)';
+                var dProfit = dRev - dCost;
+                var isLatest = i === snaps.length - 1;
+                var borderColor = isLatest ? 'var(--accent)' : 'var(--border)';
+                var scale = isLatest ? '1' : '0.95';
+                html += '<div style="flex:0 0 auto;min-width:140px;padding:10px 12px;border-radius:8px;background:var(--surface2);border:1px solid ' + borderColor + ';transform:scale(' + scale + ');">';
+                html += '<div style="font-size:10px;color:var(--text-dim);margin-bottom:4px;">' + escapeHTML(snap.weekOf) + '</div>';
+                html += '<div style="font-size:18px;font-weight:700;color:var(--green);margin-bottom:2px;">' + (dRev >= 0 ? '+' : '') + formatCurrency(dRev) + '</div>';
+                html += '<div style="font-size:9px;color:var(--text-dim);">rev earned</div>';
+                html += '<div style="display:flex;justify-content:space-between;margin-top:6px;font-size:10px;">';
+                html += '<span style="color:var(--text-dim);">Cost <b style="color:var(--red);">' + (dCost >= 0 ? '+' : '') + formatCurrency(dCost) + '</b></span>';
+                html += '</div>';
+                html += '<div style="display:flex;justify-content:space-between;font-size:10px;">';
+                html += '<span style="color:var(--text-dim);">Profit <b style="color:' + (dProfit >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + (dProfit >= 0 ? '+' : '') + formatCurrency(dProfit) + '</b></span>';
+                html += '</div>';
+                html += '<div style="margin-top:6px;height:4px;border-radius:2px;background:var(--border);overflow:hidden;">';
+                html += '<div style="height:100%;width:' + Math.min(snap.job.pctComplete, 100) + '%;background:' + (snap.job.pctComplete >= 100 ? 'var(--green)' : 'var(--accent)') + ';border-radius:2px;"></div></div>';
+                html += '<div style="font-size:9px;color:var(--text-dim);text-align:right;margin-top:2px;">' + snap.job.pctComplete.toFixed(1) + '%</div>';
+                html += '</div>';
+            });
+            html += '</div></div>';
+
+            // ─── Section 2: Waterfall Chart (revenue vs costs cumulative) ───
+            html += '<div style="margin-bottom:16px;border-top:1px solid var(--border);padding-top:12px;">';
+            html += '<div style="font-size:11px;font-weight:600;color:var(--text-dim);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px;">Revenue vs Costs</div>';
+            var wfId = 'wf-chart-' + jobId.replace(/\W/g, '_');
+            html += '<canvas id="' + wfId + '" width="600" height="180" style="width:100%;height:180px;"></canvas>';
+            html += '</div>';
+
+            // ─── Section 3: Phase Heat Map ───
+            var allPhaseIds = {};
+            snaps.forEach(function(s) { (s.phases || []).forEach(function(p) { allPhaseIds[p.id] = p.name; }); });
+            var phaseKeys = Object.keys(allPhaseIds);
+            if (phaseKeys.length > 0) {
+                html += '<div style="margin-bottom:16px;border-top:1px solid var(--border);padding-top:12px;">';
+                html += '<div style="font-size:11px;font-weight:600;color:var(--text-dim);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px;">Phase Progress Heat Map</div>';
+                html += '<div style="overflow-x:auto;">';
+                html += '<table style="border-collapse:collapse;font-size:10px;width:100%;">';
+                html += '<thead><tr><th style="padding:4px 6px;text-align:left;border-bottom:1px solid var(--border);color:var(--text-dim);white-space:nowrap;">Phase</th>';
+                snaps.forEach(function(s) {
+                    var label = s.weekOf.substring(5);
+                    html += '<th style="padding:4px 4px;text-align:center;border-bottom:1px solid var(--border);color:var(--text-dim);white-space:nowrap;min-width:40px;">' + label + '</th>';
+                });
+                html += '</tr></thead><tbody>';
+                phaseKeys.forEach(function(pid) {
+                    html += '<tr>';
+                    html += '<td style="padding:3px 6px;border-bottom:1px solid var(--border);white-space:nowrap;max-width:120px;overflow:hidden;text-overflow:ellipsis;">' + escapeHTML(allPhaseIds[pid]) + '</td>';
+                    var prevPct = 0;
+                    snaps.forEach(function(s, si) {
+                        var ph = (s.phases || []).find(function(p) { return p.id === pid; });
+                        var pct = ph ? ph.pctComplete : 0;
+                        var delta = pct - prevPct;
+                        prevPct = pct;
+                        var bg, fg;
+                        if (pct >= 100) { bg = 'rgba(52,211,153,0.3)'; fg = 'var(--green)'; }
+                        else if (delta > 10) { bg = 'rgba(52,211,153,0.2)'; fg = 'var(--green)'; }
+                        else if (delta > 0) { bg = 'rgba(251,191,36,0.15)'; fg = '#f59e0b'; }
+                        else if (pct > 0) { bg = 'rgba(139,144,165,0.1)'; fg = 'var(--text-dim)'; }
+                        else { bg = 'transparent'; fg = 'var(--text-dim)'; }
+                        html += '<td style="padding:3px 4px;text-align:center;border-bottom:1px solid var(--border);background:' + bg + ';color:' + fg + ';font-weight:' + (delta > 0 ? '600' : '400') + ';">' + (pct > 0 ? pct.toFixed(0) + '%' : '—') + '</td>';
+                    });
+                    html += '</tr>';
+                });
+                html += '</tbody></table></div></div>';
+            }
+
+            // ─── Section 4: Burn-Down / Backlog Projection ───
+            html += '<div style="border-top:1px solid var(--border);padding-top:12px;">';
+            html += '<div style="font-size:11px;font-weight:600;color:var(--text-dim);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px;">Backlog Burn-Down</div>';
+            var bdId = 'bd-chart-' + jobId.replace(/\W/g, '_');
+            html += '<canvas id="' + bdId + '" width="600" height="140" style="width:100%;height:140px;"></canvas>';
+            // Projected completion
+            if (snaps.length >= 2) {
+                var lastSnap = snaps[snaps.length - 1];
+                var prevSnap = snaps[snaps.length - 2];
+                var weeklyRevRate = lastSnap.job.revEarned - prevSnap.job.revEarned;
+                var backlog = lastSnap.job.backlog;
+                if (weeklyRevRate > 0 && backlog > 0) {
+                    var weeksLeft = Math.ceil(backlog / weeklyRevRate);
+                    var projDate = new Date(lastSnap.weekOf);
+                    projDate.setDate(projDate.getDate() + weeksLeft * 7);
+                    var projStr = projDate.toISOString().split('T')[0];
+                    html += '<div style="font-size:11px;color:var(--text-dim);margin-top:6px;">At current pace (<b style="color:var(--green);">' + formatCurrency(weeklyRevRate) + '/wk</b>), projected completion: <b style="color:var(--accent);">' + projStr + '</b> (~' + weeksLeft + ' weeks)</div>';
+                }
+            }
+            html += '</div>';
+
+            html += '</div>'; // close card
+
+            // ─── Detail Table (collapsible rows, kept from before) ───
+            html += '<div style="margin-top:10px;">';
+            html += '<div class="card" style="padding:0;overflow-x:auto;">';
+            html += '<table style="width:100%;border-collapse:collapse;font-size:11px;">';
+            html += '<thead><tr style="background:var(--surface2);">';
+            html += '<th style="padding:6px 8px;text-align:left;border-bottom:1px solid var(--border);">Week</th>';
+            html += '<th style="padding:6px 8px;text-align:right;border-bottom:1px solid var(--border);">% Cmp</th>';
+            html += '<th style="padding:6px 8px;text-align:right;border-bottom:1px solid var(--border);">Rev Earned</th>';
+            html += '<th style="padding:6px 8px;text-align:right;border-bottom:1px solid var(--border);color:var(--green);">&#916; Rev</th>';
+            html += '<th style="padding:6px 8px;text-align:right;border-bottom:1px solid var(--border);">Actual Costs</th>';
+            html += '<th style="padding:6px 8px;text-align:right;border-bottom:1px solid var(--border);color:var(--red);">&#916; Costs</th>';
+            html += '<th style="padding:6px 8px;text-align:right;border-bottom:1px solid var(--border);">Gross Profit</th>';
+            html += '<th style="padding:6px 8px;text-align:right;border-bottom:1px solid var(--border);">Backlog</th>';
+            html += '</tr></thead><tbody>';
+            snaps.forEach(function(snap, i) {
+                var prev = i > 0 ? snaps[i - 1] : null;
+                var dRev = snap.job.revEarned - (prev ? prev.job.revEarned : 0);
+                var dCost = snap.job.actualCosts - (prev ? prev.job.actualCosts : 0);
                 var uid = 'wk-detail-' + jobId.replace(/\W/g, '_') + '-' + i;
-
-                html += '<tr style="cursor:pointer;border-bottom:1px solid var(--border);" onclick="var d=document.getElementById(\'' + uid + '\');d.style.display=d.style.display===\'none\'?\'table-row\':\'none\';">' +
-                    '<td style="padding:6px 8px;font-weight:600;white-space:nowrap;">' + escapeHTML(snap.weekOf) + '</td>' +
-                    '<td style="padding:6px 8px;text-align:right;color:' + pctColor + ';">' + snap.job.pctComplete.toFixed(1) + '%</td>' +
-                    '<td style="padding:6px 8px;text-align:right;">' + formatCurrency(snap.job.revEarned) + '</td>' +
-                    '<td style="padding:6px 8px;text-align:right;font-weight:600;color:' + dRevColor + ';">' + (dRev >= 0 ? '+' : '') + formatCurrency(dRev) + '</td>' +
-                    '<td style="padding:6px 8px;text-align:right;">' + formatCurrency(snap.job.actualCosts) + '</td>' +
-                    '<td style="padding:6px 8px;text-align:right;font-weight:600;color:' + dCostColor + ';">' + (dCost >= 0 ? '+' : '') + formatCurrency(dCost) + '</td>' +
-                    '<td style="padding:6px 8px;text-align:right;color:' + (snap.job.grossProfit >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + formatCurrency(snap.job.grossProfit) + '</td>' +
-                    '<td style="padding:6px 8px;text-align:right;">' + formatCurrency(snap.job.backlog) + '</td>' +
-                    '</tr>';
-
-                // Expandable detail row
+                html += '<tr style="cursor:pointer;border-bottom:1px solid var(--border);" onclick="var d=document.getElementById(\'' + uid + '\');d.style.display=d.style.display===\'none\'?\'table-row\':\'none\';">';
+                html += '<td style="padding:6px 8px;font-weight:600;">' + escapeHTML(snap.weekOf) + '</td>';
+                html += '<td style="padding:6px 8px;text-align:right;">' + snap.job.pctComplete.toFixed(1) + '%</td>';
+                html += '<td style="padding:6px 8px;text-align:right;">' + formatCurrency(snap.job.revEarned) + '</td>';
+                html += '<td style="padding:6px 8px;text-align:right;color:var(--green);font-weight:600;">' + (dRev >= 0 ? '+' : '') + formatCurrency(dRev) + '</td>';
+                html += '<td style="padding:6px 8px;text-align:right;">' + formatCurrency(snap.job.actualCosts) + '</td>';
+                html += '<td style="padding:6px 8px;text-align:right;color:var(--red);font-weight:600;">' + (dCost >= 0 ? '+' : '') + formatCurrency(dCost) + '</td>';
+                html += '<td style="padding:6px 8px;text-align:right;color:' + (snap.job.grossProfit >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + formatCurrency(snap.job.grossProfit) + '</td>';
+                html += '<td style="padding:6px 8px;text-align:right;">' + formatCurrency(snap.job.backlog) + '</td>';
+                html += '</tr>';
+                // Expandable detail
                 html += '<tr id="' + uid + '" style="display:none;"><td colspan="8" style="padding:8px 12px;background:var(--surface2);">';
-
-                // Phase detail
                 if (snap.phases && snap.phases.length) {
-                    html += '<div style="font-size:10px;font-weight:600;color:var(--text-dim);margin-bottom:4px;">PHASES</div>';
-                    html += '<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px;">';
+                    html += '<div style="font-size:10px;font-weight:600;color:var(--text-dim);margin-bottom:4px;">PHASES</div><div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px;">';
                     snap.phases.forEach(function(p) {
-                        var pColor = p.pctComplete >= 100 ? 'var(--green)' : p.pctComplete >= 50 ? '#f59e0b' : 'var(--text-dim)';
-                        html += '<span style="font-size:9px;padding:2px 6px;border-radius:4px;background:var(--surface);border:1px solid var(--border);">' +
-                            escapeHTML(p.name) + ' <b style="color:' + pColor + ';">' + p.pctComplete.toFixed(0) + '%</b> Rev: ' + formatCurrency(p.revenue) + ' Cost: ' + formatCurrency(p.cost) + '</span>';
+                        html += '<span style="font-size:9px;padding:2px 6px;border-radius:4px;background:var(--surface);border:1px solid var(--border);">' + escapeHTML(p.name) + ' <b>' + p.pctComplete.toFixed(0) + '%</b> Rev:' + formatCurrency(p.revenue) + ' Cost:' + formatCurrency(p.cost) + '</span>';
                     });
                     html += '</div>';
                 }
-
-                // Building detail
                 if (snap.buildings && snap.buildings.length) {
-                    html += '<div style="font-size:10px;font-weight:600;color:var(--text-dim);margin-bottom:4px;">BUILDINGS</div>';
-                    html += '<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px;">';
+                    html += '<div style="font-size:10px;font-weight:600;color:var(--text-dim);margin-bottom:4px;">BUILDINGS</div><div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px;">';
                     snap.buildings.forEach(function(b) {
-                        html += '<span style="font-size:9px;padding:2px 6px;border-radius:4px;background:var(--surface);border:1px solid var(--border);">' +
-                            escapeHTML(b.name) + ' ' + b.pctComplete.toFixed(0) + '% Budget: ' + formatCurrency(b.budget) + ' Cost: ' + formatCurrency(b.cost) + '</span>';
+                        html += '<span style="font-size:9px;padding:2px 6px;border-radius:4px;background:var(--surface);border:1px solid var(--border);">' + escapeHTML(b.name) + ' ' + b.pctComplete.toFixed(0) + '% Budget:' + formatCurrency(b.budget) + '</span>';
                     });
                     html += '</div>';
                 }
-
-                // CO detail
                 if (snap.changeOrders && snap.changeOrders.length) {
-                    html += '<div style="font-size:10px;font-weight:600;color:var(--text-dim);margin-bottom:4px;">CHANGE ORDERS</div>';
-                    html += '<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px;">';
+                    html += '<div style="font-size:10px;font-weight:600;color:var(--text-dim);margin-bottom:4px;">CHANGE ORDERS</div><div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px;">';
                     snap.changeOrders.forEach(function(c) {
-                        html += '<span style="font-size:9px;padding:2px 6px;border-radius:4px;background:var(--surface);border:1px solid var(--border);">' +
-                            escapeHTML(c.coNumber || 'CO') + ' Inc: ' + formatCurrency(c.income) + ' Cost: ' + formatCurrency(c.estimatedCosts) + '</span>';
+                        html += '<span style="font-size:9px;padding:2px 6px;border-radius:4px;background:var(--surface);border:1px solid var(--border);">' + escapeHTML(c.coNumber || 'CO') + ' Inc:' + formatCurrency(c.income) + '</span>';
                     });
                     html += '</div>';
                 }
-
-                // Sub detail
-                if (snap.subs && snap.subs.length) {
-                    html += '<div style="font-size:10px;font-weight:600;color:var(--text-dim);margin-bottom:4px;">SUBS</div>';
-                    html += '<div style="display:flex;flex-wrap:wrap;gap:4px;">';
-                    snap.subs.forEach(function(s) {
-                        html += '<span style="font-size:9px;padding:2px 6px;border-radius:4px;background:var(--surface);border:1px solid var(--border);">' +
-                            escapeHTML(s.name) + ' Contract: ' + formatCurrency(s.contractAmt) + ' Billed: ' + formatCurrency(s.billedToDate) + '</span>';
-                    });
-                    html += '</div>';
-                }
-
                 html += '</td></tr>';
             });
+            html += '</tbody></table></div></div>';
 
-            html += '</tbody></table></div>';
             section.innerHTML = html;
             container.appendChild(section);
+
+            // ─── Draw Waterfall Chart (canvas) ───
+            setTimeout(function() {
+                var wfCanvas = document.getElementById(wfId);
+                if (!wfCanvas) return;
+                var ctx = wfCanvas.getContext('2d');
+                var W = wfCanvas.width = wfCanvas.offsetWidth * 2;
+                var H = wfCanvas.height = 360;
+                ctx.scale(2, 2);
+                var w = W / 2, h = H / 2;
+                var pad = { t: 20, r: 14, b: 28, l: 56 };
+                var cw = w - pad.l - pad.r, ch = h - pad.t - pad.b;
+
+                var maxVal = 0;
+                snaps.forEach(function(s) { maxVal = Math.max(maxVal, s.job.revEarned, s.job.actualCosts); });
+                if (maxVal === 0) maxVal = 1;
+                var barW = Math.min(30, (cw / snaps.length - 6) / 2);
+
+                ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--text-dim') || '#8b90a5';
+                ctx.font = '9px system-ui';
+                ctx.textAlign = 'right';
+                for (var gi = 0; gi <= 4; gi++) {
+                    var gy = pad.t + ch - (ch * gi / 4);
+                    var gv = maxVal * gi / 4;
+                    ctx.fillText(gv >= 1000 ? '$' + (gv / 1000).toFixed(0) + 'k' : '$' + gv.toFixed(0), pad.l - 6, gy + 3);
+                    ctx.strokeStyle = 'rgba(140,145,165,0.15)';
+                    ctx.beginPath(); ctx.moveTo(pad.l, gy); ctx.lineTo(pad.l + cw, gy); ctx.stroke();
+                }
+
+                snaps.forEach(function(s, i) {
+                    var x = pad.l + (i + 0.5) * (cw / snaps.length);
+                    var revH = (s.job.revEarned / maxVal) * ch;
+                    var costH = (s.job.actualCosts / maxVal) * ch;
+
+                    ctx.fillStyle = 'rgba(79,140,255,0.7)';
+                    ctx.fillRect(x - barW - 1, pad.t + ch - revH, barW, revH);
+                    ctx.fillStyle = 'rgba(248,113,113,0.7)';
+                    ctx.fillRect(x + 1, pad.t + ch - costH, barW, costH);
+
+                    ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--text-dim') || '#8b90a5';
+                    ctx.font = '8px system-ui';
+                    ctx.textAlign = 'center';
+                    ctx.fillText(s.weekOf.substring(5), x, h - pad.b + 12);
+                });
+
+                // Legend
+                ctx.font = '9px system-ui';
+                ctx.fillStyle = 'rgba(79,140,255,0.9)';
+                ctx.fillRect(pad.l, 4, 8, 8);
+                ctx.fillText('Rev Earned', pad.l + 56, 12);
+                ctx.fillStyle = 'rgba(248,113,113,0.9)';
+                ctx.fillRect(pad.l + 70, 4, 8, 8);
+                ctx.textAlign = 'left';
+                ctx.fillText('Actual Costs', pad.l + 82, 12);
+
+                // ─── Draw Burn-Down Chart ───
+                var bdCanvas = document.getElementById(bdId);
+                if (!bdCanvas) return;
+                var bCtx = bdCanvas.getContext('2d');
+                var bW = bdCanvas.width = bdCanvas.offsetWidth * 2;
+                var bH = bdCanvas.height = 280;
+                bCtx.scale(2, 2);
+                var bw = bW / 2, bh = bH / 2;
+                var bp = { t: 16, r: 14, b: 28, l: 56 };
+                var bcw = bw - bp.l - bp.r, bch = bh - bp.t - bp.b;
+
+                var maxBacklog = 0;
+                snaps.forEach(function(s) { maxBacklog = Math.max(maxBacklog, s.job.backlog, s.job.totalIncome); });
+                if (maxBacklog === 0) maxBacklog = 1;
+
+                // Grid
+                bCtx.fillStyle = getComputedStyle(document.body).getPropertyValue('--text-dim') || '#8b90a5';
+                bCtx.font = '9px system-ui';
+                bCtx.textAlign = 'right';
+                for (var bi = 0; bi <= 4; bi++) {
+                    var by = bp.t + bch - (bch * bi / 4);
+                    var bv = maxBacklog * bi / 4;
+                    bCtx.fillText(bv >= 1000 ? '$' + (bv / 1000).toFixed(0) + 'k' : '$' + bv.toFixed(0), bp.l - 6, by + 3);
+                    bCtx.strokeStyle = 'rgba(140,145,165,0.15)';
+                    bCtx.beginPath(); bCtx.moveTo(bp.l, by); bCtx.lineTo(bp.l + bcw, by); bCtx.stroke();
+                }
+
+                // Backlog line
+                bCtx.beginPath();
+                bCtx.strokeStyle = '#fbbf24';
+                bCtx.lineWidth = 2;
+                snaps.forEach(function(s, i) {
+                    var bx = bp.l + (i + 0.5) * (bcw / snaps.length);
+                    var by2 = bp.t + bch - (s.job.backlog / maxBacklog) * bch;
+                    if (i === 0) bCtx.moveTo(bx, by2);
+                    else bCtx.lineTo(bx, by2);
+                });
+                bCtx.stroke();
+
+                // Backlog fill
+                bCtx.lineTo(bp.l + (snaps.length - 0.5) * (bcw / snaps.length), bp.t + bch);
+                bCtx.lineTo(bp.l + 0.5 * (bcw / snaps.length), bp.t + bch);
+                bCtx.closePath();
+                bCtx.fillStyle = 'rgba(251,191,36,0.1)';
+                bCtx.fill();
+
+                // Rev earned line (overlay)
+                bCtx.beginPath();
+                bCtx.strokeStyle = 'var(--green)';
+                bCtx.lineWidth = 2;
+                snaps.forEach(function(s, i) {
+                    var bx = bp.l + (i + 0.5) * (bcw / snaps.length);
+                    var by2 = bp.t + bch - (s.job.revEarned / maxBacklog) * bch;
+                    if (i === 0) bCtx.moveTo(bx, by2);
+                    else bCtx.lineTo(bx, by2);
+                });
+                bCtx.stroke();
+
+                // Dots + labels
+                snaps.forEach(function(s, i) {
+                    var bx = bp.l + (i + 0.5) * (bcw / snaps.length);
+                    var byB = bp.t + bch - (s.job.backlog / maxBacklog) * bch;
+                    bCtx.fillStyle = '#fbbf24';
+                    bCtx.beginPath(); bCtx.arc(bx, byB, 3, 0, Math.PI * 2); bCtx.fill();
+                    bCtx.fillStyle = getComputedStyle(document.body).getPropertyValue('--text-dim') || '#8b90a5';
+                    bCtx.font = '8px system-ui';
+                    bCtx.textAlign = 'center';
+                    bCtx.fillText(s.weekOf.substring(5), bx, bh - bp.b + 12);
+                });
+
+                // Legend
+                bCtx.font = '9px system-ui';
+                bCtx.textAlign = 'left';
+                bCtx.strokeStyle = '#fbbf24'; bCtx.lineWidth = 2;
+                bCtx.beginPath(); bCtx.moveTo(bp.l, 4); bCtx.lineTo(bp.l + 16, 4); bCtx.stroke();
+                bCtx.fillStyle = '#fbbf24';
+                bCtx.fillText('Backlog', bp.l + 20, 8);
+                bCtx.strokeStyle = '#34d399';
+                bCtx.beginPath(); bCtx.moveTo(bp.l + 70, 4); bCtx.lineTo(bp.l + 86, 4); bCtx.stroke();
+                bCtx.fillStyle = '#34d399';
+                bCtx.fillText('Rev Earned', bp.l + 90, 8);
+            }, 50);
         }
 
         function renderJobBuildings(jobId) {
