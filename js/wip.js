@@ -3183,11 +3183,22 @@ function renderWIPMain() {
         }
 
         function showArchivedJobs() {
-            document.querySelectorAll('.tab-content').forEach(function(tc) { tc.classList.remove('active'); });
-            document.querySelectorAll('.tab-btn').forEach(function(btn) { btn.classList.remove('active'); });
-            document.getElementById('archived').classList.add('active');
-            document.querySelector('[data-tab="archived"]').classList.add('active');
-            renderArchivedJobs();
+            var mainView = document.getElementById('wip-main-view');
+            var archiveView = document.getElementById('archived-jobs-list');
+            if (!mainView || !archiveView) return;
+            var showing = archiveView.style.display !== 'none';
+            if (showing) {
+                archiveView.style.display = 'none';
+                mainView.style.display = '';
+                document.querySelectorAll('.wip-action-tab').forEach(function(t) { t.classList.remove('active'); });
+            } else {
+                mainView.style.display = 'none';
+                archiveView.style.display = '';
+                document.querySelectorAll('.wip-action-tab').forEach(function(t) {
+                    t.classList.toggle('active', t.textContent.trim() === 'Archived');
+                });
+                renderArchivedJobs();
+            }
         }
 
         // ==================== ARCHIVED JOBS ====================
@@ -3199,7 +3210,8 @@ function renderWIPMain() {
             var archived = appData.jobs.filter(function(j) { return j.status === 'Archived'; });
 
             var html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">' +
-                '<h2 style="font-size:18px;margin:0;">Archived Jobs (' + archived.length + ')</h2></div>';
+                '<h2 style="font-size:18px;margin:0;">Archived Jobs (' + archived.length + ')</h2>' +
+                '<button class="wip-action-tab" onclick="showArchivedJobs()" style="font-size:12px;">&larr; Back to WIP</button></div>';
 
             if (archived.length === 0) {
                 html += '<div class="card" style="padding:30px;text-align:center;color:var(--text-dim);">No archived jobs. Archive a job by setting its status to "Archived" in the job editor.</div>';

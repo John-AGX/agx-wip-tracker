@@ -294,10 +294,12 @@
                 renderEstimatesList();
             } else if (tabName === 'insights') {
                 if (typeof renderInsightsDashboard === 'function') renderInsightsDashboard();
-            } else if (tabName === 'archived') {
-                if (typeof renderArchivedJobs === 'function') renderArchivedJobs();
             } else {
                 renderWIPMain();
+                var archiveView = document.getElementById('archived-jobs-list');
+                if (archiveView) archiveView.style.display = 'none';
+                var mainView = document.getElementById('wip-main-view');
+                if (mainView) mainView.style.display = '';
             }
         }
 
