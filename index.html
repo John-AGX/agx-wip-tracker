@@ -9,13 +9,32 @@
 
 </head>
 <body>
-    <div class="container">
+    <!-- Login Screen -->
+    <div id="login-screen" style="position:fixed;inset:0;z-index:99999;background:var(--bg);display:flex;align-items:center;justify-content:center;">
+        <div style="width:340px;text-align:center;">
+            <img src="images/logo-white.png" alt="AGX" style="height:48px;margin-bottom:24px;opacity:0.9;" />
+            <h2 style="font-size:18px;margin:0 0 4px;color:var(--text);">AGX Central Florida</h2>
+            <p style="font-size:12px;color:var(--text-dim);margin:0 0 24px;">Estimating & Project Tracking</p>
+            <div id="login-error" style="display:none;background:rgba(248,113,113,0.1);border:1px solid var(--red);color:var(--red);padding:8px 12px;border-radius:6px;font-size:12px;margin-bottom:12px;"></div>
+            <input type="email" id="login-email" placeholder="Email" style="width:100%;padding:10px 14px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:14px;margin-bottom:10px;box-sizing:border-box;" />
+            <input type="password" id="login-password" placeholder="Password" style="width:100%;padding:10px 14px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:14px;margin-bottom:16px;box-sizing:border-box;" />
+            <button id="login-btn" style="width:100%;padding:10px;border-radius:8px;background:var(--accent);border:none;color:#fff;font-size:14px;font-weight:600;cursor:pointer;">Sign In</button>
+            <p style="font-size:10px;color:var(--text-dim);margin-top:16px;">Not connected to server? <a href="#" id="login-offline" style="color:var(--accent);">Continue Offline</a></p>
+        </div>
+    </div>
+
+    <div class="container" id="app-container" style="display:none;">
         <header>
             <div class="header-content">
                 <div class="header-top">
                     <div class="header-title"><img src="images/logo-white.png" alt="AGX AG Exteriors" class="header-logo" /></div>
                     <div class="header-right">
                         <span class="header-subtitle">Estimating &amp; Project Tracking</span>
+                        <div id="user-menu" style="display:flex;align-items:center;gap:8px;margin-left:auto;">
+                            <span id="user-name" style="font-size:11px;color:rgba(255,255,255,0.7);"></span>
+                            <span id="user-role-badge" style="font-size:9px;padding:2px 6px;border-radius:10px;background:rgba(255,255,255,0.1);color:rgba(255,255,255,0.6);text-transform:uppercase;"></span>
+                            <button id="logout-btn" style="font-size:10px;padding:3px 10px;border-radius:6px;background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.15);color:rgba(255,255,255,0.7);cursor:pointer;">Logout</button>
+                        </div>
                         <button id="theme-toggle" class="theme-toggle" title="Toggle light/dark mode"></button>
                     </div>
                 </div>
@@ -1201,7 +1220,8 @@
         <div class="modal-footer" style="background:white;border-top:2px solid #ddd;"><button onclick="window.print()" class="primary">&#x1F5A8; Print</button><button onclick="closeModal('estimatePreviewModal')" class="secondary">&#x2716; Close</button></div>
       </div>
     </div>
-    <script src="js/app.js?v=25"></script>
+    <script src="js/auth.js?v=1"></script>
+    <script src="js/app.js?v=26"></script>
     <script src="js/wip.js?v=44"></script>
     <script src="js/estimates.js?v=18"></script>
     <script src="js/proposal.js?v=18"></script>
