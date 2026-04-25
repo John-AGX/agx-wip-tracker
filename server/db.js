@@ -1,71 +1,60 @@
-const Database = require('better-sqlite3');
-const path = require('path');
+const { Pool } = require('pg');
 const bcrypt = require('bcryptjs');
 
-const DB_PATH = path.join(__dirname, '..', 'data', 'agx.db');
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+});
 
-let db;
-
-function getDb() {
-  if (!db) {
-    const fs = require('fs');
-    fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
-    db = new Database(DB_PATH);
-    db.pragma('journal_mode = WAL');
-    db.pragma('foreign_keys = ON');
-    initSchema();
-  }
-  return db;
-}
-
-function initSchema() {
-  db.exec(`
+async function initSchema() {
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      id SERIAL PRIMARY KEY,
       email TEXT UNIQUE NOT NULL,
       password_hash TEXT NOT NULL,
       name TEXT NOT NULL,
       role TEXT NOT NULL DEFAULT 'pm',
-      active INTEGER NOT NULL DEFAULT 1,
-      created_at TEXT DEFAULT (datetime('now')),
-      updated_at TEXT DEFAULT (datetime('now'))
+      active BOOLEAN NOT NULL DEFAULT true,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
     );
 
     CREATE TABLE IF NOT EXISTS jobs (
       id TEXT PRIMARY KEY,
-      owner_id INTEGER NOT NULL,
-      data TEXT NOT NULL,
-      created_at TEXT DEFAULT (datetime('now')),
-      updated_at TEXT DEFAULT (datetime('now')),
-      FOREIGN KEY (owner_id) REFERENCES users(id)
+      owner_id INTEGER NOT NULL REFERENCES users(id),
+      data JSONB NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
     );
 
     CREATE TABLE IF NOT EXISTS job_access (
-      job_id TEXT NOT NULL,
-      user_id INTEGER NOT NULL,
+      job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       access_level TEXT NOT NULL DEFAULT 'edit',
-      PRIMARY KEY (job_id, user_id),
-      FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE,
-      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      PRIMARY KEY (job_id, user_id)
     );
 
     CREATE TABLE IF NOT EXISTS node_graphs (
-      job_id TEXT PRIMARY KEY,
-      data TEXT NOT NULL,
-      updated_at TEXT DEFAULT (datetime('now')),
-      FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
+      job_id TEXT PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,
+      data JSONB NOT NULL,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
     );
   `);
 
   // Seed default admin if no users exist
-  const count = db.prepare('SELECT COUNT(*) as c FROM users').get();
-  if (count.c === 0) {
+  const { rows } = await pool.query('SELECT COUNT(*)::int as c FROM users');
+  if (rows[0].c === 0) {
     const hash = bcrypt.hashSync('admin123', 10);
-    db.prepare(
-      'INSERT INTO users (email, password_hash, name, role) VALUES (?, ?, ?, ?)'
-    ).run('admin@agx.com', hash, 'Admin', 'admin');
+    await pool.query(
+      'INSERT INTO users (email, password_hash, name, role) VALUES ($1, $2, $3, $4)',
+      ['admin@agx.com', hash, 'Admin', 'admin']
+    );
     console.log('Seeded default admin: admin@agx.com / admin123');
   }
 }
 
-module.exports = { getDb };
+async function init() {
+  await initSchema();
+}
+
+module.exports = { pool, init };

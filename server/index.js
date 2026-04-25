@@ -14,15 +14,12 @@ if (fs.existsSync(envPath)) {
   });
 }
 
-const { getDb } = require('./db');
+const { init } = require('./db');
 const authRoutes = require('./routes/auth-routes');
 const jobRoutes = require('./routes/job-routes');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-
-// Initialize database on startup
-getDb();
 
 // Middleware
 app.use(express.json({ limit: '10mb' }));
@@ -40,13 +37,19 @@ app.get('/api/health', (req, res) => {
 // Serve static frontend files
 app.use(express.static(path.join(__dirname, '..')));
 
-// SPA fallback — serve index.html for any non-API route
+// SPA fallback
 app.get('*', (req, res) => {
   if (req.path.startsWith('/api/')) return res.status(404).json({ error: 'Not found' });
   res.sendFile(path.join(__dirname, '..', 'index.html'));
 });
 
-app.listen(PORT, () => {
-  console.log(`AGX WIP Tracker running on http://localhost:${PORT}`);
-  console.log(`Default login: admin@agx.com / admin123`);
+// Initialize DB then start
+init().then(() => {
+  app.listen(PORT, () => {
+    console.log(`AGX WIP Tracker running on http://localhost:${PORT}`);
+    console.log(`Default login: admin@agx.com / admin123`);
+  });
+}).catch(err => {
+  console.error('Failed to initialize database:', err.message);
+  process.exit(1);
 });
