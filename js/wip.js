@@ -3126,5 +3126,268 @@ function renderWIPMain() {
             renderJobDetail(appState.currentJobId);
         }
 
+        // ==================== INSIGHTS DASHBOARD ====================
+        function renderInsightsDashboard() {
+            var container = document.getElementById('insights-dashboard');
+            if (!container) return;
+            container.innerHTML = '';
+
+            var jobs = appData.jobs.filter(function(j) { return j.status !== 'Archived'; });
+            var jobsWithSnaps = jobs.filter(function(j) { return j.weeklySnapshots && j.weeklySnapshots.length; });
+
+            // Collect all unique week dates across all jobs
+            var weekSet = {};
+            jobsWithSnaps.forEach(function(j) {
+                j.weeklySnapshots.forEach(function(s) { weekSet[s.weekOf] = 1; });
+            });
+            var allWeeks = Object.keys(weekSet).sort();
+
+            // ── Header ──
+            var html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">' +
+                '<h2 style="font-size:18px;margin:0;">Company WIP Insights</h2>' +
+                '<span style="font-size:12px;color:var(--text-dim);">' + jobsWithSnaps.length + ' jobs with snapshot data &middot; ' + allWeeks.length + ' weeks tracked</span></div>';
+
+            // ── Summary KPI cards ──
+            var totalIncome = 0, totalRevEarned = 0, totalActualCosts = 0, totalBacklog = 0, totalAccrued = 0;
+            jobs.forEach(function(j) {
+                var w = getJobWIP(j.id);
+                totalIncome += w.totalIncome || 0;
+                totalRevEarned += w.revenueEarned || 0;
+                totalActualCosts += w.actualCosts || 0;
+                totalBacklog += w.backlog || 0;
+                totalAccrued += (typeof getJobAccruedCosts === 'function' ? getJobAccruedCosts(j.id) : 0);
+            });
+            var totalProfit = totalRevEarned - totalActualCosts;
+            var avgPct = totalIncome > 0 ? (totalRevEarned / totalIncome * 100) : 0;
+
+            html += '<div style="display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap;">';
+            var kpis = [
+                { label: 'Total Pipeline', value: formatCurrency(totalIncome), color: 'var(--accent)' },
+                { label: 'Rev Earned', value: formatCurrency(totalRevEarned), color: 'var(--green)' },
+                { label: 'Actual Costs', value: formatCurrency(totalActualCosts), color: 'var(--red)' },
+                { label: 'Gross Profit', value: formatCurrency(totalProfit), color: totalProfit >= 0 ? 'var(--green)' : 'var(--red)' },
+                { label: 'Backlog', value: formatCurrency(totalBacklog), color: 'var(--yellow)' },
+                { label: 'Avg % Complete', value: avgPct.toFixed(1) + '%', color: 'var(--accent)' }
+            ];
+            kpis.forEach(function(k) {
+                html += '<div class="card" style="flex:1;min-width:130px;padding:12px 14px;text-align:center;">' +
+                    '<div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">' + k.label + '</div>' +
+                    '<div style="font-size:20px;font-weight:700;color:' + k.color + ';">' + k.value + '</div></div>';
+            });
+            html += '</div>';
+
+            if (allWeeks.length === 0) {
+                html += '<div class="card" style="padding:30px;text-align:center;color:var(--text-dim);">No weekly snapshots yet. Close weeks on individual jobs to see trends here.</div>';
+                container.innerHTML = html;
+                return;
+            }
+
+            // ── Combined Revenue vs Costs Waterfall ──
+            html += '<div class="card" style="padding:14px;margin-bottom:14px;">';
+            html += '<div style="font-size:11px;font-weight:600;color:var(--text-dim);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px;">All Jobs — Revenue vs Costs by Week</div>';
+            var cwfId = 'insights-wf-chart';
+            html += '<canvas id="' + cwfId + '" width="800" height="200" style="width:100%;height:200px;"></canvas>';
+            html += '</div>';
+
+            // ── Per-Job Status Cards ──
+            html += '<div class="card" style="padding:14px;margin-bottom:14px;">';
+            html += '<div style="font-size:11px;font-weight:600;color:var(--text-dim);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.5px;">Job Performance</div>';
+            html += '<div style="display:flex;gap:8px;overflow-x:auto;padding-bottom:6px;">';
+            jobs.forEach(function(j) {
+                var w = getJobWIP(j.id);
+                var profit = w.revenueEarned - w.actualCosts;
+                var margin = w.revenueEarned > 0 ? (profit / w.revenueEarned * 100) : 0;
+                var snapCount = (j.weeklySnapshots || []).length;
+                var borderColor = margin >= 15 ? 'var(--green)' : margin >= 0 ? 'var(--yellow)' : 'var(--red)';
+                html += '<div style="flex:0 0 auto;min-width:170px;padding:10px 12px;border-radius:8px;background:var(--surface2);border-left:3px solid ' + borderColor + ';">';
+                html += '<div style="font-size:11px;font-weight:600;margin-bottom:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escapeHTML(j.title || '') + '">' + escapeHTML((j.jobNumber ? j.jobNumber + ' — ' : '') + (j.title || 'Untitled')) + '</div>';
+                html += '<div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-dim);margin-bottom:2px;"><span>Income</span><b style="color:var(--text);">' + formatCurrency(w.totalIncome) + '</b></div>';
+                html += '<div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-dim);margin-bottom:2px;"><span>Rev Earned</span><b style="color:var(--green);">' + formatCurrency(w.revenueEarned) + '</b></div>';
+                html += '<div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-dim);margin-bottom:2px;"><span>Margin</span><b style="color:' + borderColor + ';">' + margin.toFixed(1) + '%</b></div>';
+                html += '<div style="margin-top:4px;height:4px;border-radius:2px;background:var(--border);overflow:hidden;">' +
+                    '<div style="height:100%;width:' + Math.min(w.pctComplete, 100) + '%;background:' + borderColor + ';border-radius:2px;"></div></div>';
+                html += '<div style="font-size:9px;color:var(--text-dim);text-align:right;margin-top:2px;">' + w.pctComplete.toFixed(1) + '% &middot; ' + snapCount + ' wks</div>';
+                html += '</div>';
+            });
+            html += '</div></div>';
+
+            // ── Job Heat Map (jobs × weeks) ──
+            if (jobsWithSnaps.length > 0 && allWeeks.length > 0) {
+                html += '<div class="card" style="padding:14px;margin-bottom:14px;">';
+                html += '<div style="font-size:11px;font-weight:600;color:var(--text-dim);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px;">Weekly Revenue Earned — All Jobs Heat Map</div>';
+                html += '<div style="overflow-x:auto;"><table style="border-collapse:collapse;font-size:10px;width:100%;">';
+                html += '<thead><tr><th style="padding:4px 6px;text-align:left;border-bottom:1px solid var(--border);color:var(--text-dim);">Job</th>';
+                allWeeks.forEach(function(wk) {
+                    html += '<th style="padding:4px 4px;text-align:center;border-bottom:1px solid var(--border);color:var(--text-dim);min-width:50px;">' + wk.substring(5) + '</th>';
+                });
+                html += '</tr></thead><tbody>';
+
+                jobsWithSnaps.forEach(function(j) {
+                    html += '<tr>';
+                    html += '<td style="padding:3px 6px;border-bottom:1px solid var(--border);white-space:nowrap;max-width:140px;overflow:hidden;text-overflow:ellipsis;">' + escapeHTML((j.jobNumber ? j.jobNumber + ' ' : '') + (j.title || '')) + '</td>';
+                    var prevRev = 0;
+                    allWeeks.forEach(function(wk) {
+                        var snap = (j.weeklySnapshots || []).find(function(s) { return s.weekOf === wk; });
+                        var rev = snap ? snap.job.revEarned : prevRev;
+                        var delta = rev - prevRev;
+                        if (snap) prevRev = rev;
+                        var bg, fg;
+                        if (!snap) { bg = 'transparent'; fg = 'var(--text-dim)'; }
+                        else if (delta > 10000) { bg = 'rgba(52,211,153,0.3)'; fg = 'var(--green)'; }
+                        else if (delta > 1000) { bg = 'rgba(52,211,153,0.15)'; fg = 'var(--green)'; }
+                        else if (delta > 0) { bg = 'rgba(251,191,36,0.15)'; fg = '#f59e0b'; }
+                        else { bg = 'rgba(139,144,165,0.08)'; fg = 'var(--text-dim)'; }
+                        var cellText = snap ? (delta >= 1000 ? '+$' + (delta / 1000).toFixed(0) + 'k' : delta > 0 ? '+$' + delta.toFixed(0) : '—') : '—';
+                        html += '<td style="padding:3px 4px;text-align:center;border-bottom:1px solid var(--border);background:' + bg + ';color:' + fg + ';font-weight:' + (delta > 0 ? '600' : '400') + ';">' + cellText + '</td>';
+                    });
+                    html += '</tr>';
+                });
+                html += '</tbody></table></div></div>';
+            }
+
+            // ── Combined Backlog Burn-Down ──
+            html += '<div class="card" style="padding:14px;">';
+            html += '<div style="font-size:11px;font-weight:600;color:var(--text-dim);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px;">Combined Backlog Burn-Down</div>';
+            var cbdId = 'insights-bd-chart';
+            html += '<canvas id="' + cbdId + '" width="800" height="160" style="width:100%;height:160px;"></canvas>';
+            html += '</div>';
+
+            container.innerHTML = html;
+
+            // ─── Draw Combined Waterfall ───
+            setTimeout(function() {
+                // Aggregate rev earned + actual costs per week across all jobs
+                var weekAgg = {};
+                allWeeks.forEach(function(wk) { weekAgg[wk] = { rev: 0, cost: 0 }; });
+                jobsWithSnaps.forEach(function(j) {
+                    (j.weeklySnapshots || []).forEach(function(s) {
+                        if (weekAgg[s.weekOf]) {
+                            weekAgg[s.weekOf].rev += s.job.revEarned || 0;
+                            weekAgg[s.weekOf].cost += s.job.actualCosts || 0;
+                        }
+                    });
+                });
+
+                var wfCanvas = document.getElementById(cwfId);
+                if (!wfCanvas) return;
+                var ctx = wfCanvas.getContext('2d');
+                var W = wfCanvas.width = wfCanvas.offsetWidth * 2;
+                var H = wfCanvas.height = 400;
+                ctx.scale(2, 2);
+                var w = W / 2, h = H / 2;
+                var pad = { t: 20, r: 14, b: 28, l: 60 };
+                var cw = w - pad.l - pad.r, ch = h - pad.t - pad.b;
+
+                var maxVal = 0;
+                allWeeks.forEach(function(wk) { maxVal = Math.max(maxVal, weekAgg[wk].rev, weekAgg[wk].cost); });
+                if (maxVal === 0) maxVal = 1;
+                var barW = Math.min(28, (cw / allWeeks.length - 6) / 2);
+
+                ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--text-dim') || '#8b90a5';
+                ctx.font = '9px system-ui';
+                ctx.textAlign = 'right';
+                for (var gi = 0; gi <= 4; gi++) {
+                    var gy = pad.t + ch - (ch * gi / 4);
+                    var gv = maxVal * gi / 4;
+                    ctx.fillText(gv >= 1000000 ? '$' + (gv / 1000000).toFixed(1) + 'M' : gv >= 1000 ? '$' + (gv / 1000).toFixed(0) + 'k' : '$' + gv.toFixed(0), pad.l - 6, gy + 3);
+                    ctx.strokeStyle = 'rgba(140,145,165,0.15)';
+                    ctx.beginPath(); ctx.moveTo(pad.l, gy); ctx.lineTo(pad.l + cw, gy); ctx.stroke();
+                }
+                allWeeks.forEach(function(wk, i) {
+                    var x = pad.l + (i + 0.5) * (cw / allWeeks.length);
+                    var agg = weekAgg[wk];
+                    ctx.fillStyle = 'rgba(79,140,255,0.7)';
+                    ctx.fillRect(x - barW - 1, pad.t + ch - (agg.rev / maxVal) * ch, barW, (agg.rev / maxVal) * ch);
+                    ctx.fillStyle = 'rgba(248,113,113,0.7)';
+                    ctx.fillRect(x + 1, pad.t + ch - (agg.cost / maxVal) * ch, barW, (agg.cost / maxVal) * ch);
+                    ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--text-dim') || '#8b90a5';
+                    ctx.font = '8px system-ui'; ctx.textAlign = 'center';
+                    ctx.fillText(wk.substring(5), x, h - pad.b + 12);
+                });
+                ctx.font = '9px system-ui'; ctx.textAlign = 'left';
+                ctx.fillStyle = 'rgba(79,140,255,0.9)'; ctx.fillRect(pad.l, 4, 8, 8);
+                ctx.fillText('Rev Earned', pad.l + 12, 12);
+                ctx.fillStyle = 'rgba(248,113,113,0.9)'; ctx.fillRect(pad.l + 80, 4, 8, 8);
+                ctx.fillText('Actual Costs', pad.l + 92, 12);
+
+                // ─── Combined Burn-Down ───
+                var bdCanvas = document.getElementById(cbdId);
+                if (!bdCanvas) return;
+                var bCtx = bdCanvas.getContext('2d');
+                var bW = bdCanvas.width = bdCanvas.offsetWidth * 2;
+                var bH = bdCanvas.height = 320;
+                bCtx.scale(2, 2);
+                var bw = bW / 2, bh = bH / 2;
+                var bp = { t: 16, r: 14, b: 28, l: 60 };
+                var bcw = bw - bp.l - bp.r, bch = bh - bp.t - bp.b;
+
+                var weekBacklog = {};
+                allWeeks.forEach(function(wk) { weekBacklog[wk] = { backlog: 0, rev: 0 }; });
+                jobsWithSnaps.forEach(function(j) {
+                    (j.weeklySnapshots || []).forEach(function(s) {
+                        if (weekBacklog[s.weekOf]) {
+                            weekBacklog[s.weekOf].backlog += s.job.backlog || 0;
+                            weekBacklog[s.weekOf].rev += s.job.revEarned || 0;
+                        }
+                    });
+                });
+
+                var maxBd = 0;
+                allWeeks.forEach(function(wk) { maxBd = Math.max(maxBd, weekBacklog[wk].backlog, weekBacklog[wk].rev); });
+                if (maxBd === 0) maxBd = 1;
+
+                bCtx.fillStyle = getComputedStyle(document.body).getPropertyValue('--text-dim') || '#8b90a5';
+                bCtx.font = '9px system-ui'; bCtx.textAlign = 'right';
+                for (var bi = 0; bi <= 4; bi++) {
+                    var by = bp.t + bch - (bch * bi / 4);
+                    var bv = maxBd * bi / 4;
+                    bCtx.fillText(bv >= 1000000 ? '$' + (bv / 1000000).toFixed(1) + 'M' : bv >= 1000 ? '$' + (bv / 1000).toFixed(0) + 'k' : '$' + bv.toFixed(0), bp.l - 6, by + 3);
+                    bCtx.strokeStyle = 'rgba(140,145,165,0.15)';
+                    bCtx.beginPath(); bCtx.moveTo(bp.l, by); bCtx.lineTo(bp.l + bcw, by); bCtx.stroke();
+                }
+                // Backlog area
+                bCtx.beginPath(); bCtx.strokeStyle = '#fbbf24'; bCtx.lineWidth = 2;
+                allWeeks.forEach(function(wk, i) {
+                    var bx = bp.l + (i + 0.5) * (bcw / allWeeks.length);
+                    var byy = bp.t + bch - (weekBacklog[wk].backlog / maxBd) * bch;
+                    if (i === 0) bCtx.moveTo(bx, byy); else bCtx.lineTo(bx, byy);
+                });
+                bCtx.stroke();
+                allWeeks.forEach(function(wk, i) {
+                    var bx = bp.l + (i + 0.5) * (bcw / allWeeks.length);
+                    if (i === allWeeks.length - 1) bCtx.lineTo(bx, bp.t + bch);
+                });
+                bCtx.lineTo(bp.l + 0.5 * (bcw / allWeeks.length), bp.t + bch);
+                bCtx.closePath(); bCtx.fillStyle = 'rgba(251,191,36,0.1)'; bCtx.fill();
+
+                // Rev earned line
+                bCtx.beginPath(); bCtx.strokeStyle = '#34d399'; bCtx.lineWidth = 2;
+                allWeeks.forEach(function(wk, i) {
+                    var bx = bp.l + (i + 0.5) * (bcw / allWeeks.length);
+                    var byy = bp.t + bch - (weekBacklog[wk].rev / maxBd) * bch;
+                    if (i === 0) bCtx.moveTo(bx, byy); else bCtx.lineTo(bx, byy);
+                });
+                bCtx.stroke();
+
+                // Week labels + dots
+                allWeeks.forEach(function(wk, i) {
+                    var bx = bp.l + (i + 0.5) * (bcw / allWeeks.length);
+                    var byy = bp.t + bch - (weekBacklog[wk].backlog / maxBd) * bch;
+                    bCtx.fillStyle = '#fbbf24';
+                    bCtx.beginPath(); bCtx.arc(bx, byy, 3, 0, Math.PI * 2); bCtx.fill();
+                    bCtx.fillStyle = getComputedStyle(document.body).getPropertyValue('--text-dim') || '#8b90a5';
+                    bCtx.font = '8px system-ui'; bCtx.textAlign = 'center';
+                    bCtx.fillText(wk.substring(5), bx, bh - bp.b + 12);
+                });
+                bCtx.font = '9px system-ui'; bCtx.textAlign = 'left';
+                bCtx.strokeStyle = '#fbbf24'; bCtx.lineWidth = 2;
+                bCtx.beginPath(); bCtx.moveTo(bp.l, 4); bCtx.lineTo(bp.l + 16, 4); bCtx.stroke();
+                bCtx.fillStyle = '#fbbf24'; bCtx.fillText('Backlog', bp.l + 20, 8);
+                bCtx.strokeStyle = '#34d399';
+                bCtx.beginPath(); bCtx.moveTo(bp.l + 70, 4); bCtx.lineTo(bp.l + 86, 4); bCtx.stroke();
+                bCtx.fillStyle = '#34d399'; bCtx.fillText('Rev Earned', bp.l + 90, 8);
+            }, 50);
+        }
+
         // ==================== ESTIMATES FUNCTIONS (FROM ORIGINAL FILE) ====================
         

@@ -292,6 +292,8 @@
 
             if (tabName === 'estimates') {
                 renderEstimatesList();
+            } else if (tabName === 'insights') {
+                if (typeof renderInsightsDashboard === 'function') renderInsightsDashboard();
             } else {
                 renderWIPMain();
             }
