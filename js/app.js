@@ -313,6 +313,39 @@
             }
         }
 
+        // Hardening for read-only mode: walks every button in the detail view
+        // and sets the native HTML `disabled` attribute on anything that's not
+        // in the navigation whitelist. CSS pointer-events does most of the
+        // work, but inline-styled buttons (or workspace internals rebuilt by
+        // js/workspace-layout.js) can defeat the cascade. The disabled
+        // attribute is a hard browser-level block. Safe to call repeatedly.
+        function applyReadOnlyButtonGuard() {
+            var detail = document.getElementById('wip-job-detail-view');
+            if (!detail) return;
+            var readOnly = detail.classList.contains('read-only-mode');
+            // Selector for buttons that should remain interactive in read-only mode.
+            var allowed = '.job-detail-header button, .sub-tab-btn-job, .ws-right-tab, .card-toggle, [data-readonly-allowed], .modal button';
+            detail.querySelectorAll('button').forEach(function(btn) {
+                if (!readOnly) {
+                    if (btn.dataset.readonlyDisabled === '1') {
+                        btn.removeAttribute('disabled');
+                        delete btn.dataset.readonlyDisabled;
+                    }
+                    return;
+                }
+                if (btn.matches(allowed)) {
+                    if (btn.dataset.readonlyDisabled === '1') {
+                        btn.removeAttribute('disabled');
+                        delete btn.dataset.readonlyDisabled;
+                    }
+                } else if (!btn.disabled) {
+                    btn.setAttribute('disabled', 'true');
+                    btn.dataset.readonlyDisabled = '1';
+                }
+            });
+        }
+        window.applyReadOnlyButtonGuard = applyReadOnlyButtonGuard;
+
         function switchJobSubTab(subtabName) {
             document.querySelectorAll('.sub-tab-content-job').forEach(stc => stc.classList.remove('active'));
             document.querySelectorAll('.sub-tab-btn-job').forEach(btn => btn.classList.remove('active'));
@@ -330,6 +363,10 @@
             else if (subtabName === 'job-invoices') renderInvoices(currentJobId);
             else if (subtabName === 'job-labor') renderJobLabor(currentJobId);
             else if (subtabName === 'job-weekly') renderJobWeekly(currentJobId);
+
+            // Re-apply read-only button guard after the new sub-tab content renders.
+            // setTimeout 0 lets the synchronous render finish first.
+            setTimeout(applyReadOnlyButtonGuard, 0);
         }
 
         // ==================== DATA STORAGE ====================

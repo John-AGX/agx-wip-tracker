@@ -191,11 +191,9 @@
             display: block;
         }
 
-        /* Read-only mode for job detail when the current PM doesn't own the job.
-           Strategy: kill ALL form controls and ALL buttons inside the detail
-           view, then re-enable a small whitelist of pure navigation: the
-           Back to WIP header button, the sub-tab nav, and the read-only
-           Sharing card (hidden anyway for non-managers, but safe to allow). */
+        /* Read-only mode for job detail when the current PM doesn't own the job. */
+
+        /* Form controls always disabled (typing is meaningless if save is blocked). */
         .read-only-mode input:not([type=button]):not([type=hidden]),
         .read-only-mode select,
         .read-only-mode textarea {
@@ -203,21 +201,42 @@
             background-color: rgba(255,255,255,0.04) !important;
             opacity: 0.6;
         }
+
+        /* The workspace (left-side spreadsheet/cell editor) becomes entirely
+           non-interactive but stays at full visual fidelity — the user can
+           still read formulas and cell content, just can't edit them. */
+        .read-only-mode .ws-col-left {
+            pointer-events: none !important;
+        }
+
+        /* Disable every button in the detail view by default... */
         .read-only-mode button {
             pointer-events: none !important;
             opacity: 0.4 !important;
             cursor: not-allowed !important;
         }
-        /* Re-enable navigation: back button, sub-tab switcher, and card
-           collapse/expand controls so users can still browse the job's data. */
+        /* ...except the navigation whitelist: Back to WIP, sub-tab switcher
+           (both legacy .sub-tab-btn-job and workspace-layout .ws-right-tab),
+           card collapse arrows (rendered as plain divs/spans, not buttons,
+           so they're never blocked), and any escape-hatch element with
+           [data-readonly-allowed]. Modal buttons stay enabled so any modal
+           that does open can still be closed. */
         .read-only-mode .job-detail-header button,
         .read-only-mode .sub-tab-btn-job,
+        .read-only-mode .ws-right-tab,
         .read-only-mode .card-toggle,
         .read-only-mode button[data-readonly-allowed],
         .read-only-mode .modal button {
             pointer-events: auto !important;
             opacity: 1 !important;
             cursor: pointer !important;
+        }
+        /* Native [disabled] applied via the JS hardening below — this just
+           keeps it visually consistent with the CSS-disabled state. */
+        .read-only-mode button[disabled] {
+            pointer-events: none !important;
+            opacity: 0.4 !important;
+            cursor: not-allowed !important;
         }
 
         /* CARDS */

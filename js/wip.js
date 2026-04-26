@@ -1095,6 +1095,14 @@ function renderWIPMain() {
             // for non-managers and offline mode.
             if (typeof renderJobSharing === 'function') renderJobSharing(jobId);
 
+            // Defensive: re-apply the read-only button guard after the rest of
+            // the detail finishes rendering (workspace-layout.js may rebuild
+            // panels asynchronously). setTimeout 0 lets all synchronous
+            // sub-renders complete before we walk the DOM.
+            if (typeof applyReadOnlyButtonGuard === 'function') {
+                setTimeout(applyReadOnlyButtonGuard, 0);
+            }
+
             const w = getJobWIP(jobId);
 
             document.getElementById('job-detail-title').textContent = (job.jobNumber ? job.jobNumber + ' — ' : '') + job.title;
