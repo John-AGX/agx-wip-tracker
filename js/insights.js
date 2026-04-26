@@ -112,6 +112,45 @@
     return weeks.filter(function(w) { return w >= cutoffStr; });
   }
 
+  // Inline SVG sparkline. Dead simple — polyline normalized to viewBox.
+  // Returns '' for fewer than 2 points so the cell stays clean. Color is
+  // an explicit hex/rgb so it doesn't depend on theme variables (which
+  // would force a paint fight with the theme toggle).
+  function sparklineSVG(values, color, opts) {
+    opts = opts || {};
+    var width = opts.width || 60;
+    var height = opts.height || 18;
+    if (!values || values.length < 2) return '';
+    var min = Math.min.apply(null, values);
+    var max = Math.max.apply(null, values);
+    var range = (max - min) || 1;
+    var pad = 1.5; // keep the stroke off the edge
+    var n = values.length;
+    var pts = values.map(function(v, i) {
+      var x = pad + (i / (n - 1)) * (width - pad * 2);
+      var y = pad + (height - pad * 2) - ((v - min) / range) * (height - pad * 2);
+      return x.toFixed(1) + ',' + y.toFixed(1);
+    }).join(' ');
+    // Last-point dot for emphasis
+    var last = values[values.length - 1];
+    var lastX = pad + (width - pad * 2);
+    var lastY = pad + (height - pad * 2) - ((last - min) / range) * (height - pad * 2);
+    return '<svg width="' + width + '" height="' + height + '" style="display:block;margin:3px auto 0;overflow:visible;" aria-hidden="true">' +
+      '<polyline points="' + pts + '" fill="none" stroke="' + color + '" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round" opacity="0.85" />' +
+      '<circle cx="' + lastX.toFixed(1) + '" cy="' + lastY.toFixed(1) + '" r="1.6" fill="' + color + '" />' +
+      '</svg>';
+  }
+
+  // Pull a metric's value series for a job, ordered oldest-to-newest, capped
+  // at the last `limit` points and bounded at the selected end date.
+  function metricSeries(job, endDateKey, fieldExtractor, limit) {
+    var snaps = jobSnapshots(job)
+      .filter(function(s) { return s.dateKey && s.dateKey <= endDateKey; })
+      .sort(function(a, b) { return a.dateKey < b.dateKey ? -1 : 1; });
+    if (limit && snaps.length > limit) snaps = snaps.slice(-limit);
+    return snaps.map(fieldExtractor);
+  }
+
   // ── Rendering ──────────────────────────────────────────────────────────
 
   function kpiCard(label, value, deltaValue, deltaLabel) {
@@ -135,7 +174,18 @@
     var marginPrev = (prev && prev.revEarned > 0) ? (prev.grossProfit / prev.revEarned) * 100 : null;
     var marginDelta = (marginPrev != null) ? (marginCur - marginPrev) : null;
 
-    function cell(value, delta, type) {
+    // Build per-metric sparkline series from the job's snapshot history,
+    // bounded at the selected date and capped at 14 points so the lines
+    // stay readable. Each gets a tone-matched stroke color.
+    var pctSeries = metricSeries(j, s.dateKey, function(x) { return (x.job||{}).pctComplete||0; }, 14);
+    var revSeries = metricSeries(j, s.dateKey, function(x) { return (x.job||{}).revEarned||0; }, 14);
+    var costSeries = metricSeries(j, s.dateKey, function(x) { return (x.job||{}).actualCosts||0; }, 14);
+    var marginSeries = metricSeries(j, s.dateKey, function(x) {
+      var jx = x.job||{};
+      return jx.revEarned > 0 ? (jx.grossProfit / jx.revEarned) * 100 : 0;
+    }, 14);
+
+    function cell(value, delta, type, sparkValues, sparkColor) {
       var deltaText = '';
       if (delta != null) {
         var dStr;
@@ -144,8 +194,9 @@
         else dStr = fmtSignedCurrency(delta);
         deltaText = '<div class="' + deltaClass(delta) + '" style="font-size:10px;margin-top:2px;">' + deltaArrow(delta) + ' ' + dStr + '</div>';
       }
+      var sparkHtml = (sparkValues && sparkColor) ? sparklineSVG(sparkValues, sparkColor) : '';
       return '<td style="padding:8px 10px;text-align:right;">' +
-             '<div>' + value + '</div>' + deltaText + '</td>';
+             '<div>' + value + '</div>' + deltaText + sparkHtml + '</td>';
     }
 
     return '<tr style="border-bottom:1px solid var(--border,#333);">' +
@@ -154,11 +205,11 @@
         '<div style="font-size:10px;color:var(--text-dim,#888);">' + escapeHTML(j.jobNumber || '') +
         (j.client ? ' · ' + escapeHTML(j.client) : '') + '</div>' +
       '</td>' +
-      cell(fmtPct(cur.pctComplete), pctDelta, 'pct') +
+      cell(fmtPct(cur.pctComplete), pctDelta, 'pct', pctSeries, '#fbbf24') +
       cell(fmtCurrency(cur.totalIncome), null) +
-      cell(fmtCurrency(cur.revEarned), revDelta) +
-      cell(fmtCurrency(cur.actualCosts), costDelta) +
-      cell(fmtPct(marginCur), marginDelta, 'pp') +
+      cell(fmtCurrency(cur.revEarned), revDelta, null, revSeries, '#34d399') +
+      cell(fmtCurrency(cur.actualCosts), costDelta, null, costSeries, '#f87171') +
+      cell(fmtPct(marginCur), marginDelta, 'pp', marginSeries, '#34d399') +
     '</tr>';
   }
 
