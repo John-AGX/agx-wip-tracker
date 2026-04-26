@@ -1090,11 +1090,6 @@ function renderWIPMain() {
                 saveData();
             }
 
-            // Sharing section: visible only to admin/owner; rendered async after
-            // a fetch to /api/jobs/:id/access. The function self-hides the card
-            // for non-managers and offline mode.
-            if (typeof renderJobSharing === 'function') renderJobSharing(jobId);
-
             // Defensive: re-apply the read-only button guard after the rest of
             // the detail finishes rendering (workspace-layout.js may rebuild
             // panels asynchronously). setTimeout 0 lets all synchronous
@@ -1174,6 +1169,27 @@ function renderWIPMain() {
                 '<button class="small" onclick="openAddChangeOrderModal()" style="font-size:11px;padding:4px 10px;">&#x1F4DD; Change Order</button>' +
                 '<button class="small" onclick="openAddPOModal()" style="font-size:11px;padding:4px 10px;">&#x1F4C4; Purchase Order</button>' +
                 '<button class="small" onclick="openAddInvoiceModal()" style="font-size:11px;padding:4px 10px;">&#x1F4B3; Invoice</button>';
+
+            // Sharing button — visible only to admin or the job owner. Renders
+            // a tiny inline indicator with the share count, and opens the
+            // existing manage-sharing modal on click.
+            var auth = window.agxAuth;
+            var me = auth && auth.getUser && auth.getUser();
+            var jobObj = appData.jobs.find(function(j) { return j.id === jobId; });
+            var canManageSharing = me && jobObj && (me.role === 'admin' || me.id === jobObj.owner_id);
+            if (canManageSharing && window.agxApi && window.agxApi.isAuthenticated()) {
+                btnRow.insertAdjacentHTML('beforeend',
+                    '<button class="small" onclick="openJobShareManager(\'' + escapeHTML(jobId) + '\')" ' +
+                    'data-readonly-allowed style="font-size:11px;padding:4px 10px;background:rgba(79,140,255,0.12);color:#4f8cff;border:1px solid rgba(79,140,255,0.3);" ' +
+                    'id="job-overview-share-btn">&#x1F517; Sharing <span id="job-overview-share-count" style="opacity:0.7;font-size:10px;"></span></button>'
+                );
+                // Async fetch the share count so the button shows '(n)' if any
+                window.agxApi.jobs.listAccess(jobId).then(function(res) {
+                    var n = (res.shares || []).length;
+                    var countEl = document.getElementById('job-overview-share-count');
+                    if (countEl && n > 0) countEl.textContent = '(' + n + ')';
+                }).catch(function() { /* ignore — button still works without count */ });
+            }
             container.appendChild(btnRow);
 
             // ── Building cards ──

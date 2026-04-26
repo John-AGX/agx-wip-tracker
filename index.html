@@ -241,15 +241,6 @@
                             <button onclick="openAddSubToJobModal()">&#x1F477; Add Sub</button>
                         </div>
 
-                        <!-- Sharing card: visible to admin or job owner. Populated by renderJobSharing(). -->
-                        <div class="card" id="job-sharing-card" style="display:none;">
-                            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-                                <h3 style="margin:0;">Sharing</h3>
-                                <button class="small primary" onclick="openGrantAccessModal()">+ Grant Access</button>
-                            </div>
-                            <div id="job-sharing-list" style="font-size:13px;color:var(--text,#fff);"></div>
-                        </div>
-
                         <div class="sub-tabs">
                             <button class="sub-tab-btn-job active" data-subtab="job-overview">Overview</button>
                             <button class="sub-tab-btn-job" data-subtab="job-wip">WIP</button>
@@ -1474,10 +1465,10 @@
 
     <script src="js/auth.js?v=4"></script>
     <script src="js/api.js?v=5"></script>
-    <script src="js/admin.js?v=7"></script>
+    <script src="js/admin.js?v=8"></script>
     <script src="js/insights.js?v=3"></script>
     <script src="js/app.js?v=34"></script>
-    <script src="js/wip.js?v=49"></script>
+    <script src="js/wip.js?v=50"></script>
     <script src="js/estimates.js?v=18"></script>
     <script src="js/proposal.js?v=18"></script>
 

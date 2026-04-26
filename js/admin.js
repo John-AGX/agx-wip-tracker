@@ -424,12 +424,32 @@
   }
 
   function openJobShareManager(jobId) {
+    // Look up the job in the admin cache first (admins coming in from the
+    // Job Assignments table); fall back to appData.jobs (non-admin owners
+    // clicking the Sharing button on their own job overview). Either way
+    // we just need a label for the modal header.
     var job = _jobsCache.find(function(j) { return j.id === jobId; });
-    if (!job) return;
+    if (!job && window.appData && window.appData.jobs) {
+      job = window.appData.jobs.find(function(j) { return j.id === jobId; });
+    }
+    if (!job) {
+      alert('Could not find that job.');
+      return;
+    }
     _currentSharingJobId = jobId; // reuse the per-job sharing flow's state
     var label = (job.jobNumber ? '[' + job.jobNumber + '] ' : '') + (job.title || jobId);
     document.getElementById('manageSharing_jobLabel').textContent = label;
-    refreshShareManager(jobId);
+    // Ensure the users cache exists so the owner display + grant dropdown work.
+    if (!_users.length && window.agxApi) {
+      window.agxApi.users.list().then(function(res) {
+        _users = res.users || [];
+        refreshShareManager(jobId);
+      }).catch(function() {
+        refreshShareManager(jobId);
+      });
+    } else {
+      refreshShareManager(jobId);
+    }
     openModal('manageJobSharingModal');
   }
 

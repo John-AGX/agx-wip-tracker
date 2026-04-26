@@ -66,8 +66,12 @@ router.post('/register', requireAuth, requireRole('admin'), async (req, res) => 
   }
 });
 
-// GET /api/auth/users (admin only)
-router.get('/users', requireAuth, requireRole('admin'), async (req, res) => {
+// GET /api/auth/users
+// All authenticated users can list the org directory. Needed so that PM
+// owners can populate the grant-access picker on jobs they own. Data
+// returned is minimal (id/email/name/role/active/created_at) — same as
+// what's needed for the admin Users table, with no auth secrets.
+router.get('/users', requireAuth, async (req, res) => {
   try {
     const { rows } = await pool.query('SELECT id, email, name, role, active, created_at FROM users');
     res.json({ users: rows });
