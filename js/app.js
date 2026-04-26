@@ -494,22 +494,37 @@
         };
 
         // ==================== IMPORT FROM BROWSER ====================
-        // One-time migration UI: read jobs/estimates from this browser's localStorage
-        // and push selected ones to the server. After Phase 1 it remains useful as a
-        // "I had unsaved data on another machine" recovery path.
-        function openImportFromBrowserModal() {
-            if (!window.agxApi || !window.agxApi.isAuthenticated()) {
-                alert('Log in to the server first. Offline mode has no server to push to.');
-                return;
-            }
-            var localJobs = safeLoadJSON('agx-wip-jobs', []);
-            var localEstimates = safeLoadJSON('agx-estimates', []);
+        // One-time migration UI: read jobs/estimates from this browser's localStorage,
+        // OR from JSON pasted in from another origin (e.g. the GitHub Pages deploy),
+        // and push selected ones to the server.
+
+        // Holds the current import source — either pulled from localStorage on this
+        // origin or parsed from a JSON paste. Has the same shape as appData.
+        var _importSource = null;
+
+        function readLocalStorageAsImportSource() {
+            return {
+                jobs: safeLoadJSON('agx-wip-jobs', []),
+                buildings: safeLoadJSON('agx-wip-buildings', []),
+                phases: safeLoadJSON('agx-wip-phases', []),
+                subs: safeLoadJSON('agx-wip-subs', []),
+                changeOrders: safeLoadJSON('agx-wip-changeorders', []),
+                purchaseOrders: safeLoadJSON('agx-wip-purchaseorders', []),
+                invoices: safeLoadJSON('agx-wip-invoices', []),
+                estimates: safeLoadJSON('agx-estimates', []),
+                estimateLines: safeLoadJSON('agx-estimate-lines', []),
+                estimateAlternates: safeLoadJSON('agx-estimate-alternates', [])
+            };
+        }
+
+        function renderImportJobsList() {
             var listEl = document.getElementById('importBrowser_jobsList');
-            if (!localJobs.length) {
-                listEl.innerHTML = '<div style="padding:15px;color:var(--text-dim,#888);">No jobs found in this browser.</div>';
+            var src = _importSource || { jobs: [], estimates: [] };
+            if (!src.jobs.length) {
+                listEl.innerHTML = '<div style="padding:15px;color:var(--text-dim,#888);">No jobs in source.</div>';
             } else {
                 var html = '';
-                localJobs.forEach(function(j) {
+                src.jobs.forEach(function(j) {
                     var label = (j.jobNumber ? '[' + j.jobNumber + '] ' : '') + (j.title || j.id) +
                                 (j.client ? ' — ' + j.client : '');
                     html += '<label style="display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--border,#333);cursor:pointer;">' +
@@ -520,16 +535,90 @@
                 listEl.innerHTML = html;
             }
             document.getElementById('importBrowser_estimatesLabel').textContent =
-                'Also push estimates (' + localEstimates.length + ' in this browser)';
+                'Also push estimates (' + (src.estimates ? src.estimates.length : 0) + ' in source)';
+        }
+
+        function openImportFromBrowserModal() {
+            if (!window.agxApi || !window.agxApi.isAuthenticated()) {
+                alert('Log in to the server first. Offline mode has no server to push to.');
+                return;
+            }
+            switchImportSource('local');
             document.getElementById('importBrowser_estimatesChk').checked = false;
             document.getElementById('importBrowser_status').textContent = '';
             document.getElementById('importBrowser_runBtn').disabled = false;
             openModal('importBrowserModal');
         }
 
+        function switchImportSource(source) {
+            var localTab = document.getElementById('importBrowser_tabLocal');
+            var pasteTab = document.getElementById('importBrowser_tabPaste');
+            var pasteSection = document.getElementById('importBrowser_pasteSection');
+
+            if (source === 'paste') {
+                localTab.style.borderBottomColor = 'transparent';
+                localTab.style.color = 'var(--text-dim,#888)';
+                pasteTab.style.borderBottomColor = '#4f8cff';
+                pasteTab.style.color = 'var(--text,#fff)';
+                pasteSection.style.display = '';
+                // Don't replace _importSource yet — wait for parseImportJSON
+                if (!_importSource || _importSource.__source !== 'paste') {
+                    _importSource = { jobs: [], estimates: [], __source: 'paste' };
+                    renderImportJobsList();
+                }
+            } else {
+                pasteTab.style.borderBottomColor = 'transparent';
+                pasteTab.style.color = 'var(--text-dim,#888)';
+                localTab.style.borderBottomColor = '#4f8cff';
+                localTab.style.color = 'var(--text,#fff)';
+                pasteSection.style.display = 'none';
+                _importSource = readLocalStorageAsImportSource();
+                _importSource.__source = 'local';
+                renderImportJobsList();
+            }
+        }
+
+        function parseImportJSON() {
+            var statusEl = document.getElementById('importBrowser_status');
+            var raw = document.getElementById('importBrowser_pasteText').value.trim();
+            if (!raw) {
+                statusEl.style.color = '#fbbf24';
+                statusEl.textContent = 'Paste the JSON output first.';
+                return;
+            }
+            try {
+                var parsed = JSON.parse(raw);
+                _importSource = {
+                    jobs: parsed.jobs || [],
+                    buildings: parsed.buildings || [],
+                    phases: parsed.phases || [],
+                    subs: parsed.subs || [],
+                    changeOrders: parsed.changeOrders || [],
+                    purchaseOrders: parsed.purchaseOrders || [],
+                    invoices: parsed.invoices || [],
+                    estimates: parsed.estimates || [],
+                    estimateLines: parsed.estimateLines || [],
+                    estimateAlternates: parsed.estimateAlternates || [],
+                    __source: 'paste'
+                };
+                renderImportJobsList();
+                statusEl.style.color = '#34d399';
+                statusEl.textContent = 'Parsed: ' + _importSource.jobs.length + ' job(s), ' +
+                                       _importSource.estimates.length + ' estimate(s). Pick which to import below.';
+            } catch (e) {
+                statusEl.style.color = '#e74c3c';
+                statusEl.textContent = 'Could not parse JSON: ' + e.message;
+            }
+        }
+
         function runImportFromBrowser() {
             var statusEl = document.getElementById('importBrowser_status');
             var btn = document.getElementById('importBrowser_runBtn');
+            if (!_importSource) {
+                statusEl.style.color = '#fbbf24';
+                statusEl.textContent = 'No source selected.';
+                return;
+            }
             var picked = {};
             document.querySelectorAll('.importBrowser_jobChk:checked').forEach(function(chk) {
                 picked[chk.getAttribute('data-job-id')] = true;
@@ -542,31 +631,23 @@
                 return;
             }
 
-            // Build a payload from localStorage scoped to the picked jobs
-            var localJobs = safeLoadJSON('agx-wip-jobs', []);
-            var localBuildings = safeLoadJSON('agx-wip-buildings', []);
-            var localPhases = safeLoadJSON('agx-wip-phases', []);
-            var localSubs = safeLoadJSON('agx-wip-subs', []);
-            var localCOs = safeLoadJSON('agx-wip-changeorders', []);
-            var localPOs = safeLoadJSON('agx-wip-purchaseorders', []);
-            var localInvs = safeLoadJSON('agx-wip-invoices', []);
-
+            var src = _importSource;
             var jobsPayload = {
-                jobs: localJobs.filter(function(j) { return picked[j.id]; }),
-                buildings: localBuildings.filter(function(b) { return picked[b.jobId]; }),
-                phases: localPhases.filter(function(p) { return picked[p.jobId]; }),
-                subs: localSubs.filter(function(s) { return picked[s.jobId]; }),
-                changeOrders: localCOs.filter(function(c) { return picked[c.jobId]; }),
-                purchaseOrders: localPOs.filter(function(p) { return picked[p.jobId]; }),
-                invoices: localInvs.filter(function(i) { return picked[i.jobId]; })
+                jobs: src.jobs.filter(function(j) { return picked[j.id]; }),
+                buildings: (src.buildings || []).filter(function(b) { return picked[b.jobId]; }),
+                phases: (src.phases || []).filter(function(p) { return picked[p.jobId]; }),
+                subs: (src.subs || []).filter(function(s) { return picked[s.jobId]; }),
+                changeOrders: (src.changeOrders || []).filter(function(c) { return picked[c.jobId]; }),
+                purchaseOrders: (src.purchaseOrders || []).filter(function(p) { return picked[p.jobId]; }),
+                invoices: (src.invoices || []).filter(function(i) { return picked[i.jobId]; })
             };
 
             var estimatesPayload = null;
             if (includeEstimates) {
                 estimatesPayload = {
-                    estimates: safeLoadJSON('agx-estimates', []),
-                    estimateLines: safeLoadJSON('agx-estimate-lines', []),
-                    estimateAlternates: safeLoadJSON('agx-estimate-alternates', [])
+                    estimates: src.estimates || [],
+                    estimateLines: src.estimateLines || [],
+                    estimateAlternates: src.estimateAlternates || []
                 };
             }
 
@@ -598,6 +679,8 @@
 
         window.openImportFromBrowserModal = openImportFromBrowserModal;
         window.runImportFromBrowser = runImportFromBrowser;
+        window.switchImportSource = switchImportSource;
+        window.parseImportJSON = parseImportJSON;
 
         // ==================== SEED DATA ====================
         function seedDataIfNeeded() {
