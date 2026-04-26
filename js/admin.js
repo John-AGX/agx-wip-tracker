@@ -511,6 +511,22 @@
       .catch(function(err) { alert('Revoke failed: ' + (err.message || '')); });
   }
 
+  // Toggle between Users / Job Assignments inside the Admin tab.
+  // Renders the section's data on first reveal so we don't fire API calls
+  // for tabs the admin never opens.
+  function switchAdminSubTab(name) {
+    document.querySelectorAll('[data-admin-subtab]').forEach(function(btn) {
+      btn.classList.toggle('active', btn.dataset.adminSubtab === name);
+    });
+    document.querySelectorAll('.admin-subtab-content').forEach(function(c) {
+      c.style.display = 'none';
+    });
+    var target = document.getElementById('admin-subtab-' + name);
+    if (target) target.style.display = '';
+    if (name === 'users') renderAdminUsers();
+    else if (name === 'jobs') renderAdminJobs();
+  }
+
   function deleteAdminUser(userId) {
     var u = _users.find(function(x) { return x.id === userId; });
     if (!u) return;
@@ -544,4 +560,5 @@
   window.openGrantAccessFromAdmin = openGrantAccessFromAdmin;
   window.updateAdminJobAccessLevel = updateAdminJobAccessLevel;
   window.revokeAdminJobAccess = revokeAdminJobAccess;
+  window.switchAdminSubTab = switchAdminSubTab;
 })();

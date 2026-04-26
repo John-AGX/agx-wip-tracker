@@ -297,8 +297,10 @@
             } else if (tabName === 'insights') {
                 if (typeof renderInsightsDashboard === 'function') renderInsightsDashboard();
             } else if (tabName === 'admin') {
-                if (typeof renderAdminUsers === 'function') renderAdminUsers();
-                if (typeof renderAdminJobs === 'function') renderAdminJobs();
+                // Default to the Users sub-tab; switchAdminSubTab handles the
+                // initial render so we don't double-fire API calls.
+                if (typeof switchAdminSubTab === 'function') switchAdminSubTab('users');
+                else if (typeof renderAdminUsers === 'function') renderAdminUsers();
             } else {
                 // Returning to WIP from another tab: force back to the main job
                 // list, even if a job detail was previously open. Without this

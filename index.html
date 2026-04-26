@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AGX Central Florida &mdash; WIP Tracker</title>
     <link rel="stylesheet" href="css/styles.css?v=10">
+    <link rel="stylesheet" href="css/workspace-layout.css?v=22">
     <link rel="stylesheet" href="css/workspace.css?v=20">
 
 </head>
@@ -633,46 +634,57 @@
 
                 <!-- ADMIN TAB (admin-only, populated by js/admin.js) -->
                 <div id="admin" class="tab-content" data-admin-only style="display:none;">
-                    <div class="action-buttons">
-                        <button onclick="openNewUserModal()">&#x1F464; New User</button>
-                        <button onclick="renderAdminUsers()" class="secondary">Refresh</button>
+                    <div class="ws-right-tabs" style="margin-bottom:16px;">
+                        <button class="ws-right-tab active" data-admin-subtab="users" onclick="switchAdminSubTab('users')">Users</button>
+                        <button class="ws-right-tab" data-admin-subtab="jobs" onclick="switchAdminSubTab('jobs')">Job Assignments</button>
                     </div>
 
-                    <h3 style="margin-top:20px;color:var(--text,#fff);">Users</h3>
-                    <div class="table-container">
-                        <table id="admin-users-table">
-                            <thead>
-                                <tr>
-                                    <th>Name</th>
-                                    <th>Email</th>
-                                    <th>Role</th>
-                                    <th style="text-align:center;">Active</th>
-                                    <th>Created</th>
-                                    <th style="text-align:center;">Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody id="admin-users-tbody"></tbody>
-                        </table>
+                    <!-- Users sub-tab -->
+                    <div id="admin-subtab-users" class="admin-subtab-content">
+                        <div class="action-buttons">
+                            <button onclick="openNewUserModal()">&#x1F464; New User</button>
+                            <button onclick="renderAdminUsers()" class="secondary">Refresh</button>
+                        </div>
+                        <div class="table-container" style="margin-top:14px;">
+                            <table id="admin-users-table">
+                                <thead>
+                                    <tr>
+                                        <th>Name</th>
+                                        <th>Email</th>
+                                        <th>Role</th>
+                                        <th style="text-align:center;">Active</th>
+                                        <th>Created</th>
+                                        <th style="text-align:center;">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="admin-users-tbody"></tbody>
+                            </table>
+                        </div>
                     </div>
 
-                    <h3 style="margin-top:30px;color:var(--text,#fff);">Job Assignments</h3>
-                    <p style="margin:0 0 12px 0;color:var(--text-dim,#888);font-size:12px;">
-                        Reassign a job's owner from the dropdown. Click <strong>Manage Sharing</strong> to grant additional users edit or view access.
-                    </p>
-                    <div class="table-container">
-                        <table id="admin-jobs-table">
-                            <thead>
-                                <tr>
-                                    <th>Job</th>
-                                    <th>Client</th>
-                                    <th>Status</th>
-                                    <th>Owner</th>
-                                    <th style="text-align:center;">Shared With</th>
-                                    <th style="text-align:center;">Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody id="admin-jobs-tbody"></tbody>
-                        </table>
+                    <!-- Job Assignments sub-tab -->
+                    <div id="admin-subtab-jobs" class="admin-subtab-content" style="display:none;">
+                        <div class="action-buttons">
+                            <button onclick="renderAdminJobs()" class="secondary">Refresh</button>
+                        </div>
+                        <p style="margin:12px 0;color:var(--text-dim,#888);font-size:12px;">
+                            Reassign a job's owner from the dropdown. Click <strong>Manage Sharing</strong> to grant additional users edit or view access.
+                        </p>
+                        <div class="table-container">
+                            <table id="admin-jobs-table">
+                                <thead>
+                                    <tr>
+                                        <th>Job</th>
+                                        <th>Client</th>
+                                        <th>Status</th>
+                                        <th>Owner</th>
+                                        <th style="text-align:center;">Shared With</th>
+                                        <th style="text-align:center;">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="admin-jobs-tbody"></tbody>
+                            </table>
+                        </div>
                     </div>
                 </div>
 
@@ -1438,9 +1450,9 @@
 
     <script src="js/auth.js?v=4"></script>
     <script src="js/api.js?v=5"></script>
-    <script src="js/admin.js?v=4"></script>
+    <script src="js/admin.js?v=5"></script>
     <script src="js/insights.js?v=1"></script>
-    <script src="js/app.js?v=32"></script>
+    <script src="js/app.js?v=33"></script>
     <script src="js/wip.js?v=48"></script>
     <script src="js/estimates.js?v=18"></script>
     <script src="js/proposal.js?v=18"></script>
