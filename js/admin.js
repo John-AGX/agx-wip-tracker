@@ -167,16 +167,39 @@
       });
   }
 
+  // Cache-only fetch — populates _users without trying to render the admin
+  // UI. Used on login for all authenticated users so PM-by-owner_id lookups
+  // (e.g. the Job Information PM field) can resolve user names everywhere.
+  function loadUsersCache() {
+    if (!window.agxApi || !window.agxApi.isAuthenticated()) return Promise.resolve();
+    return window.agxApi.users.list().then(function(res) {
+      _users = res.users || [];
+      // Re-render views that depend on user names so PM-by-owner_id lookups
+      // resolve once the cache lands. Each renderer is a no-op if its DOM
+      // target isn't visible.
+      if (typeof renderWIPMain === 'function') renderWIPMain();
+      if (typeof renderInsightsDashboard === 'function') renderInsightsDashboard();
+      return _users;
+    }).catch(function() { return []; });
+  }
+
+  function findUserById(id) {
+    if (id == null) return null;
+    return _users.find(function(u) { return u.id === id; }) || null;
+  }
+
   // Expose helpers for other modules. The PM dropdown in the Add Job modal
-  // will read getActivePMs() to populate options.
+  // and the Job Information PM field both read from this cache.
   window.agxAdmin = {
     getCachedUsers: function() { return _users.slice(); },
+    findUserById: findUserById,
     getActivePMs: function() {
       return _users.filter(function(u) {
         return u.active && (u.role === 'pm' || u.role === 'admin');
       });
     },
-    refreshUsers: renderAdminUsers
+    refreshUsers: renderAdminUsers,
+    loadUsersCache: loadUsersCache
   };
 
   // ==================== JOB SHARING ====================

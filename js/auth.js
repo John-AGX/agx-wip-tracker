@@ -115,7 +115,13 @@
       // Pull fresh data from the server now that we're authenticated.
       if (window.agxData) window.agxData.reloadFromServer();
       // Pre-load the users cache for admins so the PM dropdown is ready.
-      if (currentUser.role === 'admin' && window.agxAdmin) window.agxAdmin.refreshUsers();
+      // Load the users cache for everyone (admins get the rendered table from
+      // refreshUsers; non-admins just need the cache populated so PM-by-id
+      // lookups in the Job Information panel resolve names correctly).
+      if (window.agxAdmin) {
+        if (currentUser.role === 'admin') window.agxAdmin.refreshUsers();
+        else if (window.agxAdmin.loadUsersCache) window.agxAdmin.loadUsersCache();
+      }
     })
     .catch(function() {
       btn.disabled = false;
@@ -137,7 +143,13 @@
       isOffline = false;
       showApp();
       if (window.agxData) window.agxData.reloadFromServer();
-      if (currentUser.role === 'admin' && window.agxAdmin) window.agxAdmin.refreshUsers();
+      // Load the users cache for everyone (admins get the rendered table from
+      // refreshUsers; non-admins just need the cache populated so PM-by-id
+      // lookups in the Job Information panel resolve names correctly).
+      if (window.agxAdmin) {
+        if (currentUser.role === 'admin') window.agxAdmin.refreshUsers();
+        else if (window.agxAdmin.loadUsersCache) window.agxAdmin.loadUsersCache();
+      }
     })
     .catch(function() {
       localStorage.removeItem('agx-auth-token');

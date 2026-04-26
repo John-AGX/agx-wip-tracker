@@ -803,7 +803,7 @@ function renderWIPMain() {
                     row.style.opacity = '0.6';
                     row.title = 'View only — assigned to ' + (job.pm || 'another PM');
                 }
-                var pmCell = escapeHTML(job.pm) || '—';
+                var pmCell = escapeHTML(getJobOwnerName(job));
                 if (readOnly) pmCell += ' <span style="font-size:9px;color:var(--text-dim,#888);margin-left:4px;">view only</span>';
                 row.innerHTML = `
                     <td>${index + 1}</td>
@@ -1055,6 +1055,17 @@ function renderWIPMain() {
             }
         }
 
+        // Resolve a job's PM display name from owner_id via the users cache,
+        // falling back to the legacy job.pm string for old jobs / offline mode.
+        function getJobOwnerName(job) {
+            if (!job) return '—';
+            if (window.agxAdmin && window.agxAdmin.findUserById) {
+                var u = window.agxAdmin.findUserById(job.owner_id);
+                if (u && u.name) return u.name;
+            }
+            return job.pm || '—';
+        }
+
         function renderJobDetail(jobId) {
             const job = appData.jobs.find(j => j.id === jobId);
             if (!job) return;
@@ -1108,7 +1119,7 @@ function renderWIPMain() {
             document.getElementById('job-info-number').textContent = job.jobNumber || '—';
             document.getElementById('job-info-title').textContent = job.title;
             document.getElementById('job-info-client').textContent = job.client || '—';
-            document.getElementById('job-info-pm').textContent = job.pm || '—';
+            document.getElementById('job-info-pm').textContent = getJobOwnerName(job);
             document.getElementById('job-info-type').textContent = job.jobType ? (job.jobType + (job.market ? ' - ' + job.market : '')) : '—';
             document.getElementById('job-info-worktype').textContent = job.workType || '—';
             document.getElementById('job-info-market').textContent = job.market || '—';
