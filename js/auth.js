@@ -56,6 +56,16 @@
       roleEl.style.color = colors[currentUser.role] || '#8b90a5';
       roleEl.style.background = 'rgba(255,255,255,0.1)';
     }
+    applyRoleVisibility();
+  }
+
+  // Show/hide elements based on current role. Elements with [data-admin-only]
+  // are visible only to admins (or to offline mode, which gets admin powers).
+  function applyRoleVisibility() {
+    var isAdmin = isOffline || (currentUser && currentUser.role === 'admin');
+    document.querySelectorAll('[data-admin-only]').forEach(function(el) {
+      el.style.display = isAdmin ? '' : 'none';
+    });
   }
 
   function showError(msg) {
@@ -95,6 +105,8 @@
       showApp();
       // Pull fresh data from the server now that we're authenticated.
       if (window.agxData) window.agxData.reloadFromServer();
+      // Pre-load the users cache for admins so the PM dropdown is ready.
+      if (currentUser.role === 'admin' && window.agxAdmin) window.agxAdmin.refreshUsers();
     })
     .catch(function() {
       btn.disabled = false;
@@ -116,6 +128,7 @@
       isOffline = false;
       showApp();
       if (window.agxData) window.agxData.reloadFromServer();
+      if (currentUser.role === 'admin' && window.agxAdmin) window.agxAdmin.refreshUsers();
     })
     .catch(function() {
       localStorage.removeItem('agx-auth-token');

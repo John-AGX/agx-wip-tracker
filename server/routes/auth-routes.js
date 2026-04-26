@@ -95,6 +95,26 @@ router.put('/users/:id', requireAuth, requireRole('admin'), async (req, res) => 
   }
 });
 
+// PUT /api/auth/users/:id/password (admin resets any user's password)
+router.put('/users/:id/password', requireAuth, requireRole('admin'), async (req, res) => {
+  try {
+    const { newPassword } = req.body;
+    if (!newPassword || newPassword.length < 4) {
+      return res.status(400).json({ error: 'New password required (min 4 chars)' });
+    }
+    const { rows } = await pool.query('SELECT id FROM users WHERE id = $1', [req.params.id]);
+    if (!rows.length) return res.status(404).json({ error: 'User not found' });
+    await pool.query(
+      'UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2',
+      [bcrypt.hashSync(newPassword, 10), req.params.id]
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('PUT /api/auth/users/:id/password error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // PUT /api/auth/password (change own password)
 router.put('/password', requireAuth, async (req, res) => {
   try {

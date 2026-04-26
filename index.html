@@ -43,6 +43,7 @@
                     <button class="tab-btn active" data-tab="wip">WIP</button>
                     <button class="tab-btn" data-tab="insights">Insights</button>
                     <button class="tab-btn" data-tab="estimates">Estimates</button>
+                    <button class="tab-btn" data-tab="admin" data-admin-only style="display:none;">Admin</button>
                 </nav>
             </div>
         </header>
@@ -616,6 +617,31 @@
 
                     <div id="estimate-editor-view" style="display: none;"></div>
                     <div id="estimate-preview-view" style="display: none;"></div>
+                </div>
+
+                <!-- ADMIN TAB (admin-only, populated by js/admin.js) -->
+                <div id="admin" class="tab-content" data-admin-only style="display:none;">
+                    <div class="action-buttons">
+                        <button onclick="openNewUserModal()">&#x1F464; New User</button>
+                        <button onclick="renderAdminUsers()" class="secondary">Refresh</button>
+                    </div>
+
+                    <h3 style="margin-top:20px;color:var(--text,#fff);">Users</h3>
+                    <div class="table-container">
+                        <table id="admin-users-table">
+                            <thead>
+                                <tr>
+                                    <th>Name</th>
+                                    <th>Email</th>
+                                    <th>Role</th>
+                                    <th style="text-align:center;">Active</th>
+                                    <th>Created</th>
+                                    <th style="text-align:center;">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="admin-users-tbody"></tbody>
+                        </table>
+                    </div>
                 </div>
 
             </div>
@@ -1222,6 +1248,79 @@
       </div>
     </div>
 
+    <!-- ADMIN: Create new user -->
+    <div id="newUserModal" class="modal">
+      <div class="modal-content" style="max-width:480px;">
+        <div class="modal-header">New User</div>
+        <div style="padding:20px;display:flex;flex-direction:column;gap:12px;">
+          <div>
+            <label style="display:block;font-size:12px;color:var(--text-dim,#888);margin-bottom:4px;">Full Name</label>
+            <input id="newUser_name" type="text" placeholder="Jane Doe" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);" />
+          </div>
+          <div>
+            <label style="display:block;font-size:12px;color:var(--text-dim,#888);margin-bottom:4px;">Email</label>
+            <input id="newUser_email" type="email" placeholder="jane@agxco.com" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);" />
+          </div>
+          <div>
+            <label style="display:block;font-size:12px;color:var(--text-dim,#888);margin-bottom:4px;">Initial Password</label>
+            <input id="newUser_password" type="text" placeholder="min 4 chars (tell the user out-of-band)" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);" />
+          </div>
+          <div>
+            <label style="display:block;font-size:12px;color:var(--text-dim,#888);margin-bottom:4px;">Role</label>
+            <select id="newUser_role" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);">
+              <option value="pm">PM &mdash; edits own jobs and assigned jobs</option>
+              <option value="corporate">Corporate &mdash; read-only across all jobs</option>
+              <option value="admin">Admin &mdash; full access, user management</option>
+            </select>
+          </div>
+          <div id="newUser_status" style="font-size:13px;"></div>
+        </div>
+        <div class="modal-footer">
+          <button onclick="closeModal('newUserModal')" class="secondary">Cancel</button>
+          <button onclick="submitNewUser()" class="primary" id="newUser_submitBtn">Create User</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ADMIN: Edit existing user -->
+    <div id="editUserModal" class="modal">
+      <div class="modal-content" style="max-width:480px;">
+        <div class="modal-header">Edit User</div>
+        <div style="padding:20px;display:flex;flex-direction:column;gap:12px;">
+          <input type="hidden" id="editUser_id" />
+          <div>
+            <label style="display:block;font-size:12px;color:var(--text-dim,#888);margin-bottom:4px;">Email (read-only)</label>
+            <input id="editUser_email" type="email" readonly style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text-dim,#888);" />
+          </div>
+          <div>
+            <label style="display:block;font-size:12px;color:var(--text-dim,#888);margin-bottom:4px;">Full Name</label>
+            <input id="editUser_name" type="text" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);" />
+          </div>
+          <div>
+            <label style="display:block;font-size:12px;color:var(--text-dim,#888);margin-bottom:4px;">Role</label>
+            <select id="editUser_role" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);">
+              <option value="pm">PM</option>
+              <option value="corporate">Corporate</option>
+              <option value="admin">Admin</option>
+            </select>
+          </div>
+          <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text,#fff);">
+            <input type="checkbox" id="editUser_active" /> Active (uncheck to disable login)
+          </label>
+          <hr style="border:none;border-top:1px solid var(--border,#333);margin:8px 0;" />
+          <div>
+            <label style="display:block;font-size:12px;color:var(--text-dim,#888);margin-bottom:4px;">Reset Password (optional)</label>
+            <input id="editUser_newPassword" type="text" placeholder="Leave blank to keep current password" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);" />
+          </div>
+          <div id="editUser_status" style="font-size:13px;"></div>
+        </div>
+        <div class="modal-footer">
+          <button onclick="closeModal('editUserModal')" class="secondary">Cancel</button>
+          <button onclick="submitEditUser()" class="primary" id="editUser_submitBtn">Save Changes</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Import jobs to server: from this browser's localStorage OR from pasted JSON
          (used to migrate jobs from another origin like the GitHub Pages deploy). -->
     <div id="importBrowserModal" class="modal">
@@ -1262,10 +1361,11 @@
       </div>
     </div>
 
-    <script src="js/auth.js?v=2"></script>
-    <script src="js/api.js?v=1"></script>
-    <script src="js/app.js?v=28"></script>
-    <script src="js/wip.js?v=44"></script>
+    <script src="js/auth.js?v=3"></script>
+    <script src="js/api.js?v=2"></script>
+    <script src="js/admin.js?v=1"></script>
+    <script src="js/app.js?v=29"></script>
+    <script src="js/wip.js?v=45"></script>
     <script src="js/estimates.js?v=18"></script>
     <script src="js/proposal.js?v=18"></script>
 

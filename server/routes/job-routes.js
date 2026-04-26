@@ -58,13 +58,22 @@ router.get('/:id', requireAuth, async (req, res) => {
 });
 
 // POST /api/jobs
+// Admins can assign ownership to any user via body.owner_id; PMs always own
+// the jobs they create (the field is ignored from non-admin callers).
 router.post('/', requireAuth, requireRole('admin', 'pm'), async (req, res) => {
   try {
     const id = req.body.id || 'job' + Date.now();
+    let ownerId = req.user.id;
+    if (req.user.role === 'admin' && req.body.owner_id) {
+      const { rows } = await pool.query('SELECT id FROM users WHERE id = $1 AND active = true', [req.body.owner_id]);
+      if (!rows.length) return res.status(400).json({ error: 'Invalid owner_id' });
+      ownerId = req.body.owner_id;
+    }
     await pool.query('INSERT INTO jobs (id, owner_id, data) VALUES ($1, $2, $3)',
-      [id, req.user.id, JSON.stringify(req.body)]);
-    res.json({ id, ok: true });
+      [id, ownerId, JSON.stringify(req.body)]);
+    res.json({ id, owner_id: ownerId, ok: true });
   } catch (e) {
+    console.error('POST /api/jobs error:', e);
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -130,10 +139,14 @@ router.put('/bulk/save', requireAuth, requireRole('admin', 'pm'), async (req, re
           purchaseOrders: (appData.purchaseOrders || []).filter(p => p.jobId === job.id),
           invoices: (appData.invoices || []).filter(i => i.jobId === job.id),
         };
+        // For new jobs, admins can specify owner_id to assign a PM. Non-admins
+        // (PMs creating their own jobs) always own what they create. ON CONFLICT
+        // never touches owner_id, so existing jobs keep their original PM.
+        const ownerId = (req.user.role === 'admin' && job.owner_id) ? job.owner_id : req.user.id;
         await client.query(
           `INSERT INTO jobs (id, owner_id, data) VALUES ($1, $2, $3)
            ON CONFLICT (id) DO UPDATE SET data = $3, updated_at = NOW()`,
-          [job.id, req.user.id, JSON.stringify(jobBlob)]
+          [job.id, ownerId, JSON.stringify(jobBlob)]
         );
       }
       await client.query('COMMIT');

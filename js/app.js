@@ -296,6 +296,8 @@
                 renderEstimatesList();
             } else if (tabName === 'insights') {
                 if (typeof renderInsightsDashboard === 'function') renderInsightsDashboard();
+            } else if (tabName === 'admin') {
+                if (typeof renderAdminUsers === 'function') renderAdminUsers();
             } else {
                 renderWIPMain();
                 var archiveView = document.getElementById('archived-jobs-list');

@@ -837,7 +837,6 @@ function renderWIPMain() {
             document.getElementById('jobNumber').value = '';
             document.getElementById('jobTitle').value = '';
             document.getElementById('jobClient').value = '';
-            document.getElementById('jobPM').value = '';
             document.getElementById('jobType').value = '';
             document.getElementById('jobWorkType').value = '';
             document.getElementById('jobMarket').value = '';
@@ -846,18 +845,62 @@ function renderWIPMain() {
             document.getElementById('jobTargetMargin').value = '50';
             document.getElementById('jobStatus').value = 'New';
             document.getElementById('jobNotes').value = '';
+            populateJobPMSelect();
             openModal('addJobModal');
+        }
+
+        // Populate the PM <select> from cached users when authenticated. For admins,
+        // any active PM/admin can be assigned. For PMs themselves, lock the field
+        // to their own user. Falls back to the legacy hardcoded list when offline.
+        function populateJobPMSelect() {
+            var sel = document.getElementById('jobPM');
+            if (!sel) return;
+            var auth = window.agxAuth;
+            var admin = window.agxAdmin;
+            if (!auth || auth.isOffline() || !admin) {
+                // Legacy / offline mode — keep the static dropdown as-is
+                sel.value = '';
+                sel.disabled = false;
+                return;
+            }
+            var me = auth.getUser();
+            var users = admin.getActivePMs();
+            // If the cache hasn't loaded yet, kick off a refresh and at least seed self
+            if (!users.length && me) {
+                users = [{ id: me.id, name: me.name, role: me.role, active: true }];
+                if (admin.refreshUsers) admin.refreshUsers();
+            }
+            var html = '<option value="">-- Select PM --</option>';
+            users.forEach(function(u) {
+                html += '<option value="' + u.id + '" data-name="' + escapeHTML(u.name) + '">' +
+                        escapeHTML(u.name) + (u.role === 'admin' ? ' (admin)' : '') + '</option>';
+            });
+            sel.innerHTML = html;
+
+            if (auth.isAdmin()) {
+                sel.disabled = false;
+                sel.value = me ? String(me.id) : '';
+            } else {
+                // PMs always own jobs they create — lock to self
+                sel.value = me ? String(me.id) : '';
+                sel.disabled = true;
+            }
         }
 
         function saveJob() {
             const title = document.getElementById('jobTitle').value.trim();
             if (!title) { alert('Enter a job name'); return; }
+            const pmSelect = document.getElementById('jobPM');
+            const pmOpt = pmSelect.options[pmSelect.selectedIndex];
+            const pmName = (pmOpt && pmOpt.dataset && pmOpt.dataset.name) ? pmOpt.dataset.name : pmSelect.value;
+            const ownerIdRaw = parseInt(pmSelect.value, 10);
             const job = {
                 id: 'j' + Date.now(),
                 jobNumber: document.getElementById('jobNumber').value.trim(),
                 title: title,
                 client: document.getElementById('jobClient').value.trim(),
-                pm: document.getElementById('jobPM').value,
+                pm: pmName,
+                owner_id: isNaN(ownerIdRaw) ? null : ownerIdRaw,
                 jobType: document.getElementById('jobType').value,
                 workType: document.getElementById('jobWorkType').value,
                 market: document.getElementById('jobMarket').value,

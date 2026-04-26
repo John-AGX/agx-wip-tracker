@@ -83,7 +83,10 @@
   var users = {
     list: function() { return get('/api/auth/users'); },
     create: function(payload) { return post('/api/auth/register', payload); },
-    update: function(id, payload) { return put('/api/auth/users/' + encodeURIComponent(id), payload); }
+    update: function(id, payload) { return put('/api/auth/users/' + encodeURIComponent(id), payload); },
+    resetPassword: function(id, newPassword) {
+      return put('/api/auth/users/' + encodeURIComponent(id) + '/password', { newPassword: newPassword });
+    }
   };
 
   window.agxApi = {
