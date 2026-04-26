@@ -1,9 +1,14 @@
 const { Pool } = require('pg');
 const bcrypt = require('bcryptjs');
 
+// Railway internal hostnames don't terminate TLS, so don't try to SSL-handshake them.
+// Public proxy URLs (and most other hosted Postgres) require SSL in production.
+const url = process.env.DATABASE_URL || '';
+const useSsl = process.env.NODE_ENV === 'production' && !url.includes('.railway.internal');
+
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+  connectionString: url,
+  ssl: useSsl ? { rejectUnauthorized: false } : false
 });
 
 async function initSchema() {
