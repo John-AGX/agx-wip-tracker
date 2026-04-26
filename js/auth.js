@@ -93,6 +93,8 @@
       isOffline = false;
       localStorage.setItem('agx-auth-token', token);
       showApp();
+      // Pull fresh data from the server now that we're authenticated.
+      if (window.agxData) window.agxData.reloadFromServer();
     })
     .catch(function() {
       btn.disabled = false;
@@ -113,6 +115,7 @@
       currentUser = data.user;
       isOffline = false;
       showApp();
+      if (window.agxData) window.agxData.reloadFromServer();
     })
     .catch(function() {
       localStorage.removeItem('agx-auth-token');

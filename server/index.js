@@ -17,6 +17,7 @@ if (fs.existsSync(envPath)) {
 const { init } = require('./db');
 const authRoutes = require('./routes/auth-routes');
 const jobRoutes = require('./routes/job-routes');
+const estimateRoutes = require('./routes/estimate-routes');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -28,6 +29,7 @@ app.use(cookieParser());
 // API routes
 app.use('/api/auth', authRoutes);
 app.use('/api/jobs', jobRoutes);
+app.use('/api/estimates', estimateRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {
@@ -45,9 +47,13 @@ app.get('*', (req, res) => {
 
 // Initialize DB then start
 init().then(() => {
-  app.listen(PORT, () => {
+  app.listen(PORT, '0.0.0.0', () => {
     console.log(`AGX WIP Tracker running on http://localhost:${PORT}`);
-    console.log(`Default login: admin@agx.com / admin123`);
+    if (process.env.ADMIN_EMAIL) {
+      console.log(`Admin user synced from env: ${process.env.ADMIN_EMAIL}`);
+    } else {
+      console.log('No ADMIN_EMAIL/ADMIN_PASSWORD env vars set — using dev admin@local / changeme');
+    }
   });
 }).catch(err => {
   console.error('Failed to initialize database:', err.message);

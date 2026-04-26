@@ -236,6 +236,8 @@
         }
 
         function backfillSampleData() {
+            // Server is source of truth when authenticated — never inject demo data
+            if (window.agxApi && window.agxApi.isAuthenticated()) return;
             var changed = false;
             if (appData.jobs.some(j => j.id === 'j1') && appData.purchaseOrders.length === 0) {
                 appData.purchaseOrders = [
@@ -350,7 +352,9 @@
             editInvId: null
         };
 
-        function loadData() {
+        // Read all appData sections from localStorage. Used as the offline path
+        // and as the fast first-paint cache while the server fetch is in flight.
+        function loadFromLocalStorage() {
             appData.jobs = safeLoadJSON('agx-wip-jobs', []);
             appData.buildings = safeLoadJSON('agx-wip-buildings', []);
             appData.phases = safeLoadJSON('agx-wip-phases', []);
@@ -363,7 +367,7 @@
             appData.estimateAlternates = safeLoadJSON('agx-estimate-alternates', []);
         }
 
-        function saveData() {
+        function writeToLocalStorage() {
             localStorage.setItem('agx-wip-jobs', JSON.stringify(appData.jobs));
             localStorage.setItem('agx-wip-buildings', JSON.stringify(appData.buildings));
             localStorage.setItem('agx-wip-phases', JSON.stringify(appData.phases));
@@ -376,8 +380,229 @@
             localStorage.setItem('agx-estimate-alternates', JSON.stringify(appData.estimateAlternates));
         }
 
+        // Reconstruct flat appData arrays from server response. The server stores
+        // each job's nested entities (buildings/phases/subs/etc.) inside its JSONB
+        // blob; this fans them back out into the top-level arrays the UI expects.
+        function hydrateFromServerJobs(serverJobs) {
+            appData.jobs = [];
+            appData.buildings = [];
+            appData.phases = [];
+            appData.changeOrders = [];
+            appData.subs = [];
+            appData.purchaseOrders = [];
+            appData.invoices = [];
+            (serverJobs || []).forEach(function(j) {
+                var buildings = j.buildings || [];
+                var phases = j.phases || [];
+                var changeOrders = j.changeOrders || [];
+                var subs = j.subs || [];
+                var purchaseOrders = j.purchaseOrders || [];
+                var invoices = j.invoices || [];
+                var jobMeta = Object.assign({}, j);
+                delete jobMeta.buildings;
+                delete jobMeta.phases;
+                delete jobMeta.changeOrders;
+                delete jobMeta.subs;
+                delete jobMeta.purchaseOrders;
+                delete jobMeta.invoices;
+                appData.jobs.push(jobMeta);
+                Array.prototype.push.apply(appData.buildings, buildings);
+                Array.prototype.push.apply(appData.phases, phases);
+                Array.prototype.push.apply(appData.changeOrders, changeOrders);
+                Array.prototype.push.apply(appData.subs, subs);
+                Array.prototype.push.apply(appData.purchaseOrders, purchaseOrders);
+                Array.prototype.push.apply(appData.invoices, invoices);
+            });
+        }
+
+        function hydrateFromServerEstimates(serverEstimates) {
+            appData.estimates = [];
+            appData.estimateLines = [];
+            appData.estimateAlternates = [];
+            (serverEstimates || []).forEach(function(e) {
+                var lines = e.lines || [];
+                var alternates = e.alternates || [];
+                var meta = Object.assign({}, e);
+                delete meta.lines;
+                delete meta.alternates;
+                appData.estimates.push(meta);
+                Array.prototype.push.apply(appData.estimateLines, lines);
+                Array.prototype.push.apply(appData.estimateAlternates, alternates);
+            });
+        }
+
+        // loadData is called once at startup. When authenticated, fetch from the
+        // server and replace local state with the authoritative copy. Offline mode
+        // (or no token) keeps the localStorage-only behavior.
+        function loadData() {
+            loadFromLocalStorage();
+            if (window.agxApi && window.agxApi.isAuthenticated()) {
+                Promise.all([
+                    window.agxApi.jobs.list(),
+                    window.agxApi.estimates.list()
+                ]).then(function(results) {
+                    hydrateFromServerJobs(results[0].jobs);
+                    hydrateFromServerEstimates(results[1].estimates);
+                    writeToLocalStorage();
+                    if (typeof renderWIPMain === 'function') renderWIPMain();
+                    if (typeof renderEstimatesList === 'function') renderEstimatesList();
+                }).catch(function(err) {
+                    console.warn('Server load failed, staying on localStorage cache:', err.message);
+                });
+            }
+        }
+
+        // saveData writes to localStorage immediately (cheap, synchronous) so the
+        // existing call sites stay correct, and schedules a debounced push to the
+        // server when authenticated. Offline mode is localStorage-only.
+        var _serverPushTimer = null;
+        function saveData() {
+            writeToLocalStorage();
+            if (!window.agxApi || !window.agxApi.isAuthenticated()) return;
+            if (_serverPushTimer) clearTimeout(_serverPushTimer);
+            _serverPushTimer = setTimeout(pushToServer, 600);
+        }
+
+        function pushToServer() {
+            if (!window.agxApi || !window.agxApi.isAuthenticated()) return Promise.resolve();
+            var jobsPayload = {
+                jobs: appData.jobs,
+                buildings: appData.buildings,
+                phases: appData.phases,
+                changeOrders: appData.changeOrders,
+                subs: appData.subs,
+                purchaseOrders: appData.purchaseOrders,
+                invoices: appData.invoices
+            };
+            var estimatesPayload = {
+                estimates: appData.estimates,
+                estimateLines: appData.estimateLines,
+                estimateAlternates: appData.estimateAlternates
+            };
+            return Promise.all([
+                appData.jobs.length ? window.agxApi.jobs.bulkSave(jobsPayload) : Promise.resolve(),
+                appData.estimates.length ? window.agxApi.estimates.bulkSave(estimatesPayload) : Promise.resolve()
+            ]).catch(function(err) {
+                console.warn('Server push failed:', err.message);
+            });
+        }
+
+        // Expose for explicit triggers (e.g. the import-from-browser button)
+        window.agxData = {
+            pushToServer: pushToServer,
+            reloadFromServer: loadData
+        };
+
+        // ==================== IMPORT FROM BROWSER ====================
+        // One-time migration UI: read jobs/estimates from this browser's localStorage
+        // and push selected ones to the server. After Phase 1 it remains useful as a
+        // "I had unsaved data on another machine" recovery path.
+        function openImportFromBrowserModal() {
+            if (!window.agxApi || !window.agxApi.isAuthenticated()) {
+                alert('Log in to the server first. Offline mode has no server to push to.');
+                return;
+            }
+            var localJobs = safeLoadJSON('agx-wip-jobs', []);
+            var localEstimates = safeLoadJSON('agx-estimates', []);
+            var listEl = document.getElementById('importBrowser_jobsList');
+            if (!localJobs.length) {
+                listEl.innerHTML = '<div style="padding:15px;color:var(--text-dim,#888);">No jobs found in this browser.</div>';
+            } else {
+                var html = '';
+                localJobs.forEach(function(j) {
+                    var label = (j.jobNumber ? '[' + j.jobNumber + '] ' : '') + (j.title || j.id) +
+                                (j.client ? ' — ' + j.client : '');
+                    html += '<label style="display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--border,#333);cursor:pointer;">' +
+                            '<input type="checkbox" class="importBrowser_jobChk" data-job-id="' + escapeHTML(j.id) + '" />' +
+                            '<span style="font-size:13px;color:var(--text,#fff);">' + escapeHTML(label) + '</span>' +
+                            '</label>';
+                });
+                listEl.innerHTML = html;
+            }
+            document.getElementById('importBrowser_estimatesLabel').textContent =
+                'Also push estimates (' + localEstimates.length + ' in this browser)';
+            document.getElementById('importBrowser_estimatesChk').checked = false;
+            document.getElementById('importBrowser_status').textContent = '';
+            document.getElementById('importBrowser_runBtn').disabled = false;
+            openModal('importBrowserModal');
+        }
+
+        function runImportFromBrowser() {
+            var statusEl = document.getElementById('importBrowser_status');
+            var btn = document.getElementById('importBrowser_runBtn');
+            var picked = {};
+            document.querySelectorAll('.importBrowser_jobChk:checked').forEach(function(chk) {
+                picked[chk.getAttribute('data-job-id')] = true;
+            });
+            var includeEstimates = document.getElementById('importBrowser_estimatesChk').checked;
+            var jobIds = Object.keys(picked);
+            if (!jobIds.length && !includeEstimates) {
+                statusEl.style.color = '#fbbf24';
+                statusEl.textContent = 'Pick at least one job, or check the estimates box.';
+                return;
+            }
+
+            // Build a payload from localStorage scoped to the picked jobs
+            var localJobs = safeLoadJSON('agx-wip-jobs', []);
+            var localBuildings = safeLoadJSON('agx-wip-buildings', []);
+            var localPhases = safeLoadJSON('agx-wip-phases', []);
+            var localSubs = safeLoadJSON('agx-wip-subs', []);
+            var localCOs = safeLoadJSON('agx-wip-changeorders', []);
+            var localPOs = safeLoadJSON('agx-wip-purchaseorders', []);
+            var localInvs = safeLoadJSON('agx-wip-invoices', []);
+
+            var jobsPayload = {
+                jobs: localJobs.filter(function(j) { return picked[j.id]; }),
+                buildings: localBuildings.filter(function(b) { return picked[b.jobId]; }),
+                phases: localPhases.filter(function(p) { return picked[p.jobId]; }),
+                subs: localSubs.filter(function(s) { return picked[s.jobId]; }),
+                changeOrders: localCOs.filter(function(c) { return picked[c.jobId]; }),
+                purchaseOrders: localPOs.filter(function(p) { return picked[p.jobId]; }),
+                invoices: localInvs.filter(function(i) { return picked[i.jobId]; })
+            };
+
+            var estimatesPayload = null;
+            if (includeEstimates) {
+                estimatesPayload = {
+                    estimates: safeLoadJSON('agx-estimates', []),
+                    estimateLines: safeLoadJSON('agx-estimate-lines', []),
+                    estimateAlternates: safeLoadJSON('agx-estimate-alternates', [])
+                };
+            }
+
+            btn.disabled = true;
+            statusEl.style.color = 'var(--text-dim,#888)';
+            statusEl.textContent = 'Pushing to server…';
+
+            var jobs = jobsPayload.jobs.length
+                ? window.agxApi.jobs.bulkSave(jobsPayload)
+                : Promise.resolve({ count: 0 });
+            var ests = (estimatesPayload && estimatesPayload.estimates.length)
+                ? window.agxApi.estimates.bulkSave(estimatesPayload)
+                : Promise.resolve({ count: 0 });
+
+            Promise.all([jobs, ests]).then(function(res) {
+                statusEl.style.color = '#34d399';
+                statusEl.textContent = 'Imported ' + (res[0].count || 0) + ' job(s) and ' +
+                                       (res[1].count || 0) + ' estimate(s). Reloading from server…';
+                setTimeout(function() {
+                    closeModal('importBrowserModal');
+                    if (window.agxData) window.agxData.reloadFromServer();
+                }, 800);
+            }).catch(function(err) {
+                statusEl.style.color = '#e74c3c';
+                statusEl.textContent = 'Import failed: ' + (err.message || 'unknown error');
+                btn.disabled = false;
+            });
+        }
+
+        window.openImportFromBrowserModal = openImportFromBrowserModal;
+        window.runImportFromBrowser = runImportFromBrowser;
+
         // ==================== SEED DATA ====================
         function seedDataIfNeeded() {
+            // Server is source of truth when authenticated — never seed demo data
+            if (window.agxApi && window.agxApi.isAuthenticated()) return;
             if (appData.jobs.length > 0) return;
 
             // Job 1: Commerce Park Phase 2

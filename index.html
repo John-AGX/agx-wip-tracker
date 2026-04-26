@@ -33,6 +33,7 @@
                         <div id="user-menu" style="display:flex;align-items:center;gap:8px;margin-left:auto;">
                             <span id="user-name" style="font-size:11px;color:rgba(255,255,255,0.7);"></span>
                             <span id="user-role-badge" style="font-size:9px;padding:2px 6px;border-radius:10px;background:rgba(255,255,255,0.1);color:rgba(255,255,255,0.6);text-transform:uppercase;"></span>
+                            <button id="import-browser-btn" onclick="openImportFromBrowserModal()" title="Import jobs from this browser's localStorage to the server" style="font-size:10px;padding:3px 10px;border-radius:6px;background:rgba(79,140,255,0.15);border:1px solid rgba(79,140,255,0.3);color:#4f8cff;cursor:pointer;">Import from browser</button>
                             <button id="logout-btn" style="font-size:10px;padding:3px 10px;border-radius:6px;background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.15);color:rgba(255,255,255,0.7);cursor:pointer;">Logout</button>
                         </div>
                         <button id="theme-toggle" class="theme-toggle" title="Toggle light/dark mode"></button>
@@ -1220,8 +1221,32 @@
         <div class="modal-footer" style="background:white;border-top:2px solid #ddd;"><button onclick="window.print()" class="primary">&#x1F5A8; Print</button><button onclick="closeModal('estimatePreviewModal')" class="secondary">&#x2716; Close</button></div>
       </div>
     </div>
-    <script src="js/auth.js?v=1"></script>
-    <script src="js/app.js?v=26"></script>
+
+    <!-- Import from browser localStorage to server -->
+    <div id="importBrowserModal" class="modal">
+      <div class="modal-content" style="max-width:700px;max-height:85vh;overflow-y:auto;">
+        <div class="modal-header">Import jobs from this browser to server</div>
+        <div style="padding:20px;">
+          <p style="margin-top:0;color:var(--text-dim,#888);font-size:13px;">
+            Pick which jobs to push to the server. All nested data (buildings, phases, subs, POs, invoices, change orders) goes with each job. Estimates are pushed separately as a group at the bottom.
+          </p>
+          <div id="importBrowser_jobsList" style="margin:15px 0;border:1px solid var(--border,#333);border-radius:8px;max-height:300px;overflow-y:auto;"></div>
+          <label style="display:flex;align-items:center;gap:8px;padding:8px 12px;border:1px solid var(--border,#333);border-radius:8px;margin-top:10px;cursor:pointer;">
+            <input type="checkbox" id="importBrowser_estimatesChk" />
+            <span id="importBrowser_estimatesLabel">Also push estimates</span>
+          </label>
+          <div id="importBrowser_status" style="margin-top:15px;font-size:13px;"></div>
+        </div>
+        <div class="modal-footer">
+          <button onclick="closeModal('importBrowserModal')" class="secondary">Cancel</button>
+          <button onclick="runImportFromBrowser()" class="primary" id="importBrowser_runBtn">Import selected</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="js/auth.js?v=2"></script>
+    <script src="js/api.js?v=1"></script>
+    <script src="js/app.js?v=27"></script>
     <script src="js/wip.js?v=44"></script>
     <script src="js/estimates.js?v=18"></script>
     <script src="js/proposal.js?v=18"></script>
