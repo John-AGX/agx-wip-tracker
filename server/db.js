@@ -46,15 +46,29 @@ async function initSchema() {
     );
   `);
 
-  // Seed default admin if no users exist
-  const { rows } = await pool.query('SELECT COUNT(*)::int as c FROM users');
-  if (rows[0].c === 0) {
-    const hash = bcrypt.hashSync('admin123', 10);
+  // Sync the admin user from env vars on every boot.
+  // ADMIN_EMAIL + ADMIN_PASSWORD are set in Railway/production env. Treated as a
+  // system-managed account, not user-facing — change the env var to rotate the password.
+  // Without env vars, fall back to a clearly-fake dev seed only when the DB is empty.
+  if (process.env.ADMIN_EMAIL && process.env.ADMIN_PASSWORD) {
+    const hash = bcrypt.hashSync(process.env.ADMIN_PASSWORD, 10);
     await pool.query(
-      'INSERT INTO users (email, password_hash, name, role) VALUES ($1, $2, $3, $4)',
-      ['admin@agx.com', hash, 'Admin', 'admin']
+      `INSERT INTO users (email, password_hash, name, role)
+       VALUES ($1, $2, 'Admin', 'admin')
+       ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash`,
+      [process.env.ADMIN_EMAIL, hash]
     );
-    console.log('Seeded default admin: admin@agx.com / admin123');
+    console.log(`Synced admin user from env: ${process.env.ADMIN_EMAIL}`);
+  } else {
+    const { rows } = await pool.query('SELECT COUNT(*)::int as c FROM users');
+    if (rows[0].c === 0) {
+      const hash = bcrypt.hashSync('changeme', 10);
+      await pool.query(
+        'INSERT INTO users (email, password_hash, name, role) VALUES ($1, $2, $3, $4)',
+        ['admin@local', hash, 'Admin', 'admin']
+      );
+      console.log('Seeded dev admin: admin@local / changeme — set ADMIN_EMAIL and ADMIN_PASSWORD env vars in production');
+    }
   }
 }
 
