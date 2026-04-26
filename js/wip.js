@@ -101,12 +101,20 @@ function renderWIPMain() {
             return bldgPhases.reduce((s, p) => s + (p.pctComplete || 0), 0) / bldgPhases.length;
         }
 
-        // Auto-calculate job % complete from buildings (weighted by budget) or phases if no buildings
+        // Auto-calculate job % complete. Order of preference:
+        //   1. Building-weighted (when buildings exist AND phases are linked to them)
+        //   2. Phase-weighted directly (when phases exist but aren't all building-linked)
+        //   3. Stored job.pctComplete as last-resort fallback
+        // The middle case caught a real bug: jobs with buildings + unlinked
+        // phases were rolling up to 0%, then overwriting the correct stored
+        // value on every WIP main render because pctCompleteManual was false.
         function calcJobPctComplete(jobId) {
             const buildings = appData.buildings.filter(b => b.jobId === jobId);
             const phases = appData.phases.filter(p => p.jobId === jobId);
-            if (buildings.length > 0) {
-                // Calculate each building's pctComplete from its phases
+            const linkedPhases = phases.filter(p => p.buildingId);
+
+            // 1. Building-weighted, but only if phases are actually attached
+            if (buildings.length > 0 && linkedPhases.length > 0) {
                 const bldgData = buildings.map(b => ({
                     budget: b.budget || 0,
                     pct: calcBuildingPctComplete(b.id, jobId)
@@ -116,14 +124,18 @@ function renderWIPMain() {
                     return bldgData.reduce((s, d) => s + d.pct * d.budget, 0) / totalBudget;
                 }
                 return bldgData.reduce((s, d) => s + d.pct, 0) / bldgData.length;
-            } else if (phases.length > 0) {
-                // No buildings - use phases directly
+            }
+
+            // 2. Phase-weighted directly (covers both no-buildings and
+            //    buildings-but-phases-not-linked cases)
+            if (phases.length > 0) {
                 const totalBudget = phases.reduce((s, p) => s + (p.phaseBudget || 0), 0);
                 if (totalBudget > 0) {
                     return phases.reduce((s, p) => s + (p.pctComplete || 0) * (p.phaseBudget || 0), 0) / totalBudget;
                 }
                 return phases.reduce((s, p) => s + (p.pctComplete || 0), 0) / phases.length;
             }
+
             return appData.jobs.find(j => j.id === jobId)?.pctComplete || 0;
         }
 
