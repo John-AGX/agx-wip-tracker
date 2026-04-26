@@ -192,8 +192,10 @@
         }
 
         /* Read-only mode for job detail when the current PM doesn't own the job.
-           Disables form controls and edit-action buttons; the back button and
-           non-mutating UI (sub-tab nav, modal close X) stay clickable. */
+           Strategy: kill ALL form controls and ALL buttons inside the detail
+           view, then re-enable a small whitelist of pure navigation: the
+           Back to WIP header button, the sub-tab nav, and the read-only
+           Sharing card (hidden anyway for non-managers, but safe to allow). */
         .read-only-mode input:not([type=button]):not([type=hidden]),
         .read-only-mode select,
         .read-only-mode textarea {
@@ -201,16 +203,21 @@
             background-color: rgba(255,255,255,0.04) !important;
             opacity: 0.6;
         }
-        .read-only-mode .primary,
-        .read-only-mode button.danger,
-        .read-only-mode button[onclick*="toggleEdit"],
-        .read-only-mode button[onclick*="save"],
-        .read-only-mode button[onclick*="archive"],
-        .read-only-mode button[onclick*="delete"],
-        .read-only-mode button[onclick*="add"] {
+        .read-only-mode button {
             pointer-events: none !important;
             opacity: 0.4 !important;
             cursor: not-allowed !important;
+        }
+        /* Re-enable navigation: back button, sub-tab switcher, and card
+           collapse/expand controls so users can still browse the job's data. */
+        .read-only-mode .job-detail-header button,
+        .read-only-mode .sub-tab-btn-job,
+        .read-only-mode .card-toggle,
+        .read-only-mode button[data-readonly-allowed],
+        .read-only-mode .modal button {
+            pointer-events: auto !important;
+            opacity: 1 !important;
+            cursor: pointer !important;
         }
 
         /* CARDS */
