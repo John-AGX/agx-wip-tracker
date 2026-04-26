@@ -39,6 +39,15 @@
     document.getElementById('login-screen').style.display = 'none';
     document.getElementById('app-container').style.display = '';
     updateUserMenu();
+    // Land each role on its most-relevant tab. This also clears any stale
+    // 'active' tab class left over from a previous user (e.g. admin had
+    // Admin open, logged out, PM logs in — without this they'd see a blank
+    // content area because the admin tab is hidden but still marked active).
+    var role = isOffline ? 'admin' : (currentUser ? currentUser.role : 'pm');
+    var landing = role === 'admin' ? 'admin' : (role === 'corporate' ? 'insights' : 'wip');
+    if (typeof window.switchTab === 'function') {
+      try { window.switchTab(landing); } catch (e) { console.warn('Initial tab switch failed:', e); }
+    }
   }
 
   function updateUserMenu() {
