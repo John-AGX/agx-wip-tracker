@@ -86,7 +86,8 @@
     update: function(id, payload) { return put('/api/auth/users/' + encodeURIComponent(id), payload); },
     resetPassword: function(id, newPassword) {
       return put('/api/auth/users/' + encodeURIComponent(id) + '/password', { newPassword: newPassword });
-    }
+    },
+    remove: function(id) { return del('/api/auth/users/' + encodeURIComponent(id)); }
   };
 
   window.agxApi = {

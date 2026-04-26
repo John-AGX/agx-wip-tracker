@@ -115,6 +115,30 @@ router.put('/users/:id/password', requireAuth, requireRole('admin'), async (req,
   }
 });
 
+// DELETE /api/auth/users/:id (admin only)
+// Will fail if the user owns any jobs (FK constraint) — that's the safe behavior;
+// admin should reassign jobs via the UI before deleting. Falls back to deactivation
+// in that case (set active=false instead of delete).
+router.delete('/users/:id', requireAuth, requireRole('admin'), async (req, res) => {
+  try {
+    if (parseInt(req.params.id, 10) === req.user.id) {
+      return res.status(400).json({ error: 'Cannot delete your own account' });
+    }
+    const { rows } = await pool.query('SELECT id FROM users WHERE id = $1', [req.params.id]);
+    if (!rows.length) return res.status(404).json({ error: 'User not found' });
+    await pool.query('DELETE FROM users WHERE id = $1', [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) {
+    if (e.code === '23503') {
+      return res.status(409).json({
+        error: 'User owns jobs — reassign or delete those jobs first, or deactivate the user instead.'
+      });
+    }
+    console.error('DELETE /api/auth/users/:id error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // PUT /api/auth/password (change own password)
 router.put('/password', requireAuth, async (req, res) => {
   try {

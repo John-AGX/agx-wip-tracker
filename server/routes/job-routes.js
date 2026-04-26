@@ -24,21 +24,28 @@ async function canEdit(userId, userRole, jobId) {
 }
 
 // GET /api/jobs
+// Everyone authenticated sees every job. Edit rights are conveyed via _canEdit
+// on each row so the client can render read-only indicators and skip non-editable
+// jobs from its bulk-save payload.
 router.get('/', requireAuth, async (req, res) => {
   try {
-    let rows;
-    if (req.user.role === 'admin' || req.user.role === 'corporate') {
-      ({ rows } = await pool.query('SELECT id, data, owner_id, created_at, updated_at FROM jobs'));
-    } else {
-      ({ rows } = await pool.query(`
-        SELECT j.id, j.data, j.owner_id, j.created_at, j.updated_at FROM jobs j
-        LEFT JOIN job_access ja ON ja.job_id = j.id AND ja.user_id = $1
-        WHERE j.owner_id = $2 OR ja.user_id IS NOT NULL
-      `, [req.user.id, req.user.id]));
-    }
-    const result = rows.map(j => ({ id: j.id, owner_id: j.owner_id, ...j.data }));
+    const { rows } = await pool.query(`
+      SELECT j.id, j.data, j.owner_id, j.created_at, j.updated_at,
+             COALESCE(ja.access_level, '') AS access_level
+      FROM jobs j
+      LEFT JOIN job_access ja ON ja.job_id = j.id AND ja.user_id = $1
+    `, [req.user.id]);
+    const result = rows.map(j => {
+      let canEdit = false;
+      if (req.user.role === 'admin') canEdit = true;
+      else if (req.user.role === 'corporate') canEdit = false;
+      else if (j.owner_id === req.user.id) canEdit = true;
+      else if (j.access_level === 'edit') canEdit = true;
+      return { id: j.id, owner_id: j.owner_id, _canEdit: canEdit, ...j.data };
+    });
     res.json({ jobs: result });
   } catch (e) {
+    console.error('GET /api/jobs error:', e);
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -127,9 +134,31 @@ router.put('/bulk/save', requireAuth, requireRole('admin', 'pm'), async (req, re
     if (!appData || !appData.jobs) return res.status(400).json({ error: 'Invalid appData' });
 
     const client = await pool.connect();
+    let saved = 0;
+    let skipped = 0;
     try {
       await client.query('BEGIN');
       for (const job of appData.jobs) {
+        // Defense in depth: even if the client sends jobs the user can't edit,
+        // we re-check here. Admins can edit anything; PMs need ownership or
+        // explicit job_access edit grant; corporate is read-only.
+        const existing = await client.query(
+          'SELECT owner_id FROM jobs WHERE id = $1', [job.id]
+        );
+        if (existing.rows.length) {
+          let canEdit = false;
+          if (req.user.role === 'admin') canEdit = true;
+          else if (req.user.role === 'corporate') canEdit = false;
+          else if (existing.rows[0].owner_id === req.user.id) canEdit = true;
+          else {
+            const access = await client.query(
+              "SELECT access_level FROM job_access WHERE job_id = $1 AND user_id = $2",
+              [job.id, req.user.id]
+            );
+            canEdit = access.rows.length > 0 && access.rows[0].access_level === 'edit';
+          }
+          if (!canEdit) { skipped++; continue; }
+        }
         const jobBlob = {
           ...job,
           buildings: (appData.buildings || []).filter(b => b.jobId === job.id),
@@ -139,6 +168,8 @@ router.put('/bulk/save', requireAuth, requireRole('admin', 'pm'), async (req, re
           purchaseOrders: (appData.purchaseOrders || []).filter(p => p.jobId === job.id),
           invoices: (appData.invoices || []).filter(i => i.jobId === job.id),
         };
+        // Strip server-injected hints that shouldn't round-trip back into the blob
+        delete jobBlob._canEdit;
         // For new jobs, admins can specify owner_id to assign a PM. Non-admins
         // (PMs creating their own jobs) always own what they create. ON CONFLICT
         // never touches owner_id, so existing jobs keep their original PM.
@@ -148,6 +179,7 @@ router.put('/bulk/save', requireAuth, requireRole('admin', 'pm'), async (req, re
            ON CONFLICT (id) DO UPDATE SET data = $3, updated_at = NOW()`,
           [job.id, ownerId, JSON.stringify(jobBlob)]
         );
+        saved++;
       }
       await client.query('COMMIT');
     } catch (e) {
@@ -156,7 +188,7 @@ router.put('/bulk/save', requireAuth, requireRole('admin', 'pm'), async (req, re
     } finally {
       client.release();
     }
-    res.json({ ok: true, count: appData.jobs.length });
+    res.json({ ok: true, count: saved, skipped: skipped });
   } catch (e) {
     res.status(500).json({ error: 'Server error' });
   }

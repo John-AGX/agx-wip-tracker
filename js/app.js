@@ -299,11 +299,17 @@
             } else if (tabName === 'admin') {
                 if (typeof renderAdminUsers === 'function') renderAdminUsers();
             } else {
+                // Returning to WIP from another tab: force back to the main job
+                // list, even if a job detail was previously open. Without this
+                // reset the detail view stays layered on top and steals clicks.
                 renderWIPMain();
                 var archiveView = document.getElementById('archived-jobs-list');
                 if (archiveView) archiveView.style.display = 'none';
                 var mainView = document.getElementById('wip-main-view');
                 if (mainView) mainView.style.display = '';
+                var detailView = document.getElementById('wip-job-detail-view');
+                if (detailView) detailView.style.display = 'none';
+                appState.currentJobId = null;
             }
         }
 
@@ -467,14 +473,22 @@
 
         function pushToServer() {
             if (!window.agxApi || !window.agxApi.isAuthenticated()) return Promise.resolve();
+            // Only push jobs the current user can edit. _canEdit comes from the
+            // server on each GET. Read-only jobs (e.g. another PM's job that this
+            // user can view but not modify) are filtered out so PMs scrolling the
+            // list don't accidentally overwrite each other's data.
+            var editableJobs = appData.jobs.filter(function(j) { return j._canEdit !== false; });
+            var editableIds = {};
+            editableJobs.forEach(function(j) { editableIds[j.id] = true; });
+
             var jobsPayload = {
-                jobs: appData.jobs,
-                buildings: appData.buildings,
-                phases: appData.phases,
-                changeOrders: appData.changeOrders,
-                subs: appData.subs,
-                purchaseOrders: appData.purchaseOrders,
-                invoices: appData.invoices
+                jobs: editableJobs,
+                buildings: appData.buildings.filter(function(b) { return editableIds[b.jobId]; }),
+                phases: appData.phases.filter(function(p) { return editableIds[p.jobId]; }),
+                changeOrders: appData.changeOrders.filter(function(c) { return editableIds[c.jobId]; }),
+                subs: appData.subs.filter(function(s) { return editableIds[s.jobId]; }),
+                purchaseOrders: appData.purchaseOrders.filter(function(p) { return editableIds[p.jobId]; }),
+                invoices: appData.invoices.filter(function(i) { return editableIds[i.jobId]; })
             };
             var estimatesPayload = {
                 estimates: appData.estimates,
@@ -482,7 +496,7 @@
                 estimateAlternates: appData.estimateAlternates
             };
             return Promise.all([
-                appData.jobs.length ? window.agxApi.jobs.bulkSave(jobsPayload) : Promise.resolve(),
+                editableJobs.length ? window.agxApi.jobs.bulkSave(jobsPayload) : Promise.resolve(),
                 appData.estimates.length ? window.agxApi.estimates.bulkSave(estimatesPayload) : Promise.resolve()
             ]).catch(function(err) {
                 console.warn('Server push failed:', err.message);

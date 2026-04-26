@@ -38,18 +38,24 @@
         return;
       }
       var html = '';
+      var me = window.agxAuth && window.agxAuth.getUser && window.agxAuth.getUser();
+      var myId = me ? me.id : null;
       _users.forEach(function(u) {
         var activeBadge = u.active
           ? '<span style="color:#34d399;">&#x2713;</span>'
           : '<span style="color:#e74c3c;">&#x2717;</span>';
+        var deleteBtn = (u.id === myId)
+          ? '<button disabled title="You cannot delete your own account" style="font-size:11px;padding:4px 10px;opacity:0.4;cursor:not-allowed;margin-left:4px;">Delete</button>'
+          : '<button onclick="deleteAdminUser(' + u.id + ')" style="font-size:11px;padding:4px 10px;background:#e74c3c;color:#fff;border:none;border-radius:4px;margin-left:4px;cursor:pointer;">Delete</button>';
         html += '<tr>' +
           '<td>' + escapeHTML(u.name || '') + '</td>' +
           '<td>' + escapeHTML(u.email || '') + '</td>' +
           '<td>' + roleBadge(u.role) + '</td>' +
           '<td style="text-align:center;">' + activeBadge + '</td>' +
           '<td>' + fmtDate(u.created_at) + '</td>' +
-          '<td style="text-align:center;">' +
+          '<td style="text-align:center;white-space:nowrap;">' +
             '<button onclick="openEditUserModal(' + u.id + ')" style="font-size:11px;padding:4px 10px;">Edit</button>' +
+            deleteBtn +
           '</td>' +
         '</tr>';
       });
@@ -173,9 +179,26 @@
     refreshUsers: renderAdminUsers
   };
 
+  function deleteAdminUser(userId) {
+    var u = _users.find(function(x) { return x.id === userId; });
+    if (!u) return;
+    var msg = 'Delete user "' + u.name + '" (' + u.email + ')? This cannot be undone.\n\n' +
+              'If they own any jobs, the delete will fail and you should deactivate them ' +
+              '(uncheck Active in Edit) instead, or reassign their jobs first.';
+    if (!confirm(msg)) return;
+    window.agxApi.users.remove(userId)
+      .then(function() {
+        renderAdminUsers();
+      })
+      .catch(function(err) {
+        alert('Delete failed: ' + (err.message || 'unknown error'));
+      });
+  }
+
   window.renderAdminUsers = renderAdminUsers;
   window.openNewUserModal = openNewUserModal;
   window.submitNewUser = submitNewUser;
   window.openEditUserModal = openEditUserModal;
   window.submitEditUser = submitEditUser;
+  window.deleteAdminUser = deleteAdminUser;
 })();
