@@ -109,20 +109,72 @@ router.delete('/:id', requireAuth, requireRole('admin'), async (req, res) => {
   }
 });
 
-// POST /api/jobs/:id/access
+// Helper: only admin or job owner can manage access for a given job.
+async function canManageAccess(req, jobId) {
+  if (req.user.role === 'admin') return true;
+  const { rows } = await pool.query('SELECT owner_id FROM jobs WHERE id = $1', [jobId]);
+  if (!rows.length) return null; // job not found
+  return rows[0].owner_id === req.user.id;
+}
+
+// GET /api/jobs/:id/access — list users with explicit access plus the owner
+router.get('/:id/access', requireAuth, async (req, res) => {
+  try {
+    if (!(await canAccess(req.user.id, req.user.role, req.params.id))) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    const { rows: jobRows } = await pool.query(
+      'SELECT owner_id FROM jobs WHERE id = $1', [req.params.id]
+    );
+    if (!jobRows.length) return res.status(404).json({ error: 'Job not found' });
+    const { rows: shares } = await pool.query(`
+      SELECT ja.user_id, ja.access_level, u.name, u.email, u.role
+      FROM job_access ja
+      JOIN users u ON u.id = ja.user_id
+      WHERE ja.job_id = $1
+      ORDER BY u.name
+    `, [req.params.id]);
+    res.json({ owner_id: jobRows[0].owner_id, shares });
+  } catch (e) {
+    console.error('GET /api/jobs/:id/access error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /api/jobs/:id/access — grant or update a user's access to a job
 router.post('/:id/access', requireAuth, async (req, res) => {
   try {
-    const { rows } = await pool.query('SELECT owner_id FROM jobs WHERE id = $1', [req.params.id]);
-    if (!rows.length) return res.status(404).json({ error: 'Job not found' });
-    if (req.user.role !== 'admin' && rows[0].owner_id !== req.user.id) {
-      return res.status(403).json({ error: 'Only owner or admin can manage access' });
-    }
+    const ok = await canManageAccess(req, req.params.id);
+    if (ok === null) return res.status(404).json({ error: 'Job not found' });
+    if (!ok) return res.status(403).json({ error: 'Only owner or admin can manage access' });
+
     const { userId, accessLevel } = req.body;
+    if (!userId) return res.status(400).json({ error: 'userId required' });
+    const level = accessLevel === 'view' ? 'view' : 'edit';
     await pool.query(
       'INSERT INTO job_access (job_id, user_id, access_level) VALUES ($1, $2, $3) ON CONFLICT (job_id, user_id) DO UPDATE SET access_level = $3',
-      [req.params.id, userId, accessLevel || 'edit']);
+      [req.params.id, userId, level]);
     res.json({ ok: true });
   } catch (e) {
+    console.error('POST /api/jobs/:id/access error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// DELETE /api/jobs/:id/access/:userId — revoke a user's access
+router.delete('/:id/access/:userId', requireAuth, async (req, res) => {
+  try {
+    const ok = await canManageAccess(req, req.params.id);
+    if (ok === null) return res.status(404).json({ error: 'Job not found' });
+    if (!ok) return res.status(403).json({ error: 'Only owner or admin can manage access' });
+
+    await pool.query(
+      'DELETE FROM job_access WHERE job_id = $1 AND user_id = $2',
+      [req.params.id, req.params.userId]
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('DELETE /api/jobs/:id/access/:userId error:', e);
     res.status(500).json({ error: 'Server error' });
   }
 });

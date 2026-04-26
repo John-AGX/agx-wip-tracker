@@ -127,6 +127,9 @@
                     <div id="archived-jobs-list" style="display:none;"></div>
 
                     <div id="wip-job-detail-view" style="display: none;">
+                        <div id="job-detail-readonly-banner" style="display:none;background:rgba(251,191,36,0.12);border:1px solid rgba(251,191,36,0.4);color:#fbbf24;padding:10px 14px;border-radius:8px;margin-bottom:14px;font-size:13px;">
+                            <strong>View only.</strong> <span id="job-detail-readonly-msg">This job is assigned to another PM. You can review the data but changes won&apos;t save.</span>
+                        </div>
                         <div class="job-detail-header">
                             <button class="secondary small" onclick="backToWIPMain()">&larr; Back to WIP</button>
                             <div class="job-detail-info">
@@ -236,6 +239,15 @@
                             <button onclick="openAddBuildingToJobModal()">&#x1F3D7; Add Building</button>
                             <button onclick="openAddPhaseToJobModal()">&#x1F4CB; Add Phase</button>
                             <button onclick="openAddSubToJobModal()">&#x1F477; Add Sub</button>
+                        </div>
+
+                        <!-- Sharing card: visible to admin or job owner. Populated by renderJobSharing(). -->
+                        <div class="card" id="job-sharing-card" style="display:none;">
+                            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+                                <h3 style="margin:0;">Sharing</h3>
+                                <button class="small primary" onclick="openGrantAccessModal()">+ Grant Access</button>
+                            </div>
+                            <div id="job-sharing-list" style="font-size:13px;color:var(--text,#fff);"></div>
                         </div>
 
                         <div class="sub-tabs">
@@ -1248,6 +1260,31 @@
       </div>
     </div>
 
+    <!-- Job sharing: grant a user access to the current job -->
+    <div id="grantAccessModal" class="modal">
+      <div class="modal-content" style="max-width:480px;">
+        <div class="modal-header">Grant Access</div>
+        <div style="padding:20px;display:flex;flex-direction:column;gap:12px;">
+          <div>
+            <label style="display:block;font-size:12px;color:var(--text-dim,#888);margin-bottom:4px;">User</label>
+            <select id="grantAccess_userSelect" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);"></select>
+          </div>
+          <div>
+            <label style="display:block;font-size:12px;color:var(--text-dim,#888);margin-bottom:4px;">Access Level</label>
+            <select id="grantAccess_level" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);">
+              <option value="edit">Edit &mdash; can change job data</option>
+              <option value="view">View &mdash; read-only</option>
+            </select>
+          </div>
+          <div id="grantAccess_status" style="font-size:13px;"></div>
+        </div>
+        <div class="modal-footer">
+          <button onclick="closeModal('grantAccessModal')" class="secondary">Cancel</button>
+          <button onclick="submitGrantAccess()" class="primary" id="grantAccess_submitBtn">Grant</button>
+        </div>
+      </div>
+    </div>
+
     <!-- ADMIN: Create new user -->
     <div id="newUserModal" class="modal">
       <div class="modal-content" style="max-width:480px;">
@@ -1362,10 +1399,10 @@
     </div>
 
     <script src="js/auth.js?v=4"></script>
-    <script src="js/api.js?v=3"></script>
-    <script src="js/admin.js?v=2"></script>
+    <script src="js/api.js?v=4"></script>
+    <script src="js/admin.js?v=3"></script>
     <script src="js/app.js?v=30"></script>
-    <script src="js/wip.js?v=46"></script>
+    <script src="js/wip.js?v=47"></script>
     <script src="js/estimates.js?v=18"></script>
     <script src="js/proposal.js?v=18"></script>
 

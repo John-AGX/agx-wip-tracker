@@ -1059,18 +1059,41 @@ function renderWIPMain() {
             const job = appData.jobs.find(j => j.id === jobId);
             if (!job) return;
 
-            // Recalculate sub costs from Subcontractors tab entries
-            recalcSubCosts(jobId);
-
-            // Auto-calculate % complete from phases/buildings (unless manual override)
-            if (!job.pctCompleteManual) {
-                const hasPhases = appData.phases.filter(p => p.jobId === jobId).length > 0;
-                const hasBuildings = appData.buildings.filter(b => b.jobId === jobId).length > 0;
-                if (hasPhases || hasBuildings) {
-                    job.pctComplete = Math.round(calcJobPctComplete(jobId) * 10) / 10;
-                }
+            // Read-only enforcement: when the current user can't edit this job,
+            // toggle a CSS class on the detail container that disables form
+            // controls and edit-action buttons, and show the explanatory banner.
+            // Also skip auto-calc + saveData below since those would attempt
+            // server writes that the user isn't allowed to make.
+            const detailEl = document.getElementById('wip-job-detail-view');
+            const readOnly = job._canEdit === false;
+            if (detailEl) detailEl.classList.toggle('read-only-mode', readOnly);
+            const banner = document.getElementById('job-detail-readonly-banner');
+            const bannerMsg = document.getElementById('job-detail-readonly-msg');
+            if (banner) banner.style.display = readOnly ? '' : 'none';
+            if (bannerMsg && readOnly) {
+                bannerMsg.textContent = 'This job is assigned to ' + (job.pm || 'another PM') +
+                                         '. You can review the data but changes won’t save.';
             }
-            saveData();
+
+            if (!readOnly) {
+                // Recalculate sub costs from Subcontractors tab entries
+                recalcSubCosts(jobId);
+
+                // Auto-calculate % complete from phases/buildings (unless manual override)
+                if (!job.pctCompleteManual) {
+                    const hasPhases = appData.phases.filter(p => p.jobId === jobId).length > 0;
+                    const hasBuildings = appData.buildings.filter(b => b.jobId === jobId).length > 0;
+                    if (hasPhases || hasBuildings) {
+                        job.pctComplete = Math.round(calcJobPctComplete(jobId) * 10) / 10;
+                    }
+                }
+                saveData();
+            }
+
+            // Sharing section: visible only to admin/owner; rendered async after
+            // a fetch to /api/jobs/:id/access. The function self-hides the card
+            // for non-managers and offline mode.
+            if (typeof renderJobSharing === 'function') renderJobSharing(jobId);
 
             const w = getJobWIP(jobId);
 
