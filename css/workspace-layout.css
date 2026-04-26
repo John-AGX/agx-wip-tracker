@@ -343,16 +343,26 @@
   display: flex;
   flex-wrap: nowrap;
   gap: 6px;
-  padding: 4px 0;
-  margin: 0;
+  padding: 10px 14px;
+  margin: 0 0 8px 0;
   background: none;
   border: none;
   box-shadow: none;
-  flex: 1;
-  justify-content: flex-end;
+  width: 100%;
+  min-width: 0;
+  justify-content: flex-start;
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: thin;
+  box-sizing: border-box;
+}
+/* When the strip is detached from the sticky header (current layout), it
+   sits directly above the workspace grid as a full-width band. */
+#jh-strip-detached {
+  background: linear-gradient(180deg, rgba(0,0,0,0.2), rgba(0,0,0,0));
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  padding: 12px 16px;
+  margin-bottom: 12px;
 }
 .jh-metrics-strip::-webkit-scrollbar { height: 4px; }
 .jh-metrics-strip::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 2px; }

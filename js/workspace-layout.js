@@ -32,7 +32,7 @@
     var link = document.createElement('link');
     link.id = 'ws-layout-v2-css';
     link.rel = 'stylesheet';
-    link.href = 'css/workspace-layout.css?v=24';
+    link.href = 'css/workspace-layout.css?v=25';
     document.head.appendChild(link);
   }
 
@@ -63,7 +63,8 @@
       tabRow.remove();
     }
 
-    // Remove any stale metrics strip
+    // Remove any stale metrics strip (now lives detached at the top of the
+    // detail view, not inside the header)
     var strip = document.querySelector(".jh-metrics-strip");
     if (strip) strip.remove();
 
@@ -185,12 +186,12 @@
       'Remaining Costs': 'cost',
       '% Complete': 'neutral',
       'Revenue Earned': 'gain',
-      'Accrued': 'neutral',
+      'Accrued': 'amber',
       'Invoiced': 'income',
       'Change Orders': 'income',
       'Gross Profit': 'gain',
       'Margin JTD': 'gain',
-      'Backlog': 'amber'
+      'Backlog': 'neutral'
     };
 
     // ---- Metrics strip ----
@@ -212,7 +213,7 @@
       strip.appendChild(card);
     });
 
-    // ---- Tab + metrics row ----
+    // ---- Tab row (nav only — strip moved out of the sticky header) ----
     if (nav && headerContent) {
       var tabRow = document.createElement("div");
       tabRow.id = "jh-tab-metrics-row";
@@ -220,8 +221,14 @@
       nav.parentNode.insertBefore(tabRow, nav);
       nav.style.flex = "0 0 auto";
       tabRow.appendChild(nav);
-      tabRow.appendChild(strip);
     }
+
+    // ---- Metrics strip ----
+    // Lives in the detail view directly above the workspace grid so it spans
+    // the full content width with no competition from the nav. Inserted at
+    // the top of #wip-job-detail-view; cleanup removes it on tear-down.
+    strip.id = "jh-strip-detached";
+    detail.insertBefore(strip, detail.firstChild);
 
     // Hide original job-detail-header in page content
     var origHeader = detail.querySelector(".job-detail-header");
