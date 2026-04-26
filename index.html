@@ -654,6 +654,26 @@
                             <tbody id="admin-users-tbody"></tbody>
                         </table>
                     </div>
+
+                    <h3 style="margin-top:30px;color:var(--text,#fff);">Job Assignments</h3>
+                    <p style="margin:0 0 12px 0;color:var(--text-dim,#888);font-size:12px;">
+                        Reassign a job's owner from the dropdown. Click <strong>Manage Sharing</strong> to grant additional users edit or view access.
+                    </p>
+                    <div class="table-container">
+                        <table id="admin-jobs-table">
+                            <thead>
+                                <tr>
+                                    <th>Job</th>
+                                    <th>Client</th>
+                                    <th>Status</th>
+                                    <th>Owner</th>
+                                    <th style="text-align:center;">Shared With</th>
+                                    <th style="text-align:center;">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="admin-jobs-tbody"></tbody>
+                        </table>
+                    </div>
                 </div>
 
             </div>
@@ -1260,6 +1280,24 @@
       </div>
     </div>
 
+    <!-- Admin: per-job share manager (used from the Job Assignments table) -->
+    <div id="manageJobSharingModal" class="modal">
+      <div class="modal-content" style="max-width:640px;max-height:85vh;overflow-y:auto;">
+        <div class="modal-header">Manage Sharing &mdash; <span id="manageSharing_jobLabel"></span></div>
+        <div style="padding:20px;">
+          <div id="manageSharing_ownerLine" style="margin-bottom:12px;padding:8px 10px;background:rgba(255,255,255,0.04);border-radius:6px;font-size:13px;color:var(--text,#fff);"></div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+            <strong style="font-size:13px;color:var(--text,#fff);">Additional Access</strong>
+            <button onclick="openGrantAccessFromAdmin()" class="primary small" style="font-size:11px;">+ Grant Access</button>
+          </div>
+          <div id="manageSharing_list" style="font-size:13px;color:var(--text,#fff);"></div>
+        </div>
+        <div class="modal-footer">
+          <button onclick="closeModal('manageJobSharingModal')" class="secondary">Close</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Job sharing: grant a user access to the current job -->
     <div id="grantAccessModal" class="modal">
       <div class="modal-content" style="max-width:480px;">
@@ -1399,10 +1437,10 @@
     </div>
 
     <script src="js/auth.js?v=4"></script>
-    <script src="js/api.js?v=4"></script>
-    <script src="js/admin.js?v=3"></script>
+    <script src="js/api.js?v=5"></script>
+    <script src="js/admin.js?v=4"></script>
     <script src="js/insights.js?v=1"></script>
-    <script src="js/app.js?v=31"></script>
+    <script src="js/app.js?v=32"></script>
     <script src="js/wip.js?v=48"></script>
     <script src="js/estimates.js?v=18"></script>
     <script src="js/proposal.js?v=18"></script>

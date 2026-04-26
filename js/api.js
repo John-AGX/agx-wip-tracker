@@ -72,6 +72,9 @@
     list: function() { return get('/api/jobs'); },
     bulkSave: function(appData) { return put('/api/jobs/bulk/save', { appData: appData }); },
     remove: function(id) { return del('/api/jobs/' + encodeURIComponent(id)); },
+    reassignOwner: function(id, ownerId) {
+      return put('/api/jobs/' + encodeURIComponent(id) + '/owner', { ownerId: ownerId });
+    },
     listAccess: function(id) { return get('/api/jobs/' + encodeURIComponent(id) + '/access'); },
     grantAccess: function(id, userId, accessLevel) {
       return post('/api/jobs/' + encodeURIComponent(id) + '/access', { userId: userId, accessLevel: accessLevel });

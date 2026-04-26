@@ -292,8 +292,14 @@
         statusEl.textContent = 'Granted.';
         setTimeout(function() {
           closeModal('grantAccessModal');
-          renderJobSharing(_currentSharingJobId);
-          // Pull fresh job list so this user's _canEdit reflects the new grant on next reload
+          // Caller (per-job detail vs admin-tab share manager) sets a custom
+          // refresh target. Default is to re-render the per-job sharing card.
+          if (typeof window._grantAccessRefreshTarget === 'function') {
+            window._grantAccessRefreshTarget();
+            window._grantAccessRefreshTarget = null;
+          } else {
+            renderJobSharing(_currentSharingJobId);
+          }
           if (window.agxData) window.agxData.reloadFromServer();
         }, 800);
       })
@@ -332,6 +338,179 @@
       });
   }
 
+  // ==================== JOB ASSIGNMENTS (admin-side) ====================
+  // Centralized job ownership + sharing management. Pulls the full job list
+  // from the API and renders a table with an inline owner dropdown and a
+  // "Manage Sharing" action that opens a modal listing the per-job shares.
+  var _jobsCache = [];
+
+  function renderAdminJobs() {
+    if (!isAdmin()) return;
+    var tbody = document.getElementById('admin-jobs-tbody');
+    if (!tbody) return;
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-dim,#888);padding:20px;">Loading…</td></tr>';
+
+    Promise.all([
+      window.agxApi.jobs.list(),
+      _users.length ? Promise.resolve({ users: _users }) : window.agxApi.users.list()
+    ]).then(function(results) {
+      _jobsCache = results[0].jobs || [];
+      _users = results[1].users || _users;
+      if (!_jobsCache.length) {
+        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-dim,#888);padding:20px;">No jobs.</td></tr>';
+        return;
+      }
+      var assignableUsers = _users.filter(function(u) {
+        return u.active && (u.role === 'pm' || u.role === 'admin');
+      });
+      var html = '';
+      _jobsCache.forEach(function(j) {
+        var ownerOpts = '<option value="">-- Unassigned --</option>';
+        assignableUsers.forEach(function(u) {
+          ownerOpts += '<option value="' + u.id + '"' + (j.owner_id === u.id ? ' selected' : '') + '>' +
+                       escapeHTML(u.name) + (u.role === 'admin' ? ' (admin)' : '') + '</option>';
+        });
+        var label = (j.jobNumber ? '[' + j.jobNumber + '] ' : '') + (j.title || j.id);
+        html += '<tr>' +
+          '<td><strong>' + escapeHTML(label) + '</strong></td>' +
+          '<td>' + escapeHTML(j.client || '—') + '</td>' +
+          '<td><span class="badge">' + escapeHTML(j.status || '—') + '</span></td>' +
+          '<td>' +
+            '<select onchange="reassignJobOwner(\'' + escapeHTML(j.id) + '\', this.value)" ' +
+              'style="font-size:12px;padding:4px 8px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);border:1px solid var(--border,#333);border-radius:4px;min-width:180px;">' +
+              ownerOpts +
+            '</select>' +
+          '</td>' +
+          '<td style="text-align:center;" id="admin-shares-cell-' + escapeHTML(j.id) + '">' +
+            '<span style="color:var(--text-dim,#888);font-size:11px;">…</span>' +
+          '</td>' +
+          '<td style="text-align:center;">' +
+            '<button onclick="openJobShareManager(\'' + escapeHTML(j.id) + '\')" style="font-size:11px;padding:4px 10px;">Manage Sharing</button>' +
+          '</td>' +
+        '</tr>';
+      });
+      tbody.innerHTML = html;
+      // Asynchronously fill in the share counts. One call per job — small
+      // dataset for now, fine. Can be batched into a single endpoint later
+      // if the job count grows large.
+      _jobsCache.forEach(function(j) {
+        window.agxApi.jobs.listAccess(j.id).then(function(res) {
+          var cell = document.getElementById('admin-shares-cell-' + j.id);
+          if (!cell) return;
+          var n = (res.shares || []).length;
+          cell.innerHTML = n
+            ? '<span style="background:rgba(79,140,255,0.15);color:#4f8cff;padding:2px 8px;border-radius:10px;font-size:11px;">' + n + '</span>'
+            : '<span style="color:var(--text-dim,#888);font-size:11px;">—</span>';
+        }).catch(function() { /* ignore per-job failures */ });
+      });
+    }).catch(function(err) {
+      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#e74c3c;padding:20px;">Failed: ' + escapeHTML(err.message) + '</td></tr>';
+    });
+  }
+
+  function reassignJobOwner(jobId, newOwnerId) {
+    if (!newOwnerId) return; // ignore the "-- Unassigned --" placeholder
+    window.agxApi.jobs.reassignOwner(jobId, parseInt(newOwnerId, 10))
+      .then(function() {
+        // Pull fresh job state so _canEdit recalculates for everyone, and
+        // refresh the assignments table to show the new owner.
+        if (window.agxData) window.agxData.reloadFromServer();
+        renderAdminJobs();
+      })
+      .catch(function(err) {
+        alert('Reassign failed: ' + (err.message || 'unknown error'));
+        renderAdminJobs(); // revert the dropdown
+      });
+  }
+
+  function openJobShareManager(jobId) {
+    var job = _jobsCache.find(function(j) { return j.id === jobId; });
+    if (!job) return;
+    _currentSharingJobId = jobId; // reuse the per-job sharing flow's state
+    var label = (job.jobNumber ? '[' + job.jobNumber + '] ' : '') + (job.title || jobId);
+    document.getElementById('manageSharing_jobLabel').textContent = label;
+    refreshShareManager(jobId);
+    openModal('manageJobSharingModal');
+  }
+
+  function refreshShareManager(jobId) {
+    var listEl = document.getElementById('manageSharing_list');
+    var ownerEl = document.getElementById('manageSharing_ownerLine');
+    listEl.innerHTML = '<div style="color:var(--text-dim,#888);">Loading…</div>';
+    window.agxApi.jobs.listAccess(jobId).then(function(res) {
+      _currentSharingShares = res.shares || [];
+      var owner = _users.find(function(u) { return u.id === res.owner_id; });
+      ownerEl.innerHTML = '<strong>Owner:</strong> ' +
+        escapeHTML(owner ? (owner.name + ' · ' + owner.email) : ('User #' + res.owner_id)) +
+        ' <span style="font-size:10px;color:var(--text-dim,#888);margin-left:6px;">always full edit</span>';
+      if (!_currentSharingShares.length) {
+        listEl.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;padding:8px 0;">No additional users have access yet.</div>';
+        return;
+      }
+      var html = '<table style="width:100%;border-collapse:collapse;">';
+      html += '<thead><tr>' +
+        '<th style="text-align:left;font-size:11px;color:var(--text-dim,#888);padding:4px 8px;border-bottom:1px solid var(--border,#333);">Name</th>' +
+        '<th style="text-align:left;font-size:11px;color:var(--text-dim,#888);padding:4px 8px;border-bottom:1px solid var(--border,#333);">Role</th>' +
+        '<th style="text-align:left;font-size:11px;color:var(--text-dim,#888);padding:4px 8px;border-bottom:1px solid var(--border,#333);">Access</th>' +
+        '<th style="text-align:right;padding:4px 8px;border-bottom:1px solid var(--border,#333);"></th>' +
+      '</tr></thead><tbody>';
+      _currentSharingShares.forEach(function(s) {
+        html += '<tr>' +
+          '<td style="padding:6px 8px;">' + escapeHTML(s.name || '') + '</td>' +
+          '<td style="padding:6px 8px;font-size:11px;color:var(--text-dim,#888);">' + escapeHTML(s.role || '') + '</td>' +
+          '<td style="padding:6px 8px;">' +
+            '<select onchange="updateAdminJobAccessLevel(' + s.user_id + ', this.value)" style="font-size:11px;padding:2px 4px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);border:1px solid var(--border,#333);border-radius:4px;">' +
+              '<option value="edit"' + (s.access_level === 'edit' ? ' selected' : '') + '>edit</option>' +
+              '<option value="view"' + (s.access_level === 'view' ? ' selected' : '') + '>view</option>' +
+            '</select>' +
+          '</td>' +
+          '<td style="padding:6px 8px;text-align:right;">' +
+            '<button onclick="revokeAdminJobAccess(' + s.user_id + ')" style="font-size:10px;padding:2px 8px;background:#e74c3c;color:#fff;border:none;border-radius:4px;cursor:pointer;">Revoke</button>' +
+          '</td>' +
+        '</tr>';
+      });
+      html += '</tbody></table>';
+      listEl.innerHTML = html;
+    }).catch(function(err) {
+      listEl.innerHTML = '<div style="color:#e74c3c;">Failed to load: ' + escapeHTML(err.message) + '</div>';
+    });
+  }
+
+  // Reuses the existing grant-access modal — it picks up _currentSharingJobId.
+  function openGrantAccessFromAdmin() {
+    openGrantAccessModal();
+    // After grantAccessModal closes successfully it auto-refreshes via
+    // renderJobSharing(); we want refreshShareManager() instead. Patch the
+    // submit path by stashing the original target so it knows where to go.
+    window._grantAccessRefreshTarget = function() {
+      refreshShareManager(_currentSharingJobId);
+      renderAdminJobs();
+    };
+  }
+
+  function updateAdminJobAccessLevel(userId, newLevel) {
+    if (!_currentSharingJobId) return;
+    window.agxApi.jobs.grantAccess(_currentSharingJobId, userId, newLevel)
+      .then(function() {
+        refreshShareManager(_currentSharingJobId);
+        if (window.agxData) window.agxData.reloadFromServer();
+      })
+      .catch(function(err) { alert('Update failed: ' + (err.message || '')); });
+  }
+
+  function revokeAdminJobAccess(userId) {
+    if (!_currentSharingJobId) return;
+    var u = _currentSharingShares.find(function(x) { return x.user_id === userId; });
+    if (!confirm('Revoke ' + (u ? u.name : 'this user') + "'s access?")) return;
+    window.agxApi.jobs.revokeAccess(_currentSharingJobId, userId)
+      .then(function() {
+        refreshShareManager(_currentSharingJobId);
+        renderAdminJobs();
+        if (window.agxData) window.agxData.reloadFromServer();
+      })
+      .catch(function(err) { alert('Revoke failed: ' + (err.message || '')); });
+  }
+
   function deleteAdminUser(userId) {
     var u = _users.find(function(x) { return x.id === userId; });
     if (!u) return;
@@ -359,4 +538,10 @@
   window.submitGrantAccess = submitGrantAccess;
   window.revokeJobAccess = revokeJobAccess;
   window.updateJobAccessLevel = updateJobAccessLevel;
+  window.renderAdminJobs = renderAdminJobs;
+  window.reassignJobOwner = reassignJobOwner;
+  window.openJobShareManager = openJobShareManager;
+  window.openGrantAccessFromAdmin = openGrantAccessFromAdmin;
+  window.updateAdminJobAccessLevel = updateAdminJobAccessLevel;
+  window.revokeAdminJobAccess = revokeAdminJobAccess;
 })();

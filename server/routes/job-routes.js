@@ -99,6 +99,30 @@ router.put('/:id', requireAuth, async (req, res) => {
   }
 });
 
+// PUT /api/jobs/:id/owner — reassign job to a different PM/admin (admin only)
+// Existing job_access entries are kept intact, so anyone who had explicit
+// edit/view access still has it after a reassignment. The previous owner
+// loses their implicit ownership; if you want them to keep access, add them
+// as a share separately.
+router.put('/:id/owner', requireAuth, requireRole('admin'), async (req, res) => {
+  try {
+    const { ownerId } = req.body;
+    if (!ownerId) return res.status(400).json({ error: 'ownerId required' });
+    const userCheck = await pool.query('SELECT id FROM users WHERE id = $1 AND active = true', [ownerId]);
+    if (!userCheck.rows.length) return res.status(400).json({ error: 'Invalid or inactive user' });
+    const jobCheck = await pool.query('SELECT id FROM jobs WHERE id = $1', [req.params.id]);
+    if (!jobCheck.rows.length) return res.status(404).json({ error: 'Job not found' });
+    await pool.query(
+      'UPDATE jobs SET owner_id = $1, updated_at = NOW() WHERE id = $2',
+      [ownerId, req.params.id]
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('PUT /api/jobs/:id/owner error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // DELETE /api/jobs/:id (admin only)
 router.delete('/:id', requireAuth, requireRole('admin'), async (req, res) => {
   try {

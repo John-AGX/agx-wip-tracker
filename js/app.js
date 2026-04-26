@@ -298,6 +298,7 @@
                 if (typeof renderInsightsDashboard === 'function') renderInsightsDashboard();
             } else if (tabName === 'admin') {
                 if (typeof renderAdminUsers === 'function') renderAdminUsers();
+                if (typeof renderAdminJobs === 'function') renderAdminJobs();
             } else {
                 // Returning to WIP from another tab: force back to the main job
                 // list, even if a job detail was previously open. Without this
