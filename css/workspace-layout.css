@@ -334,11 +334,16 @@
 }
 
 /* ââ Metrics Strip (13 cards) ââ */
+/* Sticky job-detail metrics strip — borrows the watch-node aesthetic from
+   the nodegraph (dark gradient cards with a faint diagonal sheen) and adds
+   tone-based color coding so income, cost, gain, and amber metrics each
+   read at a glance. nowrap + overflow-x:auto keeps everything on one line
+   even at 12+ metrics; the strip scrolls horizontally on tight widths. */
 .jh-metrics-strip {
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  padding: 0;
+  flex-wrap: nowrap;
+  gap: 6px;
+  padding: 4px 0;
   margin: 0;
   background: none;
   border: none;
@@ -347,40 +352,115 @@
   justify-content: flex-end;
   overflow-x: auto;
   overflow-y: hidden;
+  scrollbar-width: thin;
 }
-.jh-metrics-strip::-webkit-scrollbar { height: 3px; }
+.jh-metrics-strip::-webkit-scrollbar { height: 4px; }
 .jh-metrics-strip::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 2px; }
+
 .jh-strip-card {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  background: rgba(0,0,0,0.35);
+  background: linear-gradient(135deg, #05080f 0%, #0e1322 50%, #0a1424 100%);
   border: 1px solid rgba(255,255,255,0.08);
-  border-radius: 6px;
-  padding: 8px 14px;
+  border-radius: 7px;
+  padding: 6px 12px;
   text-align: center;
-  flex: 0 1 auto;
-  min-width: 58px;
-  transition: background 0.15s;
+  flex: 0 0 auto;
+  min-width: 78px;
+  position: relative;
+  overflow: hidden;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.35);
+  transition: border-color 0.2s, transform 0.15s, box-shadow 0.2s;
 }
-.jh-strip-card:hover { background: rgba(0,0,0,0.5); }
+/* Diagonal sheen sweep, lifted from .ng-watch-kpi::before */
+.jh-strip-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(120deg, transparent 30%, rgba(255,255,255,0.05) 50%, transparent 70%);
+  animation: jh-strip-shine 7s ease-in-out infinite;
+  pointer-events: none;
+  z-index: 0;
+}
+.jh-strip-card:hover {
+  transform: translateY(-1px);
+  border-color: rgba(255,255,255,0.2);
+  box-shadow: 0 4px 14px rgba(0,0,0,0.5);
+}
+
 .jh-strip-label {
   font-size: 9px;
   font-weight: 600;
   color: rgba(255,255,255,0.55);
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.6px;
   white-space: nowrap;
-  margin-bottom: 2px;
+  margin-bottom: 3px;
+  position: relative;
+  z-index: 1;
 }
 .jh-strip-value {
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 700;
   color: #fff;
   white-space: nowrap;
-  font-family: 'SF Mono', 'Fira Code', monospace;
-  letter-spacing: -0.3px;
+  font-family: 'SF Mono', 'Fira Code', 'Courier New', monospace;
+  letter-spacing: -0.2px;
+  position: relative;
+  z-index: 1;
+}
+
+/* Tone variants — match the nodegraph watch-kpi color palette. Each tone
+   tints the value text + glow + border, while keeping the dark base bg. */
+.jh-strip-card[data-tone="gain"] {
+  border-color: rgba(52,211,153,0.35);
+  background: linear-gradient(135deg, #05080f 0%, #0a2418 50%, #0a1424 100%);
+}
+.jh-strip-card[data-tone="gain"] .jh-strip-value {
+  color: #34d399;
+  text-shadow: 0 0 10px rgba(52,211,153,0.45);
+}
+.jh-strip-card[data-tone="gain"] .jh-strip-label { color: rgba(52,211,153,0.65); }
+
+.jh-strip-card[data-tone="cost"] {
+  border-color: rgba(248,113,113,0.3);
+  background: linear-gradient(135deg, #05080f 0%, #2a0e14 50%, #0a1424 100%);
+}
+.jh-strip-card[data-tone="cost"] .jh-strip-value {
+  color: #f87171;
+  text-shadow: 0 0 10px rgba(248,113,113,0.4);
+}
+.jh-strip-card[data-tone="cost"] .jh-strip-label { color: rgba(248,113,113,0.6); }
+
+.jh-strip-card[data-tone="income"] {
+  border-color: rgba(96,165,250,0.32);
+  background: linear-gradient(135deg, #05080f 0%, #0c1830 50%, #0a1424 100%);
+}
+.jh-strip-card[data-tone="income"] .jh-strip-value {
+  color: #60a5fa;
+  text-shadow: 0 0 10px rgba(96,165,250,0.4);
+}
+.jh-strip-card[data-tone="income"] .jh-strip-label { color: rgba(96,165,250,0.6); }
+
+.jh-strip-card[data-tone="amber"] {
+  border-color: rgba(251,191,36,0.4);
+  background: linear-gradient(135deg, #05080f 0%, #1a1230 50%, #0a1424 100%);
+}
+.jh-strip-card[data-tone="amber"] .jh-strip-value {
+  color: #fbbf24;
+  text-shadow: 0 0 10px rgba(251,191,36,0.5);
+}
+.jh-strip-card[data-tone="amber"] .jh-strip-label { color: rgba(251,191,36,0.65); }
+
+.jh-strip-card[data-tone="neutral"] .jh-strip-value {
+  color: #e4e6f0;
+}
+
+@keyframes jh-strip-shine {
+  0%, 100% { transform: translateX(-110%); }
+  50% { transform: translateX(110%); }
 }
 
 

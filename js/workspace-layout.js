@@ -32,7 +32,7 @@
     var link = document.createElement('link');
     link.id = 'ws-layout-v2-css';
     link.rel = 'stylesheet';
-    link.href = 'css/workspace-layout.css?v=23';
+    link.href = 'css/workspace-layout.css?v=24';
     document.head.appendChild(link);
   }
 
@@ -175,12 +175,32 @@
       headerRight.appendChild(jobInfo);
     }
 
+    // Map each metric label to a tone hint so the card can color-code itself.
+    // Income-side = blue, cost-side = red, gain-side (revenue/profit/margin)
+    // = green, backlog/throughput = amber, neutral counters = gray.
+    var METRIC_TONE = {
+      'Total Income': 'income',
+      'Est. Costs (Rev.)': 'cost',
+      'Actual Costs': 'cost',
+      'Remaining Costs': 'cost',
+      '% Complete': 'neutral',
+      'Revenue Earned': 'gain',
+      'Accrued': 'neutral',
+      'Invoiced': 'income',
+      'Change Orders': 'income',
+      'Gross Profit': 'gain',
+      'Margin JTD': 'gain',
+      'Backlog': 'amber'
+    };
+
     // ---- Metrics strip ----
     var strip = document.createElement("div");
     strip.className = "jh-metrics-strip";
     metricsData.forEach(function(m) {
       var card = document.createElement("div");
       card.className = "jh-strip-card";
+      var tone = METRIC_TONE[m.label] || 'neutral';
+      card.setAttribute('data-tone', tone);
       var lbl = document.createElement("div");
       lbl.className = "jh-strip-label";
       lbl.textContent = m.label;
