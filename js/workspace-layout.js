@@ -32,7 +32,7 @@
     var link = document.createElement('link');
     link.id = 'ws-layout-v2-css';
     link.rel = 'stylesheet';
-    link.href = 'css/workspace-layout.css?v=25';
+    link.href = 'css/workspace-layout.css?v=26';
     document.head.appendChild(link);
   }
 
@@ -132,14 +132,15 @@
       if (revMatch) revVal = revMatch[0];
     }
 
+    // Order: Contract -> cost progression -> work-in-progress -> billing -> profit -> backlog
     var metricsData = [
-      { label: "Total Income", value: extractVal(allText, "Total Income") },
+      { label: "Contract Amount", value: extractVal(allText, "Total Income") },
       { label: "Est. Costs (Rev.)", value: extractVal(allText, "Total Est. Costs (Revised)") },
       { label: "Actual Costs", value: extractVal(allText, "Actual Costs (from tracker)") },
+      { label: "Accrued Costs", value: "--" },
       { label: "Remaining Costs", value: extractVal(allText, "Remaining Est. Costs") },
       { label: "% Complete", value: extractVal(allText, "% Complete") },
       { label: "Revenue Earned", value: revVal },
-      { label: "Accrued", value: "--" },
       { label: "Invoiced", value: extractVal(allText, "Invoiced to Date") },
       { label: "Change Orders", value: extractVal(allText, "+ Change Orders") },
       { label: "Gross Profit", value: extractVal(allText, "Revised Gross Profit") },
@@ -180,13 +181,13 @@
     // Income-side = blue, cost-side = red, gain-side (revenue/profit/margin)
     // = green, backlog/throughput = amber, neutral counters = gray.
     var METRIC_TONE = {
-      'Total Income': 'income',
+      'Contract Amount': 'income',
       'Est. Costs (Rev.)': 'cost',
       'Actual Costs': 'cost',
+      'Accrued Costs': 'amber',
       'Remaining Costs': 'cost',
       '% Complete': 'neutral',
       'Revenue Earned': 'gain',
-      'Accrued': 'amber',
       'Invoiced': 'income',
       'Change Orders': 'income',
       'Gross Profit': 'gain',
@@ -249,13 +250,13 @@
     var w = getJobWIP(currentJobId);
     var accrued = (typeof getJobAccruedCosts === 'function') ? getJobAccruedCosts(currentJobId) : 0;
     var map = {
-      'Total Income': formatCurrency(w.totalIncome),
+      'Contract Amount': formatCurrency(w.totalIncome),
       'Est. Costs (Rev.)': formatCurrency(w.revisedEstCosts),
       'Actual Costs': formatCurrency(w.actualCosts),
+      'Accrued Costs': formatCurrency(accrued),
       'Remaining Costs': formatCurrency(w.remainingCosts),
       '% Complete': w.pctComplete.toFixed(1) + '%',
       'Revenue Earned': formatCurrency(w.revenueEarned),
-      'Accrued': formatCurrency(accrued),
       'Invoiced': formatCurrency(w.invoiced),
       'Change Orders': formatCurrency(w.coIncome),
       'Gross Profit': formatCurrency(w.revisedProfit),
