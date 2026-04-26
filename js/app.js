@@ -429,6 +429,10 @@
             estimateLines: [],
             estimateAlternates: []
         };
+        // Expose on window so other modules (admin.js, insights.js) that
+        // use `window.appData` can read the live state. Top-level `let` in a
+        // classic script doesn't auto-attach to window, so we do it manually.
+        window.appData = appData;
 
         let appState = {
             currentJobId: null,
@@ -536,8 +540,14 @@
                     hydrateFromServerJobs(results[0].jobs);
                     hydrateFromServerEstimates(results[1].estimates);
                     writeToLocalStorage();
+                    // Re-render whatever's visible. Each renderer no-ops if
+                    // its DOM target isn't present, so calling them all is
+                    // safe regardless of which tab the user is on.
                     if (typeof renderWIPMain === 'function') renderWIPMain();
                     if (typeof renderEstimatesList === 'function') renderEstimatesList();
+                    if (typeof renderInsightsDashboard === 'function') renderInsightsDashboard();
+                    if (typeof renderAdminMetrics === 'function') renderAdminMetrics();
+                    if (typeof renderAdminJobs === 'function') renderAdminJobs();
                 }).catch(function(err) {
                     console.warn('Server load failed, staying on localStorage cache:', err.message);
                 });
