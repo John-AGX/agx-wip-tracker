@@ -1164,13 +1164,16 @@ function renderWIPMain() {
             // ── Action buttons ──
             const btnRow = document.createElement('div');
             btnRow.style.cssText = 'display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap;';
+            // Note: Close Week was retired in favor of automatic daily
+            // snapshots (3 AM EST) plus a manual Capture Now on the Admin →
+            // Metrics tab. The legacy weekly snapshots remain visible in
+            // Insights history but no new ones get captured here.
             btnRow.innerHTML = '<button class="small" onclick="openAddBuildingToJobModal()" style="font-size:11px;padding:4px 10px;">&#x1F3D7; Building</button>' +
                 '<button class="small" onclick="openAddPhaseToJobModal()" style="font-size:11px;padding:4px 10px;">&#x1F4CB; Phase</button>' +
                 '<button class="small" onclick="openAddSubToJobModal()" style="font-size:11px;padding:4px 10px;">&#x1F477; Sub</button>' +
                 '<button class="small" onclick="openAddChangeOrderModal()" style="font-size:11px;padding:4px 10px;">&#x1F4DD; Change Order</button>' +
                 '<button class="small" onclick="openAddPOModal()" style="font-size:11px;padding:4px 10px;">&#x1F4C4; Purchase Order</button>' +
-                '<button class="small" onclick="openAddInvoiceModal()" style="font-size:11px;padding:4px 10px;">&#x1F4B3; Invoice</button>' +
-                '<button class="small" onclick="openCloseWeekModal(\'' + escapeHTML(jobId) + '\')" style="font-size:11px;padding:4px 10px;background:var(--green);color:#fff;border:none;">&#x1F4C5; Close Week</button>';
+                '<button class="small" onclick="openAddInvoiceModal()" style="font-size:11px;padding:4px 10px;">&#x1F4B3; Invoice</button>';
             container.appendChild(btnRow);
 
             // ── Building cards ──
@@ -1302,6 +1305,128 @@ function renderWIPMain() {
         }
 
         // ==================== WEEKLY SNAPSHOT / CLOSE WEEK ====================
+        // Returns a YYYY-MM-DD string for the given Date in America/New_York
+        // (business timezone, used for dating all daily snapshots regardless
+        // of where the user's browser actually is).
+        function dateKeyEST(d) {
+            d = d || new Date();
+            return d.toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+        }
+
+        // Builds the snapshot blob from current job state. Shared by both daily
+        // and weekly capture paths so they record the same fields.
+        function buildSnapshotPayload(jobId, dateTag) {
+            const job = appData.jobs.find(j => j.id === jobId);
+            if (!job) return null;
+            ensureNGComputed(jobId);
+            const w = getJobWIP(jobId);
+            const accrued = getJobAccruedCosts(jobId);
+            const buildings = appData.buildings.filter(b => b.jobId === jobId);
+            const phases = appData.phases.filter(p => p.jobId === jobId);
+            const cos = appData.changeOrders.filter(c => c.jobId === jobId);
+            const subs = appData.subs.filter(s => s.jobId === jobId);
+            const pos = (appData.purchaseOrders || []).filter(p => p.jobId === jobId);
+
+            return {
+                weekOf: dateTag,
+                dateKey: dateTag,
+                closedAt: new Date().toISOString(),
+                job: {
+                    pctComplete: w.pctComplete,
+                    totalIncome: w.totalIncome,
+                    contractIncome: w.contractIncome,
+                    estimatedCosts: w.estimatedCosts,
+                    revisedEstCosts: w.revisedEstCosts,
+                    actualCosts: w.actualCosts,
+                    accrued: accrued,
+                    revEarned: w.revenueEarned,
+                    invoiced: w.invoiced,
+                    coIncome: w.coIncome,
+                    grossProfit: w.revisedProfit,
+                    backlog: w.backlog
+                },
+                buildings: buildings.map(function(b) {
+                    var bPct = calcBuildingPctComplete(b.id, jobId);
+                    var bCost = (b.materials||0)+(b.labor||0)+(b.sub||0)+(b.equipment||0);
+                    return { id:b.id, name:b.name, pctComplete:bPct, budget:b.budget||0, cost:bCost };
+                }),
+                phases: phases.map(function(p) {
+                    var pCost = (p.materials||0)+(p.labor||0)+(p.sub||0)+(p.equipment||0);
+                    return { id:p.id, name:p.phase, pctComplete:p.pctComplete||0, revenue:p.asSoldRevenue||0, cost:pCost, buildingId:p.buildingId };
+                }),
+                changeOrders: cos.map(function(c) {
+                    return { id:c.id, coNumber:c.coNumber, income:c.income||0, estimatedCosts:c.estimatedCosts||0, pctComplete:c.pctComplete||0 };
+                }),
+                subs: subs.map(function(s) {
+                    return { id:s.id, name:s.name, contractAmt:s.contractAmt||0, billedToDate:s.billedToDate||0, accruedAmt:s.accruedAmt||0 };
+                }),
+                purchaseOrders: pos.map(function(p) {
+                    return { id:p.id, vendor:p.vendor, amount:p.amount||0, billedToDate:p.billedToDate||0 };
+                })
+            };
+        }
+
+        // Capture (or refresh) today's daily snapshot for a single job. Only
+        // snapshots Live jobs unless `force` is true (used by the manual
+        // "Capture Now" button on the Metrics tab). Auto-prunes dailySnapshots
+        // older than 90 days.
+        function captureDailySnapshot(jobId, force) {
+            const job = appData.jobs.find(j => j.id === jobId);
+            if (!job) return false;
+            if (!force && job.liveStatus !== 'live') return false;
+            if (!job.dailySnapshots) job.dailySnapshots = [];
+            var today = dateKeyEST();
+            var payload = buildSnapshotPayload(jobId, today);
+            if (!payload) return false;
+            var existingIdx = job.dailySnapshots.findIndex(function(s) { return s.dateKey === today; });
+            if (existingIdx >= 0) {
+                job.dailySnapshots[existingIdx] = payload;
+            } else {
+                job.dailySnapshots.push(payload);
+            }
+            // Sort ascending and prune anything older than 90 days
+            job.dailySnapshots.sort(function(a, b) { return a.dateKey < b.dateKey ? -1 : 1; });
+            var cutoff = new Date();
+            cutoff.setDate(cutoff.getDate() - 90);
+            var cutoffKey = cutoff.toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+            job.dailySnapshots = job.dailySnapshots.filter(function(s) { return s.dateKey >= cutoffKey; });
+            return true;
+        }
+
+        // Capture daily snapshots for every Live job that's missing today's
+        // entry. Saves once at the end if anything was captured. Returns the
+        // number of jobs captured.
+        function captureDailySnapshotsForAllLiveJobs() {
+            var today = dateKeyEST();
+            var captured = 0;
+            (appData.jobs || []).forEach(function(j) {
+                if (j.liveStatus !== 'live') return;
+                var has = (j.dailySnapshots || []).some(function(s) { return s.dateKey === today; });
+                if (has) return;
+                if (captureDailySnapshot(j.id)) captured++;
+            });
+            if (captured > 0) saveData();
+            return captured;
+        }
+
+        // Returns ms until next 3 AM America/New_York. Used by the scheduler
+        // to fire one snapshot pass per day if the app stays open across
+        // 3 AM EST/EDT. NY DST shifts are handled automatically by the
+        // toLocaleString conversion — we don't have to track EDT vs EST.
+        function msUntilNext3AmEst() {
+            var now = new Date();
+            // Build a Date that represents "now" in NY timezone as a string,
+            // then parse it back. Lose the timezone offset so math is local.
+            var nyNowStr = now.toLocaleString('en-US', { timeZone: 'America/New_York', hour12: false });
+            var nyNow = new Date(nyNowStr);
+            var target = new Date(nyNow);
+            target.setHours(3, 0, 5, 0); // 3:00:05 AM, slight buffer past the hour
+            if (target <= nyNow) target.setDate(target.getDate() + 1);
+            var diffMs = target.getTime() - nyNow.getTime();
+            // Floor at 60s to avoid tight loops if the math goes weird
+            return Math.max(60000, diffMs);
+        }
+
         function captureWeekSnapshot(jobId, weekOf) {
             const job = appData.jobs.find(j => j.id === jobId);
             if (!job) return null;

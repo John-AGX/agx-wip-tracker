@@ -44,25 +44,48 @@
     return v > 0 ? '↑' : '↓';
   }
 
-  // Given an array of jobs, produce a sorted unique list of all weekOf dates
-  // present across their snapshots. Newest first.
-  function getAllWeekOfDates(jobs) {
+  // Returns the merged snapshot list for one job, daily first then legacy
+  // weekly, with each entry tagged so we can tell them apart in the UI.
+  // Each item has a `dateKey` (YYYY-MM-DD) used as the canonical date.
+  function jobSnapshots(j) {
+    var out = [];
+    (j.dailySnapshots || []).forEach(function(s) {
+      out.push(Object.assign({}, s, { _kind: 'daily', dateKey: s.dateKey || s.weekOf }));
+    });
+    (j.weeklySnapshots || []).forEach(function(s) {
+      // Skip if a daily snapshot covers the same date (daily wins)
+      var dKey = s.weekOf;
+      if (out.some(function(x) { return x.dateKey === dKey; })) return;
+      out.push(Object.assign({}, s, { _kind: 'weekly', dateKey: dKey }));
+    });
+    return out;
+  }
+
+  // Sorted unique list of all dateKey values across every job's snapshots.
+  // Newest first. Daily snapshots take precedence over weekly on the same day.
+  function getAllSnapshotDates(jobs) {
     var set = {};
     (jobs || []).forEach(function(j) {
-      (j.weeklySnapshots || []).forEach(function(s) {
-        if (s.weekOf) set[s.weekOf] = true;
+      jobSnapshots(j).forEach(function(s) {
+        if (s.dateKey) set[s.dateKey] = true;
       });
     });
     return Object.keys(set).sort().reverse();
   }
 
-  // Returns each job's snapshot for the given weekOf, or null if none.
-  function snapshotsForWeek(jobs, weekOf) {
+  // Returns each job's snapshot for the given date (preferring daily over
+  // legacy weekly), tagged with `_job` for downstream rendering.
+  function snapshotsForDate(jobs, dateKey) {
     return (jobs || []).map(function(j) {
-      var snap = (j.weeklySnapshots || []).find(function(s) { return s.weekOf === weekOf; });
+      var snaps = jobSnapshots(j);
+      var snap = snaps.find(function(s) { return s.dateKey === dateKey; });
       return snap ? Object.assign({}, snap, { _job: j }) : null;
     }).filter(Boolean);
   }
+
+  // Backward-compat aliases used elsewhere in this file.
+  var getAllWeekOfDates = getAllSnapshotDates;
+  var snapshotsForWeek = snapshotsForDate;
 
   // Sum a metric across all jobs' snapshots for a given week. Missing jobs
   // contribute 0. Returns aggregate { backlog, revEarned, grossProfit, marginPct }.
@@ -181,13 +204,24 @@
       return;
     }
 
-    // Selected week defaults to most recent. If a previous render stored a
+    // Selected date defaults to most recent. If a previous render stored a
     // selection on window._insightsSelectedWeek, honor it as long as it's still
     // a valid date in the list.
     var selectedWeek = window._insightsSelectedWeek;
     if (!selectedWeek || allWeeks.indexOf(selectedWeek) === -1) selectedWeek = allWeeks[0];
+
+    // Default comparison: 7 days before the selected date if a snapshot
+    // exists from then; otherwise the next-most-recent snapshot we have.
+    function dateMinusDays(key, days) {
+      var d = new Date(key + 'T00:00:00');
+      d.setDate(d.getDate() - days);
+      return d.toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+    }
     var selectedIdx = allWeeks.indexOf(selectedWeek);
-    var prevWeek = allWeeks[selectedIdx + 1] || null;
+    var sevenAgoKey = dateMinusDays(selectedWeek, 7);
+    var prevWeek = allWeeks.indexOf(sevenAgoKey) !== -1
+      ? sevenAgoKey
+      : (allWeeks[selectedIdx + 1] || null);
 
     var aggCur = aggregateForWeek(jobs, selectedWeek);
     var aggPrev = prevWeek ? aggregateForWeek(jobs, prevWeek) : null;
@@ -208,13 +242,13 @@
     var headerHtml =
       '<div style="display:flex;align-items:center;gap:14px;margin-bottom:18px;flex-wrap:wrap;">' +
         '<div>' +
-          '<label style="font-size:11px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px;">Week of</label>' +
+          '<label style="font-size:11px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px;">As of</label>' +
           '<select id="insights-week-select" onchange="setInsightsWeek(this.value)" style="padding:8px 12px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);border:1px solid var(--border,#333);border-radius:6px;font-size:13px;">' +
             weekOpts +
           '</select>' +
         '</div>' +
         '<div style="font-size:12px;color:var(--text-dim,#888);align-self:flex-end;padding-bottom:8px;">' +
-          (prevWeek ? 'Compared to week of <strong>' + prevWeek + '</strong>' : 'No prior closed week to compare') +
+          (prevWeek ? 'Compared to <strong>' + prevWeek + '</strong>' : 'No earlier snapshot to compare') +
         '</div>' +
       '</div>';
 
@@ -222,16 +256,16 @@
     var kpiHtml = '<div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:24px;">' +
       kpiCard('Backlog', fmtCurrency(aggCur.backlog),
               delta('backlog'),
-              aggPrev ? fmtSignedCurrency(delta('backlog')) + ' (' + fmtSignedPct(deltaPct('backlog')) + ')' : 'no prior week') +
+              aggPrev ? fmtSignedCurrency(delta('backlog')) + ' (' + fmtSignedPct(deltaPct('backlog')) + ')' : 'no prior data') +
       kpiCard('Revenue Earned', fmtCurrency(aggCur.revEarned),
               delta('revEarned'),
-              aggPrev ? fmtSignedCurrency(delta('revEarned')) + ' (' + fmtSignedPct(deltaPct('revEarned')) + ')' : 'no prior week') +
+              aggPrev ? fmtSignedCurrency(delta('revEarned')) + ' (' + fmtSignedPct(deltaPct('revEarned')) + ')' : 'no prior data') +
       kpiCard('Profit', fmtCurrency(aggCur.grossProfit),
               delta('grossProfit'),
-              aggPrev ? fmtSignedCurrency(delta('grossProfit')) + ' (' + fmtSignedPct(deltaPct('grossProfit')) + ')' : 'no prior week') +
+              aggPrev ? fmtSignedCurrency(delta('grossProfit')) + ' (' + fmtSignedPct(deltaPct('grossProfit')) + ')' : 'no prior data') +
       kpiCard('Margin', fmtPct(aggCur.marginPct),
               aggPrev ? (aggCur.marginPct - aggPrev.marginPct) : null,
-              aggPrev ? fmtSignedPct(aggCur.marginPct - aggPrev.marginPct, 1) + ' pp' : 'no prior week') +
+              aggPrev ? fmtSignedPct(aggCur.marginPct - aggPrev.marginPct, 1) + ' pp' : 'no prior data') +
     '</div>';
 
     // --- Per-job ticker ---

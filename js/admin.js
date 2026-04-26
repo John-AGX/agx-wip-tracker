@@ -588,7 +588,8 @@
         ? '<span style="display:inline-block;padding:2px 10px;border-radius:10px;background:rgba(52,211,153,0.15);color:#34d399;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;">Live</span>'
         : '<span style="display:inline-block;padding:2px 10px;border-radius:10px;background:rgba(251,191,36,0.15);color:#fbbf24;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;">Draft</span>';
       var actionBtn = isLive
-        ? '<button onclick="toggleJobLiveStatus(\'' + escapeHTML(j.id) + '\', false)" style="font-size:11px;padding:4px 12px;background:rgba(251,191,36,0.15);color:#fbbf24;border:1px solid rgba(251,191,36,0.3);border-radius:5px;cursor:pointer;">Revert to Draft</button>'
+        ? '<button onclick="captureNowForJob(\'' + escapeHTML(j.id) + '\')" style="font-size:11px;padding:4px 10px;background:rgba(79,140,255,0.15);color:#4f8cff;border:1px solid rgba(79,140,255,0.3);border-radius:5px;cursor:pointer;margin-right:6px;">Capture Now</button>' +
+          '<button onclick="toggleJobLiveStatus(\'' + escapeHTML(j.id) + '\', false)" style="font-size:11px;padding:4px 12px;background:rgba(251,191,36,0.15);color:#fbbf24;border:1px solid rgba(251,191,36,0.3);border-radius:5px;cursor:pointer;">Revert to Draft</button>'
         : '<button onclick="toggleJobLiveStatus(\'' + escapeHTML(j.id) + '\', true)" style="font-size:11px;padding:4px 12px;background:#34d399;color:#0a0a0f;border:none;border-radius:5px;cursor:pointer;font-weight:600;">Go Live</button>';
 
       html += '<tr>' +
@@ -607,6 +608,8 @@
 
   // Toggle a job's liveStatus between 'live' and 'draft'. Pure client-side
   // mutation — saveData() already syncs to the server via bulk save.
+  // Going Live also captures an immediate baseline snapshot so the job has
+  // day-one history on Insights without waiting for the next 3 AM tick.
   function toggleJobLiveStatus(jobId, goLive) {
     var jobs = (window.appData && window.appData.jobs) || [];
     var job = jobs.find(function(j) { return j.id === jobId; });
@@ -614,8 +617,28 @@
     if (goLive && !confirm('Mark "' + (job.title || job.id) + '" as Live?\n\nIt will start showing on the Insights dashboard.')) return;
     job.liveStatus = goLive ? 'live' : 'draft';
     job.updatedAt = new Date().toISOString();
+    if (goLive && typeof captureDailySnapshot === 'function') {
+      captureDailySnapshot(jobId, true); // force=true since we just flipped to live
+    }
     if (typeof saveData === 'function') saveData();
     renderAdminMetrics();
+  }
+
+  // Manual override: capture today's snapshot immediately for a single job,
+  // overwriting whatever was there from the 3 AM auto-capture (or creating
+  // it if missing). Useful after a big mid-day data update.
+  function captureNowForJob(jobId) {
+    if (typeof captureDailySnapshot !== 'function') {
+      alert('Snapshot helper not loaded.');
+      return;
+    }
+    var ok = captureDailySnapshot(jobId, true);
+    if (ok) {
+      if (typeof saveData === 'function') saveData();
+      renderAdminMetrics();
+    } else {
+      alert('Could not capture snapshot for that job.');
+    }
   }
 
   function deleteAdminUser(userId) {
@@ -654,4 +677,5 @@
   window.switchAdminSubTab = switchAdminSubTab;
   window.renderAdminMetrics = renderAdminMetrics;
   window.toggleJobLiveStatus = toggleJobLiveStatus;
+  window.captureNowForJob = captureNowForJob;
 })();

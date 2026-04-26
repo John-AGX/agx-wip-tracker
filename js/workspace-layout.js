@@ -252,6 +252,10 @@
     }
   }
   window.refreshHeaderMetrics = refreshHeaderMetrics;
+  // Exposed so switchTab() can force a teardown when navigating away from WIP
+  // (Insights / Estimates / Admin). Without this the sticky job-metrics
+  // header lingers until the polling loop notices the detail view is hidden.
+  window.workspaceLayoutCleanup = cleanup;
 
   function buildLayout(detail) {
     var container = document.createElement('div');

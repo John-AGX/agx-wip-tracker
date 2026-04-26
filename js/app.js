@@ -214,6 +214,35 @@
             backfillSampleData();
             migrateBudgetFields();
             renderWIPMain();
+            startDailySnapshotScheduler();
+        }
+
+        // Fires daily snapshots for every Live job. Two trigger paths:
+        //   1) On app load — catch-up if today's snapshot is missing for any
+        //      Live job. Runs after a small delay to let async loadData finish.
+        //   2) setTimeout to next 3 AM America/New_York — re-arms itself each
+        //      time it fires, so the app captures automatically across midnight
+        //      if it stays open (or catches up the next time it loads).
+        function startDailySnapshotScheduler() {
+            // Catch-up: run shortly after load when server data has arrived
+            setTimeout(function() {
+                if (typeof captureDailySnapshotsForAllLiveJobs === 'function') {
+                    captureDailySnapshotsForAllLiveJobs();
+                }
+            }, 5000);
+
+            function tickAndReschedule() {
+                if (typeof captureDailySnapshotsForAllLiveJobs === 'function') {
+                    captureDailySnapshotsForAllLiveJobs();
+                }
+                if (typeof msUntilNext3AmEst === 'function') {
+                    setTimeout(tickAndReschedule, msUntilNext3AmEst());
+                }
+            }
+
+            if (typeof msUntilNext3AmEst === 'function') {
+                setTimeout(tickAndReschedule, msUntilNext3AmEst());
+            }
         }
 
         function migrateBudgetFields() {
@@ -291,6 +320,21 @@
 
             document.getElementById(tabName)?.classList.add('active');
             document.querySelector(`[data-tab="${tabName}"]`)?.classList.add('active');
+
+            // Leaving the WIP tab: tear down any sticky job-detail header
+            // (metrics strip + back button) that workspace-layout.js may have
+            // injected, so the Insights/Admin/Estimates pages don't show a
+            // stale header from a job the user was just viewing.
+            if (tabName !== 'wip') {
+                var detail = document.getElementById('wip-job-detail-view');
+                if (detail) detail.style.display = 'none';
+                var mainView = document.getElementById('wip-main-view');
+                if (mainView) mainView.style.display = '';
+                appState.currentJobId = null;
+                if (typeof window.workspaceLayoutCleanup === 'function') {
+                    try { window.workspaceLayoutCleanup(); } catch (e) { /* defensive */ }
+                }
+            }
 
             if (tabName === 'estimates') {
                 renderEstimatesList();
