@@ -161,14 +161,23 @@
   function renderInsightsDashboard() {
     var dash = document.getElementById('insights-dashboard');
     if (!dash) return;
-    var jobs = (window.appData && appData.jobs) || [];
-    if (!jobs.length) {
+    var allJobs = (window.appData && appData.jobs) || [];
+    // Only Live jobs appear on Insights — Draft jobs are still being prepped
+    // and shouldn't pollute the dashboard. Admins toggle status from the
+    // Admin → Metrics sub-tab.
+    var jobs = allJobs.filter(function(j) { return j.liveStatus === 'live'; });
+    var draftCount = allJobs.length - jobs.length;
+    if (!allJobs.length) {
       renderEmpty('No jobs yet.');
+      return;
+    }
+    if (!jobs.length) {
+      renderEmpty('No Live jobs yet — go to Admin → Metrics and click Go Live on any job whose data is verified.');
       return;
     }
     var allWeeks = getAllWeekOfDates(jobs);
     if (!allWeeks.length) {
-      renderEmpty('No closed weeks yet.');
+      renderEmpty('Live jobs found, but no closed weeks yet.');
       return;
     }
 

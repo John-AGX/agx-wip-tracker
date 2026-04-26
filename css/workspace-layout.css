@@ -93,40 +93,46 @@
 }
 
 /* ââ Right Tab Buttons âââââââââââââââââââââââââââââââââââââ */
+/* Unified tab bar — matches the top-nav .tabs styling so admin sub-tabs,
+   job-detail right-column tabs, and the main header tabs all look the same. */
 .ws-right-tabs {
   display: flex;
+  gap: 0;
+  margin-top: 4px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--border, #2e3346);
+  background: transparent;
+  border-radius: 0;
+  padding: 0;
   flex-wrap: wrap;
-  gap: 2px;
-  background: var(--surface, #1a1d27);
-  border: 1px solid var(--border, #2e3346);
-  border-radius: 8px;
-  padding: 4px;
 }
 
 .ws-right-tab {
-  flex: 1 1 0;
-  padding: 6px 8px;
-  font-size: 11px;
+  flex: 0 0 auto;
+  padding: 6px 20px;
+  font-size: 13px;
   font-weight: 500;
   font-family: inherit;
-  text-align: center;
   border: none;
-  border-radius: 5px;
+  border-bottom: 2px solid transparent;
   background: transparent;
   color: var(--text-dim, #8b90a5);
   cursor: pointer;
-  transition: background 0.15s, color 0.15s;
+  transition: all 0.3s ease;
   white-space: nowrap;
+  border-radius: 0;
+  text-align: center;
 }
 
 .ws-right-tab:hover {
-  background: var(--surface2, #242836);
+  background: transparent;
   color: var(--text, #e4e6f0);
 }
 
 .ws-right-tab.active {
-  background: var(--accent, #4f8cff);
-  color: #fff;
+  background: transparent;
+  color: #5ddb7e;
+  border-bottom-color: #5ddb7e;
   font-weight: 600;
 }
 

@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AGX Central Florida &mdash; WIP Tracker</title>
     <link rel="stylesheet" href="css/styles.css?v=10">
-    <link rel="stylesheet" href="css/workspace-layout.css?v=22">
+    <link rel="stylesheet" href="css/workspace-layout.css?v=23">
     <link rel="stylesheet" href="css/workspace.css?v=20">
 
 </head>
@@ -634,9 +634,10 @@
 
                 <!-- ADMIN TAB (admin-only, populated by js/admin.js) -->
                 <div id="admin" class="tab-content" data-admin-only style="display:none;">
-                    <div class="ws-right-tabs" style="margin-bottom:16px;">
+                    <div class="ws-right-tabs">
                         <button class="ws-right-tab active" data-admin-subtab="users" onclick="switchAdminSubTab('users')">Users</button>
                         <button class="ws-right-tab" data-admin-subtab="jobs" onclick="switchAdminSubTab('jobs')">Job Assignments</button>
+                        <button class="ws-right-tab" data-admin-subtab="metrics" onclick="switchAdminSubTab('metrics')">Metrics</button>
                     </div>
 
                     <!-- Users sub-tab -->
@@ -658,6 +659,30 @@
                                     </tr>
                                 </thead>
                                 <tbody id="admin-users-tbody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- Metrics sub-tab -->
+                    <div id="admin-subtab-metrics" class="admin-subtab-content" style="display:none;">
+                        <p style="margin:0 0 14px 0;color:var(--text-dim,#888);font-size:12px;">
+                            Site-wide totals, plus per-job <strong>Go Live</strong> toggles. A job stays in <em>Draft</em> until you've verified its data is complete &mdash; only Live jobs roll up into the Insights tickers.
+                        </p>
+                        <div id="admin-metrics-cards" style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:20px;"></div>
+                        <h3 style="margin:0 0 8px 0;color:var(--text,#fff);font-size:14px;">Job Status</h3>
+                        <div class="table-container">
+                            <table id="admin-metrics-jobs-table">
+                                <thead>
+                                    <tr>
+                                        <th>Job</th>
+                                        <th>Owner</th>
+                                        <th style="text-align:right;">Contract</th>
+                                        <th style="text-align:right;">% Complete</th>
+                                        <th style="text-align:center;">Status</th>
+                                        <th style="text-align:center;">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="admin-metrics-jobs-tbody"></tbody>
                             </table>
                         </div>
                     </div>
@@ -1450,8 +1475,8 @@
 
     <script src="js/auth.js?v=4"></script>
     <script src="js/api.js?v=5"></script>
-    <script src="js/admin.js?v=5"></script>
-    <script src="js/insights.js?v=1"></script>
+    <script src="js/admin.js?v=6"></script>
+    <script src="js/insights.js?v=2"></script>
     <script src="js/app.js?v=33"></script>
     <script src="js/wip.js?v=48"></script>
     <script src="js/estimates.js?v=18"></script>

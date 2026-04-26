@@ -511,7 +511,7 @@
       .catch(function(err) { alert('Revoke failed: ' + (err.message || '')); });
   }
 
-  // Toggle between Users / Job Assignments inside the Admin tab.
+  // Toggle between Users / Job Assignments / Metrics inside the Admin tab.
   // Renders the section's data on first reveal so we don't fire API calls
   // for tabs the admin never opens.
   function switchAdminSubTab(name) {
@@ -525,6 +525,97 @@
     if (target) target.style.display = '';
     if (name === 'users') renderAdminUsers();
     else if (name === 'jobs') renderAdminJobs();
+    else if (name === 'metrics') renderAdminMetrics();
+  }
+
+  // ==================== METRICS + GO LIVE ====================
+  // Renders site-wide totals plus a per-job table where the admin can toggle
+  // each job between Draft and Live. Only Live jobs are eligible for the
+  // Insights dashboard tickers (insights.js filters on j.liveStatus).
+  function renderAdminMetrics() {
+    if (!isAdmin()) return;
+    var cardsEl = document.getElementById('admin-metrics-cards');
+    var tbody = document.getElementById('admin-metrics-jobs-tbody');
+    if (!cardsEl || !tbody) return;
+
+    var jobs = (window.appData && window.appData.jobs) || [];
+    var users = (_users.length ? _users : []);
+
+    // ── Site metric cards ─────────────────────────────────
+    var liveCount = jobs.filter(function(j) { return j.liveStatus === 'live'; }).length;
+    var draftCount = jobs.length - liveCount;
+    var totalContract = jobs.reduce(function(s, j) { return s + (j.contractAmount || 0); }, 0);
+    var totalRev = 0;
+    var totalProfit = 0;
+    jobs.forEach(function(j) {
+      if (typeof getJobWIP === 'function') {
+        try {
+          var w = getJobWIP(j.id);
+          totalRev += w.revenueEarned || 0;
+          totalProfit += w.revisedProfit || 0;
+        } catch (e) { /* skip jobs that can't be computed */ }
+      }
+    });
+    var activeUsers = users.filter(function(u) { return u.active; }).length;
+
+    function metricCard(label, value, sub) {
+      return '<div style="flex:1 1 160px;min-width:160px;background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:10px;padding:14px 16px;">' +
+        '<div style="font-size:10px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">' + label + '</div>' +
+        '<div style="font-size:20px;font-weight:600;color:var(--text,#fff);">' + value + '</div>' +
+        (sub ? '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:4px;">' + sub + '</div>' : '') +
+      '</div>';
+    }
+
+    cardsEl.innerHTML =
+      metricCard('Jobs', jobs.length, liveCount + ' live · ' + draftCount + ' draft') +
+      metricCard('Contract Value', formatCurrency(totalContract), 'across all jobs') +
+      metricCard('Revenue Earned', formatCurrency(totalRev), 'live state') +
+      metricCard('Gross Profit', formatCurrency(totalProfit), 'live state') +
+      metricCard('Active Users', activeUsers, users.length + ' total');
+
+    // ── Job status table ──────────────────────────────────
+    if (!jobs.length) {
+      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-dim,#888);padding:20px;">No jobs.</td></tr>';
+      return;
+    }
+    var html = '';
+    jobs.forEach(function(j) {
+      var owner = users.find(function(u) { return u.id === j.owner_id; });
+      var ownerName = owner ? owner.name : '—';
+      var label = (j.jobNumber ? '[' + j.jobNumber + '] ' : '') + (j.title || j.id);
+      var isLive = j.liveStatus === 'live';
+      var statusBadge = isLive
+        ? '<span style="display:inline-block;padding:2px 10px;border-radius:10px;background:rgba(52,211,153,0.15);color:#34d399;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;">Live</span>'
+        : '<span style="display:inline-block;padding:2px 10px;border-radius:10px;background:rgba(251,191,36,0.15);color:#fbbf24;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;">Draft</span>';
+      var actionBtn = isLive
+        ? '<button onclick="toggleJobLiveStatus(\'' + escapeHTML(j.id) + '\', false)" style="font-size:11px;padding:4px 12px;background:rgba(251,191,36,0.15);color:#fbbf24;border:1px solid rgba(251,191,36,0.3);border-radius:5px;cursor:pointer;">Revert to Draft</button>'
+        : '<button onclick="toggleJobLiveStatus(\'' + escapeHTML(j.id) + '\', true)" style="font-size:11px;padding:4px 12px;background:#34d399;color:#0a0a0f;border:none;border-radius:5px;cursor:pointer;font-weight:600;">Go Live</button>';
+
+      html += '<tr>' +
+        '<td><strong>' + escapeHTML(label) + '</strong>' +
+          (j.client ? '<div style="font-size:10px;color:var(--text-dim,#888);">' + escapeHTML(j.client) + '</div>' : '') +
+        '</td>' +
+        '<td>' + escapeHTML(ownerName) + '</td>' +
+        '<td style="text-align:right;">' + formatCurrency(j.contractAmount || 0) + '</td>' +
+        '<td style="text-align:right;">' + (j.pctComplete || 0).toFixed(1) + '%</td>' +
+        '<td style="text-align:center;">' + statusBadge + '</td>' +
+        '<td style="text-align:center;">' + actionBtn + '</td>' +
+      '</tr>';
+    });
+    tbody.innerHTML = html;
+  }
+
+  // Toggle a job's liveStatus between 'live' and 'draft'. Pure client-side
+  // mutation — saveData() already syncs to the server via bulk save.
+  function toggleJobLiveStatus(jobId, goLive) {
+    var jobs = (window.appData && window.appData.jobs) || [];
+    var job = jobs.find(function(j) { return j.id === jobId; });
+    if (!job) return;
+    if (goLive && !confirm('Mark "' + (job.title || job.id) + '" as Live?\n\nIt will start showing on the Insights dashboard.')) return;
+    job.liveStatus = goLive ? 'live' : 'draft';
+    job.updatedAt = new Date().toISOString();
+    if (typeof saveData === 'function') saveData();
+    renderAdminMetrics();
   }
 
   function deleteAdminUser(userId) {
@@ -561,4 +652,6 @@
   window.updateAdminJobAccessLevel = updateAdminJobAccessLevel;
   window.revokeAdminJobAccess = revokeAdminJobAccess;
   window.switchAdminSubTab = switchAdminSubTab;
+  window.renderAdminMetrics = renderAdminMetrics;
+  window.toggleJobLiveStatus = toggleJobLiveStatus;
 })();
