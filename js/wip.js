@@ -2348,50 +2348,10 @@ function renderWIPMain() {
             });
         }
 
-        function renderJobWeekly(jobId) {
-            const phases = appData.phases.filter(p => p.jobId === jobId);
-            const container = document.getElementById('job-weekly-content');
-            container.innerHTML = '';
-
-            const card = document.createElement('div');
-            card.className = 'card';
-            card.innerHTML = `
-                <h3 style="margin-bottom: 8px; font-size: 14px;">Thursday WIP Meeting Accruals</h3>
-                <div class="table-container">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>Building</th>
-                                <th>Phase</th>
-                                <th style="text-align: right;">Materials</th>
-                                <th style="text-align: right;">Labor</th>
-                                <th style="text-align: right;">Sub</th>
-                                <th style="text-align: right;">Equipment</th>
-                                <th style="text-align: right;">Total This Week</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            ${phases.map(p => {
-                                const building = appData.buildings.find(b => b.id === p.buildingId);
-                                const weeklyTotal = (p.weeklyMat || 0) + (p.weeklyLabor || 0) + (p.weeklySub || 0) + (p.weeklyEquip || 0);
-                                return `
-                                    <tr>
-                                        <td>${building?.name || ''}</td>
-                                        <td>${p.phase}</td>
-                                        <td style="text-align: right;">${formatCurrency(p.weeklyMat)}</td>
-                                        <td style="text-align: right;">${formatCurrency(p.weeklyLabor)}</td>
-                                        <td style="text-align: right;">${formatCurrency(p.weeklySub)}</td>
-                                        <td style="text-align: right;">${formatCurrency(p.weeklyEquip)}</td>
-                                        <td style="text-align: right; font-weight: 600;">${formatCurrency(weeklyTotal)}</td>
-                                    </tr>
-                                `;
-                            }).join('')}
-                        </tbody>
-                    </table>
-                </div>
-            `;
-            container.appendChild(card);
-        }
+        // renderJobWeekly retired — Thursday WIP Meeting Accruals were a manual
+        // weekly capture workflow. Daily auto-snapshots (3 AM EST) replace the
+        // need for it. Per-phase weeklyMat/weeklyLabor/weeklySub/weeklyEquip
+        // fields are no longer set on new phases.
 
         function renderJobCosts(jobId) {
             const job = appData.jobs.find(j => j.id === jobId);
@@ -3233,10 +3193,6 @@ function renderWIPMain() {
                 const phase = Object.assign({
                     id: 'p' + Date.now(),
                     jobId: appState.currentJobId,
-                    weeklyMat: 0,
-                    weeklyLabor: 0,
-                    weeklySub: 0,
-                    weeklyEquip: 0,
                     dateAdded: new Date().toISOString()
                 }, formData);
                 appData.phases.push(phase);

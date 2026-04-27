@@ -22,8 +22,9 @@
     { id: 'job-changeorders',  label: 'CO\'s' },
     { id: 'job-purchaseorders',label: 'PO\'s' },
     { id: 'job-invoices',      label: 'Invoices' },
-    { id: 'job-subs',          label: 'Subs' },
-    { id: 'job-weekly',        label: 'Accruals' }
+    { id: 'job-subs',          label: 'Subs' }
+    // Accruals tab retired — Thursday WIP meeting accruals were a manual
+    // weekly capture workflow. Daily auto-snapshots (3 AM EST) replace it.
   ];
 
   // ── CSS injection ─────────────────────────────────────────
@@ -374,7 +375,6 @@
           'job-overview': 'renderJobOverview',
           'job-costs': 'renderJobCosts',
           'job-subs': 'renderJobSubs',
-          'job-weekly': 'renderJobWeekly',
           'job-changeorders': 'renderChangeOrders',
           'job-purchaseorders': 'renderPurchaseOrders',
           'job-invoices': 'renderInvoices',

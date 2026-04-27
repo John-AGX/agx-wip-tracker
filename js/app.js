@@ -409,7 +409,6 @@
             else if (subtabName === 'job-purchaseorders') renderPurchaseOrders(currentJobId);
             else if (subtabName === 'job-invoices') renderInvoices(currentJobId);
             else if (subtabName === 'job-labor') renderJobLabor(currentJobId);
-            else if (subtabName === 'job-weekly') renderJobWeekly(currentJobId);
 
             // Re-apply read-only button guard after the new sub-tab content renders.
             // setTimeout 0 lets the synchronous render finish first.
