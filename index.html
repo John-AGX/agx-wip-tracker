@@ -1292,6 +1292,7 @@
                 <div style="font-size:11px;color:var(--text-dim,#888);margin-top:3px;">Or skip and type the fields manually below.</div>
             </div>
             <input type="hidden" id="estClientId" />
+            <input type="hidden" id="estLeadId" />
             <div class="form-group">
                 <label>Client Company Name</label>
                 <input type="text" id="estClient" placeholder="Client company name">
@@ -1385,14 +1386,23 @@
       </div>
     </div>
 
-    <!-- Lead editor modal — Phase 1 (General fields only). Mirrors BT's
-         lead detail layout: title + linked client + address + sales pipeline
-         (status, confidence, projected sale date, revenue range, source,
-         project type) + assigned salesperson + custom fields + notes. -->
+    <!-- Lead editor modal — Phase 2. Mirrors BT's lead detail layout with
+         a General tab for the form fields + a Proposals tab listing the
+         estimates linked to this lead via estimate.lead_id. -->
     <div id="leadEditorModal" class="modal">
       <div class="modal-content" style="max-width:780px;max-height:88vh;overflow-y:auto;">
         <div class="modal-header" id="leadEditor_title">New Lead</div>
-        <div style="padding:18px 20px;display:flex;flex-direction:column;gap:18px;">
+
+        <!-- In-modal tabs (General | Proposals N) — only shown in edit mode.
+             Hidden on create since there's nothing to put on the Proposals
+             tab until the lead has an id. -->
+        <div id="leadEditor_tabs" class="ws-right-tabs" style="display:none;margin:12px 20px 0 20px;">
+          <button class="ws-right-tab active" data-leadeditor-tab="general" onclick="switchLeadEditorTab('general')">General</button>
+          <button class="ws-right-tab" data-leadeditor-tab="proposals" onclick="switchLeadEditorTab('proposals')">Proposals <span id="leadEditor_proposalsCount" style="opacity:0.6;font-weight:400;"></span></button>
+        </div>
+
+        <!-- General tab: original form fields -->
+        <div id="leadEditor_tab_general" style="padding:18px 20px;display:flex;flex-direction:column;gap:18px;">
           <input type="hidden" id="leadEditor_id" />
 
           <!-- Identity -->
@@ -1483,6 +1493,18 @@
 
           <div id="leadEditor_status_msg" style="font-size:13px;"></div>
         </div>
+
+        <!-- Proposals tab: estimates linked to this lead via estimate.lead_id.
+             Hidden until edit mode (the lead needs an id before estimates
+             can hang off it). -->
+        <div id="leadEditor_tab_proposals" style="display:none;padding:18px 20px;">
+          <div class="action-buttons" style="margin-bottom:12px;">
+            <button class="primary" onclick="createEstimateFromLead()">&#x1F4C4; New Estimate from Lead</button>
+            <span style="font-size:12px;color:var(--text-dim,#888);align-self:center;">Pre-fills the form from this lead's client, address, and project info.</span>
+          </div>
+          <div id="leadEditor_proposalsList" style="display:flex;flex-direction:column;gap:8px;"></div>
+        </div>
+
         <div class="modal-footer">
           <button id="leadEditor_deleteBtn" class="danger" style="margin-right:auto;display:none;" onclick="deleteLeadFromEditor()">Delete</button>
           <button onclick="closeModal('leadEditorModal')" class="secondary">Cancel</button>
@@ -1758,11 +1780,11 @@
     <script src="js/api.js?v=9"></script>
     <script src="js/admin.js?v=11"></script>
     <script src="js/clients.js?v=5"></script>
-    <script src="js/leads.js?v=1"></script>
+    <script src="js/leads.js?v=2"></script>
     <script src="js/insights.js?v=5"></script>
     <script src="js/app.js?v=37"></script>
     <script src="js/wip.js?v=56"></script>
-    <script src="js/estimates.js?v=19"></script>
+    <script src="js/estimates.js?v=20"></script>
     <script src="js/proposal.js?v=19"></script>
 
     <script src="js/workspace.js?v=21"></script>

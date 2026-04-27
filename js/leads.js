@@ -263,6 +263,15 @@
     document.getElementById('leadEditor_title').textContent = 'New Lead';
     populateClientSelect('');
     populateSalespersonSelect('');
+    // Hide tabs in create mode — Proposals tab is meaningless until the
+    // lead has an id. Reveal them on first save / re-open in edit mode.
+    document.getElementById('leadEditor_tabs').style.display = 'none';
+    var generalTab = document.getElementById('leadEditor_tab_general');
+    var proposalsTab = document.getElementById('leadEditor_tab_proposals');
+    if (generalTab) generalTab.style.display = '';
+    if (proposalsTab) proposalsTab.style.display = 'none';
+    var footer = document.querySelector('#leadEditorModal .modal-footer');
+    if (footer) footer.style.display = '';
     openModal('leadEditorModal');
   }
 
@@ -283,7 +292,120 @@
     populateClientSelect(l.client_id || '');
     populateSalespersonSelect(l.salesperson_id || '');
     document.getElementById('leadEditor_deleteBtn').style.display = '';
+    // Edit mode shows the General | Proposals tab nav. Default to General;
+    // user clicks Proposals to see the linked estimates.
+    document.getElementById('leadEditor_tabs').style.display = '';
+    switchLeadEditorTab('general');
+    renderLeadProposals(l.id);
     openModal('leadEditorModal');
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  // Proposals tab — estimates linked to this lead
+  // ──────────────────────────────────────────────────────────────────
+
+  // Currently-open lead id, used by createEstimateFromLead so the prefill
+  // can find its source data without re-reading from the form fields.
+  var _currentEditingLeadId = null;
+
+  function switchLeadEditorTab(name) {
+    document.querySelectorAll('[data-leadeditor-tab]').forEach(function(btn) {
+      btn.classList.toggle('active', btn.dataset.leadeditorTab === name);
+    });
+    document.getElementById('leadEditor_tab_general').style.display = (name === 'general') ? '' : 'none';
+    document.getElementById('leadEditor_tab_proposals').style.display = (name === 'proposals') ? '' : 'none';
+    // The footer Save / Delete buttons only make sense on the General tab.
+    // On the Proposals tab they'd be confusing (the estimates have their
+    // own save flow). Hide them when Proposals is active.
+    var footer = document.querySelector('#leadEditorModal .modal-footer');
+    if (footer) footer.style.display = (name === 'proposals') ? 'none' : '';
+  }
+
+  function renderLeadProposals(leadId) {
+    _currentEditingLeadId = leadId;
+    var listEl = document.getElementById('leadEditor_proposalsList');
+    var countEl = document.getElementById('leadEditor_proposalsCount');
+    if (!listEl) return;
+    var estimates = (window.appData && appData.estimates) || [];
+    var linked = estimates.filter(function(e) { return e.lead_id === leadId; });
+    if (countEl) countEl.textContent = linked.length ? '(' + linked.length + ')' : '';
+    if (!linked.length) {
+      listEl.innerHTML = '<div style="padding:20px;color:var(--text-dim,#888);text-align:center;border:1px dashed var(--border,#333);border-radius:8px;">' +
+        'No estimates yet. Click <strong>+ New Estimate from Lead</strong> to draft the first proposal.' +
+      '</div>';
+      return;
+    }
+    listEl.innerHTML = linked.map(proposalRowHTML).join('');
+  }
+
+  function proposalRowHTML(est) {
+    var lines = ((window.appData && appData.estimateLines) || []).filter(function(l) { return l.estimateId === est.id; });
+    var baseCost = lines.reduce(function(s, l) { return s + (Number(l.qty) || 0) * (Number(l.unitCost) || 0); }, 0);
+    var clientPrice = baseCost * (1 + (Number(est.defaultMarkup) || 0) / 100);
+    return '<div class="card" style="padding:12px 14px;display:flex;justify-content:space-between;align-items:center;gap:12px;">' +
+      '<div style="min-width:0;flex:1;">' +
+        '<div style="font-weight:600;font-size:13px;color:var(--text,#fff);">' + escapeHTML(est.title || 'Untitled estimate') + '</div>' +
+        '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:3px;">' +
+          'Base ' + fmtCurrencyShort(baseCost) +
+          ' · Markup ' + (Number(est.defaultMarkup) || 0) + '%' +
+          ' · Client ' + fmtCurrencyShort(clientPrice) +
+          ' · ' + lines.length + ' line' + (lines.length === 1 ? '' : 's') +
+        '</div>' +
+      '</div>' +
+      '<div style="display:flex;gap:6px;flex-shrink:0;">' +
+        '<button class="small secondary" onclick="closeModal(\'leadEditorModal\');editEstimate(\'' + escapeAttr(est.id) + '\');">Edit</button>' +
+        '<button class="small secondary" onclick="closeModal(\'leadEditorModal\');previewEstimate(\'' + escapeAttr(est.id) + '\');">Preview</button>' +
+      '</div>' +
+    '</div>';
+  }
+
+  // Pre-fill the New Estimate form from the currently-editing lead, then
+  // open it. The estimate save path (createNewEstimate) reads the hidden
+  // estLeadId / estClientId fields to persist the link.
+  function createEstimateFromLead() {
+    var leadId = _currentEditingLeadId;
+    if (!leadId) { alert('Save the lead first.'); return; }
+    var l = _leads.find(function(x) { return x.id === leadId; });
+    if (!l) { alert('Lead not found.'); return; }
+    // Resolve the linked client (if any) so we can pull manager / address fields
+    var clientCache = (window.agxClients && window.agxClients.getCached && window.agxClients.getCached()) || [];
+    var c = l.client_id ? clientCache.find(function(x) { return x.id === l.client_id; }) : null;
+
+    closeModal('leadEditorModal');
+    if (typeof window.openNewEstimateForm !== 'function') {
+      alert('Estimate form not available.');
+      return;
+    }
+    window.openNewEstimateForm();
+
+    function set(id, v) {
+      var el = document.getElementById(id);
+      if (el && v != null) el.value = v;
+    }
+    set('estTitle', l.title || '');
+    set('estJobType', l.project_type || '');
+    set('estLeadId', l.id);
+    set('estClientId', l.client_id || '');
+    if (c) {
+      set('estClient', c.company_name || c.name || '');
+      set('estCommunity', c.community_name || c.name || '');
+      var pAddr = [c.property_address || c.address, c.city, c.state, c.zip].filter(Boolean).join(', ');
+      var bAddr = [c.address, c.city, c.state, c.zip].filter(Boolean).join(', ');
+      set('estPropertyAddr', pAddr);
+      set('estBillingAddr', bAddr);
+      set('estManagerName', c.community_manager || '');
+      set('estManagerEmail', c.cm_email || c.email || '');
+      set('estManagerPhone', c.cm_phone || c.phone || c.cell || '');
+      // Reflect the picked client in the dropdown so it shows the right name
+      var picker = document.getElementById('estClientPicker');
+      if (picker) picker.value = c.id;
+    }
+    // Lead's project address overrides the client mailing address for the
+    // property field if the lead has its own street_address.
+    if (l.street_address) {
+      var leadAddr = [l.street_address, l.city, l.state, l.zip].filter(Boolean).join(', ');
+      set('estPropertyAddr', leadAddr);
+    }
   }
 
   function submitLeadEditor() {
@@ -345,6 +467,8 @@
   window.submitLeadEditor = submitLeadEditor;
   window.deleteLeadFromEditor = deleteLeadFromEditor;
   window.onLeadClientPicked = onLeadClientPicked;
+  window.switchLeadEditorTab = switchLeadEditorTab;
+  window.createEstimateFromLead = createEstimateFromLead;
   window.agxLeads = {
     getCached: function() { return _leads.slice(); },
     reload: reloadLeadsCache

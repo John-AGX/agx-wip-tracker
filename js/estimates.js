@@ -41,6 +41,8 @@ function renderEstimatesList() {
             document.getElementById('estDefaultMarkup').value = '100';
             var idEl = document.getElementById('estClientId');
             if (idEl) idEl.value = '';
+            var leadEl = document.getElementById('estLeadId');
+            if (leadEl) leadEl.value = '';
             // Populate the client picker from the directory cache so users
             // can auto-fill the form by selecting a client.
             if (typeof populateEstimateClientPicker === 'function') {
@@ -57,6 +59,7 @@ function renderEstimatesList() {
                 client: document.getElementById('estClient').value,
                 community: document.getElementById('estCommunity').value,
                 client_id: (document.getElementById('estClientId') || {}).value || null,
+                lead_id: (document.getElementById('estLeadId') || {}).value || null,
                 propertyAddr: document.getElementById('estPropertyAddr').value,
                 billingAddr: document.getElementById('estBillingAddr').value,
                 managerName: document.getElementById('estManagerName').value,
