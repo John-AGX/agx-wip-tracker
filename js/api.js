@@ -113,7 +113,8 @@
     get: function(id) { return get('/api/clients/' + encodeURIComponent(id)); },
     create: function(payload) { return post('/api/clients', payload); },
     update: function(id, payload) { return put('/api/clients/' + encodeURIComponent(id), payload); },
-    remove: function(id) { return del('/api/clients/' + encodeURIComponent(id)); }
+    remove: function(id) { return del('/api/clients/' + encodeURIComponent(id)); },
+    importBatch: function(rows) { return post('/api/clients/import', { rows: rows }); }
   };
 
   window.agxApi = {

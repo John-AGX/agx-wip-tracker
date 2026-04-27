@@ -136,4 +136,142 @@ router.delete('/:id', requireAuth, requireCapability('ESTIMATES_EDIT'), async (r
   }
 });
 
+// POST /api/clients/import — bulk insert/update clients from a Buildertrend
+// export. The client parses the xlsx browser-side (via SheetJS) and POSTs
+// a normalized rows array. We dedupe by case-insensitive name, auto-create
+// parent clients from any unique `company_name` values, and link children.
+//
+// Body: { rows: [{ name, company_name?, community_name?, ... }] }
+// Returns: { inserted, updated, parentsCreated, total, errors[] }
+router.post('/import', requireAuth, requireCapability('ESTIMATES_EDIT'), async (req, res) => {
+  try {
+    const incoming = Array.isArray(req.body && req.body.rows) ? req.body.rows : null;
+    if (!incoming || !incoming.length) {
+      return res.status(400).json({ error: 'rows array is required' });
+    }
+
+    // Build a name -> id index of the existing directory for case-insensitive
+    // dedupe. We do this once up front and keep it in sync as we go.
+    const existing = await pool.query('SELECT id, name FROM clients');
+    const byName = new Map();
+    for (const r of existing.rows) byName.set(String(r.name).trim().toLowerCase(), r.id);
+
+    // Phase 1: ensure a parent client exists for every unique company_name
+    // that appears in the incoming rows. If no client with that name exists
+    // yet, create a minimal one (just the company name) — its details will
+    // be filled in later if a row in the import has its own data for the
+    // company (e.g. when the company itself is also exported as a row).
+    const companyNames = new Set();
+    for (const row of incoming) {
+      const c = row.company_name && String(row.company_name).trim();
+      if (c) companyNames.add(c);
+    }
+    let parentsCreated = 0;
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      for (const company of companyNames) {
+        const key = company.toLowerCase();
+        if (byName.has(key)) continue;
+        const id = 'client_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+        await client.query(
+          `INSERT INTO clients (id, name, company_name, client_type)
+           VALUES ($1, $2, $2, 'Property Mgmt')`,
+          [id, company]
+        );
+        byName.set(key, id);
+        parentsCreated++;
+      }
+
+      // Phase 2: per-row upsert. We match by name (case-insensitive) and
+      // either UPDATE existing or INSERT new. parent_client_id is resolved
+      // from byName via the row's company_name (or null if none / row IS
+      // the company itself).
+      let inserted = 0;
+      let updated = 0;
+      const errors = [];
+      for (let i = 0; i < incoming.length; i++) {
+        const row = incoming[i] || {};
+        const name = (row.name || '').trim();
+        if (!name) { errors.push({ row: i, error: 'missing name' }); continue; }
+
+        // Resolve parent — a row whose name equals its own company_name is
+        // the company itself, so it has no parent.
+        let parentId = null;
+        if (row.company_name && row.company_name.trim().toLowerCase() !== name.toLowerCase()) {
+          parentId = byName.get(row.company_name.trim().toLowerCase()) || null;
+        }
+
+        const key = name.toLowerCase();
+        const fields = pickEditable(row);
+        fields.activation_status = (fields.activation_status || 'active').toLowerCase();
+
+        if (byName.has(key)) {
+          // UPDATE: only set non-empty fields so partial rows don't blank
+          // out richer existing data.
+          const existingId = byName.get(key);
+          const sets = [];
+          const params = [];
+          let p = 1;
+          for (const k of Object.keys(fields)) {
+            if (fields[k] === '' || fields[k] == null) continue;
+            sets.push(k + ' = $' + p++);
+            params.push(fields[k]);
+          }
+          if (parentId) {
+            sets.push('parent_client_id = $' + p++);
+            params.push(parentId);
+          }
+          if (sets.length) {
+            sets.push('updated_at = NOW()');
+            params.push(existingId);
+            try {
+              await client.query(`UPDATE clients SET ${sets.join(', ')} WHERE id = $${p}`, params);
+              updated++;
+            } catch (e) {
+              errors.push({ row: i, name, error: e.message });
+            }
+          }
+        } else {
+          const id = 'client_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+          const cols = ['id', 'name', 'parent_client_id'];
+          const vals = [id, name, parentId];
+          for (const k of Object.keys(fields)) {
+            if (k === 'name') continue;
+            if (fields[k] === '' || fields[k] == null) continue;
+            cols.push(k);
+            vals.push(fields[k]);
+          }
+          const placeholders = cols.map((_, i) => '$' + (i + 1)).join(', ');
+          try {
+            await client.query(`INSERT INTO clients (${cols.join(', ')}) VALUES (${placeholders})`, vals);
+            byName.set(key, id);
+            inserted++;
+          } catch (e) {
+            errors.push({ row: i, name, error: e.message });
+          }
+        }
+      }
+
+      await client.query('COMMIT');
+      res.json({
+        ok: true,
+        total: incoming.length,
+        inserted,
+        updated,
+        parentsCreated,
+        errors
+      });
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
+  } catch (e) {
+    console.error('POST /api/clients/import error:', e);
+    res.status(500).json({ error: 'Server error: ' + e.message });
+  }
+});
+
 module.exports = router;

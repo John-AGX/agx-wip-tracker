@@ -315,11 +315,169 @@
     });
   }
 
-  // Force-reload from server. Used by the Refresh button and after future
-  // create/edit/import operations.
+  // Force-reload from server. Used by the Refresh button and after every
+  // create/edit/delete/import operation that mutates the directory.
   function reloadClientsCache() {
     _clients = [];
     renderClientsList();
+  }
+
+  // ==================== BUILDERTREND IMPORT ====================
+  // Maps the BT export column headers to our DB column names. The asterisks
+  // in BT custom-field names get stripped before lookup, and the comparison
+  // is case-insensitive — so "Cm Email*" or "CM EMAIL*" both work.
+  var BT_HEADER_MAP = {
+    'name': 'name',
+    'activation status': 'activation_status',
+    'phone': 'phone',
+    'cell': 'cell',
+    'address': 'address',
+    'city': 'city',
+    'state': 'state',
+    'zip': 'zip',
+    'email': 'email',
+    'first name': 'first_name',
+    'last name': 'last_name',
+    'gate code/addtl notes': 'gate_code',
+    'additional pocs': 'additional_pocs',
+    'cm direct phone': 'cm_phone',
+    'cm email': 'cm_email',
+    'community manager/cam': 'community_manager',
+    'community name': 'community_name',
+    'company name': 'company_name',
+    'maintenance manager': 'maintenance_manager',
+    'market': 'market',
+    'mm direct phone': 'mm_phone',
+    'mm email': 'mm_email',
+    'property address': 'property_address',
+    'property phone': 'property_phone',
+    'website': 'website'
+    // Note: Jobs and Lead Opportunities are computed counts in BT — we skip them
+  };
+
+  function normalizeHeader(h) {
+    return String(h || '').replace(/\*/g, '').trim().toLowerCase();
+  }
+
+  // Parse a Buildertrend Client Contacts xlsx file (browser-side via SheetJS)
+  // and return a normalized array of {column_name: value} ready to POST. The
+  // first sheet is used; the first non-empty header row is detected
+  // automatically (BT puts a "Client Contacts (exported on …)" title row above
+  // the actual headers).
+  function parseBTWorkbook(arrayBuffer) {
+    if (typeof window.XLSX === 'undefined') {
+      throw new Error('XLSX library not loaded yet — try again in a moment.');
+    }
+    var wb = window.XLSX.read(arrayBuffer, { type: 'array' });
+    var sheet = wb.Sheets[wb.SheetNames[0]];
+    var aoa = window.XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+    if (!aoa.length) return [];
+
+    // Find the header row — the first row where 'Name' appears as a cell.
+    var headerRowIdx = -1;
+    for (var i = 0; i < Math.min(aoa.length, 10); i++) {
+      var row = aoa[i] || [];
+      for (var j = 0; j < row.length; j++) {
+        if (normalizeHeader(row[j]) === 'name') { headerRowIdx = i; break; }
+      }
+      if (headerRowIdx !== -1) break;
+    }
+    if (headerRowIdx === -1) {
+      throw new Error('Could not find a Name column in the spreadsheet.');
+    }
+
+    // Map column index -> our DB column name
+    var headers = aoa[headerRowIdx];
+    var colMap = {};
+    headers.forEach(function(h, idx) {
+      var key = BT_HEADER_MAP[normalizeHeader(h)];
+      if (key) colMap[idx] = key;
+    });
+
+    var rows = [];
+    for (var r = headerRowIdx + 1; r < aoa.length; r++) {
+      var raw = aoa[r] || [];
+      var obj = {};
+      var hasContent = false;
+      Object.keys(colMap).forEach(function(idx) {
+        var v = raw[idx];
+        if (v != null && String(v).trim() !== '') {
+          obj[colMap[idx]] = String(v).trim();
+          hasContent = true;
+        }
+      });
+      if (hasContent) rows.push(obj);
+    }
+    return rows;
+  }
+
+  function handleClientsImportFile(evt) {
+    var file = evt.target.files && evt.target.files[0];
+    if (!file) return;
+    // Reset the input so picking the same file twice still fires onchange
+    evt.target.value = '';
+
+    var reader = new FileReader();
+    reader.onload = function(e) {
+      var rows;
+      try {
+        rows = parseBTWorkbook(e.target.result);
+      } catch (err) {
+        alert('Could not parse file: ' + err.message);
+        return;
+      }
+      if (!rows.length) {
+        alert('No client rows found in that file. Is it the right export?');
+        return;
+      }
+      if (!confirm('Found ' + rows.length + ' client rows. Import them now?\n\n' +
+                   'Existing clients (matched by name, case-insensitive) will be updated. ' +
+                   'New clients will be created. Parents are auto-created from Company Name when needed.')) {
+        return;
+      }
+      window.agxApi.clients.importBatch(rows).then(function(res) {
+        renderImportResult(res);
+        reloadClientsCache();
+      }).catch(function(err) {
+        alert('Import failed: ' + (err.message || 'unknown error'));
+      });
+    };
+    reader.onerror = function() { alert('Could not read the file.'); };
+    reader.readAsArrayBuffer(file);
+  }
+
+  function renderImportResult(res) {
+    var body = document.getElementById('clientImportResult_body');
+    var lines = [
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;">' +
+        statBlock('New clients', res.inserted || 0, '#34d399') +
+        statBlock('Updated', res.updated || 0, '#4f8cff') +
+        statBlock('Parent firms created', res.parentsCreated || 0, '#fbbf24') +
+        statBlock('Total rows', res.total || 0, 'var(--text-dim,#888)') +
+      '</div>'
+    ];
+    var errs = res.errors || [];
+    if (errs.length) {
+      lines.push('<div style="font-size:12px;color:#f87171;margin-bottom:6px;font-weight:600;">' +
+        errs.length + ' row(s) had errors:</div>');
+      lines.push('<div style="max-height:160px;overflow-y:auto;font-size:11px;font-family:monospace;background:rgba(248,113,113,0.05);border:1px solid rgba(248,113,113,0.2);border-radius:6px;padding:8px;">');
+      errs.slice(0, 50).forEach(function(e) {
+        lines.push('<div>Row ' + e.row + (e.name ? ' (' + escapeHTML(e.name) + ')' : '') + ': ' + escapeHTML(e.error) + '</div>');
+      });
+      if (errs.length > 50) lines.push('<div style="color:var(--text-dim,#888);">…and ' + (errs.length - 50) + ' more</div>');
+      lines.push('</div>');
+    } else {
+      lines.push('<div style="font-size:12px;color:#34d399;">No errors.</div>');
+    }
+    body.innerHTML = lines.join('');
+    openModal('clientImportResultModal');
+  }
+
+  function statBlock(label, value, color) {
+    return '<div style="background:rgba(255,255,255,0.03);border:1px solid var(--border,#333);border-radius:6px;padding:10px 12px;">' +
+      '<div style="font-size:10px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">' + label + '</div>' +
+      '<div style="font-size:18px;font-weight:700;color:' + color + ';">' + value + '</div>' +
+    '</div>';
   }
 
   // Hook the Refresh button: clear cache then re-render so it actually
@@ -339,6 +497,7 @@
   window.submitClientEditor = submitClientEditor;
   window.deleteClientFromEditor = deleteClientFromEditor;
   window.reloadClientsCache = reloadClientsCache;
+  window.handleClientsImportFile = handleClientsImportFile;
   window.agxClients = {
     getCached: function() { return _clients.slice(); },
     reload: reloadClientsCache

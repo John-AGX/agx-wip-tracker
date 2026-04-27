@@ -627,11 +627,25 @@
                     <div id="estimates-subtab-clients" class="estimates-subtab-content" style="display:none;">
                         <div class="action-buttons">
                             <button class="primary" onclick="openNewClientModal()">&#x1F465; New Client</button>
-                            <button class="secondary" onclick="renderClientsList()">Refresh</button>
+                            <button class="success" onclick="document.getElementById('clients-import-file').click()">&#x1F4E5; Import from Buildertrend</button>
+                            <input type="file" id="clients-import-file" accept=".xlsx" style="display:none;" onchange="handleClientsImportFile(event)" />
+                            <button class="secondary" onclick="reloadClientsCache()">Refresh</button>
                             <input type="text" id="clients-search" oninput="renderClientsList()" placeholder="Search clients…" style="margin-left:auto;min-width:220px;" />
                         </div>
                         <p id="clients-summary" style="margin:12px 0;color:var(--text-dim,#888);font-size:12px;"></p>
                         <div id="clients-list" style="display:flex;flex-direction:column;gap:8px;"></div>
+                    </div>
+
+                    <!-- Import result modal — populated after a Buildertrend
+                         xlsx upload. Shows counts + any per-row errors. -->
+                    <div id="clientImportResultModal" class="modal">
+                      <div class="modal-content" style="max-width:560px;">
+                        <div class="modal-header">Import Result</div>
+                        <div id="clientImportResult_body" style="padding:18px 20px;"></div>
+                        <div class="modal-footer">
+                          <button class="primary" onclick="closeModal('clientImportResultModal')">Done</button>
+                        </div>
+                      </div>
                     </div>
                 </div>
 
@@ -1597,9 +1611,9 @@
     </div>
 
     <script src="js/auth.js?v=6"></script>
-    <script src="js/api.js?v=7"></script>
+    <script src="js/api.js?v=8"></script>
     <script src="js/admin.js?v=11"></script>
-    <script src="js/clients.js?v=2"></script>
+    <script src="js/clients.js?v=3"></script>
     <script src="js/insights.js?v=5"></script>
     <script src="js/app.js?v=37"></script>
     <script src="js/wip.js?v=56"></script>
