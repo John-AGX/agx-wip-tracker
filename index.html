@@ -1491,6 +1491,19 @@
             <textarea id="leadEditor_notes" rows="4" style="resize:vertical;"></textarea>
           </fieldset>
 
+          <!-- Linked-job chip — shown when lead.job_id is set so the user
+               can jump from a sold lead straight to its WIP job. -->
+          <div id="leadEditor_linkedJob" style="display:none;padding:10px 14px;background:rgba(52,211,153,0.08);border:1px solid rgba(52,211,153,0.3);border-radius:8px;display:none;align-items:center;justify-content:space-between;gap:10px;">
+            <div style="display:flex;align-items:center;gap:10px;">
+              <span style="color:#34d399;font-size:14px;">&#x2713;</span>
+              <div>
+                <div style="font-size:13px;font-weight:600;color:#34d399;">Sold &mdash; linked to a job</div>
+                <div id="leadEditor_linkedJobLabel" style="font-size:11px;color:var(--text-dim,#888);"></div>
+              </div>
+            </div>
+            <button class="small secondary" onclick="openLinkedJobFromLead()">Open Job &rarr;</button>
+          </div>
+
           <div id="leadEditor_status_msg" style="font-size:13px;"></div>
         </div>
 
@@ -1507,6 +1520,7 @@
 
         <div class="modal-footer">
           <button id="leadEditor_deleteBtn" class="danger" style="margin-right:auto;display:none;" onclick="deleteLeadFromEditor()">Delete</button>
+          <button id="leadEditor_convertJobBtn" class="success" style="display:none;" onclick="convertLeadToJob()" data-cap="JOBS_EDIT_ANY JOBS_EDIT_OWN">&#x1F3D7; Create Job from Lead</button>
           <button onclick="closeModal('leadEditorModal')" class="secondary">Cancel</button>
           <button onclick="submitLeadEditor()" class="primary" id="leadEditor_submitBtn">Save Lead</button>
         </div>
@@ -1780,7 +1794,7 @@
     <script src="js/api.js?v=9"></script>
     <script src="js/admin.js?v=11"></script>
     <script src="js/clients.js?v=5"></script>
-    <script src="js/leads.js?v=2"></script>
+    <script src="js/leads.js?v=3"></script>
     <script src="js/insights.js?v=5"></script>
     <script src="js/app.js?v=37"></script>
     <script src="js/wip.js?v=56"></script>

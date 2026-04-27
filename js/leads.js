@@ -179,6 +179,10 @@
     document.getElementById('leadEditor_status_msg').textContent = '';
     document.getElementById('leadEditor_submitBtn').disabled = false;
     document.getElementById('leadEditor_deleteBtn').style.display = 'none';
+    var chip = document.getElementById('leadEditor_linkedJob');
+    if (chip) chip.style.display = 'none';
+    var convertBtn = document.getElementById('leadEditor_convertJobBtn');
+    if (convertBtn) convertBtn.style.display = 'none';
   }
 
   // Reuse the clients cache (loaded by clients.js) so we don't hit the API
@@ -297,7 +301,140 @@
     document.getElementById('leadEditor_tabs').style.display = '';
     switchLeadEditorTab('general');
     renderLeadProposals(l.id);
+    refreshLinkedJobChip(l);
+    refreshConvertJobButton(l);
     openModal('leadEditorModal');
+  }
+
+  // Show the green "Sold — linked to a job" chip when the lead has a job_id.
+  // Clicking the chip's button jumps to that job's WIP detail view.
+  function refreshLinkedJobChip(l) {
+    var chip = document.getElementById('leadEditor_linkedJob');
+    var labelEl = document.getElementById('leadEditor_linkedJobLabel');
+    if (!chip) return;
+    if (!l || !l.job_id) {
+      chip.style.display = 'none';
+      return;
+    }
+    var jobs = (window.appData && appData.jobs) || [];
+    var job = jobs.find(function(j) { return j.id === l.job_id; });
+    if (labelEl) {
+      labelEl.textContent = job
+        ? ((job.jobNumber ? '[' + job.jobNumber + '] ' : '') + (job.title || job.id))
+        : ('Job ' + l.job_id + ' (not in current view — admin may have removed it)');
+    }
+    chip.style.display = 'flex';
+  }
+
+  // Hide the convert button on already-converted leads (they have a job_id)
+  // and on roles without job-edit capability. Keeping the button always
+  // visible would tempt double-conversion of the same lead.
+  function refreshConvertJobButton(l) {
+    var btn = document.getElementById('leadEditor_convertJobBtn');
+    if (!btn) return;
+    var canEditJobs = window.agxAuth && (
+      window.agxAuth.hasCapability('JOBS_EDIT_ANY') ||
+      window.agxAuth.hasCapability('JOBS_EDIT_OWN')
+    );
+    btn.style.display = (canEditJobs && (!l || !l.job_id)) ? '' : 'none';
+  }
+
+  // Open the WIP job linked to the currently-editing lead.
+  function openLinkedJobFromLead() {
+    var leadId = _currentEditingLeadId;
+    var l = _leads.find(function(x) { return x.id === leadId; });
+    if (!l || !l.job_id) return;
+    closeModal('leadEditorModal');
+    if (typeof window.switchTab === 'function') {
+      window.switchTab('wip');
+      // editJob is defined in wip.js; give the WIP render a tick before opening
+      setTimeout(function() {
+        if (typeof window.editJob === 'function') window.editJob(l.job_id);
+      }, 200);
+    }
+  }
+
+  // Convert the currently-editing lead into a new WIP job. Copies title,
+  // client, project type, market, contract amount (from estimated revenue),
+  // and assigns the salesperson as PM/owner. Sets lead.status = 'sold' and
+  // lead.job_id = new job id so future opens of the lead show the chip.
+  function convertLeadToJob() {
+    var leadId = _currentEditingLeadId;
+    var l = _leads.find(function(x) { return x.id === leadId; });
+    if (!l) return;
+    if (l.job_id) {
+      alert('This lead is already linked to a job. Use the Open Job button.');
+      return;
+    }
+    if (!window.appData || !Array.isArray(window.appData.jobs)) {
+      alert('App data not ready — try again in a moment.');
+      return;
+    }
+
+    var clientCache = (window.agxClients && window.agxClients.getCached && window.agxClients.getCached()) || [];
+    var c = l.client_id ? clientCache.find(function(x) { return x.id === l.client_id; }) : null;
+    var clientName = c ? (c.company_name || c.name) : '';
+
+    var msg =
+      'Create a new WIP job from this lead?\n\n' +
+      'This will:\n' +
+      '  • Add a job to WIP with the lead\'s title, client, and project info\n' +
+      '  • Use Estimated Revenue (high) as the Contract Amount\n' +
+      '  • Mark the lead as Sold and link the new job to it\n\n' +
+      'You can edit the job number, costs, and other fields after.';
+    if (!confirm(msg)) return;
+
+    // Pick the better of the revenue range as a starter contract value
+    var contractAmt = Number(l.estimated_revenue_high || l.estimated_revenue_low || 0);
+    var me = window.agxAuth && window.agxAuth.getUser && window.agxAuth.getUser();
+    var ownerId = l.salesperson_id || (me && me.id) || null;
+
+    var jobId = 'j' + Date.now();
+    var nowIso = new Date().toISOString();
+    var newJob = {
+      id: jobId,
+      jobNumber: '',
+      title: l.title,
+      client: clientName,
+      pm: '',
+      owner_id: ownerId,
+      jobType: l.project_type || '',
+      workType: '',
+      market: l.market || '',
+      status: 'New',
+      contractAmount: contractAmt,
+      estimatedCosts: 0,
+      targetMarginPct: 50,
+      pctComplete: 0,
+      invoicedToDate: 0,
+      revisedCostChanges: 0,
+      notes: l.notes || '',
+      createdAt: nowIso,
+      updatedAt: nowIso
+    };
+    window.appData.jobs.push(newJob);
+    if (typeof saveData === 'function') saveData();
+
+    // Update the lead record on the server: set job_id + flip status to sold.
+    // Keep the local lead object in sync so the chip renders correctly when
+    // the modal stays open.
+    window.agxApi.leads.update(leadId, { job_id: jobId, status: 'sold' }).then(function() {
+      l.job_id = jobId;
+      l.status = 'sold';
+      closeModal('leadEditorModal');
+      reloadLeadsCache();
+      // Hand off to WIP so the user sees the new job
+      if (typeof window.switchTab === 'function') window.switchTab('wip');
+      setTimeout(function() {
+        if (typeof window.editJob === 'function') window.editJob(jobId);
+      }, 250);
+    }).catch(function(err) {
+      alert('Job created, but linking it back to the lead failed: ' + err.message +
+            '\n\nThe job is in WIP — you can re-link it manually if needed.');
+      closeModal('leadEditorModal');
+      reloadLeadsCache();
+      if (typeof window.switchTab === 'function') window.switchTab('wip');
+    });
   }
 
   // ──────────────────────────────────────────────────────────────────
@@ -469,6 +606,8 @@
   window.onLeadClientPicked = onLeadClientPicked;
   window.switchLeadEditorTab = switchLeadEditorTab;
   window.createEstimateFromLead = createEstimateFromLead;
+  window.convertLeadToJob = convertLeadToJob;
+  window.openLinkedJobFromLead = openLinkedJobFromLead;
   window.agxLeads = {
     getCached: function() { return _leads.slice(); },
     reload: reloadLeadsCache
