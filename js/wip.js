@@ -977,17 +977,28 @@ function renderWIPMain() {
             const job = appData.jobs.find(j => j.id === jobId);
             if (!job) return;
             if (!confirm('Permanently delete "' + (job.title || 'this job') + '" and all its buildings, phases, subs, and change orders? This cannot be undone.')) return;
-            // Remove all related data
+            // Remove all related data locally
             appData.buildings = appData.buildings.filter(b => b.jobId !== jobId);
             appData.phases = appData.phases.filter(p => p.jobId !== jobId);
             appData.subs = appData.subs.filter(s => s.jobId !== jobId);
             appData.changeOrders = appData.changeOrders.filter(c => c.jobId !== jobId);
+            appData.purchaseOrders = (appData.purchaseOrders || []).filter(p => p.jobId !== jobId);
+            appData.invoices = (appData.invoices || []).filter(i => i.jobId !== jobId);
             appData.jobs = appData.jobs.filter(j => j.id !== jobId);
             // Remove workspace data
             var allWs = safeLoadJSON('agx-workspaces', {});
             delete allWs[jobId];
             localStorage.setItem('agx-workspaces', JSON.stringify(allWs));
+            // Persist locally + push to server. The bulk-save endpoint only
+            // upserts present jobs, so we also need an explicit DELETE
+            // /api/jobs/:id call — without this the server keeps the job
+            // and it reappears on the next page reload.
             saveData();
+            if (window.agxApi && window.agxApi.isAuthenticated()) {
+                window.agxApi.jobs.remove(jobId).catch(function(err) {
+                    console.warn('Server delete failed for ' + jobId + ':', err.message);
+                });
+            }
             backToWIPMain();
         }
 
@@ -3534,6 +3545,13 @@ function renderWIPMain() {
                 localStorage.setItem('agx-nodegraphs', JSON.stringify(all));
             } catch (e) {}
             saveData();
+            // Server-side delete (bulk-save only upserts; without this the
+            // job comes back on next page reload).
+            if (window.agxApi && window.agxApi.isAuthenticated()) {
+                window.agxApi.jobs.remove(jobId).catch(function(err) {
+                    console.warn('Server delete failed for ' + jobId + ':', err.message);
+                });
+            }
             renderArchivedJobs();
         }
 
