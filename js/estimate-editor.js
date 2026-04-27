@@ -528,6 +528,7 @@
         'oninput="updateSectionName(\'' + idAttr + '\', this.value)" ' +
         'style="flex:1;font-size:13px;font-weight:700;background:transparent;border:1px solid transparent;border-radius:4px;padding:4px 8px;color:#4f8cff;text-transform:uppercase;letter-spacing:0.5px;" ' +
         'onfocus="this.style.borderColor=\'var(--border,#333)\';" onblur="this.style.borderColor=\'transparent\';" />' +
+      '<button class="small primary" onclick="addEstimateLineFromEditor(\'' + idAttr + '\')" title="Add a line under this section" style="padding:4px 10px;font-size:11px;">&#x2795; Line Item</button>' +
       '<button class="small ghost" onclick="deleteSectionFromEditor(\'' + idAttr + '\')" title="Remove section header (lines stay)">&#x1F5D1;</button>' +
     '</div>';
   }
@@ -611,7 +612,11 @@
     // its value as-typed; subtotals don't depend on the section name.
   }
 
-  function addEstimateLineFromEditor() {
+  // Optional sectionId — when provided, the new line is inserted just
+  // before the next section header (i.e. at the end of that section's
+  // group), so the standard-sections layout stays intact. Without it,
+  // the line is appended to the end as before.
+  function addEstimateLineFromEditor(sectionId) {
     var est = getEstimate();
     if (!est) return;
     var newLine = {
@@ -624,6 +629,35 @@
       unitCost: 0,
       markup: ''
     };
+    if (sectionId) {
+      var arr = appData.estimateLines;
+      var startIdx = arr.findIndex(function(l) { return l.id === sectionId; });
+      if (startIdx >= 0) {
+        // Walk forward from the section header until we hit the next
+        // header in the same alternate, or run out of lines.
+        var insertAt = arr.length;
+        for (var j = startIdx + 1; j < arr.length; j++) {
+          var L = arr[j];
+          if (L.estimateId !== est.id || L.alternateId !== est.activeAlternateId) continue;
+          if (L.section === '__section_header__') { insertAt = j; break; }
+        }
+        // If we never found a next header, find the index after the last
+        // line in this alternate so we don't sneak into another alternate.
+        if (insertAt === arr.length) {
+          for (var k = arr.length - 1; k > startIdx; k--) {
+            var M = arr[k];
+            if (M.estimateId === est.id && M.alternateId === est.activeAlternateId) {
+              insertAt = k + 1; break;
+            }
+          }
+        }
+        arr.splice(insertAt, 0, newLine);
+        debouncedSave();
+        renderLineItems();
+        renderTotals();
+        return;
+      }
+    }
     appData.estimateLines.push(newLine);
     debouncedSave();
     renderLineItems();
@@ -669,10 +703,10 @@
   // BT's two-sheet import — keeping the simple keys here for now keeps
   // existing data forward-compatible.
   var STANDARD_SECTIONS_PRESET = [
-    { name: 'Subcontractors Costs',       btCategory: 'sub' },
     { name: 'Materials & Supplies Costs', btCategory: 'materials' },
+    { name: 'Direct Labor',               btCategory: 'labor' },
     { name: 'General Conditions',         btCategory: 'gc' },
-    { name: 'Direct Labor',               btCategory: 'labor' }
+    { name: 'Subcontractors Costs',       btCategory: 'sub' }
   ];
 
   function addStandardSectionsFromEditor() {

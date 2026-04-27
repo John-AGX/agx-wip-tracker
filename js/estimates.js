@@ -59,10 +59,10 @@ function renderEstimatesList() {
         // Repair Income row (= total client price) is injected by the
         // export, not stored as a section.
         const ESTIMATE_STANDARD_SECTIONS = [
-            { name: 'Subcontractors Costs',     btCategory: 'sub' },
             { name: 'Materials & Supplies Costs', btCategory: 'materials' },
-            { name: 'General Conditions',       btCategory: 'gc' },
-            { name: 'Direct Labor',             btCategory: 'labor' }
+            { name: 'Direct Labor',               btCategory: 'labor' },
+            { name: 'General Conditions',         btCategory: 'gc' },
+            { name: 'Subcontractors Costs',       btCategory: 'sub' }
         ];
 
         function createNewEstimate() {
