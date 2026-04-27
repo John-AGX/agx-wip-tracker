@@ -640,7 +640,49 @@
                             </div>
                         </div>
 
-                        <div id="estimate-editor-view" style="display: none;"></div>
+                        <!-- Full-page estimate editor (Phase A). Sticky header
+                             with linked lead/client chips + live totals; body
+                             splits into Line Items, Details, Preview tabs. -->
+                        <div id="estimate-editor-view" style="display: none;">
+                            <!-- Sticky header -->
+                            <div id="ee-header" style="position:sticky;top:0;z-index:5;background:var(--bg,#0a0a0f);border-bottom:1px solid var(--border,#333);padding:14px 4px;margin-bottom:14px;">
+                                <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
+                                    <button class="small secondary" onclick="closeEstimateEditor()">&larr; Back</button>
+                                    <input id="ee-title" type="text" placeholder="Estimate title" style="flex:1;min-width:200px;font-size:18px;font-weight:600;padding:6px 10px;background:transparent;border:1px solid transparent;border-radius:6px;color:var(--text,#fff);" onfocus="this.style.borderColor='var(--border,#333)'" onblur="this.style.borderColor='transparent'" />
+                                    <div id="ee-linked-chips" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
+                                </div>
+                                <!-- Live totals strip -->
+                                <div id="ee-totals" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
+                                <!-- Sub-tab nav -->
+                                <div class="ws-right-tabs" style="margin-top:10px;margin-bottom:0;">
+                                    <button class="ws-right-tab active" data-ee-tab="lines" onclick="switchEstimateEditorTab('lines')">Line Items</button>
+                                    <button class="ws-right-tab" data-ee-tab="details" onclick="switchEstimateEditorTab('details')">Details</button>
+                                    <button class="ws-right-tab" data-ee-tab="preview" onclick="switchEstimateEditorTab('preview')">Preview</button>
+                                </div>
+                            </div>
+
+                            <!-- Line Items tab -->
+                            <div id="ee-tab-lines" class="ee-tab-content">
+                                <div class="action-buttons" style="margin-bottom:10px;">
+                                    <button class="primary" onclick="addEstimateLineFromEditor()">&#x2795; Line Item</button>
+                                    <button class="secondary" onclick="addEstimateSectionFromEditor()">&#x2795; Section</button>
+                                    <span style="font-size:11px;color:var(--text-dim,#888);align-self:center;margin-left:10px;">Edits autosave on blur. Per-line markup overrides the default.</span>
+                                </div>
+                                <div id="ee-lines-container"></div>
+                            </div>
+
+                            <!-- Details tab -->
+                            <div id="ee-tab-details" class="ee-tab-content" style="display:none;">
+                                <div id="ee-details-form"></div>
+                            </div>
+
+                            <!-- Preview tab (Phase C will populate this with the live render) -->
+                            <div id="ee-tab-preview" class="ee-tab-content" style="display:none;">
+                                <div style="padding:40px;text-align:center;color:var(--text-dim,#888);font-size:13px;">
+                                    Live preview lands in Phase C — for now use the Preview button on the estimate row.
+                                </div>
+                            </div>
+                        </div>
                         <div id="estimate-preview-view" style="display: none;"></div>
                     </div>
 
@@ -1800,6 +1842,7 @@
     <script src="js/wip.js?v=56"></script>
     <script src="js/estimates.js?v=20"></script>
     <script src="js/proposal.js?v=19"></script>
+    <script src="js/estimate-editor.js?v=1"></script>
 
     <script src="js/workspace.js?v=21"></script>
     <script src="js/workspace-layout.js?v=28"></script>
