@@ -140,6 +140,16 @@
   // Live totals strip — recomputes on every line change.
   // ──────────────────────────────────────────────────────────────────
 
+  // Math pipeline (in order):
+  //   subtotal           = Σ qty × unitCost
+  //   markupAmount       = Σ ext × (line markup % or default)
+  //   markedUp           = subtotal + markupAmount
+  //   feeFlat            = est.feeFlat
+  //   feePct             = markedUp × (est.feePct / 100)
+  //   preTax             = markedUp + feeFlat + feePct
+  //   taxAmount          = preTax × (est.taxPct / 100)
+  //   beforeRound        = preTax + taxAmount
+  //   total              = round up beforeRound to nearest est.roundTo
   function computeTotals() {
     var est = getEstimate();
     var lines = getLines().filter(function(l) { return l.section !== '__section_header__'; });
@@ -152,10 +162,29 @@
       var m = (l.markup === '' || l.markup == null) ? defaultMarkup : num(l.markup);
       markedUp += ext * (1 + m / 100);
     });
+    var feeFlat = est ? num(est.feeFlat) : 0;
+    var feePctAmount = markedUp * (est ? num(est.feePct) : 0) / 100;
+    var preTax = markedUp + feeFlat + feePctAmount;
+    var taxAmount = preTax * (est ? num(est.taxPct) : 0) / 100;
+    var beforeRound = preTax + taxAmount;
+    var roundTo = est ? num(est.roundTo) : 0;
+    var total = beforeRound;
+    var rounded = 0;
+    if (roundTo > 0) {
+      total = Math.ceil(beforeRound / roundTo) * roundTo;
+      rounded = total - beforeRound;
+    }
     return {
       subtotal: subtotal,
       markupAmount: markedUp - subtotal,
-      total: markedUp,
+      markedUp: markedUp,
+      feeFlat: feeFlat,
+      feePctAmount: feePctAmount,
+      preTax: preTax,
+      taxAmount: taxAmount,
+      beforeRound: beforeRound,
+      rounded: rounded,
+      total: total,
       lineCount: lines.length
     };
   }
@@ -173,8 +202,42 @@
     totalsEl.innerHTML =
       chip('Subtotal', fmtCurrency(t.subtotal), 'var(--text,#fff)') +
       chip('Markup', fmtCurrency(t.markupAmount), '#fbbf24') +
+      chip('Tax + Fees', fmtCurrency(t.feeFlat + t.feePctAmount + t.taxAmount), '#60a5fa') +
       chip('Client Total', fmtCurrency(t.total), '#34d399') +
       chip('Lines', t.lineCount, 'var(--text-dim,#888)');
+    // Also refresh the detailed breakdown card under the line items.
+    renderPricingBreakdown();
+  }
+
+  // Detailed breakdown shown under the line items table. Hides components
+  // that are zero so a simple estimate (no fees / no tax / no rounding)
+  // doesn't render visual clutter.
+  function renderPricingBreakdown() {
+    var el = document.getElementById('ee-pricing-breakdown');
+    if (!el) return;
+    var t = computeTotals();
+    function row(label, value, opts) {
+      opts = opts || {};
+      var color = opts.color || 'var(--text,#fff)';
+      var weight = opts.bold ? 700 : 500;
+      var size = opts.bold ? 14 : 12;
+      var divider = opts.divider ? 'border-top:1px solid var(--border,#333);padding-top:8px;margin-top:8px;' : '';
+      return '<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;' + divider + '">' +
+        '<span style="font-size:' + (opts.bold ? 12 : 11) + 'px;color:var(--text-dim,#888);' + (opts.bold ? 'text-transform:uppercase;letter-spacing:0.5px;font-weight:700;' : '') + '">' + label + '</span>' +
+        '<span style="font-family:\'SF Mono\',monospace;font-size:' + size + 'px;font-weight:' + weight + ';color:' + color + ';">' + fmtCurrency(value) + '</span>' +
+      '</div>';
+    }
+    var html = '';
+    html += row('Subtotal (cost)', t.subtotal);
+    html += row('Markup', t.markupAmount, { color: '#fbbf24' });
+    html += row('Marked-Up Subtotal', t.markedUp, { divider: true });
+    if (t.feeFlat) html += row('+ Flat Fee', t.feeFlat, { color: '#60a5fa' });
+    if (t.feePctAmount) html += row('+ Percentage Fee', t.feePctAmount, { color: '#60a5fa' });
+    if (t.feeFlat || t.feePctAmount) html += row('Pre-Tax Total', t.preTax, { divider: true });
+    if (t.taxAmount) html += row('+ Tax', t.taxAmount, { color: '#60a5fa' });
+    if (t.rounded) html += row('+ Round Up', t.rounded, { color: 'var(--text-dim,#888)' });
+    html += row('Client Total', t.total, { bold: true, color: '#34d399', divider: true });
+    el.innerHTML = html;
   }
 
   // ──────────────────────────────────────────────────────────────────
@@ -243,6 +306,7 @@
       return '<div style="flex:' + (w || '1 1 auto') + ';padding:8px 10px;font-size:10px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;text-align:' + (align || 'left') + ';">' + label + '</div>';
     };
     return '<div style="display:flex;background:rgba(255,255,255,0.02);border-bottom:1px solid var(--border,#333);">' +
+      th('', '0 0 28px') + // drag handle column
       th('Description', '2 1 200px') +
       th('Qty', '0 0 70px', 'right') +
       th('Unit', '0 0 70px') +
@@ -254,13 +318,30 @@
     '</div>';
   }
 
+  // Drag handle markup shared by section headers + line rows. The HTML5
+  // drag-and-drop dance: dragstart records the dragged id, dragover preserves
+  // the drop target highlight, drop reorders the array.
+  function dragHandleHTML(id) {
+    return '<div ' +
+      'draggable="true" ' +
+      'ondragstart="onLineDragStart(event, \'' + escapeHTML(id) + '\')" ' +
+      'ondragend="onLineDragEnd(event)" ' +
+      'style="flex:0 0 28px;text-align:center;cursor:grab;color:var(--text-dim,#888);font-size:14px;user-select:none;padding:6px 0;line-height:1;" ' +
+      'title="Drag to reorder">&#x2630;</div>';
+  }
+
   function renderSectionHeaderRow(line) {
-    return '<div data-section-id="' + escapeHTML(line.id) + '" style="display:flex;align-items:center;background:rgba(79,140,255,0.06);border-bottom:1px solid var(--border,#333);padding:6px 10px;gap:8px;">' +
+    var idAttr = escapeHTML(line.id);
+    return '<div data-section-id="' + idAttr + '" data-line-id="' + idAttr + '" ' +
+        'ondragover="onLineDragOver(event)" ondragleave="onLineDragLeave(event)" ' +
+        'ondrop="onLineDrop(event, \'' + idAttr + '\')" ' +
+        'style="display:flex;align-items:center;background:rgba(79,140,255,0.06);border-bottom:1px solid var(--border,#333);padding:6px 10px;gap:8px;">' +
+      dragHandleHTML(line.id) +
       '<input type="text" value="' + escapeHTML(line.description || '') + '" placeholder="Section name" ' +
-        'oninput="updateSectionName(\'' + escapeHTML(line.id) + '\', this.value)" ' +
+        'oninput="updateSectionName(\'' + idAttr + '\', this.value)" ' +
         'style="flex:1;font-size:13px;font-weight:700;background:transparent;border:1px solid transparent;border-radius:4px;padding:4px 8px;color:#4f8cff;text-transform:uppercase;letter-spacing:0.5px;" ' +
         'onfocus="this.style.borderColor=\'var(--border,#333)\';" onblur="this.style.borderColor=\'transparent\';" />' +
-      '<button class="small ghost" onclick="deleteSectionFromEditor(\'' + escapeHTML(line.id) + '\')" title="Remove section header (lines stay)">&#x1F5D1;</button>' +
+      '<button class="small ghost" onclick="deleteSectionFromEditor(\'' + idAttr + '\')" title="Remove section header (lines stay)">&#x1F5D1;</button>' +
     '</div>';
   }
 
@@ -288,7 +369,11 @@
       return '<div style="flex:' + flex + ';padding:8px 10px;font-size:12px;text-align:right;color:' + (color || 'var(--text-dim,#888)') + ';font-family:\'SF Mono\',monospace;">' + value + '</div>';
     };
 
-    return '<div style="display:flex;align-items:center;border-bottom:1px solid var(--border,#333);">' +
+    return '<div data-line-id="' + idAttr + '" ' +
+        'ondragover="onLineDragOver(event)" ondragleave="onLineDragLeave(event)" ' +
+        'ondrop="onLineDrop(event, \'' + idAttr + '\')" ' +
+        'style="display:flex;align-items:center;border-bottom:1px solid var(--border,#333);">' +
+      dragHandleHTML(line.id) +
       input('description', line.description, { flex: '2 1 200px' }) +
       input('qty', line.qty, { flex: '0 0 70px', type: 'number', align: 'right', mono: true }) +
       input('unit', line.unit, { flex: '0 0 70px' }) +
@@ -304,6 +389,7 @@
 
   function renderSectionSubtotal(rawSum, markedUp) {
     return '<div style="display:flex;align-items:center;background:rgba(255,255,255,0.02);border-bottom:1px solid var(--border,#333);padding:6px 10px;">' +
+      '<div style="flex:0 0 28px;"></div>' + // matches the drag-handle column
       '<div style="flex:2 1 200px;font-size:11px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;font-weight:600;padding-left:8px;">Section Subtotal</div>' +
       '<div style="flex:0 0 70px;"></div>' +
       '<div style="flex:0 0 70px;"></div>' +
@@ -390,6 +476,77 @@
   }
 
   // ──────────────────────────────────────────────────────────────────
+  // Drag-reorder — native HTML5 D&D. Each line / section row is a drop
+  // target; the dragged item's id is stashed on dragstart and the row
+  // gets a faint highlight on dragover. Drop reorders the
+  // appData.estimateLines array in-place.
+  // ──────────────────────────────────────────────────────────────────
+
+  var _draggedLineId = null;
+
+  function onLineDragStart(e, id) {
+    _draggedLineId = id;
+    try { e.dataTransfer.effectAllowed = 'move'; } catch (_) {}
+    try { e.dataTransfer.setData('text/plain', id); } catch (_) {}
+    // Fade the source row a touch so the user can see what they're moving
+    var row = e.target.closest('[data-line-id]');
+    if (row) row.style.opacity = '0.45';
+  }
+
+  function onLineDragOver(e) {
+    if (!_draggedLineId) return;
+    e.preventDefault();
+    try { e.dataTransfer.dropEffect = 'move'; } catch (_) {}
+    var row = e.currentTarget;
+    if (row && row.style) row.style.background = 'rgba(79,140,255,0.10)';
+  }
+
+  function onLineDragLeave(e) {
+    var row = e.currentTarget;
+    if (!row || !row.style) return;
+    // Restore the original background. Section headers + subtotals have
+    // their own background; resetting to '' lets the inline style win
+    // back from the row's original :style attribute when re-rendered.
+    row.style.background = '';
+  }
+
+  function onLineDragEnd(e) {
+    // Source row opacity restore — we re-render after a successful drop,
+    // but if the drop didn't land on a target (cancelled drag) we need to
+    // restore the visual state.
+    var row = e.target.closest('[data-line-id]');
+    if (row) row.style.opacity = '';
+    _draggedLineId = null;
+    // Clear any stuck drop-target highlight
+    document.querySelectorAll('[data-line-id]').forEach(function(el) { el.style.background = ''; });
+  }
+
+  function onLineDrop(e, targetId) {
+    e.preventDefault();
+    if (!_draggedLineId || _draggedLineId === targetId) {
+      _draggedLineId = null;
+      renderLineItems();
+      return;
+    }
+    var lines = appData.estimateLines;
+    var fromIdx = lines.findIndex(function(l) { return l.id === _draggedLineId; });
+    var toIdx = lines.findIndex(function(l) { return l.id === targetId; });
+    if (fromIdx < 0 || toIdx < 0) {
+      _draggedLineId = null;
+      renderLineItems();
+      return;
+    }
+    var moved = lines.splice(fromIdx, 1)[0];
+    // If we removed an earlier item, the target index shifts left by 1
+    if (fromIdx < toIdx) toIdx--;
+    lines.splice(toIdx, 0, moved);
+    _draggedLineId = null;
+    debouncedSave();
+    renderLineItems();
+    renderTotals();
+  }
+
+  // ──────────────────────────────────────────────────────────────────
   // Details tab — header info, addresses, manager, scope, default markup.
   // Mirrors the old modal's fields, just laid out for the page width.
   // ──────────────────────────────────────────────────────────────────
@@ -433,10 +590,24 @@
           field('Manager Name', 'ee-managerName', est.managerName) +
           field('Manager Email', 'ee-managerEmail', est.managerEmail, { type: 'email' }) +
           field('Manager Phone', 'ee-managerPhone', est.managerPhone, { type: 'tel' }) +
-          field('Default Markup %', 'ee-defaultMarkup', est.defaultMarkup, { type: 'number', step: '0.1' }) +
           field('Scope of Work', 'ee-scopeOfWork', est.scopeOfWork, { textarea: true, rows: 6 }) +
         '</div>' +
-      '</div>';
+      '</div>' +
+      // Pricing fieldset — default markup + tax + fees + round-up.
+      // Lives below the two-column block so it stretches full width.
+      '<fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;margin-top:18px;max-width:900px;">' +
+        '<legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Pricing</legend>' +
+        '<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;">' +
+          field('Default Markup %', 'ee-defaultMarkup', est.defaultMarkup, { type: 'number', step: '0.1', placeholder: '0' }) +
+          field('Tax %', 'ee-taxPct', est.taxPct, { type: 'number', step: '0.01', placeholder: '0' }) +
+          field('Flat Fee ($)', 'ee-feeFlat', est.feeFlat, { type: 'number', step: '0.01', placeholder: '0' }) +
+          field('Fee % of Marked-Up', 'ee-feePct', est.feePct, { type: 'number', step: '0.1', placeholder: '0' }) +
+          field('Round Up to Nearest ($)', 'ee-roundTo', est.roundTo, { type: 'number', step: '1', placeholder: '0 = off' }) +
+        '</div>' +
+        '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:8px;">' +
+          'Tax applies after fees. Round-up is the last step — set to 0 to disable.' +
+        '</div>' +
+      '</fieldset>';
 
     // Wire each field's onchange to live-update the estimate record.
     var fieldMap = {
@@ -460,16 +631,27 @@
         debouncedSave();
       };
     });
-    var markupEl = document.getElementById('ee-defaultMarkup');
-    if (markupEl) {
-      markupEl.onchange = function() {
+    // Pricing-affecting fields: changing any of these means the line table
+    // (default-markup placeholder + computed columns) and the totals strip
+    // both need to update.
+    var pricingMap = {
+      'ee-defaultMarkup': 'defaultMarkup',
+      'ee-taxPct':        'taxPct',
+      'ee-feeFlat':       'feeFlat',
+      'ee-feePct':        'feePct',
+      'ee-roundTo':       'roundTo'
+    };
+    Object.keys(pricingMap).forEach(function(elId) {
+      var el = document.getElementById(elId);
+      if (!el) return;
+      el.onchange = function() {
         var e = getEstimate(); if (!e) return;
-        e.defaultMarkup = num(markupEl.value);
+        e[pricingMap[elId]] = num(el.value);
         debouncedSave();
-        renderLineItems(); // markup change ripples through line client prices
+        renderLineItems();
         renderTotals();
       };
-    }
+    });
     // Hidden client_id field — the picker writes into it. Mirror to the
     // estimate record on every change.
     var clientIdEl = document.getElementById('editEst_clientId');
@@ -550,4 +732,9 @@
   window.deleteLineFromEditor = deleteLineFromEditor;
   window.deleteSectionFromEditor = deleteSectionFromEditor;
   window.jumpToLeadFromEstimate = jumpToLeadFromEstimate;
+  window.onLineDragStart = onLineDragStart;
+  window.onLineDragOver = onLineDragOver;
+  window.onLineDragLeave = onLineDragLeave;
+  window.onLineDragEnd = onLineDragEnd;
+  window.onLineDrop = onLineDrop;
 })();

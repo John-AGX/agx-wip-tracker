@@ -666,9 +666,18 @@
                                 <div class="action-buttons" style="margin-bottom:10px;">
                                     <button class="primary" onclick="addEstimateLineFromEditor()">&#x2795; Line Item</button>
                                     <button class="secondary" onclick="addEstimateSectionFromEditor()">&#x2795; Section</button>
-                                    <span style="font-size:11px;color:var(--text-dim,#888);align-self:center;margin-left:10px;">Edits autosave on blur. Per-line markup overrides the default.</span>
+                                    <span style="font-size:11px;color:var(--text-dim,#888);align-self:center;margin-left:10px;">Edits autosave on blur. Drag the &#x2630; handle to reorder. Per-line markup overrides the default.</span>
                                 </div>
                                 <div id="ee-lines-container"></div>
+                                <!-- Detailed pricing breakdown — recomputes whenever a line / fee /
+                                     tax / round-up value changes. Hides zero-value rows so simple
+                                     estimates stay tidy. -->
+                                <div style="margin-top:18px;display:flex;justify-content:flex-end;">
+                                    <div style="width:100%;max-width:380px;background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:10px;padding:14px 18px;">
+                                        <div style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">Pricing</div>
+                                        <div id="ee-pricing-breakdown"></div>
+                                    </div>
+                                </div>
                             </div>
 
                             <!-- Details tab -->
@@ -1842,7 +1851,7 @@
     <script src="js/wip.js?v=56"></script>
     <script src="js/estimates.js?v=20"></script>
     <script src="js/proposal.js?v=19"></script>
-    <script src="js/estimate-editor.js?v=1"></script>
+    <script src="js/estimate-editor.js?v=2"></script>
 
     <script src="js/workspace.js?v=21"></script>
     <script src="js/workspace-layout.js?v=28"></script>
