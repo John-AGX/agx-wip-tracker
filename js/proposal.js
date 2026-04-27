@@ -737,17 +737,8 @@ function injectImportBtn() {
 
   const button = document.createElement('button');
   button.id = 'agx-import-btn';
+  button.className = 'success';
   button.textContent = 'Import Lead Report';
-  button.style.cssText = `
-    background-color: #1B8541;
-    color: white;
-    padding: 8px 16px;
-    border: none;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 14px;
-    margin-left: 8px;
-  `;
 
   const fileInput = document.createElement('input');
   fileInput.type = 'file';
@@ -777,17 +768,8 @@ function injectTemplateBtn() {
 
   const button = document.createElement('button');
   button.id = 'agx-template-btn';
+  button.className = 'secondary';
   button.textContent = 'Blank Template';
-  button.style.cssText = `
-    background-color: white;
-    color: #1B3A5C;
-    padding: 8px 16px;
-    border: 2px solid #1B3A5C;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 14px;
-    margin-left: 8px;
-  `;
 
   button.addEventListener('click', downloadBlankTemplate);
   actionButtons.appendChild(button);

@@ -66,6 +66,56 @@ async function initSchema() {
       created_at TIMESTAMPTZ DEFAULT NOW(),
       updated_at TIMESTAMPTZ DEFAULT NOW()
     );
+
+    -- CRM client directory. parent_client_id self-references so HOA /
+    -- property-management hierarchies are first-class (e.g. "Associa Gulf
+    -- Coast" parent with each managed property as a child). Column set
+    -- maps the Buildertrend Client Contacts export verbatim — both the
+    -- standard fields (name/phone/address/...) and the custom property-
+    -- management fields (community_name, company_name, cm_*, mm_*, etc.).
+    CREATE TABLE IF NOT EXISTS clients (
+      id TEXT PRIMARY KEY,
+      parent_client_id TEXT REFERENCES clients(id) ON DELETE SET NULL,
+      -- Identity
+      name TEXT NOT NULL,
+      client_type TEXT,
+      activation_status TEXT DEFAULT 'active',
+      -- Primary contact
+      first_name TEXT,
+      last_name TEXT,
+      email TEXT,
+      phone TEXT,
+      cell TEXT,
+      -- Mailing / billing address
+      address TEXT,
+      city TEXT,
+      state TEXT,
+      zip TEXT,
+      -- Property / community details
+      company_name TEXT,
+      community_name TEXT,
+      market TEXT,
+      property_address TEXT,
+      property_phone TEXT,
+      website TEXT,
+      gate_code TEXT,
+      additional_pocs TEXT,
+      -- Community manager / CAM
+      community_manager TEXT,
+      cm_email TEXT,
+      cm_phone TEXT,
+      -- Maintenance manager
+      maintenance_manager TEXT,
+      mm_email TEXT,
+      mm_phone TEXT,
+      -- Free-form
+      notes TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_clients_parent ON clients(parent_client_id);
+    CREATE INDEX IF NOT EXISTS idx_clients_name ON clients(name);
+    CREATE INDEX IF NOT EXISTS idx_clients_company ON clients(company_name);
   `);
 
   // Seed built-in roles. ON CONFLICT lets us re-run safely without

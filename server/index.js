@@ -20,6 +20,7 @@ const authRoutes = require('./routes/auth-routes');
 const jobRoutes = require('./routes/job-routes');
 const estimateRoutes = require('./routes/estimate-routes');
 const roleRoutes = require('./routes/role-routes');
+const clientRoutes = require('./routes/client-routes');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -33,6 +34,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/jobs', jobRoutes);
 app.use('/api/estimates', estimateRoutes);
 app.use('/api/roles', roleRoutes);
+app.use('/api/clients', clientRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {

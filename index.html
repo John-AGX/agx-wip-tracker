@@ -590,30 +590,49 @@
 
                 <!-- ESTIMATES TAB -->
                 <div id="estimates" class="tab-content">
-                    <div id="estimates-list-view">
-                        <div class="action-buttons">
-                            <button onclick="openNewEstimateForm()">&#x1F4C4; New Estimate</button>
-                        </div>
-
-                        <div class="table-container">
-                            <table id="estimates-table">
-                                <thead>
-                                    <tr>
-                                        <th>Title</th>
-                                        <th>Client/Community</th>
-                                        <th style="text-align: right;">Base Cost</th>
-                                        <th style="text-align: right;">Markup %</th>
-                                        <th style="text-align: right;">Client Price</th>
-                                        <th style="text-align: center;">Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody></tbody>
-                            </table>
-                        </div>
+                    <div class="ws-right-tabs">
+                        <button class="ws-right-tab active" data-estimates-subtab="list" onclick="switchEstimatesSubTab('list')">Estimates</button>
+                        <button class="ws-right-tab" data-estimates-subtab="clients" onclick="switchEstimatesSubTab('clients')">Clients</button>
                     </div>
 
-                    <div id="estimate-editor-view" style="display: none;"></div>
-                    <div id="estimate-preview-view" style="display: none;"></div>
+                    <!-- Estimates list sub-tab -->
+                    <div id="estimates-subtab-list" class="estimates-subtab-content">
+                        <div id="estimates-list-view">
+                            <div class="action-buttons">
+                                <button class="primary" onclick="openNewEstimateForm()">&#x1F4C4; New Estimate</button>
+                            </div>
+
+                            <div class="table-container">
+                                <table id="estimates-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Title</th>
+                                            <th>Client/Community</th>
+                                            <th style="text-align: right;">Base Cost</th>
+                                            <th style="text-align: right;">Markup %</th>
+                                            <th style="text-align: right;">Client Price</th>
+                                            <th style="text-align: center;">Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody></tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <div id="estimate-editor-view" style="display: none;"></div>
+                        <div id="estimate-preview-view" style="display: none;"></div>
+                    </div>
+
+                    <!-- Clients sub-tab -->
+                    <div id="estimates-subtab-clients" class="estimates-subtab-content" style="display:none;">
+                        <div class="action-buttons">
+                            <button class="primary" onclick="openNewClientModal()">&#x1F465; New Client</button>
+                            <button class="secondary" onclick="renderClientsList()">Refresh</button>
+                            <input type="text" id="clients-search" oninput="renderClientsList()" placeholder="Search clients…" style="margin-left:auto;min-width:220px;" />
+                        </div>
+                        <p id="clients-summary" style="margin:12px 0;color:var(--text-dim,#888);font-size:12px;"></p>
+                        <div id="clients-list" style="display:flex;flex-direction:column;gap:8px;"></div>
+                    </div>
                 </div>
 
                 <!-- ADMIN TAB (admin-only, populated by js/admin.js) -->
@@ -1456,13 +1475,14 @@
     </div>
 
     <script src="js/auth.js?v=6"></script>
-    <script src="js/api.js?v=6"></script>
+    <script src="js/api.js?v=7"></script>
     <script src="js/admin.js?v=11"></script>
+    <script src="js/clients.js?v=1"></script>
     <script src="js/insights.js?v=5"></script>
     <script src="js/app.js?v=37"></script>
     <script src="js/wip.js?v=56"></script>
     <script src="js/estimates.js?v=18"></script>
-    <script src="js/proposal.js?v=18"></script>
+    <script src="js/proposal.js?v=19"></script>
 
     <script src="js/workspace.js?v=21"></script>
     <script src="js/workspace-layout.js?v=28"></script>
