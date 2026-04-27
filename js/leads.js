@@ -588,12 +588,48 @@
     var id = document.getElementById('leadEditor_id').value;
     if (!id) return;
     var l = _leads.find(function(x) { return x.id === id; });
-    if (!confirm('Delete lead "' + (l ? l.title : id) + '"? This cannot be undone.')) return;
-    window.agxApi.leads.remove(id).then(function() {
+
+    // Estimates created from this lead carry lead_id === id. They have no
+    // standalone meaning once the lead is gone, so delete them as part of
+    // the same action. Surface the count up front so the user can back out.
+    var linkedEstimates = (window.appData && window.appData.estimates || [])
+      .filter(function(e) { return e.lead_id === id; });
+
+    var msg = 'Delete lead "' + (l ? l.title : id) + '"? This cannot be undone.';
+    if (linkedEstimates.length) {
+      msg += '\n\nThis will also delete ' + linkedEstimates.length + ' linked estimate' +
+             (linkedEstimates.length === 1 ? '' : 's') + ':\n  - ' +
+             linkedEstimates.map(function(e) { return e.title || '(untitled)'; }).join('\n  - ');
+    }
+    if (!confirm(msg)) return;
+
+    // Delete the linked estimates in parallel first; if any fail, abort the
+    // lead delete so the cache stays consistent. 404s are treated as success
+    // since the row is already gone server-side.
+    var estimatePromises = linkedEstimates.map(function(e) {
+      return window.agxApi.estimates.remove(e.id).catch(function(err) {
+        if (err && err.status === 404) return; // already gone, fine
+        throw err;
+      });
+    });
+
+    Promise.all(estimatePromises).then(function() {
+      // Drop from local appData so the estimates list updates without a reload
+      if (window.appData && linkedEstimates.length) {
+        var deletedIds = {};
+        linkedEstimates.forEach(function(e) { deletedIds[e.id] = true; });
+        window.appData.estimates = window.appData.estimates.filter(function(e) { return !deletedIds[e.id]; });
+        window.appData.estimateLines = (window.appData.estimateLines || []).filter(function(line) { return !deletedIds[line.estimateId]; });
+        if (typeof saveData === 'function') saveData();
+        if (typeof renderEstimatesList === 'function') renderEstimatesList();
+      }
+      return window.agxApi.leads.remove(id);
+    }).then(function() {
       closeModal('leadEditorModal');
       reloadLeadsCache();
     }).catch(function(err) {
-      alert('Delete failed: ' + (err.message || 'unknown error'));
+      alert('Delete failed: ' + (err.message || 'unknown error') +
+            (linkedEstimates.length ? '\n\nSome linked estimates may have been deleted before the failure. Refresh to check.' : ''));
     });
   }
 
