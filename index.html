@@ -591,12 +591,33 @@
                 <!-- ESTIMATES TAB -->
                 <div id="estimates" class="tab-content">
                     <div class="ws-right-tabs">
-                        <button class="ws-right-tab active" data-estimates-subtab="list" onclick="switchEstimatesSubTab('list')">Estimates</button>
+                        <button class="ws-right-tab active" data-estimates-subtab="leads" onclick="switchEstimatesSubTab('leads')" data-cap="LEADS_VIEW">Leads</button>
+                        <button class="ws-right-tab" data-estimates-subtab="list" onclick="switchEstimatesSubTab('list')">Estimates</button>
                         <button class="ws-right-tab" data-estimates-subtab="clients" onclick="switchEstimatesSubTab('clients')">Clients</button>
                     </div>
 
+                    <!-- Leads sub-tab -->
+                    <div id="estimates-subtab-leads" class="estimates-subtab-content">
+                        <div class="action-buttons">
+                            <button class="primary" onclick="openNewLeadModal()" data-cap="LEADS_EDIT">&#x1F465; New Lead</button>
+                            <button class="secondary" onclick="reloadLeadsCache()">Refresh</button>
+                            <select id="leads-filter-status" onchange="renderLeadsList()" style="width:auto;min-width:140px;margin-left:6px;">
+                                <option value="">All statuses</option>
+                                <option value="new">New</option>
+                                <option value="in_progress">In Progress</option>
+                                <option value="sent">Sent</option>
+                                <option value="sold">Sold</option>
+                                <option value="lost">Lost</option>
+                                <option value="no_opportunity">No Opportunity</option>
+                            </select>
+                            <input type="text" id="leads-search" oninput="renderLeadsList()" placeholder="Search leads…" style="margin-left:auto;min-width:220px;" />
+                        </div>
+                        <p id="leads-summary" style="margin:12px 0;color:var(--text-dim,#888);font-size:12px;"></p>
+                        <div id="leads-list" style="display:flex;flex-direction:column;gap:8px;"></div>
+                    </div>
+
                     <!-- Estimates list sub-tab -->
-                    <div id="estimates-subtab-list" class="estimates-subtab-content">
+                    <div id="estimates-subtab-list" class="estimates-subtab-content" style="display:none;">
                         <div id="estimates-list-view">
                             <div class="action-buttons">
                                 <button class="primary" onclick="openNewEstimateForm()">&#x1F4C4; New Estimate</button>
@@ -1364,6 +1385,112 @@
       </div>
     </div>
 
+    <!-- Lead editor modal — Phase 1 (General fields only). Mirrors BT's
+         lead detail layout: title + linked client + address + sales pipeline
+         (status, confidence, projected sale date, revenue range, source,
+         project type) + assigned salesperson + custom fields + notes. -->
+    <div id="leadEditorModal" class="modal">
+      <div class="modal-content" style="max-width:780px;max-height:88vh;overflow-y:auto;">
+        <div class="modal-header" id="leadEditor_title">New Lead</div>
+        <div style="padding:18px 20px;display:flex;flex-direction:column;gap:18px;">
+          <input type="hidden" id="leadEditor_id" />
+
+          <!-- Identity -->
+          <fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;">
+            <legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Lead</legend>
+            <div>
+              <label style="display:block;">Title *</label>
+              <input id="leadEditor_title_field" type="text" placeholder="e.g. Penthouse Groves — Building Repaint G-H" />
+            </div>
+            <div style="display:grid;grid-template-columns:2fr 1fr;gap:10px;margin-top:10px;">
+              <div>
+                <label style="display:block;">Client</label>
+                <select id="leadEditor_client_id" onchange="onLeadClientPicked()">
+                  <option value="">— Select a client —</option>
+                </select>
+                <div style="font-size:11px;color:var(--text-dim,#888);margin-top:3px;">Picking a client auto-fills the address below.</div>
+              </div>
+              <div>
+                <label style="display:block;">Status</label>
+                <select id="leadEditor_status">
+                  <option value="new">New</option>
+                  <option value="in_progress">In Progress</option>
+                  <option value="sent">Sent</option>
+                  <option value="sold">Sold</option>
+                  <option value="lost">Lost</option>
+                  <option value="no_opportunity">No Opportunity</option>
+                </select>
+              </div>
+            </div>
+          </fieldset>
+
+          <!-- Address -->
+          <fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;">
+            <legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Project Address</legend>
+            <div><label style="display:block;">Street</label><input id="leadEditor_street_address" type="text" /></div>
+            <div style="display:grid;grid-template-columns:2fr 80px 110px;gap:10px;margin-top:10px;">
+              <div><label style="display:block;">City</label><input id="leadEditor_city" type="text" /></div>
+              <div><label style="display:block;">State</label><input id="leadEditor_state" type="text" maxlength="2" style="text-transform:uppercase;" /></div>
+              <div><label style="display:block;">Zip</label><input id="leadEditor_zip" type="text" maxlength="10" /></div>
+            </div>
+          </fieldset>
+
+          <!-- Sales pipeline -->
+          <fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;">
+            <legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Sales Pipeline</legend>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:end;">
+              <div>
+                <label style="display:block;">Confidence <span id="leadEditor_confidenceLabel" style="color:var(--text-dim,#888);font-weight:normal;">— 0%</span></label>
+                <input id="leadEditor_confidence" type="range" min="0" max="100" step="5" value="0"
+                       oninput="document.getElementById('leadEditor_confidenceLabel').textContent='— '+this.value+'%'" />
+              </div>
+              <div>
+                <label style="display:block;">Projected Sale Date</label>
+                <input id="leadEditor_projected_sale_date" type="date" />
+              </div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px;">
+              <div><label style="display:block;">Estimated Revenue (Low)</label><input id="leadEditor_estimated_revenue_low" type="number" step="100" placeholder="0" /></div>
+              <div><label style="display:block;">Estimated Revenue (High)</label><input id="leadEditor_estimated_revenue_high" type="number" step="100" placeholder="0" /></div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:10px;">
+              <div><label style="display:block;">Source</label><input id="leadEditor_source" type="text" placeholder="Referral, BT, …" /></div>
+              <div><label style="display:block;">Project Type</label><input id="leadEditor_project_type" type="text" placeholder="Renovation, Repaint, …" /></div>
+              <div>
+                <label style="display:block;">Salesperson</label>
+                <select id="leadEditor_salesperson_id">
+                  <option value="">— Unassigned —</option>
+                </select>
+              </div>
+            </div>
+          </fieldset>
+
+          <!-- Custom fields (BT parity) -->
+          <fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;">
+            <legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Site Details</legend>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">
+              <div><label style="display:block;">Property Name</label><input id="leadEditor_property_name" type="text" /></div>
+              <div><label style="display:block;">Gate Code</label><input id="leadEditor_gate_code" type="text" /></div>
+              <div><label style="display:block;">Market</label><input id="leadEditor_market" type="text" /></div>
+            </div>
+          </fieldset>
+
+          <!-- Notes -->
+          <fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;">
+            <legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Notes</legend>
+            <textarea id="leadEditor_notes" rows="4" style="resize:vertical;"></textarea>
+          </fieldset>
+
+          <div id="leadEditor_status_msg" style="font-size:13px;"></div>
+        </div>
+        <div class="modal-footer">
+          <button id="leadEditor_deleteBtn" class="danger" style="margin-right:auto;display:none;" onclick="deleteLeadFromEditor()">Delete</button>
+          <button onclick="closeModal('leadEditorModal')" class="secondary">Cancel</button>
+          <button onclick="submitLeadEditor()" class="primary" id="leadEditor_submitBtn">Save Lead</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Client editor modal — used for both create and edit. Mirrors the
          BT Client Contacts export columns one-to-one so the import pipeline
          can round-trip cleanly. Sections collapse the field count visually. -->
@@ -1628,9 +1755,10 @@
     </div>
 
     <script src="js/auth.js?v=6"></script>
-    <script src="js/api.js?v=8"></script>
+    <script src="js/api.js?v=9"></script>
     <script src="js/admin.js?v=11"></script>
-    <script src="js/clients.js?v=4"></script>
+    <script src="js/clients.js?v=5"></script>
+    <script src="js/leads.js?v=1"></script>
     <script src="js/insights.js?v=5"></script>
     <script src="js/app.js?v=37"></script>
     <script src="js/wip.js?v=56"></script>

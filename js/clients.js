@@ -24,7 +24,8 @@
     });
     var target = document.getElementById('estimates-subtab-' + name);
     if (target) target.style.display = '';
-    if (name === 'list' && typeof renderEstimatesList === 'function') renderEstimatesList();
+    if (name === 'leads' && typeof renderLeadsList === 'function') renderLeadsList();
+    else if (name === 'list' && typeof renderEstimatesList === 'function') renderEstimatesList();
     else if (name === 'clients') renderClientsList();
   }
 

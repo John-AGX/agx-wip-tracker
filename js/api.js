@@ -117,9 +117,29 @@
     importBatch: function(rows) { return post('/api/clients/import', { rows: rows }); }
   };
 
+  var leads = {
+    list: function(query) {
+      var qs = '';
+      if (query) {
+        var parts = [];
+        Object.keys(query).forEach(function(k) {
+          if (query[k] != null && query[k] !== '') {
+            parts.push(encodeURIComponent(k) + '=' + encodeURIComponent(query[k]));
+          }
+        });
+        if (parts.length) qs = '?' + parts.join('&');
+      }
+      return get('/api/leads' + qs);
+    },
+    get: function(id) { return get('/api/leads/' + encodeURIComponent(id)); },
+    create: function(payload) { return post('/api/leads', payload); },
+    update: function(id, payload) { return put('/api/leads/' + encodeURIComponent(id), payload); },
+    remove: function(id) { return del('/api/leads/' + encodeURIComponent(id)); }
+  };
+
   window.agxApi = {
     get: get, put: put, post: post, del: del,
-    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients,
+    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads,
     isOffline: isOffline,
     isAuthenticated: function() { return !!getToken() && !isOffline(); }
   };

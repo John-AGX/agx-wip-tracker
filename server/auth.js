@@ -21,6 +21,9 @@ const CAPABILITY_KEYS = [
   // Estimates
   { key: 'ESTIMATES_VIEW',  group: 'Estimates',  label: 'View estimates' },
   { key: 'ESTIMATES_EDIT',  group: 'Estimates',  label: 'Create / edit estimates' },
+  // Sales pipeline (Leads)
+  { key: 'LEADS_VIEW',      group: 'Sales',      label: 'View leads / sales pipeline' },
+  { key: 'LEADS_EDIT',      group: 'Sales',      label: 'Create / edit leads' },
   // Admin
   { key: 'USERS_MANAGE',    group: 'Admin',      label: 'Manage users' },
   { key: 'ROLES_MANAGE',    group: 'Admin',      label: 'Manage roles + capabilities' },

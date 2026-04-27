@@ -116,6 +116,47 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_clients_parent ON clients(parent_client_id);
     CREATE INDEX IF NOT EXISTS idx_clients_name ON clients(name);
     CREATE INDEX IF NOT EXISTS idx_clients_company ON clients(company_name);
+
+    -- Sales pipeline. A lead is one opportunity for work; estimates (the
+    -- "proposals" in BT terminology) hang off a lead via lead_id stored in
+    -- the estimate's JSONB blob. Status drives the pipeline:
+    --   new -> in_progress -> sent -> sold | lost | no_opportunity
+    -- A "sold" lead converts to a job (job_id is set on conversion).
+    CREATE TABLE IF NOT EXISTS leads (
+      id TEXT PRIMARY KEY,
+      client_id TEXT REFERENCES clients(id) ON DELETE SET NULL,
+      title TEXT NOT NULL,
+      -- Address (defaults to the client's address but can be overridden)
+      street_address TEXT,
+      city TEXT,
+      state TEXT,
+      zip TEXT,
+      -- Sales pipeline
+      status TEXT NOT NULL DEFAULT 'new',
+      confidence INTEGER DEFAULT 0,
+      projected_sale_date DATE,
+      estimated_revenue_low NUMERIC(12, 2),
+      estimated_revenue_high NUMERIC(12, 2),
+      source TEXT,
+      project_type TEXT,
+      -- Assignment
+      salesperson_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      -- BT-style custom fields that came up on the lead detail screenshot
+      property_name TEXT,
+      gate_code TEXT,
+      market TEXT,
+      -- Free-form
+      notes TEXT,
+      -- Conversion tracking
+      job_id TEXT REFERENCES jobs(id) ON DELETE SET NULL,
+      -- Audit
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_leads_client ON leads(client_id);
+    CREATE INDEX IF NOT EXISTS idx_leads_status ON leads(status);
+    CREATE INDEX IF NOT EXISTS idx_leads_salesperson ON leads(salesperson_id);
   `);
 
   // Seed built-in roles. ON CONFLICT lets us re-run safely without
@@ -130,6 +171,7 @@ async function initSchema() {
         'JOBS_VIEW_ALL', 'JOBS_EDIT_ANY', 'JOBS_DELETE', 'JOBS_GO_LIVE', 'JOBS_REASSIGN',
         'FINANCIALS_VIEW', 'PROGRESS_UPDATE',
         'ESTIMATES_VIEW', 'ESTIMATES_EDIT',
+        'LEADS_VIEW', 'LEADS_EDIT',
         'USERS_MANAGE', 'ROLES_MANAGE',
         'INSIGHTS_VIEW', 'ADMIN_METRICS'
       ]
@@ -137,17 +179,18 @@ async function initSchema() {
     {
       name: 'corporate',
       label: 'Corporate',
-      description: 'Read-only across all jobs and dashboards.',
-      capabilities: ['JOBS_VIEW_ALL', 'FINANCIALS_VIEW', 'ESTIMATES_VIEW', 'INSIGHTS_VIEW']
+      description: 'Read-only across all jobs, leads, and dashboards.',
+      capabilities: ['JOBS_VIEW_ALL', 'FINANCIALS_VIEW', 'ESTIMATES_VIEW', 'LEADS_VIEW', 'INSIGHTS_VIEW']
     },
     {
       name: 'pm',
       label: 'Project Manager',
-      description: 'Edits own and assigned jobs; full estimate access; sees insights.',
+      description: 'Edits own / assigned jobs and leads; full estimate access; sees insights.',
       capabilities: [
         'JOBS_VIEW_ALL', 'JOBS_EDIT_OWN',
         'FINANCIALS_VIEW', 'PROGRESS_UPDATE',
         'ESTIMATES_VIEW', 'ESTIMATES_EDIT',
+        'LEADS_VIEW', 'LEADS_EDIT',
         'INSIGHTS_VIEW'
       ]
     },
@@ -159,16 +202,35 @@ async function initSchema() {
     }
   ];
   for (const r of BUILTIN_ROLES) {
-    await pool.query(
-      `INSERT INTO roles (name, label, description, builtin, capabilities)
-       VALUES ($1, $2, $3, true, $4::jsonb)
-       ON CONFLICT (name) DO UPDATE
-         SET label = EXCLUDED.label,
-             description = EXCLUDED.description,
-             builtin = true,
-             updated_at = NOW()`,
-      [r.name, r.label, r.description, JSON.stringify(r.capabilities)]
-    );
+    // The admin role is special-cased: its capability list is always re-synced
+    // to the canonical full set on boot. That way new capabilities added to
+    // the codebase (LEADS_*, future features) flow automatically to admins
+    // without anyone having to toggle them in the Roles UI. Other built-ins
+    // preserve admin customizations on conflict.
+    if (r.name === 'admin') {
+      await pool.query(
+        `INSERT INTO roles (name, label, description, builtin, capabilities)
+         VALUES ($1, $2, $3, true, $4::jsonb)
+         ON CONFLICT (name) DO UPDATE
+           SET label = EXCLUDED.label,
+               description = EXCLUDED.description,
+               builtin = true,
+               capabilities = EXCLUDED.capabilities,
+               updated_at = NOW()`,
+        [r.name, r.label, r.description, JSON.stringify(r.capabilities)]
+      );
+    } else {
+      await pool.query(
+        `INSERT INTO roles (name, label, description, builtin, capabilities)
+         VALUES ($1, $2, $3, true, $4::jsonb)
+         ON CONFLICT (name) DO UPDATE
+           SET label = EXCLUDED.label,
+               description = EXCLUDED.description,
+               builtin = true,
+               updated_at = NOW()`,
+        [r.name, r.label, r.description, JSON.stringify(r.capabilities)]
+      );
+    }
   }
 
   // Sync the admin user from env vars on every boot.
