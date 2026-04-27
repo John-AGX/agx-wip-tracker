@@ -147,13 +147,172 @@
     listEl.innerHTML = html;
   }
 
-  // Placeholders — modal lives in the next commit. Keep callable so the
-  // buttons don't throw when clicked early.
-  function openNewClientModal() {
-    alert('Client create form coming in the next commit. The directory is read-only for now.');
+  // Field list mirrors the server's EDITABLE_FIELDS in client-routes.js.
+  // Used to clear the form on open and to read it back on submit.
+  var EDITABLE_FIELDS = [
+    'name', 'client_type', 'activation_status',
+    'first_name', 'last_name', 'email',
+    'phone', 'cell',
+    'address', 'city', 'state', 'zip',
+    'company_name', 'community_name', 'market',
+    'property_address', 'property_phone', 'website',
+    'gate_code', 'additional_pocs',
+    'community_manager', 'cm_email', 'cm_phone',
+    'maintenance_manager', 'mm_email', 'mm_phone',
+    'notes'
+  ];
+
+  // Repopulate the parent dropdown from the cache. excludeId hides the
+  // current client (so it can't pick itself) and any of its descendants
+  // (so we don't create cycles). Descendant detection is a single BFS.
+  function populateParentSelect(currentId, currentParentId) {
+    var sel = document.getElementById('clientEditor_parent_client_id');
+    if (!sel) return;
+    var disallowed = {};
+    if (currentId) {
+      disallowed[currentId] = true;
+      // Walk the children-of-children to also block descendants
+      var queue = [currentId];
+      while (queue.length) {
+        var head = queue.shift();
+        _clients.forEach(function(c) {
+          if (c.parent_client_id === head && !disallowed[c.id]) {
+            disallowed[c.id] = true;
+            queue.push(c.id);
+          }
+        });
+      }
+    }
+    var options = '<option value="">— None (top-level) —</option>';
+    _clients
+      .slice()
+      .sort(byName)
+      .forEach(function(c) {
+        if (disallowed[c.id]) return;
+        var sel = (c.id === currentParentId) ? ' selected' : '';
+        options += '<option value="' + escapeAttr(c.id) + '"' + sel + '>' +
+          escapeHTML(c.name) +
+          (c.company_name && c.company_name !== c.name ? ' — ' + escapeHTML(c.company_name) : '') +
+        '</option>';
+      });
+    sel.innerHTML = options;
   }
+
+  function setEditorField(name, value) {
+    var el = document.getElementById('clientEditor_' + name);
+    if (el) el.value = (value == null ? '' : value);
+  }
+  function getEditorField(name) {
+    var el = document.getElementById('clientEditor_' + name);
+    return el ? el.value : '';
+  }
+
+  function clearEditor() {
+    EDITABLE_FIELDS.forEach(function(f) { setEditorField(f, ''); });
+    setEditorField('activation_status', 'active');
+    document.getElementById('clientEditor_id').value = '';
+    document.getElementById('clientEditor_status').textContent = '';
+    document.getElementById('clientEditor_submitBtn').disabled = false;
+    document.getElementById('clientEditor_deleteBtn').style.display = 'none';
+  }
+
+  // Make sure the cache is populated before opening the modal so the
+  // parent dropdown isn't empty on first use.
+  function ensureClientsCache() {
+    if (_clients.length) return Promise.resolve(_clients);
+    return window.agxApi.clients.list().then(function(res) {
+      _clients = res.clients || [];
+      return _clients;
+    });
+  }
+
+  function openNewClientModal() {
+    ensureClientsCache().then(function() {
+      clearEditor();
+      document.getElementById('clientEditor_title').textContent = 'New Client';
+      populateParentSelect(null, null);
+      openModal('clientEditorModal');
+    });
+  }
+
   function openEditClientModal(id) {
-    alert('Client edit coming in the next commit. (id: ' + id + ')');
+    ensureClientsCache().then(function() {
+      var c = _clients.find(function(x) { return x.id === id; });
+      if (!c) {
+        alert('Client not found in cache. Try Refresh.');
+        return;
+      }
+      clearEditor();
+      document.getElementById('clientEditor_title').textContent = 'Edit Client: ' + c.name;
+      document.getElementById('clientEditor_id').value = c.id;
+      EDITABLE_FIELDS.forEach(function(f) { setEditorField(f, c[f]); });
+      populateParentSelect(c.id, c.parent_client_id);
+      document.getElementById('clientEditor_deleteBtn').style.display = '';
+      openModal('clientEditorModal');
+    });
+  }
+
+  function submitClientEditor() {
+    var statusEl = document.getElementById('clientEditor_status');
+    var btn = document.getElementById('clientEditor_submitBtn');
+    var id = document.getElementById('clientEditor_id').value;
+    var payload = {};
+    EDITABLE_FIELDS.forEach(function(f) {
+      var v = getEditorField(f);
+      if (v !== '') payload[f] = v;
+      // Always include name + activation_status even if empty so explicit
+      // saves clear them server-side rather than treating them as no-op
+      else if (f === 'name' || f === 'activation_status') payload[f] = v;
+    });
+    payload.parent_client_id = getEditorField('parent_client_id') || null;
+
+    if (!payload.name) {
+      statusEl.style.color = '#fbbf24';
+      statusEl.textContent = 'Name is required.';
+      return;
+    }
+
+    btn.disabled = true;
+    statusEl.style.color = 'var(--text-dim,#888)';
+    statusEl.textContent = 'Saving…';
+
+    var p = id
+      ? window.agxApi.clients.update(id, payload)
+      : window.agxApi.clients.create(payload);
+
+    p.then(function() {
+      statusEl.style.color = '#34d399';
+      statusEl.textContent = 'Saved.';
+      setTimeout(function() {
+        closeModal('clientEditorModal');
+        reloadClientsCache();
+      }, 600);
+    }).catch(function(err) {
+      btn.disabled = false;
+      statusEl.style.color = '#e74c3c';
+      statusEl.textContent = 'Failed: ' + (err.message || 'unknown error');
+    });
+  }
+
+  function deleteClientFromEditor() {
+    var id = document.getElementById('clientEditor_id').value;
+    if (!id) return;
+    var c = _clients.find(function(x) { return x.id === id; });
+    var name = c ? c.name : 'this client';
+    var children = _clients.filter(function(x) { return x.parent_client_id === id; });
+    var msg = 'Delete "' + name + '"?';
+    if (children.length) {
+      msg += '\n\n' + children.length + ' sub-' + (children.length === 1 ? 'property' : 'properties') +
+             ' will become top-level (parent link cleared).';
+    }
+    msg += '\n\nThis cannot be undone.';
+    if (!confirm(msg)) return;
+    window.agxApi.clients.remove(id).then(function() {
+      closeModal('clientEditorModal');
+      reloadClientsCache();
+    }).catch(function(err) {
+      alert('Delete failed: ' + (err.message || 'unknown error'));
+    });
   }
 
   // Force-reload from server. Used by the Refresh button and after future
@@ -177,6 +336,8 @@
   window.renderClientsList = renderClientsList;
   window.openNewClientModal = openNewClientModal;
   window.openEditClientModal = openEditClientModal;
+  window.submitClientEditor = submitClientEditor;
+  window.deleteClientFromEditor = deleteClientFromEditor;
   window.reloadClientsCache = reloadClientsCache;
   window.agxClients = {
     getCached: function() { return _clients.slice(); },

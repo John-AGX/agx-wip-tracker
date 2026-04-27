@@ -1333,6 +1333,128 @@
       </div>
     </div>
 
+    <!-- Client editor modal — used for both create and edit. Mirrors the
+         BT Client Contacts export columns one-to-one so the import pipeline
+         can round-trip cleanly. Sections collapse the field count visually. -->
+    <div id="clientEditorModal" class="modal">
+      <div class="modal-content" style="max-width:780px;max-height:88vh;overflow-y:auto;">
+        <div class="modal-header" id="clientEditor_title">New Client</div>
+        <div style="padding:18px 20px;display:flex;flex-direction:column;gap:18px;">
+          <input type="hidden" id="clientEditor_id" />
+
+          <!-- Identity -->
+          <fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;">
+            <legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Identity</legend>
+            <div style="display:grid;grid-template-columns:1fr 200px;gap:10px;">
+              <div>
+                <label style="display:block;">Name *</label>
+                <input id="clientEditor_name" type="text" placeholder="Display name (community / firm / owner)" />
+              </div>
+              <div>
+                <label style="display:block;">Activation</label>
+                <select id="clientEditor_activation_status">
+                  <option value="active">Active</option>
+                  <option value="inactive">Inactive</option>
+                </select>
+              </div>
+            </div>
+            <div style="display:grid;grid-template-columns:200px 1fr;gap:10px;margin-top:10px;">
+              <div>
+                <label style="display:block;">Type</label>
+                <input id="clientEditor_client_type" type="text" placeholder="HOA, Owner, Builder, …" />
+              </div>
+              <div>
+                <label style="display:block;">Parent Client</label>
+                <select id="clientEditor_parent_client_id">
+                  <option value="">— None (top-level) —</option>
+                </select>
+              </div>
+            </div>
+          </fieldset>
+
+          <!-- Primary contact -->
+          <fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;">
+            <legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Primary Contact</legend>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+              <div><label style="display:block;">First Name</label><input id="clientEditor_first_name" type="text" /></div>
+              <div><label style="display:block;">Last Name</label><input id="clientEditor_last_name" type="text" /></div>
+            </div>
+            <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:10px;margin-top:10px;">
+              <div><label style="display:block;">Email</label><input id="clientEditor_email" type="email" /></div>
+              <div><label style="display:block;">Phone</label><input id="clientEditor_phone" type="tel" /></div>
+              <div><label style="display:block;">Cell</label><input id="clientEditor_cell" type="tel" /></div>
+            </div>
+          </fieldset>
+
+          <!-- Mailing / billing address -->
+          <fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;">
+            <legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Mailing Address</legend>
+            <div><label style="display:block;">Street</label><input id="clientEditor_address" type="text" /></div>
+            <div style="display:grid;grid-template-columns:2fr 80px 110px;gap:10px;margin-top:10px;">
+              <div><label style="display:block;">City</label><input id="clientEditor_city" type="text" /></div>
+              <div><label style="display:block;">State</label><input id="clientEditor_state" type="text" maxlength="2" style="text-transform:uppercase;" /></div>
+              <div><label style="display:block;">Zip</label><input id="clientEditor_zip" type="text" maxlength="10" /></div>
+            </div>
+          </fieldset>
+
+          <!-- Property / community details -->
+          <fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;">
+            <legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Property &amp; Community</legend>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+              <div><label style="display:block;">Company Name</label><input id="clientEditor_company_name" type="text" placeholder="Parent firm (e.g. Associa Gulf Coast)" /></div>
+              <div><label style="display:block;">Community Name</label><input id="clientEditor_community_name" type="text" placeholder="This property" /></div>
+            </div>
+            <div style="display:grid;grid-template-columns:160px 1fr 1fr;gap:10px;margin-top:10px;">
+              <div><label style="display:block;">Market</label><input id="clientEditor_market" type="text" /></div>
+              <div><label style="display:block;">Property Address</label><input id="clientEditor_property_address" type="text" /></div>
+              <div><label style="display:block;">Property Phone</label><input id="clientEditor_property_phone" type="tel" /></div>
+            </div>
+            <div style="display:grid;grid-template-columns:2fr 1fr;gap:10px;margin-top:10px;">
+              <div><label style="display:block;">Website</label><input id="clientEditor_website" type="url" placeholder="https://" /></div>
+              <div><label style="display:block;">Gate Code / Notes</label><input id="clientEditor_gate_code" type="text" /></div>
+            </div>
+            <div style="margin-top:10px;">
+              <label style="display:block;">Additional Points of Contact</label>
+              <textarea id="clientEditor_additional_pocs" rows="2" style="resize:vertical;"></textarea>
+            </div>
+          </fieldset>
+
+          <!-- Community manager -->
+          <fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;">
+            <legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Community Manager / CAM</legend>
+            <div style="display:grid;grid-template-columns:1fr 1fr 160px;gap:10px;">
+              <div><label style="display:block;">Manager Name</label><input id="clientEditor_community_manager" type="text" /></div>
+              <div><label style="display:block;">Email</label><input id="clientEditor_cm_email" type="email" /></div>
+              <div><label style="display:block;">Phone</label><input id="clientEditor_cm_phone" type="tel" /></div>
+            </div>
+          </fieldset>
+
+          <!-- Maintenance manager -->
+          <fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;">
+            <legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Maintenance Manager</legend>
+            <div style="display:grid;grid-template-columns:1fr 1fr 160px;gap:10px;">
+              <div><label style="display:block;">Manager Name</label><input id="clientEditor_maintenance_manager" type="text" /></div>
+              <div><label style="display:block;">Email</label><input id="clientEditor_mm_email" type="email" /></div>
+              <div><label style="display:block;">Phone</label><input id="clientEditor_mm_phone" type="tel" /></div>
+            </div>
+          </fieldset>
+
+          <!-- Notes -->
+          <fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;">
+            <legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Notes</legend>
+            <textarea id="clientEditor_notes" rows="3" style="resize:vertical;"></textarea>
+          </fieldset>
+
+          <div id="clientEditor_status" style="font-size:13px;"></div>
+        </div>
+        <div class="modal-footer">
+          <button id="clientEditor_deleteBtn" class="danger" style="margin-right:auto;display:none;" onclick="deleteClientFromEditor()">Delete</button>
+          <button onclick="closeModal('clientEditorModal')" class="secondary">Cancel</button>
+          <button onclick="submitClientEditor()" class="primary" id="clientEditor_submitBtn">Save Client</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Admin: create or edit a role + its capabilities. Used for both flows;
          in edit mode the name field is read-only. -->
     <div id="roleEditorModal" class="modal">
@@ -1477,7 +1599,7 @@
     <script src="js/auth.js?v=6"></script>
     <script src="js/api.js?v=7"></script>
     <script src="js/admin.js?v=11"></script>
-    <script src="js/clients.js?v=1"></script>
+    <script src="js/clients.js?v=2"></script>
     <script src="js/insights.js?v=5"></script>
     <script src="js/app.js?v=37"></script>
     <script src="js/wip.js?v=56"></script>
