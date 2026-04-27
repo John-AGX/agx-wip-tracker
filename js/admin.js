@@ -582,19 +582,34 @@
     else if (name === 'templates') renderAdminTemplates();
   }
 
-  // ==================== PROPOSAL TEMPLATES ====================
-  // Single editable record (key = 'proposal_template') driving the proposal
-  // PDF / preview boilerplate. Exclusions are kept as an ordered array so
-  // admins can add, remove, and reorder lines without HTML editing.
+  // ==================== PROPOSAL TEMPLATES + BT MAPPING ====================
+  // Two editable records keyed in app_settings:
+  //   - 'proposal_template' (header / intro / about / exclusions / signature)
+  //   - 'bt_export_mapping' (btCategory -> BT Parent Group/Subgroup/Cost Type
+  //     and the Service & Repair Income line config)
+  // Loaded together so a single Save commits both side by side.
   var _templateDraft = null;
+  var _btMappingDraft = null;
 
   function renderAdminTemplates() {
     if (!isAdmin()) return;
     var pane = document.getElementById('admin-subtab-templates');
     if (!pane) return;
     pane.innerHTML = '<div style="padding:15px;color:var(--text-dim,#888);">Loading…</div>';
-    window.agxApi.settings.get('proposal_template').then(function(res) {
-      _templateDraft = (res && res.setting && res.setting.value) || {};
+    Promise.all([
+      window.agxApi.settings.get('proposal_template').catch(function() { return null; }),
+      window.agxApi.settings.get('bt_export_mapping').catch(function() { return null; })
+    ]).then(function(results) {
+      _templateDraft = (results[0] && results[0].setting && results[0].setting.value) || {};
+      _btMappingDraft = (results[1] && results[1].setting && results[1].setting.value) || { categories: {}, fallback: {}, income: {} };
+      // Make sure all four built-in categories exist in the draft so the
+      // form renders all rows even if a saved mapping was missing one.
+      ['materials', 'labor', 'gc', 'sub'].forEach(function(k) {
+        if (!_btMappingDraft.categories) _btMappingDraft.categories = {};
+        if (!_btMappingDraft.categories[k]) _btMappingDraft.categories[k] = { parentGroup: '', parentDesc: '', subgroup: '', subgroupDesc: '', costCode: '', costType: '' };
+      });
+      if (!_btMappingDraft.fallback) _btMappingDraft.fallback = { parentGroup: '', parentDesc: '', subgroup: '', subgroupDesc: '', costCode: '', costType: '' };
+      if (!_btMappingDraft.income) _btMappingDraft.income = { title: '', parentGroup: '', parentDesc: '', subgroup: '', subgroupDesc: '', costCode: '', costType: '' };
       renderTemplatesForm();
     }).catch(function(err) {
       pane.innerHTML = '<div style="padding:15px;color:#f87171;">Failed to load template: ' + escapeHTML(err.message || '') + '</div>';
@@ -655,8 +670,9 @@
           '<textarea id="tpl-signature_text" rows="2" style="width:100%;resize:vertical;">' + escapeHTML(t.signature_text || '') + '</textarea>' +
         '</div>' +
       '</fieldset>' +
+      renderBTMappingHTML() +
       '<div class="action-buttons" style="margin-top:14px;">' +
-        '<button class="primary" onclick="saveAdminTemplate()">&#x1F4BE; Save Template</button>' +
+        '<button class="primary" onclick="saveAdminTemplate()">&#x1F4BE; Save Template &amp; Mapping</button>' +
         '<button class="secondary" onclick="renderAdminTemplates()">Discard Changes</button>' +
         '<span id="tpl-status" style="margin-left:14px;color:var(--text-dim,#888);font-size:12px;align-self:center;"></span>' +
       '</div>';
@@ -678,6 +694,101 @@
     ['company_header', 'intro_template', 'about_paragraph', 'signature_text'].forEach(function(k) {
       var el = document.getElementById('tpl-' + k);
       if (el) _templateDraft[k] = el.value;
+    });
+    syncBTMappingFromInputs();
+  }
+
+  // ==================== BT MAPPING (sub-section of Templates tab) ====================
+  // Renders the editable form for the bt_export_mapping setting. Each
+  // built-in btCategory (materials/labor/gc/sub) gets a row; the fallback
+  // bucket (no-category lines) and the Service & Repair Income line each
+  // get their own block.
+  var BT_CATEGORY_LABELS = {
+    materials: 'Materials & Supplies',
+    labor:     'Direct Labor',
+    gc:        'General Conditions',
+    sub:       'Subcontractors'
+  };
+  var BT_FIELD_KEYS = ['parentGroup', 'parentDesc', 'subgroup', 'subgroupDesc', 'costCode', 'costType'];
+  var BT_FIELD_LABELS = {
+    parentGroup:  'Parent Group',
+    parentDesc:   'Parent Group Desc',
+    subgroup:     'Subgroup',
+    subgroupDesc: 'Subgroup Desc',
+    costCode:     'Cost Code',
+    costType:     'Cost Type'
+  };
+
+  function renderBTMappingHTML() {
+    var bt = _btMappingDraft || {};
+    var cats = bt.categories || {};
+    var html = '';
+    html += '<fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;margin-bottom:14px;">';
+    html += '<legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Buildertrend Export Mapping</legend>';
+    html += '<p style="margin:0 0 10px 0;color:var(--text-dim,#888);font-size:12px;">' +
+      'Drives the <strong>Export to Buildertrend</strong> xlsx. Each built-in cost category maps to a BT Parent Group / Subgroup / Cost Type. ' +
+      '<strong>Cost Type</strong> must match BT\'s vocabulary (Material, Labor, Subcontractor, Other, Equipment).' +
+      '</p>';
+
+    // Per-category rows
+    Object.keys(BT_CATEGORY_LABELS).forEach(function(key) {
+      var c = cats[key] || {};
+      html += '<div style="border:1px solid var(--border,#333);border-radius:6px;padding:10px 12px;margin-bottom:10px;">';
+      html += '<div style="font-size:12px;font-weight:700;color:#4f8cff;margin-bottom:8px;">' + escapeHTML(BT_CATEGORY_LABELS[key]) + ' <span style="color:var(--text-dim,#888);font-weight:400;font-size:11px;">(btCategory: ' + key + ')</span></div>';
+      html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">';
+      BT_FIELD_KEYS.forEach(function(fk) {
+        html += '<div><label style="display:block;font-size:11px;">' + BT_FIELD_LABELS[fk] + '</label>' +
+          '<input type="text" data-bt-cat="' + key + '" data-bt-field="' + fk + '" value="' + escapeHTML(c[fk] || '') + '" style="width:100%;" /></div>';
+      });
+      html += '</div></div>';
+    });
+
+    // Fallback bucket
+    var fb = bt.fallback || {};
+    html += '<div style="border:1px solid var(--border,#333);border-radius:6px;padding:10px 12px;margin-bottom:10px;">';
+    html += '<div style="font-size:12px;font-weight:700;color:#fbbf24;margin-bottom:8px;">Fallback (lines with no tagged section)</div>';
+    html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">';
+    BT_FIELD_KEYS.forEach(function(fk) {
+      html += '<div><label style="display:block;font-size:11px;">' + BT_FIELD_LABELS[fk] + '</label>' +
+        '<input type="text" data-bt-fb-field="' + fk + '" value="' + escapeHTML(fb[fk] || '') + '" style="width:100%;" /></div>';
+    });
+    html += '</div></div>';
+
+    // Income line
+    var inc = bt.income || {};
+    html += '<div style="border:1px solid #34d399;border-radius:6px;padding:10px 12px;background:rgba(52,211,153,0.05);">';
+    html += '<div style="font-size:12px;font-weight:700;color:#34d399;margin-bottom:8px;">&#x1F4B0; Service &amp; Repair Income (auto-injected first row)</div>';
+    html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">';
+    html += '<div style="grid-column:1 / -1;"><label style="display:block;font-size:11px;">Title</label>' +
+      '<input type="text" data-bt-inc-field="title" value="' + escapeHTML(inc.title || '') + '" style="width:100%;" /></div>';
+    BT_FIELD_KEYS.forEach(function(fk) {
+      html += '<div><label style="display:block;font-size:11px;">' + BT_FIELD_LABELS[fk] + '</label>' +
+        '<input type="text" data-bt-inc-field="' + fk + '" value="' + escapeHTML(inc[fk] || '') + '" style="width:100%;" /></div>';
+    });
+    html += '</div></div>';
+
+    html += '</fieldset>';
+    return html;
+  }
+
+  function syncBTMappingFromInputs() {
+    if (!_btMappingDraft) _btMappingDraft = { categories: {}, fallback: {}, income: {} };
+    if (!_btMappingDraft.categories) _btMappingDraft.categories = {};
+    if (!_btMappingDraft.fallback) _btMappingDraft.fallback = {};
+    if (!_btMappingDraft.income) _btMappingDraft.income = {};
+    document.querySelectorAll('[data-bt-cat]').forEach(function(el) {
+      var k = el.getAttribute('data-bt-cat');
+      var f = el.getAttribute('data-bt-field');
+      if (!_btMappingDraft.categories[k]) _btMappingDraft.categories[k] = {};
+      _btMappingDraft.categories[k][f] = el.value;
+    });
+    document.querySelectorAll('[data-bt-fb-field]').forEach(function(el) {
+      var f = el.getAttribute('data-bt-fb-field');
+      _btMappingDraft.fallback[f] = el.value;
+    });
+    document.querySelectorAll('[data-bt-inc-field]').forEach(function(el) {
+      var f = el.getAttribute('data-bt-inc-field');
+      _btMappingDraft.income[f] = el.value;
     });
   }
 
@@ -715,11 +826,18 @@
     syncTopLevelDraftFromInputs();
     var statusEl = document.getElementById('tpl-status');
     if (statusEl) { statusEl.textContent = 'Saving…'; statusEl.style.color = 'var(--text-dim,#888)'; }
-    window.agxApi.settings.put('proposal_template', _templateDraft).then(function() {
+    Promise.all([
+      window.agxApi.settings.put('proposal_template', _templateDraft),
+      window.agxApi.settings.put('bt_export_mapping', _btMappingDraft)
+    ]).then(function() {
       if (statusEl) { statusEl.textContent = 'Saved.'; statusEl.style.color = '#34d399'; }
-      // Bust the preview's cached copy so the next preview render pulls fresh
+      // Bust the cached copies on the consumer modules so the next preview /
+      // export render pulls the freshly-saved settings.
       if (typeof window.invalidateProposalTemplateCache === 'function') {
         window.invalidateProposalTemplateCache();
+      }
+      if (typeof window.invalidateBTMappingCache === 'function') {
+        window.invalidateBTMappingCache();
       }
       setTimeout(function() { if (statusEl) statusEl.textContent = ''; }, 2400);
     }).catch(function(err) {

@@ -12,30 +12,58 @@
 (function() {
   'use strict';
 
-  // btCategory -> BT mapping. Hardcoded sensible defaults for now; will
-  // be moved into the Admin Templates tab so per-AGX-instance Cost Code
-  // values can be set without a code change. Cost Type values match BT's
-  // built-in vocabulary (Labor / Material / Subcontractor / Other).
-  var BT_MAPPING = {
-    materials: { parentGroup: 'Materials & Supplies', parentDesc: 'Materials and supplies costs',     subgroup: 'Materials',                subgroupDesc: 'General materials',             costCode: '', costType: 'Material' },
-    labor:     { parentGroup: 'Direct Labor',         parentDesc: 'AG Exteriors direct labor',         subgroup: 'Field Labor',              subgroupDesc: 'Field crew labor',              costCode: '', costType: 'Labor' },
-    gc:        { parentGroup: 'General Conditions',   parentDesc: 'Project general conditions',        subgroup: 'Site Operations',          subgroupDesc: 'General site operations',       costCode: '', costType: 'Other' },
-    sub:       { parentGroup: 'Subcontractors',       parentDesc: 'Subcontracted scopes',              subgroup: 'General Subcontractors',   subgroupDesc: 'General subcontracted work',    costCode: '', costType: 'Subcontractor' }
+  // Hardcoded fallback used if the API lookup fails (offline, network
+  // glitch, settings row missing). Mirrors the seed in server/db.js so a
+  // first-time export still produces a usable file. Real values are loaded
+  // from /api/settings/bt_export_mapping and edited via Admin -> Templates.
+  var DEFAULT_MAPPING = {
+    categories: {
+      materials: { parentGroup: 'Materials & Supplies', parentDesc: 'Materials and supplies costs', subgroup: 'Materials',              subgroupDesc: 'General materials',          costCode: '', costType: 'Material' },
+      labor:     { parentGroup: 'Direct Labor',         parentDesc: 'AG Exteriors direct labor',     subgroup: 'Field Labor',            subgroupDesc: 'Field crew labor',           costCode: '', costType: 'Labor' },
+      gc:        { parentGroup: 'General Conditions',   parentDesc: 'Project general conditions',     subgroup: 'Site Operations',        subgroupDesc: 'General site operations',   costCode: '', costType: 'Other' },
+      sub:       { parentGroup: 'Subcontractors',       parentDesc: 'Subcontracted scopes',           subgroup: 'General Subcontractors', subgroupDesc: 'General subcontracted work', costCode: '', costType: 'Subcontractor' }
+    },
+    fallback: { parentGroup: 'Uncategorized', parentDesc: '', subgroup: 'General', subgroupDesc: '', costCode: '', costType: 'Other' },
+    income: {
+      title: 'Service & Repair Income',
+      parentGroup: 'Income',
+      parentDesc: 'Client-facing income line',
+      subgroup: 'Service & Repair',
+      subgroupDesc: 'Service and repair income',
+      costCode: 'Service & Repair Income',
+      costType: 'Other'
+    }
   };
-  // Used when a line has no category (no parent section, or the section has
-  // no btCategory tag). Keeps unclassified lines visible in the export.
-  var BT_FALLBACK = { parentGroup: 'Uncategorized', parentDesc: '', subgroup: 'General', subgroupDesc: '', costCode: '', costType: 'Other' };
-  // The income line config — the raison d'être of this exporter. Title +
-  // Cost Code use AGX's existing BT vocabulary; the unit cost = client total.
-  var BT_INCOME = {
-    title: 'Service & Repair Income',
-    parentGroup: 'Income',
-    parentDesc: 'Client-facing income line',
-    subgroup: 'Service & Repair',
-    subgroupDesc: 'Service and repair income',
-    costCode: 'Service & Repair Income',
-    costType: 'Other'
-  };
+
+  var _mappingCache = null;
+  var _mappingPromise = null;
+
+  function loadMapping() {
+    if (_mappingCache) return Promise.resolve(_mappingCache);
+    if (_mappingPromise) return _mappingPromise;
+    if (!window.agxApi || !window.agxApi.isAuthenticated()) {
+      _mappingCache = DEFAULT_MAPPING;
+      return Promise.resolve(_mappingCache);
+    }
+    _mappingPromise = window.agxApi.settings.get('bt_export_mapping')
+      .then(function(res) {
+        var v = res && res.setting && res.setting.value;
+        _mappingCache = (v && v.categories && v.income) ? v : DEFAULT_MAPPING;
+        return _mappingCache;
+      })
+      .catch(function() {
+        _mappingCache = DEFAULT_MAPPING;
+        return _mappingCache;
+      });
+    return _mappingPromise;
+  }
+
+  // Called by the Admin Templates UI after a save so the next export uses
+  // the freshly-edited mapping without a page refresh.
+  function invalidateMappingCache() {
+    _mappingCache = null;
+    _mappingPromise = null;
+  }
 
   function num(v) { var n = parseFloat(v); return isNaN(n) ? 0 : n; }
 
@@ -98,72 +126,79 @@
     var estimate = (window.appData && window.appData.estimates || []).find(function(e) { return e.id === estId; });
     if (!estimate) { alert('Estimate not found.'); return; }
 
-    var catMap = buildLineCategoryMap(estimate);
-    var nonHeader = catMap.lines.filter(function(l) { return l.section !== '__section_header__'; });
-    var defaultMarkup = num(estimate.defaultMarkup);
-    var clientTotal = computeClientTotal(estimate);
+    loadMapping().then(function(mapping) {
+      var categories = mapping.categories || {};
+      var fallback = mapping.fallback || DEFAULT_MAPPING.fallback;
+      var income = mapping.income || DEFAULT_MAPPING.income;
 
-    // Column order matches the BT sample exactly so an admin can drop the
-    // file straight into BT's Estimate Import without remapping.
-    var headers = [
-      'Title', 'Description',
-      'Parent Group', 'Parent Group Description',
-      'Subgroup', 'Subgroup Description',
-      'Cost Code', 'Quantity', 'Unit', 'Unit Cost',
-      'Cost Type', 'Total Cost', 'Internal Notes',
-      'Markup', 'Markup Type', 'Line Item Type'
-    ];
-    var rows = [headers];
+      var catMap = buildLineCategoryMap(estimate);
+      var nonHeader = catMap.lines.filter(function(l) { return l.section !== '__section_header__'; });
+      var defaultMarkup = num(estimate.defaultMarkup);
+      var clientTotal = computeClientTotal(estimate);
 
-    // === Service & Repair Income (auto-injected first row) ===
-    rows.push([
-      BT_INCOME.title, '',
-      BT_INCOME.parentGroup, BT_INCOME.parentDesc,
-      BT_INCOME.subgroup, BT_INCOME.subgroupDesc,
-      BT_INCOME.costCode,
-      1, 'ea',
-      Number(clientTotal.toFixed(2)),
-      BT_INCOME.costType,
-      Number(clientTotal.toFixed(2)),
-      'AGX export — total client price (auto-injected)',
-      0, '$', 'Estimate'
-    ]);
+      // Column order matches the BT sample exactly so an admin can drop the
+      // file straight into BT's Estimate Import without remapping.
+      var headers = [
+        'Title', 'Description',
+        'Parent Group', 'Parent Group Description',
+        'Subgroup', 'Subgroup Description',
+        'Cost Code', 'Quantity', 'Unit', 'Unit Cost',
+        'Cost Type', 'Total Cost', 'Internal Notes',
+        'Markup', 'Markup Type', 'Line Item Type'
+      ];
+      var rows = [headers];
 
-    // === Cost-side line items, in stored order ===
-    nonHeader.forEach(function(l) {
-      var cat = catMap.byLineId[l.id];
-      var m = (cat && BT_MAPPING[cat]) || BT_FALLBACK;
-      var qty = num(l.qty);
-      var unitCost = num(l.unitCost);
-      var totalCost = qty * unitCost;
-      var markup = (l.markup === '' || l.markup == null) ? defaultMarkup : num(l.markup);
+      // === Service & Repair Income (auto-injected first row) ===
       rows.push([
-        l.description || '', '',
-        m.parentGroup, m.parentDesc,
-        m.subgroup, m.subgroupDesc,
-        m.costCode,
-        qty, l.unit || 'ea',
-        Number(unitCost.toFixed(2)),
-        m.costType,
-        Number(totalCost.toFixed(2)),
-        l.notes || '',
-        Number(markup), '%', 'Estimate'
+        income.title, '',
+        income.parentGroup, income.parentDesc,
+        income.subgroup, income.subgroupDesc,
+        income.costCode,
+        1, 'ea',
+        Number(clientTotal.toFixed(2)),
+        income.costType,
+        Number(clientTotal.toFixed(2)),
+        'AGX export — total client price (auto-injected)',
+        0, '$', 'Estimate'
       ]);
+
+      // === Cost-side line items, in stored order ===
+      nonHeader.forEach(function(l) {
+        var cat = catMap.byLineId[l.id];
+        var m = (cat && categories[cat]) || fallback;
+        var qty = num(l.qty);
+        var unitCost = num(l.unitCost);
+        var totalCost = qty * unitCost;
+        var markup = (l.markup === '' || l.markup == null) ? defaultMarkup : num(l.markup);
+        rows.push([
+          l.description || '', '',
+          m.parentGroup, m.parentDesc,
+          m.subgroup, m.subgroupDesc,
+          m.costCode,
+          qty, l.unit || 'ea',
+          Number(unitCost.toFixed(2)),
+          m.costType,
+          Number(totalCost.toFixed(2)),
+          l.notes || '',
+          Number(markup), '%', 'Estimate'
+        ]);
+      });
+
+      var ws = XLSX.utils.aoa_to_sheet(rows);
+      ws['!cols'] = [
+        { wch: 24 }, { wch: 30 }, { wch: 22 }, { wch: 32 },
+        { wch: 22 }, { wch: 32 }, { wch: 22 }, { wch: 9 }, { wch: 6 },
+        { wch: 11 }, { wch: 14 }, { wch: 12 }, { wch: 30 },
+        { wch: 8 }, { wch: 12 }, { wch: 13 }
+      ];
+      var wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Estimate Import');
+
+      var fileName = 'BT_' + safeFileName(estimate.title) + '.xlsx';
+      XLSX.writeFile(wb, fileName);
     });
-
-    var ws = XLSX.utils.aoa_to_sheet(rows);
-    ws['!cols'] = [
-      { wch: 24 }, { wch: 30 }, { wch: 22 }, { wch: 32 },
-      { wch: 22 }, { wch: 32 }, { wch: 22 }, { wch: 9 }, { wch: 6 },
-      { wch: 11 }, { wch: 14 }, { wch: 12 }, { wch: 30 },
-      { wch: 8 }, { wch: 12 }, { wch: 13 }
-    ];
-    var wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Estimate Import');
-
-    var fileName = 'BT_' + safeFileName(estimate.title) + '.xlsx';
-    XLSX.writeFile(wb, fileName);
   }
 
   window.exportEstimateToBuildertrend = exportEstimateToBuildertrend;
+  window.invalidateBTMappingCache = invalidateMappingCache;
 })();

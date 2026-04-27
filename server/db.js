@@ -278,6 +278,35 @@ async function initSchema() {
     [JSON.stringify(DEFAULT_PROPOSAL_TEMPLATE)]
   );
 
+  // BT export mapping — drives the Buildertrend xlsx exporter. Keys map
+  // each btCategory (and the auto-injected income line) to a BT Parent
+  // Group / Subgroup / Cost Type / Cost Code. Cost Code is intentionally
+  // blank by default; admins fill it in with their own BT codes.
+  const DEFAULT_BT_MAPPING = {
+    categories: {
+      materials: { parentGroup: 'Materials & Supplies', parentDesc: 'Materials and supplies costs', subgroup: 'Materials',              subgroupDesc: 'General materials',          costCode: '', costType: 'Material' },
+      labor:     { parentGroup: 'Direct Labor',         parentDesc: 'AG Exteriors direct labor',     subgroup: 'Field Labor',            subgroupDesc: 'Field crew labor',           costCode: '', costType: 'Labor' },
+      gc:        { parentGroup: 'General Conditions',   parentDesc: 'Project general conditions',     subgroup: 'Site Operations',        subgroupDesc: 'General site operations',   costCode: '', costType: 'Other' },
+      sub:       { parentGroup: 'Subcontractors',       parentDesc: 'Subcontracted scopes',           subgroup: 'General Subcontractors', subgroupDesc: 'General subcontracted work', costCode: '', costType: 'Subcontractor' }
+    },
+    fallback: { parentGroup: 'Uncategorized', parentDesc: '', subgroup: 'General', subgroupDesc: '', costCode: '', costType: 'Other' },
+    income: {
+      title: 'Service & Repair Income',
+      parentGroup: 'Income',
+      parentDesc: 'Client-facing income line',
+      subgroup: 'Service & Repair',
+      subgroupDesc: 'Service and repair income',
+      costCode: 'Service & Repair Income',
+      costType: 'Other'
+    }
+  };
+  await pool.query(
+    `INSERT INTO app_settings (key, value)
+     VALUES ('bt_export_mapping', $1::jsonb)
+     ON CONFLICT (key) DO NOTHING`,
+    [JSON.stringify(DEFAULT_BT_MAPPING)]
+  );
+
   // Sync the admin user from env vars on every boot.
   // ADMIN_EMAIL + ADMIN_PASSWORD are set in Railway/production env. Treated as a
   // system-managed account, not user-facing — change the env var to rotate the password.
