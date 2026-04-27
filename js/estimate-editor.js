@@ -23,9 +23,51 @@
     if (!_currentId || !window.appData) return null;
     return appData.estimates.find(function(e) { return e.id === _currentId; }) || null;
   }
+
+  // Returns lines belonging to the estimate AND to the currently-active
+  // alternate. Old estimates without an alternate id fall back to the
+  // estimate's default alternate during ensureAlternates().
   function getLines() {
     if (!_currentId || !window.appData) return [];
+    var est = getEstimate();
+    var altId = est && est.activeAlternateId;
+    return (appData.estimateLines || []).filter(function(l) {
+      return l.estimateId === _currentId && l.alternateId === altId;
+    });
+  }
+  function getAllLinesForEstimate() {
+    if (!_currentId || !window.appData) return [];
     return (appData.estimateLines || []).filter(function(l) { return l.estimateId === _currentId; });
+  }
+  function getActiveAlternate() {
+    var est = getEstimate();
+    if (!est || !est.alternates) return null;
+    return est.alternates.find(function(a) { return a.id === est.activeAlternateId; }) || est.alternates[0] || null;
+  }
+
+  // Idempotent migration. Runs every time an estimate is opened so old
+  // records (no alternates array, lines without alternateId) get a clean
+  // default and behave the same as fresh ones. Saves silently after
+  // backfill so the cleaned state persists.
+  function ensureAlternates(est) {
+    if (!est) return;
+    var changed = false;
+    if (!est.alternates || !est.alternates.length) {
+      est.alternates = [{ id: 'alt_default', name: 'Base', isDefault: true }];
+      changed = true;
+    }
+    if (!est.activeAlternateId || !est.alternates.find(function(a) { return a.id === est.activeAlternateId; })) {
+      est.activeAlternateId = est.alternates[0].id;
+      changed = true;
+    }
+    var defaultId = est.alternates[0].id;
+    (appData.estimateLines || []).forEach(function(l) {
+      if (l.estimateId === est.id && !l.alternateId) {
+        l.alternateId = defaultId;
+        changed = true;
+      }
+    });
+    if (changed) debouncedSave();
   }
 
   function fmtCurrency(v) {
@@ -44,6 +86,10 @@
     var est = (window.appData && appData.estimates || []).find(function(e) { return e.id === estimateId; });
     if (!est) { alert('Estimate not found.'); return; }
     _currentId = estimateId;
+    // Idempotent: ensures the estimate has at least one alternate and that
+    // every line is tagged with one. Old records get a "Base" alternate
+    // and have their existing lines silently associated to it.
+    ensureAlternates(est);
 
     var listView = document.getElementById('estimates-list-view');
     var editorView = document.getElementById('estimate-editor-view');
@@ -62,6 +108,7 @@
     }
 
     renderHeaderChips();
+    renderAlternateTabs();
     renderTotals();
     renderDetailsForm();
     renderLineItems();
@@ -134,6 +181,146 @@
     if (typeof window.openEditLeadModal === 'function') {
       setTimeout(function() { window.openEditLeadModal(leadId); }, 100);
     }
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  // Alternates / tiers — Good / Better / Best style parallel line sets.
+  // Tax / fees / round-up are estimate-wide; each alternate has its
+  // own subtotal -> markup -> client total computed from its own lines.
+  // ──────────────────────────────────────────────────────────────────
+
+  function renderAlternateTabs() {
+    var wrap = document.getElementById('ee-alternate-tabs');
+    if (!wrap) return;
+    var est = getEstimate();
+    if (!est || !est.alternates) { wrap.innerHTML = ''; return; }
+    var activeId = est.activeAlternateId;
+    var html = '';
+    est.alternates.forEach(function(a) {
+      var isActive = (a.id === activeId);
+      var lineCount = (appData.estimateLines || []).filter(function(l) {
+        return l.estimateId === est.id && l.alternateId === a.id && l.section !== '__section_header__';
+      }).length;
+      var bg = isActive ? 'rgba(79,140,255,0.18)' : 'transparent';
+      var border = isActive ? '#4f8cff' : 'var(--border,#333)';
+      var color = isActive ? '#fff' : 'var(--text-dim,#888)';
+      html += '<button onclick="switchAlternate(\'' + escapeHTML(a.id) + '\')" ' +
+        'style="padding:6px 14px;border:1px solid ' + border + ';border-radius:18px;' +
+        'background:' + bg + ';color:' + color + ';font-size:12px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:6px;">' +
+        escapeHTML(a.name) +
+        '<span style="font-size:10px;color:var(--text-dim,#888);font-weight:400;">' + lineCount + '</span>' +
+        '</button>';
+    });
+    wrap.innerHTML = html;
+
+    // Disable Delete when only one alternate exists — there's always at
+    // least one parallel set, even if the user only ever uses Base.
+    var deleteBtn = document.getElementById('ee-altDeleteBtn');
+    if (deleteBtn) deleteBtn.disabled = (est.alternates.length <= 1);
+  }
+
+  function switchAlternate(altId) {
+    var est = getEstimate();
+    if (!est || !est.alternates) return;
+    if (!est.alternates.find(function(a) { return a.id === altId; })) return;
+    est.activeAlternateId = altId;
+    debouncedSave();
+    renderAlternateTabs();
+    renderLineItems();
+    renderTotals();
+  }
+
+  function addAlternateFromEditor() {
+    var est = getEstimate();
+    if (!est) return;
+    if (!est.alternates) est.alternates = [];
+    var name = prompt('Name for the new alternate:', suggestNextAlternateName(est));
+    if (name == null) return;
+    name = name.trim();
+    if (!name) return;
+    var newAlt = { id: 'alt_' + Date.now(), name: name, isDefault: false };
+    est.alternates.push(newAlt);
+    est.activeAlternateId = newAlt.id;
+    debouncedSave();
+    renderAlternateTabs();
+    renderLineItems();
+    renderTotals();
+  }
+
+  function suggestNextAlternateName(est) {
+    var existing = (est.alternates || []).map(function(a) { return (a.name || '').toLowerCase(); });
+    var ladder = ['Good', 'Better', 'Best'];
+    for (var i = 0; i < ladder.length; i++) {
+      if (existing.indexOf(ladder[i].toLowerCase()) === -1) return ladder[i];
+    }
+    return 'Alternate ' + (est.alternates.length + 1);
+  }
+
+  function renameActiveAlternate() {
+    var est = getEstimate();
+    var a = getActiveAlternate();
+    if (!est || !a) return;
+    var name = prompt('Rename alternate:', a.name);
+    if (name == null) return;
+    name = name.trim();
+    if (!name) return;
+    a.name = name;
+    debouncedSave();
+    renderAlternateTabs();
+  }
+
+  function duplicateActiveAlternate() {
+    var est = getEstimate();
+    var a = getActiveAlternate();
+    if (!est || !a) return;
+    var name = prompt('Name for the duplicated alternate:', suggestNextAlternateName(est));
+    if (name == null) return;
+    name = name.trim();
+    if (!name) return;
+    var newAlt = { id: 'alt_' + Date.now(), name: name, isDefault: false };
+    est.alternates.push(newAlt);
+    // Clone every line in the active alternate over to the new one. Section
+    // headers are cloned too so the structure carries over intact.
+    var sourceLines = (appData.estimateLines || []).filter(function(l) {
+      return l.estimateId === est.id && l.alternateId === a.id;
+    });
+    sourceLines.forEach(function(l, idx) {
+      var copy = Object.assign({}, l);
+      copy.id = (l.section === '__section_header__' ? 's' : 'l') + Date.now() + '_' + idx;
+      copy.alternateId = newAlt.id;
+      appData.estimateLines.push(copy);
+    });
+    est.activeAlternateId = newAlt.id;
+    debouncedSave();
+    renderAlternateTabs();
+    renderLineItems();
+    renderTotals();
+  }
+
+  function deleteActiveAlternate() {
+    var est = getEstimate();
+    var a = getActiveAlternate();
+    if (!est || !a) return;
+    if ((est.alternates || []).length <= 1) {
+      alert('Cannot delete the last alternate — at least one is required.');
+      return;
+    }
+    var lineCount = (appData.estimateLines || []).filter(function(l) {
+      return l.estimateId === est.id && l.alternateId === a.id;
+    }).length;
+    var msg = 'Delete alternate "' + a.name + '"?';
+    if (lineCount) msg += '\n\nThis will also remove ' + lineCount + ' line item' + (lineCount === 1 ? '' : 's') + ' / section header' + (lineCount === 1 ? '' : 's') + '.';
+    if (!confirm(msg)) return;
+    // Remove the alternate's lines first, then the alternate itself
+    appData.estimateLines = (appData.estimateLines || []).filter(function(l) {
+      return !(l.estimateId === est.id && l.alternateId === a.id);
+    });
+    est.alternates = est.alternates.filter(function(x) { return x.id !== a.id; });
+    est.activeAlternateId = est.alternates[0].id;
+    debouncedSave();
+    renderAlternateTabs();
+    renderLineItems();
+    renderTotals();
   }
 
   // ──────────────────────────────────────────────────────────────────
@@ -430,6 +617,7 @@
     var newLine = {
       id: 'l' + Date.now(),
       estimateId: est.id,
+      alternateId: est.activeAlternateId,
       description: '',
       qty: 1,
       unit: '',
@@ -450,6 +638,7 @@
     var newHeader = {
       id: 's' + Date.now(),
       estimateId: est.id,
+      alternateId: est.activeAlternateId,
       section: '__section_header__',
       description: name || 'Untitled Section'
     };
@@ -737,4 +926,9 @@
   window.onLineDragLeave = onLineDragLeave;
   window.onLineDragEnd = onLineDragEnd;
   window.onLineDrop = onLineDrop;
+  window.switchAlternate = switchAlternate;
+  window.addAlternateFromEditor = addAlternateFromEditor;
+  window.renameActiveAlternate = renameActiveAlternate;
+  window.duplicateActiveAlternate = duplicateActiveAlternate;
+  window.deleteActiveAlternate = deleteActiveAlternate;
 })();

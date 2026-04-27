@@ -663,6 +663,17 @@
 
                             <!-- Line Items tab -->
                             <div id="ee-tab-lines" class="ee-tab-content">
+                                <!-- Alternate tier strip — Good / Better / Best style. Each alternate
+                                     has its own line items + totals; tax/fees/round-up are estimate-wide. -->
+                                <div id="ee-alternate-strip" style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap;">
+                                    <div id="ee-alternate-tabs" style="display:flex;gap:6px;flex-wrap:wrap;flex:1;"></div>
+                                    <div style="display:flex;gap:6px;">
+                                        <button class="small secondary" onclick="addAlternateFromEditor()" title="Add a new alternate (e.g. Good / Better / Best)">&#x2795; Alternate</button>
+                                        <button class="small ghost" onclick="duplicateActiveAlternate()" title="Copy this alternate's lines into a new alternate" id="ee-altDuplicateBtn">&#x2398; Duplicate</button>
+                                        <button class="small ghost" onclick="renameActiveAlternate()" title="Rename this alternate" id="ee-altRenameBtn">&#x270F; Rename</button>
+                                        <button class="small danger" onclick="deleteActiveAlternate()" title="Delete this alternate (cannot delete the last one)" id="ee-altDeleteBtn">&#x1F5D1; Delete</button>
+                                    </div>
+                                </div>
                                 <div class="action-buttons" style="margin-bottom:10px;">
                                     <button class="primary" onclick="addEstimateLineFromEditor()">&#x2795; Line Item</button>
                                     <button class="secondary" onclick="addEstimateSectionFromEditor()">&#x2795; Section</button>
@@ -1851,7 +1862,7 @@
     <script src="js/wip.js?v=56"></script>
     <script src="js/estimates.js?v=20"></script>
     <script src="js/proposal.js?v=19"></script>
-    <script src="js/estimate-editor.js?v=2"></script>
+    <script src="js/estimate-editor.js?v=3"></script>
 
     <script src="js/workspace.js?v=21"></script>
     <script src="js/workspace-layout.js?v=28"></script>
