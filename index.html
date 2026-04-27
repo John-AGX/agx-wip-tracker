@@ -34,7 +34,6 @@
                         <div id="user-menu" style="display:flex;align-items:center;gap:8px;margin-left:auto;">
                             <span id="user-name" style="font-size:11px;color:rgba(255,255,255,0.7);"></span>
                             <span id="user-role-badge" style="font-size:9px;padding:2px 6px;border-radius:10px;background:rgba(255,255,255,0.1);color:rgba(255,255,255,0.6);text-transform:uppercase;"></span>
-                            <button id="import-browser-btn" onclick="openImportFromBrowserModal()" title="Import jobs from this browser's localStorage to the server" style="font-size:10px;padding:3px 10px;border-radius:6px;background:rgba(79,140,255,0.15);border:1px solid rgba(79,140,255,0.3);color:#4f8cff;cursor:pointer;">Import from browser</button>
                             <button id="logout-btn" style="font-size:10px;padding:3px 10px;border-radius:6px;background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.15);color:rgba(255,255,255,0.7);cursor:pointer;">Logout</button>
                         </div>
                         <button id="theme-toggle" class="theme-toggle" title="Toggle light/dark mode"></button>
@@ -1418,51 +1417,11 @@
       </div>
     </div>
 
-    <!-- Import jobs to server: from this browser's localStorage OR from pasted JSON
-         (used to migrate jobs from another origin like the GitHub Pages deploy). -->
-    <div id="importBrowserModal" class="modal">
-      <div class="modal-content" style="max-width:720px;max-height:85vh;overflow-y:auto;">
-        <div class="modal-header">Import jobs to server</div>
-        <div style="padding:20px;">
-          <div style="display:flex;gap:6px;margin-bottom:14px;border-bottom:1px solid var(--border,#333);">
-            <button id="importBrowser_tabLocal" onclick="switchImportSource('local')" style="padding:8px 14px;background:none;border:none;border-bottom:2px solid #4f8cff;color:var(--text,#fff);cursor:pointer;font-size:13px;">From this browser</button>
-            <button id="importBrowser_tabPaste" onclick="switchImportSource('paste')" style="padding:8px 14px;background:none;border:none;border-bottom:2px solid transparent;color:var(--text-dim,#888);cursor:pointer;font-size:13px;">Paste JSON from another browser</button>
-          </div>
-
-          <div id="importBrowser_pasteSection" style="display:none;margin-bottom:14px;">
-            <p style="margin:0 0 8px 0;color:var(--text-dim,#888);font-size:12px;line-height:1.5;">
-              On the other site (e.g. <code>john-agx.github.io/agx-wip-tracker</code>), open devtools console and run the snippet below. It copies your data to clipboard. Paste it here.
-            </p>
-            <textarea id="importBrowser_pasteText" placeholder="Paste JSON here…" style="width:100%;min-height:140px;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);font-family:monospace;font-size:11px;"></textarea>
-            <button onclick="parseImportJSON()" class="secondary" style="margin-top:8px;font-size:12px;">Parse JSON</button>
-            <details style="margin-top:10px;">
-              <summary style="cursor:pointer;color:var(--text-dim,#888);font-size:12px;">Show export snippet</summary>
-              <pre style="margin-top:6px;padding:10px;background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:6px;font-size:10px;overflow-x:auto;color:var(--text-dim,#aaa);">copy(JSON.stringify({jobs:JSON.parse(localStorage.getItem('agx-wip-jobs')||'[]'),buildings:JSON.parse(localStorage.getItem('agx-wip-buildings')||'[]'),phases:JSON.parse(localStorage.getItem('agx-wip-phases')||'[]'),subs:JSON.parse(localStorage.getItem('agx-wip-subs')||'[]'),changeOrders:JSON.parse(localStorage.getItem('agx-wip-changeorders')||'[]'),purchaseOrders:JSON.parse(localStorage.getItem('agx-wip-purchaseorders')||'[]'),invoices:JSON.parse(localStorage.getItem('agx-wip-invoices')||'[]'),estimates:JSON.parse(localStorage.getItem('agx-estimates')||'[]'),estimateLines:JSON.parse(localStorage.getItem('agx-estimate-lines')||'[]'),estimateAlternates:JSON.parse(localStorage.getItem('agx-estimate-alternates')||'[]')}))</pre>
-            </details>
-          </div>
-
-          <p style="margin:0 0 10px 0;color:var(--text-dim,#888);font-size:13px;">
-            Pick which jobs to push. All nested data (buildings, phases, subs, POs, invoices, change orders) goes with each job.
-          </p>
-          <div id="importBrowser_jobsList" style="margin:0 0 10px 0;border:1px solid var(--border,#333);border-radius:8px;max-height:300px;overflow-y:auto;"></div>
-          <label style="display:flex;align-items:center;gap:8px;padding:8px 12px;border:1px solid var(--border,#333);border-radius:8px;cursor:pointer;">
-            <input type="checkbox" id="importBrowser_estimatesChk" />
-            <span id="importBrowser_estimatesLabel">Also push estimates</span>
-          </label>
-          <div id="importBrowser_status" style="margin-top:15px;font-size:13px;"></div>
-        </div>
-        <div class="modal-footer">
-          <button onclick="closeModal('importBrowserModal')" class="secondary">Cancel</button>
-          <button onclick="runImportFromBrowser()" class="primary" id="importBrowser_runBtn">Import selected</button>
-        </div>
-      </div>
-    </div>
-
     <script src="js/auth.js?v=5"></script>
     <script src="js/api.js?v=5"></script>
     <script src="js/admin.js?v=9"></script>
     <script src="js/insights.js?v=5"></script>
-    <script src="js/app.js?v=36"></script>
+    <script src="js/app.js?v=37"></script>
     <script src="js/wip.js?v=56"></script>
     <script src="js/estimates.js?v=18"></script>
     <script src="js/proposal.js?v=18"></script>
