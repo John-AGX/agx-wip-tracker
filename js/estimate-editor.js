@@ -46,20 +46,32 @@
   }
 
   // Idempotent migration. Runs every time an estimate is opened so old
-  // records (no alternates array, lines without alternateId) get a clean
-  // default and behave the same as fresh ones. Saves silently after
-  // backfill so the cleaned state persists.
+  // records (no alternates array, lines without alternateId, alternates
+  // missing the `scope` field) get a clean default and behave the same as
+  // fresh ones. Saves silently after backfill so the cleaned state
+  // persists.
   function ensureAlternates(est) {
     if (!est) return;
     var changed = false;
     if (!est.alternates || !est.alternates.length) {
-      est.alternates = [{ id: 'alt_default', name: 'Base', isDefault: true }];
+      est.alternates = [{ id: 'alt_default', name: 'Base', isDefault: true, scope: '' }];
       changed = true;
     }
     if (!est.activeAlternateId || !est.alternates.find(function(a) { return a.id === est.activeAlternateId; })) {
       est.activeAlternateId = est.alternates[0].id;
       changed = true;
     }
+    // Backfill `scope` so the right-panel textarea has a target on every
+    // alternate. The first alternate inherits the legacy estimate-level
+    // scopeOfWork on first open so existing data isn't lost.
+    var firstAlt = est.alternates[0];
+    if (firstAlt && firstAlt.scope == null) {
+      firstAlt.scope = est.scopeOfWork || '';
+      changed = true;
+    }
+    est.alternates.forEach(function(a) {
+      if (a.scope == null) { a.scope = ''; changed = true; }
+    });
     var defaultId = est.alternates[0].id;
     (appData.estimateLines || []).forEach(function(l) {
       if (l.estimateId === est.id && !l.alternateId) {
@@ -112,7 +124,39 @@
     renderTotals();
     renderDetailsForm();
     renderLineItems();
+    renderScopePanel();
     switchEstimateEditorTab('lines');
+  }
+
+  // Right-panel scope textarea — bound to the ACTIVE alternate's scope so
+  // Good / Better / Best can each carry their own narrative. Falls back to
+  // the legacy estimate.scopeOfWork only on first migration (handled in
+  // ensureAlternates). Changes write straight through to the alternate.
+  function renderScopePanel() {
+    var pane = document.getElementById('ee-scope-panel');
+    if (!pane) return;
+    var est = getEstimate();
+    var alt = getActiveAlternate();
+    if (!est || !alt) { pane.innerHTML = ''; return; }
+    pane.innerHTML =
+      '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;gap:8px;">' +
+        '<div style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;">Scope of Work</div>' +
+        '<div style="font-size:11px;color:#4f8cff;font-weight:600;">' + escapeHTML(alt.name || 'Alternate') + '</div>' +
+      '</div>' +
+      '<textarea id="ee-alt-scope" rows="14" placeholder="Bulleted scope, narrative, or whatever the proposal needs. This is per-alternate." ' +
+        'style="width:100%;resize:vertical;font-family:inherit;font-size:12px;line-height:1.5;padding:10px 12px;background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:8px;color:var(--text,#fff);">' +
+        escapeHTML(alt.scope || '') +
+      '</textarea>' +
+      '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:6px;">Saved per alternate. Used by the Preview tab and PDF/Buildertrend exports.</div>';
+    var ta = document.getElementById('ee-alt-scope');
+    if (ta) {
+      ta.oninput = function() {
+        var a = getActiveAlternate();
+        if (!a) return;
+        a.scope = ta.value;
+        debouncedSave();
+      };
+    }
   }
 
   function closeEstimateEditor() {
@@ -237,6 +281,7 @@
     renderAlternateTabs();
     renderLineItems();
     renderTotals();
+    renderScopePanel();
   }
 
   function addAlternateFromEditor() {
@@ -247,13 +292,14 @@
     if (name == null) return;
     name = name.trim();
     if (!name) return;
-    var newAlt = { id: 'alt_' + Date.now(), name: name, isDefault: false };
+    var newAlt = { id: 'alt_' + Date.now(), name: name, isDefault: false, scope: '' };
     est.alternates.push(newAlt);
     est.activeAlternateId = newAlt.id;
     debouncedSave();
     renderAlternateTabs();
     renderLineItems();
     renderTotals();
+    renderScopePanel();
   }
 
   function suggestNextAlternateName(est) {
@@ -286,7 +332,8 @@
     if (name == null) return;
     name = name.trim();
     if (!name) return;
-    var newAlt = { id: 'alt_' + Date.now(), name: name, isDefault: false };
+    var srcAlt = getActiveAlternate();
+    var newAlt = { id: 'alt_' + Date.now(), name: name, isDefault: false, scope: (srcAlt && srcAlt.scope) || '' };
     est.alternates.push(newAlt);
     // Clone every line in the active alternate over to the new one. Section
     // headers are cloned too so the structure carries over intact.
@@ -866,7 +913,9 @@
           field('Manager Name', 'ee-managerName', est.managerName) +
           field('Manager Email', 'ee-managerEmail', est.managerEmail, { type: 'email' }) +
           field('Manager Phone', 'ee-managerPhone', est.managerPhone, { type: 'tel' }) +
-          field('Scope of Work', 'ee-scopeOfWork', est.scopeOfWork, { textarea: true, rows: 6 }) +
+          '<div style="margin-bottom:12px;font-size:11px;color:var(--text-dim,#888);padding:8px 10px;background:rgba(79,140,255,0.06);border:1px solid var(--border,#333);border-radius:6px;line-height:1.5;">' +
+            '<strong style="color:#4f8cff;">Scope of Work</strong> moved to the <strong>Line Items</strong> tab so each alternate carries its own. Find it in the right panel under the active alternate.' +
+          '</div>' +
         '</div>' +
       '</div>' +
       // Pricing fieldset — default markup + tax + fees + round-up.
@@ -897,8 +946,7 @@
       'ee-issue': 'issue',
       'ee-managerName': 'managerName',
       'ee-managerEmail': 'managerEmail',
-      'ee-managerPhone': 'managerPhone',
-      'ee-scopeOfWork': 'scopeOfWork'
+      'ee-managerPhone': 'managerPhone'
     };
     Object.keys(fieldMap).forEach(function(elId) {
       var el = document.getElementById(elId);
@@ -1024,6 +1072,7 @@
   window.onLineDragEnd = onLineDragEnd;
   window.onLineDrop = onLineDrop;
   window.switchAlternate = switchAlternate;
+  window.renderScopePanel = renderScopePanel;
   window.addAlternateFromEditor = addAlternateFromEditor;
   window.renameActiveAlternate = renameActiveAlternate;
   window.duplicateActiveAlternate = duplicateActiveAlternate;

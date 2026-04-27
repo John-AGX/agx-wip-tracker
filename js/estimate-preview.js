@@ -196,7 +196,11 @@
       date: escapeHTMLLocal(ctx.date)
     });
 
-    var scopeText = (estimate.scopeOfWork || '').trim();
+    // Active alternate's scope wins; legacy estimate.scopeOfWork is the
+    // pre-migration fallback for old records that haven't been opened in
+    // the new editor yet.
+    var activeAlt = (estimate.alternates || []).find(function(a) { return a.id === estimate.activeAlternateId; });
+    var scopeText = ((activeAlt && activeAlt.scope) || estimate.scopeOfWork || '').trim();
     var scopeHTML = scopeText
       ? '<div class="scope-text">' + scopeText.split(/\n+/).map(function(p) { return '<p>' + escapeHTMLLocal(p) + '</p>'; }).join('') + '</div>'
       : '<p style="color:#999;font-style:italic;">Scope of work not yet entered.</p>';

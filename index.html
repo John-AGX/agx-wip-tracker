@@ -662,10 +662,11 @@
                                 </div>
                             </div>
 
-                            <!-- Line Items tab -->
+                            <!-- Line Items tab — two-column grid: line items on the left,
+                                 per-alternate scope of work + pricing breakdown on the right. -->
                             <div id="ee-tab-lines" class="ee-tab-content">
                                 <!-- Alternate tier strip — Good / Better / Best style. Each alternate
-                                     has its own line items + totals; tax/fees/round-up are estimate-wide. -->
+                                     has its own line items + scope; tax/fees/round-up are estimate-wide. -->
                                 <div id="ee-alternate-strip" style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap;">
                                     <div id="ee-alternate-tabs" style="display:flex;gap:6px;flex-wrap:wrap;flex:1;"></div>
                                     <div style="display:flex;gap:6px;">
@@ -675,20 +676,26 @@
                                         <button class="small danger" onclick="deleteActiveAlternate()" title="Delete this alternate (cannot delete the last one)" id="ee-altDeleteBtn">&#x1F5D1; Delete</button>
                                     </div>
                                 </div>
-                                <div class="action-buttons" style="margin-bottom:10px;">
-                                    <button class="primary" onclick="addEstimateLineFromEditor()">&#x2795; Line Item</button>
-                                    <button class="secondary" onclick="addEstimateSectionFromEditor()">&#x2795; Section</button>
-                                    <button class="ghost" onclick="addStandardSectionsFromEditor()" title="Add the four BT-aligned cost categories (Subs / Materials / GC / Labor)">&#x2795; Standard Sections</button>
-                                    <span style="font-size:11px;color:var(--text-dim,#888);align-self:center;margin-left:10px;">Edits autosave on blur. Drag the &#x2630; handle to reorder. Per-line markup overrides the default.</span>
-                                </div>
-                                <div id="ee-lines-container"></div>
-                                <!-- Detailed pricing breakdown — recomputes whenever a line / fee /
-                                     tax / round-up value changes. Hides zero-value rows so simple
-                                     estimates stay tidy. -->
-                                <div style="margin-top:18px;display:flex;justify-content:flex-end;">
-                                    <div style="width:100%;max-width:380px;background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:10px;padding:14px 18px;">
-                                        <div style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">Pricing</div>
-                                        <div id="ee-pricing-breakdown"></div>
+
+                                <div class="ee-lines-grid" style="display:grid;grid-template-columns:minmax(0,2fr) minmax(280px,1fr);gap:16px;align-items:start;">
+                                    <!-- LEFT: line items workspace -->
+                                    <div class="ee-lines-left" style="min-width:0;">
+                                        <div class="action-buttons" style="margin-bottom:10px;">
+                                            <button class="primary" onclick="addEstimateLineFromEditor()">&#x2795; Line Item</button>
+                                            <button class="secondary" onclick="addEstimateSectionFromEditor()">&#x2795; Section</button>
+                                            <button class="ghost" onclick="addStandardSectionsFromEditor()" title="Add the four BT-aligned cost categories (Subs / Materials / GC / Labor)">&#x2795; Standard Sections</button>
+                                        </div>
+                                        <div id="ee-lines-container"></div>
+                                        <div style="font-size:11px;color:var(--text-dim,#888);margin-top:8px;">Edits autosave on blur. Drag the &#x2630; handle to reorder. Per-line markup overrides the default.</div>
+                                    </div>
+
+                                    <!-- RIGHT: per-alternate scope of work + pricing breakdown -->
+                                    <div class="ee-lines-right" style="display:flex;flex-direction:column;gap:14px;min-width:0;">
+                                        <div id="ee-scope-panel" style="background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:10px;padding:12px 14px;"></div>
+                                        <div style="background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:10px;padding:12px 14px;">
+                                            <div style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">Pricing</div>
+                                            <div id="ee-pricing-breakdown"></div>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
@@ -1866,10 +1873,10 @@
     <script src="js/insights.js?v=5"></script>
     <script src="js/app.js?v=37"></script>
     <script src="js/wip.js?v=56"></script>
-    <script src="js/estimates.js?v=24"></script>
+    <script src="js/estimates.js?v=25"></script>
     <script src="js/proposal.js?v=19"></script>
-    <script src="js/estimate-editor.js?v=6"></script>
-    <script src="js/estimate-preview.js?v=2"></script>
+    <script src="js/estimate-editor.js?v=7"></script>
+    <script src="js/estimate-preview.js?v=3"></script>
     <script src="js/bt-export.js?v=2"></script>
 
     <script src="js/workspace.js?v=21"></script>

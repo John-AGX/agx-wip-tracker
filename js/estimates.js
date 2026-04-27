@@ -84,8 +84,9 @@ function renderEstimatesList() {
                 defaultMarkup: parseFloat(document.getElementById('estDefaultMarkup').value) || 100,
                 scopeOfWork: document.getElementById('estScopeOfWork').value || '',
                 // Pre-wire alternates so the editor opens straight into the
-                // standard structure without the migration shuffle.
-                alternates: [{ id: defaultAlternateId, name: 'Base', isDefault: true }],
+                // standard structure without the migration shuffle. Scope is
+                // per-alternate so Good/Better/Best can each carry their own.
+                alternates: [{ id: defaultAlternateId, name: 'Base', isDefault: true, scope: document.getElementById('estScopeOfWork') ? (document.getElementById('estScopeOfWork').value || '') : '' }],
                 activeAlternateId: defaultAlternateId
             };
             appData.estimates.push(est);
