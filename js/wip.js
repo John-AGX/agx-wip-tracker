@@ -792,14 +792,16 @@ function renderWIPMain() {
             });
 
             jobs.forEach((job, index) => {
-                // Auto-calc % complete from phases/buildings
-                const _jp = appData.phases.filter(p => p.jobId === job.id);
-                const _jb = appData.buildings.filter(b => b.jobId === job.id);
-                if (_jp.length > 0 || _jb.length > 0) {
+                // The WIP main row used to auto-recalc pctComplete here, but
+                // that runs without the node-graph compute step the detail
+                // view uses, so it produced different values than the metric
+                // strip and would clobber the correct stored value. Now we
+                // just read what's stored — the detail view (renderJobDetail)
+                // is the single source of truth for keeping job.pctComplete
+                // fresh. recalcSubCosts is still cheap and useful here for
+                // dollar columns.
+                if (appData.phases.some(p => p.jobId === job.id) || appData.buildings.some(b => b.jobId === job.id)) {
                     recalcSubCosts(job.id);
-                    if (!job.pctCompleteManual) {
-                        job.pctComplete = Math.round(calcJobPctComplete(job.id) * 10) / 10;
-                    }
                 }
                 const w = getJobWIP(job.id);
                 const statusClass = job.status === 'On Hold' ? 'at-risk' : job.status === 'Completed' ? 'on-track' : job.status === 'Archived' ? 'not-started' : 'on-track';
