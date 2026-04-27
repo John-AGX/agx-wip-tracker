@@ -258,31 +258,35 @@
 
   // Stylesheet shared between the in-tab preview and the print window. The
   // print window grabs its own copy via window-open + document.write.
+  //
+  // Sizes track the actual AGX proposal PDFs (which are letter-paper, Arial,
+  // ~11pt body). Using pt rather than px so the screen preview lines up with
+  // the printed PDF rather than rendering everything ~30% larger.
   function getProposalCSS() {
     return (
-      '.agx-proposal { font-family: Arial, sans-serif; color: #222; line-height: 1.55; max-width: 8.5in; margin: 0 auto; padding: 28px 36px; background: #fff; box-shadow: 0 2px 18px rgba(0,0,0,0.4); }' +
-      '.agx-proposal .proposal-header { text-align: center; margin-bottom: 22px; }' +
-      '.agx-proposal .company-line { font-size: 11px; color: #444; }' +
-      '.agx-proposal .proposal-meta { display: flex; justify-content: space-between; gap: 30px; margin-bottom: 24px; font-size: 12px; }' +
+      '.agx-proposal { font-family: Arial, sans-serif; color: #222; font-size: 11pt; line-height: 1.45; max-width: 8.5in; margin: 0 auto; padding: 0.5in 0.6in; background: #fff; box-shadow: 0 2px 18px rgba(0,0,0,0.4); }' +
+      '.agx-proposal .proposal-header { text-align: center; margin-bottom: 18px; }' +
+      '.agx-proposal .company-line { font-size: 9pt; color: #444; letter-spacing: 0.2px; }' +
+      '.agx-proposal .proposal-meta { display: flex; justify-content: space-between; gap: 30px; margin-bottom: 18px; font-size: 10pt; }' +
       '.agx-proposal .meta-left { flex: 1; }' +
-      '.agx-proposal .meta-right { text-align: right; flex: 0 0 auto; min-width: 240px; font-size: 12px; }' +
+      '.agx-proposal .meta-right { text-align: right; flex: 0 0 auto; min-width: 220px; font-size: 10pt; }' +
       '.agx-proposal .meta-label { font-weight: 700; color: #333; }' +
-      '.agx-proposal .meta-print-date { margin-top: 8px; }' +
-      '.agx-proposal .proposal-title { font-size: 22px; font-weight: 700; color: #222; margin: 18px 0 16px; }' +
-      '.agx-proposal .greeting { margin: 12px 0; }' +
-      '.agx-proposal .intro, .agx-proposal .about { margin: 12px 0; text-align: justify; }' +
-      '.agx-proposal .divider { border: none; border-top: 1px solid #ccc; margin: 22px 0; }' +
-      '.agx-proposal .section-heading { font-size: 16px; font-weight: 700; color: #222; margin: 22px 0 10px; }' +
-      '.agx-proposal .italic-heading { font-style: italic; }' +
-      '.agx-proposal .scope-text p { margin: 6px 0; }' +
-      '.agx-proposal .total-block { text-align: right; font-size: 22px; font-weight: 700; color: #1B8541; margin: 26px 0 18px; padding-top: 14px; border-top: 1px solid #ddd; }' +
-      '.agx-proposal .total-block .total-label { color: #222; margin-right: 12px; }' +
-      '.agx-proposal .exclusions { padding-left: 28px; margin: 10px 0 22px; }' +
-      '.agx-proposal .exclusions li { margin: 8px 0; font-size: 12px; text-align: justify; }' +
-      '.agx-proposal .sig-intro { margin-top: 28px; font-size: 12px; }' +
-      '.agx-proposal .sig-block { margin-top: 18px; }' +
-      '.agx-proposal .sig-row { display: flex; align-items: center; gap: 10px; margin: 14px 0; font-size: 12px; }' +
-      '.agx-proposal .sig-label { font-weight: 700; min-width: 90px; }' +
+      '.agx-proposal .meta-print-date { margin-top: 6px; }' +
+      '.agx-proposal .proposal-title { font-size: 17pt; font-weight: 700; color: #222; margin: 14px 0 14px; line-height: 1.25; }' +
+      '.agx-proposal .greeting { margin: 8px 0 14px; font-size: 11pt; }' +
+      '.agx-proposal .intro, .agx-proposal .about { margin: 10px 0; text-align: left; font-size: 11pt; }' +
+      '.agx-proposal .divider { border: none; border-top: 1px solid #ccc; margin: 18px 0; }' +
+      '.agx-proposal .section-heading { font-size: 13pt; font-weight: 700; color: #222; margin: 16px 0 8px; }' +
+      '.agx-proposal .italic-heading { font-style: italic; font-size: 11pt; }' +
+      '.agx-proposal .scope-text p { margin: 4px 0; font-size: 11pt; }' +
+      '.agx-proposal .total-block { text-align: right; font-size: 16pt; font-weight: 700; color: #222; margin: 22px 0 16px; padding-top: 10px; border-top: 1px solid #ddd; }' +
+      '.agx-proposal .total-block .total-label { color: #222; margin-right: 10px; }' +
+      '.agx-proposal .exclusions { padding-left: 26px; margin: 8px 0 18px; }' +
+      '.agx-proposal .exclusions li { margin: 6px 0; font-size: 10pt; text-align: left; line-height: 1.4; }' +
+      '.agx-proposal .sig-intro { margin-top: 22px; font-size: 10pt; }' +
+      '.agx-proposal .sig-block { margin-top: 14px; }' +
+      '.agx-proposal .sig-row { display: flex; align-items: center; gap: 10px; margin: 12px 0; font-size: 10pt; }' +
+      '.agx-proposal .sig-label { font-weight: 700; min-width: 80px; }' +
       '.agx-proposal .sig-line { flex: 1; border-bottom: 1px solid #333; height: 0; }' +
       ''
     );
