@@ -39,6 +39,13 @@ function renderEstimatesList() {
             document.getElementById('estManagerEmail').value = '';
             document.getElementById('estManagerPhone').value = '';
             document.getElementById('estDefaultMarkup').value = '100';
+            var idEl = document.getElementById('estClientId');
+            if (idEl) idEl.value = '';
+            // Populate the client picker from the directory cache so users
+            // can auto-fill the form by selecting a client.
+            if (typeof populateEstimateClientPicker === 'function') {
+                populateEstimateClientPicker('estClientPicker', '');
+            }
             openModal('newEstimateModal');
         }
 
@@ -49,6 +56,7 @@ function renderEstimatesList() {
                 jobType: document.getElementById('estJobType').value,
                 client: document.getElementById('estClient').value,
                 community: document.getElementById('estCommunity').value,
+                client_id: (document.getElementById('estClientId') || {}).value || null,
                 propertyAddr: document.getElementById('estPropertyAddr').value,
                 billingAddr: document.getElementById('estBillingAddr').value,
                 managerName: document.getElementById('estManagerName').value,
@@ -78,6 +86,11 @@ function renderEstimatesList() {
     document.getElementById('editEst_managerPhone').value = estimate.managerPhone || '';
     document.getElementById('editEst_scopeOfWork').value = estimate.scopeOfWork || '';
     document.getElementById('editEst_defaultMarkup').value = estimate.defaultMarkup || 0;
+    var idEl = document.getElementById('editEst_clientId');
+    if (idEl) idEl.value = estimate.client_id || '';
+    if (typeof populateEstimateClientPicker === 'function') {
+        populateEstimateClientPicker('editEstClientPicker', estimate.client_id || '');
+    }
     const lineItems = appData.estimateLines.filter(line => line.estimateId === estId);
     renderEditEstimateLineItems(lineItems);
     recalcEstimateTotals();
@@ -165,6 +178,8 @@ function renderEstimatesList() {
     estimate.jobType = document.getElementById('editEst_jobType').value;
     estimate.client = document.getElementById('editEst_client').value;
     estimate.community = document.getElementById('editEst_community').value;
+    var clientIdEl = document.getElementById('editEst_clientId');
+    estimate.client_id = clientIdEl ? (clientIdEl.value || null) : (estimate.client_id || null);
     estimate.propertyAddr = document.getElementById('editEst_propertyAddr').value;
     estimate.billingAddr = document.getElementById('editEst_billingAddr').value;
     estimate.managerName = document.getElementById('editEst_managerName').value;

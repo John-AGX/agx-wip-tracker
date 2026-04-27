@@ -1264,6 +1264,14 @@
                 <input type="text" id="estJobType" placeholder="e.g., Exterior Restoration, Repair, General Construction">
             </div>
             <div class="form-group">
+                <label>Pick from Client Directory</label>
+                <select id="estClientPicker" onchange="onEstimateClientPicked('new')">
+                    <option value="">— Select a client to auto-fill —</option>
+                </select>
+                <div style="font-size:11px;color:var(--text-dim,#888);margin-top:3px;">Or skip and type the fields manually below.</div>
+            </div>
+            <input type="hidden" id="estClientId" />
+            <div class="form-group">
                 <label>Client Company Name</label>
                 <input type="text" id="estClient" placeholder="Client company name">
             </div>
@@ -1314,6 +1322,15 @@
         <div class="modal-header">Edit Estimate</div>
         <div style="padding: 0 20px 20px;">
           <div style="background: var(--surface2); padding: 10px 15px; border-radius: 4px; margin-bottom: 12px;">
+            <input type="hidden" id="editEst_clientId" />
+            <div class="form-row" style="gap:8px;margin-bottom:6px;">
+                <div class="form-group" style="flex:2;margin-bottom:4px;">
+                    <label style="font-size:11px;margin-bottom:2px;">Pick from Client Directory</label>
+                    <select id="editEstClientPicker" onchange="onEstimateClientPicked('edit')" style="padding:6px 8px;font-size:13px;">
+                        <option value="">— Select a client to auto-fill —</option>
+                    </select>
+                </div>
+            </div>
             <div class="form-row" style="gap:8px;margin-bottom:6px;"><div class="form-group" style="flex:2;margin-bottom:4px;"><label style="font-size:11px;margin-bottom:2px;">Title</label><input type="text" id="editEst_title" style="padding:6px 8px;font-size:13px;"></div><div class="form-group" style="flex:1;margin-bottom:4px;"><label style="font-size:11px;margin-bottom:2px;">Job Type</label><input type="text" id="editEst_jobType" style="padding:6px 8px;font-size:13px;"></div><div class="form-group" style="flex:0.5;margin-bottom:4px;"><label style="font-size:11px;margin-bottom:2px;">Markup %</label><input type="number" id="editEst_defaultMarkup" step="0.1" style="padding:6px 8px;font-size:13px;"></div><div class="form-group" style="flex:1;margin-bottom:4px;"><label style="font-size:11px;margin-bottom:2px;">Client</label><input type="text" id="editEst_client" style="padding:6px 8px;font-size:13px;"></div><div class="form-group" style="flex:1;margin-bottom:4px;"><label style="font-size:11px;margin-bottom:2px;">Community</label><input type="text" id="editEst_community" style="padding:6px 8px;font-size:13px;"></div></div>
             <div class="form-row" style="gap:8px;"><div class="form-group" style="flex:1.5;margin-bottom:4px;"><label style="font-size:11px;margin-bottom:2px;">Property Address</label><input type="text" id="editEst_propertyAddr" style="padding:6px 8px;font-size:13px;"></div><div class="form-group" style="flex:1.5;margin-bottom:4px;"><label style="font-size:11px;margin-bottom:2px;">Billing Address</label><input type="text" id="editEst_billingAddr" style="padding:6px 8px;font-size:13px;"></div><div class="form-group" style="flex:1;margin-bottom:4px;"><label style="font-size:11px;margin-bottom:2px;">Manager</label><input type="text" id="editEst_managerName" style="padding:6px 8px;font-size:13px;"></div><div class="form-group" style="flex:1;margin-bottom:4px;"><label style="font-size:11px;margin-bottom:2px;">Email</label><input type="email" id="editEst_managerEmail" style="padding:6px 8px;font-size:13px;"></div><div class="form-group" style="flex:0.7;margin-bottom:4px;"><label style="font-size:11px;margin-bottom:2px;">Phone</label><input type="tel" id="editEst_managerPhone" style="padding:6px 8px;font-size:13px;"></div></div>
           </div>
@@ -1613,11 +1630,11 @@
     <script src="js/auth.js?v=6"></script>
     <script src="js/api.js?v=8"></script>
     <script src="js/admin.js?v=11"></script>
-    <script src="js/clients.js?v=3"></script>
+    <script src="js/clients.js?v=4"></script>
     <script src="js/insights.js?v=5"></script>
     <script src="js/app.js?v=37"></script>
     <script src="js/wip.js?v=56"></script>
-    <script src="js/estimates.js?v=18"></script>
+    <script src="js/estimates.js?v=19"></script>
     <script src="js/proposal.js?v=19"></script>
 
     <script src="js/workspace.js?v=21"></script>

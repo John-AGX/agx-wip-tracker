@@ -498,6 +498,88 @@
   window.deleteClientFromEditor = deleteClientFromEditor;
   window.reloadClientsCache = reloadClientsCache;
   window.handleClientsImportFile = handleClientsImportFile;
+
+  // ==================== ESTIMATE LINKING ====================
+  // Populate a <select> with all clients from the cache, selecting
+  // currentClientId if provided. Quietly fetches the cache on first call.
+  function populateEstimateClientPicker(selectId, currentClientId) {
+    var sel = document.getElementById(selectId);
+    if (!sel) return;
+    var fill = function() {
+      var html = '<option value="">— Select a client to auto-fill —</option>';
+      _clients.slice().sort(byName).forEach(function(c) {
+        var selAttr = c.id === currentClientId ? ' selected' : '';
+        var label = c.name;
+        if (c.community_name && c.community_name !== c.name) {
+          label = c.community_name + ' — ' + c.name;
+        } else if (c.company_name && c.company_name !== c.name) {
+          label += ' (' + c.company_name + ')';
+        }
+        html += '<option value="' + escapeAttr(c.id) + '"' + selAttr + '>' + escapeHTML(label) + '</option>';
+      });
+      sel.innerHTML = html;
+    };
+    if (_clients.length) {
+      fill();
+    } else if (window.agxApi && window.agxApi.isAuthenticated && window.agxApi.isAuthenticated()) {
+      window.agxApi.clients.list().then(function(res) {
+        _clients = res.clients || [];
+        fill();
+      }).catch(function() { fill(); });
+    } else {
+      // Offline mode — picker stays a placeholder, user fills fields manually
+      sel.innerHTML = '<option value="">— Client directory unavailable in offline mode —</option>';
+    }
+  }
+
+  // When the picker fires its change event, look up the client and prefill
+  // the form fields. mode = 'new' or 'edit' chooses the field id prefix.
+  function onEstimateClientPicked(mode) {
+    var prefix = mode === 'edit' ? 'editEst_' : 'est';
+    var pickerId = mode === 'edit' ? 'editEstClientPicker' : 'estClientPicker';
+    var hiddenId = mode === 'edit' ? 'editEst_clientId' : 'estClientId';
+    var picker = document.getElementById(pickerId);
+    var hidden = document.getElementById(hiddenId);
+    if (!picker) return;
+    var id = picker.value;
+    if (hidden) hidden.value = id || '';
+    if (!id) return;
+    var c = _clients.find(function(x) { return x.id === id; });
+    if (!c) return;
+
+    // Map client fields onto the estimate form. Only overwrite fields the
+    // client has data for so users can mix manual input with auto-fill.
+    function setField(suffix, value) {
+      var el = document.getElementById(prefix + suffix);
+      if (el && value) el.value = value;
+    }
+    var clientLabel = c.company_name || c.name;
+    var communityLabel = c.community_name || c.name;
+    var propertyAddrParts = [c.property_address || c.address, c.city, c.state, c.zip].filter(Boolean);
+    var billingAddrParts = [c.address, c.city, c.state, c.zip].filter(Boolean);
+
+    // Capitalize varies — "Client" / "client" / "Community" — handle both modal field naming styles.
+    if (mode === 'edit') {
+      setField('client', clientLabel);
+      setField('community', communityLabel);
+      setField('propertyAddr', propertyAddrParts.join(', '));
+      setField('billingAddr', billingAddrParts.join(', '));
+      setField('managerName', c.community_manager || '');
+      setField('managerEmail', c.cm_email || c.email || '');
+      setField('managerPhone', c.cm_phone || c.phone || c.cell || '');
+    } else {
+      setField('Client', clientLabel);
+      setField('Community', communityLabel);
+      setField('PropertyAddr', propertyAddrParts.join(', '));
+      setField('BillingAddr', billingAddrParts.join(', '));
+      setField('ManagerName', c.community_manager || '');
+      setField('ManagerEmail', c.cm_email || c.email || '');
+      setField('ManagerPhone', c.cm_phone || c.phone || c.cell || '');
+    }
+  }
+
+  window.populateEstimateClientPicker = populateEstimateClientPicker;
+  window.onEstimateClientPicked = onEstimateClientPicked;
   window.agxClients = {
     getCached: function() { return _clients.slice(); },
     reload: reloadClientsCache
