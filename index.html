@@ -650,6 +650,7 @@
                                     <button class="small secondary" onclick="closeEstimateEditor()">&larr; Back</button>
                                     <input id="ee-title" type="text" placeholder="Estimate title" style="flex:1;min-width:200px;font-size:18px;font-weight:600;padding:6px 10px;background:transparent;border:1px solid transparent;border-radius:6px;color:var(--text,#fff);" onfocus="this.style.borderColor='var(--border,#333)'" onblur="this.style.borderColor='transparent'" />
                                     <div id="ee-linked-chips" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
+                                    <button class="small success" onclick="exportEstimateToBuildertrend()" title="Download Buildertrend-format xlsx (16 columns + Service &amp; Repair Income line)">&#x1F4E4; Export to Buildertrend</button>
                                 </div>
                                 <!-- Live totals strip -->
                                 <div id="ee-totals" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
@@ -1869,6 +1870,7 @@
     <script src="js/proposal.js?v=19"></script>
     <script src="js/estimate-editor.js?v=6"></script>
     <script src="js/estimate-preview.js?v=1"></script>
+    <script src="js/bt-export.js?v=1"></script>
 
     <script src="js/workspace.js?v=21"></script>
     <script src="js/workspace-layout.js?v=28"></script>
