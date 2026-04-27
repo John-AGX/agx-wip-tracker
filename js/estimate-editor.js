@@ -664,6 +664,48 @@
     renderTotals();
   }
 
+  // Standard cost-side sections used by the Buildertrend export pipeline.
+  // Phase C will widen btCategory into a (parentGroup, subgroup) tuple for
+  // BT's two-sheet import — keeping the simple keys here for now keeps
+  // existing data forward-compatible.
+  var STANDARD_SECTIONS_PRESET = [
+    { name: 'Subcontractors Costs',       btCategory: 'sub' },
+    { name: 'Materials & Supplies Costs', btCategory: 'materials' },
+    { name: 'General Conditions',         btCategory: 'gc' },
+    { name: 'Direct Labor',               btCategory: 'labor' }
+  ];
+
+  function addStandardSectionsFromEditor() {
+    var est = getEstimate();
+    if (!est) return;
+    var altId = est.activeAlternateId;
+    var existing = (appData.estimateLines || []).filter(function(l) {
+      return l.estimateId === est.id && l.alternateId === altId && l.section === '__section_header__';
+    });
+    var existingCats = {};
+    existing.forEach(function(s) { if (s.btCategory) existingCats[s.btCategory] = true; });
+    var added = 0;
+    STANDARD_SECTIONS_PRESET.forEach(function(s, idx) {
+      if (existingCats[s.btCategory]) return; // already present in this alternate
+      appData.estimateLines.push({
+        id: 's' + Date.now() + '_' + idx,
+        estimateId: est.id,
+        alternateId: altId,
+        section: '__section_header__',
+        description: s.name,
+        btCategory: s.btCategory
+      });
+      added++;
+    });
+    if (!added) {
+      alert('All four standard sections are already present in this alternate.');
+      return;
+    }
+    debouncedSave();
+    renderLineItems();
+    renderTotals();
+  }
+
   // ──────────────────────────────────────────────────────────────────
   // Drag-reorder — native HTML5 D&D. Each line / section row is a drop
   // target; the dragged item's id is stashed on dragstart and the row

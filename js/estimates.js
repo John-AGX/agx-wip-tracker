@@ -51,9 +51,25 @@ function renderEstimatesList() {
             openModal('newEstimateModal');
         }
 
+        // Standard cost-side sections seeded into every new estimate so the
+        // line-item table starts pre-organized to match Buildertrend's
+        // proposal worksheet categories. The btCategory tag is what the
+        // Phase C BT export will use to map each line into the correct
+        // BT cost row (Subs / Materials / GC / Labor) and the Service &
+        // Repair Income row (= total client price) is injected by the
+        // export, not stored as a section.
+        const ESTIMATE_STANDARD_SECTIONS = [
+            { name: 'Subcontractors Costs',     btCategory: 'sub' },
+            { name: 'Materials & Supplies Costs', btCategory: 'materials' },
+            { name: 'General Conditions',       btCategory: 'gc' },
+            { name: 'Direct Labor',             btCategory: 'labor' }
+        ];
+
         function createNewEstimate() {
+            const estId = 'e' + Date.now();
+            const defaultAlternateId = 'alt_default';
             const est = {
-                id: 'e' + Date.now(),
+                id: estId,
                 title: document.getElementById('estTitle').value,
                 jobType: document.getElementById('estJobType').value,
                 client: document.getElementById('estClient').value,
@@ -66,9 +82,24 @@ function renderEstimatesList() {
                 managerEmail: document.getElementById('estManagerEmail').value,
                 managerPhone: document.getElementById('estManagerPhone').value,
                 defaultMarkup: parseFloat(document.getElementById('estDefaultMarkup').value) || 100,
-                scopeOfWork: document.getElementById('estScopeOfWork').value || ''
+                scopeOfWork: document.getElementById('estScopeOfWork').value || '',
+                // Pre-wire alternates so the editor opens straight into the
+                // standard structure without the migration shuffle.
+                alternates: [{ id: defaultAlternateId, name: 'Base', isDefault: true }],
+                activeAlternateId: defaultAlternateId
             };
             appData.estimates.push(est);
+            // Seed the standard sections under the default alternate.
+            ESTIMATE_STANDARD_SECTIONS.forEach(function(s, idx) {
+                appData.estimateLines.push({
+                    id: 's' + Date.now() + '_' + idx,
+                    estimateId: estId,
+                    alternateId: defaultAlternateId,
+                    section: '__section_header__',
+                    description: s.name,
+                    btCategory: s.btCategory
+                });
+            });
             saveData();
             closeModal('newEstimateModal');
             renderEstimatesList();
