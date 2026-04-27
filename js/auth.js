@@ -5,6 +5,10 @@
   var currentUser = null;
   var token = null;
   var isOffline = false;
+  // Set of capability keys for the current user's role. Loaded from
+  // /api/roles after login so capability-gated UI elements can check
+  // visibility synchronously via hasCapability().
+  var capabilities = new Set();
 
   function init() {
     var stored = localStorage.getItem('agx-auth-token');
@@ -39,15 +43,31 @@
     document.getElementById('login-screen').style.display = 'none';
     document.getElementById('app-container').style.display = '';
     updateUserMenu();
-    // Land each role on its most-relevant tab. This also clears any stale
-    // 'active' tab class left over from a previous user (e.g. admin had
-    // Admin open, logged out, PM logs in — without this they'd see a blank
-    // content area because the admin tab is hidden but still marked active).
-    var role = isOffline ? 'admin' : (currentUser ? currentUser.role : 'pm');
-    var landing = role === 'admin' ? 'admin' : (role === 'corporate' ? 'insights' : 'wip');
     if (typeof window.switchTab === 'function') {
-      try { window.switchTab(landing); } catch (e) { console.warn('Initial tab switch failed:', e); }
+      try { window.switchTab(getLandingTab()); }
+      catch (e) { console.warn('Initial tab switch failed:', e); }
     }
+  }
+
+  // Pick the user's default tab. Built-in roles get their familiar landing
+  // (admin -> Admin, corporate -> Insights, pm -> WIP, field_crew ->
+  // Estimates). Custom roles fall back to the first tab their capabilities
+  // unlock — so a "no-jobs" role still gets a sensible landing.
+  function getLandingTab() {
+    if (isOffline) return 'wip';
+    if (!currentUser) return 'wip';
+    var byRole = {
+      admin: 'admin',
+      corporate: 'insights',
+      pm: 'wip',
+      field_crew: 'estimates'
+    };
+    if (byRole[currentUser.role]) return byRole[currentUser.role];
+    if (hasCapability('ADMIN_METRICS') || hasCapability('USERS_MANAGE') || hasCapability('ROLES_MANAGE')) return 'admin';
+    if (hasCapability('JOBS_VIEW_ALL') || hasCapability('JOBS_VIEW_ASSIGNED') || hasCapability('JOBS_EDIT_ANY') || hasCapability('JOBS_EDIT_OWN')) return 'wip';
+    if (hasCapability('INSIGHTS_VIEW')) return 'insights';
+    if (hasCapability('ESTIMATES_VIEW')) return 'estimates';
+    return 'wip';
   }
 
   function updateUserMenu() {
@@ -68,12 +88,44 @@
     applyRoleVisibility();
   }
 
-  // Show/hide elements based on current role. Elements with [data-admin-only]
-  // are visible only to admins (or to offline mode, which gets admin powers).
+  // Show/hide elements based on current role and capabilities.
+  // - [data-admin-only] toggles on admin role (offline counts as admin).
+  // - [data-cap="KEY"] toggles on the corresponding capability. Multiple
+  //   capabilities (any-of) can be supplied space-separated: data-cap="A B".
   function applyRoleVisibility() {
     var isAdmin = isOffline || (currentUser && currentUser.role === 'admin');
     document.querySelectorAll('[data-admin-only]').forEach(function(el) {
       el.style.display = isAdmin ? '' : 'none';
+    });
+    document.querySelectorAll('[data-cap]').forEach(function(el) {
+      var keys = (el.getAttribute('data-cap') || '').split(/\s+/).filter(Boolean);
+      var allowed = keys.some(function(k) { return hasCapability(k); });
+      el.style.display = allowed ? '' : 'none';
+    });
+  }
+
+  function hasCapability(key) {
+    if (isOffline) return true; // offline mode = full access locally
+    return capabilities.has(key);
+  }
+
+  // Pulls the current user's role and capabilities from /api/roles.
+  // Falls back to an empty cap set on failure (UI hides everything
+  // capability-gated) — defensive but won't crash the app.
+  function loadCapabilities() {
+    if (!currentUser || !window.agxApi) {
+      capabilities = new Set();
+      applyRoleVisibility();
+      return Promise.resolve();
+    }
+    return window.agxApi.roles.list().then(function(res) {
+      var role = (res.roles || []).find(function(r) { return r.name === currentUser.role; });
+      var caps = (role && Array.isArray(role.capabilities)) ? role.capabilities : [];
+      capabilities = new Set(caps);
+      applyRoleVisibility();
+    }).catch(function() {
+      capabilities = new Set();
+      applyRoleVisibility();
     });
   }
 
@@ -111,7 +163,9 @@
       currentUser = res.data.user;
       isOffline = false;
       localStorage.setItem('agx-auth-token', token);
-      showApp();
+      // Load capabilities BEFORE rendering the app so visibility (data-cap,
+      // landing tab) is correct on first paint.
+      loadCapabilities().then(function() { showApp(); });
       // Pull fresh data from the server now that we're authenticated.
       if (window.agxData) window.agxData.reloadFromServer();
       // Pre-load the users cache for admins so the PM dropdown is ready.
@@ -141,7 +195,7 @@
     .then(function(data) {
       currentUser = data.user;
       isOffline = false;
-      showApp();
+      loadCapabilities().then(function() { showApp(); });
       if (window.agxData) window.agxData.reloadFromServer();
       // Load the users cache for everyone (admins get the rendered table from
       // refreshUsers; non-admins just need the cache populated so PM-by-id
@@ -183,7 +237,10 @@
     isOffline: function() { return isOffline; },
     isAdmin: function() { return currentUser && currentUser.role === 'admin'; },
     canEdit: function() { return currentUser && (currentUser.role === 'admin' || currentUser.role === 'pm'); },
-    isReadOnly: function() { return currentUser && currentUser.role === 'corporate'; }
+    isReadOnly: function() { return currentUser && currentUser.role === 'corporate'; },
+    hasCapability: hasCapability,
+    getCapabilities: function() { return Array.from(capabilities); },
+    reloadCapabilities: loadCapabilities
   };
 
   if (document.readyState === 'loading') {

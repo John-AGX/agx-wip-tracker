@@ -40,9 +40,9 @@
                     </div>
                 </div>
                 <nav class="tabs">
-                    <button class="tab-btn active" data-tab="wip">WIP</button>
-                    <button class="tab-btn" data-tab="insights">Insights</button>
-                    <button class="tab-btn" data-tab="estimates">Estimates</button>
+                    <button class="tab-btn active" data-tab="wip" data-cap="JOBS_VIEW_ALL JOBS_VIEW_ASSIGNED JOBS_EDIT_ANY JOBS_EDIT_OWN">WIP</button>
+                    <button class="tab-btn" data-tab="insights" data-cap="INSIGHTS_VIEW">Insights</button>
+                    <button class="tab-btn" data-tab="estimates" data-cap="ESTIMATES_VIEW">Estimates</button>
                     <button class="tab-btn" data-tab="admin" data-admin-only style="display:none;">Admin</button>
                 </nav>
             </div>
@@ -622,6 +622,7 @@
                         <button class="ws-right-tab active" data-admin-subtab="users" onclick="switchAdminSubTab('users')">Users</button>
                         <button class="ws-right-tab" data-admin-subtab="jobs" onclick="switchAdminSubTab('jobs')">Job Assignments</button>
                         <button class="ws-right-tab" data-admin-subtab="metrics" onclick="switchAdminSubTab('metrics')">Metrics</button>
+                        <button class="ws-right-tab" data-admin-subtab="roles" onclick="switchAdminSubTab('roles')">Roles</button>
                     </div>
 
                     <!-- Users sub-tab -->
@@ -669,6 +670,18 @@
                                 <tbody id="admin-metrics-jobs-tbody"></tbody>
                             </table>
                         </div>
+                    </div>
+
+                    <!-- Roles sub-tab -->
+                    <div id="admin-subtab-roles" class="admin-subtab-content" style="display:none;">
+                        <div class="action-buttons">
+                            <button onclick="openNewRoleModal()">&#x1F510; New Role</button>
+                            <button onclick="renderAdminRoles()" class="secondary">Refresh</button>
+                        </div>
+                        <p style="margin:12px 0;color:var(--text-dim,#888);font-size:12px;">
+                            Built-in roles can be edited but not renamed or deleted. Custom roles can be deleted only when no users are assigned to them. New users get the role you pick when creating them.
+                        </p>
+                        <div id="admin-roles-list" style="display:flex;flex-direction:column;gap:10px;"></div>
                     </div>
 
                     <!-- Job Assignments sub-tab -->
@@ -1301,6 +1314,39 @@
       </div>
     </div>
 
+    <!-- Admin: create or edit a role + its capabilities. Used for both flows;
+         in edit mode the name field is read-only. -->
+    <div id="roleEditorModal" class="modal">
+      <div class="modal-content" style="max-width:640px;max-height:85vh;overflow-y:auto;">
+        <div class="modal-header" id="roleEditor_title">New Role</div>
+        <div style="padding:20px;display:flex;flex-direction:column;gap:12px;">
+          <input type="hidden" id="roleEditor_origName" />
+          <div>
+            <label style="display:block;font-size:12px;color:var(--text-dim,#888);margin-bottom:4px;">Internal Name</label>
+            <input id="roleEditor_name" type="text" placeholder="lowercase_with_underscores" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);font-family:monospace;" />
+            <div style="font-size:11px;color:var(--text-dim,#888);margin-top:4px;">Lowercase letters, digits, and underscores only. Used internally and as the role on users.</div>
+          </div>
+          <div>
+            <label style="display:block;font-size:12px;color:var(--text-dim,#888);margin-bottom:4px;">Display Name</label>
+            <input id="roleEditor_label" type="text" placeholder="e.g. Field Crew" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);" />
+          </div>
+          <div>
+            <label style="display:block;font-size:12px;color:var(--text-dim,#888);margin-bottom:4px;">Description (optional)</label>
+            <textarea id="roleEditor_description" rows="2" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);resize:vertical;"></textarea>
+          </div>
+          <div>
+            <label style="display:block;font-size:12px;color:var(--text-dim,#888);margin-bottom:6px;">Capabilities</label>
+            <div id="roleEditor_caps" style="display:flex;flex-direction:column;gap:14px;border:1px solid var(--border,#333);border-radius:6px;padding:12px;max-height:340px;overflow-y:auto;"></div>
+          </div>
+          <div id="roleEditor_status" style="font-size:13px;"></div>
+        </div>
+        <div class="modal-footer">
+          <button onclick="closeModal('roleEditorModal')" class="secondary">Cancel</button>
+          <button onclick="submitRoleEditor()" class="primary" id="roleEditor_submitBtn">Save Role</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Admin: per-job share manager (used from the Job Assignments table) -->
     <div id="manageJobSharingModal" class="modal">
       <div class="modal-content" style="max-width:640px;max-height:85vh;overflow-y:auto;">
@@ -1363,11 +1409,7 @@
           </div>
           <div>
             <label style="display:block;font-size:12px;color:var(--text-dim,#888);margin-bottom:4px;">Role</label>
-            <select id="newUser_role" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);">
-              <option value="pm">PM &mdash; edits own jobs and assigned jobs</option>
-              <option value="corporate">Corporate &mdash; read-only across all jobs</option>
-              <option value="admin">Admin &mdash; full access, user management</option>
-            </select>
+            <select id="newUser_role" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);"></select>
           </div>
           <div id="newUser_status" style="font-size:13px;"></div>
         </div>
@@ -1394,11 +1436,7 @@
           </div>
           <div>
             <label style="display:block;font-size:12px;color:var(--text-dim,#888);margin-bottom:4px;">Role</label>
-            <select id="editUser_role" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);">
-              <option value="pm">PM</option>
-              <option value="corporate">Corporate</option>
-              <option value="admin">Admin</option>
-            </select>
+            <select id="editUser_role" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);"></select>
           </div>
           <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text,#fff);">
             <input type="checkbox" id="editUser_active" /> Active (uncheck to disable login)
@@ -1417,9 +1455,9 @@
       </div>
     </div>
 
-    <script src="js/auth.js?v=5"></script>
-    <script src="js/api.js?v=5"></script>
-    <script src="js/admin.js?v=9"></script>
+    <script src="js/auth.js?v=6"></script>
+    <script src="js/api.js?v=6"></script>
+    <script src="js/admin.js?v=10"></script>
     <script src="js/insights.js?v=5"></script>
     <script src="js/app.js?v=37"></script>
     <script src="js/wip.js?v=56"></script>

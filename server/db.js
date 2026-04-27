@@ -52,7 +52,74 @@ async function initSchema() {
       created_at TIMESTAMPTZ DEFAULT NOW(),
       updated_at TIMESTAMPTZ DEFAULT NOW()
     );
+
+    -- Role definitions. users.role is a TEXT FK by name (no schema change to
+    -- users), so existing 'admin'/'corporate'/'pm' values keep working as
+    -- soon as the matching rows are seeded below. capabilities is a JSONB
+    -- array of capability keys (see CAPABILITY_KEYS in server/auth.js).
+    CREATE TABLE IF NOT EXISTS roles (
+      name TEXT PRIMARY KEY,
+      label TEXT NOT NULL,
+      description TEXT,
+      builtin BOOLEAN NOT NULL DEFAULT FALSE,
+      capabilities JSONB NOT NULL DEFAULT '[]'::jsonb,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
   `);
+
+  // Seed built-in roles. ON CONFLICT lets us re-run safely without
+  // overwriting capability edits an admin made post-seed (only the label,
+  // description, and builtin flag get refreshed).
+  const BUILTIN_ROLES = [
+    {
+      name: 'admin',
+      label: 'Admin',
+      description: 'Full access. Manages users, roles, jobs, and site settings.',
+      capabilities: [
+        'JOBS_VIEW_ALL', 'JOBS_EDIT_ANY', 'JOBS_DELETE', 'JOBS_GO_LIVE', 'JOBS_REASSIGN',
+        'FINANCIALS_VIEW', 'PROGRESS_UPDATE',
+        'ESTIMATES_VIEW', 'ESTIMATES_EDIT',
+        'USERS_MANAGE', 'ROLES_MANAGE',
+        'INSIGHTS_VIEW', 'ADMIN_METRICS'
+      ]
+    },
+    {
+      name: 'corporate',
+      label: 'Corporate',
+      description: 'Read-only across all jobs and dashboards.',
+      capabilities: ['JOBS_VIEW_ALL', 'FINANCIALS_VIEW', 'ESTIMATES_VIEW', 'INSIGHTS_VIEW']
+    },
+    {
+      name: 'pm',
+      label: 'Project Manager',
+      description: 'Edits own and assigned jobs; full estimate access; sees insights.',
+      capabilities: [
+        'JOBS_VIEW_ALL', 'JOBS_EDIT_OWN',
+        'FINANCIALS_VIEW', 'PROGRESS_UPDATE',
+        'ESTIMATES_VIEW', 'ESTIMATES_EDIT',
+        'INSIGHTS_VIEW'
+      ]
+    },
+    {
+      name: 'field_crew',
+      label: 'Field Crew',
+      description: 'Estimates and Cost Inbox only. No jobs, no financials.',
+      capabilities: ['ESTIMATES_VIEW', 'ESTIMATES_EDIT']
+    }
+  ];
+  for (const r of BUILTIN_ROLES) {
+    await pool.query(
+      `INSERT INTO roles (name, label, description, builtin, capabilities)
+       VALUES ($1, $2, $3, true, $4::jsonb)
+       ON CONFLICT (name) DO UPDATE
+         SET label = EXCLUDED.label,
+             description = EXCLUDED.description,
+             builtin = true,
+             updated_at = NOW()`,
+      [r.name, r.label, r.description, JSON.stringify(r.capabilities)]
+    );
+  }
 
   // Sync the admin user from env vars on every boot.
   // ADMIN_EMAIL + ADMIN_PASSWORD are set in Railway/production env. Treated as a

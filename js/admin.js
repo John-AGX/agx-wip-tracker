@@ -69,9 +69,14 @@
     document.getElementById('newUser_name').value = '';
     document.getElementById('newUser_email').value = '';
     document.getElementById('newUser_password').value = '';
-    document.getElementById('newUser_role').value = 'pm';
     document.getElementById('newUser_status').textContent = '';
     document.getElementById('newUser_submitBtn').disabled = false;
+    // Refresh role options each time so newly created custom roles show up
+    // and the dropdown reflects any capability tweaks the admin made since.
+    var sel = document.getElementById('newUser_role');
+    Promise.resolve(loadRolesCache()).then(function() {
+      populateRoleSelect(sel, 'pm');
+    });
     openModal('newUserModal');
   }
 
@@ -123,11 +128,15 @@
     document.getElementById('editUser_id').value = u.id;
     document.getElementById('editUser_email').value = u.email;
     document.getElementById('editUser_name').value = u.name || '';
-    document.getElementById('editUser_role').value = u.role || 'pm';
     document.getElementById('editUser_active').checked = !!u.active;
     document.getElementById('editUser_newPassword').value = '';
     document.getElementById('editUser_status').textContent = '';
     document.getElementById('editUser_submitBtn').disabled = false;
+    // Populate the role dropdown dynamically so custom roles + field_crew
+    // show up alongside the built-ins.
+    Promise.resolve(loadRolesCache()).then(function() {
+      populateRoleSelect(document.getElementById('editUser_role'), u.role || 'pm');
+    });
     openModal('editUserModal');
   }
 
@@ -554,9 +563,9 @@
       .catch(function(err) { alert('Revoke failed: ' + (err.message || '')); });
   }
 
-  // Toggle between Users / Job Assignments / Metrics inside the Admin tab.
-  // Renders the section's data on first reveal so we don't fire API calls
-  // for tabs the admin never opens.
+  // Toggle between Users / Job Assignments / Metrics / Roles inside the
+  // Admin tab. Renders the section's data on first reveal so we don't fire
+  // API calls for tabs the admin never opens.
   function switchAdminSubTab(name) {
     document.querySelectorAll('[data-admin-subtab]').forEach(function(btn) {
       btn.classList.toggle('active', btn.dataset.adminSubtab === name);
@@ -569,6 +578,203 @@
     if (name === 'users') renderAdminUsers();
     else if (name === 'jobs') renderAdminJobs();
     else if (name === 'metrics') renderAdminMetrics();
+    else if (name === 'roles') renderAdminRoles();
+  }
+
+  // ==================== ROLES ====================
+  // Role list, create, edit (capabilities), delete. Backed by /api/roles.
+  // Capability metadata (group + label) comes from /api/roles/capabilities
+  // and is cached after first fetch since it's a static enum on the server.
+  var _rolesCache = [];
+  var _capsMeta = null;
+
+  function loadCapsMeta() {
+    if (_capsMeta) return Promise.resolve(_capsMeta);
+    return window.agxApi.roles.capabilities().then(function(res) {
+      _capsMeta = res.capabilities || [];
+      return _capsMeta;
+    });
+  }
+
+  function loadRolesCache() {
+    return window.agxApi.roles.list().then(function(res) {
+      _rolesCache = res.roles || [];
+      return _rolesCache;
+    });
+  }
+
+  // Render a Set of capability keys grouped by their meta group, with each
+  // capability as a labeled checkbox. Used inside the role editor modal.
+  function renderCapabilityCheckboxes(containerEl, currentCaps) {
+    var grouped = {};
+    _capsMeta.forEach(function(c) {
+      if (!grouped[c.group]) grouped[c.group] = [];
+      grouped[c.group].push(c);
+    });
+    var html = '';
+    Object.keys(grouped).forEach(function(g) {
+      html += '<div>' +
+        '<div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text-dim,#888);letter-spacing:0.5px;margin-bottom:6px;">' + escapeHTML(g) + '</div>' +
+        '<div style="display:flex;flex-direction:column;gap:4px;">';
+      grouped[g].forEach(function(c) {
+        var checked = currentCaps.has(c.key) ? ' checked' : '';
+        html += '<label style="display:flex;align-items:flex-start;gap:8px;font-size:13px;cursor:pointer;padding:4px 6px;border-radius:4px;">' +
+          '<input type="checkbox" class="roleEditor_capChk" value="' + c.key + '"' + checked + ' style="margin-top:3px;" />' +
+          '<span style="color:var(--text,#fff);"><strong>' + escapeHTML(c.label) + '</strong>' +
+          ' <span style="font-size:10px;color:var(--text-dim,#888);font-family:monospace;margin-left:6px;">' + escapeHTML(c.key) + '</span></span>' +
+        '</label>';
+      });
+      html += '</div></div>';
+    });
+    containerEl.innerHTML = html;
+  }
+
+  function renderAdminRoles() {
+    if (!isAdmin()) return;
+    var listEl = document.getElementById('admin-roles-list');
+    if (!listEl) return;
+    listEl.innerHTML = '<div style="padding:15px;color:var(--text-dim,#888);">Loading…</div>';
+    Promise.all([loadCapsMeta(), loadRolesCache()]).then(function() {
+      if (!_rolesCache.length) {
+        listEl.innerHTML = '<div style="padding:15px;color:var(--text-dim,#888);">No roles yet.</div>';
+        return;
+      }
+      var html = '';
+      _rolesCache.forEach(function(r) {
+        var capCount = (r.capabilities || []).length;
+        var builtinBadge = r.builtin
+          ? '<span style="margin-left:8px;padding:2px 8px;border-radius:10px;background:rgba(79,140,255,0.15);color:#4f8cff;font-size:10px;text-transform:uppercase;letter-spacing:0.5px;">Built-in</span>'
+          : '';
+        var deleteBtn = r.builtin
+          ? '<button disabled title="Built-in roles cannot be deleted" style="font-size:11px;padding:4px 10px;opacity:0.4;cursor:not-allowed;margin-left:4px;">Delete</button>'
+          : '<button onclick="deleteAdminRole(\'' + escapeHTML(r.name) + '\')" style="font-size:11px;padding:4px 10px;background:#e74c3c;color:#fff;border:none;border-radius:4px;margin-left:4px;cursor:pointer;">Delete</button>';
+        html += '<div class="card" style="padding:14px 16px;">' +
+          '<div style="display:flex;justify-content:space-between;align-items:start;gap:10px;flex-wrap:wrap;">' +
+            '<div>' +
+              '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
+                '<strong style="color:var(--text,#fff);font-size:14px;">' + escapeHTML(r.label) + '</strong>' +
+                '<span style="font-size:11px;color:var(--text-dim,#888);font-family:monospace;">' + escapeHTML(r.name) + '</span>' +
+                builtinBadge +
+              '</div>' +
+              (r.description
+                ? '<div style="font-size:12px;color:var(--text-dim,#888);margin-top:4px;">' + escapeHTML(r.description) + '</div>'
+                : '') +
+              '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:6px;">' + capCount + ' capabilit' + (capCount === 1 ? 'y' : 'ies') + '</div>' +
+            '</div>' +
+            '<div style="white-space:nowrap;">' +
+              '<button onclick="openEditRoleModal(\'' + escapeHTML(r.name) + '\')" style="font-size:11px;padding:4px 10px;">Edit</button>' +
+              deleteBtn +
+            '</div>' +
+          '</div>' +
+        '</div>';
+      });
+      listEl.innerHTML = html;
+    }).catch(function(err) {
+      listEl.innerHTML = '<div style="padding:15px;color:#e74c3c;">Failed to load roles: ' + escapeHTML(err.message) + '</div>';
+    });
+  }
+
+  function openNewRoleModal() {
+    Promise.all([loadCapsMeta(), loadRolesCache()]).then(function() {
+      document.getElementById('roleEditor_title').textContent = 'New Role';
+      document.getElementById('roleEditor_origName').value = '';
+      document.getElementById('roleEditor_name').value = '';
+      document.getElementById('roleEditor_name').readOnly = false;
+      document.getElementById('roleEditor_label').value = '';
+      document.getElementById('roleEditor_description').value = '';
+      renderCapabilityCheckboxes(document.getElementById('roleEditor_caps'), new Set());
+      document.getElementById('roleEditor_status').textContent = '';
+      document.getElementById('roleEditor_submitBtn').disabled = false;
+      openModal('roleEditorModal');
+    });
+  }
+
+  function openEditRoleModal(name) {
+    Promise.all([loadCapsMeta(), loadRolesCache()]).then(function() {
+      var role = _rolesCache.find(function(r) { return r.name === name; });
+      if (!role) { alert('Role not found.'); return; }
+      document.getElementById('roleEditor_title').textContent = 'Edit Role: ' + role.label;
+      document.getElementById('roleEditor_origName').value = role.name;
+      document.getElementById('roleEditor_name').value = role.name;
+      document.getElementById('roleEditor_name').readOnly = true; // can't rename
+      document.getElementById('roleEditor_label').value = role.label || '';
+      document.getElementById('roleEditor_description').value = role.description || '';
+      renderCapabilityCheckboxes(document.getElementById('roleEditor_caps'), new Set(role.capabilities || []));
+      document.getElementById('roleEditor_status').textContent = '';
+      document.getElementById('roleEditor_submitBtn').disabled = false;
+      openModal('roleEditorModal');
+    });
+  }
+
+  function submitRoleEditor() {
+    var statusEl = document.getElementById('roleEditor_status');
+    var btn = document.getElementById('roleEditor_submitBtn');
+    var origName = document.getElementById('roleEditor_origName').value;
+    var name = document.getElementById('roleEditor_name').value.trim();
+    var label = document.getElementById('roleEditor_label').value.trim();
+    var description = document.getElementById('roleEditor_description').value.trim();
+    var caps = Array.from(document.querySelectorAll('.roleEditor_capChk:checked')).map(function(el) { return el.value; });
+
+    if (!name || !label) {
+      statusEl.style.color = '#fbbf24';
+      statusEl.textContent = 'Name and display label are required.';
+      return;
+    }
+    if (!origName && !/^[a-z0-9_]+$/.test(name)) {
+      statusEl.style.color = '#fbbf24';
+      statusEl.textContent = 'Name must be lowercase letters, digits, and underscores.';
+      return;
+    }
+
+    btn.disabled = true;
+    statusEl.style.color = 'var(--text-dim,#888)';
+    statusEl.textContent = 'Saving…';
+
+    var p = origName
+      ? window.agxApi.roles.update(origName, { label: label, description: description, capabilities: caps })
+      : window.agxApi.roles.create({ name: name, label: label, description: description, capabilities: caps });
+
+    p.then(function() {
+      statusEl.style.color = '#34d399';
+      statusEl.textContent = 'Saved.';
+      // Refresh the current user's capability set in case they edited their
+      // own role (e.g. admin removed their own ROLES_MANAGE — server lock-in
+      // is the next safety, but reflect the new state in the UI now).
+      if (window.agxAuth && window.agxAuth.reloadCapabilities) window.agxAuth.reloadCapabilities();
+      setTimeout(function() {
+        closeModal('roleEditorModal');
+        renderAdminRoles();
+      }, 700);
+    }).catch(function(err) {
+      btn.disabled = false;
+      statusEl.style.color = '#e74c3c';
+      statusEl.textContent = 'Failed: ' + (err.message || 'unknown error');
+    });
+  }
+
+  function deleteAdminRole(name) {
+    var role = _rolesCache.find(function(r) { return r.name === name; });
+    if (!role) return;
+    if (!confirm('Delete role "' + role.label + '"? Will fail if any user is still assigned to it.')) return;
+    window.agxApi.roles.remove(name).then(function() {
+      renderAdminRoles();
+    }).catch(function(err) {
+      alert('Delete failed: ' + (err.message || 'unknown error'));
+    });
+  }
+
+  // Populate any role <select> with options from the cache. Used by both
+  // the New User and Edit User modals so they pick up custom roles.
+  function populateRoleSelect(selectEl, currentValue) {
+    if (!_rolesCache.length) return loadRolesCache().then(function() { populateRoleSelect(selectEl, currentValue); });
+    var html = '';
+    _rolesCache.forEach(function(r) {
+      var sel = (r.name === currentValue) ? ' selected' : '';
+      html += '<option value="' + escapeHTML(r.name) + '"' + sel + '>' +
+        escapeHTML(r.label) + (r.description ? ' &mdash; ' + escapeHTML(r.description) : '') +
+      '</option>';
+    });
+    selectEl.innerHTML = html;
   }
 
   // ==================== METRICS + GO LIVE ====================
@@ -721,4 +927,9 @@
   window.renderAdminMetrics = renderAdminMetrics;
   window.toggleJobLiveStatus = toggleJobLiveStatus;
   window.captureNowForJob = captureNowForJob;
+  window.renderAdminRoles = renderAdminRoles;
+  window.openNewRoleModal = openNewRoleModal;
+  window.openEditRoleModal = openEditRoleModal;
+  window.submitRoleEditor = submitRoleEditor;
+  window.deleteAdminRole = deleteAdminRole;
 })();

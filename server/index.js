@@ -14,10 +14,12 @@ if (fs.existsSync(envPath)) {
   });
 }
 
-const { init } = require('./db');
+const { init, pool } = require('./db');
+const { setRolePool, refreshRoleCache } = require('./auth');
 const authRoutes = require('./routes/auth-routes');
 const jobRoutes = require('./routes/job-routes');
 const estimateRoutes = require('./routes/estimate-routes');
+const roleRoutes = require('./routes/role-routes');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -30,6 +32,7 @@ app.use(cookieParser());
 app.use('/api/auth', authRoutes);
 app.use('/api/jobs', jobRoutes);
 app.use('/api/estimates', estimateRoutes);
+app.use('/api/roles', roleRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {
@@ -45,8 +48,11 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, '..', 'index.html'));
 });
 
-// Initialize DB then start
-init().then(() => {
+// Initialize DB then start. Hand the pool to the auth module so capability
+// lookups can refresh from the DB whenever a role mutation lands.
+setRolePool(pool);
+
+init().then(refreshRoleCache).then(() => {
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`AGX WIP Tracker running on http://localhost:${PORT}`);
     if (process.env.ADMIN_EMAIL) {

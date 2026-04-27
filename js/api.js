@@ -100,9 +100,17 @@
     remove: function(id) { return del('/api/auth/users/' + encodeURIComponent(id)); }
   };
 
+  var roles = {
+    list: function() { return get('/api/roles'); },
+    capabilities: function() { return get('/api/roles/capabilities'); },
+    create: function(payload) { return post('/api/roles', payload); },
+    update: function(name, payload) { return put('/api/roles/' + encodeURIComponent(name), payload); },
+    remove: function(name) { return del('/api/roles/' + encodeURIComponent(name)); }
+  };
+
   window.agxApi = {
     get: get, put: put, post: post, del: del,
-    jobs: jobs, estimates: estimates, users: users,
+    jobs: jobs, estimates: estimates, users: users, roles: roles,
     isOffline: isOffline,
     isAuthenticated: function() { return !!getToken() && !isOffline(); }
   };
