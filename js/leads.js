@@ -633,6 +633,204 @@
     });
   }
 
+  // ==================== BT LEADS IMPORT ====================
+  // Parses a Buildertrend Leads xlsx export (the "Leads (exported on ...)"
+  // file from BT) and POSTs the normalized rows to /api/leads/import. The
+  // BT export header is on row 2 (row 1 is the export-date title), so we
+  // skip the first row when extracting cells.
+
+  // BT lead status -> our status enum. Anything not listed maps to 'new'.
+  var BT_STATUS_MAP = {
+    'pending': 'in_progress',
+    'open': 'new',
+    'new': 'new',
+    'sent': 'sent',
+    'sold': 'sold',
+    'lost': 'lost',
+    'no opportunity': 'no_opportunity',
+    'closed': 'no_opportunity'
+  };
+
+  function mapBTStatus(s) {
+    if (!s) return 'new';
+    var k = String(s).trim().toLowerCase();
+    return BT_STATUS_MAP[k] || 'new';
+  }
+
+  // Parse a "$1,234.56" string into a Number, or null. Empty / non-numeric
+  // values become null so the server treats the column as unset rather
+  // than zero (zero would be a confusing "we estimated $0 revenue").
+  function parseMoney(v) {
+    if (v == null || v === '') return null;
+    var s = String(v).replace(/[\$,\s]/g, '');
+    if (!s) return null;
+    var n = parseFloat(s);
+    return isNaN(n) ? null : n;
+  }
+
+  function parseConfidence(v) {
+    if (v == null || v === '') return null;
+    var s = String(v).replace(/[%\s]/g, '');
+    var n = parseInt(s, 10);
+    return isNaN(n) ? null : Math.max(0, Math.min(100, n));
+  }
+
+  // BT writes dates as "M-D-YYYY" or "M/D/YYYY". Postgres accepts ISO so
+  // normalize to YYYY-MM-DD. Return null if unparsable.
+  function parseDate(v) {
+    if (!v) return null;
+    var s = String(v).trim();
+    var m = s.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})$/);
+    if (!m) return null;
+    var mm = m[1].padStart(2, '0');
+    var dd = m[2].padStart(2, '0');
+    var yyyy = m[3].length === 2 ? '20' + m[3] : m[3];
+    return yyyy + '-' + mm + '-' + dd;
+  }
+
+  function parseBTLeadsWorkbook(arrayBuf) {
+    if (typeof XLSX === 'undefined') throw new Error('XLSX library not loaded');
+    var data = new Uint8Array(arrayBuf);
+    var wb = XLSX.read(data, { type: 'array' });
+    var sheet = wb.Sheets[wb.SheetNames[0]];
+    var aoa = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: '' });
+    if (!aoa.length) return [];
+
+    // Row 0 is the export title ("Leads (exported on ...)"); row 1 is the
+    // header row with column names. Find the header row defensively in case
+    // BT shifts the layout — we look for "Opportunity Title" within the
+    // first three rows.
+    var headerRowIdx = -1;
+    for (var i = 0; i < Math.min(3, aoa.length); i++) {
+      var rr = aoa[i] || [];
+      for (var c = 0; c < rr.length; c++) {
+        if (String(rr[c] || '').trim().toLowerCase() === 'opportunity title') {
+          headerRowIdx = i;
+          break;
+        }
+      }
+      if (headerRowIdx >= 0) break;
+    }
+    if (headerRowIdx < 0) throw new Error('Could not find header row (no "Opportunity Title" column).');
+
+    var headers = (aoa[headerRowIdx] || []).map(function(h) { return String(h || '').trim(); });
+    var idx = {};
+    headers.forEach(function(h, i) { idx[h] = i; });
+
+    function cell(row, name) {
+      var i = idx[name];
+      if (i == null) return '';
+      var v = row[i];
+      return v == null ? '' : String(v).trim();
+    }
+
+    var rows = [];
+    for (var r = headerRowIdx + 1; r < aoa.length; r++) {
+      var row = aoa[r];
+      if (!row || !row.length) continue;
+      var title = cell(row, 'Opportunity Title');
+      if (!title) continue; // blank row
+      // Address: prefer the Opportunity address columns; fall back to
+      // Contact when Opp is blank (some BT rows fill only Contact).
+      var street = cell(row, 'Street Address(Opp)') || cell(row, 'Street Address (Contact)');
+      var city = cell(row, 'City(Opp)') || cell(row, 'City (Contact)');
+      var state = cell(row, 'State(Opp)') || cell(row, 'State (Contact)');
+      var zip = cell(row, 'Zip(Opp)') || cell(row, 'Zip (Contact)');
+
+      rows.push({
+        title: title,
+        client_name: cell(row, 'Client Contact'), // resolved server-side
+        status: mapBTStatus(cell(row, 'Lead Status')),
+        confidence: parseConfidence(cell(row, 'Confidence')),
+        estimated_revenue_low: parseMoney(cell(row, 'Estimated Revenue Min')),
+        estimated_revenue_high: parseMoney(cell(row, 'Estimated Revenue Max')) || parseMoney(cell(row, 'Estimated Revenue')),
+        projected_sale_date: parseDate(cell(row, 'Projected Sales Date')),
+        source: cell(row, 'Source'),
+        project_type: cell(row, 'Project Type'),
+        street_address: street,
+        city: city,
+        state: state,
+        zip: zip,
+        gate_code: cell(row, 'Gate Code (if applicable)*') || cell(row, 'Gate Code'),
+        market: cell(row, 'Market*') || cell(row, 'Market'),
+        notes: cell(row, 'Notes')
+      });
+    }
+    return rows;
+  }
+
+  function handleLeadsImportFile(evt) {
+    var file = evt.target.files && evt.target.files[0];
+    if (!file) return;
+    evt.target.value = ''; // reset so re-picking the same file fires onchange
+
+    var reader = new FileReader();
+    reader.onload = function(e) {
+      var rows;
+      try {
+        rows = parseBTLeadsWorkbook(e.target.result);
+      } catch (err) {
+        alert('Could not parse file: ' + err.message);
+        return;
+      }
+      if (!rows.length) {
+        alert('No lead rows found in that file. Is it the right export?');
+        return;
+      }
+      if (!confirm('Found ' + rows.length + ' lead row(s). Import them now?\n\n' +
+                   'Existing leads (matched by title, case-insensitive) will be skipped. ' +
+                   'Clients are matched by name against the directory; unmatched leads import without a client link.')) {
+        return;
+      }
+      window.agxApi.leads.importBatch(rows).then(function(res) {
+        renderLeadsImportResult(res);
+        reloadLeadsCache();
+      }).catch(function(err) {
+        alert('Import failed: ' + (err.message || 'unknown error'));
+      });
+    };
+    reader.onerror = function() { alert('Could not read the file.'); };
+    reader.readAsArrayBuffer(file);
+  }
+
+  // Reuses the same client-import result modal layout. We swap the title and
+  // body in place so we don't have to copy a second modal into index.html.
+  function renderLeadsImportResult(res) {
+    var modal = document.getElementById('clientImportResultModal');
+    var titleEl = document.getElementById('clientImportResult_title');
+    var body = document.getElementById('clientImportResult_body');
+    if (!modal || !body) {
+      alert('Imported ' + (res.inserted || 0) + ' lead(s); skipped ' + (res.skipped || 0) + ' duplicate(s).');
+      return;
+    }
+    if (titleEl) titleEl.textContent = 'Lead Import Result';
+    var html = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;">' +
+      statBlock('New leads', res.inserted || 0, '#34d399') +
+      statBlock('Skipped (duplicate title)', res.skipped || 0, '#fbbf24') +
+      statBlock('Errors', (res.errors || []).length, '#f87171') +
+      statBlock('Total rows', res.total || 0, 'var(--text-dim,#888)') +
+    '</div>';
+    var errs = res.errors || [];
+    if (errs.length) {
+      html += '<div style="font-size:12px;color:#f87171;margin-bottom:6px;font-weight:600;">' + errs.length + ' row(s) had errors:</div>';
+      html += '<div style="max-height:160px;overflow-y:auto;font-size:11px;font-family:monospace;background:rgba(248,113,113,0.05);border:1px solid rgba(248,113,113,0.2);border-radius:6px;padding:8px;">';
+      errs.slice(0, 50).forEach(function(e) {
+        html += '<div>Row ' + e.row + (e.title ? ' (' + escapeHTML(e.title) + ')' : '') + ': ' + escapeHTML(e.error) + '</div>';
+      });
+      if (errs.length > 50) html += '<div style="color:var(--text-dim,#888);">…and ' + (errs.length - 50) + ' more</div>';
+      html += '</div>';
+    }
+    body.innerHTML = html;
+    openModal('clientImportResultModal');
+  }
+
+  function statBlock(label, value, color) {
+    return '<div style="background:rgba(255,255,255,0.03);border:1px solid var(--border,#333);border-radius:6px;padding:10px 12px;">' +
+      '<div style="font-size:10px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">' + label + '</div>' +
+      '<div style="font-size:18px;font-weight:700;color:' + color + ';">' + value + '</div>' +
+    '</div>';
+  }
+
   window.renderLeadsList = renderLeadsList;
   window.reloadLeadsCache = reloadLeadsCache;
   window.openNewLeadModal = openNewLeadModal;
@@ -644,6 +842,7 @@
   window.createEstimateFromLead = createEstimateFromLead;
   window.convertLeadToJob = convertLeadToJob;
   window.openLinkedJobFromLead = openLinkedJobFromLead;
+  window.handleLeadsImportFile = handleLeadsImportFile;
   window.agxLeads = {
     getCached: function() { return _leads.slice(); },
     reload: reloadLeadsCache

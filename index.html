@@ -600,6 +600,8 @@
                     <div id="estimates-subtab-leads" class="estimates-subtab-content">
                         <div class="action-buttons">
                             <button class="primary" onclick="openNewLeadModal()" data-cap="LEADS_EDIT">&#x1F465; New Lead</button>
+                            <button class="success" onclick="document.getElementById('leads-import-file').click()" data-cap="LEADS_EDIT" title="Import a Buildertrend Leads xlsx export">&#x1F4E5; Import from Buildertrend</button>
+                            <input type="file" id="leads-import-file" accept=".xlsx" style="display:none;" onchange="handleLeadsImportFile(event)" />
                             <button class="secondary" onclick="reloadLeadsCache()">Refresh</button>
                             <select id="leads-filter-status" onchange="renderLeadsList()" style="width:auto;min-width:140px;margin-left:6px;">
                                 <option value="">All statuses</option>
@@ -728,7 +730,7 @@
                          xlsx upload. Shows counts + any per-row errors. -->
                     <div id="clientImportResultModal" class="modal">
                       <div class="modal-content" style="max-width:560px;">
-                        <div class="modal-header">Import Result</div>
+                        <div class="modal-header" id="clientImportResult_title">Import Result</div>
                         <div id="clientImportResult_body" style="padding:18px 20px;"></div>
                         <div class="modal-footer">
                           <button class="primary" onclick="closeModal('clientImportResultModal')">Done</button>
@@ -1869,7 +1871,7 @@
     <script src="js/api.js?v=9"></script>
     <script src="js/admin.js?v=13"></script>
     <script src="js/clients.js?v=5"></script>
-    <script src="js/leads.js?v=4"></script>
+    <script src="js/leads.js?v=5"></script>
     <script src="js/insights.js?v=5"></script>
     <script src="js/app.js?v=37"></script>
     <script src="js/wip.js?v=56"></script>

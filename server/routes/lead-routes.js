@@ -146,6 +146,96 @@ router.put('/:id', requireAuth, requireCapability('LEADS_EDIT'), async (req, res
   }
 });
 
+// POST /api/leads/import — bulk insert leads from a Buildertrend Leads
+// xlsx export. The client parses the workbook with SheetJS and POSTs a
+// normalized rows array. Each row contains the BT column values; we resolve
+// client_id by matching the row's client_name (case-insensitive) against the
+// existing clients directory, map BT lead statuses to our enum, and dedupe
+// by lowercase title (since BT opportunity titles are unique-ish).
+//
+// Body: { rows: [{ title, status, confidence, client_name, ... }] }
+// Returns: { inserted, skipped, total, errors[] }
+router.post('/import', requireAuth, requireCapability('LEADS_EDIT'), async (req, res) => {
+  try {
+    const incoming = Array.isArray(req.body && req.body.rows) ? req.body.rows : null;
+    if (!incoming || !incoming.length) {
+      return res.status(400).json({ error: 'rows array is required' });
+    }
+
+    // Build a name -> client.id index for fast lookup. We match either
+    // client.name or client.company_name so BT's "ProCura - La Hacienda
+    // Condominiums" can resolve even if the directory has only "ProCura".
+    const clientsRes = await pool.query('SELECT id, name, company_name FROM clients');
+    const clientByName = new Map();
+    for (const c of clientsRes.rows) {
+      if (c.name) clientByName.set(String(c.name).trim().toLowerCase(), c.id);
+      if (c.company_name) {
+        const k = String(c.company_name).trim().toLowerCase();
+        if (!clientByName.has(k)) clientByName.set(k, c.id);
+      }
+    }
+
+    // Existing leads keyed by lowercase title — used for dedupe so re-running
+    // an import doesn't double-insert the same opportunity.
+    const existingLeadsRes = await pool.query('SELECT id, title FROM leads');
+    const existingByTitle = new Map();
+    for (const l of existingLeadsRes.rows) {
+      if (l.title) existingByTitle.set(String(l.title).trim().toLowerCase(), l.id);
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      let inserted = 0;
+      let skipped = 0;
+      const errors = [];
+
+      for (let i = 0; i < incoming.length; i++) {
+        const row = incoming[i] || {};
+        const title = (row.title || '').trim();
+        if (!title) { errors.push({ row: i, error: 'missing title' }); continue; }
+        if (existingByTitle.has(title.toLowerCase())) { skipped++; continue; }
+
+        const fields = pickEditable(row);
+        fields.title = title;
+        if (!fields.status) fields.status = 'new';
+        // Resolve client_id from a client_name string passed through by the
+        // client-side parser. Leaves null if no match — admin can fix later.
+        if (!fields.client_id && row.client_name) {
+          const k = String(row.client_name).trim().toLowerCase();
+          if (clientByName.has(k)) fields.client_id = clientByName.get(k);
+        }
+
+        const id = 'lead_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+        const cols = ['id', 'created_by'].concat(Object.keys(fields));
+        const vals = [id, req.user.id].concat(Object.keys(fields).map(k => fields[k]));
+        const placeholders = cols.map((_, idx) => '$' + (idx + 1)).join(', ');
+        try {
+          await client.query(
+            `INSERT INTO leads (${cols.join(', ')}) VALUES (${placeholders})`,
+            vals
+          );
+          existingByTitle.set(title.toLowerCase(), id);
+          inserted++;
+        } catch (e) {
+          errors.push({ row: i, title, error: e.message });
+        }
+      }
+
+      await client.query('COMMIT');
+      res.json({ ok: true, total: incoming.length, inserted, skipped, errors });
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
+  } catch (e) {
+    console.error('POST /api/leads/import error:', e);
+    res.status(500).json({ error: 'Server error: ' + e.message });
+  }
+});
+
 router.delete('/:id', requireAuth, requireCapability('LEADS_EDIT'), async (req, res) => {
   try {
     const r = await pool.query('DELETE FROM leads WHERE id = $1', [req.params.id]);
