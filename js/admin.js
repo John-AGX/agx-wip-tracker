@@ -604,7 +604,8 @@
   }
 
   // Render a Set of capability keys grouped by their meta group, with each
-  // capability as a labeled checkbox. Used inside the role editor modal.
+  // capability as a labeled checkbox. Styling comes from .cap-row + .cap-text
+  // + .cap-key in styles.css (overrides the global label uppercase/tiny rule).
   function renderCapabilityCheckboxes(containerEl, currentCaps) {
     var grouped = {};
     _capsMeta.forEach(function(c) {
@@ -613,18 +614,16 @@
     });
     var html = '';
     Object.keys(grouped).forEach(function(g) {
-      html += '<div>' +
-        '<div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text-dim,#888);letter-spacing:0.5px;margin-bottom:6px;">' + escapeHTML(g) + '</div>' +
-        '<div style="display:flex;flex-direction:column;gap:4px;">';
+      html += '<div class="cap-group-title">' + escapeHTML(g) + '</div>';
       grouped[g].forEach(function(c) {
         var checked = currentCaps.has(c.key) ? ' checked' : '';
-        html += '<label style="display:flex;align-items:flex-start;gap:8px;font-size:13px;cursor:pointer;padding:4px 6px;border-radius:4px;">' +
-          '<input type="checkbox" class="roleEditor_capChk" value="' + c.key + '"' + checked + ' style="margin-top:3px;" />' +
-          '<span style="color:var(--text,#fff);"><strong>' + escapeHTML(c.label) + '</strong>' +
-          ' <span style="font-size:10px;color:var(--text-dim,#888);font-family:monospace;margin-left:6px;">' + escapeHTML(c.key) + '</span></span>' +
+        html += '<label class="cap-row">' +
+          '<input type="checkbox" class="roleEditor_capChk" value="' + c.key + '"' + checked + ' />' +
+          '<span class="cap-text">' + escapeHTML(c.label) +
+            '<span class="cap-key">' + escapeHTML(c.key) + '</span>' +
+          '</span>' +
         '</label>';
       });
-      html += '</div></div>';
     });
     containerEl.innerHTML = html;
   }
@@ -643,28 +642,24 @@
       _rolesCache.forEach(function(r) {
         var capCount = (r.capabilities || []).length;
         var builtinBadge = r.builtin
-          ? '<span style="margin-left:8px;padding:2px 8px;border-radius:10px;background:rgba(79,140,255,0.15);color:#4f8cff;font-size:10px;text-transform:uppercase;letter-spacing:0.5px;">Built-in</span>'
+          ? '<span style="padding:2px 8px;border-radius:10px;background:rgba(79,140,255,0.15);color:#4f8cff;font-size:10px;text-transform:uppercase;letter-spacing:0.5px;font-weight:600;">Built-in</span>'
           : '';
         var deleteBtn = r.builtin
-          ? '<button disabled title="Built-in roles cannot be deleted" style="font-size:11px;padding:4px 10px;opacity:0.4;cursor:not-allowed;margin-left:4px;">Delete</button>'
-          : '<button onclick="deleteAdminRole(\'' + escapeHTML(r.name) + '\')" style="font-size:11px;padding:4px 10px;background:#e74c3c;color:#fff;border:none;border-radius:4px;margin-left:4px;cursor:pointer;">Delete</button>';
-        html += '<div class="card" style="padding:14px 16px;">' +
-          '<div style="display:flex;justify-content:space-between;align-items:start;gap:10px;flex-wrap:wrap;">' +
-            '<div>' +
-              '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
-                '<strong style="color:var(--text,#fff);font-size:14px;">' + escapeHTML(r.label) + '</strong>' +
-                '<span style="font-size:11px;color:var(--text-dim,#888);font-family:monospace;">' + escapeHTML(r.name) + '</span>' +
-                builtinBadge +
-              '</div>' +
-              (r.description
-                ? '<div style="font-size:12px;color:var(--text-dim,#888);margin-top:4px;">' + escapeHTML(r.description) + '</div>'
-                : '') +
-              '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:6px;">' + capCount + ' capabilit' + (capCount === 1 ? 'y' : 'ies') + '</div>' +
+          ? '<button class="small" disabled title="Built-in roles cannot be deleted">Delete</button>'
+          : '<button class="small danger" onclick="deleteAdminRole(\'' + escapeHTML(r.name) + '\')">Delete</button>';
+        html += '<div class="card" style="padding:12px 16px;display:flex;justify-content:space-between;align-items:center;gap:14px;">' +
+          '<div style="min-width:0;flex:1;">' +
+            '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:2px;">' +
+              '<strong style="color:var(--text,#fff);font-size:14px;">' + escapeHTML(r.label) + '</strong>' +
+              '<code style="font-size:11px;color:var(--text-dim,#888);background:rgba(255,255,255,0.04);padding:1px 6px;border-radius:3px;">' + escapeHTML(r.name) + '</code>' +
+              builtinBadge +
             '</div>' +
-            '<div style="white-space:nowrap;">' +
-              '<button onclick="openEditRoleModal(\'' + escapeHTML(r.name) + '\')" style="font-size:11px;padding:4px 10px;">Edit</button>' +
-              deleteBtn +
-            '</div>' +
+            (r.description ? '<div style="font-size:12px;color:var(--text-dim,#888);">' + escapeHTML(r.description) + '</div>' : '') +
+            '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:4px;">' + capCount + ' capabilit' + (capCount === 1 ? 'y' : 'ies') + '</div>' +
+          '</div>' +
+          '<div style="display:flex;gap:6px;flex-shrink:0;">' +
+            '<button class="small secondary" onclick="openEditRoleModal(\'' + escapeHTML(r.name) + '\')">Edit</button>' +
+            deleteBtn +
           '</div>' +
         '</div>';
       });

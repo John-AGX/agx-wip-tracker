@@ -249,6 +249,10 @@
         }
 
         /* BUTTONS */
+        /* Button system — default = subtle neutral. Variants: .primary
+           (green accent for the main action), .secondary (muted, used for
+           Cancel/Refresh), .danger (red, for destructive actions),
+           .ghost (transparent, for tertiary), .small (compact size). */
         button {
             background: var(--surface2);
             color: var(--text);
@@ -258,58 +262,89 @@
             cursor: pointer;
             font-size: 13px;
             font-weight: 600;
-            transition: all 0.15s ease;
+            transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease, transform 0.05s ease;
             display: inline-flex;
             align-items: center;
+            justify-content: center;
             gap: 6px;
             line-height: 1.3;
             letter-spacing: 0.2px;
+            font-family: inherit;
+            white-space: nowrap;
         }
-
         button:hover {
-            background: var(--accent);
-            color: #fff;
-            border-color: var(--accent);
+            background: rgba(255, 255, 255, 0.06);
+            border-color: rgba(255, 255, 255, 0.18);
+        }
+        button:active:not(:disabled) { transform: translateY(1px); }
+        button:focus-visible {
+            outline: none;
+            box-shadow: 0 0 0 2px rgba(93, 219, 126, 0.45);
+        }
+        button:disabled {
+            opacity: 0.45;
+            cursor: not-allowed;
+            transform: none !important;
         }
 
         button.primary {
-            background: var(--accent);
-            border-color: var(--accent);
+            background: linear-gradient(180deg, #5b96ff, #3b7cf5);
+            border-color: #3b7cf5;
             color: #fff;
+            box-shadow: 0 1px 0 rgba(255,255,255,0.18) inset, 0 1px 4px rgba(0,0,0,0.25);
+        }
+        button.primary:hover {
+            background: linear-gradient(180deg, #6ea2ff, #4d8cff);
+            border-color: #4d8cff;
         }
 
-        button.primary:hover {
-            background: #3b7cf5;
-            border-color: #3b7cf5;
+        button.success {
+            background: linear-gradient(180deg, #5ddb7e, #3eb764);
+            border-color: #3eb764;
+            color: #0a0a0f;
+            box-shadow: 0 1px 0 rgba(255,255,255,0.2) inset, 0 1px 4px rgba(0,0,0,0.25);
+        }
+        button.success:hover {
+            background: linear-gradient(180deg, #6ee98f, #4ec371);
+            border-color: #4ec371;
         }
 
         button.secondary {
-            background: var(--surface);
+            background: transparent;
             color: var(--text-dim);
             border: 1px solid var(--border);
         }
-
         button.secondary:hover {
-            background: var(--surface2);
+            background: rgba(255, 255, 255, 0.04);
             color: var(--text);
-            border-color: var(--text-dim);
+            border-color: rgba(255, 255, 255, 0.2);
         }
 
         button.danger {
-            background: rgba(248, 113, 113, 0.1);
-            border-color: rgba(248, 113, 113, 0.3);
-            color: var(--red);
+            background: rgba(248, 113, 113, 0.08);
+            border-color: rgba(248, 113, 113, 0.35);
+            color: #f87171;
+        }
+        button.danger:hover {
+            background: #f87171;
+            border-color: #f87171;
+            color: #1a0608;
         }
 
-        button.danger:hover {
-            background: var(--red);
-            border-color: var(--red);
-            color: #fff;
+        button.ghost {
+            background: transparent;
+            border-color: transparent;
+            color: var(--text-dim);
+        }
+        button.ghost:hover {
+            background: rgba(255,255,255,0.05);
+            color: var(--text);
         }
 
         button.small {
-            padding: 5px 10px;
+            padding: 5px 12px;
             font-size: 12px;
+            border-radius: 5px;
         }
 
         /* SUMMARY CARDS */
@@ -405,6 +440,59 @@
             color: var(--text-dim);
             text-transform: uppercase;
             letter-spacing: 0.4px;
+        }
+
+        /* Brand accent for native form controls so checkboxes/radios pick
+           up the green theme instead of the OS default (which renders red
+           on Windows for many users). */
+        input[type="checkbox"],
+        input[type="radio"] {
+            accent-color: #5ddb7e;
+        }
+
+        /* Capability row in the Role editor. Beats the global label rule
+           above for these specific rows so the cap text doesn't render as
+           tiny uppercase dimmed metadata. */
+        .cap-group-title {
+            font-size: 10px;
+            font-weight: 700;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            padding: 0 4px;
+            margin: 8px 0 4px 0;
+        }
+        .cap-group-title:first-child { margin-top: 0; }
+        label.cap-row {
+            display: flex !important;
+            align-items: center !important;
+            gap: 10px !important;
+            padding: 7px 10px !important;
+            border-radius: 5px !important;
+            font-size: 13px !important;
+            font-weight: normal !important;
+            color: var(--text) !important;
+            text-transform: none !important;
+            letter-spacing: 0 !important;
+            margin: 0 !important;
+            cursor: pointer;
+            transition: background 0.12s;
+        }
+        label.cap-row:hover { background: rgba(255,255,255,0.04); }
+        label.cap-row input[type="checkbox"] {
+            width: auto !important;
+            margin: 0 !important;
+            flex: 0 0 auto;
+            transform: scale(1.05);
+        }
+        label.cap-row .cap-text { flex: 1 1 auto; line-height: 1.3; min-width: 0; }
+        label.cap-row .cap-key {
+            font-family: 'SF Mono', 'Fira Code', 'Courier New', monospace;
+            font-size: 10px;
+            color: var(--text-dim);
+            margin-left: 8px;
+            font-weight: normal;
+            opacity: 0.7;
         }
 
         input, select, textarea {
