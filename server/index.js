@@ -22,6 +22,7 @@ const estimateRoutes = require('./routes/estimate-routes');
 const roleRoutes = require('./routes/role-routes');
 const clientRoutes = require('./routes/client-routes');
 const leadRoutes = require('./routes/lead-routes');
+const settingsRoutes = require('./routes/settings-routes');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -37,6 +38,7 @@ app.use('/api/estimates', estimateRoutes);
 app.use('/api/roles', roleRoutes);
 app.use('/api/clients', clientRoutes);
 app.use('/api/leads', leadRoutes);
+app.use('/api/settings', settingsRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {

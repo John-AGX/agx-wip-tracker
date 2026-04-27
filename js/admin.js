@@ -579,6 +579,152 @@
     else if (name === 'jobs') renderAdminJobs();
     else if (name === 'metrics') renderAdminMetrics();
     else if (name === 'roles') renderAdminRoles();
+    else if (name === 'templates') renderAdminTemplates();
+  }
+
+  // ==================== PROPOSAL TEMPLATES ====================
+  // Single editable record (key = 'proposal_template') driving the proposal
+  // PDF / preview boilerplate. Exclusions are kept as an ordered array so
+  // admins can add, remove, and reorder lines without HTML editing.
+  var _templateDraft = null;
+
+  function renderAdminTemplates() {
+    if (!isAdmin()) return;
+    var pane = document.getElementById('admin-subtab-templates');
+    if (!pane) return;
+    pane.innerHTML = '<div style="padding:15px;color:var(--text-dim,#888);">Loading…</div>';
+    window.agxApi.settings.get('proposal_template').then(function(res) {
+      _templateDraft = (res && res.setting && res.setting.value) || {};
+      renderTemplatesForm();
+    }).catch(function(err) {
+      pane.innerHTML = '<div style="padding:15px;color:#f87171;">Failed to load template: ' + escapeHTML(err.message || '') + '</div>';
+    });
+  }
+
+  function renderTemplatesForm() {
+    var pane = document.getElementById('admin-subtab-templates');
+    if (!pane) return;
+    var t = _templateDraft || {};
+    var exclusions = Array.isArray(t.exclusions) ? t.exclusions : [];
+
+    var exclusionsHTML = exclusions.map(function(item, idx) {
+      return '<div class="excl-row" style="display:flex;gap:8px;align-items:flex-start;margin-bottom:8px;">' +
+        '<span style="flex:0 0 28px;text-align:right;color:var(--text-dim,#888);font-size:12px;padding-top:8px;font-family:\'SF Mono\',monospace;">' + (idx + 1) + '.</span>' +
+        '<textarea data-excl-idx="' + idx + '" rows="3" style="flex:1;resize:vertical;font-size:12px;">' + escapeHTML(item) + '</textarea>' +
+        '<div style="display:flex;flex-direction:column;gap:4px;">' +
+          '<button class="ghost small" onclick="moveExclusion(' + idx + ', -1)" ' + (idx === 0 ? 'disabled' : '') + ' title="Move up">&#x25B2;</button>' +
+          '<button class="ghost small" onclick="moveExclusion(' + idx + ', 1)" ' + (idx === exclusions.length - 1 ? 'disabled' : '') + ' title="Move down">&#x25BC;</button>' +
+          '<button class="ghost small" onclick="deleteExclusion(' + idx + ')" title="Remove" style="color:#f87171;">&#x1F5D1;</button>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+
+    pane.innerHTML =
+      '<p style="margin:0 0 16px 0;color:var(--text-dim,#888);font-size:12px;">' +
+        'These fields are shared across every proposal preview / PDF export. Use the placeholders ' +
+        '<code>{salutation}</code> <code>{issue}</code> <code>{community}</code> <code>{date}</code> <code>{total}</code> ' +
+        'in the Intro Template — they get filled in from the active estimate at preview time.' +
+      '</p>' +
+      '<fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;margin-bottom:14px;">' +
+        '<legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Header</legend>' +
+        '<div style="margin-bottom:10px;">' +
+          '<label style="display:block;">Company Header Line</label>' +
+          '<input id="tpl-company_header" type="text" value="' + escapeHTML(t.company_header || '') + '" style="width:100%;" placeholder="Address &middot; City &middot; Phone" />' +
+        '</div>' +
+      '</fieldset>' +
+      '<fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;margin-bottom:14px;">' +
+        '<legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Letter Body</legend>' +
+        '<div style="margin-bottom:10px;">' +
+          '<label style="display:block;">Intro Template</label>' +
+          '<textarea id="tpl-intro_template" rows="3" style="width:100%;resize:vertical;">' + escapeHTML(t.intro_template || '') + '</textarea>' +
+        '</div>' +
+        '<div>' +
+          '<label style="display:block;">About Paragraph</label>' +
+          '<textarea id="tpl-about_paragraph" rows="6" style="width:100%;resize:vertical;">' + escapeHTML(t.about_paragraph || '') + '</textarea>' +
+        '</div>' +
+      '</fieldset>' +
+      '<fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;margin-bottom:14px;">' +
+        '<legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Assumptions, Clarifications and Exclusions</legend>' +
+        '<div id="tpl-exclusions-list">' + exclusionsHTML + '</div>' +
+        '<button class="secondary small" onclick="addExclusion()" style="margin-top:6px;">&#x2795; Add Exclusion</button>' +
+      '</fieldset>' +
+      '<fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;margin-bottom:14px;">' +
+        '<legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Signature</legend>' +
+        '<div>' +
+          '<label style="display:block;">Signature Lead-In</label>' +
+          '<textarea id="tpl-signature_text" rows="2" style="width:100%;resize:vertical;">' + escapeHTML(t.signature_text || '') + '</textarea>' +
+        '</div>' +
+      '</fieldset>' +
+      '<div class="action-buttons" style="margin-top:14px;">' +
+        '<button class="primary" onclick="saveAdminTemplate()">&#x1F4BE; Save Template</button>' +
+        '<button class="secondary" onclick="renderAdminTemplates()">Discard Changes</button>' +
+        '<span id="tpl-status" style="margin-left:14px;color:var(--text-dim,#888);font-size:12px;align-self:center;"></span>' +
+      '</div>';
+
+    // Wire textarea blur to sync edits into the in-memory draft so reordering
+    // (which re-renders the list) doesn't clobber unsaved text.
+    pane.querySelectorAll('[data-excl-idx]').forEach(function(ta) {
+      ta.addEventListener('input', function() {
+        var idx = parseInt(ta.getAttribute('data-excl-idx'), 10);
+        if (Array.isArray(_templateDraft.exclusions)) {
+          _templateDraft.exclusions[idx] = ta.value;
+        }
+      });
+    });
+  }
+
+  function syncTopLevelDraftFromInputs() {
+    if (!_templateDraft) _templateDraft = {};
+    ['company_header', 'intro_template', 'about_paragraph', 'signature_text'].forEach(function(k) {
+      var el = document.getElementById('tpl-' + k);
+      if (el) _templateDraft[k] = el.value;
+    });
+  }
+
+  function addExclusion() {
+    if (!_templateDraft) _templateDraft = {};
+    if (!Array.isArray(_templateDraft.exclusions)) _templateDraft.exclusions = [];
+    syncTopLevelDraftFromInputs();
+    _templateDraft.exclusions.push('');
+    renderTemplatesForm();
+    // Focus the new textarea so the admin can type into it immediately
+    var rows = document.querySelectorAll('[data-excl-idx]');
+    if (rows.length) rows[rows.length - 1].focus();
+  }
+
+  function deleteExclusion(idx) {
+    if (!_templateDraft || !Array.isArray(_templateDraft.exclusions)) return;
+    if (!confirm('Remove exclusion ' + (idx + 1) + '?')) return;
+    syncTopLevelDraftFromInputs();
+    _templateDraft.exclusions.splice(idx, 1);
+    renderTemplatesForm();
+  }
+
+  function moveExclusion(idx, delta) {
+    if (!_templateDraft || !Array.isArray(_templateDraft.exclusions)) return;
+    var to = idx + delta;
+    if (to < 0 || to >= _templateDraft.exclusions.length) return;
+    syncTopLevelDraftFromInputs();
+    var arr = _templateDraft.exclusions;
+    var moved = arr.splice(idx, 1)[0];
+    arr.splice(to, 0, moved);
+    renderTemplatesForm();
+  }
+
+  function saveAdminTemplate() {
+    syncTopLevelDraftFromInputs();
+    var statusEl = document.getElementById('tpl-status');
+    if (statusEl) { statusEl.textContent = 'Saving…'; statusEl.style.color = 'var(--text-dim,#888)'; }
+    window.agxApi.settings.put('proposal_template', _templateDraft).then(function() {
+      if (statusEl) { statusEl.textContent = 'Saved.'; statusEl.style.color = '#34d399'; }
+      // Bust the preview's cached copy so the next preview render pulls fresh
+      if (typeof window.invalidateProposalTemplateCache === 'function') {
+        window.invalidateProposalTemplateCache();
+      }
+      setTimeout(function() { if (statusEl) statusEl.textContent = ''; }, 2400);
+    }).catch(function(err) {
+      if (statusEl) { statusEl.textContent = 'Save failed: ' + (err.message || ''); statusEl.style.color = '#f87171'; }
+    });
   }
 
   // ==================== ROLES ====================
@@ -927,4 +1073,9 @@
   window.openEditRoleModal = openEditRoleModal;
   window.submitRoleEditor = submitRoleEditor;
   window.deleteAdminRole = deleteAdminRole;
+  window.renderAdminTemplates = renderAdminTemplates;
+  window.saveAdminTemplate = saveAdminTemplate;
+  window.addExclusion = addExclusion;
+  window.deleteExclusion = deleteExclusion;
+  window.moveExclusion = moveExclusion;
 })();

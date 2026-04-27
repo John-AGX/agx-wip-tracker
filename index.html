@@ -697,12 +697,8 @@
                                 <div id="ee-details-form"></div>
                             </div>
 
-                            <!-- Preview tab (Phase C will populate this with the live render) -->
-                            <div id="ee-tab-preview" class="ee-tab-content" style="display:none;">
-                                <div style="padding:40px;text-align:center;color:var(--text-dim,#888);font-size:13px;">
-                                    Live preview lands in Phase C — for now use the Preview button on the estimate row.
-                                </div>
-                            </div>
+                            <!-- Preview tab — populated on demand by js/estimate-preview.js -->
+                            <div id="ee-tab-preview" class="ee-tab-content" style="display:none;"></div>
                         </div>
                         <div id="estimate-preview-view" style="display: none;"></div>
                     </div>
@@ -740,6 +736,7 @@
                         <button class="ws-right-tab" data-admin-subtab="jobs" onclick="switchAdminSubTab('jobs')">Job Assignments</button>
                         <button class="ws-right-tab" data-admin-subtab="metrics" onclick="switchAdminSubTab('metrics')">Metrics</button>
                         <button class="ws-right-tab" data-admin-subtab="roles" onclick="switchAdminSubTab('roles')">Roles</button>
+                        <button class="ws-right-tab" data-admin-subtab="templates" onclick="switchAdminSubTab('templates')">Templates</button>
                     </div>
 
                     <!-- Users sub-tab -->
@@ -800,6 +797,9 @@
                         </p>
                         <div id="admin-roles-list" style="display:flex;flex-direction:column;gap:10px;"></div>
                     </div>
+
+                    <!-- Templates sub-tab (proposal boilerplate) -->
+                    <div id="admin-subtab-templates" class="admin-subtab-content" style="display:none;"></div>
 
                     <!-- Job Assignments sub-tab -->
                     <div id="admin-subtab-jobs" class="admin-subtab-content" style="display:none;">
@@ -1627,6 +1627,10 @@
                 </select>
               </div>
             </div>
+            <div style="margin-top:10px;">
+              <label style="display:block;">Proposal Salutation <span style="color:var(--text-dim,#888);font-weight:400;font-size:11px;">(used in "Dear ___,")</span></label>
+              <input id="clientEditor_salutation" type="text" placeholder="e.g. PAC Team, Jane, Wimbledon Greens HOA Board" />
+            </div>
           </fieldset>
 
           <!-- Primary contact -->
@@ -1855,15 +1859,16 @@
 
     <script src="js/auth.js?v=6"></script>
     <script src="js/api.js?v=9"></script>
-    <script src="js/admin.js?v=11"></script>
+    <script src="js/admin.js?v=12"></script>
     <script src="js/clients.js?v=5"></script>
     <script src="js/leads.js?v=3"></script>
     <script src="js/insights.js?v=5"></script>
     <script src="js/app.js?v=37"></script>
     <script src="js/wip.js?v=56"></script>
-    <script src="js/estimates.js?v=22"></script>
+    <script src="js/estimates.js?v=23"></script>
     <script src="js/proposal.js?v=19"></script>
-    <script src="js/estimate-editor.js?v=5"></script>
+    <script src="js/estimate-editor.js?v=6"></script>
+    <script src="js/estimate-preview.js?v=1"></script>
 
     <script src="js/workspace.js?v=21"></script>
     <script src="js/workspace-layout.js?v=28"></script>

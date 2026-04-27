@@ -135,7 +135,16 @@
     });
     var target = document.getElementById('ee-tab-' + name);
     if (target) target.style.display = '';
+    // Preview tab is rendered on demand by js/estimate-preview.js since
+    // pulling the template is async (one network round-trip the first time).
+    if (name === 'preview' && typeof window.renderEstimatePreview === 'function') {
+      window.renderEstimatePreview();
+    }
   }
+
+  // Expose the currently-open estimate for the preview module so it doesn't
+  // have to crack open the IIFE's private state.
+  window.getActiveEstimateForPreview = function() { return getEstimate(); };
 
   // ──────────────────────────────────────────────────────────────────
   // Header chips — linked lead and linked client surface here so users
@@ -852,6 +861,8 @@
           field('Client Billing Address', 'ee-billingAddr', est.billingAddr) +
         '</div>' +
         '<div>' +
+          field('Proposal Salutation (Dear ___,)', 'ee-salutation', est.salutation, { placeholder: 'Auto-filled from client; e.g. PAC Team' }) +
+          field('Issue / Repair (proposal headline)', 'ee-issue', est.issue, { placeholder: 'e.g. Metal Stair Repairs' }) +
           field('Manager Name', 'ee-managerName', est.managerName) +
           field('Manager Email', 'ee-managerEmail', est.managerEmail, { type: 'email' }) +
           field('Manager Phone', 'ee-managerPhone', est.managerPhone, { type: 'tel' }) +
@@ -882,6 +893,8 @@
       'ee-community': 'community',
       'ee-propertyAddr': 'propertyAddr',
       'ee-billingAddr': 'billingAddr',
+      'ee-salutation': 'salutation',
+      'ee-issue': 'issue',
       'ee-managerName': 'managerName',
       'ee-managerEmail': 'managerEmail',
       'ee-managerPhone': 'managerPhone',
@@ -966,6 +979,14 @@
       setIf('ee-managerName', c.community_manager || '');
       setIf('ee-managerEmail', c.cm_email || c.email || '');
       setIf('ee-managerPhone', c.cm_phone || c.phone || c.cell || '');
+      // Snapshot the client's salutation onto the estimate so editing the
+      // client later doesn't rewrite a sent proposal. Falls through to
+      // first/last name -> contact name -> client name if salutation is blank.
+      var salutationGuess = c.salutation
+        || ((c.first_name || c.last_name) ? [c.first_name, c.last_name].filter(Boolean).join(' ') : '')
+        || c.community_manager
+        || c.name || '';
+      setIf('ee-salutation', salutationGuess);
       // Update estimate.client_id directly + chips
       var e = getEstimate();
       if (e) { e.client_id = sel.value; debouncedSave(); }

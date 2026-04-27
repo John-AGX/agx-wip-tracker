@@ -117,6 +117,20 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_clients_name ON clients(name);
     CREATE INDEX IF NOT EXISTS idx_clients_company ON clients(company_name);
 
+    -- Salutation = the "Dear X," opening on a proposal letter (e.g. "PAC Team",
+    -- "Jane", "Wimbledon Greens HOA Board"). Added after the initial schema so
+    -- existing rows just get NULL — front-end falls back to the contact name.
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS salutation TEXT;
+
+    -- Site-wide settings keyed by short string (e.g. 'proposal_template').
+    -- value is JSONB so each setting can store whatever shape it needs without
+    -- a schema change. Read/write gated by the ROLES_MANAGE capability.
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY,
+      value JSONB NOT NULL,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
     -- Sales pipeline. A lead is one opportunity for work; estimates (the
     -- "proposals" in BT terminology) hang off a lead via lead_id stored in
     -- the estimate's JSONB blob. Status drives the pipeline:
@@ -232,6 +246,37 @@ async function initSchema() {
       );
     }
   }
+
+  // Seed the default proposal template once. Re-running is a no-op so admins
+  // can edit the live template via /api/settings/proposal_template without
+  // having their changes reverted on the next boot. The placeholder tokens
+  // ({salutation}, {issue}, {community}, {date}, {total}) are filled in by the
+  // preview renderer on the client.
+  const DEFAULT_PROPOSAL_TEMPLATE = {
+    company_header: '13191 56th Court, Ste 102 · Clearwater, FL 33760-4030 · Phone: 813-725-5233',
+    intro_template:
+      'AG Exteriors is pleased to provide you with a proposal to complete the {issue} needed by the {community} community.',
+    about_paragraph:
+      'We proudly specialize in a wide range of exterior services, including roofing, siding, painting, deck rebuilding, and more—delivering each with care and attention to detail. Backed by our leadership team with extensive experience in construction, development, and property management. AG Exteriors is committed to bringing a thoughtful, professional approach to every project. With this foundation, we’re committed to providing high-quality work and dependable service on every project.',
+    exclusions: [
+      'This proposal may be withdrawn by AG Exteriors if not accepted within 30 days.',
+      'Pricing assumes unfettered access to the property during the project.',
+      'If AG Exteriors encounters unforeseen conditions that differ from those anticipated or ordinarily found to exist in the construction activities being provided, AG Exteriors retains the right to make an equitable adjustment to the pricing.',
+      'Client will provide electrical power and water at no charge.',
+      'Client will provide a location for dumpsters on site for trash and material disposal. AG Exteriors will provide the dumpsters for the entire job. However, if we are required to switch out dumpsters due to residents’ use, AG Exteriors reserves the right to charge the Client accordingly.',
+      'Mold/Asbestos/Lead Paint: Any detection or remediation of mold, asbestos, and lead paint is specifically excluded from this proposal. Any costs associated with the detection and/or removal of mold, mold spores, asbestos, and lead paint are the responsibility of others.',
+      'Damage to the physical property that occurred prior to AG Exteriors’ work not specifically called out in the scope of work is excluded.',
+      'Proposal excludes any engineering and/or permit fees. If any of these are required to complete the project, AG Exteriors will charge the client the cost of these fees plus an additional 10%.',
+      'Client acknowledges that markets are experiencing significant, industry-wide economic fluctuations, impacting the price of materials to be supplied in conjunction with the agreement. Client acknowledges that materials pricing has the potential to significantly increase between the time of the issuance of the underlying bid and the date of materials purchase for the Project. If the cost of any given material increases above the amount shown in the bid proposal for such material, this quote shall be adjusted upwards, and the Client will be responsible for the increased cost of the materials. In order to mitigate the potential for material-based price increases, the Client has the option to pay for materials in advance of the job. Material costs are guaranteed if materials are paid for at the time the proposal is accepted. Any prepayment of materials will be in addition to the normal deposit of 35%.'
+    ],
+    signature_text: 'I confirm that my action here represents my electronic signature and is binding.'
+  };
+  await pool.query(
+    `INSERT INTO app_settings (key, value)
+     VALUES ('proposal_template', $1::jsonb)
+     ON CONFLICT (key) DO NOTHING`,
+    [JSON.stringify(DEFAULT_PROPOSAL_TEMPLATE)]
+  );
 
   // Sync the admin user from env vars on every boot.
   // ADMIN_EMAIL + ADMIN_PASSWORD are set in Railway/production env. Treated as a

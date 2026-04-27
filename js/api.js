@@ -117,6 +117,11 @@
     importBatch: function(rows) { return post('/api/clients/import', { rows: rows }); }
   };
 
+  var settings = {
+    get: function(key) { return get('/api/settings/' + encodeURIComponent(key)); },
+    put: function(key, value) { return put('/api/settings/' + encodeURIComponent(key), { value: value }); }
+  };
+
   var leads = {
     list: function(query) {
       var qs = '';
@@ -139,7 +144,7 @@
 
   window.agxApi = {
     get: get, put: put, post: post, del: del,
-    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads,
+    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings,
     isOffline: isOffline,
     isAuthenticated: function() { return !!getToken() && !isOffline(); }
   };

@@ -16,6 +16,7 @@ const EDITABLE_FIELDS = [
   'gate_code', 'additional_pocs',
   'community_manager', 'cm_email', 'cm_phone',
   'maintenance_manager', 'mm_email', 'mm_phone',
+  'salutation',
   'notes'
 ];
 
