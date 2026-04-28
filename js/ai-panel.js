@@ -96,16 +96,20 @@
       '<div id="ai-messages" style="flex:1;overflow-y:auto;padding:14px 16px;display:flex;flex-direction:column;gap:10px;font-size:13px;color:var(--text,#e6e6e6);"></div>' +
       // Preset prompts
       '<div id="ai-presets" style="padding:8px 12px;border-top:1px solid var(--border,#333);display:flex;flex-wrap:wrap;gap:6px;background:rgba(255,255,255,0.02);"></div>' +
-      // Input row
+      // Input row. The inner spans use !important text-transform overrides
+      // because the global stylesheet applies uppercase + letter-spacing to
+      // every <label>, which made this strip look shouty.
       '<div style="padding:10px 12px 12px;border-top:1px solid var(--border,#333);background:var(--card-bg,#0c0c14);">' +
-        '<label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-dim,#aaa);margin-bottom:6px;cursor:pointer;">' +
-          '<input id="ai-photos-toggle" type="checkbox" checked style="margin:0;" />' +
-          '<span>Send photos with my message</span>' +
-          '<span id="ai-photos-count" style="margin-left:auto;color:var(--text-dim,#888);"></span>' +
-        '</label>' +
+        '<div style="display:flex;align-items:center;gap:6px;font-size:11px;margin-bottom:8px;">' +
+          '<label style="display:flex;align-items:center;gap:6px;cursor:pointer;color:var(--text-dim,#aaa);text-transform:none !important;letter-spacing:normal !important;font-size:11px !important;font-weight:400 !important;margin:0;flex:1;min-width:0;">' +
+            '<input id="ai-photos-toggle" type="checkbox" checked style="margin:0;flex:0 0 auto;" />' +
+            '<span style="text-transform:none;">Send photos with my message</span>' +
+          '</label>' +
+          '<span id="ai-photos-count" style="color:var(--text-dim,#888);text-transform:none;letter-spacing:normal;flex:0 0 auto;"></span>' +
+        '</div>' +
         '<div style="display:flex;gap:8px;align-items:flex-end;">' +
-          '<textarea id="ai-input" rows="2" placeholder="Ask anything about this estimate…" style="flex:1;resize:none;background:transparent;border:1px solid var(--border,#333);border-radius:6px;padding:8px 10px;color:var(--text,#fff);font-size:13px;line-height:1.4;font-family:inherit;"></textarea>' +
-          '<button id="ai-send" class="primary" style="padding:8px 14px;font-size:12px;">Send</button>' +
+          '<textarea id="ai-input" rows="1" placeholder="Ask anything about this estimate…" style="flex:1;resize:none;overflow-y:auto;min-height:36px;max-height:200px;background:transparent;border:1px solid var(--border,#333);border-radius:6px;padding:8px 10px;color:var(--text,#fff);font-size:13px;line-height:1.4;font-family:inherit;box-sizing:border-box;"></textarea>' +
+          '<button id="ai-send" class="primary" style="padding:0 16px;font-size:12px;height:36px;flex:0 0 auto;">Send</button>' +
         '</div>' +
       '</div>';
     document.body.appendChild(panel);
@@ -116,6 +120,13 @@
     panel.querySelector('#ai-send').onclick = onSend;
     panel.querySelector('#ai-photos-toggle').onchange = function(e) { _includePhotos = !!e.target.checked; };
     var input = panel.querySelector('#ai-input');
+    // Auto-grow: textarea expands as the user types, capped at max-height
+    // (set in the inline style above). Reset to scrollHeight on each input.
+    function autoGrow() {
+      input.style.height = 'auto';
+      input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+    }
+    input.addEventListener('input', autoGrow);
     input.addEventListener('keydown', function(e) {
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
@@ -285,6 +296,9 @@
     if (!text) return;
     if (!_estimateId) { alert('No estimate is open.'); return; }
     input.value = '';
+    // Reset auto-grow height after clearing the value, so the textarea
+    // collapses back to one row on submit instead of staying tall.
+    input.style.height = 'auto';
     sendMessage(text);
   }
 
