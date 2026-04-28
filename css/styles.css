@@ -595,6 +595,40 @@
             color: var(--accent);
         }
 
+        /* BT-style leads table — column layout for the Leads sub-tab */
+        .leads-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        .leads-table th {
+            padding: 10px 12px;
+            background: rgba(255,255,255,0.025);
+            border-bottom: 1px solid var(--border, #333);
+            position: static; /* override the global sticky default */
+        }
+        .leads-table td {
+            padding: 10px 12px;
+            border-bottom: 1px solid var(--border, #2a2a3a);
+            vertical-align: middle;
+        }
+        .leads-table tbody tr {
+            cursor: pointer;
+            transition: background 0.12s;
+        }
+        .leads-table tbody tr:hover {
+            background: rgba(79, 140, 255, 0.06);
+        }
+        .leads-table tbody tr:last-child td {
+            border-bottom: none;
+        }
+        .leads-table th.num,
+        .leads-table td.num {
+            text-align: right;
+        }
+        .leads-table .lead-title-cell {
+            max-width: 320px;
+        }
+
         td {
             padding: 6px 8px;
             border-bottom: 1px solid var(--border);

@@ -47,32 +47,101 @@
   // List + filter
   // ──────────────────────────────────────────────────────────────────
 
-  function leadCardHTML(l) {
+  // BT-style column layout — sortable header, dense rows, status pill,
+  // numeric columns right-aligned. Click anywhere on a row to open the
+  // editor.
+  var _leadsSort = { key: 'created_at', dir: 'desc' };
+
+  function leadRowHTML(l) {
     var sm = statusMeta(l.status);
     var statusPill =
-      '<span style="padding:2px 10px;border-radius:10px;background:' + sm.bg + ';color:' + sm.color +
-      ';font-size:10px;text-transform:uppercase;letter-spacing:0.5px;font-weight:700;">' +
+      '<span style="display:inline-block;padding:2px 10px;border-radius:10px;background:' + sm.bg + ';color:' + sm.color +
+      ';font-size:10px;text-transform:uppercase;letter-spacing:0.5px;font-weight:700;white-space:nowrap;">' +
       escapeHTML(sm.label) + '</span>';
-    var clientLine = l.client_name
-      ? escapeHTML(l.client_name) + (l.client_company && l.client_company !== l.client_name ? ' · ' + escapeHTML(l.client_company) : '')
-      : '<span style="color:var(--text-dim,#888);font-style:italic;">No client linked</span>';
+
+    var clientCell;
+    if (l.client_name) {
+      clientCell = '<div style="font-size:13px;color:var(--text,#e6e6e6);">' + escapeHTML(l.client_name) + '</div>';
+      if (l.client_company && l.client_company !== l.client_name) {
+        clientCell += '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:1px;">' + escapeHTML(l.client_company) + '</div>';
+      }
+    } else {
+      clientCell = '<span style="color:var(--text-dim,#666);font-style:italic;font-size:12px;">no client</span>';
+    }
+
     var revenue = fmtRevenueRange(l.estimated_revenue_low, l.estimated_revenue_high);
-    var meta = [];
-    if (l.salesperson_name) meta.push(escapeHTML(l.salesperson_name));
-    if (l.projected_sale_date) meta.push('Target ' + fmtDate(l.projected_sale_date));
-    if (l.confidence != null && l.confidence > 0) meta.push(l.confidence + '% conf');
-    if (revenue) meta.push(revenue);
-    return '<div class="card" style="padding:12px 16px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:14px;" onclick="openEditLeadModal(\'' + escapeAttr(l.id) + '\')">' +
-      '<div style="min-width:0;flex:1;">' +
-        '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:3px;">' +
-          '<strong style="color:var(--text,#fff);font-size:14px;">' + escapeHTML(l.title) + '</strong>' +
-          statusPill +
-        '</div>' +
-        '<div style="font-size:12px;color:var(--text-dim,#888);">' + clientLine + '</div>' +
-        (meta.length ? '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:3px;">' + meta.join(' · ') + '</div>' : '') +
-      '</div>' +
-      '<div style="font-size:10px;color:var(--text-dim,#666);text-align:right;flex-shrink:0;">' + fmtDate(l.created_at) + '</div>' +
-    '</div>';
+    var conf = (l.confidence != null && l.confidence > 0) ? l.confidence + '%' : '';
+    var location = [l.city, l.state].filter(Boolean).join(', ');
+
+    return '<tr class="leads-row" onclick="openEditLeadModal(\'' + escapeAttr(l.id) + '\')">' +
+      '<td class="lead-title-cell">' +
+        '<div style="font-weight:600;color:var(--text,#fff);font-size:13px;line-height:1.3;">' + escapeHTML(l.title) + '</div>' +
+        (location ? '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:2px;">' + escapeHTML(location) + '</div>' : '') +
+      '</td>' +
+      '<td>' + clientCell + '</td>' +
+      '<td>' + statusPill + '</td>' +
+      '<td class="num" style="font-family:\'SF Mono\',monospace;color:#34d399;font-weight:600;font-size:13px;">' + escapeHTML(revenue) + '</td>' +
+      '<td class="num" style="font-family:\'SF Mono\',monospace;color:var(--text-dim,#aaa);font-size:12px;">' + escapeHTML(conf) + '</td>' +
+      '<td style="font-size:12px;color:var(--text-dim,#aaa);">' + escapeHTML(l.salesperson_name || '') + '</td>' +
+      '<td style="font-size:12px;color:var(--text-dim,#aaa);">' + escapeHTML(l.project_type || '') + '</td>' +
+      '<td style="font-size:11px;color:var(--text-dim,#888);white-space:nowrap;">' + escapeHTML(fmtDate(l.created_at)) + '</td>' +
+    '</tr>';
+  }
+
+  // Stable sort by the configured column. Strings use locale compare,
+  // numbers/dates fall back to numeric. Status sorts by pipeline order
+  // (new → in_progress → sent → sold/lost/no_opportunity) instead of
+  // alphabetically — way more useful for a sales view.
+  function compareLeads(a, b, key, dir) {
+    var av, bv;
+    if (key === 'status') {
+      var order = STATUSES.map(function(s) { return s.key; });
+      av = order.indexOf(a.status); bv = order.indexOf(b.status);
+    } else if (key === 'revenue') {
+      av = Number(a.estimated_revenue_high || a.estimated_revenue_low || 0);
+      bv = Number(b.estimated_revenue_high || b.estimated_revenue_low || 0);
+    } else if (key === 'confidence') {
+      av = Number(a.confidence || 0); bv = Number(b.confidence || 0);
+    } else if (key === 'created_at') {
+      av = a.created_at ? new Date(a.created_at).getTime() : 0;
+      bv = b.created_at ? new Date(b.created_at).getTime() : 0;
+    } else if (key === 'client') {
+      av = (a.client_name || '').toLowerCase(); bv = (b.client_name || '').toLowerCase();
+    } else if (key === 'salesperson') {
+      av = (a.salesperson_name || '').toLowerCase(); bv = (b.salesperson_name || '').toLowerCase();
+    } else if (key === 'project_type') {
+      av = (a.project_type || '').toLowerCase(); bv = (b.project_type || '').toLowerCase();
+    } else { // title
+      av = (a.title || '').toLowerCase(); bv = (b.title || '').toLowerCase();
+    }
+    if (av < bv) return dir === 'desc' ? 1 : -1;
+    if (av > bv) return dir === 'desc' ? -1 : 1;
+    return 0;
+  }
+
+  function sortLeads(key) {
+    if (_leadsSort.key === key) {
+      _leadsSort.dir = _leadsSort.dir === 'asc' ? 'desc' : 'asc';
+    } else {
+      _leadsSort.key = key;
+      // Default direction: dates and numerics descend (newest/biggest
+      // first); text columns ascend.
+      _leadsSort.dir = (key === 'created_at' || key === 'revenue' || key === 'confidence') ? 'desc' : 'asc';
+    }
+    renderLeadsList();
+  }
+
+  function leadsHeaderCell(label, key, opts) {
+    opts = opts || {};
+    var active = _leadsSort.key === key;
+    var arrow = active ? (_leadsSort.dir === 'asc' ? ' &uarr;' : ' &darr;') : '';
+    var color = active ? '#4f8cff' : 'var(--text-dim,#888)';
+    var alignClass = opts.num ? ' class="num"' : '';
+    return '<th' + alignClass + ' style="text-align:' + (opts.num ? 'right' : 'left') + ';" onclick="sortLeadsBy(\'' + key + '\')">' +
+      '<span style="cursor:pointer;color:' + color + ';font-size:10px;text-transform:uppercase;letter-spacing:0.5px;font-weight:700;user-select:none;">' +
+      label + arrow +
+      '</span>' +
+    '</th>';
   }
 
   function matchesSearch(l, q) {
@@ -134,7 +203,30 @@
         '</div>';
       return;
     }
-    listEl.innerHTML = filtered.map(leadCardHTML).join('');
+
+    var sorted = filtered.slice().sort(function(a, b) {
+      return compareLeads(a, b, _leadsSort.key, _leadsSort.dir);
+    });
+
+    var headerRow =
+      leadsHeaderCell('Title',         'title') +
+      leadsHeaderCell('Client',        'client') +
+      leadsHeaderCell('Status',        'status') +
+      leadsHeaderCell('Revenue',       'revenue', { num: true }) +
+      leadsHeaderCell('Conf',          'confidence', { num: true }) +
+      leadsHeaderCell('Salesperson',   'salesperson') +
+      leadsHeaderCell('Project Type',  'project_type') +
+      leadsHeaderCell('Created',       'created_at');
+
+    listEl.innerHTML =
+      '<div class="leads-table-wrap" style="border:1px solid var(--border,#333);border-radius:10px;overflow:hidden;background:var(--card-bg,#0f0f1e);">' +
+        '<table class="leads-table" style="width:100%;border-collapse:collapse;table-layout:auto;">' +
+          '<thead style="background:rgba(255,255,255,0.02);border-bottom:1px solid var(--border,#333);">' +
+            '<tr>' + headerRow + '</tr>' +
+          '</thead>' +
+          '<tbody>' + sorted.map(leadRowHTML).join('') + '</tbody>' +
+        '</table>' +
+      '</div>';
   }
 
   function reloadLeadsCache() {
@@ -846,6 +938,7 @@
   }
 
   window.renderLeadsList = renderLeadsList;
+  window.sortLeadsBy = sortLeads;
   window.reloadLeadsCache = reloadLeadsCache;
   window.openNewLeadModal = openNewLeadModal;
   window.openEditLeadModal = openEditLeadModal;
