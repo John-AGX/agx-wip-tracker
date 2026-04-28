@@ -45,8 +45,8 @@
           ? '<span style="color:#34d399;">&#x2713;</span>'
           : '<span style="color:#e74c3c;">&#x2717;</span>';
         var deleteBtn = (u.id === myId)
-          ? '<button disabled title="You cannot delete your own account" style="font-size:11px;padding:4px 10px;opacity:0.4;cursor:not-allowed;margin-left:4px;">Delete</button>'
-          : '<button onclick="deleteAdminUser(' + u.id + ')" style="font-size:11px;padding:4px 10px;background:#e74c3c;color:#fff;border:none;border-radius:4px;margin-left:4px;cursor:pointer;">Delete</button>';
+          ? '<button class="ee-btn ghost" disabled title="You cannot delete your own account" style="margin-left:4px;">Delete</button>'
+          : '<button class="ee-btn danger" onclick="deleteAdminUser(' + u.id + ')" style="margin-left:4px;">Delete</button>';
         html += '<tr>' +
           '<td>' + escapeHTML(u.name || '') + '</td>' +
           '<td>' + escapeHTML(u.email || '') + '</td>' +
@@ -54,7 +54,7 @@
           '<td style="text-align:center;">' + activeBadge + '</td>' +
           '<td>' + fmtDate(u.created_at) + '</td>' +
           '<td style="text-align:center;white-space:nowrap;">' +
-            '<button onclick="openEditUserModal(' + u.id + ')" style="font-size:11px;padding:4px 10px;">Edit</button>' +
+            '<button class="ee-btn secondary" onclick="openEditUserModal(' + u.id + ')">Edit</button>' +
             deleteBtn +
           '</td>' +
         '</tr>';

@@ -254,21 +254,20 @@
            Cancel/Refresh), .danger (red, for destructive actions),
            .ghost (transparent, for tertiary), .small (compact size). */
         button {
-            background: var(--surface2);
+            background: rgba(255, 255, 255, 0.04);
             color: var(--text);
             border: 1px solid var(--border);
-            padding: 8px 16px;
+            padding: 5px 10px;
             border-radius: 6px;
             cursor: pointer;
-            font-size: 13px;
-            font-weight: 600;
-            transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease, transform 0.05s ease;
+            font-size: 12px;
+            font-weight: 500;
+            transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
             display: inline-flex;
             align-items: center;
             justify-content: center;
             gap: 6px;
             line-height: 1.3;
-            letter-spacing: 0.2px;
             font-family: inherit;
             white-space: nowrap;
         }
@@ -288,25 +287,21 @@
         }
 
         button.primary {
-            background: linear-gradient(180deg, #5b96ff, #3b7cf5);
-            border-color: #3b7cf5;
-            color: #fff;
-            box-shadow: 0 1px 0 rgba(255,255,255,0.18) inset, 0 1px 4px rgba(0,0,0,0.25);
+            background: rgba(79, 140, 255, 0.18);
+            border-color: rgba(79, 140, 255, 0.45);
+            color: #4f8cff;
         }
         button.primary:hover {
-            background: linear-gradient(180deg, #6ea2ff, #4d8cff);
-            border-color: #4d8cff;
+            background: rgba(79, 140, 255, 0.28);
         }
 
         button.success {
-            background: linear-gradient(180deg, #5ddb7e, #3eb764);
-            border-color: #3eb764;
-            color: #0a0a0f;
-            box-shadow: 0 1px 0 rgba(255,255,255,0.2) inset, 0 1px 4px rgba(0,0,0,0.25);
+            background: rgba(52, 211, 153, 0.18);
+            border-color: rgba(52, 211, 153, 0.4);
+            color: #34d399;
         }
         button.success:hover {
-            background: linear-gradient(180deg, #6ee98f, #4ec371);
-            border-color: #4ec371;
+            background: rgba(52, 211, 153, 0.28);
         }
 
         button.secondary {
