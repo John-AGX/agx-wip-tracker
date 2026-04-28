@@ -141,9 +141,17 @@
           '</label>' +
           '<span id="ai-photos-count" style="color:var(--text-dim,#888);text-transform:none;letter-spacing:normal;flex:0 0 auto;"></span>' +
         '</div>' +
-        '<div style="display:flex;gap:8px;align-items:flex-end;">' +
-          '<textarea id="ai-input" rows="1" placeholder="Ask anything about this estimate…" style="flex:1;resize:none;overflow-y:auto;min-height:36px;max-height:200px;background:transparent;border:1px solid var(--border,#333);border-radius:6px;padding:8px 10px;color:var(--text,#fff);font-size:13px;line-height:1.4;font-family:inherit;box-sizing:border-box;"></textarea>' +
-          '<button id="ai-send" class="primary" style="padding:0 16px;font-size:12px;height:36px;flex:0 0 auto;">Send</button>' +
+        // Pill-style input container — borderless textarea with the mic
+        // and send icons docked at the bottom-right. Grows up as the user
+        // types so long prompts stay readable; capped at 320px before
+        // internal scrolling kicks in.
+        '<div id="ai-input-pill" style="background:rgba(255,255,255,0.04);border:1px solid var(--border,#333);border-radius:14px;padding:10px 12px 8px;transition:border-color 0.15s, background 0.15s;">' +
+          '<textarea id="ai-input" rows="1" placeholder="Ask anything about this estimate…" style="width:100%;resize:none;overflow-y:auto;min-height:22px;max-height:320px;background:transparent;border:none;outline:none;padding:0;color:var(--text,#fff);font-size:13px;line-height:1.5;font-family:inherit;box-sizing:border-box;display:block;"></textarea>' +
+          '<div style="display:flex;align-items:center;gap:4px;margin-top:6px;">' +
+            '<div style="flex:1;"></div>' +
+            '<button id="ai-mic" type="button" title="Dictate (voice → text)" aria-label="Dictate" style="background:transparent;border:none;color:var(--text-dim,#888);width:30px;height:30px;border-radius:50%;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;font-size:15px;padding:0;transition:background 0.12s, color 0.12s;">&#x1F3A4;</button>' +
+            '<button id="ai-send" type="button" title="Send (Enter)" aria-label="Send" style="background:rgba(79,140,255,0.18);border:1px solid rgba(79,140,255,0.4);color:#4f8cff;width:30px;height:30px;border-radius:50%;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;font-size:14px;padding:0;transition:background 0.12s, color 0.12s;">&#x27A4;</button>' +
+          '</div>' +
         '</div>' +
       '</div>';
     document.body.appendChild(panel);
@@ -154,11 +162,12 @@
     panel.querySelector('#ai-send').onclick = onSend;
     panel.querySelector('#ai-photos-toggle').onchange = function(e) { _includePhotos = !!e.target.checked; };
     var input = panel.querySelector('#ai-input');
+    var pill = panel.querySelector('#ai-input-pill');
     // Auto-grow: textarea expands as the user types, capped at max-height
     // (set in the inline style above). Reset to scrollHeight on each input.
     function autoGrow() {
       input.style.height = 'auto';
-      input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+      input.style.height = Math.min(input.scrollHeight, 320) + 'px';
     }
     input.addEventListener('input', autoGrow);
     input.addEventListener('keydown', function(e) {
@@ -167,6 +176,21 @@
         onSend();
       }
     });
+    // Pill focus ring — gives visual feedback that the borderless textarea
+    // is the active input target.
+    input.addEventListener('focus', function() {
+      if (pill) {
+        pill.style.borderColor = 'rgba(79,140,255,0.5)';
+        pill.style.background = 'rgba(255,255,255,0.06)';
+      }
+    });
+    input.addEventListener('blur', function() {
+      if (pill) {
+        pill.style.borderColor = 'var(--border,#333)';
+        pill.style.background = 'rgba(255,255,255,0.04)';
+      }
+    });
+    setupVoiceInput(panel);
 
     // Initial preset render — refreshed on every open() to switch
     // between estimate and job preset sets when the entity changes.
@@ -730,9 +754,87 @@
 
   function setSendDisabled(disabled) {
     var btn = document.getElementById('ai-send');
-    if (btn) btn.disabled = disabled;
+    if (btn) {
+      btn.disabled = disabled;
+      // Dim the paper-plane while a request is in flight.
+      btn.style.opacity = disabled ? '0.45' : '1';
+    }
     var input = document.getElementById('ai-input');
     if (input) input.disabled = disabled;
+  }
+
+  // Web Speech API mic wiring. Toggles dictation on/off; appends each
+  // final transcript chunk to the textarea so the user can see what the
+  // browser heard before sending. Hides the mic button on browsers that
+  // don't support SpeechRecognition (Firefox without flags).
+  var _recognition = null;
+  var _isListening = false;
+  function setupVoiceInput(panel) {
+    var micBtn = panel.querySelector('#ai-mic');
+    if (!micBtn) return;
+    var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) {
+      micBtn.style.display = 'none';
+      return;
+    }
+    micBtn.onclick = function() {
+      if (_isListening) { stopListening(); return; }
+      startListening();
+    };
+    function startListening() {
+      try {
+        _recognition = new SR();
+        _recognition.continuous = true;
+        _recognition.interimResults = true;
+        _recognition.lang = navigator.language || 'en-US';
+        var baseValue = '';
+        _recognition.onstart = function() {
+          _isListening = true;
+          var input = document.getElementById('ai-input');
+          baseValue = input ? input.value : '';
+          if (baseValue && !/\s$/.test(baseValue)) baseValue += ' ';
+          micBtn.style.background = 'rgba(248,113,113,0.18)';
+          micBtn.style.color = '#f87171';
+          micBtn.title = 'Stop dictation';
+        };
+        _recognition.onresult = function(e) {
+          var final = '';
+          var interim = '';
+          for (var i = e.resultIndex; i < e.results.length; i++) {
+            var t = e.results[i][0].transcript;
+            if (e.results[i].isFinal) final += t;
+            else interim += t;
+          }
+          var input = document.getElementById('ai-input');
+          if (input) {
+            input.value = baseValue + final + interim;
+            input.dispatchEvent(new Event('input'));
+            if (final) baseValue += final;
+          }
+        };
+        _recognition.onerror = function(ev) {
+          stopListening();
+          if (ev && ev.error === 'not-allowed') {
+            alert('Microphone access denied. Allow it in your browser settings to dictate.');
+          }
+        };
+        _recognition.onend = function() { stopListening(); };
+        _recognition.start();
+      } catch (e) {
+        alert('Could not start dictation: ' + (e.message || e));
+        stopListening();
+      }
+    }
+    function stopListening() {
+      if (_recognition) {
+        try { _recognition.stop(); } catch (e) { /* ignore */ }
+        _recognition = null;
+      }
+      _isListening = false;
+      micBtn.style.background = 'transparent';
+      micBtn.style.color = 'var(--text-dim,#888)';
+      micBtn.title = 'Dictate (voice → text)';
+    }
   }
 
   function countCurrentPhotos() {
@@ -766,8 +868,11 @@
     style.id = 'agx-ai-css';
     style.textContent =
       '@keyframes agx-blink { from, to { opacity: 1; } 50% { opacity: 0; } } ' +
+      '@keyframes agx-mic-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.12); } } ' +
       '.ai-content p:first-child { margin-top: 0; } ' +
       '.ai-content p:last-child { margin-bottom: 0; } ' +
+      '#ai-mic:hover { background: rgba(255,255,255,0.08) !important; color: var(--text,#fff) !important; } ' +
+      '#ai-send:hover:not(:disabled) { background: rgba(79,140,255,0.32) !important; } ' +
       // When the panel is open, push the entire page over so the editor
       // stays fully visible. Sticky elements (page nav, editor header)
       // respect this since they sit in the document flow. The fixed
