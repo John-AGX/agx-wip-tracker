@@ -100,6 +100,21 @@ async function buildEstimateContext(estimateId, includePhotos) {
     clientRow = cRes.rows[0] || null;
   }
 
+  // Linked lead — when an estimate was created from a lead, the lead's
+  // notes typically carry the SOW summary, POC, and key constraints from
+  // BT. Surface them so the assistant can spot missing line items.
+  let leadRow = null;
+  if (blob.lead_id) {
+    const lRes = await pool.query(
+      `SELECT l.*, u.name AS salesperson_name
+       FROM leads l
+       LEFT JOIN users u ON u.id = l.salesperson_id
+       WHERE l.id = $1`,
+      [blob.lead_id]
+    );
+    leadRow = lRes.rows[0] || null;
+  }
+
   // Photos for vision. We pull both leads' and the estimate's photos so the
   // assistant has every available visual. Limited to web-size (1600px,
   // ~150KB each) to keep token cost in check; ignored entirely if the
@@ -149,6 +164,31 @@ async function buildEstimateContext(estimateId, includePhotos) {
   if (blob.community && (!clientRow || clientRow.community_name !== blob.community)) lines.push('- Community / property: ' + blob.community);
   if (blob.propertyAddr) lines.push('- Job address: ' + blob.propertyAddr);
   lines.push('');
+
+  // Linked lead context. The lead's notes often carry the original
+  // BT-imported SOW summary, POC contact, gate codes, and special
+  // instructions — read these when answering scope / completeness
+  // questions. Photos from the lead are already attached as image blocks.
+  if (leadRow) {
+    lines.push('# Linked lead');
+    if (leadRow.title && leadRow.title !== blob.title) lines.push('- Lead title: ' + leadRow.title);
+    if (leadRow.status) lines.push('- Status: ' + leadRow.status);
+    if (leadRow.salesperson_name) lines.push('- Salesperson: ' + leadRow.salesperson_name);
+    if (leadRow.source) lines.push('- Source: ' + leadRow.source);
+    if (leadRow.confidence != null && leadRow.confidence > 0) lines.push('- Confidence: ' + leadRow.confidence + '%');
+    if (leadRow.estimated_revenue_low || leadRow.estimated_revenue_high) {
+      const lo = leadRow.estimated_revenue_low || leadRow.estimated_revenue_high;
+      const hi = leadRow.estimated_revenue_high || leadRow.estimated_revenue_low;
+      lines.push('- Estimated revenue (from BT): $' + Number(lo).toLocaleString() + (lo !== hi ? ' – $' + Number(hi).toLocaleString() : ''));
+    }
+    if (leadRow.market) lines.push('- Market: ' + leadRow.market);
+    if (leadRow.gate_code) lines.push('- Gate code: ' + leadRow.gate_code);
+    if (leadRow.notes && leadRow.notes.trim()) {
+      lines.push('## Lead notes (from BT — typically SOW summary + POC)');
+      lines.push(leadRow.notes.trim());
+    }
+    lines.push('');
+  }
 
   if (alternates.length > 1) {
     lines.push('# Alternates (Good / Better / Best)');

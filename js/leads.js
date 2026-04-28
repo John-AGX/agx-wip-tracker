@@ -629,12 +629,13 @@
     set('estJobType', l.project_type || '');
     set('estLeadId', l.id);
     set('estClientId', l.client_id || '');
+
     if (c) {
       set('estClient', c.company_name || c.name || '');
       set('estCommunity', c.community_name || c.name || '');
-      var pAddr = [c.property_address || c.address, c.city, c.state, c.zip].filter(Boolean).join(', ');
+      // Billing address is the management company's mailing address — always
+      // pulled from the client record, never the lead.
       var bAddr = [c.address, c.city, c.state, c.zip].filter(Boolean).join(', ');
-      set('estPropertyAddr', pAddr);
       set('estBillingAddr', bAddr);
       set('estManagerName', c.community_manager || '');
       set('estManagerEmail', c.cm_email || c.email || '');
@@ -643,12 +644,22 @@
       var picker = document.getElementById('estClientPicker');
       if (picker) picker.value = c.id;
     }
-    // Lead's project address overrides the client mailing address for the
-    // property field if the lead has its own street_address.
-    if (l.street_address) {
-      var leadAddr = [l.street_address, l.city, l.state, l.zip].filter(Boolean).join(', ');
-      set('estPropertyAddr', leadAddr);
+
+    // Property (job-site) address: the lead is the authoritative source
+    // because it points at a specific opportunity. Pull street+city+state+zip
+    // from the lead first; only fall back to the client's property_address
+    // (which carries client-mailing city/state — wrong for any client whose
+    // HQ isn't co-located with the property) when the lead has nothing.
+    var hasLeadAddrParts = l.street_address || l.city || l.state || l.zip;
+    var pAddr;
+    if (hasLeadAddrParts) {
+      pAddr = [l.street_address, l.city, l.state, l.zip].filter(Boolean).join(', ');
+    } else if (c) {
+      pAddr = [c.property_address || c.address, c.city, c.state, c.zip].filter(Boolean).join(', ');
+    } else {
+      pAddr = '';
     }
+    if (pAddr) set('estPropertyAddr', pAddr);
   }
 
   function submitLeadEditor() {
