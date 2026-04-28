@@ -522,6 +522,13 @@
   window.reloadClientsCache = reloadClientsCache;
   window.handleClientsImportFile = handleClientsImportFile;
 
+  // Hook the AI panel calls so the directory re-renders after each
+  // tool the assistant applies. Debounced via the call sites in
+  // ai-panel.js (one call per applied tool plus a final on done).
+  window.refreshClientsAfterAI = function() {
+    reloadClientsCache();
+  };
+
   // ==================== ESTIMATE LINKING ====================
   // Populate a <select> with all clients from the cache, selecting
   // currentClientId if provided. Quietly fetches the cache on first call.

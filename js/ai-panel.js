@@ -25,12 +25,13 @@
   var _abortController = null;
 
   function apiBase() {
-    return _entityType === 'job'
-      ? '/api/ai/jobs/' + encodeURIComponent(_entityId)
-      : '/api/ai/estimates/' + encodeURIComponent(_entityId);
+    if (_entityType === 'job') return '/api/ai/jobs/' + encodeURIComponent(_entityId);
+    if (_entityType === 'client') return '/api/ai/clients';
+    return '/api/ai/estimates/' + encodeURIComponent(_entityId);
   }
   function isEstimateMode() { return _entityType === 'estimate'; }
   function isJobMode() { return _entityType === 'job'; }
+  function isClientMode() { return _entityType === 'client'; }
 
   // Preset prompts surfaced as quick-tap buttons. Different presets per
   // entity — estimates focus on scope/materials, jobs on margin/billing.
@@ -46,7 +47,17 @@
     { label: 'Missing change orders?', prompt: 'Look at the cost lines vs. the original estimated costs. Anything that looks like out-of-scope work that should have been captured as a change order?' },
     { label: 'Margin drift',          prompt: 'Compare as-sold margin, revised margin, and JTD margin. Is the job drifting? What\'s driving the change?' }
   ];
-  function getActivePresets() { return isJobMode() ? JOB_PRESETS : ESTIMATE_PRESETS; }
+  var CLIENT_PRESETS = [
+    { label: 'Find duplicates',         prompt: 'Scan the directory for likely duplicate clients (typo variants, abbreviations vs full names, same CAM/email on different rows). List them and propose merges where you are confident.' },
+    { label: 'Organize flat clients',   prompt: 'Look at the unparented entries. For each one, suggest the parent management company they belong under (existing parent if a match, otherwise propose a split into parent + property).' },
+    { label: 'Add a property',          prompt: 'Walk me through adding a new property. Ask which parent management company first, then collect the property name, address, and on-site CAM contact.' },
+    { label: 'Audit incomplete records', prompt: 'Show me clients missing key fields (no CAM contact, no property address, or no parent linkage). Group by what is missing so I can fill them in efficiently.' }
+  ];
+  function getActivePresets() {
+    if (isJobMode()) return JOB_PRESETS;
+    if (isClientMode()) return CLIENT_PRESETS;
+    return ESTIMATE_PRESETS;
+  }
 
   function escapeHTMLLocal(s) {
     if (typeof window.escapeHTML === 'function') return window.escapeHTML(s);
@@ -111,7 +122,7 @@
         '<button id="ai-clear" title="Clear conversation" style="background:rgba(255,255,255,0.08);color:#ccc;border:1px solid rgba(255,255,255,0.15);border-radius:6px;padding:6px 10px;font-size:11px;cursor:pointer;">Clear</button>' +
       '</div>' +
       // Notice strip
-      '<div style="padding:8px 14px;background:rgba(79,140,255,0.08);border-bottom:1px solid var(--border,#333);font-size:11px;color:var(--text-dim,#aaa);">' +
+      '<div id="ai-notice" style="padding:8px 14px;background:rgba(79,140,255,0.08);border-bottom:1px solid var(--border,#333);font-size:11px;color:var(--text-dim,#aaa);">' +
         'Read-only — I see your estimate and photos but cannot change anything. Apply suggestions by hand.' +
       '</div>' +
       // Messages scroll area
@@ -180,10 +191,14 @@
       entityType = arg.entityType || 'estimate';
       entityId = arg.entityId;
     }
-    if (!entityId) {
+    // Client mode is global to the user — no entity ID needed (the
+    // directory IS the context). Other modes still require an entity.
+    var requiresEntity = entityType !== 'client';
+    if (requiresEntity && !entityId) {
       alert('Save the ' + (entityType || 'record') + ' first to enable the AI assistant.');
       return;
     }
+    if (!requiresEntity) entityId = '__global__';
     var panel = ensurePanel();
     if (_entityId !== entityId || _entityType !== entityType) {
       _entityType = entityType;
@@ -212,7 +227,23 @@
       if (rowEl) rowEl.style.display = isEstimateMode() ? '' : 'none';
     }
     var headerEl = document.querySelector('#agx-ai-panel .agx-ai-title');
-    if (headerEl) headerEl.textContent = isJobMode() ? '📊 WIP Assistant' : '✨ AI Assistant';
+    if (headerEl) {
+      if (isJobMode()) headerEl.textContent = '📊 WIP Assistant';
+      else if (isClientMode()) headerEl.textContent = '👥 Client Directory';
+      else headerEl.textContent = '✨ AI Assistant';
+    }
+    var noticeEl = document.querySelector('#agx-ai-panel #ai-notice');
+    if (noticeEl) {
+      if (isJobMode()) noticeEl.textContent = 'Read-only — I can see this job\'s WIP/financial state but cannot change anything.';
+      else if (isClientMode()) noticeEl.textContent = 'I can edit the client directory. Simple changes (new property under known parent, typo fixes) apply automatically; merges, splits, deletes, and new parent companies require your approval.';
+      else noticeEl.textContent = 'Read-only — I see your estimate and photos but cannot change anything. Apply suggestions by hand.';
+    }
+    var inputEl = document.getElementById('ai-input');
+    if (inputEl) {
+      if (isClientMode()) inputEl.placeholder = 'Ask about your client directory or describe a change…';
+      else if (isJobMode()) inputEl.placeholder = 'Ask anything about this job…';
+      else inputEl.placeholder = 'Ask anything about this estimate…';
+    }
     renderPresets();
   }
 
@@ -286,9 +317,10 @@
     var box = document.getElementById('ai-messages');
     if (!box) return;
     if (!_messages.length) {
-      var hint = isJobMode()
-        ? 'Pick a preset below or ask anything about the job.<br><span style="font-size:11px;opacity:0.7;">I can see contract, costs, change orders, % complete, billing posture.</span>'
-        : 'Pick a preset below or ask anything about the estimate.<br><span style="font-size:11px;opacity:0.7;">I can see line items, scope, client, photos &mdash; and I can propose edits.</span>';
+      var hint;
+      if (isJobMode()) hint = 'Pick a preset below or ask anything about the job.<br><span style="font-size:11px;opacity:0.7;">I can see contract, costs, change orders, % complete, billing posture.</span>';
+      else if (isClientMode()) hint = 'Pick a preset below or describe what you need.<br><span style="font-size:11px;opacity:0.7;">I can see your full directory and can add properties, link parents, fix typos, and propose merges/splits.</span>';
+      else hint = 'Pick a preset below or ask anything about the estimate.<br><span style="font-size:11px;opacity:0.7;">I can see line items, scope, client, photos &mdash; and I can propose edits.</span>';
       box.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;padding:20px 0;text-align:center;line-height:1.6;">' + hint + '</div>';
       return;
     }
@@ -403,8 +435,26 @@
           scrollToBottom();
         } else if (payload.tool_use) {
           pendingToolUses.push(payload.tool_use);
+        } else if (payload.tool_applied) {
+          // Server-side auto-tier tool already executed. Show an inline
+          // confirmation chip in the streaming bubble.
+          appendToolChip(streamDiv, '✓', payload.tool_applied.summary || (payload.tool_applied.name + ' applied'), '#34d399');
+          if (isClientMode() && typeof window.refreshClientsAfterAI === 'function') {
+            window.refreshClientsAfterAI();
+          }
+          scrollToBottom();
+        } else if (payload.tool_failed) {
+          appendToolChip(streamDiv, '✗', payload.tool_failed.error || (payload.tool_failed.name + ' failed'), '#f87171');
+          scrollToBottom();
+        } else if (payload.tool_rejected) {
+          appendToolChip(streamDiv, '⊘', (payload.tool_rejected.name || 'tool') + ' rejected', '#a3a3a3');
+          scrollToBottom();
         } else if (payload.awaiting_approval) {
           pendingAssistantContent = payload.pending_assistant_content;
+        } else if (payload.done) {
+          if (isClientMode() && typeof window.refreshClientsAfterAI === 'function') {
+            window.refreshClientsAfterAI();
+          }
         } else if (payload.error) {
           if (contentEl) contentEl.innerHTML = '<span style="color:#f87171;">' + escapeHTMLLocal(payload.error) + '</span>';
         }
@@ -516,6 +566,10 @@
   }
 
   function applyTool(tu) {
+    if (isClientMode()) {
+      // Server applies client tools on /chat/continue. Just signal approval.
+      return '';
+    }
     if (!window.estimateEditorAPI) {
       throw new Error('Estimate editor not loaded — refresh the page.');
     }
@@ -528,6 +582,17 @@
       case 'propose_update_scope':  return window.estimateEditorAPI.applyUpdateScope(tu.input);
       default: throw new Error('Unknown tool: ' + tu.name);
     }
+  }
+
+  // Inline confirmation chip — used when a server-side auto-tier tool
+  // applies during the stream, so the user sees what happened without
+  // needing an approval card.
+  function appendToolChip(streamDiv, glyph, text, color) {
+    if (!streamDiv) return;
+    var chip = document.createElement('div');
+    chip.style.cssText = 'display:flex;align-items:center;gap:8px;margin-top:6px;padding:5px 9px;background:rgba(255,255,255,0.04);border:1px solid var(--border,#333);border-left:3px solid ' + color + ';border-radius:4px;font-size:11px;color:var(--text-dim,#aaa);';
+    chip.innerHTML = '<span style="color:' + color + ';font-weight:700;">' + glyph + '</span><span style="flex:1;">' + escapeHTMLLocal(text) + '</span>';
+    streamDiv.appendChild(chip);
   }
 
   function continueAfterProposals(pendingContent, responses) {
@@ -566,6 +631,31 @@
       var preview = (input.scope_text || '').slice(0, 280);
       if ((input.scope_text || '').length > 280) preview += '…';
       detail = '<pre style="white-space:pre-wrap;font-family:inherit;font-size:12px;margin:4px 0 0;color:var(--text,#ccc);background:rgba(0,0,0,0.2);padding:8px;border-radius:4px;max-height:160px;overflow-y:auto;">' + escapeHTMLLocal(preview) + '</pre>';
+    } else if (tu.name === 'create_parent_company') {
+      heading = '&#x1F3E2; New parent company';
+      detail = '<div style="font-size:13px;color:var(--text,#fff);font-weight:600;">' + escapeHTMLLocal(input.name || '') + '</div>' +
+        (input.notes ? '<div style="font-size:11px;color:var(--text-dim,#aaa);margin-top:3px;">' + escapeHTMLLocal(input.notes) + '</div>' : '');
+    } else if (tu.name === 'rename_client') {
+      heading = '&#x270F; Rename client';
+      detail = '<div style="font-size:12px;color:var(--text,#ccc);">→ <strong>' + escapeHTMLLocal(input.new_name || '') + '</strong></div>' +
+        '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:2px;font-family:monospace;">id: ' + escapeHTMLLocal(input.client_id || '') + '</div>';
+    } else if (tu.name === 'change_property_parent') {
+      heading = '&#x21B7; Change parent';
+      detail = '<div style="font-size:12px;color:var(--text,#ccc);">' +
+        (input.new_parent_client_id ? 'New parent id: <code>' + escapeHTMLLocal(input.new_parent_client_id) + '</code>' : 'Detach (no parent)') +
+        '</div><div style="font-size:10px;color:var(--text-dim,#888);margin-top:2px;font-family:monospace;">property: ' + escapeHTMLLocal(input.property_client_id || '') + '</div>';
+    } else if (tu.name === 'merge_clients') {
+      heading = '&#x1F500; Merge duplicates';
+      detail = '<div style="font-size:12px;color:var(--text,#ccc);">Keep <code>' + escapeHTMLLocal(input.keep_client_id || '') + '</code></div>' +
+        '<div style="font-size:12px;color:var(--text,#ccc);">Fold in <code>' + escapeHTMLLocal(input.merge_from_client_id || '') + '</code></div>';
+    } else if (tu.name === 'split_client_into_parent_and_property') {
+      heading = '&#x2702; Split client';
+      detail = '<div style="font-size:12px;color:var(--text,#ccc);">Parent: <strong>' + escapeHTMLLocal(input.new_parent_name || '') + '</strong>' +
+        (input.existing_parent_id ? ' <span style="color:var(--text-dim,#888);">(reuse existing)</span>' : '') + '</div>' +
+        '<div style="font-size:12px;color:var(--text,#ccc);">Property: <strong>' + escapeHTMLLocal(input.new_property_name || '') + '</strong></div>';
+    } else if (tu.name === 'delete_client') {
+      heading = '&#x1F5D1; Delete client';
+      detail = '<div style="font-size:12px;color:#f87171;font-family:monospace;">id: ' + escapeHTMLLocal(input.client_id || '') + '</div>';
     } else {
       heading = '? Unknown tool: ' + tu.name;
       detail = '<pre style="font-size:11px;">' + escapeHTMLLocal(JSON.stringify(input, null, 2)) + '</pre>';
@@ -739,5 +829,12 @@
     var jobId = (window.appState && window.appState.currentJobId) || null;
     if (!jobId) { alert('Open a job first.'); return; }
     open({ entityType: 'job', entityId: jobId });
+  };
+
+  // Client-directory entry point. No entity ID — the directory IS the
+  // context. Pages that want a refresh after the assistant changes things
+  // can register window.refreshClientsAfterAI.
+  window.openClientAI = function() {
+    open({ entityType: 'client' });
   };
 })();

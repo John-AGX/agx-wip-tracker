@@ -1151,4 +1151,705 @@ router.post('/extract-lead',
   }
 );
 
+// ════════════════════════════════════════════════════════════════════
+// CLIENT DIRECTORY ASSISTANT
+//
+// Helps with parent-company / property hierarchy management. Each tool
+// is tagged with a risk tier:
+//   - 'auto'      → server applies immediately, model sees the result and
+//                   continues. No UI gating. Used for clearly-safe ops
+//                   (creating a new property under a known parent,
+//                   filling in a missing phone/email).
+//   - 'approval'  → server emits a tool_use event and stops; the user
+//                   clicks Approve/Reject. Used for restructural ops
+//                   (merging, splitting, deleting, reparenting).
+//
+// All writes are logged via clients.updated_at and the response payload
+// so the chat can echo what happened.
+// ════════════════════════════════════════════════════════════════════
+const CLIENT_TOOLS = [
+  {
+    name: 'create_property',
+    tier: 'auto',
+    description: 'Create a new property/community under an existing parent management company. Use this when the user asks to add a new property and the parent company already exists in the directory. The parent_client_id MUST refer to an existing client (look it up in the directory context).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Display name of the property/community (e.g., "Solace Tampa", "City Lakes").' },
+        parent_client_id: { type: 'string', description: 'ID of the existing parent management company.' },
+        community_name: { type: 'string', description: 'Optional — usually same as name; set only when the formal community name differs from the display name.' },
+        property_address: { type: 'string', description: 'Property street address.' },
+        city: { type: 'string' },
+        state: { type: 'string' },
+        zip: { type: 'string' },
+        community_manager: { type: 'string', description: 'CAM / on-site contact name.' },
+        cm_email: { type: 'string' },
+        cm_phone: { type: 'string' },
+        market: { type: 'string', description: 'Geographic market (e.g., "Tampa", "Orlando").' }
+      },
+      required: ['name', 'parent_client_id']
+    }
+  },
+  {
+    name: 'create_parent_company',
+    tier: 'approval',
+    description: 'Create a new top-level parent management company. Use ONLY when the user explicitly asks to add a new parent company AND no similar name exists in the directory. Approval-required to guard against duplicates.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Company name (e.g., "Preferred Apartment Communities").' },
+        company_name: { type: 'string', description: 'Optional formal company name; defaults to name if omitted.' },
+        notes: { type: 'string', description: 'Why this is a separate parent rather than reusing an existing one.' },
+        rationale: { type: 'string', description: 'One short sentence shown on the approval card.' }
+      },
+      required: ['name', 'rationale']
+    }
+  },
+  {
+    name: 'update_client_field',
+    tier: 'auto',
+    description: 'Update one or more editable fields on an existing client (typo fix, fill missing email/phone, etc.). Cannot change name or parent_client_id — use rename_client or change_property_parent for those.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        client_id: { type: 'string' },
+        fields: {
+          type: 'object',
+          description: 'Object of field-name → new-value pairs. Allowed fields: salutation, first_name, last_name, email, phone, cell, address, city, state, zip, company_name, community_name, market, property_address, property_phone, website, gate_code, additional_pocs, community_manager, cm_email, cm_phone, maintenance_manager, mm_email, mm_phone, notes, client_type, activation_status.'
+        }
+      },
+      required: ['client_id', 'fields']
+    }
+  },
+  {
+    name: 'link_property_to_parent',
+    tier: 'auto',
+    description: 'Set or change the parent_client_id of a client when the parent already exists. Used to slot a flat client under an existing parent management company. If the property already has a different parent, this is restructural — DO NOT use this; use change_property_parent instead.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        property_client_id: { type: 'string' },
+        parent_client_id: { type: 'string' }
+      },
+      required: ['property_client_id', 'parent_client_id']
+    }
+  },
+  {
+    name: 'rename_client',
+    tier: 'approval',
+    description: 'Rename an existing client. Approval-required because rename can affect linked leads/estimates display.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        client_id: { type: 'string' },
+        new_name: { type: 'string' },
+        rationale: { type: 'string' }
+      },
+      required: ['client_id', 'new_name', 'rationale']
+    }
+  },
+  {
+    name: 'change_property_parent',
+    tier: 'approval',
+    description: "Change a property's parent to a different parent company. Restructural — always requires approval.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        property_client_id: { type: 'string' },
+        new_parent_client_id: { type: 'string', description: 'Pass empty string or null to detach (make it a top-level entry).' },
+        rationale: { type: 'string' }
+      },
+      required: ['property_client_id', 'rationale']
+    }
+  },
+  {
+    name: 'merge_clients',
+    tier: 'approval',
+    description: "Merge two duplicate clients. The 'keep' client is the survivor; data from 'merge_from' is folded into it (only filling empty fields, never overwriting), then merge_from is deleted. Any properties parented to merge_from get reparented to keep.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        keep_client_id: { type: 'string' },
+        merge_from_client_id: { type: 'string' },
+        rationale: { type: 'string' }
+      },
+      required: ['keep_client_id', 'merge_from_client_id', 'rationale']
+    }
+  },
+  {
+    name: 'split_client_into_parent_and_property',
+    tier: 'approval',
+    description: 'Take a single flat client whose name encodes both a parent and a property (e.g., "PAC - Solace Tampa") and split it into a parent company + a property under it. The original client is converted into the property; a new parent is created (or an existing parent is reused if its name matches).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        client_id: { type: 'string' },
+        new_parent_name: { type: 'string', description: 'The parent company portion (e.g., "Preferred Apartment Communities").' },
+        new_property_name: { type: 'string', description: 'The property portion (e.g., "Solace Tampa").' },
+        existing_parent_id: { type: 'string', description: 'Optional — if a matching parent already exists, pass its ID here instead of creating a new one.' },
+        rationale: { type: 'string' }
+      },
+      required: ['client_id', 'new_parent_name', 'new_property_name', 'rationale']
+    }
+  },
+  {
+    name: 'delete_client',
+    tier: 'approval',
+    description: 'Delete a client. Children get detached (parent_client_id set NULL on their rows). Always requires approval.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        client_id: { type: 'string' },
+        rationale: { type: 'string' }
+      },
+      required: ['client_id', 'rationale']
+    }
+  }
+];
+
+const CLIENT_EDITABLE_FIELDS = new Set([
+  'salutation', 'first_name', 'last_name', 'email', 'phone', 'cell',
+  'address', 'city', 'state', 'zip',
+  'company_name', 'community_name', 'market',
+  'property_address', 'property_phone', 'website', 'gate_code', 'additional_pocs',
+  'community_manager', 'cm_email', 'cm_phone',
+  'maintenance_manager', 'mm_email', 'mm_phone',
+  'notes', 'client_type', 'activation_status'
+]);
+
+// ──────────────────────────────────────────────────────────────────
+// Tool executors. Each returns a short human-readable summary string
+// that gets fed back to the model as the tool_result content AND
+// surfaced to the UI as the "applied" chip text. Throws on error;
+// the chat loop turns the error into a tool_result with `is_error: true`
+// so the model can recover (apologize / try a different tool).
+// ──────────────────────────────────────────────────────────────────
+async function execClientTool(name, input) {
+  switch (name) {
+    case 'create_property': {
+      if (!input.name || !input.parent_client_id) throw new Error('name and parent_client_id are required');
+      const parent = await pool.query('SELECT id, name FROM clients WHERE id = $1', [input.parent_client_id]);
+      if (!parent.rows.length) throw new Error('parent_client_id not found');
+      const id = 'client_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+      const cols = ['id', 'parent_client_id', 'name', 'client_type'];
+      const vals = [id, input.parent_client_id, input.name, 'Property'];
+      for (const k of ['community_name', 'property_address', 'city', 'state', 'zip', 'community_manager', 'cm_email', 'cm_phone', 'market']) {
+        if (input[k]) { cols.push(k); vals.push(input[k]); }
+      }
+      const placeholders = cols.map((_, i) => '$' + (i + 1)).join(', ');
+      await pool.query(`INSERT INTO clients (${cols.join(', ')}) VALUES (${placeholders})`, vals);
+      return `Created property "${input.name}" under "${parent.rows[0].name}" (id=${id}).`;
+    }
+    case 'create_parent_company': {
+      if (!input.name) throw new Error('name is required');
+      const id = 'client_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+      await pool.query(
+        `INSERT INTO clients (id, name, company_name, client_type, notes)
+         VALUES ($1, $2, $3, 'Property Mgmt', $4)`,
+        [id, input.name, input.company_name || input.name, input.notes || null]
+      );
+      return `Created parent company "${input.name}" (id=${id}).`;
+    }
+    case 'update_client_field': {
+      if (!input.client_id || !input.fields || typeof input.fields !== 'object') throw new Error('client_id and fields are required');
+      const exists = await pool.query('SELECT id, name FROM clients WHERE id = $1', [input.client_id]);
+      if (!exists.rows.length) throw new Error('client_id not found');
+      const sets = [];
+      const params = [];
+      let p = 1;
+      for (const [k, v] of Object.entries(input.fields)) {
+        if (!CLIENT_EDITABLE_FIELDS.has(k)) continue;
+        sets.push(k + ' = $' + p++);
+        params.push(v);
+      }
+      if (!sets.length) return `No editable fields supplied for ${exists.rows[0].name}.`;
+      sets.push('updated_at = NOW()');
+      params.push(input.client_id);
+      await pool.query(`UPDATE clients SET ${sets.join(', ')} WHERE id = $${p}`, params);
+      return `Updated ${Object.keys(input.fields).join(', ')} on ${exists.rows[0].name}.`;
+    }
+    case 'link_property_to_parent': {
+      const child = await pool.query('SELECT id, name, parent_client_id FROM clients WHERE id = $1', [input.property_client_id]);
+      if (!child.rows.length) throw new Error('property_client_id not found');
+      if (child.rows[0].parent_client_id) throw new Error('Property already has a parent — use change_property_parent instead.');
+      const parent = await pool.query('SELECT id, name FROM clients WHERE id = $1', [input.parent_client_id]);
+      if (!parent.rows.length) throw new Error('parent_client_id not found');
+      if (input.property_client_id === input.parent_client_id) throw new Error('A client cannot be its own parent.');
+      await pool.query('UPDATE clients SET parent_client_id = $1, updated_at = NOW() WHERE id = $2', [input.parent_client_id, input.property_client_id]);
+      return `Linked "${child.rows[0].name}" under "${parent.rows[0].name}".`;
+    }
+    case 'rename_client': {
+      const r = await pool.query('SELECT name FROM clients WHERE id = $1', [input.client_id]);
+      if (!r.rows.length) throw new Error('client_id not found');
+      await pool.query('UPDATE clients SET name = $1, updated_at = NOW() WHERE id = $2', [input.new_name, input.client_id]);
+      return `Renamed "${r.rows[0].name}" to "${input.new_name}".`;
+    }
+    case 'change_property_parent': {
+      const child = await pool.query('SELECT id, name FROM clients WHERE id = $1', [input.property_client_id]);
+      if (!child.rows.length) throw new Error('property_client_id not found');
+      const newParentId = input.new_parent_client_id || null;
+      if (newParentId) {
+        if (newParentId === input.property_client_id) throw new Error('A client cannot be its own parent.');
+        const p = await pool.query('SELECT id FROM clients WHERE id = $1', [newParentId]);
+        if (!p.rows.length) throw new Error('new_parent_client_id not found');
+      }
+      await pool.query('UPDATE clients SET parent_client_id = $1, updated_at = NOW() WHERE id = $2', [newParentId, input.property_client_id]);
+      return newParentId
+        ? `Moved "${child.rows[0].name}" to a new parent.`
+        : `Detached "${child.rows[0].name}" from its parent.`;
+    }
+    case 'merge_clients': {
+      const keep = await pool.query('SELECT * FROM clients WHERE id = $1', [input.keep_client_id]);
+      const from = await pool.query('SELECT * FROM clients WHERE id = $1', [input.merge_from_client_id]);
+      if (!keep.rows.length) throw new Error('keep_client_id not found');
+      if (!from.rows.length) throw new Error('merge_from_client_id not found');
+      if (input.keep_client_id === input.merge_from_client_id) throw new Error('keep and merge_from are the same client.');
+      const k = keep.rows[0];
+      const f = from.rows[0];
+      const cli = await pool.connect();
+      try {
+        await cli.query('BEGIN');
+        // Fold: only fill blanks on keep from from
+        const sets = [];
+        const params = [];
+        let p = 1;
+        for (const col of CLIENT_EDITABLE_FIELDS) {
+          if ((k[col] === null || k[col] === '') && f[col]) {
+            sets.push(col + ' = $' + p++);
+            params.push(f[col]);
+          }
+        }
+        if (sets.length) {
+          sets.push('updated_at = NOW()');
+          params.push(input.keep_client_id);
+          await cli.query(`UPDATE clients SET ${sets.join(', ')} WHERE id = $${p}`, params);
+        }
+        // Reparent any children of merge_from to keep
+        await cli.query('UPDATE clients SET parent_client_id = $1 WHERE parent_client_id = $2', [input.keep_client_id, input.merge_from_client_id]);
+        // Move leads/estimates that pointed at merge_from to keep (estimates store client_id in JSONB; skip for now)
+        await cli.query('UPDATE leads SET client_id = $1 WHERE client_id = $2', [input.keep_client_id, input.merge_from_client_id]);
+        await cli.query('DELETE FROM clients WHERE id = $1', [input.merge_from_client_id]);
+        await cli.query('COMMIT');
+      } catch (e) {
+        await cli.query('ROLLBACK');
+        throw e;
+      } finally {
+        cli.release();
+      }
+      return `Merged "${f.name}" into "${k.name}".`;
+    }
+    case 'split_client_into_parent_and_property': {
+      const orig = await pool.query('SELECT * FROM clients WHERE id = $1', [input.client_id]);
+      if (!orig.rows.length) throw new Error('client_id not found');
+      const cli = await pool.connect();
+      try {
+        await cli.query('BEGIN');
+        let parentId = input.existing_parent_id;
+        if (parentId) {
+          const p = await cli.query('SELECT id FROM clients WHERE id = $1', [parentId]);
+          if (!p.rows.length) throw new Error('existing_parent_id not found');
+        } else {
+          parentId = 'client_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+          await cli.query(
+            `INSERT INTO clients (id, name, company_name, client_type)
+             VALUES ($1, $2, $2, 'Property Mgmt')`,
+            [parentId, input.new_parent_name]
+          );
+        }
+        await cli.query(
+          `UPDATE clients SET name = $1, parent_client_id = $2, client_type = COALESCE(client_type, 'Property'), updated_at = NOW()
+           WHERE id = $3`,
+          [input.new_property_name, parentId, input.client_id]
+        );
+        await cli.query('COMMIT');
+      } catch (e) {
+        await cli.query('ROLLBACK');
+        throw e;
+      } finally {
+        cli.release();
+      }
+      return `Split "${orig.rows[0].name}" → parent "${input.new_parent_name}" + property "${input.new_property_name}".`;
+    }
+    case 'delete_client': {
+      const r = await pool.query('SELECT name FROM clients WHERE id = $1', [input.client_id]);
+      if (!r.rows.length) throw new Error('client_id not found');
+      await pool.query('DELETE FROM clients WHERE id = $1', [input.client_id]);
+      return `Deleted "${r.rows[0].name}".`;
+    }
+    default:
+      throw new Error('Unknown tool: ' + name);
+  }
+}
+
+function isClientToolAutoTier(name) {
+  const t = CLIENT_TOOLS.find(t => t.name === name);
+  return !!(t && t.tier === 'auto');
+}
+
+// Build the directory snapshot Claude reads as context. Capped per
+// parent so a huge directory doesn't blow the prompt window.
+async function buildClientDirectoryContext() {
+  const { rows } = await pool.query(
+    `SELECT id, name, parent_client_id, client_type, company_name, community_name,
+            community_manager, cm_email, cm_phone, market, property_address,
+            city, state, zip, email, phone
+     FROM clients ORDER BY COALESCE(parent_client_id, id), name`
+  );
+  const byId = new Map(rows.map(r => [r.id, r]));
+  const parents = rows.filter(r => !r.parent_client_id);
+  const childrenByParent = new Map();
+  for (const r of rows) {
+    if (r.parent_client_id) {
+      if (!childrenByParent.has(r.parent_client_id)) childrenByParent.set(r.parent_client_id, []);
+      childrenByParent.get(r.parent_client_id).push(r);
+    }
+  }
+  const flatTopLevel = parents.filter(p => !childrenByParent.has(p.id));
+
+  const out = [];
+  out.push('You are a client-directory assistant for AG Exteriors. AGX runs work for property-management companies and HOAs in Central Florida; the directory is structured as parent management companies (e.g., "Preferred Apartment Communities", "Associa", "FirstService Residential") with property/community children under them (e.g., "Solace Tampa", "City Lakes", "Wimbledon Greens"). Your job is to keep this hierarchy clean, accurate, and free of duplicates.');
+  out.push('');
+  out.push('Behavior rules:');
+  out.push('- ALWAYS prefer linking a new property under an EXISTING parent over creating a new parent. Re-use parents whose name closely matches (typo / abbreviation / "Inc." vs not) — call out the match in chat before proposing the new property.');
+  out.push('- When the user describes work for "PAC" or "Associa" or any abbreviation, look it up in the directory below; do not assume a new parent.');
+  out.push('- A property\'s contact is the on-site CAM (community_manager). The mailing address belongs to the parent management company. The property_address belongs to the community itself.');
+  out.push('- Some tools auto-apply (creating a property, fixing a typo, linking under an existing parent). Others require user approval (creating new parent, merging, splitting, deleting, changing parent). Tier is per-tool — just call it; the system handles gating.');
+  out.push('- After each batch of changes, give the user a one-line summary in plain text. Keep prose short — they want results, not narration.');
+  out.push('');
+  out.push('# Directory snapshot (' + rows.length + ' clients)');
+  out.push('');
+  out.push('## Parent companies with properties:');
+  for (const p of parents) {
+    const kids = childrenByParent.get(p.id);
+    if (!kids || !kids.length) continue;
+    out.push(`- **${p.name}** (id=${p.id})${p.market ? ' — ' + p.market : ''}`);
+    for (const k of kids) {
+      const bits = [];
+      if (k.community_manager) bits.push('CAM: ' + k.community_manager);
+      if (k.market) bits.push(k.market);
+      if (k.city) bits.push(k.city + (k.state ? ', ' + k.state : ''));
+      out.push(`  - ${k.name} (id=${k.id})${bits.length ? ' — ' + bits.join(' · ') : ''}`);
+    }
+  }
+  if (flatTopLevel.length) {
+    out.push('');
+    out.push('## Flat / unparented entries (potential candidates to organize):');
+    for (const f of flatTopLevel) {
+      const bits = [];
+      if (f.company_name && f.company_name !== f.name) bits.push('company_name=' + f.company_name);
+      if (f.community_name && f.community_name !== f.name) bits.push('community=' + f.community_name);
+      if (f.community_manager) bits.push('CAM: ' + f.community_manager);
+      if (f.city) bits.push(f.city + (f.state ? ', ' + f.state : ''));
+      out.push(`- ${f.name} (id=${f.id})${bits.length ? ' — ' + bits.join(' · ') : ''}`);
+    }
+  }
+  return { systemPrompt: out.join('\n'), totalClients: rows.length };
+}
+
+// Persist a final assistant text response on the client thread.
+async function saveClientAssistantMessage({ userId, text, usage }) {
+  const id = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+  await pool.query(
+    `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content, model, input_tokens, output_tokens)
+     VALUES ($1, 'client', 'global', $2, 'assistant', $3, $4, $5, $6)`,
+    [id, userId, text, MODEL, usage.input_tokens, usage.output_tokens]
+  );
+}
+
+// One streaming step against Anthropic. Returns a structured turn outcome
+// the loop can branch on: assistant text, tool_use blocks (split by tier),
+// final assistant content for echo-on-continue, and usage.
+async function streamClientTurn({ anthropic, res, systemPrompt, messages }) {
+  let assistantText = '';
+  let finalContent = null;
+  let usage = { input_tokens: null, output_tokens: null };
+  const stream = anthropic.messages.stream({
+    model: MODEL,
+    max_tokens: MAX_TOKENS,
+    system: systemPrompt,
+    tools: CLIENT_TOOLS.map(({ tier, ...t }) => t),
+    messages
+  });
+  stream.on('text', (delta) => {
+    assistantText += delta;
+    res.write('data: ' + JSON.stringify({ delta }) + '\n\n');
+  });
+  stream.on('finalMessage', (msg) => {
+    if (msg && msg.usage) usage = msg.usage;
+    if (msg && Array.isArray(msg.content)) finalContent = msg.content;
+  });
+  await stream.done();
+
+  const toolUseBlocks = (finalContent || []).filter(b => b.type === 'tool_use');
+  return { assistantText, finalContent, toolUseBlocks, usage };
+}
+
+router.get('/clients/messages',
+  requireAuth, requireCapability('ESTIMATES_VIEW'),
+  async (req, res) => {
+    try {
+      const { rows } = await pool.query(
+        `SELECT id, role, content, created_at FROM ai_messages
+         WHERE entity_type='client' AND user_id=$1
+         ORDER BY created_at ASC`,
+        [req.user.id]
+      );
+      res.json({ messages: rows });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  }
+);
+router.delete('/clients/messages',
+  requireAuth, requireCapability('ESTIMATES_VIEW'),
+  async (req, res) => {
+    try {
+      await pool.query(`DELETE FROM ai_messages WHERE entity_type='client' AND user_id=$1`, [req.user.id]);
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  }
+);
+
+// Client chat endpoint. Loops server-side: stream → if auto-tier tools,
+// execute and continue; if approval-tier, stop and emit awaiting_approval.
+const MAX_CLIENT_TOOL_LOOPS = 6;
+router.post('/clients/chat',
+  requireAuth, requireCapability('ESTIMATES_EDIT'),
+  async (req, res) => {
+    const anthropic = getAnthropic();
+    if (!anthropic) {
+      return res.status(503).json({ error: 'AI assistant is not configured.' });
+    }
+    const userMessage = (req.body && req.body.message || '').trim();
+    if (!userMessage) return res.status(400).json({ error: 'message is required' });
+
+    setSSEHeaders(res);
+    try {
+      const histRes = await pool.query(
+        `SELECT role, content FROM ai_messages
+         WHERE entity_type='client' AND user_id=$1
+         ORDER BY created_at ASC`,
+        [req.user.id]
+      );
+      let history = histRes.rows;
+      const cap = MAX_HISTORY_PAIRS * 2;
+      if (history.length > cap) history = history.slice(-cap);
+
+      const userMsgId = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+      await pool.query(
+        `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content)
+         VALUES ($1, 'client', 'global', $2, 'user', $3)`,
+        [userMsgId, req.user.id, userMessage]
+      );
+
+      const messages = [
+        ...history.map(m => ({ role: m.role, content: m.content })),
+        { role: 'user', content: userMessage }
+      ];
+
+      let totalUsage = { input_tokens: 0, output_tokens: 0 };
+      let finalAssistantText = '';
+
+      for (let loop = 0; loop < MAX_CLIENT_TOOL_LOOPS; loop++) {
+        // Refresh directory context each loop iteration so the model sees
+        // changes from the auto-tier tools it just ran.
+        const ctx = await buildClientDirectoryContext();
+        const turn = await streamClientTurn({
+          anthropic, res,
+          systemPrompt: ctx.systemPrompt,
+          messages
+        });
+        finalAssistantText = turn.assistantText;
+        if (turn.usage.input_tokens) totalUsage.input_tokens += turn.usage.input_tokens;
+        if (turn.usage.output_tokens) totalUsage.output_tokens += turn.usage.output_tokens;
+
+        if (!turn.toolUseBlocks.length) {
+          // No more tool use — done.
+          if (finalAssistantText) {
+            await saveClientAssistantMessage({ userId: req.user.id, text: finalAssistantText, usage: totalUsage });
+          }
+          res.write('data: ' + JSON.stringify({ done: true, usage: totalUsage }) + '\n\n');
+          res.write('data: [DONE]\n\n');
+          res.end();
+          return;
+        }
+
+        // Partition the tool blocks by tier.
+        const autoBlocks = turn.toolUseBlocks.filter(b => isClientToolAutoTier(b.name));
+        const approvalBlocks = turn.toolUseBlocks.filter(b => !isClientToolAutoTier(b.name));
+
+        if (approvalBlocks.length) {
+          // Mixed or all-approval — stop here and let the user decide.
+          // If there are also auto-tier blocks in the SAME turn, we treat
+          // them ALL as approval-required so the user sees the full plan.
+          for (const tu of turn.toolUseBlocks) {
+            res.write('data: ' + JSON.stringify({ tool_use: { id: tu.id, name: tu.name, input: tu.input, tier: isClientToolAutoTier(tu.name) ? 'auto' : 'approval' } }) + '\n\n');
+          }
+          res.write('data: ' + JSON.stringify({
+            awaiting_approval: true,
+            pending_assistant_content: turn.finalContent,
+            tool_use_count: turn.toolUseBlocks.length,
+            usage: totalUsage
+          }) + '\n\n');
+          res.write('data: [DONE]\n\n');
+          res.end();
+          return;
+        }
+
+        // All auto. Execute each, send tool_applied event, append tool_result, loop.
+        const toolResultBlocks = [];
+        for (const tu of autoBlocks) {
+          let summary, isError = false;
+          try {
+            summary = await execClientTool(tu.name, tu.input || {});
+            res.write('data: ' + JSON.stringify({ tool_applied: { id: tu.id, name: tu.name, input: tu.input, summary } }) + '\n\n');
+          } catch (e) {
+            summary = 'Error: ' + (e.message || 'failed');
+            isError = true;
+            res.write('data: ' + JSON.stringify({ tool_failed: { id: tu.id, name: tu.name, input: tu.input, error: summary } }) + '\n\n');
+          }
+          toolResultBlocks.push({ type: 'tool_result', tool_use_id: tu.id, content: summary, is_error: isError || undefined });
+        }
+        messages.push({ role: 'assistant', content: turn.finalContent });
+        messages.push({ role: 'user', content: toolResultBlocks });
+        // loop continues with updated messages
+      }
+      // Hit loop cap without resolving
+      res.write('data: ' + JSON.stringify({ error: 'Tool loop exceeded maximum iterations' }) + '\n\n');
+      res.write('data: [DONE]\n\n');
+      res.end();
+    } catch (e) {
+      console.error('AI client chat error:', e);
+      res.write('data: ' + JSON.stringify({ error: e.message || 'Server error' }) + '\n\n');
+      res.write('data: [DONE]\n\n');
+      res.end();
+    }
+  }
+);
+
+// Continuation after user approves/rejects. Runs the same multi-step
+// loop as /chat so further auto-tier tools can chain off the approved
+// ones without another round-trip.
+router.post('/clients/chat/continue',
+  requireAuth, requireCapability('ESTIMATES_EDIT'),
+  async (req, res) => {
+    const anthropic = getAnthropic();
+    if (!anthropic) return res.status(503).json({ error: 'AI assistant is not configured.' });
+    const pendingContent = req.body && req.body.pending_assistant_content;
+    const decisions = req.body && req.body.tool_results;
+    if (!Array.isArray(pendingContent) || !Array.isArray(decisions) || !decisions.length) {
+      return res.status(400).json({ error: 'pending_assistant_content and tool_results required' });
+    }
+    setSSEHeaders(res);
+    try {
+      const histRes = await pool.query(
+        `SELECT role, content FROM ai_messages
+         WHERE entity_type='client' AND user_id=$1
+         ORDER BY created_at ASC`,
+        [req.user.id]
+      );
+      let history = histRes.rows;
+      const cap = MAX_HISTORY_PAIRS * 2;
+      if (history.length > cap) history = history.slice(-cap);
+
+      // Execute approved tools server-side (the client just sends approval
+      // booleans; we never trust the client to apply changes). Build the
+      // tool_result blocks the API expects.
+      const pendingToolUseById = new Map();
+      for (const block of pendingContent) {
+        if (block && block.type === 'tool_use') pendingToolUseById.set(block.id, block);
+      }
+      const toolResultBlocks = [];
+      for (const d of decisions) {
+        const tu = pendingToolUseById.get(d.tool_use_id);
+        let summary, isError = false;
+        if (!tu) {
+          summary = 'Error: tool_use not found in pending content.';
+          isError = true;
+        } else if (!d.approved) {
+          summary = d.reject_reason || 'User rejected this proposal.';
+          res.write('data: ' + JSON.stringify({ tool_rejected: { id: tu.id, name: tu.name } }) + '\n\n');
+        } else {
+          try {
+            summary = await execClientTool(tu.name, tu.input || {});
+            res.write('data: ' + JSON.stringify({ tool_applied: { id: tu.id, name: tu.name, input: tu.input, summary } }) + '\n\n');
+          } catch (e) {
+            summary = 'Error: ' + (e.message || 'failed');
+            isError = true;
+            res.write('data: ' + JSON.stringify({ tool_failed: { id: tu.id, name: tu.name, input: tu.input, error: summary } }) + '\n\n');
+          }
+        }
+        toolResultBlocks.push({ type: 'tool_result', tool_use_id: d.tool_use_id, content: summary, is_error: isError || undefined });
+      }
+
+      const messages = [
+        ...history.map(m => ({ role: m.role, content: m.content })),
+        { role: 'assistant', content: pendingContent },
+        { role: 'user', content: toolResultBlocks }
+      ];
+
+      let totalUsage = { input_tokens: 0, output_tokens: 0 };
+      let finalAssistantText = '';
+      for (let loop = 0; loop < MAX_CLIENT_TOOL_LOOPS; loop++) {
+        const ctx = await buildClientDirectoryContext();
+        const turn = await streamClientTurn({ anthropic, res, systemPrompt: ctx.systemPrompt, messages });
+        finalAssistantText = turn.assistantText;
+        if (turn.usage.input_tokens) totalUsage.input_tokens += turn.usage.input_tokens;
+        if (turn.usage.output_tokens) totalUsage.output_tokens += turn.usage.output_tokens;
+
+        if (!turn.toolUseBlocks.length) {
+          if (finalAssistantText) {
+            await saveClientAssistantMessage({ userId: req.user.id, text: finalAssistantText, usage: totalUsage });
+          }
+          res.write('data: ' + JSON.stringify({ done: true, usage: totalUsage }) + '\n\n');
+          res.write('data: [DONE]\n\n');
+          res.end();
+          return;
+        }
+        const autoBlocks = turn.toolUseBlocks.filter(b => isClientToolAutoTier(b.name));
+        const approvalBlocks = turn.toolUseBlocks.filter(b => !isClientToolAutoTier(b.name));
+        if (approvalBlocks.length) {
+          for (const tu of turn.toolUseBlocks) {
+            res.write('data: ' + JSON.stringify({ tool_use: { id: tu.id, name: tu.name, input: tu.input, tier: isClientToolAutoTier(tu.name) ? 'auto' : 'approval' } }) + '\n\n');
+          }
+          res.write('data: ' + JSON.stringify({
+            awaiting_approval: true,
+            pending_assistant_content: turn.finalContent,
+            tool_use_count: turn.toolUseBlocks.length,
+            usage: totalUsage
+          }) + '\n\n');
+          res.write('data: [DONE]\n\n');
+          res.end();
+          return;
+        }
+        const inner = [];
+        for (const tu of autoBlocks) {
+          let summary, isError = false;
+          try {
+            summary = await execClientTool(tu.name, tu.input || {});
+            res.write('data: ' + JSON.stringify({ tool_applied: { id: tu.id, name: tu.name, input: tu.input, summary } }) + '\n\n');
+          } catch (e) {
+            summary = 'Error: ' + (e.message || 'failed');
+            isError = true;
+            res.write('data: ' + JSON.stringify({ tool_failed: { id: tu.id, name: tu.name, input: tu.input, error: summary } }) + '\n\n');
+          }
+          inner.push({ type: 'tool_result', tool_use_id: tu.id, content: summary, is_error: isError || undefined });
+        }
+        messages.push({ role: 'assistant', content: turn.finalContent });
+        messages.push({ role: 'user', content: inner });
+      }
+      res.write('data: ' + JSON.stringify({ error: 'Tool loop exceeded maximum iterations' }) + '\n\n');
+      res.write('data: [DONE]\n\n');
+      res.end();
+    } catch (e) {
+      console.error('AI client chat/continue error:', e);
+      res.write('data: ' + JSON.stringify({ error: e.message || 'Server error' }) + '\n\n');
+      res.write('data: [DONE]\n\n');
+      res.end();
+    }
+  }
+);
+
 module.exports = router;
