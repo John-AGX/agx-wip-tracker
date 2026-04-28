@@ -81,11 +81,12 @@
     panel.id = 'agx-ai-panel';
     panel.style.cssText = 'position:fixed;top:0;right:0;bottom:0;width:420px;max-width:90vw;background:var(--surface,#0f0f1e);border-left:1px solid var(--border,#333);box-shadow:-4px 0 22px rgba(0,0,0,0.6);z-index:80;display:flex;flex-direction:column;transform:translateX(100%);transition:transform 0.22s ease;';
     panel.innerHTML =
-      // Header
-      '<div style="padding:14px 16px;border-bottom:1px solid var(--border,#333);background:linear-gradient(135deg,#0d1f12 0%,#14351d 100%);display:flex;align-items:center;gap:10px;">' +
-        '<div style="font-size:14px;font-weight:700;color:#fff;flex:1;">&#x2728; AI Estimating Assistant</div>' +
-        '<button id="ai-clear" title="Clear conversation" style="background:rgba(255,255,255,0.08);color:#ccc;border:1px solid rgba(255,255,255,0.15);border-radius:6px;padding:4px 8px;font-size:11px;cursor:pointer;">Clear</button>' +
-        '<button id="ai-close" title="Close (Esc)" style="background:rgba(255,255,255,0.08);color:#fff;border:1px solid rgba(255,255,255,0.15);border-radius:6px;width:28px;height:28px;font-size:14px;cursor:pointer;">&times;</button>' +
+      // Header — close button is the most prominent control on the left
+      // (mirrors a typical drawer/sidebar UX) so it's never missed.
+      '<div style="padding:12px 14px;border-bottom:1px solid var(--border,#333);background:linear-gradient(135deg,#0d1f12 0%,#14351d 100%);display:flex;align-items:center;gap:10px;">' +
+        '<button id="ai-close" title="Close (Esc)" style="background:rgba(255,255,255,0.12);color:#fff;border:1px solid rgba(255,255,255,0.2);border-radius:6px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:6px;">&rarr; Close</button>' +
+        '<div style="font-size:14px;font-weight:700;color:#fff;flex:1;text-align:right;">&#x2728; AI Assistant</div>' +
+        '<button id="ai-clear" title="Clear conversation" style="background:rgba(255,255,255,0.08);color:#ccc;border:1px solid rgba(255,255,255,0.15);border-radius:6px;padding:6px 10px;font-size:11px;cursor:pointer;">Clear</button>' +
       '</div>' +
       // Notice strip
       '<div style="padding:8px 14px;background:rgba(79,140,255,0.08);border-bottom:1px solid var(--border,#333);font-size:11px;color:var(--text-dim,#aaa);">' +
@@ -160,6 +161,9 @@
       loadHistory();
     }
     panel.style.transform = 'translateX(0)';
+    // Push the page content left so the panel doesn't cover the editor.
+    // CSS class on body handles the layout; transition is smooth.
+    document.body.classList.add('agx-ai-open');
     _open = true;
     setTimeout(function() {
       var inp = document.getElementById('ai-input');
@@ -171,6 +175,7 @@
   function close() {
     var panel = document.getElementById('agx-ai-panel');
     if (panel) panel.style.transform = 'translateX(100%)';
+    document.body.classList.remove('agx-ai-open');
     _open = false;
     if (_abortController) {
       try { _abortController.abort(); } catch (e) { /* ignore */ }
@@ -396,11 +401,23 @@
     }).catch(function() { if (el) el.textContent = ''; });
   }
 
-  // CSS for the cursor blink — appended once
+  // CSS for the cursor blink + body shift — appended once
   if (!document.getElementById('agx-ai-css')) {
     var style = document.createElement('style');
     style.id = 'agx-ai-css';
-    style.textContent = '@keyframes agx-blink { from, to { opacity: 1; } 50% { opacity: 0; } } .ai-content p:first-child { margin-top: 0; } .ai-content p:last-child { margin-bottom: 0; }';
+    style.textContent =
+      '@keyframes agx-blink { from, to { opacity: 1; } 50% { opacity: 0; } } ' +
+      '.ai-content p:first-child { margin-top: 0; } ' +
+      '.ai-content p:last-child { margin-bottom: 0; } ' +
+      // When the panel is open, push the entire page over so the editor
+      // stays fully visible. Sticky elements (page nav, editor header)
+      // respect this since they sit in the document flow. The fixed
+      // panel itself stays at right:0 since fixed-position elements
+      // ignore body padding.
+      'body.agx-ai-open { padding-right: 420px; transition: padding-right 0.22s ease; } ' +
+      // On narrow screens fall back to the overlay behavior — no point
+      // shoving a tablet's content into a 200px column.
+      '@media (max-width: 1100px) { body.agx-ai-open { padding-right: 0; } }';
     document.head.appendChild(style);
   }
 
