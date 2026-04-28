@@ -284,7 +284,7 @@
       var leads = (window.agxLeads && window.agxLeads.getCached && window.agxLeads.getCached()) || [];
       var lead = leads.find(function(x) { return x.id === est.lead_id; });
       if (lead) {
-        html += '<button class="small secondary" onclick="jumpToLeadFromEstimate(\'' + escapeHTML(lead.id) + '\')" style="display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:14px;font-size:11px;">' +
+        html += '<button class="ee-btn secondary" onclick="jumpToLeadFromEstimate(\'' + escapeHTML(lead.id) + '\')" style="display:inline-flex;align-items:center;gap:6px;">' +
           '<span>&#x1F4CB;</span>From lead: ' + escapeHTML(lead.title) + ' &rarr;' +
         '</button>';
       } else {
@@ -661,8 +661,8 @@
         'oninput="updateSectionName(\'' + idAttr + '\', this.value)" ' +
         'style="flex:1;font-size:13px;font-weight:700;background:transparent;border:1px solid transparent;border-radius:4px;padding:4px 8px;color:#4f8cff;text-transform:uppercase;letter-spacing:0.5px;" ' +
         'onfocus="this.style.borderColor=\'var(--border,#333)\';" onblur="this.style.borderColor=\'transparent\';" />' +
-      '<button class="small primary" onclick="addEstimateLineFromEditor(\'' + idAttr + '\')" title="Add a line under this section" style="padding:4px 10px;font-size:11px;">&#x2795; Line Item</button>' +
-      '<button class="small ghost" onclick="deleteSectionFromEditor(\'' + idAttr + '\')" title="Remove section header (lines stay)">&#x1F5D1;</button>' +
+      '<button class="ee-btn primary" onclick="addEstimateLineFromEditor(\'' + idAttr + '\')" title="Add a line under this section">&#x2795; Line Item</button>' +
+      '<button class="ee-btn ee-icon-btn ghost" onclick="deleteSectionFromEditor(\'' + idAttr + '\')" title="Remove section header (lines stay)">&#x1F5D1;</button>' +
     '</div>';
   }
 
@@ -703,7 +703,7 @@
       readOnly(fmtCurrency(ext), '0 0 110px') +
       readOnly(fmtCurrency(clientPrice), '0 0 120px', '#34d399') +
       '<div style="flex:0 0 36px;text-align:center;">' +
-        '<button class="small ghost" onclick="deleteLineFromEditor(\'' + idAttr + '\')" title="Delete line" style="padding:4px 8px;">&#x1F5D1;</button>' +
+        '<button class="ee-btn ee-icon-btn danger" onclick="deleteLineFromEditor(\'' + idAttr + '\')" title="Delete line">&#x1F5D1;</button>' +
       '</div>' +
     '</div>';
   }

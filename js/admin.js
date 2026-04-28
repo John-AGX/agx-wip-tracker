@@ -909,8 +909,8 @@
           ? '<span style="padding:2px 8px;border-radius:10px;background:rgba(79,140,255,0.15);color:#4f8cff;font-size:10px;text-transform:uppercase;letter-spacing:0.5px;font-weight:600;">Built-in</span>'
           : '';
         var deleteBtn = r.builtin
-          ? '<button class="small" disabled title="Built-in roles cannot be deleted">Delete</button>'
-          : '<button class="small danger" onclick="deleteAdminRole(\'' + escapeHTML(r.name) + '\')">Delete</button>';
+          ? '<button class="ee-btn ghost" disabled title="Built-in roles cannot be deleted">Delete</button>'
+          : '<button class="ee-btn danger" onclick="deleteAdminRole(\'' + escapeHTML(r.name) + '\')">Delete</button>';
         html += '<div class="card" style="padding:12px 16px;display:flex;justify-content:space-between;align-items:center;gap:14px;">' +
           '<div style="min-width:0;flex:1;">' +
             '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:2px;">' +
@@ -922,7 +922,7 @@
             '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:4px;">' + capCount + ' capabilit' + (capCount === 1 ? 'y' : 'ies') + '</div>' +
           '</div>' +
           '<div style="display:flex;gap:6px;flex-shrink:0;">' +
-            '<button class="small secondary" onclick="openEditRoleModal(\'' + escapeHTML(r.name) + '\')">Edit</button>' +
+            '<button class="ee-btn secondary" onclick="openEditRoleModal(\'' + escapeHTML(r.name) + '\')">Edit</button>' +
             deleteBtn +
           '</div>' +
         '</div>';

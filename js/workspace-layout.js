@@ -298,7 +298,7 @@
       '<div class="ws-left-header" style="display:flex;align-items:center;gap:10px;">' +
         '<img src="images/logo-color.png" alt="AGX" class="ws-left-logo" />' +
         '<span class="ws-left-sub" style="flex:1;">Workspace \u00b7 Formulas \u00b7 Cell\u2192Job Linking</span>' +
-        '<button class="small" onclick="openJobAI()" title="WIP / financial AI assistant" style="background:linear-gradient(135deg,#8b5cf6,#4f8cff);color:#fff;border:none;font-size:11px;padding:5px 10px;">\u2728 Ask AI</button>' +
+        '<button class="ee-btn" onclick="openJobAI()" title="WIP / financial AI assistant" style="background:linear-gradient(135deg,#8b5cf6,#4f8cff);color:#fff;border-color:transparent;">\u2728 Ask AI</button>' +
       '</div>' +
       '<div id="wsWorkspaceContainer" tabindex="0"></div>';
 

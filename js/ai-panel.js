@@ -222,9 +222,8 @@
     presetWrap.innerHTML = '';
     getActivePresets().forEach(function(p) {
       var btn = document.createElement('button');
-      btn.className = 'small ghost';
+      btn.className = 'ee-btn ghost';
       btn.textContent = p.label;
-      btn.style.cssText = 'font-size:11px;padding:5px 9px;border-radius:14px;';
       btn.onclick = function() {
         if (_streaming) return;
         var ta = document.getElementById('ai-input');

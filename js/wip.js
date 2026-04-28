@@ -469,8 +469,8 @@ function renderWIPMain() {
                     <td style="text-align: right; color: ${profit >= 0 ? 'var(--green)' : 'var(--red)'};">${formatCurrency(profit)}</td>
                     <td>${escapeHTML(co.date) || '—'}</td>
                     <td>
-                        <button class="small" onclick="event.stopPropagation(); editCO('${escapeHTML(co.id)}')">&#x270F;&#xFE0F; Edit</button>
-                        <button class="small danger" onclick="event.stopPropagation(); deleteCO('${escapeHTML(co.id)}')">&#x1F5D1; Del</button>
+                        <button class="ee-btn secondary" onclick="event.stopPropagation(); editCO('${escapeHTML(co.id)}')">&#x270F;&#xFE0F; Edit</button>
+                        <button class="ee-btn ee-icon-btn danger" onclick="event.stopPropagation(); deleteCO('${escapeHTML(co.id)}')" title="Delete">&#x1F5D1;</button>
                     </td>`;
                 tbody.appendChild(row);
             });
@@ -576,8 +576,8 @@ function renderWIPMain() {
                     <td><span style="color: ${statusColor}; font-weight: 600; font-size: 12px;">${escapeHTML(po.status)}</span></td>
                     <td>${escapeHTML(po.date) || '—'}</td>
                     <td>
-                        <button class="small" onclick="event.stopPropagation(); editPO('${escapeHTML(po.id)}')">&#x270F;&#xFE0F; Edit</button>
-                        <button class="small danger" onclick="event.stopPropagation(); deletePO('${escapeHTML(po.id)}')">&#x1F5D1; Del</button>
+                        <button class="ee-btn secondary" onclick="event.stopPropagation(); editPO('${escapeHTML(po.id)}')">&#x270F;&#xFE0F; Edit</button>
+                        <button class="ee-btn ee-icon-btn danger" onclick="event.stopPropagation(); deletePO('${escapeHTML(po.id)}')" title="Delete">&#x1F5D1;</button>
                     </td>`;
                 tbody.appendChild(row);
             });
@@ -680,8 +680,8 @@ function renderWIPMain() {
                     <td>${escapeHTML(inv.date) || '—'}</td>
                     <td>${escapeHTML(inv.dueDate) || '—'}</td>
                     <td>
-                        <button class="small" onclick="event.stopPropagation(); editInvoice('${escapeHTML(inv.id)}')">&#x270F;&#xFE0F; Edit</button>
-                        <button class="small danger" onclick="event.stopPropagation(); deleteInvoice('${escapeHTML(inv.id)}')">&#x1F5D1; Del</button>
+                        <button class="ee-btn secondary" onclick="event.stopPropagation(); editInvoice('${escapeHTML(inv.id)}')">&#x270F;&#xFE0F; Edit</button>
+                        <button class="ee-btn ee-icon-btn danger" onclick="event.stopPropagation(); deleteInvoice('${escapeHTML(inv.id)}')" title="Delete">&#x1F5D1;</button>
                     </td>`;
                 tbody.appendChild(row);
             });
@@ -1037,12 +1037,12 @@ function renderWIPMain() {
                     grid.innerHTML = mkDiv('Job Number','job-info-number') + mkDiv('Job Name','job-info-title') + mkDiv('Client','job-info-client') + mkDiv('PM','job-info-pm') + mkDiv('Type','job-info-type') + mkDiv('Work Type','job-info-worktype') + mkDiv('Market','job-info-market') + mkDiv('Contract (As Sold)','job-info-contract','var(--accent); font-weight: 700') + mkDiv('Est. Costs (As Sold)','job-info-estcosts') + mkDiv('Target Margin %','job-info-margin') + mkDiv('Status','job-info-status') + mkDiv('Notes','job-info-notes');
                 }
                 btn.innerHTML = '&#x270F;&#xFE0F; Edit Job';
-                btn.className = 'small primary';
+                btn.className = 'ee-btn primary';
                 renderJobDetail(jobId);
             } else {
                 // Enter edit mode - replace displays with inputs
                 btn.innerHTML = '&#x1F4BE; Save';
-                btn.className = 'small primary';
+                btn.className = 'ee-btn success';
                 const grid = card.querySelector('div[style*="grid-template-columns"]');
                 if (!grid) return;
                 const pmOpts = ['John','Noah','Henry'].map(p => 
@@ -1199,12 +1199,12 @@ function renderWIPMain() {
             // snapshots (3 AM EST) plus a manual Capture Now on the Admin →
             // Metrics tab. The legacy weekly snapshots remain visible in
             // Insights history but no new ones get captured here.
-            btnRow.innerHTML = '<button class="small" onclick="openAddBuildingToJobModal()" style="font-size:11px;padding:4px 10px;">&#x1F3D7; Building</button>' +
-                '<button class="small" onclick="openAddPhaseToJobModal()" style="font-size:11px;padding:4px 10px;">&#x1F4CB; Phase</button>' +
-                '<button class="small" onclick="openAddSubToJobModal()" style="font-size:11px;padding:4px 10px;">&#x1F477; Sub</button>' +
-                '<button class="small" onclick="openAddChangeOrderModal()" style="font-size:11px;padding:4px 10px;">&#x1F4DD; Change Order</button>' +
-                '<button class="small" onclick="openAddPOModal()" style="font-size:11px;padding:4px 10px;">&#x1F4C4; Purchase Order</button>' +
-                '<button class="small" onclick="openAddInvoiceModal()" style="font-size:11px;padding:4px 10px;">&#x1F4B3; Invoice</button>';
+            btnRow.innerHTML = '<button class="ee-btn secondary" onclick="openAddBuildingToJobModal()">&#x1F3D7; Building</button>' +
+                '<button class="ee-btn secondary" onclick="openAddPhaseToJobModal()">&#x1F4CB; Phase</button>' +
+                '<button class="ee-btn secondary" onclick="openAddSubToJobModal()">&#x1F477; Sub</button>' +
+                '<button class="ee-btn secondary" onclick="openAddChangeOrderModal()">&#x1F4DD; Change Order</button>' +
+                '<button class="ee-btn secondary" onclick="openAddPOModal()">&#x1F4C4; Purchase Order</button>' +
+                '<button class="ee-btn secondary" onclick="openAddInvoiceModal()">&#x1F4B3; Invoice</button>';
 
             // Sharing button — visible only to admin or the job owner. Renders
             // a tiny inline indicator with the share count, and opens the
@@ -1215,8 +1215,8 @@ function renderWIPMain() {
             var canManageSharing = me && jobObj && (me.role === 'admin' || me.id === jobObj.owner_id);
             if (canManageSharing && window.agxApi && window.agxApi.isAuthenticated()) {
                 btnRow.insertAdjacentHTML('beforeend',
-                    '<button class="small" onclick="openJobShareManager(\'' + escapeHTML(jobId) + '\')" ' +
-                    'data-readonly-allowed style="font-size:11px;padding:4px 10px;background:rgba(79,140,255,0.12);color:#4f8cff;border:1px solid rgba(79,140,255,0.3);" ' +
+                    '<button class="ee-btn primary" onclick="openJobShareManager(\'' + escapeHTML(jobId) + '\')" ' +
+                    'data-readonly-allowed ' +
                     'id="job-overview-share-btn">&#x1F517; Sharing <span id="job-overview-share-count" style="opacity:0.7;font-size:10px;"></span></button>'
                 );
                 // Async fetch the share count so the button shows '(n)' if any
@@ -1926,7 +1926,7 @@ function renderWIPMain() {
                             <div style="text-align:right;flex-shrink:0;margin-left:8px;display:flex;align-items:center;gap:8px;">
                                 <span style="font-size:13px;font-weight:700;color:var(--green);">${pctComplete}%</span>
                                 <span style="font-size:10px;color:var(--text-dim);">${bldgPct}% of job</span>
-                                <button class="small" onclick="event.stopPropagation();editBuilding('${escapeHTML(building.id)}')" style="font-size:10px;padding:2px 8px;">&#x270F;&#xFE0F; Edit</button>
+                                <button class="ee-btn ghost" onclick="event.stopPropagation();editBuilding('${escapeHTML(building.id)}')">&#x270F;&#xFE0F; Edit</button>
                             </div>
                         </div>
                         <div style="display:flex;gap:12px;font-size:12px;margin-bottom:6px;">
@@ -2224,7 +2224,7 @@ function renderWIPMain() {
                         '<span style="font-size:13px;font-weight:600;color:var(--text);">' + escapeHTML(bldgName) + '</span>' +
                         '<span style="font-size:11px;color:var(--text-dim);margin-left:8px;">Rev: ' + formatCurrency(p.asSoldRevenue || 0) + ' | Mat: ' + formatCurrency(p.materials || 0) + ' | Lab: ' + formatCurrency(p.labor || 0) + ' | Sub: ' + formatCurrency(p.sub || 0) + ' | Equip: ' + formatCurrency(p.equipment || 0) + '</span>' +
                         '</div>' +
-                        '<button class="small" onclick="editPhase(\'' + escapeHTML(p.id) + '\')" style="font-size:10px;padding:2px 8px;">&#x270F;&#xFE0F; Edit</button>' +
+                        '<button class="ee-btn ghost" onclick="editPhase(\'' + escapeHTML(p.id) + '\')">&#x270F;&#xFE0F; Edit</button>' +
                         '</div>' +
                         '<div style="margin-top:4px;">' + renderConnectionList(conns) + '</div>' +
                         '</div>';
@@ -2282,7 +2282,7 @@ function renderWIPMain() {
                     '<span style="color:var(--text-dim);">Billed: <strong style="color:var(--green);">' + formatCurrency(billed) + '</strong></span>' +
                     '<span style="color:var(--text-dim);">Rem: <strong style="color:var(--orange);">' + formatCurrency(remaining) + '</strong></span>' +
                     '<span style="color:var(--text-dim);">' + pctBilled + '%</span>' +
-                    '<button class="small" onclick="event.stopPropagation();editSub(\'' + escapeHTML(sub.id) + '\')" style="font-size:10px;padding:2px 8px;">&#x270F;&#xFE0F; Edit</button>' +
+                    '<button class="ee-btn ghost" onclick="event.stopPropagation();editSub(\'' + escapeHTML(sub.id) + '\')">&#x270F;&#xFE0F; Edit</button>' +
                     '</div></div>';
 
                 var body = '<div id="' + uid + '" style="display:none;border-top:1px solid var(--border);padding:10px 14px;">';
@@ -3466,9 +3466,9 @@ function renderWIPMain() {
 
                 // Right: action buttons
                 html += '<div style="display:flex;flex-direction:column;gap:4px;flex-shrink:0;">';
-                html += '<button onclick="editJob(\'' + escapeHTML(job.id) + '\')" class="small" style="font-size:10px;padding:4px 10px;">Edit</button>';
-                html += '<button onclick="restoreJob(\'' + escapeHTML(job.id) + '\')" class="small" style="font-size:10px;padding:4px 10px;background:var(--green);color:#fff;border:none;">Restore</button>';
-                html += '<button onclick="deleteArchivedJob(\'' + escapeHTML(job.id) + '\')" class="small" style="font-size:10px;padding:4px 10px;background:var(--red);color:#fff;border:none;">Delete</button>';
+                html += '<button onclick="editJob(\'' + escapeHTML(job.id) + '\')" class="ee-btn secondary">Edit</button>';
+                html += '<button onclick="restoreJob(\'' + escapeHTML(job.id) + '\')" class="ee-btn success">Restore</button>';
+                html += '<button onclick="deleteArchivedJob(\'' + escapeHTML(job.id) + '\')" class="ee-btn danger">Delete</button>';
                 html += '</div>';
 
                 html += '</div></div>';

@@ -144,9 +144,9 @@
                             <div style="display: flex; justify-content: space-between; align-items: start; flex-wrap: wrap; gap: 10px; margin-bottom: 15px;">
                                 <h3 style="margin: 0;">Job Information</h3>
                                 <div style="display: flex; gap: 8px;">
-                                    <button class="small primary" onclick="toggleEditJobInfo()" id="edit-job-info-btn">&#x270F;&#xFE0F; Edit Job</button>
-                        <button class="small secondary" onclick="archiveCurrentJob()" id="archive-job-btn">&#x1F4E6; Archive Job</button>
-                        <button class="small danger" onclick="deleteCurrentJob()">&#x1F5D1; Delete Job</button>
+                                    <button class="ee-btn primary" onclick="toggleEditJobInfo()" id="edit-job-info-btn">&#x270F;&#xFE0F; Edit Job</button>
+                                    <button class="ee-btn secondary" onclick="archiveCurrentJob()" id="archive-job-btn">&#x1F4E6; Archive Job</button>
+                                    <button class="ee-btn danger" onclick="deleteCurrentJob()">&#x1F5D1; Delete Job</button>
                                 </div>
                             </div>
                             <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 15px;">
@@ -677,10 +677,10 @@
                                 <div id="ee-alternate-strip" style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap;">
                                     <div id="ee-alternate-tabs" style="display:flex;gap:6px;flex-wrap:wrap;flex:1;"></div>
                                     <div style="display:flex;gap:6px;">
-                                        <button class="small secondary" onclick="addAlternateFromEditor()" title="Add a new alternate (e.g. Good / Better / Best)">&#x2795; Alternate</button>
-                                        <button class="small ghost" onclick="duplicateActiveAlternate()" title="Copy this alternate's lines into a new alternate" id="ee-altDuplicateBtn">&#x2398; Duplicate</button>
-                                        <button class="small ghost" onclick="renameActiveAlternate()" title="Rename this alternate" id="ee-altRenameBtn">&#x270F; Rename</button>
-                                        <button class="small danger" onclick="deleteActiveAlternate()" title="Delete this alternate (cannot delete the last one)" id="ee-altDeleteBtn">&#x1F5D1; Delete</button>
+                                        <button class="ee-btn secondary" onclick="addAlternateFromEditor()" title="Add a new alternate (e.g. Good / Better / Best)">&#x2795; Alternate</button>
+                                        <button class="ee-btn ghost" onclick="duplicateActiveAlternate()" title="Copy this alternate's lines into a new alternate" id="ee-altDuplicateBtn">&#x2398; Duplicate</button>
+                                        <button class="ee-btn ghost" onclick="renameActiveAlternate()" title="Rename this alternate" id="ee-altRenameBtn">&#x270F; Rename</button>
+                                        <button class="ee-btn ee-icon-btn danger" onclick="deleteActiveAlternate()" title="Delete this alternate (cannot delete the last one)" id="ee-altDeleteBtn">&#x1F5D1;</button>
                                     </div>
                                 </div>
 
@@ -974,7 +974,7 @@
                 </div>
                 <div id="bldgPhaseRows"></div>
                 <div style="display:flex; gap:8px; margin-top:8px;">
-                    <button type="button" class="small secondary" id="bldgAddPhaseBtn" onclick="addPhaseFromBuildingModal()" style="font-size:11px;">+ Add Phase</button>
+                    <button type="button" class="ee-btn secondary" id="bldgAddPhaseBtn" onclick="addPhaseFromBuildingModal()">+ Add Phase</button>
                 </div>
             </div>
             <div id="buildingCOBreakdown" style="display:none; border:1px solid var(--border); border-radius:8px; padding:12px; margin-bottom:16px; background:var(--surface);">
@@ -984,7 +984,7 @@
                 </div>
                 <div id="bldgCORows"></div>
                 <div style="display:flex; gap:8px; margin-top:8px;">
-                    <button type="button" class="small secondary" id="bldgAddCOBtn" onclick="addCOFromBuildingModal()" style="font-size:11px;">+ Add CO</button>
+                    <button type="button" class="ee-btn secondary" id="bldgAddCOBtn" onclick="addCOFromBuildingModal()">+ Add CO</button>
                 </div>
             </div>
             <div class="form-row" style="align-items: center; margin-bottom: 16px;">
@@ -1123,7 +1123,7 @@
                     <input type="checkbox" id="phaseLocked" style="width: 16px; height: 16px;">
                     Lock this phase's % (exclude from auto-balance)
                 </label>
-                <button type="button" class="small secondary" onclick="autoBalancePhasePcts()" style="margin-left: auto;">&#x2696; Auto-Balance %</button>
+                <button type="button" class="ee-btn secondary" onclick="autoBalancePhasePcts()" style="margin-left: auto;">&#x2696; Auto-Balance %</button>
             </div>
             <div class="form-row">
                 <div class="form-group">
@@ -1625,7 +1625,7 @@
                 <div id="leadEditor_linkedJobLabel" style="font-size:11px;color:var(--text-dim,#888);"></div>
               </div>
             </div>
-            <button class="small secondary" onclick="openLinkedJobFromLead()">Open Job &rarr;</button>
+            <button class="ee-btn secondary" onclick="openLinkedJobFromLead()">Open Job &rarr;</button>
           </div>
 
           <div id="leadEditor_status_msg" style="font-size:13px;"></div>

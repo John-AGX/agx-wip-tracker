@@ -616,8 +616,8 @@
         '</div>' +
       '</div>' +
       '<div style="display:flex;gap:6px;flex-shrink:0;">' +
-        '<button class="small secondary" onclick="closeModal(\'leadEditorModal\');editEstimate(\'' + escapeAttr(est.id) + '\');">Edit</button>' +
-        '<button class="small secondary" onclick="closeModal(\'leadEditorModal\');previewEstimate(\'' + escapeAttr(est.id) + '\');">Preview</button>' +
+        '<button class="ee-btn secondary" onclick="closeModal(\'leadEditorModal\');editEstimate(\'' + escapeAttr(est.id) + '\');">Edit</button>' +
+        '<button class="ee-btn secondary" onclick="closeModal(\'leadEditorModal\');previewEstimate(\'' + escapeAttr(est.id) + '\');">Preview</button>' +
       '</div>' +
     '</div>';
   }

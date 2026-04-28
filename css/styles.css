@@ -623,6 +623,27 @@
         .ee-btn.secondary {
             background: rgba(255, 255, 255, 0.06);
         }
+        .ee-btn.primary {
+            background: rgba(79, 140, 255, 0.18);
+            border-color: rgba(79, 140, 255, 0.45);
+            color: #4f8cff;
+        }
+        .ee-btn.primary:hover {
+            background: rgba(79, 140, 255, 0.28);
+        }
+        .ee-btn.ghost {
+            background: transparent;
+            border-color: rgba(255, 255, 255, 0.12);
+            color: var(--text-dim, #aaa);
+        }
+        .ee-btn.ghost:hover {
+            background: rgba(255, 255, 255, 0.06);
+            color: var(--text, #fff);
+        }
+        .ee-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
         .ee-btn.success {
             background: rgba(52, 211, 153, 0.18);
             border-color: rgba(52, 211, 153, 0.4);

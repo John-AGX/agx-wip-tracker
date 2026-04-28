@@ -96,7 +96,7 @@
           : '') +
       '</div>' +
       '<div style="display:flex;gap:6px;flex-shrink:0;">' +
-        '<button class="small secondary" onclick="openEditClientModal(\'' + escapeAttr(c.id) + '\')">Edit</button>' +
+        '<button class="ee-btn secondary" onclick="openEditClientModal(\'' + escapeAttr(c.id) + '\')">Edit</button>' +
       '</div>' +
     '</div>';
   }
