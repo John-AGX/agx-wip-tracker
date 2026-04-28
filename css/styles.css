@@ -595,6 +595,59 @@
             color: var(--accent);
         }
 
+        /* Slim header buttons — used in the estimate editor sticky header
+           where the action row holds 5+ buttons and the standard .small
+           padding ate too much horizontal space. Tighter padding + smaller
+           font, with the same color variants (.success, .danger, etc.)
+           inheriting from the global button rules. .ee-icon-btn is the
+           further-shrunk square variant for icon-only buttons (e.g. the
+           Delete trash can). */
+        .ee-btn {
+            padding: 5px 10px;
+            font-size: 12px;
+            font-weight: 500;
+            border: 1px solid var(--border, #333);
+            background: rgba(255, 255, 255, 0.04);
+            color: var(--text, #fff);
+            border-radius: 6px;
+            cursor: pointer;
+            transition: background 0.12s, border-color 0.12s;
+            line-height: 1;
+            font-family: inherit;
+            white-space: nowrap;
+        }
+        .ee-btn:hover {
+            background: rgba(255, 255, 255, 0.08);
+            border-color: rgba(255, 255, 255, 0.18);
+        }
+        .ee-btn.secondary {
+            background: rgba(255, 255, 255, 0.06);
+        }
+        .ee-btn.success {
+            background: rgba(52, 211, 153, 0.18);
+            border-color: rgba(52, 211, 153, 0.4);
+            color: #34d399;
+        }
+        .ee-btn.success:hover {
+            background: rgba(52, 211, 153, 0.28);
+        }
+        .ee-btn.danger {
+            background: rgba(248, 113, 113, 0.12);
+            border-color: rgba(248, 113, 113, 0.35);
+            color: #f87171;
+        }
+        .ee-btn.danger:hover {
+            background: rgba(248, 113, 113, 0.22);
+        }
+        .ee-icon-btn {
+            padding: 5px 9px;
+            font-size: 13px;
+            min-width: 30px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+
         /* Dense BT-style table — used by Leads, Estimates, and any future
            dense list view in the Estimates sub-tab area. Both class names
            apply the same styles so .leads-table existing call sites keep

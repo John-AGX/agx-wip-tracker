@@ -433,19 +433,27 @@
     var lineCount = (appData.estimateLines || []).filter(function(l) {
       return l.estimateId === est.id && l.alternateId === a.id;
     }).length;
-    var msg = 'Delete alternate "' + a.name + '"?';
-    if (lineCount) msg += '\n\nThis will also remove ' + lineCount + ' line item' + (lineCount === 1 ? '' : 's') + ' / section header' + (lineCount === 1 ? '' : 's') + '.';
-    if (!confirm(msg)) return;
-    // Remove the alternate's lines first, then the alternate itself
-    appData.estimateLines = (appData.estimateLines || []).filter(function(l) {
-      return !(l.estimateId === est.id && l.alternateId === a.id);
+    var msg = lineCount
+      ? 'This will also remove ' + lineCount + ' line item' + (lineCount === 1 ? '' : 's') + ' / section header' + (lineCount === 1 ? '' : 's') + '. This cannot be undone.'
+      : 'This cannot be undone.';
+    window.agxConfirm({
+      title: 'Delete alternate "' + a.name + '"?',
+      message: msg,
+      confirmText: 'Delete',
+      destructive: true
+    }).then(function(ok) {
+      if (!ok) return;
+      // Remove the alternate's lines first, then the alternate itself
+      appData.estimateLines = (appData.estimateLines || []).filter(function(l) {
+        return !(l.estimateId === est.id && l.alternateId === a.id);
+      });
+      est.alternates = est.alternates.filter(function(x) { return x.id !== a.id; });
+      est.activeAlternateId = est.alternates[0].id;
+      debouncedSave();
+      renderAlternateTabs();
+      renderLineItems();
+      renderTotals();
     });
-    est.alternates = est.alternates.filter(function(x) { return x.id !== a.id; });
-    est.activeAlternateId = est.alternates[0].id;
-    debouncedSave();
-    renderAlternateTabs();
-    renderLineItems();
-    renderTotals();
   }
 
   // ──────────────────────────────────────────────────────────────────
@@ -808,19 +816,37 @@
   }
 
   function deleteLineFromEditor(lineId) {
-    if (!confirm('Delete this line?')) return;
-    appData.estimateLines = (appData.estimateLines || []).filter(function(l) { return l.id !== lineId; });
-    debouncedSave();
-    renderLineItems();
-    renderTotals();
+    var line = (appData.estimateLines || []).find(function(l) { return l.id === lineId; });
+    var preview = line && line.description ? line.description : 'this line';
+    window.agxConfirm({
+      title: 'Delete line item?',
+      message: '"' + preview + '" will be removed from the active alternate. This cannot be undone.',
+      confirmText: 'Delete',
+      destructive: true
+    }).then(function(ok) {
+      if (!ok) return;
+      appData.estimateLines = (appData.estimateLines || []).filter(function(l) { return l.id !== lineId; });
+      debouncedSave();
+      renderLineItems();
+      renderTotals();
+    });
   }
 
   function deleteSectionFromEditor(sectionId) {
-    if (!confirm('Remove this section header? The line items below it stay.')) return;
-    appData.estimateLines = (appData.estimateLines || []).filter(function(l) { return l.id !== sectionId; });
-    debouncedSave();
-    renderLineItems();
-    renderTotals();
+    var section = (appData.estimateLines || []).find(function(l) { return l.id === sectionId; });
+    var name = section && section.description ? section.description : 'this section';
+    window.agxConfirm({
+      title: 'Remove section header?',
+      message: 'The header "' + name + '" will be removed. The line items underneath it stay where they are.',
+      confirmText: 'Remove',
+      destructive: true
+    }).then(function(ok) {
+      if (!ok) return;
+      appData.estimateLines = (appData.estimateLines || []).filter(function(l) { return l.id !== sectionId; });
+      debouncedSave();
+      renderLineItems();
+      renderTotals();
+    });
   }
 
   // Standard cost-side sections used by the Buildertrend export pipeline.

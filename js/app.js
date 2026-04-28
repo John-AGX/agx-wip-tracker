@@ -450,6 +450,76 @@
         // which job to open the WIP assistant against.
         window.appState = appState;
 
+        // ──────────────────────────────────────────────────────────────
+        // Custom confirm modal — replaces window.confirm() so destructive
+        // actions get a centered, themed "Are you sure?" instead of the
+        // jarring native dialog. Returns a Promise<boolean>.
+        //
+        // Usage:
+        //   await agxConfirm({
+        //     title: 'Delete this line?',
+        //     message: 'This cannot be undone.',
+        //     confirmText: 'Delete',
+        //     destructive: true
+        //   });
+        // ──────────────────────────────────────────────────────────────
+        window.agxConfirm = function(opts) {
+            opts = opts || {};
+            var title = opts.title || 'Are you sure?';
+            var message = opts.message || '';
+            var confirmText = opts.confirmText || 'Confirm';
+            var cancelText = opts.cancelText || 'Cancel';
+            var destructive = !!opts.destructive;
+
+            return new Promise(function(resolve) {
+                var overlay = document.createElement('div');
+                overlay.className = 'agx-confirm-overlay';
+                overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.65);z-index:10000;display:flex;align-items:center;justify-content:center;padding:20px;backdrop-filter:blur(2px);';
+
+                var box = document.createElement('div');
+                box.style.cssText = 'background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:12px;padding:24px 26px;max-width:420px;width:100%;box-shadow:0 16px 48px rgba(0,0,0,0.6);';
+                box.innerHTML =
+                    '<div style="font-size:16px;font-weight:700;color:var(--text,#fff);margin-bottom:' + (message ? '10px' : '20px') + ';">' +
+                        (typeof window.escapeHTML === 'function' ? window.escapeHTML(title) : title) +
+                    '</div>' +
+                    (message
+                        ? '<div style="font-size:13px;color:var(--text-dim,#aaa);line-height:1.5;margin-bottom:20px;white-space:pre-wrap;">' +
+                              (typeof window.escapeHTML === 'function' ? window.escapeHTML(message) : message) +
+                          '</div>'
+                        : ''
+                    ) +
+                    '<div style="display:flex;justify-content:flex-end;gap:8px;">' +
+                        '<button data-confirm-cancel class="secondary small" style="padding:8px 16px;">' + (typeof window.escapeHTML === 'function' ? window.escapeHTML(cancelText) : cancelText) + '</button>' +
+                        '<button data-confirm-ok class="' + (destructive ? 'danger' : 'primary') + ' small" style="padding:8px 16px;">' + (typeof window.escapeHTML === 'function' ? window.escapeHTML(confirmText) : confirmText) + '</button>' +
+                    '</div>';
+
+                overlay.appendChild(box);
+                document.body.appendChild(overlay);
+
+                function cleanup(answer) {
+                    document.removeEventListener('keydown', onKey);
+                    if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+                    resolve(answer);
+                }
+                function onKey(e) {
+                    if (e.key === 'Escape') cleanup(false);
+                    else if (e.key === 'Enter') cleanup(true);
+                }
+                box.querySelector('[data-confirm-cancel]').onclick = function() { cleanup(false); };
+                box.querySelector('[data-confirm-ok]').onclick = function() { cleanup(true); };
+                overlay.addEventListener('click', function(e) {
+                    if (e.target === overlay) cleanup(false);
+                });
+                document.addEventListener('keydown', onKey);
+
+                // Focus the confirm button on next tick so Enter / Escape work
+                setTimeout(function() {
+                    var btn = box.querySelector('[data-confirm-ok]');
+                    if (btn) btn.focus();
+                }, 0);
+            });
+        };
+
         // Read all appData sections from localStorage. Used as the offline path
         // and as the fast first-paint cache while the server fetch is in flight.
         function loadFromLocalStorage() {
