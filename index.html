@@ -1918,13 +1918,17 @@
     </div>
 
     <!-- PDF.js — used by the document viewer to render PDF pages to canvas
-         (and from there to base64 images for vision-based AI analysis). -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.min.js"></script>
+         (and from there to base64 images for vision-based AI analysis).
+         Pinned to 3.11.174: v4+ dropped the classic UMD pdf.min.js build
+         in favor of ES modules, which means a plain <script> tag stops
+         exposing the pdfjsLib global. v3 is stable, well-supported, and
+         still receives security backports. -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
     <script>
       // Worker URL must be set before any pdfjsLib.getDocument() calls.
       if (window.pdfjsLib) {
         window.pdfjsLib.GlobalWorkerOptions.workerSrc =
-          'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.worker.min.js';
+          'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
       }
     </script>
 
