@@ -541,6 +541,13 @@ router.post('/estimates/:id/chat',
     const userMessage = (req.body && req.body.message || '').trim();
     if (!userMessage) return res.status(400).json({ error: 'message is required' });
     const includePhotos = req.body && req.body.includePhotos !== false;
+    // Inline base64 images shipped with this single turn (e.g., rendered
+    // PDF pages from the viewer's "Ask AI" handoff). Hard-capped here on
+    // the server side as well so a misbehaving client can't push past
+    // Anthropic's per-request image limit.
+    const additionalImages = Array.isArray(req.body && req.body.additional_images)
+      ? req.body.additional_images.slice(0, 12)
+      : [];
     const estimateId = req.params.id;
 
     setSSEHeaders(res);
@@ -559,8 +566,25 @@ router.post('/estimates/:id/chat',
 
       const ctx = await buildEstimateContext(estimateId, includePhotos);
 
-      const userContent = ctx.photoBlocks.length
-        ? [...ctx.photoBlocks, { type: 'text', text: userMessage }]
+      // Build the inline image content blocks for this turn. The entity's
+      // attached photos come first, then any per-turn additional_images.
+      // If both are present we may exceed Anthropic's 20-image limit, so
+      // trim the combined list to a safe ceiling (20 minus headroom).
+      const inlineImageBlocks = [...ctx.photoBlocks];
+      additionalImages.forEach(b64 => {
+        // Tolerate clients that pass either pure base64 or "data:...;base64,..."
+        const stripped = typeof b64 === 'string' && b64.indexOf('base64,') >= 0
+          ? b64.slice(b64.indexOf('base64,') + 7)
+          : b64;
+        inlineImageBlocks.push({
+          type: 'image',
+          source: { type: 'base64', media_type: 'image/jpeg', data: stripped }
+        });
+      });
+      const cappedImages = inlineImageBlocks.slice(0, 18);
+
+      const userContent = cappedImages.length
+        ? [...cappedImages, { type: 'text', text: userMessage }]
         : userMessage;
 
       const messages = [

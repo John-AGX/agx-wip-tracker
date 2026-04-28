@@ -354,14 +354,22 @@
 
   function sendMessage(text) {
     var photoCount = countCurrentPhotos();
+    var inlineImageCount = _pendingImages && _pendingImages.images ? _pendingImages.images.length : 0;
     _messages.push({
       role: 'user', content: text,
-      photos_included: _includePhotos ? photoCount : 0
+      photos_included: (_includePhotos ? photoCount : 0) + inlineImageCount
     });
     renderMessages();
     var body = isEstimateMode()
       ? { message: text, includePhotos: _includePhotos }
       : { message: text };
+    // Attach any one-shot inline images (e.g., rendered PDF pages from
+    // the viewer's Ask AI handoff). They only ride on this single call,
+    // not subsequent turns.
+    if (_pendingImages && _pendingImages.images && _pendingImages.images.length) {
+      body.additional_images = _pendingImages.images;
+      _pendingImages = null;
+    }
     streamFromEndpoint(apiBase() + '/chat', body);
   }
 
@@ -682,8 +690,44 @@
     document.head.appendChild(style);
   }
 
+  // One-shot inline images attached to the next message. Set by
+  // openWithImages(); cleared after the next sendMessage so the images
+  // don't ride along on every subsequent turn.
+  var _pendingImages = null;
+
+  // Open the panel for an entity AND attach a one-shot batch of images
+  // (e.g., rendered PDF pages from the viewer) to the next outgoing
+  // message. Used by the PDF viewer's "Ask AI" button.
+  function openWithImages(opts) {
+    opts = opts || {};
+    if (!opts.entityType || !opts.entityId) {
+      alert('Open an estimate or lead first.');
+      return;
+    }
+    if (Array.isArray(opts.images) && opts.images.length) {
+      _pendingImages = {
+        images: opts.images.slice(0, 12), // hard cap matches Anthropic per-request limit
+        note: opts.imagesNote || null
+      };
+    }
+    open({ entityType: opts.entityType, entityId: opts.entityId });
+    if (opts.prefill) {
+      setTimeout(function() {
+        var input = document.getElementById('ai-input');
+        if (input) {
+          input.value = opts.prefill;
+          // Trigger auto-grow by dispatching an input event
+          input.dispatchEvent(new Event('input'));
+          input.focus();
+          input.setSelectionRange(input.value.length, input.value.length);
+        }
+      }, 260);
+    }
+  }
+
   window.agxAI = {
     open: open,
+    openWithImages: openWithImages,
     close: close,
     toggle: toggle,
     isOpen: function() { return _open; }

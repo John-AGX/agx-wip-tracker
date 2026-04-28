@@ -226,12 +226,15 @@
           html += sectionHeader('📎 Documents', docs.length);
           html += '<div style="display:flex;flex-direction:column;gap:6px;border:1px solid var(--border,#333);border-radius:8px;overflow:hidden;">';
           docs.forEach(function(att) {
-            html += '<div style="display:flex;align-items:center;gap:12px;padding:10px 12px;background:rgba(255,255,255,0.02);border-bottom:1px solid var(--border,#2a2a3a);">' +
+            var isPdf = (att.mime_type && att.mime_type.indexOf('pdf') >= 0) ||
+                        (att.filename || '').toLowerCase().endsWith('.pdf');
+            html += '<div style="display:flex;align-items:center;gap:8px;padding:10px 12px;background:rgba(255,255,255,0.02);border-bottom:1px solid var(--border,#2a2a3a);">' +
               '<div style="font-size:24px;flex:0 0 auto;line-height:1;">' + fileIconFor(att.filename, att.mime_type) + '</div>' +
               '<div style="flex:1;min-width:0;">' +
                 '<div style="font-size:13px;color:var(--text,#fff);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTMLLocal(att.filename) + '</div>' +
                 '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:2px;">' + fmtBytes(att.size_bytes) + (att.mime_type ? ' &middot; ' + escapeHTMLLocal(att.mime_type) : '') + '</div>' +
               '</div>' +
+              (isPdf ? '<button data-att-view="' + escapeAttr(att.id) + '" title="Preview pages and send to the AI assistant" style="flex:0 0 auto;background:rgba(139,92,246,0.12);color:#c4b5fd;border:1px solid rgba(139,92,246,0.3);border-radius:6px;padding:6px 12px;font-size:11px;font-weight:600;cursor:pointer;">&#x1F441; View</button>' : '') +
               '<a href="' + escapeAttr(att.original_url) + '" download="' + escapeAttr(att.filename) + '" target="_blank" rel="noopener" title="Download" style="flex:0 0 auto;background:rgba(79,140,255,0.12);color:#4f8cff;border:1px solid rgba(79,140,255,0.3);border-radius:6px;padding:6px 12px;text-decoration:none;font-size:11px;font-weight:600;">&#x2B07; Download</a>' +
               (canEdit ? '<button data-att-del-doc="' + escapeAttr(att.id) + '" title="Delete" style="flex:0 0 auto;background:rgba(248,113,113,0.10);color:#f87171;border:1px solid rgba(248,113,113,0.25);border-radius:6px;width:30px;height:30px;font-size:14px;cursor:pointer;line-height:1;">&times;</button>' : '') +
             '</div>';
@@ -288,6 +291,19 @@
         btn.onclick = function(e) {
           e.stopPropagation();
           deleteAttachment(btn.getAttribute('data-att-del-doc'), 'document');
+        };
+      });
+      // PDF view button — opens the inline viewer with an Ask AI handoff.
+      container.querySelectorAll('[data-att-view]').forEach(function(btn) {
+        btn.onclick = function(e) {
+          e.stopPropagation();
+          var attId = btn.getAttribute('data-att-view');
+          var att = state.attachments.find(function(a) { return a.id === attId; });
+          if (att && typeof window.openPdfViewer === 'function') {
+            window.openPdfViewer(att, { entityType: entityType, entityId: entityId });
+          } else {
+            alert('PDF viewer not loaded — refresh the page.');
+          }
         };
       });
     }
