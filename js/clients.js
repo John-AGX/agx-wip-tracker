@@ -24,7 +24,12 @@
     });
     var target = document.getElementById('estimates-subtab-' + name);
     if (target) target.style.display = '';
-    if (name === 'leads' && typeof renderLeadsList === 'function') renderLeadsList();
+    if (name === 'leads') {
+      // Always re-fetch on tab open so changes from other tabs / users show up
+      // immediately instead of requiring a manual Refresh click.
+      if (typeof window.reloadLeadsCache === 'function') window.reloadLeadsCache();
+      else if (typeof renderLeadsList === 'function') renderLeadsList();
+    }
     else if (name === 'list') {
       // If the user previously opened the full-page estimate editor and
       // then navigated away via the sub-tab buttons, clicking back into
