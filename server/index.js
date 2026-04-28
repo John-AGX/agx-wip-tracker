@@ -24,6 +24,7 @@ const clientRoutes = require('./routes/client-routes');
 const leadRoutes = require('./routes/lead-routes');
 const settingsRoutes = require('./routes/settings-routes');
 const attachmentRoutes = require('./routes/attachment-routes');
+const aiRoutes = require('./routes/ai-routes');
 const { storage } = require('./storage');
 
 const app = express();
@@ -42,6 +43,7 @@ app.use('/api/clients', clientRoutes);
 app.use('/api/leads', leadRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/attachments', attachmentRoutes);
+app.use('/api/ai', aiRoutes);
 
 // Serve uploaded files when running with the local storage backend.
 // On Railway with a mounted volume, set UPLOAD_DIR to the mount path

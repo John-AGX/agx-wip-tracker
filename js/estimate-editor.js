@@ -1085,6 +1085,18 @@
   window.onLineDrop = onLineDrop;
   window.switchAlternate = switchAlternate;
   window.renderScopePanel = renderScopePanel;
+
+  // Tiny shim so the sticky-header "Ask AI" button can find the active
+  // estimate id without the AI panel having to read the editor's private
+  // state. Just delegates to agxAI.open with the current id.
+  window.openEstimateAI = function() {
+    if (!_currentId) { alert('Open an estimate first.'); return; }
+    if (window.agxAI && typeof window.agxAI.open === 'function') {
+      window.agxAI.open(_currentId);
+    } else {
+      alert('AI panel not loaded yet — refresh the page.');
+    }
+  };
   window.addAlternateFromEditor = addAlternateFromEditor;
   window.renameActiveAlternate = renameActiveAlternate;
   window.duplicateActiveAlternate = duplicateActiveAlternate;

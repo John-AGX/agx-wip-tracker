@@ -199,6 +199,26 @@ async function initSchema() {
       uploaded_at TIMESTAMPTZ DEFAULT NOW()
     );
     CREATE INDEX IF NOT EXISTS idx_attachments_entity ON attachments(entity_type, entity_id, position);
+
+    -- AI estimating-assistant chat. Per-user, per-estimate (so PMs each see
+    -- their own conversation). Two messages per round (one user, one
+    -- assistant) ordered by created_at; the route layer rebuilds the
+    -- conversation by selecting all rows with matching (estimate_id, user_id).
+    -- Token counts let us tally cost later.
+    CREATE TABLE IF NOT EXISTS ai_messages (
+      id TEXT PRIMARY KEY,
+      estimate_id TEXT NOT NULL,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+      content TEXT NOT NULL,
+      model TEXT,
+      input_tokens INTEGER,
+      output_tokens INTEGER,
+      photos_included INTEGER DEFAULT 0,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_ai_messages_conversation
+      ON ai_messages(estimate_id, user_id, created_at);
   `);
 
   // Seed built-in roles. ON CONFLICT lets us re-run safely without
