@@ -591,8 +591,19 @@
                 var lines = e.lines || [];
                 var alternates = e.alternates || [];
                 var meta = Object.assign({}, e);
+                // Strip lines from the estimate object — the editor always
+                // reads them from appData.estimateLines (a flat array) so
+                // keeping them inline would just duplicate state.
                 delete meta.lines;
-                delete meta.alternates;
+                // KEEP alternates INLINE on the estimate. The full-page
+                // editor reads est.alternates directly and writes scope /
+                // line membership / etc. straight to those objects. If we
+                // strip them here, ensureAlternates() sees no alternates on
+                // first open, creates a fresh blank "Base", and any typed
+                // scope from a previous session is invisible — which was
+                // exactly the "scope didn't save" bug. The flat
+                // estimateAlternates array stays populated as a fallback
+                // for older callers, but it's not the source of truth.
                 appData.estimates.push(meta);
                 Array.prototype.push.apply(appData.estimateLines, lines);
                 Array.prototype.push.apply(appData.estimateAlternates, alternates);
