@@ -1018,4 +1018,137 @@ router.post('/jobs/:id/chat',
   }
 );
 
+// ════════════════════════════════════════════════════════════════════
+// LEAD EXTRACTION FROM PDF
+//
+// Takes rendered pages from a Buildertrend "Lead Print" PDF and returns
+// structured lead data that the New Lead form prefills with. The user
+// drops a PDF on the modal; client-side PDF.js renders pages; we ship
+// the page images to Claude with a tight schema; the model returns
+// JSON matching the leads-table column set.
+//
+// Schema mirrors the editable fields on lead-routes.js EDITABLE_FIELDS
+// so the prefilled values can save with no transformation.
+// ════════════════════════════════════════════════════════════════════
+
+const LEAD_EXTRACTION_SCHEMA = {
+  type: 'object',
+  properties: {
+    title: { type: 'string', description: 'Lead opportunity title — the project / repair name. Usually shown as the heading of the BT print.' },
+    client_company: { type: 'string', description: 'Client company / management firm name. From the Client Contact block. Empty string if not present.' },
+    client_first_name: { type: 'string', description: 'Primary contact first name (often shown after the company in BT) or empty string if only a company is listed.' },
+    client_last_name: { type: 'string', description: 'Primary contact last name or empty string.' },
+    client_email: { type: 'string', description: 'Client contact email address or empty string.' },
+    client_phone: { type: 'string', description: 'Client contact phone (digits with formatting OK) or empty string.' },
+    client_address: { type: 'string', description: 'Client mailing street address (line 1) or empty string. NOT the property/job site address.' },
+    client_city: { type: 'string', description: 'Client mailing city or empty string.' },
+    client_state: { type: 'string', description: 'Two-letter state code or empty string.' },
+    client_zip: { type: 'string', description: 'Client mailing ZIP or empty string.' },
+    property_name: { type: 'string', description: 'Property / community name (from "Lead Opportunity Info" or similar block). Empty string if not present.' },
+    property_address: { type: 'string', description: 'Property / job site street address (line 1) or empty string.' },
+    property_city: { type: 'string', description: 'Property city or empty string.' },
+    property_state: { type: 'string', description: 'Property state code or empty string.' },
+    property_zip: { type: 'string', description: 'Property ZIP or empty string.' },
+    salesperson_name: { type: 'string', description: 'AGX salesperson name from the Salesperson section or empty string.' },
+    project_type: { type: 'string', description: 'Project type / job type if specified (e.g., Renovation, Service & Repair, Work Order). Empty string if blank.' },
+    market: { type: 'string', description: 'Market field from the custom fields section (e.g., "Tampa", "Orlando"). Empty string if N/A or absent.' },
+    gate_code: { type: 'string', description: 'Gate code from the custom fields section. Empty string if N/A or absent.' },
+    confidence_pct: { type: 'integer', description: 'Confidence Level as a number 0-100. 0 if absent.' },
+    estimated_revenue_low: { type: 'number', description: 'Lower bound of Est. Revenue range. 0 if not specified or both bounds blank.' },
+    estimated_revenue_high: { type: 'number', description: 'Upper bound of Est. Revenue range. 0 if not specified.' },
+    status: { type: 'string', enum: ['new', 'in_progress', 'sent', 'sold', 'lost', 'no_opportunity'], description: 'Mapped lead status. BT "Open" or "Pending" → "in_progress"; BT "New" → "new"; otherwise default to "new".' },
+    notes: { type: 'string', description: 'Full Notes section text. Preserve formatting/line breaks. Includes the SOW summary, POC details, and any other narrative content. Empty string if no notes.' }
+  },
+  required: [
+    'title', 'client_company', 'client_first_name', 'client_last_name',
+    'client_email', 'client_phone', 'client_address', 'client_city',
+    'client_state', 'client_zip', 'property_name', 'property_address',
+    'property_city', 'property_state', 'property_zip',
+    'salesperson_name', 'project_type', 'market', 'gate_code',
+    'confidence_pct', 'estimated_revenue_low', 'estimated_revenue_high',
+    'status', 'notes'
+  ],
+  additionalProperties: false
+};
+
+const LEAD_EXTRACTION_SYSTEM = [
+  'You are extracting structured lead data from a Buildertrend "Lead Print" PDF for AG Exteriors, a Central Florida construction services company.',
+  '',
+  'The PDF pages are attached as images. Read every page. Return ONLY the JSON described by the schema — no prose, no markdown.',
+  '',
+  'Field rules:',
+  '- Use empty strings for missing text fields, 0 for missing numbers — never null, never the string "N/A".',
+  '- The Client Contact block usually shows "Company Name - Property/Site Name" on line 1, then the mailing address. Extract the company name only (strip the " - Site Name" suffix) into client_company.',
+  '- Distinguish the client mailing address from the property/job site address. The Lead Opportunity Info block carries the property address; the Client Contact block carries the mailing address.',
+  '- The Notes section in BT often contains "**SOW:** ..." and "**POC:** ..." markers. Preserve them in the notes field as-is — they help the PM know the original structure.',
+  '- For status: BT "Open" or "Pending" → "in_progress"; "New" → "new"; "Sent" → "sent"; "Sold" → "sold"; "Lost" → "lost"; "No Opportunity" → "no_opportunity". When in doubt, "new".',
+  '- For estimated_revenue_low/high: parse "$1,200 to $1,500" as 1200 / 1500. "0 to 0" → both 0. Single number "$5,000" → both 5000.',
+  '- For confidence_pct: parse "75%" as 75 (integer). Absent → 0.'
+].join('\n');
+
+router.post('/extract-lead',
+  requireAuth, requireCapability('LEADS_EDIT'),
+  async (req, res) => {
+    const anthropic = getAnthropic();
+    if (!anthropic) {
+      return res.status(503).json({ error: 'AI assistant is not configured. Set ANTHROPIC_API_KEY.' });
+    }
+    const images = Array.isArray(req.body && req.body.images) ? req.body.images : [];
+    if (!images.length) {
+      return res.status(400).json({ error: 'images array is required' });
+    }
+    if (images.length > 12) {
+      return res.status(400).json({ error: 'Up to 12 page images per extraction request.' });
+    }
+
+    try {
+      // Strip "data:image/...;base64," prefixes if any so the API gets pure base64
+      const imageBlocks = images.map(b64 => {
+        const stripped = typeof b64 === 'string' && b64.indexOf('base64,') >= 0
+          ? b64.slice(b64.indexOf('base64,') + 7)
+          : b64;
+        return {
+          type: 'image',
+          source: { type: 'base64', media_type: 'image/jpeg', data: stripped }
+        };
+      });
+
+      const userContent = [
+        ...imageBlocks,
+        { type: 'text', text: 'Extract the lead data from these pages. Return only the JSON.' }
+      ];
+
+      const response = await anthropic.messages.create({
+        model: MODEL,
+        max_tokens: 1500,
+        system: LEAD_EXTRACTION_SYSTEM,
+        messages: [{ role: 'user', content: userContent }],
+        // Structured outputs — the API guarantees a JSON response that
+        // validates against this schema. Saves us a parsing-and-retry loop.
+        output_config: {
+          format: {
+            type: 'json_schema',
+            schema: LEAD_EXTRACTION_SCHEMA
+          }
+        }
+      });
+
+      // The response's first text block is the JSON string; parse it.
+      const textBlock = (response.content || []).find(b => b.type === 'text');
+      if (!textBlock) throw new Error('No text response from the model.');
+      let parsed;
+      try {
+        parsed = JSON.parse(textBlock.text);
+      } catch (e) {
+        throw new Error('Model returned non-JSON response: ' + textBlock.text.slice(0, 200));
+      }
+
+      res.json({ ok: true, lead: parsed, usage: response.usage });
+    } catch (e) {
+      console.error('AI extract-lead error:', e);
+      res.status(500).json({ error: e.message || 'Server error' });
+    }
+  }
+);
+
 module.exports = router;

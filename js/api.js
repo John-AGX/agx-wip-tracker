@@ -138,6 +138,10 @@
     }).then(handleResponse);
   }
 
+  var ai = {
+    extractLead: function(images) { return post('/api/ai/extract-lead', { images: images }); }
+  };
+
   var attachments = {
     list: function(entityType, entityId) {
       return get('/api/attachments/' + encodeURIComponent(entityType) + '/' + encodeURIComponent(entityId));
@@ -172,7 +176,7 @@
 
   window.agxApi = {
     get: get, put: put, post: post, del: del,
-    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments,
+    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai,
     isOffline: isOffline,
     isAuthenticated: function() { return !!getToken() && !isOffline(); }
   };

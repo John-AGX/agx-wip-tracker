@@ -29,12 +29,12 @@
     if (Math.abs(n) >= 1e3) return '$' + (n / 1e3).toFixed(0) + 'k';
     return '$' + Math.round(n).toLocaleString();
   }
-  function fmtRevenueRange(low, high) {
-    if (low == null && high == null) return '';
-    if (low != null && high != null && Number(low) !== Number(high)) {
-      return fmtCurrencyShort(low) + '–' + fmtCurrencyShort(high);
-    }
-    return fmtCurrencyShort(low != null ? low : high);
+  // AGX-side only uses the single estimated revenue figure (the min).
+  // Kept the same function name and accepts (low, high) for back-compat
+  // with existing call sites — the high arg is ignored.
+  function fmtRevenueRange(low /*, high */) {
+    if (low == null || low === '' || Number(low) === 0) return '';
+    return fmtCurrencyShort(low);
   }
   function fmtDate(s) {
     if (!s) return '';
@@ -98,8 +98,8 @@
       var order = STATUSES.map(function(s) { return s.key; });
       av = order.indexOf(a.status); bv = order.indexOf(b.status);
     } else if (key === 'revenue') {
-      av = Number(a.estimated_revenue_high || a.estimated_revenue_low || 0);
-      bv = Number(b.estimated_revenue_high || b.estimated_revenue_low || 0);
+      av = Number(a.estimated_revenue_low || 0);
+      bv = Number(b.estimated_revenue_low || 0);
     } else if (key === 'confidence') {
       av = Number(a.confidence || 0); bv = Number(b.confidence || 0);
     } else if (key === 'created_at') {
@@ -368,6 +368,14 @@
     if (proposalsTab) proposalsTab.style.display = 'none';
     var footer = document.querySelector('#leadEditorModal .modal-footer');
     if (footer) footer.style.display = '';
+    // Show the BT-PDF drop zone and reset its status — only on create
+    var pdfDrop = document.getElementById('leadEditor_pdfDrop');
+    if (pdfDrop) {
+      pdfDrop.style.display = '';
+      var s = document.getElementById('leadEditor_pdfDropStatus');
+      if (s) { s.style.display = 'none'; s.textContent = ''; s.style.color = ''; }
+      wirePdfDropOnce();
+    }
     openModal('leadEditorModal');
   }
 
@@ -388,6 +396,10 @@
     populateClientSelect(l.client_id || '');
     populateSalespersonSelect(l.salesperson_id || '');
     document.getElementById('leadEditor_deleteBtn').style.display = '';
+    // Hide the BT-PDF drop zone in edit mode — extraction only makes
+    // sense when creating a fresh lead.
+    var pdfDrop = document.getElementById('leadEditor_pdfDrop');
+    if (pdfDrop) pdfDrop.style.display = 'none';
     // Edit mode shows the General | Proposals tab nav. Default to General;
     // user clicks Proposals to see the linked estimates.
     document.getElementById('leadEditor_tabs').style.display = '';
@@ -476,8 +488,9 @@
       'You can edit the job number, costs, and other fields after.';
     if (!confirm(msg)) return;
 
-    // Pick the better of the revenue range as a starter contract value
-    var contractAmt = Number(l.estimated_revenue_high || l.estimated_revenue_low || 0);
+    // Lead-to-job conversion: use the single estimated revenue value as
+    // the starter contract amount (we no longer track a low/high range).
+    var contractAmt = Number(l.estimated_revenue_low || 0);
     var me = window.agxAuth && window.agxAuth.getUser && window.agxAuth.getUser();
     var ownerId = l.salesperson_id || (me && me.id) || null;
 
@@ -946,6 +959,158 @@
       '<div style="font-size:10px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">' + label + '</div>' +
       '<div style="font-size:18px;font-weight:700;color:' + color + ';">' + value + '</div>' +
     '</div>';
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  // Build-from-PDF drop flow on the New Lead modal. User drops a
+  // Buildertrend "Lead Print" PDF; we render pages client-side via
+  // PDF.js → POST images to /api/ai/extract-lead → prefill the form
+  // fields with the structured response. User reviews and saves
+  // normally (saves go through the existing submitLeadEditor flow).
+  // ──────────────────────────────────────────────────────────────────
+  var _pdfDropWired = false;
+
+  function wirePdfDropOnce() {
+    if (_pdfDropWired) return;
+    var dropZone = document.getElementById('leadEditor_pdfDrop');
+    var fileInput = document.getElementById('leadEditor_pdfFile');
+    if (!dropZone || !fileInput) return;
+    dropZone.onclick = function(e) {
+      if (e.target !== fileInput) fileInput.click();
+    };
+    dropZone.ondragover = function(e) {
+      e.preventDefault();
+      dropZone.style.borderColor = '#8b5cf6';
+      dropZone.style.background = 'rgba(139,92,246,0.12)';
+    };
+    dropZone.ondragleave = function() {
+      dropZone.style.borderColor = '';
+      dropZone.style.background = '';
+    };
+    dropZone.ondrop = function(e) {
+      e.preventDefault();
+      dropZone.style.borderColor = '';
+      dropZone.style.background = '';
+      if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]) {
+        handlePdfDrop(e.dataTransfer.files[0]);
+      }
+    };
+    fileInput.onchange = function() {
+      if (fileInput.files && fileInput.files[0]) handlePdfDrop(fileInput.files[0]);
+      fileInput.value = '';
+    };
+    _pdfDropWired = true;
+  }
+
+  function setPdfStatus(message, color) {
+    var s = document.getElementById('leadEditor_pdfDropStatus');
+    if (!s) return;
+    s.style.display = '';
+    s.textContent = message;
+    s.style.color = color || '#c4b5fd';
+  }
+
+  function handlePdfDrop(file) {
+    if (!file) return;
+    var name = (file.name || '').toLowerCase();
+    if (file.type !== 'application/pdf' && !name.endsWith('.pdf')) {
+      setPdfStatus('Not a PDF — drop a Buildertrend Lead Print.', '#f87171');
+      return;
+    }
+    if (!window.pdfjsLib) {
+      setPdfStatus('PDF library not loaded — refresh the page.', '#f87171');
+      return;
+    }
+
+    setPdfStatus('Reading PDF…');
+    var reader = new FileReader();
+    reader.onload = function(e) {
+      var typedArray = new Uint8Array(e.target.result);
+      window.pdfjsLib.getDocument({ data: typedArray }).promise.then(function(pdf) {
+        return renderPdfPagesToBase64(pdf);
+      }).then(function(images) {
+        setPdfStatus('Extracting fields with AI… (' + images.length + ' page' + (images.length === 1 ? '' : 's') + ')');
+        return window.agxApi.ai.extractLead(images);
+      }).then(function(res) {
+        if (!res || !res.lead) throw new Error('Empty response from AI.');
+        prefillFromExtractedLead(res.lead);
+        setPdfStatus('✓ Fields prefilled from PDF — review and save below.', '#34d399');
+      }).catch(function(err) {
+        console.error('PDF extraction failed:', err);
+        setPdfStatus('Extraction failed: ' + (err.message || err), '#f87171');
+      });
+    };
+    reader.onerror = function() {
+      setPdfStatus('Could not read the file.', '#f87171');
+    };
+    reader.readAsArrayBuffer(file);
+  }
+
+  // Render every page of the loaded PDF to a base64 JPEG. Capped at 6
+  // since lead prints are usually 1-2 pages and we want to leave room
+  // under Anthropic's per-request image limit.
+  function renderPdfPagesToBase64(pdf) {
+    var max = Math.min(pdf.numPages, 6);
+    var chain = Promise.resolve();
+    var images = [];
+    for (var i = 1; i <= max; i++) {
+      (function(pageNum) {
+        chain = chain.then(function() {
+          return pdf.getPage(pageNum).then(function(page) {
+            var viewport = page.getViewport({ scale: 1.5 });
+            var canvas = document.createElement('canvas');
+            canvas.width = viewport.width;
+            canvas.height = viewport.height;
+            return page.render({ canvasContext: canvas.getContext('2d'), viewport: viewport }).promise.then(function() {
+              var dataUrl = canvas.toDataURL('image/jpeg', 0.82);
+              images.push(dataUrl);
+            });
+          });
+        });
+      })(i);
+    }
+    return chain.then(function() { return images; });
+  }
+
+  // Take the AI's structured response and stuff each field into the
+  // form. We map the response keys to the form-field IDs the existing
+  // submitLeadEditor / save flow already uses, so the user can just
+  // hit Save to commit.
+  function prefillFromExtractedLead(lead) {
+    if (!lead) return;
+    if (lead.title) setField('title', lead.title);
+    if (lead.status) setField('status', lead.status);
+    // Estimated revenue: AGX-side only uses the min/low value — display
+    // a single number on our forms. The schema asks for both, but we
+    // ignore the high.
+    if (lead.estimated_revenue_low) setField('estimated_revenue_low', lead.estimated_revenue_low);
+    if (lead.confidence_pct != null) setField('confidence', lead.confidence_pct);
+    if (lead.project_type) setField('project_type', lead.project_type);
+    if (lead.market) setField('market', lead.market);
+    if (lead.gate_code) setField('gate_code', lead.gate_code);
+    if (lead.notes) setField('notes', lead.notes);
+    if (lead.property_name) setField('property_name', lead.property_name);
+    // Property/job-site address goes onto the lead's address fields
+    if (lead.property_address) setField('street_address', lead.property_address);
+    if (lead.property_city) setField('city', lead.property_city);
+    if (lead.property_state) setField('state', lead.property_state);
+    if (lead.property_zip) setField('zip', lead.property_zip);
+
+    // Try to auto-link a client if the company name matches one in the
+    // directory cache. Fall through silently if no match — user can pick
+    // a client in the dropdown OR create one later.
+    if (lead.client_company) {
+      var needle = String(lead.client_company).trim().toLowerCase();
+      var clients = (window.agxClients && window.agxClients.getCached && window.agxClients.getCached()) || [];
+      var match = clients.find(function(c) {
+        return (c.name || '').toLowerCase().indexOf(needle) >= 0
+          || (c.company_name || '').toLowerCase().indexOf(needle) >= 0;
+      });
+      if (match) {
+        var sel = document.getElementById('leadEditor_client_id');
+        if (sel) sel.value = match.id;
+      }
+    }
   }
 
   window.renderLeadsList = renderLeadsList;

@@ -1508,6 +1508,17 @@
         <div id="leadEditor_tab_general" style="padding:18px 20px;display:flex;flex-direction:column;gap:18px;">
           <input type="hidden" id="leadEditor_id" />
 
+          <!-- Build-from-PDF drop zone. Hidden in edit mode (only shown when
+               creating a new lead). User drops a Buildertrend "Lead Print"
+               PDF; client renders pages via PDF.js, server runs Claude with
+               structured outputs to extract the fields. -->
+          <div id="leadEditor_pdfDrop" style="border:2px dashed rgba(139,92,246,0.4);border-radius:10px;padding:14px;background:rgba(139,92,246,0.05);text-align:center;cursor:pointer;transition:border-color 0.15s,background 0.15s;">
+            <div style="font-size:13px;color:#c4b5fd;margin-bottom:4px;">&#x2728; Drop a Buildertrend Lead Print PDF here <span style="color:var(--text-dim,#888);">or <strong style="color:#4f8cff;">click to pick</strong></span></div>
+            <div style="font-size:11px;color:var(--text-dim,#888);">AI reads the printed lead report and prefills the fields below. You review and save.</div>
+            <div id="leadEditor_pdfDropStatus" style="font-size:11px;margin-top:6px;display:none;"></div>
+            <input id="leadEditor_pdfFile" type="file" accept="application/pdf,.pdf" style="display:none;" />
+          </div>
+
           <!-- Identity -->
           <fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;">
             <legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Lead</legend>
@@ -1562,10 +1573,13 @@
                 <input id="leadEditor_projected_sale_date" type="date" />
               </div>
             </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px;">
-              <div><label style="display:block;">Estimated Revenue (Low)</label><input id="leadEditor_estimated_revenue_low" type="number" step="100" placeholder="0" /></div>
-              <div><label style="display:block;">Estimated Revenue (High)</label><input id="leadEditor_estimated_revenue_high" type="number" step="100" placeholder="0" /></div>
+            <div style="margin-top:10px;">
+              <label style="display:block;">Estimated Revenue</label>
+              <input id="leadEditor_estimated_revenue_low" type="number" step="100" placeholder="0" />
             </div>
+            <!-- estimated_revenue_high stays in the schema but is hidden on
+                 the AGX side — we only display/use the single min value. -->
+            <input id="leadEditor_estimated_revenue_high" type="hidden" />
             <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:10px;">
               <div><label style="display:block;">Source</label><input id="leadEditor_source" type="text" placeholder="Referral, BT, …" /></div>
               <div><label style="display:block;">Project Type</label><input id="leadEditor_project_type" type="text" placeholder="Renovation, Repaint, …" /></div>
@@ -1915,12 +1929,12 @@
     </script>
 
     <script src="js/auth.js?v=6"></script>
-    <script src="js/api.js?v=10"></script>
+    <script src="js/api.js?v=11"></script>
     <script src="js/attachments.js?v=3"></script>
     <script src="js/pdf-viewer.js?v=1"></script>
     <script src="js/admin.js?v=13"></script>
     <script src="js/clients.js?v=6"></script>
-    <script src="js/leads.js?v=8"></script>
+    <script src="js/leads.js?v=9"></script>
     <script src="js/insights.js?v=5"></script>
     <script src="js/app.js?v=38"></script>
     <script src="js/wip.js?v=56"></script>
