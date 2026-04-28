@@ -13,10 +13,63 @@
 
   var _currentId = null;
   var _saveTimer = null;
+  // Save status tracker — drives the indicator + Save button in the
+  // sticky header. 'idle' = nothing pending, 'pending' = local debounce
+  // running, 'saving' = saveData has fired and the server push is in
+  // flight, 'saved' = recently saved (hold for 2s), 'error' = failed.
+  var _saveState = 'idle';
+
+  function setSaveState(state) {
+    _saveState = state;
+    renderSaveIndicator();
+  }
 
   function debouncedSave() {
     if (_saveTimer) clearTimeout(_saveTimer);
-    _saveTimer = setTimeout(function() { if (typeof saveData === 'function') saveData(); }, 400);
+    setSaveState('pending');
+    _saveTimer = setTimeout(function() {
+      _saveTimer = null;
+      runSaveNow();
+    }, 400);
+  }
+
+  // Force an immediate save — used by closeEstimateEditor and the manual
+  // Save button. Skips the debounce timer and surfaces the result on the
+  // status indicator.
+  function runSaveNow() {
+    if (typeof saveData !== 'function') { setSaveState('error'); return; }
+    setSaveState('saving');
+    try {
+      saveData();
+      // saveData() is fire-and-forget locally; localStorage is synchronous.
+      // Server push is queued ~600ms later. Show "saved" optimistically and
+      // fade after 2s — if the server push fails, the next user action
+      // will retry.
+      setTimeout(function() {
+        if (_saveState === 'saving') setSaveState('saved');
+        setTimeout(function() {
+          if (_saveState === 'saved') setSaveState('idle');
+        }, 2000);
+      }, 700);
+    } catch (e) {
+      console.warn('Manual save failed:', e);
+      setSaveState('error');
+    }
+  }
+
+  function renderSaveIndicator() {
+    var el = document.getElementById('ee-save-indicator');
+    if (!el) return;
+    var dot, label, color;
+    switch (_saveState) {
+      case 'pending': dot = '●'; label = 'Unsaved'; color = '#fbbf24'; break;
+      case 'saving':  dot = '●'; label = 'Saving…'; color = '#60a5fa'; break;
+      case 'saved':   dot = '✓'; label = 'Saved'; color = '#34d399'; break;
+      case 'error':   dot = '!'; label = 'Save failed'; color = '#f87171'; break;
+      default:        dot = '○'; label = 'No changes'; color = 'var(--text-dim,#888)'; break;
+    }
+    el.style.color = color;
+    el.innerHTML = '<span style="font-weight:700;margin-right:5px;">' + dot + '</span>' + label;
   }
 
   function getEstimate() {
@@ -126,6 +179,9 @@
     renderLineItems();
     renderScopePanel();
     switchEstimateEditorTab('lines');
+    // Reset save state to idle on every fresh editor open so we don't
+    // carry "saved" / "error" indicators from a previous session.
+    setSaveState('idle');
   }
 
   // Right-panel scope textarea — bound to the ACTIVE alternate's scope so
@@ -163,6 +219,7 @@
     if (_saveTimer) { clearTimeout(_saveTimer); _saveTimer = null; }
     if (typeof saveData === 'function') saveData();
     _currentId = null;
+    _saveState = 'idle';
     var listView = document.getElementById('estimates-list-view');
     var editorView = document.getElementById('estimate-editor-view');
     if (editorView) editorView.style.display = 'none';
@@ -1107,6 +1164,14 @@
   // Tiny shim so the sticky-header "Ask AI" button can find the active
   // estimate id without the AI panel having to read the editor's private
   // state. Just delegates to agxAI.open with the current id.
+  // Manual save invoked by the sticky-header Save button + the save
+  // indicator (clicking the chip also triggers an immediate save).
+  window.saveEstimateNow = function() {
+    if (!_currentId) return;
+    if (_saveTimer) { clearTimeout(_saveTimer); _saveTimer = null; }
+    runSaveNow();
+  };
+
   window.openEstimateAI = function() {
     if (!_currentId) { alert('Open an estimate first.'); return; }
     if (window.agxAI && typeof window.agxAI.open === 'function') {

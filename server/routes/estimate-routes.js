@@ -35,8 +35,18 @@ router.put('/bulk/save', requireAuth, requireRole('admin', 'pm'), async (req, re
         const blob = {
           ...est,
           lines: (estimateLines || []).filter(l => l.estimateId === est.id),
-          alternates: (estimateAlternates || []).filter(a => a.estimateId === est.id),
         };
+        // Alternates: the new full-page editor stores them inline on each
+        // estimate as est.alternates (with their scope text). Older callers
+        // sent alternates as a flat appData.estimateAlternates array. Keep
+        // the editor's inline form when it's there; only fall back to the
+        // flat array when the estimate doesn't already carry its own. This
+        // was the bug behind "scope didn't save" — the inline alternates
+        // were being silently overwritten by the (almost always empty)
+        // filtered flat array.
+        if (!Array.isArray(blob.alternates) || !blob.alternates.length) {
+          blob.alternates = (estimateAlternates || []).filter(a => a.estimateId === est.id);
+        }
         await client.query(
           `INSERT INTO estimates (id, owner_id, data) VALUES ($1, $2, $3)
            ON CONFLICT (id) DO UPDATE SET data = $3, updated_at = NOW()`,
