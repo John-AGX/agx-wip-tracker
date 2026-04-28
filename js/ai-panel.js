@@ -48,10 +48,11 @@
     { label: 'Margin drift',          prompt: 'Compare as-sold margin, revised margin, and JTD margin. Is the job drifting? What\'s driving the change?' }
   ];
   var CLIENT_PRESETS = [
-    { label: 'Find duplicates',         prompt: 'Scan the directory for likely duplicate clients (typo variants, abbreviations vs full names, same CAM/email on different rows). List them and propose merges where you are confident.' },
-    { label: 'Organize flat clients',   prompt: 'Look at the unparented entries. For each one, suggest the parent management company they belong under (existing parent if a match, otherwise propose a split into parent + property).' },
-    { label: 'Add a property',          prompt: 'Walk me through adding a new property. Ask which parent management company first, then collect the property name, address, and on-site CAM contact.' },
-    { label: 'Audit incomplete records', prompt: 'Show me clients missing key fields (no CAM contact, no property address, or no parent linkage). Group by what is missing so I can fill them in efficiently.' }
+    { label: 'Run full audit',           prompt: 'Run a full audit of the customer directory. Work in this order, using your tools to actually fix things — do not just describe them:\n1. Split any flat clients whose name encodes both a parent management company and a property/community (e.g., "PAC - Solace Tampa", "Associa | Wimbledon Greens", names with " - ", " | ", " / " separators followed by a property name). Reuse existing parents (existing_parent_id) when they already exist in the directory.\n2. Link any unparented properties to their existing parent management company when the company_name field, address, or context makes it obvious.\n3. Merge clear duplicates (typo variants, "Inc."/"LLC" mismatches, same property_address, same CAM email).\n4. Normalize parent-company name spelling to the canonical form across all children.\n5. At the end, in chat, list ambiguous cases that need my judgment — do not act on them.\nChain auto-tier tools efficiently (no preamble), and group approval-tier proposals so I can bulk-approve them.' },
+    { label: 'Find duplicates',          prompt: 'Scan the directory for likely duplicate clients (typo variants, abbreviations vs full names, same CAM/email on different rows, same property_address). For each pair you are confident about, propose a merge — pick the row with more data as keep. List ambiguous pairs in chat for me to decide.' },
+    { label: 'Organize flat clients',    prompt: 'Look at the unparented entries. For each one, decide: (a) is the name a parent+property compound that needs split_client_into_parent_and_property? (b) does it match an existing parent\'s company_name and just need link_property_to_parent? (c) is it a legitimate top-level parent? Apply auto-tier fixes; propose splits for me to approve.' },
+    { label: 'Audit incomplete records', prompt: 'Show me properties missing key fields (no CAM contact, no property_address, no parent linkage, no market). Group by what\'s missing so I can fill them in efficiently. If you can fill anything from context (e.g., copying market from siblings under the same parent), do it via update_client_field.' },
+    { label: 'Add a property',           prompt: 'Walk me through adding a new property. Ask which parent management company first (search existing parents in the directory). Then collect property name, property_address, on-site CAM name + email + phone, market, and gate code if any. Use create_property to apply.' }
   ];
   function getActivePresets() {
     if (isJobMode()) return JOB_PRESETS;
@@ -229,18 +230,18 @@
     var headerEl = document.querySelector('#agx-ai-panel .agx-ai-title');
     if (headerEl) {
       if (isJobMode()) headerEl.textContent = '📊 WIP Assistant';
-      else if (isClientMode()) headerEl.textContent = '👥 Client Directory';
+      else if (isClientMode()) headerEl.textContent = '🤝 Customer Relations Agent';
       else headerEl.textContent = '✨ AI Assistant';
     }
     var noticeEl = document.querySelector('#agx-ai-panel #ai-notice');
     if (noticeEl) {
       if (isJobMode()) noticeEl.textContent = 'Read-only — I can see this job\'s WIP/financial state but cannot change anything.';
-      else if (isClientMode()) noticeEl.textContent = 'I can edit the client directory. Simple changes (new property under known parent, typo fixes) apply automatically; merges, splits, deletes, and new parent companies require your approval.';
+      else if (isClientMode()) noticeEl.textContent = 'Customer Relations Agent — I keep the parent-company / property hierarchy clean. Simple writes apply automatically; restructural changes (new parent, merges, splits, deletes) require approval.';
       else noticeEl.textContent = 'Read-only — I see your estimate and photos but cannot change anything. Apply suggestions by hand.';
     }
     var inputEl = document.getElementById('ai-input');
     if (inputEl) {
-      if (isClientMode()) inputEl.placeholder = 'Ask about your client directory or describe a change…';
+      if (isClientMode()) inputEl.placeholder = 'Describe a change, ask a question, or tap "Run full audit" below…';
       else if (isJobMode()) inputEl.placeholder = 'Ask anything about this job…';
       else inputEl.placeholder = 'Ask anything about this estimate…';
     }
@@ -319,7 +320,7 @@
     if (!_messages.length) {
       var hint;
       if (isJobMode()) hint = 'Pick a preset below or ask anything about the job.<br><span style="font-size:11px;opacity:0.7;">I can see contract, costs, change orders, % complete, billing posture.</span>';
-      else if (isClientMode()) hint = 'Pick a preset below or describe what you need.<br><span style="font-size:11px;opacity:0.7;">I can see your full directory and can add properties, link parents, fix typos, and propose merges/splits.</span>';
+      else if (isClientMode()) hint = '<strong style="color:var(--text,#fff);">🤝 Customer Relations Agent</strong><br>Tap <strong>Run full audit</strong> to clean up the directory in one pass — I\'ll split parent+property compounds, link unparented entries, merge dupes, and surface anything ambiguous for you.<br><span style="font-size:11px;opacity:0.7;">I know the AGX hierarchy: parent management company → property/community → CAM contact.</span>';
       else hint = 'Pick a preset below or ask anything about the estimate.<br><span style="font-size:11px;opacity:0.7;">I can see line items, scope, client, photos &mdash; and I can propose edits.</span>';
       box.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;padding:20px 0;text-align:center;line-height:1.6;">' + hint + '</div>';
       return;
