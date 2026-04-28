@@ -25,7 +25,23 @@
     var target = document.getElementById('estimates-subtab-' + name);
     if (target) target.style.display = '';
     if (name === 'leads' && typeof renderLeadsList === 'function') renderLeadsList();
-    else if (name === 'list' && typeof renderEstimatesList === 'function') renderEstimatesList();
+    else if (name === 'list') {
+      // If the user previously opened the full-page estimate editor and
+      // then navigated away via the sub-tab buttons, clicking back into
+      // Estimates should show the LIST, not silently leave them inside an
+      // editor that's unclear they're still in. Close the editor first.
+      var editorView = document.getElementById('estimate-editor-view');
+      var listView = document.getElementById('estimates-list-view');
+      if (editorView && editorView.style.display !== 'none') {
+        if (typeof window.closeEstimateEditor === 'function') {
+          window.closeEstimateEditor();
+        } else {
+          editorView.style.display = 'none';
+          if (listView) listView.style.display = '';
+        }
+      }
+      if (typeof renderEstimatesList === 'function') renderEstimatesList();
+    }
     else if (name === 'clients') renderClientsList();
   }
 

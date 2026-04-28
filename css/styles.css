@@ -595,34 +595,45 @@
             color: var(--accent);
         }
 
-        /* BT-style leads table — column layout for the Leads sub-tab */
-        .leads-table {
+        /* Dense BT-style table — used by Leads, Estimates, and any future
+           dense list view in the Estimates sub-tab area. Both class names
+           apply the same styles so .leads-table existing call sites keep
+           working while the canonical name is .dense-table. */
+        .leads-table,
+        .dense-table {
             width: 100%;
             border-collapse: collapse;
         }
-        .leads-table th {
+        .leads-table th,
+        .dense-table th {
             padding: 10px 12px;
             background: rgba(255,255,255,0.025);
             border-bottom: 1px solid var(--border, #333);
             position: static; /* override the global sticky default */
         }
-        .leads-table td {
+        .leads-table td,
+        .dense-table td {
             padding: 10px 12px;
             border-bottom: 1px solid var(--border, #2a2a3a);
             vertical-align: middle;
         }
-        .leads-table tbody tr {
+        .leads-table tbody tr,
+        .dense-table tbody tr {
             cursor: pointer;
             transition: background 0.12s;
         }
-        .leads-table tbody tr:hover {
+        .leads-table tbody tr:hover,
+        .dense-table tbody tr:hover {
             background: rgba(79, 140, 255, 0.06);
         }
-        .leads-table tbody tr:last-child td {
+        .leads-table tbody tr:last-child td,
+        .dense-table tbody tr:last-child td {
             border-bottom: none;
         }
         .leads-table th.num,
-        .leads-table td.num {
+        .leads-table td.num,
+        .dense-table th.num,
+        .dense-table td.num {
             text-align: right;
         }
         .leads-table .lead-title-cell {

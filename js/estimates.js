@@ -1,27 +1,63 @@
 function renderEstimatesList() {
             const tbody = document.querySelector('#estimates-table tbody');
+            const searchEl = document.getElementById('estimates-search');
+            const summaryEl = document.getElementById('estimates-summary');
+            const tableWrap = tbody && tbody.closest('div[style]');
+            if (!tbody) return;
             tbody.innerHTML = '';
 
-            appData.estimates.forEach(est => {
+            // Search across title + client + community + addresses so the
+            // user can filter by any visible piece of info.
+            const q = searchEl ? searchEl.value.trim().toLowerCase() : '';
+            const all = appData.estimates || [];
+            const filtered = !q ? all : all.filter(function(e) {
+                return [e.title, e.client, e.community, e.propertyAddr, e.jobType, e.nickName]
+                    .filter(Boolean).join(' ').toLowerCase().indexOf(q) !== -1;
+            });
+
+            // Summary count line — mirrors the Leads pattern so switching
+            // sub-tabs doesn't feel like dropping a tooling level.
+            if (summaryEl) {
+                if (q) summaryEl.textContent = 'Showing ' + filtered.length + ' of ' + all.length + ' estimates';
+                else summaryEl.textContent = all.length + ' estimate' + (all.length === 1 ? '' : 's');
+            }
+
+            if (!filtered.length) {
+                const msg = q
+                    ? 'No estimates match.'
+                    : 'No estimates yet. Click ' + '“' + 'New Estimate' + '”' + ' to create your first.';
+                tbody.innerHTML = '<tr><td colspan="6" style="padding:24px;text-align:center;color:var(--text-dim,#888);font-size:13px;">' + msg + '</td></tr>';
+                if (tableWrap) tableWrap.style.display = '';
+                return;
+            }
+
+            filtered.forEach(est => {
                 const lines = appData.estimateLines.filter(l => l.estimateId === est.id);
                 let baseCost = 0;
                 lines.forEach(l => {
+                    if (l.section === '__section_header__') return;
                     baseCost += (l.qty || 0) * (l.unitCost || 0);
                 });
-
                 const clientPrice = baseCost * (1 + (est.defaultMarkup || 0) / 100);
+                const clientLabel = [est.client, est.community].filter(Boolean).join(' · ') || '<span style="color:var(--text-dim,#666);font-style:italic;">no client</span>';
 
                 const row = document.createElement('tr');
+                row.onclick = function(e) {
+                    // Don't fire row-click when the user clicks one of the
+                    // action buttons — those handle their own action.
+                    if (e.target && e.target.closest('button')) return;
+                    editEstimate(est.id);
+                };
                 row.innerHTML = `
-                    <td><strong>${escapeHTML(est.title)}</strong></td>
-                    <td>${escapeHTML(est.client)} - ${escapeHTML(est.community)}</td>
-                    <td style="text-align: right;">${formatCurrency(baseCost)}</td>
-                    <td style="text-align: right;">${est.defaultMarkup}%</td>
-                    <td style="text-align: right;">${formatCurrency(clientPrice)}</td>
-                    <td style="text-align: center;">
-                        <button class="small" onclick="editEstimate('${escapeHTML(est.id)}')">Edit</button>
-                        <button class="small" onclick="previewEstimate('${escapeHTML(est.id)}')">Preview</button>
-                        <button class="small danger" onclick="deleteEstimate('${escapeHTML(est.id)}')">Delete</button>
+                    <td><strong style="color:var(--text,#fff);">${escapeHTML(est.title || '(untitled)')}</strong>${est.jobType ? '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:2px;">' + escapeHTML(est.jobType) + '</div>' : ''}</td>
+                    <td style="font-size:13px;color:var(--text,#e6e6e6);">${clientLabel}</td>
+                    <td class="num" style="font-family:'SF Mono',monospace;">${formatCurrency(baseCost)}</td>
+                    <td class="num" style="color:#fbbf24;font-family:'SF Mono',monospace;">${est.defaultMarkup}%</td>
+                    <td class="num" style="font-family:'SF Mono',monospace;color:#34d399;font-weight:600;">${formatCurrency(clientPrice)}</td>
+                    <td style="text-align: center; white-space: nowrap;">
+                        <button class="small" onclick="editEstimate('${escapeHTML(est.id)}');event.stopPropagation();">Edit</button>
+                        <button class="small" onclick="previewEstimate('${escapeHTML(est.id)}');event.stopPropagation();">Preview</button>
+                        <button class="small danger" onclick="deleteEstimate('${escapeHTML(est.id)}');event.stopPropagation();">Delete</button>
                     </td>
                 `;
                 tbody.appendChild(row);
