@@ -229,6 +229,15 @@ async function initSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_ai_messages_conversation
       ON ai_messages(estimate_id, user_id, created_at);
+
+    -- Polymorphic the AI conversation table so the same widget can run
+    -- against different entities (estimates today, jobs starting Phase 2B,
+    -- maybe leads later). estimate_id holds whatever entity ID; entity_type
+    -- discriminates. Idempotent ADD COLUMN with default 'estimate' so
+    -- existing rows belong to the estimate flow.
+    ALTER TABLE ai_messages ADD COLUMN IF NOT EXISTS entity_type TEXT NOT NULL DEFAULT 'estimate';
+    CREATE INDEX IF NOT EXISTS idx_ai_messages_entity
+      ON ai_messages(entity_type, estimate_id, user_id, created_at);
   `);
 
   // Seed built-in roles. ON CONFLICT lets us re-run safely without

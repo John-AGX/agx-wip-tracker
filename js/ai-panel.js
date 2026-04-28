@@ -11,20 +11,42 @@
   'use strict';
 
   var _open = false;
-  var _estimateId = null;
+  // Generalized entity binding — the panel works against estimates today
+  // and jobs as of Phase 2B. _entityType decides which API base path the
+  // chat hits ('estimate' → /api/ai/estimates/:id, 'job' → /api/ai/jobs/:id)
+  // and which features are available (estimate has photos + write tools,
+  // job is read-only / no photos for now).
+  var _entityType = 'estimate';
+  var _entityId = null;
+  var _estimateId = null; // legacy alias kept so existing call sites keep working
   var _messages = [];           // {role, content, ...}
   var _streaming = false;
   var _includePhotos = true;    // default-on with toggle, per the user
   var _abortController = null;
 
-  // Preset prompts surfaced as quick-tap buttons. Picked specifically for
-  // construction estimating workflow — feel free to add more.
-  var PRESETS = [
+  function apiBase() {
+    return _entityType === 'job'
+      ? '/api/ai/jobs/' + encodeURIComponent(_entityId)
+      : '/api/ai/estimates/' + encodeURIComponent(_entityId);
+  }
+  function isEstimateMode() { return _entityType === 'estimate'; }
+  function isJobMode() { return _entityType === 'job'; }
+
+  // Preset prompts surfaced as quick-tap buttons. Different presets per
+  // entity — estimates focus on scope/materials, jobs on margin/billing.
+  var ESTIMATE_PRESETS = [
     { label: 'Draft scope from photos', prompt: 'Look at the photos attached and draft a tight, bulleted scope of work for this estimate. Focus on the work AGX would actually be doing.' },
     { label: "What am I missing?",      prompt: 'Review the estimate as it stands. What line items, prep work, or costs am I likely missing? Be specific to the trade and scope.' },
     { label: 'Site assessment',         prompt: 'Based on the photos and what you know about this property, what site conditions should I factor into pricing — stories, access difficulty, distance, weather/scheduling risks, code concerns?' },
-    { label: 'Material suggestions',    prompt: 'For this scope, what materials and quantities would you recommend? Use cost-side prices; the markup is applied separately.' }
+    { label: 'Build my line items',     prompt: 'Propose the cost-side line items I should add for this scope. Use realistic AGX prices for Central Florida and slot each one under the right standard section. Make multiple parallel proposals so I can approve them in batch.' }
   ];
+  var JOB_PRESETS = [
+    { label: 'Health check',          prompt: 'Run a quick WIP health check on this job. Margin trend, cost-to-complete sanity, any red flags I should look at first.' },
+    { label: 'Am I underbilled?',     prompt: 'Compare revenue earned vs. invoiced to date. Am I behind on billing? If so, by how much, and what should I send next?' },
+    { label: 'Missing change orders?', prompt: 'Look at the cost lines vs. the original estimated costs. Anything that looks like out-of-scope work that should have been captured as a change order?' },
+    { label: 'Margin drift',          prompt: 'Compare as-sold margin, revised margin, and JTD margin. Is the job drifting? What\'s driving the change?' }
+  ];
+  function getActivePresets() { return isJobMode() ? JOB_PRESETS : ESTIMATE_PRESETS; }
 
   function escapeHTMLLocal(s) {
     if (typeof window.escapeHTML === 'function') return window.escapeHTML(s);
@@ -85,7 +107,7 @@
       // (mirrors a typical drawer/sidebar UX) so it's never missed.
       '<div style="padding:12px 14px;border-bottom:1px solid var(--border,#333);background:linear-gradient(135deg,#0d1f12 0%,#14351d 100%);display:flex;align-items:center;gap:10px;">' +
         '<button id="ai-close" title="Close (Esc)" style="background:rgba(255,255,255,0.12);color:#fff;border:1px solid rgba(255,255,255,0.2);border-radius:6px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:6px;">&rarr; Close</button>' +
-        '<div style="font-size:14px;font-weight:700;color:#fff;flex:1;text-align:right;">&#x2728; AI Assistant</div>' +
+        '<div class="agx-ai-title" style="font-size:14px;font-weight:700;color:#fff;flex:1;text-align:right;">&#x2728; AI Assistant</div>' +
         '<button id="ai-clear" title="Clear conversation" style="background:rgba(255,255,255,0.08);color:#ccc;border:1px solid rgba(255,255,255,0.15);border-radius:6px;padding:6px 10px;font-size:11px;cursor:pointer;">Clear</button>' +
       '</div>' +
       // Notice strip
@@ -134,21 +156,9 @@
       }
     });
 
-    // Render preset buttons
-    var presetWrap = panel.querySelector('#ai-presets');
-    PRESETS.forEach(function(p) {
-      var btn = document.createElement('button');
-      btn.className = 'small ghost';
-      btn.textContent = p.label;
-      btn.style.cssText = 'font-size:11px;padding:5px 9px;border-radius:14px;';
-      btn.onclick = function() {
-        if (_streaming) return;
-        var ta = panel.querySelector('#ai-input');
-        ta.value = p.prompt;
-        ta.focus();
-      };
-      presetWrap.appendChild(btn);
-    });
+    // Initial preset render — refreshed on every open() to switch
+    // between estimate and job preset sets when the entity changes.
+    renderPresets();
 
     // Esc-to-close while focus is in the panel
     panel.addEventListener('keydown', function(e) {
@@ -158,29 +168,70 @@
     return panel;
   }
 
-  function open(estimateId) {
-    if (!estimateId) {
-      alert('Save the estimate first to enable the AI assistant.');
+  // open() accepts either:
+  //   open(estimateId)                       — legacy: opens for an estimate
+  //   open({ entityType, entityId })         — explicit polymorphic form
+  function open(arg) {
+    var entityType, entityId;
+    if (typeof arg === 'string') {
+      entityType = 'estimate';
+      entityId = arg;
+    } else if (arg && typeof arg === 'object') {
+      entityType = arg.entityType || 'estimate';
+      entityId = arg.entityId;
+    }
+    if (!entityId) {
+      alert('Save the ' + (entityType || 'record') + ' first to enable the AI assistant.');
       return;
     }
     var panel = ensurePanel();
-    if (_estimateId !== estimateId) {
-      _estimateId = estimateId;
+    if (_entityId !== entityId || _entityType !== entityType) {
+      _entityType = entityType;
+      _entityId = entityId;
+      _estimateId = entityType === 'estimate' ? entityId : null;
       _messages = [];
-      // Refresh conversation when switching estimates so we don't show
-      // stale context from a previous estimate
       loadHistory();
     }
     panel.style.transform = 'translateX(0)';
-    // Push the page content left so the panel doesn't cover the editor.
-    // CSS class on body handles the layout; transition is smooth.
     document.body.classList.add('agx-ai-open');
     _open = true;
+    // Photos toggle and proposal cards only make sense on the estimate
+    // side. Hide / disable them when running against a job.
+    refreshModeSpecificUI();
     setTimeout(function() {
       var inp = document.getElementById('ai-input');
       if (inp) inp.focus();
     }, 240);
     updatePhotoCount();
+  }
+
+  function refreshModeSpecificUI() {
+    var photoRow = document.querySelector('#agx-ai-panel #ai-photos-toggle');
+    if (photoRow) {
+      var rowEl = photoRow.closest('div');
+      if (rowEl) rowEl.style.display = isEstimateMode() ? '' : 'none';
+    }
+    var headerEl = document.querySelector('#agx-ai-panel .agx-ai-title');
+    if (headerEl) headerEl.textContent = isJobMode() ? '📊 WIP Assistant' : '✨ AI Assistant';
+    renderPresets();
+  }
+
+  function renderPresets() {
+    var presetWrap = document.getElementById('ai-presets');
+    if (!presetWrap) return;
+    presetWrap.innerHTML = '';
+    getActivePresets().forEach(function(p) {
+      var btn = document.createElement('button');
+      btn.className = 'small ghost';
+      btn.textContent = p.label;
+      btn.style.cssText = 'font-size:11px;padding:5px 9px;border-radius:14px;';
+      btn.onclick = function() {
+        if (_streaming) return;
+        var ta = document.getElementById('ai-input');
+        if (ta) { ta.value = p.prompt; ta.focus(); }
+      };
+      presetWrap.appendChild(btn);
+    });
   }
 
   function close() {
@@ -204,10 +255,10 @@
   // ──────────────────────────────────────────────────────────────────
 
   function loadHistory() {
-    if (!_estimateId || !window.agxApi) return;
+    if (!_entityId || !window.agxApi) return;
     var box = document.getElementById('ai-messages');
     if (box) box.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;">Loading…</div>';
-    fetch('/api/ai/estimates/' + encodeURIComponent(_estimateId) + '/messages', {
+    fetch(apiBase() + '/messages', {
       headers: authHeaders()
     }).then(function(r) { return r.json(); }).then(function(res) {
       _messages = res.messages || [];
@@ -219,9 +270,9 @@
   }
 
   function clearConversation() {
-    if (!_estimateId) return;
-    if (!confirm('Clear this conversation? Your messages on this estimate will be deleted.')) return;
-    fetch('/api/ai/estimates/' + encodeURIComponent(_estimateId) + '/messages', {
+    if (!_entityId) return;
+    if (!confirm('Clear this conversation? Your messages on this ' + _entityType + ' will be deleted.')) return;
+    fetch(apiBase() + '/messages', {
       method: 'DELETE',
       headers: authHeaders()
     }).then(function() {
@@ -236,11 +287,10 @@
     var box = document.getElementById('ai-messages');
     if (!box) return;
     if (!_messages.length) {
-      box.innerHTML =
-        '<div style="color:var(--text-dim,#888);font-size:12px;padding:20px 0;text-align:center;line-height:1.6;">' +
-          'Pick a preset below or ask anything about the estimate.<br>' +
-          '<span style="font-size:11px;opacity:0.7;">I can see your line items, scope, client, and photos.</span>' +
-        '</div>';
+      var hint = isJobMode()
+        ? 'Pick a preset below or ask anything about the job.<br><span style="font-size:11px;opacity:0.7;">I can see contract, costs, change orders, % complete, billing posture.</span>'
+        : 'Pick a preset below or ask anything about the estimate.<br><span style="font-size:11px;opacity:0.7;">I can see line items, scope, client, photos &mdash; and I can propose edits.</span>';
+      box.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;padding:20px 0;text-align:center;line-height:1.6;">' + hint + '</div>';
       return;
     }
     var html = '';
@@ -294,7 +344,7 @@
     var input = document.getElementById('ai-input');
     var text = (input && input.value || '').trim();
     if (!text) return;
-    if (!_estimateId) { alert('No estimate is open.'); return; }
+    if (!_entityId) { alert('No ' + _entityType + ' is open.'); return; }
     input.value = '';
     // Reset auto-grow height after clearing the value, so the textarea
     // collapses back to one row on submit instead of staying tall.
@@ -309,10 +359,10 @@
       photos_included: _includePhotos ? photoCount : 0
     });
     renderMessages();
-    streamFromEndpoint(
-      '/api/ai/estimates/' + encodeURIComponent(_estimateId) + '/chat',
-      { message: text, includePhotos: _includePhotos }
-    );
+    var body = isEstimateMode()
+      ? { message: text, includePhotos: _includePhotos }
+      : { message: text };
+    streamFromEndpoint(apiBase() + '/chat', body);
   }
 
   // Shared streaming runner — used by sendMessage (initial turn) and by
@@ -475,7 +525,7 @@
 
   function continueAfterProposals(pendingContent, responses) {
     streamFromEndpoint(
-      '/api/ai/estimates/' + encodeURIComponent(_estimateId) + '/chat/continue',
+      apiBase() + '/chat/continue',
       { pending_assistant_content: pendingContent, tool_results: responses }
     );
   }
@@ -596,11 +646,12 @@
 
   function updatePhotoCount() {
     var el = document.getElementById('ai-photos-count');
-    if (!el || !_estimateId || !window.agxApi) { if (el) el.textContent = ''; return; }
-    window.agxApi.attachments.list('estimate', _estimateId).then(function(res) {
+    if (!el || !window.agxApi) return;
+    if (!isEstimateMode() || !_entityId) { el.textContent = ''; return; }
+    window.agxApi.attachments.list('estimate', _entityId).then(function(res) {
       var n = (res.attachments || []).length;
       // Add lead photos if estimate is linked to a lead
-      var est = (window.appData && window.appData.estimates || []).find(function(e) { return e.id === _estimateId; });
+      var est = (window.appData && window.appData.estimates || []).find(function(e) { return e.id === _entityId; });
       if (est && est.lead_id) {
         return window.agxApi.attachments.list('lead', est.lead_id).then(function(r2) {
           n += (r2.attachments || []).length;
@@ -636,5 +687,14 @@
     close: close,
     toggle: toggle,
     isOpen: function() { return _open; }
+  };
+
+  // Sticky-header shim mirroring openEstimateAI() — finds the active job id
+  // from the workspace state and opens the panel against it. Lives here so
+  // wip.js doesn't need to know about agxAI's internals.
+  window.openJobAI = function() {
+    var jobId = (window.appState && window.appState.currentJobId) || null;
+    if (!jobId) { alert('Open a job first.'); return; }
+    open({ entityType: 'job', entityId: jobId });
   };
 })();

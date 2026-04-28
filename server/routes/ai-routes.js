@@ -675,4 +675,323 @@ router.post('/estimates/:id/chat/continue',
   }
 );
 
+// ════════════════════════════════════════════════════════════════════
+// JOB / WIP CHAT — Phase 2B
+//
+// Same chat infrastructure, different context. Reads the job's WIP
+// blob from `jobs.data` and surfaces financials (contract, costs,
+// change orders, % complete, margin, billing posture) so the assistant
+// can spot underbilled phases, missing change orders, margin drift,
+// etc. Read-only for now — no write tools. Storage shares the
+// ai_messages table, partitioned via entity_type='job'.
+// ════════════════════════════════════════════════════════════════════
+
+function fmtMoney(n) {
+  if (n == null || isNaN(n)) n = 0;
+  return '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+}
+function pct(n) {
+  if (n == null || isNaN(n)) return '0%';
+  return Number(n).toFixed(1) + '%';
+}
+
+// Mirrors getJobWIP() in js/wip.js so the AI sees the same numbers the
+// PM sees on the workspace. Pulled into the server so the assistant
+// doesn't have to recompute (and risk drifting from) the UI's math.
+function computeJobWIP(job, jobBuildings, jobPhases, jobChangeOrders, jobSubs, jobInvoices) {
+  const co = (jobChangeOrders || []).reduce((acc, c) => {
+    acc.income += Number(c.income || c.contractAmount || 0);
+    acc.costs += Number(c.costs || c.estimatedCosts || 0);
+    return acc;
+  }, { income: 0, costs: 0 });
+
+  // Sum of sub-level + phase-level + building-level actual costs is the
+  // same calc wip.js does in getJobTotalCost(). Subs at level=='phase'
+  // / 'building' / 'job' all roll up. Use the override if present.
+  let actualCosts = 0;
+  if (job.ngActualCosts != null) {
+    actualCosts = Number(job.ngActualCosts);
+  } else {
+    actualCosts = (jobSubs || []).reduce((sum, s) => sum + Number(s.amount || 0), 0);
+  }
+
+  const contractIncome = Number(job.contractAmount || 0);
+  const estimatedCosts = Number(job.estimatedCosts || 0);
+  const totalIncome = contractIncome + co.income;
+  const totalEstCosts = estimatedCosts + co.costs;
+  const revisedCostChanges = Number(job.revisedCostChanges || 0);
+  const revisedEstCosts = totalEstCosts + revisedCostChanges;
+  const asSoldProfit = contractIncome - estimatedCosts;
+  const asSoldMargin = contractIncome > 0 ? (asSoldProfit / contractIncome * 100) : 0;
+  const revisedProfit = totalIncome - revisedEstCosts;
+  const revisedMargin = totalIncome > 0 ? (revisedProfit / totalIncome * 100) : 0;
+  const pctComplete = Number(job.pctComplete || 0);
+  const revenueEarned = totalIncome * (pctComplete / 100);
+  const jtdProfit = revenueEarned - actualCosts;
+  const jtdMargin = revenueEarned > 0 ? (jtdProfit / revenueEarned * 100) : 0;
+  const invoiced = Number(job.invoicedToDate || 0);
+  const unbilled = revenueEarned - invoiced;
+  const backlog = totalIncome - revenueEarned;
+  const remainingCosts = revisedEstCosts - actualCosts;
+
+  return {
+    contractIncome, estimatedCosts, coIncome: co.income, coCosts: co.costs,
+    totalIncome, totalEstCosts, revisedCostChanges, revisedEstCosts,
+    asSoldProfit, asSoldMargin, revisedProfit, revisedMargin,
+    pctComplete, revenueEarned, actualCosts, jtdProfit, jtdMargin,
+    invoiced, unbilled, backlog, remainingCosts
+  };
+}
+
+async function buildJobContext(jobId) {
+  // Pull the job + the related data the bulk-save serializes alongside it.
+  const jobRes = await pool.query('SELECT id, owner_id, data FROM jobs WHERE id = $1', [jobId]);
+  if (!jobRes.rows.length) throw new Error('Job not found');
+  const job = { id: jobRes.rows[0].id, owner_id: jobRes.rows[0].owner_id, ...jobRes.rows[0].data };
+
+  // Joined data sits alongside the jobs JSONB blob — the bulk save splits
+  // them into separate appData arrays on the client. Read all of them
+  // here and filter to this job.
+  const jobsRes = await pool.query(`SELECT id, data FROM jobs`);
+  // Each job row's data may contain its OWN buildings/phases/etc. arrays,
+  // OR the client may have flattened them across the appData blob. Try the
+  // job-local arrays first.
+  const buildings = Array.isArray(job.buildings) ? job.buildings : [];
+  const phases = Array.isArray(job.phases) ? job.phases : [];
+  const changeOrders = Array.isArray(job.changeOrders) ? job.changeOrders : [];
+  const subs = Array.isArray(job.subs) ? job.subs : [];
+  const purchaseOrders = Array.isArray(job.purchaseOrders) ? job.purchaseOrders : [];
+  const invoices = Array.isArray(job.invoices) ? job.invoices : [];
+  void jobsRes; // future use if cross-job analysis is needed
+
+  const wip = computeJobWIP(job, buildings, phases, changeOrders, subs, invoices);
+
+  const lines = [];
+  lines.push('You are a WIP-and-financial analyst for AG Exteriors, a Central Florida construction services company. The PM is working on the job below — help them spot margin issues, missing change orders, billing gaps, and progress risks.');
+  lines.push('');
+  lines.push('# Job');
+  lines.push('- Title: ' + (job.title || job.jobName || '(untitled)'));
+  if (job.jobNumber) lines.push('- Job number: ' + job.jobNumber);
+  if (job.client) lines.push('- Client: ' + job.client);
+  if (job.community) lines.push('- Community / property: ' + job.community);
+  if (job.propertyAddr) lines.push('- Address: ' + job.propertyAddr);
+  if (job.jobType) lines.push('- Type: ' + job.jobType + (job.market ? ' (' + job.market + ')' : ''));
+  if (job.status) lines.push('- Status: ' + job.status);
+  if (job.targetMarginPct != null) lines.push('- Target margin: ' + job.targetMarginPct + '%');
+  lines.push('');
+
+  lines.push('# WIP snapshot');
+  lines.push('## Income');
+  lines.push('- Contract (as-sold): ' + fmtMoney(wip.contractIncome));
+  lines.push('- Change-order income: ' + fmtMoney(wip.coIncome));
+  lines.push('- Total income (contract + COs): ' + fmtMoney(wip.totalIncome));
+  lines.push('## Costs');
+  lines.push('- Estimated costs (as-sold): ' + fmtMoney(wip.estimatedCosts));
+  lines.push('- Change-order costs: ' + fmtMoney(wip.coCosts));
+  lines.push('- Revised cost changes: ' + fmtMoney(wip.revisedCostChanges));
+  lines.push('- Revised estimated costs: ' + fmtMoney(wip.revisedEstCosts));
+  lines.push('- Actual costs to date: ' + fmtMoney(wip.actualCosts));
+  lines.push('- Remaining costs (revised est − actual): ' + fmtMoney(wip.remainingCosts));
+  lines.push('## Margin');
+  lines.push('- As-sold profit: ' + fmtMoney(wip.asSoldProfit) + ' (' + pct(wip.asSoldMargin) + ')');
+  lines.push('- Revised profit: ' + fmtMoney(wip.revisedProfit) + ' (' + pct(wip.revisedMargin) + ')');
+  lines.push('- JTD profit: ' + fmtMoney(wip.jtdProfit) + ' (' + pct(wip.jtdMargin) + ')');
+  lines.push('## Progress & billing');
+  lines.push('- % complete: ' + pct(wip.pctComplete));
+  lines.push('- Revenue earned: ' + fmtMoney(wip.revenueEarned));
+  lines.push('- Invoiced to date: ' + fmtMoney(wip.invoiced));
+  lines.push('- Unbilled (earned − invoiced): ' + fmtMoney(wip.unbilled));
+  lines.push('- Backlog (total income − revenue earned): ' + fmtMoney(wip.backlog));
+  lines.push('');
+
+  // Sub-job structure summary so the assistant can reason at the right
+  // grain (phase-level vs. building-level)
+  if (buildings.length || phases.length) {
+    lines.push('# Structure');
+    lines.push('- Buildings: ' + buildings.length + (buildings.length ? ' (' + buildings.map(b => b.name || b.id).slice(0, 8).join(', ') + (buildings.length > 8 ? ', …' : '') + ')' : ''));
+    lines.push('- Phases: ' + phases.length);
+    lines.push('');
+  }
+
+  // Change orders — the most-overlooked profit lever
+  if (changeOrders.length) {
+    lines.push('# Change orders (' + changeOrders.length + ')');
+    changeOrders.forEach((c, i) => {
+      const num = i + 1;
+      const inc = fmtMoney(c.income || c.contractAmount || 0);
+      const cost = fmtMoney(c.costs || c.estimatedCosts || 0);
+      const desc = c.description || c.title || '(no description)';
+      lines.push('- CO ' + num + ': ' + desc + ' — income ' + inc + ', cost ' + cost + (c.status ? ' [' + c.status + ']' : ''));
+    });
+    lines.push('');
+  } else {
+    lines.push('# Change orders');
+    lines.push('(none recorded)');
+    lines.push('');
+  }
+
+  // Cost-side detail — top cost-line subs by amount, capped so we don't
+  // blow context. Group by phase / building when meaningful.
+  if (subs.length) {
+    const sortedSubs = subs.slice().sort((a, b) => Number(b.amount || 0) - Number(a.amount || 0));
+    const top = sortedSubs.slice(0, 20);
+    lines.push('# Top cost lines (' + top.length + ' of ' + subs.length + ' shown)');
+    top.forEach(s => {
+      const amt = fmtMoney(s.amount || 0);
+      const where = s.level === 'phase' ? '[phase]' : s.level === 'building' ? '[building]' : '[job]';
+      const label = s.vendor || s.description || s.name || '(unlabeled)';
+      lines.push('- ' + amt + ' ' + where + ' ' + label);
+    });
+    lines.push('');
+  }
+
+  // Invoices — billing posture
+  if (invoices.length) {
+    lines.push('# Invoices (' + invoices.length + ')');
+    const invTotal = invoices.reduce((s, i) => s + Number(i.amount || 0), 0);
+    lines.push('- Total invoiced (sum): ' + fmtMoney(invTotal));
+    invoices.slice(0, 8).forEach(inv => {
+      lines.push('- ' + (inv.date || inv.invoiceDate || '') + ' ' + fmtMoney(inv.amount || 0) + ' ' + (inv.number || inv.invoiceNumber || '') + (inv.status ? ' [' + inv.status + ']' : ''));
+    });
+    if (invoices.length > 8) lines.push('- …and ' + (invoices.length - 8) + ' more');
+    lines.push('');
+  }
+
+  if (purchaseOrders.length) {
+    lines.push('# Purchase orders: ' + purchaseOrders.length);
+    lines.push('');
+  }
+
+  if (job.notes) {
+    lines.push('# Job notes');
+    lines.push(job.notes);
+    lines.push('');
+  }
+
+  lines.push('# Your role');
+  lines.push('- Read the WIP snapshot, change orders, and cost lines together — they tell a story about whether the job is healthy.');
+  lines.push('- Spot mismatches: % complete way ahead of revenue earned (under-pulled progress), revenue earned way ahead of invoiced (under-billed), JTD margin diverging from revised margin (cost overruns), large recurring vendors that should have been a CO.');
+  lines.push('- When citing dollar figures, match the field name from the snapshot above so the PM can find them in the UI.');
+  lines.push('- You are READ-ONLY for the job side. When you see something that needs action, format it as a checklist the PM can work through. (Write controls — adjusting % complete, adding a CO, etc. — come in a future phase.)');
+  lines.push('- Be concise and direct. Construction trade vocabulary is welcome. If you need one piece of info to answer well, ask one targeted question first.');
+
+  return { systemPrompt: lines.join('\n'), photoBlocks: [] }; // no photo channel on the job side yet
+}
+
+// History endpoints scoped by entity_type='job'
+router.get('/jobs/:id/messages',
+  requireAuth, requireCapability('FINANCIALS_VIEW'),
+  async (req, res) => {
+    try {
+      const { rows } = await pool.query(
+        `SELECT id, role, content, created_at
+         FROM ai_messages
+         WHERE entity_type = 'job' AND estimate_id = $1 AND user_id = $2
+         ORDER BY created_at ASC`,
+        [req.params.id, req.user.id]
+      );
+      res.json({ messages: rows });
+    } catch (e) {
+      console.error('GET /api/ai/jobs/:id/messages error:', e);
+      res.status(500).json({ error: 'Server error' });
+    }
+  }
+);
+
+router.delete('/jobs/:id/messages',
+  requireAuth, requireCapability('FINANCIALS_VIEW'),
+  async (req, res) => {
+    try {
+      await pool.query(
+        `DELETE FROM ai_messages WHERE entity_type='job' AND estimate_id=$1 AND user_id=$2`,
+        [req.params.id, req.user.id]
+      );
+      res.json({ ok: true });
+    } catch (e) {
+      console.error('DELETE job history error:', e);
+      res.status(500).json({ error: 'Server error' });
+    }
+  }
+);
+
+router.post('/jobs/:id/chat',
+  requireAuth, requireCapability('FINANCIALS_VIEW'),
+  async (req, res) => {
+    const anthropic = getAnthropic();
+    if (!anthropic) {
+      return res.status(503).json({ error: 'AI assistant is not configured. Set ANTHROPIC_API_KEY in the server environment.' });
+    }
+    const userMessage = (req.body && req.body.message || '').trim();
+    if (!userMessage) return res.status(400).json({ error: 'message is required' });
+    const jobId = req.params.id;
+
+    setSSEHeaders(res);
+
+    try {
+      const histRes = await pool.query(
+        `SELECT role, content FROM ai_messages
+         WHERE entity_type='job' AND estimate_id=$1 AND user_id=$2
+         ORDER BY created_at ASC`,
+        [jobId, req.user.id]
+      );
+      let history = histRes.rows;
+      const cap = MAX_HISTORY_PAIRS * 2;
+      if (history.length > cap) history = history.slice(-cap);
+
+      const ctx = await buildJobContext(jobId);
+
+      const messages = [
+        ...history.map(m => ({ role: m.role, content: m.content })),
+        { role: 'user', content: userMessage }
+      ];
+
+      const userMsgId = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+      await pool.query(
+        `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content)
+         VALUES ($1, 'job', $2, $3, 'user', $4)`,
+        [userMsgId, jobId, req.user.id, userMessage]
+      );
+
+      // No tools on the job side yet — but reuse the same stream helper.
+      // It tolerates an empty tool result fine; just no tool_use will fire.
+      let assistantText = '';
+      let usage = { input_tokens: null, output_tokens: null };
+      const stream = anthropic.messages.stream({
+        model: MODEL,
+        max_tokens: MAX_TOKENS,
+        system: ctx.systemPrompt,
+        messages: messages
+      });
+      stream.on('text', (delta) => {
+        assistantText += delta;
+        res.write('data: ' + JSON.stringify({ delta }) + '\n\n');
+      });
+      stream.on('finalMessage', (msg) => { if (msg && msg.usage) usage = msg.usage; });
+      stream.on('error', (err) => {
+        res.write('data: ' + JSON.stringify({ error: err.message || 'AI request failed' }) + '\n\n');
+        res.write('data: [DONE]\n\n');
+        res.end();
+      });
+      await stream.done();
+
+      if (assistantText) {
+        const aid = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+        await pool.query(
+          `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content, model, input_tokens, output_tokens)
+           VALUES ($1, 'job', $2, $3, 'assistant', $4, $5, $6, $7)`,
+          [aid, jobId, req.user.id, assistantText, MODEL, usage.input_tokens, usage.output_tokens]
+        );
+      }
+      res.write('data: ' + JSON.stringify({ done: true, usage }) + '\n\n');
+      res.write('data: [DONE]\n\n');
+      res.end();
+    } catch (e) {
+      console.error('AI job chat error:', e);
+      res.write('data: ' + JSON.stringify({ error: e.message || 'Server error' }) + '\n\n');
+      res.write('data: [DONE]\n\n');
+      res.end();
+    }
+  }
+);
+
 module.exports = router;
