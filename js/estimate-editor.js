@@ -1097,6 +1097,120 @@
       alert('AI panel not loaded yet — refresh the page.');
     }
   };
+
+  // ──────────────────────────────────────────────────────────────────
+  // Public write API for the AI panel. Each function applies a single
+  // approved proposal, mutating appData + saving + re-rendering. All
+  // operations target the currently-open estimate's active alternate.
+  // Returns a short summary string the AI panel can echo back to the
+  // server in the tool_result so Claude knows what landed.
+  // ──────────────────────────────────────────────────────────────────
+  function applyAddLineItem(input) {
+    var est = getEstimate();
+    if (!est) throw new Error('No estimate open.');
+    var alt = getActiveAlternate();
+    if (!alt) throw new Error('No active alternate.');
+
+    var sectionId = null;
+    if (input.section_name) {
+      var needle = String(input.section_name).toLowerCase();
+      var match = (appData.estimateLines || []).find(function(l) {
+        return l.estimateId === est.id
+          && l.alternateId === alt.id
+          && l.section === '__section_header__'
+          && (l.description || '').toLowerCase().indexOf(needle) >= 0;
+      });
+      if (match) sectionId = match.id;
+    }
+
+    var newLine = {
+      id: 'l' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+      estimateId: est.id,
+      alternateId: alt.id,
+      description: input.description || '',
+      qty: num(input.qty),
+      unit: input.unit || 'ea',
+      unitCost: num(input.unit_cost),
+      markup: (input.markup_pct == null || input.markup_pct === '') ? '' : num(input.markup_pct)
+    };
+
+    if (sectionId) {
+      // Same insertion logic as addEstimateLineFromEditor: walk forward to
+      // the next section header in the same alternate.
+      var arr = appData.estimateLines;
+      var startIdx = arr.findIndex(function(l) { return l.id === sectionId; });
+      if (startIdx >= 0) {
+        var insertAt = arr.length;
+        for (var j = startIdx + 1; j < arr.length; j++) {
+          var L = arr[j];
+          if (L.estimateId !== est.id || L.alternateId !== alt.id) continue;
+          if (L.section === '__section_header__') { insertAt = j; break; }
+        }
+        if (insertAt === arr.length) {
+          for (var k = arr.length - 1; k > startIdx; k--) {
+            var M = arr[k];
+            if (M.estimateId === est.id && M.alternateId === alt.id) {
+              insertAt = k + 1; break;
+            }
+          }
+        }
+        arr.splice(insertAt, 0, newLine);
+      } else {
+        arr.push(newLine);
+      }
+    } else {
+      appData.estimateLines.push(newLine);
+    }
+
+    debouncedSave();
+    renderLineItems();
+    renderTotals();
+    return 'Added line: "' + newLine.description + '" — qty ' + newLine.qty + ' ' + newLine.unit + ' @ $' + newLine.unitCost.toFixed(2);
+  }
+
+  function applyAddSection(input) {
+    var est = getEstimate();
+    if (!est) throw new Error('No estimate open.');
+    var alt = getActiveAlternate();
+    if (!alt) throw new Error('No active alternate.');
+    var newHeader = {
+      id: 's' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+      estimateId: est.id,
+      alternateId: alt.id,
+      section: '__section_header__',
+      description: input.name || 'Untitled Section'
+    };
+    if (input.bt_category) newHeader.btCategory = input.bt_category;
+    appData.estimateLines.push(newHeader);
+    debouncedSave();
+    renderLineItems();
+    renderTotals();
+    return 'Added section: "' + newHeader.description + '"';
+  }
+
+  function applyUpdateScope(input) {
+    var alt = getActiveAlternate();
+    if (!alt) throw new Error('No active alternate.');
+    var mode = input.mode === 'append' ? 'append' : 'replace';
+    var newScope;
+    if (mode === 'append' && alt.scope) {
+      newScope = alt.scope.replace(/\s+$/, '') + '\n\n' + (input.scope_text || '');
+    } else {
+      newScope = input.scope_text || '';
+    }
+    alt.scope = newScope;
+    debouncedSave();
+    renderScopePanel();
+    return 'Updated scope on alternate "' + alt.name + '" (' + mode + ', ' + newScope.length + ' chars)';
+  }
+
+  window.estimateEditorAPI = {
+    isOpenFor: function(estimateId) { return _currentId === estimateId; },
+    activeAlternateName: function() { var a = getActiveAlternate(); return a ? a.name : null; },
+    applyAddLineItem: applyAddLineItem,
+    applyAddSection: applyAddSection,
+    applyUpdateScope: applyUpdateScope
+  };
   window.addAlternateFromEditor = addAlternateFromEditor;
   window.renameActiveAlternate = renameActiveAlternate;
   window.duplicateActiveAlternate = duplicateActiveAlternate;

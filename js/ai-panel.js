@@ -304,25 +304,35 @@
 
   function sendMessage(text) {
     var photoCount = countCurrentPhotos();
-    // Optimistically push the user message into the visible list.
     _messages.push({
       role: 'user', content: text,
       photos_included: _includePhotos ? photoCount : 0
     });
     renderMessages();
+    streamFromEndpoint(
+      '/api/ai/estimates/' + encodeURIComponent(_estimateId) + '/chat',
+      { message: text, includePhotos: _includePhotos }
+    );
+  }
 
-    // Add a streaming placeholder under it
+  // Shared streaming runner — used by sendMessage (initial turn) and by
+  // continueAfterProposals (tool-use continuation). Handles all SSE event
+  // shapes: text deltas, tool_use proposals, awaiting_approval, errors,
+  // and end-of-turn.
+  function streamFromEndpoint(endpoint, body) {
     var streamDiv = appendStreamingBubble();
     var contentEl = streamDiv && streamDiv.querySelector('[data-stream-content]');
     var assistantText = '';
+    var pendingToolUses = [];     // tool_use blocks captured this turn
+    var pendingAssistantContent = null; // full content array for echo-back
     _streaming = true;
     setSendDisabled(true);
 
     _abortController = new AbortController();
-    fetch('/api/ai/estimates/' + encodeURIComponent(_estimateId) + '/chat', {
+    return fetch(endpoint, {
       method: 'POST',
       headers: authHeaders(),
-      body: JSON.stringify({ message: text, includePhotos: _includePhotos }),
+      body: JSON.stringify(body),
       signal: _abortController.signal
     }).then(function(r) {
       if (!r.ok) {
@@ -333,28 +343,214 @@
           assistantText += payload.delta;
           if (contentEl) contentEl.innerHTML = renderMarkdown(assistantText) +
             '<span style="display:inline-block;width:7px;height:13px;background:#34d399;margin-left:2px;animation:agx-blink 0.9s step-end infinite;"></span>';
-          var box = document.getElementById('ai-messages');
-          if (box) box.scrollTop = box.scrollHeight;
+          scrollToBottom();
+        } else if (payload.tool_use) {
+          pendingToolUses.push(payload.tool_use);
+        } else if (payload.awaiting_approval) {
+          pendingAssistantContent = payload.pending_assistant_content;
         } else if (payload.error) {
           if (contentEl) contentEl.innerHTML = '<span style="color:#f87171;">' + escapeHTMLLocal(payload.error) + '</span>';
         }
       });
     }).then(function() {
-      // Drop the streaming placeholder and replace with a permanent bubble
-      if (streamDiv && streamDiv.parentNode) streamDiv.parentNode.removeChild(streamDiv);
-      _messages.push({ role: 'assistant', content: assistantText || '(no response)' });
-      renderMessages();
+      _streaming = false;
+      setSendDisabled(false);
+      _abortController = null;
+
+      if (pendingToolUses.length && pendingAssistantContent) {
+        // Tool-use turn — render approval cards inline. The streamDiv
+        // stays as the assistant bubble; cards get appended below the
+        // text. No history persistence on this turn — the conversation
+        // gets persisted only after the final text response of the
+        // multi-step exchange.
+        finalizeProposalBubble(streamDiv, assistantText, pendingToolUses, pendingAssistantContent);
+      } else {
+        // Plain text response — drop the streaming placeholder and add
+        // a permanent bubble (history already persisted server-side).
+        if (streamDiv && streamDiv.parentNode) streamDiv.parentNode.removeChild(streamDiv);
+        _messages.push({ role: 'assistant', content: assistantText || '(no response)' });
+        renderMessages();
+      }
     }).catch(function(err) {
+      _streaming = false;
+      setSendDisabled(false);
+      _abortController = null;
       if (err && err.name === 'AbortError') {
         if (streamDiv && streamDiv.parentNode) streamDiv.parentNode.removeChild(streamDiv);
       } else {
         if (contentEl) contentEl.innerHTML = '<span style="color:#f87171;">Error: ' + escapeHTMLLocal(err.message || 'unknown') + '</span>';
       }
-    }).finally(function() {
-      _streaming = false;
-      setSendDisabled(false);
-      _abortController = null;
     });
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  // Approval cards — for each tool_use block from Claude, render a card
+  // with Approve / Reject. When all are answered, continue the
+  // conversation with /chat/continue passing the assembled tool_results.
+  // ──────────────────────────────────────────────────────────────────
+  function finalizeProposalBubble(streamDiv, assistantText, toolUses, pendingContent) {
+    var contentEl = streamDiv && streamDiv.querySelector('[data-stream-content]');
+    if (contentEl) contentEl.innerHTML = renderMarkdown(assistantText || '');
+
+    var propContainer = document.createElement('div');
+    propContainer.style.cssText = 'margin-top:10px;display:flex;flex-direction:column;gap:6px;';
+    streamDiv.appendChild(propContainer);
+
+    var responses = [];
+    var totalCount = toolUses.length;
+    var bulkButtons = null;
+
+    function answer(idx, approved, card) {
+      var tu = toolUses[idx];
+      var summary = '';
+      if (approved) {
+        try {
+          summary = applyTool(tu);
+        } catch (e) {
+          alert('Could not apply: ' + (e.message || e));
+          return;
+        }
+      }
+      responses.push({ tool_use_id: tu.id, approved: approved, applied_summary: summary });
+      markCardDone(card, approved, summary);
+
+      // Refresh bulk-action button count
+      if (bulkButtons) {
+        var remaining = totalCount - responses.length;
+        if (remaining <= 0) bulkButtons.remove();
+        else bulkButtons.querySelector('[data-bulk-info]').textContent = remaining + ' remaining';
+      }
+
+      if (responses.length === totalCount) {
+        continueAfterProposals(pendingContent, responses);
+      }
+    }
+
+    // Bulk-action bar when there are 2+ proposals
+    if (totalCount >= 2) {
+      bulkButtons = document.createElement('div');
+      bulkButtons.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 10px;background:rgba(79,140,255,0.05);border:1px solid rgba(79,140,255,0.2);border-radius:6px;font-size:11px;color:var(--text-dim,#aaa);';
+      bulkButtons.innerHTML =
+        '<span data-bulk-info>' + totalCount + ' proposals</span>' +
+        '<button data-bulk-approve class="success small" style="padding:4px 10px;font-size:11px;margin-left:auto;">&check; Approve all</button>' +
+        '<button data-bulk-reject class="ghost small" style="padding:4px 10px;font-size:11px;">&times; Reject all</button>';
+      propContainer.appendChild(bulkButtons);
+      bulkButtons.querySelector('[data-bulk-approve]').onclick = function() {
+        cards.forEach(function(card, i) {
+          if (!isCardAnswered(card)) answer(i, true, card);
+        });
+      };
+      bulkButtons.querySelector('[data-bulk-reject]').onclick = function() {
+        cards.forEach(function(card, i) {
+          if (!isCardAnswered(card)) answer(i, false, card);
+        });
+      };
+    }
+
+    var cards = [];
+    toolUses.forEach(function(tu, i) {
+      var card = renderProposalCard(tu);
+      card.querySelector('[data-card-approve]').onclick = function() { answer(i, true, card); };
+      card.querySelector('[data-card-reject]').onclick = function() { answer(i, false, card); };
+      propContainer.appendChild(card);
+      cards.push(card);
+    });
+    scrollToBottom();
+  }
+
+  function applyTool(tu) {
+    if (!window.estimateEditorAPI) {
+      throw new Error('Estimate editor not loaded — refresh the page.');
+    }
+    if (!window.estimateEditorAPI.isOpenFor(_estimateId)) {
+      throw new Error('Open the estimate in the editor before approving changes.');
+    }
+    switch (tu.name) {
+      case 'propose_add_line_item': return window.estimateEditorAPI.applyAddLineItem(tu.input);
+      case 'propose_add_section':   return window.estimateEditorAPI.applyAddSection(tu.input);
+      case 'propose_update_scope':  return window.estimateEditorAPI.applyUpdateScope(tu.input);
+      default: throw new Error('Unknown tool: ' + tu.name);
+    }
+  }
+
+  function continueAfterProposals(pendingContent, responses) {
+    streamFromEndpoint(
+      '/api/ai/estimates/' + encodeURIComponent(_estimateId) + '/chat/continue',
+      { pending_assistant_content: pendingContent, tool_results: responses }
+    );
+  }
+
+  // Card rendering — one per tool_use block, formatted by tool type.
+  function renderProposalCard(tu) {
+    var card = document.createElement('div');
+    card.style.cssText = 'background:rgba(255,255,255,0.04);border:1px solid var(--border,#333);border-left:3px solid #4f8cff;border-radius:6px;padding:10px 12px;';
+
+    var heading = '';
+    var detail = '';
+    var input = tu.input || {};
+
+    if (tu.name === 'propose_add_line_item') {
+      heading = '&#x2795; Add line item';
+      detail =
+        '<div style="font-size:13px;color:var(--text,#fff);font-weight:600;">' + escapeHTMLLocal(input.description || '') + '</div>' +
+        '<div style="font-size:11px;color:var(--text-dim,#aaa);margin-top:3px;font-family:\'SF Mono\',monospace;">' +
+          'qty ' + escapeHTMLLocal(String(input.qty)) + ' ' + escapeHTMLLocal(input.unit || 'ea') +
+          ' @ $' + Number(input.unit_cost || 0).toFixed(2) +
+          (input.markup_pct != null ? ' &middot; markup ' + input.markup_pct + '%' : '') +
+        '</div>' +
+        (input.section_name ? '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:3px;">section: ' + escapeHTMLLocal(input.section_name) + '</div>' : '');
+    } else if (tu.name === 'propose_add_section') {
+      heading = '&#x2795; Add section';
+      detail =
+        '<div style="font-size:13px;color:var(--text,#fff);font-weight:600;">' + escapeHTMLLocal(input.name || '') + '</div>' +
+        (input.bt_category ? '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:3px;">BT category: ' + escapeHTMLLocal(input.bt_category) + '</div>' : '');
+    } else if (tu.name === 'propose_update_scope') {
+      heading = '&#x270F; Update scope (' + (input.mode || 'replace') + ')';
+      var preview = (input.scope_text || '').slice(0, 280);
+      if ((input.scope_text || '').length > 280) preview += '…';
+      detail = '<pre style="white-space:pre-wrap;font-family:inherit;font-size:12px;margin:4px 0 0;color:var(--text,#ccc);background:rgba(0,0,0,0.2);padding:8px;border-radius:4px;max-height:160px;overflow-y:auto;">' + escapeHTMLLocal(preview) + '</pre>';
+    } else {
+      heading = '? Unknown tool: ' + tu.name;
+      detail = '<pre style="font-size:11px;">' + escapeHTMLLocal(JSON.stringify(input, null, 2)) + '</pre>';
+    }
+
+    var rationale = input.rationale
+      ? '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:6px;font-style:italic;border-top:1px dashed var(--border,#333);padding-top:6px;">' + escapeHTMLLocal(input.rationale) + '</div>'
+      : '';
+
+    card.innerHTML =
+      '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">' +
+        '<div style="font-size:11px;font-weight:700;color:#4f8cff;flex:1;text-transform:none;letter-spacing:normal;">' + heading + '</div>' +
+        '<div data-card-status style="font-size:10px;font-weight:600;"></div>' +
+      '</div>' +
+      detail + rationale +
+      '<div data-card-actions style="display:flex;gap:6px;margin-top:8px;">' +
+        '<button data-card-approve class="success small" style="padding:4px 12px;font-size:11px;">&check; Approve</button>' +
+        '<button data-card-reject class="ghost small" style="padding:4px 12px;font-size:11px;">&times; Reject</button>' +
+      '</div>';
+
+    return card;
+  }
+
+  function markCardDone(card, approved, summary) {
+    var status = card.querySelector('[data-card-status]');
+    var actions = card.querySelector('[data-card-actions]');
+    if (actions) actions.remove();
+    if (status) {
+      status.style.color = approved ? '#34d399' : '#f87171';
+      status.textContent = approved ? '✓ Applied' : '✗ Rejected';
+    }
+    card.style.opacity = approved ? '1' : '0.55';
+    card.style.borderLeftColor = approved ? '#34d399' : '#f87171';
+  }
+
+  function isCardAnswered(card) {
+    return !card.querySelector('[data-card-actions]');
+  }
+
+  function scrollToBottom() {
+    var box = document.getElementById('ai-messages');
+    if (box) box.scrollTop = box.scrollHeight;
   }
 
   // Read SSE chunks from a fetch response. Delegates to onChunk for each

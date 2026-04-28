@@ -70,6 +70,59 @@ const MAX_TOKENS = 2000;
 const MAX_HISTORY_PAIRS = 12;
 
 // ──────────────────────────────────────────────────────────────────
+// Tools — write controls. Claude can propose edits via these; the UI
+// shows each proposal as an Approve/Reject card. Nothing lands in the
+// estimate until the user approves. The "propose_" prefix in every tool
+// name reinforces to the model (and to anyone reading the docs) that
+// the action is a request, not a fait accompli.
+// ──────────────────────────────────────────────────────────────────
+const ESTIMATE_TOOLS = [
+  {
+    name: 'propose_add_line_item',
+    description: 'Propose adding a single cost-side line item to the active alternate. The user will see your proposal as a card with Approve / Reject buttons before anything lands in the estimate. Use multiple parallel calls to propose several lines at once.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        description: { type: 'string', description: 'What the line item is — short, specific, trade-style ("8d common nails, 5lb box" not "fasteners").' },
+        qty: { type: 'number', description: 'Quantity. Must be a positive number.' },
+        unit: { type: 'string', description: 'Unit of measure (ea, sf, lf, hr, cy, ton, lot, etc.).' },
+        unit_cost: { type: 'number', description: 'AGX cost per unit, NOT client price. Markup is applied separately.' },
+        markup_pct: { type: 'number', description: 'Optional per-line markup % override. Omit to use the estimate-wide default markup.' },
+        section_name: { type: 'string', description: 'Existing section header to slot under (case-insensitive substring match). Common values: "Materials & Supplies Costs", "Direct Labor", "General Conditions", "Subcontractors Costs". If omitted or no match, the line goes at the end.' },
+        rationale: { type: 'string', description: 'One short sentence explaining why this item is needed. Shown on the approval card.' }
+      },
+      required: ['description', 'qty', 'unit', 'unit_cost', 'rationale']
+    }
+  },
+  {
+    name: 'propose_update_scope',
+    description: "Propose setting or appending the active alternate's Scope of Work text. Use this when the user asks you to draft or extend the scope.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        scope_text: { type: 'string', description: 'The full scope text to apply. Use bullet points (lines starting with "- " or "• ") for typical scopes.' },
+        mode: { type: 'string', enum: ['replace', 'append'], description: 'replace = overwrite the current scope; append = add to the end with a blank line separator. Default replace if omitted.' },
+        rationale: { type: 'string', description: 'One short sentence explaining the proposed change.' }
+      },
+      required: ['scope_text', 'rationale']
+    }
+  },
+  {
+    name: 'propose_add_section',
+    description: 'Propose adding a new section header to the active alternate. Sections group line items in the editor and on the BT export.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Section name (e.g., "Stair Tread Replacement").' },
+        bt_category: { type: 'string', enum: ['materials', 'labor', 'gc', 'sub'], description: 'Optional BT cost category mapping. Omit if the section is not one of the four standard cost buckets.' },
+        rationale: { type: 'string', description: 'One short sentence explaining why this section is needed.' }
+      },
+      required: ['name', 'rationale']
+    }
+  }
+];
+
+// ──────────────────────────────────────────────────────────────────
 // Context builder — pulls everything Claude needs to know about the
 // estimate and formats it as a system-prompt prefix. Photos are returned
 // separately so the chat handler can attach them as image blocks.
@@ -291,9 +344,11 @@ async function buildEstimateContext(estimateId, includePhotos) {
   lines.push('# Your role');
   lines.push('- Help the PM think through scope, materials, sequencing, and gotchas.');
   lines.push('- Spot missing line items, suggest items to add, flag risks (access, height, weather, code).');
-  lines.push('- Cite cost-side prices (the user applies markup separately to get client price).');
-  lines.push('- You are READ-ONLY for this conversation: you cannot edit the estimate. When recommending changes, format them clearly so the PM can apply them by hand.');
-  lines.push('- Be concise. Construction trade vocabulary is welcome. If you need one piece of info to answer well, ask one targeted question.');
+  lines.push('- Cite cost-side prices (markup is applied separately to get client price).');
+  lines.push('- You can PROPOSE edits via the propose_add_line_item, propose_update_scope, and propose_add_section tools. Every proposal is shown to the PM as a card with Approve / Reject buttons — nothing lands in the estimate without their click. Make multiple parallel proposals when the user asks for a batch (e.g., "draft the full materials list" → propose_add_line_item × N in one response).');
+  lines.push('- When proposing line items, use realistic AGX cost-side prices for Central Florida construction. Quantities should be specific (calculated from photos / scope when possible). Always include a rationale on each proposal.');
+  lines.push('- Mix proposals with prose: brief lead-in text, then the proposals, then a one-line wrap-up is good. Avoid emitting proposals without any explanation.');
+  lines.push('- Be concise. Construction trade vocabulary is welcome. If you need one piece of info to answer well, ask one targeted question first.');
 
   return {
     systemPrompt: lines.join('\n'),
@@ -363,11 +418,119 @@ router.delete('/estimates/:id/messages',
 );
 
 // ──────────────────────────────────────────────────────────────────
-// Streaming chat endpoint. Body: { message, includePhotos }.
-// Response: text/event-stream with `data: {chunk}` per token + final
-// `data: [DONE]`. Errors are sent as `data: {error}`.
+// Shared streaming helper. Both /chat (initial) and /chat/continue
+// (resume after approvals) call this with a pre-built `messages` array.
+// It streams text deltas as they arrive, then on finalMessage:
+//   - If the response contains tool_use blocks, send them as SSE events
+//     and end with `awaiting_approval: true` + the full assistant
+//     content array (so the client can echo it back on /chat/continue).
+//   - Otherwise (end_turn), persist the assistant text and end with
+//     `done: true`.
+//
+// The assistant message is NOT persisted when it contains tool_use —
+// only the final text response of the full multi-step turn lands in
+// history. Intermediate proposal turns are transient.
 // ──────────────────────────────────────────────────────────────────
+function setSSEHeaders(res) {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders();
+}
 
+async function runStream({ anthropic, res, systemPrompt, messages, persistAssistantText, persistArgs }) {
+  function send(payload) { res.write('data: ' + JSON.stringify(payload) + '\n\n'); }
+  function endWithDone() { res.write('data: [DONE]\n\n'); res.end(); }
+  function abort(message) {
+    send({ error: message });
+    endWithDone();
+  }
+
+  let assistantText = '';
+  let finalContent = null;
+  let usage = { input_tokens: null, output_tokens: null };
+
+  const stream = anthropic.messages.stream({
+    model: MODEL,
+    max_tokens: MAX_TOKENS,
+    system: systemPrompt,
+    tools: ESTIMATE_TOOLS,
+    messages: messages
+  });
+
+  stream.on('text', (delta) => {
+    assistantText += delta;
+    send({ delta: delta });
+  });
+  stream.on('finalMessage', (msg) => {
+    if (msg && msg.usage) usage = msg.usage;
+    if (msg && Array.isArray(msg.content)) finalContent = msg.content;
+  });
+  stream.on('error', (err) => {
+    console.error('Anthropic stream error:', err);
+    abort(err.message || 'AI request failed');
+  });
+
+  try {
+    await stream.done();
+  } catch (e) {
+    abort(e.message || 'Stream failed');
+    return;
+  }
+
+  // Did Claude produce any tool_use blocks?
+  const toolUseBlocks = (finalContent || []).filter(b => b.type === 'tool_use');
+
+  if (toolUseBlocks.length) {
+    // Stream each proposal as a discrete event so the client can render
+    // approval cards in order.
+    for (const tu of toolUseBlocks) {
+      send({ tool_use: { id: tu.id, name: tu.name, input: tu.input } });
+    }
+    // Send the full assistant content back so the client can echo it on
+    // /chat/continue — Anthropic needs the original tool_use blocks in
+    // the conversation history to match against the user-side tool_result.
+    send({
+      awaiting_approval: true,
+      pending_assistant_content: finalContent,
+      tool_use_count: toolUseBlocks.length,
+      usage: usage
+    });
+    endWithDone();
+    return;
+  }
+
+  // No tool calls — final text response. Persist and complete.
+  if (assistantText && persistAssistantText) {
+    await persistAssistantText(assistantText, usage, persistArgs);
+  }
+  send({ done: true, usage: usage });
+  endWithDone();
+}
+
+// Persist a final assistant text response. Used as the callback on the
+// run helper so persistence stays inside this module.
+async function saveAssistantMessage({ estimateId, userId, text, usage }) {
+  const id = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+  await pool.query(
+    `INSERT INTO ai_messages (id, estimate_id, user_id, role, content, model, input_tokens, output_tokens)
+     VALUES ($1, $2, $3, 'assistant', $4, $5, $6, $7)`,
+    [id, estimateId, userId, text, MODEL, usage.input_tokens, usage.output_tokens]
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────
+// Streaming chat endpoint. Body: { message, includePhotos }.
+// Response: text/event-stream with structured events:
+//   { delta: "..." }                   — text chunk
+//   { tool_use: {id, name, input} }    — proposed action (one per block)
+//   { awaiting_approval: true,         — end-of-turn: needs user response
+//     pending_assistant_content: [...] }
+//   { done: true }                     — end-of-turn: nothing pending
+//   { error: "..." }                   — failure
+// Stream always ends with `data: [DONE]`.
+// ──────────────────────────────────────────────────────────────────
 router.post('/estimates/:id/chat',
   requireAuth, requireCapability('ESTIMATES_VIEW'),
   async (req, res) => {
@@ -380,25 +543,9 @@ router.post('/estimates/:id/chat',
     const includePhotos = req.body && req.body.includePhotos !== false;
     const estimateId = req.params.id;
 
-    // SSE headers — flush immediately so the client knows the connection
-    // is live and starts buffering.
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    res.setHeader('X-Accel-Buffering', 'no'); // disable nginx-style buffering
-    res.flushHeaders();
-
-    function send(payload) {
-      res.write('data: ' + JSON.stringify(payload) + '\n\n');
-    }
-    function abort(message) {
-      send({ error: message });
-      res.write('data: [DONE]\n\n');
-      res.end();
-    }
+    setSSEHeaders(res);
 
     try {
-      // Pull the user's existing conversation for this estimate
       const histRes = await pool.query(
         `SELECT role, content
          FROM ai_messages
@@ -406,18 +553,12 @@ router.post('/estimates/:id/chat',
          ORDER BY created_at ASC`,
         [estimateId, req.user.id]
       );
-      // Trim to the most recent N pairs to cap token cost
       let history = histRes.rows;
       const cap = MAX_HISTORY_PAIRS * 2;
       if (history.length > cap) history = history.slice(-cap);
 
-      // Build fresh context — estimate state may have changed since last
-      // message, so we never cache it.
       const ctx = await buildEstimateContext(estimateId, includePhotos);
 
-      // The user's new message gets the photo blocks attached as image
-      // content (if any) so vision is available on this round. Past
-      // messages are text-only — the system prompt re-mentions the photos.
       const userContent = ctx.photoBlocks.length
         ? [...ctx.photoBlocks, { type: 'text', text: userMessage }]
         : userMessage;
@@ -427,8 +568,8 @@ router.post('/estimates/:id/chat',
         { role: 'user', content: userContent }
       ];
 
-      // Persist the user message right away — even if streaming fails the
-      // user can see what they asked.
+      // Persist the user message immediately so a mid-stream failure
+      // doesn't lose what they asked.
       const userMsgId = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
       await pool.query(
         `INSERT INTO ai_messages (id, estimate_id, user_id, role, content, photos_included)
@@ -436,45 +577,100 @@ router.post('/estimates/:id/chat',
         [userMsgId, estimateId, req.user.id, userMessage, ctx.photoBlocks.length]
       );
 
-      // Stream from Anthropic
-      let assistantText = '';
-      let usage = { input_tokens: null, output_tokens: null };
-      const stream = anthropic.messages.stream({
-        model: MODEL,
-        max_tokens: MAX_TOKENS,
-        system: ctx.systemPrompt,
-        messages: messages
+      await runStream({
+        anthropic, res,
+        systemPrompt: ctx.systemPrompt,
+        messages: messages,
+        persistAssistantText: async (text, usage) => {
+          await saveAssistantMessage({ estimateId, userId: req.user.id, text, usage });
+        }
       });
-
-      stream.on('text', (delta) => {
-        assistantText += delta;
-        send({ delta: delta });
-      });
-      stream.on('finalMessage', (msg) => {
-        if (msg && msg.usage) usage = msg.usage;
-      });
-      stream.on('error', (err) => {
-        console.error('Anthropic stream error:', err);
-        abort(err.message || 'AI request failed');
-      });
-
-      await stream.done();
-
-      // Persist the assistant reply once streaming completes
-      if (assistantText) {
-        const assistantId = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
-        await pool.query(
-          `INSERT INTO ai_messages (id, estimate_id, user_id, role, content, model, input_tokens, output_tokens)
-           VALUES ($1, $2, $3, 'assistant', $4, $5, $6, $7)`,
-          [assistantId, estimateId, req.user.id, assistantText, MODEL, usage.input_tokens, usage.output_tokens]
-        );
-      }
-      send({ done: true, usage: usage });
-      res.write('data: [DONE]\n\n');
-      res.end();
     } catch (e) {
       console.error('AI chat error:', e);
-      abort(e.message || 'Server error');
+      res.write('data: ' + JSON.stringify({ error: e.message || 'Server error' }) + '\n\n');
+      res.write('data: [DONE]\n\n');
+      res.end();
+    }
+  }
+);
+
+// ──────────────────────────────────────────────────────────────────
+// Continuation endpoint — called after the user approves/rejects the
+// proposals from a tool_use turn.
+//
+// Body:
+//   pending_assistant_content: <the full content array we sent in
+//                                awaiting_approval — must be echoed
+//                                back verbatim so the API matches the
+//                                tool_use IDs against the tool_result>
+//   tool_results: [
+//     { tool_use_id, approved: bool, applied_summary?: string }
+//   ]
+//
+// We don't include photos on continuation — they were attached to the
+// initial user message and are conceptually still in the prior turn's
+// context from Claude's perspective.
+// ──────────────────────────────────────────────────────────────────
+router.post('/estimates/:id/chat/continue',
+  requireAuth, requireCapability('ESTIMATES_VIEW'),
+  async (req, res) => {
+    const anthropic = getAnthropic();
+    if (!anthropic) {
+      return res.status(503).json({ error: 'AI assistant is not configured.' });
+    }
+    const pendingContent = req.body && req.body.pending_assistant_content;
+    const toolResults = req.body && req.body.tool_results;
+    if (!Array.isArray(pendingContent) || !Array.isArray(toolResults) || !toolResults.length) {
+      return res.status(400).json({ error: 'pending_assistant_content and tool_results are required' });
+    }
+    const estimateId = req.params.id;
+
+    setSSEHeaders(res);
+
+    try {
+      const histRes = await pool.query(
+        `SELECT role, content
+         FROM ai_messages
+         WHERE estimate_id = $1 AND user_id = $2
+         ORDER BY created_at ASC`,
+        [estimateId, req.user.id]
+      );
+      let history = histRes.rows;
+      const cap = MAX_HISTORY_PAIRS * 2;
+      if (history.length > cap) history = history.slice(-cap);
+
+      // Don't include photos on continuation — they were attached to the
+      // initial user message; the system prompt re-mentions them by count.
+      const ctx = await buildEstimateContext(estimateId, false);
+
+      // Build tool_result blocks from the user's approve/reject decisions
+      const toolResultBlocks = toolResults.map(r => ({
+        type: 'tool_result',
+        tool_use_id: r.tool_use_id,
+        content: r.approved
+          ? (r.applied_summary || 'User approved. Change applied to the estimate.')
+          : (r.reject_reason || 'User rejected this proposal.')
+      }));
+
+      const messages = [
+        ...history.map(m => ({ role: m.role, content: m.content })),
+        { role: 'assistant', content: pendingContent },
+        { role: 'user', content: toolResultBlocks }
+      ];
+
+      await runStream({
+        anthropic, res,
+        systemPrompt: ctx.systemPrompt,
+        messages: messages,
+        persistAssistantText: async (text, usage) => {
+          await saveAssistantMessage({ estimateId, userId: req.user.id, text, usage });
+        }
+      });
+    } catch (e) {
+      console.error('AI chat/continue error:', e);
+      res.write('data: ' + JSON.stringify({ error: e.message || 'Server error' }) + '\n\n');
+      res.write('data: [DONE]\n\n');
+      res.end();
     }
   }
 );
