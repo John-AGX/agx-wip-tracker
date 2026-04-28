@@ -68,6 +68,12 @@ function renderEstimatesList() {
         function createNewEstimate() {
             const estId = 'e' + Date.now();
             const defaultAlternateId = 'alt_default';
+            // Scope no longer lives in the new-estimate modal — the user
+            // adds it on the editor's right panel after creation. Keep the
+            // safe lookup so legacy callers / the lead-prefill flow that
+            // still has the field can pass through any seeded text.
+            const scopeEl = document.getElementById('estScopeOfWork');
+            const seededScope = scopeEl ? (scopeEl.value || '') : '';
             const est = {
                 id: estId,
                 title: document.getElementById('estTitle').value,
@@ -82,11 +88,11 @@ function renderEstimatesList() {
                 managerEmail: document.getElementById('estManagerEmail').value,
                 managerPhone: document.getElementById('estManagerPhone').value,
                 defaultMarkup: parseFloat(document.getElementById('estDefaultMarkup').value) || 100,
-                scopeOfWork: document.getElementById('estScopeOfWork').value || '',
+                scopeOfWork: seededScope,
                 // Pre-wire alternates so the editor opens straight into the
                 // standard structure without the migration shuffle. Scope is
                 // per-alternate so Good/Better/Best can each carry their own.
-                alternates: [{ id: defaultAlternateId, name: 'Base', isDefault: true, scope: document.getElementById('estScopeOfWork') ? (document.getElementById('estScopeOfWork').value || '') : '' }],
+                alternates: [{ id: defaultAlternateId, name: 'Base', isDefault: true, scope: seededScope }],
                 activeAlternateId: defaultAlternateId
             };
             appData.estimates.push(est);
