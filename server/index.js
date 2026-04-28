@@ -23,6 +23,8 @@ const roleRoutes = require('./routes/role-routes');
 const clientRoutes = require('./routes/client-routes');
 const leadRoutes = require('./routes/lead-routes');
 const settingsRoutes = require('./routes/settings-routes');
+const attachmentRoutes = require('./routes/attachment-routes');
+const { storage } = require('./storage');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -39,6 +41,18 @@ app.use('/api/roles', roleRoutes);
 app.use('/api/clients', clientRoutes);
 app.use('/api/leads', leadRoutes);
 app.use('/api/settings', settingsRoutes);
+app.use('/api/attachments', attachmentRoutes);
+
+// Serve uploaded files when running with the local storage backend.
+// On Railway with a mounted volume, set UPLOAD_DIR to the mount path
+// (e.g. /data/uploads) and this serves them from there. R2 backend
+// returns absolute URLs so this static mount is unused.
+if (storage.localRoot) {
+  app.use(storage.publicBase, express.static(storage.localRoot, {
+    fallthrough: true,
+    maxAge: '7d'
+  }));
+}
 
 // Health check
 app.get('/api/health', (req, res) => {

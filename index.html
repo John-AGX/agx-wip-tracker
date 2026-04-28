@@ -660,6 +660,7 @@
                                 <div class="ws-right-tabs" style="margin-top:10px;margin-bottom:0;">
                                     <button class="ws-right-tab active" data-ee-tab="lines" onclick="switchEstimateEditorTab('lines')">Line Items</button>
                                     <button class="ws-right-tab" data-ee-tab="details" onclick="switchEstimateEditorTab('details')">Details</button>
+                                    <button class="ws-right-tab" data-ee-tab="photos" onclick="switchEstimateEditorTab('photos')">&#x1F4F7; Photos</button>
                                     <button class="ws-right-tab" data-ee-tab="preview" onclick="switchEstimateEditorTab('preview')">Preview</button>
                                 </div>
                             </div>
@@ -705,6 +706,12 @@
                             <!-- Details tab -->
                             <div id="ee-tab-details" class="ee-tab-content" style="display:none;">
                                 <div id="ee-details-form"></div>
+                            </div>
+
+                            <!-- Photos tab — drag-drop upload + thumbnail grid + lightbox.
+                                 Mounted on demand by switchEstimateEditorTab(). -->
+                            <div id="ee-tab-photos" class="ee-tab-content" style="display:none;">
+                                <div id="ee-photos-mount"></div>
                             </div>
 
                             <!-- Preview tab — populated on demand by js/estimate-preview.js -->
@@ -1472,6 +1479,7 @@
         <div id="leadEditor_tabs" class="ws-right-tabs" style="display:none;margin:12px 20px 0 20px;">
           <button class="ws-right-tab active" data-leadeditor-tab="general" onclick="switchLeadEditorTab('general')">General</button>
           <button class="ws-right-tab" data-leadeditor-tab="proposals" onclick="switchLeadEditorTab('proposals')">Proposals <span id="leadEditor_proposalsCount" style="opacity:0.6;font-weight:400;"></span></button>
+          <button class="ws-right-tab" data-leadeditor-tab="photos" onclick="switchLeadEditorTab('photos')">&#x1F4F7; Photos</button>
         </div>
 
         <!-- General tab: original form fields -->
@@ -1589,6 +1597,12 @@
             <span style="font-size:12px;color:var(--text-dim,#888);align-self:center;">Pre-fills the form from this lead's client, address, and project info.</span>
           </div>
           <div id="leadEditor_proposalsList" style="display:flex;flex-direction:column;gap:8px;"></div>
+        </div>
+
+        <!-- Photos tab — drag-drop uploader + thumbnail grid + lightbox.
+             Hidden until the lead has been saved (no entity id to attach to). -->
+        <div id="leadEditor_tab_photos" style="display:none;padding:18px 20px;">
+          <div id="leadEditor_photosMount"></div>
         </div>
 
         <div class="modal-footer">
@@ -1868,16 +1882,17 @@
     </div>
 
     <script src="js/auth.js?v=6"></script>
-    <script src="js/api.js?v=9"></script>
+    <script src="js/api.js?v=10"></script>
+    <script src="js/attachments.js?v=1"></script>
     <script src="js/admin.js?v=13"></script>
     <script src="js/clients.js?v=5"></script>
-    <script src="js/leads.js?v=5"></script>
+    <script src="js/leads.js?v=6"></script>
     <script src="js/insights.js?v=5"></script>
     <script src="js/app.js?v=37"></script>
     <script src="js/wip.js?v=56"></script>
     <script src="js/estimates.js?v=25"></script>
     <script src="js/proposal.js?v=19"></script>
-    <script src="js/estimate-editor.js?v=7"></script>
+    <script src="js/estimate-editor.js?v=8"></script>
     <script src="js/estimate-preview.js?v=3"></script>
     <script src="js/bt-export.js?v=2"></script>
 

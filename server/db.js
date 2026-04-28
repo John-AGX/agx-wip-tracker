@@ -171,6 +171,34 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_leads_client ON leads(client_id);
     CREATE INDEX IF NOT EXISTS idx_leads_status ON leads(status);
     CREATE INDEX IF NOT EXISTS idx_leads_salesperson ON leads(salesperson_id);
+
+    -- Polymorphic attachments — each row is a single uploaded photo (or doc)
+    -- belonging to either a lead or an estimate. We store three size variants
+    -- per upload (thumbnail, web, original) so the UI can show a fast grid,
+    -- a lightbox view, and offer a full-res download. URLs are absolute paths
+    -- that the storage backend (local disk now, R2 later) returns. Keys are
+    -- the storage-side identifiers we hand back when deleting.
+    CREATE TABLE IF NOT EXISTS attachments (
+      id TEXT PRIMARY KEY,
+      entity_type TEXT NOT NULL CHECK (entity_type IN ('lead', 'estimate')),
+      entity_id TEXT NOT NULL,
+      filename TEXT NOT NULL,
+      mime_type TEXT NOT NULL,
+      size_bytes INTEGER NOT NULL,
+      width INTEGER,
+      height INTEGER,
+      thumb_url TEXT NOT NULL,
+      web_url TEXT NOT NULL,
+      original_url TEXT NOT NULL,
+      thumb_key TEXT NOT NULL,
+      web_key TEXT NOT NULL,
+      original_key TEXT NOT NULL,
+      caption TEXT,
+      position INTEGER NOT NULL DEFAULT 0,
+      uploaded_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      uploaded_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_attachments_entity ON attachments(entity_type, entity_id, position);
   `);
 
   // Seed built-in roles. ON CONFLICT lets us re-run safely without

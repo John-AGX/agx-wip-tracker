@@ -451,11 +451,25 @@
     });
     document.getElementById('leadEditor_tab_general').style.display = (name === 'general') ? '' : 'none';
     document.getElementById('leadEditor_tab_proposals').style.display = (name === 'proposals') ? '' : 'none';
+    var photosTab = document.getElementById('leadEditor_tab_photos');
+    if (photosTab) photosTab.style.display = (name === 'photos') ? '' : 'none';
     // The footer Save / Delete buttons only make sense on the General tab.
-    // On the Proposals tab they'd be confusing (the estimates have their
-    // own save flow). Hide them when Proposals is active.
+    // On the Proposals / Photos tabs they'd be confusing (those have their
+    // own save / delete flows). Hide the footer when one of those is active.
     var footer = document.querySelector('#leadEditorModal .modal-footer');
-    if (footer) footer.style.display = (name === 'proposals') ? 'none' : '';
+    if (footer) footer.style.display = (name === 'general') ? '' : 'none';
+    // Mount the photos widget on first switch — re-uses the same mount on
+    // re-entry since agxAttachments handles its own state internally.
+    if (name === 'photos' && _currentEditingLeadId) {
+      var mountEl = document.getElementById('leadEditor_photosMount');
+      if (mountEl && window.agxAttachments) {
+        window.agxAttachments.mount(mountEl, {
+          entityType: 'lead',
+          entityId: _currentEditingLeadId,
+          canEdit: true
+        });
+      }
+    }
   }
 
   function renderLeadProposals(leadId) {

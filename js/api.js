@@ -122,6 +122,33 @@
     put: function(key, value) { return put('/api/settings/' + encodeURIComponent(key), { value: value }); }
   };
 
+  // Multipart upload — bypasses the JSON-only `post` helper since we need
+  // a FormData body. Auth header still gets attached.
+  function uploadFile(path, file) {
+    var fd = new FormData();
+    fd.append('file', file);
+    var headers = {};
+    var token = getToken();
+    if (token) headers['Authorization'] = 'Bearer ' + token;
+    return fetch(path, {
+      method: 'POST',
+      headers: headers,
+      credentials: 'same-origin',
+      body: fd
+    }).then(handleResponse);
+  }
+
+  var attachments = {
+    list: function(entityType, entityId) {
+      return get('/api/attachments/' + encodeURIComponent(entityType) + '/' + encodeURIComponent(entityId));
+    },
+    upload: function(entityType, entityId, file) {
+      return uploadFile('/api/attachments/' + encodeURIComponent(entityType) + '/' + encodeURIComponent(entityId), file);
+    },
+    update: function(id, payload) { return put('/api/attachments/' + encodeURIComponent(id), payload); },
+    remove: function(id) { return del('/api/attachments/' + encodeURIComponent(id)); }
+  };
+
   var leads = {
     list: function(query) {
       var qs = '';
@@ -145,7 +172,7 @@
 
   window.agxApi = {
     get: get, put: put, post: post, del: del,
-    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings,
+    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments,
     isOffline: isOffline,
     isAuthenticated: function() { return !!getToken() && !isOffline(); }
   };

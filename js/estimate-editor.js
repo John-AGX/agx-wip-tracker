@@ -184,6 +184,18 @@
     if (name === 'preview' && typeof window.renderEstimatePreview === 'function') {
       window.renderEstimatePreview();
     }
+    // Photos tab — mount the shared widget. agxAttachments handles its own
+    // state, so re-mounting on each switch is fine and keeps things simple.
+    if (name === 'photos' && _currentId && window.agxAttachments) {
+      var mountEl = document.getElementById('ee-photos-mount');
+      if (mountEl) {
+        window.agxAttachments.mount(mountEl, {
+          entityType: 'estimate',
+          entityId: _currentId,
+          canEdit: true
+        });
+      }
+    }
   }
 
   // Expose the currently-open estimate for the preview module so it doesn't
