@@ -200,6 +200,16 @@ async function initSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_attachments_entity ON attachments(entity_type, entity_id, position);
 
+    -- Make image-pipeline columns nullable so document attachments (PDFs,
+    -- Excel, Word, drawings, RFPs, etc.) can store just the original
+    -- without having to fake thumb/web URLs. Image uploads still set all
+    -- three. Idempotent — DROP NOT NULL on an already-nullable column is
+    -- a no-op in Postgres.
+    ALTER TABLE attachments ALTER COLUMN thumb_url DROP NOT NULL;
+    ALTER TABLE attachments ALTER COLUMN web_url   DROP NOT NULL;
+    ALTER TABLE attachments ALTER COLUMN thumb_key DROP NOT NULL;
+    ALTER TABLE attachments ALTER COLUMN web_key   DROP NOT NULL;
+
     -- AI estimating-assistant chat. Per-user, per-estimate (so PMs each see
     -- their own conversation). Two messages per round (one user, one
     -- assistant) ordered by created_at; the route layer rebuilds the

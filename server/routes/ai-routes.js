@@ -115,34 +115,49 @@ async function buildEstimateContext(estimateId, includePhotos) {
     leadRow = lRes.rows[0] || null;
   }
 
-  // Photos for vision. We pull both leads' and the estimate's photos so the
-  // assistant has every available visual. Limited to web-size (1600px,
-  // ~150KB each) to keep token cost in check; ignored entirely if the
-  // user toggled photos off.
+  // Pull every attachment (photos + docs) for both the estimate and the
+  // linked lead in one go. Photos go to the vision pipeline (cap 12 per
+  // Anthropic's per-request limit); docs are listed as structured text so
+  // the assistant knows what RFP / spec / drawing references exist even
+  // though it can't read PDF/Excel content yet.
   let photoBlocks = [];
-  if (includePhotos) {
-    const photoRows = [];
-    const estPhotos = await pool.query(
-      `SELECT * FROM attachments WHERE entity_type='estimate' AND entity_id=$1
-       ORDER BY position, uploaded_at LIMIT 8`,
-      [estimateId]
+  let docManifest = []; // { source, filename, mime, size }
+  const allAttachments = [];
+
+  const estAtts = await pool.query(
+    `SELECT * FROM attachments WHERE entity_type='estimate' AND entity_id=$1
+     ORDER BY position, uploaded_at`,
+    [estimateId]
+  );
+  allAttachments.push(...estAtts.rows.map(r => ({ ...r, source: 'estimate' })));
+  if (blob.lead_id) {
+    const leadAtts = await pool.query(
+      `SELECT * FROM attachments WHERE entity_type='lead' AND entity_id=$1
+       ORDER BY position, uploaded_at`,
+      [blob.lead_id]
     );
-    photoRows.push(...estPhotos.rows.map(r => ({ ...r, source: 'estimate' })));
-    if (blob.lead_id) {
-      const leadPhotos = await pool.query(
-        `SELECT * FROM attachments WHERE entity_type='lead' AND entity_id=$1
-         ORDER BY position, uploaded_at LIMIT 8`,
-        [blob.lead_id]
-      );
-      photoRows.push(...leadPhotos.rows.map(r => ({ ...r, source: 'lead' })));
-    }
-    // Cap at 12 total to stay under Anthropic's 20-image-per-request limit
-    photoRows.splice(12);
-    for (const p of photoRows) {
+    allAttachments.push(...leadAtts.rows.map(r => ({ ...r, source: 'lead' })));
+  }
+
+  // Partition by mime type. Anything starting with image/ AND with a
+  // thumb_key is a server-side resized photo; everything else is a doc.
+  const photoRows = allAttachments.filter(a => a.mime_type && a.mime_type.startsWith('image/') && a.thumb_key);
+  const docRows = allAttachments.filter(a => !(a.mime_type && a.mime_type.startsWith('image/') && a.thumb_key));
+
+  if (includePhotos) {
+    const cappedPhotos = photoRows.slice(0, 12);
+    for (const p of cappedPhotos) {
       const block = await loadPhotoAsBlock(p);
       if (block) photoBlocks.push(block);
     }
   }
+
+  docManifest = docRows.map(d => ({
+    source: d.source,
+    filename: d.filename,
+    mime: d.mime_type,
+    size: d.size_bytes
+  }));
 
   // Build the structured system-prompt prefix
   const lines = [];
@@ -256,6 +271,20 @@ async function buildEstimateContext(estimateId, includePhotos) {
   if (photoBlocks.length) {
     lines.push('# Photos');
     lines.push(`${photoBlocks.length} photo(s) attached below — analyze them when relevant to the user's question.`);
+    lines.push('');
+  }
+
+  // Document manifest. We can't read PDF/Excel/Word contents directly, but
+  // surfacing what's attached lets the assistant ask the user to summarize
+  // a relevant doc, OR cite a doc by name when recommending follow-ups
+  // ("see the RFP attached on the lead for the spec on caulk type").
+  if (docManifest.length) {
+    lines.push('# Attached documents (' + docManifest.length + ')');
+    lines.push('Filenames listed for reference. The contents are not loaded into context — ask the user to paste relevant excerpts if needed.');
+    docManifest.forEach(function(d) {
+      var sizeStr = d.size != null ? ' (' + (d.size > 1048576 ? (d.size / 1048576).toFixed(1) + ' MB' : Math.round(d.size / 1024) + ' KB') + ')' : '';
+      lines.push('- [' + d.source + '] ' + d.filename + sizeStr);
+    });
     lines.push('');
   }
 

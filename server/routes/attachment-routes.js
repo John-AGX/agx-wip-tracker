@@ -19,11 +19,20 @@ const { storage } = require('../storage');
 
 const router = express.Router();
 
-// Upload caps. 10 photos per entity is enforced in the route handler since
-// it depends on the existing row count; multer just enforces per-file size.
-const MAX_FILES_PER_ENTITY = 10;
-const MAX_FILE_BYTES = 12 * 1024 * 1024; // 12MB pre-resize ceiling
+// Upload caps. Photos and documents share one pool per entity so a heavy
+// drawing-heavy lead doesn't burst past a separate doc cap. Multer
+// enforces the per-file ceiling; the per-entity total is checked in the
+// handler since it depends on the existing row count.
+const MAX_FILES_PER_ENTITY = 30;
+const MAX_FILE_BYTES = 50 * 1024 * 1024; // 50MB — fits most drawings, big PDFs
 const VALID_ENTITY_TYPES = new Set(['lead', 'estimate']);
+
+// Lightweight MIME detection — sharp only handles raster images, so
+// anything outside this set bypasses the resize pipeline.
+function isImageMime(mime) {
+  if (!mime) return false;
+  return mime.startsWith('image/') && mime !== 'image/svg+xml'; // sharp can't rasterize SVG without extra deps
+}
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -104,26 +113,41 @@ router.post('/:entityType/:entityId',
       }
 
       const id = 'att_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
-      const ext = (req.file.originalname.match(/\.([a-z0-9]+)$/i) || [, 'jpg'])[1].toLowerCase();
+      const ext = (req.file.originalname.match(/\.([a-z0-9]+)$/i) || [, 'bin'])[1].toLowerCase();
       const baseKey = entityType + '/' + entityId + '/' + id;
-
-      // Resize pipeline. .rotate() honors EXIF orientation so phone photos
-      // stop coming in sideways. `withMetadata: false` strips EXIF on
-      // resize variants so we don't leak GPS coords from contractor phones.
       const buf = req.file.buffer;
-      const meta = await sharp(buf).rotate().metadata();
-      const thumbBuf = await sharp(buf).rotate().resize(200, 200, { fit: 'cover' }).jpeg({ quality: 80 }).toBuffer();
-      const webBuf = await sharp(buf).rotate().resize(1600, 1600, { fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 82 }).toBuffer();
+      const mime = req.file.mimetype || 'application/octet-stream';
 
-      const thumbKey = baseKey + '_thumb.jpg';
-      const webKey = baseKey + '_web.jpg';
-      const originalKey = baseKey + '_orig.' + ext;
+      let thumbUrl = null, webUrl = null, originalUrl;
+      let thumbKey = null, webKey = null, originalKey;
+      let width = null, height = null;
 
-      const thumbUrl = await storage.put(thumbKey, thumbBuf, 'image/jpeg');
-      const webUrl = await storage.put(webKey, webBuf, 'image/jpeg');
-      const originalUrl = await storage.put(originalKey, buf, req.file.mimetype || 'application/octet-stream');
+      if (isImageMime(mime)) {
+        // Image pipeline: resize to thumb (200×200 cover) + web (1600px max)
+        // + keep original. .rotate() honors EXIF orientation so phone photos
+        // stop coming in sideways; the resized variants drop EXIF entirely
+        // so we don't leak GPS coords from contractor phones.
+        const meta = await sharp(buf).rotate().metadata();
+        width = meta.width || null;
+        height = meta.height || null;
+        const thumbBuf = await sharp(buf).rotate().resize(200, 200, { fit: 'cover' }).jpeg({ quality: 80 }).toBuffer();
+        const webBuf = await sharp(buf).rotate().resize(1600, 1600, { fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 82 }).toBuffer();
+        thumbKey = baseKey + '_thumb.jpg';
+        webKey = baseKey + '_web.jpg';
+        originalKey = baseKey + '_orig.' + ext;
+        thumbUrl = await storage.put(thumbKey, thumbBuf, 'image/jpeg');
+        webUrl = await storage.put(webKey, webBuf, 'image/jpeg');
+        originalUrl = await storage.put(originalKey, buf, mime);
+      } else {
+        // Document pipeline: just stash the original. No thumbnail or web
+        // variant — the frontend renders these as a file-icon list, not a
+        // grid. Original filename's extension is preserved in the key so
+        // the file downloads with the right type.
+        originalKey = baseKey + '_orig.' + ext;
+        originalUrl = await storage.put(originalKey, buf, mime);
+      }
 
-      // Position = current count so new uploads append to the end of the grid.
+      // Position = current count so new uploads append to the end of the list.
       const position = countRes.rows[0].c;
 
       const ins = await pool.query(
@@ -137,8 +161,8 @@ router.post('/:entityType/:entityId',
          RETURNING *`,
         [
           id, entityType, entityId,
-          req.file.originalname, req.file.mimetype || 'application/octet-stream', req.file.size,
-          meta.width || null, meta.height || null,
+          req.file.originalname, mime, req.file.size,
+          width, height,
           thumbUrl, webUrl, originalUrl,
           thumbKey, webKey, originalKey,
           position, req.user.id
@@ -166,11 +190,9 @@ router.delete('/:id', requireAuth, async (req, res) => {
     const ok = await hasCapability(req.user, cap);
     if (!ok) return res.status(403).json({ error: 'Forbidden' });
 
-    await Promise.all([
-      storage.delete(att.thumb_key),
-      storage.delete(att.web_key),
-      storage.delete(att.original_key)
-    ]);
+    // Documents have null thumb/web keys — only delete what's actually stored.
+    const keysToDelete = [att.thumb_key, att.web_key, att.original_key].filter(Boolean);
+    await Promise.all(keysToDelete.map(function(k) { return storage.delete(k); }));
     await pool.query('DELETE FROM attachments WHERE id = $1', [req.params.id]);
     res.json({ ok: true });
   } catch (e) {
