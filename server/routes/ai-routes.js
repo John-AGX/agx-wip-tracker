@@ -1050,7 +1050,7 @@ const LEAD_EXTRACTION_SCHEMA = {
     property_state: { type: 'string', description: 'Property state code or empty string.' },
     property_zip: { type: 'string', description: 'Property ZIP or empty string.' },
     salesperson_name: { type: 'string', description: 'AGX salesperson name from the Salesperson section or empty string.' },
-    project_type: { type: 'string', description: 'Project type / job type if specified (e.g., Renovation, Service & Repair, Work Order). Empty string if blank.' },
+    project_type: { type: 'string', enum: ['', 'Renovation', 'Service & Repair', 'Work Order'], description: 'Project type. Map BT values to this enum: Renovation/Repaint/Restoration → "Renovation"; Service or Repair → "Service & Repair"; Work Order/Urgent/Emergency → "Work Order". Empty string if BT did not specify.' },
     market: { type: 'string', description: 'Market field from the custom fields section (e.g., "Tampa", "Orlando"). Empty string if N/A or absent.' },
     gate_code: { type: 'string', description: 'Gate code from the custom fields section. Empty string if N/A or absent.' },
     confidence_pct: { type: 'integer', description: 'Confidence Level as a number 0-100. 0 if absent.' },

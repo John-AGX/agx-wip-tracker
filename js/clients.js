@@ -524,18 +524,31 @@
     var sel = document.getElementById(selectId);
     if (!sel) return;
     var fill = function() {
+      // Fill the underlying <select> for back-compat — the searchable
+      // widget reads .value off this same element. Keeping the options
+      // populated also means an unmounted fallback (e.g., screen reader,
+      // admin browsing the DOM) still sees the data.
       var html = '<option value="">— Select a client to auto-fill —</option>';
       _clients.slice().sort(byName).forEach(function(c) {
         var selAttr = c.id === currentClientId ? ' selected' : '';
-        var label = c.name;
-        if (c.community_name && c.community_name !== c.name) {
-          label = c.community_name + ' — ' + c.name;
-        } else if (c.company_name && c.company_name !== c.name) {
-          label += ' (' + c.company_name + ')';
-        }
-        html += '<option value="' + escapeAttr(c.id) + '"' + selAttr + '>' + escapeHTML(label) + '</option>';
+        html += '<option value="' + escapeAttr(c.id) + '"' + selAttr + '>' + escapeHTML(c.name || '(unnamed)') + '</option>';
       });
       sel.innerHTML = html;
+      sel.value = currentClientId || '';
+
+      // Mount the searchable picker over the (now-populated) select.
+      // Pass through the existing onchange handler — the widget triggers
+      // it after a click-pick so prefill logic runs unchanged.
+      var onPick = function() {
+        // Walk up the DOM to find which mode this picker is in. The select's
+        // existing onchange attribute (set in HTML) carries the mode hint;
+        // we just call onEstimateClientPicked with the right mode arg.
+        var modeAttr = sel.getAttribute('onchange') || '';
+        var mode = modeAttr.indexOf('edit') >= 0 ? 'edit' : 'new';
+        onEstimateClientPicked(mode);
+      };
+      var handle = window.agxClients.mountPicker(sel, onPick);
+      if (handle && handle.refreshLabel) handle.refreshLabel();
     };
     if (_clients.length) {
       fill();
@@ -571,9 +584,37 @@
       var el = document.getElementById(prefix + suffix);
       if (el && value) el.value = value;
     }
-    var clientLabel = c.company_name || c.name;
-    var communityLabel = c.community_name || c.name;
-    var propertyAddrParts = [c.property_address || c.address, c.city, c.state, c.zip].filter(Boolean);
+    // Resolve the parent firm if this client is a child (community).
+    // For child rows: Client field = parent firm name, Community = child.
+    // For top-level rows: Client = name, Community = empty (no specific
+    // community for a parent management firm).
+    var parent = c.parent_client_id
+      ? _clients.find(function(p) { return p.id === c.parent_client_id; })
+      : null;
+
+    var clientLabel, communityLabel;
+    if (parent) {
+      clientLabel = parent.company_name || parent.name || '';
+      communityLabel = c.community_name || c.name || '';
+    } else {
+      clientLabel = c.company_name || c.name || '';
+      // Only set Community for a top-level row if it has a distinct
+      // community_name (e.g., a standalone HOA that isn't under a firm).
+      communityLabel = (c.community_name && c.community_name !== c.name) ? c.community_name : '';
+    }
+
+    // Property address fix: c.property_address often already contains the
+    // full property address (street + city + state + zip from the BT
+    // import). Don't append c.city/state/zip — those are the MAILING
+    // location and produced strings like "5700 Saddlebrook Way, Wesley
+    // Chapel, FL 33543, Clearwater, FL 33762". If property_address has
+    // commas it's already complete; otherwise treat it as just the street.
+    var propertyAddrParts;
+    if (c.property_address && c.property_address.indexOf(',') >= 0) {
+      propertyAddrParts = [c.property_address];
+    } else {
+      propertyAddrParts = [c.property_address || c.address, c.city, c.state, c.zip].filter(Boolean);
+    }
     var billingAddrParts = [c.address, c.city, c.state, c.zip].filter(Boolean);
 
     // Capitalize varies — "Client" / "client" / "Community" — handle both modal field naming styles.
@@ -596,10 +637,239 @@
     }
   }
 
+  // ──────────────────────────────────────────────────────────────────
+  // Searchable client picker — replaces the plain <select> with a
+  // type-to-filter popover that groups child communities under their
+  // parent management firm. Used on the new-estimate modal, the
+  // estimate editor's Details tab, and the lead editor.
+  //
+  // Mounts INTO the existing <select> element by hiding it and
+  // injecting a sibling widget; the select is kept for back-compat
+  // (its .value still tracks the picked id, and onchange still fires
+  // through the original onEstimateClientPicked path).
+  // ──────────────────────────────────────────────────────────────────
+  function buildHierarchy() {
+    var byId = {};
+    _clients.forEach(function(c) { byId[c.id] = c; });
+    var top = [];
+    var childrenOf = {};
+    _clients.forEach(function(c) {
+      if (c.parent_client_id && byId[c.parent_client_id]) {
+        if (!childrenOf[c.parent_client_id]) childrenOf[c.parent_client_id] = [];
+        childrenOf[c.parent_client_id].push(c);
+      } else {
+        top.push(c);
+      }
+    });
+    top.sort(byName);
+    Object.keys(childrenOf).forEach(function(k) { childrenOf[k].sort(byName); });
+    return { top: top, childrenOf: childrenOf, byId: byId };
+  }
+
+  // Build a flat list of {client, depth, parentName} for rendering.
+  // Search filtering is applied here so a child match also surfaces its
+  // parent header for context.
+  function flattenForPicker(query) {
+    var h = buildHierarchy();
+    var q = (query || '').trim().toLowerCase();
+    function match(c) {
+      if (!q) return true;
+      var hay = [c.name, c.company_name, c.community_name, c.community_manager, c.market]
+        .filter(Boolean).join(' ').toLowerCase();
+      return hay.indexOf(q) >= 0;
+    }
+    var rows = [];
+    h.top.forEach(function(parent) {
+      var children = h.childrenOf[parent.id] || [];
+      var parentMatch = match(parent);
+      var matchedChildren = children.filter(match);
+      if (!parentMatch && matchedChildren.length === 0) return;
+      var hasChildren = children.length > 0;
+      rows.push({ client: parent, depth: 0, isParent: hasChildren, hidden: !parentMatch && !!q });
+      var childList = q ? matchedChildren : children;
+      childList.forEach(function(child) {
+        rows.push({ client: child, depth: 1, isParent: false, hidden: false });
+      });
+    });
+    return rows;
+  }
+
+  function pickerLabelFor(c) {
+    // The display string for a single picker item. Parent firm uses
+    // company_name; community uses community_name (or name as fallback).
+    if (c.parent_client_id) return c.community_name || c.name || '(unnamed)';
+    return c.company_name || c.name || '(unnamed)';
+  }
+
+  function pickerSubtitleFor(c) {
+    // Secondary info under the main label (city/state, market, etc.)
+    var bits = [];
+    if (c.community_manager) bits.push('CAM: ' + c.community_manager);
+    if (c.market) bits.push(c.market);
+    var loc = [c.city, c.state].filter(Boolean).join(', ');
+    if (loc) bits.push(loc);
+    return bits.join(' · ');
+  }
+
+  // Mount the picker widget over an existing <select>. selectEl is the
+  // native element we hide (its .value continues to be the source of truth
+  // for the picked id); onPick is called after the selection so the host
+  // page can run its prefill logic.
+  function mountSearchablePicker(selectEl, onPick) {
+    if (!selectEl || selectEl.dataset.pickerMounted === '1') return;
+    selectEl.dataset.pickerMounted = '1';
+    selectEl.style.display = 'none';
+
+    var wrap = document.createElement('div');
+    wrap.className = 'agx-cli-picker';
+    wrap.style.cssText = 'position:relative;width:100%;';
+
+    var trigger = document.createElement('button');
+    trigger.type = 'button';
+    trigger.className = 'agx-cli-picker-trigger';
+    trigger.style.cssText = 'width:100%;text-align:left;padding:8px 30px 8px 10px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);border:1px solid var(--border,#333);border-radius:6px;cursor:pointer;font-size:13px;font-family:inherit;position:relative;';
+    var triggerLabel = document.createElement('span');
+    triggerLabel.className = 'agx-cli-picker-label';
+    triggerLabel.style.cssText = 'display:inline-block;max-width:calc(100% - 18px);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;vertical-align:middle;';
+    triggerLabel.textContent = '— Select a client to auto-fill —';
+    var triggerArrow = document.createElement('span');
+    triggerArrow.style.cssText = 'position:absolute;right:10px;top:50%;transform:translateY(-50%);color:var(--text-dim,#888);font-size:10px;';
+    triggerArrow.textContent = '▼';
+    trigger.appendChild(triggerLabel);
+    trigger.appendChild(triggerArrow);
+
+    var pop = document.createElement('div');
+    pop.className = 'agx-cli-picker-pop';
+    pop.style.cssText = 'display:none;position:absolute;top:calc(100% + 4px);left:0;right:0;z-index:1000;background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.5);max-height:380px;overflow:hidden;flex-direction:column;';
+
+    var search = document.createElement('input');
+    search.type = 'text';
+    search.placeholder = 'Search by firm, community, CAM…';
+    search.style.cssText = 'width:100%;padding:9px 12px;border:none;border-bottom:1px solid var(--border,#333);background:rgba(255,255,255,0.02);color:var(--text,#fff);font-size:13px;font-family:inherit;outline:none;box-sizing:border-box;';
+
+    var list = document.createElement('div');
+    list.style.cssText = 'flex:1;overflow-y:auto;padding:4px 0;';
+
+    pop.appendChild(search);
+    pop.appendChild(list);
+    wrap.appendChild(trigger);
+    wrap.appendChild(pop);
+    selectEl.parentNode.insertBefore(wrap, selectEl.nextSibling);
+
+    var open = false;
+    function setOpen(o) {
+      open = o;
+      pop.style.display = o ? 'flex' : 'none';
+      triggerArrow.textContent = o ? '▲' : '▼';
+      if (o) {
+        renderList();
+        setTimeout(function() { search.focus(); search.select(); }, 0);
+      }
+    }
+    trigger.addEventListener('click', function(e) {
+      e.stopPropagation();
+      setOpen(!open);
+    });
+    document.addEventListener('click', function(e) {
+      if (!open) return;
+      if (!wrap.contains(e.target)) setOpen(false);
+    });
+    search.addEventListener('input', renderList);
+    search.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape') { setOpen(false); trigger.focus(); }
+    });
+
+    function renderList() {
+      var rows = flattenForPicker(search.value);
+      if (!rows.length) {
+        list.innerHTML = '<div style="padding:18px;text-align:center;color:var(--text-dim,#888);font-size:12px;">No clients match.</div>';
+        return;
+      }
+      list.innerHTML = '';
+      rows.forEach(function(r) {
+        if (r.hidden) return;
+        var c = r.client;
+        var item = document.createElement('div');
+        var isCurrent = (c.id === selectEl.value);
+        var isParentRow = r.isParent;
+        item.style.cssText = 'padding:7px 12px 7px ' + (12 + r.depth * 16) + 'px;cursor:pointer;border-left:3px solid transparent;font-size:13px;line-height:1.3;' +
+          (isParentRow ? 'background:rgba(79,140,255,0.04);' : '') +
+          (isCurrent ? 'background:rgba(52,211,153,0.12);border-left-color:#34d399;' : '');
+        var primary = pickerLabelFor(c);
+        var secondary = pickerSubtitleFor(c);
+        item.innerHTML =
+          '<div style="font-weight:' + (isParentRow ? '700' : '500') + ';color:var(--text,#fff);">' +
+            (r.depth > 0 ? '<span style="color:var(--text-dim,#666);margin-right:6px;">└</span>' : '') +
+            escapeHTML(primary) +
+          '</div>' +
+          (secondary ? '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:2px;margin-left:' + (r.depth > 0 ? '14px' : '0') + ';">' + escapeHTML(secondary) + '</div>' : '');
+        item.addEventListener('mouseenter', function() {
+          if (!isCurrent) item.style.background = 'rgba(79,140,255,0.10)';
+        });
+        item.addEventListener('mouseleave', function() {
+          item.style.background = isCurrent ? 'rgba(52,211,153,0.12)' : (isParentRow ? 'rgba(79,140,255,0.04)' : 'transparent');
+        });
+        item.addEventListener('click', function() {
+          selectEl.value = c.id;
+          // Update the trigger label
+          updateTriggerLabel();
+          setOpen(false);
+          // Run the page-supplied callback (legacy onchange handler)
+          if (typeof onPick === 'function') onPick();
+        });
+        list.appendChild(item);
+      });
+    }
+
+    function updateTriggerLabel() {
+      var id = selectEl.value;
+      if (!id) {
+        triggerLabel.textContent = '— Select a client to auto-fill —';
+        triggerLabel.style.color = 'var(--text-dim,#888)';
+        return;
+      }
+      var c = _clients.find(function(x) { return x.id === id; });
+      if (!c) {
+        triggerLabel.textContent = '— Select a client to auto-fill —';
+        return;
+      }
+      triggerLabel.style.color = 'var(--text,#fff)';
+      var primary = pickerLabelFor(c);
+      if (c.parent_client_id) {
+        var parent = _clients.find(function(p) { return p.id === c.parent_client_id; });
+        if (parent) {
+          triggerLabel.innerHTML = escapeHTML(parent.company_name || parent.name) +
+            ' <span style="color:var(--text-dim,#888);">›</span> ' +
+            escapeHTML(primary);
+          return;
+        }
+      }
+      triggerLabel.textContent = primary;
+    }
+
+    // Listen for external value changes (PDF prefill, programmatic edit
+    // load) so the trigger label stays in sync without each call site
+    // having to know about the picker widget.
+    selectEl.addEventListener('change', function() { updateTriggerLabel(); });
+
+    // Initial label sync
+    updateTriggerLabel();
+    return { refreshLabel: updateTriggerLabel };
+  }
+
+  // Expose so the existing populateEstimateClientPicker can call it after
+  // it loads the cache + sets the <select> options. Returns the widget
+  // handle (refreshLabel callable) for callers that change selectEl.value
+  // programmatically (lead-prefill, edit-load, etc.).
+  function applyPickerToSelect(selectEl, onPick) {
+    return mountSearchablePicker(selectEl, onPick);
+  }
+
   window.populateEstimateClientPicker = populateEstimateClientPicker;
   window.onEstimateClientPicked = onEstimateClientPicked;
   window.agxClients = {
     getCached: function() { return _clients.slice(); },
-    reload: reloadClientsCache
+    reload: reloadClientsCache,
+    mountPicker: applyPickerToSelect
   };
 })();

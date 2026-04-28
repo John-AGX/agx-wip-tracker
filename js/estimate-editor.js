@@ -894,6 +894,24 @@
       var input = '';
       if (opts.textarea) {
         input = '<textarea id="' + id + '" rows="' + (opts.rows || 4) + '" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);resize:vertical;">' + escapeHTML(value || '') + '</textarea>';
+      } else if (opts.options && opts.options.length) {
+        // Select with a fixed option list. The current value is always
+        // included as a fallback option even if it's not in the list, so
+        // pre-existing free-text values from before this dropdown
+        // landed don't silently get dropped on first save.
+        var seen = false;
+        var optHtml = '<option value="">— Select —</option>';
+        opts.options.forEach(function(o) {
+          var v = (typeof o === 'string') ? o : o.value;
+          var lbl = (typeof o === 'string') ? o : (o.label || o.value);
+          var sel = (value === v) ? ' selected' : '';
+          if (sel) seen = true;
+          optHtml += '<option value="' + escapeHTML(v) + '"' + sel + '>' + escapeHTML(lbl) + '</option>';
+        });
+        if (value && !seen) {
+          optHtml += '<option value="' + escapeHTML(value) + '" selected>' + escapeHTML(value) + ' (legacy)</option>';
+        }
+        input = '<select id="' + id + '" style="width:100%;">' + optHtml + '</select>';
       } else {
         input = '<input id="' + id + '" type="' + (opts.type || 'text') + '" value="' + escapeHTML(value == null ? '' : String(value)) + '"' +
                 (opts.step ? ' step="' + opts.step + '"' : '') +
@@ -913,7 +931,7 @@
           '<input type="hidden" id="editEst_clientId" value="' + escapeHTML(est.client_id || '') + '" />' +
           '<input type="hidden" id="editEst_leadId" value="' + escapeHTML(est.lead_id || '') + '" />' +
           field('Nickname (internal)', 'ee-nickName', est.nickName, { placeholder: 'Short label for internal lists' }) +
-          field('Job Type', 'ee-jobType', est.jobType) +
+          field('Job Type', 'ee-jobType', est.jobType, { options: ['Renovation', 'Service & Repair', 'Work Order'] }) +
           field('Client Company Name', 'ee-client', est.client) +
           field('Community / Property Name', 'ee-community', est.community) +
           field('Property Address', 'ee-propertyAddr', est.propertyAddr) +

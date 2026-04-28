@@ -284,20 +284,27 @@
     var sel = document.getElementById('leadEditor_client_id');
     if (!sel) return;
     var fillFrom = function(clients) {
+      // Underlying <select> stays populated for back-compat. The
+      // searchable picker widget reads .value off this same element.
       var html = '<option value="">— Select a client —</option>';
       clients.slice().sort(function(a, b) {
         return (a.name || '').localeCompare(b.name || '');
       }).forEach(function(c) {
         var selAttr = c.id === currentClientId ? ' selected' : '';
-        var label = c.name;
-        if (c.community_name && c.community_name !== c.name) {
-          label = c.community_name + ' — ' + c.name;
-        } else if (c.company_name && c.company_name !== c.name) {
-          label += ' (' + c.company_name + ')';
-        }
-        html += '<option value="' + escapeAttr(c.id) + '"' + selAttr + '>' + escapeHTML(label) + '</option>';
+        html += '<option value="' + escapeAttr(c.id) + '"' + selAttr + '>' + escapeHTML(c.name || '(unnamed)') + '</option>';
       });
       sel.innerHTML = html;
+      sel.value = currentClientId || '';
+
+      // Mount the searchable picker. The original <select> has an
+      // onchange="onLeadClientPicked()" attribute — re-fire that after
+      // a click-pick so the lead-side prefill (address, etc.) still runs.
+      if (window.agxClients && typeof window.agxClients.mountPicker === 'function') {
+        var handle = window.agxClients.mountPicker(sel, function() {
+          if (typeof onLeadClientPicked === 'function') onLeadClientPicked();
+        });
+        if (handle && handle.refreshLabel) handle.refreshLabel();
+      }
     };
     var cached = (window.agxClients && window.agxClients.getCached && window.agxClients.getCached()) || [];
     if (cached.length) {
@@ -1108,7 +1115,13 @@
       });
       if (match) {
         var sel = document.getElementById('leadEditor_client_id');
-        if (sel) sel.value = match.id;
+        if (sel) {
+          sel.value = match.id;
+          // Force a change event so the searchable picker widget refreshes
+          // its trigger label and the existing onLeadClientPicked() handler
+          // runs through to fill the address fields from the matched client.
+          try { sel.dispatchEvent(new Event('change', { bubbles: true })); } catch (e) { /* ignore old browsers */ }
+        }
       }
     }
   }
