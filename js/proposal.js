@@ -780,6 +780,15 @@ let lastExportInjectTime = 0;
 const EXPORT_INJECT_DEBOUNCE = 200;
 
 function injectExportBtns() {
+  // No-op as of the per-row action-button cleanup. Generate Proposal lives
+  // on the editor's Preview tab + Print to PDF; Export to BT lives on the
+  // editor's sticky header. Row-level injection is no longer needed and
+  // would now land buttons inside the Client Price cell since the Actions
+  // column was removed. Kept the function shell so existing call sites
+  // (initial bootstrap + MutationObserver) don't error.
+  return;
+  /* eslint-disable */
+  // Legacy body retained below for reference; intentionally unreachable.
   const now = Date.now();
   if (now - lastExportInjectTime < EXPORT_INJECT_DEBOUNCE) {
     clearTimeout(exportInjectTimeout);

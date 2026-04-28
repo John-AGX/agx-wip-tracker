@@ -26,7 +26,7 @@ function renderEstimatesList() {
                 const msg = q
                     ? 'No estimates match.'
                     : 'No estimates yet. Click ' + '“' + 'New Estimate' + '”' + ' to create your first.';
-                tbody.innerHTML = '<tr><td colspan="6" style="padding:24px;text-align:center;color:var(--text-dim,#888);font-size:13px;">' + msg + '</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="5" style="padding:24px;text-align:center;color:var(--text-dim,#888);font-size:13px;">' + msg + '</td></tr>';
                 if (tableWrap) tableWrap.style.display = '';
                 return;
             }
@@ -42,23 +42,13 @@ function renderEstimatesList() {
                 const clientLabel = [est.client, est.community].filter(Boolean).join(' · ') || '<span style="color:var(--text-dim,#666);font-style:italic;">no client</span>';
 
                 const row = document.createElement('tr');
-                row.onclick = function(e) {
-                    // Don't fire row-click when the user clicks one of the
-                    // action buttons — those handle their own action.
-                    if (e.target && e.target.closest('button')) return;
-                    editEstimate(est.id);
-                };
+                row.onclick = function() { editEstimate(est.id); };
                 row.innerHTML = `
                     <td><strong style="color:var(--text,#fff);">${escapeHTML(est.title || '(untitled)')}</strong>${est.jobType ? '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:2px;">' + escapeHTML(est.jobType) + '</div>' : ''}</td>
                     <td style="font-size:13px;color:var(--text,#e6e6e6);">${clientLabel}</td>
                     <td class="num" style="font-family:'SF Mono',monospace;">${formatCurrency(baseCost)}</td>
                     <td class="num" style="color:#fbbf24;font-family:'SF Mono',monospace;">${est.defaultMarkup}%</td>
                     <td class="num" style="font-family:'SF Mono',monospace;color:#34d399;font-weight:600;">${formatCurrency(clientPrice)}</td>
-                    <td style="text-align: center; white-space: nowrap;">
-                        <button class="small" onclick="editEstimate('${escapeHTML(est.id)}');event.stopPropagation();">Edit</button>
-                        <button class="small" onclick="previewEstimate('${escapeHTML(est.id)}');event.stopPropagation();">Preview</button>
-                        <button class="small danger" onclick="deleteEstimate('${escapeHTML(est.id)}');event.stopPropagation();">Delete</button>
-                    </td>
                 `;
                 tbody.appendChild(row);
             });

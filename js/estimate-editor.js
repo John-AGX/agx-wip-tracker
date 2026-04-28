@@ -1098,6 +1098,30 @@
     }
   };
 
+  // Delete from the editor sticky header. Closes the editor first so the
+  // user lands back on the list, then runs the existing global delete
+  // (which handles the server-side remove + local state cleanup).
+  window.deleteEstimateFromEditor = function() {
+    if (!_currentId) return;
+    var id = _currentId;
+    if (typeof window.deleteEstimate !== 'function') {
+      alert('Delete not available — refresh the page.');
+      return;
+    }
+    // The global deleteEstimate prompts via confirm() and only removes
+    // on yes. Close the editor view AFTER the user confirms so a cancel
+    // leaves them in place.
+    var prevConfirm = window.confirm;
+    var userSaidYes = false;
+    window.confirm = function(msg) {
+      var ok = prevConfirm.call(window, msg);
+      userSaidYes = userSaidYes || ok;
+      return ok;
+    };
+    try { window.deleteEstimate(id); } finally { window.confirm = prevConfirm; }
+    if (userSaidYes) closeEstimateEditor();
+  };
+
   // ──────────────────────────────────────────────────────────────────
   // Public write API for the AI panel. Each function applies a single
   // approved proposal, mutating appData + saving + re-rendering. All
