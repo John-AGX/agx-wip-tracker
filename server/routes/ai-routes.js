@@ -22,11 +22,41 @@ const { storage } = require('../storage');
 
 const router = express.Router();
 
-// Single client instance — reused across requests. Reads ANTHROPIC_API_KEY
-// from env. If unset, we still load the route but every chat call will 401.
-const anthropic = process.env.ANTHROPIC_API_KEY
-  ? new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
-  : null;
+// Lazy SDK init — reads ANTHROPIC_API_KEY on first request rather than at
+// module-load time. This is more robust against Railway's deploy timing:
+// if the env var was set after the build started, a module-level capture
+// would miss it and we'd serve "not configured" forever until restart.
+// Lazy lookup re-checks on every request, so a fix-and-redeploy works.
+let _anthropicClient = null;
+let _anthropicKey = null;
+function getAnthropic() {
+  const raw = process.env.ANTHROPIC_API_KEY || '';
+  const key = raw.trim();
+  if (!key) return null;
+  // Recreate the client if the key changed (rare, but possible on rotation)
+  if (!_anthropicClient || _anthropicKey !== key) {
+    _anthropicClient = new Anthropic({ apiKey: key });
+    _anthropicKey = key;
+  }
+  return _anthropicClient;
+}
+
+// Startup diagnostic — prints to Railway logs whether the env was visible to
+// the Node process at boot. The fingerprint (first 7 / last 4 chars) lets us
+// spot accidental whitespace or wrong-key issues without leaking the secret.
+(function() {
+  const raw = process.env.ANTHROPIC_API_KEY || '';
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    console.log('[ai-routes] ANTHROPIC_API_KEY: MISSING at startup');
+  } else {
+    const fp = trimmed.length > 12
+      ? trimmed.slice(0, 7) + '…' + trimmed.slice(-4)
+      : '<short>';
+    const wsNote = (raw.length !== trimmed.length) ? ' (had whitespace, trimmed)' : '';
+    console.log('[ai-routes] ANTHROPIC_API_KEY: present, fingerprint ' + fp + ', length ' + trimmed.length + wsNote);
+  }
+})();
 
 // Sonnet 4.6 = the right cost/capability tier for an estimating assistant.
 // Override via env if we want to A/B against Opus.
@@ -272,8 +302,9 @@ router.delete('/estimates/:id/messages',
 router.post('/estimates/:id/chat',
   requireAuth, requireCapability('ESTIMATES_VIEW'),
   async (req, res) => {
+    const anthropic = getAnthropic();
     if (!anthropic) {
-      return res.status(503).json({ error: 'AI assistant is not configured. Set ANTHROPIC_API_KEY in the server environment.' });
+      return res.status(503).json({ error: 'AI assistant is not configured. Set ANTHROPIC_API_KEY in the server environment, then redeploy or restart the service.' });
     }
     const userMessage = (req.body && req.body.message || '').trim();
     if (!userMessage) return res.status(400).json({ error: 'message is required' });
