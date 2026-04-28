@@ -446,6 +446,9 @@
             editPOId: null,
             editInvId: null
         };
+        // Expose to other modules — the AI panel needs currentJobId to know
+        // which job to open the WIP assistant against.
+        window.appState = appState;
 
         // Read all appData sections from localStorage. Used as the offline path
         // and as the fast first-paint cache while the server fetch is in flight.

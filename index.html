@@ -144,7 +144,6 @@
                             <div style="display: flex; justify-content: space-between; align-items: start; flex-wrap: wrap; gap: 10px; margin-bottom: 15px;">
                                 <h3 style="margin: 0;">Job Information</h3>
                                 <div style="display: flex; gap: 8px;">
-                                    <button class="small" onclick="openJobAI()" title="WIP / financial AI assistant" style="background:linear-gradient(135deg,#8b5cf6,#4f8cff);color:#fff;border:none;">&#x1F4CA; Ask WIP AI</button>
                                     <button class="small primary" onclick="toggleEditJobInfo()" id="edit-job-info-btn">&#x270F;&#xFE0F; Edit Job</button>
                         <button class="small secondary" onclick="archiveCurrentJob()" id="archive-job-btn">&#x1F4E6; Archive Job</button>
                         <button class="small danger" onclick="deleteCurrentJob()">&#x1F5D1; Delete Job</button>
@@ -1910,7 +1909,7 @@
     <script src="js/clients.js?v=5"></script>
     <script src="js/leads.js?v=8"></script>
     <script src="js/insights.js?v=5"></script>
-    <script src="js/app.js?v=37"></script>
+    <script src="js/app.js?v=38"></script>
     <script src="js/wip.js?v=56"></script>
     <script src="js/estimates.js?v=26"></script>
     <script src="js/proposal.js?v=19"></script>
@@ -1920,7 +1919,7 @@
     <script src="js/ai-panel.js?v=5"></script>
 
     <script src="js/workspace.js?v=21"></script>
-    <script src="js/workspace-layout.js?v=28"></script>
+    <script src="js/workspace-layout.js?v=29"></script>
 
     <!-- Node Graph (Beta) -->
     <link rel="stylesheet" href="nodegraph/nodegraph.css?v=74" />
@@ -1935,6 +1934,7 @@
         <button class="ng-tbtn ng-arrange-btn" title="Arrange full tree, or only the selected node's children if one is selected">&#x2725; Auto Arrange</button>
         <button class="ng-tbtn ng-sync-btn" title="Add missing nodes from job data without moving existing ones">&#x1F504; Sync Data</button>
         <button class="ng-tbtn ng-reset-btn" title="Delete graph and rebuild from scratch">&#x26A0; Reset Graph</button>
+        <button class="ng-tbtn" onclick="openJobAI()" title="WIP / financial AI assistant" style="background:linear-gradient(135deg,#8b5cf6,#4f8cff);color:#fff;border:none;">&#x2728; Ask AI</button>
         <button class="ng-tbtn-close">&#x2716; Close</button>
       </div>
       <div class="ng-main">
