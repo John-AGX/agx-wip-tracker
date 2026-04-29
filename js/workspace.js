@@ -465,22 +465,457 @@
   }
 
   /** Evaluate a single function call */
+  // ── Range / criteria helpers (used by expanded functions) ──
+
+  /** Collect raw cell values (any type) from a range. Used by text and
+   *  lookup functions where numeric coercion would lose information. */
+  function getRangeCells(rangeStr) {
+    var m = rangeStr.match(/^([A-Z]+\d+):([A-Z]+\d+)$/i);
+    if (!m) {
+      // single cell?
+      var sm = rangeStr.match(/^([A-Z]+\d+)$/i);
+      if (sm) {
+        var sa = parseAddr(sm[1].toUpperCase());
+        if (!sa) return [];
+        return [getCell(sa.r, sa.c).value];
+      }
+      return [];
+    }
+    var s = parseAddr(m[1].toUpperCase()), e = parseAddr(m[2].toUpperCase());
+    if (!s || !e) return [];
+    var vals = [];
+    for (var r = Math.min(s.r, e.r); r <= Math.max(s.r, e.r); r++) {
+      for (var c = Math.min(s.c, e.c); c <= Math.max(s.c, e.c); c++) {
+        vals.push(getCell(r, c).value);
+      }
+    }
+    return vals;
+  }
+
+  /** Return the 2D cell-value array for a range — preserves rows/cols
+   *  shape, needed by INDEX/VLOOKUP/MATCH. */
+  function getRange2D(rangeStr) {
+    var m = rangeStr.match(/^([A-Z]+\d+):([A-Z]+\d+)$/i);
+    if (!m) return [];
+    var s = parseAddr(m[1].toUpperCase()), e = parseAddr(m[2].toUpperCase());
+    if (!s || !e) return [];
+    var r1 = Math.min(s.r, e.r), r2 = Math.max(s.r, e.r);
+    var c1 = Math.min(s.c, e.c), c2 = Math.max(s.c, e.c);
+    var out = [];
+    for (var r = r1; r <= r2; r++) {
+      var row = [];
+      for (var c = c1; c <= c2; c++) row.push(getCell(r, c).value);
+      out.push(row);
+    }
+    return out;
+  }
+
+  /** Match a value against an Excel-style criterion: ">5", "<>0",
+   *  "<=10", "=Tampa", or a bare value (equality). */
+  function matchesCriterion(value, criterion) {
+    if (criterion == null) return value == null || value === '';
+    var c = String(criterion).trim();
+    // Try operator prefixes
+    var op = null, target = c;
+    if (c.startsWith('>=')) { op = '>='; target = c.slice(2); }
+    else if (c.startsWith('<=')) { op = '<='; target = c.slice(2); }
+    else if (c.startsWith('<>')) { op = '<>'; target = c.slice(2); }
+    else if (c.startsWith('!=')) { op = '<>'; target = c.slice(2); }
+    else if (c.startsWith('>'))  { op = '>';  target = c.slice(1); }
+    else if (c.startsWith('<'))  { op = '<';  target = c.slice(1); }
+    else if (c.startsWith('='))  { op = '=';  target = c.slice(1); }
+    else                          { op = '=';  target = c; }
+    target = target.trim();
+    // Strip surrounding quotes from target (text criteria)
+    if ((target.startsWith('"') && target.endsWith('"')) ||
+        (target.startsWith("'") && target.endsWith("'"))) {
+      target = target.slice(1, -1);
+    }
+    var nValue = Number(value);
+    var nTarget = Number(target);
+    var bothNumeric = !isNaN(nValue) && !isNaN(nTarget);
+    if (bothNumeric) {
+      switch (op) {
+        case '>=': return nValue >= nTarget;
+        case '<=': return nValue <= nTarget;
+        case '>':  return nValue >  nTarget;
+        case '<':  return nValue <  nTarget;
+        case '<>': return nValue !== nTarget;
+        case '=':  return nValue === nTarget;
+      }
+    }
+    // String comparison (case-insensitive). Wildcards * and ? supported
+    // via a regex translation, mirroring Excel's COUNTIF/SUMIF semantics.
+    var sValue = String(value || '').toLowerCase();
+    var sTarget = String(target || '').toLowerCase();
+    function wildcardToRegex(pattern) {
+      var esc = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+      esc = esc.replace(/\*/g, '.*').replace(/\?/g, '.');
+      return new RegExp('^' + esc + '$');
+    }
+    var hasWildcard = /[*?]/.test(sTarget);
+    if (op === '=' || op === '<>') {
+      var match = hasWildcard
+        ? wildcardToRegex(sTarget).test(sValue)
+        : (sValue === sTarget);
+      return op === '<>' ? !match : match;
+    }
+    // String comparisons for >, <, etc. fall through to lex order.
+    if (op === '>')  return sValue >  sTarget;
+    if (op === '<')  return sValue <  sTarget;
+    if (op === '>=') return sValue >= sTarget;
+    if (op === '<=') return sValue <= sTarget;
+    return false;
+  }
+
+  /** Strip quotes from a string-literal arg, e.g., '"hello"' -> 'hello'.
+   *  Used by text functions that take string operands directly. */
+  function unquoteArg(s) {
+    if (typeof s !== 'string') return String(s);
+    s = s.trim();
+    if ((s.startsWith('"') && s.endsWith('"')) ||
+        (s.startsWith("'") && s.endsWith("'"))) {
+      return s.slice(1, -1);
+    }
+    // Could be a cell reference — resolve to its raw value
+    if (/^[A-Z]+\d+$/i.test(s)) {
+      var ref = parseAddr(s.toUpperCase());
+      if (ref) return String(getCell(ref.r, ref.c).value || '');
+    }
+    return s;
+  }
+
   function evalFunction(name, argsStr) {
     var args = splitArgs(argsStr);
     switch (name) {
+      // ── Aggregates ────────────────────────────────────────
       case 'SUM': { var v = getRangeValues(argsStr); return v.reduce(function (a, b) { return a + b; }, 0); }
-      case 'AVERAGE': { var v = getRangeValues(argsStr); return v.length ? v.reduce(function (a, b) { return a + b; }, 0) / v.length : 0; }
+      case 'AVERAGE':
+      case 'AVG': { var v = getRangeValues(argsStr); return v.length ? v.reduce(function (a, b) { return a + b; }, 0) / v.length : 0; }
       case 'MAX': { var v = getRangeValues(argsStr); return v.length ? Math.max.apply(null, v) : 0; }
       case 'MIN': { var v = getRangeValues(argsStr); return v.length ? Math.min.apply(null, v) : 0; }
       case 'COUNT': { return getRangeValues(argsStr).length; }
+      case 'COUNTA': {
+        var raws = getRangeCells(argsStr);
+        return raws.filter(function(x) { return x !== '' && x != null; }).length;
+      }
+      case 'COUNTBLANK': {
+        var raws = getRangeCells(argsStr);
+        return raws.filter(function(x) { return x === '' || x == null; }).length;
+      }
+      case 'MEDIAN': {
+        var v = getRangeValues(argsStr).slice().sort(function(a, b) { return a - b; });
+        if (!v.length) return 0;
+        var mid = Math.floor(v.length / 2);
+        return v.length % 2 ? v[mid] : (v[mid - 1] + v[mid]) / 2;
+      }
+      case 'STDEV':
+      case 'STDEVP': {
+        var v = getRangeValues(argsStr);
+        if (!v.length) return 0;
+        var mean = v.reduce(function(a, b) { return a + b; }, 0) / v.length;
+        var sumSq = v.reduce(function(a, b) { return a + (b - mean) * (b - mean); }, 0);
+        var divisor = (name === 'STDEV') ? Math.max(1, v.length - 1) : v.length;
+        return Math.sqrt(sumSq / divisor);
+      }
+      case 'VAR':
+      case 'VARP': {
+        var v = getRangeValues(argsStr);
+        if (!v.length) return 0;
+        var mean = v.reduce(function(a, b) { return a + b; }, 0) / v.length;
+        var sumSq = v.reduce(function(a, b) { return a + (b - mean) * (b - mean); }, 0);
+        var divisor = (name === 'VAR') ? Math.max(1, v.length - 1) : v.length;
+        return sumSq / divisor;
+      }
+      case 'LARGE': {
+        var v = getRangeValues(args[0]).slice().sort(function(a, b) { return b - a; });
+        var k = safeEvalExpr(args[1] || '1');
+        return v[k - 1] != null ? v[k - 1] : '#ERR';
+      }
+      case 'SMALL': {
+        var v = getRangeValues(args[0]).slice().sort(function(a, b) { return a - b; });
+        var k = safeEvalExpr(args[1] || '1');
+        return v[k - 1] != null ? v[k - 1] : '#ERR';
+      }
+      case 'SUMIF': {
+        // SUMIF(range, criterion, [sum_range])
+        if (args.length < 2) return '#ERR';
+        var range = getRangeCells(args[0]);
+        var sumRange = args[2] ? getRangeCells(args[2]) : range;
+        var crit = unquoteArg(args[1]);
+        var total = 0;
+        for (var i = 0; i < range.length; i++) {
+          if (matchesCriterion(range[i], crit)) {
+            var n = Number(sumRange[i]);
+            if (!isNaN(n)) total += n;
+          }
+        }
+        return total;
+      }
+      case 'COUNTIF': {
+        if (args.length < 2) return '#ERR';
+        var range = getRangeCells(args[0]);
+        var crit = unquoteArg(args[1]);
+        return range.filter(function(v) { return matchesCriterion(v, crit); }).length;
+      }
+      case 'AVERAGEIF': {
+        if (args.length < 2) return '#ERR';
+        var range = getRangeCells(args[0]);
+        var avgRange = args[2] ? getRangeCells(args[2]) : range;
+        var crit = unquoteArg(args[1]);
+        var total = 0, count = 0;
+        for (var i = 0; i < range.length; i++) {
+          if (matchesCriterion(range[i], crit)) {
+            var n = Number(avgRange[i]);
+            if (!isNaN(n)) { total += n; count++; }
+          }
+        }
+        return count ? total / count : 0;
+      }
+
+      // ── Math / Trig ───────────────────────────────────────
       case 'ROUND': { return args.length >= 2 ? +safeEvalExpr(args[0]).toFixed(safeEvalExpr(args[1])) : Math.round(safeEvalExpr(args[0])); }
+      case 'ROUNDUP': { var n = safeEvalExpr(args[0]), d = safeEvalExpr(args[1] || '0'); var f = Math.pow(10, d); return Math.ceil(n * f) / f; }
+      case 'ROUNDDOWN': { var n = safeEvalExpr(args[0]), d = safeEvalExpr(args[1] || '0'); var f = Math.pow(10, d); return Math.floor(n * f) / f; }
       case 'ABS': { return Math.abs(safeEvalExpr(args[0])); }
       case 'CEILING': { var v = safeEvalExpr(args[0]), s = args.length >= 2 ? safeEvalExpr(args[1]) : 1; return Math.ceil(v / s) * s; }
       case 'FLOOR': { var v = safeEvalExpr(args[0]), s = args.length >= 2 ? safeEvalExpr(args[1]) : 1; return Math.floor(v / s) * s; }
+      case 'SQRT': { return Math.sqrt(safeEvalExpr(args[0])); }
+      case 'POWER': { return Math.pow(safeEvalExpr(args[0]), safeEvalExpr(args[1])); }
+      case 'EXP': { return Math.exp(safeEvalExpr(args[0])); }
+      case 'LN': { return Math.log(safeEvalExpr(args[0])); }
+      case 'LOG': { var n = safeEvalExpr(args[0]), b = args.length >= 2 ? safeEvalExpr(args[1]) : 10; return Math.log(n) / Math.log(b); }
+      case 'LOG10': { return Math.log10(safeEvalExpr(args[0])); }
+      case 'MOD': { return safeEvalExpr(args[0]) % safeEvalExpr(args[1]); }
+      case 'INT': { return Math.floor(safeEvalExpr(args[0])); }
+      case 'TRUNC': { var n = safeEvalExpr(args[0]), d = args.length >= 2 ? safeEvalExpr(args[1]) : 0; var f = Math.pow(10, d); return Math.trunc(n * f) / f; }
+      case 'SIGN': { var n = safeEvalExpr(args[0]); return n > 0 ? 1 : n < 0 ? -1 : 0; }
+      case 'PI': { return Math.PI; }
+      case 'RAND': { return Math.random(); }
+      case 'RANDBETWEEN': { var lo = safeEvalExpr(args[0]), hi = safeEvalExpr(args[1]); return Math.floor(Math.random() * (hi - lo + 1)) + lo; }
+
+      // ── Logical ───────────────────────────────────────────
       case 'IF': {
-        if (args.length < 3) return '#ERR';
-        return safeEvalExpr(args[0]) ? safeEvalExpr(args[1]) : safeEvalExpr(args[2]);
+        if (args.length < 2) return '#ERR';
+        return safeEvalExpr(args[0]) ? safeEvalExpr(args[1]) : (args.length >= 3 ? safeEvalExpr(args[2]) : false);
       }
+      case 'IFS': {
+        for (var i = 0; i + 1 < args.length; i += 2) {
+          if (safeEvalExpr(args[i])) return safeEvalExpr(args[i + 1]);
+        }
+        return '#N/A';
+      }
+      case 'IFERROR': {
+        try {
+          var v = safeEvalExpr(args[0]);
+          if (typeof v === 'string' && /^#[A-Z!\/]+$/i.test(v)) return safeEvalExpr(args[1]);
+          return v;
+        } catch (e) { return safeEvalExpr(args[1]); }
+      }
+      case 'IFNA': {
+        try {
+          var v = safeEvalExpr(args[0]);
+          if (v === '#N/A') return safeEvalExpr(args[1]);
+          return v;
+        } catch (e) { return safeEvalExpr(args[1]); }
+      }
+      case 'AND': { return args.every(function(a) { return !!safeEvalExpr(a); }); }
+      case 'OR':  { return args.some(function(a) { return !!safeEvalExpr(a); }); }
+      case 'NOT': { return !safeEvalExpr(args[0]); }
+      case 'XOR': { return args.reduce(function(acc, a) { return acc !== !!safeEvalExpr(a); }, false); }
+      case 'TRUE': { return true; }
+      case 'FALSE': { return false; }
+      case 'SWITCH': {
+        // SWITCH(expr, val1, result1, val2, result2, ..., [default])
+        var expr = safeEvalExpr(args[0]);
+        for (var i = 1; i + 1 < args.length; i += 2) {
+          if (safeEvalExpr(args[i]) === expr) return safeEvalExpr(args[i + 1]);
+        }
+        return (args.length % 2 === 0) ? safeEvalExpr(args[args.length - 1]) : '#N/A';
+      }
+
+      // ── Text ──────────────────────────────────────────────
+      case 'CONCAT':
+      case 'CONCATENATE': {
+        return args.map(function(a) { return unquoteArg(a); }).join('');
+      }
+      case 'LEN': { return unquoteArg(args[0]).length; }
+      case 'LEFT':  { return unquoteArg(args[0]).slice(0, args.length >= 2 ? safeEvalExpr(args[1]) : 1); }
+      case 'RIGHT': { var s = unquoteArg(args[0]); var n = args.length >= 2 ? safeEvalExpr(args[1]) : 1; return s.slice(s.length - n); }
+      case 'MID':   { var s = unquoteArg(args[0]); var start = safeEvalExpr(args[1]); var len = safeEvalExpr(args[2]); return s.slice(start - 1, start - 1 + len); }
+      case 'UPPER': { return unquoteArg(args[0]).toUpperCase(); }
+      case 'LOWER': { return unquoteArg(args[0]).toLowerCase(); }
+      case 'PROPER': {
+        return unquoteArg(args[0]).replace(/\w\S*/g, function(t) {
+          return t.charAt(0).toUpperCase() + t.slice(1).toLowerCase();
+        });
+      }
+      case 'TRIM': { return unquoteArg(args[0]).replace(/\s+/g, ' ').trim(); }
+      case 'SUBSTITUTE': {
+        var s = unquoteArg(args[0]);
+        var oldStr = unquoteArg(args[1]);
+        var newStr = unquoteArg(args[2]);
+        // SUBSTITUTE replaces ALL occurrences by default; an optional 4th
+        // arg lets you target the Nth occurrence only.
+        if (args.length >= 4) {
+          var nth = safeEvalExpr(args[3]);
+          var count = 0, pos = 0, out = '';
+          while (true) {
+            var idx = s.indexOf(oldStr, pos);
+            if (idx === -1) break;
+            count++;
+            if (count === nth) {
+              return s.slice(0, idx) + newStr + s.slice(idx + oldStr.length);
+            }
+            pos = idx + oldStr.length;
+          }
+          return s;
+        }
+        return s.split(oldStr).join(newStr);
+      }
+      case 'REPLACE': {
+        // REPLACE(old_text, start_num, num_chars, new_text)
+        var s = unquoteArg(args[0]);
+        var start = safeEvalExpr(args[1]);
+        var len = safeEvalExpr(args[2]);
+        var newStr = unquoteArg(args[3]);
+        return s.slice(0, start - 1) + newStr + s.slice(start - 1 + len);
+      }
+      case 'FIND': {
+        // Case-sensitive; returns 1-based position or #VALUE!
+        var needle = unquoteArg(args[0]);
+        var hay = unquoteArg(args[1]);
+        var start = args.length >= 3 ? safeEvalExpr(args[2]) - 1 : 0;
+        var idx = hay.indexOf(needle, start);
+        return idx === -1 ? '#VALUE!' : idx + 1;
+      }
+      case 'SEARCH': {
+        // Case-insensitive; supports * and ? wildcards.
+        var needle = unquoteArg(args[0]).toLowerCase();
+        var hay = unquoteArg(args[1]).toLowerCase();
+        var start = args.length >= 3 ? safeEvalExpr(args[2]) - 1 : 0;
+        var idx = hay.indexOf(needle, start);
+        return idx === -1 ? '#VALUE!' : idx + 1;
+      }
+      case 'TEXT': {
+        // Tiny TEXT() implementation — handles the most common patterns:
+        //   0.00 / #,##0.00 / 0% / mm/dd/yyyy. Anything else falls through
+        //   to JS's default toString. Real Excel format strings are way
+        //   richer — we cover what actually shows up on AGX worksheets.
+        var v = safeEvalExpr(args[0]);
+        var fmt = unquoteArg(args[1]);
+        if (typeof v !== 'number') return String(v);
+        if (/^0\.0+$/.test(fmt)) return v.toFixed(fmt.split('.')[1].length);
+        if (/^#,##0(\.0+)?$/.test(fmt)) {
+          var dec = fmt.indexOf('.') >= 0 ? fmt.split('.')[1].length : 0;
+          return v.toLocaleString('en-US', { minimumFractionDigits: dec, maximumFractionDigits: dec });
+        }
+        if (/^0%$|^0\.0+%$/.test(fmt)) {
+          var dec = fmt.indexOf('.') >= 0 ? fmt.split('.')[1].replace('%','').length : 0;
+          return (v * 100).toFixed(dec) + '%';
+        }
+        return String(v);
+      }
+
+      // ── Date ──────────────────────────────────────────────
+      case 'TODAY': { return new Date().toISOString().slice(0, 10); }
+      case 'NOW': { return new Date().toISOString().slice(0, 19).replace('T', ' '); }
+      case 'DATE': {
+        var y = safeEvalExpr(args[0]), m = safeEvalExpr(args[1]), d = safeEvalExpr(args[2]);
+        var dt = new Date(y, m - 1, d);
+        return dt.toISOString().slice(0, 10);
+      }
+      case 'YEAR':    { return new Date(unquoteArg(args[0])).getFullYear() || '#VALUE!'; }
+      case 'MONTH':   { var dt = new Date(unquoteArg(args[0])); return isNaN(dt.getTime()) ? '#VALUE!' : dt.getMonth() + 1; }
+      case 'DAY':     { var dt = new Date(unquoteArg(args[0])); return isNaN(dt.getTime()) ? '#VALUE!' : dt.getDate(); }
+      case 'WEEKDAY': { var dt = new Date(unquoteArg(args[0])); return isNaN(dt.getTime()) ? '#VALUE!' : dt.getDay() + 1; }
+      case 'DAYS': {
+        var end = new Date(unquoteArg(args[0])), start = new Date(unquoteArg(args[1]));
+        if (isNaN(end.getTime()) || isNaN(start.getTime())) return '#VALUE!';
+        return Math.round((end - start) / (1000 * 60 * 60 * 24));
+      }
+
+      // ── Lookup / Reference ────────────────────────────────
+      case 'VLOOKUP': {
+        // VLOOKUP(lookup_value, table_array, col_index_num, [exact])
+        if (args.length < 3) return '#ERR';
+        var needle = safeEvalExpr(args[0]);
+        var table = getRange2D(args[1]);
+        var col = safeEvalExpr(args[2]) - 1;
+        var exact = args.length >= 4 ? !safeEvalExpr(args[3]) : false;
+        for (var i = 0; i < table.length; i++) {
+          var key = table[i][0];
+          if (exact) {
+            if (String(key).toLowerCase() === String(needle).toLowerCase()) {
+              return table[i][col] != null ? table[i][col] : '#N/A';
+            }
+          } else {
+            if (Number(key) <= Number(needle)) {
+              if (i === table.length - 1 || Number(table[i + 1][0]) > Number(needle)) {
+                return table[i][col] != null ? table[i][col] : '#N/A';
+              }
+            }
+          }
+        }
+        return '#N/A';
+      }
+      case 'HLOOKUP': {
+        if (args.length < 3) return '#ERR';
+        var needle = safeEvalExpr(args[0]);
+        var table = getRange2D(args[1]);
+        var row = safeEvalExpr(args[2]) - 1;
+        if (!table.length || !table[0]) return '#N/A';
+        for (var c = 0; c < table[0].length; c++) {
+          var key = table[0][c];
+          if (String(key).toLowerCase() === String(needle).toLowerCase()) {
+            return table[row] && table[row][c] != null ? table[row][c] : '#N/A';
+          }
+        }
+        return '#N/A';
+      }
+      case 'INDEX': {
+        // INDEX(array, row_num, [col_num])
+        var arr = getRange2D(args[0]);
+        var rIdx = safeEvalExpr(args[1]) - 1;
+        var cIdx = args.length >= 3 ? safeEvalExpr(args[2]) - 1 : 0;
+        if (!arr[rIdx] || arr[rIdx][cIdx] == null) return '#REF!';
+        return arr[rIdx][cIdx];
+      }
+      case 'MATCH': {
+        // MATCH(lookup, range, [match_type])  -1 = greater, 0 = exact, 1 = lesser (default)
+        var needle = safeEvalExpr(args[0]);
+        var range = getRangeCells(args[1]);
+        var type = args.length >= 3 ? safeEvalExpr(args[2]) : 1;
+        if (type === 0) {
+          for (var i = 0; i < range.length; i++) {
+            if (String(range[i]).toLowerCase() === String(needle).toLowerCase()) return i + 1;
+          }
+        } else {
+          var bestIdx = -1;
+          for (var i = 0; i < range.length; i++) {
+            var v = Number(range[i]);
+            if (type === 1 && v <= Number(needle)) bestIdx = i;
+            if (type === -1 && v >= Number(needle)) bestIdx = i;
+          }
+          if (bestIdx >= 0) return bestIdx + 1;
+        }
+        return '#N/A';
+      }
+      case 'CHOOSE': {
+        var idx = safeEvalExpr(args[0]);
+        return args[idx] != null ? safeEvalExpr(args[idx]) : '#VALUE!';
+      }
+      case 'ROW': {
+        if (!args.length || !args[0]) return '#ERR';
+        var ref = parseAddr(args[0].toUpperCase());
+        return ref ? ref.r + 1 : '#REF!';
+      }
+      case 'COLUMN': {
+        if (!args.length || !args[0]) return '#ERR';
+        var ref = parseAddr(args[0].toUpperCase());
+        return ref ? ref.c + 1 : '#REF!';
+      }
+
       default: return '#ERR';
     }
   }
@@ -976,6 +1411,126 @@
     renderSheetTabs();
   }
 
+  // ── xlsx / csv import ──────────────────────────────────────
+  // Parse a vendor xlsx with SheetJS and append each Excel sheet as a
+  // new tab in the workbook. Existing sheets are preserved.
+  function handleXlsxImport(file) {
+    if (typeof XLSX === 'undefined') {
+      alert('Spreadsheet library still loading. Try again in a moment.');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      try {
+        const data = new Uint8Array(e.target.result);
+        // cellFormula:true gives us .f (formula string) on each cell;
+        // cellDates:true keeps dates as JS Date objects so we can render
+        // them sensibly.
+        const wb = XLSX.read(data, { type: 'array', cellFormula: true, cellDates: true });
+        if (!wb.SheetNames.length) {
+          alert('No sheets in that file.');
+          return;
+        }
+        // Sync current grid before mutating workbook
+        syncGridToActiveSheet();
+        const baseName = file.name.replace(/\.[^.]+$/, '');
+        let added = 0;
+        wb.SheetNames.forEach(function(srcName) {
+          const ws = wb.Sheets[srcName];
+          if (!ws) return;
+          // Prevent collisions: append (n) to repeats. Excel sheet
+          // names can match existing AGX tabs, so namespace by file.
+          let name = srcName;
+          if (workbook.sheets.some(s => s.name === name)) {
+            name = baseName + ' · ' + srcName;
+          }
+          let collisionN = 2;
+          while (workbook.sheets.some(s => s.name === name)) {
+            name = baseName + ' · ' + srcName + ' (' + (collisionN++) + ')';
+          }
+          const sheet = importXlsxSheet(ws, name);
+          if (sheet) {
+            workbook.sheets.push(sheet);
+            added++;
+          }
+        });
+        if (!added) {
+          alert('Nothing imported — sheets were empty.');
+          return;
+        }
+        // Switch to the first newly-added sheet so the user sees the
+        // result of their import.
+        const firstNew = workbook.sheets[workbook.sheets.length - added];
+        workbook.activeSheetId = firstNew.id;
+        loadSheetIntoGrid(firstNew);
+        workbook.dirty = true;
+        recalcAll();
+        renderGrid();
+        renderSheetTabs();
+        selectCell(0, 0);
+      } catch (err) {
+        console.error('xlsx import failed:', err);
+        alert('Import failed: ' + (err.message || err));
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  }
+
+  // Convert one SheetJS worksheet object into an AGX sheet object.
+  // Excel formulas (`.f`) come without a leading `=`; we add it so our
+  // evaluator picks them up. Values are kept as-is (strings/numbers/Date
+  // become string), formatted dates rendered as YYYY-MM-DD.
+  function importXlsxSheet(ws, name) {
+    const ref = ws['!ref'];
+    if (!ref) return null;
+    const range = XLSX.utils.decode_range(ref);
+    const rows = Math.max(range.e.r + 1, MIN_ROWS);
+    const cols = Math.max(range.e.c + 1, MIN_COLS);
+    const cells = {};
+    for (let r = range.s.r; r <= range.e.r; r++) {
+      for (let c = range.s.c; c <= range.e.c; c++) {
+        const a = XLSX.utils.encode_cell({ r: r, c: c });
+        const cell = ws[a];
+        if (!cell) continue;
+        const ourAddr = colLetter(c) + (r + 1);
+        let raw;
+        if (cell.f) {
+          raw = '=' + cell.f;
+        } else if (cell.v instanceof Date) {
+          raw = cell.v.toISOString().slice(0, 10);
+        } else if (cell.v != null) {
+          raw = cell.v;
+        } else {
+          continue;
+        }
+        cells[ourAddr] = { raw: raw, value: raw };
+      }
+    }
+    // Pull column widths from xlsx if present
+    const colWidths = {};
+    if (ws['!cols']) {
+      ws['!cols'].forEach(function(col, idx) {
+        if (col && (col.wpx || col.wch)) {
+          colWidths[idx] = Math.max(60, Math.round(col.wpx || (col.wch * 7)));
+        }
+      });
+    }
+    // Pull merges if present (Excel format → our format)
+    const merges = (ws['!merges'] || []).map(function(m) {
+      return { r1: m.s.r, c1: m.s.c, r2: m.e.r, c2: m.e.c };
+    });
+    return {
+      id: newSheetId(),
+      name: name,
+      rows: rows,
+      cols: cols,
+      cells: cells,
+      colWidths: colWidths,
+      links: {},
+      merges: merges
+    };
+  }
+
   // Resolve a sheet name to a sheet object — used by cross-sheet
   // formula refs (`=Sheet2!A1`). Case-insensitive match. Returns null
   // when the named sheet doesn't exist.
@@ -1006,6 +1561,8 @@
           <button class="ws-btn ws-btn-fmt" data-fmt="null" title="Clear format">&times;</button>
           <span class="ws-separator"></span>
           <button class="ws-btn" id="wsLinkBtn" title="Link cell to job field">&#x1F517; Link</button>
+          <button class="ws-btn" id="wsImportXlsxBtn" title="Import an Excel file as new sheets">&#x1F4E5; Import .xlsx</button>
+          <input type="file" id="wsImportXlsxInput" accept=".xlsx,.xls,.csv" style="display:none;" />
           <button class="ws-btn" id="wsClearBtn" title="Clear workspace">&#x1F5D1; Clear</button>
           <button class="ws-btn ws-btn-save" id="wsSaveBtn" title="Save workspace">&#x1F4BE; Save</button>
           <button class="ws-btn" id="wsNodeGraphBtn" title="Node Graph (Beta)">&#x26A1;</button>
@@ -2653,6 +3210,19 @@
     document.getElementById('wsAddCol').addEventListener('click', function () {
       insertColumn(grid.cols - 1, 'right');
     });
+
+    // xlsx / csv import — picker triggered by toolbar button. Each
+    // sheet in the file appends as a new tab; the workbook switches
+    // focus to the first imported sheet so the result is visible.
+    const importBtn = document.getElementById('wsImportXlsxBtn');
+    const importInput = document.getElementById('wsImportXlsxInput');
+    if (importBtn && importInput) {
+      importBtn.addEventListener('click', function() { importInput.value = ''; importInput.click(); });
+      importInput.addEventListener('change', function(e) {
+        const file = e.target.files && e.target.files[0];
+        if (file) handleXlsxImport(file);
+      });
+    }
 
     // Toolbar buttons
     document.getElementById('wsLinkBtn').addEventListener('click', () => {
