@@ -277,7 +277,24 @@ router.post('/import', requireAuth, requireCapability('ROLES_MANAGE'), async (re
       const unitPrice = num(r['Unit Price']);
       const netUnitPrice = num(r['Net Unit Price']);
       const isReturn = qty < 0 || unitPrice < 0;
-      const date = r['Date'] ? String(r['Date']).slice(0, 10) : null;
+      // Robust date coercion: HD's CSV ships ISO dates ("2026-04-29")
+      // but a misbehaving client (e.g., SheetJS without raw:false) might
+      // send a JS Date object whose toString is "Wed Apr 29 2026 ...".
+      // Match either by extracting a YYYY-MM-DD substring.
+      let date = null;
+      if (r['Date']) {
+        const dStr = String(r['Date']);
+        const m = dStr.match(/(\d{4}-\d{2}-\d{2})/);
+        if (m) {
+          date = m[1];
+        } else {
+          // Fall back to JS Date parsing for native Date objects / unusual formats
+          const parsed = new Date(dStr);
+          if (!isNaN(parsed.getTime())) {
+            date = parsed.toISOString().slice(0, 10);
+          }
+        }
+      }
       entry.purchases.push({
         purchase_date: date,
         store_number: str(r['Store Number']) || null,

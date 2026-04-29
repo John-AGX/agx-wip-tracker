@@ -850,7 +850,12 @@
         if (headerIdx >= 0) text = text.slice(headerIdx);
         var wb = XLSX.read(text, { type: 'string' });
         var ws = wb.Sheets[wb.SheetNames[0]];
-        var rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
+        // raw: false keeps every column as a string. Without this, SheetJS
+        // auto-detects ISO dates ("2026-04-29") and converts them to JS
+        // Date objects, which then fail the server-side YYYY-MM-DD parse.
+        // Numeric columns also stay as strings, so the server's str()
+        // coercion has nothing to do.
+        var rows = XLSX.utils.sheet_to_json(ws, { defval: '', raw: false });
         if (!rows.length) {
           throw new Error('No data rows in CSV');
         }
