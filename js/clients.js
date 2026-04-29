@@ -262,25 +262,28 @@
       }
     });
 
-    var filtered = _clients.filter(function(c) {
-      if (!matchesSearch(c, q)) return false;
-      if (statusFilter) {
-        if (statusFilter === 'active' && c.activation_status === 'inactive') return false;
-        if (statusFilter === 'inactive' && c.activation_status !== 'inactive') return false;
-      }
-      if (marketFilter && c.market !== marketFilter) return false;
-      if (roleFilter && roleOf[c.id] !== roleFilter) return false;
-      return true;
+    // Pre-compute which clients pass the filter set so the hierarchical
+    // renderer can branch on parent vs child match independently.
+    var passes = {};
+    _clients.forEach(function(c) {
+      if (q && !matchesSearch(c, q)) return;
+      if (statusFilter === 'active' && c.activation_status === 'inactive') return;
+      if (statusFilter === 'inactive' && c.activation_status !== 'inactive') return;
+      if (marketFilter && c.market !== marketFilter) return;
+      if (roleFilter && roleOf[c.id] !== roleFilter) return;
+      passes[c.id] = true;
     });
+
+    var passCount = Object.keys(passes).length;
     if (summaryEl) {
       var bits = [_clients.length + ' total'];
-      if (filtered.length !== _clients.length) bits.unshift('Showing ' + filtered.length);
+      if (passCount !== _clients.length) bits.unshift('Showing ' + passCount);
       summaryEl.textContent = bits.join(' · ');
     }
 
-    if (!filtered.length) {
+    if (!passCount) {
       var empty = q ? 'No clients match "' + escapeHTML(q) + '"' :
-        (roleFilter || statusFilter || marketFilter
+        (roleFilter || statusFilter !== 'active' || marketFilter
           ? 'No clients match the current filters.'
           : 'No clients yet. Click + New Client to add one.');
       listEl.innerHTML = '<div style="padding:20px;color:var(--text-dim,#888);text-align:center;">' + empty + '</div>';
@@ -298,15 +301,16 @@
         '</tr></thead>' +
         '<tbody>';
 
-    // Branching: when ANY non-default filter or search is active OR sort is
-    // by a non-name column, flatten to a single sorted list (otherwise the
-    // hierarchy "loses" rows that don't match). When the user is browsing
-    // with default filters, keep the parent → expanded-properties grouping.
-    var hierarchical = !q && !roleFilter && !marketFilter && !statusFilter && _clientsSort.key === 'name';
+    // Hierarchy mode applies whenever the user isn't searching, isn't
+    // sorting by a non-name column, and isn't role-filtering to JUST
+    // parents or JUST children. Status / market filters DO narrow what
+    // shows but don't flatten — a parent is visible if it OR any of its
+    // children pass.
+    var hierarchical = !q && _clientsSort.key === 'name' && roleFilter !== 'parent' && roleFilter !== 'child';
 
     if (!hierarchical) {
-      filtered
-        .slice()
+      _clients
+        .filter(function(c) { return passes[c.id]; })
         .sort(function(a, b) { return compareClients(a, b, _clientsSort.key, _clientsSort.dir); })
         .forEach(function(c) {
           var role = roleOf[c.id];
@@ -316,17 +320,24 @@
           html += clientRowHTML(c, { role: role, childCount: childCount, expanded: !!_expandedParents[c.id] });
         });
     } else {
-      var grouped = groupForRender(filtered);
-      // Parents themselves get sorted by the active key/dir
+      // Group ALL clients (not just passing) so we can detect children
+      // that pass under a parent that itself doesn't.
+      var grouped = groupForRender(_clients);
       grouped.topLevel
         .slice()
+        .filter(function(top) {
+          if (passes[top.id]) return true;
+          var allKids = grouped.childrenOf[top.id] || [];
+          return allKids.some(function(k) { return passes[k.id]; });
+        })
         .sort(function(a, b) { return compareClients(a, b, _clientsSort.key, _clientsSort.dir); })
         .forEach(function(top) {
-          var kids = grouped.childrenOf[top.id] || [];
-          var role = kids.length ? 'parent' : 'flat';
-          html += clientRowHTML(top, { role: role, childCount: kids.length, expanded: !!_expandedParents[top.id] });
-          if (kids.length && _expandedParents[top.id]) {
-            kids
+          var allKids = grouped.childrenOf[top.id] || [];
+          var visibleKids = allKids.filter(function(k) { return passes[k.id]; });
+          var role = allKids.length ? 'parent' : 'flat';
+          html += clientRowHTML(top, { role: role, childCount: visibleKids.length, expanded: !!_expandedParents[top.id] });
+          if (visibleKids.length && _expandedParents[top.id]) {
+            visibleKids
               .slice()
               .sort(function(a, b) { return compareClients(a, b, _clientsSort.key, _clientsSort.dir); })
               .forEach(function(child) {
