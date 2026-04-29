@@ -325,22 +325,39 @@
           html += clientRowHTML(c, { role: role, childCount: childCount, expanded: !!_expandedParents[c.id] });
         });
     } else {
-      // Group ALL clients (not just passing) so we can detect children
-      // that pass under a parent that itself doesn't.
+      // Hierarchical view. Filters narrow which PARENTS show; expanding
+      // a parent reveals ALL its children regardless of status/market
+      // filters (the user explicitly asked to see what's inside, so we
+      // honor that). Search still applies to both levels — if you're
+      // searching, hits should appear at whatever level they live at.
       var grouped = groupForRender(_clients);
       grouped.topLevel
         .slice()
         .filter(function(top) {
-          if (passes[top.id]) return true;
-          var allKids = grouped.childrenOf[top.id] || [];
-          return allKids.some(function(k) { return passes[k.id]; });
+          if (q) {
+            // Search: parent passes if it or any of its kids matches
+            if (matchesSearch(top, q)) return true;
+            var allKids = grouped.childrenOf[top.id] || [];
+            return allKids.some(function(k) { return matchesSearch(k, q); });
+          }
+          // No search: apply status / market / role filters to the parent.
+          if (statusFilter === 'active' && top.activation_status === 'inactive') return false;
+          if (statusFilter === 'inactive' && top.activation_status !== 'inactive') return false;
+          if (marketFilter && top.market !== marketFilter) return false;
+          if (roleFilter === 'flat' && roleOf[top.id] !== 'flat') return false;
+          return true;
         })
         .sort(function(a, b) { return compareClients(a, b, _clientsSort.key, _clientsSort.dir); })
         .forEach(function(top) {
           var allKids = grouped.childrenOf[top.id] || [];
-          var visibleKids = allKids.filter(function(k) { return passes[k.id]; });
+          // When expanded, show every child (search-narrowed only). Bypass
+          // status/market/role so a click on the chevron always reveals
+          // something useful.
+          var visibleKids = allKids.filter(function(k) {
+            return q ? matchesSearch(k, q) : true;
+          });
           var role = allKids.length ? 'parent' : 'flat';
-          html += clientRowHTML(top, { role: role, childCount: visibleKids.length, expanded: !!_expandedParents[top.id] });
+          html += clientRowHTML(top, { role: role, childCount: allKids.length, expanded: !!_expandedParents[top.id] });
           if (visibleKids.length && _expandedParents[top.id]) {
             visibleKids
               .slice()
