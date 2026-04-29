@@ -76,8 +76,10 @@
       cols: MIN_COLS,
       cells: {},
       colWidths: {},
+      rowHeights: {},   // { 0: 32, 5: 48, ... } — rows not in here get ROW_HEIGHT
       links: {},
-      merges: []
+      merges: [],
+      tables: []        // [{ r1, c1, r2, c2, style }] — formatted ranges
     };
   }
 
@@ -86,11 +88,13 @@
     cols: MIN_COLS,
     cells: {},       // { "A1": { raw: "=B1*2", value: 42, fmt: null, style: {} }, ... }
     colWidths: {},   // { 0: 120, 1: 100, ... }
+    rowHeights: {},  // { 0: 32, ... } — only rows resized away from default
     selection: null,  // { r: 0, c: 0 }
     selEnd: null,     // { r, c } for range selection end (null = single cell)
     editing: null,    // { r: 0, c: 0 }
     links: {},        // { "C5": "contractAmount", "D5": "estimatedCosts" }
     merges: [],       // [{ r1, c1, r2, c2 }, ...] merged cell ranges
+    tables: [],       // [{ r1, c1, r2, c2, style }] — formatted table ranges
     jobId: null,
     dirty: false,
     refMode: false,   // TRUE when entering a formula
@@ -1218,8 +1222,10 @@
     sheet.cols = grid.cols;
     sheet.cells = grid.cells;
     sheet.colWidths = grid.colWidths;
+    sheet.rowHeights = grid.rowHeights;
     sheet.links = grid.links;
     sheet.merges = grid.merges;
+    sheet.tables = grid.tables;
   }
 
   // Pull a sheet's persistent state into grid so the rest of the engine
@@ -1231,8 +1237,10 @@
     grid.cols = Math.max(sheet.cols || MIN_COLS, MIN_COLS);
     grid.cells = sheet.cells || {};
     grid.colWidths = sheet.colWidths || {};
+    grid.rowHeights = sheet.rowHeights || {};
     grid.links = sheet.links || {};
     grid.merges = sheet.merges || [];
+    grid.tables = sheet.tables || [];
     grid.selection = null;
     grid.selEnd = null;
     grid.editing = null;
@@ -1273,8 +1281,10 @@
         cols: Math.max(s.cols || MIN_COLS, MIN_COLS),
         cells: s.cells || {},
         colWidths: s.colWidths || {},
+        rowHeights: s.rowHeights || {},
         links: s.links || {},
-        merges: s.merges || []
+        merges: s.merges || [],
+        tables: s.tables || []
       }));
       workbook.activeSheetId = saved.activeSheetId && workbook.sheets.find(s => s.id === saved.activeSheetId)
         ? saved.activeSheetId
@@ -1289,8 +1299,10 @@
         cols: Math.max(saved.cols || MIN_COLS, MIN_COLS),
         cells: saved.cells || {},
         colWidths: saved.colWidths || {},
+        rowHeights: {},
         links: saved.links || {},
-        merges: saved.merges || []
+        merges: saved.merges || [],
+        tables: []
       }];
       workbook.activeSheetId = workbook.sheets[0].id;
     } else {
@@ -1561,6 +1573,20 @@
           <button class="ws-btn ws-btn-fmt" data-fmt="null" title="Clear format">&times;</button>
           <span class="ws-separator"></span>
           <button class="ws-btn" id="wsLinkBtn" title="Link cell to job field">&#x1F517; Link</button>
+          <button class="ws-btn" id="wsAutoSumBtn" onclick="window.wsAutoSum()" title="Insert =SUM with auto-detected range (above or left)">&#x03A3; AutoSum</button>
+          <button class="ws-btn" id="wsMakeTableBtn" onclick="window.wsMakeTable()" title="Convert selected range into a styled table">&#x1F5C2; Table</button>
+          <button class="ws-btn" id="wsSortAscBtn" onclick="window.wsSortAscHeader()" title="Sort range ascending (preserves header row)">&#x2191;A</button>
+          <button class="ws-btn" id="wsSortDescBtn" onclick="window.wsSortDescHeader()" title="Sort range descending (preserves header row)">&#x2193;Z</button>
+          <button class="ws-btn" id="wsFindBtn" onclick="window.wsOpenFindReplace()" title="Find &amp; Replace (Ctrl+F)">&#x1F50D;</button>
+          <span class="ws-separator"></span>
+          <select id="wsFreezeSelect" onchange="window.wsSetFreeze(this.value || null); this.value='';" style="padding:4px 8px;background:var(--card-bg,#0c0c14);color:var(--text);border:1px solid var(--grid-border);border-radius:4px;font-size:11px;" title="Freeze panes">
+            <option value="">&#x2744; Freeze…</option>
+            <option value="row">Top row</option>
+            <option value="col">First column</option>
+            <option value="both">Top row + first column</option>
+            <option value="">No freeze</option>
+          </select>
+          <span class="ws-separator"></span>
           <button class="ws-btn" id="wsImportXlsxBtn" title="Import an Excel file as new sheets">&#x1F4E5; Import .xlsx</button>
           <input type="file" id="wsImportXlsxInput" accept=".xlsx,.xls,.csv" style="display:none;" />
           <button class="ws-btn" id="wsClearBtn" title="Clear workspace">&#x1F5D1; Clear</button>
@@ -1728,7 +1754,11 @@
     html += '</tr></thead><tbody>';
 
     for (let r = 0; r < grid.rows; r++) {
-      html += `<tr><td class="ws-row-header">${r + 1}</td>`;
+      const rh = grid.rowHeights && grid.rowHeights[r];
+      const trStyle = rh ? ` style="height:${rh}px;"` : '';
+      // Row header carries data-row so the resize-handle hit test below
+      // knows which row it's on. Resize handle is the bottom-edge strip.
+      html += `<tr${trStyle}><td class="ws-row-header" data-row="${r}">${r + 1}<div class="ws-row-resize" data-row="${r}"></div></td>`;
       for (let c = 0; c < grid.cols; c++) {
         // Skip hidden merged cells
         if (hidden[r + ',' + c]) continue;
@@ -1742,6 +1772,7 @@
         const isLinked = grid.links[key];
         const isError = cell.error;
         const isFormula = typeof cell.raw === 'string' && cell.raw.startsWith('=');
+        const tableStyle = getTableStyleForCell(r, c);
 
         let cls = 'ws-cell';
         if (isSelected) cls += ' ws-selected';
@@ -1755,6 +1786,7 @@
         if (isLinked) cls += ' ws-linked';
         if (isError) cls += ' ws-error';
         if (isFormula) cls += ' ws-formula';
+        if (tableStyle) cls += ' ws-table-cell ws-table-' + tableStyle.style + ' ws-table-' + tableStyle.role;
         if (typeof cell.value === 'number' && !(cell.style && cell.style.align)) cls += ' ws-number';
         if (cell.note) cls += ' ws-has-note';
 
@@ -3126,6 +3158,420 @@
     }
   }
 
+  // ── Row Resize ────────────────────────────────────────────
+  // Mirrors the column resize pattern. Drag handle is the .ws-row-resize
+  // strip rendered at the bottom of each row header.
+  let rowResizing = null;
+  function handleRowResizeStart(e) {
+    const handle = e.target.classList && e.target.classList.contains('ws-row-resize');
+    if (!handle) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const r = parseInt(e.target.dataset.row);
+    rowResizing = {
+      row: r,
+      startY: e.clientY,
+      startHeight: grid.rowHeights[r] || ROW_HEIGHT
+    };
+    document.body.style.cursor = 'row-resize';
+  }
+  function handleRowResizeMove(e) {
+    if (!rowResizing) return;
+    const newHeight = Math.max(18, rowResizing.startHeight + (e.clientY - rowResizing.startY));
+    grid.rowHeights[rowResizing.row] = newHeight;
+    // Find the tr for this row by counting from the second tr (first is thead)
+    const tbody = wsTable.querySelector('tbody');
+    if (tbody && tbody.rows[rowResizing.row]) {
+      tbody.rows[rowResizing.row].style.height = newHeight + 'px';
+    }
+  }
+  function handleRowResizeEnd() {
+    if (rowResizing) {
+      rowResizing = null;
+      document.body.style.cursor = '';
+      grid.dirty = true;
+      saveWorkspace();
+    }
+  }
+
+  // ── Tables ────────────────────────────────────────────────
+  // Tables are styled rectangular ranges. The cell renderer asks
+  // getTableStyleForCell(r, c) for each cell; if the cell falls inside
+  // a registered table, we tag it with two CSS classes:
+  //   ws-table-<styleName>   (e.g., ws-table-classic)
+  //   ws-table-<role>        (header / body-even / body-odd / total)
+  // Style + role compose to give banded rows, header bar, total row.
+  const TABLE_STYLES = ['classic', 'professional', 'minimal', 'bold', 'colorful', 'finance'];
+  function getTableStyleForCell(r, c) {
+    if (!grid.tables || !grid.tables.length) return null;
+    for (const t of grid.tables) {
+      if (r >= t.r1 && r <= t.r2 && c >= t.c1 && c <= t.c2) {
+        let role;
+        if (r === t.r1) role = 'header';
+        else if (t.totalRow && r === t.r2) role = 'total';
+        else role = ((r - t.r1) % 2 === 1) ? 'body-odd' : 'body-even';
+        return { style: t.style || 'classic', role: role };
+      }
+    }
+    return null;
+  }
+
+  // Convert the current selection range into a table. Prompts for a
+  // style; the range is registered in grid.tables and re-rendered with
+  // header / banded-body classes.
+  function makeTable(style) {
+    const rng = getSelRange();
+    if (!rng || (rng.r1 === rng.r2 && rng.c1 === rng.c2)) {
+      alert('Select a range of at least 2 rows × 2 columns first.');
+      return;
+    }
+    style = style || 'classic';
+    if (TABLE_STYLES.indexOf(style) === -1) style = 'classic';
+    // Remove any overlapping tables before adding the new one — only
+    // one table per range to keep semantics simple.
+    grid.tables = (grid.tables || []).filter(function(t) {
+      return rng.r2 < t.r1 || rng.r1 > t.r2 || rng.c2 < t.c1 || rng.c1 > t.c2;
+    });
+    grid.tables.push({
+      r1: rng.r1, c1: rng.c1, r2: rng.r2, c2: rng.c2,
+      style: style,
+      totalRow: false
+    });
+    pushUndo();
+    grid.dirty = true;
+    renderGrid();
+    saveWorkspace();
+  }
+
+  function changeTableStyle(style) {
+    if (!grid.selection || !grid.tables || !grid.tables.length) return;
+    for (const t of grid.tables) {
+      if (grid.selection.r >= t.r1 && grid.selection.r <= t.r2 &&
+          grid.selection.c >= t.c1 && grid.selection.c <= t.c2) {
+        t.style = style;
+        grid.dirty = true;
+        renderGrid();
+        saveWorkspace();
+        return;
+      }
+    }
+  }
+
+  function removeTable() {
+    if (!grid.selection || !grid.tables) return;
+    const before = grid.tables.length;
+    grid.tables = grid.tables.filter(function(t) {
+      return !(grid.selection.r >= t.r1 && grid.selection.r <= t.r2 &&
+               grid.selection.c >= t.c1 && grid.selection.c <= t.c2);
+    });
+    if (grid.tables.length !== before) {
+      pushUndo();
+      grid.dirty = true;
+      renderGrid();
+      saveWorkspace();
+    }
+  }
+
+  function toggleTotalRow() {
+    if (!grid.selection || !grid.tables) return;
+    for (const t of grid.tables) {
+      if (grid.selection.r >= t.r1 && grid.selection.r <= t.r2 &&
+          grid.selection.c >= t.c1 && grid.selection.c <= t.c2) {
+        t.totalRow = !t.totalRow;
+        grid.dirty = true;
+        renderGrid();
+        saveWorkspace();
+        return;
+      }
+    }
+  }
+
+  // Picker UI for "Make Table" — small popover with the 6 styles
+  function openTableStylePicker(anchor) {
+    const existing = document.getElementById('wsTableStylePicker');
+    if (existing) existing.remove();
+    const pop = document.createElement('div');
+    pop.id = 'wsTableStylePicker';
+    pop.style.cssText = 'position:fixed;background:var(--surface,#181820);border:1px solid var(--border,#333);border-radius:8px;padding:8px;z-index:1500;box-shadow:0 8px 24px rgba(0,0,0,0.5);display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;';
+    const labels = {
+      classic: 'Classic',
+      professional: 'Professional',
+      minimal: 'Minimal',
+      bold: 'Bold',
+      colorful: 'Colorful',
+      finance: 'Finance'
+    };
+    TABLE_STYLES.forEach(function(s) {
+      const btn = document.createElement('button');
+      btn.className = 'ws-btn ws-table-style-' + s;
+      btn.style.cssText = 'padding:8px 12px;font-size:11px;min-width:90px;';
+      btn.textContent = labels[s];
+      btn.onclick = function() { makeTable(s); pop.remove(); };
+      pop.appendChild(btn);
+    });
+    document.body.appendChild(pop);
+    const rect = anchor.getBoundingClientRect();
+    pop.style.left = rect.left + 'px';
+    pop.style.top = (rect.bottom + 4) + 'px';
+    // Close when clicking outside
+    setTimeout(function() {
+      function offClick(e) {
+        if (!pop.contains(e.target)) { pop.remove(); document.removeEventListener('mousedown', offClick); }
+      }
+      document.addEventListener('mousedown', offClick);
+    }, 0);
+  }
+
+  // ── Sort Range ────────────────────────────────────────────
+  // Sort the cells in the selected range by the column the active cell
+  // is in. Header row (top of selection) is preserved when the option is on.
+  function sortSelection(direction, hasHeader) {
+    const rng = getSelRange();
+    if (!rng || rng.r1 === rng.r2) {
+      alert('Select a multi-row range to sort.');
+      return;
+    }
+    const sortCol = grid.selection.c;
+    const startRow = hasHeader ? rng.r1 + 1 : rng.r1;
+    if (startRow >= rng.r2) return;
+    pushUndo();
+    // Pull every row's cells into an array
+    const rows = [];
+    for (let r = startRow; r <= rng.r2; r++) {
+      const row = [];
+      for (let c = rng.c1; c <= rng.c2; c++) {
+        const a = addr(r, c);
+        row.push(grid.cells[a] ? Object.assign({}, grid.cells[a]) : null);
+      }
+      rows.push(row);
+    }
+    const sortColRel = sortCol - rng.c1;
+    rows.sort(function(a, b) {
+      const av = a[sortColRel] ? a[sortColRel].value : '';
+      const bv = b[sortColRel] ? b[sortColRel].value : '';
+      const an = Number(av), bn = Number(bv);
+      const bothNum = !isNaN(an) && !isNaN(bn) && av !== '' && bv !== '';
+      let cmp;
+      if (bothNum) cmp = an - bn;
+      else cmp = String(av).localeCompare(String(bv));
+      return direction === 'desc' ? -cmp : cmp;
+    });
+    // Write back
+    for (let i = 0; i < rows.length; i++) {
+      const r = startRow + i;
+      for (let cIdx = 0; cIdx < rows[i].length; cIdx++) {
+        const c = rng.c1 + cIdx;
+        const a = addr(r, c);
+        if (rows[i][cIdx]) grid.cells[a] = rows[i][cIdx];
+        else delete grid.cells[a];
+      }
+    }
+    grid.dirty = true;
+    recalcAll();
+    renderGrid();
+    selectCell(rng.r1, rng.c1);
+    saveWorkspace();
+  }
+
+  // ── AutoSum ───────────────────────────────────────────────
+  // Inserts =SUM(...) at the active cell, auto-detecting a contiguous
+  // range of numeric cells immediately above (preferred) or to the left.
+  function autoSum() {
+    if (!grid.selection) return;
+    const r = grid.selection.r, c = grid.selection.c;
+    // Probe upward first
+    let above = 0;
+    for (let i = r - 1; i >= 0; i--) {
+      const v = (grid.cells[addr(i, c)] || {}).value;
+      if (v === '' || v == null || isNaN(Number(v))) break;
+      above++;
+    }
+    let formula;
+    if (above >= 1) {
+      formula = '=SUM(' + addr(r - above, c) + ':' + addr(r - 1, c) + ')';
+    } else {
+      // Probe leftward
+      let left = 0;
+      for (let i = c - 1; i >= 0; i--) {
+        const v = (grid.cells[addr(r, i)] || {}).value;
+        if (v === '' || v == null || isNaN(Number(v))) break;
+        left++;
+      }
+      if (left >= 1) {
+        formula = '=SUM(' + addr(r, c - left) + ':' + addr(r, c - 1) + ')';
+      } else {
+        formula = '=SUM()';
+      }
+    }
+    pushUndo();
+    grid.cells[addr(r, c)] = { raw: formula, value: '', style: (grid.cells[addr(r, c)] || {}).style || {} };
+    grid.dirty = true;
+    recalcAll();
+    renderGrid();
+    selectCell(r, c);
+    // Drop into edit mode so the user can tweak before committing
+    startEditing(r, c);
+    saveWorkspace();
+  }
+
+  // ── Find & Replace ────────────────────────────────────────
+  // Lightweight modal — searches every sheet in the workbook, jumps to
+  // each match in turn, optionally replaces.
+  let _findState = { query: '', matches: [], idx: 0, caseSensitive: false };
+
+  function openFindReplace() {
+    const existing = document.getElementById('wsFindReplace');
+    if (existing) { existing.style.display = 'block'; document.getElementById('wsFindInput').focus(); return; }
+    const pop = document.createElement('div');
+    pop.id = 'wsFindReplace';
+    pop.style.cssText = 'position:fixed;top:80px;right:30px;background:var(--surface,#181820);border:1px solid var(--border,#333);border-radius:8px;padding:14px 16px;z-index:1500;box-shadow:0 8px 24px rgba(0,0,0,0.5);width:340px;font-size:12px;';
+    pop.innerHTML =
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">' +
+        '<strong style="font-size:13px;">Find &amp; Replace</strong>' +
+        '<button class="ws-btn" onclick="document.getElementById(\'wsFindReplace\').style.display=\'none\';" style="padding:2px 8px;">×</button>' +
+      '</div>' +
+      '<div style="display:flex;flex-direction:column;gap:8px;">' +
+        '<input type="text" id="wsFindInput" placeholder="Find what" style="padding:6px 10px;border:1px solid var(--grid-border);border-radius:4px;background:var(--card-bg,#0c0c14);color:var(--text);" />' +
+        '<input type="text" id="wsReplaceInput" placeholder="Replace with" style="padding:6px 10px;border:1px solid var(--grid-border);border-radius:4px;background:var(--card-bg,#0c0c14);color:var(--text);" />' +
+        '<label style="display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--text-dim,#aaa);text-transform:none !important;letter-spacing:normal !important;font-weight:400 !important;">' +
+          '<input type="checkbox" id="wsFindCase" /> Match case' +
+        '</label>' +
+        '<div id="wsFindStatus" style="font-size:11px;color:var(--text-dim,#aaa);min-height:15px;"></div>' +
+        '<div style="display:flex;gap:6px;">' +
+          '<button class="ws-btn" onclick="window.wsFindNext()">Find Next</button>' +
+          '<button class="ws-btn" onclick="window.wsReplaceCurrent()">Replace</button>' +
+          '<button class="ws-btn" onclick="window.wsReplaceAll()">Replace All</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(pop);
+    document.getElementById('wsFindInput').addEventListener('input', function(e) {
+      _findState.query = e.target.value;
+      _findState.matches = [];
+      _findState.idx = 0;
+    });
+    document.getElementById('wsFindInput').focus();
+  }
+
+  function findAllMatches() {
+    const q = _findState.query;
+    if (!q) return [];
+    const cs = !!document.getElementById('wsFindCase')?.checked;
+    const matches = [];
+    workbook.sheets.forEach(function(sheet) {
+      Object.keys(sheet.cells).forEach(function(addr) {
+        const v = String(sheet.cells[addr].value || sheet.cells[addr].raw || '');
+        const haystack = cs ? v : v.toLowerCase();
+        const needle = cs ? q : q.toLowerCase();
+        if (haystack.indexOf(needle) !== -1) matches.push({ sheetId: sheet.id, addr: addr });
+      });
+    });
+    return matches;
+  }
+
+  window.wsFindNext = function() {
+    if (!_findState.query) return;
+    if (!_findState.matches.length) {
+      _findState.matches = findAllMatches();
+      _findState.idx = 0;
+    }
+    const status = document.getElementById('wsFindStatus');
+    if (!_findState.matches.length) {
+      if (status) status.textContent = 'No matches.';
+      return;
+    }
+    const m = _findState.matches[_findState.idx];
+    if (m.sheetId !== workbook.activeSheetId) switchSheet(m.sheetId);
+    const ref = parseAddr(m.addr);
+    if (ref) selectCell(ref.r, ref.c);
+    _findState.idx = (_findState.idx + 1) % _findState.matches.length;
+    if (status) status.textContent = (_findState.idx === 0 ? _findState.matches.length : _findState.idx) +
+      ' of ' + _findState.matches.length;
+  };
+
+  window.wsReplaceCurrent = function() {
+    if (!grid.selection || !_findState.query) return;
+    const a = addr(grid.selection.r, grid.selection.c);
+    const cell = grid.cells[a];
+    if (!cell) return;
+    const replaceWith = document.getElementById('wsReplaceInput').value || '';
+    const cs = !!document.getElementById('wsFindCase')?.checked;
+    const raw = String(cell.raw != null ? cell.raw : cell.value);
+    const re = new RegExp(_findState.query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), cs ? '' : 'i');
+    if (!re.test(raw)) return;
+    pushUndo();
+    grid.cells[a] = Object.assign({}, cell, { raw: raw.replace(re, replaceWith) });
+    grid.dirty = true;
+    recalcAll();
+    renderGrid();
+    saveWorkspace();
+    _findState.matches = []; // refresh on next find-next
+    window.wsFindNext();
+  };
+
+  window.wsReplaceAll = function() {
+    if (!_findState.query) return;
+    const replaceWith = document.getElementById('wsReplaceInput').value || '';
+    const cs = !!document.getElementById('wsFindCase')?.checked;
+    const re = new RegExp(_findState.query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
+      cs ? 'g' : 'gi');
+    let count = 0;
+    pushUndo();
+    workbook.sheets.forEach(function(sheet) {
+      Object.keys(sheet.cells).forEach(function(addr) {
+        const cell = sheet.cells[addr];
+        const raw = String(cell.raw != null ? cell.raw : cell.value);
+        if (re.test(raw)) {
+          sheet.cells[addr] = Object.assign({}, cell, { raw: raw.replace(re, replaceWith) });
+          count++;
+        }
+      });
+    });
+    syncGridToActiveSheet();
+    loadSheetIntoGrid(workbook.sheets.find(s => s.id === workbook.activeSheetId));
+    grid.dirty = true;
+    recalcAll();
+    renderGrid();
+    saveWorkspace();
+    const status = document.getElementById('wsFindStatus');
+    if (status) status.textContent = 'Replaced ' + count + ' match' + (count === 1 ? '' : 'es') + '.';
+    _findState.matches = [];
+  };
+
+  // ── Freeze Panes ──────────────────────────────────────────
+  // Toggle: top row, first column, both, or none. Stored on the active
+  // sheet since freeze settings are sheet-specific in Excel too.
+  function setFreeze(mode) {
+    const sheet = workbook.sheets.find(s => s.id === workbook.activeSheetId);
+    if (!sheet) return;
+    sheet.frozen = mode; // 'row' | 'col' | 'both' | null
+    workbook.dirty = true;
+    saveWorkspace();
+    renderGrid();
+    applyFreezeClasses();
+  }
+  function applyFreezeClasses() {
+    if (!wsTable) return;
+    const sheet = workbook.sheets.find(s => s.id === workbook.activeSheetId);
+    const mode = sheet && sheet.frozen;
+    wsTable.classList.toggle('ws-freeze-row', mode === 'row' || mode === 'both');
+    wsTable.classList.toggle('ws-freeze-col', mode === 'col' || mode === 'both');
+  }
+
+  window.wsMakeTable = function() {
+    const btn = document.getElementById('wsMakeTableBtn');
+    if (btn) openTableStylePicker(btn);
+  };
+  window.wsRemoveTable = removeTable;
+  window.wsToggleTotalRow = toggleTotalRow;
+  window.wsChangeTableStyle = changeTableStyle;
+  window.wsSortAsc = function() { sortSelection('asc', false); };
+  window.wsSortDesc = function() { sortSelection('desc', false); };
+  window.wsSortAscHeader = function() { sortSelection('asc', true); };
+  window.wsSortDescHeader = function() { sortSelection('desc', true); };
+  window.wsAutoSum = autoSum;
+  window.wsOpenFindReplace = openFindReplace;
+  window.wsSetFreeze = setFreeze;
+
   // ── Public Init ────────────────────────────────────────────
 
   function initWorkspace(containerId, jobId) {
@@ -3164,6 +3610,22 @@
     wsTable.addEventListener('mousedown', handleColResizeStart);
     document.addEventListener('mousemove', handleColResizeMove);
     document.addEventListener('mouseup', handleColResizeEnd);
+
+    // Row resize
+    wsTable.addEventListener('mousedown', handleRowResizeStart);
+    document.addEventListener('mousemove', handleRowResizeMove);
+    document.addEventListener('mouseup', handleRowResizeEnd);
+
+    // Find & Replace shortcut
+    wsContainer.addEventListener('keydown', function(e) {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+        e.preventDefault();
+        openFindReplace();
+      }
+    }, true);
+
+    // Apply freeze classes if the active sheet has them
+    applyFreezeClasses();
 
     // Context menu on cells and headers
     wsTable.addEventListener('contextmenu', function (e) {
