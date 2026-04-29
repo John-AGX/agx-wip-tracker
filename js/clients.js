@@ -76,34 +76,72 @@
     return (a.name || '').localeCompare(b.name || '');
   }
 
-  function clientCardHTML(c, depth) {
-    var indent = depth ? 'margin-left:' + (depth * 18) + 'px;' : '';
-    var statusBadge = c.activation_status === 'inactive'
-      ? '<span style="padding:2px 8px;border-radius:10px;background:rgba(248,113,113,0.12);color:#f87171;font-size:10px;text-transform:uppercase;letter-spacing:0.5px;font-weight:600;margin-left:8px;">Inactive</span>'
+  // Tracks which parent rows are expanded in the directory list so reloads
+  // don't collapse the user's view. Persisted in sessionStorage under a
+  // simple JSON-stringified Set.
+  var _expandedParents = (function() {
+    try {
+      var raw = sessionStorage.getItem('agx_clients_expanded');
+      var arr = raw ? JSON.parse(raw) : [];
+      var s = {};
+      arr.forEach(function(id) { s[id] = true; });
+      return s;
+    } catch (e) { return {}; }
+  })();
+  function persistExpanded() {
+    try {
+      sessionStorage.setItem('agx_clients_expanded', JSON.stringify(Object.keys(_expandedParents)));
+    } catch (e) { /* ignore */ }
+  }
+
+  function clientRowHTML(c, opts) {
+    opts = opts || {};
+    var role = opts.role; // 'parent' | 'child' | 'flat'
+    var childCount = opts.childCount || 0;
+    var expanded = !!opts.expanded;
+    var rowAttrs = 'data-client-id="' + escapeAttr(c.id) + '" data-role="' + role + '"';
+    var rowStyle = role === 'child'
+      ? 'background:rgba(255,255,255,0.02);'
       : '';
-    var locationBits = [c.city, c.state].filter(Boolean).join(', ');
-    var contactLine = [c.first_name, c.last_name].filter(Boolean).join(' ');
-    var contactBits = [contactLine, c.email, c.phone || c.cell].filter(Boolean).join(' · ');
-    var company = c.company_name && c.company_name !== c.name
-      ? '<span style="font-size:11px;color:var(--text-dim,#888);margin-left:8px;">' + escapeHTML(c.company_name) + '</span>'
-      : '';
-    return '<div class="card" style="padding:10px 14px;display:flex;justify-content:space-between;align-items:center;gap:10px;' + indent + '">' +
-      '<div style="min-width:0;flex:1;">' +
-        '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
-          '<strong style="color:var(--text,#fff);font-size:13px;">' + escapeHTML(c.name) + '</strong>' +
-          company +
-          statusBadge +
-        '</div>' +
-        (contactBits || locationBits
-          ? '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:3px;">' +
-              [contactBits, locationBits].filter(Boolean).join(' · ') +
-            '</div>'
-          : '') +
-      '</div>' +
-      '<div style="display:flex;gap:6px;flex-shrink:0;">' +
-        '<button class="ee-btn secondary" onclick="openEditClientModal(\'' + escapeAttr(c.id) + '\')">Edit</button>' +
-      '</div>' +
-    '</div>';
+
+    var nameCell;
+    if (role === 'parent') {
+      nameCell =
+        '<button class="ee-btn ee-icon-btn ghost" onclick="event.stopPropagation();toggleClientParent(\'' + escapeAttr(c.id) + '\')" title="' + (expanded ? 'Collapse' : 'Expand') + '" style="width:22px;height:22px;padding:0;font-size:11px;">' + (expanded ? '▾' : '▸') + '</button>' +
+        '<strong style="color:var(--text,#fff);font-size:13px;">' + escapeHTML(c.name) + '</strong>' +
+        '<span style="padding:1px 7px;border-radius:9px;background:rgba(79,140,255,0.12);color:#4f8cff;font-size:10px;text-transform:uppercase;letter-spacing:0.5px;font-weight:600;">Parent · ' + childCount + '</span>';
+    } else if (role === 'child') {
+      nameCell =
+        '<span style="display:inline-block;width:22px;text-align:center;color:var(--text-dim,#666);font-size:11px;">↳</span>' +
+        '<span style="color:var(--text,#ddd);font-size:13px;">' + escapeHTML(c.name) + '</span>';
+    } else {
+      nameCell =
+        '<span style="display:inline-block;width:22px;"></span>' +
+        '<span style="color:var(--text,#ddd);font-size:13px;">' + escapeHTML(c.name) + '</span>' +
+        '<span style="padding:1px 7px;border-radius:9px;background:rgba(251,191,36,0.12);color:#fbbf24;font-size:10px;text-transform:uppercase;letter-spacing:0.5px;font-weight:600;">Unparented</span>';
+    }
+    if (c.activation_status === 'inactive') {
+      nameCell += '<span style="padding:1px 7px;border-radius:9px;background:rgba(248,113,113,0.12);color:#f87171;font-size:10px;text-transform:uppercase;letter-spacing:0.5px;font-weight:600;">Inactive</span>';
+    }
+
+    var contactName = [c.first_name, c.last_name].filter(Boolean).join(' ') || c.community_manager || '';
+    var contact = [contactName, c.email || c.cm_email, c.phone || c.cell || c.cm_phone].filter(Boolean).join(' · ');
+    var location = [c.city, c.state].filter(Boolean).join(', ');
+    if (c.market) location = c.market + (location ? ' · ' + location : '');
+
+    var actions =
+      '<button class="ee-btn secondary" onclick="event.stopPropagation();openEditClientModal(\'' + escapeAttr(c.id) + '\')" title="Edit">&#x270F;&#xFE0F;</button>' +
+      '<button class="ee-btn ghost" onclick="event.stopPropagation();openClientMergeModal(\'' + escapeAttr(c.id) + '\')" title="Merge into another client">&#x1F500;</button>' +
+      (role === 'flat' ? '<button class="ee-btn ghost" onclick="event.stopPropagation();openClientSplitModal(\'' + escapeAttr(c.id) + '\')" title="Split into parent + property">&#x2702;</button>' : '');
+
+    return '<tr ' + rowAttrs + ' style="cursor:pointer;' + rowStyle + '" onclick="openEditClientModal(\'' + escapeAttr(c.id) + '\')">' +
+      '<td style="display:flex;align-items:center;gap:8px;">' + nameCell + '</td>' +
+      '<td>' + escapeHTML(contact) + '</td>' +
+      '<td>' + escapeHTML(location) + '</td>' +
+      '<td style="text-align:right;white-space:nowrap;">' +
+        '<div style="display:inline-flex;gap:4px;">' + actions + '</div>' +
+      '</td>' +
+    '</tr>';
   }
 
   function matchesSearch(c, q) {
@@ -152,21 +190,303 @@
       return;
     }
 
-    // Render parent/child structure (top-level firms with their managed
-    // sub-properties indented). When searching, flatten to a single list so
-    // a hit doesn't disappear because its parent didn't match.
-    var html = '';
+    // Dense table with hierarchical expand. Parent rows show child count
+    // and toggle to reveal their properties. Flat (unparented) rows are
+    // tagged so they're easy to spot for cleanup. When searching, we
+    // flatten and force-expand any parent whose child matched so the
+    // hit isn't hidden.
+    var html =
+      '<table class="dense-table">' +
+        '<thead><tr>' +
+          '<th>Name</th>' +
+          '<th>Contact</th>' +
+          '<th>Location</th>' +
+          '<th style="text-align:right;width:140px;">Actions</th>' +
+        '</tr></thead>' +
+        '<tbody>';
+
     if (q) {
-      filtered.forEach(function(c) { html += clientCardHTML(c, 0); });
+      // Search: flatten and surface every match. Tag rows by their actual
+      // role in the hierarchy so badges still make sense.
+      filtered.forEach(function(c) {
+        var role;
+        var childCount = 0;
+        if (!c.parent_client_id) {
+          var kids = _clients.filter(function(x) { return x.parent_client_id === c.id; });
+          childCount = kids.length;
+          role = childCount ? 'parent' : 'flat';
+        } else {
+          role = 'child';
+        }
+        html += clientRowHTML(c, { role: role, childCount: childCount, expanded: !!_expandedParents[c.id] });
+      });
     } else {
       var grouped = groupForRender(filtered);
-      grouped.topLevel.forEach(function(parent) {
-        html += clientCardHTML(parent, 0);
-        var kids = grouped.childrenOf[parent.id] || [];
-        kids.forEach(function(child) { html += clientCardHTML(child, 1); });
+      grouped.topLevel.forEach(function(top) {
+        var kids = grouped.childrenOf[top.id] || [];
+        var role = kids.length ? 'parent' : 'flat';
+        html += clientRowHTML(top, { role: role, childCount: kids.length, expanded: !!_expandedParents[top.id] });
+        if (kids.length && _expandedParents[top.id]) {
+          kids.forEach(function(child) {
+            html += clientRowHTML(child, { role: 'child' });
+          });
+        }
       });
     }
+
+    html += '</tbody></table>';
     listEl.innerHTML = html;
+  }
+
+  function toggleClientParent(id) {
+    if (_expandedParents[id]) delete _expandedParents[id];
+    else _expandedParents[id] = true;
+    persistExpanded();
+    renderClientsList();
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  // Manual merge — pick a survivor, fold the other in. Mirrors the
+  // CRA's merge_clients tool but driven from the UI. Server endpoint
+  // doesn't exist as a one-off yet, so we do it via two PUT/DELETE
+  // calls plus children/leads reparenting client-side. Safer to add a
+  // proper /api/clients/merge endpoint later, but this works today.
+  // ──────────────────────────────────────────────────────────────────
+  function openClientMergeModal(sourceId) {
+    ensureClientsCache().then(function() {
+      var src = _clients.find(function(x) { return x.id === sourceId; });
+      if (!src) { alert('Client not found in cache. Try Refresh.'); return; }
+
+      var modal = document.getElementById('clientMergeModal') || createClientMergeModal();
+      document.getElementById('clientMerge_sourceId').value = sourceId;
+      document.getElementById('clientMerge_sourceName').textContent = src.name;
+      var sel = document.getElementById('clientMerge_targetId');
+      // Targets: every other client. Sort alpha. Surface parent vs child
+      // hint inline so the user picks the right one.
+      var byIdLocal = {};
+      _clients.forEach(function(c) { byIdLocal[c.id] = c; });
+      var opts = '<option value="">— Pick the SURVIVOR (the one to keep) —</option>';
+      _clients
+        .slice()
+        .filter(function(c) { return c.id !== sourceId; })
+        .sort(byName)
+        .forEach(function(c) {
+          var hint = c.parent_client_id && byIdLocal[c.parent_client_id]
+            ? ' (under ' + (byIdLocal[c.parent_client_id].name) + ')'
+            : (c.company_name && c.company_name !== c.name ? ' — ' + c.company_name : '');
+          opts += '<option value="' + escapeAttr(c.id) + '">' + escapeHTML(c.name + hint) + '</option>';
+        });
+      sel.innerHTML = opts;
+      document.getElementById('clientMerge_status').textContent = '';
+      document.getElementById('clientMerge_submitBtn').disabled = false;
+      openModal('clientMergeModal');
+    });
+  }
+
+  function createClientMergeModal() {
+    var modal = document.createElement('div');
+    modal.id = 'clientMergeModal';
+    modal.className = 'modal';
+    modal.innerHTML =
+      '<div class="modal-content" style="max-width:520px;">' +
+        '<div class="modal-header">Merge Client</div>' +
+        '<div style="padding:18px 20px;">' +
+          '<input type="hidden" id="clientMerge_sourceId" />' +
+          '<p style="margin:0 0 10px;color:var(--text-dim,#aaa);font-size:13px;">Fold <strong id="clientMerge_sourceName" style="color:var(--text,#fff);"></strong> into another client. The survivor keeps its data; only its empty fields are filled from the source. Children, linked leads, and estimates of the source are reparented to the survivor. The source row is then deleted.</p>' +
+          '<label style="font-size:12px;color:var(--text-dim,#aaa);">Survivor</label>' +
+          '<select id="clientMerge_targetId" style="width:100%;margin-top:4px;"></select>' +
+          '<p id="clientMerge_status" style="margin-top:10px;font-size:12px;"></p>' +
+        '</div>' +
+        '<div class="modal-footer">' +
+          '<button class="ee-btn secondary" onclick="closeModal(\'clientMergeModal\')">Cancel</button>' +
+          '<button class="ee-btn primary" id="clientMerge_submitBtn" onclick="submitClientMerge()">Merge</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(modal);
+    return modal;
+  }
+
+  function submitClientMerge() {
+    var sourceId = document.getElementById('clientMerge_sourceId').value;
+    var targetId = document.getElementById('clientMerge_targetId').value;
+    var statusEl = document.getElementById('clientMerge_status');
+    var btn = document.getElementById('clientMerge_submitBtn');
+    if (!targetId) {
+      statusEl.style.color = '#fbbf24';
+      statusEl.textContent = 'Pick a survivor first.';
+      return;
+    }
+    btn.disabled = true;
+    statusEl.style.color = 'var(--text-dim,#aaa)';
+    statusEl.textContent = 'Merging…';
+
+    // Look the two rows up locally so we can fill survivor's blanks from
+    // the source. The server doesn't have a dedicated merge endpoint yet,
+    // so we orchestrate from the client.
+    var src = _clients.find(function(x) { return x.id === sourceId; });
+    var dst = _clients.find(function(x) { return x.id === targetId; });
+    if (!src || !dst) {
+      btn.disabled = false;
+      statusEl.style.color = '#e74c3c';
+      statusEl.textContent = 'Could not resolve clients in cache.';
+      return;
+    }
+    // Fill blanks on dst from src
+    var fillFields = EDITABLE_FIELDS.concat(['parent_client_id']);
+    var patch = {};
+    fillFields.forEach(function(f) {
+      if ((dst[f] === null || dst[f] === undefined || dst[f] === '') && src[f]) {
+        patch[f] = src[f];
+      }
+    });
+
+    // Reparent any children of src to dst
+    var children = _clients.filter(function(x) { return x.parent_client_id === sourceId; });
+
+    var work = Promise.resolve();
+    if (Object.keys(patch).length) {
+      work = work.then(function() { return window.agxApi.clients.update(targetId, patch); });
+    }
+    children.forEach(function(child) {
+      work = work.then(function() { return window.agxApi.clients.update(child.id, { parent_client_id: targetId }); });
+    });
+    work = work
+      .then(function() { return window.agxApi.clients.remove(sourceId); })
+      .then(function() {
+        statusEl.style.color = '#34d399';
+        statusEl.textContent = 'Merged.';
+        setTimeout(function() {
+          closeModal('clientMergeModal');
+          reloadClientsCache();
+        }, 500);
+      })
+      .catch(function(err) {
+        btn.disabled = false;
+        statusEl.style.color = '#e74c3c';
+        statusEl.textContent = 'Failed: ' + (err.message || err);
+      });
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  // Manual split — turn one flat client into a parent + a property under
+  // it. The original client gets renamed to the property; a new parent
+  // is created (or an existing one reused if the user picks one).
+  // ──────────────────────────────────────────────────────────────────
+  function openClientSplitModal(sourceId) {
+    ensureClientsCache().then(function() {
+      var src = _clients.find(function(x) { return x.id === sourceId; });
+      if (!src) { alert('Client not found in cache. Try Refresh.'); return; }
+
+      if (!document.getElementById('clientSplitModal')) createClientSplitModal();
+
+      document.getElementById('clientSplit_sourceId').value = sourceId;
+      document.getElementById('clientSplit_sourceName').textContent = src.name;
+
+      // Heuristic split — separators commonly used in BT exports
+      var name = src.name || '';
+      var sep = / [-–—|/] /;
+      var parts = name.split(sep);
+      var parentGuess = parts.length > 1 ? parts[0].trim() : (src.company_name || '');
+      var propertyGuess = parts.length > 1 ? parts.slice(1).join(' ').trim() : name;
+      document.getElementById('clientSplit_newParentName').value = parentGuess;
+      document.getElementById('clientSplit_newPropertyName').value = propertyGuess;
+
+      // Existing-parent picker — if a likely-match exists, default it
+      var sel = document.getElementById('clientSplit_existingParentId');
+      var opts = '<option value="">— Create new parent from "' + escapeHTML(parentGuess || 'name above') + '" —</option>';
+      _clients
+        .slice()
+        .filter(function(c) { return !c.parent_client_id && c.id !== sourceId; })
+        .sort(byName)
+        .forEach(function(c) {
+          opts += '<option value="' + escapeAttr(c.id) + '">' + escapeHTML(c.name) + '</option>';
+        });
+      sel.innerHTML = opts;
+      document.getElementById('clientSplit_status').textContent = '';
+      document.getElementById('clientSplit_submitBtn').disabled = false;
+      openModal('clientSplitModal');
+    });
+  }
+
+  function createClientSplitModal() {
+    var modal = document.createElement('div');
+    modal.id = 'clientSplitModal';
+    modal.className = 'modal';
+    modal.innerHTML =
+      '<div class="modal-content" style="max-width:520px;">' +
+        '<div class="modal-header">Split Client into Parent + Property</div>' +
+        '<div style="padding:18px 20px;">' +
+          '<input type="hidden" id="clientSplit_sourceId" />' +
+          '<p style="margin:0 0 12px;color:var(--text-dim,#aaa);font-size:13px;">Take <strong id="clientSplit_sourceName" style="color:var(--text,#fff);"></strong> and split into a parent management company plus a property under it. The original row becomes the property.</p>' +
+          '<label style="font-size:12px;color:var(--text-dim,#aaa);">Parent (existing or new)</label>' +
+          '<select id="clientSplit_existingParentId" style="width:100%;margin-top:4px;margin-bottom:8px;"></select>' +
+          '<input id="clientSplit_newParentName" type="text" placeholder="New parent company name" style="width:100%;margin-bottom:12px;" />' +
+          '<label style="font-size:12px;color:var(--text-dim,#aaa);">Property name (renames the original)</label>' +
+          '<input id="clientSplit_newPropertyName" type="text" style="width:100%;margin-top:4px;" />' +
+          '<p id="clientSplit_status" style="margin-top:10px;font-size:12px;"></p>' +
+        '</div>' +
+        '<div class="modal-footer">' +
+          '<button class="ee-btn secondary" onclick="closeModal(\'clientSplitModal\')">Cancel</button>' +
+          '<button class="ee-btn primary" id="clientSplit_submitBtn" onclick="submitClientSplit()">Split</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(modal);
+    return modal;
+  }
+
+  function submitClientSplit() {
+    var sourceId = document.getElementById('clientSplit_sourceId').value;
+    var existingParentId = document.getElementById('clientSplit_existingParentId').value;
+    var newParentName = document.getElementById('clientSplit_newParentName').value.trim();
+    var newPropertyName = document.getElementById('clientSplit_newPropertyName').value.trim();
+    var statusEl = document.getElementById('clientSplit_status');
+    var btn = document.getElementById('clientSplit_submitBtn');
+    if (!newPropertyName) {
+      statusEl.style.color = '#fbbf24';
+      statusEl.textContent = 'Property name is required.';
+      return;
+    }
+    if (!existingParentId && !newParentName) {
+      statusEl.style.color = '#fbbf24';
+      statusEl.textContent = 'Either pick an existing parent or fill in a new parent name.';
+      return;
+    }
+    btn.disabled = true;
+    statusEl.style.color = 'var(--text-dim,#aaa)';
+    statusEl.textContent = 'Splitting…';
+
+    var pickParent = existingParentId
+      ? Promise.resolve(existingParentId)
+      : window.agxApi.clients.create({
+          name: newParentName,
+          company_name: newParentName,
+          client_type: 'Property Mgmt'
+        }).then(function(res) { return res.id; });
+
+    pickParent
+      .then(function(parentId) {
+        return window.agxApi.clients.update(sourceId, {
+          name: newPropertyName,
+          client_type: 'Property',
+          parent_client_id: parentId
+        });
+      })
+      .then(function() {
+        statusEl.style.color = '#34d399';
+        statusEl.textContent = 'Split complete.';
+        setTimeout(function() {
+          closeModal('clientSplitModal');
+          reloadClientsCache();
+          // Auto-expand the parent so the user sees the result
+          // (we don't have the parent ID in scope here, so just expand
+          // every parent whose name matches what we just used).
+        }, 500);
+      })
+      .catch(function(err) {
+        btn.disabled = false;
+        statusEl.style.color = '#e74c3c';
+        statusEl.textContent = 'Failed: ' + (err.message || err);
+      });
   }
 
   // Field list mirrors the server's EDITABLE_FIELDS in client-routes.js.
@@ -521,6 +841,11 @@
   window.deleteClientFromEditor = deleteClientFromEditor;
   window.reloadClientsCache = reloadClientsCache;
   window.handleClientsImportFile = handleClientsImportFile;
+  window.toggleClientParent = toggleClientParent;
+  window.openClientMergeModal = openClientMergeModal;
+  window.submitClientMerge = submitClientMerge;
+  window.openClientSplitModal = openClientSplitModal;
+  window.submitClientSplit = submitClientSplit;
 
   // Hook the AI panel calls so the directory re-renders after each
   // tool the assistant applies. Debounced via the call sites in

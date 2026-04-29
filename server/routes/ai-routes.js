@@ -1167,6 +1167,64 @@ router.post('/extract-lead',
 // All writes are logged via clients.updated_at and the response payload
 // so the chat can echo what happened.
 // ════════════════════════════════════════════════════════════════════
+// Pending-image bucket — keyed by user_id. Images sent inline on a
+// client-mode chat turn land here so the attach_business_card_to_client
+// tool can persist them to a specific client's attachments once the
+// agent identifies the match. Bucket is in-memory; a server restart or
+// scale-out (multiple dynos) would lose it. Acceptable for a single
+// Railway dyno; revisit when scaling out.
+//
+// Each bucket: { images: [{ b64, mime, addedAt }], lastTouched }.
+// We cap at 8 images / 30 min before pruning to avoid unbounded growth.
+const _clientImageBuckets = new Map();
+const PENDING_IMAGE_TTL_MS = 30 * 60 * 1000;
+const PENDING_IMAGE_CAP = 8;
+
+function stashPendingClientImages(userId, base64Array) {
+  if (!base64Array || !base64Array.length) return;
+  const existing = _clientImageBuckets.get(userId) || { images: [], lastTouched: 0 };
+  const now = Date.now();
+  for (const raw of base64Array) {
+    const stripped = typeof raw === 'string' && raw.indexOf('base64,') >= 0
+      ? raw.slice(raw.indexOf('base64,') + 7)
+      : raw;
+    existing.images.push({ b64: stripped, mime: 'image/jpeg', addedAt: now });
+  }
+  // Trim oldest first
+  if (existing.images.length > PENDING_IMAGE_CAP) {
+    existing.images = existing.images.slice(-PENDING_IMAGE_CAP);
+  }
+  existing.lastTouched = now;
+  _clientImageBuckets.set(userId, existing);
+}
+function getPendingClientImage(userId, indexFromEnd) {
+  const bucket = _clientImageBuckets.get(userId);
+  if (!bucket || !bucket.images.length) return null;
+  // Default: last image. Negative indexes count back from the end.
+  const offset = (typeof indexFromEnd === 'number' && indexFromEnd > 0)
+    ? Math.min(indexFromEnd, bucket.images.length) - 1
+    : 0;
+  return bucket.images[bucket.images.length - 1 - offset] || null;
+}
+function consumePendingClientImage(userId, indexFromEnd) {
+  const bucket = _clientImageBuckets.get(userId);
+  if (!bucket || !bucket.images.length) return null;
+  const offset = (typeof indexFromEnd === 'number' && indexFromEnd > 0)
+    ? Math.min(indexFromEnd, bucket.images.length) - 1
+    : 0;
+  const targetIdx = bucket.images.length - 1 - offset;
+  const [picked] = bucket.images.splice(targetIdx, 1);
+  if (!bucket.images.length) _clientImageBuckets.delete(userId);
+  return picked || null;
+}
+// Prune stale buckets every 10 min.
+setInterval(() => {
+  const cutoff = Date.now() - PENDING_IMAGE_TTL_MS;
+  for (const [uid, bucket] of _clientImageBuckets.entries()) {
+    if ((bucket.lastTouched || 0) < cutoff) _clientImageBuckets.delete(uid);
+  }
+}, 10 * 60 * 1000).unref();
+
 const CLIENT_TOOLS = [
   {
     name: 'create_property',
@@ -1301,6 +1359,21 @@ const CLIENT_TOOLS = [
       properties: {
         client_id: { type: 'string' },
         rationale: { type: 'string' }
+      },
+      required: ['client_id', 'rationale']
+    }
+  },
+  {
+    name: 'attach_business_card_to_client',
+    tier: 'approval',
+    description: 'Attach the most recent business card / photo the user uploaded in this conversation to a specific client. Use this AFTER you have read the card, identified which client it belongs to, and proposed any update_client_field changes — the photo gets stored under that client\'s attachments. Approval-required so the user confirms the right client was matched. The image is consumed from the pending bucket; only call once per uploaded card.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        client_id: { type: 'string' },
+        caption: { type: 'string', description: 'Short label, e.g., "Business card — Jane Smith, CAM at Solace Tampa".' },
+        image_index: { type: 'number', description: 'Optional. 1 = most recent image (default), 2 = the one before that, etc. Use only if the user uploaded multiple cards in one turn.' },
+        rationale: { type: 'string', description: 'One short sentence shown on the approval card explaining why this card belongs on this client.' }
       },
       required: ['client_id', 'rationale']
     }
@@ -1476,9 +1549,72 @@ async function execClientTool(name, input) {
       await pool.query('DELETE FROM clients WHERE id = $1', [input.client_id]);
       return `Deleted "${r.rows[0].name}".`;
     }
+    case 'attach_business_card_to_client': {
+      // Note: the userId is needed to find the right pending bucket.
+      // We pass it via execClientTool's options arg (added below).
+      throw new Error('attach_business_card_to_client must be invoked via execClientToolWithCtx');
+    }
     default:
       throw new Error('Unknown tool: ' + name);
   }
+}
+
+// Wrapper that adds context (userId, storage) for tools that need it
+// (currently only attach_business_card_to_client). Falls through to the
+// stateless executor for everything else.
+async function execClientToolWithCtx(name, input, ctx) {
+  if (name !== 'attach_business_card_to_client') {
+    return execClientTool(name, input);
+  }
+  const userId = ctx && ctx.userId;
+  if (!userId) throw new Error('userId required for attach_business_card_to_client');
+  const exists = await pool.query('SELECT id, name FROM clients WHERE id = $1', [input.client_id]);
+  if (!exists.rows.length) throw new Error('client_id not found');
+  const picked = consumePendingClientImage(userId, input.image_index);
+  if (!picked) throw new Error('No pending business-card image found. The user may have uploaded then sent it more than 30 minutes ago, or the image was already attached.');
+  // Persist via the storage adapter + attachments table, mirroring the
+  // attachment-routes upload flow.
+  const buf = Buffer.from(picked.b64, 'base64');
+  const id = 'att_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+  const baseKey = 'client/' + input.client_id + '/' + id;
+  let thumbKey = null, webKey = null, originalKey = null;
+  let thumbUrl = null, webUrl = null, originalUrl = null;
+  let width = null, height = null;
+  try {
+    // Use sharp pipeline if available — same as attachment-routes.
+    const sharp = require('sharp');
+    const meta = await sharp(buf).metadata();
+    width = meta.width || null;
+    height = meta.height || null;
+    const thumbBuf = await sharp(buf).rotate().resize(200, 200, { fit: 'cover' }).jpeg({ quality: 80 }).toBuffer();
+    const webBuf   = await sharp(buf).rotate().resize(1600, 1600, { fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 85 }).toBuffer();
+    thumbKey    = baseKey + '_thumb.jpg';
+    webKey      = baseKey + '_web.jpg';
+    originalKey = baseKey + '_orig.jpg';
+    thumbUrl    = await storage.put(thumbKey, thumbBuf, 'image/jpeg');
+    webUrl      = await storage.put(webKey,   webBuf,   'image/jpeg');
+    originalUrl = await storage.put(originalKey, buf, picked.mime || 'image/jpeg');
+  } catch (e) {
+    // sharp not available or pipeline failed — fall back to original-only.
+    originalKey = baseKey + '_orig.jpg';
+    originalUrl = await storage.put(originalKey, buf, picked.mime || 'image/jpeg');
+  }
+  await pool.query(
+    `INSERT INTO attachments
+       (id, entity_type, entity_id, filename, mime_type, size_bytes,
+        width, height, thumb_url, web_url, original_url,
+        thumb_key, web_key, original_key, caption, position, uploaded_by)
+     VALUES ($1, 'client', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 0, $15)`,
+    [id, input.client_id,
+     (input.caption || 'Business card').slice(0, 80) + '.jpg',
+     picked.mime || 'image/jpeg', buf.length,
+     width, height,
+     thumbUrl, webUrl, originalUrl,
+     thumbKey, webKey, originalKey,
+     input.caption || null,
+     userId]
+  );
+  return `Attached business card to "${exists.rows[0].name}".`;
 }
 
 function isClientToolAutoTier(name) {
@@ -1572,7 +1708,16 @@ async function buildClientDirectoryContext() {
   out.push('    create_property, update_client_field, link_property_to_parent');
   out.push('  APPROVAL (user clicks Approve/Reject before applying):');
   out.push('    create_parent_company, rename_client, change_property_parent,');
-  out.push('    merge_clients, split_client_into_parent_and_property, delete_client');
+  out.push('    merge_clients, split_client_into_parent_and_property, delete_client,');
+  out.push('    attach_business_card_to_client');
+  out.push('');
+  out.push('# Photos / business cards');
+  out.push('When the user uploads a photo (visible to you in this turn as an inline image):');
+  out.push('  1. READ it. If it\'s a business card, extract: name, title, company, email, phone, address.');
+  out.push('  2. MATCH to an existing client. Compare the extracted name/email/phone/company against the directory below. If the company on the card matches a parent management company and the title implies the cardholder is a CAM/manager at a property, look for that property under the parent. If the property does not exist yet, propose create_property.');
+  out.push('  3. UPDATE missing fields on the matched client (community_manager / cm_email / cm_phone / first_name / last_name / etc.) via update_client_field — auto-tier, just call.');
+  out.push('  4. PROPOSE attach_business_card_to_client to save the photo to that client\'s attachments. Include a caption like "Business card — Jane Smith, CAM at Solace Tampa". Approval-tier — user confirms the match.');
+  out.push('Only call attach_business_card_to_client ONCE per uploaded card — the image is consumed from the pending bucket.');
   out.push('');
   out.push('# Directory snapshot (' + rows.length + ' clients)');
   out.push('');
@@ -1682,6 +1827,17 @@ router.post('/clients/chat',
     }
     const userMessage = (req.body && req.body.message || '').trim();
     if (!userMessage) return res.status(400).json({ error: 'message is required' });
+    // Inline images (composer uploads, business cards, etc.). Client mode
+    // has no entity_id, so these aren't persisted to attachments yet —
+    // we stash them in a per-user pending bucket so the
+    // attach_business_card_to_client tool can persist on demand once the
+    // agent identifies the right client.
+    const additionalImages = Array.isArray(req.body && req.body.additional_images)
+      ? req.body.additional_images.slice(0, 12)
+      : [];
+    if (additionalImages.length) {
+      stashPendingClientImages(req.user.id, additionalImages);
+    }
 
     setSSEHeaders(res);
     try {
@@ -1702,9 +1858,23 @@ router.post('/clients/chat',
         [userMsgId, req.user.id, userMessage]
       );
 
+      // Build user message content — text + any inline images (one-shot
+      // vision). The agent reads the business card / photo this turn.
+      const userContent = additionalImages.length
+        ? [
+            ...additionalImages.map(b64 => {
+              const stripped = typeof b64 === 'string' && b64.indexOf('base64,') >= 0
+                ? b64.slice(b64.indexOf('base64,') + 7)
+                : b64;
+              return { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: stripped } };
+            }),
+            { type: 'text', text: userMessage }
+          ]
+        : userMessage;
+
       const messages = [
         ...history.map(m => ({ role: m.role, content: m.content })),
-        { role: 'user', content: userMessage }
+        { role: 'user', content: userContent }
       ];
 
       let totalUsage = { input_tokens: 0, output_tokens: 0 };
@@ -1761,7 +1931,7 @@ router.post('/clients/chat',
         for (const tu of autoBlocks) {
           let summary, isError = false;
           try {
-            summary = await execClientTool(tu.name, tu.input || {});
+            summary = await execClientToolWithCtx(tu.name, tu.input || {}, { userId: req.user.id });
             res.write('data: ' + JSON.stringify({ tool_applied: { id: tu.id, name: tu.name, input: tu.input, summary } }) + '\n\n');
           } catch (e) {
             summary = 'Error: ' + (e.message || 'failed');
@@ -1831,7 +2001,7 @@ router.post('/clients/chat/continue',
           res.write('data: ' + JSON.stringify({ tool_rejected: { id: tu.id, name: tu.name } }) + '\n\n');
         } else {
           try {
-            summary = await execClientTool(tu.name, tu.input || {});
+            summary = await execClientToolWithCtx(tu.name, tu.input || {}, { userId: req.user.id });
             res.write('data: ' + JSON.stringify({ tool_applied: { id: tu.id, name: tu.name, input: tu.input, summary } }) + '\n\n');
           } catch (e) {
             summary = 'Error: ' + (e.message || 'failed');
@@ -1886,7 +2056,7 @@ router.post('/clients/chat/continue',
         for (const tu of autoBlocks) {
           let summary, isError = false;
           try {
-            summary = await execClientTool(tu.name, tu.input || {});
+            summary = await execClientToolWithCtx(tu.name, tu.input || {}, { userId: req.user.id });
             res.write('data: ' + JSON.stringify({ tool_applied: { id: tu.id, name: tu.name, input: tu.input, summary } }) + '\n\n');
           } catch (e) {
             summary = 'Error: ' + (e.message || 'failed');

@@ -704,6 +704,11 @@
     } else if (tu.name === 'delete_client') {
       heading = '&#x1F5D1; Delete client';
       detail = '<div style="font-size:12px;color:#f87171;font-family:monospace;">id: ' + escapeHTMLLocal(input.client_id || '') + '</div>';
+    } else if (tu.name === 'attach_business_card_to_client') {
+      heading = '&#x1F4CE; Attach business card';
+      detail = '<div style="font-size:12px;color:var(--text,#ccc);">Save the most recent uploaded photo to this client\'s attachments.</div>' +
+        '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:2px;font-family:monospace;">client: ' + escapeHTMLLocal(input.client_id || '') + '</div>' +
+        (input.caption ? '<div style="font-size:11px;color:var(--text-dim,#aaa);margin-top:3px;">Caption: ' + escapeHTMLLocal(input.caption) + '</div>' : '');
     } else {
       heading = '? Unknown tool: ' + tu.name;
       detail = '<pre style="font-size:11px;">' + escapeHTMLLocal(JSON.stringify(input, null, 2)) + '</pre>';
