@@ -3196,6 +3196,168 @@
     }
   }
 
+  // ── AutoFit + Resize All (rows + columns) ─────────────────
+  // Excel's double-click-the-handle gesture: measure each cell's content
+  // height, pick the tallest, set rowHeights[r] to that. For columns,
+  // measure the longest rendered text and set width accordingly.
+
+  // AutoFit one row's height. Strategy: probe rendered cell scrollHeight
+  // since the browser already knows what a cell needs. Falls back to a
+  // line-count heuristic for non-rendered cells.
+  function autoFitRow(r) {
+    const tbody = wsTable && wsTable.querySelector('tbody');
+    let maxH = ROW_HEIGHT;
+    if (tbody && tbody.rows[r]) {
+      const tr = tbody.rows[r];
+      // Temporarily release the explicit height so the row collapses to
+      // content size; capture, then restore the explicit value.
+      const oldHeight = tr.style.height;
+      tr.style.height = '';
+      const measured = tr.getBoundingClientRect().height;
+      tr.style.height = oldHeight;
+      maxH = Math.max(ROW_HEIGHT, Math.ceil(measured));
+    }
+    if (maxH === ROW_HEIGHT) {
+      delete grid.rowHeights[r];
+    } else {
+      grid.rowHeights[r] = maxH;
+    }
+    grid.dirty = true;
+    renderGrid();
+    saveWorkspace();
+  }
+
+  function autoFitAllRows() {
+    for (let r = 0; r < grid.rows; r++) {
+      autoFitRowSilent(r);
+    }
+    grid.dirty = true;
+    renderGrid();
+    saveWorkspace();
+  }
+  // Variant that skips the per-row save / re-render — caller does it once.
+  function autoFitRowSilent(r) {
+    const tbody = wsTable && wsTable.querySelector('tbody');
+    let maxH = ROW_HEIGHT;
+    if (tbody && tbody.rows[r]) {
+      const tr = tbody.rows[r];
+      const oldHeight = tr.style.height;
+      tr.style.height = '';
+      const measured = tr.getBoundingClientRect().height;
+      tr.style.height = oldHeight;
+      maxH = Math.max(ROW_HEIGHT, Math.ceil(measured));
+    }
+    if (maxH === ROW_HEIGHT) delete grid.rowHeights[r];
+    else grid.rowHeights[r] = maxH;
+  }
+
+  // Apply one fixed height to every row in the sheet. Excel's "Resize
+  // all rows" with a manual value.
+  function setAllRowHeights(height) {
+    const h = Math.max(18, Number(height) || ROW_HEIGHT);
+    if (h === ROW_HEIGHT) {
+      grid.rowHeights = {};
+    } else {
+      const out = {};
+      for (let r = 0; r < grid.rows; r++) out[r] = h;
+      grid.rowHeights = out;
+    }
+    grid.dirty = true;
+    renderGrid();
+    saveWorkspace();
+  }
+
+  function setRowHeight(r, height) {
+    const h = Math.max(18, Number(height) || ROW_HEIGHT);
+    if (h === ROW_HEIGHT) delete grid.rowHeights[r];
+    else grid.rowHeights[r] = h;
+    grid.dirty = true;
+    renderGrid();
+    saveWorkspace();
+  }
+
+  // Column equivalents — Excel parity. Width-of-content via temporary
+  // measurement of an off-screen probe element.
+  function autoFitColumn(c) {
+    let maxW = 60;
+    // Measure every cell that's rendered in this column. scrollWidth
+    // already accounts for the rendered text including font metrics.
+    if (wsTable) {
+      wsTable.querySelectorAll('td[data-c="' + c + '"]').forEach(function(td) {
+        const old = td.style.width;
+        const oldMin = td.style.minWidth;
+        td.style.width = ''; td.style.minWidth = '';
+        const w = td.scrollWidth;
+        td.style.width = old; td.style.minWidth = oldMin;
+        if (w > maxW) maxW = w;
+      });
+      // And the column header
+      const th = wsTable.querySelector('th[data-col="' + c + '"]');
+      if (th && th.scrollWidth > maxW) maxW = th.scrollWidth;
+    }
+    grid.colWidths[c] = Math.max(60, Math.ceil(maxW + 12)); // 12px breathing room
+    grid.dirty = true;
+    renderGrid();
+    saveWorkspace();
+  }
+
+  function autoFitAllColumns() {
+    for (let c = 0; c < grid.cols; c++) {
+      autoFitColumnSilent(c);
+    }
+    grid.dirty = true;
+    renderGrid();
+    saveWorkspace();
+  }
+  function autoFitColumnSilent(c) {
+    let maxW = 60;
+    if (wsTable) {
+      wsTable.querySelectorAll('td[data-c="' + c + '"]').forEach(function(td) {
+        const old = td.style.width;
+        const oldMin = td.style.minWidth;
+        td.style.width = ''; td.style.minWidth = '';
+        const w = td.scrollWidth;
+        td.style.width = old; td.style.minWidth = oldMin;
+        if (w > maxW) maxW = w;
+      });
+      const th = wsTable.querySelector('th[data-col="' + c + '"]');
+      if (th && th.scrollWidth > maxW) maxW = th.scrollWidth;
+    }
+    grid.colWidths[c] = Math.max(60, Math.ceil(maxW + 12));
+  }
+
+  function setAllColWidths(width) {
+    const w = Math.max(40, Number(width) || COL_DEFAULT_WIDTH);
+    if (w === COL_DEFAULT_WIDTH) {
+      grid.colWidths = {};
+    } else {
+      const out = {};
+      for (let c = 0; c < grid.cols; c++) out[c] = w;
+      grid.colWidths = out;
+    }
+    grid.dirty = true;
+    renderGrid();
+    saveWorkspace();
+  }
+
+  function setColumnWidth(c, width) {
+    const w = Math.max(40, Number(width) || COL_DEFAULT_WIDTH);
+    if (w === COL_DEFAULT_WIDTH) delete grid.colWidths[c];
+    else grid.colWidths[c] = w;
+    grid.dirty = true;
+    renderGrid();
+    saveWorkspace();
+  }
+
+  window.wsAutoFitRow = autoFitRow;
+  window.wsAutoFitAllRows = autoFitAllRows;
+  window.wsSetAllRowHeights = setAllRowHeights;
+  window.wsSetRowHeight = setRowHeight;
+  window.wsAutoFitColumn = autoFitColumn;
+  window.wsAutoFitAllColumns = autoFitAllColumns;
+  window.wsSetAllColWidths = setAllColWidths;
+  window.wsSetColumnWidth = setColumnWidth;
+
   // ── Tables ────────────────────────────────────────────────
   // Tables are styled rectangular ranges. The cell renderer asks
   // getTableStyleForCell(r, c) for each cell; if the cell falls inside
@@ -3618,6 +3780,27 @@
     document.addEventListener('mousemove', handleRowResizeMove);
     document.addEventListener('mouseup', handleRowResizeEnd);
 
+    // Double-click on a row/column resize handle = AutoFit (Excel parity)
+    wsTable.addEventListener('dblclick', function(e) {
+      // Row resize handle (bottom edge of row header)
+      if (e.target.classList && e.target.classList.contains('ws-row-resize')) {
+        e.stopPropagation();
+        const r = parseInt(e.target.dataset.row);
+        if (!isNaN(r)) autoFitRow(r);
+        return;
+      }
+      // Column resize handle: header right edge (within ~6px). Mirrors
+      // the column-resize hit test in handleColResizeStart.
+      if (e.target.classList && e.target.classList.contains('ws-col-header')) {
+        const rect = e.target.getBoundingClientRect();
+        if (e.clientX > rect.right - 6) {
+          e.stopPropagation();
+          const c = parseInt(e.target.dataset.col);
+          if (!isNaN(c)) autoFitColumn(c);
+        }
+      }
+    }, true);
+
     // Find & Replace shortcut
     wsContainer.addEventListener('keydown', function(e) {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
@@ -3653,6 +3836,17 @@
           { label: 'Insert Row Above', action: function () { insertRow(rowIdx, 'above'); } },
           { label: 'Insert Row Below', action: function () { insertRow(rowIdx, 'below'); } },
           '---',
+          { label: 'AutoFit Height (Fit to Content)', action: function () { autoFitRow(rowIdx); } },
+          { label: 'AutoFit All Rows', action: function () { autoFitAllRows(); } },
+          { label: 'Set Row Height…', action: function () {
+            var h = prompt('Row height (px):', String(grid.rowHeights[rowIdx] || ROW_HEIGHT));
+            if (h != null) setRowHeight(rowIdx, parseInt(h, 10));
+          } },
+          { label: 'Set All Row Heights…', action: function () {
+            var h = prompt('Apply this height to every row (px):', String(ROW_HEIGHT));
+            if (h != null) setAllRowHeights(parseInt(h, 10));
+          } },
+          '---',
           { label: 'Delete Row', action: function () { deleteRow(rowIdx); } }
         ]);
       } else if (colH) {
@@ -3661,6 +3855,17 @@
         showContextMenu(e.clientX, e.clientY, [
           { label: 'Insert Column Left', action: function () { insertColumn(colIdx, 'left'); } },
           { label: 'Insert Column Right', action: function () { insertColumn(colIdx, 'right'); } },
+          '---',
+          { label: 'AutoFit Width (Fit to Content)', action: function () { autoFitColumn(colIdx); } },
+          { label: 'AutoFit All Columns', action: function () { autoFitAllColumns(); } },
+          { label: 'Set Column Width…', action: function () {
+            var w = prompt('Column width (px):', String(grid.colWidths[colIdx] || COL_DEFAULT_WIDTH));
+            if (w != null) setColumnWidth(colIdx, parseInt(w, 10));
+          } },
+          { label: 'Set All Column Widths…', action: function () {
+            var w = prompt('Apply this width to every column (px):', String(COL_DEFAULT_WIDTH));
+            if (w != null) setAllColWidths(parseInt(w, 10));
+          } },
           '---',
           { label: 'Delete Column', action: function () { deleteColumn(colIdx); } }
         ]);
