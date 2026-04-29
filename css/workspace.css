@@ -637,6 +637,65 @@
   background: var(--row-hover);
 }
 
+/* ── Sheet Tab Strip ────────────────────────────────────── */
+/* Excel-style tabs at the bottom of the workspace, above the status bar. */
+.ws-sheet-tabs {
+  background: var(--grid-header-bg);
+  border-left: 1px solid var(--grid-border);
+  border-right: 1px solid var(--grid-border);
+  padding: 2px 4px 0;
+  user-select: none;
+}
+.ws-sheet-tabs-list {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+.ws-sheet-tab {
+  position: relative;
+  padding: 6px 14px 6px 12px;
+  background: rgba(255,255,255,0.02);
+  border: 1px solid var(--grid-border);
+  border-bottom: none;
+  border-radius: 4px 4px 0 0;
+  font-size: 11px;
+  color: var(--text-dim, #aaa);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.12s, color 0.12s;
+  margin-bottom: -1px;
+}
+.ws-sheet-tab:hover {
+  background: rgba(255,255,255,0.05);
+  color: var(--text, #fff);
+}
+.ws-sheet-tab.active {
+  background: var(--surface, #181820);
+  color: var(--text, #fff);
+  font-weight: 600;
+  border-bottom: 1px solid var(--surface, #181820);
+  z-index: 1;
+}
+.ws-sheet-tab-name { display: inline-block; }
+.ws-sheet-tab-add {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-dim, #888);
+  padding: 4px 10px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  border-radius: 4px;
+  margin-bottom: 1px;
+  transition: background 0.12s, color 0.12s;
+}
+.ws-sheet-tab-add:hover {
+  background: rgba(255,255,255,0.06);
+  color: var(--text, #fff);
+}
+
 /* ── Status Bar ─────────────────────────────────────────── */
 
 .ws-statusbar {

@@ -51,6 +51,36 @@
   var recentFontColors = [];
 
   // ── State ──────────────────────────────────────────────────
+  // Workbook = collection of sheets, like an Excel file. Persistent
+  // state lives here. Each sheet carries its own grid (cells, dimensions,
+  // links, merges, column widths). The active sheet's data is mirrored
+  // into the `grid` object below, which all the existing rendering /
+  // editing / formula functions read from. switchSheet keeps the two
+  // in sync.
+  let workbook = {
+    jobId: null,
+    activeSheetId: null,
+    sheets: [],        // [{ id, name, rows, cols, cells, colWidths, links, merges }, ...]
+    dirty: false
+  };
+
+  function newSheetId() {
+    return 's_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
+  }
+
+  function makeBlankSheet(name) {
+    return {
+      id: newSheetId(),
+      name: name || 'Sheet1',
+      rows: MIN_ROWS,
+      cols: MIN_COLS,
+      cells: {},
+      colWidths: {},
+      links: {},
+      merges: []
+    };
+  }
+
   let grid = {
     rows: MIN_ROWS,
     cols: MIN_COLS,
@@ -466,8 +496,26 @@
     const expr = raw.substring(1);
 
     try {
+      // Cross-sheet refs first: `Sheet2!A1` or `'Sheet Two'!A1`. These
+      // need to be resolved BEFORE the same-sheet ref pass below,
+      // otherwise the bare `A1` inside `Sheet2!A1` would match the
+      // local-sheet regex and produce the wrong value.
+      var resolved = expr.replace(
+        /(?:'([^']+)'|([A-Za-z_][A-Za-z0-9_ ]*))!([A-Z]+\d+)/gi,
+        function (match, quotedName, bareName, addr) {
+          var sheetName = quotedName || bareName;
+          var sheet = findSheetByName(sheetName);
+          if (!sheet) return '0';
+          var ref = parseAddr(addr.toUpperCase());
+          if (!ref) return '0';
+          var refCell = getCellFromSheet(sheet, ref.r, ref.c);
+          var v = refCell.value;
+          return (typeof v === 'number') ? v : (v === '' ? '0' : JSON.stringify(v));
+        }
+      );
+
       // Replace cell references with their numeric values
-      var resolved = expr.replace(/\b([A-Z]+)(\d+)\b/gi, function (match, col, row) {
+      resolved = resolved.replace(/\b([A-Z]+)(\d+)\b/gi, function (match, col, row) {
         var ref = parseAddr(match.toUpperCase());
         if (!ref) return '0';
         // Redirect merged cells to origin
@@ -725,48 +773,224 @@
 
   // ── Persistence ────────────────────────────────────────────
 
+  // Sync grid (active sheet's working state) back to its sheet object
+  // in the workbook. Called before persistence and before switching sheets.
+  function syncGridToActiveSheet() {
+    if (!workbook.sheets.length) return;
+    const sheet = workbook.sheets.find(s => s.id === workbook.activeSheetId);
+    if (!sheet) return;
+    sheet.rows = grid.rows;
+    sheet.cols = grid.cols;
+    sheet.cells = grid.cells;
+    sheet.colWidths = grid.colWidths;
+    sheet.links = grid.links;
+    sheet.merges = grid.merges;
+  }
+
+  // Pull a sheet's persistent state into grid so the rest of the engine
+  // (rendering, formulas, undo, etc.) keeps reading from the same place
+  // it always has. Resets transient state — selection / editing / undo
+  // history are per-sheet by virtue of being cleared on switch.
+  function loadSheetIntoGrid(sheet) {
+    grid.rows = Math.max(sheet.rows || MIN_ROWS, MIN_ROWS);
+    grid.cols = Math.max(sheet.cols || MIN_COLS, MIN_COLS);
+    grid.cells = sheet.cells || {};
+    grid.colWidths = sheet.colWidths || {};
+    grid.links = sheet.links || {};
+    grid.merges = sheet.merges || [];
+    grid.selection = null;
+    grid.selEnd = null;
+    grid.editing = null;
+    grid.refMode = false;
+    grid.refAnchor = null;
+    grid.undoStack = [];
+    grid.redoStack = [];
+  }
+
   function saveWorkspace() {
-    if (!grid.jobId) return;
+    if (!workbook.jobId) return;
+    syncGridToActiveSheet();
     const data = {
-      rows: grid.rows,
-      cols: grid.cols,
-      cells: grid.cells,
-      colWidths: grid.colWidths,
-      links: grid.links,
-      merges: grid.merges
+      // Versioned shape so the next migration knows what it's reading.
+      version: 2,
+      activeSheetId: workbook.activeSheetId,
+      sheets: workbook.sheets
     };
     const allWs = safeLoadJSON('agx-workspaces', {});
-    allWs[grid.jobId] = data;
+    allWs[workbook.jobId] = data;
     localStorage.setItem('agx-workspaces', JSON.stringify(allWs));
+    workbook.dirty = false;
     grid.dirty = false;
   }
 
   function loadWorkspace(jobId) {
     const allWs = safeLoadJSON('agx-workspaces', {});
     const saved = allWs[jobId];
-    if (saved) {
-      grid.rows = Math.max(saved.rows || MIN_ROWS, MIN_ROWS);
-      grid.cols = Math.max(saved.cols || MIN_COLS, MIN_COLS);
-      grid.cells = saved.cells || {};
-      grid.colWidths = saved.colWidths || {};
-      grid.links = saved.links || {};
-      grid.merges = saved.merges || [];
+
+    workbook.jobId = jobId;
+
+    if (saved && Array.isArray(saved.sheets) && saved.sheets.length) {
+      // v2+ shape — already a workbook with sheets
+      workbook.sheets = saved.sheets.map(s => ({
+        id: s.id || newSheetId(),
+        name: s.name || 'Sheet',
+        rows: Math.max(s.rows || MIN_ROWS, MIN_ROWS),
+        cols: Math.max(s.cols || MIN_COLS, MIN_COLS),
+        cells: s.cells || {},
+        colWidths: s.colWidths || {},
+        links: s.links || {},
+        merges: s.merges || []
+      }));
+      workbook.activeSheetId = saved.activeSheetId && workbook.sheets.find(s => s.id === saved.activeSheetId)
+        ? saved.activeSheetId
+        : workbook.sheets[0].id;
+    } else if (saved && (saved.cells || saved.rows)) {
+      // v1 shape — legacy single-sheet save. Wrap it as Sheet1 of a new
+      // workbook so existing data carries forward without loss.
+      workbook.sheets = [{
+        id: newSheetId(),
+        name: 'Sheet1',
+        rows: Math.max(saved.rows || MIN_ROWS, MIN_ROWS),
+        cols: Math.max(saved.cols || MIN_COLS, MIN_COLS),
+        cells: saved.cells || {},
+        colWidths: saved.colWidths || {},
+        links: saved.links || {},
+        merges: saved.merges || []
+      }];
+      workbook.activeSheetId = workbook.sheets[0].id;
     } else {
-      grid.rows = MIN_ROWS;
-      grid.cols = MIN_COLS;
-      grid.cells = {};
-      grid.colWidths = {};
-      grid.links = {};
-      grid.merges = [];
+      // Brand-new workspace
+      workbook.sheets = [makeBlankSheet('Sheet1')];
+      workbook.activeSheetId = workbook.sheets[0].id;
     }
+
+    workbook.dirty = false;
     grid.jobId = jobId;
-    grid.selection = null;
-    grid.editing = null;
-    grid.refMode = false;
-    grid.refAnchor = null;
     grid.dirty = false;
+    loadSheetIntoGrid(workbook.sheets.find(s => s.id === workbook.activeSheetId));
     migrateLinks();
     recalcAll();
+  }
+
+  // ── Sheet management ───────────────────────────────────────
+  // Switch the active sheet. Saves current grid state back to its sheet,
+  // loads the target sheet's state into grid, re-renders.
+  function switchSheet(sheetId) {
+    if (sheetId === workbook.activeSheetId) return;
+    const target = workbook.sheets.find(s => s.id === sheetId);
+    if (!target) return;
+    syncGridToActiveSheet();
+    workbook.activeSheetId = sheetId;
+    loadSheetIntoGrid(target);
+    workbook.dirty = true;
+    grid.dirty = true;
+    recalcAll();
+    renderGrid();
+    renderSheetTabs();
+    selectCell(0, 0);
+  }
+
+  function addSheet(initialName) {
+    syncGridToActiveSheet();
+    let name = initialName;
+    if (!name) {
+      let n = workbook.sheets.length + 1;
+      while (workbook.sheets.some(s => s.name === 'Sheet' + n)) n++;
+      name = 'Sheet' + n;
+    }
+    const sheet = makeBlankSheet(name);
+    workbook.sheets.push(sheet);
+    workbook.activeSheetId = sheet.id;
+    loadSheetIntoGrid(sheet);
+    workbook.dirty = true;
+    grid.dirty = true;
+    renderGrid();
+    renderSheetTabs();
+    selectCell(0, 0);
+    return sheet.id;
+  }
+
+  function deleteSheet(sheetId) {
+    if (workbook.sheets.length <= 1) {
+      alert('Workbook must have at least one sheet.');
+      return;
+    }
+    const idx = workbook.sheets.findIndex(s => s.id === sheetId);
+    if (idx === -1) return;
+    const sheet = workbook.sheets[idx];
+    if (!confirm('Delete sheet "' + sheet.name + '"? This cannot be undone.')) return;
+    workbook.sheets.splice(idx, 1);
+    if (workbook.activeSheetId === sheetId) {
+      workbook.activeSheetId = workbook.sheets[Math.max(0, idx - 1)].id;
+      loadSheetIntoGrid(workbook.sheets.find(s => s.id === workbook.activeSheetId));
+      recalcAll();
+      renderGrid();
+      selectCell(0, 0);
+    }
+    workbook.dirty = true;
+    renderSheetTabs();
+  }
+
+  function renameSheet(sheetId, newName) {
+    const sheet = workbook.sheets.find(s => s.id === sheetId);
+    if (!sheet) return;
+    const trimmed = String(newName || '').trim();
+    if (!trimmed) return;
+    if (workbook.sheets.some(s => s.id !== sheetId && s.name === trimmed)) {
+      alert('A sheet named "' + trimmed + '" already exists.');
+      return;
+    }
+    sheet.name = trimmed;
+    workbook.dirty = true;
+    renderSheetTabs();
+  }
+
+  function duplicateSheet(sheetId) {
+    syncGridToActiveSheet();
+    const src = workbook.sheets.find(s => s.id === sheetId);
+    if (!src) return;
+    const copy = {
+      id: newSheetId(),
+      name: src.name + ' (copy)',
+      rows: src.rows,
+      cols: src.cols,
+      cells: JSON.parse(JSON.stringify(src.cells)),
+      colWidths: JSON.parse(JSON.stringify(src.colWidths)),
+      links: JSON.parse(JSON.stringify(src.links)),
+      merges: JSON.parse(JSON.stringify(src.merges))
+    };
+    const idx = workbook.sheets.findIndex(s => s.id === sheetId);
+    workbook.sheets.splice(idx + 1, 0, copy);
+    workbook.dirty = true;
+    renderSheetTabs();
+  }
+
+  function moveSheet(sheetId, direction) {
+    const idx = workbook.sheets.findIndex(s => s.id === sheetId);
+    if (idx === -1) return;
+    const target = direction === 'left' ? idx - 1 : idx + 1;
+    if (target < 0 || target >= workbook.sheets.length) return;
+    const [sheet] = workbook.sheets.splice(idx, 1);
+    workbook.sheets.splice(target, 0, sheet);
+    workbook.dirty = true;
+    renderSheetTabs();
+  }
+
+  // Resolve a sheet name to a sheet object — used by cross-sheet
+  // formula refs (`=Sheet2!A1`). Case-insensitive match. Returns null
+  // when the named sheet doesn't exist.
+  function findSheetByName(name) {
+    if (!name) return null;
+    const target = String(name).trim().toLowerCase();
+    return workbook.sheets.find(s => s.name.toLowerCase() === target) || null;
+  }
+
+  // Read a cell from a specific sheet without disturbing grid. Used by
+  // cross-sheet formula resolution.
+  function getCellFromSheet(sheet, r, c) {
+    if (!sheet) return { value: '', raw: '' };
+    const a = colLetter(c) + (r + 1);
+    return sheet.cells[a] || { value: '', raw: '' };
   }
 
   // ── Rendering ──────────────────────────────────────────────
@@ -846,6 +1070,7 @@
       <div class="ws-grid-wrapper" id="wsGridWrapper">
         <table class="ws-grid" id="wsGrid"></table>
       </div>
+      <div class="ws-sheet-tabs" id="wsSheetTabs"></div>
       <div class="ws-statusbar">
         <span id="wsStatus">Ready</span>
         <span id="wsQuickCalc"></span>
@@ -855,6 +1080,68 @@
         </span>
       </div>
     `;
+  }
+
+  // ── Sheet tab strip ────────────────────────────────────────
+  // Excel-style tabs at the bottom of the workspace. Click to switch,
+  // double-click to rename, right-click for the contextual menu.
+  // The "+" appends a fresh sheet.
+  function renderSheetTabs() {
+    const wrap = document.getElementById('wsSheetTabs');
+    if (!wrap) return;
+    let html = '<div class="ws-sheet-tabs-list">';
+    workbook.sheets.forEach(function(s) {
+      const active = s.id === workbook.activeSheetId;
+      html += '<div class="ws-sheet-tab' + (active ? ' active' : '') + '" data-sheet-id="' +
+        s.id + '" title="' + escapeAttr(s.name) + '">' +
+        '<span class="ws-sheet-tab-name">' + escapeHTML(s.name) + '</span>' +
+      '</div>';
+    });
+    html += '<button class="ws-sheet-tab-add" id="wsAddSheetBtn" title="Add sheet">+</button>';
+    html += '</div>';
+    wrap.innerHTML = html;
+    // Wire interactions
+    wrap.querySelectorAll('.ws-sheet-tab').forEach(function(tab) {
+      const id = tab.dataset.sheetId;
+      tab.addEventListener('click', function() { switchSheet(id); });
+      tab.addEventListener('dblclick', function() {
+        const sheet = workbook.sheets.find(s => s.id === id);
+        if (!sheet) return;
+        const newName = prompt('Rename sheet:', sheet.name);
+        if (newName != null) renameSheet(id, newName);
+      });
+      tab.addEventListener('contextmenu', function(e) {
+        e.preventDefault();
+        const items = [
+          { label: 'Rename', action: function() {
+            const sheet = workbook.sheets.find(s => s.id === id);
+            if (!sheet) return;
+            const newName = prompt('Rename sheet:', sheet.name);
+            if (newName != null) renameSheet(id, newName);
+          } },
+          { label: 'Duplicate', action: function() { duplicateSheet(id); } },
+          '---',
+          { label: 'Move Left',  action: function() { moveSheet(id, 'left'); } },
+          { label: 'Move Right', action: function() { moveSheet(id, 'right'); } },
+          '---',
+          { label: 'Delete', action: function() { deleteSheet(id); } }
+        ];
+        showContextMenu(e.clientX, e.clientY, items);
+      });
+    });
+    const addBtn = wrap.querySelector('#wsAddSheetBtn');
+    if (addBtn) addBtn.addEventListener('click', function() { addSheet(); });
+  }
+
+  // Light HTML escapers for sheet names. The tab text is user-typed so
+  // we want to be careful, but the rest of workspace.js doesn't already
+  // import these — quick local copies.
+  function escapeHTML(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+  function escapeAttr(s) {
+    return escapeHTML(s).replace(/"/g, '&quot;');
   }
 
   /** Build inline style string from cell.style */
@@ -2295,6 +2582,7 @@
     formulaBar = document.getElementById('wsFormulaBar');
 
     renderGrid();
+    renderSheetTabs();
 
     // Select first cell
     selectCell(0, 0);
