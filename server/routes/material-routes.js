@@ -128,6 +128,15 @@ function num(v) {
   return isNaN(n) ? 0 : n;
 }
 
+// Safe string coercion — SheetJS returns numeric columns (SKU Number,
+// Internet SKU, etc.) as JS numbers, so .trim() on them throws. This
+// helper converts anything to a trimmed string and treats null/undefined
+// as ''.
+function str(v) {
+  if (v == null) return '';
+  return String(v).trim();
+}
+
 // ──────────────────────────────────────────────────────────────────
 // GET /api/materials — browse with filters. Supports search + subgroup
 // + hidden filtering. Capped at 200 by default to keep responses snappy
@@ -231,24 +240,24 @@ router.post('/import', requireAuth, requireCapability('ROLES_MANAGE'), async (re
     const grouped = new Map(); // key = vendor + lower(rawDesc)
     let skipped = 0;
     for (const r of rows) {
-      const rawDesc = (r['SKU Description'] || '').trim();
+      const rawDesc = str(r['SKU Description']);
       if (!rawDesc) { skipped++; continue; }
-      const dept = (r['Department Name'] || '').trim();
+      const dept = str(r['Department Name']);
       if (dept.toUpperCase() === 'FEES') { skipped++; continue; }
       const cleaned = cleanDescription(rawDesc);
-      const subgroup = mapHdToAgxSubgroup(dept, r['Class Name'], r['Subclass Name']);
+      const subgroup = mapHdToAgxSubgroup(dept, str(r['Class Name']), str(r['Subclass Name']));
       if (!subgroup) { skipped++; continue; }
       const key = vendor + '|' + rawDesc.toLowerCase();
       if (!grouped.has(key)) {
         grouped.set(key, {
           vendor,
-          sku: (r['SKU Number'] || '').trim() || null,
-          internet_sku: (r['Internet SKU'] || '').trim() || null,
+          sku: str(r['SKU Number']) || null,
+          internet_sku: str(r['Internet SKU']) || null,
           raw_description: rawDesc,
           description: cleaned,
           hd_department: dept || null,
-          hd_class: (r['Class Name'] || '').trim() || null,
-          hd_subclass: (r['Subclass Name'] || '').trim() || null,
+          hd_class: str(r['Class Name']) || null,
+          hd_subclass: str(r['Subclass Name']) || null,
           agx_subgroup: subgroup,
           unit: inferUnit(cleaned),
           purchases: [],
@@ -271,9 +280,9 @@ router.post('/import', requireAuth, requireCapability('ROLES_MANAGE'), async (re
       const date = r['Date'] ? String(r['Date']).slice(0, 10) : null;
       entry.purchases.push({
         purchase_date: date,
-        store_number: (r['Store Number'] || '').toString() || null,
-        transaction_id: (r['Transaction ID'] || '').toString() || null,
-        job_name: (r['Job Name'] || '').trim() || null,
+        store_number: str(r['Store Number']) || null,
+        transaction_id: str(r['Transaction ID']) || null,
+        job_name: str(r['Job Name']) || null,
         quantity: qty,
         unit_price: Math.abs(unitPrice),
         net_unit_price: Math.abs(netUnitPrice) || Math.abs(unitPrice),
