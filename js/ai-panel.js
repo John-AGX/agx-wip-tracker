@@ -141,13 +141,18 @@
           '</label>' +
           '<span id="ai-photos-count" style="color:var(--text-dim,#888);text-transform:none;letter-spacing:normal;flex:0 0 auto;"></span>' +
         '</div>' +
-        // Pill-style input container — borderless textarea with the mic
-        // and send icons docked at the bottom-right. Grows up as the user
-        // types so long prompts stay readable; capped at 320px before
-        // internal scrolling kicks in.
+        // Pill-style input container — borderless textarea with attach,
+        // camera, mic and send icons docked at the bottom-right. Grows
+        // up as the user types so long prompts stay readable; capped at
+        // 320px before internal scrolling (no visible scrollbar).
         '<div id="ai-input-pill" style="background:rgba(255,255,255,0.04);border:1px solid var(--border,#333);border-radius:14px;padding:10px 12px 8px;transition:border-color 0.15s, background 0.15s;">' +
+          '<div id="ai-attachments-strip" style="display:none;flex-wrap:wrap;gap:6px;margin-bottom:8px;"></div>' +
           '<textarea id="ai-input" rows="1" placeholder="Ask anything about this estimate…" style="width:100%;resize:none;overflow-y:auto;min-height:22px;max-height:320px;background:transparent;border:none;outline:none;padding:0;color:var(--text,#fff);font-size:13px;line-height:1.5;font-family:inherit;box-sizing:border-box;display:block;"></textarea>' +
           '<div style="display:flex;align-items:center;gap:4px;margin-top:6px;">' +
+            '<button id="ai-attach" type="button" title="Attach file (image or PDF)" aria-label="Attach file" style="background:transparent;border:none;color:var(--text-dim,#888);width:30px;height:30px;border-radius:50%;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;font-size:18px;padding:0;transition:background 0.12s, color 0.12s;">&#x002B;</button>' +
+            '<button id="ai-camera" type="button" title="Take a photo" aria-label="Take a photo" style="background:transparent;border:none;color:var(--text-dim,#888);width:30px;height:30px;border-radius:50%;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;font-size:14px;padding:0;transition:background 0.12s, color 0.12s;">&#x1F4F7;</button>' +
+            '<input id="ai-file-input" type="file" accept="image/*,application/pdf" multiple style="display:none;" />' +
+            '<input id="ai-camera-input" type="file" accept="image/*" capture="environment" style="display:none;" />' +
             '<div style="flex:1;"></div>' +
             '<button id="ai-mic" type="button" title="Dictate (voice → text)" aria-label="Dictate" style="background:transparent;border:none;color:var(--text-dim,#888);width:30px;height:30px;border-radius:50%;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;font-size:15px;padding:0;transition:background 0.12s, color 0.12s;">&#x1F3A4;</button>' +
             '<button id="ai-send" type="button" title="Send (Enter)" aria-label="Send" style="background:rgba(79,140,255,0.18);border:1px solid rgba(79,140,255,0.4);color:#4f8cff;width:30px;height:30px;border-radius:50%;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;font-size:14px;padding:0;transition:background 0.12s, color 0.12s;">&#x27A4;</button>' +
@@ -191,6 +196,7 @@
       }
     });
     setupVoiceInput(panel);
+    setupFileAttachments(panel);
 
     // Initial preset render — refreshed on every open() to switch
     // between estimate and job preset sets when the entity changes.
@@ -409,8 +415,20 @@
   }
 
   function sendMessage(text) {
+    // Pull any base64 images from the composer chips (uploads or PDF
+    // renders) for one-shot vision on this turn. The same images are
+    // ALSO persisted to the entity's attachments via processFile, so
+    // subsequent turns will see them via the system-prompt context.
+    var composerImages = [];
+    var composerNotes = [];
+    _pendingComposer.forEach(function(e) {
+      if (e.status !== 'ready') return;
+      composerImages = composerImages.concat(e.base64Images || []);
+      composerNotes.push((e.kind === 'pdf' ? 'PDF: ' : 'Image: ') + e.filename + (e.viewUrl ? ' [stored]' : ''));
+    });
+
     var photoCount = countCurrentPhotos();
-    var inlineImageCount = _pendingImages && _pendingImages.images ? _pendingImages.images.length : 0;
+    var inlineImageCount = (_pendingImages && _pendingImages.images ? _pendingImages.images.length : 0) + composerImages.length;
     _messages.push({
       role: 'user', content: text,
       photos_included: (_includePhotos ? photoCount : 0) + inlineImageCount
@@ -419,13 +437,18 @@
     var body = isEstimateMode()
       ? { message: text, includePhotos: _includePhotos }
       : { message: text };
-    // Attach any one-shot inline images (e.g., rendered PDF pages from
-    // the viewer's Ask AI handoff). They only ride on this single call,
-    // not subsequent turns.
+    // Combine one-shot images: pre-existing handoff (PDF viewer) + composer.
+    var bodyImages = [];
     if (_pendingImages && _pendingImages.images && _pendingImages.images.length) {
-      body.additional_images = _pendingImages.images;
+      bodyImages = bodyImages.concat(_pendingImages.images);
       _pendingImages = null;
     }
+    if (composerImages.length) bodyImages = bodyImages.concat(composerImages);
+    if (bodyImages.length) body.additional_images = bodyImages.slice(0, 18);
+
+    _pendingComposer = [];
+    renderAttachmentsStrip();
+
     streamFromEndpoint(apiBase() + '/chat', body);
   }
 
@@ -763,6 +786,183 @@
     if (input) input.disabled = disabled;
   }
 
+  // ──────────────────────────────────────────────────────────────────
+  // File attachments composer — + and 📷 buttons.
+  //
+  // Flow per mode:
+  //   estimate / job / lead
+  //     image  → upload to that entity's attachments (real persistence),
+  //              chip in pill with view link, AI sees it via context
+  //     pdf    → upload to entity attachments AND render pages client-side
+  //              into _pendingImages so the AI can read them as vision
+  //   client (Customer Relations Agent)
+  //     image  → no persistence (no client_id chosen yet); send as
+  //              one-shot inline vision image so the AI can read e.g.
+  //              a business card. Future tool will let the agent attach
+  //              the staged image to the client it identifies.
+  //     pdf    → render pages, attach as one-shot vision images
+  //
+  // Pending uploads are cleared on send.
+  // ──────────────────────────────────────────────────────────────────
+  // Tracks pending composer attachments — the chips currently visible in
+  // the pill. Each entry: {id, kind:'image'|'pdf', filename, attachmentId?,
+  // viewUrl?, base64Images:[]}
+  var _pendingComposer = [];
+
+  function setupFileAttachments(panel) {
+    var attachBtn = panel.querySelector('#ai-attach');
+    var cameraBtn = panel.querySelector('#ai-camera');
+    var fileInput = panel.querySelector('#ai-file-input');
+    var cameraInput = panel.querySelector('#ai-camera-input');
+    if (!attachBtn || !fileInput) return;
+
+    attachBtn.onclick = function() { fileInput.value = ''; fileInput.click(); };
+    if (cameraBtn && cameraInput) {
+      cameraBtn.onclick = function() { cameraInput.value = ''; cameraInput.click(); };
+      cameraInput.onchange = function(e) { handleSelectedFiles(e.target.files); };
+    }
+    fileInput.onchange = function(e) { handleSelectedFiles(e.target.files); };
+  }
+
+  function handleSelectedFiles(fileList) {
+    if (!fileList || !fileList.length) return;
+    var files = Array.from(fileList);
+    files.forEach(function(file) {
+      var ext = (file.name.split('.').pop() || '').toLowerCase();
+      var isPdf = file.type === 'application/pdf' || ext === 'pdf';
+      var isImage = !!(file.type && file.type.indexOf('image/') === 0) || /^(jpe?g|png|gif|webp|heic)$/.test(ext);
+      if (!isPdf && !isImage) {
+        alert('Unsupported file type: ' + file.name + '. Use an image or PDF.');
+        return;
+      }
+      var entry = {
+        id: 'pa_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+        kind: isPdf ? 'pdf' : 'image',
+        filename: file.name,
+        sizeBytes: file.size,
+        status: 'processing',
+        attachmentId: null,
+        viewUrl: null,
+        base64Images: []
+      };
+      _pendingComposer.push(entry);
+      renderAttachmentsStrip();
+      processFile(entry, file);
+    });
+  }
+
+  function processFile(entry, file) {
+    var supportsAttach = (_entityType === 'estimate' || _entityType === 'job' || _entityType === 'lead') && _entityId && _entityId !== '__global__';
+    var jobs = [];
+    // 1. Persist to entity attachments where it makes sense.
+    if (supportsAttach && window.agxApi && window.agxApi.attachments) {
+      jobs.push(
+        window.agxApi.attachments.upload(_entityType, _entityId, file).then(function(res) {
+          var att = res.attachment || res;
+          entry.attachmentId = att.id;
+          entry.viewUrl = att.web_url || att.original_url || null;
+        }).catch(function(err) {
+          entry.uploadError = err.message || 'Upload failed';
+        })
+      );
+    }
+    // 2. For PDFs, render pages client-side so the AI can see them this turn.
+    if (entry.kind === 'pdf') {
+      jobs.push(renderPdfFileToBase64(file).then(function(images) {
+        entry.base64Images = images;
+      }).catch(function(err) {
+        entry.uploadError = err.message || 'PDF render failed';
+      }));
+    } else if (entry.kind === 'image') {
+      // For images we ALSO push the raw bytes inline as one-shot vision so
+      // the AI sees the just-uploaded photo without waiting for the next
+      // round of context loading. (For estimate/job/lead it'll also come
+      // in via the entity context; for client mode it's the only path.)
+      jobs.push(fileToBase64(file).then(function(b64) {
+        entry.base64Images = [b64];
+      }).catch(function(err) {
+        entry.uploadError = err.message || 'Image read failed';
+      }));
+    }
+    Promise.all(jobs).then(function() {
+      entry.status = entry.uploadError ? 'error' : 'ready';
+      renderAttachmentsStrip();
+    });
+  }
+
+  function fileToBase64(file) {
+    return new Promise(function(resolve, reject) {
+      var fr = new FileReader();
+      fr.onload = function() {
+        var s = String(fr.result || '');
+        var i = s.indexOf('base64,');
+        resolve(i >= 0 ? s.slice(i + 7) : s);
+      };
+      fr.onerror = function() { reject(new Error('Could not read file')); };
+      fr.readAsDataURL(file);
+    });
+  }
+
+  function renderPdfFileToBase64(file) {
+    if (!window.pdfjsLib) return Promise.reject(new Error('PDF library not loaded'));
+    return file.arrayBuffer().then(function(buf) {
+      return window.pdfjsLib.getDocument({ data: buf }).promise;
+    }).then(function(pdf) {
+      var pageCount = Math.min(pdf.numPages, 10);
+      var promises = [];
+      for (var i = 1; i <= pageCount; i++) {
+        promises.push(pdf.getPage(i).then(function(page) {
+          var viewport = page.getViewport({ scale: 1.5 });
+          var canvas = document.createElement('canvas');
+          canvas.width = viewport.width;
+          canvas.height = viewport.height;
+          var ctx = canvas.getContext('2d');
+          return page.render({ canvasContext: ctx, viewport: viewport }).promise.then(function() {
+            var dataUrl = canvas.toDataURL('image/jpeg', 0.82);
+            return dataUrl.slice(dataUrl.indexOf('base64,') + 7);
+          });
+        }));
+      }
+      return Promise.all(promises);
+    });
+  }
+
+  function renderAttachmentsStrip() {
+    var strip = document.getElementById('ai-attachments-strip');
+    if (!strip) return;
+    if (!_pendingComposer.length) {
+      strip.style.display = 'none';
+      strip.innerHTML = '';
+      return;
+    }
+    strip.style.display = 'flex';
+    strip.innerHTML = '';
+    _pendingComposer.forEach(function(e) {
+      var glyph = e.kind === 'pdf' ? '📄' : '🖼';
+      var status = e.status === 'processing'
+        ? '<span style="color:var(--text-dim,#888);font-size:10px;">processing…</span>'
+        : (e.status === 'error'
+          ? '<span style="color:#f87171;font-size:10px;">' + escapeHTMLLocal(e.uploadError || 'failed') + '</span>'
+          : '<span style="color:#34d399;font-size:10px;">ready</span>');
+      var chip = document.createElement('div');
+      chip.style.cssText = 'display:inline-flex;align-items:center;gap:6px;padding:4px 8px;background:rgba(255,255,255,0.04);border:1px solid var(--border,#333);border-radius:12px;font-size:11px;color:var(--text,#ddd);';
+      chip.innerHTML =
+        '<span style="font-size:13px;">' + glyph + '</span>' +
+        '<span style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTMLLocal(e.filename) + '</span>' +
+        status +
+        (e.viewUrl ? '<a href="' + e.viewUrl + '" target="_blank" rel="noopener" title="Open" style="color:#4f8cff;text-decoration:none;font-size:11px;">↗</a>' : '') +
+        '<button data-remove="' + e.id + '" title="Remove" style="background:transparent;border:none;color:var(--text-dim,#888);cursor:pointer;font-size:13px;padding:0 2px;line-height:1;">×</button>';
+      strip.appendChild(chip);
+    });
+    strip.querySelectorAll('[data-remove]').forEach(function(b) {
+      b.onclick = function() {
+        var id = b.getAttribute('data-remove');
+        _pendingComposer = _pendingComposer.filter(function(e) { return e.id !== id; });
+        renderAttachmentsStrip();
+      };
+    });
+  }
+
   // Web Speech API mic wiring. Toggles dictation on/off; appends each
   // final transcript chunk to the textarea so the user can see what the
   // browser heard before sending. Hides the mic button on browsers that
@@ -871,7 +1071,20 @@
       '@keyframes agx-mic-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.12); } } ' +
       '.ai-content p:first-child { margin-top: 0; } ' +
       '.ai-content p:last-child { margin-bottom: 0; } ' +
+      // Hide scrollbar entirely on the input textarea — it grows up to its
+      // cap, beyond which arrow keys still navigate. No visible chrome.
+      '#ai-input { scrollbar-width: none; -ms-overflow-style: none; } ' +
+      '#ai-input::-webkit-scrollbar { display: none; width: 0; height: 0; } ' +
+      // Ghost scrollbars on the messages area + presets — dark, narrow,
+      // only visible while actively scrolling.
+      '#agx-ai-panel ::-webkit-scrollbar { width: 6px; height: 6px; } ' +
+      '#agx-ai-panel ::-webkit-scrollbar-track { background: transparent; } ' +
+      '#agx-ai-panel ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.06); border-radius: 3px; transition: background 0.2s; } ' +
+      '#agx-ai-panel ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.14); } ' +
+      '#agx-ai-panel { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.06) transparent; } ' +
       '#ai-mic:hover { background: rgba(255,255,255,0.08) !important; color: var(--text,#fff) !important; } ' +
+      '#ai-attach:hover { background: rgba(255,255,255,0.08) !important; color: var(--text,#fff) !important; } ' +
+      '#ai-camera:hover { background: rgba(255,255,255,0.08) !important; color: var(--text,#fff) !important; } ' +
       '#ai-send:hover:not(:disabled) { background: rgba(79,140,255,0.32) !important; } ' +
       // When the panel is open, push the entire page over so the editor
       // stays fully visible. Sticky elements (page nav, editor header)

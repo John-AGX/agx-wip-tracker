@@ -25,7 +25,7 @@ const router = express.Router();
 // handler since it depends on the existing row count.
 const MAX_FILES_PER_ENTITY = 30;
 const MAX_FILE_BYTES = 50 * 1024 * 1024; // 50MB — fits most drawings, big PDFs
-const VALID_ENTITY_TYPES = new Set(['lead', 'estimate']);
+const VALID_ENTITY_TYPES = new Set(['lead', 'estimate', 'client', 'job']);
 
 // Lightweight MIME detection — sharp only handles raster images, so
 // anything outside this set bypasses the resize pipeline.
@@ -43,10 +43,16 @@ const upload = multer({
 // the parent entity can see its photos. Writes require the matching
 // edit capability.
 function readCapForEntity(entityType) {
-  return entityType === 'estimate' ? 'ESTIMATES_VIEW' : 'LEADS_VIEW';
+  if (entityType === 'estimate') return 'ESTIMATES_VIEW';
+  if (entityType === 'client')   return 'ESTIMATES_VIEW';
+  if (entityType === 'job')      return 'JOBS_VIEW';
+  return 'LEADS_VIEW';
 }
 function writeCapForEntity(entityType) {
-  return entityType === 'estimate' ? 'ESTIMATES_EDIT' : 'LEADS_EDIT';
+  if (entityType === 'estimate') return 'ESTIMATES_EDIT';
+  if (entityType === 'client')   return 'ESTIMATES_EDIT';
+  if (entityType === 'job')      return 'JOBS_EDIT';
+  return 'LEADS_EDIT';
 }
 
 // Hand-rolled cap check since the cap depends on a path param. Mirrors
@@ -186,7 +192,7 @@ router.delete('/:id', requireAuth, async (req, res) => {
     const att = rows[0];
 
     // Capability check — same write rule as the parent entity.
-    const cap = att.entity_type === 'estimate' ? 'ESTIMATES_EDIT' : 'LEADS_EDIT';
+    const cap = writeCapForEntity(att.entity_type);
     const ok = await hasCapability(req.user, cap);
     if (!ok) return res.status(403).json({ error: 'Forbidden' });
 
@@ -207,7 +213,7 @@ router.put('/:id', requireAuth, async (req, res) => {
     const { rows } = await pool.query('SELECT * FROM attachments WHERE id = $1', [req.params.id]);
     if (!rows.length) return res.status(404).json({ error: 'Attachment not found' });
     const att = rows[0];
-    const cap = att.entity_type === 'estimate' ? 'ESTIMATES_EDIT' : 'LEADS_EDIT';
+    const cap = writeCapForEntity(att.entity_type);
     const ok = await hasCapability(req.user, cap);
     if (!ok) return res.status(403).json({ error: 'Forbidden' });
 

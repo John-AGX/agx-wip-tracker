@@ -210,6 +210,27 @@ async function initSchema() {
     ALTER TABLE attachments ALTER COLUMN thumb_key DROP NOT NULL;
     ALTER TABLE attachments ALTER COLUMN web_key   DROP NOT NULL;
 
+    -- Extend the entity_type enum to support clients (business-card photos,
+    -- W9s, COIs, etc. attached to a parent management company or property).
+    -- The CHECK constraint is named implicitly so we have to drop and re-add
+    -- by inspecting the catalog. Idempotent: safe to run on every boot.
+    DO $$
+    DECLARE
+      cname TEXT;
+    BEGIN
+      SELECT conname INTO cname
+        FROM pg_constraint
+        WHERE conrelid = 'attachments'::regclass
+          AND contype = 'c'
+          AND pg_get_constraintdef(oid) ILIKE '%entity_type%';
+      IF cname IS NOT NULL THEN
+        EXECUTE 'ALTER TABLE attachments DROP CONSTRAINT ' || quote_ident(cname);
+      END IF;
+    END $$;
+    ALTER TABLE attachments
+      ADD CONSTRAINT attachments_entity_type_check
+      CHECK (entity_type IN ('lead', 'estimate', 'client', 'job'));
+
     -- AI estimating-assistant chat. Per-user, per-estimate (so PMs each see
     -- their own conversation). Two messages per round (one user, one
     -- assistant) ordered by created_at; the route layer rebuilds the
