@@ -292,13 +292,17 @@ async function initSchema() {
       created_at TIMESTAMPTZ DEFAULT NOW(),
       updated_at TIMESTAMPTZ DEFAULT NOW()
     );
+    -- Idempotent ADD COLUMN for upgrades from earlier schema (where the
+    -- category col didn't exist yet). Must run BEFORE the index creation
+    -- below — otherwise on an existing materials table from a prior
+    -- deploy, the CREATE INDEX hits a missing column and crashes the
+    -- migration. Safe to re-run; ADD COLUMN IF NOT EXISTS is a no-op
+    -- when the column already exists.
+    ALTER TABLE materials ADD COLUMN IF NOT EXISTS category TEXT;
     CREATE INDEX IF NOT EXISTS idx_materials_subgroup ON materials(agx_subgroup);
     CREATE INDEX IF NOT EXISTS idx_materials_category ON materials(category);
     CREATE INDEX IF NOT EXISTS idx_materials_sku ON materials(sku);
     CREATE INDEX IF NOT EXISTS idx_materials_hidden ON materials(is_hidden);
-    -- Idempotent ADD COLUMN for upgrades from earlier schema (where the
-    -- category col didn't exist yet). Safe to re-run.
-    ALTER TABLE materials ADD COLUMN IF NOT EXISTS category TEXT;
     CREATE INDEX IF NOT EXISTS idx_materials_search ON materials
       USING gin(to_tsvector('english', description || ' ' || raw_description));
     -- Natural-key dedupe — case-insensitive description per vendor.
