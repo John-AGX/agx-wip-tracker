@@ -13,6 +13,40 @@
   background: var(--surface2, #242836);
   border: 1px solid var(--border, #2e3346);
   border-radius: 6px 6px 0 0;
+  flex-wrap: nowrap;
+}
+
+/* Subsequent toolbar rows (data ops, file ops) share the same chrome
+   but have no top radius — they stack flush against the formula bar
+   row above them. Single-line layout: no wrap. */
+.ws-toolbar + .ws-toolbar {
+  border-top: none;
+  border-radius: 0;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+/* Visual separator between data-ops and file-ops rows */
+.ws-toolbar.ws-toolbar-file {
+  background: rgba(0, 0, 0, 0.12);
+}
+
+/* The freeze-panes select needs to look like a button, not a default
+   <select>. Compact, dark-themed, matching the surrounding ws-btn. */
+.ws-select {
+  padding: 4px 8px;
+  background: var(--card-bg, #0c0c14);
+  color: var(--text);
+  border: 1px solid var(--grid-border, #2e3346);
+  border-radius: 4px;
+  font-size: 11px;
+  height: 26px;
+  cursor: pointer;
+}
+.ws-select:hover {
+  border-color: rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.04);
 }
 
 /* ── Formatting Toolbar ────────────────────────────────── */
@@ -29,7 +63,8 @@
 }
 
 /* When formatting toolbar follows main toolbar, remove rounded bottom corners */
-.ws-toolbar:has(+ .ws-toolbar-fmt) {
+.ws-toolbar:has(+ .ws-toolbar-fmt),
+.ws-toolbar + .ws-toolbar:has(+ .ws-toolbar-fmt) {
   border-bottom: none;
 }
 

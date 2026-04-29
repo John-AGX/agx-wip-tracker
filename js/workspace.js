@@ -1567,36 +1567,38 @@
       <div class="ws-toolbar">
         <div class="ws-cell-ref" id="wsCellRef">A1</div>
         <input type="text" class="ws-formula-bar" id="wsFormulaBar" placeholder="Enter value or formula (e.g. =A1+B1)" spellcheck="false" />
-        <div class="ws-toolbar-actions">
-          <button class="ws-btn ws-btn-fmt" data-fmt="currency" title="Currency format">$</button>
-          <button class="ws-btn ws-btn-fmt" data-fmt="percent" title="Percent format">%</button>
-          <button class="ws-btn ws-btn-fmt" data-fmt="null" title="Clear format">&times;</button>
-          <span class="ws-separator"></span>
-          <button class="ws-btn" id="wsLinkBtn" title="Link cell to job field">&#x1F517; Link</button>
-          <button class="ws-btn" id="wsAutoSumBtn" onclick="window.wsAutoSum()" title="Insert =SUM with auto-detected range (above or left)">&#x03A3; AutoSum</button>
-          <button class="ws-btn" id="wsMakeTableBtn" onclick="window.wsMakeTable()" title="Convert selected range into a styled table">&#x1F5C2; Table</button>
-          <button class="ws-btn" id="wsSortAscBtn" onclick="window.wsSortAscHeader()" title="Sort range ascending (preserves header row)">&#x2191;A</button>
-          <button class="ws-btn" id="wsSortDescBtn" onclick="window.wsSortDescHeader()" title="Sort range descending (preserves header row)">&#x2193;Z</button>
-          <button class="ws-btn" id="wsFindBtn" onclick="window.wsOpenFindReplace()" title="Find &amp; Replace (Ctrl+F)">&#x1F50D;</button>
-          <span class="ws-separator"></span>
-          <select id="wsFreezeSelect" onchange="window.wsSetFreeze(this.value || null); this.value='';" style="padding:4px 8px;background:var(--card-bg,#0c0c14);color:var(--text);border:1px solid var(--grid-border);border-radius:4px;font-size:11px;" title="Freeze panes">
-            <option value="">&#x2744; Freeze…</option>
-            <option value="row">Top row</option>
-            <option value="col">First column</option>
-            <option value="both">Top row + first column</option>
-            <option value="">No freeze</option>
-          </select>
-          <span class="ws-separator"></span>
-          <button class="ws-btn" id="wsImportXlsxBtn" title="Import an Excel file as new sheets">&#x1F4E5; Import .xlsx</button>
-          <input type="file" id="wsImportXlsxInput" accept=".xlsx,.xls,.csv" style="display:none;" />
-          <button class="ws-btn" id="wsClearBtn" title="Clear workspace">&#x1F5D1; Clear</button>
-          <button class="ws-btn ws-btn-save" id="wsSaveBtn" title="Save workspace">&#x1F4BE; Save</button>
-          <button class="ws-btn" id="wsNodeGraphBtn" title="Node Graph (Beta)">&#x26A1;</button>
-        </div>
+      </div>
+      <!-- Row 2: Data ops — what you do TO the data -->
+      <div class="ws-toolbar ws-toolbar-data">
+        <button class="ws-btn" id="wsLinkBtn" title="Link cell to job field">&#x1F517; Link</button>
+        <button class="ws-btn" id="wsAutoSumBtn" onclick="window.wsAutoSum()" title="Insert =SUM with auto-detected range (above or left)">&#x03A3; AutoSum</button>
+        <button class="ws-btn" id="wsMakeTableBtn" onclick="window.wsMakeTable()" title="Convert selected range into a styled table">&#x1F5C2; Table</button>
+        <button class="ws-btn" id="wsSortAscBtn" onclick="window.wsSortAscHeader()" title="Sort range ascending (preserves header row)">&#x2191;A</button>
+        <button class="ws-btn" id="wsSortDescBtn" onclick="window.wsSortDescHeader()" title="Sort range descending (preserves header row)">&#x2193;Z</button>
+        <button class="ws-btn" id="wsFindBtn" onclick="window.wsOpenFindReplace()" title="Find &amp; Replace (Ctrl+F)">&#x1F50D; Find</button>
+        <select id="wsFreezeSelect" class="ws-select" onchange="window.wsSetFreeze(this.value || null); this.value='';" title="Freeze panes">
+          <option value="">&#x2744; Freeze…</option>
+          <option value="row">Top row</option>
+          <option value="col">First column</option>
+          <option value="both">Top row + first column</option>
+          <option value="">No freeze</option>
+        </select>
+      </div>
+      <!-- Row 3: File ops — what you do WITH the workbook -->
+      <div class="ws-toolbar ws-toolbar-file">
+        <button class="ws-btn" id="wsImportXlsxBtn" title="Import an Excel file as new sheets">&#x1F4E5; Import .xlsx</button>
+        <input type="file" id="wsImportXlsxInput" accept=".xlsx,.xls,.csv" style="display:none;" />
+        <button class="ws-btn" id="wsClearBtn" title="Clear workspace">&#x1F5D1; Clear</button>
+        <button class="ws-btn ws-btn-save" id="wsSaveBtn" title="Save workspace">&#x1F4BE; Save</button>
+        <button class="ws-btn" id="wsNodeGraphBtn" title="Node Graph (Beta)">&#x26A1; Node Graph</button>
       </div>
       <div class="ws-toolbar-fmt" id="wsToolbarFmt">
         <button class="ws-btn ws-btn-icon" id="wsUndoBtn" title="Undo (Ctrl+Z)">&#x21A9;</button>
         <button class="ws-btn ws-btn-icon" id="wsRedoBtn" title="Redo (Ctrl+Y)">&#x21AA;</button>
+        <span class="ws-separator"></span>
+        <button class="ws-btn ws-btn-fmt" data-fmt="currency" title="Currency format">$</button>
+        <button class="ws-btn ws-btn-fmt" data-fmt="percent" title="Percent format">%</button>
+        <button class="ws-btn ws-btn-fmt" data-fmt="null" title="Clear number format">&times;</button>
         <span class="ws-separator"></span>
         <button class="ws-btn ws-fmt-toggle" id="wsBoldBtn" data-style="bold" title="Bold (Ctrl+B)"><b>B</b></button>
         <button class="ws-btn ws-fmt-toggle" id="wsItalicBtn" data-style="italic" title="Italic (Ctrl+I)"><i>I</i></button>
