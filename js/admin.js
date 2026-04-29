@@ -621,12 +621,38 @@
     });
   }
 
-  function renderTemplatesForm() {
-    var pane = document.getElementById('admin-subtab-templates');
-    if (!pane) return;
+  // Active sub-tab inside Admin -> Templates. Persisted in sessionStorage
+  // so refreshes / cross-tab navigation don't bounce the admin back to
+  // the first tab. Default 'proposal' since that's the most-edited
+  // section.
+  var _templatesActiveTab = (function() {
+    try { return sessionStorage.getItem('agx_templates_tab') || 'proposal'; }
+    catch (e) { return 'proposal'; }
+  })();
+
+  var TEMPLATES_TABS = [
+    { key: 'proposal', label: '📄 Proposal',  desc: 'Header, letter body, exclusions, signature.' },
+    { key: 'bt',       label: '📊 BT Export', desc: 'Buildertrend cost-category mapping.' },
+    { key: 'skills',   label: '🧠 Skills',    desc: 'Editable instruction packs the in-app AI agents load at chat time.' }
+  ];
+
+  function switchTemplatesTab(key) {
+    if (!TEMPLATES_TABS.some(function(t) { return t.key === key; })) return;
+    // Sync inputs from the currently-active tab into the in-memory draft
+    // before swapping content, so the user's unsaved edits survive the
+    // tab change.
+    syncTopLevelDraftFromInputs();
+    syncBTMappingFromInputs();
+    syncSkillsFromInputs();
+    _templatesActiveTab = key;
+    try { sessionStorage.setItem('agx_templates_tab', key); } catch (e) { /* ignore */ }
+    renderTemplatesForm();
+  }
+  window.switchTemplatesTab = switchTemplatesTab;
+
+  function renderProposalTemplateHTML() {
     var t = _templateDraft || {};
     var exclusions = Array.isArray(t.exclusions) ? t.exclusions : [];
-
     var exclusionsHTML = exclusions.map(function(item, idx) {
       return '<div class="excl-row" style="display:flex;gap:8px;align-items:flex-start;margin-bottom:8px;">' +
         '<span style="flex:0 0 28px;text-align:right;color:var(--text-dim,#888);font-size:12px;padding-top:8px;font-family:\'SF Mono\',monospace;">' + (idx + 1) + '.</span>' +
@@ -638,8 +664,7 @@
         '</div>' +
       '</div>';
     }).join('');
-
-    pane.innerHTML =
+    return (
       '<p style="margin:0 0 16px 0;color:var(--text-dim,#888);font-size:12px;">' +
         'These fields are shared across every proposal preview / PDF export. Use the placeholders ' +
         '<code>{salutation}</code> <code>{issue}</code> <code>{community}</code> <code>{date}</code> <code>{total}</code> ' +
@@ -674,10 +699,51 @@
           '<label style="display:block;">Signature Lead-In</label>' +
           '<textarea id="tpl-signature_text" rows="2" style="width:100%;resize:vertical;">' + escapeHTML(t.signature_text || '') + '</textarea>' +
         '</div>' +
-      '</fieldset>' +
-      renderBTMappingHTML() +
-      renderAgentSkillsHTML() +
-      '<div class="action-buttons" style="margin-top:14px;">' +
+      '</fieldset>'
+    );
+  }
+
+  function renderTemplatesForm() {
+    var pane = document.getElementById('admin-subtab-templates');
+    if (!pane) return;
+    if (!TEMPLATES_TABS.some(function(t) { return t.key === _templatesActiveTab; })) {
+      _templatesActiveTab = 'proposal';
+    }
+    var activeTab = TEMPLATES_TABS.find(function(t) { return t.key === _templatesActiveTab; });
+
+    // Tab strip — pill-style buttons matching the rest of the app, with
+    // the active tab highlighted in accent blue.
+    var tabsHTML = '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px;border-bottom:1px solid var(--border,#333);padding-bottom:10px;">';
+    TEMPLATES_TABS.forEach(function(tab) {
+      var isActive = (tab.key === _templatesActiveTab);
+      var bg = isActive ? 'rgba(79,140,255,0.18)' : 'transparent';
+      var border = isActive ? '#4f8cff' : 'var(--border,#333)';
+      var color = isActive ? '#fff' : 'var(--text-dim,#888)';
+      tabsHTML += '<button onclick="switchTemplatesTab(\'' + tab.key + '\')" ' +
+        'style="padding:6px 14px;border:1px solid ' + border + ';border-radius:18px;background:' + bg + ';color:' + color + ';font-size:12px;font-weight:600;cursor:pointer;">' +
+        tab.label +
+      '</button>';
+    });
+    tabsHTML += '</div>';
+
+    var contentHTML = '';
+    if (_templatesActiveTab === 'proposal') {
+      contentHTML = renderProposalTemplateHTML();
+    } else if (_templatesActiveTab === 'bt') {
+      contentHTML = renderBTMappingHTML();
+    } else if (_templatesActiveTab === 'skills') {
+      contentHTML = renderAgentSkillsHTML();
+    }
+
+    var tabHint = activeTab && activeTab.desc
+      ? '<p style="margin:0 0 12px 0;color:var(--text-dim,#888);font-size:12px;">' + activeTab.desc + '</p>'
+      : '';
+
+    pane.innerHTML =
+      tabsHTML +
+      tabHint +
+      '<div id="tpl-tab-content">' + contentHTML + '</div>' +
+      '<div class="action-buttons" style="margin-top:14px;border-top:1px solid var(--border,#333);padding-top:14px;">' +
         '<button class="primary" onclick="saveAdminTemplate()">&#x1F4BE; Save All</button>' +
         '<button class="secondary" onclick="renderAdminTemplates()">Discard Changes</button>' +
         '<span id="tpl-status" style="margin-left:14px;color:var(--text-dim,#888);font-size:12px;align-self:center;"></span>' +
@@ -685,6 +751,8 @@
 
     // Wire textarea blur to sync edits into the in-memory draft so reordering
     // (which re-renders the list) doesn't clobber unsaved text.
+    // Only relevant on the proposal tab — querySelectorAll on missing
+    // elements is a safe no-op on the other tabs.
     pane.querySelectorAll('[data-excl-idx]').forEach(function(ta) {
       ta.addEventListener('input', function() {
         var idx = parseInt(ta.getAttribute('data-excl-idx'), 10);
