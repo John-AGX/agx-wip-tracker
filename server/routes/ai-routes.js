@@ -267,7 +267,8 @@ async function buildEstimateContext(estimateId, includePhotos) {
     source: d.source,
     filename: d.filename,
     mime: d.mime_type,
-    size: d.size_bytes
+    size: d.size_bytes,
+    extracted_text: d.extracted_text || null  // PDF body text when available
   }));
 
   // ────────────────────────────────────────────────────────────────
@@ -419,12 +420,23 @@ async function buildEstimateContext(estimateId, includePhotos) {
   // ("see the RFP attached on the lead for the spec on caulk type").
   if (docManifest.length) {
     lines.push('# Attached documents (' + docManifest.length + ')');
-    lines.push('Filenames listed for reference. The contents are not loaded into context — ask the user to paste relevant excerpts if needed.');
+    var anyWithText = docManifest.some(function(d) { return d.extracted_text; });
+    lines.push(anyWithText
+      ? 'PDF text below has been extracted at upload time. Quote / cite directly when relevant. For docs without extracted text (scanned PDFs, Excel, Word), ask the user to paste excerpts.'
+      : 'Filenames listed for reference. Ask the user to paste relevant excerpts if needed.');
+    lines.push('');
     docManifest.forEach(function(d) {
       var sizeStr = d.size != null ? ' (' + (d.size > 1048576 ? (d.size / 1048576).toFixed(1) + ' MB' : Math.round(d.size / 1024) + ' KB') + ')' : '';
-      lines.push('- [' + d.source + '] ' + d.filename + sizeStr);
+      lines.push('## [' + d.source + '] ' + d.filename + sizeStr);
+      if (d.extracted_text) {
+        lines.push('```');
+        lines.push(d.extracted_text);
+        lines.push('```');
+      } else {
+        lines.push('_(no extractable text — likely a scanned PDF or non-PDF doc)_');
+      }
+      lines.push('');
     });
-    lines.push('');
   }
 
   // ─── STABLE PLAYBOOK (cached prefix) ───────────────────────────────

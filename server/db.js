@@ -210,6 +210,12 @@ async function initSchema() {
     ALTER TABLE attachments ALTER COLUMN thumb_key DROP NOT NULL;
     ALTER TABLE attachments ALTER COLUMN web_key   DROP NOT NULL;
 
+    -- Extracted text from PDF / Excel / Word docs (Phase A: just PDFs).
+    -- Populated at upload time via pdf-parse so AG can read the actual
+    -- contents instead of just the filename. Idempotent.
+    ALTER TABLE attachments ADD COLUMN IF NOT EXISTS extracted_text TEXT;
+    ALTER TABLE attachments ADD COLUMN IF NOT EXISTS extracted_text_at TIMESTAMPTZ;
+
     -- Extend the entity_type enum to support clients (business-card photos,
     -- W9s, COIs, etc. attached to a parent management company or property).
     -- The CHECK constraint is named implicitly so we have to drop and re-add

@@ -41,6 +41,11 @@ class LocalDiskStorage extends StorageAdapter {
   async delete(key) {
     try { await fs.promises.unlink(this._full(key)); } catch (e) { /* idempotent */ }
   }
+  // Read a previously-uploaded file's bytes back out. Used by backfill
+  // jobs (e.g., re-extracting PDF text from older attachments).
+  async getBuffer(key) {
+    return fs.promises.readFile(this._full(key));
+  }
 }
 
 // Stubbed R2 backend — wire up later with @aws-sdk/client-s3 (R2 is

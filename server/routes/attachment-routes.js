@@ -17,6 +17,34 @@ const { pool } = require('../db');
 const { requireAuth, requireCapability } = require('../auth');
 const { storage } = require('../storage');
 
+// pdf-parse — text extraction for AG-readable PDF context. Required from
+// the deep import path (lib/pdf-parse.js) to skip the package's
+// self-test on require, which tries to read a sample PDF off disk and
+// crashes when bundled / sandboxed.
+let pdfParse = null;
+try { pdfParse = require('pdf-parse/lib/pdf-parse.js'); }
+catch (e) { console.warn('[attachment-routes] pdf-parse not installed — PDF text extraction disabled'); }
+
+// Pull text out of a PDF buffer. Returns null on any error so a busted
+// PDF doesn't block the upload. Caps stored text at 50KB — covers a
+// long RFP, keeps the DB and AG-context payloads sane.
+const PDF_TEXT_CAP_BYTES = 50 * 1024;
+async function extractPdfText(buffer) {
+  if (!pdfParse) return null;
+  try {
+    const result = await pdfParse(buffer, { max: 50 }); // first 50 pages
+    let text = (result.text || '').trim();
+    if (!text) return null;
+    if (text.length > PDF_TEXT_CAP_BYTES) {
+      text = text.slice(0, PDF_TEXT_CAP_BYTES) + '\n\n[...truncated; PDF longer than ' + PDF_TEXT_CAP_BYTES + ' chars]';
+    }
+    return text;
+  } catch (e) {
+    console.warn('[attachment-routes] PDF text extraction failed:', e.message);
+    return null;
+  }
+}
+
 const router = express.Router();
 
 // Upload caps. Photos and documents share one pool per entity so a heavy
@@ -153,6 +181,16 @@ router.post('/:entityType/:entityId',
         originalUrl = await storage.put(originalKey, buf, mime);
       }
 
+      // PDF → text extraction so AG can read the contents instead of just
+      // the filename. Runs on application/pdf only; failures degrade
+      // silently (file is still saved, AG just doesn't get the text).
+      let extractedText = null;
+      let extractedAt = null;
+      if (mime === 'application/pdf') {
+        extractedText = await extractPdfText(buf);
+        if (extractedText) extractedAt = new Date();
+      }
+
       // Position = current count so new uploads append to the end of the list.
       const position = countRes.rows[0].c;
 
@@ -162,8 +200,8 @@ router.post('/:entityType/:entityId',
           width, height,
           thumb_url, web_url, original_url,
           thumb_key, web_key, original_key,
-          position, uploaded_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+          position, uploaded_by, extracted_text, extracted_text_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
          RETURNING *`,
         [
           id, entityType, entityId,
@@ -171,7 +209,7 @@ router.post('/:entityType/:entityId',
           width, height,
           thumbUrl, webUrl, originalUrl,
           thumbKey, webKey, originalKey,
-          position, req.user.id
+          position, req.user.id, extractedText, extractedAt
         ]
       );
       res.json({ ok: true, attachment: ins.rows[0] });
@@ -236,6 +274,79 @@ router.put('/:id', requireAuth, async (req, res) => {
     console.error('PUT /api/attachments/:id error:', e);
     res.status(500).json({ error: 'Server error: ' + e.message });
   }
+});
+
+// POST /api/attachments/extract-pdf-text — backfill text extraction
+// across every PDF that doesn't already have it. Useful one-shot after
+// deploying this feature so existing uploaded RFPs / lead reports
+// become AG-readable. Admin-only since it touches all rows.
+//
+// Streams progress as plain-text lines so the request doesn't time out
+// on large catalogs. Each PDF is fetched from storage, re-parsed, and
+// the result written back. Failures are logged but don't halt the run.
+router.post('/extract-pdf-text', requireAuth, async (req, res) => {
+  const ok = await hasCapability(req.user, 'ROLES_MANAGE');
+  if (!ok) return res.status(403).json({ error: 'Admin only' });
+  if (!pdfParse) return res.status(503).json({ error: 'pdf-parse not available' });
+
+  // Find PDFs that are missing extracted text (fresh) or have it but the
+  // user wants a re-run (force=1). For now: just the missing ones.
+  const force = req.query.force === '1';
+  const where = force
+    ? `mime_type = 'application/pdf'`
+    : `mime_type = 'application/pdf' AND extracted_text IS NULL`;
+  const { rows } = await pool.query(
+    `SELECT id, original_key, filename FROM attachments WHERE ${where} ORDER BY uploaded_at`
+  );
+
+  // Stream plain-text status so a long backfill keeps the connection
+  // alive past Railway's first-byte timeout.
+  res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.write(`Found ${rows.length} PDF(s) to process${force ? ' (force re-run)' : ''}.\n`);
+
+  let extracted = 0, empty = 0, failed = 0;
+  for (const att of rows) {
+    try {
+      // storage.getBuffer is the local-disk implementation; if the
+      // backend changes (R2 etc.), this needs to grow. For now disk-only.
+      let buf = null;
+      if (storage.getBuffer) {
+        buf = await storage.getBuffer(att.original_key);
+      } else if (storage.localRoot) {
+        const fs = require('fs');
+        const path = require('path');
+        const fp = path.join(storage.localRoot, att.original_key);
+        buf = fs.readFileSync(fp);
+      }
+      if (!buf) {
+        res.write(`  ✗ ${att.filename} — could not read storage\n`);
+        failed++;
+        continue;
+      }
+      const text = await extractPdfText(buf);
+      if (text) {
+        await pool.query(
+          `UPDATE attachments SET extracted_text = $1, extracted_text_at = NOW() WHERE id = $2`,
+          [text, att.id]
+        );
+        res.write(`  ✓ ${att.filename} — ${text.length} chars\n`);
+        extracted++;
+      } else {
+        await pool.query(
+          `UPDATE attachments SET extracted_text_at = NOW() WHERE id = $1`,
+          [att.id]
+        );
+        res.write(`  · ${att.filename} — no extractable text (scanned PDF?)\n`);
+        empty++;
+      }
+    } catch (e) {
+      res.write(`  ✗ ${att.filename} — ${e.message}\n`);
+      failed++;
+    }
+  }
+  res.write(`\nDone. Extracted: ${extracted}, no-text: ${empty}, failed: ${failed}.\n`);
+  res.end();
 });
 
 module.exports = router;
