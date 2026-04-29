@@ -773,6 +773,7 @@
                         <button class="ws-right-tab" data-admin-subtab="metrics" onclick="switchAdminSubTab('metrics')">Metrics</button>
                         <button class="ws-right-tab" data-admin-subtab="roles" onclick="switchAdminSubTab('roles')">Roles</button>
                         <button class="ws-right-tab" data-admin-subtab="templates" onclick="switchAdminSubTab('templates')">Templates</button>
+                        <button class="ws-right-tab" data-admin-subtab="materials" onclick="switchAdminSubTab('materials')">Materials</button>
                     </div>
 
                     <!-- Users sub-tab -->
@@ -836,6 +837,10 @@
 
                     <!-- Templates sub-tab (proposal boilerplate) -->
                     <div id="admin-subtab-templates" class="admin-subtab-content" style="display:none;"></div>
+
+                    <!-- Materials catalog sub-tab — built from vendor purchase
+                         history CSVs; AG queries this for line-item proposals -->
+                    <div id="admin-subtab-materials" class="admin-subtab-content" style="display:none;"></div>
 
                     <!-- Job Assignments sub-tab -->
                     <div id="admin-subtab-jobs" class="admin-subtab-content" style="display:none;">

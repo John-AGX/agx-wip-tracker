@@ -259,6 +259,67 @@ async function initSchema() {
     ALTER TABLE ai_messages ADD COLUMN IF NOT EXISTS entity_type TEXT NOT NULL DEFAULT 'estimate';
     CREATE INDEX IF NOT EXISTS idx_ai_messages_entity
       ON ai_messages(entity_type, estimate_id, user_id, created_at);
+
+    -- Materials catalog — AGX's purchase history (Home Depot to start;
+    -- vendor column makes Lowe's / Sherwin Williams / etc. a config
+    -- addition later, not a schema change). One row per unique
+    -- (vendor, cleaned-description); SKU is stored as metadata but is
+    -- not the primary identity since vendors do change SKUs over time.
+    CREATE TABLE IF NOT EXISTS materials (
+      id SERIAL PRIMARY KEY,
+      vendor TEXT NOT NULL DEFAULT 'home_depot',
+      sku TEXT,
+      internet_sku TEXT,
+      raw_description TEXT NOT NULL,
+      description TEXT NOT NULL,           -- cleaned, AG-readable
+      hd_department TEXT,
+      hd_class TEXT,
+      hd_subclass TEXT,
+      agx_subgroup TEXT,                   -- 'materials' | 'labor' | 'gc' | 'sub'
+      unit TEXT,                           -- ea / qt / gal / lb / lf / sf / ...
+      last_unit_price NUMERIC(10, 2),
+      avg_unit_price NUMERIC(10, 2),
+      min_unit_price NUMERIC(10, 2),
+      max_unit_price NUMERIC(10, 2),
+      total_qty NUMERIC(12, 2) DEFAULT 0,
+      purchase_count INTEGER DEFAULT 0,
+      first_seen DATE,
+      last_seen DATE,
+      is_hidden BOOLEAN DEFAULT FALSE,     -- admin can hide noise SKUs
+      manual_override BOOLEAN DEFAULT FALSE, -- admin-edited; protect from re-import
+      notes TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_materials_subgroup ON materials(agx_subgroup);
+    CREATE INDEX IF NOT EXISTS idx_materials_sku ON materials(sku);
+    CREATE INDEX IF NOT EXISTS idx_materials_hidden ON materials(is_hidden);
+    CREATE INDEX IF NOT EXISTS idx_materials_search ON materials
+      USING gin(to_tsvector('english', description || ' ' || raw_description));
+    -- Natural-key dedupe — case-insensitive description per vendor.
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_materials_natural_key
+      ON materials(vendor, lower(raw_description));
+
+    -- Per-purchase rows kept for audit + price-history queries. Lets us
+    -- re-run aggregates after admins fix descriptions, and lets AG
+    -- answer "when did we last buy this?" with a date.
+    CREATE TABLE IF NOT EXISTS material_purchases (
+      id SERIAL PRIMARY KEY,
+      material_id INTEGER REFERENCES materials(id) ON DELETE CASCADE,
+      purchase_date DATE,
+      store_number TEXT,
+      transaction_id TEXT,
+      job_name TEXT,
+      quantity NUMERIC(10, 2),
+      unit_price NUMERIC(10, 2),
+      net_unit_price NUMERIC(10, 2),
+      is_return BOOLEAN DEFAULT FALSE,
+      source_file TEXT,
+      imported_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_material_purchases_material ON material_purchases(material_id);
+    CREATE INDEX IF NOT EXISTS idx_material_purchases_date ON material_purchases(purchase_date);
+    CREATE INDEX IF NOT EXISTS idx_material_purchases_job ON material_purchases(job_name);
   `);
 
   // Seed built-in roles. ON CONFLICT lets us re-run safely without

@@ -174,9 +174,27 @@
     importBatch: function(rows) { return post('/api/leads/import', { rows: rows }); }
   };
 
+  var materials = {
+    list: function(params) {
+      var qs = '';
+      if (params) {
+        var parts = [];
+        Object.keys(params).forEach(function(k) {
+          if (params[k] != null && params[k] !== '') {
+            parts.push(encodeURIComponent(k) + '=' + encodeURIComponent(params[k]));
+          }
+        });
+        if (parts.length) qs = '?' + parts.join('&');
+      }
+      return get('/api/materials' + qs);
+    },
+    update: function(id, payload) { return put('/api/materials/' + encodeURIComponent(id), payload); },
+    importBatch: function(payload) { return post('/api/materials/import', payload); }
+  };
+
   window.agxApi = {
     get: get, put: put, post: post, del: del,
-    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai,
+    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai, materials: materials,
     isOffline: isOffline,
     isAuthenticated: function() { return !!getToken() && !isOffline(); }
   };

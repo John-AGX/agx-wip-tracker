@@ -566,6 +566,351 @@
   // Toggle between Users / Job Assignments / Metrics / Roles inside the
   // Admin tab. Renders the section's data on first reveal so we don't fire
   // API calls for tabs the admin never opens.
+  // ==================== MATERIALS CATALOG ====================
+  // Browse + edit AGX's vendor purchase catalog. Backed by /api/materials,
+  // populated by uploading vendor CSVs (Home Depot today; Lowe's / etc.
+  // later via the same endpoint with a different vendor name).
+  //
+  // Catalog drives the AG `search_materials` tool — when the estimator is
+  // proposing line items, it queries this list for real AGX descriptions
+  // and prices instead of guessing. Admins can fix descriptions, change
+  // subgroup assignments, or hide noise rows.
+  var _materialsCache = [];
+  var _materialsFilters = { q: '', subgroup: '', show_hidden: false };
+  var _materialsTotal = 0;
+
+  function renderAdminMaterials() {
+    if (!isAdmin()) return;
+    var pane = document.getElementById('admin-subtab-materials');
+    if (!pane) return;
+    // Initial chrome: upload + filter row + status line + table mount.
+    // Renders once per admin tab visit; loadMaterials repaints the table.
+    pane.innerHTML =
+      '<div class="action-buttons" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' +
+        '<button class="ee-btn primary" onclick="document.getElementById(\'mat-upload-input\').click()">' +
+          '&#x1F4E5; Import vendor CSV' +
+        '</button>' +
+        '<input type="file" id="mat-upload-input" accept=".csv" style="display:none;" onchange="handleMaterialsImportFile(event)" />' +
+        '<button class="ee-btn secondary" onclick="reloadMaterials()">Refresh</button>' +
+        '<select id="mat-filter-subgroup" onchange="onMaterialsFilterChange()" style="margin-left:auto;min-width:130px;">' +
+          '<option value="">All subgroups</option>' +
+          '<option value="materials">Materials</option>' +
+          '<option value="labor">Labor</option>' +
+          '<option value="gc">GC</option>' +
+          '<option value="sub">Subs</option>' +
+        '</select>' +
+        '<label style="display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--text-dim,#aaa);text-transform:none !important;letter-spacing:normal !important;font-weight:400 !important;cursor:pointer;">' +
+          '<input id="mat-filter-hidden" type="checkbox" onchange="onMaterialsFilterChange()" style="margin:0;" /> show hidden' +
+        '</label>' +
+        '<input type="text" id="mat-search" oninput="onMaterialsFilterChange()" placeholder="Search descriptions, SKU…" style="min-width:240px;" />' +
+      '</div>' +
+      '<p id="mat-summary" style="margin:12px 0;color:var(--text-dim,#888);font-size:12px;">Loading…</p>' +
+      '<div id="mat-import-status" style="display:none;margin-bottom:12px;padding:10px 12px;border-radius:6px;font-size:12px;"></div>' +
+      '<div id="mat-list"></div>';
+    loadMaterials();
+  }
+
+  function loadMaterials() {
+    if (!window.agxApi) return;
+    var listEl = document.getElementById('mat-list');
+    if (listEl) listEl.innerHTML = '<div style="padding:20px;color:var(--text-dim,#888);text-align:center;">Loading…</div>';
+    window.agxApi.materials.list({
+      q: _materialsFilters.q,
+      subgroup: _materialsFilters.subgroup,
+      show_hidden: _materialsFilters.show_hidden ? '1' : '',
+      limit: 500
+    }).then(function(res) {
+      _materialsCache = res.materials || [];
+      _materialsTotal = res.totalInDb || 0;
+      renderMaterialsTable();
+    }).catch(function(err) {
+      if (listEl) listEl.innerHTML = '<div style="padding:20px;color:#f87171;text-align:center;">Failed to load: ' + escapeHTML(err.message || '') + '</div>';
+    });
+  }
+
+  function reloadMaterials() {
+    _materialsFilters.q = '';
+    var qInput = document.getElementById('mat-search');
+    if (qInput) qInput.value = '';
+    loadMaterials();
+  }
+
+  function onMaterialsFilterChange() {
+    var qInput = document.getElementById('mat-search');
+    var sgInput = document.getElementById('mat-filter-subgroup');
+    var hidInput = document.getElementById('mat-filter-hidden');
+    _materialsFilters.q = qInput ? qInput.value.trim() : '';
+    _materialsFilters.subgroup = sgInput ? sgInput.value : '';
+    _materialsFilters.show_hidden = hidInput ? !!hidInput.checked : false;
+    // Tiny debounce so each keystroke doesn't fire a request.
+    clearTimeout(window._matFilterTimer);
+    window._matFilterTimer = setTimeout(loadMaterials, 200);
+  }
+
+  function fmtMoney(n) {
+    if (n == null || n === '') return '—';
+    var v = Number(n);
+    if (isNaN(v)) return '—';
+    return '$' + v.toFixed(2);
+  }
+  function fmtDate(d) {
+    if (!d) return '—';
+    return String(d).slice(0, 10);
+  }
+
+  function renderMaterialsTable() {
+    var listEl = document.getElementById('mat-list');
+    var summaryEl = document.getElementById('mat-summary');
+    if (!listEl) return;
+    var rows = _materialsCache;
+    if (summaryEl) {
+      var bits = [_materialsTotal + ' total in catalog'];
+      if (rows.length !== _materialsTotal) bits.unshift('Showing ' + rows.length);
+      summaryEl.textContent = bits.join(' · ');
+    }
+    if (!rows.length) {
+      var hint = _materialsTotal === 0
+        ? 'Catalog is empty. Click <strong>📥 Import vendor CSV</strong> to load your purchase history.'
+        : 'No materials match the current filters.';
+      listEl.innerHTML = '<div style="padding:30px;text-align:center;color:var(--text-dim,#888);border:1px dashed var(--border,#333);border-radius:8px;">' + hint + '</div>';
+      return;
+    }
+    var html =
+      '<table class="dense-table">' +
+        '<thead><tr>' +
+          '<th>Description</th>' +
+          '<th style="width:90px;">Subgroup</th>' +
+          '<th style="width:60px;">Unit</th>' +
+          '<th class="num" style="width:90px;">Last $</th>' +
+          '<th class="num" style="width:90px;">Avg $</th>' +
+          '<th class="num" style="width:60px;">Buys</th>' +
+          '<th style="width:90px;">Last seen</th>' +
+          '<th style="width:120px;text-align:right;">Actions</th>' +
+        '</tr></thead>' +
+        '<tbody>';
+    rows.forEach(function(m) {
+      var subgroupBadge = m.agx_subgroup
+        ? '<span style="padding:1px 7px;border-radius:9px;background:rgba(79,140,255,0.12);color:#4f8cff;font-size:10px;text-transform:uppercase;letter-spacing:0.4px;font-weight:600;">' + escapeHTML(m.agx_subgroup) + '</span>'
+        : '<span style="color:var(--text-dim,#666);font-style:italic;font-size:11px;">unmapped</span>';
+      var hiddenBadge = m.is_hidden
+        ? '<span style="padding:1px 7px;border-radius:9px;background:rgba(248,113,113,0.10);color:#f87171;font-size:10px;text-transform:uppercase;letter-spacing:0.4px;font-weight:600;margin-left:6px;">Hidden</span>'
+        : '';
+      var manualBadge = m.manual_override
+        ? '<span title="Description manually edited — protected from re-import" style="padding:1px 7px;border-radius:9px;background:rgba(52,211,153,0.10);color:#34d399;font-size:10px;text-transform:uppercase;letter-spacing:0.4px;font-weight:600;margin-left:6px;">Edited</span>'
+        : '';
+      var skuLine = m.sku
+        ? '<div style="font-size:10px;color:var(--text-dim,#888);font-family:\'SF Mono\',monospace;margin-top:2px;">SKU ' + escapeHTML(m.sku) + (m.hd_class ? ' · ' + escapeHTML(m.hd_class) + (m.hd_subclass ? ' / ' + escapeHTML(m.hd_subclass) : '') : '') + '</div>'
+        : '';
+      html += '<tr data-mat-id="' + m.id + '" style="' + (m.is_hidden ? 'opacity:0.55;' : '') + '">' +
+        '<td>' +
+          '<div style="font-size:13px;color:var(--text,#fff);">' + escapeHTML(m.description || m.raw_description || '') + manualBadge + hiddenBadge + '</div>' +
+          skuLine +
+        '</td>' +
+        '<td>' + subgroupBadge + '</td>' +
+        '<td style="font-family:\'SF Mono\',monospace;font-size:12px;">' + escapeHTML(m.unit || 'ea') + '</td>' +
+        '<td class="num" style="font-family:\'SF Mono\',monospace;color:#34d399;">' + fmtMoney(m.last_unit_price) + '</td>' +
+        '<td class="num" style="font-family:\'SF Mono\',monospace;color:var(--text-dim,#aaa);">' + fmtMoney(m.avg_unit_price) + '</td>' +
+        '<td class="num" style="font-family:\'SF Mono\',monospace;">' + (m.purchase_count || 0) + '</td>' +
+        '<td style="font-size:11px;color:var(--text-dim,#aaa);">' + fmtDate(m.last_seen) + '</td>' +
+        '<td style="text-align:right;white-space:nowrap;">' +
+          '<button class="ee-btn ee-icon-btn secondary" onclick="openMaterialEditor(' + m.id + ')" title="Edit">&#x270F;&#xFE0F;</button>' +
+          '<button class="ee-btn ee-icon-btn ghost" onclick="toggleMaterialHidden(' + m.id + ')" title="' + (m.is_hidden ? 'Unhide' : 'Hide') + '">' + (m.is_hidden ? '&#x1F441;' : '&#x1F441;&#xFE0F;') + '</button>' +
+        '</td>' +
+      '</tr>';
+    });
+    html += '</tbody></table>';
+    listEl.innerHTML = html;
+  }
+
+  function toggleMaterialHidden(id) {
+    var m = _materialsCache.find(function(x) { return x.id === id; });
+    if (!m) return;
+    window.agxApi.materials.update(id, { is_hidden: !m.is_hidden }).then(loadMaterials);
+  }
+
+  // Inline editor — modal with description, subgroup, unit, hidden, notes.
+  function openMaterialEditor(id) {
+    var m = _materialsCache.find(function(x) { return x.id === id; });
+    if (!m) return;
+    var modal = document.getElementById('matEditorModal') || createMaterialEditorModal();
+    document.getElementById('matEd_id').value = m.id;
+    document.getElementById('matEd_raw').textContent = m.raw_description || '';
+    document.getElementById('matEd_description').value = m.description || '';
+    document.getElementById('matEd_subgroup').value = m.agx_subgroup || 'materials';
+    document.getElementById('matEd_unit').value = m.unit || 'ea';
+    document.getElementById('matEd_hidden').checked = !!m.is_hidden;
+    document.getElementById('matEd_notes').value = m.notes || '';
+    document.getElementById('matEd_status').textContent = '';
+    openModal('matEditorModal');
+  }
+
+  function createMaterialEditorModal() {
+    var modal = document.createElement('div');
+    modal.id = 'matEditorModal';
+    modal.className = 'modal';
+    modal.innerHTML =
+      '<div class="modal-content" style="max-width:560px;">' +
+        '<div class="modal-header">Edit Material</div>' +
+        '<div style="padding:18px 22px;">' +
+          '<input type="hidden" id="matEd_id" />' +
+          '<div style="margin-bottom:12px;font-size:11px;color:var(--text-dim,#888);">Vendor description (read-only): <span id="matEd_raw" style="color:var(--text,#ccc);font-family:\'SF Mono\',monospace;font-size:12px;"></span></div>' +
+          '<div class="form-group">' +
+            '<label>Display description (used by AG)</label>' +
+            '<input type="text" id="matEd_description" style="width:100%;" />' +
+          '</div>' +
+          '<div style="display:grid;grid-template-columns:2fr 1fr;gap:12px;">' +
+            '<div class="form-group">' +
+              '<label>Subgroup</label>' +
+              '<select id="matEd_subgroup">' +
+                '<option value="materials">Materials</option>' +
+                '<option value="labor">Labor</option>' +
+                '<option value="gc">GC</option>' +
+                '<option value="sub">Subs</option>' +
+              '</select>' +
+            '</div>' +
+            '<div class="form-group">' +
+              '<label>Unit</label>' +
+              '<input type="text" id="matEd_unit" placeholder="ea, qt, lb, lf…" />' +
+            '</div>' +
+          '</div>' +
+          '<div class="form-group">' +
+            '<label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;text-transform:none !important;letter-spacing:normal !important;">' +
+              '<input type="checkbox" id="matEd_hidden" /> Hide from AG suggestions (noise / one-off / wrong)' +
+            '</label>' +
+          '</div>' +
+          '<div class="form-group">' +
+            '<label>Notes</label>' +
+            '<textarea id="matEd_notes" rows="2" style="width:100%;resize:vertical;" placeholder="Optional — usage tips, alternates, supplier details…"></textarea>' +
+          '</div>' +
+          '<p id="matEd_status" style="margin-top:6px;font-size:12px;"></p>' +
+        '</div>' +
+        '<div class="modal-footer">' +
+          '<button class="ee-btn secondary" onclick="closeModal(\'matEditorModal\')">Cancel</button>' +
+          '<button class="ee-btn primary" onclick="saveMaterialEditor()">Save</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(modal);
+    return modal;
+  }
+
+  function saveMaterialEditor() {
+    var id = document.getElementById('matEd_id').value;
+    var payload = {
+      description: document.getElementById('matEd_description').value.trim(),
+      agx_subgroup: document.getElementById('matEd_subgroup').value,
+      unit: document.getElementById('matEd_unit').value.trim(),
+      is_hidden: document.getElementById('matEd_hidden').checked,
+      notes: document.getElementById('matEd_notes').value.trim() || null
+    };
+    var statusEl = document.getElementById('matEd_status');
+    statusEl.style.color = 'var(--text-dim,#aaa)';
+    statusEl.textContent = 'Saving…';
+    window.agxApi.materials.update(id, payload).then(function() {
+      statusEl.style.color = '#34d399';
+      statusEl.textContent = 'Saved.';
+      setTimeout(function() {
+        closeModal('matEditorModal');
+        loadMaterials();
+      }, 400);
+    }).catch(function(err) {
+      statusEl.style.color = '#f87171';
+      statusEl.textContent = 'Failed: ' + (err.message || err);
+    });
+  }
+
+  // ─── CSV import ────────────────────────────────────────────────
+  // Parse browser-side via SheetJS (already loaded by proposal.js for
+  // the BT export), then POST the row array to the import endpoint.
+  // Keeping the parse on the client means the server doesn't need a
+  // CSV dependency and we can show a preview / row count before upload.
+  function handleMaterialsImportFile(event) {
+    var file = event && event.target && event.target.files && event.target.files[0];
+    event.target.value = ''; // allow re-selecting the same file
+    if (!file) return;
+    if (typeof XLSX === 'undefined') {
+      alert('Spreadsheet library still loading. Try again in a moment.');
+      return;
+    }
+    var statusEl = document.getElementById('mat-import-status');
+    if (statusEl) {
+      statusEl.style.display = 'block';
+      statusEl.style.background = 'rgba(79,140,255,0.08)';
+      statusEl.style.border = '1px solid rgba(79,140,255,0.25)';
+      statusEl.style.color = 'var(--text,#ddd)';
+      statusEl.innerHTML = '⏳ Parsing <strong>' + escapeHTML(file.name) + '</strong>…';
+    }
+    var reader = new FileReader();
+    reader.onload = function(e) {
+      try {
+        var text = e.target.result;
+        // HD's CSV has 5 metadata rows + a blank row before the header
+        // (Date, Store Number, ...). SheetJS header detection won't find
+        // it automatically, so we strip the prelude here.
+        var headerIdx = text.indexOf('Date,Store Number,');
+        if (headerIdx >= 0) text = text.slice(headerIdx);
+        var wb = XLSX.read(text, { type: 'string' });
+        var ws = wb.Sheets[wb.SheetNames[0]];
+        var rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
+        if (!rows.length) {
+          throw new Error('No data rows in CSV');
+        }
+        if (statusEl) statusEl.innerHTML = '⏳ Uploading <strong>' + rows.length + '</strong> rows…';
+        // Detect vendor — for now Home Depot is the only format. Future:
+        // dropdown on the import button.
+        var vendor = 'home_depot';
+        window.agxApi.materials.importBatch({
+          vendor: vendor,
+          source_file: file.name,
+          rows: rows
+        }).then(function(res) {
+          if (statusEl) {
+            statusEl.style.background = 'rgba(52,211,153,0.10)';
+            statusEl.style.border = '1px solid rgba(52,211,153,0.35)';
+            statusEl.style.color = '#34d399';
+            statusEl.innerHTML =
+              '✓ Imported. ' +
+              '<strong>' + res.unique_materials + '</strong> unique materials processed · ' +
+              '<strong>' + res.inserted + '</strong> new · ' +
+              '<strong>' + res.updated + '</strong> updated · ' +
+              (res.protected_admin_edits ? '<strong>' + res.protected_admin_edits + '</strong> admin-edited (description preserved) · ' : '') +
+              '<strong>' + res.skipped + '</strong> skipped (fees/blank).';
+          }
+          loadMaterials();
+        }).catch(function(err) {
+          if (statusEl) {
+            statusEl.style.background = 'rgba(248,113,113,0.10)';
+            statusEl.style.border = '1px solid rgba(248,113,113,0.35)';
+            statusEl.style.color = '#f87171';
+            statusEl.innerHTML = '✗ Import failed: ' + escapeHTML(err.message || '');
+          }
+        });
+      } catch (err) {
+        if (statusEl) {
+          statusEl.style.background = 'rgba(248,113,113,0.10)';
+          statusEl.style.border = '1px solid rgba(248,113,113,0.35)';
+          statusEl.style.color = '#f87171';
+          statusEl.innerHTML = '✗ Parse failed: ' + escapeHTML(err.message || '');
+        }
+      }
+    };
+    reader.onerror = function() {
+      if (statusEl) {
+        statusEl.style.background = 'rgba(248,113,113,0.10)';
+        statusEl.style.color = '#f87171';
+        statusEl.innerHTML = '✗ Could not read the file.';
+      }
+    };
+    reader.readAsText(file);
+  }
+
+  window.renderAdminMaterials = renderAdminMaterials;
+  window.reloadMaterials = reloadMaterials;
+  window.onMaterialsFilterChange = onMaterialsFilterChange;
+  window.openMaterialEditor = openMaterialEditor;
+  window.saveMaterialEditor = saveMaterialEditor;
+  window.toggleMaterialHidden = toggleMaterialHidden;
+  window.handleMaterialsImportFile = handleMaterialsImportFile;
+
   function switchAdminSubTab(name) {
     document.querySelectorAll('[data-admin-subtab]').forEach(function(btn) {
       btn.classList.toggle('active', btn.dataset.adminSubtab === name);
@@ -580,6 +925,7 @@
     else if (name === 'metrics') renderAdminMetrics();
     else if (name === 'roles') renderAdminRoles();
     else if (name === 'templates') renderAdminTemplates();
+    else if (name === 'materials') renderAdminMaterials();
   }
 
   // ==================== PROPOSAL TEMPLATES + BT MAPPING ====================
