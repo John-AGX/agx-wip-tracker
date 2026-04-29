@@ -15,6 +15,10 @@ const { requireAuth, requireCapability } = require('../auth');
 
 const router = express.Router();
 
+// Startup fingerprint — lets us verify from deploy logs whether this
+// file is in the running image (vs a stale cached build).
+console.log('[material-routes] mounted at /api/materials (Phase 1 — catalog ingest + browse)');
+
 // ──────────────────────────────────────────────────────────────────
 // Description cleanup (regex, no AI). Handles ~95% of HD's screaming-
 // caps descriptions cleanly. Admins can fix the remaining 5% by hand
