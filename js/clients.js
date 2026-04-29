@@ -111,7 +111,7 @@
     var nameCell;
     if (role === 'parent') {
       nameCell =
-        '<button class="ee-btn ee-icon-btn ghost" onclick="event.stopPropagation();toggleClientParent(\'' + escapeAttr(c.id) + '\')" title="' + (expanded ? 'Collapse' : 'Expand') + '" style="width:22px;height:22px;padding:0;font-size:11px;">' + (expanded ? '▾' : '▸') + '</button>' +
+        '<button class="ee-btn ee-icon-btn ghost" onclick="event.stopPropagation();toggleClientParent(\'' + escapeAttr(c.id) + '\')" title="' + (expanded ? 'Collapse' : 'Expand') + '">' + (expanded ? '▾' : '▸') + '</button>' +
         '<strong style="color:var(--text,#fff);font-size:13px;">' + escapeHTML(c.name) + '</strong>' +
         '<span style="padding:1px 7px;border-radius:9px;background:rgba(79,140,255,0.12);color:#4f8cff;font-size:10px;text-transform:uppercase;letter-spacing:0.5px;font-weight:600;">Parent · ' + childCount + '</span>';
     } else if (role === 'child') {
@@ -134,12 +134,17 @@
     if (c.market) location = c.market + (location ? ' · ' + location : '');
 
     var actions =
-      '<button class="ee-btn secondary" onclick="event.stopPropagation();openEditClientModal(\'' + escapeAttr(c.id) + '\')" title="Edit">&#x270F;&#xFE0F;</button>' +
-      '<button class="ee-btn ghost" onclick="event.stopPropagation();openClientMergeModal(\'' + escapeAttr(c.id) + '\')" title="Merge into another client">&#x1F500;</button>' +
-      (role === 'flat' ? '<button class="ee-btn ghost" onclick="event.stopPropagation();openClientSplitModal(\'' + escapeAttr(c.id) + '\')" title="Split into parent + property">&#x2702;</button>' : '');
+      '<button class="ee-btn ee-icon-btn secondary" onclick="event.stopPropagation();openEditClientModal(\'' + escapeAttr(c.id) + '\')" title="Edit">&#x270F;&#xFE0F;</button>' +
+      '<button class="ee-btn ee-icon-btn ghost" onclick="event.stopPropagation();openClientMergeModal(\'' + escapeAttr(c.id) + '\')" title="Merge into another client">&#x1F500;</button>' +
+      (role === 'flat' ? '<button class="ee-btn ee-icon-btn ghost" onclick="event.stopPropagation();openClientSplitModal(\'' + escapeAttr(c.id) + '\')" title="Split into parent + property">&#x2702;</button>' : '');
 
+    // Note: keep display:flex on a wrapper DIV inside the td, not on the
+    // td itself. Flex on a <td> breaks the table-cell layout — the cell
+    // shrinks to content width and the rest of the row lines up next to
+    // it instead of across the full table, which renders as a stray
+    // vertical seam halfway across the body.
     return '<tr ' + rowAttrs + ' style="cursor:pointer;' + rowStyle + '" onclick="openEditClientModal(\'' + escapeAttr(c.id) + '\')">' +
-      '<td style="display:flex;align-items:center;gap:8px;">' + nameCell + '</td>' +
+      '<td><div style="display:flex;align-items:center;gap:8px;">' + nameCell + '</div></td>' +
       '<td>' + escapeHTML(contact) + '</td>' +
       '<td>' + escapeHTML(location) + '</td>' +
       '<td style="text-align:right;white-space:nowrap;">' +
