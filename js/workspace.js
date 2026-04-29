@@ -1568,29 +1568,28 @@
         <div class="ws-cell-ref" id="wsCellRef">A1</div>
         <input type="text" class="ws-formula-bar" id="wsFormulaBar" placeholder="Enter value or formula (e.g. =A1+B1)" spellcheck="false" />
       </div>
-      <!-- Row 2: Data ops — what you do TO the data -->
-      <div class="ws-toolbar ws-toolbar-data">
-        <button class="ws-btn" id="wsLinkBtn" title="Link cell to job field">&#x1F517; Link</button>
-        <button class="ws-btn" id="wsAutoSumBtn" onclick="window.wsAutoSum()" title="Insert =SUM with auto-detected range (above or left)">&#x03A3; AutoSum</button>
-        <button class="ws-btn" id="wsMakeTableBtn" onclick="window.wsMakeTable()" title="Convert selected range into a styled table">&#x1F5C2; Table</button>
-        <button class="ws-btn" id="wsSortAscBtn" onclick="window.wsSortAscHeader()" title="Sort range ascending (preserves header row)">&#x2191;A</button>
-        <button class="ws-btn" id="wsSortDescBtn" onclick="window.wsSortDescHeader()" title="Sort range descending (preserves header row)">&#x2193;Z</button>
-        <button class="ws-btn" id="wsFindBtn" onclick="window.wsOpenFindReplace()" title="Find &amp; Replace (Ctrl+F)">&#x1F50D; Find</button>
-        <select id="wsFreezeSelect" class="ws-select" onchange="window.wsSetFreeze(this.value || null); this.value='';" title="Freeze panes">
-          <option value="">&#x2744; Freeze…</option>
+      <!-- Single compact action row: data + file ops together. Most
+           buttons are icon-only to keep the strip on one line. -->
+      <div class="ws-toolbar ws-toolbar-actions">
+        <button class="ws-btn" id="wsLinkBtn" title="Link cell to job field">&#x1F517;</button>
+        <button class="ws-btn" id="wsAutoSumBtn" onclick="window.wsAutoSum()" title="AutoSum (Σ) — insert =SUM with auto-detected range">&#x03A3;</button>
+        <button class="ws-btn" id="wsMakeTableBtn" onclick="window.wsMakeTable()" title="Convert selected range into a styled table">&#x1F5C2;</button>
+        <button class="ws-btn" id="wsSortAscBtn" onclick="window.wsSortAscHeader()" title="Sort range ascending">&#x2191;A</button>
+        <button class="ws-btn" id="wsSortDescBtn" onclick="window.wsSortDescHeader()" title="Sort range descending">&#x2193;Z</button>
+        <button class="ws-btn" id="wsFindBtn" onclick="window.wsOpenFindReplace()" title="Find &amp; Replace (Ctrl+F)">&#x1F50D;</button>
+        <select id="wsFreezeSelect" class="ws-select-compact" onchange="window.wsSetFreeze(this.value || null); this.value='';" title="Freeze panes">
+          <option value="">&#x2744;</option>
           <option value="row">Top row</option>
           <option value="col">First column</option>
           <option value="both">Top row + first column</option>
           <option value="">No freeze</option>
         </select>
-      </div>
-      <!-- Row 3: File ops — what you do WITH the workbook -->
-      <div class="ws-toolbar ws-toolbar-file">
-        <button class="ws-btn" id="wsImportXlsxBtn" title="Import an Excel file as new sheets">&#x1F4E5; Import .xlsx</button>
+        <span class="ws-toolbar-spacer"></span>
+        <button class="ws-btn" id="wsImportXlsxBtn" title="Import .xlsx as new sheets">&#x1F4E5;</button>
         <input type="file" id="wsImportXlsxInput" accept=".xlsx,.xls,.csv" style="display:none;" />
-        <button class="ws-btn" id="wsClearBtn" title="Clear workspace">&#x1F5D1; Clear</button>
-        <button class="ws-btn ws-btn-save" id="wsSaveBtn" title="Save workspace">&#x1F4BE; Save</button>
-        <button class="ws-btn" id="wsNodeGraphBtn" title="Node Graph (Beta)">&#x26A1; Node Graph</button>
+        <button class="ws-btn" id="wsClearBtn" title="Clear workspace">&#x1F5D1;</button>
+        <button class="ws-btn ws-btn-save" id="wsSaveBtn" title="Save workspace (Ctrl+S)">&#x1F4BE; Save</button>
+        <button class="ws-btn" id="wsNodeGraphBtn" title="Node Graph (Beta)">&#x26A1;</button>
       </div>
       <div class="ws-toolbar-fmt" id="wsToolbarFmt">
         <button class="ws-btn ws-btn-icon" id="wsUndoBtn" title="Undo (Ctrl+Z)">&#x21A9;</button>

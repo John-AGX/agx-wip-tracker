@@ -27,24 +27,26 @@
   scrollbar-width: thin;
 }
 
-/* Visual separator between data-ops and file-ops rows */
-.ws-toolbar.ws-toolbar-file {
-  background: rgba(0, 0, 0, 0.12);
-}
+/* Spacer pushes file-ops to the right side of the action row */
+.ws-toolbar-spacer { flex: 1; }
 
-/* The freeze-panes select needs to look like a button, not a default
-   <select>. Compact, dark-themed, matching the surrounding ws-btn. */
-.ws-select {
-  padding: 4px 8px;
+/* Compact freeze-panes select — width-of-content (~32px) when closed,
+   expands when the user opens the dropdown. Matches ws-btn visual. */
+.ws-select-compact {
+  padding: 4px 4px 4px 6px;
   background: var(--card-bg, #0c0c14);
   color: var(--text);
   border: 1px solid var(--grid-border, #2e3346);
   border-radius: 4px;
-  font-size: 11px;
+  font-size: 12px;
   height: 26px;
+  width: 38px;
   cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  text-align-last: center;
 }
-.ws-select:hover {
+.ws-select-compact:hover {
   border-color: rgba(255, 255, 255, 0.18);
   background: rgba(255, 255, 255, 0.04);
 }
@@ -590,15 +592,28 @@
   padding: 2px 6px;
   border: 1px solid var(--cell-border);
   color: var(--text);
-  height: 24px;
+  /* min-height keeps the comfortable click area, but the row can grow
+     beyond it via explicit row height (drag-resize / AutoFit). */
+  min-height: 24px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  vertical-align: top; /* content lines up at the top when row grows */
   cursor: cell;
   transition: background 0.08s;
   position: relative;
   background: var(--cell-bg);
   font-size: 12px;
+  line-height: 1.4;
+}
+
+/* When a row has been resized (rowHeights[r] is set), cells in that
+   row wrap their content. Pulling a row taller now visibly wraps the
+   text to fill the available space — which is what the user expects
+   from a "make it bigger" gesture. */
+.ws-grid tbody tr[style*="height"] .ws-cell {
+  white-space: normal;
+  word-break: break-word;
 }
 
 .ws-cell:hover {
@@ -737,21 +752,36 @@
 .ws-table-style-finance { border-left:4px solid #fbbf24 !important; }
 
 /* ── Freeze panes ────────────────────────────────────── */
-/* Sticky header / first column. Uses CSS sticky positioning so the
-   browser keeps the row/col pinned during scroll. */
-.ws-grid.ws-freeze-row thead th {
+/* The column-letter header (thead) is already position:sticky in the
+   default styles. Excel's "Freeze Top Row" means freeze the first
+   DATA row — the one carrying the user's column titles, like Row 1
+   in their spreadsheet. We pin tbody tr:first-child + offset it by
+   the thead height so it sits just below the column letters. */
+.ws-grid.ws-freeze-row tbody tr:first-child td {
   position: sticky;
-  top: 0;
-  z-index: 3;
+  top: 28px; /* matches default ROW_HEIGHT = thead row height */
+  z-index: 2;
+  background: var(--surface,#181820);
+  box-shadow: 0 1px 0 var(--grid-border,#2e3346); /* subtle separator */
 }
+.ws-grid.ws-freeze-row tbody tr:first-child td.ws-row-header {
+  z-index: 3; /* row-header corner stacks above the regular cells */
+}
+
+/* Freeze first column — pin the row-header column AND the actual
+   first data column (which is th[data-col=0] / td[data-c=0]). */
 .ws-grid.ws-freeze-col tbody td.ws-row-header,
-.ws-grid.ws-freeze-col tbody td:nth-child(2) {
+.ws-grid.ws-freeze-col thead th.ws-row-corner,
+.ws-grid.ws-freeze-col tbody td[data-c="0"],
+.ws-grid.ws-freeze-col thead th[data-col="0"] {
   position: sticky;
   left: 0;
   z-index: 2;
   background: var(--surface,#181820);
 }
-.ws-grid.ws-freeze-row.ws-freeze-col thead th:first-child {
+/* Stack the corner cells above everything else when both axes freeze */
+.ws-grid.ws-freeze-row.ws-freeze-col tbody tr:first-child td.ws-row-header,
+.ws-grid.ws-freeze-row.ws-freeze-col tbody tr:first-child td[data-c="0"] {
   z-index: 4;
 }
 
