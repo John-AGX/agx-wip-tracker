@@ -411,7 +411,10 @@
             color: var(--text);
             padding-bottom: 8px;
             border-bottom: 1px solid var(--border);
+            cursor: move; /* signals the header is a drag handle */
+            user-select: none;
         }
+        .modal-header:active { cursor: grabbing; }
 
         .modal-footer {
             display: flex;
