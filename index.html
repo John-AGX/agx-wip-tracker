@@ -1385,21 +1385,28 @@
                     <input type="text" id="estTitle" placeholder="e.g., Madeira Bay — Restoration Project RFP" autofocus />
                 </div>
 
-                <!-- Job Type + Default Markup paired -->
-                <div style="display:grid;grid-template-columns:2fr 1fr;gap:12px;">
-                    <div class="form-group">
-                        <label>Job Type</label>
-                        <select id="estJobType">
-                            <option value="">— Select —</option>
-                            <option value="Renovation">Renovation</option>
-                            <option value="Service &amp; Repair">Service &amp; Repair</option>
-                            <option value="Work Order">Work Order</option>
-                        </select>
+                <!-- Job Type — markup is per-section now, set inside the editor -->
+                <div class="form-group">
+                    <label>Job Type</label>
+                    <select id="estJobType">
+                        <option value="">— Select —</option>
+                        <option value="Renovation">Renovation</option>
+                        <option value="Service &amp; Repair">Service &amp; Repair</option>
+                        <option value="Work Order">Work Order</option>
+                    </select>
+                </div>
+
+                <!-- Lead-prefill banner — only visible when this estimate is
+                     being created from an existing lead. The "Copy from lead"
+                     button re-runs the prefill so the user can recover from
+                     accidentally clearing fields. -->
+                <div id="estLeadPrefillBanner" style="display:none;margin-bottom:14px;padding:10px 12px;background:rgba(52,211,153,0.08);border:1px solid rgba(52,211,153,0.25);border-radius:8px;align-items:center;gap:10px;">
+                    <span style="font-size:18px;">&#x1F4CB;</span>
+                    <div style="flex:1;font-size:12px;color:var(--text,#fff);">
+                        <strong>From lead:</strong> <span id="estLeadPrefillLabel" style="color:#34d399;"></span>
+                        <div style="font-size:11px;color:var(--text-dim,#aaa);margin-top:2px;">Client + property fields filled from the lead. Editing below is fine.</div>
                     </div>
-                    <div class="form-group">
-                        <label>Default Markup %</label>
-                        <input type="number" id="estDefaultMarkup" value="100" step="0.1" />
-                    </div>
+                    <button type="button" class="ee-btn secondary" onclick="window.copyFromLeadAgain && window.copyFromLeadAgain()" title="Re-run the lead prefill (handy if you accidentally cleared a field)">&#x21BB; Copy from lead</button>
                 </div>
 
                 <!-- Client picker — auto-fills the rest -->

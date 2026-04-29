@@ -470,16 +470,44 @@
   //   taxAmount          = preTax × (est.taxPct / 100)
   //   beforeRound        = preTax + taxAmount
   //   total              = round up beforeRound to nearest est.roundTo
+  // Walk back from a given line to find its enclosing section header and
+  // return that section's markup. Per-line `markup` overrides the section.
+  // For legacy estimates that still carry an estimate-wide `defaultMarkup`,
+  // fall through to it so existing data keeps pricing the same until the
+  // user assigns explicit section markups.
+  function effectiveMarkupForLine(line, allLines, est) {
+    if (line && line.markup !== '' && line.markup != null) return num(line.markup);
+    return sectionMarkupForLine(line, allLines, est);
+  }
+  // The section-derived markup for a line, ignoring any per-line override.
+  // Used to populate the placeholder on the per-line markup field so the
+  // user knows what they'd be overriding if they typed a value.
+  function sectionMarkupForLine(line, allLines, est) {
+    if (allLines && allLines.length) {
+      var idx = allLines.indexOf(line);
+      if (idx < 0) idx = allLines.length;
+      for (var i = idx - 1; i >= 0; i--) {
+        var L = allLines[i];
+        if (L && L.section === '__section_header__') {
+          if (L.markup !== '' && L.markup != null) return num(L.markup);
+          break;
+        }
+      }
+    }
+    if (est && est.defaultMarkup != null && est.defaultMarkup !== '') return num(est.defaultMarkup);
+    return 0;
+  }
+
   function computeTotals() {
     var est = getEstimate();
-    var lines = getLines().filter(function(l) { return l.section !== '__section_header__'; });
-    var defaultMarkup = num(est && est.defaultMarkup);
+    var allLines = getLines();
     var subtotal = 0;
     var markedUp = 0;
-    lines.forEach(function(l) {
+    allLines.forEach(function(l) {
+      if (l.section === '__section_header__') return;
       var ext = num(l.qty) * num(l.unitCost);
       subtotal += ext;
-      var m = (l.markup === '' || l.markup == null) ? defaultMarkup : num(l.markup);
+      var m = effectiveMarkupForLine(l, allLines, est);
       markedUp += ext * (1 + m / 100);
     });
     var feeFlat = est ? num(est.feeFlat) : 0;
@@ -579,18 +607,16 @@
       return;
     }
 
-    var defaultMarkup = num(est.defaultMarkup);
     var html = '<div class="ee-line-table" style="border:1px solid var(--border,#333);border-radius:8px;overflow:hidden;">';
     html += renderLineHeaderRow();
 
     // Group rendering: walk lines in order, render section headers + lines
-    // + per-section subtotals.
+    // + per-section subtotals. Markup is now per-section — every line
+    // inherits its section header's markup unless the line overrides.
     var currentSection = null;
     var sectionStartIdx = null;
     function flushSectionSubtotal(endIdx) {
       if (currentSection == null) return;
-      // Sum from sectionStartIdx (inclusive of the header row index in ALL
-      // lines) up through endIdx
       var sum = 0;
       var marked = 0;
       for (var i = sectionStartIdx + 1; i < endIdx; i++) {
@@ -598,7 +624,7 @@
         if (!L || L.section === '__section_header__') continue;
         var ext = num(L.qty) * num(L.unitCost);
         sum += ext;
-        var m = (L.markup === '' || L.markup == null) ? defaultMarkup : num(L.markup);
+        var m = effectiveMarkupForLine(L, lines, est);
         marked += ext * (1 + m / 100);
       }
       html += renderSectionSubtotal(sum, marked);
@@ -612,7 +638,7 @@
         currentSection = line.description || 'Section';
         sectionStartIdx = i;
       } else {
-        html += renderLineItemRow(line, defaultMarkup);
+        html += renderLineItemRow(line, lines, est);
       }
     }
     if (currentSection != null) flushSectionSubtotal(lines.length);
@@ -652,6 +678,7 @@
 
   function renderSectionHeaderRow(line) {
     var idAttr = escapeHTML(line.id);
+    var markupVal = (line.markup === '' || line.markup == null) ? '' : num(line.markup);
     return '<div data-section-id="' + idAttr + '" data-line-id="' + idAttr + '" ' +
         'ondragover="onLineDragOver(event)" ondragleave="onLineDragLeave(event)" ' +
         'ondrop="onLineDrop(event, \'' + idAttr + '\')" ' +
@@ -661,16 +688,31 @@
         'oninput="updateSectionName(\'' + idAttr + '\', this.value)" ' +
         'style="flex:1;font-size:13px;font-weight:700;background:transparent;border:1px solid transparent;border-radius:4px;padding:4px 8px;color:#4f8cff;text-transform:uppercase;letter-spacing:0.5px;" ' +
         'onfocus="this.style.borderColor=\'var(--border,#333)\';" onblur="this.style.borderColor=\'transparent\';" />' +
+      // Section markup — all lines under this header inherit this %.
+      // Slider snaps to common increments; the number input is the source
+      // of truth and accepts any value.
+      '<div style="display:inline-flex;align-items:center;gap:6px;background:rgba(0,0,0,0.18);padding:3px 8px;border-radius:14px;border:1px solid var(--border,#333);">' +
+        '<span style="font-size:10px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.4px;font-weight:600;">Markup</span>' +
+        '<input type="range" min="0" max="60" step="1" value="' + (markupVal === '' ? 0 : markupVal) + '" ' +
+          'oninput="updateSectionMarkup(\'' + idAttr + '\', this.value, true)" ' +
+          'style="width:70px;height:14px;cursor:pointer;accent-color:#4f8cff;" />' +
+        '<input type="number" min="0" step="0.5" placeholder="0" value="' + markupVal + '" ' +
+          'oninput="updateSectionMarkup(\'' + idAttr + '\', this.value, false)" ' +
+          'style="width:50px;padding:2px 4px;font-size:12px;background:transparent;border:1px solid transparent;border-radius:4px;color:var(--text,#fff);text-align:right;font-family:\'SF Mono\',monospace;" ' +
+          'onfocus="this.style.borderColor=\'var(--border,#333)\';" onblur="this.style.borderColor=\'transparent\';" />' +
+        '<span style="font-size:11px;color:var(--text-dim,#888);">%</span>' +
+      '</div>' +
       '<button class="ee-btn primary" onclick="addEstimateLineFromEditor(\'' + idAttr + '\')" title="Add a line under this section">&#x2795; Line Item</button>' +
       '<button class="ee-btn ee-icon-btn ghost" onclick="deleteSectionFromEditor(\'' + idAttr + '\')" title="Remove section header (lines stay)">&#x1F5D1;</button>' +
     '</div>';
   }
 
-  function renderLineItemRow(line, defaultMarkup) {
+  function renderLineItemRow(line, allLines, est) {
     var ext = num(line.qty) * num(line.unitCost);
-    var lineMarkup = (line.markup === '' || line.markup == null) ? defaultMarkup : num(line.markup);
+    var inherited = sectionMarkupForLine(line, allLines, est);
+    var lineMarkup = (line.markup === '' || line.markup == null) ? inherited : num(line.markup);
     var clientPrice = ext * (1 + lineMarkup / 100);
-    var markupPlaceholder = (line.markup === '' || line.markup == null) ? defaultMarkup + ' (default)' : '';
+    var markupPlaceholder = (line.markup === '' || line.markup == null) ? inherited + ' (section)' : '';
     var idAttr = escapeHTML(line.id);
 
     var input = function(field, value, opts) {
@@ -743,6 +785,30 @@
     debouncedSave();
     // Don't re-render the whole thing on every keystroke — the input keeps
     // its value as-typed; subtotals don't depend on the section name.
+  }
+
+  // Section markup — applies to every line under the header unless the
+  // line carries its own override. `fromSlider` syncs the matching number
+  // input in the same row; both inputs feed into the same line.markup.
+  function updateSectionMarkup(lineId, value, fromSlider) {
+    var line = (appData.estimateLines || []).find(function(l) { return l.id === lineId; });
+    if (!line) return;
+    var raw = (value == null) ? '' : String(value).trim();
+    line.markup = raw === '' ? '' : Number(raw);
+    debouncedSave();
+    // Sync the sibling input visually so slider drag matches the number
+    // box in real time.
+    var row = document.querySelector('[data-section-id="' + lineId + '"]');
+    if (row) {
+      var sliderEl = row.querySelector('input[type="range"]');
+      var numEl = row.querySelector('input[type="number"]');
+      if (fromSlider && numEl) numEl.value = raw;
+      if (!fromSlider && sliderEl) sliderEl.value = (raw === '' ? 0 : Number(raw));
+    }
+    // Markup change cascades into every line under this section AND the
+    // grand totals strip. Re-render both.
+    renderLineItems();
+    renderTotals();
   }
 
   // Optional sectionId — when provided, the new line is inserted just
@@ -853,11 +919,15 @@
   // Phase C will widen btCategory into a (parentGroup, subgroup) tuple for
   // BT's two-sheet import — keeping the simple keys here for now keeps
   // existing data forward-compatible.
+  // Default markup per category mirrors AGX's typical pricing: materials
+  // and subs run lean, direct labor carries the bulk of the margin, GC is
+  // usually a flat percentage. Estimators can dial each section's slider
+  // up or down per job in the editor.
   var STANDARD_SECTIONS_PRESET = [
-    { name: 'Materials & Supplies Costs', btCategory: 'materials' },
-    { name: 'Direct Labor',               btCategory: 'labor' },
-    { name: 'General Conditions',         btCategory: 'gc' },
-    { name: 'Subcontractors Costs',       btCategory: 'sub' }
+    { name: 'Materials & Supplies Costs', btCategory: 'materials', markup: 20 },
+    { name: 'Direct Labor',               btCategory: 'labor',     markup: 35 },
+    { name: 'General Conditions',         btCategory: 'gc',        markup: 25 },
+    { name: 'Subcontractors Costs',       btCategory: 'sub',       markup: 10 }
   ];
 
   function addStandardSectionsFromEditor() {
@@ -878,7 +948,8 @@
         alternateId: altId,
         section: '__section_header__',
         description: s.name,
-        btCategory: s.btCategory
+        btCategory: s.btCategory,
+        markup: s.markup
       });
       added++;
     });
@@ -1031,19 +1102,18 @@
           '</div>' +
         '</div>' +
       '</div>' +
-      // Pricing fieldset — default markup + tax + fees + round-up.
-      // Lives below the two-column block so it stretches full width.
+      // Pricing fieldset — tax + fees + round-up. Markup is per-section now;
+      // set it on each section header inside the Line Items tab.
       '<fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;margin-top:18px;max-width:900px;">' +
         '<legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Pricing</legend>' +
-        '<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;">' +
-          field('Default Markup %', 'ee-defaultMarkup', est.defaultMarkup, { type: 'number', step: '0.1', placeholder: '0' }) +
+        '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;">' +
           field('Tax %', 'ee-taxPct', est.taxPct, { type: 'number', step: '0.01', placeholder: '0' }) +
           field('Flat Fee ($)', 'ee-feeFlat', est.feeFlat, { type: 'number', step: '0.01', placeholder: '0' }) +
           field('Fee % of Marked-Up', 'ee-feePct', est.feePct, { type: 'number', step: '0.1', placeholder: '0' }) +
           field('Round Up to Nearest ($)', 'ee-roundTo', est.roundTo, { type: 'number', step: '1', placeholder: '0 = off' }) +
         '</div>' +
         '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:8px;">' +
-          'Tax applies after fees. Round-up is the last step — set to 0 to disable.' +
+          'Markup is per-section — set it on each section header in <strong>Line Items</strong>. Tax applies after fees. Round-up is the last step.' +
         '</div>' +
       '</fieldset>';
 
@@ -1074,7 +1144,6 @@
     // (default-markup placeholder + computed columns) and the totals strip
     // both need to update.
     var pricingMap = {
-      'ee-defaultMarkup': 'defaultMarkup',
       'ee-taxPct':        'taxPct',
       'ee-feeFlat':       'feeFlat',
       'ee-feePct':        'feePct',
@@ -1173,6 +1242,7 @@
   window.closeEstimateEditor = closeEstimateEditor;
   window.switchEstimateEditorTab = switchEstimateEditorTab;
   window.updateLineField = updateLineField;
+  window.updateSectionMarkup = updateSectionMarkup;
   window.updateSectionName = updateSectionName;
   window.addEstimateLineFromEditor = addEstimateLineFromEditor;
   window.addEstimateSectionFromEditor = addEstimateSectionFromEditor;
@@ -1314,11 +1384,12 @@
       description: input.name || 'Untitled Section'
     };
     if (input.bt_category) newHeader.btCategory = input.bt_category;
+    if (input.markup_pct != null && input.markup_pct !== '') newHeader.markup = Number(input.markup_pct);
     appData.estimateLines.push(newHeader);
     debouncedSave();
     renderLineItems();
     renderTotals();
-    return 'Added section: "' + newHeader.description + '"';
+    return 'Added section: "' + newHeader.description + '"' + (newHeader.markup != null ? ' (markup ' + newHeader.markup + '%)' : '');
   }
 
   function applyUpdateScope(input) {

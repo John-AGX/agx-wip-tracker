@@ -602,17 +602,39 @@
   }
 
   function proposalRowHTML(est) {
-    var lines = ((window.appData && appData.estimateLines) || []).filter(function(l) { return l.estimateId === est.id; });
-    var baseCost = lines.reduce(function(s, l) { return s + (Number(l.qty) || 0) * (Number(l.unitCost) || 0); }, 0);
-    var clientPrice = baseCost * (1 + (Number(est.defaultMarkup) || 0) / 100);
+    var allLines = ((window.appData && appData.estimateLines) || []).filter(function(l) { return l.estimateId === est.id; });
+    var baseCost = 0;
+    var markedUp = 0;
+    allLines.forEach(function(l, idx) {
+      if (l.section === '__section_header__') return;
+      var ext = (Number(l.qty) || 0) * (Number(l.unitCost) || 0);
+      baseCost += ext;
+      // Per-line markup, falling back to enclosing section header, then
+      // legacy estimate.defaultMarkup
+      var m = (l.markup === '' || l.markup == null) ? null : Number(l.markup);
+      if (m == null) {
+        for (var i = idx - 1; i >= 0; i--) {
+          var L = allLines[i];
+          if (L && L.section === '__section_header__') {
+            if (L.markup !== '' && L.markup != null) m = Number(L.markup);
+            break;
+          }
+        }
+      }
+      if (m == null && est.defaultMarkup != null && est.defaultMarkup !== '') m = Number(est.defaultMarkup);
+      if (m == null) m = 0;
+      markedUp += ext * (1 + m / 100);
+    });
+    var blendedMarkup = baseCost > 0 ? (markedUp / baseCost - 1) * 100 : 0;
+    var clientPrice = markedUp;
     return '<div class="card" style="padding:12px 14px;display:flex;justify-content:space-between;align-items:center;gap:12px;">' +
       '<div style="min-width:0;flex:1;">' +
         '<div style="font-weight:600;font-size:13px;color:var(--text,#fff);">' + escapeHTML(est.title || 'Untitled estimate') + '</div>' +
         '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:3px;">' +
           'Base ' + fmtCurrencyShort(baseCost) +
-          ' · Markup ' + (Number(est.defaultMarkup) || 0) + '%' +
+          ' · Markup ' + blendedMarkup.toFixed(1) + '%' +
           ' · Client ' + fmtCurrencyShort(clientPrice) +
-          ' · ' + lines.length + ' line' + (lines.length === 1 ? '' : 's') +
+          ' · ' + allLines.filter(function(l) { return l.section !== '__section_header__'; }).length + ' line' + (allLines.length === 1 ? '' : 's') +
         '</div>' +
       '</div>' +
       '<div style="display:flex;gap:6px;flex-shrink:0;">' +
@@ -621,6 +643,62 @@
       '</div>' +
     '</div>';
   }
+
+  // Show the "From lead" banner above the client picker on the New
+  // Estimate modal. Hidden by default; opened only when the modal was
+  // launched via createEstimateFromLead.
+  function showLeadPrefillBanner(lead) {
+    var banner = document.getElementById('estLeadPrefillBanner');
+    var label = document.getElementById('estLeadPrefillLabel');
+    if (!banner) return;
+    if (label) label.textContent = lead && lead.title ? lead.title : 'lead';
+    banner.style.display = 'flex';
+  }
+  function hideLeadPrefillBanner() {
+    var banner = document.getElementById('estLeadPrefillBanner');
+    if (banner) banner.style.display = 'none';
+  }
+  // Re-run the lead prefill — callable from the Copy-from-lead button.
+  // Reads the lead + client snapshot stashed by createEstimateFromLead.
+  window.copyFromLeadAgain = function() {
+    var src = window._estimateLeadPrefillSource;
+    if (!src || !src.lead) {
+      alert('No lead context available — open this estimate from a lead to copy.');
+      return;
+    }
+    var l = src.lead;
+    var c = src.client;
+    function set(id, v) {
+      var el = document.getElementById(id);
+      if (el && v != null) el.value = v;
+    }
+    set('estTitle', l.title || '');
+    set('estJobType', l.project_type || '');
+    set('estLeadId', l.id);
+    set('estClientId', l.client_id || '');
+    if (c) {
+      set('estClient', c.company_name || c.name || '');
+      set('estCommunity', c.community_name || c.name || '');
+      var bAddr = [c.address, c.city, c.state, c.zip].filter(Boolean).join(', ');
+      set('estBillingAddr', bAddr);
+      set('estManagerName', c.community_manager || '');
+      set('estManagerEmail', c.cm_email || c.email || '');
+      set('estManagerPhone', c.cm_phone || c.phone || c.cell || '');
+      if (typeof window.populateEstimateClientPicker === 'function') {
+        window.populateEstimateClientPicker('estClientPicker', c.id);
+      }
+    }
+    var hasLeadAddrParts = l.street_address || l.city || l.state || l.zip;
+    var pAddr;
+    if (hasLeadAddrParts) {
+      pAddr = [l.street_address, l.city, l.state, l.zip].filter(Boolean).join(', ');
+    } else if (c) {
+      pAddr = c.property_address || '';
+    } else {
+      pAddr = '';
+    }
+    set('estPropertyAddr', pAddr);
+  };
 
   // Pre-fill the New Estimate form from the currently-editing lead, then
   // open it. The estimate save path (createNewEstimate) reads the hidden
@@ -660,10 +738,20 @@
       set('estManagerName', c.community_manager || '');
       set('estManagerEmail', c.cm_email || c.email || '');
       set('estManagerPhone', c.cm_phone || c.phone || c.cell || '');
-      // Reflect the picked client in the dropdown so it shows the right name
-      var picker = document.getElementById('estClientPicker');
-      if (picker) picker.value = c.id;
+      // Reflect the picked client in the searchable picker. Re-running
+      // populateEstimateClientPicker with the client id repaints the
+      // visible trigger label so the user sees who they're linked to.
+      if (typeof window.populateEstimateClientPicker === 'function') {
+        window.populateEstimateClientPicker('estClientPicker', c.id);
+      } else {
+        var picker = document.getElementById('estClientPicker');
+        if (picker) picker.value = c.id;
+      }
     }
+    // Stash the lead so the "Copy from lead" button on the modal can re-run
+    // this prefill if the user accidentally clears or swaps things.
+    window._estimateLeadPrefillSource = { lead: l, client: c || null };
+    showLeadPrefillBanner(l);
 
     // Property (job-site) address: the lead is the authoritative source
     // because it points at a specific opportunity. Pull street+city+state+zip

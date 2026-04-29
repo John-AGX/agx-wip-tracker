@@ -32,13 +32,30 @@ function renderEstimatesList() {
             }
 
             filtered.forEach(est => {
-                const lines = appData.estimateLines.filter(l => l.estimateId === est.id);
+                const allLines = appData.estimateLines.filter(l => l.estimateId === est.id);
                 let baseCost = 0;
-                lines.forEach(l => {
+                let markedUp = 0;
+                allLines.forEach((l, idx) => {
                     if (l.section === '__section_header__') return;
-                    baseCost += (l.qty || 0) * (l.unitCost || 0);
+                    const ext = (l.qty || 0) * (l.unitCost || 0);
+                    baseCost += ext;
+                    // Per-line override OR walk back to section header markup
+                    let m = (l.markup === '' || l.markup == null) ? null : Number(l.markup);
+                    if (m == null) {
+                        for (let i = idx - 1; i >= 0; i--) {
+                            const L = allLines[i];
+                            if (L && L.section === '__section_header__') {
+                                if (L.markup !== '' && L.markup != null) m = Number(L.markup);
+                                break;
+                            }
+                        }
+                    }
+                    if (m == null && est.defaultMarkup != null && est.defaultMarkup !== '') m = Number(est.defaultMarkup);
+                    if (m == null) m = 0;
+                    markedUp += ext * (1 + m / 100);
                 });
-                const clientPrice = baseCost * (1 + (est.defaultMarkup || 0) / 100);
+                const blendedMarkup = baseCost > 0 ? (markedUp / baseCost - 1) * 100 : 0;
+                const clientPrice = markedUp;
                 const clientLabel = [est.client, est.community].filter(Boolean).join(' · ') || '<span style="color:var(--text-dim,#666);font-style:italic;">no client</span>';
 
                 const row = document.createElement('tr');
@@ -47,7 +64,7 @@ function renderEstimatesList() {
                     <td><strong style="color:var(--text,#fff);">${escapeHTML(est.title || '(untitled)')}</strong>${est.jobType ? '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:2px;">' + escapeHTML(est.jobType) + '</div>' : ''}</td>
                     <td style="font-size:13px;color:var(--text,#e6e6e6);">${clientLabel}</td>
                     <td class="num" style="font-family:'SF Mono',monospace;">${formatCurrency(baseCost)}</td>
-                    <td class="num" style="color:#fbbf24;font-family:'SF Mono',monospace;">${est.defaultMarkup}%</td>
+                    <td class="num" style="color:#fbbf24;font-family:'SF Mono',monospace;">${blendedMarkup.toFixed(1)}%</td>
                     <td class="num" style="font-family:'SF Mono',monospace;color:#34d399;font-weight:600;">${formatCurrency(clientPrice)}</td>
                 `;
                 tbody.appendChild(row);
@@ -64,11 +81,16 @@ function renderEstimatesList() {
             document.getElementById('estManagerName').value = '';
             document.getElementById('estManagerEmail').value = '';
             document.getElementById('estManagerPhone').value = '';
-            document.getElementById('estDefaultMarkup').value = '100';
             var idEl = document.getElementById('estClientId');
             if (idEl) idEl.value = '';
             var leadEl = document.getElementById('estLeadId');
             if (leadEl) leadEl.value = '';
+            // Reset the lead-prefill banner — the form is being opened
+            // standalone, not from a lead. createEstimateFromLead will
+            // re-show it after this runs.
+            window._estimateLeadPrefillSource = null;
+            var banner = document.getElementById('estLeadPrefillBanner');
+            if (banner) banner.style.display = 'none';
             // Populate the client picker from the directory cache so users
             // can auto-fill the form by selecting a client.
             if (typeof populateEstimateClientPicker === 'function') {
@@ -84,11 +106,14 @@ function renderEstimatesList() {
         // BT cost row (Subs / Materials / GC / Labor) and the Service &
         // Repair Income row (= total client price) is injected by the
         // export, not stored as a section.
+        // Default per-section markup mirrors AGX's typical pricing — see
+        // estimate-editor.js for the rationale. Markup can be dialed per
+        // job via the slider/number input on each section header.
         const ESTIMATE_STANDARD_SECTIONS = [
-            { name: 'Materials & Supplies Costs', btCategory: 'materials' },
-            { name: 'Direct Labor',               btCategory: 'labor' },
-            { name: 'General Conditions',         btCategory: 'gc' },
-            { name: 'Subcontractors Costs',       btCategory: 'sub' }
+            { name: 'Materials & Supplies Costs', btCategory: 'materials', markup: 20 },
+            { name: 'Direct Labor',               btCategory: 'labor',     markup: 35 },
+            { name: 'General Conditions',         btCategory: 'gc',        markup: 25 },
+            { name: 'Subcontractors Costs',       btCategory: 'sub',       markup: 10 }
         ];
 
         function createNewEstimate() {
@@ -113,7 +138,6 @@ function renderEstimatesList() {
                 managerName: document.getElementById('estManagerName').value,
                 managerEmail: document.getElementById('estManagerEmail').value,
                 managerPhone: document.getElementById('estManagerPhone').value,
-                defaultMarkup: parseFloat(document.getElementById('estDefaultMarkup').value) || 100,
                 scopeOfWork: seededScope,
                 // Pre-wire alternates so the editor opens straight into the
                 // standard structure without the migration shuffle. Scope is
@@ -130,7 +154,8 @@ function renderEstimatesList() {
                     alternateId: defaultAlternateId,
                     section: '__section_header__',
                     description: s.name,
-                    btCategory: s.btCategory
+                    btCategory: s.btCategory,
+                    markup: s.markup
                 });
             });
             saveData();
@@ -152,7 +177,8 @@ function renderEstimatesList() {
     document.getElementById('editEst_managerEmail').value = estimate.managerEmail || '';
     document.getElementById('editEst_managerPhone').value = estimate.managerPhone || '';
     document.getElementById('editEst_scopeOfWork').value = estimate.scopeOfWork || '';
-    document.getElementById('editEst_defaultMarkup').value = estimate.defaultMarkup || 0;
+    var legacyMarkupEl = document.getElementById('editEst_defaultMarkup');
+    if (legacyMarkupEl) legacyMarkupEl.value = estimate.defaultMarkup || 0;
     var idEl = document.getElementById('editEst_clientId');
     if (idEl) idEl.value = estimate.client_id || '';
     if (typeof populateEstimateClientPicker === 'function') {
@@ -272,7 +298,8 @@ function renderEstimatesList() {
     estimate.managerEmail = document.getElementById('editEst_managerEmail').value;
     estimate.managerPhone = document.getElementById('editEst_managerPhone').value;
     estimate.scopeOfWork = document.getElementById('editEst_scopeOfWork').value;
-    estimate.defaultMarkup = parseFloat(document.getElementById('editEst_defaultMarkup').value) || 0;
+    var legacyMarkupSaveEl = document.getElementById('editEst_defaultMarkup');
+    if (legacyMarkupSaveEl) estimate.defaultMarkup = parseFloat(legacyMarkupSaveEl.value) || 0;
     const rows = document.querySelectorAll('#editEstimate_lineItemsBody tr[data-line-id]');
     const updatedIds = new Set();
     rows.forEach(row => {

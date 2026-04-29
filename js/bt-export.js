@@ -87,17 +87,36 @@
     return { lines: lines, byLineId: byLineId };
   }
 
+  // Walk back from a line index to find its enclosing section header's
+  // markup. Per-line markup overrides; section header markup is the
+  // baseline. Falls back to legacy estimate.defaultMarkup if a section
+  // doesn't carry its own markup yet.
+  function effectiveMarkup(line, allLines, estimate) {
+    if (line && line.markup !== '' && line.markup != null) return num(line.markup);
+    var idx = allLines.indexOf(line);
+    if (idx < 0) idx = allLines.length;
+    for (var i = idx - 1; i >= 0; i--) {
+      var L = allLines[i];
+      if (L && L.section === '__section_header__') {
+        if (L.markup !== '' && L.markup != null) return num(L.markup);
+        break;
+      }
+    }
+    if (estimate && estimate.defaultMarkup != null && estimate.defaultMarkup !== '') return num(estimate.defaultMarkup);
+    return 0;
+  }
+
   // Mirrors the editor's pricing pipeline: subtotal -> per-line markup ->
   // marked-up subtotal -> + flat fee -> + percent fee -> + tax -> round-up.
   function computeClientTotal(estimate) {
-    var lines = (window.appData && window.appData.estimateLines || []).filter(function(l) {
-      return l.estimateId === estimate.id && l.alternateId === estimate.activeAlternateId && l.section !== '__section_header__';
+    var allLines = (window.appData && window.appData.estimateLines || []).filter(function(l) {
+      return l.estimateId === estimate.id && l.alternateId === estimate.activeAlternateId;
     });
-    var defaultMarkup = num(estimate.defaultMarkup);
     var markedUp = 0;
-    lines.forEach(function(l) {
+    allLines.forEach(function(l) {
+      if (l.section === '__section_header__') return;
       var ext = num(l.qty) * num(l.unitCost);
-      var m = (l.markup === '' || l.markup == null) ? defaultMarkup : num(l.markup);
+      var m = effectiveMarkup(l, allLines, estimate);
       markedUp += ext * (1 + m / 100);
     });
     var feeFlat = num(estimate.feeFlat);
@@ -132,8 +151,8 @@
       var income = mapping.income || DEFAULT_MAPPING.income;
 
       var catMap = buildLineCategoryMap(estimate);
-      var nonHeader = catMap.lines.filter(function(l) { return l.section !== '__section_header__'; });
-      var defaultMarkup = num(estimate.defaultMarkup);
+      var allLines = catMap.lines;
+      var nonHeader = allLines.filter(function(l) { return l.section !== '__section_header__'; });
       var clientTotal = computeClientTotal(estimate);
 
       // Column order matches the BT sample exactly so an admin can drop the
@@ -169,7 +188,7 @@
         var qty = num(l.qty);
         var unitCost = num(l.unitCost);
         var totalCost = qty * unitCost;
-        var markup = (l.markup === '' || l.markup == null) ? defaultMarkup : num(l.markup);
+        var markup = effectiveMarkup(l, allLines, estimate);
         rows.push([
           l.description || '', '',
           m.parentGroup, m.parentDesc,

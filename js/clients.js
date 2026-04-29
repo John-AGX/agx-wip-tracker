@@ -1189,7 +1189,11 @@
   // for the picked id); onPick is called after the selection so the host
   // page can run its prefill logic.
   function mountSearchablePicker(selectEl, onPick) {
-    if (!selectEl || selectEl.dataset.pickerMounted === '1') return;
+    if (!selectEl) return null;
+    // Idempotent: returning the existing handle on re-mount so callers can
+    // refresh the trigger label after setting a pre-selected value
+    // programmatically (e.g., the lead-prefill path).
+    if (selectEl.dataset.pickerMounted === '1') return selectEl._pickerHandle || null;
     selectEl.dataset.pickerMounted = '1';
     selectEl.style.display = 'none';
 
@@ -1327,7 +1331,9 @@
 
     // Initial label sync
     updateTriggerLabel();
-    return { refreshLabel: updateTriggerLabel };
+    var handle = { refreshLabel: updateTriggerLabel };
+    selectEl._pickerHandle = handle;
+    return handle;
   }
 
   // Expose so the existing populateEstimateClientPicker can call it after

@@ -106,18 +106,37 @@
     });
   }
 
+  // Walk back from a line to find its enclosing section header's markup.
+  // Per-line markup overrides; section header markup is the baseline.
+  // Falls back to legacy est.defaultMarkup so estimates from before the
+  // section-markup change still price the same.
+  function effectiveMarkup(line, allLines, estimate) {
+    if (line && line.markup !== '' && line.markup != null) return parseFloat(line.markup) || 0;
+    var idx = allLines.indexOf(line);
+    if (idx < 0) idx = allLines.length;
+    for (var i = idx - 1; i >= 0; i--) {
+      var L = allLines[i];
+      if (L && L.section === '__section_header__') {
+        if (L.markup !== '' && L.markup != null) return parseFloat(L.markup) || 0;
+        break;
+      }
+    }
+    if (estimate && estimate.defaultMarkup != null && estimate.defaultMarkup !== '') return parseFloat(estimate.defaultMarkup) || 0;
+    return 0;
+  }
+
   // Mirrors estimate-editor's pricing pipeline. Subtotal -> per-line markup
   // -> + flat fee -> + percent fee -> + tax -> round-up -> total.
   function computeTotal(estimate) {
     if (!estimate) return 0;
-    var lines = getActiveAlternateLines(estimate).filter(function(l) { return l.section !== '__section_header__'; });
-    var defaultMarkup = parseFloat(estimate.defaultMarkup) || 0;
+    var allLines = getActiveAlternateLines(estimate);
     var subtotal = 0;
     var markedUp = 0;
-    lines.forEach(function(l) {
+    allLines.forEach(function(l) {
+      if (l.section === '__section_header__') return;
       var ext = (parseFloat(l.qty) || 0) * (parseFloat(l.unitCost) || 0);
       subtotal += ext;
-      var m = (l.markup === '' || l.markup == null) ? defaultMarkup : (parseFloat(l.markup) || 0);
+      var m = effectiveMarkup(l, allLines, estimate);
       markedUp += ext * (1 + m / 100);
     });
     var feeFlat = parseFloat(estimate.feeFlat) || 0;

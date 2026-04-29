@@ -87,7 +87,7 @@ const ESTIMATE_TOOLS = [
         qty: { type: 'number', description: 'Quantity. Must be a positive number.' },
         unit: { type: 'string', description: 'Unit of measure (ea, sf, lf, hr, cy, ton, lot, etc.).' },
         unit_cost: { type: 'number', description: 'AGX cost per unit, NOT client price. Markup is applied separately.' },
-        markup_pct: { type: 'number', description: 'Optional per-line markup % override. Omit to use the estimate-wide default markup.' },
+        markup_pct: { type: 'number', description: 'Optional per-line markup % override. Omit to inherit the section header\'s markup (the standard case).' },
         section_name: { type: 'string', description: 'Existing section header to slot under (case-insensitive substring match). Common values: "Materials & Supplies Costs", "Direct Labor", "General Conditions", "Subcontractors Costs". If omitted or no match, the line goes at the end.' },
         rationale: { type: 'string', description: 'One short sentence explaining why this item is needed. Shown on the approval card.' }
       },
@@ -109,12 +109,13 @@ const ESTIMATE_TOOLS = [
   },
   {
     name: 'propose_add_section',
-    description: 'Propose adding a new section header to the active alternate. Sections group line items in the editor and on the BT export.',
+    description: 'Propose adding a new section header to the active alternate. Sections group line items in the editor and on the BT export. The section\'s markup % applies to every line under it unless a line overrides — so set markup_pct based on the trade typical for AGX (Materials ~20%, Labor ~35%, Subs ~10%, GC by case).',
     input_schema: {
       type: 'object',
       properties: {
         name: { type: 'string', description: 'Section name (e.g., "Stair Tread Replacement").' },
         bt_category: { type: 'string', enum: ['materials', 'labor', 'gc', 'sub'], description: 'Optional BT cost category mapping. Omit if the section is not one of the four standard cost buckets.' },
+        markup_pct: { type: 'number', description: 'Section markup %. Lines under this header inherit it. Typical AGX rates: Materials 20, Labor 35, Subs 10. Omit if you want the user to set it manually.' },
         rationale: { type: 'string', description: 'One short sentence explaining why this section is needed.' }
       },
       required: ['name', 'rationale']
@@ -281,24 +282,31 @@ async function buildEstimateContext(estimateId, includePhotos) {
     lines.push('');
   }
 
-  // Group lines by section header for readable rendering
+  // Group lines by section header for readable rendering. Markup is now
+  // per-section: each section header's `markup` field defines the
+  // baseline; individual lines can override.
   if (activeLines.length) {
     lines.push('## Line items (cost-side)');
     let currentSection = '(uncategorized)';
+    let currentSectionMarkup = (blob.defaultMarkup != null && blob.defaultMarkup !== '') ? parseFloat(blob.defaultMarkup) : 0;
     let lineNumInSection = 0;
     activeLines.forEach(l => {
       if (l.section === '__section_header__') {
         currentSection = l.description || 'section';
+        currentSectionMarkup = (l.markup === '' || l.markup == null)
+          ? ((blob.defaultMarkup != null && blob.defaultMarkup !== '') ? parseFloat(blob.defaultMarkup) : 0)
+          : parseFloat(l.markup);
         lineNumInSection = 0;
-        lines.push('### ' + currentSection);
+        lines.push(`### ${currentSection} (section markup ${currentSectionMarkup}%)`);
       } else {
         lineNumInSection++;
         const qty = parseFloat(l.qty) || 0;
         const unit = l.unit || 'ea';
         const cost = parseFloat(l.unitCost) || 0;
         const ext = qty * cost;
-        const markup = (l.markup === '' || l.markup == null) ? (parseFloat(blob.defaultMarkup) || 0) : parseFloat(l.markup);
-        lines.push(`${lineNumInSection}. ${l.description || '(no description)'} — qty ${qty} ${unit} @ $${cost.toFixed(2)} = $${ext.toFixed(2)}; markup ${markup}%`);
+        const markup = (l.markup === '' || l.markup == null) ? currentSectionMarkup : parseFloat(l.markup);
+        const markupNote = (l.markup === '' || l.markup == null) ? '' : ' [overrides section]';
+        lines.push(`${lineNumInSection}. ${l.description || '(no description)'} — qty ${qty} ${unit} @ $${cost.toFixed(2)} = $${ext.toFixed(2)}; markup ${markup}%${markupNote}`);
       }
     });
     lines.push('');
@@ -310,7 +318,9 @@ async function buildEstimateContext(estimateId, includePhotos) {
 
   // Pricing posture
   const pricingBits = [];
-  if (blob.defaultMarkup) pricingBits.push(`default markup ${blob.defaultMarkup}%`);
+  // Markup is per-section now — see line-item section headers above. The
+  // legacy estimate-wide defaultMarkup is retained only as a fall-back for
+  // sections that haven't been assigned their own markup yet.
   if (blob.taxPct) pricingBits.push(`tax ${blob.taxPct}%`);
   if (blob.feeFlat) pricingBits.push(`flat fee $${blob.feeFlat}`);
   if (blob.feePct) pricingBits.push(`fee ${blob.feePct}%`);
