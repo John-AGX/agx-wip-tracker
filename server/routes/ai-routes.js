@@ -79,7 +79,7 @@ const MAX_HISTORY_PAIRS = 12;
 const ESTIMATE_TOOLS = [
   {
     name: 'propose_add_line_item',
-    description: 'Propose adding a single cost-side line item to the active alternate. The user will see your proposal as a card with Approve / Reject buttons before anything lands in the estimate. Use multiple parallel calls to propose several lines at once.',
+    description: 'Propose adding a single cost-side line item to the active group. The user will see your proposal as a card with Approve / Reject buttons before anything lands in the estimate. Use multiple parallel calls to propose several lines at once. ALWAYS supply section_name pointing at one of the four standard subgroups — never let a line fall to the bottom uncategorized.',
     input_schema: {
       type: 'object',
       properties: {
@@ -87,11 +87,11 @@ const ESTIMATE_TOOLS = [
         qty: { type: 'number', description: 'Quantity. Must be a positive number.' },
         unit: { type: 'string', description: 'Unit of measure (ea, sf, lf, hr, cy, ton, lot, etc.).' },
         unit_cost: { type: 'number', description: 'AGX cost per unit, NOT client price. Markup is applied separately.' },
-        markup_pct: { type: 'number', description: 'Optional per-line markup % override. Omit to inherit the section header\'s markup (the standard case).' },
-        section_name: { type: 'string', description: 'Existing section header to slot under (case-insensitive substring match). Common values: "Materials & Supplies Costs", "Direct Labor", "General Conditions", "Subcontractors Costs". If omitted or no match, the line goes at the end.' },
+        markup_pct: { type: 'number', description: 'Optional per-line markup % override. Omit to inherit the subgroup header\'s markup (the standard case).' },
+        section_name: { type: 'string', description: 'REQUIRED in practice — the subgroup to slot the line under. Use a case-insensitive substring of one of the four standard subgroup names: "Materials & Supplies Costs" (any physical material, hardware, finish, fastener, paint, lumber, fixture, supply), "Direct Labor" (AGX crew hours — anything our own crew physically does), "General Conditions" (mobilization, dump fees, permits, supervision, equipment rental, signage, port-a-john), "Subcontractors Costs" (any scope handed off to another company — paint sub, roof sub, tile sub, etc.). If a custom subgroup exists from a previous user request, you can match it by substring instead. NEVER omit this — uncategorized lines confuse the BT export.' },
         rationale: { type: 'string', description: 'One short sentence explaining why this item is needed. Shown on the approval card.' }
       },
-      required: ['description', 'qty', 'unit', 'unit_cost', 'rationale']
+      required: ['description', 'qty', 'unit', 'unit_cost', 'section_name', 'rationale']
     }
   },
   {
@@ -109,7 +109,7 @@ const ESTIMATE_TOOLS = [
   },
   {
     name: 'propose_add_section',
-    description: 'Propose adding a new section header to the active alternate. Sections group line items in the editor and on the BT export. The section\'s markup % applies to every line under it unless a line overrides — so set markup_pct based on the trade typical for AGX (Materials ~20%, Labor ~35%, Subs ~10%, GC by case).',
+    description: 'Propose adding a NEW custom subgroup header to the active group. ⚠ Use this ONLY when the user explicitly asks for a custom subgroup ("add a Stair Tread Repairs section under Materials" — no, slot lines into the existing Materials subgroup; "add a separate subgroup for change-order work" — yes, that\'s a real custom subgroup). 99% of the time you should be slotting line items into the FOUR EXISTING standard subgroups (Materials / Labor / GC / Subs) via propose_add_line_item with section_name set. New subgroups also need a markup_pct (Materials ~20%, Labor ~35%, Subs ~10%, GC by case).',
     input_schema: {
       type: 'object',
       properties: {
@@ -441,11 +441,36 @@ async function buildEstimateContext(estimateId, includePhotos) {
   lines.push('  • propose_update_scope — set or append the ACTIVE GROUP\'s scope of work (each group has its own scope)');
   lines.push('Every line and subgroup has an id shown above; use those exact ids when calling update/delete tools. Today you only edit the ACTIVE group — if the user wants you to work in a different group, ask them to switch first. Make multiple parallel proposals when batching — one approval card per call, with a bulk Approve-all.');
   lines.push('');
+  lines.push('# Slotting rules — STRICT');
+  lines.push('Every line item belongs in exactly one of the four standard subgroups. Choose by what the line IS, not who pays for it:');
+  lines.push('  • Materials & Supplies Costs — any physical good AGX buys. Lumber, fasteners, paint, primer, caulk, sealant, hardware, fixtures, finishes, sundries, blades, abrasives, masking, drop cloths.');
+  lines.push('  • Direct Labor — hours of AGX\'s own crew. Demo, prep, install, finish, cleanup. Per-trade unit-rate labor (e.g., "deck board install" labor) belongs here, not Subs.');
+  lines.push('  • General Conditions — project overhead. Mobilization, demobilization, dump/disposal fees, permits + permit runner, supervision, project management, equipment rental (lifts, scaffolding, dumpsters), signage, port-a-john, fuel, daily site protection.');
+  lines.push('  • Subcontractors Costs — scopes AGX hands off to another company under contract. A roof sub, paint sub, tile sub, electrical sub, etc. If AGX\'s own crew does the work, it\'s Direct Labor — not Subs.');
+  lines.push('Always pass section_name on propose_add_line_item — it gates BT export categorization. Only call propose_add_section when the user explicitly asks for a CUSTOM subgroup outside these four (rare).');
+  lines.push('');
   lines.push('# Pricing rules');
   lines.push('- AGX cost-side prices for Central-FL construction. Quantities should be specific (calculated from photos / scope when possible).');
   lines.push('- Subgroup markup typical: Materials 20%, Labor 35%, GC 25%, Subs 10%. Per-line markup overrides the subgroup only when there\'s a real reason (special-order item priced higher, or a loss-leader line).');
   lines.push('- Always include a rationale on each proposal — it\'s shown to the user on the approval card.');
   lines.push('');
+
+  // Load admin-editable skill packs targeted at AG. These are layered on
+  // top of the baseline prompt above so admins can refine behavior over
+  // time (slotting tweaks, pricing rules, common-scope playbooks) without
+  // a code change. Always-on for v1.
+  const skillBlocks = await loadActiveSkillsFor('ag');
+  if (skillBlocks.length) {
+    lines.push('# Loaded skills');
+    lines.push('Skill packs your admin has assigned. Treat each as binding additional guidance on top of the baseline rules above.');
+    lines.push('');
+    skillBlocks.forEach(s => {
+      lines.push('## ' + s.name);
+      lines.push(s.body);
+      lines.push('');
+    });
+  }
+
   lines.push('# Tone');
   lines.push('- Concise. Trade vocabulary welcome. Mix prose with proposals — short lead-in, the cards, a one-line wrap-up. Don\'t emit proposals without any explanation. If you need one piece of info to answer well, ask one targeted question first.');
 
@@ -453,6 +478,27 @@ async function buildEstimateContext(estimateId, includePhotos) {
     systemPrompt: lines.join('\n'),
     photoBlocks: photoBlocks
   };
+}
+
+// Load skill packs from app_settings.agent_skills filtered by agent +
+// alwaysOn. Returns an array of {name, body} blocks ready to append to
+// the system prompt. Failures (no setting yet, malformed JSON) return
+// an empty array — the agent still works, just without the playbooks.
+async function loadActiveSkillsFor(agentKey) {
+  try {
+    const { rows } = await pool.query(
+      `SELECT value FROM app_settings WHERE key = 'agent_skills'`
+    );
+    if (!rows.length) return [];
+    const cfg = rows[0].value || {};
+    const skills = Array.isArray(cfg.skills) ? cfg.skills : [];
+    return skills
+      .filter(s => s && s.alwaysOn !== false && Array.isArray(s.agents) && s.agents.indexOf(agentKey) >= 0 && s.body)
+      .map(s => ({ name: s.name || '(untitled skill)', body: s.body }));
+  } catch (e) {
+    console.error('loadActiveSkillsFor error:', e);
+    return [];
+  }
 }
 
 // Load a photo's web variant from storage and return an Anthropic image
@@ -1818,6 +1864,21 @@ async function buildClientDirectoryContext() {
   out.push('  4. PROPOSE attach_business_card_to_client to save the photo to that client\'s attachments. Include a caption like "Business card — Jane Smith, CAM at Solace Tampa". Approval-tier — user confirms the match.');
   out.push('Only call attach_business_card_to_client ONCE per uploaded card — the image is consumed from the pending bucket.');
   out.push('');
+
+  // Skill packs targeted at the Customer Relations Agent. Same loader as
+  // AG — admin-editable additions to the baseline prompt.
+  const craSkills = await loadActiveSkillsFor('cra');
+  if (craSkills.length) {
+    out.push('# Loaded skills');
+    out.push('Skill packs your admin has assigned. Treat each as binding additional guidance.');
+    out.push('');
+    craSkills.forEach(s => {
+      out.push('## ' + s.name);
+      out.push(s.body);
+      out.push('');
+    });
+  }
+
   out.push('# Directory snapshot (' + rows.length + ' clients)');
   out.push('');
   out.push('## Parent companies with properties:');

@@ -395,6 +395,67 @@ async function initSchema() {
     [JSON.stringify(DEFAULT_BT_MAPPING)]
   );
 
+  // Agent skills — admin-editable prompt extensions that the in-app AI
+  // agents (AG, the Customer Relations Agent) load into their system
+  // prompts. Each skill has a body (free-form prompt text), the agents
+  // it applies to, and an alwaysOn flag. v1 only honors alwaysOn — the
+  // body just gets appended for every chat. v2 will support on-demand
+  // loading via a tool call.
+  //
+  // Default seed bundles AGX's house-style estimating playbook for AG.
+  // Admins edit these in Admin -> Templates -> Skills; nothing in code
+  // needs to change to add a new playbook.
+  const DEFAULT_AGENT_SKILLS = {
+    skills: [
+      {
+        id: 'sk_agx_estimating_playbook',
+        name: 'AGX Estimating Playbook',
+        agents: ['ag'],
+        alwaysOn: true,
+        body: [
+          'AGX house style for estimating:',
+          '',
+          '## Slotting (extra emphasis)',
+          'Always slot lines into the four standard subgroups. Materials = anything you can hold. Labor = AGX crew hours. GC = overhead/permits/dumpster/PM. Subs = work handed to another company.',
+          '',
+          '## Quantity discipline',
+          'Take quantities off photos when possible: count balusters, pickets, treads, doors, windows, panels. State your count in the rationale ("counted 38 balusters across 4 sections of railing"). When you can\'t count from the photo, ask for a measurement.',
+          '',
+          '## Common AGX scopes — typical line bundles',
+          '- Deck repair: PT 5/4 deck boards (Materials), 8d hot-dip nails or trim screws (Materials), demo + install labor (Direct Labor), dump fees (GC), paint sub if separate (Subs).',
+          '- Painting: primer (Materials), top-coat paint (Materials), masking + drop cloths (Materials), prep + paint labor (Direct Labor), color match samples (Materials small lot).',
+          '- Stair tread replacement: oak/PT treads (Materials), risers if needed (Materials), construction adhesive (Materials), demo + install labor (Direct Labor), finish stain/sealer (Materials).',
+          '',
+          '## What I always check before saying "complete"',
+          '- Did I cover demo / disposal? (GC dump fees + Direct Labor demo hours)',
+          '- Did I include mobilization?',
+          '- Is there a permit cost the client expects us to pull?',
+          '- Are there access issues (height, gate codes, scheduling) that need a line?',
+          '- Did I match section_name on every line item?',
+          '',
+          '## Tone',
+          'Trade vocab welcome. Speak like a senior PM walking the job. No corporate filler.'
+        ].join('\n')
+      },
+      {
+        id: 'sk_cra_directory_hygiene',
+        name: 'Customer Directory Hygiene',
+        agents: ['cra'],
+        alwaysOn: true,
+        body: [
+          'When auditing the directory, work in this order: (1) split obvious parent+property compounds, (2) link unparented properties to existing parents, (3) merge clear duplicates, (4) normalize parent-company spelling. Flag ambiguous cases for the user — don\'t guess on a 50/50.',
+          'Always prefer reusing an existing parent over creating a new one. PAC, Associa, FirstService Residential, Greystar, RangeWater are common — check the directory before proposing new ones.'
+        ].join('\n')
+      }
+    ]
+  };
+  await pool.query(
+    `INSERT INTO app_settings (key, value)
+     VALUES ('agent_skills', $1::jsonb)
+     ON CONFLICT (key) DO NOTHING`,
+    [JSON.stringify(DEFAULT_AGENT_SKILLS)]
+  );
+
   // Sync the admin user from env vars on every boot.
   // ADMIN_EMAIL + ADMIN_PASSWORD are set in Railway/production env. Treated as a
   // system-managed account, not user-facing — change the env var to rotate the password.

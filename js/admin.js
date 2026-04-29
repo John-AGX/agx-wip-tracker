@@ -591,6 +591,8 @@
   var _templateDraft = null;
   var _btMappingDraft = null;
 
+  var _skillsDraft = { skills: [] };
+
   function renderAdminTemplates() {
     if (!isAdmin()) return;
     var pane = document.getElementById('admin-subtab-templates');
@@ -598,10 +600,13 @@
     pane.innerHTML = '<div style="padding:15px;color:var(--text-dim,#888);">Loading…</div>';
     Promise.all([
       window.agxApi.settings.get('proposal_template').catch(function() { return null; }),
-      window.agxApi.settings.get('bt_export_mapping').catch(function() { return null; })
+      window.agxApi.settings.get('bt_export_mapping').catch(function() { return null; }),
+      window.agxApi.settings.get('agent_skills').catch(function() { return null; })
     ]).then(function(results) {
       _templateDraft = (results[0] && results[0].setting && results[0].setting.value) || {};
       _btMappingDraft = (results[1] && results[1].setting && results[1].setting.value) || { categories: {}, fallback: {}, income: {} };
+      _skillsDraft = (results[2] && results[2].setting && results[2].setting.value) || { skills: [] };
+      if (!Array.isArray(_skillsDraft.skills)) _skillsDraft.skills = [];
       // Make sure all four built-in categories exist in the draft so the
       // form renders all rows even if a saved mapping was missing one.
       ['materials', 'labor', 'gc', 'sub'].forEach(function(k) {
@@ -671,8 +676,9 @@
         '</div>' +
       '</fieldset>' +
       renderBTMappingHTML() +
+      renderAgentSkillsHTML() +
       '<div class="action-buttons" style="margin-top:14px;">' +
-        '<button class="primary" onclick="saveAdminTemplate()">&#x1F4BE; Save Template &amp; Mapping</button>' +
+        '<button class="primary" onclick="saveAdminTemplate()">&#x1F4BE; Save All</button>' +
         '<button class="secondary" onclick="renderAdminTemplates()">Discard Changes</button>' +
         '<span id="tpl-status" style="margin-left:14px;color:var(--text-dim,#888);font-size:12px;align-self:center;"></span>' +
       '</div>';
@@ -771,6 +777,105 @@
     return html;
   }
 
+  // ==================== AGENT SKILLS (sub-section of Templates tab) ====================
+  // Admin-editable prompt extensions loaded into the in-app AI agents
+  // (AG = estimating, CRA = customer relations) at chat time. Each skill
+  // has a name, free-form body, agents it applies to, and an alwaysOn
+  // flag. v1 only honors alwaysOn = true — when on, the skill is appended
+  // to that agent's system prompt on every turn.
+  var AGENT_LABELS = { ag: '📐 AG (Estimator)', cra: '🤝 CRA (Customer Relations)' };
+
+  function renderAgentSkillsHTML() {
+    if (!_skillsDraft || !Array.isArray(_skillsDraft.skills)) _skillsDraft = { skills: [] };
+    var html = '';
+    html += '<fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;margin-bottom:14px;">';
+    html += '<legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Agent Skill Packs</legend>';
+    html += '<p style="margin:0 0 10px 0;color:var(--text-dim,#888);font-size:12px;">' +
+      'Reusable instruction blocks loaded into the in-app AI agents at chat time. Use these to teach AGX-specific workflows, pricing rules, slotting preferences, and common-scope playbooks. ' +
+      '<strong>Always-on</strong> skills get appended to the agent\'s system prompt on every turn (token cost: a few hundred each).' +
+      '</p>';
+
+    if (!_skillsDraft.skills.length) {
+      html += '<div style="padding:14px;text-align:center;color:var(--text-dim,#888);border:1px dashed var(--border,#333);border-radius:6px;font-size:12px;">' +
+        'No skill packs yet. Click <strong>+ Add Skill</strong> below to create one.' +
+      '</div>';
+    } else {
+      _skillsDraft.skills.forEach(function(skill, idx) {
+        var agents = Array.isArray(skill.agents) ? skill.agents : [];
+        html += '<div data-skill-idx="' + idx + '" style="border:1px solid var(--border,#333);border-radius:6px;padding:10px 12px;margin-bottom:10px;">';
+        html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">' +
+          '<input type="text" data-skill-name="' + idx + '" value="' + escapeHTML(skill.name || '') + '" placeholder="Skill name (e.g., AGX Estimating Playbook)" style="flex:1;font-weight:600;" />' +
+          '<label style="display:inline-flex;align-items:center;gap:4px;font-size:11px;color:var(--text-dim,#aaa);text-transform:none !important;letter-spacing:normal !important;font-weight:400 !important;cursor:pointer;">' +
+            '<input type="checkbox" data-skill-alwayson="' + idx + '" ' + (skill.alwaysOn === false ? '' : 'checked') + ' style="margin:0;" /> always on' +
+          '</label>' +
+          '<button class="ee-btn ee-icon-btn danger" onclick="deleteSkill(' + idx + ')" title="Remove skill">&#x1F5D1;</button>' +
+        '</div>';
+        // Agent checkboxes — which agents load this skill
+        html += '<div style="display:flex;gap:14px;margin-bottom:8px;font-size:11px;color:var(--text-dim,#aaa);">';
+        Object.keys(AGENT_LABELS).forEach(function(key) {
+          var checked = agents.indexOf(key) >= 0 ? 'checked' : '';
+          html += '<label style="display:inline-flex;align-items:center;gap:4px;text-transform:none !important;letter-spacing:normal !important;font-weight:400 !important;cursor:pointer;">' +
+            '<input type="checkbox" data-skill-agent="' + idx + '" data-agent-key="' + key + '" ' + checked + ' style="margin:0;" /> ' + AGENT_LABELS[key] +
+          '</label>';
+        });
+        html += '</div>';
+        html += '<textarea data-skill-body="' + idx + '" rows="8" style="width:100%;resize:vertical;font-family:\'SF Mono\',monospace;font-size:12px;line-height:1.5;" placeholder="Free-form prompt text. Markdown ok. Refer to subgroups, tools, common scopes, pricing rules.">' + escapeHTML(skill.body || '') + '</textarea>';
+        html += '</div>';
+      });
+    }
+
+    html += '<button class="ee-btn secondary" onclick="addSkill()">&#x2795; Add Skill</button>';
+    html += '</fieldset>';
+    return html;
+  }
+
+  function syncSkillsFromInputs() {
+    if (!_skillsDraft || !Array.isArray(_skillsDraft.skills)) _skillsDraft = { skills: [] };
+    _skillsDraft.skills.forEach(function(skill, idx) {
+      var nameEl = document.querySelector('[data-skill-name="' + idx + '"]');
+      var bodyEl = document.querySelector('[data-skill-body="' + idx + '"]');
+      var alwaysOnEl = document.querySelector('[data-skill-alwayson="' + idx + '"]');
+      if (nameEl) skill.name = nameEl.value;
+      if (bodyEl) skill.body = bodyEl.value;
+      if (alwaysOnEl) skill.alwaysOn = !!alwaysOnEl.checked;
+      var agents = [];
+      document.querySelectorAll('[data-skill-agent="' + idx + '"]').forEach(function(el) {
+        if (el.checked) agents.push(el.getAttribute('data-agent-key'));
+      });
+      skill.agents = agents;
+    });
+  }
+
+  function addSkill() {
+    syncTopLevelDraftFromInputs();
+    syncBTMappingFromInputs();
+    syncSkillsFromInputs();
+    if (!_skillsDraft || !Array.isArray(_skillsDraft.skills)) _skillsDraft = { skills: [] };
+    _skillsDraft.skills.push({
+      id: 'sk_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+      name: '',
+      agents: ['ag'],
+      alwaysOn: true,
+      body: ''
+    });
+    renderTemplatesForm();
+  }
+
+  function deleteSkill(idx) {
+    if (!_skillsDraft || !Array.isArray(_skillsDraft.skills)) return;
+    var skill = _skillsDraft.skills[idx];
+    if (!skill) return;
+    if (!confirm('Remove skill pack "' + (skill.name || '(unnamed)') + '"?')) return;
+    syncTopLevelDraftFromInputs();
+    syncBTMappingFromInputs();
+    syncSkillsFromInputs();
+    _skillsDraft.skills.splice(idx, 1);
+    renderTemplatesForm();
+  }
+
+  window.addSkill = addSkill;
+  window.deleteSkill = deleteSkill;
+
   function syncBTMappingFromInputs() {
     if (!_btMappingDraft) _btMappingDraft = { categories: {}, fallback: {}, income: {} };
     if (!_btMappingDraft.categories) _btMappingDraft.categories = {};
@@ -824,11 +929,14 @@
 
   function saveAdminTemplate() {
     syncTopLevelDraftFromInputs();
+    syncBTMappingFromInputs();
+    syncSkillsFromInputs();
     var statusEl = document.getElementById('tpl-status');
     if (statusEl) { statusEl.textContent = 'Saving…'; statusEl.style.color = 'var(--text-dim,#888)'; }
     Promise.all([
       window.agxApi.settings.put('proposal_template', _templateDraft),
-      window.agxApi.settings.put('bt_export_mapping', _btMappingDraft)
+      window.agxApi.settings.put('bt_export_mapping', _btMappingDraft),
+      window.agxApi.settings.put('agent_skills', _skillsDraft)
     ]).then(function() {
       if (statusEl) { statusEl.textContent = 'Saved.'; statusEl.style.color = '#34d399'; }
       // Bust the cached copies on the consumer modules so the next preview /
