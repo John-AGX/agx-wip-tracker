@@ -76,6 +76,10 @@
     return (a.name || '').localeCompare(b.name || '');
   }
 
+  // Sort state — header click toggles direction; switching column resets
+  // direction to a sensible default per column type.
+  var _clientsSort = { key: 'name', dir: 'asc' };
+
   // Tracks which parent rows are expanded in the directory list so reloads
   // don't collapse the user's view. Persisted in sessionStorage under a
   // simple JSON-stringified Set.
@@ -158,17 +162,85 @@
     return hay.indexOf(q) !== -1;
   }
 
+  // Compare two client rows for sorting. Falls through to name on ties so
+  // sorts are stable-feeling.
+  function compareClients(a, b, key, dir) {
+    var av, bv;
+    if (key === 'contact') {
+      av = (([a.first_name, a.last_name].filter(Boolean).join(' ') || a.community_manager || a.email || '')).toLowerCase();
+      bv = (([b.first_name, b.last_name].filter(Boolean).join(' ') || b.community_manager || b.email || '')).toLowerCase();
+    } else if (key === 'location') {
+      av = ((a.market || a.city || a.state || '')).toLowerCase();
+      bv = ((b.market || b.city || b.state || '')).toLowerCase();
+    } else {
+      av = (a[key] || '').toString().toLowerCase();
+      bv = (b[key] || '').toString().toLowerCase();
+    }
+    if (av < bv) return dir === 'desc' ? 1 : -1;
+    if (av > bv) return dir === 'desc' ? -1 : 1;
+    var an = (a.name || '').toLowerCase();
+    var bn = (b.name || '').toLowerCase();
+    return an < bn ? -1 : (an > bn ? 1 : 0);
+  }
+
+  function sortClientsBy(key) {
+    if (_clientsSort.key === key) {
+      _clientsSort.dir = _clientsSort.dir === 'asc' ? 'desc' : 'asc';
+    } else {
+      _clientsSort.key = key;
+      _clientsSort.dir = 'asc';
+    }
+    renderClientsList();
+  }
+
+  function clientsHeaderCell(label, key, opts) {
+    opts = opts || {};
+    var active = _clientsSort.key === key;
+    var arrow = active ? (_clientsSort.dir === 'asc' ? ' &uarr;' : ' &darr;') : '';
+    var color = active ? '#4f8cff' : 'var(--text-dim,#888)';
+    var align = opts.align || 'left';
+    var width = opts.width ? ('width:' + opts.width + ';') : '';
+    return '<th style="text-align:' + align + ';' + width + '" onclick="sortClientsBy(\'' + key + '\')">' +
+      '<span style="cursor:pointer;color:' + color + ';font-size:10px;text-transform:uppercase;letter-spacing:0.5px;font-weight:700;user-select:none;">' +
+      label + arrow +
+      '</span>' +
+    '</th>';
+  }
+
+  // Populate the market filter dropdown from the unique markets currently
+  // present in the cache. Preserves the user's current selection.
+  function refreshMarketFilter() {
+    var sel = document.getElementById('clients-filter-market');
+    if (!sel) return;
+    var current = sel.value || '';
+    var markets = {};
+    _clients.forEach(function(c) { if (c.market) markets[c.market] = true; });
+    var keys = Object.keys(markets).sort();
+    var opts = '<option value="">All markets</option>';
+    keys.forEach(function(m) {
+      opts += '<option value="' + escapeAttr(m) + '"' + (m === current ? ' selected' : '') + '>' + escapeHTML(m) + '</option>';
+    });
+    sel.innerHTML = opts;
+  }
+
   function renderClientsList() {
     var listEl = document.getElementById('clients-list');
     var summaryEl = document.getElementById('clients-summary');
     if (!listEl) return;
     var searchEl = document.getElementById('clients-search');
+    var roleFilterEl = document.getElementById('clients-filter-role');
+    var statusFilterEl = document.getElementById('clients-filter-status');
+    var marketFilterEl = document.getElementById('clients-filter-market');
     var q = searchEl ? searchEl.value.trim() : '';
+    var roleFilter = roleFilterEl ? roleFilterEl.value : '';
+    var statusFilter = statusFilterEl ? statusFilterEl.value : '';
+    var marketFilter = marketFilterEl ? marketFilterEl.value : '';
 
     if (!_clients.length) {
       listEl.innerHTML = '<div style="padding:20px;color:var(--text-dim,#888);text-align:center;">Loading clients…</div>';
       window.agxApi.clients.list().then(function(res) {
         _clients = res.clients || [];
+        refreshMarketFilter();
         renderClientsList();
       }).catch(function(err) {
         listEl.innerHTML = '<div style="padding:20px;color:#e74c3c;text-align:center;">Failed to load clients: ' + escapeHTML(err.message) + '</div>';
@@ -176,62 +248,92 @@
       return;
     }
 
-    var filtered = _clients.filter(function(c) { return matchesSearch(c, q); });
+    refreshMarketFilter();
+
+    // Pre-compute role per client so the role filter is consistent with
+    // the hierarchical badges shown on the row.
+    var roleOf = {};
+    _clients.forEach(function(c) {
+      if (c.parent_client_id) {
+        roleOf[c.id] = 'child';
+      } else {
+        var kids = _clients.filter(function(x) { return x.parent_client_id === c.id; });
+        roleOf[c.id] = kids.length ? 'parent' : 'flat';
+      }
+    });
+
+    var filtered = _clients.filter(function(c) {
+      if (!matchesSearch(c, q)) return false;
+      if (statusFilter) {
+        if (statusFilter === 'active' && c.activation_status === 'inactive') return false;
+        if (statusFilter === 'inactive' && c.activation_status !== 'inactive') return false;
+      }
+      if (marketFilter && c.market !== marketFilter) return false;
+      if (roleFilter && roleOf[c.id] !== roleFilter) return false;
+      return true;
+    });
     if (summaryEl) {
-      summaryEl.textContent = q
-        ? 'Showing ' + filtered.length + ' of ' + _clients.length + ' clients'
-        : _clients.length + ' clients in directory';
+      var bits = [_clients.length + ' total'];
+      if (filtered.length !== _clients.length) bits.unshift('Showing ' + filtered.length);
+      summaryEl.textContent = bits.join(' · ');
     }
 
     if (!filtered.length) {
-      listEl.innerHTML = '<div style="padding:20px;color:var(--text-dim,#888);text-align:center;">' +
-        (q ? 'No clients match "' + escapeHTML(q) + '"' : 'No clients yet. Click + New Client to add one.') +
-        '</div>';
+      var empty = q ? 'No clients match "' + escapeHTML(q) + '"' :
+        (roleFilter || statusFilter || marketFilter
+          ? 'No clients match the current filters.'
+          : 'No clients yet. Click + New Client to add one.');
+      listEl.innerHTML = '<div style="padding:20px;color:var(--text-dim,#888);text-align:center;">' + empty + '</div>';
       return;
     }
 
-    // Dense table with hierarchical expand. Parent rows show child count
-    // and toggle to reveal their properties. Flat (unparented) rows are
-    // tagged so they're easy to spot for cleanup. When searching, we
-    // flatten and force-expand any parent whose child matched so the
-    // hit isn't hidden.
+    // Sortable header — keys map to compareClients above.
     var html =
       '<table class="dense-table">' +
         '<thead><tr>' +
-          '<th>Name</th>' +
-          '<th>Contact</th>' +
-          '<th>Location</th>' +
-          '<th style="text-align:right;width:140px;">Actions</th>' +
+          clientsHeaderCell('Name', 'name') +
+          clientsHeaderCell('Contact', 'contact') +
+          clientsHeaderCell('Location', 'location') +
+          '<th style="text-align:right;width:140px;color:var(--text-dim,#888);font-size:10px;text-transform:uppercase;letter-spacing:0.5px;font-weight:700;">Actions</th>' +
         '</tr></thead>' +
         '<tbody>';
 
-    if (q) {
-      // Search: flatten and surface every match. Tag rows by their actual
-      // role in the hierarchy so badges still make sense.
-      filtered.forEach(function(c) {
-        var role;
-        var childCount = 0;
-        if (!c.parent_client_id) {
-          var kids = _clients.filter(function(x) { return x.parent_client_id === c.id; });
-          childCount = kids.length;
-          role = childCount ? 'parent' : 'flat';
-        } else {
-          role = 'child';
-        }
-        html += clientRowHTML(c, { role: role, childCount: childCount, expanded: !!_expandedParents[c.id] });
-      });
+    // Branching: when ANY non-default filter or search is active OR sort is
+    // by a non-name column, flatten to a single sorted list (otherwise the
+    // hierarchy "loses" rows that don't match). When the user is browsing
+    // with default filters, keep the parent → expanded-properties grouping.
+    var hierarchical = !q && !roleFilter && !marketFilter && !statusFilter && _clientsSort.key === 'name';
+
+    if (!hierarchical) {
+      filtered
+        .slice()
+        .sort(function(a, b) { return compareClients(a, b, _clientsSort.key, _clientsSort.dir); })
+        .forEach(function(c) {
+          var role = roleOf[c.id];
+          var childCount = role === 'parent'
+            ? _clients.filter(function(x) { return x.parent_client_id === c.id; }).length
+            : 0;
+          html += clientRowHTML(c, { role: role, childCount: childCount, expanded: !!_expandedParents[c.id] });
+        });
     } else {
       var grouped = groupForRender(filtered);
-      grouped.topLevel.forEach(function(top) {
-        var kids = grouped.childrenOf[top.id] || [];
-        var role = kids.length ? 'parent' : 'flat';
-        html += clientRowHTML(top, { role: role, childCount: kids.length, expanded: !!_expandedParents[top.id] });
-        if (kids.length && _expandedParents[top.id]) {
-          kids.forEach(function(child) {
-            html += clientRowHTML(child, { role: 'child' });
-          });
-        }
-      });
+      // Parents themselves get sorted by the active key/dir
+      grouped.topLevel
+        .slice()
+        .sort(function(a, b) { return compareClients(a, b, _clientsSort.key, _clientsSort.dir); })
+        .forEach(function(top) {
+          var kids = grouped.childrenOf[top.id] || [];
+          var role = kids.length ? 'parent' : 'flat';
+          html += clientRowHTML(top, { role: role, childCount: kids.length, expanded: !!_expandedParents[top.id] });
+          if (kids.length && _expandedParents[top.id]) {
+            kids
+              .slice()
+              .sort(function(a, b) { return compareClients(a, b, _clientsSort.key, _clientsSort.dir); })
+              .forEach(function(child) {
+                html += clientRowHTML(child, { role: 'child' });
+              });
+          }
+        });
     }
 
     html += '</tbody></table>';
@@ -842,6 +944,7 @@
   window.reloadClientsCache = reloadClientsCache;
   window.handleClientsImportFile = handleClientsImportFile;
   window.toggleClientParent = toggleClientParent;
+  window.sortClientsBy = sortClientsBy;
   window.openClientMergeModal = openClientMergeModal;
   window.submitClientMerge = submitClientMerge;
   window.openClientSplitModal = openClientSplitModal;

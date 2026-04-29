@@ -732,7 +732,21 @@
                             <input type="file" id="clients-import-file" accept=".xlsx" style="display:none;" onchange="handleClientsImportFile(event)" />
                             <button class="secondary" onclick="reloadClientsCache()">Refresh</button>
                             <button onclick="window.openClientAI && window.openClientAI()" title="Customer Relations Agent — directory hygiene, dedupe, parent/property hierarchy" style="background:linear-gradient(135deg,#8b5cf6,#4f8cff);color:#fff;border-color:transparent;">&#x1F91D; Customer Relations Agent</button>
-                            <input type="text" id="clients-search" oninput="renderClientsList()" placeholder="Search clients…" style="margin-left:auto;min-width:220px;" />
+                            <select id="clients-filter-role" onchange="renderClientsList()" style="width:auto;min-width:130px;margin-left:auto;">
+                                <option value="">All entries</option>
+                                <option value="parent">Parents (with kids)</option>
+                                <option value="flat">Unparented only</option>
+                                <option value="child">Properties only</option>
+                            </select>
+                            <select id="clients-filter-status" onchange="renderClientsList()" style="width:auto;min-width:120px;">
+                                <option value="active">Active</option>
+                                <option value="">All statuses</option>
+                                <option value="inactive">Inactive</option>
+                            </select>
+                            <select id="clients-filter-market" onchange="renderClientsList()" style="width:auto;min-width:130px;">
+                                <option value="">All markets</option>
+                            </select>
+                            <input type="text" id="clients-search" oninput="renderClientsList()" placeholder="Search clients…" style="min-width:200px;" />
                         </div>
                         <p id="clients-summary" style="margin:12px 0;color:var(--text-dim,#888);font-size:12px;"></p>
                         <div id="clients-list" style="display:flex;flex-direction:column;gap:8px;"></div>
