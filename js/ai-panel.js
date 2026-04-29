@@ -130,17 +130,10 @@
       '<div id="ai-messages" style="flex:1;overflow-y:auto;padding:14px 16px;display:flex;flex-direction:column;gap:10px;font-size:13px;color:var(--text,#e6e6e6);"></div>' +
       // Preset prompts
       '<div id="ai-presets" style="padding:8px 12px;border-top:1px solid var(--border,#333);display:flex;flex-wrap:wrap;gap:6px;background:rgba(255,255,255,0.02);"></div>' +
-      // Input row. The inner spans use !important text-transform overrides
-      // because the global stylesheet applies uppercase + letter-spacing to
-      // every <label>, which made this strip look shouty.
+      // Input row. Photos are auto-included via the entity's attachments
+      // and inline uploads via the + composer button — no separate toggle
+      // needed.
       '<div style="padding:10px 12px 12px;border-top:1px solid var(--border,#333);background:var(--card-bg,#0c0c14);">' +
-        '<div style="display:flex;align-items:center;gap:6px;font-size:11px;margin-bottom:8px;">' +
-          '<label style="display:flex;align-items:center;gap:6px;cursor:pointer;color:var(--text-dim,#aaa);text-transform:none !important;letter-spacing:normal !important;font-size:11px !important;font-weight:400 !important;margin:0;flex:1;min-width:0;">' +
-            '<input id="ai-photos-toggle" type="checkbox" checked style="margin:0;flex:0 0 auto;" />' +
-            '<span style="text-transform:none;">Send photos with my message</span>' +
-          '</label>' +
-          '<span id="ai-photos-count" style="color:var(--text-dim,#888);text-transform:none;letter-spacing:normal;flex:0 0 auto;"></span>' +
-        '</div>' +
         // Pill-style input container — borderless textarea with attach,
         // camera, mic and send icons docked at the bottom-right. Grows
         // up as the user types so long prompts stay readable; capped at
@@ -165,7 +158,6 @@
     panel.querySelector('#ai-close').onclick = close;
     panel.querySelector('#ai-clear').onclick = clearConversation;
     panel.querySelector('#ai-send').onclick = onSend;
-    panel.querySelector('#ai-photos-toggle').onchange = function(e) { _includePhotos = !!e.target.checked; };
     var input = panel.querySelector('#ai-input');
     var pill = panel.querySelector('#ai-input-pill');
     // Auto-grow: textarea expands as the user types, capped at max-height
@@ -248,15 +240,9 @@
       var inp = document.getElementById('ai-input');
       if (inp) inp.focus();
     }, 240);
-    updatePhotoCount();
   }
 
   function refreshModeSpecificUI() {
-    var photoRow = document.querySelector('#agx-ai-panel #ai-photos-toggle');
-    if (photoRow) {
-      var rowEl = photoRow.closest('div');
-      if (rowEl) rowEl.style.display = isEstimateMode() ? '' : 'none';
-    }
     var headerEl = document.querySelector('#agx-ai-panel .agx-ai-title');
     if (headerEl) {
       if (isJobMode()) headerEl.textContent = '📊 WIP Assistant';
@@ -1047,24 +1033,6 @@
     // off the editor's currently-open list. The server is authoritative.
     if (!_estimateId) return 0;
     return 0; // placeholder; the count chip is informational only
-  }
-
-  function updatePhotoCount() {
-    var el = document.getElementById('ai-photos-count');
-    if (!el || !window.agxApi) return;
-    if (!isEstimateMode() || !_entityId) { el.textContent = ''; return; }
-    window.agxApi.attachments.list('estimate', _entityId).then(function(res) {
-      var n = (res.attachments || []).length;
-      // Add lead photos if estimate is linked to a lead
-      var est = (window.appData && window.appData.estimates || []).find(function(e) { return e.id === _entityId; });
-      if (est && est.lead_id) {
-        return window.agxApi.attachments.list('lead', est.lead_id).then(function(r2) {
-          n += (r2.attachments || []).length;
-          el.textContent = n + ' photo' + (n === 1 ? '' : 's') + ' available';
-        });
-      }
-      el.textContent = n + ' photo' + (n === 1 ? '' : 's') + ' available';
-    }).catch(function() { if (el) el.textContent = ''; });
   }
 
   // CSS for the cursor blink + body shift — appended once
