@@ -320,25 +320,50 @@
     var html = '';
     est.alternates.forEach(function(a) {
       var isActive = (a.id === activeId);
+      var excluded = !!a.excludeFromTotal;
       var lineCount = (appData.estimateLines || []).filter(function(l) {
         return l.estimateId === est.id && l.alternateId === a.id && l.section !== '__section_header__';
       }).length;
-      var bg = isActive ? 'rgba(79,140,255,0.18)' : 'transparent';
-      var border = isActive ? '#4f8cff' : 'var(--border,#333)';
-      var color = isActive ? '#fff' : 'var(--text-dim,#888)';
-      html += '<button onclick="switchAlternate(\'' + escapeHTML(a.id) + '\')" ' +
-        'style="padding:6px 14px;border:1px solid ' + border + ';border-radius:18px;' +
-        'background:' + bg + ';color:' + color + ';font-size:12px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:6px;">' +
-        escapeHTML(a.name) +
-        '<span style="font-size:10px;color:var(--text-dim,#888);font-weight:400;">' + lineCount + '</span>' +
-        '</button>';
+      var bg = excluded ? 'rgba(255,255,255,0.02)' : (isActive ? 'rgba(79,140,255,0.18)' : 'transparent');
+      var border = excluded ? 'var(--border,#333)' : (isActive ? '#4f8cff' : 'var(--border,#333)');
+      var color = excluded ? 'var(--text-dim,#666)' : (isActive ? '#fff' : 'var(--text-dim,#888)');
+      var nameStyle = excluded ? 'text-decoration:line-through;opacity:0.7;' : '';
+      // Group tab is a flex container with two zones:
+      //   1. inclusion checkbox (toggle whether this group ships in the
+      //      proposal + counts toward the total)
+      //   2. clickable label (switch active group for editing)
+      var checkboxTitle = excluded ? 'Excluded from proposal — click to include' : 'Included in proposal — click to exclude';
+      html += '<div style="display:inline-flex;align-items:stretch;border:1px solid ' + border + ';border-radius:18px;background:' + bg + ';overflow:hidden;">' +
+        '<label title="' + checkboxTitle + '" style="display:inline-flex;align-items:center;padding:0 8px;cursor:pointer;border-right:1px solid var(--border,#333);">' +
+          '<input type="checkbox" ' + (excluded ? '' : 'checked') + ' ' +
+            'onchange="toggleGroupInclude(\'' + escapeHTML(a.id) + '\', this.checked)" ' +
+            'style="margin:0;cursor:pointer;accent-color:#4f8cff;" />' +
+        '</label>' +
+        '<button onclick="switchAlternate(\'' + escapeHTML(a.id) + '\')" ' +
+          'style="padding:6px 14px;border:none;background:transparent;color:' + color + ';font-size:12px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:6px;' + nameStyle + '">' +
+          escapeHTML(a.name) +
+          '<span style="font-size:10px;color:var(--text-dim,#888);font-weight:400;">' + lineCount + '</span>' +
+        '</button>' +
+      '</div>';
     });
     wrap.innerHTML = html;
 
-    // Disable Delete when only one alternate exists — there's always at
-    // least one parallel set, even if the user only ever uses Base.
+    // Disable Delete when only one group exists — there's always at least
+    // one group on an estimate.
     var deleteBtn = document.getElementById('ee-altDeleteBtn');
     if (deleteBtn) deleteBtn.disabled = (est.alternates.length <= 1);
+  }
+
+  function toggleGroupInclude(altId, included) {
+    var est = getEstimate();
+    if (!est || !est.alternates) return;
+    var a = est.alternates.find(function(x) { return x.id === altId; });
+    if (!a) return;
+    a.excludeFromTotal = !included;
+    debouncedSave();
+    renderAlternateTabs();
+    renderTotals();
+    renderLineItems(); // active group's banner state may need refreshing
   }
 
   function switchAlternate(altId) {
@@ -357,13 +382,26 @@
     var est = getEstimate();
     if (!est) return;
     if (!est.alternates) est.alternates = [];
-    var name = prompt('Name for the new alternate:', suggestNextAlternateName(est));
+    var name = prompt('Name for the new group (e.g., "Deck 1", "Roof", "Phase 2"):', suggestNextAlternateName(est));
     if (name == null) return;
     name = name.trim();
     if (!name) return;
     var newAlt = { id: 'alt_' + Date.now(), name: name, isDefault: false, scope: '' };
     est.alternates.push(newAlt);
     est.activeAlternateId = newAlt.id;
+    // Auto-seed the four standard subgroups under the new group so the
+    // estimator can immediately drop line items into the right buckets.
+    STANDARD_SECTIONS_PRESET.forEach(function(s, idx) {
+      appData.estimateLines.push({
+        id: 's' + Date.now() + '_' + idx,
+        estimateId: est.id,
+        alternateId: newAlt.id,
+        section: '__section_header__',
+        description: s.name,
+        btCategory: s.btCategory,
+        markup: s.markup
+      });
+    });
     debouncedSave();
     renderAlternateTabs();
     renderLineItems();
@@ -372,19 +410,19 @@
   }
 
   function suggestNextAlternateName(est) {
-    var existing = (est.alternates || []).map(function(a) { return (a.name || '').toLowerCase(); });
-    var ladder = ['Good', 'Better', 'Best'];
-    for (var i = 0; i < ladder.length; i++) {
-      if (existing.indexOf(ladder[i].toLowerCase()) === -1) return ladder[i];
-    }
-    return 'Alternate ' + (est.alternates.length + 1);
+    // Group names default to numbered scopes — most estimates use Group 1
+    // for the primary scope and add Group 2/3 for additional decks, phases,
+    // optional adds, etc. The Good/Better/Best ladder is still available
+    // by typing a custom name.
+    var n = (est.alternates || []).length + 1;
+    return 'Group ' + n;
   }
 
   function renameActiveAlternate() {
     var est = getEstimate();
     var a = getActiveAlternate();
     if (!est || !a) return;
-    var name = prompt('Rename alternate:', a.name);
+    var name = prompt('Rename group:', a.name);
     if (name == null) return;
     name = name.trim();
     if (!name) return;
@@ -397,7 +435,7 @@
     var est = getEstimate();
     var a = getActiveAlternate();
     if (!est || !a) return;
-    var name = prompt('Name for the duplicated alternate:', suggestNextAlternateName(est));
+    var name = prompt('Name for the duplicated group:', suggestNextAlternateName(est));
     if (name == null) return;
     name = name.trim();
     if (!name) return;
@@ -427,17 +465,17 @@
     var a = getActiveAlternate();
     if (!est || !a) return;
     if ((est.alternates || []).length <= 1) {
-      alert('Cannot delete the last alternate — at least one is required.');
+      alert('Cannot delete the last group — at least one is required.');
       return;
     }
     var lineCount = (appData.estimateLines || []).filter(function(l) {
       return l.estimateId === est.id && l.alternateId === a.id;
     }).length;
     var msg = lineCount
-      ? 'This will also remove ' + lineCount + ' line item' + (lineCount === 1 ? '' : 's') + ' / section header' + (lineCount === 1 ? '' : 's') + '. This cannot be undone.'
+      ? 'This will also remove ' + lineCount + ' line item' + (lineCount === 1 ? '' : 's') + ' / subgroup header' + (lineCount === 1 ? '' : 's') + '. This cannot be undone.'
       : 'This cannot be undone.';
     window.agxConfirm({
-      title: 'Delete alternate "' + a.name + '"?',
+      title: 'Delete group "' + a.name + '"?',
       message: msg,
       confirmText: 'Delete',
       destructive: true
@@ -498,17 +536,43 @@
     return 0;
   }
 
-  function computeTotals() {
-    var est = getEstimate();
-    var allLines = getLines();
-    var subtotal = 0;
-    var markedUp = 0;
-    allLines.forEach(function(l) {
+  // Helper: marked-up subtotal for a single group (alternate). Used by the
+  // active-group subtotal display and by the cross-group sum below.
+  function markedUpForGroup(est, alt) {
+    if (!est || !alt) return { subtotal: 0, markedUp: 0 };
+    var lines = (appData.estimateLines || []).filter(function(l) {
+      return l.estimateId === est.id && l.alternateId === alt.id;
+    });
+    var subtotal = 0, markedUp = 0;
+    lines.forEach(function(l) {
       if (l.section === '__section_header__') return;
       var ext = num(l.qty) * num(l.unitCost);
       subtotal += ext;
-      var m = effectiveMarkupForLine(l, allLines, est);
+      var m = effectiveMarkupForLine(l, lines, est);
       markedUp += ext * (1 + m / 100);
+    });
+    return { subtotal: subtotal, markedUp: markedUp };
+  }
+
+  function computeTotals() {
+    var est = getEstimate();
+    if (!est) return {};
+    // Sum across every INCLUDED group. The active group is just for editing
+    // focus; the proposal total reflects the union of every group whose
+    // toggle is on.
+    var subtotal = 0;
+    var markedUp = 0;
+    var includedGroups = [];
+    var excludedGroups = [];
+    (est.alternates || []).forEach(function(alt) {
+      var per = markedUpForGroup(est, alt);
+      if (alt.excludeFromTotal) {
+        excludedGroups.push({ alt: alt, subtotal: per.subtotal, markedUp: per.markedUp });
+      } else {
+        includedGroups.push({ alt: alt, subtotal: per.subtotal, markedUp: per.markedUp });
+        subtotal += per.subtotal;
+        markedUp += per.markedUp;
+      }
     });
     var feeFlat = est ? num(est.feeFlat) : 0;
     var feePctAmount = markedUp * (est ? num(est.feePct) : 0) / 100;
@@ -522,6 +586,11 @@
       total = Math.ceil(beforeRound / roundTo) * roundTo;
       rounded = total - beforeRound;
     }
+    var lineCount = (appData.estimateLines || []).filter(function(l) {
+      return l.estimateId === est.id && l.section !== '__section_header__';
+    }).length;
+    var activeAlt = getActiveAlternate();
+    var activePer = activeAlt ? markedUpForGroup(est, activeAlt) : { subtotal: 0, markedUp: 0 };
     return {
       subtotal: subtotal,
       markupAmount: markedUp - subtotal,
@@ -533,7 +602,11 @@
       beforeRound: beforeRound,
       rounded: rounded,
       total: total,
-      lineCount: lines.length
+      lineCount: lineCount,
+      includedGroups: includedGroups,
+      excludedGroups: excludedGroups,
+      activeGroupSubtotal: activePer.markedUp,
+      activeGroupExcluded: !!(activeAlt && activeAlt.excludeFromTotal)
     };
   }
 
@@ -547,11 +620,15 @@
         '<div style="font-size:14px;font-weight:700;color:' + color + ';font-family:\'SF Mono\',\'Fira Code\',monospace;">' + value + '</div>' +
       '</div>';
     }
+    var groupCountChip = (t.includedGroups && t.includedGroups.length > 1)
+      ? chip('Active Group', fmtCurrency(t.activeGroupSubtotal) + (t.activeGroupExcluded ? ' (excluded)' : ''), t.activeGroupExcluded ? 'var(--text-dim,#888)' : '#60a5fa')
+      : '';
     totalsEl.innerHTML =
+      groupCountChip +
       chip('Subtotal', fmtCurrency(t.subtotal), 'var(--text,#fff)') +
       chip('Markup', fmtCurrency(t.markupAmount), '#fbbf24') +
       chip('Tax + Fees', fmtCurrency(t.feeFlat + t.feePctAmount + t.taxAmount), '#60a5fa') +
-      chip('Client Total', fmtCurrency(t.total), '#34d399') +
+      chip('Proposal Total', fmtCurrency(t.total), '#34d399') +
       chip('Lines', t.lineCount, 'var(--text-dim,#888)');
     // Also refresh the detailed breakdown card under the line items.
     renderPricingBreakdown();
@@ -576,7 +653,25 @@
       '</div>';
     }
     var html = '';
-    html += row('Subtotal (cost)', t.subtotal);
+    // When there are multiple groups, show a per-group breakdown at the
+    // top so the user can see which group contributes what.
+    if ((t.includedGroups && t.includedGroups.length > 1) || (t.excludedGroups && t.excludedGroups.length)) {
+      html += '<div style="font-size:11px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;margin-bottom:6px;">Groups</div>';
+      (t.includedGroups || []).forEach(function(g) {
+        html += '<div style="display:flex;justify-content:space-between;align-items:center;padding:3px 0;font-size:12px;">' +
+          '<span style="color:var(--text,#ddd);">' + escapeHTML(g.alt.name || '(unnamed)') + '</span>' +
+          '<span style="font-family:\'SF Mono\',monospace;color:var(--text,#fff);">' + fmtCurrency(g.markedUp) + '</span>' +
+        '</div>';
+      });
+      (t.excludedGroups || []).forEach(function(g) {
+        html += '<div style="display:flex;justify-content:space-between;align-items:center;padding:3px 0;font-size:12px;opacity:0.5;">' +
+          '<span style="color:var(--text-dim,#888);text-decoration:line-through;">' + escapeHTML(g.alt.name || '(unnamed)') + '</span>' +
+          '<span style="font-family:\'SF Mono\',monospace;color:var(--text-dim,#666);">' + fmtCurrency(g.markedUp) + ' (excluded)</span>' +
+        '</div>';
+      });
+      html += '<div style="border-top:1px solid var(--border,#333);margin:8px 0;"></div>';
+    }
+    html += row('Subtotal (cost, all included groups)', t.subtotal);
     html += row('Markup', t.markupAmount, { color: '#fbbf24' });
     html += row('Marked-Up Subtotal', t.markedUp, { divider: true });
     if (t.feeFlat) html += row('+ Flat Fee', t.feeFlat, { color: '#60a5fa' });
@@ -584,7 +679,7 @@
     if (t.feeFlat || t.feePctAmount) html += row('Pre-Tax Total', t.preTax, { divider: true });
     if (t.taxAmount) html += row('+ Tax', t.taxAmount, { color: '#60a5fa' });
     if (t.rounded) html += row('+ Round Up', t.rounded, { color: 'var(--text-dim,#888)' });
-    html += row('Client Total', t.total, { bold: true, color: '#34d399', divider: true });
+    html += row('Proposal Total', t.total, { bold: true, color: '#34d399', divider: true });
     el.innerHTML = html;
   }
 
@@ -600,14 +695,21 @@
     if (!container) return;
     var est = getEstimate();
     var lines = getLines();
+    var activeAlt = getActiveAlternate();
+    var bannerHtml = '';
+    if (activeAlt && activeAlt.excludeFromTotal) {
+      bannerHtml = '<div style="padding:10px 14px;background:rgba(251,191,36,0.10);border:1px solid rgba(251,191,36,0.35);border-radius:8px;margin-bottom:10px;font-size:12px;color:#fbbf24;">' +
+        '⚠ This group is <strong>excluded</strong> from the proposal total. Lines you edit here won\'t ship to the client. Toggle the group on in the strip above to include it.' +
+      '</div>';
+    }
     if (!lines.length) {
-      container.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-dim,#888);border:1px dashed var(--border,#333);border-radius:8px;">' +
-        'No line items yet. Click <strong>+ Line Item</strong> or <strong>+ Section</strong> to start.' +
+      container.innerHTML = bannerHtml + '<div style="padding:40px;text-align:center;color:var(--text-dim,#888);border:1px dashed var(--border,#333);border-radius:8px;">' +
+        'No line items yet. Click <strong>+ Line Item</strong> or <strong>+ Subgroup</strong> to start.' +
       '</div>';
       return;
     }
 
-    var html = '<div class="ee-line-table" style="border:1px solid var(--border,#333);border-radius:8px;overflow:hidden;">';
+    var html = bannerHtml + '<div class="ee-line-table" style="border:1px solid var(--border,#333);border-radius:8px;overflow:hidden;">';
     html += renderLineHeaderRow();
 
     // Group rendering: walk lines in order, render section headers + lines
@@ -866,7 +968,7 @@
   function addEstimateSectionFromEditor() {
     var est = getEstimate();
     if (!est) return;
-    var name = prompt('Section name:', '');
+    var name = prompt('Subgroup name:', '');
     if (name == null) return;
     var newHeader = {
       id: 's' + Date.now(),
@@ -954,7 +1056,7 @@
       added++;
     });
     if (!added) {
-      alert('All four standard sections are already present in this alternate.');
+      alert('All four standard subgroups are already present in this group.');
       return;
     }
     debouncedSave();
@@ -1526,4 +1628,5 @@
   window.renameActiveAlternate = renameActiveAlternate;
   window.duplicateActiveAlternate = duplicateActiveAlternate;
   window.deleteActiveAlternate = deleteActiveAlternate;
+  window.toggleGroupInclude = toggleGroupInclude;
 })();

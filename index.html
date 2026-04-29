@@ -677,10 +677,10 @@
                                 <div id="ee-alternate-strip" style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap;">
                                     <div id="ee-alternate-tabs" style="display:flex;gap:6px;flex-wrap:wrap;flex:1;"></div>
                                     <div style="display:flex;gap:6px;">
-                                        <button class="ee-btn secondary" onclick="addAlternateFromEditor()" title="Add a new alternate (e.g. Good / Better / Best)">&#x2795; Alternate</button>
-                                        <button class="ee-btn ghost" onclick="duplicateActiveAlternate()" title="Copy this alternate's lines into a new alternate" id="ee-altDuplicateBtn">&#x2398; Duplicate</button>
-                                        <button class="ee-btn ghost" onclick="renameActiveAlternate()" title="Rename this alternate" id="ee-altRenameBtn">&#x270F; Rename</button>
-                                        <button class="ee-btn ee-icon-btn danger" onclick="deleteActiveAlternate()" title="Delete this alternate (cannot delete the last one)" id="ee-altDeleteBtn">&#x1F5D1;</button>
+                                        <button class="ee-btn secondary" onclick="addAlternateFromEditor()" title="Add a new group (e.g., another deck, optional adds, a phase). Auto-seeds the four standard subgroups.">&#x2795; Group</button>
+                                        <button class="ee-btn ghost" onclick="duplicateActiveAlternate()" title="Copy this group's lines into a new group" id="ee-altDuplicateBtn">&#x2398; Duplicate</button>
+                                        <button class="ee-btn ghost" onclick="renameActiveAlternate()" title="Rename this group" id="ee-altRenameBtn">&#x270F; Rename</button>
+                                        <button class="ee-btn ee-icon-btn danger" onclick="deleteActiveAlternate()" title="Delete this group (cannot delete the last one)" id="ee-altDeleteBtn">&#x1F5D1;</button>
                                     </div>
                                 </div>
 
@@ -689,8 +689,8 @@
                                     <div class="ee-lines-left" style="min-width:0;">
                                         <div class="action-buttons" style="margin-bottom:10px;">
                                             <button class="primary" onclick="addEstimateLineFromEditor()">&#x2795; Line Item</button>
-                                            <button class="secondary" onclick="addEstimateSectionFromEditor()">&#x2795; Section</button>
-                                            <button class="ghost" onclick="addStandardSectionsFromEditor()" title="Add the four BT-aligned cost categories (Subs / Materials / GC / Labor)">&#x2795; Standard Sections</button>
+                                            <button class="secondary" onclick="addEstimateSectionFromEditor()">&#x2795; Subgroup</button>
+                                            <button class="ghost" onclick="addStandardSectionsFromEditor()" title="Add the four BT-aligned subgroups (Materials / Labor / GC / Subs)">&#x2795; Standard Subgroups</button>
                                         </div>
                                         <div id="ee-lines-container"></div>
                                         <div style="font-size:11px;color:var(--text-dim,#888);margin-top:8px;">Edits autosave on blur. Drag the &#x2630; handle to reorder. Per-line markup overrides the default.</div>

@@ -67,24 +67,50 @@
 
   function num(v) { var n = parseFloat(v); return isNaN(n) ? 0 : n; }
 
+  // Returns the list of group ids that should be included in the export.
+  // Excluded groups are dropped entirely. If no group flags are set yet
+  // (legacy estimates), every group is included.
+  function includedGroupIds(estimate) {
+    var alts = (estimate && estimate.alternates) || [];
+    var included = alts.filter(function(a) { return !a.excludeFromTotal; });
+    if (!included.length) return alts.map(function(a) { return a.id; }); // safety: never empty
+    return included.map(function(a) { return a.id; });
+  }
+
   // Walks lines in their stored order; each line inherits the btCategory
   // of the most recent section header above it. Lines before the first
   // section (or under a section with no btCategory) get null and fall
-  // back to BT_FALLBACK at write time.
+  // back to BT_FALLBACK at write time. Spans every INCLUDED group so a
+  // multi-deck estimate exports as one cohesive cost-side line list.
   function buildLineCategoryMap(estimate) {
-    var lines = (window.appData && window.appData.estimateLines || []).filter(function(l) {
-      return l.estimateId === estimate.id && l.alternateId === estimate.activeAlternateId;
+    var includedIds = includedGroupIds(estimate);
+    var altById = {};
+    (estimate.alternates || []).forEach(function(a) { altById[a.id] = a; });
+    var allLines = (window.appData && window.appData.estimateLines || []).filter(function(l) {
+      return l.estimateId === estimate.id && includedIds.indexOf(l.alternateId) >= 0;
     });
+    // Group lines by alternateId so we walk each group's section structure
+    // independently — section-header context shouldn't bleed across groups.
+    var byGroup = {};
+    includedIds.forEach(function(gid) { byGroup[gid] = []; });
+    allLines.forEach(function(l) { if (byGroup[l.alternateId]) byGroup[l.alternateId].push(l); });
+    var orderedLines = [];
     var byLineId = {};
-    var currentCat = null;
-    lines.forEach(function(l) {
-      if (l.section === '__section_header__') {
-        currentCat = l.btCategory || null;
-      } else {
-        byLineId[l.id] = currentCat;
-      }
+    var groupNameByLineId = {};
+    includedIds.forEach(function(gid) {
+      var group = byGroup[gid] || [];
+      var currentCat = null;
+      group.forEach(function(l) {
+        if (l.section === '__section_header__') {
+          currentCat = l.btCategory || null;
+        } else {
+          byLineId[l.id] = currentCat;
+          groupNameByLineId[l.id] = altById[gid] ? altById[gid].name : '';
+        }
+        orderedLines.push(l);
+      });
     });
-    return { lines: lines, byLineId: byLineId };
+    return { lines: orderedLines, byLineId: byLineId, groupNameByLineId: groupNameByLineId };
   }
 
   // Walk back from a line index to find its enclosing section header's
@@ -108,16 +134,24 @@
 
   // Mirrors the editor's pricing pipeline: subtotal -> per-line markup ->
   // marked-up subtotal -> + flat fee -> + percent fee -> + tax -> round-up.
+  // Sums across every INCLUDED group so a multi-group estimate's BT income
+  // line carries the full proposal price.
   function computeClientTotal(estimate) {
+    var includedIds = includedGroupIds(estimate);
     var allLines = (window.appData && window.appData.estimateLines || []).filter(function(l) {
-      return l.estimateId === estimate.id && l.alternateId === estimate.activeAlternateId;
+      return l.estimateId === estimate.id && includedIds.indexOf(l.alternateId) >= 0;
     });
     var markedUp = 0;
-    allLines.forEach(function(l) {
-      if (l.section === '__section_header__') return;
-      var ext = num(l.qty) * num(l.unitCost);
-      var m = effectiveMarkup(l, allLines, estimate);
-      markedUp += ext * (1 + m / 100);
+    // Walk each group's lines independently so section-header context (used
+    // by effectiveMarkup) doesn't bleed across groups.
+    includedIds.forEach(function(gid) {
+      var group = allLines.filter(function(l) { return l.alternateId === gid; });
+      group.forEach(function(l) {
+        if (l.section === '__section_header__') return;
+        var ext = num(l.qty) * num(l.unitCost);
+        var m = effectiveMarkup(l, group, estimate);
+        markedUp += ext * (1 + m / 100);
+      });
     });
     var feeFlat = num(estimate.feeFlat);
     var feePct = num(estimate.feePct) / 100;

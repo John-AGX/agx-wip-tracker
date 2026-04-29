@@ -106,6 +106,15 @@
     });
   }
 
+  // Returns the ids of every group that's marked included in the proposal.
+  // Legacy estimates with no toggles set: all groups included.
+  function includedGroupIds(estimate) {
+    var alts = (estimate && estimate.alternates) || [];
+    var included = alts.filter(function(a) { return !a.excludeFromTotal; });
+    if (!included.length) return alts.map(function(a) { return a.id; });
+    return included.map(function(a) { return a.id; });
+  }
+
   // Walk back from a line to find its enclosing section header's markup.
   // Per-line markup overrides; section header markup is the baseline.
   // Falls back to legacy est.defaultMarkup so estimates from before the
@@ -127,17 +136,24 @@
 
   // Mirrors estimate-editor's pricing pipeline. Subtotal -> per-line markup
   // -> + flat fee -> + percent fee -> + tax -> round-up -> total.
+  // Sums across every INCLUDED group so a multi-group estimate's proposal
+  // total reflects the union of every group whose toggle is on.
   function computeTotal(estimate) {
     if (!estimate) return 0;
-    var allLines = getActiveAlternateLines(estimate);
+    var includedIds = includedGroupIds(estimate);
     var subtotal = 0;
     var markedUp = 0;
-    allLines.forEach(function(l) {
-      if (l.section === '__section_header__') return;
-      var ext = (parseFloat(l.qty) || 0) * (parseFloat(l.unitCost) || 0);
-      subtotal += ext;
-      var m = effectiveMarkup(l, allLines, estimate);
-      markedUp += ext * (1 + m / 100);
+    includedIds.forEach(function(gid) {
+      var groupLines = (window.appData.estimateLines || []).filter(function(l) {
+        return l.estimateId === estimate.id && l.alternateId === gid;
+      });
+      groupLines.forEach(function(l) {
+        if (l.section === '__section_header__') return;
+        var ext = (parseFloat(l.qty) || 0) * (parseFloat(l.unitCost) || 0);
+        subtotal += ext;
+        var m = effectiveMarkup(l, groupLines, estimate);
+        markedUp += ext * (1 + m / 100);
+      });
     });
     var feeFlat = parseFloat(estimate.feeFlat) || 0;
     var feePct = (parseFloat(estimate.feePct) || 0) / 100;
@@ -215,14 +231,35 @@
       date: escapeHTMLLocal(ctx.date)
     });
 
-    // Active alternate's scope wins; legacy estimate.scopeOfWork is the
-    // pre-migration fallback for old records that haven't been opened in
-    // the new editor yet.
-    var activeAlt = (estimate.alternates || []).find(function(a) { return a.id === estimate.activeAlternateId; });
-    var scopeText = ((activeAlt && activeAlt.scope) || estimate.scopeOfWork || '').trim();
-    var scopeHTML = scopeText
-      ? '<div class="scope-text">' + scopeText.split(/\n+/).map(function(p) { return '<p>' + escapeHTMLLocal(p) + '</p>'; }).join('') + '</div>'
-      : '<p style="color:#999;font-style:italic;">Scope of work not yet entered.</p>';
+    // Multi-group proposal: render each INCLUDED group's scope as its own
+    // titled block so the client sees what each priced scope covers. If
+    // there's only one group, drop the title to keep simple jobs simple.
+    // Legacy estimate.scopeOfWork is the pre-migration fallback for old
+    // records that haven't been opened in the new editor yet.
+    var includedIds = includedGroupIds(estimate);
+    var includedAlts = (estimate.alternates || []).filter(function(a) { return includedIds.indexOf(a.id) >= 0; });
+    var scopeHTML;
+    if (!includedAlts.length || (includedAlts.length === 1 && !includedAlts[0].scope && estimate.scopeOfWork)) {
+      // Legacy path
+      var legacyScope = ((includedAlts[0] && includedAlts[0].scope) || estimate.scopeOfWork || '').trim();
+      scopeHTML = legacyScope
+        ? '<div class="scope-text">' + legacyScope.split(/\n+/).map(function(p) { return '<p>' + escapeHTMLLocal(p) + '</p>'; }).join('') + '</div>'
+        : '<p style="color:#999;font-style:italic;">Scope of work not yet entered.</p>';
+    } else if (includedAlts.length === 1) {
+      var soloScope = (includedAlts[0].scope || '').trim();
+      scopeHTML = soloScope
+        ? '<div class="scope-text">' + soloScope.split(/\n+/).map(function(p) { return '<p>' + escapeHTMLLocal(p) + '</p>'; }).join('') + '</div>'
+        : '<p style="color:#999;font-style:italic;">Scope of work not yet entered.</p>';
+    } else {
+      scopeHTML = '<div class="scope-text">';
+      includedAlts.forEach(function(alt, idx) {
+        var s = (alt.scope || '').trim();
+        scopeHTML += '<h4 style="margin:' + (idx === 0 ? '0' : '14px') + ' 0 6px;color:#333;font-size:13pt;">' + escapeHTMLLocal(alt.name) + '</h4>';
+        if (s) scopeHTML += s.split(/\n+/).map(function(p) { return '<p>' + escapeHTMLLocal(p) + '</p>'; }).join('');
+        else scopeHTML += '<p style="color:#999;font-style:italic;">Scope not entered for this group.</p>';
+      });
+      scopeHTML += '</div>';
+    }
 
     var exclusionsHTML = '';
     (template.exclusions || []).forEach(function(item, idx) {

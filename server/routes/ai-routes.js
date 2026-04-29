@@ -317,18 +317,22 @@ async function buildEstimateContext(estimateId, includePhotos) {
   }
 
   if (alternates.length > 1) {
-    lines.push('# Alternates (Good / Better / Best)');
+    lines.push('# Groups on this estimate');
+    lines.push('AGX organizes a multi-scope estimate into Groups (e.g., Deck 1, Deck 2, Roof, Optional Adds). Each group carries its own scope and its own line items. The proposal total = sum of every INCLUDED group; groups marked `excluded` are not priced or shown to the client.');
     alternates.forEach(a => {
       const isActive = a.id === blob.activeAlternateId;
-      lines.push('- ' + a.name + (isActive ? ' (active)' : ''));
+      const isExcluded = !!a.excludeFromTotal;
+      lines.push('- ' + a.name +
+        (isActive ? ' (active in editor)' : '') +
+        (isExcluded ? ' [EXCLUDED from proposal]' : ''));
     });
     lines.push('');
   }
 
   if (activeAlt) {
-    lines.push('# Active alternate: ' + activeAlt.name);
+    lines.push('# Active group: ' + activeAlt.name + (activeAlt.excludeFromTotal ? ' [EXCLUDED]' : ''));
     if (activeAlt.scope) {
-      lines.push('## Scope of work');
+      lines.push('## Scope of work for this group');
       lines.push(activeAlt.scope);
       lines.push('');
     }
@@ -339,31 +343,33 @@ async function buildEstimateContext(estimateId, includePhotos) {
     lines.push('');
   }
 
-  // Group lines by section header for readable rendering. Markup is now
-  // per-section: each section header's `markup` field defines the
-  // baseline; individual lines can override.
+  // Group lines by subgroup header for readable rendering. Subgroup header
+  // lines carry the markup % that the cost-side lines under them inherit;
+  // individual lines can override. Subgroups are the four cost categories
+  // (Materials / Labor / GC / Subs); the active group is the active
+  // alternate (e.g., "Deck 1" or "Roof").
   if (activeLines.length) {
-    lines.push('## Line items (cost-side)');
-    let currentSection = '(uncategorized)';
-    let currentSectionMarkup = (blob.defaultMarkup != null && blob.defaultMarkup !== '') ? parseFloat(blob.defaultMarkup) : 0;
-    let lineNumInSection = 0;
+    lines.push('## Line items in active group (cost-side)');
+    let currentSubgroup = '(uncategorized)';
+    let currentSubgroupMarkup = (blob.defaultMarkup != null && blob.defaultMarkup !== '') ? parseFloat(blob.defaultMarkup) : 0;
+    let lineNumInSubgroup = 0;
     activeLines.forEach(l => {
       if (l.section === '__section_header__') {
-        currentSection = l.description || 'section';
-        currentSectionMarkup = (l.markup === '' || l.markup == null)
+        currentSubgroup = l.description || 'subgroup';
+        currentSubgroupMarkup = (l.markup === '' || l.markup == null)
           ? ((blob.defaultMarkup != null && blob.defaultMarkup !== '') ? parseFloat(blob.defaultMarkup) : 0)
           : parseFloat(l.markup);
-        lineNumInSection = 0;
-        lines.push(`### ${currentSection} (section markup ${currentSectionMarkup}%, section_id=${l.id})`);
+        lineNumInSubgroup = 0;
+        lines.push(`### ${currentSubgroup} (subgroup markup ${currentSubgroupMarkup}%, subgroup_id=${l.id})`);
       } else {
-        lineNumInSection++;
+        lineNumInSubgroup++;
         const qty = parseFloat(l.qty) || 0;
         const unit = l.unit || 'ea';
         const cost = parseFloat(l.unitCost) || 0;
         const ext = qty * cost;
-        const markup = (l.markup === '' || l.markup == null) ? currentSectionMarkup : parseFloat(l.markup);
-        const markupNote = (l.markup === '' || l.markup == null) ? '' : ' [overrides section]';
-        lines.push(`${lineNumInSection}. ${l.description || '(no description)'} — qty ${qty} ${unit} @ $${cost.toFixed(2)} = $${ext.toFixed(2)}; markup ${markup}%${markupNote} [line_id=${l.id}]`);
+        const markup = (l.markup === '' || l.markup == null) ? currentSubgroupMarkup : parseFloat(l.markup);
+        const markupNote = (l.markup === '' || l.markup == null) ? '' : ' [overrides subgroup]';
+        lines.push(`${lineNumInSubgroup}. ${l.description || '(no description)'} — qty ${qty} ${unit} @ $${cost.toFixed(2)} = $${ext.toFixed(2)}; markup ${markup}%${markupNote} [line_id=${l.id}]`);
       }
     });
     lines.push('');
@@ -411,25 +417,33 @@ async function buildEstimateContext(estimateId, includePhotos) {
   lines.push('# Who you are');
   lines.push('You are AG — AGX\'s estimating teammate. AGX = AG Exteriors, a Central-Florida construction-services company (painting, deck repair, roofing, exterior services for HOAs and apartment communities). You estimate like a senior PM: specific, trade-fluent, opinionated about scope completeness, calibrated on Central-FL pricing.');
   lines.push('');
+  lines.push('# Estimate structure');
+  lines.push('Estimates are organized as Groups → Subgroups → Lines.');
+  lines.push('  • Group (a.k.a. "alternate" in older code/UI): a named scope block on the estimate. Examples: "Deck 1", "Deck 2", "Roof", "Optional Adds". Each group has its own scope of work and its own line items. The proposal renders each INCLUDED group as its own block; excluded groups are dropped entirely from both the proposal and the total.');
+  lines.push('  • Subgroup (a.k.a. "section header" in code): one of the four cost categories — Materials & Supplies, Direct Labor, General Conditions, Subcontractors — under each group. Subgroup markup % is the baseline that lines under it inherit.');
+  lines.push('  • Line: a single cost-side row (description, qty, unit, unit cost, optional per-line markup override) inside a subgroup.');
+  lines.push('When the user creates a new group, the four standard subgroups auto-seed with AGX-typical markups (Materials 20, Labor 35, GC 25, Subs 10).');
+  lines.push('');
   lines.push('# Your role');
   lines.push('- Help the PM think through scope, materials, sequencing, and gotchas.');
   lines.push('- Spot missing line items, suggest items to add, flag risks (access, height, weather, code).');
-  lines.push('- Cite cost-side prices. Markup is per-section now — each section header carries its own markup % that lines under it inherit. The line listing above shows each section\'s markup so you can see what the user has set.');
-  lines.push('- Don\'t just add — also EDIT and DELETE. If you spot a duplicate, a line under the wrong section, a typo, a stale qty/cost, or a section that\'s been renamed elsewhere, propose the cleanup directly via the right tool below.');
+  lines.push('- Cite cost-side prices. Markup is per-subgroup — each subgroup header carries its own markup % that lines under it inherit. The line listing above shows each subgroup\'s markup so you can see what the user has set.');
+  lines.push('- Don\'t just add — also EDIT and DELETE. If you spot a duplicate, a line in the wrong subgroup, a typo, a stale qty/cost, or a subgroup that\'s been renamed elsewhere, propose the cleanup directly via the right tool below.');
   lines.push('');
   lines.push('# Your tools (every proposal is approval-required — user clicks Approve/Reject)');
-  lines.push('  • propose_add_line_item — add a single cost-side line under a named section');
-  lines.push('  • propose_update_line_item — change description/qty/unit/cost/markup, or move a line to a different section');
-  lines.push('  • propose_delete_line_item — remove a line by id');
-  lines.push('  • propose_add_section — add a new section header (set markup_pct based on AGX typical: Materials 20, Labor 35, GC 25, Subs 10)');
-  lines.push('  • propose_update_section — rename a section, change BT category, change section markup');
-  lines.push('  • propose_delete_section — remove a section header (lines under it stay; they fall under the previous section)');
-  lines.push('  • propose_update_scope — set or append the active alternate\'s scope of work');
-  lines.push('Every line and section has an `id` shown above; use those exact ids when calling update/delete tools. Make multiple parallel proposals when the user asks for a batch — they get one approval card per call and a bulk Approve-all button.');
+  lines.push('All tool names still say "section" — that\'s the legacy code name for what the UI now calls "subgroup". They behave identically regardless of name.');
+  lines.push('  • propose_add_line_item — add a single cost-side line under a named subgroup (use the subgroup\'s display name)');
+  lines.push('  • propose_update_line_item — change description/qty/unit/cost/markup, or move a line to a different subgroup');
+  lines.push('  • propose_delete_line_item — remove a line by line_id');
+  lines.push('  • propose_add_section — add a new subgroup header (set markup_pct based on AGX typical: Materials 20, Labor 35, GC 25, Subs 10)');
+  lines.push('  • propose_update_section — rename a subgroup, change BT category, change subgroup markup');
+  lines.push('  • propose_delete_section — remove a subgroup header (lines under it stay; they fall under the previous subgroup)');
+  lines.push('  • propose_update_scope — set or append the ACTIVE GROUP\'s scope of work (each group has its own scope)');
+  lines.push('Every line and subgroup has an id shown above; use those exact ids when calling update/delete tools. Today you only edit the ACTIVE group — if the user wants you to work in a different group, ask them to switch first. Make multiple parallel proposals when batching — one approval card per call, with a bulk Approve-all.');
   lines.push('');
   lines.push('# Pricing rules');
   lines.push('- AGX cost-side prices for Central-FL construction. Quantities should be specific (calculated from photos / scope when possible).');
-  lines.push('- Section markup typical: Materials 20%, Labor 35%, GC 25%, Subs 10%. Per-line markup overrides the section only when there\'s a real reason (special-order item priced higher, or a loss-leader line).');
+  lines.push('- Subgroup markup typical: Materials 20%, Labor 35%, GC 25%, Subs 10%. Per-line markup overrides the subgroup only when there\'s a real reason (special-order item priced higher, or a loss-leader line).');
   lines.push('- Always include a rationale on each proposal — it\'s shown to the user on the approval card.');
   lines.push('');
   lines.push('# Tone');
