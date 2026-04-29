@@ -333,88 +333,233 @@ router.post('/import', requireAuth, requireCapability('ROLES_MANAGE'), async (re
       entry.last_seen = dates[dates.length - 1] || null;
     }
 
-    // ─── PASS 3: upsert into materials ────────────────────────────
+    // ─── PASS 3: bulk upsert into materials (batched) ─────────────
+    // Old loop did one SELECT + one UPDATE/INSERT + N purchase INSERTs
+    // per material — for AGX's first import (~1,500 materials, ~5,600
+    // purchases) that was ~7,000 round-trips and tripped Railway's
+    // first-byte timeout. This pass collapses it to ~6 queries:
+    //   1. one SELECT for ALL existing materials at once
+    //   2. one bulk INSERT for new materials (returning ids)
+    //   3. one bulk UPDATE for existing materials
+    //   4. one bulk INSERT for material_purchases (chunked)
     let inserted = 0, updated = 0, protected_ = 0;
-    for (const entry of grouped.values()) {
-      // Check if this row already exists + has manual_override
-      const existing = await client.query(
-        `SELECT id, manual_override FROM materials
-         WHERE vendor = $1 AND lower(raw_description) = lower($2)`,
-        [entry.vendor, entry.raw_description]
+
+    // Step 3a: load all existing materials by raw_description
+    const allEntries = Array.from(grouped.values());
+    const lowerDescs = allEntries.map(e => e.raw_description.toLowerCase());
+    const existingMap = new Map(); // lower(raw_description) -> {id, manual_override}
+    if (lowerDescs.length) {
+      const existRes = await client.query(
+        `SELECT id, manual_override, lower(raw_description) AS key
+         FROM materials
+         WHERE vendor = $1 AND lower(raw_description) = ANY($2::text[])`,
+        [vendor, lowerDescs]
       );
-      if (existing.rows.length) {
-        const m = existing.rows[0];
-        // Always refresh price stats + counts. Only refresh description /
-        // subgroup / unit when admin hasn't manually curated this row.
-        if (m.manual_override) {
-          await client.query(
-            `UPDATE materials SET
-               last_unit_price=$1, avg_unit_price=$2, min_unit_price=$3, max_unit_price=$4,
-               total_qty=$5, purchase_count=$6, first_seen=$7, last_seen=$8, sku=$9,
-               internet_sku=$10, hd_department=$11, hd_class=$12, hd_subclass=$13,
-               updated_at=NOW()
-             WHERE id=$14`,
-            [entry.last_unit_price, entry.avg_unit_price, entry.min_unit_price, entry.max_unit_price,
-             entry.total_qty, entry.purchase_count, entry.first_seen, entry.last_seen, entry.sku,
-             entry.internet_sku, entry.hd_department, entry.hd_class, entry.hd_subclass, m.id]
-          );
-          protected_++;
-        } else {
-          await client.query(
-            `UPDATE materials SET
-               description=$1, agx_subgroup=$2, unit=$3,
-               last_unit_price=$4, avg_unit_price=$5, min_unit_price=$6, max_unit_price=$7,
-               total_qty=$8, purchase_count=$9, first_seen=$10, last_seen=$11, sku=$12,
-               internet_sku=$13, hd_department=$14, hd_class=$15, hd_subclass=$16,
-               updated_at=NOW()
-             WHERE id=$17`,
-            [entry.description, entry.agx_subgroup, entry.unit,
-             entry.last_unit_price, entry.avg_unit_price, entry.min_unit_price, entry.max_unit_price,
-             entry.total_qty, entry.purchase_count, entry.first_seen, entry.last_seen, entry.sku,
-             entry.internet_sku, entry.hd_department, entry.hd_class, entry.hd_subclass, m.id]
-          );
-          updated++;
-        }
-        // Upsert purchases too — best-effort; we don't dedupe per
-        // (transaction_id, material_id, date) here since the import is
-        // all-or-nothing per upload. If you re-upload the same CSV, you
-        // get duplicate purchase rows. Future: add a UNIQUE constraint.
-        for (const p of entry.purchases) {
-          await client.query(
-            `INSERT INTO material_purchases
-               (material_id, purchase_date, store_number, transaction_id, job_name,
-                quantity, unit_price, net_unit_price, is_return, source_file)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-            [m.id, p.purchase_date, p.store_number, p.transaction_id, p.job_name,
-             p.quantity, p.unit_price, p.net_unit_price, p.is_return, sourceFile]
-          );
-        }
+      for (const row of existRes.rows) {
+        existingMap.set(row.key, { id: row.id, manual_override: row.manual_override });
+      }
+    }
+
+    // Partition entries into insert / update / protected lists
+    const toInsert = [];
+    const toUpdateFull = [];      // refresh description/subgroup/unit + stats
+    const toUpdateStatsOnly = []; // protected — only refresh stats
+    for (const entry of allEntries) {
+      const key = entry.raw_description.toLowerCase();
+      const ex = existingMap.get(key);
+      if (!ex) {
+        toInsert.push(entry);
+      } else if (ex.manual_override) {
+        toUpdateStatsOnly.push({ entry, id: ex.id });
       } else {
+        toUpdateFull.push({ entry, id: ex.id });
+      }
+    }
+
+    // Step 3b: bulk INSERT new materials. We chunk to keep prepared-
+    // statement parameter counts under PG's 65535-param limit (each row
+    // is 18 cols, so ~3,600 rows per chunk is the ceiling — pick 500
+    // for safety).
+    const newIds = []; // parallel array to toInsert giving each its new id
+    if (toInsert.length) {
+      const CHUNK = 500;
+      for (let i = 0; i < toInsert.length; i += CHUNK) {
+        const slice = toInsert.slice(i, i + CHUNK);
+        const placeholders = [];
+        const params = [];
+        let p = 1;
+        for (const e of slice) {
+          placeholders.push(
+            `($${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, ` +
+            `$${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++})`
+          );
+          params.push(
+            e.vendor, e.sku, e.internet_sku, e.raw_description, e.description,
+            e.hd_department, e.hd_class, e.hd_subclass, e.agx_subgroup, e.unit,
+            e.last_unit_price, e.avg_unit_price, e.min_unit_price, e.max_unit_price,
+            e.total_qty, e.purchase_count, e.first_seen, e.last_seen
+          );
+        }
         const { rows: ins } = await client.query(
           `INSERT INTO materials
              (vendor, sku, internet_sku, raw_description, description,
               hd_department, hd_class, hd_subclass, agx_subgroup, unit,
               last_unit_price, avg_unit_price, min_unit_price, max_unit_price,
               total_qty, purchase_count, first_seen, last_seen)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+           VALUES ${placeholders.join(',')}
            RETURNING id`,
-          [entry.vendor, entry.sku, entry.internet_sku, entry.raw_description, entry.description,
-           entry.hd_department, entry.hd_class, entry.hd_subclass, entry.agx_subgroup, entry.unit,
-           entry.last_unit_price, entry.avg_unit_price, entry.min_unit_price, entry.max_unit_price,
-           entry.total_qty, entry.purchase_count, entry.first_seen, entry.last_seen]
+          params
         );
-        const newId = ins[0].id;
-        for (const p of entry.purchases) {
-          await client.query(
-            `INSERT INTO material_purchases
-               (material_id, purchase_date, store_number, transaction_id, job_name,
-                quantity, unit_price, net_unit_price, is_return, source_file)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-            [newId, p.purchase_date, p.store_number, p.transaction_id, p.job_name,
-             p.quantity, p.unit_price, p.net_unit_price, p.is_return, sourceFile]
+        for (const r of ins) newIds.push(r.id);
+        inserted += slice.length;
+      }
+    }
+
+    // Step 3c: bulk UPDATE — full (description + subgroup + unit + stats)
+    // for non-protected rows. Use a single UPDATE ... FROM (VALUES ...)
+    // pattern so all rows update in one round-trip.
+    if (toUpdateFull.length) {
+      const CHUNK = 500;
+      for (let i = 0; i < toUpdateFull.length; i += CHUNK) {
+        const slice = toUpdateFull.slice(i, i + CHUNK);
+        const valuesRows = [];
+        const params = [];
+        let p = 1;
+        for (const u of slice) {
+          const e = u.entry;
+          valuesRows.push(
+            `($${p++}::int, $${p++}::text, $${p++}::text, $${p++}::text, ` +
+            `$${p++}::numeric, $${p++}::numeric, $${p++}::numeric, $${p++}::numeric, ` +
+            `$${p++}::numeric, $${p++}::int, $${p++}::date, $${p++}::date, ` +
+            `$${p++}::text, $${p++}::text, $${p++}::text, $${p++}::text, $${p++}::text)`
+          );
+          params.push(
+            u.id, e.description, e.agx_subgroup, e.unit,
+            e.last_unit_price, e.avg_unit_price, e.min_unit_price, e.max_unit_price,
+            e.total_qty, e.purchase_count, e.first_seen, e.last_seen,
+            e.sku, e.internet_sku, e.hd_department, e.hd_class, e.hd_subclass
           );
         }
-        inserted++;
+        await client.query(
+          `UPDATE materials AS m SET
+             description = v.description,
+             agx_subgroup = v.agx_subgroup,
+             unit = v.unit,
+             last_unit_price = v.last_unit_price,
+             avg_unit_price = v.avg_unit_price,
+             min_unit_price = v.min_unit_price,
+             max_unit_price = v.max_unit_price,
+             total_qty = v.total_qty,
+             purchase_count = v.purchase_count,
+             first_seen = v.first_seen,
+             last_seen = v.last_seen,
+             sku = v.sku,
+             internet_sku = v.internet_sku,
+             hd_department = v.hd_department,
+             hd_class = v.hd_class,
+             hd_subclass = v.hd_subclass,
+             updated_at = NOW()
+           FROM (VALUES ${valuesRows.join(',')}) AS v(
+             id, description, agx_subgroup, unit,
+             last_unit_price, avg_unit_price, min_unit_price, max_unit_price,
+             total_qty, purchase_count, first_seen, last_seen,
+             sku, internet_sku, hd_department, hd_class, hd_subclass
+           )
+           WHERE m.id = v.id`,
+          params
+        );
+        updated += slice.length;
+      }
+    }
+
+    // Step 3d: bulk UPDATE — stats-only for admin-protected rows.
+    if (toUpdateStatsOnly.length) {
+      const CHUNK = 500;
+      for (let i = 0; i < toUpdateStatsOnly.length; i += CHUNK) {
+        const slice = toUpdateStatsOnly.slice(i, i + CHUNK);
+        const valuesRows = [];
+        const params = [];
+        let p = 1;
+        for (const u of slice) {
+          const e = u.entry;
+          valuesRows.push(
+            `($${p++}::int, $${p++}::numeric, $${p++}::numeric, $${p++}::numeric, $${p++}::numeric, ` +
+            `$${p++}::numeric, $${p++}::int, $${p++}::date, $${p++}::date, ` +
+            `$${p++}::text, $${p++}::text, $${p++}::text, $${p++}::text, $${p++}::text)`
+          );
+          params.push(
+            u.id,
+            e.last_unit_price, e.avg_unit_price, e.min_unit_price, e.max_unit_price,
+            e.total_qty, e.purchase_count, e.first_seen, e.last_seen,
+            e.sku, e.internet_sku, e.hd_department, e.hd_class, e.hd_subclass
+          );
+        }
+        await client.query(
+          `UPDATE materials AS m SET
+             last_unit_price = v.last_unit_price,
+             avg_unit_price = v.avg_unit_price,
+             min_unit_price = v.min_unit_price,
+             max_unit_price = v.max_unit_price,
+             total_qty = v.total_qty,
+             purchase_count = v.purchase_count,
+             first_seen = v.first_seen,
+             last_seen = v.last_seen,
+             sku = v.sku,
+             internet_sku = v.internet_sku,
+             hd_department = v.hd_department,
+             hd_class = v.hd_class,
+             hd_subclass = v.hd_subclass,
+             updated_at = NOW()
+           FROM (VALUES ${valuesRows.join(',')}) AS v(
+             id, last_unit_price, avg_unit_price, min_unit_price, max_unit_price,
+             total_qty, purchase_count, first_seen, last_seen,
+             sku, internet_sku, hd_department, hd_class, hd_subclass
+           )
+           WHERE m.id = v.id`,
+          params
+        );
+        protected_ += slice.length;
+      }
+    }
+
+    // Step 3e: bulk INSERT material_purchases. Build the (material_id,
+    // purchase) pairs first, then chunk into multi-row INSERTs.
+    const allPurchases = [];
+    for (let i = 0; i < toInsert.length; i++) {
+      const e = toInsert[i];
+      const newId = newIds[i];
+      for (const p of e.purchases) allPurchases.push({ material_id: newId, p });
+    }
+    for (const u of toUpdateFull) {
+      for (const p of u.entry.purchases) allPurchases.push({ material_id: u.id, p });
+    }
+    for (const u of toUpdateStatsOnly) {
+      for (const p of u.entry.purchases) allPurchases.push({ material_id: u.id, p });
+    }
+    if (allPurchases.length) {
+      const CHUNK = 500;
+      for (let i = 0; i < allPurchases.length; i += CHUNK) {
+        const slice = allPurchases.slice(i, i + CHUNK);
+        const placeholders = [];
+        const params = [];
+        let p = 1;
+        for (const ap of slice) {
+          placeholders.push(
+            `($${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++})`
+          );
+          params.push(
+            ap.material_id, ap.p.purchase_date, ap.p.store_number, ap.p.transaction_id,
+            ap.p.job_name, ap.p.quantity, ap.p.unit_price, ap.p.net_unit_price,
+            ap.p.is_return, sourceFile
+          );
+        }
+        await client.query(
+          `INSERT INTO material_purchases
+             (material_id, purchase_date, store_number, transaction_id, job_name,
+              quantity, unit_price, net_unit_price, is_return, source_file)
+           VALUES ${placeholders.join(',')}`,
+          params
+        );
       }
     }
 
