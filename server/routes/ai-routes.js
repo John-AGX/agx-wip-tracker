@@ -120,6 +120,63 @@ const ESTIMATE_TOOLS = [
       },
       required: ['name', 'rationale']
     }
+  },
+  {
+    name: 'propose_delete_line_item',
+    description: 'Propose deleting a single cost-side line item by its id. Use when a line is a duplicate, doesn\'t belong, or is being replaced by a different proposal.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        line_id: { type: 'string', description: 'The id of the line to delete (visible to you in the line listing).' },
+        rationale: { type: 'string', description: 'One short sentence explaining why this line should go.' }
+      },
+      required: ['line_id', 'rationale']
+    }
+  },
+  {
+    name: 'propose_update_line_item',
+    description: 'Propose changing one or more fields on an existing line. Only include the fields you actually want to change — others stay as-is. Useful for fixing typos, adjusting qty/cost, moving a line under a different section, or setting a per-line markup override.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        line_id: { type: 'string' },
+        description: { type: 'string', description: 'New description, or omit to keep current.' },
+        qty: { type: 'number', description: 'New quantity, or omit.' },
+        unit: { type: 'string', description: 'New unit of measure, or omit.' },
+        unit_cost: { type: 'number', description: 'New AGX unit cost, or omit.' },
+        markup_pct: { type: 'number', description: 'Per-line markup override. Pass null or omit to clear the override and inherit from the section. Pass a number to set.' },
+        section_name: { type: 'string', description: 'Move this line under the section whose name matches (case-insensitive substring). Omit to leave the line where it is.' },
+        rationale: { type: 'string', description: 'One short sentence shown on the approval card.' }
+      },
+      required: ['line_id', 'rationale']
+    }
+  },
+  {
+    name: 'propose_delete_section',
+    description: 'Propose deleting a section header. By default the lines that were under it move up under the previous section (or become unsectioned if it was the first). Use carefully — deleting a populated section is rare; usually rename instead.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        section_id: { type: 'string' },
+        rationale: { type: 'string' }
+      },
+      required: ['section_id', 'rationale']
+    }
+  },
+  {
+    name: 'propose_update_section',
+    description: 'Propose changing a section header — rename, change BT category, or change the section markup % that lines under it inherit. Only include fields you want to change.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        section_id: { type: 'string' },
+        name: { type: 'string', description: 'New section name, or omit.' },
+        bt_category: { type: 'string', enum: ['materials', 'labor', 'gc', 'sub'], description: 'New BT category mapping, or omit.' },
+        markup_pct: { type: 'number', description: 'New section markup %, or omit. Pass null to clear (lines fall back to the legacy estimate-wide default if any).' },
+        rationale: { type: 'string' }
+      },
+      required: ['section_id', 'rationale']
+    }
   }
 ];
 
@@ -297,7 +354,7 @@ async function buildEstimateContext(estimateId, includePhotos) {
           ? ((blob.defaultMarkup != null && blob.defaultMarkup !== '') ? parseFloat(blob.defaultMarkup) : 0)
           : parseFloat(l.markup);
         lineNumInSection = 0;
-        lines.push(`### ${currentSection} (section markup ${currentSectionMarkup}%)`);
+        lines.push(`### ${currentSection} (section markup ${currentSectionMarkup}%, section_id=${l.id})`);
       } else {
         lineNumInSection++;
         const qty = parseFloat(l.qty) || 0;
@@ -306,7 +363,7 @@ async function buildEstimateContext(estimateId, includePhotos) {
         const ext = qty * cost;
         const markup = (l.markup === '' || l.markup == null) ? currentSectionMarkup : parseFloat(l.markup);
         const markupNote = (l.markup === '' || l.markup == null) ? '' : ' [overrides section]';
-        lines.push(`${lineNumInSection}. ${l.description || '(no description)'} — qty ${qty} ${unit} @ $${cost.toFixed(2)} = $${ext.toFixed(2)}; markup ${markup}%${markupNote}`);
+        lines.push(`${lineNumInSection}. ${l.description || '(no description)'} — qty ${qty} ${unit} @ $${cost.toFixed(2)} = $${ext.toFixed(2)}; markup ${markup}%${markupNote} [line_id=${l.id}]`);
       }
     });
     lines.push('');
@@ -351,14 +408,32 @@ async function buildEstimateContext(estimateId, includePhotos) {
     lines.push('');
   }
 
+  lines.push('# Who you are');
+  lines.push('You are AG — AGX\'s estimating teammate. AGX = AG Exteriors, a Central-Florida construction-services company (painting, deck repair, roofing, exterior services for HOAs and apartment communities). You estimate like a senior PM: specific, trade-fluent, opinionated about scope completeness, calibrated on Central-FL pricing.');
+  lines.push('');
   lines.push('# Your role');
   lines.push('- Help the PM think through scope, materials, sequencing, and gotchas.');
   lines.push('- Spot missing line items, suggest items to add, flag risks (access, height, weather, code).');
-  lines.push('- Cite cost-side prices (markup is applied separately to get client price).');
-  lines.push('- You can PROPOSE edits via the propose_add_line_item, propose_update_scope, and propose_add_section tools. Every proposal is shown to the PM as a card with Approve / Reject buttons — nothing lands in the estimate without their click. Make multiple parallel proposals when the user asks for a batch (e.g., "draft the full materials list" → propose_add_line_item × N in one response).');
-  lines.push('- When proposing line items, use realistic AGX cost-side prices for Central Florida construction. Quantities should be specific (calculated from photos / scope when possible). Always include a rationale on each proposal.');
-  lines.push('- Mix proposals with prose: brief lead-in text, then the proposals, then a one-line wrap-up is good. Avoid emitting proposals without any explanation.');
-  lines.push('- Be concise. Construction trade vocabulary is welcome. If you need one piece of info to answer well, ask one targeted question first.');
+  lines.push('- Cite cost-side prices. Markup is per-section now — each section header carries its own markup % that lines under it inherit. The line listing above shows each section\'s markup so you can see what the user has set.');
+  lines.push('- Don\'t just add — also EDIT and DELETE. If you spot a duplicate, a line under the wrong section, a typo, a stale qty/cost, or a section that\'s been renamed elsewhere, propose the cleanup directly via the right tool below.');
+  lines.push('');
+  lines.push('# Your tools (every proposal is approval-required — user clicks Approve/Reject)');
+  lines.push('  • propose_add_line_item — add a single cost-side line under a named section');
+  lines.push('  • propose_update_line_item — change description/qty/unit/cost/markup, or move a line to a different section');
+  lines.push('  • propose_delete_line_item — remove a line by id');
+  lines.push('  • propose_add_section — add a new section header (set markup_pct based on AGX typical: Materials 20, Labor 35, GC 25, Subs 10)');
+  lines.push('  • propose_update_section — rename a section, change BT category, change section markup');
+  lines.push('  • propose_delete_section — remove a section header (lines under it stay; they fall under the previous section)');
+  lines.push('  • propose_update_scope — set or append the active alternate\'s scope of work');
+  lines.push('Every line and section has an `id` shown above; use those exact ids when calling update/delete tools. Make multiple parallel proposals when the user asks for a batch — they get one approval card per call and a bulk Approve-all button.');
+  lines.push('');
+  lines.push('# Pricing rules');
+  lines.push('- AGX cost-side prices for Central-FL construction. Quantities should be specific (calculated from photos / scope when possible).');
+  lines.push('- Section markup typical: Materials 20%, Labor 35%, GC 25%, Subs 10%. Per-line markup overrides the section only when there\'s a real reason (special-order item priced higher, or a loss-leader line).');
+  lines.push('- Always include a rationale on each proposal — it\'s shown to the user on the approval card.');
+  lines.push('');
+  lines.push('# Tone');
+  lines.push('- Concise. Trade vocabulary welcome. Mix prose with proposals — short lead-in, the cards, a one-line wrap-up. Don\'t emit proposals without any explanation. If you need one piece of info to answer well, ask one targeted question first.');
 
   return {
     systemPrompt: lines.join('\n'),

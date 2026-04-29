@@ -37,9 +37,10 @@
   // entity — estimates focus on scope/materials, jobs on margin/billing.
   var ESTIMATE_PRESETS = [
     { label: 'Draft scope from photos', prompt: 'Look at the photos attached and draft a tight, bulleted scope of work for this estimate. Focus on the work AGX would actually be doing.' },
-    { label: "What am I missing?",      prompt: 'Review the estimate as it stands. What line items, prep work, or costs am I likely missing? Be specific to the trade and scope.' },
-    { label: 'Site assessment',         prompt: 'Based on the photos and what you know about this property, what site conditions should I factor into pricing — stories, access difficulty, distance, weather/scheduling risks, code concerns?' },
-    { label: 'Build my line items',     prompt: 'Propose the cost-side line items I should add for this scope. Use realistic AGX prices for Central Florida and slot each one under the right standard section. Make multiple parallel proposals so I can approve them in batch.' }
+    { label: "What am I missing?",      prompt: 'Review the estimate as it stands. What line items, prep work, or costs am I likely missing? Propose the additions as line items so I can approve them in batch.' },
+    { label: 'Build my line items',     prompt: 'Propose the cost-side line items I should add for this scope. Use realistic AGX prices for Central Florida and slot each one under the right standard section. Make multiple parallel proposals so I can approve them in batch.' },
+    { label: 'Tighten this estimate',   prompt: 'Audit my line items for duplicates, overlapping descriptions, lines that should be split into materials + labor, and lines under the wrong section. Propose updates / deletes / moves where you\'re confident.' },
+    { label: 'Adjust margin',           prompt: 'I want this estimate at roughly 28% blended GP. Walk through each section and propose new section markup percentages to get there, calling out which lines drove the change.' }
   ];
   var JOB_PRESETS = [
     { label: 'Health check',          prompt: 'Run a quick WIP health check on this job. Margin trend, cost-to-complete sanity, any red flags I should look at first.' },
@@ -247,19 +248,19 @@
     if (headerEl) {
       if (isJobMode()) headerEl.textContent = '📊 WIP Assistant';
       else if (isClientMode()) headerEl.textContent = '🤝 Customer Relations Agent';
-      else headerEl.textContent = '✨ AI Assistant';
+      else headerEl.textContent = '📐 AG · AGX Estimator';
     }
     var noticeEl = document.querySelector('#agx-ai-panel #ai-notice');
     if (noticeEl) {
       if (isJobMode()) noticeEl.textContent = 'Read-only — I can see this job\'s WIP/financial state but cannot change anything.';
       else if (isClientMode()) noticeEl.textContent = 'Customer Relations Agent — I keep the parent-company / property hierarchy clean. Simple writes apply automatically; restructural changes (new parent, merges, splits, deletes) require approval.';
-      else noticeEl.textContent = 'Read-only — I see your estimate and photos but cannot change anything. Apply suggestions by hand.';
+      else noticeEl.textContent = 'I\'m AG — your AGX estimator. I can draft scopes, add/edit/delete line items and sections, and tweak pricing. Every change is shown as a card with Approve / Reject before it lands.';
     }
     var inputEl = document.getElementById('ai-input');
     if (inputEl) {
       if (isClientMode()) inputEl.placeholder = 'Describe a change, ask a question, or tap "Run full audit" below…';
       else if (isJobMode()) inputEl.placeholder = 'Ask anything about this job…';
-      else inputEl.placeholder = 'Ask anything about this estimate…';
+      else inputEl.placeholder = 'Ask AG to draft, edit, or clean up the estimate…';
     }
     renderPresets();
   }
@@ -337,7 +338,7 @@
       var hint;
       if (isJobMode()) hint = 'Pick a preset below or ask anything about the job.<br><span style="font-size:11px;opacity:0.7;">I can see contract, costs, change orders, % complete, billing posture.</span>';
       else if (isClientMode()) hint = '<strong style="color:var(--text,#fff);">🤝 Customer Relations Agent</strong><br>Tap <strong>Run full audit</strong> to clean up the directory in one pass — I\'ll split parent+property compounds, link unparented entries, merge dupes, and surface anything ambiguous for you.<br><span style="font-size:11px;opacity:0.7;">I know the AGX hierarchy: parent management company → property/community → CAM contact.</span>';
-      else hint = 'Pick a preset below or ask anything about the estimate.<br><span style="font-size:11px;opacity:0.7;">I can see line items, scope, client, photos &mdash; and I can propose edits.</span>';
+      else hint = '<strong style="color:var(--text,#fff);">📐 AG — your AGX estimator</strong><br>Pick a preset or describe what you need. I can read the estimate, scope, client, and photos — and propose adds, edits, deletes, and pricing changes for you to approve.<br><span style="font-size:11px;opacity:0.7;">Try "tighten this estimate" or "build my line items".</span>';
       box.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;padding:20px 0;text-align:center;line-height:1.6;">' + hint + '</div>';
       return;
     }
@@ -611,9 +612,13 @@
       throw new Error('Open the estimate in the editor before approving changes.');
     }
     switch (tu.name) {
-      case 'propose_add_line_item': return window.estimateEditorAPI.applyAddLineItem(tu.input);
-      case 'propose_add_section':   return window.estimateEditorAPI.applyAddSection(tu.input);
-      case 'propose_update_scope':  return window.estimateEditorAPI.applyUpdateScope(tu.input);
+      case 'propose_add_line_item':    return window.estimateEditorAPI.applyAddLineItem(tu.input);
+      case 'propose_add_section':      return window.estimateEditorAPI.applyAddSection(tu.input);
+      case 'propose_update_scope':     return window.estimateEditorAPI.applyUpdateScope(tu.input);
+      case 'propose_delete_line_item': return window.estimateEditorAPI.applyDeleteLine(tu.input);
+      case 'propose_update_line_item': return window.estimateEditorAPI.applyUpdateLine(tu.input);
+      case 'propose_delete_section':   return window.estimateEditorAPI.applyDeleteSection(tu.input);
+      case 'propose_update_section':   return window.estimateEditorAPI.applyUpdateSection(tu.input);
       default: throw new Error('Unknown tool: ' + tu.name);
     }
   }
@@ -665,6 +670,38 @@
       var preview = (input.scope_text || '').slice(0, 280);
       if ((input.scope_text || '').length > 280) preview += '…';
       detail = '<pre style="white-space:pre-wrap;font-family:inherit;font-size:12px;margin:4px 0 0;color:var(--text,#ccc);background:rgba(0,0,0,0.2);padding:8px;border-radius:4px;max-height:160px;overflow-y:auto;">' + escapeHTMLLocal(preview) + '</pre>';
+    } else if (tu.name === 'propose_delete_line_item') {
+      heading = '&#x1F5D1; Delete line';
+      detail = '<div style="font-size:10px;color:var(--text-dim,#888);font-family:monospace;">line: ' + escapeHTMLLocal(input.line_id || '') + '</div>';
+    } else if (tu.name === 'propose_update_line_item') {
+      heading = '&#x270F; Update line';
+      var changes = [];
+      if (input.description != null) changes.push('description → "' + input.description + '"');
+      if (input.qty != null) changes.push('qty → ' + input.qty);
+      if (input.unit != null) changes.push('unit → ' + input.unit);
+      if (input.unit_cost != null) changes.push('unit cost → $' + Number(input.unit_cost).toFixed(2));
+      if (input.markup_pct != null) changes.push('markup → ' + input.markup_pct + '%');
+      else if (Object.prototype.hasOwnProperty.call(input, 'markup_pct')) changes.push('clear markup override');
+      if (input.section_name) changes.push('move to section "' + input.section_name + '"');
+      detail = (changes.length
+        ? '<div style="font-size:12px;color:var(--text,#ccc);">' + escapeHTMLLocal(changes.join(' · ')) + '</div>'
+        : '<div style="font-size:11px;color:var(--text-dim,#888);font-style:italic;">no fields specified</div>') +
+        '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:4px;font-family:monospace;">line: ' + escapeHTMLLocal(input.line_id || '') + '</div>';
+    } else if (tu.name === 'propose_delete_section') {
+      heading = '&#x1F5D1; Delete section';
+      detail = '<div style="font-size:11px;color:var(--text-dim,#aaa);">Lines under this section stay; they fall under whichever header now precedes them.</div>' +
+        '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:4px;font-family:monospace;">section: ' + escapeHTMLLocal(input.section_id || '') + '</div>';
+    } else if (tu.name === 'propose_update_section') {
+      heading = '&#x270F; Update section';
+      var sChanges = [];
+      if (input.name != null) sChanges.push('rename → "' + input.name + '"');
+      if (input.bt_category != null) sChanges.push('BT category → ' + input.bt_category);
+      if (input.markup_pct != null) sChanges.push('markup → ' + input.markup_pct + '%');
+      else if (Object.prototype.hasOwnProperty.call(input, 'markup_pct')) sChanges.push('clear markup');
+      detail = (sChanges.length
+        ? '<div style="font-size:12px;color:var(--text,#ccc);">' + escapeHTMLLocal(sChanges.join(' · ')) + '</div>'
+        : '<div style="font-size:11px;color:var(--text-dim,#888);font-style:italic;">no fields specified</div>') +
+        '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:4px;font-family:monospace;">section: ' + escapeHTMLLocal(input.section_id || '') + '</div>';
     } else if (tu.name === 'create_parent_company') {
       heading = '&#x1F3E2; New parent company';
       detail = '<div style="font-size:13px;color:var(--text,#fff);font-weight:600;">' + escapeHTMLLocal(input.name || '') + '</div>' +

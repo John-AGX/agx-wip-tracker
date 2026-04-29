@@ -1408,12 +1408,119 @@
     return 'Updated scope on alternate "' + alt.name + '" (' + mode + ', ' + newScope.length + ' chars)';
   }
 
+  // Delete a single line item by id. Refuses to delete section headers
+  // here — those go through applyDeleteSection so the side-effects on
+  // the lines beneath them are explicit.
+  function applyDeleteLine(input) {
+    var lineId = input.line_id;
+    if (!lineId) throw new Error('line_id required');
+    var line = (appData.estimateLines || []).find(function(l) { return l.id === lineId; });
+    if (!line) throw new Error('Line not found.');
+    if (line.section === '__section_header__') throw new Error('Use propose_delete_section for section headers.');
+    var name = line.description || lineId;
+    appData.estimateLines = appData.estimateLines.filter(function(l) { return l.id !== lineId; });
+    debouncedSave();
+    renderLineItems();
+    renderTotals();
+    return 'Deleted line: "' + name + '"';
+  }
+
+  // Update editable fields on an existing line. Only the keys present in
+  // `input` are touched; everything else stays. `markup_pct` accepts null
+  // to clear the per-line override (back to inheriting from the section).
+  // `section_name` does a case-insensitive substring match against section
+  // headers in the same alternate and re-positions the line under it.
+  function applyUpdateLine(input) {
+    var line = (appData.estimateLines || []).find(function(l) { return l.id === input.line_id; });
+    if (!line) throw new Error('Line not found.');
+    if (line.section === '__section_header__') throw new Error('Use propose_update_section to change section headers.');
+    var changed = [];
+    if (input.description != null) { line.description = String(input.description); changed.push('description'); }
+    if (input.qty != null) { line.qty = Number(input.qty); changed.push('qty'); }
+    if (input.unit != null) { line.unit = String(input.unit); changed.push('unit'); }
+    if (input.unit_cost != null) { line.unitCost = Number(input.unit_cost); changed.push('unit_cost'); }
+    if (Object.prototype.hasOwnProperty.call(input, 'markup_pct')) {
+      if (input.markup_pct == null || input.markup_pct === '') { line.markup = ''; changed.push('cleared markup override'); }
+      else { line.markup = Number(input.markup_pct); changed.push('markup'); }
+    }
+    // Section move: find the matching section header and re-splice the
+    // line just before the next header (or end-of-alternate). Mirrors the
+    // insertion logic addEstimateLineFromEditor uses.
+    if (input.section_name) {
+      var alt = getActiveAlternate();
+      if (alt) {
+        var needle = String(input.section_name).toLowerCase();
+        var headers = (appData.estimateLines || []).filter(function(L) {
+          return L.estimateId === line.estimateId && L.alternateId === line.alternateId && L.section === '__section_header__';
+        });
+        var match = headers.find(function(H) { return (H.description || '').toLowerCase().indexOf(needle) >= 0; });
+        if (match) {
+          appData.estimateLines = appData.estimateLines.filter(function(l) { return l.id !== line.id; });
+          var arr = appData.estimateLines;
+          var startIdx = arr.findIndex(function(l) { return l.id === match.id; });
+          var insertAt = arr.length;
+          for (var j = startIdx + 1; j < arr.length; j++) {
+            var L2 = arr[j];
+            if (L2.estimateId !== line.estimateId || L2.alternateId !== line.alternateId) continue;
+            if (L2.section === '__section_header__') { insertAt = j; break; }
+          }
+          arr.splice(insertAt, 0, line);
+          changed.push('moved to "' + match.description + '"');
+        }
+      }
+    }
+    if (!changed.length) return 'No fields changed on "' + (line.description || line.id) + '".';
+    debouncedSave();
+    renderLineItems();
+    renderTotals();
+    return 'Updated "' + (line.description || line.id) + '": ' + changed.join(', ');
+  }
+
+  // Delete a section header. Lines under it remain in the array — they
+  // simply fall under whichever section header now precedes them
+  // (or become unsectioned if the deleted header was the first).
+  function applyDeleteSection(input) {
+    var section = (appData.estimateLines || []).find(function(l) { return l.id === input.section_id; });
+    if (!section) throw new Error('Section not found.');
+    if (section.section !== '__section_header__') throw new Error('That id is not a section header.');
+    var name = section.description || input.section_id;
+    appData.estimateLines = appData.estimateLines.filter(function(l) { return l.id !== input.section_id; });
+    debouncedSave();
+    renderLineItems();
+    renderTotals();
+    return 'Removed section header: "' + name + '" (lines preserved).';
+  }
+
+  // Update fields on an existing section header. Same partial-update
+  // semantics as applyUpdateLine — only specified keys get touched.
+  function applyUpdateSection(input) {
+    var section = (appData.estimateLines || []).find(function(l) { return l.id === input.section_id; });
+    if (!section) throw new Error('Section not found.');
+    if (section.section !== '__section_header__') throw new Error('That id is not a section header.');
+    var changed = [];
+    if (input.name != null) { section.description = String(input.name); changed.push('renamed to "' + section.description + '"'); }
+    if (input.bt_category != null) { section.btCategory = String(input.bt_category); changed.push('BT category → ' + section.btCategory); }
+    if (Object.prototype.hasOwnProperty.call(input, 'markup_pct')) {
+      if (input.markup_pct == null || input.markup_pct === '') { section.markup = ''; changed.push('cleared section markup'); }
+      else { section.markup = Number(input.markup_pct); changed.push('markup → ' + section.markup + '%'); }
+    }
+    if (!changed.length) return 'No fields changed on section "' + (section.description || input.section_id) + '".';
+    debouncedSave();
+    renderLineItems();
+    renderTotals();
+    return 'Section: ' + changed.join(', ');
+  }
+
   window.estimateEditorAPI = {
     isOpenFor: function(estimateId) { return _currentId === estimateId; },
     activeAlternateName: function() { var a = getActiveAlternate(); return a ? a.name : null; },
     applyAddLineItem: applyAddLineItem,
     applyAddSection: applyAddSection,
-    applyUpdateScope: applyUpdateScope
+    applyUpdateScope: applyUpdateScope,
+    applyDeleteLine: applyDeleteLine,
+    applyUpdateLine: applyUpdateLine,
+    applyDeleteSection: applyDeleteSection,
+    applyUpdateSection: applyUpdateSection
   };
   window.addAlternateFromEditor = addAlternateFromEditor;
   window.renameActiveAlternate = renameActiveAlternate;
