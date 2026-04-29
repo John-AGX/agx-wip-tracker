@@ -576,7 +576,8 @@
   // and prices instead of guessing. Admins can fix descriptions, change
   // subgroup assignments, or hide noise rows.
   var _materialsCache = [];
-  var _materialsFilters = { q: '', subgroup: '', show_hidden: false };
+  var _materialsCategories = []; // [{name, n}, ...]
+  var _materialsFilters = { q: '', subgroup: '', category: '', show_hidden: false };
   var _materialsTotal = 0;
 
   function renderAdminMaterials() {
@@ -592,7 +593,11 @@
         '</button>' +
         '<input type="file" id="mat-upload-input" accept=".csv" style="display:none;" onchange="handleMaterialsImportFile(event)" />' +
         '<button class="ee-btn secondary" onclick="reloadMaterials()">Refresh</button>' +
-        '<select id="mat-filter-subgroup" onchange="onMaterialsFilterChange()" style="margin-left:auto;min-width:130px;">' +
+        '<button class="ee-btn ghost" onclick="recategorizeMaterials()" title="Re-run category mapping across all non-curated rows. Useful after schema upgrade.">&#x1F501; Recategorize</button>' +
+        '<select id="mat-filter-category" onchange="onMaterialsFilterChange()" style="margin-left:auto;min-width:170px;">' +
+          '<option value="">All categories</option>' +
+        '</select>' +
+        '<select id="mat-filter-subgroup" onchange="onMaterialsFilterChange()" style="min-width:130px;">' +
           '<option value="">All subgroups</option>' +
           '<option value="materials">Materials</option>' +
           '<option value="labor">Labor</option>' +
@@ -607,7 +612,43 @@
       '<p id="mat-summary" style="margin:12px 0;color:var(--text-dim,#888);font-size:12px;">Loading…</p>' +
       '<div id="mat-import-status" style="display:none;margin-bottom:12px;padding:10px 12px;border-radius:6px;font-size:12px;"></div>' +
       '<div id="mat-list"></div>';
+    loadMaterialCategories();
     loadMaterials();
+  }
+
+  function loadMaterialCategories() {
+    if (!window.agxApi || !window.agxApi.materials) return;
+    window.agxApi.materials.categories().then(function(res) {
+      _materialsCategories = res.categories || [];
+      var sel = document.getElementById('mat-filter-category');
+      if (!sel) return;
+      var current = _materialsFilters.category || '';
+      var html = '<option value="">All categories</option>';
+      _materialsCategories.forEach(function(c) {
+        if (c.n === 0) return; // skip canonical-but-empty buckets
+        var selAttr = c.name === current ? ' selected' : '';
+        html += '<option value="' + escapeHTML(c.name) + '"' + selAttr + '>' + escapeHTML(c.name) + ' (' + c.n + ')</option>';
+      });
+      sel.innerHTML = html;
+    }).catch(function() { /* leave default */ });
+  }
+
+  function recategorizeMaterials() {
+    if (!confirm('Re-run category mapping across all materials that haven\'t been manually edited? Curated rows are preserved.')) return;
+    window.agxApi.materials.recategorize().then(function(res) {
+      var statusEl = document.getElementById('mat-import-status');
+      if (statusEl) {
+        statusEl.style.display = 'block';
+        statusEl.style.background = 'rgba(52,211,153,0.10)';
+        statusEl.style.border = '1px solid rgba(52,211,153,0.35)';
+        statusEl.style.color = '#34d399';
+        statusEl.innerHTML = '✓ Recategorized ' + res.touched + ' rows across ' + res.distinct_categories + ' categories.';
+      }
+      loadMaterialCategories();
+      loadMaterials();
+    }).catch(function(err) {
+      alert('Recategorize failed: ' + (err.message || err));
+    });
   }
 
   function loadMaterials() {
@@ -617,6 +658,7 @@
     window.agxApi.materials.list({
       q: _materialsFilters.q,
       subgroup: _materialsFilters.subgroup,
+      category: _materialsFilters.category,
       show_hidden: _materialsFilters.show_hidden ? '1' : '',
       limit: 500
     }).then(function(res) {
@@ -638,9 +680,11 @@
   function onMaterialsFilterChange() {
     var qInput = document.getElementById('mat-search');
     var sgInput = document.getElementById('mat-filter-subgroup');
+    var catInput = document.getElementById('mat-filter-category');
     var hidInput = document.getElementById('mat-filter-hidden');
     _materialsFilters.q = qInput ? qInput.value.trim() : '';
     _materialsFilters.subgroup = sgInput ? sgInput.value : '';
+    _materialsFilters.category = catInput ? catInput.value : '';
     _materialsFilters.show_hidden = hidInput ? !!hidInput.checked : false;
     // Tiny debounce so each keystroke doesn't fire a request.
     clearTimeout(window._matFilterTimer);
@@ -679,6 +723,7 @@
       '<table class="dense-table">' +
         '<thead><tr>' +
           '<th>Description</th>' +
+          '<th style="width:160px;">Category</th>' +
           '<th style="width:90px;">Subgroup</th>' +
           '<th style="width:60px;">Unit</th>' +
           '<th class="num" style="width:90px;">Last $</th>' +
@@ -692,6 +737,9 @@
       var subgroupBadge = m.agx_subgroup
         ? '<span style="padding:1px 7px;border-radius:9px;background:rgba(79,140,255,0.12);color:#4f8cff;font-size:10px;text-transform:uppercase;letter-spacing:0.4px;font-weight:600;">' + escapeHTML(m.agx_subgroup) + '</span>'
         : '<span style="color:var(--text-dim,#666);font-style:italic;font-size:11px;">unmapped</span>';
+      var categoryBadge = m.category
+        ? '<span style="padding:1px 8px;border-radius:9px;background:rgba(251,191,36,0.10);color:#fbbf24;font-size:11px;font-weight:500;">' + escapeHTML(m.category) + '</span>'
+        : '<span style="color:var(--text-dim,#666);font-style:italic;font-size:11px;">none</span>';
       var hiddenBadge = m.is_hidden
         ? '<span style="padding:1px 7px;border-radius:9px;background:rgba(248,113,113,0.10);color:#f87171;font-size:10px;text-transform:uppercase;letter-spacing:0.4px;font-weight:600;margin-left:6px;">Hidden</span>'
         : '';
@@ -706,6 +754,7 @@
           '<div style="font-size:13px;color:var(--text,#fff);">' + escapeHTML(m.description || m.raw_description || '') + manualBadge + hiddenBadge + '</div>' +
           skuLine +
         '</td>' +
+        '<td>' + categoryBadge + '</td>' +
         '<td>' + subgroupBadge + '</td>' +
         '<td style="font-family:\'SF Mono\',monospace;font-size:12px;">' + escapeHTML(m.unit || 'ea') + '</td>' +
         '<td class="num" style="font-family:\'SF Mono\',monospace;color:#34d399;">' + fmtMoney(m.last_unit_price) + '</td>' +
@@ -733,6 +782,19 @@
     var m = _materialsCache.find(function(x) { return x.id === id; });
     if (!m) return;
     var modal = document.getElementById('matEditorModal') || createMaterialEditorModal();
+    // Repopulate category dropdown each open so newly-observed
+    // categories from a recent import show up.
+    var catSel = document.getElementById('matEd_category');
+    if (catSel) {
+      var opts = '<option value="">— None —</option>';
+      _materialsCategories.forEach(function(c) { opts += '<option value="' + escapeHTML(c.name) + '">' + escapeHTML(c.name) + '</option>'; });
+      // If the row's current category isn't in the list yet, append it
+      if (m.category && !_materialsCategories.some(function(c) { return c.name === m.category; })) {
+        opts += '<option value="' + escapeHTML(m.category) + '">' + escapeHTML(m.category) + ' (custom)</option>';
+      }
+      catSel.innerHTML = opts;
+      catSel.value = m.category || '';
+    }
     document.getElementById('matEd_id').value = m.id;
     document.getElementById('matEd_raw').textContent = m.raw_description || '';
     document.getElementById('matEd_description').value = m.description || '';
@@ -757,6 +819,10 @@
           '<div class="form-group">' +
             '<label>Display description (used by AG)</label>' +
             '<input type="text" id="matEd_description" style="width:100%;" />' +
+          '</div>' +
+          '<div class="form-group">' +
+            '<label>Category</label>' +
+            '<select id="matEd_category"></select>' +
           '</div>' +
           '<div style="display:grid;grid-template-columns:2fr 1fr;gap:12px;">' +
             '<div class="form-group">' +
@@ -798,6 +864,7 @@
     var payload = {
       description: document.getElementById('matEd_description').value.trim(),
       agx_subgroup: document.getElementById('matEd_subgroup').value,
+      category: document.getElementById('matEd_category').value || null,
       unit: document.getElementById('matEd_unit').value.trim(),
       is_hidden: document.getElementById('matEd_hidden').checked,
       notes: document.getElementById('matEd_notes').value.trim() || null
@@ -915,6 +982,7 @@
   window.saveMaterialEditor = saveMaterialEditor;
   window.toggleMaterialHidden = toggleMaterialHidden;
   window.handleMaterialsImportFile = handleMaterialsImportFile;
+  window.recategorizeMaterials = recategorizeMaterials;
 
   function switchAdminSubTab(name) {
     document.querySelectorAll('[data-admin-subtab]').forEach(function(btn) {

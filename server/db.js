@@ -276,6 +276,7 @@ async function initSchema() {
       hd_class TEXT,
       hd_subclass TEXT,
       agx_subgroup TEXT,                   -- 'materials' | 'labor' | 'gc' | 'sub'
+      category TEXT,                       -- AGX-natural category: 'Lumber & Decking', 'Paint', 'Fasteners', etc.
       unit TEXT,                           -- ea / qt / gal / lb / lf / sf / ...
       last_unit_price NUMERIC(10, 2),
       avg_unit_price NUMERIC(10, 2),
@@ -292,8 +293,12 @@ async function initSchema() {
       updated_at TIMESTAMPTZ DEFAULT NOW()
     );
     CREATE INDEX IF NOT EXISTS idx_materials_subgroup ON materials(agx_subgroup);
+    CREATE INDEX IF NOT EXISTS idx_materials_category ON materials(category);
     CREATE INDEX IF NOT EXISTS idx_materials_sku ON materials(sku);
     CREATE INDEX IF NOT EXISTS idx_materials_hidden ON materials(is_hidden);
+    -- Idempotent ADD COLUMN for upgrades from earlier schema (where the
+    -- category col didn't exist yet). Safe to re-run.
+    ALTER TABLE materials ADD COLUMN IF NOT EXISTS category TEXT;
     CREATE INDEX IF NOT EXISTS idx_materials_search ON materials
       USING gin(to_tsvector('english', description || ' ' || raw_description));
     -- Natural-key dedupe — case-insensitive description per vendor.

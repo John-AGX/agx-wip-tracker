@@ -189,7 +189,9 @@
       return get('/api/materials' + qs);
     },
     update: function(id, payload) { return put('/api/materials/' + encodeURIComponent(id), payload); },
-    importBatch: function(payload) { return post('/api/materials/import', payload); }
+    importBatch: function(payload) { return post('/api/materials/import', payload); },
+    categories: function() { return get('/api/materials/meta/categories'); },
+    recategorize: function() { return post('/api/materials/recategorize', {}); }
   };
 
   window.agxApi = {

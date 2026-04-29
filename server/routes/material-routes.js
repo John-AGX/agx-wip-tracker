@@ -121,6 +121,83 @@ function mapHdToAgxSubgroup(department, klass, subclass) {
   return 'materials';
 }
 
+// AGX-natural category — finer-grained than agx_subgroup. Drives the
+// Materials browser filter and (in Phase 2) gives AG a way to ask
+// "show me everything in 'Caulks & Sealants' under $10". Mapping is
+// derived from HD's class/subclass distribution observed in AGX's
+// actual purchase history — see CSV department×class breakdown.
+function mapHdToCategory(department, klass, subclass) {
+  const d = String(department || '').toUpperCase().trim();
+  const c = String(klass || '').toUpperCase().trim();
+  const s = String(subclass || '').toUpperCase().trim();
+
+  if (d === 'TOOL RENTAL') return 'Tool Rental';
+  if (d === 'PLUMBING' || d === 'KIT/BATH') return 'Plumbing';
+  if (d === 'ELECTRICAL') return 'Electrical';
+  if (d === 'WALL&FLOOR COVER.') return 'Flooring';
+  if (d === 'MILLWORK') return 'Doors & Windows';
+
+  if (d === 'LUMBER') return 'Lumber & Decking';
+
+  if (d === 'BLDG. MATERIALS') {
+    if (c === 'CONCRETE') return 'Concrete & Stucco';
+    if (c === 'GYPSUM') return 'Drywall & Patch';
+    if (c === 'ROOFING') return 'Roofing';
+    if (c === 'METAL PRODUCTS') return 'Metal Products';
+    if (c === 'INSULATION') return 'Insulation';
+    return 'Building Materials';
+  }
+
+  if (d === 'PAINT') {
+    if (c === 'CAULKS' || c === 'SEALANTS') return 'Caulks & Sealants';
+    if (c === 'EXTERIOR PAINT' || c === 'INTERIOR PAINT' || c === 'PRIMERS' || c === 'PAINT' || c === 'STAIN/CLEAR FINISH') return 'Paint';
+    if (c === 'PATCHING & REPAIR' || c === 'PATCH/REPAIR') return 'Drywall & Patch';
+    return 'Paint Tools & Supplies'; // applicators, tape, sheeting, solvents, tarps, etc.
+  }
+
+  if (d === 'HARDWARE') {
+    if (c === 'FASTENERS') return 'Fasteners';
+    if (c === 'SECURITY/SAFETY' || c === 'SAFETY') return 'Safety & PPE';
+    if (c === 'POWER TOOL ACCESSORIES' || c === 'PORTABLE POWER' || c === 'HAND TOOLS') return 'Tools & Accessories';
+    return 'Hardware';
+  }
+
+  if (d === 'GARDEN/SEASONAL') {
+    if (c === 'HARDSCAPES') return 'Hardscapes & Site';
+    if (c === 'CLEANING' || c === 'CONVENIENCE') return 'Cleaning & Consumables';
+    return 'Cleaning & Consumables';
+  }
+
+  return 'Other';
+}
+
+// Canonical list (for the admin filter dropdown). Order roughly by how
+// often AGX uses each category on Central-FL exterior work.
+const KNOWN_CATEGORIES = [
+  'Lumber & Decking',
+  'Paint',
+  'Caulks & Sealants',
+  'Paint Tools & Supplies',
+  'Fasteners',
+  'Hardware',
+  'Tools & Accessories',
+  'Safety & PPE',
+  'Concrete & Stucco',
+  'Drywall & Patch',
+  'Roofing',
+  'Metal Products',
+  'Insulation',
+  'Plumbing',
+  'Electrical',
+  'Flooring',
+  'Doors & Windows',
+  'Hardscapes & Site',
+  'Cleaning & Consumables',
+  'Building Materials',
+  'Tool Rental',
+  'Other'
+];
+
 function num(v) {
   if (v == null) return 0;
   const s = String(v).replace(/[$,\s]/g, '').trim();
@@ -149,11 +226,13 @@ router.get('/', requireAuth, requireCapability('ESTIMATES_VIEW'), async (req, re
     const showHidden = req.query.show_hidden === '1';
     const limit = Math.min(parseInt(req.query.limit || '200', 10) || 200, 1000);
 
+    const category = (req.query.category || '').trim();
     const where = [];
     const params = [];
     let p = 1;
     if (!showHidden) where.push('is_hidden = false');
     if (subgroup) { where.push('agx_subgroup = $' + p++); params.push(subgroup); }
+    if (category) { where.push('category = $' + p++); params.push(category); }
     if (q) {
       // Simple ILIKE match for now — gin index will get used when we move
       // to to_tsvector @@ plainto_tsquery later. Catalog should stay
@@ -166,7 +245,7 @@ router.get('/', requireAuth, requireCapability('ESTIMATES_VIEW'), async (req, re
     params.push(limit);
     const { rows } = await pool.query(
       `SELECT id, vendor, sku, description, raw_description,
-              hd_department, hd_class, hd_subclass, agx_subgroup, unit,
+              hd_department, hd_class, hd_subclass, agx_subgroup, category, unit,
               last_unit_price, avg_unit_price, min_unit_price, max_unit_price,
               total_qty, purchase_count, first_seen, last_seen,
               is_hidden, manual_override, notes, updated_at
@@ -188,7 +267,7 @@ router.get('/', requireAuth, requireCapability('ESTIMATES_VIEW'), async (req, re
 // notes. Sets manual_override so subsequent re-imports don't clobber.
 router.put('/:id', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
   try {
-    const allowed = ['description', 'agx_subgroup', 'unit', 'is_hidden', 'notes'];
+    const allowed = ['description', 'agx_subgroup', 'category', 'unit', 'is_hidden', 'notes'];
     const sets = [];
     const params = [];
     let p = 1;
@@ -247,6 +326,7 @@ router.post('/import', requireAuth, requireCapability('ROLES_MANAGE'), async (re
       const cleaned = cleanDescription(rawDesc);
       const subgroup = mapHdToAgxSubgroup(dept, str(r['Class Name']), str(r['Subclass Name']));
       if (!subgroup) { skipped++; continue; }
+      const category = mapHdToCategory(dept, str(r['Class Name']), str(r['Subclass Name']));
       const key = vendor + '|' + rawDesc.toLowerCase();
       if (!grouped.has(key)) {
         grouped.set(key, {
@@ -259,6 +339,7 @@ router.post('/import', requireAuth, requireCapability('ROLES_MANAGE'), async (re
           hd_class: str(r['Class Name']) || null,
           hd_subclass: str(r['Subclass Name']) || null,
           agx_subgroup: subgroup,
+          category: category,
           unit: inferUnit(cleaned),
           purchases: [],
           // Aggregates filled below
@@ -391,11 +472,11 @@ router.post('/import', requireAuth, requireCapability('ROLES_MANAGE'), async (re
         for (const e of slice) {
           placeholders.push(
             `($${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, ` +
-            `$${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++})`
+            `$${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++})`
           );
           params.push(
             e.vendor, e.sku, e.internet_sku, e.raw_description, e.description,
-            e.hd_department, e.hd_class, e.hd_subclass, e.agx_subgroup, e.unit,
+            e.hd_department, e.hd_class, e.hd_subclass, e.agx_subgroup, e.category, e.unit,
             e.last_unit_price, e.avg_unit_price, e.min_unit_price, e.max_unit_price,
             e.total_qty, e.purchase_count, e.first_seen, e.last_seen
           );
@@ -403,7 +484,7 @@ router.post('/import', requireAuth, requireCapability('ROLES_MANAGE'), async (re
         const { rows: ins } = await client.query(
           `INSERT INTO materials
              (vendor, sku, internet_sku, raw_description, description,
-              hd_department, hd_class, hd_subclass, agx_subgroup, unit,
+              hd_department, hd_class, hd_subclass, agx_subgroup, category, unit,
               last_unit_price, avg_unit_price, min_unit_price, max_unit_price,
               total_qty, purchase_count, first_seen, last_seen)
            VALUES ${placeholders.join(',')}
@@ -428,13 +509,13 @@ router.post('/import', requireAuth, requireCapability('ROLES_MANAGE'), async (re
         for (const u of slice) {
           const e = u.entry;
           valuesRows.push(
-            `($${p++}::int, $${p++}::text, $${p++}::text, $${p++}::text, ` +
+            `($${p++}::int, $${p++}::text, $${p++}::text, $${p++}::text, $${p++}::text, ` +
             `$${p++}::numeric, $${p++}::numeric, $${p++}::numeric, $${p++}::numeric, ` +
             `$${p++}::numeric, $${p++}::int, $${p++}::date, $${p++}::date, ` +
             `$${p++}::text, $${p++}::text, $${p++}::text, $${p++}::text, $${p++}::text)`
           );
           params.push(
-            u.id, e.description, e.agx_subgroup, e.unit,
+            u.id, e.description, e.agx_subgroup, e.category, e.unit,
             e.last_unit_price, e.avg_unit_price, e.min_unit_price, e.max_unit_price,
             e.total_qty, e.purchase_count, e.first_seen, e.last_seen,
             e.sku, e.internet_sku, e.hd_department, e.hd_class, e.hd_subclass
@@ -444,6 +525,7 @@ router.post('/import', requireAuth, requireCapability('ROLES_MANAGE'), async (re
           `UPDATE materials AS m SET
              description = v.description,
              agx_subgroup = v.agx_subgroup,
+             category = v.category,
              unit = v.unit,
              last_unit_price = v.last_unit_price,
              avg_unit_price = v.avg_unit_price,
@@ -460,7 +542,7 @@ router.post('/import', requireAuth, requireCapability('ROLES_MANAGE'), async (re
              hd_subclass = v.hd_subclass,
              updated_at = NOW()
            FROM (VALUES ${valuesRows.join(',')}) AS v(
-             id, description, agx_subgroup, unit,
+             id, description, agx_subgroup, category, unit,
              last_unit_price, avg_unit_price, min_unit_price, max_unit_price,
              total_qty, purchase_count, first_seen, last_seen,
              sku, internet_sku, hd_department, hd_class, hd_subclass
@@ -580,6 +662,72 @@ router.post('/import', requireAuth, requireCapability('ROLES_MANAGE'), async (re
     res.status(500).json({ error: e.message || 'Server error' });
   } finally {
     client.release();
+  }
+});
+
+// GET /api/materials/categories — canonical list + counts. Drives the
+// admin browser's filter dropdown. Counts include only non-hidden rows.
+router.get('/meta/categories', requireAuth, requireCapability('ESTIMATES_VIEW'), async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT category, COUNT(*)::int AS n
+       FROM materials
+       WHERE is_hidden = false AND category IS NOT NULL
+       GROUP BY category
+       ORDER BY n DESC`
+    );
+    const counts = new Map(rows.map(r => [r.category, r.n]));
+    // Merge canonical list with observed categories so the dropdown
+    // always shows every category (with 0 counts for ones not yet
+    // present in the catalog) — useful when the user is starting fresh
+    // and we want to show what's possible.
+    const merged = KNOWN_CATEGORIES.map(name => ({ name, n: counts.get(name) || 0 }));
+    // Plus any categories present in DB that aren't in our canonical
+    // list (e.g., admin renamed one) — append at the end.
+    for (const r of rows) {
+      if (!KNOWN_CATEGORIES.includes(r.category)) {
+        merged.push({ name: r.category, n: r.n });
+      }
+    }
+    res.json({ categories: merged });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/materials/recategorize — re-runs mapHdToCategory across
+// every existing row that doesn't have manual_override. Useful after
+// a schema upgrade or rule tweak; faster than re-importing the whole
+// CSV. Admin-only.
+router.post('/recategorize', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, hd_department, hd_class, hd_subclass
+       FROM materials
+       WHERE manual_override = false`
+    );
+    let touched = 0;
+    // Group by category so we can batch updates by target value — turns
+    // ~1,500 individual UPDATEs into ~15 (one per category bucket).
+    const byCategory = new Map();
+    for (const r of rows) {
+      const cat = mapHdToCategory(r.hd_department, r.hd_class, r.hd_subclass);
+      if (!byCategory.has(cat)) byCategory.set(cat, []);
+      byCategory.get(cat).push(r.id);
+    }
+    for (const [cat, ids] of byCategory.entries()) {
+      if (!ids.length) continue;
+      await pool.query(
+        `UPDATE materials SET category = $1, updated_at = NOW()
+         WHERE id = ANY($2::int[])`,
+        [cat, ids]
+      );
+      touched += ids.length;
+    }
+    res.json({ ok: true, touched, distinct_categories: byCategory.size });
+  } catch (e) {
+    console.error('POST /api/materials/recategorize error:', e);
+    res.status(500).json({ error: e.message });
   }
 });
 
