@@ -371,34 +371,60 @@
     }
 
     var dragging = null;
-    header.addEventListener('mousedown', function(e) {
+    // While minimized, the whole panel is a drag handle (the header
+    // shrinks and the body is just an emoji). Otherwise drag is from
+    // the header only.
+    function dragMouseDown(e) {
       if (e.target.closest('.ws-floating-btn')) return;
+      // If minimized but click is on the actions area, ignore.
       var rect = panel.getBoundingClientRect();
       dragging = {
         startMouseX: e.clientX,
         startMouseY: e.clientY,
         startLeft: parseInt(panel.style.left, 10) || 0,
         startTop: parseInt(panel.style.top, 10) || 0,
-        zoom: currentZoom()
+        zoom: currentZoom(),
+        moved: false
       };
       document.body.style.userSelect = 'none';
       e.preventDefault();
       e.stopPropagation();
+    }
+    header.addEventListener('mousedown', dragMouseDown);
+    // The folder-state body should also act as a drag handle so the
+    // node can be repositioned without an explicit header grab.
+    panel.addEventListener('mousedown', function(e) {
+      if (!panel.classList.contains('ws-floating-folder')) return;
+      // Header already wired above; don't double-bind.
+      if (e.target.closest('.ws-floating-header')) return;
+      dragMouseDown(e);
     });
     document.addEventListener('mousemove', function(e) {
       if (!dragging) return;
       var dx = (e.clientX - dragging.startMouseX) / dragging.zoom;
       var dy = (e.clientY - dragging.startMouseY) / dragging.zoom;
+      if (Math.abs(dx) + Math.abs(dy) > 3) dragging.moved = true;
       panel.style.left = (dragging.startLeft + dx) + 'px';
       panel.style.top = (dragging.startTop + dy) + 'px';
     });
     document.addEventListener('mouseup', function() {
       if (dragging) {
-        // Persist graph-mode position so it survives detach/reattach
         if (inGraphMode()) {
           panel.dataset.graphX = parseInt(panel.style.left, 10) || 0;
           panel.dataset.graphY = parseInt(panel.style.top, 10) || 0;
         }
+        // Persist the minimized position so it sticks across opens.
+        if (panel.classList.contains('ws-floating-folder')) {
+          try {
+            localStorage.setItem('agx-ws-min-pos', JSON.stringify({
+              x: parseInt(panel.style.left, 10) || 0,
+              y: parseInt(panel.style.top, 10) || 0
+            }));
+          } catch (e) {}
+        }
+        // If the user actually dragged, suppress the click-to-restore
+        // that would otherwise fire on this mouseup.
+        if (dragging.moved) _floatingState.suppressRestoreClick = true;
         dragging = null;
         document.body.style.userSelect = '';
       }
@@ -549,16 +575,18 @@
     if (typeof window.ngRender === 'function') window.ngRender();
   }
 
-  // Fullscreen toggle — when on, panel fills the entire visible canvas
-  // (in graph coords, accounting for current pan/zoom). When off,
-  // restore the previous saved size + position.
+  // Fullscreen toggle — fills the visible canvas at zoom 1.0 so
+  // content reads at "real" size regardless of where the user was
+  // zoomed before. Restore returns the panel rect *and* the pan/zoom
+  // back to whatever they were on the way in. Self-contained so the
+  // result doesn't depend on whether Focus was clicked first.
   function toggleFullscreenWorkspace() {
     var panel = document.getElementById('wsFloatingPanel');
     var area = document.querySelector('#nodeGraphTab .ng-canvas-area');
     if (!panel || !area || !panel.classList.contains('ws-floating-graph-mode')) return;
     if (panel.classList.contains('ws-floating-folder')) restoreFromMinimized();
     if (_floatingState.maximized) {
-      // Restore
+      // Restore previous panel rect + pan/zoom
       if (_floatingState.savedRect) {
         panel.style.left = _floatingState.savedRect.left + 'px';
         panel.style.top = _floatingState.savedRect.top + 'px';
@@ -569,26 +597,39 @@
         panel.dataset.graphW = _floatingState.savedRect.width;
         panel.dataset.graphH = _floatingState.savedRect.height;
       }
+      if (_floatingState.savedView && typeof NG !== 'undefined' && NG.zm && NG.pan) {
+        NG.zm(_floatingState.savedView.zoom);
+        NG.pan(_floatingState.savedView.panX, _floatingState.savedView.panY);
+        if (typeof window.ngApplyTx === 'function') window.ngApplyTx();
+        if (typeof window.ngRender === 'function') window.ngRender();
+      }
       _floatingState.maximized = false;
       panel.classList.remove('ws-floating-maximized');
     } else {
-      // Save current state, then expand to fill the visible canvas in
-      // graph coords. The visible canvas area in graph coords is
-      // (-panX, -panY) at top-left, dimensions (areaW/zoom × areaH/zoom).
+      // Save current panel rect + view state
       _floatingState.savedRect = {
         left: parseFloat(panel.style.left) || 0,
         top: parseFloat(panel.style.top) || 0,
         width: parseFloat(panel.style.width) || 720,
         height: parseFloat(panel.style.height) || 480
       };
-      var p = NG.pan(), z = NG.zm() || 1;
+      if (typeof NG !== 'undefined' && NG.zm && NG.pan) {
+        var curP = NG.pan();
+        _floatingState.savedView = { zoom: NG.zm() || 1, panX: curP.x, panY: curP.y };
+        // Reset to a known baseline: zoom 1.0, pan to origin, then
+        // expand the panel to the viewport-sized rect at (8,8).
+        NG.zm(1.0);
+        NG.pan(0, 0);
+        if (typeof window.ngApplyTx === 'function') window.ngApplyTx();
+      }
       var ar = area.getBoundingClientRect();
-      panel.style.left = (-p.x + 8) + 'px';
-      panel.style.top = (-p.y + 8) + 'px';
-      panel.style.width = (ar.width / z - 16) + 'px';
-      panel.style.height = (ar.height / z - 16) + 'px';
+      panel.style.left = '8px';
+      panel.style.top = '8px';
+      panel.style.width = (ar.width - 16) + 'px';
+      panel.style.height = (ar.height - 16) + 'px';
       _floatingState.maximized = true;
       panel.classList.add('ws-floating-maximized');
+      if (typeof window.ngRender === 'function') window.ngRender();
     }
   }
 
@@ -607,16 +648,23 @@
       height: parseFloat(panel.style.height) || 480
     };
     panel.classList.add('ws-floating-folder');
-    // Position in the top-left corner of the visible canvas (graph
-    // coords). Sized roughly like a watch node — header strip plus
-    // an emoji body filling the rest.
-    if (typeof NG !== 'undefined' && NG.pan) {
+    panel.style.width = '160px';
+    panel.style.height = '130px';
+    // Restore the user's last minimized position if we have one,
+    // otherwise drop it into the top-left of the visible canvas.
+    var savedMin = null;
+    try {
+      var raw = localStorage.getItem('agx-ws-min-pos');
+      if (raw) savedMin = JSON.parse(raw);
+    } catch (e) {}
+    if (savedMin && isFinite(savedMin.x) && isFinite(savedMin.y)) {
+      panel.style.left = savedMin.x + 'px';
+      panel.style.top = savedMin.y + 'px';
+    } else if (typeof NG !== 'undefined' && NG.pan) {
       var p = NG.pan();
       panel.style.left = (-p.x + 24) + 'px';
       panel.style.top = (-p.y + 24) + 'px';
     }
-    panel.style.width = '160px';
-    panel.style.height = '130px';
   }
   function restoreFromMinimized() {
     var panel = document.getElementById('wsFloatingPanel');
@@ -649,6 +697,10 @@
   document.addEventListener('click', function(e) {
     var panel = document.getElementById('wsFloatingPanel');
     if (!panel || !panel.classList.contains('ws-floating-folder')) return;
+    if (_floatingState.suppressRestoreClick) {
+      _floatingState.suppressRestoreClick = false;
+      return;
+    }
     if (panel.contains(e.target)) {
       restoreFromMinimized();
     }
