@@ -549,18 +549,22 @@
   padding: 4px 4px;
   border: 1px solid var(--grid-border);
   border-bottom: 2px solid var(--grid-border);
-  cursor: default;
+  cursor: pointer;
   position: relative;
   letter-spacing: 0.5px;
+  user-select: none;
 }
 
+/* Resize handle on the right edge of the column header. The strip
+   is the only spot where cursor switches to col-resize; the rest of
+   the header is the click-to-select-column hit zone. */
 .ws-col-header::after {
   content: '';
   position: absolute;
   right: 0;
-  top: 4px;
-  bottom: 4px;
-  width: 3px;
+  top: 0;
+  bottom: 0;
+  width: 4px;
   cursor: col-resize;
   background: transparent;
   transition: background 0.15s;
@@ -701,6 +705,42 @@
   z-index: 2;
 }
 .ws-row-resize:hover { background: rgba(79, 140, 255, 0.4); }
+
+/* Selected column / row headers — a subtle accent so the user can
+   tell at a glance which column they clicked. */
+.ws-col-header.ws-col-selected,
+.ws-row-header.ws-row-selected {
+  background: rgba(79, 140, 255, 0.18) !important;
+  color: var(--text, #e4e6f0) !important;
+}
+
+/* Full row selection: every cell in the row wraps text instead of
+   ellipsing, so a click on the row number expands content downward.
+   Row height stays unset so the table grows the row to fit. */
+.ws-grid tbody tr.ws-row-fullselected .ws-cell {
+  white-space: normal;
+  word-break: break-word;
+  overflow: visible;
+  text-overflow: clip;
+}
+
+/* Floating "120px" tooltip that follows the cursor while resizing
+   a column or row. Position is set inline in JS. */
+.ws-resize-tip {
+  position: fixed;
+  display: none;
+  z-index: 100000;
+  background: var(--surface, #1a1d27);
+  color: var(--text, #fff);
+  border: 1px solid rgba(79, 140, 255, 0.45);
+  border-radius: 4px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-family: 'SF Mono', Consolas, monospace;
+  font-weight: 600;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+}
 
 /* ── Tables (styled ranges) ────────────────────────────── */
 /* Six preset themes layered on top of the cell renderer via

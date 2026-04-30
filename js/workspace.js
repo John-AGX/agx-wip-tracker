@@ -2437,6 +2437,30 @@
         if (c === rng.c2) td.classList.add('ws-range-right');
       }
     });
+
+    // Header highlighting + full-row wrap. A row is "fully selected"
+    // when the range spans every column (c1=0 and c2 reaches the last
+    // column); cells in those rows wrap text downward via the
+    // .ws-row-fullselected class on the tr.
+    var lastCol = grid.cols - 1;
+    var lastRow = grid.rows - 1;
+    var fullCol = rng && rng.r1 === 0 && rng.r2 === lastRow;
+    var fullRow = rng && rng.c1 === 0 && rng.c2 === lastCol;
+    wsTable.querySelectorAll('th.ws-col-header').forEach(function (th) {
+      var c = parseInt(th.dataset.col);
+      th.classList.toggle('ws-col-selected', !!(rng && c >= rng.c1 && c <= rng.c2 && (fullCol || rng.r1 === rng.r2)));
+    });
+    var tbody = wsTable.querySelector('tbody');
+    if (tbody) {
+      Array.prototype.forEach.call(tbody.rows, function (tr, idx) {
+        var rowHeader = tr.querySelector('td.ws-row-header');
+        var inRange = rng && idx >= rng.r1 && idx <= rng.r2;
+        if (rowHeader) {
+          rowHeader.classList.toggle('ws-row-selected', !!(inRange && (fullRow || rng.c1 === rng.c2)));
+        }
+        tr.classList.toggle('ws-row-fullselected', !!(inRange && fullRow));
+      });
+    }
   }
 
   // ── Merge Helpers ──────────────────────────────────────────
@@ -3138,19 +3162,43 @@
   // ── Column Resize ──────────────────────────────────────────
 
   let resizing = null;
+  let _resizeTip = null; // floating "120px" label that tracks the cursor
+
+  function ensureResizeTip() {
+    if (_resizeTip) return _resizeTip;
+    _resizeTip = document.createElement('div');
+    _resizeTip.className = 'ws-resize-tip';
+    document.body.appendChild(_resizeTip);
+    return _resizeTip;
+  }
+  function showResizeTip(x, y, text) {
+    var t = ensureResizeTip();
+    t.textContent = text;
+    t.style.left = (x + 14) + 'px';
+    t.style.top = (y + 14) + 'px';
+    t.style.display = 'block';
+  }
+  function hideResizeTip() { if (_resizeTip) _resizeTip.style.display = 'none'; }
 
   function handleColResizeStart(e) {
     if (!e.target.classList.contains('ws-col-header')) return;
     const rect = e.target.getBoundingClientRect();
-    // Only resize if clicking near right edge
+    const c = parseInt(e.target.dataset.col);
+    // Right 6px is the resize handle; everywhere else on the header
+    // becomes a column-select click. Shift-click extends from the
+    // current selection.
     if (e.clientX > rect.right - 6) {
       e.preventDefault();
       resizing = {
-        col: parseInt(e.target.dataset.col),
+        col: c,
         startX: e.clientX,
-        startWidth: grid.colWidths[e.target.dataset.col] || COL_DEFAULT_WIDTH
+        startWidth: grid.colWidths[c] || COL_DEFAULT_WIDTH
       };
       document.body.style.cursor = 'col-resize';
+      showResizeTip(e.clientX, e.clientY, resizing.startWidth + 'px');
+    } else if (!isNaN(c)) {
+      e.preventDefault();
+      selectFullColumn(c, e.shiftKey);
     }
   }
 
@@ -3158,20 +3206,47 @@
     if (!resizing) return;
     const newWidth = Math.max(40, resizing.startWidth + (e.clientX - resizing.startX));
     grid.colWidths[resizing.col] = newWidth;
-    // Update header and all cells in this column
     const th = wsTable.querySelector(`th[data-col="${resizing.col}"]`);
     if (th) { th.style.width = newWidth + 'px'; th.style.minWidth = newWidth + 'px'; }
     wsTable.querySelectorAll(`td[data-c="${resizing.col}"]`).forEach(td => {
       td.style.width = newWidth + 'px';
       td.style.minWidth = newWidth + 'px';
     });
+    showResizeTip(e.clientX, e.clientY, Math.round(newWidth) + 'px');
   }
 
   function handleColResizeEnd() {
     if (resizing) {
       resizing = null;
       document.body.style.cursor = '';
+      hideResizeTip();
       saveWorkspace();
+    }
+  }
+
+  // ── Click-to-select whole column / row ─────────────────────
+  function selectFullColumn(c, extend) {
+    if (grid.editing) commitEdit(grid.editing.r, grid.editing.c);
+    var lastRow = grid.rows - 1;
+    if (extend && grid.selection) {
+      grid.selEnd = { r: lastRow, c: c };
+      selectCell(grid.selection.r, grid.selection.c, true);
+    } else {
+      grid.selection = { r: 0, c: c };
+      grid.selEnd = { r: lastRow, c: c };
+      selectCell(0, c, true);
+    }
+  }
+  function selectFullRow(r, extend) {
+    if (grid.editing) commitEdit(grid.editing.r, grid.editing.c);
+    var lastCol = grid.cols - 1;
+    if (extend && grid.selection) {
+      grid.selEnd = { r: r, c: lastCol };
+      selectCell(grid.selection.r, grid.selection.c, true);
+    } else {
+      grid.selection = { r: r, c: 0 };
+      grid.selEnd = { r: r, c: lastCol };
+      selectCell(r, 0, true);
     }
   }
 
@@ -3180,32 +3255,46 @@
   // strip rendered at the bottom of each row header.
   let rowResizing = null;
   function handleRowResizeStart(e) {
+    // Row resize: click the bottom-edge strip (.ws-row-resize). Plain
+    // click on the row header itself becomes a row-select instead.
     const handle = e.target.classList && e.target.classList.contains('ws-row-resize');
-    if (!handle) return;
-    e.preventDefault();
-    e.stopPropagation();
-    const r = parseInt(e.target.dataset.row);
-    rowResizing = {
-      row: r,
-      startY: e.clientY,
-      startHeight: grid.rowHeights[r] || ROW_HEIGHT
-    };
-    document.body.style.cursor = 'row-resize';
+    if (handle) {
+      e.preventDefault();
+      e.stopPropagation();
+      const r = parseInt(e.target.dataset.row);
+      rowResizing = {
+        row: r,
+        startY: e.clientY,
+        startHeight: grid.rowHeights[r] || ROW_HEIGHT
+      };
+      document.body.style.cursor = 'row-resize';
+      showResizeTip(e.clientX, e.clientY, rowResizing.startHeight + 'px');
+      return;
+    }
+    const rowH = e.target.closest && e.target.closest('td.ws-row-header');
+    if (rowH) {
+      const r2 = parseInt(rowH.dataset.row);
+      if (!isNaN(r2)) {
+        e.preventDefault();
+        selectFullRow(r2, e.shiftKey);
+      }
+    }
   }
   function handleRowResizeMove(e) {
     if (!rowResizing) return;
     const newHeight = Math.max(18, rowResizing.startHeight + (e.clientY - rowResizing.startY));
     grid.rowHeights[rowResizing.row] = newHeight;
-    // Find the tr for this row by counting from the second tr (first is thead)
     const tbody = wsTable.querySelector('tbody');
     if (tbody && tbody.rows[rowResizing.row]) {
       tbody.rows[rowResizing.row].style.height = newHeight + 'px';
     }
+    showResizeTip(e.clientX, e.clientY, Math.round(newHeight) + 'px');
   }
   function handleRowResizeEnd() {
     if (rowResizing) {
       rowResizing = null;
       document.body.style.cursor = '';
+      hideResizeTip();
       grid.dirty = true;
       saveWorkspace();
     }
