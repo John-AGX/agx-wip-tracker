@@ -101,10 +101,19 @@
   margin-top: 4px;
   margin-bottom: 12px;
   border-bottom: 1px solid var(--border, #2e3346);
-  background: transparent;
+  /* Background was transparent, but once we pin this with position:
+     sticky the scrolling content underneath will bleed through. Use
+     var(--bg) so the bar reads as an opaque header strip. */
+  background: var(--bg, #0f1117);
   border-radius: 0;
   padding: 0;
   flex-wrap: wrap;
+  /* Keep the sub-tab switcher visible while the long list / leads /
+     workspace content scrolls beneath it. <main> is the scroller, so
+     pin to its top edge. */
+  position: sticky;
+  top: 0;
+  z-index: 10;
 }
 
 .ws-right-tab {
