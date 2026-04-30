@@ -2469,6 +2469,11 @@ function ensureWatchFan(){
   return true;
 }
 
+// Exposed so the floating workspace panel's Focus button can request a
+// re-render after it pans / zooms via NG.pan() / NG.zm().
+window.ngApplyTx = applyTx;
+window.ngRender = render;
+
 window.openNodeGraph=function(jid){
   var tab=document.getElementById('nodeGraphTab'); if(!tab) return;
   // Position below the sticky header

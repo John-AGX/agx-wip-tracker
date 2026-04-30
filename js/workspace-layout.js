@@ -35,7 +35,7 @@
     var link = document.createElement('link');
     link.id = 'ws-layout-v2-css';
     link.rel = 'stylesheet';
-    link.href = 'css/workspace-layout.css?v=27';
+    link.href = 'css/workspace-layout.css?v=28';
     document.head.appendChild(link);
   }
 
@@ -320,6 +320,7 @@
       '<div class="ws-floating-header" id="wsFloatingHeader">' +
         '<span class="ws-floating-title">\u{1F4CA} Workspace</span>' +
         '<div class="ws-floating-actions">' +
+          '<button class="ws-floating-btn" id="wsFloatingFocusBtn" title="Focus this workspace (zoom 100% + center)" style="display:none;">\u{1F3AF}</button>' +
           '<button class="ws-floating-btn" id="wsFloatingMinBtn" title="Minimize">—</button>' +
           '<button class="ws-floating-btn" id="wsFloatingMaxBtn" title="Maximize / restore">⛶</button>' +
         '</div>' +
@@ -354,38 +355,107 @@
     }
     setInitialRect();
 
+    // In graph mode the panel lives inside the transformed .ng-canvas
+    // element. Pan/zoom multiply the visual deltas, so we have to
+    // divide by zoom to get correct movement in graph coordinates.
+    function inGraphMode() { return panel.classList.contains('ws-floating-graph-mode'); }
+    function currentZoom() {
+      if (inGraphMode() && typeof NG !== 'undefined' && NG.zm) return NG.zm() || 1;
+      return 1;
+    }
+
     var dragging = null;
     header.addEventListener('mousedown', function(e) {
       if (e.target.closest('.ws-floating-btn')) return;
       var rect = panel.getBoundingClientRect();
-      dragging = { offsetX: e.clientX - rect.left, offsetY: e.clientY - rect.top };
+      dragging = {
+        startMouseX: e.clientX,
+        startMouseY: e.clientY,
+        startLeft: parseInt(panel.style.left, 10) || 0,
+        startTop: parseInt(panel.style.top, 10) || 0,
+        zoom: currentZoom()
+      };
       document.body.style.userSelect = 'none';
       e.preventDefault();
+      e.stopPropagation();
     });
     document.addEventListener('mousemove', function(e) {
       if (!dragging) return;
-      panel.style.left = (e.clientX - dragging.offsetX) + 'px';
-      panel.style.top = (e.clientY - dragging.offsetY) + 'px';
+      var dx = (e.clientX - dragging.startMouseX) / dragging.zoom;
+      var dy = (e.clientY - dragging.startMouseY) / dragging.zoom;
+      panel.style.left = (dragging.startLeft + dx) + 'px';
+      panel.style.top = (dragging.startTop + dy) + 'px';
     });
     document.addEventListener('mouseup', function() {
-      if (dragging) { dragging = null; document.body.style.userSelect = ''; }
+      if (dragging) {
+        // Persist graph-mode position so it survives detach/reattach
+        if (inGraphMode()) {
+          panel.dataset.graphX = parseInt(panel.style.left, 10) || 0;
+          panel.dataset.graphY = parseInt(panel.style.top, 10) || 0;
+        }
+        dragging = null;
+        document.body.style.userSelect = '';
+      }
     });
 
     var resizing = null;
     resize.addEventListener('mousedown', function(e) {
       var rect = panel.getBoundingClientRect();
-      resizing = { startX: e.clientX, startY: e.clientY, startW: rect.width, startH: rect.height };
+      resizing = {
+        startX: e.clientX,
+        startY: e.clientY,
+        startW: parseInt(panel.style.width, 10) || rect.width,
+        startH: parseInt(panel.style.height, 10) || rect.height,
+        zoom: currentZoom()
+      };
       document.body.style.userSelect = 'none';
       e.preventDefault();
+      e.stopPropagation();
     });
     document.addEventListener('mousemove', function(e) {
       if (!resizing) return;
-      panel.style.width = Math.max(420, resizing.startW + (e.clientX - resizing.startX)) + 'px';
-      panel.style.height = Math.max(280, resizing.startH + (e.clientY - resizing.startY)) + 'px';
+      var dx = (e.clientX - resizing.startX) / resizing.zoom;
+      var dy = (e.clientY - resizing.startY) / resizing.zoom;
+      panel.style.width = Math.max(420, resizing.startW + dx) + 'px';
+      panel.style.height = Math.max(280, resizing.startH + dy) + 'px';
     });
     document.addEventListener('mouseup', function() {
-      if (resizing) { resizing = null; document.body.style.userSelect = ''; }
+      if (resizing) {
+        if (inGraphMode()) {
+          panel.dataset.graphW = parseInt(panel.style.width, 10) || 0;
+          panel.dataset.graphH = parseInt(panel.style.height, 10) || 0;
+        }
+        resizing = null;
+        document.body.style.userSelect = '';
+      }
     });
+
+    // Focus Workspace — visible only in graph mode. Sets zoom to 1.0
+    // and pans the graph so the workspace center sits at the viewport
+    // center. Lets the user pop into edit-readable scale anytime.
+    var focusBtn = document.getElementById('wsFloatingFocusBtn');
+    if (focusBtn) {
+      focusBtn.addEventListener('click', function() {
+        if (typeof NG === 'undefined' || !NG.zm || !NG.pan) return;
+        var canvas = document.querySelector('#nodeGraphTab .ng-canvas');
+        var area = document.querySelector('#nodeGraphTab .ng-canvas-area');
+        if (!canvas || !area) return;
+        var x = parseFloat(panel.style.left) || 0;
+        var y = parseFloat(panel.style.top) || 0;
+        var w = parseFloat(panel.style.width) || 720;
+        var h = parseFloat(panel.style.height) || 480;
+        var ar = area.getBoundingClientRect();
+        // After applyTx: viewport_x = (graph_x + panX) * zoom
+        // Want workspace center (x + w/2, y + h/2) at viewport center.
+        NG.zm(1.0);
+        var newPanX = (ar.width / 2) / 1.0 - (x + w / 2);
+        var newPanY = (ar.height / 2) / 1.0 - (y + h / 2);
+        NG.pan(newPanX, newPanY);
+        // Trigger re-render via the existing applyTx + render functions
+        if (typeof window.ngApplyTx === 'function') window.ngApplyTx();
+        if (typeof window.ngRender === 'function') window.ngRender();
+      });
+    }
 
     minBtn.addEventListener('click', function() {
       _floatingState.minimized = !_floatingState.minimized;
@@ -425,6 +495,67 @@
   function hideFloatingWorkspace() {
     var panel = document.getElementById('wsFloatingPanel');
     if (panel) panel.style.display = 'none';
+  }
+
+  // ── Graph integration: workspace as a pseudo-node ──────────
+  // Attach the floating panel to the node-graph's transformed .ng-canvas
+  // element. The panel lives in graph coordinate space — pan/zoom of
+  // the graph affects it, drag moves it relative to graph coords.
+  function attachWorkspaceToGraph() {
+    var panel = document.getElementById('wsFloatingPanel');
+    var canvas = document.querySelector('#nodeGraphTab .ng-canvas');
+    if (!panel || !canvas) return;
+    initFloatingPanel(); // safe to call repeatedly
+    panel.classList.remove('ws-floating-tab-mode');
+    panel.classList.add('ws-floating-graph-mode');
+    // Restore previously-saved graph-mode position+size, or seed defaults
+    var x = panel.dataset.graphX != null ? parseFloat(panel.dataset.graphX) : 100;
+    var y = panel.dataset.graphY != null ? parseFloat(panel.dataset.graphY) : 100;
+    var w = panel.dataset.graphW != null ? parseFloat(panel.dataset.graphW) : 720;
+    var h = panel.dataset.graphH != null ? parseFloat(panel.dataset.graphH) : 480;
+    panel.style.position = 'absolute';
+    panel.style.left = x + 'px';
+    panel.style.top = y + 'px';
+    panel.style.width = w + 'px';
+    panel.style.height = h + 'px';
+    canvas.appendChild(panel);
+    panel.style.display = 'flex';
+    var focusBtn = document.getElementById('wsFloatingFocusBtn');
+    if (focusBtn) focusBtn.style.display = '';
+  }
+  function detachWorkspaceFromGraph() {
+    var panel = document.getElementById('wsFloatingPanel');
+    if (!panel) return;
+    if (panel.classList.contains('ws-floating-graph-mode')) {
+      panel.dataset.graphX = parseInt(panel.style.left, 10) || 100;
+      panel.dataset.graphY = parseInt(panel.style.top, 10) || 100;
+      panel.dataset.graphW = parseInt(panel.style.width, 10) || 720;
+      panel.dataset.graphH = parseInt(panel.style.height, 10) || 480;
+    }
+    var twoCol = document.getElementById('ws-two-col');
+    if (twoCol) twoCol.appendChild(panel);
+    panel.classList.remove('ws-floating-graph-mode');
+    panel.classList.add('ws-floating-tab-mode');
+    panel.style.position = '';
+    panel.style.display = 'none';
+    var focusBtn = document.getElementById('wsFloatingFocusBtn');
+    if (focusBtn) focusBtn.style.display = 'none';
+  }
+  // Watch the node graph tab for class changes — when it loses .active
+  // (close button clicked), make sure the workspace panel detaches.
+  function watchGraphTabClose() {
+    var tab = document.getElementById('nodeGraphTab');
+    if (!tab || tab._wsLayoutWatched) return;
+    tab._wsLayoutWatched = true;
+    var obs = new MutationObserver(function() {
+      if (!tab.classList.contains('active')) {
+        var panel = document.getElementById('wsFloatingPanel');
+        if (panel && panel.classList.contains('ws-floating-graph-mode')) {
+          detachWorkspaceFromGraph();
+        }
+      }
+    });
+    obs.observe(tab, { attributes: true, attributeFilter: ['class'] });
   }
 
   // ── Move panels into right content area ───────────────────
@@ -479,10 +610,33 @@
         tabs.forEach(function(t) { t.classList.remove('active'); });
         this.classList.add('active');
         var targetId = this.getAttribute('data-panel');
+        var jobId = (typeof appState !== 'undefined') ? appState.currentJobId : null;
 
-        // Workspace tab: create the canvas if needed + show floating panel
+        // Workspace tab opens the node graph and injects the floating
+        // workspace panel into the graph's transformed canvas, so the
+        // workspace lives in graph coordinate space (pan/zoom with the
+        // graph, drag like a node). Every other tab tears that down.
         if (targetId === 'job-workspace') {
-          ensureWorkspaceCanvas(rc);
+          // Hide right-content panels — graph is full-screen modal
+          var allPanels = Array.from(rc.children);
+          allPanels.forEach(function(p) { if (!p.classList.contains('ws-job-info-details')) p.style.display = 'none'; });
+          if (jobId && typeof window.openNodeGraph === 'function') {
+            window.openNodeGraph(jobId);
+            // Defer the attach until the graph DOM is ready
+            setTimeout(function() {
+              watchGraphTabClose();
+              attachWorkspaceToGraph();
+            }, 50);
+          }
+          return;
+        }
+
+        // Leaving Workspace tab: detach panel, close graph if open
+        var graphTab = document.getElementById('nodeGraphTab');
+        if (graphTab && graphTab.classList.contains('active')) {
+          detachWorkspaceFromGraph();
+          graphTab.classList.remove('active');
+          if (typeof NG !== 'undefined' && NG.saveGraph) NG.saveGraph();
         }
 
         var allPanels = Array.from(rc.children);
@@ -490,16 +644,6 @@
         var target = document.getElementById(targetId);
         if (target) target.style.display = 'block';
 
-        // Show / hide the floating spreadsheet panel based on which tab
-        // is active. Workspace tab shows it; every other tab hides it.
-        if (targetId === 'job-workspace') {
-          showFloatingWorkspace();
-        } else {
-          hideFloatingWorkspace();
-        }
-
-        // Call render function for the tab content
-        var jobId = (typeof appState !== 'undefined') ? appState.currentJobId : null;
         if (!jobId) return;
         var renderers = {
           'job-overview': 'renderJobOverview',

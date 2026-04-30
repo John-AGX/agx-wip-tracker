@@ -667,3 +667,22 @@
 .ws-floating-panel.ws-floating-minimized .ws-floating-resize {
   display: none;
 }
+
+/* ── Floating panel modes ──────────────────────────────────── */
+/* tab-mode: viewport-fixed positioning (default, tab content) */
+.ws-floating-panel.ws-floating-tab-mode {
+  position: fixed;
+}
+/* graph-mode: lives inside the transformed .ng-canvas, pans/zooms
+   with the graph. Positioning is absolute relative to the canvas. */
+.ws-floating-panel.ws-floating-graph-mode {
+  position: absolute;
+  /* Shadow scales weirdly under transform, so use a simpler ring */
+  box-shadow:
+    0 8px 24px rgba(0, 0, 0, 0.5),
+    0 0 0 1px rgba(79, 140, 255, 0.25);
+}
+/* Make sure the panel stays above the wire/grid canvases */
+.ws-floating-panel.ws-floating-graph-mode {
+  z-index: 30;
+}
