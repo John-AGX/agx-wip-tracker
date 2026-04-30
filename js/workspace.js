@@ -2679,6 +2679,18 @@
       }
     });
     document.body.appendChild(ctxMenu);
+    // When the workspace lives inside the transformed node-graph canvas
+    // it renders at the graph's zoom level. The context menu uses
+    // viewport-fixed positioning so it draws at 1.0 — visually huge
+    // next to a zoomed-out workspace. Match the menu's scale to the
+    // canvas zoom so it reads as part of the same surface.
+    var fp = document.getElementById('wsFloatingPanel');
+    if (fp && fp.classList.contains('ws-floating-graph-mode') &&
+        typeof NG !== 'undefined' && NG.zm) {
+      var z = NG.zm() || 1;
+      ctxMenu.style.transformOrigin = 'top left';
+      ctxMenu.style.transform = 'scale(' + z + ')';
+    }
     setTimeout(function () {
       document.addEventListener('click', closeContextMenu, { once: true });
       document.addEventListener('keydown', closeCtxOnEsc);
