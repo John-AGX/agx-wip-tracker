@@ -680,8 +680,8 @@
       height: parseFloat(panel.style.height) || 480
     };
     panel.classList.add('ws-floating-folder');
-    panel.style.width = '160px';
-    panel.style.height = '130px';
+    panel.style.width = '320px';
+    panel.style.height = '240px';
     // Restore the user's last minimized position if we have one;
     // otherwise leave the panel where it is so the minimized icon
     // appears near where the expanded panel was.
