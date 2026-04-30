@@ -738,36 +738,36 @@
     0 4px 18px var(--ng-shadow, rgba(0, 0, 0, 0.55)),
     0 0 0 1px rgba(79, 140, 255, 0.25);
 }
-/* Compact header strip */
+/* Compact header strip — whitish-gray gradient matching the
+   subdued tone of the % complete progress label. */
 .ws-floating-panel.ws-floating-folder .ws-floating-header {
   cursor: move;
   padding: 5px 8px;
   border-bottom: 1px solid var(--ng-border, #242e50);
-  background: linear-gradient(135deg, rgba(79, 140, 255, 0.18) 0%, rgba(139, 92, 246, 0.12) 100%);
+  background: linear-gradient(135deg, rgba(180, 188, 208, 0.22) 0%, rgba(120, 128, 150, 0.12) 100%);
 }
 .ws-floating-panel.ws-floating-folder .ws-floating-title {
   font-size: 10px;
   letter-spacing: 0.4px;
   text-transform: uppercase;
+  color: var(--ng-dim, #8b90a5);
 }
 .ws-floating-panel.ws-floating-folder .ws-floating-logo {
   height: 14px;
   margin-right: 5px;
 }
-/* Swap to the white logo when minimized */
+/* Hide the white logo by default; show the colored one in both states */
 .ws-floating-logo.ws-logo-white { display: none; }
-.ws-floating-panel.ws-floating-folder .ws-logo-color { display: none; }
-.ws-floating-panel.ws-floating-folder .ws-logo-white { display: inline-block; }
 .ws-floating-panel.ws-floating-folder .ws-floating-actions,
 .ws-floating-panel.ws-floating-folder .ws-floating-resize {
   display: none;
 }
-/* Body fills with a small, dark-toned notebook emoji */
+/* Body shows the mini-spreadsheet SVG */
 .ws-floating-panel.ws-floating-folder .ws-floating-body {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 0;
+  padding: 6px;
   overflow: hidden;
   background: var(--ng-surface, #12162a);
   cursor: move;
@@ -775,12 +775,17 @@
 .ws-floating-panel.ws-floating-folder .ws-floating-body #wsWorkspaceContainer {
   display: none;
 }
-.ws-floating-panel.ws-floating-folder .ws-floating-body::after {
-  content: '📓';
-  font-size: 84px;
-  line-height: 1;
-  opacity: 0.9;
-  filter: grayscale(0.85) brightness(0.75) contrast(1.1) drop-shadow(0 2px 4px rgba(0, 0, 0, 0.6));
+/* Mini-spreadsheet graphic: hidden in normal panel, fills the body
+   when minimized. */
+.ws-floating-mini-graphic {
+  display: none;
+  pointer-events: none;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.55));
+}
+.ws-floating-panel.ws-floating-folder .ws-floating-mini-graphic {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 
 /* ── Topbar divider ──────────────────────────────────── */
