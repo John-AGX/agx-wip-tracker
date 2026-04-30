@@ -10,8 +10,12 @@
   'use strict';
 
   // ── Constants ──────────────────────────────────────────────
-  const MIN_ROWS = 42;
-  const MIN_COLS = 8;
+  // Default grid: A-Z (26 columns) × 100 rows. Existing workspaces grow
+  // up to this minimum on next load — see loadSheetIntoGrid which uses
+  // Math.max(saved.rows, MIN_ROWS) — so no data is lost, just more
+  // empty space available to drag into.
+  const MIN_ROWS = 100;
+  const MIN_COLS = 26;
   const EXPAND_BUFFER = 2; // rows/cols to add when typing at edge
   const COL_DEFAULT_WIDTH = 100;
   const ROW_HEIGHT = 28;

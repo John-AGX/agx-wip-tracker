@@ -1984,8 +1984,8 @@
     <script src="js/bt-export.js?v=2"></script>
     <script src="js/ai-panel.js?v=6"></script>
 
-    <script src="js/workspace.js?v=21"></script>
-    <script src="js/workspace-layout.js?v=29"></script>
+    <script src="js/workspace.js?v=22"></script>
+    <script src="js/workspace-layout.js?v=30"></script>
 
     <!-- Node Graph (Beta) -->
     <link rel="stylesheet" href="nodegraph/nodegraph.css?v=74" />
@@ -2000,6 +2000,11 @@
         <button class="ng-tbtn ng-arrange-btn" title="Arrange full tree, or only the selected node's children if one is selected">&#x2725; Auto Arrange</button>
         <button class="ng-tbtn ng-sync-btn" title="Add missing nodes from job data without moving existing ones">&#x1F504; Sync Data</button>
         <button class="ng-tbtn ng-reset-btn" title="Delete graph and rebuild from scratch">&#x26A0; Reset Graph</button>
+        <span class="ng-topbar-divider"></span>
+        <button class="ng-tbtn ng-ws-focus-btn" id="ngWsFocusBtn" title="Focus the workspace — zoom 100% and center on it">&#x1F3AF; Focus Workspace</button>
+        <button class="ng-tbtn ng-ws-fullscreen-btn" id="ngWsFullscreenBtn" title="Expand workspace to fill the canvas (toggle to restore)">&#x26F6; Fullscreen</button>
+        <button class="ng-tbtn ng-ws-minimize-btn" id="ngWsMinimizeBtn" title="Minimize workspace to a folder icon">&#x1F4C1; Minimize</button>
+        <span class="ng-topbar-divider"></span>
         <button class="ng-tbtn" onclick="openJobAI()" title="WIP / financial AI assistant" style="background:linear-gradient(135deg,#8b5cf6,#4f8cff);color:#fff;border:none;">&#x2728; Ask AI</button>
         <button class="ng-tbtn-close">&#x2716; Close</button>
       </div>

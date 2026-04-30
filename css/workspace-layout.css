@@ -686,3 +686,83 @@
 .ws-floating-panel.ws-floating-graph-mode {
   z-index: 30;
 }
+
+/* ── AGX logo in panel header ────────────────────────────── */
+.ws-floating-logo {
+  height: 18px;
+  width: auto;
+  margin-right: 8px;
+  display: inline-block;
+  vertical-align: middle;
+  pointer-events: none;
+}
+
+/* ── Maximized: panel fills the visible canvas ─────────── */
+.ws-floating-panel.ws-floating-maximized .ws-floating-resize {
+  display: none;
+}
+
+/* ── Minimized: file-folder watch icon ─────────────────── */
+.ws-floating-panel.ws-floating-folder {
+  cursor: pointer;
+  overflow: hidden;
+  border-radius: 8px 12px 8px 8px;
+  background: linear-gradient(160deg, #2a3344 0%, #1c2230 100%);
+  border-color: rgba(79, 140, 255, 0.55);
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+.ws-floating-panel.ws-floating-folder:hover {
+  transform: scale(1.06);
+  box-shadow:
+    0 12px 28px rgba(0, 0, 0, 0.6),
+    0 0 0 1px rgba(79, 140, 255, 0.55);
+}
+.ws-floating-panel.ws-floating-folder .ws-floating-header,
+.ws-floating-panel.ws-floating-folder .ws-floating-resize {
+  display: none;
+}
+/* Folder-tab notch — small angled flap at the top */
+.ws-floating-panel.ws-floating-folder::before {
+  content: '';
+  position: absolute;
+  top: -7px;
+  left: 6px;
+  width: 26px;
+  height: 8px;
+  background: linear-gradient(160deg, #2a3344 0%, #1c2230 100%);
+  border-radius: 4px 8px 0 0;
+  border: 1px solid rgba(79, 140, 255, 0.4);
+  border-bottom: none;
+}
+/* The body becomes the AGX logo container */
+.ws-floating-panel.ws-floating-folder .ws-floating-body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  height: 100%;
+  overflow: hidden;
+}
+.ws-floating-panel.ws-floating-folder .ws-floating-body #wsWorkspaceContainer {
+  display: none;
+}
+.ws-floating-panel.ws-floating-folder .ws-floating-body::after {
+  content: '';
+  display: block;
+  background-image: url('../images/logo-color.png');
+  background-size: contain;
+  background-position: center;
+  background-repeat: no-repeat;
+  width: 100%;
+  height: 100%;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.4));
+}
+
+/* ── Topbar divider ──────────────────────────────────── */
+.ng-topbar-divider {
+  width: 1px;
+  height: 22px;
+  background: rgba(255, 255, 255, 0.1);
+  margin: 0 6px;
+  display: inline-block;
+}

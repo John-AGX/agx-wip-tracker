@@ -35,7 +35,7 @@
     var link = document.createElement('link');
     link.id = 'ws-layout-v2-css';
     link.rel = 'stylesheet';
-    link.href = 'css/workspace-layout.css?v=28';
+    link.href = 'css/workspace-layout.css?v=29';
     document.head.appendChild(link);
   }
 
@@ -316,14 +316,14 @@
     fp.id = 'wsFloatingPanel';
     fp.className = 'ws-floating-panel';
     fp.style.display = 'none';
+    // Header: AGX logo + title. The min/max/focus controls were
+    // promoted to the graph topbar (Focus / Fullscreen / Minimize) so
+    // they can act as graph-wide commands. The header stays clean —
+    // just identifies the panel and gives the user a drag handle.
     fp.innerHTML =
       '<div class="ws-floating-header" id="wsFloatingHeader">' +
-        '<span class="ws-floating-title">\u{1F4CA} Workspace</span>' +
-        '<div class="ws-floating-actions">' +
-          '<button class="ws-floating-btn" id="wsFloatingFocusBtn" title="Focus this workspace (zoom 100% + center)" style="display:none;">\u{1F3AF}</button>' +
-          '<button class="ws-floating-btn" id="wsFloatingMinBtn" title="Minimize">—</button>' +
-          '<button class="ws-floating-btn" id="wsFloatingMaxBtn" title="Maximize / restore">⛶</button>' +
-        '</div>' +
+        '<img src="images/logo-color.png" alt="AGX" class="ws-floating-logo" />' +
+        '<span class="ws-floating-title">Workspace</span>' +
       '</div>' +
       '<div class="ws-floating-body">' +
         '<div id="wsWorkspaceContainer" tabindex="0"></div>' +
@@ -430,59 +430,20 @@
       }
     });
 
-    // Focus Workspace — visible only in graph mode. Sets zoom to 1.0
-    // and pans the graph so the workspace center sits at the viewport
-    // center. Lets the user pop into edit-readable scale anytime.
-    var focusBtn = document.getElementById('wsFloatingFocusBtn');
-    if (focusBtn) {
-      focusBtn.addEventListener('click', function() {
-        if (typeof NG === 'undefined' || !NG.zm || !NG.pan) return;
-        var canvas = document.querySelector('#nodeGraphTab .ng-canvas');
-        var area = document.querySelector('#nodeGraphTab .ng-canvas-area');
-        if (!canvas || !area) return;
-        var x = parseFloat(panel.style.left) || 0;
-        var y = parseFloat(panel.style.top) || 0;
-        var w = parseFloat(panel.style.width) || 720;
-        var h = parseFloat(panel.style.height) || 480;
-        var ar = area.getBoundingClientRect();
-        // After applyTx: viewport_x = (graph_x + panX) * zoom
-        // Want workspace center (x + w/2, y + h/2) at viewport center.
-        NG.zm(1.0);
-        var newPanX = (ar.width / 2) / 1.0 - (x + w / 2);
-        var newPanY = (ar.height / 2) / 1.0 - (y + h / 2);
-        NG.pan(newPanX, newPanY);
-        // Trigger re-render via the existing applyTx + render functions
-        if (typeof window.ngApplyTx === 'function') window.ngApplyTx();
-        if (typeof window.ngRender === 'function') window.ngRender();
-      });
-    }
+    // ── Event isolation ──
+    // Wheel events on the panel must NOT bubble to the graph (which
+    // would zoom the whole canvas). Mousedowns inside the panel body
+    // must NOT bubble either — otherwise the graph treats them as
+    // pan/select. Header gets its own mousedown (drag) handler with
+    // its own stopPropagation, so we only block here for non-header.
+    panel.addEventListener('wheel', function(e) { e.stopPropagation(); }, { capture: false });
+    panel.addEventListener('mousedown', function(e) {
+      // Don't swallow header drag — its handler runs first via direct
+      // listener and already calls stopPropagation. Same for resize.
+      if (e.target.closest('.ws-floating-header, .ws-floating-resize')) return;
+      e.stopPropagation();
+    });
 
-    minBtn.addEventListener('click', function() {
-      _floatingState.minimized = !_floatingState.minimized;
-      panel.classList.toggle('ws-floating-minimized', _floatingState.minimized);
-    });
-    maxBtn.addEventListener('click', function() {
-      var canvas = document.getElementById('wsCanvas');
-      if (!canvas) return;
-      if (_floatingState.maximized) {
-        if (_floatingState.savedRect) {
-          panel.style.left = _floatingState.savedRect.left + 'px';
-          panel.style.top = _floatingState.savedRect.top + 'px';
-          panel.style.width = _floatingState.savedRect.width + 'px';
-          panel.style.height = _floatingState.savedRect.height + 'px';
-        }
-        _floatingState.maximized = false;
-      } else {
-        var rect = panel.getBoundingClientRect();
-        _floatingState.savedRect = { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
-        var c = canvas.getBoundingClientRect();
-        panel.style.left = (c.left + 8) + 'px';
-        panel.style.top = (c.top + 8) + 'px';
-        panel.style.width = (c.width - 16) + 'px';
-        panel.style.height = (c.height - 16) + 'px';
-        _floatingState.maximized = true;
-      }
-    });
     _floatingState.inited = true;
   }
 
@@ -520,8 +481,7 @@
     panel.style.height = h + 'px';
     canvas.appendChild(panel);
     panel.style.display = 'flex';
-    var focusBtn = document.getElementById('wsFloatingFocusBtn');
-    if (focusBtn) focusBtn.style.display = '';
+    wireGraphToolbarWorkspaceButtons();
   }
   function detachWorkspaceFromGraph() {
     var panel = document.getElementById('wsFloatingPanel');
@@ -534,12 +494,11 @@
     }
     var twoCol = document.getElementById('ws-two-col');
     if (twoCol) twoCol.appendChild(panel);
-    panel.classList.remove('ws-floating-graph-mode');
+    panel.classList.remove('ws-floating-graph-mode', 'ws-floating-folder', 'ws-floating-maximized');
     panel.classList.add('ws-floating-tab-mode');
     panel.style.position = '';
     panel.style.display = 'none';
-    var focusBtn = document.getElementById('wsFloatingFocusBtn');
-    if (focusBtn) focusBtn.style.display = 'none';
+    _floatingState.maximized = false;
   }
   // Watch the node graph tab for class changes — when it loses .active
   // (close button clicked), make sure the workspace panel detaches.
@@ -557,6 +516,133 @@
     });
     obs.observe(tab, { attributes: true, attributeFilter: ['class'] });
   }
+
+  // ── Workspace state controls (driven by graph toolbar buttons) ──
+
+  // Focus Workspace — set zoom to 1.0 and pan so the workspace center
+  // is at the viewport center. Solves the "too small at low zoom" UX.
+  function focusOnWorkspace() {
+    if (typeof NG === 'undefined' || !NG.zm || !NG.pan) return;
+    var panel = document.getElementById('wsFloatingPanel');
+    var area = document.querySelector('#nodeGraphTab .ng-canvas-area');
+    if (!panel || !area || !panel.classList.contains('ws-floating-graph-mode')) return;
+    if (panel.classList.contains('ws-floating-folder')) restoreFromMinimized(); // unminimize first
+    var x = parseFloat(panel.style.left) || 0;
+    var y = parseFloat(panel.style.top) || 0;
+    var w = parseFloat(panel.style.width) || 720;
+    var h = parseFloat(panel.style.height) || 480;
+    var ar = area.getBoundingClientRect();
+    NG.zm(1.0);
+    NG.pan(ar.width / 2 - (x + w / 2), ar.height / 2 - (y + h / 2));
+    if (typeof window.ngApplyTx === 'function') window.ngApplyTx();
+    if (typeof window.ngRender === 'function') window.ngRender();
+  }
+
+  // Fullscreen toggle — when on, panel fills the entire visible canvas
+  // (in graph coords, accounting for current pan/zoom). When off,
+  // restore the previous saved size + position.
+  function toggleFullscreenWorkspace() {
+    var panel = document.getElementById('wsFloatingPanel');
+    var area = document.querySelector('#nodeGraphTab .ng-canvas-area');
+    if (!panel || !area || !panel.classList.contains('ws-floating-graph-mode')) return;
+    if (panel.classList.contains('ws-floating-folder')) restoreFromMinimized();
+    if (_floatingState.maximized) {
+      // Restore
+      if (_floatingState.savedRect) {
+        panel.style.left = _floatingState.savedRect.left + 'px';
+        panel.style.top = _floatingState.savedRect.top + 'px';
+        panel.style.width = _floatingState.savedRect.width + 'px';
+        panel.style.height = _floatingState.savedRect.height + 'px';
+        panel.dataset.graphX = _floatingState.savedRect.left;
+        panel.dataset.graphY = _floatingState.savedRect.top;
+        panel.dataset.graphW = _floatingState.savedRect.width;
+        panel.dataset.graphH = _floatingState.savedRect.height;
+      }
+      _floatingState.maximized = false;
+      panel.classList.remove('ws-floating-maximized');
+    } else {
+      // Save current state, then expand to fill the visible canvas in
+      // graph coords. The visible canvas area in graph coords is
+      // (-panX, -panY) at top-left, dimensions (areaW/zoom × areaH/zoom).
+      _floatingState.savedRect = {
+        left: parseFloat(panel.style.left) || 0,
+        top: parseFloat(panel.style.top) || 0,
+        width: parseFloat(panel.style.width) || 720,
+        height: parseFloat(panel.style.height) || 480
+      };
+      var p = NG.pan(), z = NG.zm() || 1;
+      var ar = area.getBoundingClientRect();
+      panel.style.left = (-p.x + 8) + 'px';
+      panel.style.top = (-p.y + 8) + 'px';
+      panel.style.width = (ar.width / z - 16) + 'px';
+      panel.style.height = (ar.height / z - 16) + 'px';
+      _floatingState.maximized = true;
+      panel.classList.add('ws-floating-maximized');
+    }
+  }
+
+  // Minimize → folder icon. Stows the panel as a small AGX-logo
+  // file-folder watch in the corner of the canvas. Click the icon to
+  // restore. The full panel state (size, position) is preserved.
+  function minimizeWorkspace() {
+    var panel = document.getElementById('wsFloatingPanel');
+    if (!panel || !panel.classList.contains('ws-floating-graph-mode')) return;
+    if (panel.classList.contains('ws-floating-folder')) return; // already minimized
+    if (_floatingState.maximized) toggleFullscreenWorkspace(); // restore from full first
+    _floatingState.preMinRect = {
+      left: parseFloat(panel.style.left) || 0,
+      top: parseFloat(panel.style.top) || 0,
+      width: parseFloat(panel.style.width) || 720,
+      height: parseFloat(panel.style.height) || 480
+    };
+    panel.classList.add('ws-floating-folder');
+    // Position in the top-left corner of the visible canvas (graph
+    // coords). Sized to ~80×96 — watch-sized as requested.
+    if (typeof NG !== 'undefined' && NG.pan) {
+      var p = NG.pan();
+      panel.style.left = (-p.x + 24) + 'px';
+      panel.style.top = (-p.y + 24) + 'px';
+    }
+    panel.style.width = '80px';
+    panel.style.height = '96px';
+  }
+  function restoreFromMinimized() {
+    var panel = document.getElementById('wsFloatingPanel');
+    if (!panel || !panel.classList.contains('ws-floating-folder')) return;
+    panel.classList.remove('ws-floating-folder');
+    if (_floatingState.preMinRect) {
+      panel.style.left = _floatingState.preMinRect.left + 'px';
+      panel.style.top = _floatingState.preMinRect.top + 'px';
+      panel.style.width = _floatingState.preMinRect.width + 'px';
+      panel.style.height = _floatingState.preMinRect.height + 'px';
+      panel.dataset.graphX = _floatingState.preMinRect.left;
+      panel.dataset.graphY = _floatingState.preMinRect.top;
+      panel.dataset.graphW = _floatingState.preMinRect.width;
+      panel.dataset.graphH = _floatingState.preMinRect.height;
+    }
+  }
+  // Wire the graph toolbar buttons. Called by attachWorkspaceToGraph
+  // after the toolbar DOM exists. Idempotent: only binds once.
+  var _toolbarWired = false;
+  function wireGraphToolbarWorkspaceButtons() {
+    if (_toolbarWired) return;
+    var focusBtn = document.getElementById('ngWsFocusBtn');
+    var fsBtn = document.getElementById('ngWsFullscreenBtn');
+    var minBtn = document.getElementById('ngWsMinimizeBtn');
+    if (focusBtn) focusBtn.addEventListener('click', focusOnWorkspace);
+    if (fsBtn) fsBtn.addEventListener('click', toggleFullscreenWorkspace);
+    if (minBtn) minBtn.addEventListener('click', minimizeWorkspace);
+    _toolbarWired = true;
+  }
+  // Click the minimized folder icon to restore. Bound globally on the
+  // panel since the folder takes over the panel's DOM.
+  document.addEventListener('click', function(e) {
+    var panel = document.getElementById('wsFloatingPanel');
+    if (!panel || !panel.classList.contains('ws-floating-folder')) return;
+    if (panel.contains(e.target)) {
+      restoreFromMinimized();
+    }
+  });
 
   // ── Move panels into right content area ───────────────────
   function populateRightPanels(detail) {
