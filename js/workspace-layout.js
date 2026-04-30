@@ -650,8 +650,9 @@
     panel.classList.add('ws-floating-folder');
     panel.style.width = '160px';
     panel.style.height = '130px';
-    // Restore the user's last minimized position if we have one,
-    // otherwise drop it into the top-left of the visible canvas.
+    // Restore the user's last minimized position if we have one;
+    // otherwise leave the panel where it is so the minimized icon
+    // appears near where the expanded panel was.
     var savedMin = null;
     try {
       var raw = localStorage.getItem('agx-ws-min-pos');
@@ -660,10 +661,6 @@
     if (savedMin && isFinite(savedMin.x) && isFinite(savedMin.y)) {
       panel.style.left = savedMin.x + 'px';
       panel.style.top = savedMin.y + 'px';
-    } else if (typeof NG !== 'undefined' && NG.pan) {
-      var p = NG.pan();
-      panel.style.left = (-p.x + 24) + 'px';
-      panel.style.top = (-p.y + 24) + 'px';
     }
   }
   function restoreFromMinimized() {
