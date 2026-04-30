@@ -55,6 +55,8 @@
                     <div id="wip-main-view">
                         <div class="wip-action-tabs">
                             <button class="wip-action-tab" onclick="openAddJobModal()">+ Add Job</button>
+                            <button class="wip-action-tab" onclick="document.getElementById('qb-costs-import-file').click()" title="Import a QuickBooks weekly Detailed Job Costs xlsx">&#x1F4E5; Import QB Costs</button>
+                            <input type="file" id="qb-costs-import-file" accept=".xlsx" style="display:none;" onchange="handleQBCostsFile(event)" />
                             <button class="wip-action-tab" onclick="exportWIPToCSV()">Export CSV</button>
                             <button class="wip-action-tab" onclick="window.print()">Print Report</button>
                             <button class="wip-action-tab" onclick="showArchivedJobs()">Archived</button>
@@ -873,6 +875,22 @@
     </div>
 
     <!-- MODALS -->
+    <!-- QuickBooks Detailed Job Costs import preview. Populated by
+         js/job-costs-import.js after parsing the dropped xlsx. Shows
+         matched jobs (with totals) and unmatched (with per-row "Create
+         stub job" buttons). Confirm writes a dated sheet to each
+         matched job's workspace. -->
+    <div id="qbCostsImportModal" class="modal">
+      <div class="modal-content" style="max-width:880px;max-height:88vh;display:flex;flex-direction:column;">
+        <div class="modal-header" id="qbCostsImport_title">Import QB Job Costs</div>
+        <div id="qbCostsImport_body" style="padding:18px 20px;overflow-y:auto;flex:1;"></div>
+        <div class="modal-footer" style="display:flex;gap:10px;justify-content:flex-end;">
+          <button class="secondary" onclick="closeModal('qbCostsImportModal')">Cancel</button>
+          <button class="primary" id="qbCostsImport_confirmBtn" onclick="commitQBCostsImport()">Import</button>
+        </div>
+      </div>
+    </div>
+
     <div id="addJobModal" class="modal">
         <div class="modal-content">
             <div class="modal-header">Add Job</div>
@@ -1974,6 +1992,7 @@
     <script src="js/admin.js?v=13"></script>
     <script src="js/clients.js?v=8"></script>
     <script src="js/leads.js?v=10"></script>
+    <script src="js/job-costs-import.js?v=1"></script>
     <script src="js/insights.js?v=5"></script>
     <script src="js/app.js?v=41"></script>
     <script src="js/wip.js?v=56"></script>
