@@ -76,7 +76,13 @@ app.get('*', (req, res) => {
 // lookups can refresh from the DB whenever a role mutation lands.
 setRolePool(pool);
 
-init().then(refreshRoleCache).then(() => {
+// Local-dev escape hatch: if DATABASE_URL is empty (i.e. running on a
+// dev box without Postgres) skip schema init and just serve the
+// static frontend. The frontend's existing offline-mode (driven by
+// /api/auth/me failing) takes over and runs against localStorage.
+// On Railway, DATABASE_URL is always set, so this branch never fires
+// in production.
+function startServer() {
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`AGX WIP Tracker running on http://localhost:${PORT}`);
     if (process.env.ADMIN_EMAIL) {
@@ -85,7 +91,15 @@ init().then(refreshRoleCache).then(() => {
       console.log('No ADMIN_EMAIL/ADMIN_PASSWORD env vars set — using dev admin@local / changeme');
     }
   });
-}).catch(err => {
-  console.error('Failed to initialize database:', err.message);
-  process.exit(1);
-});
+}
+
+if (!process.env.DATABASE_URL) {
+  console.warn('[server] DATABASE_URL not set — starting in offline/static mode. ' +
+    'API routes that hit Postgres will return 500; the frontend will fall back to localStorage.');
+  startServer();
+} else {
+  init().then(refreshRoleCache).then(startServer).catch(err => {
+    console.error('Failed to initialize database:', err.message);
+    process.exit(1);
+  });
+}
