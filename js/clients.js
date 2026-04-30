@@ -966,6 +966,18 @@
     // refetch we expose reloadClientsCache too — both behaviors land in
     // the create/edit commit when the data starts mutating.
     void refreshBtn;
+
+    // Belt-and-suspenders binding for the Estimates sub-tab buttons.
+    // The inline onclick still works in the happy path, but if some
+    // earlier script blew up before clients.js's window.* exposure
+    // ran, the inline lookup would silently no-op. A JS-bound click
+    // handler always fires because it captures the function ref now.
+    document.querySelectorAll('#estimates [data-estimates-subtab]').forEach(function(btn) {
+      btn.addEventListener('click', function(e) {
+        var name = btn.dataset.estimatesSubtab;
+        if (name) switchEstimatesSubTab(name);
+      });
+    });
   });
 
   window.switchEstimatesSubTab = switchEstimatesSubTab;

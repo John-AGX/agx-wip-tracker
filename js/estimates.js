@@ -32,7 +32,7 @@ function renderEstimatesList() {
             }
 
             filtered.forEach(est => {
-                const allLines = appData.estimateLines.filter(l => l.estimateId === est.id);
+                const allLines = (appData.estimateLines || []).filter(l => l.estimateId === est.id);
                 let baseCost = 0;
                 let markedUp = 0;
                 allLines.forEach((l, idx) => {

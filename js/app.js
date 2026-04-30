@@ -337,7 +337,19 @@
             }
 
             if (tabName === 'estimates') {
-                renderEstimatesList();
+                // Pick the currently-active sub-tab and route through
+                // switchEstimatesSubTab so its render fires. Without
+                // this the user lands on the Leads sub-tab (active by
+                // default in markup) but nothing has rendered the
+                // leads list yet — the page looks broken until they
+                // click Refresh or another sub-tab.
+                var activeSub = document.querySelector('#estimates [data-estimates-subtab].active');
+                var subName = activeSub ? activeSub.dataset.estimatesSubtab : 'list';
+                if (typeof window.switchEstimatesSubTab === 'function') {
+                    window.switchEstimatesSubTab(subName);
+                } else {
+                    renderEstimatesList();
+                }
             } else if (tabName === 'insights') {
                 if (typeof renderInsightsDashboard === 'function') renderInsightsDashboard();
             } else if (tabName === 'admin') {
