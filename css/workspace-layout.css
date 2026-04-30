@@ -529,3 +529,141 @@
   background: rgba(59, 130, 246, 0.7);
   height: 60px;
 }
+
+/* ── Single-column main view (Phase: drop two-col) ──────── */
+/* When ws-single-col is on, the main column expands full-width and
+   the (now-removed) left column / resizer aren't rendered. */
+.ws-two-col.ws-single-col {
+  grid-template-columns: 1fr;
+  display: block;
+}
+.ws-two-col.ws-single-col > .ws-col-right {
+  width: 100%;
+  border-left: none;
+}
+
+/* Tabs row gets an actions slot on the right edge for the Ask AI
+   button, so it lives with the tab strip instead of taking its own row. */
+.ws-right-tabs-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-right: 6px;
+}
+
+/* ── Workspace canvas backdrop ──────────────────────────── */
+/* The "node-graph aesthetic" without running the engine: a dark
+   surface with a subtle dotted grid. The floating spreadsheet panel
+   hovers above this, draggable + resizable. */
+.ws-workspace-canvas {
+  position: relative;
+  height: calc(100vh - 220px);
+  min-height: 540px;
+  padding: 0;
+  margin: 0;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.ws-canvas-backdrop {
+  position: absolute;
+  inset: 0;
+  background-color: var(--surface, #181820);
+  /* Dotted grid pattern — small dots every 24px give a node-graph feel
+     without competing with cell content. */
+  background-image: radial-gradient(circle, rgba(79, 140, 255, 0.10) 1px, transparent 1px);
+  background-size: 24px 24px;
+  /* Subtle gradient for depth */
+  box-shadow: inset 0 0 60px rgba(0, 0, 0, 0.45);
+  border: 1px solid var(--border, #2e3346);
+  border-radius: 6px;
+}
+
+/* ── Floating workspace panel ──────────────────────────── */
+/* Card + node-graph aesthetic: rounded frame, subtle accent border,
+   gradient header. Lives at fixed position so the user can drag and
+   resize freely within the canvas. */
+.ws-floating-panel {
+  position: fixed;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface, #181820);
+  border: 1px solid rgba(79, 140, 255, 0.35);
+  border-radius: 10px;
+  box-shadow:
+    0 12px 40px rgba(0, 0, 0, 0.55),
+    0 0 0 1px rgba(79, 140, 255, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  min-width: 420px;
+  min-height: 280px;
+  overflow: hidden;
+}
+.ws-floating-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px;
+  background: linear-gradient(135deg, rgba(79, 140, 255, 0.18) 0%, rgba(139, 92, 246, 0.12) 100%);
+  border-bottom: 1px solid rgba(79, 140, 255, 0.25);
+  cursor: move;
+  user-select: none;
+}
+.ws-floating-header:active { cursor: grabbing; }
+.ws-floating-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text, #fff);
+  letter-spacing: 0.3px;
+}
+.ws-floating-actions {
+  display: flex;
+  gap: 4px;
+}
+.ws-floating-btn {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--text, #fff);
+  border-radius: 4px;
+  width: 24px;
+  height: 22px;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.ws-floating-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+.ws-floating-body {
+  flex: 1 1 auto;
+  overflow: auto;
+  padding: 0;
+}
+.ws-floating-body #wsWorkspaceContainer {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.ws-floating-resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  background:
+    linear-gradient(135deg, transparent 0%, transparent 50%, rgba(79, 140, 255, 0.35) 50%, rgba(79, 140, 255, 0.35) 60%, transparent 60%, transparent 70%, rgba(79, 140, 255, 0.35) 70%, rgba(79, 140, 255, 0.35) 80%, transparent 80%);
+  z-index: 51;
+}
+
+/* Minimized state: collapse to header only */
+.ws-floating-panel.ws-floating-minimized {
+  min-height: unset;
+  height: auto !important;
+}
+.ws-floating-panel.ws-floating-minimized .ws-floating-body,
+.ws-floating-panel.ws-floating-minimized .ws-floating-resize {
+  display: none;
+}

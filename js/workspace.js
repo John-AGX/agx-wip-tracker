@@ -1589,7 +1589,7 @@
         <input type="file" id="wsImportXlsxInput" accept=".xlsx,.xls,.csv" style="display:none;" />
         <button class="ws-btn" id="wsClearBtn" title="Clear workspace">&#x1F5D1;</button>
         <button class="ws-btn ws-btn-save" id="wsSaveBtn" title="Save workspace (Ctrl+S)">&#x1F4BE; Save</button>
-        <button class="ws-btn" id="wsNodeGraphBtn" title="Node Graph (Beta)">&#x26A1;</button>
+        <button class="ws-btn" id="wsNodeGraphBtn" title="Node Graph (Beta)">&#x1F4CA;</button>
       </div>
       <div class="ws-toolbar-fmt" id="wsToolbarFmt">
         <button class="ws-btn ws-btn-icon" id="wsUndoBtn" title="Undo (Ctrl+Z)">&#x21A9;</button>

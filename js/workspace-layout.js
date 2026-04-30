@@ -14,17 +14,19 @@
   let currentJobId = null;
   let _ngComputing = false;
 
-  // ── Tab definitions for right panel ───────────────────────
+  // ── Tab definitions ──────────────────────────────────────
+  // Overview is the landing tab (first). The new "Workspace" tab swaps
+  // in a node-graph-style canvas with the spreadsheet rendered as a
+  // floating, draggable, resizable panel on top.
   const RIGHT_TABS = [
     { id: 'job-overview',      label: 'Overview' },
+    { id: 'job-workspace',     label: '\u{1F4CA} Workspace' },
     { id: 'job-wip',           label: 'WIP' },
     { id: 'job-costs',         label: 'Costs' },
     { id: 'job-changeorders',  label: 'CO\'s' },
     { id: 'job-purchaseorders',label: 'PO\'s' },
     { id: 'job-invoices',      label: 'Invoices' },
     { id: 'job-subs',          label: 'Subs' }
-    // Accruals tab retired — Thursday WIP meeting accruals were a manual
-    // weekly capture workflow. Daily auto-snapshots (3 AM EST) replace it.
   ];
 
   // ── CSS injection ─────────────────────────────────────────
@@ -33,7 +35,7 @@
     var link = document.createElement('link');
     link.id = 'ws-layout-v2-css';
     link.rel = 'stylesheet';
-    link.href = 'css/workspace-layout.css?v=26';
+    link.href = 'css/workspace-layout.css?v=27';
     document.head.appendChild(link);
   }
 
@@ -289,43 +291,140 @@
   function buildLayout(detail) {
     var container = document.createElement('div');
     container.id = 'ws-two-col';
-    container.className = 'ws-two-col';
+    container.className = 'ws-two-col ws-single-col';
 
-    // ─── LEFT COLUMN: Workspace ─────
-    var leftCol = document.createElement('div');
-    leftCol.className = 'ws-col-left';
-    leftCol.innerHTML =
-      '<div class="ws-left-header" style="display:flex;align-items:center;gap:10px;">' +
-        '<img src="images/logo-color.png" alt="AGX" class="ws-left-logo" />' +
-        '<span class="ws-left-sub" style="flex:1;">Workspace \u00b7 Formulas \u00b7 Cell\u2192Job Linking</span>' +
-        '<button class="ee-btn" onclick="openJobAI()" title="WIP / financial AI assistant" style="background:linear-gradient(135deg,#8b5cf6,#4f8cff);color:#fff;border-color:transparent;">\u2728 Ask AI</button>' +
-      '</div>' +
-      '<div id="wsWorkspaceContainer" tabindex="0"></div>';
+    // Single full-width column. Tabs strip + content. Overview is the
+    // landing tab. The "Workspace" tab swaps in a node-graph-style
+    // canvas with the spreadsheet rendered as a floating panel on top.
+    var mainCol = document.createElement('div');
+    mainCol.className = 'ws-col-right';
 
-    // ─── RIGHT COLUMN: Metrics + Tabs ─────
-    var rightCol = document.createElement('div');
-    rightCol.className = 'ws-col-right';
-
-    // Tab buttons (metrics strip now lives in header)
     var tabsHtml = '<div class="ws-right-tabs">';
     RIGHT_TABS.forEach(function(tab, i) {
       tabsHtml += '<button class="ws-right-tab' + (i === 0 ? ' active' : '') + '" data-panel="' + tab.id + '">' + tab.label + '</button>';
     });
+    tabsHtml += '<div class="ws-right-tabs-actions">' +
+      '<button class="ee-btn" onclick="openJobAI()" title="WIP / financial AI assistant" style="background:linear-gradient(135deg,#8b5cf6,#4f8cff);color:#fff;border-color:transparent;">✨ Ask AI</button>' +
+    '</div>';
     tabsHtml += '</div>';
 
-    // Tab content area
     var contentHtml = '<div class="ws-right-content" id="wsRightContent"></div>';
+    mainCol.innerHTML = tabsHtml + contentHtml;
+    container.appendChild(mainCol);
 
-    rightCol.innerHTML = tabsHtml + contentHtml;
-
-    container.appendChild(leftCol);
-    
-    var resizer = document.createElement('div');
-    resizer.className = 'ws-resizer';
-    container.appendChild(resizer);
-    container.appendChild(rightCol);
+    var fp = document.createElement('div');
+    fp.id = 'wsFloatingPanel';
+    fp.className = 'ws-floating-panel';
+    fp.style.display = 'none';
+    fp.innerHTML =
+      '<div class="ws-floating-header" id="wsFloatingHeader">' +
+        '<span class="ws-floating-title">\u{1F4CA} Workspace</span>' +
+        '<div class="ws-floating-actions">' +
+          '<button class="ws-floating-btn" id="wsFloatingMinBtn" title="Minimize">—</button>' +
+          '<button class="ws-floating-btn" id="wsFloatingMaxBtn" title="Maximize / restore">⛶</button>' +
+        '</div>' +
+      '</div>' +
+      '<div class="ws-floating-body">' +
+        '<div id="wsWorkspaceContainer" tabindex="0"></div>' +
+      '</div>' +
+      '<div class="ws-floating-resize" id="wsFloatingResize"></div>';
+    container.appendChild(fp);
 
     return container;
+  }
+
+  var _floatingState = { inited: false, minimized: false, maximized: false, savedRect: null };
+  function initFloatingPanel() {
+    if (_floatingState.inited) return;
+    var panel = document.getElementById('wsFloatingPanel');
+    var header = document.getElementById('wsFloatingHeader');
+    var resize = document.getElementById('wsFloatingResize');
+    var minBtn = document.getElementById('wsFloatingMinBtn');
+    var maxBtn = document.getElementById('wsFloatingMaxBtn');
+    if (!panel || !header) return;
+
+    function setInitialRect() {
+      var canvas = document.getElementById('wsCanvas');
+      if (!canvas) return;
+      var r = canvas.getBoundingClientRect();
+      panel.style.left = (r.left + 24) + 'px';
+      panel.style.top = (r.top + 24) + 'px';
+      panel.style.width = Math.max(780, Math.min(r.width - 48, 1280)) + 'px';
+      panel.style.height = Math.max(520, Math.min(r.height - 48, 760)) + 'px';
+    }
+    setInitialRect();
+
+    var dragging = null;
+    header.addEventListener('mousedown', function(e) {
+      if (e.target.closest('.ws-floating-btn')) return;
+      var rect = panel.getBoundingClientRect();
+      dragging = { offsetX: e.clientX - rect.left, offsetY: e.clientY - rect.top };
+      document.body.style.userSelect = 'none';
+      e.preventDefault();
+    });
+    document.addEventListener('mousemove', function(e) {
+      if (!dragging) return;
+      panel.style.left = (e.clientX - dragging.offsetX) + 'px';
+      panel.style.top = (e.clientY - dragging.offsetY) + 'px';
+    });
+    document.addEventListener('mouseup', function() {
+      if (dragging) { dragging = null; document.body.style.userSelect = ''; }
+    });
+
+    var resizing = null;
+    resize.addEventListener('mousedown', function(e) {
+      var rect = panel.getBoundingClientRect();
+      resizing = { startX: e.clientX, startY: e.clientY, startW: rect.width, startH: rect.height };
+      document.body.style.userSelect = 'none';
+      e.preventDefault();
+    });
+    document.addEventListener('mousemove', function(e) {
+      if (!resizing) return;
+      panel.style.width = Math.max(420, resizing.startW + (e.clientX - resizing.startX)) + 'px';
+      panel.style.height = Math.max(280, resizing.startH + (e.clientY - resizing.startY)) + 'px';
+    });
+    document.addEventListener('mouseup', function() {
+      if (resizing) { resizing = null; document.body.style.userSelect = ''; }
+    });
+
+    minBtn.addEventListener('click', function() {
+      _floatingState.minimized = !_floatingState.minimized;
+      panel.classList.toggle('ws-floating-minimized', _floatingState.minimized);
+    });
+    maxBtn.addEventListener('click', function() {
+      var canvas = document.getElementById('wsCanvas');
+      if (!canvas) return;
+      if (_floatingState.maximized) {
+        if (_floatingState.savedRect) {
+          panel.style.left = _floatingState.savedRect.left + 'px';
+          panel.style.top = _floatingState.savedRect.top + 'px';
+          panel.style.width = _floatingState.savedRect.width + 'px';
+          panel.style.height = _floatingState.savedRect.height + 'px';
+        }
+        _floatingState.maximized = false;
+      } else {
+        var rect = panel.getBoundingClientRect();
+        _floatingState.savedRect = { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
+        var c = canvas.getBoundingClientRect();
+        panel.style.left = (c.left + 8) + 'px';
+        panel.style.top = (c.top + 8) + 'px';
+        panel.style.width = (c.width - 16) + 'px';
+        panel.style.height = (c.height - 16) + 'px';
+        _floatingState.maximized = true;
+      }
+    });
+    _floatingState.inited = true;
+  }
+
+  function showFloatingWorkspace() {
+    var panel = document.getElementById('wsFloatingPanel');
+    if (!panel) return;
+    panel.style.display = 'flex';
+    initFloatingPanel();
+  }
+  function hideFloatingWorkspace() {
+    var panel = document.getElementById('wsFloatingPanel');
+    if (panel) panel.style.display = 'none';
   }
 
   // ── Move panels into right content area ───────────────────
@@ -356,6 +455,21 @@
     tryMove();
   }
 
+  // Make sure a 'job-workspace' content panel exists. It's the canvas
+  // backdrop (dotted-grid pattern, node-graph aesthetic) over which the
+  // floating workspace panel hovers. Created lazily the first time the
+  // Workspace tab is activated.
+  function ensureWorkspaceCanvas(rc) {
+    var canvas = document.getElementById('job-workspace');
+    if (canvas) return canvas;
+    canvas = document.createElement('div');
+    canvas.id = 'job-workspace';
+    canvas.className = 'sub-tab-content-job ws-workspace-canvas';
+    canvas.innerHTML = '<div id="wsCanvas" class="ws-canvas-backdrop"></div>';
+    rc.appendChild(canvas);
+    return canvas;
+  }
+
   function wireTabSwitching() {
     var tabs = document.querySelectorAll('.ws-right-tab');
     var rc = document.getElementById('wsRightContent');
@@ -365,10 +479,25 @@
         tabs.forEach(function(t) { t.classList.remove('active'); });
         this.classList.add('active');
         var targetId = this.getAttribute('data-panel');
+
+        // Workspace tab: create the canvas if needed + show floating panel
+        if (targetId === 'job-workspace') {
+          ensureWorkspaceCanvas(rc);
+        }
+
         var allPanels = Array.from(rc.children);
         allPanels.forEach(function(p) { if (!p.classList.contains('ws-job-info-details')) p.style.display = 'none'; });
         var target = document.getElementById(targetId);
         if (target) target.style.display = 'block';
+
+        // Show / hide the floating spreadsheet panel based on which tab
+        // is active. Workspace tab shows it; every other tab hides it.
+        if (targetId === 'job-workspace') {
+          showFloatingWorkspace();
+        } else {
+          hideFloatingWorkspace();
+        }
+
         // Call render function for the tab content
         var jobId = (typeof appState !== 'undefined') ? appState.currentJobId : null;
         if (!jobId) return;
