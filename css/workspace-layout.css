@@ -767,7 +767,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 6px;
+  padding: 18px 28px;
   overflow: hidden;
   background: var(--ng-surface, #12162a);
   cursor: move;

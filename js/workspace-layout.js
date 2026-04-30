@@ -441,12 +441,15 @@
     });
     document.addEventListener('mouseup', function() {
       if (dragging) {
-        if (inGraphMode()) {
+        var isFolder = panel.classList.contains('ws-floating-folder');
+        // Only persist dataset.graphX/Y for the EXPANDED panel — that
+        // value is what attachWorkspaceToGraph reads on re-attach.
+        // The minimized icon has its own saved position.
+        if (inGraphMode() && !isFolder) {
           panel.dataset.graphX = parseInt(panel.style.left, 10) || 0;
           panel.dataset.graphY = parseInt(panel.style.top, 10) || 0;
         }
-        // Persist the minimized position so it sticks across opens.
-        if (panel.classList.contains('ws-floating-folder')) {
+        if (isFolder) {
           try {
             localStorage.setItem('agx-ws-min-pos', JSON.stringify({
               x: parseInt(panel.style.left, 10) || 0,
@@ -454,8 +457,6 @@
             }));
           } catch (e) {}
         }
-        // If the user actually dragged, suppress the click-to-restore
-        // that would otherwise fire on this mouseup.
         if (dragging.moved) _floatingState.suppressRestoreClick = true;
         dragging = null;
         document.body.style.userSelect = '';
@@ -698,17 +699,29 @@
   function restoreFromMinimized() {
     var panel = document.getElementById('wsFloatingPanel');
     if (!panel || !panel.classList.contains('ws-floating-folder')) return;
+    // Capture where the minimized icon currently is, then expand the
+    // panel centered on that spot so it feels like the icon inflated
+    // in place. Width/height come from preMinRect so the user's last
+    // sizing is preserved.
+    var miniLeft = parseFloat(panel.style.left) || 0;
+    var miniTop = parseFloat(panel.style.top) || 0;
+    var miniW = parseFloat(panel.style.width) || 320;
+    var miniH = parseFloat(panel.style.height) || 240;
+    var miniCx = miniLeft + miniW / 2;
+    var miniCy = miniTop + miniH / 2;
     panel.classList.remove('ws-floating-folder');
-    if (_floatingState.preMinRect) {
-      panel.style.left = _floatingState.preMinRect.left + 'px';
-      panel.style.top = _floatingState.preMinRect.top + 'px';
-      panel.style.width = _floatingState.preMinRect.width + 'px';
-      panel.style.height = _floatingState.preMinRect.height + 'px';
-      panel.dataset.graphX = _floatingState.preMinRect.left;
-      panel.dataset.graphY = _floatingState.preMinRect.top;
-      panel.dataset.graphW = _floatingState.preMinRect.width;
-      panel.dataset.graphH = _floatingState.preMinRect.height;
-    }
+    var w = (_floatingState.preMinRect && _floatingState.preMinRect.width) || 720;
+    var h = (_floatingState.preMinRect && _floatingState.preMinRect.height) || 480;
+    var newLeft = Math.round(miniCx - w / 2);
+    var newTop = Math.round(miniCy - h / 2);
+    panel.style.left = newLeft + 'px';
+    panel.style.top = newTop + 'px';
+    panel.style.width = w + 'px';
+    panel.style.height = h + 'px';
+    panel.dataset.graphX = newLeft;
+    panel.dataset.graphY = newTop;
+    panel.dataset.graphW = w;
+    panel.dataset.graphH = h;
   }
   // Wire the graph toolbar buttons. Called by attachWorkspaceToGraph
   // after the toolbar DOM exists. Idempotent: only binds once.
