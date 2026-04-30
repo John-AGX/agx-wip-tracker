@@ -59,8 +59,16 @@ body.light-mode .ng-del-cancel:hover{background:#e5e7eb}
 .ng-tbtn-close:hover{background:rgba(248,113,113,.2)}
 .ng-main{display:flex;flex:1;overflow:hidden}
 /* Sidebar */
-.ng-sidebar{width:200px;background:var(--ng-input);border-right:1px solid var(--ng-border2);overflow-y:auto;flex-shrink:0}
-.ng-sidebar-header{padding:10px 12px;font-size:11px;font-weight:700;color:var(--ng-dim2);text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--ng-border2)}
+.ng-sidebar{width:200px;background:var(--ng-input);border-right:1px solid var(--ng-border2);overflow-y:auto;flex-shrink:0;transition:width .15s ease}
+.ng-sidebar.ng-collapsed{width:28px;cursor:pointer;overflow:hidden}
+.ng-sidebar.ng-collapsed:hover{background:rgba(79,140,255,.08)}
+.ng-sidebar.ng-collapsed .ng-sidebar-header-text,
+.ng-sidebar.ng-collapsed .ng-sidebar-search,
+.ng-sidebar.ng-collapsed .ng-cat{display:none}
+.ng-sidebar.ng-collapsed .ng-sidebar-header{padding:8px 0;justify-content:center;border-bottom:none}
+.ng-sidebar-header{padding:10px 12px;font-size:11px;font-weight:700;color:var(--ng-dim2);text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--ng-border2);display:flex;align-items:center;justify-content:space-between;gap:6px}
+.ng-sidebar-toggle{background:transparent;border:1px solid var(--ng-border2);color:var(--ng-dim2);width:18px;height:18px;border-radius:3px;font-size:9px;line-height:1;cursor:pointer;padding:0;flex-shrink:0}
+.ng-sidebar-toggle:hover{color:#6aa3ff;border-color:#4f8cff}
 .ng-sidebar-search{padding:8px 10px;border-bottom:1px solid var(--ng-border2)}
 .ng-sidebar-search input{width:100%;background:var(--ng-bg);border:1px solid var(--ng-border2);color:var(--ng-text);border-radius:4px;padding:5px 8px;font-size:12px;outline:none}
 .ng-sidebar-search input:focus{border-color:#4f8cff}

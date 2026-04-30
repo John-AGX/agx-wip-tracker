@@ -794,7 +794,10 @@ function openEntityCreateModal(type, cb){
 // ── Sidebar ──
 function buildSidebar(){
   var sb=document.querySelector('.ng-sidebar'); if(!sb) return;
-  var html='<div class="ng-sidebar-header">Node Library</div>';
+  var html='<div class="ng-sidebar-header">' +
+    '<span class="ng-sidebar-header-text">Node Library</span>' +
+    '<button class="ng-sidebar-toggle" id="ngSidebarToggle" title="Collapse library">◀</button>' +
+    '</div>';
   html+='<div class="ng-sidebar-search"><input type="text" placeholder="Search..." id="ngSearch"/></div>';
   E.CATS.forEach(function(cat,ci){
     html+='<div class="ng-cat ng-open">';
@@ -808,7 +811,30 @@ function buildSidebar(){
   });
   sb.innerHTML=html;
 
+  // Restore collapsed state from previous session.
+  try { if (localStorage.getItem('ngSidebarCollapsed')==='1') sb.classList.add('ng-collapsed'); } catch(e){}
+  var tog=document.getElementById('ngSidebarToggle');
+  function syncToggle(){
+    var c=sb.classList.contains('ng-collapsed');
+    if(tog){ tog.innerHTML=c?'▶':'◀'; tog.title=c?'Expand library':'Collapse library'; }
+  }
+  syncToggle();
+
   sb.addEventListener('click',function(e){
+    if(e.target.closest('.ng-sidebar-toggle')){
+      e.stopPropagation();
+      sb.classList.toggle('ng-collapsed');
+      try { localStorage.setItem('ngSidebarCollapsed', sb.classList.contains('ng-collapsed')?'1':'0'); } catch(_){}
+      syncToggle();
+      return;
+    }
+    // Click anywhere on a collapsed sidebar expands it.
+    if(sb.classList.contains('ng-collapsed')){
+      sb.classList.remove('ng-collapsed');
+      try { localStorage.setItem('ngSidebarCollapsed','0'); } catch(_){}
+      syncToggle();
+      return;
+    }
     var hdr=e.target.closest('.ng-cat-header');
     if(hdr){hdr.parentElement.classList.toggle('ng-open');return;}
     var item=e.target.closest('.ng-cat-item');

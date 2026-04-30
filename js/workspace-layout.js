@@ -322,8 +322,13 @@
     // just identifies the panel and gives the user a drag handle.
     fp.innerHTML =
       '<div class="ws-floating-header" id="wsFloatingHeader">' +
-        '<img src="images/logo-color.png" alt="AGX" class="ws-floating-logo" />' +
-        '<span class="ws-floating-title">Workspace</span>' +
+        '<span class="ws-floating-titlewrap">' +
+          '<img src="images/logo-color.png" alt="AGX" class="ws-floating-logo" />' +
+          '<span class="ws-floating-title">Workspace</span>' +
+        '</span>' +
+        '<div class="ws-floating-actions">' +
+          '<button class="ws-floating-btn" id="wsFloatingMinBtn" title="Minimize to folder icon">&#x2013;</button>' +
+        '</div>' +
       '</div>' +
       '<div class="ws-floating-body">' +
         '<div id="wsWorkspaceContainer" tabindex="0"></div>' +
@@ -442,6 +447,11 @@
       // listener and already calls stopPropagation. Same for resize.
       if (e.target.closest('.ws-floating-header, .ws-floating-resize')) return;
       e.stopPropagation();
+    });
+
+    if (minBtn) minBtn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      minimizeWorkspace();
     });
 
     _floatingState.inited = true;
@@ -628,10 +638,8 @@
     if (_toolbarWired) return;
     var focusBtn = document.getElementById('ngWsFocusBtn');
     var fsBtn = document.getElementById('ngWsFullscreenBtn');
-    var minBtn = document.getElementById('ngWsMinimizeBtn');
     if (focusBtn) focusBtn.addEventListener('click', focusOnWorkspace);
     if (fsBtn) fsBtn.addEventListener('click', toggleFullscreenWorkspace);
-    if (minBtn) minBtn.addEventListener('click', minimizeWorkspace);
     _toolbarWired = true;
   }
   // Click the minimized folder icon to restore. Bound globally on the

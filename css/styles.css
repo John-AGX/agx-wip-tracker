@@ -68,6 +68,33 @@
             line-height: 1.6;
         }
 
+        /* ── Global dark-mode scrollbars ─────────────────────────
+           Match the styled scrollbars used in the workspace/Excel
+           grid, applied to every scrollable region. Light mode
+           keeps the OS-default chrome. */
+        body:not(.light-mode) {
+            scrollbar-width: thin;
+            scrollbar-color: var(--scrollbar-thumb) var(--surface);
+        }
+        body:not(.light-mode) ::-webkit-scrollbar {
+            width: 10px;
+            height: 10px;
+        }
+        body:not(.light-mode) ::-webkit-scrollbar-track {
+            background: var(--surface);
+        }
+        body:not(.light-mode) ::-webkit-scrollbar-thumb {
+            background: var(--scrollbar-thumb);
+            border-radius: 5px;
+            border: 2px solid var(--surface);
+        }
+        body:not(.light-mode) ::-webkit-scrollbar-thumb:hover {
+            background: #4a5168;
+        }
+        body:not(.light-mode) ::-webkit-scrollbar-corner {
+            background: var(--surface);
+        }
+
         .container {
             display: flex;
             flex-direction: column;
