@@ -85,44 +85,122 @@
   }
 
   // Extract job code from a header like "RV2001 Waterside I Milestone
-  // Restoration". Code is the leading whitespace-delimited token.
-  // Match against [A-Z]+\d+ to avoid false positives if QB ever puts
-  // a stray sentence in col A.
+  // Restoration" or "437775 Solace Exterior Paint & Repairs". Code is
+  // the leading whitespace-delimited token. QB uses both lettered
+  // (S2009, RV2001) and all-numeric (437775) prefixes depending on
+  // when the project was created, so allow either.
   function extractCode(header) {
-    var m = (header || '').toString().trim().match(/^([A-Za-z]+\d+)\s+(.+)$/);
+    var s = (header || '').toString().trim();
+    var m = s.match(/^(\S+)\s+(.+)$/);
     if (m) return { code: m[1].toUpperCase(), name: m[2].trim() };
-    return { code: '', name: (header || '').toString().trim() };
+    return { code: '', name: s };
+  }
+
+  // Build a column-index map from the header row. QB has shipped two
+  // layouts so far:
+  //   v1 (03.20 export): Vendor | Date | Distribution account |
+  //                      Distribution account type | Class |
+  //                      Memo/Description | Amount   (cols B-H)
+  //   v2 (04.24 export): Vendor | Transaction type | Date | Num |
+  //                      Distribution account | Class |
+  //                      Memo/Description | Amount   (cols B-I)
+  // Locate each field by header name so we don't break next time the
+  // layout shifts.
+  function buildColumnMap(headerRow) {
+    var map = {};
+    (headerRow || []).forEach(function(cell, idx) {
+      var name = (cell == null ? '' : String(cell)).trim().toLowerCase();
+      if (!name) return;
+      if (name === 'vendor')                         map.vendor = idx;
+      else if (name === 'date')                      map.date = idx;
+      else if (name === 'transaction type')          map.txnType = idx;
+      else if (name === 'num')                       map.num = idx;
+      else if (name === 'distribution account')      map.account = idx;
+      else if (name === 'distribution account type') map.accountType = idx;
+      else if (name === 'class')                     map.klass = idx;
+      else if (name === 'memo' ||
+               name === 'memo/description' ||
+               name === 'memo / description')        map.memo = idx;
+      else if (name === 'amount')                    map.amount = idx;
+    });
+    return map;
+  }
+
+  // Pick the sheet that actually holds the per-job detail rows. A
+  // workbook with both a "Project Profitability Summary" and a
+  // "Project Cost Details" tab will have wb.SheetNames[0] = the
+  // summary, which has only one row per job and breaks the line-row
+  // loop. We score each sheet on how many of the expected detail
+  // headers it carries, prefer the one with the most.
+  function pickDetailSheet(wb, XLSX) {
+    var best = null, bestScore = -1, bestAoa = null;
+    var expected = ['vendor', 'amount', 'memo', 'memo/description', 'distribution account'];
+    wb.SheetNames.forEach(function(name) {
+      var sheet = wb.Sheets[name];
+      if (!sheet) return;
+      var aoa = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: '' });
+      // Score the first 10 rows (the header is usually row 5 but
+      // exports occasionally float).
+      var score = 0;
+      for (var r = 0; r < Math.min(10, aoa.length); r++) {
+        var row = aoa[r] || [];
+        for (var c = 0; c < row.length; c++) {
+          var v = (row[c] || '').toString().trim().toLowerCase();
+          if (expected.indexOf(v) !== -1) score++;
+        }
+      }
+      if (score > bestScore) {
+        bestScore = score;
+        best = name;
+        bestAoa = aoa;
+      }
+    });
+    if (!best) throw new Error('Workbook has no sheets');
+    return { name: best, aoa: bestAoa };
   }
 
   function parseQBCosts(arrayBuffer) {
     var XLSX = window.XLSX;
     var data = new Uint8Array(arrayBuffer);
     var wb = XLSX.read(data, { type: 'array' });
-    var sheet = wb.Sheets[wb.SheetNames[0]];
-    if (!sheet) throw new Error('Workbook has no sheets');
-    var aoa = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: '' });
+    var picked = pickDetailSheet(wb, XLSX);
+    var aoa = picked.aoa;
+
+    // Find the header row by looking for "Vendor" + "Amount" in the
+    // first 12 rows. Earlier exports had it at row 5 (index 4), but
+    // QB nudges this around so we scan rather than hard-code.
+    var headerRowIdx = -1;
+    for (var r = 0; r < Math.min(12, aoa.length); r++) {
+      var row = aoa[r] || [];
+      var cells = row.map(function(v) { return (v == null ? '' : String(v)).trim().toLowerCase(); });
+      if (cells.indexOf('vendor') !== -1 && cells.indexOf('amount') !== -1) {
+        headerRowIdx = r;
+        break;
+      }
+    }
+    if (headerRowIdx === -1) {
+      throw new Error('Could not find a Vendor / Amount header row in "' + picked.name + '"');
+    }
+    var col = buildColumnMap(aoa[headerRowIdx]);
+    if (col.vendor == null || col.amount == null) {
+      throw new Error('Missing required columns in "' + picked.name + '" (need Vendor + Amount)');
+    }
 
     var jobs = [];
     var current = null;
 
-    // Skip the title block; data starts at row 5 (0-indexed 4 is the
-    // header row). Walk every subsequent row and dispatch on col A.
-    for (var i = 5; i < aoa.length; i++) {
-      var row = aoa[i] || [];
-      var colA = (row[0] == null ? '' : String(row[0])).trim();
+    for (var i = headerRowIdx + 1; i < aoa.length; i++) {
+      var detailRow = aoa[i] || [];
+      var colA = (detailRow[0] == null ? '' : String(detailRow[0])).trim();
 
       if (colA) {
         if (/^Total for /i.test(colA)) {
-          // Total row closes the current job. QB writes the total in
-          // the Amount column; store it for sanity-check display.
           if (current) {
-            current.reportedTotal = toNumber(row[7]);
+            current.reportedTotal = toNumber(detailRow[col.amount]);
             jobs.push(current);
             current = null;
           }
         } else {
-          // New job header. Defensive: if we somehow skipped a Total
-          // row, still close out the previous one.
           if (current) jobs.push(current);
           var parsed = extractCode(colA);
           current = {
@@ -134,29 +212,29 @@
           };
         }
       } else if (current) {
-        // Detail row under the current job. Skip if every B-H cell is
-        // empty (some exports have a blank row separator).
+        // Detail row — skip blank separators where every column is
+        // empty.
         var hasContent = false;
-        for (var k = 1; k <= 7; k++) {
-          if (row[k] != null && String(row[k]).trim() !== '') { hasContent = true; break; }
+        for (var k = 1; k < detailRow.length; k++) {
+          if (detailRow[k] != null && String(detailRow[k]).trim() !== '') { hasContent = true; break; }
         }
         if (hasContent) {
           current.lines.push({
-            vendor: (row[1] || '').toString().trim(),
-            date: (row[2] || '').toString().trim(),
-            account: (row[3] || '').toString().trim(),
-            accountType: (row[4] || '').toString().trim(),
-            klass: (row[5] || '').toString().trim(),
-            memo: (row[6] || '').toString().trim(),
-            amount: toNumber(row[7])
+            vendor: col.vendor != null ? (detailRow[col.vendor] || '').toString().trim() : '',
+            date: col.date != null ? (detailRow[col.date] || '').toString().trim() : '',
+            txnType: col.txnType != null ? (detailRow[col.txnType] || '').toString().trim() : '',
+            num: col.num != null ? (detailRow[col.num] || '').toString().trim() : '',
+            account: col.account != null ? (detailRow[col.account] || '').toString().trim() : '',
+            accountType: col.accountType != null ? (detailRow[col.accountType] || '').toString().trim() : '',
+            klass: col.klass != null ? (detailRow[col.klass] || '').toString().trim() : '',
+            memo: col.memo != null ? (detailRow[col.memo] || '').toString().trim() : '',
+            amount: col.amount != null ? toNumber(detailRow[col.amount]) : 0
           });
         }
       }
     }
     if (current) jobs.push(current);
 
-    // Computed total per job. We display this alongside the QB-reported
-    // total so the user can spot rounding drift.
     jobs.forEach(function(j) {
       j.computedTotal = j.lines.reduce(function(s, l) { return s + l.amount; }, 0);
     });
@@ -362,35 +440,55 @@
     setCell(cells, 0, 0, 'QB Costs — ' + parsedJob.rawHeader, { style: titleStyle });
     setCell(cells, 1, 0, 'Imported ' + new Date().toLocaleString());
 
-    // Header row at index 3 (row 4 in spreadsheet)
-    var hdrRow = 3;
-    var headers = ['Vendor', 'Date', 'Account', 'Account Type', 'Class', 'Memo', 'Amount'];
-    headers.forEach(function(h, i) { setCell(cells, hdrRow, i, h, { style: headerStyle }); });
+    // Decide which columns are worth rendering based on whether any
+    // line in this job actually carries a value for them. Keeps narrow
+    // jobs narrow while still picking up Transaction type / Num when
+    // QB sends them.
+    function anyNonEmpty(field) {
+      return parsedJob.lines.some(function(l) {
+        return l[field] != null && String(l[field]).trim() !== '';
+      });
+    }
+    var schema = [
+      { key: 'vendor',      label: 'Vendor',           width: 200 },
+      { key: 'txnType',     label: 'Transaction Type', width: 130, optional: true },
+      { key: 'date',        label: 'Date',             width: 90 },
+      { key: 'num',         label: 'Num',              width: 90,  optional: true },
+      { key: 'account',     label: 'Account',          width: 200 },
+      { key: 'accountType', label: 'Account Type',     width: 140, optional: true },
+      { key: 'klass',       label: 'Class',            width: 130 },
+      { key: 'memo',        label: 'Memo',             width: 320 },
+      { key: 'amount',      label: 'Amount',           width: 120, fmt: 'currency' }
+    ].filter(function(s) { return !s.optional || anyNonEmpty(s.key); });
 
-    // Detail rows
-    parsedJob.lines.forEach(function(l, idx) {
-      var r = hdrRow + 1 + idx;
-      setCell(cells, r, 0, l.vendor);
-      setCell(cells, r, 1, l.date);
-      setCell(cells, r, 2, l.account);
-      setCell(cells, r, 3, l.accountType);
-      setCell(cells, r, 4, l.klass);
-      setCell(cells, r, 5, l.memo);
-      setCell(cells, r, 6, l.amount, { fmt: 'currency' });
+    var hdrRow = 3;
+    var colWidths = {};
+    schema.forEach(function(s, i) {
+      setCell(cells, hdrRow, i, s.label, { style: headerStyle });
+      colWidths[i] = s.width;
     });
 
-    // Total row, separated by one blank
+    parsedJob.lines.forEach(function(l, idx) {
+      var r = hdrRow + 1 + idx;
+      schema.forEach(function(s, i) {
+        var val = l[s.key];
+        if (s.fmt === 'currency') setCell(cells, r, i, val == null ? 0 : val, { fmt: 'currency' });
+        else setCell(cells, r, i, val == null ? '' : val);
+      });
+    });
+
+    var amountCol = schema.length - 1; // Amount is always last
     var totalRow = hdrRow + 1 + parsedJob.lines.length + 1;
-    setCell(cells, totalRow, 5, 'TOTAL', { style: totalStyle });
-    setCell(cells, totalRow, 6, parsedJob.computedTotal, { fmt: 'currency', style: totalStyle });
+    setCell(cells, totalRow, amountCol - 1, 'TOTAL', { style: totalStyle });
+    setCell(cells, totalRow, amountCol, parsedJob.computedTotal, { fmt: 'currency', style: totalStyle });
 
     return {
       id: 's_qb_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6),
       name: name,
       rows: Math.max(100, totalRow + 5),
-      cols: 26,
+      cols: Math.max(26, schema.length),
       cells: cells,
-      colWidths: { 0: 200, 1: 90, 2: 200, 3: 140, 4: 130, 5: 320, 6: 120 },
+      colWidths: colWidths,
       rowHeights: {},
       links: {},
       merges: [],
