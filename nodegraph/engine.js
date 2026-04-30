@@ -140,6 +140,7 @@ function addNode(type, x, y, label, data){
     budget: 0,
     revenue: 0,
     jobFields: {},
+    attachedTo: null,
   };
   if(data){
     if(data._val != null) n.value = data._val;
@@ -719,6 +720,7 @@ function saveGraph(){
         items:n.items, pctComplete:n.pctComplete, budget:n.budget, revenue:n.revenue||0, jobFields:n.jobFields||{},
         _coRevApplied: n._coRevApplied||0,
         allocTarget: n.allocTarget||null,
+        attachedTo: n.attachedTo||null,
         dataId: n.data ? n.data.id : null
       };
     }),
@@ -773,9 +775,13 @@ function loadGraph(){
       jobFields:sn.jobFields||{},
       _coRevApplied:sn._coRevApplied||0,
       allocTarget:sn.allocTarget||null,
+      attachedTo:sn.attachedTo||null,
     };
     nodes.push(n);
   });
+  // Prune any attachedTo references to nodes that no longer exist.
+  var existingIds = {}; nodes.forEach(function(n){ existingIds[n.id]=1; });
+  nodes.forEach(function(n){ if(n.attachedTo && !existingIds[n.attachedTo]) n.attachedTo=null; });
   return true;
 }
 
@@ -838,7 +844,59 @@ function drawWires(ctx, wrap, wiringFrom, wireMouse){
     ctx.strokeStyle = pcol; ctx.lineWidth = 2;
     ctx.setLineDash([6,4]); ctx.stroke(); ctx.setLineDash([]);
   }
+
+  // Note tethers — visual-only dashed line from each note to its
+  // attached node. Not a data wire; never affects calculations.
+  nodes.forEach(function(n){
+    if(n.type !== 'note' || !n.attachedTo) return;
+    var t = findNode(n.attachedTo);
+    if(!t) return;
+    var nb = nodeBox(n), tb = nodeBox(t);
+    var nc = { x: nb.x + nb.w/2, y: nb.y + nb.h/2 };
+    var tc = { x: tb.x + tb.w/2, y: tb.y + tb.h/2 };
+    // Clip endpoints to each node's bounding box edge so the line
+    // appears to start at the box outline rather than passing through.
+    var s = clipToBox(nc, tc, nb);
+    var e = clipToBox(tc, nc, tb);
+    ctx.beginPath();
+    ctx.moveTo(s.x, s.y); ctx.lineTo(e.x, e.y);
+    ctx.strokeStyle = 'rgba(251,191,36,0.65)'; // amber, matches note vibe
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([5,5]); ctx.stroke(); ctx.setLineDash([]);
+    // Small dot at the target end so it reads as "this note is about that"
+    ctx.beginPath();
+    ctx.arc(e.x, e.y, 3, 0, Math.PI*2);
+    ctx.fillStyle = 'rgba(251,191,36,0.85)';
+    ctx.fill();
+  });
+
   ctx.restore();
+}
+
+// Bounding box of a node in graph coordinates (uses the rendered DOM
+// element if available, falls back to a default size).
+function nodeBox(n){
+  if(_canvasEl){
+    var el = _canvasEl.querySelector('[data-id="'+n.id+'"]');
+    if(el){
+      var r = el.getBoundingClientRect();
+      return { x: n.x, y: n.y, w: r.width/zoom, h: r.height/zoom };
+    }
+  }
+  return { x: n.x, y: n.y, w: 200, h: 80 };
+}
+
+// Where the line from `from` to `to` exits `box`. Used to make tether
+// endpoints sit on the node outline instead of the center.
+function clipToBox(from, to, box){
+  var cx = box.x + box.w/2, cy = box.y + box.h/2;
+  var dx = to.x - from.x, dy = to.y - from.y;
+  if(dx === 0 && dy === 0) return { x: cx, y: cy };
+  var hw = box.w/2, hh = box.h/2;
+  var tX = dx === 0 ? Infinity : Math.abs(hw / dx);
+  var tY = dy === 0 ? Infinity : Math.abs(hh / dy);
+  var t = Math.min(tX, tY);
+  return { x: cx + dx*t, y: cy + dy*t };
 }
 
 // ── Port Positions ──

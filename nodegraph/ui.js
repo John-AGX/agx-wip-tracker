@@ -10,6 +10,9 @@ var dragN=null, dragOff={x:0,y:0};
 var wiringFrom=null, wireMouse=null;
 var selN=null, isPan=false, panSt={x:0,y:0};
 var editingId=null;
+// When set to a note's id, the next click on a node attaches the note
+// to that node. Click the attach button again (or the canvas) to cancel.
+var attachingFromNoteId=null;
 
 // ── Update T2/Sub labels based on connected T1 / phase data ──
 function updateTierLabels(){
@@ -167,6 +170,11 @@ function renderNodes(){
     var canEdit = (n.type==='t1'||n.type==='t2'||n.type==='sub'||n.type==='co'||n.type==='po'||n.type==='inv') && n.data && n.data.id;
     var h='<div class="ng-hdr"><span class="ng-hi">'+d.icon+'</span><span class="ng-hdr-name" data-rename="'+n.id+'" title="Double-click to rename">'+n.label+'</span>';
     if(canEdit) h+='<span class="ng-editbtn" data-edit="'+n.id+'" title="Edit details">\u2699</span>';
+    if(n.type==='note'){
+      var _att = !!n.attachedTo;
+      var _attTitle = _att ? 'Detach from node' : (attachingFromNoteId===n.id ? 'Click a node to attach (click again to cancel)' : 'Attach to a node');
+      h+='<span class="ng-attachbtn'+(_att?' ng-attached':'')+(attachingFromNoteId===n.id?' ng-attaching':'')+'" data-attach="'+n.id+'" title="'+_attTitle+'">\ud83d\udd17</span>';
+    }
     if(canColl) h+='<span class="ng-dupbtn" data-dup="'+n.id+'" title="Duplicate node">\u29C9</span>';
     if(canColl) h+='<span class="ng-cbtn" data-coll="'+n.id+'">'+(n.collapsed?'\u25B6':'\u25BC')+'</span>';
     h+='</div>';
@@ -677,6 +685,10 @@ function render(){
   E.saveGraph();
   var z=document.querySelector('.ng-zoom');
   if(z) z.textContent=Math.round(E.zm()*100)+'%';
+  if(wrap){
+    if(attachingFromNoteId) wrap.classList.add('ng-attaching');
+    else wrap.classList.remove('ng-attaching');
+  }
 }
 
 function applyTx(){
@@ -888,6 +900,8 @@ function initEvents(){
 
   wrap.addEventListener('mousedown',function(e){
     if(e.target.closest('.ng-p')||e.target.closest('.ng-node')) return;
+    // Empty-canvas click cancels any pending note-attach.
+    if(attachingFromNoteId){ attachingFromNoteId=null; render(); }
     isPan=true; wrap.classList.add('ng-panning');
     var p=E.pan();
     panSt={x:e.clientX/z()-p.x, y:e.clientY/z()-p.y};
@@ -967,6 +981,45 @@ function initEvents(){
         else if(en.type==='inv' && typeof editInvoice==='function') editInvoice(en.data.id);
       }
       return;
+    }
+    var ab=e.target.closest('.ng-attachbtn');
+    if(ab){
+      e.stopPropagation();
+      var an=E.findNode(ab.getAttribute('data-attach'));
+      if(an){
+        if(an.attachedTo){
+          // Already attached → detach
+          an.attachedTo=null;
+          attachingFromNoteId=null;
+          render();
+        } else if(attachingFromNoteId===an.id){
+          // Cancel attach mode
+          attachingFromNoteId=null;
+          render();
+        } else {
+          // Enter attach mode for this note
+          attachingFromNoteId=an.id;
+          render();
+        }
+      }
+      return;
+    }
+    // While in attach-mode, clicking any other node attaches the note.
+    if(attachingFromNoteId){
+      var hitNode=e.target.closest('.ng-node');
+      if(hitNode){
+        var targetId=hitNode.getAttribute('data-id');
+        if(targetId && targetId!==attachingFromNoteId){
+          var note=E.findNode(attachingFromNoteId);
+          if(note){
+            note.attachedTo=targetId;
+            attachingFromNoteId=null;
+            e.stopPropagation();
+            render();
+            return;
+          }
+        }
+      }
     }
     var db=e.target.closest('.ng-dupbtn');
     if(db){e.stopPropagation();duplicateNode(db.getAttribute('data-dup'));return;}

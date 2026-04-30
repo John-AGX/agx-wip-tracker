@@ -104,6 +104,14 @@ body.light-mode .ng-del-cancel:hover{background:#e5e7eb}
 .ng-hdr-name + .ng-editbtn,.ng-hdr-name + .ng-dupbtn{margin-left:auto}
 .ng-cbtn{font-size:9px;cursor:pointer;opacity:.5;padding:2px;margin-left:4px}
 .ng-cbtn:hover{opacity:1}
+.ng-attachbtn{font-size:11px;cursor:pointer;opacity:.45;padding:2px;margin-left:4px;line-height:1}
+.ng-attachbtn:hover{opacity:1;color:#fbbf24}
+.ng-attachbtn.ng-attached{opacity:1;color:#fbbf24;text-shadow:0 0 4px rgba(251,191,36,.6)}
+.ng-attachbtn.ng-attaching{opacity:1;color:#fbbf24;animation:ng-attach-pulse 0.9s ease-in-out infinite}
+@keyframes ng-attach-pulse{0%,100%{text-shadow:0 0 2px rgba(251,191,36,.4)}50%{text-shadow:0 0 10px rgba(251,191,36,1),0 0 18px rgba(251,191,36,.6)}}
+/* While picking a target, hovering any node hints it's clickable */
+.ng-canvas-area.ng-attaching .ng-node{cursor:crosshair}
+.ng-canvas-area.ng-attaching .ng-node:hover{outline:2px dashed #fbbf24;outline-offset:2px}
 /* Type colors */
 .ng-t-t1 .ng-hdr{background:linear-gradient(135deg,rgba(79,140,255,.2),rgba(79,140,255,.08));color:#6aa3ff}
 .ng-t-t2 .ng-hdr{background:linear-gradient(135deg,rgba(52,211,153,.2),rgba(52,211,153,.08));color:#34d399}
