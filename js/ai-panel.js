@@ -114,7 +114,10 @@
     if (panel) return panel;
     panel = document.createElement('div');
     panel.id = 'agx-ai-panel';
-    panel.style.cssText = 'position:fixed;top:0;right:0;bottom:0;width:420px;max-width:90vw;background:var(--surface,#0f0f1e);border-left:1px solid var(--border,#333);box-shadow:-4px 0 22px rgba(0,0,0,0.6);z-index:80;display:flex;flex-direction:column;transform:translateX(100%);transition:transform 0.22s ease;';
+    // z-index 200 sits above the node graph (#nodeGraphTab z-index:99)
+    // so the WIP Assistant slides in over the graph rather than being
+    // covered by it. Modals (.modal z:1000) still trump the panel.
+    panel.style.cssText = 'position:fixed;top:0;right:0;bottom:0;width:420px;max-width:90vw;background:var(--surface,#0f0f1e);border-left:1px solid var(--border,#333);box-shadow:-4px 0 22px rgba(0,0,0,0.6);z-index:200;display:flex;flex-direction:column;transform:translateX(100%);transition:transform 0.22s ease;';
     panel.innerHTML =
       // Header — close button is the most prominent control on the left
       // (mirrors a typical drawer/sidebar UX) so it's never missed.

@@ -2136,6 +2136,46 @@ function init(){
   var aab=tab.querySelector('.ng-arrange-btn');
   if(aab) aab.addEventListener('click',function(){ autoArrange(selN); render(); });
 
+  // Save Layout — checkpoint the current node graph to a separate
+  // localStorage slot (independent of auto-save) so the user can
+  // recover from accidental edits or auto-save wipes after a
+  // GRAPH_VER bump.
+  var snapSaveBtn=tab.querySelector('.ng-snapshot-save-btn');
+  if(snapSaveBtn) snapSaveBtn.addEventListener('click',function(){
+    var existing = E.getSnapshot ? E.getSnapshot() : null;
+    if(existing && existing.savedAt){
+      if(!confirm('Replace the previously saved layout (from ' + new Date(existing.savedAt).toLocaleString() + ')?')) return;
+    }
+    var savedAt = E.saveSnapshot();
+    if(savedAt){
+      flashSaveIndicator('saved', 'Layout saved');
+      snapSaveBtn.title = 'Last saved: ' + new Date(savedAt).toLocaleString();
+    } else {
+      flashSaveIndicator('error', 'Save failed');
+    }
+  });
+
+  // Restore Layout — replace the live graph with the last saved
+  // snapshot. Confirms because it's destructive to anything edited
+  // since the snapshot was taken.
+  var snapRestoreBtn=tab.querySelector('.ng-snapshot-restore-btn');
+  if(snapRestoreBtn) snapRestoreBtn.addEventListener('click',function(){
+    var snap = E.getSnapshot ? E.getSnapshot() : null;
+    if(!snap){
+      alert('No saved layout to restore. Click Save Layout first.');
+      return;
+    }
+    var when = snap.savedAt ? new Date(snap.savedAt).toLocaleString() : 'unknown time';
+    if(!confirm('Restore layout saved at ' + when + '? Anything you\'ve edited since will be replaced.')) return;
+    if(E.restoreSnapshot()){
+      applyTx();
+      render();
+      flashSaveIndicator('saved', 'Layout restored');
+    } else {
+      flashSaveIndicator('error', 'Restore failed');
+    }
+  });
+
   // Redraw grid when theme changes so new colors take effect
   document.addEventListener('agx-theme-change', function(){
     if(gridC && gridCtx) E.drawGrid(gridCtx, gridC.width, gridC.height);
@@ -2545,6 +2585,32 @@ function ensureWatchFan(){
 // re-render after it pans / zooms via NG.pan() / NG.zm().
 window.ngApplyTx = applyTx;
 window.ngRender = render;
+
+// Save indicator state machine. Engine's saveGraph() calls
+// window.ngMarkSaved() on every persist; we flash "Saved" briefly
+// then return to idle. Snapshot save / restore reuse the same flash.
+var _saveIndTimer = null;
+function flashSaveIndicator(state, label){
+  var ind = document.getElementById('ngSaveIndicator');
+  if(!ind) return;
+  ind.classList.remove('ng-save-saving','ng-save-saved','ng-save-error');
+  var dot = '○', text = label || 'Saved';
+  if(state === 'saving'){ ind.classList.add('ng-save-saving'); dot = '●'; text = label || 'Saving…'; }
+  else if(state === 'saved'){ ind.classList.add('ng-save-saved'); dot = '✓'; text = label || 'Saved'; }
+  else if(state === 'error'){ ind.classList.add('ng-save-error'); dot = '!'; text = label || 'Save failed'; }
+  var dotEl = ind.querySelector('.ng-save-dot'), labelEl = ind.querySelector('.ng-save-label');
+  if(dotEl) dotEl.innerHTML = dot;
+  if(labelEl) labelEl.textContent = text;
+  if(_saveIndTimer) clearTimeout(_saveIndTimer);
+  if(state !== 'error'){
+    _saveIndTimer = setTimeout(function(){
+      ind.classList.remove('ng-save-saving','ng-save-saved');
+      if(dotEl) dotEl.innerHTML = '○';
+      if(labelEl) labelEl.textContent = 'Saved';
+    }, 1500);
+  }
+}
+window.ngMarkSaved = function(state){ flashSaveIndicator(state || 'saved'); };
 
 window.openNodeGraph=function(jid){
   var tab=document.getElementById('nodeGraphTab'); if(!tab) return;

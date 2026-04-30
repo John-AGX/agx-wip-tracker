@@ -53,6 +53,11 @@ body.light-mode .ng-del-cancel:hover{background:#e5e7eb}
 .ng-topbar-title{font-size:14px;font-weight:700;color:var(--ng-text)}
 .ng-topbar-sub{font-size:11px;color:var(--ng-dim2)}
 .ng-topbar-spacer{flex:1}
+.ng-save-indicator{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;font-size:11px;font-weight:600;color:var(--ng-dim,#8b90a5);border-radius:10px;background:rgba(255,255,255,0.03);border:1px solid var(--ng-border2,#1c2236);transition:color .2s,background .2s,border-color .2s}
+.ng-save-dot{font-weight:700;font-size:13px;line-height:1}
+.ng-save-indicator.ng-save-saving{color:#60a5fa;background:rgba(96,165,250,.08);border-color:rgba(96,165,250,.25)}
+.ng-save-indicator.ng-save-saved{color:#34d399;background:rgba(52,211,153,.08);border-color:rgba(52,211,153,.25)}
+.ng-save-indicator.ng-save-error{color:#f87171;background:rgba(248,113,113,.08);border-color:rgba(248,113,113,.3)}
 .ng-tbtn{background:rgba(79,140,255,.08);border:1px solid rgba(79,140,255,.25);color:#6aa3ff;border-radius:4px;padding:4px 12px;font-size:12px;cursor:pointer;font-weight:600}
 .ng-tbtn:hover{background:rgba(79,140,255,.2)}
 .ng-tbtn-close{background:rgba(248,113,113,.08);border:1px solid rgba(248,113,113,.25);color:#f87171;border-radius:4px;padding:4px 12px;font-size:12px;cursor:pointer;font-weight:600}

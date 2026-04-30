@@ -321,6 +321,20 @@
             document.getElementById(tabName)?.classList.add('active');
             document.querySelector(`[data-tab="${tabName}"]`)?.classList.add('active');
 
+            // Tear down the node graph if it's open. #nodeGraphTab is a
+            // position:fixed overlay (z:99) that lives outside the
+            // tab-content system, so navigating away from WIP would
+            // otherwise leave it floating over Estimates/Insights/Admin.
+            // The MutationObserver in workspace-layout.js detaches the
+            // floating workspace panel automatically on this class drop.
+            var ngTab = document.getElementById('nodeGraphTab');
+            if (ngTab && ngTab.classList.contains('active')) {
+                if (typeof NG !== 'undefined' && NG.saveGraph) {
+                    try { NG.saveGraph(); } catch (e) { /* defensive */ }
+                }
+                ngTab.classList.remove('active');
+            }
+
             // Leaving the WIP tab: tear down any sticky job-detail header
             // (metrics strip + back button) that workspace-layout.js may have
             // injected, so the Insights/Admin/Estimates pages don't show a

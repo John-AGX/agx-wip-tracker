@@ -709,9 +709,8 @@ function fmtV(v,t){ return t===PT.P ? fmtP(v) : t===PT.C ? fmtC(v) : v.toLocaleS
 
 // ── Save / Load ──
 var GRAPH_VER = 8; // bump to force re-populate on next open
-function saveGraph(){
-  if(!jobId) return;
-  var state = {
+function buildGraphState(){
+  return {
     ver: GRAPH_VER,
     nodes: nodes.map(function(n){
       return {
@@ -727,9 +726,80 @@ function saveGraph(){
     wires: wires,
     panX:panX, panY:panY, zoom:zoom, nid:nid
   };
-  var all = JSON.parse(localStorage.getItem('agx-nodegraphs') || '{}');
+}
+function saveGraph(){
+  if(!jobId) return;
+  try {
+    var state = buildGraphState();
+    var all = JSON.parse(localStorage.getItem('agx-nodegraphs') || '{}');
+    all[jobId] = state;
+    localStorage.setItem('agx-nodegraphs', JSON.stringify(all));
+    if (typeof window.ngMarkSaved === 'function') window.ngMarkSaved();
+  } catch (e) {
+    if (typeof window.ngMarkSaved === 'function') window.ngMarkSaved('error');
+  }
+}
+
+// Manual snapshot — separate localStorage key so it survives
+// auto-save GRAPH_VER bumps (which wipe agx-nodegraphs). One slot
+// per job; calling saveSnapshot again overwrites with a confirm.
+function saveSnapshot(){
+  if(!jobId) return null;
+  var state = buildGraphState();
+  state.savedAt = new Date().toISOString();
+  var all = JSON.parse(localStorage.getItem('agx-nodegraph-snapshots') || '{}');
   all[jobId] = state;
-  localStorage.setItem('agx-nodegraphs', JSON.stringify(all));
+  localStorage.setItem('agx-nodegraph-snapshots', JSON.stringify(all));
+  return state.savedAt;
+}
+
+function getSnapshot(){
+  if(!jobId) return null;
+  var all = JSON.parse(localStorage.getItem('agx-nodegraph-snapshots') || '{}');
+  return all[jobId] || null;
+}
+
+// Restore a previously-saved snapshot. Replaces nodes/wires/pan/zoom
+// in place; the caller is responsible for re-rendering.
+function restoreSnapshot(){
+  if(!jobId) return false;
+  var snap = getSnapshot();
+  if(!snap || !snap.nodes) return false;
+  // Re-hydrate, mirroring loadGraph's data-pointer logic so node
+  // entries that reference appData rows still resolve.
+  nodes = []; wires = snap.wires || []; nid = snap.nid || 1;
+  panX = snap.panX || 0; panY = snap.panY || 0; zoom = snap.zoom || 1;
+  snap.nodes.forEach(function(sn){
+    var d = DEFS[sn.type]; if(!d) return;
+    var data = {};
+    if(sn.dataId && typeof appData !== 'undefined'){
+      if(sn.type === 't1') data = appData.buildings.find(function(b){ return b.id === sn.dataId; }) || {};
+      else if(sn.type === 't2') data = appData.phases.find(function(p){ return p.id === sn.dataId; }) || {};
+      else if(sn.type === 'sub') data = appData.subs.find(function(s){ return s.id === sn.dataId; }) || {};
+      else if(sn.type === 'co') data = appData.changeOrders.find(function(c){ return c.id === sn.dataId; }) || {};
+      else if(sn.type === 'po') data = (appData.purchaseOrders||[]).find(function(p){ return p.id === sn.dataId; }) || {};
+      else if(sn.type === 'inv') data = (appData.invoices||[]).find(function(i){ return i.id === sn.dataId; }) || {};
+    }
+    nodes.push({
+      id:sn.id, type:sn.type, cat:d.cat,
+      x:sn.x, y:sn.y, label:sn.label,
+      data:data, value:sn.value||0,
+      collapsed:sn.collapsed||false,
+      noteText:sn.noteText||'',
+      items:sn.items||[],
+      pctComplete:sn.pctComplete||0,
+      budget:sn.budget||0,
+      revenue:sn.revenue||0,
+      jobFields:sn.jobFields||{},
+      _coRevApplied:sn._coRevApplied||0,
+      allocTarget:sn.allocTarget||null,
+      attachedTo:sn.attachedTo||null
+    });
+  });
+  // Persist the restore as the new auto-save state too, so the user
+  // doesn't see the snapshot vanish next open.
+  saveGraph();
+  return true;
 }
 
 function loadGraph(){
@@ -962,6 +1032,7 @@ return {
   getWIPWeightedPct:getWIPWeightedPct, getT2ShareToT1:getT2ShareToT1,
   fmtC:fmtC, fmtP:fmtP, fmtV:fmtV,
   saveGraph:saveGraph, loadGraph:loadGraph,
+  saveSnapshot:saveSnapshot, restoreSnapshot:restoreSnapshot, getSnapshot:getSnapshot,
   drawWires:drawWires, drawGrid:drawGrid,
   portPos:portPos, setCanvasEl:setCanvasEl,
   genId:genId,
