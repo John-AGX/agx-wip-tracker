@@ -323,7 +323,8 @@
     fp.innerHTML =
       '<div class="ws-floating-header" id="wsFloatingHeader">' +
         '<span class="ws-floating-titlewrap">' +
-          '<img src="images/logo-color.png" alt="AGX" class="ws-floating-logo" />' +
+          '<img src="images/logo-color.png" alt="AGX" class="ws-floating-logo ws-logo-color" />' +
+          '<img src="images/logo-white.png" alt="AGX" class="ws-floating-logo ws-logo-white" />' +
           '<span class="ws-floating-title">Workspace</span>' +
         '</span>' +
         '<div class="ws-floating-actions">' +
@@ -607,14 +608,15 @@
     };
     panel.classList.add('ws-floating-folder');
     // Position in the top-left corner of the visible canvas (graph
-    // coords). Sized to ~80×96 — watch-sized as requested.
+    // coords). Sized roughly like a watch node — header strip plus
+    // an emoji body filling the rest.
     if (typeof NG !== 'undefined' && NG.pan) {
       var p = NG.pan();
       panel.style.left = (-p.x + 24) + 'px';
       panel.style.top = (-p.y + 24) + 'px';
     }
-    panel.style.width = '80px';
-    panel.style.height = '96px';
+    panel.style.width = '160px';
+    panel.style.height = '130px';
   }
   function restoreFromMinimized() {
     var panel = document.getElementById('wsFloatingPanel');
