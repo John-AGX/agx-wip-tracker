@@ -2027,13 +2027,6 @@ function init(){
   tab.querySelector('.ng-tbtn-close').addEventListener('click',function(){
     E.saveGraph(); tab.classList.remove('active');
   });
-  var pb=tab.querySelector('.ng-populate-btn');
-  if(pb) pb.addEventListener('click',function(){
-    E.setNodes([]); E.setWires([]); E.setNid(1);
-    populate(); render();
-  });
-
-  // Push to job
   // Collapse all
   var cab=tab.querySelector('.ng-collapse-all-btn');
   if(cab) cab.addEventListener('click',function(){
