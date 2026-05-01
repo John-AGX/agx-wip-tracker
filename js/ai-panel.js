@@ -100,84 +100,125 @@
       }
     } catch (e) { /* defensive */ }
 
-    // QB cost data — aggregated from workspace sheets named
-    // "QB Costs YYYY-MM-DD". Each sheet was built by job-costs-import.js
-    // with row 3 as the header and rows 4+ as data.
+    // QB cost data — Phase 2 made this server-persisted, so the
+    // canonical source is appData.qbCostLines (hydrated from the
+    // qb_cost_lines table on every login). Workspace "QB Costs"
+    // sheets are now a secondary view, only used as a fallback if
+    // no server lines exist for this job (e.g. a fresh browser
+    // session that hasn't hydrated yet, or pre-Phase-2 data that
+    // never made it to the server).
     try {
-      var allWs = JSON.parse(localStorage.getItem('agx-workspaces') || '{}');
-      var wb = allWs[jobId];
-      if (wb && Array.isArray(wb.sheets)) {
-        var qbSheets = wb.sheets.filter(function(s) { return /^QB Costs /.test(s.name || ''); });
-        if (qbSheets.length) {
-          var allLines = [];
-          var mostRecent = '';
-          qbSheets.forEach(function(s) {
-            // Header row at index 3, data starts at 4
-            var cells = s.cells || {};
-            // Find amount column index from header row
-            var headerCells = {};
-            Object.keys(cells).forEach(function(k) {
-              var m = k.match(/^(\d+),(\d+)$/);
-              if (!m) return;
-              var r = parseInt(m[1], 10), c = parseInt(m[2], 10);
-              if (r === 3) headerCells[c] = String(cells[k].value || '').trim();
-            });
-            var col = {};
-            Object.keys(headerCells).forEach(function(c) {
-              var name = headerCells[c].toLowerCase();
-              if (name === 'vendor') col.vendor = +c;
-              else if (name === 'date') col.date = +c;
-              else if (name === 'amount') col.amount = +c;
-              else if (name === 'account') col.account = +c;
-              else if (name === 'class') col.klass = +c;
-              else if (name === 'memo') col.memo = +c;
-            });
-            // Track sheet date for "mostRecent"
-            var dateMatch = (s.name || '').match(/QB Costs (\d{4}-\d{2}-\d{2})/);
-            if (dateMatch && dateMatch[1] > mostRecent) mostRecent = dateMatch[1];
-            // Walk data rows
-            var rowKeys = {};
-            Object.keys(cells).forEach(function(k) {
-              var m = k.match(/^(\d+),(\d+)$/);
-              if (!m) return;
-              var r = parseInt(m[1], 10);
-              if (r >= 4) rowKeys[r] = true;
-            });
-            Object.keys(rowKeys).forEach(function(r) {
-              var ri = parseInt(r, 10);
-              var cellAt = function(c) { var v = cells[ri + ',' + c]; return v ? v.value : null; };
-              var amt = col.amount != null ? Number(cellAt(col.amount)) : 0;
-              if (!isFinite(amt) || amt === 0) return;
-              // Skip the TOTAL row (it has 'TOTAL' text in the row above amount)
-              var labelCell = col.amount != null ? cells[ri + ',' + (col.amount - 1)] : null;
-              if (labelCell && /^TOTAL$/i.test(String(labelCell.value || '').trim())) return;
-              allLines.push({
-                vendor: col.vendor != null ? String(cellAt(col.vendor) || '') : '',
-                date: col.date != null ? String(cellAt(col.date) || '') : '',
-                amount: amt,
-                account: col.account != null ? String(cellAt(col.account) || '') : '',
-                klass: col.klass != null ? String(cellAt(col.klass) || '') : '',
-                memo: col.memo != null ? String(cellAt(col.memo) || '') : ''
+      var serverLines = (window.appData && Array.isArray(appData.qbCostLines))
+        ? appData.qbCostLines.filter(function(l) {
+            return (l.job_id || l.jobId) === jobId;
+          })
+        : [];
+
+      var allLines = [];
+      var mostRecent = '';
+      var source = null;
+
+      if (serverLines.length) {
+        source = 'server';
+        serverLines.forEach(function(l) {
+          var amt = Number(l.amount || 0);
+          if (!isFinite(amt) || amt === 0) return;
+          var date = l.txn_date || l.date || '';
+          if (typeof date === 'string' && date.length > 10) date = date.slice(0, 10);
+          allLines.push({
+            id: l.id || null,
+            vendor: l.vendor || '',
+            date: String(date || ''),
+            amount: amt,
+            account: l.account || '',
+            klass: l.klass || '',
+            memo: l.memo || '',
+            linkedNodeId: l.linked_node_id || l.linkedNodeId || null
+          });
+          var rd = l.report_date || l.reportDate || '';
+          if (typeof rd === 'string') {
+            var rdNorm = rd.length > 10 ? rd.slice(0, 10) : rd;
+            if (rdNorm > mostRecent) mostRecent = rdNorm;
+          }
+        });
+      } else {
+        // Fallback: parse the workspace sheets the same way Phase 1
+        // did. Marked source='sheets' so the prompt can warn the AI
+        // that the data is localStorage-only and may be partial.
+        var allWs = JSON.parse(localStorage.getItem('agx-workspaces') || '{}');
+        var wb = allWs[jobId];
+        if (wb && Array.isArray(wb.sheets)) {
+          var qbSheets = wb.sheets.filter(function(s) { return /^QB Costs /.test(s.name || ''); });
+          if (qbSheets.length) {
+            source = 'sheets';
+            qbSheets.forEach(function(s) {
+              var cells = s.cells || {};
+              var headerCells = {};
+              Object.keys(cells).forEach(function(k) {
+                var m = k.match(/^(\d+),(\d+)$/);
+                if (!m) return;
+                var r = parseInt(m[1], 10), c = parseInt(m[2], 10);
+                if (r === 3) headerCells[c] = String(cells[k].value || '').trim();
+              });
+              var col = {};
+              Object.keys(headerCells).forEach(function(c) {
+                var name = headerCells[c].toLowerCase();
+                if (name === 'vendor') col.vendor = +c;
+                else if (name === 'date') col.date = +c;
+                else if (name === 'amount') col.amount = +c;
+                else if (name === 'account') col.account = +c;
+                else if (name === 'class') col.klass = +c;
+                else if (name === 'memo') col.memo = +c;
+              });
+              var dateMatch = (s.name || '').match(/QB Costs (\d{4}-\d{2}-\d{2})/);
+              if (dateMatch && dateMatch[1] > mostRecent) mostRecent = dateMatch[1];
+              var rowKeys = {};
+              Object.keys(cells).forEach(function(k) {
+                var m = k.match(/^(\d+),(\d+)$/);
+                if (!m) return;
+                var r = parseInt(m[1], 10);
+                if (r >= 4) rowKeys[r] = true;
+              });
+              Object.keys(rowKeys).forEach(function(r) {
+                var ri = parseInt(r, 10);
+                var cellAt = function(c) { var v = cells[ri + ',' + c]; return v ? v.value : null; };
+                var amt = col.amount != null ? Number(cellAt(col.amount)) : 0;
+                if (!isFinite(amt) || amt === 0) return;
+                var labelCell = col.amount != null ? cells[ri + ',' + (col.amount - 1)] : null;
+                if (labelCell && /^TOTAL$/i.test(String(labelCell.value || '').trim())) return;
+                allLines.push({
+                  vendor: col.vendor != null ? String(cellAt(col.vendor) || '') : '',
+                  date: col.date != null ? String(cellAt(col.date) || '') : '',
+                  amount: amt,
+                  account: col.account != null ? String(cellAt(col.account) || '') : '',
+                  klass: col.klass != null ? String(cellAt(col.klass) || '') : '',
+                  memo: col.memo != null ? String(cellAt(col.memo) || '') : ''
+                });
               });
             });
-          });
-          if (allLines.length) {
-            var total = allLines.reduce(function(s, l) { return s + l.amount; }, 0);
-            var byCategory = {};
-            allLines.forEach(function(l) {
-              var key = l.account || '(uncategorized)';
-              byCategory[key] = (byCategory[key] || 0) + l.amount;
-            });
-            var samples = allLines.slice().sort(function(a, b) { return b.amount - a.amount; }).slice(0, 15);
-            ctx.qbCosts = {
-              total: total,
-              byCategory: byCategory,
-              lineCount: allLines.length,
-              mostRecentImport: mostRecent || null,
-              samples: samples
-            };
           }
         }
+      }
+
+      if (allLines.length) {
+        var total = allLines.reduce(function(s, l) { return s + l.amount; }, 0);
+        var byCategory = {};
+        var unlinkedCount = 0;
+        allLines.forEach(function(l) {
+          var key = l.account || '(uncategorized)';
+          byCategory[key] = (byCategory[key] || 0) + l.amount;
+          if (!l.linkedNodeId) unlinkedCount++;
+        });
+        var samples = allLines.slice().sort(function(a, b) { return b.amount - a.amount; }).slice(0, 20);
+        ctx.qbCosts = {
+          source: source,
+          total: total,
+          byCategory: byCategory,
+          lineCount: allLines.length,
+          unlinkedCount: unlinkedCount,
+          mostRecentImport: mostRecent || null,
+          samples: samples
+        };
       }
     } catch (e) { /* defensive */ }
 

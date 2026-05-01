@@ -1280,8 +1280,14 @@ async function buildJobContext(jobId, clientContext) {
   if (clientContext && clientContext.qbCosts) {
     var qb = clientContext.qbCosts;
     if (qb.lineCount > 0 || qb.total) {
-      lines.push('# QuickBooks cost data (imported, client-side)');
-      lines.push('- Lines: ' + (qb.lineCount || 0));
+      var sourceLabel = qb.source === 'server'
+        ? 'server-persisted (qb_cost_lines table — canonical, idempotent across devices)'
+        : qb.source === 'sheets'
+          ? 'localStorage workspace sheets (legacy, may be partial — recommend re-importing the QB xlsx so data lands on the server)'
+          : 'unknown source';
+      lines.push('# QuickBooks cost data — ' + sourceLabel);
+      lines.push('**This is the imported QuickBooks data**. When the user asks about cost data they imported, USE THIS BLOCK as the source of truth — do NOT tell them to "open the workspace tab and hit Save on each QB Cost sheet." That advice was correct pre-Phase-2 but the data is now server-persisted; the workspace sheets are just a secondary view.');
+      lines.push('- Lines: ' + (qb.lineCount || 0) + (qb.unlinkedCount != null ? ' (' + qb.unlinkedCount + ' unlinked to a graph node)' : ''));
       lines.push('- Total: ' + fmtMoney(qb.total || 0));
       if (qb.mostRecentImport) lines.push('- Most recent import: ' + qb.mostRecentImport);
       if (qb.byCategory && Object.keys(qb.byCategory).length) {
@@ -1294,9 +1300,11 @@ async function buildJobContext(jobId, clientContext) {
           });
       }
       if (Array.isArray(qb.samples) && qb.samples.length) {
-        lines.push('## Sample lines (top by amount)');
-        qb.samples.slice(0, 15).forEach(function(s) {
-          lines.push('- ' + (s.date || '') + ' ' + fmtMoney(s.amount || 0) + ' ' + (s.vendor || '') + (s.account ? ' | ' + s.account : '') + (s.memo ? ' — ' + String(s.memo).slice(0, 80) : ''));
+        lines.push('## Top ' + Math.min(qb.samples.length, 20) + ' lines by amount');
+        qb.samples.slice(0, 20).forEach(function(s) {
+          var lineMarker = s.id ? ' [id=' + s.id + ']' : '';
+          var linked = s.linkedNodeId ? ' → ' + s.linkedNodeId : '';
+          lines.push('- ' + (s.date || '') + ' ' + fmtMoney(s.amount || 0) + ' ' + (s.vendor || '') + (s.account ? ' | ' + s.account : '') + (s.memo ? ' — ' + String(s.memo).slice(0, 80) : '') + linked + lineMarker);
         });
       }
       lines.push('');
