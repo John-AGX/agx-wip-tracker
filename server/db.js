@@ -271,6 +271,38 @@ async function initSchema() {
     -- addition later, not a schema change). One row per unique
     -- (vendor, cleaned-description); SKU is stored as metadata but is
     -- not the primary identity since vendors do change SKUs over time.
+    -- QuickBooks Detailed Job Cost lines. Imported from the weekly
+    -- "Project Costs" / "Detailed Job Costs" xlsx export. The id is a
+    -- content-derived hash so re-imports of the same QB row land on the
+    -- same record (idempotent across devices and re-runs).
+    -- linked_node_id is set by the user (or AI in Phase 3) to attach
+    -- a line to a node graph node — that's how QB spend gets reconciled
+    -- against the cost-flow tree.
+    CREATE TABLE IF NOT EXISTS qb_cost_lines (
+      id TEXT PRIMARY KEY,
+      job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+      vendor TEXT,
+      txn_date DATE,
+      txn_type TEXT,
+      num TEXT,
+      account TEXT,
+      account_type TEXT,
+      klass TEXT,
+      memo TEXT,
+      amount NUMERIC(12, 2) NOT NULL,
+      linked_node_id TEXT,
+      raw_data JSONB,
+      source_file TEXT,
+      report_date DATE,
+      imported_at TIMESTAMPTZ DEFAULT NOW(),
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_qb_cost_lines_job ON qb_cost_lines(job_id);
+    CREATE INDEX IF NOT EXISTS idx_qb_cost_lines_date ON qb_cost_lines(txn_date);
+    CREATE INDEX IF NOT EXISTS idx_qb_cost_lines_account ON qb_cost_lines(account);
+    CREATE INDEX IF NOT EXISTS idx_qb_cost_lines_linked_node ON qb_cost_lines(linked_node_id);
+
     CREATE TABLE IF NOT EXISTS materials (
       id SERIAL PRIMARY KEY,
       vendor TEXT NOT NULL DEFAULT 'home_depot',

@@ -194,9 +194,19 @@
     recategorize: function() { return post('/api/materials/recategorize', {}); }
   };
 
+  // QuickBooks cost lines — DB-backed Phase 2.
+  var qbCosts = {
+    list: function(jobId) {
+      return get('/api/qb-costs' + (jobId ? '?jobId=' + encodeURIComponent(jobId) : ''));
+    },
+    importBatch: function(payload) { return post('/api/qb-costs/import', payload); },
+    update: function(id, payload) { return put('/api/qb-costs/' + encodeURIComponent(id), payload); },
+    remove: function(id) { return del('/api/qb-costs/' + encodeURIComponent(id)); }
+  };
+
   window.agxApi = {
     get: get, put: put, post: post, del: del,
-    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai, materials: materials,
+    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai, materials: materials, qbCosts: qbCosts,
     isOffline: isOffline,
     isAuthenticated: function() { return !!getToken() && !isOffline(); }
   };

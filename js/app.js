@@ -452,7 +452,8 @@
             invoices: [],
             estimates: [],
             estimateLines: [],
-            estimateAlternates: []
+            estimateAlternates: [],
+            qbCostLines: []
         };
         // Expose on window so other modules (admin.js, insights.js) that
         // use `window.appData` can read the live state. Top-level `let` in a
@@ -644,10 +645,15 @@
             if (window.agxApi && window.agxApi.isAuthenticated()) {
                 Promise.all([
                     window.agxApi.jobs.list(),
-                    window.agxApi.estimates.list()
+                    window.agxApi.estimates.list(),
+                    // QB cost lines now persist server-side. Read all of
+                    // them at boot so Job Costs / Audit / WIP Assistant
+                    // can reason about them without per-tab fetches.
+                    window.agxApi.qbCosts.list().catch(function() { return { lines: [] }; })
                 ]).then(function(results) {
                     hydrateFromServerJobs(results[0].jobs);
                     hydrateFromServerEstimates(results[1].estimates);
+                    appData.qbCostLines = (results[2] && results[2].lines) || [];
                     writeToLocalStorage();
                     // Re-render whatever's visible. Each renderer no-ops if
                     // its DOM target isn't present, so calling them all is

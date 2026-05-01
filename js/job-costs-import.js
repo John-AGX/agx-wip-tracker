@@ -550,6 +550,53 @@
     localStorage.setItem('agx-workspaces', JSON.stringify(allWs));
     if (typeof saveData === 'function') saveData();
 
+    // ── Phase 2: Server persistence ─────────────────────────────
+    // Workspace sheets are now a *view* of the data; the source of
+    // truth lives in Postgres so re-imports across devices stay
+    // idempotent. Fire-and-forget — if the server is offline the
+    // workspace sheets still render fine from localStorage.
+    if (window.agxApi && window.agxApi.isAuthenticated && window.agxApi.isAuthenticated()) {
+      var payload = {
+        reportDate: _lastParse.reportDate,
+        sourceFile: _lastParse.fileName || null,
+        jobs: m.matched.map(function(x) {
+          return {
+            jobId: x.job.id,
+            lines: x.parsed.lines.map(function(l) {
+              return {
+                vendor: l.vendor || '',
+                date: l.date || '',
+                txnType: l.txnType || '',
+                num: l.num || '',
+                account: l.account || '',
+                accountType: l.accountType || '',
+                klass: l.klass || '',
+                memo: l.memo || '',
+                amount: l.amount || 0
+              };
+            })
+          };
+        })
+      };
+      fetch('/api/qb-costs/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(payload)
+      }).then(function(r) { return r.json().then(function(j) { return { ok: r.ok, body: j }; }); })
+        .then(function(res) {
+          if (!res.ok) {
+            console.warn('[qb-costs] server import failed:', res.body && res.body.error);
+          } else {
+            console.log('[qb-costs] server upsert: +' + (res.body.inserted || 0) +
+              ' new, ' + (res.body.updated || 0) + ' updated, ' +
+              (res.body.skipped || 0) + ' skipped');
+          }
+        }).catch(function(err) {
+          console.warn('[qb-costs] server import error:', err && err.message);
+        });
+    }
+
     // If the workspace for the currently-open job got updated, the
     // user will see the new sheet on next open. Re-rendering the WIP
     // list refreshes any rollup display.

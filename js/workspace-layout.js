@@ -23,6 +23,7 @@
     { id: 'job-workspace',     label: '\u{1F4CA} Workspace' },
     { id: 'job-wip',           label: 'WIP' },
     { id: 'job-costs',         label: 'Costs' },
+    { id: 'job-qb-costs',      label: '\u{1F4CB} Detailed' },
     { id: 'job-changeorders',  label: 'CO\'s' },
     { id: 'job-purchaseorders',label: 'PO\'s' },
     { id: 'job-invoices',      label: 'Invoices' },
@@ -859,6 +860,7 @@
         var renderers = {
           'job-overview': 'renderJobOverview',
           'job-costs': 'renderJobCosts',
+          'job-qb-costs': 'renderJobQBCosts',
           'job-subs': 'renderJobSubs',
           'job-changeorders': 'renderChangeOrders',
           'job-purchaseorders': 'renderPurchaseOrders',
