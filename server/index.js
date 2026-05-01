@@ -28,6 +28,7 @@ const aiRoutes = require('./routes/ai-routes');
 const materialRoutes = require('./routes/material-routes');
 const qbCostRoutes = require('./routes/qb-cost-routes');
 const subRoutes = require('./routes/sub-routes');
+const scheduleRoutes = require('./routes/schedule-routes');
 const { storage } = require('./storage');
 
 const app = express();
@@ -50,6 +51,7 @@ app.use('/api/ai', aiRoutes);
 app.use('/api/materials', materialRoutes);
 app.use('/api/qb-costs', qbCostRoutes);
 app.use('/api/subs', subRoutes);
+app.use('/api/schedule', scheduleRoutes);
 
 // Serve uploaded files when running with the local storage backend.
 // On Railway with a mounted volume, set UPLOAD_DIR to the mount path

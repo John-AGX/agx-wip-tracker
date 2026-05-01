@@ -422,6 +422,27 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_material_purchases_material ON material_purchases(material_id);
     CREATE INDEX IF NOT EXISTS idx_material_purchases_date ON material_purchases(purchase_date);
     CREATE INDEX IF NOT EXISTS idx_material_purchases_job ON material_purchases(job_name);
+
+    -- Schedule page: production entries placed on the calendar.
+    -- Phase 2 of the schedule feature — replaces the localStorage
+    -- shim from Phase 1 with server-persisted, multi-device-synced
+    -- entries. crew is a JSONB array of user ids assigned to the day.
+    CREATE TABLE IF NOT EXISTS schedule_entries (
+      id TEXT PRIMARY KEY,
+      job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+      start_date DATE NOT NULL,
+      days INTEGER NOT NULL DEFAULT 1 CHECK (days >= 1 AND days <= 365),
+      crew JSONB NOT NULL DEFAULT '[]'::jsonb,    -- [user_id, ...]
+      includes_weekends BOOLEAN NOT NULL DEFAULT FALSE,
+      status TEXT NOT NULL DEFAULT 'planned',     -- 'planned' | 'in-progress' | 'done' | 'rolled-over'
+      notes TEXT,
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_schedule_entries_job ON schedule_entries(job_id);
+    CREATE INDEX IF NOT EXISTS idx_schedule_entries_start ON schedule_entries(start_date);
+    CREATE INDEX IF NOT EXISTS idx_schedule_entries_status ON schedule_entries(status);
   `);
 
   // Seed built-in roles. ON CONFLICT lets us re-run safely without

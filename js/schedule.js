@@ -26,16 +26,21 @@
   'use strict';
 
   // ── Storage ────────────────────────────────────────────────
+  // Phase 2: server is the source of truth (window.agxApi.schedule).
+  // localStorage stays around as an offline cache + the seed for the
+  // first paint while the network call resolves. Settings (view month
+  // / weekend toggle) stay client-only since they're per-user UX state
+  // not collaborative data.
   var STORAGE_KEY = 'agx-schedule-entries';
   var SETTINGS_KEY = 'agx-schedule-settings';
 
-  function loadEntries() {
+  function loadCachedEntries() {
     try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]') || []; }
     catch (e) { return []; }
   }
-  function saveEntries(list) {
+  function cacheEntries(list) {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(list)); }
-    catch (e) { console.warn('[schedule] save failed', e); }
+    catch (e) { /* defensive */ }
   }
   function loadSettings() {
     try {
@@ -48,6 +53,33 @@
   function saveSettings(s) {
     try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(s)); }
     catch (e) { /* defensive */ }
+  }
+
+  function isApiReady() {
+    return !!(window.agxApi &&
+              window.agxApi.schedule &&
+              window.agxApi.isAuthenticated &&
+              window.agxApi.isAuthenticated());
+  }
+
+  // Pull entries from the server and refresh the cache. Returns a
+  // Promise so callers can chain a render. Falls back to the cached
+  // copy when offline / unauthenticated so the page still works.
+  function fetchEntries() {
+    if (!isApiReady()) {
+      _state.entries = loadCachedEntries();
+      return Promise.resolve(_state.entries);
+    }
+    return window.agxApi.schedule.list().then(function(res) {
+      var list = (res && res.entries) || [];
+      _state.entries = list;
+      cacheEntries(list);
+      return list;
+    }).catch(function(err) {
+      console.warn('[schedule] fetch failed, using cache:', err && err.message);
+      _state.entries = loadCachedEntries();
+      return _state.entries;
+    });
   }
 
   // ── Date helpers ───────────────────────────────────────────
@@ -257,13 +289,15 @@
   function renderSchedule() {
     var root = document.getElementById('schedule-root');
     if (!root) return;
+    _state.settings = loadSettings();
+    if (typeof _state.settings.showWeekends !== 'boolean') _state.settings.showWeekends = true;
     if (!_state.cursor) {
       var saved = parseISODate(_state.settings.viewMonth);
       _state.cursor = saved ? startOfMonth(saved) : startOfMonth(new Date());
     }
-    _state.entries = loadEntries();
-    _state.settings = loadSettings();
-    if (typeof _state.settings.showWeekends !== 'boolean') _state.settings.showWeekends = true;
+    // Seed with cached entries so the first paint isn't blank, then
+    // refresh from the server in the background.
+    _state.entries = loadCachedEntries();
 
     root.innerHTML =
       '<div class="sch-page">' +
@@ -277,6 +311,12 @@
     // Kick off user load in the background so the editor modal can
     // populate the crew picker as soon as the user clicks a day.
     loadUsers();
+
+    // And the server fetch — repaint the grid + summary when it lands.
+    fetchEntries().then(function() {
+      renderGrid();
+      refreshWeekSummary();
+    });
   }
 
   // ── Render: sidebar ────────────────────────────────────────
@@ -622,17 +662,35 @@
       function close() { modal.remove(); }
       modal.querySelector('#schEditCancel').addEventListener('click', close);
       modal.addEventListener('click', function(e) { if (e.target === modal) close(); });
+
+      // Disable buttons + show a tiny spinner so a slow network doesn't
+      // produce double-clicks or the appearance of a frozen modal.
+      function setBusy(busy) {
+        modal.querySelectorAll('button').forEach(function(b) { b.disabled = !!busy; });
+        var saveBtn = modal.querySelector('#schEditSave');
+        if (saveBtn) saveBtn.textContent = busy ? '…' : (isEdit ? 'Save' : 'Create');
+      }
+
       var del = modal.querySelector('#schEditDelete');
       if (del) {
         del.addEventListener('click', function() {
           if (!entry) return;
           if (!confirm('Delete this schedule entry?')) return;
-          _state.entries = _state.entries.filter(function(x) { return x.id !== entry.id; });
-          saveEntries(_state.entries);
-          close();
-          renderGrid();
-          renderSidebar();
-          refreshWeekSummary();
+          setBusy(true);
+          var p = isApiReady() && entry.id && entry.id.indexOf('sch_local_') !== 0
+            ? window.agxApi.schedule.remove(entry.id)
+            : Promise.resolve();
+          p.then(function() {
+            _state.entries = _state.entries.filter(function(x) { return x.id !== entry.id; });
+            cacheEntries(_state.entries);
+            close();
+            renderGrid();
+            renderSidebar();
+            refreshWeekSummary();
+          }).catch(function(err) {
+            setBusy(false);
+            alert('Delete failed: ' + (err.message || err));
+          });
         });
       }
       modal.querySelector('#schEditSave').addEventListener('click', function() {
@@ -644,35 +702,60 @@
         var ww = modal.querySelector('#schEditWeekends').checked;
         var st = modal.querySelector('#schEditStatus').value || 'planned';
         var nt = modal.querySelector('#schEditNotes').value || '';
-        var now = new Date().toISOString();
-        if (isEdit) {
-          entry.jobId = jobId;
-          entry.startDate = sd;
-          entry.days = d;
-          entry.crew = crew.slice();
-          entry.notes = nt;
-          entry.status = st;
-          entry.includesWeekends = ww;
-          entry.updatedAt = now;
+        var payload = {
+          jobId: jobId,
+          startDate: sd,
+          days: d,
+          crew: crew.slice(),
+          notes: nt,
+          status: st,
+          includesWeekends: ww
+        };
+        setBusy(true);
+        var done = function(saved) {
+          if (isEdit) {
+            // Replace the entry in-place — cleaner than splice since
+            // the server response carries the canonical row including
+            // updated_at and any server-side defaults.
+            var idx = _state.entries.findIndex(function(x) { return x.id === entry.id; });
+            if (idx >= 0) _state.entries[idx] = saved;
+            else _state.entries.push(saved);
+          } else {
+            _state.entries.push(saved);
+          }
+          cacheEntries(_state.entries);
+          close();
+          renderGrid();
+          refreshWeekSummary();
+        };
+        var fail = function(err) {
+          setBusy(false);
+          alert('Save failed: ' + (err.message || err));
+        };
+
+        if (isApiReady()) {
+          var req = isEdit
+            ? window.agxApi.schedule.update(entry.id, payload)
+            : window.agxApi.schedule.create(payload);
+          req.then(function(res) {
+            done(res && res.entry);
+          }).catch(fail);
         } else {
-          var ne = {
-            id: 'sch_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
-            jobId: jobId,
-            startDate: sd,
-            days: d,
-            crew: crew.slice(),
-            notes: nt,
-            status: st,
-            includesWeekends: ww,
-            createdAt: now,
-            updatedAt: now
-          };
-          _state.entries.push(ne);
+          // Offline / unauthenticated fallback: write to cache only,
+          // tag the id so we don't try to PATCH it later. These entries
+          // become first-class once the user is back online by being
+          // re-created via /api/schedule on the next save action — for
+          // now, they're effectively local-only.
+          var now = new Date().toISOString();
+          var saved = isEdit
+            ? Object.assign({}, entry, payload, { updatedAt: now })
+            : Object.assign({
+                id: 'sch_local_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+                createdAt: now,
+                updatedAt: now
+              }, payload);
+          done(saved);
         }
-        saveEntries(_state.entries);
-        close();
-        renderGrid();
-        refreshWeekSummary();
       });
     };
 

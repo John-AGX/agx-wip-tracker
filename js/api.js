@@ -229,9 +229,40 @@
     migrateApply: function(inlineSubs) { return post('/api/subs/migrate-apply', { inlineSubs: inlineSubs }); }
   };
 
+  // Production-scheduling calendar (Phase 2).
+  // Persists schedule_entries server-side so the Friday meeting's
+  // plan is the same on every device.
+  var schedule = {
+    list: function(opts) {
+      opts = opts || {};
+      var qs = [];
+      if (opts.from) qs.push('from=' + encodeURIComponent(opts.from));
+      if (opts.to) qs.push('to=' + encodeURIComponent(opts.to));
+      if (opts.jobId) qs.push('jobId=' + encodeURIComponent(opts.jobId));
+      return get('/api/schedule' + (qs.length ? '?' + qs.join('&') : ''));
+    },
+    create: function(payload) { return post('/api/schedule', payload); },
+    update: function(id, payload) {
+      // PATCH — same pattern as subsApi.updateAssignment since our
+      // helpers don't expose patch directly.
+      return fetch('/api/schedule/' + encodeURIComponent(id), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(payload)
+      }).then(function(r) {
+        return r.json().then(function(b) {
+          if (!r.ok) throw new Error(b.error || 'request failed');
+          return b;
+        });
+      });
+    },
+    remove: function(id) { return del('/api/schedule/' + encodeURIComponent(id)); }
+  };
+
   window.agxApi = {
     get: get, put: put, post: post, del: del,
-    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai, materials: materials, qbCosts: qbCosts, subs: subsApi,
+    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai, materials: materials, qbCosts: qbCosts, subs: subsApi, schedule: schedule,
     isOffline: isOffline,
     isAuthenticated: function() { return !!getToken() && !isOffline(); }
   };
