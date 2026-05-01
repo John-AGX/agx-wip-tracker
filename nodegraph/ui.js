@@ -689,6 +689,11 @@ function render(){
     if(attachingFromNoteId) wrap.classList.add('ng-attaching');
     else wrap.classList.remove('ng-attaching');
   }
+  // Audit badge — recompute high+med findings count after every
+  // graph state change (workspace-layout.js exposes this hook).
+  if (typeof window._wsRefreshAuditBadge === 'function') {
+    try { window._wsRefreshAuditBadge(); } catch(e) {}
+  }
 }
 
 function applyTx(){

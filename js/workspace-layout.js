@@ -743,6 +743,7 @@
     var focusBtn = document.getElementById('ngWsFocusBtn');
     var fsBtn = document.getElementById('ngWsFullscreenBtn');
     var maxBtn = document.getElementById('ngFullscreenGraphBtn');
+    var auditBtn = document.getElementById('ngAuditBtn');
     if (focusBtn) focusBtn.addEventListener('click', focusOnWorkspace);
     if (fsBtn) fsBtn.addEventListener('click', toggleFullscreenWorkspace);
     // Toggle the AGX nav header. body class drives the CSS in
@@ -756,8 +757,42 @@
         ? 'Restore the AGX nav header (toggle)'
         : 'Hide the AGX nav header to give the graph the entire viewport (toggle)';
     });
+    // Audit — opens the connectivity+completeness modal scoped to
+    // the current job. The badge count refreshes on every render
+    // via refreshAuditBadge() below.
+    if (auditBtn) auditBtn.addEventListener('click', function() {
+      var jid = (window.appState && appState.currentJobId) || null;
+      if (!jid) return alert('Open a job first.');
+      if (window.agxJobAudit) window.agxJobAudit.open(jid);
+    });
     _toolbarWired = true;
   }
+
+  // Refresh the audit-button badge with the count of high+med
+  // findings. Called on graph render so the count stays in sync as
+  // the user wires/unwires nodes or edits %complete. Idempotent.
+  function refreshAuditBadge() {
+    var btn = document.getElementById('ngAuditBtn');
+    var badge = document.getElementById('ngAuditBadge');
+    if (!btn || !badge) return;
+    var jid = (window.appState && appState.currentJobId) || null;
+    if (!jid || !window.agxJobAudit) {
+      badge.style.display = 'none';
+      return;
+    }
+    try {
+      var count = window.agxJobAudit.findingCount(jid, ['high', 'med']);
+      if (count > 0) {
+        badge.textContent = count;
+        badge.style.display = 'inline-block';
+      } else {
+        badge.style.display = 'none';
+      }
+    } catch (e) { badge.style.display = 'none'; }
+  }
+  // Expose so nodegraph/ui.js's render() can call us after each
+  // graph state change.
+  window._wsRefreshAuditBadge = refreshAuditBadge;
   // Click the minimized folder icon to restore. Bound globally on the
   // panel since the folder takes over the panel's DOM.
   document.addEventListener('click', function(e) {

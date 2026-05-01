@@ -2022,6 +2022,7 @@
     <script src="js/admin.js?v=13"></script>
     <script src="js/clients.js?v=8"></script>
     <script src="js/subs.js?v=1"></script>
+    <script src="js/job-audit.js?v=1"></script>
     <script src="js/leads.js?v=10"></script>
     <script src="js/job-costs-import.js?v=3"></script>
     <script src="js/qb-costs-view.js?v=2"></script>
@@ -2036,7 +2037,7 @@
     <script src="js/ai-panel.js?v=8"></script>
 
     <script src="js/workspace.js?v=24"></script>
-    <script src="js/workspace-layout.js?v=39"></script>
+    <script src="js/workspace-layout.js?v=40"></script>
 
     <!-- Node Graph (Beta) -->
     <link rel="stylesheet" href="nodegraph/nodegraph.css?v=80" />
@@ -2064,6 +2065,7 @@
         <button class="ng-tbtn ng-ws-focus-btn" id="ngWsFocusBtn" title="Focus the workspace — zoom 100% and center on it">&#x1F3AF; Focus Workspace</button>
         <button class="ng-tbtn ng-ws-fullscreen-btn" id="ngWsFullscreenBtn" title="Expand workspace to fill the canvas (toggle to restore)">&#x26F6; Fullscreen</button>
         <button class="ng-tbtn ng-fullscreen-graph-btn" id="ngFullscreenGraphBtn" title="Hide the AGX nav header to give the graph the entire viewport (toggle)">&#x1F5D6; Maximize</button>
+        <button class="ng-tbtn ng-audit-btn" id="ngAuditBtn" title="Run a connectivity + completeness audit on this job — surfaces orphan nodes, missing %complete, unlinked QB lines, margin drift">&#x26A0; Audit<span id="ngAuditBadge" style="display:none;margin-left:4px;font-size:9px;padding:1px 6px;border-radius:8px;background:rgba(248,113,113,0.25);color:#f87171;font-weight:700;"></span></button>
         <span class="ng-topbar-divider"></span>
         <button class="ng-tbtn" onclick="openJobAI()" title="WIP / financial AI assistant" style="background:linear-gradient(135deg,#8b5cf6,#4f8cff);color:#fff;border:none;">&#x2728; Ask AI</button>
         <button class="ng-tbtn-close">&#x2716; Close</button>
@@ -2080,6 +2082,6 @@
       </div>
     </div>
     <script src="nodegraph/engine.js?v=67"></script>
-    <script src="nodegraph/ui.js?v=122"></script>
+    <script src="nodegraph/ui.js?v=123"></script>
 </body>
 </html>
