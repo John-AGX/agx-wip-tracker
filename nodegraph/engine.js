@@ -8,7 +8,7 @@ var PT = { C:'currency', P:'percent', N:'number', A:'any' };
 var WCOL = { currency:'#34d399', percent:'#fbbf24', number:'#a78bfa', any:'#4f8cff' };
 // Wire color by SOURCE node type — matches node header colors
 var SRCCOL = {
-  labor:'#fbbf24', mat:'#fbbf24', gc:'#fbbf24', other:'#fbbf24',
+  labor:'#fbbf24', mat:'#fbbf24', gc:'#fbbf24', other:'#fbbf24', burden:'#fbbf24',
   sub:'#a78bfa', po:'#22d3ee', inv:'#fce7f3',
   co:'#ec4899',
   t1:'#6aa3ff', t2:'#34d399',
@@ -27,6 +27,11 @@ var DEFS = {
   mat:   { cat:'cost', icon:'🧱', label:'Materials',    ins:[], outs:[{n:'Total',t:PT.C}], hasItems:true, nameEdit:true, itemType:'mat' },
   gc:    { cat:'cost', icon:'🏢', label:'Gen. Conditions', ins:[], outs:[{n:'Total',t:PT.C}], hasItems:true, nameEdit:true, itemType:'gc' },
   other: { cat:'cost', icon:'📌', label:'Other',        ins:[], outs:[{n:'Total',t:PT.C}], hasItems:true, nameEdit:true, itemType:'other' },
+  // Direct burden — payroll burden / insurance / taxes layered on
+  // labor. Same line-entry shape as Materials (date + amount), so the
+  // user can map QB "Direct Burden" account totals directly without
+  // touching qty/rate math.
+  burden:{ cat:'cost', icon:'⚖️', label:'Direct Burden', ins:[], outs:[{n:'Total',t:PT.C}], hasItems:true, nameEdit:true, itemType:'burden' },
   sub:   { cat:'sub',  icon:'👷', label:'Sub',          ins:[{n:'Costs',t:PT.C}], outs:[{n:'Total',t:PT.C}], nameEdit:true },
   po:    { cat:'sub',  icon:'📄', label:'Purchase Order', ins:[{n:'Invoiced',t:PT.C}], outs:[{n:'Total',t:PT.C}], hasItems:true, nameEdit:true, itemType:'po' },
   inv:   { cat:'sub',  icon:'💳', label:'Invoice',       ins:[], outs:[{n:'Total',t:PT.C}], hasItems:true, nameEdit:true, itemType:'inv' },
@@ -47,7 +52,7 @@ var DEFS = {
 var CATS = [
   { name:'Master',    items:['wip'] },
   { name:'Structure', items:['t1','t2'] },
-  { name:'Costs',     items:['labor','mat','gc','other'] },
+  { name:'Costs',     items:['labor','mat','gc','burden','other'] },
   { name:'Subs & COs',items:['sub','po','inv','co'] },
   { name:'Math',      items:['sum','sub2','mul','pct'] },
   { name:'Output',    items:['watch'] },
@@ -212,8 +217,8 @@ function getOutput(n, pi){
     });
   }
 
-  // Cost nodes (labor, mat, gc, other): items total or direct value
-  if(n.type === 'labor' || n.type === 'mat' || n.type === 'gc' || n.type === 'other'){
+  // Cost nodes (labor, mat, gc, other, burden): items total or direct value
+  if(n.type === 'labor' || n.type === 'mat' || n.type === 'gc' || n.type === 'other' || n.type === 'burden'){
     v = itemsTotal || n.value || 0;
     _comp[n.id] = false; return v;
   }
@@ -364,7 +369,7 @@ function getActual(n){
   if(_compA[n.id]) return 0;
   _compA[n.id] = true;
   var v = 0, iT = _itemsTotal(n);
-  if(n.type==='labor'||n.type==='mat'||n.type==='gc'||n.type==='other'){ v = iT || n.value || 0; }
+  if(n.type==='labor'||n.type==='mat'||n.type==='gc'||n.type==='other'||n.type==='burden'){ v = iT || n.value || 0; }
   else if(n.type==='inv'){ v = iT; }
   else if(n.type==='po'){
     // Sum wired Invoice amounts on the PO's input port

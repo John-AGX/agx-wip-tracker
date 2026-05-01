@@ -1162,9 +1162,9 @@
         }
         if (!node) throw new Error('Node "' + idOrLabel + '" not in graph. Use a node id from the # Node graph block (not a phase id).');
 
-        var allowedTypes = { labor: 1, mat: 1, gc: 1, other: 1, sub: 1 };
+        var allowedTypes = { labor: 1, mat: 1, gc: 1, other: 1, sub: 1, burden: 1 };
         if (!allowedTypes[node.type]) {
-          throw new Error('set_node_value only works on cost-bucket nodes (labor/mat/gc/other/sub). Node "' + (node.label || node.id) + '" is type "' + node.type + '". For phase fields use set_phase_field.');
+          throw new Error('set_node_value only works on cost-bucket nodes (labor/mat/gc/other/sub/burden). Node "' + (node.label || node.id) + '" is type "' + node.type + '". For phase fields use set_phase_field.');
         }
 
         var amt = Number(input.amount);

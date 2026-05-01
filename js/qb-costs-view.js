@@ -449,16 +449,17 @@
       co:  'Change Order',
       po:  'Purchase Order',
       inv: 'Invoice',
-      labor: 'Labor',
-      mat:   'Materials',
-      gc:    'General Conditions',
-      other: 'Other Cost',
-      watch: 'Watch'
+      labor:  'Labor',
+      burden: 'Direct Burden',
+      mat:    'Materials',
+      gc:     'General Conditions',
+      other:  'Other Cost',
+      watch:  'Watch'
     };
     // Stable sort order — phases & buildings near the top, individual
     // cost-bucket types after, sub at the very top since most QB lines
     // are subcontractor charges.
-    var TYPE_ORDER = ['sub', 't2', 't1', 'co', 'po', 'inv', 'labor', 'mat', 'gc', 'other', 'watch'];
+    var TYPE_ORDER = ['sub', 't2', 't1', 'co', 'po', 'inv', 'labor', 'burden', 'mat', 'gc', 'other', 'watch'];
 
     // Strip any prior instance — re-opening shouldn't stack modals.
     var prior = document.getElementById('qbLinkPickerModal');

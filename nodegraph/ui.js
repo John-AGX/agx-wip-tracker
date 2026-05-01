@@ -252,13 +252,14 @@ function renderNodes(){
       // labor/mat/gc/other; sub's getOutput falls back to n.value
       // when no wired cost inputs exist (added below).
       if(iType==='po') h+='<div class="ng-edit-val"><label style="font-size:9px;color:#6a7090;display:block;text-align:center;">Base Contract</label><input type="number" value="'+(n.value||0)+'" data-node="'+n.id+'" step="0.01" /></div>';
-      else if(iType==='labor' || iType==='mat' || iType==='gc' || iType==='other' || iType==='sub') {
+      else if(iType==='labor' || iType==='mat' || iType==='gc' || iType==='other' || iType==='sub' || iType==='burden') {
         var labels = {
-          labor: 'QuickBooks Total (used if no weekly entries)',
-          mat:   'QuickBooks Total (used if no line entries)',
-          gc:    'QuickBooks Total (used if no line entries)',
-          other: 'QuickBooks Total (used if no line entries)',
-          sub:   'QuickBooks Total (used if no wired costs)'
+          labor:  'QuickBooks Total (used if no weekly entries)',
+          mat:    'QuickBooks Total (used if no line entries)',
+          gc:     'QuickBooks Total (used if no line entries)',
+          other:  'QuickBooks Total (used if no line entries)',
+          burden: 'QuickBooks Total (used if no line entries)',
+          sub:    'QuickBooks Total (used if no wired costs)'
         };
         // Compute linked QB lines for this node — show the sum so
         // the user can verify the manual QB Total they typed against
@@ -287,6 +288,7 @@ function renderNodes(){
       // Header row
       if(iType==='labor') h+='<div class="ng-si-hdr"><span class="hd hd-date">Week Of</span><span class="hd hd-sm">Hrs</span><span class="hd hd-sm">Rate</span><span class="hd hd-sm">Total</span><span class="hd hd-del"></span></div>';
       else if(iType==='mat') h+='<div class="ng-si-hdr"><span class="hd hd-date">Date</span><span class="hd hd-flex">Amount</span><span class="hd hd-del"></span></div>';
+      else if(iType==='burden') h+='<div class="ng-si-hdr"><span class="hd hd-date">Period</span><span class="hd hd-flex">Amount</span><span class="hd hd-del"></span></div>';
       else if(iType==='gc') h+='<div class="ng-si-hdr"><span class="hd hd-date">Week Of</span><span class="hd hd-flex">Vendor</span><span class="hd hd-sm">Amount</span><span class="hd hd-del"></span></div>';
       else if(iType==='other') h+='<div class="ng-si-hdr"><span class="hd hd-date">Date</span><span class="hd hd-sm">Qty</span><span class="hd hd-sm">$/Unit</span><span class="hd hd-sm">Total</span><span class="hd hd-del"></span></div>';
       else if(iType==='sub') h+='<div class="ng-si-hdr"><span class="hd hd-date">Date</span><span class="hd hd-flex">Description</span><span class="hd hd-sm">Amount</span><span class="hd hd-del"></span></div>';
@@ -302,6 +304,9 @@ function renderNodes(){
           h+='<input class="ng-si-f ng-si-sm" type="number" '+pre+' data-field="rate" value="'+(item.rate||65)+'" step="0.01" />';
           h+='<span class="ng-si-val">'+E.fmtC((item.hours||0)*(item.rate||65))+'</span>';
         } else if(iType==='mat'){
+          h+='<input class="ng-si-f ng-si-date" type="date" '+pre+' data-field="date" value="'+(item.date||'')+'" />';
+          h+='<input class="ng-si-f ng-si-sm" type="number" '+pre+' data-field="amount" value="'+(item.amount||0)+'" step="0.01" style="flex:1" />';
+        } else if(iType==='burden'){
           h+='<input class="ng-si-f ng-si-date" type="date" '+pre+' data-field="date" value="'+(item.date||'')+'" />';
           h+='<input class="ng-si-f ng-si-sm" type="number" '+pre+' data-field="amount" value="'+(item.amount||0)+'" step="0.01" style="flex:1" />';
         } else if(iType==='gc'){
@@ -1383,6 +1388,7 @@ function initEvents(){
         else if(iT==='mat'){newItem.amount=0;}
         else if(iT==='gc'){newItem.vendor='';newItem.amount=0;}
         else if(iT==='other'){newItem.qty=0;newItem.unitCost=0;}
+        else if(iT==='burden'){newItem.amount=0;}
         else if(iT==='sub'){newItem.desc='';newItem.amount=0;}
         else if(iT==='po'){newItem.desc='';newItem.amount=0;}
         else if(iT==='inv'){newItem.invNum='';newItem.amount=0;}
@@ -1707,7 +1713,10 @@ function pushToJob(){
         // T2 costs roll into building via the total
       } else {
         var val=E.getOutput(src,w.fromPort);
-        if(src.type==='labor') lab+=val;
+        // Direct Burden rolls into the labor bucket — payroll burden
+        // (taxes/insurance/benefits) is a labor cost in standard WIP
+        // reporting and the AGX QB accounts treat it that way.
+        if(src.type==='labor' || src.type==='burden') lab+=val;
         else if(src.type==='mat') mat+=val;
         else if(src.type==='gc') gc+=val;
         else if(src.type==='other') equip+=val;
@@ -1734,7 +1743,7 @@ function pushToJob(){
       var src=E.findNode(w.fromNode);
       if(!src) return;
       var val=E.getOutput(src,w.fromPort);
-      if(src.type==='labor') lab+=val;
+      if(src.type==='labor' || src.type==='burden') lab+=val;
       else if(src.type==='mat') mat+=val;
       else if(src.type==='other') equip+=val;
     });
@@ -1781,7 +1790,7 @@ function pushToJob(){
   var jobMat=0,jobLab=0,jobEquip=0,jobGC=0;
   var hasJobCostNodes=false;
   nodes.forEach(function(n){
-    if(n.type!=='labor'&&n.type!=='mat'&&n.type!=='gc'&&n.type!=='other') return;
+    if(n.type!=='labor'&&n.type!=='mat'&&n.type!=='gc'&&n.type!=='other'&&n.type!=='burden') return;
     // Check if this cost node is wired to a T1 or T2
     var wiredToTier=wires.some(function(w){
       if(w.fromNode!==n.id) return false;
@@ -1791,7 +1800,7 @@ function pushToJob(){
     if(wiredToTier) return; // already counted at building/phase level
     hasJobCostNodes=true;
     var val=E.getOutput(n,0);
-    if(n.type==='labor') jobLab+=val;
+    if(n.type==='labor' || n.type==='burden') jobLab+=val;
     else if(n.type==='mat') jobMat+=val;
     else if(n.type==='gc') jobGC+=val;
     else if(n.type==='other') jobEquip+=val;
@@ -2366,7 +2375,7 @@ function autoArrange(selectedId){
       }
     });
     // Fan order: T1/T2 first (primary hierarchy), then sub/po/inv; COs excluded
-    var typeRank={t1:1, t2:2, sub:3, po:4, inv:5, labor:6, mat:7, gc:8, other:9, sum:10, sub2:10, mul:10, pct:10, job:11};
+    var typeRank={t1:1, t2:2, sub:3, po:4, inv:5, labor:6, burden:6.5, mat:7, gc:8, other:9, sum:10, sub2:10, mul:10, pct:10, job:11};
     srcs=srcs.filter(function(s){return s.type!=='co';});
     srcs.sort(function(a,b){return (typeRank[a.type]||99)-(typeRank[b.type]||99);});
     return srcs;

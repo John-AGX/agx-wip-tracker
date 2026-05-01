@@ -251,11 +251,12 @@ const JOB_TOOLS = [
   {
     name: 'set_node_value',
     description:
-      'Set the QuickBooks Total / value field on a cost-bucket node in the graph (labor / mat / gc / other / sub). ' +
-      'Use this when the user wants a QB account total (e.g. "Materials & Supplies - COGS = $43,078") loaded into a specific cost node so it flows up through the graph. ' +
+      'Set the QuickBooks Total / value field on a cost-bucket node in the graph (labor / mat / gc / other / sub / burden). ' +
+      'Use this when the user wants a QB account total (e.g. "Materials & Supplies - COGS = $43,078" or "Direct Burden = $1,883") loaded into a specific cost node so it flows up through the graph. ' +
       'node_id MUST be a node id from the # Node graph block (e.g. "n38"), NOT a phase id from # Structure. ' +
       'For phase-level fields (materials/labor/sub/equipment on a phase record) use set_phase_field instead. ' +
-      'Only valid on labor / mat / gc / other / sub node types — will error on t1, t2, wip, watch, note, co, po, inv.',
+      'Only valid on labor / mat / gc / other / sub / burden node types — will error on t1, t2, wip, watch, note, co, po, inv. ' +
+      'Note: "burden" (Direct Burden) is the payroll-burden bucket — taxes/insurance/benefits layered on labor — and rolls into the labor cost total at building/phase/job levels.',
     input_schema: {
       type: 'object',
       additionalProperties: false,
