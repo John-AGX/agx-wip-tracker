@@ -28,7 +28,9 @@ function genId() {
 }
 
 // Sanitize / coerce inputs from the JSON body. Returns { ok, value, error }.
-function readEntry(body, isUpdate) {
+// Async because crew ids are validated against the users table — we
+// don't want stale/garbage user ids festering in the JSONB column.
+async function readEntry(body, isUpdate) {
   if (!body || typeof body !== 'object') return { ok: false, error: 'Body required' };
   const out = {};
   if (!isUpdate || body.jobId !== undefined) {
@@ -49,17 +51,33 @@ function readEntry(body, isUpdate) {
     if (body.crew == null) {
       out.crew = [];
     } else if (Array.isArray(body.crew)) {
-      // Crew is an array of user ids (numbers from users.id) — coerce
-      // to numbers + dedupe so the JSONB column stays clean.
+      // Crew is an array of user ids (integers from users.id). Coerce
+      // to numbers + dedupe, then verify each id refers to a real user
+      // — stops bad-actor / typo'd ids from polluting the JSONB.
       const seen = {};
-      out.crew = [];
+      const candidates = [];
       body.crew.forEach((u) => {
         const n = parseInt(u, 10);
         if (Number.isFinite(n) && !seen[n]) {
           seen[n] = true;
-          out.crew.push(n);
+          candidates.push(n);
         }
       });
+      if (candidates.length) {
+        const { rows: validRows } = await pool.query(
+          'SELECT id FROM users WHERE id = ANY($1::int[]) AND active = TRUE',
+          [candidates]
+        );
+        const validSet = new Set(validRows.map((r) => Number(r.id)));
+        out.crew = candidates.filter((n) => validSet.has(n));
+        // If the caller passed ids we couldn't validate, surface a
+        // soft warning in the response so the client can show "X
+        // dropped" if it cares. Doesn't block save.
+        const dropped = candidates.filter((n) => !validSet.has(n));
+        if (dropped.length) out._droppedCrew = dropped;
+      } else {
+        out.crew = [];
+      }
     } else {
       return { ok: false, error: 'crew must be an array' };
     }
@@ -75,6 +93,12 @@ function readEntry(body, isUpdate) {
   }
   if (!isUpdate || body.notes !== undefined) {
     out.notes = body.notes == null ? null : String(body.notes).slice(0, 2000);
+  }
+  // expectedUpdatedAt — optimistic-locking token. Only meaningful on
+  // PATCH. Validated in the route handler, not here, so we just pass
+  // it through on the parsed value.
+  if (isUpdate && body.expectedUpdatedAt !== undefined) {
+    out._expectedUpdatedAt = body.expectedUpdatedAt;
   }
   return { ok: true, value: out };
 }
@@ -159,7 +183,7 @@ router.post('/',
   requireAuth, requireCapability('JOBS_VIEW_ALL'),
   async (req, res) => {
     try {
-      const parsed = readEntry(req.body, false);
+      const parsed = await readEntry(req.body, false);
       if (!parsed.ok) return res.status(400).json({ error: parsed.error });
       const v = parsed.value;
       // Confirm the job exists so we don't leave orphan rows. ON DELETE
@@ -192,14 +216,43 @@ router.post('/',
   }
 );
 
-// PATCH /api/schedule/:id — partial update
+// PATCH /api/schedule/:id — partial update with optimistic locking.
+//
+// Concurrency model: the client sends `expectedUpdatedAt` — the value
+// of updated_at it last saw on this entry. The server only commits
+// the UPDATE if the row's current updated_at still matches. If
+// someone else saved a change in between, we return 409 with the
+// current row so the client can refresh and let the user re-apply.
+// Skipped (= last-write-wins) only when the client doesn't send the
+// token, since the field is opt-in for backwards compat.
 router.patch('/:id',
   requireAuth, requireCapability('JOBS_VIEW_ALL'),
   async (req, res) => {
     try {
-      const parsed = readEntry(req.body, true);
+      const parsed = await readEntry(req.body, true);
       if (!parsed.ok) return res.status(400).json({ error: parsed.error });
       const v = parsed.value;
+      const expectedUpdatedAt = v._expectedUpdatedAt;
+      delete v._expectedUpdatedAt;
+
+      // Optimistic-locking pre-check. Skipped silently when the
+      // client hasn't sent a token (older callers / scripts).
+      if (expectedUpdatedAt) {
+        const cur = await pool.query(
+          "SELECT updated_at, to_char(start_date, 'YYYY-MM-DD') AS start_date_iso, * FROM schedule_entries WHERE id = $1",
+          [req.params.id]
+        );
+        if (!cur.rows.length) return res.status(404).json({ error: 'not found' });
+        const liveTs = cur.rows[0].updated_at instanceof Date
+          ? cur.rows[0].updated_at.toISOString()
+          : String(cur.rows[0].updated_at);
+        if (liveTs !== String(expectedUpdatedAt)) {
+          return res.status(409).json({
+            error: 'Entry changed elsewhere — refresh and try again.',
+            current: rowToJson(cur.rows[0])
+          });
+        }
+      }
 
       // Build dynamic SET clause from the fields that were actually
       // provided. updated_at always bumps so consumers can poll for

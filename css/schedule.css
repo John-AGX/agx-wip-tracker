@@ -423,6 +423,15 @@
   border-color: transparent;
   font-weight: 600;
 }
+/* Ghost pill — assigned to a user that's been deleted/deactivated.
+   Striped so it reads as broken; clicking still removes it. */
+.sch-crew-pill.sch-crew-pill-missing {
+  background-image: repeating-linear-gradient(
+    45deg, rgba(248, 113, 113, 0.55), rgba(248, 113, 113, 0.55) 4px,
+    rgba(248, 113, 113, 0.30) 4px, rgba(248, 113, 113, 0.30) 8px
+  );
+  border-color: rgba(248, 113, 113, 0.6);
+}
 .sch-modal-row {
   display: grid;
   grid-template-columns: 1fr 1fr;

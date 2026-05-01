@@ -70,6 +70,12 @@
   // never made it to the server (offline create). We keep those in
   // the in-memory list so the user sees them; they're promoted to
   // real server rows the next time the user edits + saves them.
+  //
+  // Migration rule: any cached entry whose id is NOT in the server's
+  // response AND doesn't have the sch_local_ prefix is treated as an
+  // orphaned Phase-1-style entry (created before server persistence
+  // shipped). We POST them up so they're not silently dropped — see
+  // migrateOrphanedCacheEntries().
   function fetchEntries() {
     if (!isApiReady()) {
       _state.entries = loadCachedEntries();
@@ -78,17 +84,75 @@
     return window.agxApi.schedule.list().then(function(res) {
       var serverList = (res && res.entries) || [];
       var cached = loadCachedEntries();
+      var serverIds = {};
+      serverList.forEach(function(e) { if (e.id) serverIds[e.id] = true; });
       var localOnly = cached.filter(function(e) {
         return typeof e.id === 'string' && e.id.indexOf('sch_local_') === 0;
+      });
+      // Phase-1 orphans — cached, not on the server, not local-only.
+      var orphans = cached.filter(function(e) {
+        if (!e || !e.id) return false;
+        if (serverIds[e.id]) return false;
+        if (typeof e.id === 'string' && e.id.indexOf('sch_local_') === 0) return false;
+        return true;
       });
       var merged = serverList.concat(localOnly);
       _state.entries = merged;
       cacheEntries(merged);
+      // Kick off the migration in the background and re-render once
+      // it completes. This is best-effort — failures get logged but
+      // don't block the render.
+      if (orphans.length) {
+        migrateOrphanedCacheEntries(orphans).then(function(migrated) {
+          if (!migrated.length) return;
+          // Append the new server rows and drop the orphan id
+          // versions from the cache.
+          _state.entries = _state.entries.concat(migrated);
+          cacheEntries(_state.entries);
+          renderGrid();
+          refreshWeekSummary();
+          // One-shot toast so the user knows what happened.
+          try { console.info('[schedule] migrated ' + migrated.length + ' Phase-1 entries to server'); } catch (e) {}
+        });
+      }
       return merged;
     }).catch(function(err) {
       console.warn('[schedule] fetch failed, using cache:', err && err.message);
       _state.entries = loadCachedEntries();
       return _state.entries;
+    });
+  }
+
+  // POST each orphaned cache entry to the server. Resolves with the
+  // list of successfully-migrated server rows.
+  function migrateOrphanedCacheEntries(orphans) {
+    if (!orphans || !orphans.length) return Promise.resolve([]);
+    var jobs = (window.appData && Array.isArray(window.appData.jobs)) ? window.appData.jobs : [];
+    var validJobIds = {};
+    jobs.forEach(function(j) { validJobIds[j.id] = true; });
+    var promises = orphans.map(function(e) {
+      // Drop entries that reference a job that no longer exists —
+      // POST would 404 otherwise and the server would reject. Better
+      // to skip them quietly than break the whole migration.
+      if (!validJobIds[e.jobId]) return Promise.resolve(null);
+      var payload = {
+        jobId: e.jobId,
+        startDate: e.startDate,
+        days: parseInt(e.days, 10) || 1,
+        crew: Array.isArray(e.crew) ? e.crew : [],
+        includesWeekends: !!e.includesWeekends,
+        status: e.status || 'planned',
+        notes: e.notes || ''
+      };
+      return window.agxApi.schedule.create(payload)
+        .then(function(res) { return res && res.entry ? res.entry : null; })
+        .catch(function(err) {
+          console.warn('[schedule] migrate orphan failed (' + e.id + '):', err && err.message);
+          return null;
+        });
+    });
+    return Promise.all(promises).then(function(results) {
+      return results.filter(function(r) { return !!r; });
     });
   }
 
@@ -415,9 +479,9 @@
           '<button class="sch-btn sch-btn-icon" id="schNext" title="Next month">&rsaquo;</button>' +
           '<button class="sch-btn" id="schToday" style="margin-left:6px;">Today</button>' +
         '</div>' +
-        '<label class="sch-toolbar-toggle">' +
+        '<label class="sch-toolbar-toggle" title="Calendar display only — does not change how production days are counted on entries.">' +
           '<input type="checkbox" id="schWeekendToggle" ' + (_state.settings.showWeekends ? 'checked' : '') + ' /> ' +
-          'Show weekends' +
+          'Show Sat/Sun columns' +
         '</label>' +
         '<div class="sch-toolbar-spacer"></div>' +
         '<button class="sch-btn sch-btn-primary" id="schAddEntry">+ Schedule entry</button>' +
@@ -706,13 +770,29 @@
         '</option>';
       }).join('');
 
-      var crewPills = (_state.users || []).map(function(u) {
+      var users = _state.users || [];
+      var userIdSet = {};
+      users.forEach(function(u) {
+        var n = parseInt(u.id, 10);
+        if (Number.isFinite(n)) userIdSet[n] = true;
+      });
+      var crewPills = users.map(function(u) {
         var uid = parseInt(u.id, 10);
         var on = crew.indexOf(uid) !== -1;
         return '<span class="sch-crew-pill' + (on ? ' selected' : '') + '" data-user-id="' + uid + '">' +
           escapeHTML(u.name || u.email || '(unnamed)') +
         '</span>';
       }).join('');
+      // Ghost pills for crew ids that no longer match an active user
+      // (deleted / deactivated). Marked so the data is visible in the
+      // UI — clicking removes them from the entry's crew list.
+      var missingCrewPills = crew.filter(function(id) { return !userIdSet[id]; }).map(function(id) {
+        return '<span class="sch-crew-pill selected sch-crew-pill-missing" ' +
+               'data-user-id="' + id + '" title="User no longer active. Click to remove.">' +
+          'Unknown user #' + id +
+        '</span>';
+      }).join('');
+      crewPills = crewPills + missingCrewPills;
 
       modal.innerHTML =
         '<div class="modal-content" style="max-width:560px;">' +
@@ -735,11 +815,12 @@
                 '<input type="number" id="schEditDays" min="1" max="60" value="' + days + '" />' +
               '</div>' +
             '</div>' +
-            '<div>' +
-              '<label>' +
-                '<input type="checkbox" id="schEditWeekends" ' + (includesWeekends ? 'checked' : '') + ' style="margin-right:4px;" />' +
-                'Include weekends in production days' +
+            '<div title="When ON: Sat/Sun count toward the entry\'s span (e.g. 5 days starting Friday → ends Tuesday). When OFF: weekends are skipped (5 days starting Friday → ends Thursday).">' +
+              '<label style="display:flex;align-items:center;gap:6px;cursor:pointer;text-transform:none;letter-spacing:normal;font-weight:500;color:var(--text,#e4e6f0);">' +
+                '<input type="checkbox" id="schEditWeekends" ' + (includesWeekends ? 'checked' : '') + ' />' +
+                '<span>Count weekends as production days</span>' +
               '</label>' +
+              '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:4px;line-height:1.3;">Affects how the production-days count expands across the calendar.</div>' +
             '</div>' +
             '<div>' +
               '<label>Crew (click to assign)</label>' +
@@ -770,11 +851,20 @@
 
       // Crew pill toggle — store ints to match the integer ids
       // delivered by /api/auth/users (and expected by /api/schedule).
+      // Ghost pills (missing users) just remove themselves on click;
+      // toggling them off would leave a striped-but-unselected pill
+      // which reads as broken.
       modal.querySelectorAll('.sch-crew-pill').forEach(function(p) {
         p.addEventListener('click', function() {
           var id = parseInt(p.getAttribute('data-user-id'), 10);
           if (!Number.isFinite(id)) return;
+          var isMissing = p.classList.contains('sch-crew-pill-missing');
           var idx = crew.indexOf(id);
+          if (isMissing) {
+            if (idx >= 0) crew.splice(idx, 1);
+            p.remove();
+            return;
+          }
           if (idx >= 0) crew.splice(idx, 1); else crew.push(id);
           p.classList.toggle('selected');
         });
@@ -860,6 +950,13 @@
           // to a POST instead — the server assigns a real id and we
           // drop the placeholder from the cache below.
           var isLocalOnly = isEdit && entry && typeof entry.id === 'string' && entry.id.indexOf('sch_local_') === 0;
+          // Pass the entry's last-seen updatedAt as the optimistic-
+          // locking token. If someone else saved this entry in the
+          // meantime the server returns 409 and we surface a refresh
+          // prompt instead of silently overwriting their change.
+          if (isEdit && !isLocalOnly && entry && entry.updatedAt) {
+            payload.expectedUpdatedAt = entry.updatedAt;
+          }
           var req = (isEdit && !isLocalOnly)
             ? window.agxApi.schedule.update(entry.id, payload)
             : window.agxApi.schedule.create(payload);
@@ -870,7 +967,29 @@
               _state.entries = _state.entries.filter(function(x) { return x.id !== entry.id; });
             }
             done(saved);
-          }).catch(fail);
+          }).catch(function(err) {
+            var msg = (err && err.message) || String(err);
+            // 409 conflict — let the user know and offer to refresh
+            // with the server's current copy. The error text from
+            // the api layer carries the route's "Entry changed
+            // elsewhere — refresh and try again." message.
+            if (/changed elsewhere|409/i.test(msg)) {
+              setBusy(false);
+              var goRefresh = confirm(
+                'This entry was just updated by someone else.\n\n' +
+                'Reload the latest version? (Your unsaved changes will be lost.)'
+              );
+              if (goRefresh) {
+                fetchEntries().then(function() {
+                  close();
+                  renderGrid();
+                  refreshWeekSummary();
+                });
+              }
+              return;
+            }
+            fail(err);
+          });
         } else {
           // Offline / unauthenticated fallback: write to cache only,
           // tag the id so we don't try to PATCH it later. These entries
