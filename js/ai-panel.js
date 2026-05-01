@@ -373,7 +373,7 @@
     }
     var noticeEl = document.querySelector('#agx-ai-panel #ai-notice');
     if (noticeEl) {
-      if (isJobMode()) noticeEl.textContent = 'Read-only — I can see this job\'s WIP/financial state but cannot change anything.';
+      if (isJobMode()) noticeEl.textContent = 'I see WIP, costs, the node graph, and QB lines — and I can propose edits (e.g. set a phase\'s % complete) for you to approve before they apply.';
       else if (isClientMode()) noticeEl.textContent = 'Customer Relations Agent — I keep the parent-company / property hierarchy clean. Simple writes apply automatically; restructural changes (new parent, merges, splits, deletes) require approval.';
       else noticeEl.textContent = 'I\'m AG — your AGX estimator. I can draft scopes, add/edit/delete line items and sections, and tweak pricing. Every change is shown as a card with Approve / Reject before it lands.';
     }
@@ -736,6 +736,9 @@
       // Server applies client tools on /chat/continue. Just signal approval.
       return '';
     }
+    if (isJobMode()) {
+      return applyJobTool(tu);
+    }
     if (!window.estimateEditorAPI) {
       throw new Error('Estimate editor not loaded — refresh the page.');
     }
@@ -754,6 +757,31 @@
     }
   }
 
+  // Job-side tool application. All writes go through appData + the
+  // existing CRUD APIs so the rest of the app picks up changes via
+  // the standard saveData() persistence path.
+  function applyJobTool(tu) {
+    var input = tu.input || {};
+    switch (tu.name) {
+      case 'set_phase_pct_complete': {
+        var phase = (window.appData && (appData.phases || []).find(function(p) { return p.id === input.phase_id; }));
+        if (!phase) throw new Error('Phase id "' + input.phase_id + '" not found.');
+        var oldPct = Number(phase.pctComplete || 0);
+        phase.pctComplete = Math.max(0, Math.min(100, Number(input.pct_complete || 0)));
+        // Persist via the standard save path. The bulk-save serializer
+        // picks up the mutation, jobs API writes it back to the DB.
+        if (typeof window.saveData === 'function') window.saveData();
+        // Re-render whatever's open so the user sees the change land.
+        if (typeof window.renderJobOverview === 'function' && window.appState && appState.currentJobId) {
+          try { window.renderJobOverview(appState.currentJobId); } catch (e) {}
+        }
+        return Math.round(oldPct) + '% → ' + Math.round(phase.pctComplete) + '% on phase "' + (phase.phase || phase.name || phase.id) + '"';
+      }
+      default:
+        throw new Error('Unknown job tool: ' + tu.name);
+    }
+  }
+
   // Inline confirmation chip — used when a server-side auto-tier tool
   // applies during the stream, so the user sees what happened without
   // needing an approval card.
@@ -766,10 +794,15 @@
   }
 
   function continueAfterProposals(pendingContent, responses) {
-    streamFromEndpoint(
-      apiBase() + '/chat/continue',
-      { pending_assistant_content: pendingContent, tool_results: responses }
-    );
+    var body = { pending_assistant_content: pendingContent, tool_results: responses };
+    // Job mode: re-attach the latest clientContext so the assistant
+    // sees fresh state after the user-applied changes (e.g. updated
+    // pctComplete reflects in the next reply).
+    if (isJobMode()) {
+      var ctx = buildJobClientContext();
+      if (ctx) body.clientContext = ctx;
+    }
+    streamFromEndpoint(apiBase() + '/chat/continue', body);
   }
 
   // Card rendering — one per tool_use block, formatted by tool type.
@@ -863,6 +896,21 @@
       detail = '<div style="font-size:12px;color:var(--text,#ccc);">Save the most recent uploaded photo to this client\'s attachments.</div>' +
         '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:2px;font-family:monospace;">client: ' + escapeHTMLLocal(input.client_id || '') + '</div>' +
         (input.caption ? '<div style="font-size:11px;color:var(--text-dim,#aaa);margin-top:3px;">Caption: ' + escapeHTMLLocal(input.caption) + '</div>' : '');
+    } else if (tu.name === 'set_phase_pct_complete') {
+      // Look up the phase locally so the card shows where the change
+      // is going + the prior pct (helps user spot "from 0 → 50" vs
+      // a small bump).
+      var ph = (window.appData && (appData.phases || []).find(function(p) { return p.id === input.phase_id; })) || null;
+      var bldg = ph ? (appData.buildings || []).find(function(b) { return b.id === ph.buildingId; }) : null;
+      var location = ph ? ((bldg ? bldg.name + ' › ' : '') + (ph.phase || ph.name || '(unnamed)')) : '<em style="color:#fbbf24;">phase id ' + escapeHTMLLocal(input.phase_id) + ' (not found locally)</em>';
+      var oldPct = ph ? Number(ph.pctComplete || 0) : null;
+      heading = '&#x270F; Set phase % complete';
+      detail =
+        '<div style="font-size:13px;color:var(--text,#fff);font-weight:600;">' + location + '</div>' +
+        '<div style="font-size:12px;color:var(--text,#ccc);margin-top:3px;">' +
+          (oldPct != null ? Math.round(oldPct) + '% &rarr; ' : '') +
+          '<strong style="color:#34d399;">' + Math.round(Number(input.pct_complete || 0)) + '%</strong>' +
+        '</div>';
     } else {
       heading = '? Unknown tool: ' + tu.name;
       detail = '<pre style="font-size:11px;">' + escapeHTMLLocal(JSON.stringify(input, null, 2)) + '</pre>';

@@ -181,6 +181,37 @@ const ESTIMATE_TOOLS = [
 ];
 
 // ──────────────────────────────────────────────────────────────────
+// Job-side tools — write capabilities for the WIP Assistant.
+// All proposals route through the same approval-card flow as the
+// estimate side: assistant emits a tool_use block, client renders
+// a card, user approves, client applies the change locally and
+// signals approval back via /chat/continue.
+//
+// Phase 3 ships the foundation tool. Subsequent commits add
+// wire_nodes, assign_qb_line, set_phase_field, create_node, etc.
+// ──────────────────────────────────────────────────────────────────
+const JOB_TOOLS = [
+  {
+    name: 'set_phase_pct_complete',
+    description:
+      'Update a phase\'s % complete. Use when the user verbally confirms a number ' +
+      '("phase 1 is at 50%") or when audit findings show a phase has cost data but pctComplete=0. ' +
+      'phase_id MUST be one of the phase ids visible in the # Structure block; do not invent ids. ' +
+      'Always include rationale (1 short sentence) explaining why this number.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        phase_id: { type: 'string', description: 'The phase id from the # Structure block of the system prompt.' },
+        pct_complete: { type: 'number', minimum: 0, maximum: 100, description: 'New % complete value (0–100).' },
+        rationale: { type: 'string', description: 'One short sentence — why this number, not the old one.' }
+      },
+      required: ['phase_id', 'pct_complete', 'rationale']
+    }
+  }
+];
+
+// ──────────────────────────────────────────────────────────────────
 // Context builder — pulls everything Claude needs to know about the
 // estimate and formats it as a system-prompt prefix. Photos are returned
 // separately so the chat handler can attach them as image blocks.
@@ -617,7 +648,7 @@ function setSSEHeaders(res) {
   res.flushHeaders();
 }
 
-async function runStream({ anthropic, res, system, messages, persistAssistantText, persistArgs }) {
+async function runStream({ anthropic, res, system, messages, persistAssistantText, persistArgs, tools }) {
   function send(payload) { res.write('data: ' + JSON.stringify(payload) + '\n\n'); }
   function endWithDone() { res.write('data: [DONE]\n\n'); res.end(); }
   function abort(message) {
@@ -635,12 +666,15 @@ async function runStream({ anthropic, res, system, messages, persistAssistantTex
   // (system, tools rendered first in cache order). Combined with the
   // system stable-prefix cache, that's two cache breakpoints — well
   // under the per-request limit.
-  const cachedTools = ESTIMATE_TOOLS.length
+  // Caller can pass `tools` to swap in JOB_TOOLS (or any other tool
+  // set). Defaults to ESTIMATE_TOOLS for backwards-compat.
+  const toolList = Array.isArray(tools) ? tools : ESTIMATE_TOOLS;
+  const cachedTools = toolList.length
     ? [
-        ...ESTIMATE_TOOLS.slice(0, -1),
-        Object.assign({}, ESTIMATE_TOOLS[ESTIMATE_TOOLS.length - 1], { cache_control: { type: 'ephemeral' } })
+        ...toolList.slice(0, -1),
+        Object.assign({}, toolList[toolList.length - 1], { cache_control: { type: 'ephemeral' } })
       ]
-    : ESTIMATE_TOOLS;
+    : toolList;
   const stream = anthropic.messages.stream({
     model: MODEL,
     max_tokens: MAX_TOKENS,
@@ -1257,41 +1291,97 @@ router.post('/jobs/:id/chat',
         [userMsgId, jobId, req.user.id, userMessage]
       );
 
-      // No tools on the job side yet — but reuse the same stream helper.
-      // It tolerates an empty tool result fine; just no tool_use will fire.
-      let assistantText = '';
-      let usage = { input_tokens: null, output_tokens: null };
-      const stream = anthropic.messages.stream({
-        model: MODEL,
-        max_tokens: MAX_TOKENS,
+      // Phase 3: route through runStream with JOB_TOOLS so the
+      // assistant can emit tool_use proposals. Approval flow is the
+      // same as the estimate side — client renders cards, user
+      // approves, /chat/continue resumes the turn with tool_results.
+      await runStream({
+        anthropic, res,
         system: ctx.system,
-        messages: messages
+        messages: messages,
+        tools: JOB_TOOLS,
+        persistAssistantText: async (text, usage) => {
+          if (!text) return;
+          const aid = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+          await pool.query(
+            `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content, model, input_tokens, output_tokens)
+             VALUES ($1, 'job', $2, $3, 'assistant', $4, $5, $6, $7)`,
+            [aid, jobId, req.user.id, text, MODEL, usage.input_tokens, usage.output_tokens]
+          );
+        }
       });
-      stream.on('text', (delta) => {
-        assistantText += delta;
-        res.write('data: ' + JSON.stringify({ delta }) + '\n\n');
-      });
-      stream.on('finalMessage', (msg) => { if (msg && msg.usage) usage = msg.usage; });
-      stream.on('error', (err) => {
-        res.write('data: ' + JSON.stringify({ error: err.message || 'AI request failed' }) + '\n\n');
-        res.write('data: [DONE]\n\n');
-        res.end();
-      });
-      await stream.done();
-
-      if (assistantText) {
-        const aid = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
-        await pool.query(
-          `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content, model, input_tokens, output_tokens)
-           VALUES ($1, 'job', $2, $3, 'assistant', $4, $5, $6, $7)`,
-          [aid, jobId, req.user.id, assistantText, MODEL, usage.input_tokens, usage.output_tokens]
-        );
-      }
-      res.write('data: ' + JSON.stringify({ done: true, usage }) + '\n\n');
-      res.write('data: [DONE]\n\n');
-      res.end();
     } catch (e) {
       console.error('AI job chat error:', e);
+      res.write('data: ' + JSON.stringify({ error: e.message || 'Server error' }) + '\n\n');
+      res.write('data: [DONE]\n\n');
+      res.end();
+    }
+  }
+);
+
+// Job /chat/continue — resumes a turn after the user has approved
+// or rejected proposals from the previous tool_use round.
+router.post('/jobs/:id/chat/continue',
+  requireAuth, requireCapability('FINANCIALS_VIEW'),
+  async (req, res) => {
+    const anthropic = getAnthropic();
+    if (!anthropic) {
+      return res.status(503).json({ error: 'AI assistant is not configured.' });
+    }
+    const pendingContent = req.body && req.body.pending_assistant_content;
+    const toolResults = req.body && req.body.tool_results;
+    const clientContext = (req.body && req.body.clientContext) || null;
+    if (!Array.isArray(pendingContent) || !Array.isArray(toolResults) || !toolResults.length) {
+      return res.status(400).json({ error: 'pending_assistant_content and tool_results are required' });
+    }
+    const jobId = req.params.id;
+
+    setSSEHeaders(res);
+
+    try {
+      const histRes = await pool.query(
+        `SELECT role, content FROM ai_messages
+         WHERE entity_type='job' AND estimate_id=$1 AND user_id=$2
+         ORDER BY created_at ASC`,
+        [jobId, req.user.id]
+      );
+      let history = histRes.rows;
+      const cap = MAX_HISTORY_PAIRS * 2;
+      if (history.length > cap) history = history.slice(-cap);
+
+      const ctx = await buildJobContext(jobId, clientContext);
+
+      const toolResultBlocks = toolResults.map(r => ({
+        type: 'tool_result',
+        tool_use_id: r.tool_use_id,
+        content: r.approved
+          ? (r.applied_summary || 'User approved. Change applied.')
+          : (r.reject_reason || 'User rejected this proposal.')
+      }));
+
+      const messages = [
+        ...history.map(m => ({ role: m.role, content: m.content })),
+        { role: 'assistant', content: pendingContent },
+        { role: 'user', content: toolResultBlocks }
+      ];
+
+      await runStream({
+        anthropic, res,
+        system: ctx.system,
+        messages: messages,
+        tools: JOB_TOOLS,
+        persistAssistantText: async (text, usage) => {
+          if (!text) return;
+          const aid = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+          await pool.query(
+            `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content, model, input_tokens, output_tokens)
+             VALUES ($1, 'job', $2, $3, 'assistant', $4, $5, $6, $7)`,
+            [aid, jobId, req.user.id, text, MODEL, usage.input_tokens, usage.output_tokens]
+          );
+        }
+      });
+    } catch (e) {
+      console.error('AI job chat/continue error:', e);
       res.write('data: ' + JSON.stringify({ error: e.message || 'Server error' }) + '\n\n');
       res.write('data: [DONE]\n\n');
       res.end();
