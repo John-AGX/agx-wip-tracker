@@ -665,13 +665,12 @@
     html += '<div class="sch-cal-bars">';
     var maxRow = 0;
     segments.forEach(function(seg) {
-      if (hideWeekend && (days[seg.startCol].isWeekend ||
-          (seg.span > 1 && days[seg.startCol + seg.span - 1].isWeekend))) {
-        // If the segment is purely weekend in a hidden-weekend view,
-        // skip rendering the bar — the underlying cells are hidden.
-        // Mixed-weekday/weekend segments still render across all 7
-        // cols since we keep the grid shape.
-      }
+      // Note: when "Show Sat/Sun" is off but an entry's includesWeekends
+      // is true, the bar still renders over the (visibility:hidden)
+      // weekend cells. Underlying cells take grid space, so the
+      // percentage math stays correct — bar just paints over blank
+      // visual area. That's the right call: respect what the entry
+      // actually represents instead of dropping data.
       var leftPct = (seg.startCol / 7) * 100;
       var widthPct = (seg.span / 7) * 100;
       var topPx = 22 + seg.row * 18; // 22px reserved for the day-num

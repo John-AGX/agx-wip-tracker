@@ -345,6 +345,27 @@
   // toggle visibility from there.
   // ──────────────────────────────────────────────────────────────────
 
+  // Persist the user's preferred panel width across sessions. Min/max
+  // protect against the user pulling it off-screen or shrinking past
+  // a usable width — the chat UI breaks below ~320px.
+  var AI_PANEL_WIDTH_KEY = 'agx-ai-panel-width';
+  var AI_PANEL_WIDTH_MIN = 320;
+  var AI_PANEL_WIDTH_MAX_FRAC = 0.92; // 92% of viewport width
+  function loadAIPanelWidth() {
+    try {
+      var v = parseInt(localStorage.getItem(AI_PANEL_WIDTH_KEY), 10);
+      if (Number.isFinite(v) && v >= AI_PANEL_WIDTH_MIN) return v;
+    } catch (e) {}
+    return 420; // default
+  }
+  function saveAIPanelWidth(px) {
+    try { localStorage.setItem(AI_PANEL_WIDTH_KEY, String(px)); } catch (e) {}
+  }
+  function clampAIPanelWidth(px) {
+    var max = Math.floor(window.innerWidth * AI_PANEL_WIDTH_MAX_FRAC);
+    return Math.max(AI_PANEL_WIDTH_MIN, Math.min(max, px));
+  }
+
   function ensurePanel() {
     var panel = document.getElementById('agx-ai-panel');
     if (panel) return panel;
@@ -353,8 +374,18 @@
     // z-index 200 sits above the node graph (#nodeGraphTab z-index:99)
     // so the WIP Assistant slides in over the graph rather than being
     // covered by it. Modals (.modal z:1000) still trump the panel.
-    panel.style.cssText = 'position:fixed;top:0;right:0;bottom:0;width:420px;max-width:90vw;background:var(--surface,#0f0f1e);border-left:1px solid var(--border,#333);box-shadow:-4px 0 22px rgba(0,0,0,0.6);z-index:200;display:flex;flex-direction:column;transform:translateX(100%);transition:transform 0.22s ease;';
+    var initialWidth = clampAIPanelWidth(loadAIPanelWidth());
+    panel.style.cssText = 'position:fixed;top:0;right:0;bottom:0;width:' + initialWidth + 'px;max-width:92vw;min-width:' + AI_PANEL_WIDTH_MIN + 'px;background:var(--surface,#0f0f1e);border-left:1px solid var(--border,#333);box-shadow:-4px 0 22px rgba(0,0,0,0.6);z-index:200;display:flex;flex-direction:column;transform:translateX(100%);transition:transform 0.22s ease;';
     panel.innerHTML =
+      // Left-edge resize grabber. Wider than it looks (12px hit area)
+      // for easy targeting, but visually only a thin 2px line that
+      // brightens on hover. While dragging we toggle a class that
+      // disables the panel's slide transition so the resize feels
+      // direct instead of laggy.
+      '<div id="ai-panel-resizer" title="Drag to resize" aria-label="Resize panel" ' +
+        'style="position:absolute;top:0;left:-6px;bottom:0;width:12px;cursor:ew-resize;z-index:1;display:flex;align-items:center;justify-content:center;">' +
+        '<div style="width:2px;height:100%;background:rgba(79,140,255,0.18);transition:background 0.15s;"></div>' +
+      '</div>' +
       // Header — close button is the most prominent control on the left
       // (mirrors a typical drawer/sidebar UX) so it's never missed.
       '<div style="padding:12px 14px;border-bottom:1px solid var(--border,#333);background:linear-gradient(135deg,#0d1f12 0%,#14351d 100%);display:flex;align-items:center;gap:10px;">' +
@@ -399,6 +430,7 @@
     panel.querySelector('#ai-close').onclick = close;
     panel.querySelector('#ai-clear').onclick = clearConversation;
     panel.querySelector('#ai-send').onclick = onSend;
+    wireAIPanelResizer(panel);
     var trustBtn = panel.querySelector('#ai-trust');
     if (trustBtn) trustBtn.onclick = function(e) {
       e.stopPropagation();
@@ -448,6 +480,73 @@
     });
 
     return panel;
+  }
+
+  // Bind drag-resize behavior to the panel's left-edge handle. The
+  // panel sits flush-right (right:0), so dragging left = wider, drag
+  // right = narrower. Width snaps within [320 .. 92vw]; pulled below
+  // 320 it stays at 320, pulled past 92vw clamps so the panel can't
+  // hide the close button. The handle's hit area is 12px wide for
+  // easy targeting; the visible line is 2px and brightens during drag.
+  function wireAIPanelResizer(panel) {
+    var handle = panel.querySelector('#ai-panel-resizer');
+    if (!handle) return;
+    var line = handle.firstElementChild;
+    var dragging = null;
+
+    handle.addEventListener('mouseenter', function() {
+      if (!dragging && line) line.style.background = 'rgba(79,140,255,0.55)';
+    });
+    handle.addEventListener('mouseleave', function() {
+      if (!dragging && line) line.style.background = 'rgba(79,140,255,0.18)';
+    });
+
+    handle.addEventListener('mousedown', function(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      dragging = {
+        startX: e.clientX,
+        startW: panel.getBoundingClientRect().width
+      };
+      // Disable the slide transition mid-drag so the panel tracks
+      // the cursor 1:1; restore it after.
+      panel.dataset._priorTransition = panel.style.transition || '';
+      panel.style.transition = 'none';
+      if (line) line.style.background = '#4f8cff';
+      document.body.style.cursor = 'ew-resize';
+      document.body.style.userSelect = 'none';
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+
+    function onMove(e) {
+      if (!dragging) return;
+      // Panel grows to the LEFT — moving cursor left should widen.
+      var delta = dragging.startX - e.clientX;
+      var w = clampAIPanelWidth(dragging.startW + delta);
+      panel.style.width = w + 'px';
+    }
+    function onUp() {
+      if (!dragging) return;
+      var w = parseInt(panel.style.width, 10);
+      if (Number.isFinite(w)) saveAIPanelWidth(w);
+      panel.style.transition = panel.dataset._priorTransition || 'transform 0.22s ease';
+      delete panel.dataset._priorTransition;
+      if (line) line.style.background = 'rgba(79,140,255,0.18)';
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      dragging = null;
+    }
+
+    // Re-clamp on viewport resize so a saved 1500px width doesn't
+    // leave the panel wider than the new (smaller) screen.
+    window.addEventListener('resize', function() {
+      var cur = panel.getBoundingClientRect().width;
+      var next = clampAIPanelWidth(cur);
+      if (next !== cur) panel.style.width = next + 'px';
+    });
   }
 
   // open() accepts either:
