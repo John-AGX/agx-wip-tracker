@@ -196,13 +196,15 @@ const JOB_TOOLS = [
     description:
       'Update a phase\'s % complete. Use when the user verbally confirms a number ' +
       '("phase 1 is at 50%") or when audit findings show a phase has cost data but pctComplete=0. ' +
-      'phase_id MUST be one of the phase ids visible in the # Structure block; do not invent ids. ' +
+      'phase_id accepts EITHER a phase record id from the # Structure block (e.g. "ph_...") OR ' +
+      'a t2 / t1 graph node id from the # Node graph block (e.g. "n2"). The applier resolves both — ' +
+      'pick whichever is more clearly identifiable in the user\'s context. ' +
       'Always include rationale (1 short sentence) explaining why this number.',
     input_schema: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        phase_id: { type: 'string', description: 'The phase id from the # Structure block of the system prompt.' },
+        phase_id: { type: 'string', description: 'A phase id from # Structure ("ph_...") or a t2/t1 node id from # Node graph ("n2").' },
         pct_complete: { type: 'number', minimum: 0, maximum: 100, description: 'New % complete value (0–100).' },
         rationale: { type: 'string', description: 'One short sentence — why this number, not the old one.' }
       },

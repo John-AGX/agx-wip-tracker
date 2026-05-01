@@ -1152,29 +1152,66 @@
     var input = tu.input || {};
     switch (tu.name) {
       case 'set_phase_pct_complete': {
+        // Phase IDs vs Node IDs: the AI sometimes hands us a graph
+        // node id ("n2") instead of a phase record id ("ph_..."). Try
+        // appData.phases first; if not found, look for a t2 node with
+        // that id and route through it. T2 nodes carry their own
+        // pctComplete which the engine syncs to the phase record on
+        // the next render cycle, so either path lands the same value.
+        var newPct = Math.max(0, Math.min(100, Number(input.pct_complete || 0)));
         var phase = (window.appData && (appData.phases || []).find(function(p) { return p.id === input.phase_id; }));
-        if (!phase) throw new Error('Phase id "' + input.phase_id + '" not found.');
-        var oldPct = Number(phase.pctComplete || 0);
-        phase.pctComplete = Math.max(0, Math.min(100, Number(input.pct_complete || 0)));
-        if (typeof window.saveData === 'function') window.saveData();
-        if (typeof window.renderJobOverview === 'function' && window.appState && appState.currentJobId) {
-          try { window.renderJobOverview(appState.currentJobId); } catch (e) {}
+        if (phase) {
+          var oldPct = Number(phase.pctComplete || 0);
+          phase.pctComplete = newPct;
+          if (typeof window.saveData === 'function') window.saveData();
+          if (typeof window.renderJobOverview === 'function' && window.appState && appState.currentJobId) {
+            try { window.renderJobOverview(appState.currentJobId); } catch (e) {}
+          }
+          return Math.round(oldPct) + '% → ' + Math.round(phase.pctComplete) + '% on phase "' + (phase.phase || phase.name || phase.id) + '"';
         }
-        return Math.round(oldPct) + '% → ' + Math.round(phase.pctComplete) + '% on phase "' + (phase.phase || phase.name || phase.id) + '"';
+        // Fallback — try as a graph node id.
+        var liveNodesP = (typeof NG !== 'undefined' && NG.nodes) ? NG.nodes() : [];
+        var nodeP = liveNodesP.find(function(n) { return n.id === input.phase_id; });
+        if (!nodeP) throw new Error('Phase id "' + input.phase_id + '" not found in appData.phases or in the node graph.');
+        if (nodeP.type !== 't2' && nodeP.type !== 't1') {
+          throw new Error('Node "' + input.phase_id + '" is type "' + nodeP.type + '" — set_phase_pct_complete only works on t2 (phase) or t1 (building) nodes. For cost-bucket nodes use set_node_value.');
+        }
+        var oldNodePct = Number(nodeP.pctComplete || 0);
+        nodeP.pctComplete = newPct;
+        if (typeof NG !== 'undefined' && NG.saveGraph) NG.saveGraph();
+        if (typeof window.ngRender === 'function') {
+          try { window.ngRender(); } catch (e) {}
+        }
+        return Math.round(oldNodePct) + '% → ' + Math.round(newPct) + '% on node "' + (nodeP.label || nodeP.id) + '" (' + nodeP.type + ')';
       }
 
       case 'set_phase_field': {
-        var ph = (window.appData && (appData.phases || []).find(function(p) { return p.id === input.phase_id; }));
-        if (!ph) throw new Error('Phase id "' + input.phase_id + '" not found.');
+        // Same id-fallback pattern as set_phase_pct_complete — accept
+        // a graph node id and route through it when no matching phase
+        // record exists. T2 nodes don't store materials/labor/sub/
+        // equipment as direct fields — those flow up from wired cost
+        // children — so falling back to a node id only makes sense
+        // when the user passed a phase record id by accident.
         var allowed = ['materials', 'labor', 'sub', 'equipment'];
         if (allowed.indexOf(input.field) === -1) throw new Error('Field "' + input.field + '" not allowed.');
-        var oldAmt = Number(ph[input.field] || 0);
-        ph[input.field] = Math.max(0, Number(input.amount || 0));
-        if (typeof window.saveData === 'function') window.saveData();
-        if (typeof window.renderJobOverview === 'function' && window.appState && appState.currentJobId) {
-          try { window.renderJobOverview(appState.currentJobId); } catch (e) {}
+        var ph = (window.appData && (appData.phases || []).find(function(p) { return p.id === input.phase_id; }));
+        if (ph) {
+          var oldAmt = Number(ph[input.field] || 0);
+          ph[input.field] = Math.max(0, Number(input.amount || 0));
+          if (typeof window.saveData === 'function') window.saveData();
+          if (typeof window.renderJobOverview === 'function' && window.appState && appState.currentJobId) {
+            try { window.renderJobOverview(appState.currentJobId); } catch (e) {}
+          }
+          return input.field + ': $' + oldAmt.toFixed(0) + ' → $' + Number(ph[input.field]).toFixed(0) + ' on phase "' + (ph.phase || ph.name || ph.id) + '"';
         }
-        return input.field + ': $' + oldAmt.toFixed(0) + ' → $' + Number(ph[input.field]).toFixed(0) + ' on phase "' + (ph.phase || ph.name || ph.id) + '"';
+        // Helpful error: redirect the AI to the right tool when the
+        // id looks like a node.
+        var liveNodesF = (typeof NG !== 'undefined' && NG.nodes) ? NG.nodes() : [];
+        var nodeF = liveNodesF.find(function(n) { return n.id === input.phase_id; });
+        if (nodeF) {
+          throw new Error('"' + input.phase_id + '" is a graph node (type "' + nodeF.type + '"), not a phase record. Use set_node_value for cost-bucket nodes (labor/mat/gc/other/sub/burden), or set_phase_pct_complete for t2 % complete.');
+        }
+        throw new Error('Phase id "' + input.phase_id + '" not found.');
       }
 
       case 'wire_nodes': {
@@ -1617,13 +1654,28 @@
         '<div style="font-size:13px;color:var(--text,#fff);font-weight:600;">' + escapeHTMLLocal(input.sheet_name || '(unspecified)') + '</div>' +
         '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:3px;">Read-only — returns the full sheet contents to the assistant for analysis.</div>';
     } else if (tu.name === 'set_phase_pct_complete') {
-      // Look up the phase locally so the card shows where the change
-      // is going + the prior pct (helps user spot "from 0 → 50" vs
-      // a small bump).
+      // Look up the target locally so the card shows where the change
+      // is going + the prior pct. Try phase records first (preferred)
+      // then fall back to a graph node lookup since the apply path
+      // accepts both ids — keeps the preview in sync with reality.
       var ph = (window.appData && (appData.phases || []).find(function(p) { return p.id === input.phase_id; })) || null;
       var bldg = ph ? (appData.buildings || []).find(function(b) { return b.id === ph.buildingId; }) : null;
-      var location = ph ? ((bldg ? bldg.name + ' › ' : '') + (ph.phase || ph.name || '(unnamed)')) : '<em style="color:#fbbf24;">phase id ' + escapeHTMLLocal(input.phase_id) + ' (not found locally)</em>';
-      var oldPct = ph ? Number(ph.pctComplete || 0) : null;
+      var location, oldPct;
+      if (ph) {
+        location = (bldg ? bldg.name + ' › ' : '') + (ph.phase || ph.name || '(unnamed)');
+        oldPct = Number(ph.pctComplete || 0);
+      } else {
+        var pcNodes = (typeof NG !== 'undefined' && NG.nodes) ? NG.nodes() : [];
+        var pcNode = pcNodes.find(function(n) { return n.id === input.phase_id; });
+        if (pcNode) {
+          location = escapeHTMLLocal(pcNode.label || pcNode.id) +
+            ' <span style="font-size:11px;color:var(--text-dim,#888);font-weight:400;">(' + escapeHTMLLocal(pcNode.type) + ' node)</span>';
+          oldPct = Number(pcNode.pctComplete || 0);
+        } else {
+          location = '<em style="color:#fbbf24;">id ' + escapeHTMLLocal(input.phase_id) + ' (not found locally)</em>';
+          oldPct = null;
+        }
+      }
       heading = '&#x270F; Set phase % complete';
       detail =
         '<div style="font-size:13px;color:var(--text,#fff);font-weight:600;">' + location + '</div>' +
