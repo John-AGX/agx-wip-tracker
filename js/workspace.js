@@ -1564,7 +1564,11 @@
         links: s.links || {},
         merges: s.merges || [],
         tables: s.tables || [],
-        pinned: !!s.pinned
+        pinned: !!s.pinned,
+        // Preserve xlsx-import provenance across reloads so future
+        // tooling (e.g. "remove all sheets from <file>") can find them.
+        sourceFile: s.sourceFile || null,
+        sourceSheetName: s.sourceSheetName || null
       }));
       workbook.activeSheetId = saved.activeSheetId && workbook.sheets.find(s => s.id === saved.activeSheetId)
         ? saved.activeSheetId
@@ -1754,7 +1758,15 @@
         // cellFormula:true gives us .f (formula string) on each cell;
         // cellDates:true keeps dates as JS Date objects so we can render
         // them sensibly.
-        const wb = XLSX.read(data, { type: 'array', cellFormula: true, cellDates: true });
+        // cellStyles: true asks SheetJS to return per-cell font/fill/
+        // alignment so we can preserve the look of the source xlsx —
+        // headers stay bold, totals keep their fills, etc.
+        const wb = XLSX.read(data, {
+          type: 'array',
+          cellFormula: true,
+          cellDates: true,
+          cellStyles: true
+        });
         if (!wb.SheetNames.length) {
           alert('No sheets in that file.');
           return;
@@ -1763,22 +1775,41 @@
         syncGridToActiveSheet();
         const baseName = file.name.replace(/\.[^.]+$/, '');
         let added = 0;
+        // Multi-sheet xlsx files behave like a workbook themselves —
+        // ALWAYS prefix the file name so the resulting AGX tabs stay
+        // visually grouped ("Q1 · Sales", "Q1 · Costs") and the user
+        // can see at a glance which sheets came from which import.
+        // Single-sheet files don't need the prefix; the bare sheet
+        // name reads cleaner.
+        const isMulti = wb.SheetNames.length > 1;
+        // Find the right insertion index — keep imported sheets
+        // grouped together at the end of editable tabs but before
+        // any pinned built-ins (Detailed Costs, Attachments).
+        let insertAt = workbook.sheets.findIndex(s => s.pinned);
+        if (insertAt === -1) insertAt = workbook.sheets.length;
         wb.SheetNames.forEach(function(srcName) {
           const ws = wb.Sheets[srcName];
           if (!ws) return;
-          // Prevent collisions: append (n) to repeats. Excel sheet
-          // names can match existing AGX tabs, so namespace by file.
-          let name = srcName;
+          // Multi-sheet → always prefix with file name. Single-sheet
+          // → bare name; collision-prefix only on conflict.
+          let name = isMulti ? (baseName + ' · ' + srcName) : srcName;
           if (workbook.sheets.some(s => s.name === name)) {
-            name = baseName + ' · ' + srcName;
-          }
-          let collisionN = 2;
-          while (workbook.sheets.some(s => s.name === name)) {
-            name = baseName + ' · ' + srcName + ' (' + (collisionN++) + ')';
+            // Collision after the standard naming rule — append (n)
+            // until we find a free slot.
+            let collisionN = 2;
+            const stem = name;
+            while (workbook.sheets.some(s => s.name === name)) {
+              name = stem + ' (' + (collisionN++) + ')';
+            }
           }
           const sheet = importXlsxSheet(ws, name);
           if (sheet) {
-            workbook.sheets.push(sheet);
+            // Track origin so a future "delete imported workbook"
+            // action can find every sheet from a given file.
+            sheet.sourceFile = file.name;
+            sheet.sourceSheetName = srcName;
+            workbook.sheets.splice(insertAt, 0, sheet);
+            insertAt++;
             added++;
           }
         });
@@ -1808,6 +1839,12 @@
   // Excel formulas (`.f`) come without a leading `=`; we add it so our
   // evaluator picks them up. Values are kept as-is (strings/numbers/Date
   // become string), formatted dates rendered as YYYY-MM-DD.
+  //
+  // Style preservation: when SheetJS was called with cellStyles:true,
+  // each cell carries a `.s` object with font/fill/alignment we map
+  // into our own style shape (see buildCellStyle for the rendering
+  // side). Only present when the source file had explicit styling —
+  // unstyled cells skip the conversion entirely.
   function importXlsxSheet(ws, name) {
     const ref = ws['!ref'];
     if (!ref) return null;
@@ -1828,10 +1865,21 @@
           raw = cell.v.toISOString().slice(0, 10);
         } else if (cell.v != null) {
           raw = cell.v;
-        } else {
-          continue;
         }
-        cells[ourAddr] = { raw: raw, value: raw };
+        // Translate SheetJS cell.s → AGX cell.style. Skip empty cells
+        // unless they carry style — Excel often has style-only cells
+        // (background fills) that we should preserve.
+        const style = xlsxStyleToAgx(cell.s);
+        if (raw == null && !style) continue;
+        const out = { raw: raw == null ? '' : raw, value: raw == null ? '' : raw };
+        if (style) out.style = style;
+        // Number format pass-through — when Excel format is currency
+        // or percent, set our fmt so values render correctly.
+        if (cell.z) {
+          if (/[\$£€¥]/.test(cell.z) || /\bUSD\b/i.test(cell.z)) out.fmt = 'currency';
+          else if (/%/.test(cell.z)) out.fmt = 'percent';
+        }
+        cells[ourAddr] = out;
       }
     }
     // Pull column widths from xlsx if present
@@ -1843,6 +1891,16 @@
         }
       });
     }
+    // Row heights — preserve any explicit per-row height the source
+    // xlsx had (Excel uses points; we use px ≈ pt × 1.333).
+    const rowHeights = {};
+    if (ws['!rows']) {
+      ws['!rows'].forEach(function(row, idx) {
+        if (row && (row.hpx || row.hpt)) {
+          rowHeights[idx] = Math.max(18, Math.round(row.hpx || (row.hpt * 1.333)));
+        }
+      });
+    }
     // Pull merges if present (Excel format → our format)
     const merges = (ws['!merges'] || []).map(function(m) {
       return { r1: m.s.r, c1: m.s.c, r2: m.e.r, c2: m.e.c };
@@ -1850,13 +1908,64 @@
     return {
       id: newSheetId(),
       name: name,
+      kind: 'grid',
       rows: rows,
       cols: cols,
       cells: cells,
       colWidths: colWidths,
+      rowHeights: rowHeights,
       links: {},
-      merges: merges
+      merges: merges,
+      tables: []
     };
+  }
+
+  // Translate a SheetJS cell.s object → AGX cell.style. Returns null
+  // when the source has nothing to copy. SheetJS RGB colors come back
+  // as 6-char hex strings without a leading `#`; some cells use ARGB
+  // (8 chars) — strip the alpha byte. Theme colors aren't resolved
+  // by the CE build so they fall through silently rather than guess.
+  function xlsxStyleToAgx(s) {
+    if (!s || typeof s !== 'object') return null;
+    var out = {};
+    var hadColor = function(c) {
+      if (!c || typeof c !== 'object') return null;
+      var rgb = c.rgb;
+      if (typeof rgb !== 'string') return null;
+      // ARGB → RGB (drop alpha) and AABBCC → #AABBCC
+      if (rgb.length === 8) rgb = rgb.slice(2);
+      if (rgb.length !== 6) return null;
+      return '#' + rgb.toLowerCase();
+    };
+    if (s.font) {
+      if (s.font.bold) out.bold = true;
+      if (s.font.italic) out.italic = true;
+      if (s.font.underline) out.underline = true;
+      var fc = hadColor(s.font.color);
+      if (fc) out.color = fc;
+      if (typeof s.font.sz === 'number' && s.font.sz > 0 && s.font.sz !== 11) {
+        // Excel default is 11pt — only persist non-defaults to keep
+        // payloads small. Our render uses px; pt × 1.333 ≈ px.
+        out.fontSize = Math.round(s.font.sz * 1.333);
+      }
+    }
+    if (s.fill) {
+      // Excel reserves fgColor for solid fills; bgColor is the pattern
+      // background. For the common "filled cell" case fgColor is what
+      // the user actually sees, so prefer it.
+      var bg = hadColor(s.fill.fgColor) || hadColor(s.fill.bgColor);
+      // Skip fully white / theme-default fills so unstyled cells stay
+      // unstyled (Excel sometimes writes "ffffff" everywhere).
+      if (bg && bg !== '#ffffff' && bg !== '#000000') out.bg = bg;
+    }
+    if (s.alignment) {
+      if (typeof s.alignment.horizontal === 'string' && /^(left|center|right)$/i.test(s.alignment.horizontal)) {
+        out.align = s.alignment.horizontal.toLowerCase();
+      }
+      if (s.alignment.wrapText) out.wrap = true;
+    }
+    var anyKey = Object.keys(out).length > 0;
+    return anyKey ? out : null;
   }
 
   // Resolve a sheet name to a sheet object — used by cross-sheet
@@ -2080,6 +2189,12 @@
     if (s.underline) st += 'text-decoration:underline;';
     if (s.align) st += 'text-align:' + s.align + ';';
     if (s.wrap) st += 'white-space:normal;word-wrap:break-word;';
+    // Imported xlsx cells carry an explicit pt → px font size; only
+    // apply when set so the workspace's default sizing wins for
+    // hand-typed cells.
+    if (typeof s.fontSize === 'number' && s.fontSize > 0) {
+      st += 'font-size:' + s.fontSize + 'px;';
+    }
     return st;
   }
 

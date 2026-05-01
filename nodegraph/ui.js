@@ -793,6 +793,16 @@ function findLoadedNode(type,entry){
 // Pan (and optionally zoom) so the node sits centered in the viewport.
 // targetZoom is optional — when supplied, we ramp to it before computing
 // the centering pan so the math uses the post-zoom scale.
+//
+// Centering math: applyTx renders as `translate(p.x*z, p.y*z) scale(z)`,
+// so a graph point (n.x + ox, n.y + oy) lands at viewport pixel
+// `(p.x + n.x + ox) * z`. We want that to equal viewport center:
+//   (p.x + n.x + ox) * z = wrap.clientWidth / 2
+//   p.x = wrap.clientWidth / (2*z) - n.x - ox
+// (ox, oy) is the node's geometric center offset. Reading the live
+// DOM size beats the old hardcoded (85, 30) — large nodes (expanded
+// subs / wip / collapsed-but-tall watch) were drifting noticeably to
+// the upper-left.
 function focusNode(n, opts){
   if(!wrap) return;
   opts = opts || {};
@@ -801,9 +811,18 @@ function focusNode(n, opts){
     E.zm(nz);
   }
   var z=E.zm();
-  var cx=-(n.x+85)+wrap.clientWidth/2/z;
-  var cy=-(n.y+30)+wrap.clientHeight/2/z;
-  E.pan(cx,cy);
+  // Measure the actual rendered node size — offsetWidth/offsetHeight
+  // are pre-transform, exactly what we want to compute the offset
+  // in graph coords.
+  var ox = 85, oy = 30; // fallback to the old defaults if DOM not ready
+  var domNode = canvasEl && canvasEl.querySelector('[data-id="' + n.id + '"]');
+  if (domNode && domNode.offsetWidth) {
+    ox = domNode.offsetWidth / 2;
+    oy = domNode.offsetHeight / 2;
+  }
+  var cx = wrap.clientWidth / (2 * z) - n.x - ox;
+  var cy = wrap.clientHeight / (2 * z) - n.y - oy;
+  E.pan(cx, cy);
   applyTx();
   render();
   // Brief highlight pulse so the user sees which node was focused —
@@ -1443,11 +1462,11 @@ function initEvents(){
         selN = nidF;
         nel.classList.add('ng-sel');
         updateConnectedHighlight();
-        // Zoom target: 1.4 if currently zoomed out, otherwise nudge
-        // to 1.6 so a second Ctrl+Click on the same node zooms in
-        // a bit more before plateauing. Keeps repeat-clicking useful.
+        // Zoom target: gentle 1.1 on first hit (was 1.4 — too aggressive
+        // on dense graphs). Repeat-clicks nudge by 0.15 up to 1.8 so
+        // power users can keep zooming with subsequent presses.
         var curZ = E.zm();
-        var targetZ = curZ < 1.2 ? 1.4 : Math.min(2.0, curZ + 0.2);
+        var targetZ = curZ < 1.0 ? 1.1 : Math.min(1.8, curZ + 0.15);
         focusNode(nF, { zoom: targetZ });
         return;
       }
