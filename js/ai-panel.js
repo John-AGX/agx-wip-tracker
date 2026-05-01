@@ -193,6 +193,12 @@
       if (wb2 && Array.isArray(wb2.sheets)) {
         var nonQB = wb2.sheets.filter(function(s) { return !/^QB Costs /.test(s.name || ''); });
         if (nonQB.length) {
+          // Index EVERY sheet by name first — even empty ones — so
+          // the assistant can list available tabs and ask the user
+          // which one to read. Without this, an AI suggestion to
+          // "look at the bottom tab bar in your workspace" feels
+          // useless when the assistant has the names right in scope.
+          ctx.workspaceSheetIndex = nonQB.map(function(s) { return s.name || '(unnamed)'; });
           ctx.workspaceSheets = nonQB.slice(0, 5).map(function(s) {
             // Default preview: first 100 rows × 26 cols (A–Z). Covers
             // virtually every real-world AGX sheet. If something deeper
@@ -241,13 +247,18 @@
               totalCols: trueMaxC + 1,
               truncated: truncated
             };
-          }).filter(function(s) { return s.cellCount > 0; });
-          if (!ctx.workspaceSheets.length) delete ctx.workspaceSheets;
+          });
+          // Drop the heavy preview block when no sheet has content,
+          // but keep the index so the assistant can still surface
+          // sheet names.
+          if (!ctx.workspaceSheets.some(function(s) { return s.cellCount > 0; })) {
+            delete ctx.workspaceSheets;
+          }
         }
       }
     } catch (e) { /* defensive */ }
 
-    return (ctx.nodeGraph || ctx.qbCosts || ctx.workspaceSheets) ? ctx : null;
+    return (ctx.nodeGraph || ctx.qbCosts || ctx.workspaceSheets || (ctx.workspaceSheetIndex && ctx.workspaceSheetIndex.length)) ? ctx : null;
   }
 
   // Lightweight markdown — bold, italic, inline code, lists, paragraphs.
@@ -1048,16 +1059,26 @@
       case 'read_workspace_sheet_full': {
         // Return the entire sheet's contents as the tool_result so
         // the assistant can analyze data past the default 100×26
-        // preview window. Capped at 1000 rows × 26 cols defensively
-        // (anything bigger is almost certainly garbage data the AI
-        // shouldn't try to summarize in a single turn).
+        // preview window. Sheet name lookup is fuzzy: exact →
+        // case-insensitive → trimmed-whitespace. Empty sheets return
+        // a diagnostic message naming nearby tabs so the assistant
+        // can suggest alternatives instead of saying "0 rows."
         var jid = (window.appState && appState.currentJobId) || null;
         if (!jid) throw new Error('No job is open.');
         var allWs = JSON.parse(localStorage.getItem('agx-workspaces') || '{}');
         var wb = allWs[jid];
         if (!wb || !Array.isArray(wb.sheets)) throw new Error('No workspace for this job.');
-        var sheet = wb.sheets.find(function(s) { return s.name === input.sheet_name; });
-        if (!sheet) throw new Error('Sheet "' + input.sheet_name + '" not found.');
+        var requested = String(input.sheet_name || '');
+        var norm = function(s) { return String(s || '').replace(/\s+/g, ' ').trim().toLowerCase(); };
+        var rNorm = norm(requested);
+        var sheet = wb.sheets.find(function(s) { return s.name === requested; }) ||
+                    wb.sheets.find(function(s) { return norm(s.name) === rNorm; });
+        if (!sheet) {
+          // Tell the assistant which sheets DO exist so it can
+          // re-prompt the user with valid options.
+          var available = wb.sheets.map(function(s) { return s.name || '(unnamed)'; });
+          throw new Error('Sheet "' + requested + '" not found. Available tabs: ' + available.join(' · '));
+        }
         var cells = sheet.cells || {};
         var grid = {};
         var maxR = 0, maxC = 0;
@@ -1086,6 +1107,17 @@
             }
           }
           if (parts.length) rows.push((r + 1) + ': ' + parts.join(' · '));
+        }
+        if (!rows.length) {
+          // Empty sheet — be explicit so the assistant doesn't claim
+          // "0 rows" generically. Includes the matched name + an
+          // explanation that workspace sheets are localStorage-only
+          // (so cross-device sync hasn't happened yet).
+          var siblings = wb.sheets.map(function(s) { return s.name || '(unnamed)'; }).filter(function(n) { return n !== sheet.name; });
+          return 'Sheet "' + sheet.name + '" exists but has no populated cells in this browser session. ' +
+            'Workspace sheets are localStorage-only right now — cells aren\'t synced across devices/sessions, ' +
+            'so if the user expects data here they may need to open the Workspace tab and Save it on this machine. ' +
+            (siblings.length ? 'Other tabs in this job: ' + siblings.join(' · ') + '.' : '');
         }
         var header = 'Sheet "' + sheet.name + '" — ' + rows.length + ' populated rows × ' + (maxC + 1) + ' cols\n\n';
         return header + rows.join('\n');

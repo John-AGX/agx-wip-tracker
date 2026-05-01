@@ -1248,13 +1248,30 @@ async function buildJobContext(jobId, clientContext) {
   // The client packages each non-QB sheet as a text-table preview;
   // we drop it into the prompt verbatim so the assistant can extract
   // phase names, line items, etc. on demand.
+  // Workspace sheet index — the COMPLETE list of sheet names in the
+  // user's workspace (including empty ones), so the assistant always
+  // knows what tabs exist by name and never says "I don't have a
+  // list of your workspace sheet names." Render even when no sheet
+  // has populated content.
+  if (clientContext && Array.isArray(clientContext.workspaceSheetIndex) && clientContext.workspaceSheetIndex.length) {
+    lines.push('# Workspace sheets — index (' + clientContext.workspaceSheetIndex.length + ' tabs)');
+    lines.push('Tab names available in the user\'s Workspace right now (1 line each):');
+    clientContext.workspaceSheetIndex.forEach(function(name) {
+      lines.push('- ' + name);
+    });
+    lines.push('When the user references a sheet, MATCH AGAINST THIS LIST FIRST — try exact match, then case-insensitive, then trimmed-whitespace. Tell the user the exact name you matched. If no list match, ask which tab they mean and show this index. To fetch any sheet\'s contents call `read_workspace_sheet_full` (auto-applies, no approval).');
+    lines.push('');
+  }
+
   if (clientContext && Array.isArray(clientContext.workspaceSheets) && clientContext.workspaceSheets.length) {
-    lines.push('# Workspace sheets (' + clientContext.workspaceSheets.length + ')');
-    lines.push('Each sheet preview is rendered as `<row>: A=val · B=val · …` (1-indexed rows, A–Z columns). Use these to answer "what phases / scope items / line items do I have in my workspace?" When the user asks you to extract data, pull it directly from the relevant sheet here — do NOT say you can\'t see the workspace. The default preview window is 100 rows × 26 cols; if a sheet is bigger the totalRows/totalCols line will say so and you can call the `read_workspace_sheet_full` tool with sheet_name to fetch the entire sheet — that tool auto-applies (no approval card), so use it freely whenever the preview is truncated.');
+    lines.push('# Workspace sheets — populated previews (' + clientContext.workspaceSheets.length + ')');
+    lines.push('Each preview is rendered as `<row>: A=val · B=val · …` (1-indexed rows, A–Z columns). Use these to answer "what phases / scope items / line items do I have in my workspace?" — pull data directly from these previews. The default preview window is 100 rows × 26 cols; if a sheet is bigger the heading reads "preview truncated" and you should call `read_workspace_sheet_full` to fetch the rest.');
     clientContext.workspaceSheets.forEach(function(s) {
       lines.push('');
-      lines.push('## "' + s.name + '" (' + s.totalRows + ' rows × ' + s.totalCols + ' cols' + (s.truncated ? ', preview truncated' : '') + ')');
+      var hint = s.cellCount === 0 ? ', empty in this session' : (s.truncated ? ', preview truncated' : '');
+      lines.push('## "' + s.name + '" (' + s.totalRows + ' rows × ' + s.totalCols + ' cols' + hint + ')');
       if (s.preview) lines.push(s.preview);
+      else lines.push('(no populated cells)');
     });
     lines.push('');
   }
