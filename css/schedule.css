@@ -335,6 +335,46 @@
   opacity: 0.85;
   margin-left: 4px;
 }
+/* Resize handle on the right edge of the LAST segment of an entry.
+   Wide enough to grab without being precise; visible only on hover
+   so quiet entries don't show clutter. */
+.sch-entry-bar-handle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 8px;
+  cursor: ew-resize;
+  background-image: linear-gradient(
+    to right,
+    transparent 0%,
+    rgba(255, 255, 255, 0.0) 30%,
+    rgba(255, 255, 255, 0.45) 60%,
+    rgba(255, 255, 255, 0.45) 100%
+  );
+  opacity: 0;
+  transition: opacity 0.12s;
+  z-index: 2;
+}
+.sch-entry-bar:hover .sch-entry-bar-handle {
+  opacity: 1;
+}
+.sch-entry-bar-label {
+  /* So the bar text doesn't overflow into the handle area. */
+  display: inline-block;
+  max-width: calc(100% - 12px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+}
+/* While a resize-drag is active, dim the cursor everywhere on the
+   page to ew-resize so the user knows they're in resize mode and
+   the UI stays responsive when the cursor leaves the bar. */
+body.sch-resizing,
+body.sch-resizing * {
+  cursor: ew-resize !important;
+  user-select: none !important;
+}
 
 /* ─── Week summary right rail ────────────────────────────── */
 .sch-week-summary {

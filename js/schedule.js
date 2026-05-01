@@ -592,6 +592,7 @@
       // An entry's days may not be contiguous (e.g. weekends skipped).
       // Group consecutive runs into separate segments so each renders
       // as its own bar.
+      var entrySegStart = segments.length;
       var run = [cols[0]];
       for (var i = 1; i < cols.length; i++) {
         if (cols[i] === cols[i - 1] + 1) {
@@ -602,6 +603,18 @@
         }
       }
       segments.push({ entry: e, startCol: run[0], span: run.length });
+      // Mark the last day of this entry overall so we know which
+      // segment gets the resize handle. The handle only renders on
+      // segments that contain the entry's final calendar day.
+      var lastDayKey = span[span.length - 1];
+      for (var j = entrySegStart; j < segments.length; j++) {
+        var seg = segments[j];
+        var segDates = [];
+        for (var k = 0; k < seg.span; k++) segDates.push(weekKeys[seg.startCol + k]);
+        if (segDates.indexOf(lastDayKey) !== -1) {
+          seg.isLastSegment = true;
+        }
+      }
     });
 
     // Stack segments — each gets a row index based on the lowest
@@ -673,12 +686,21 @@
       var label = job ? (job.jobNumber || job.title || 'Job') : 'Job';
       // Days-remaining hint shown after the label for spans ≥ 2 cols.
       var hint = seg.span >= 2 ? ' (' + seg.span + 'd)' : '';
+      // Only the segment containing the entry's last day gets the
+      // resize handle — dragging that handle adjusts entry.days.
+      // Handles on every segment would let the user shrink the
+      // middle of a multi-week entry, which doesn't have a sensible
+      // mapping to days/startDate.
+      var handleHtml = seg.isLastSegment
+        ? '<span class="sch-entry-bar-handle" data-entry-id="' + escapeAttr(e.id) + '" title="Drag to extend / shrink production days"></span>'
+        : '';
       html += '<div class="sch-entry-bar' + statusCls + '" ' +
         'data-entry-id="' + escapeAttr(e.id) + '" ' +
         'style="left:' + leftPct.toFixed(4) + '%;width:calc(' + widthPct.toFixed(4) + '% - 4px);top:' + topPx + 'px;background:' + color + ';" ' +
         'title="' + escapeAttr(jobLabel(job)) + (e.notes ? ' — ' + escapeAttr(e.notes) : '') + '">' +
-        escapeHTML(label) + hint +
+        '<span class="sch-entry-bar-label">' + escapeHTML(label) + hint + '</span>' +
         (meta ? '<span class="sch-entry-bar-meta">' + meta + '</span>' : '') +
+        handleHtml +
       '</div>';
     });
     html += '</div></div>'; // close .sch-cal-bars + .sch-cal-week-row
@@ -713,6 +735,18 @@
   function wireGridClicks(grid) {
     grid.querySelectorAll('.sch-entry-bar[data-entry-id]').forEach(function(el) {
       el.addEventListener('click', function(e) {
+        // The resize handle handles its own mousedown/up — clicks
+        // shouldn't open the editor. The handle's mousedown calls
+        // stopPropagation, so click also won't fire on it normally,
+        // but defense-in-depth here keeps it tight.
+        if (e.target.closest('.sch-entry-bar-handle')) return;
+        // If we just finished a resize-drag, suppress the click that
+        // browsers fire as the mouseup release. _resizeJustEnded is
+        // set true for one tick by the resize-drag handler.
+        if (_resizeJustEnded) {
+          _resizeJustEnded = false;
+          return;
+        }
         e.stopPropagation();
         var id = el.getAttribute('data-entry-id');
         var entry = _state.entries.find(function(x) { return x.id === id; });
@@ -726,6 +760,153 @@
         openEntryEditor(null, date);
       });
     });
+    wireResizeHandles(grid);
+  }
+
+  // ── Drag-resize: extend / shrink an entry by its right edge ─
+  // Phase 3. Handles only appear on the SEGMENT containing the
+  // entry's final day (isLastSegment in renderWeekRow). Drag math
+  // walks forward from the entry's startDate, counting calendar
+  // days that pass under the cursor and respecting the entry's
+  // includesWeekends flag — same rule entrySpanDays uses to expand
+  // the entry forward, so what the user drags is what they save.
+  var _resizeJustEnded = false;
+  function wireResizeHandles(grid) {
+    grid.querySelectorAll('.sch-entry-bar-handle').forEach(function(handle) {
+      handle.addEventListener('mousedown', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        var entryId = handle.getAttribute('data-entry-id');
+        var entry = _state.entries.find(function(x) { return x.id === entryId; });
+        if (!entry) return;
+        startResizeDrag(entry, e);
+      });
+    });
+  }
+
+  function startResizeDrag(entry, downEv) {
+    var bar = downEv.target.closest('.sch-entry-bar');
+    if (!bar) return;
+    var weekRow = bar.closest('.sch-cal-week-row');
+    if (!weekRow) return;
+
+    // Live preview state — we update entry.days locally during the
+    // drag and re-render the grid so the bar grows/shrinks in real
+    // time. The PATCH only fires on mouseup if the value changed.
+    var originalDays = parseInt(entry.days, 10) || 1;
+    var startDate = parseISODate(entry.startDate);
+    if (!startDate) return;
+
+    // Build a forward-walk function: given a target column index in
+    // the visible-week-row coords, count how many days from the
+    // entry's startDate to that column. Used to compute the new
+    // production-day count as the cursor moves.
+    function daysAtCursor(clientX, hostRow) {
+      var rect = hostRow.getBoundingClientRect();
+      var colWidth = rect.width / 7;
+      // Clamp to 0..6 (or 7 to allow snapping just past the right edge).
+      var rawCol = (clientX - rect.left) / colWidth;
+      var col = Math.max(0, Math.min(6, Math.floor(rawCol)));
+      // Compute target date = first day of that hostRow + col.
+      var hostDow = hostRow.querySelector('.sch-cal-day[data-date]');
+      // First *visible* day cell in the row. If weekends hidden the
+      // first cell may be Mon — use it as the row's anchor and add
+      // its index back.
+      var anchorDate = null, anchorCol = 0;
+      var dayCells = hostRow.querySelectorAll('.sch-cal-day[data-date]');
+      // Re-derive the actual Monday of this week: take the first
+      // day-cell's date, subtract its dow-offset to Monday.
+      if (dayCells.length) {
+        var firstDate = parseISODate(dayCells[0].getAttribute('data-date'));
+        if (firstDate) {
+          var firstDow = firstDate.getDay();
+          var deltaToMon = firstDow === 0 ? -6 : (1 - firstDow);
+          anchorDate = addDays(firstDate, deltaToMon);
+        }
+      }
+      if (!anchorDate) return originalDays;
+      var targetDate = addDays(anchorDate, col);
+      // Days from entry startDate to targetDate, respecting the
+      // entry's weekend rule. We re-use entrySpanDays' math by
+      // building a temp entry with a generous days count, then
+      // searching for the targetDate.
+      var probe = { startDate: entry.startDate, days: 365, includesWeekends: !!entry.includesWeekends };
+      var span = entrySpanDays(probe);
+      var targetIso = toISODate(targetDate);
+      var idx = span.indexOf(targetIso);
+      if (idx >= 0) return idx + 1;
+      // Cursor is past the entry's last calendar day — entry must
+      // grow to reach. Estimate by counting calendar days, then
+      // scaling for the weekend skip when needed. Floor to 1.
+      var msPerDay = 86400000;
+      var calDays = Math.round((targetDate.getTime() - startDate.getTime()) / msPerDay) + 1;
+      if (calDays < 1) calDays = 1;
+      if (entry.includesWeekends) return calDays;
+      // Skipping weekends: walk forward from startDate, count workdays
+      // up to and including targetDate.
+      var workDays = 0;
+      var cursor = new Date(startDate);
+      while (cursor <= targetDate) {
+        var dow = cursor.getDay();
+        if (dow !== 0 && dow !== 6) workDays++;
+        cursor.setDate(cursor.getDate() + 1);
+      }
+      return Math.max(1, workDays);
+    }
+
+    function onMove(ev) {
+      // Always resolve the host row from the cursor's CURRENT position
+      // — when the user drags into a different week row, switch.
+      var below = document.elementFromPoint(ev.clientX, ev.clientY);
+      var hostRow = below ? below.closest('.sch-cal-week-row') : null;
+      if (!hostRow) hostRow = weekRow;
+      var newDays = daysAtCursor(ev.clientX, hostRow);
+      newDays = Math.max(1, Math.min(365, newDays));
+      if (newDays !== (entry.days | 0)) {
+        entry.days = newDays;
+        renderGrid();
+        refreshWeekSummary();
+      }
+    }
+
+    function onUp() {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.body.classList.remove('sch-resizing');
+      _resizeJustEnded = true;
+      setTimeout(function() { _resizeJustEnded = false; }, 0);
+      var newDays = parseInt(entry.days, 10) || 1;
+      if (newDays === originalDays) return;
+      // Persist. PATCH carries the optimistic-locking token. On
+      // failure we revert the local change.
+      if (!isApiReady() || (typeof entry.id === 'string' && entry.id.indexOf('sch_local_') === 0)) {
+        // Local-only entry — just update the cache; no PATCH route.
+        cacheEntries(_state.entries);
+        return;
+      }
+      var payload = { days: newDays };
+      if (entry.updatedAt) payload.expectedUpdatedAt = entry.updatedAt;
+      window.agxApi.schedule.update(entry.id, payload).then(function(res) {
+        var saved = res && res.entry;
+        if (!saved) return;
+        var idx = _state.entries.findIndex(function(x) { return x.id === entry.id; });
+        if (idx >= 0) _state.entries[idx] = saved;
+        cacheEntries(_state.entries);
+        renderGrid();
+        refreshWeekSummary();
+      }).catch(function(err) {
+        var msg = (err && err.message) || String(err);
+        alert('Could not save resize: ' + msg);
+        // Revert local change so the UI matches truth.
+        entry.days = originalDays;
+        renderGrid();
+        refreshWeekSummary();
+      });
+    }
+
+    document.body.classList.add('sch-resizing');
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
   }
 
   // ── Entry editor modal ─────────────────────────────────────
