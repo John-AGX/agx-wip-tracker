@@ -447,8 +447,13 @@
         // value is what attachWorkspaceToGraph reads on re-attach.
         // The minimized icon has its own saved position.
         if (inGraphMode() && !isFolder) {
-          panel.dataset.graphX = parseInt(panel.style.left, 10) || 0;
-          panel.dataset.graphY = parseInt(panel.style.top, 10) || 0;
+          var nx = parseInt(panel.style.left, 10) || 0;
+          var ny = parseInt(panel.style.top, 10) || 0;
+          panel.dataset.graphX = nx;
+          panel.dataset.graphY = ny;
+          // Persist immediately so a tab/window close doesn't lose
+          // the position.
+          saveWorkspaceState({ x: nx, y: ny });
         }
         if (isFolder) {
           try {
@@ -488,8 +493,11 @@
     document.addEventListener('mouseup', function() {
       if (resizing) {
         if (inGraphMode()) {
-          panel.dataset.graphW = parseInt(panel.style.width, 10) || 0;
-          panel.dataset.graphH = parseInt(panel.style.height, 10) || 0;
+          var nw = parseInt(panel.style.width, 10) || 0;
+          var nh = parseInt(panel.style.height, 10) || 0;
+          panel.dataset.graphW = nw;
+          panel.dataset.graphH = nh;
+          saveWorkspaceState({ w: nw, h: nh });
         }
         resizing = null;
         document.body.style.userSelect = '';
@@ -533,6 +541,32 @@
   // Attach the floating panel to the node-graph's transformed .ng-canvas
   // element. The panel lives in graph coordinate space — pan/zoom of
   // the graph affects it, drag moves it relative to graph coords.
+
+  // Per-job persistence of the workspace's graph-mode rect + folder
+  // (minimized) flag. dataset.* lives only on the DOM and disappears
+  // on full reload; localStorage survives.
+  function workspaceStateKey() {
+    var jid = (window.appState && appState.currentJobId) || null;
+    return jid ? 'agx-ws-graphstate:' + jid : null;
+  }
+  function loadWorkspaceState() {
+    var key = workspaceStateKey();
+    if (!key) return null;
+    try {
+      var raw = localStorage.getItem(key);
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) { return null; }
+  }
+  function saveWorkspaceState(patch) {
+    var key = workspaceStateKey();
+    if (!key) return;
+    try {
+      var cur = loadWorkspaceState() || {};
+      Object.keys(patch).forEach(function(k) { cur[k] = patch[k]; });
+      localStorage.setItem(key, JSON.stringify(cur));
+    } catch (e) {}
+  }
+
   function attachWorkspaceToGraph() {
     var panel = document.getElementById('wsFloatingPanel');
     var canvas = document.querySelector('#nodeGraphTab .ng-canvas');
@@ -540,11 +574,21 @@
     initFloatingPanel(); // safe to call repeatedly
     panel.classList.remove('ws-floating-tab-mode');
     panel.classList.add('ws-floating-graph-mode');
-    // Restore previously-saved graph-mode position+size, or seed defaults
-    var x = panel.dataset.graphX != null ? parseFloat(panel.dataset.graphX) : 100;
-    var y = panel.dataset.graphY != null ? parseFloat(panel.dataset.graphY) : 100;
-    var w = panel.dataset.graphW != null ? parseFloat(panel.dataset.graphW) : 720;
-    var h = panel.dataset.graphH != null ? parseFloat(panel.dataset.graphH) : 480;
+    // Prefer localStorage (survives reloads), then dataset (survives
+    // sub-tab switches within a session), then defaults.
+    var saved = loadWorkspaceState() || {};
+    var x = saved.x != null
+      ? saved.x
+      : (panel.dataset.graphX != null ? parseFloat(panel.dataset.graphX) : 100);
+    var y = saved.y != null
+      ? saved.y
+      : (panel.dataset.graphY != null ? parseFloat(panel.dataset.graphY) : 100);
+    var w = saved.w != null
+      ? saved.w
+      : (panel.dataset.graphW != null ? parseFloat(panel.dataset.graphW) : 720);
+    var h = saved.h != null
+      ? saved.h
+      : (panel.dataset.graphH != null ? parseFloat(panel.dataset.graphH) : 480);
     panel.style.position = 'absolute';
     panel.style.left = x + 'px';
     panel.style.top = y + 'px';
@@ -552,16 +596,34 @@
     panel.style.height = h + 'px';
     canvas.appendChild(panel);
     panel.style.display = 'flex';
+    // Mirror dataset for in-session sub-tab switching.
+    panel.dataset.graphX = x;
+    panel.dataset.graphY = y;
+    panel.dataset.graphW = w;
+    panel.dataset.graphH = h;
     wireGraphToolbarWorkspaceButtons();
+    // If the user had it minimized last time, re-minimize on attach.
+    if (saved.minimized) {
+      // Defer so the layout settles before adding the folder class.
+      setTimeout(function() { minimizeWorkspace(); }, 0);
+    }
   }
   function detachWorkspaceFromGraph() {
     var panel = document.getElementById('wsFloatingPanel');
     if (!panel) return;
     if (panel.classList.contains('ws-floating-graph-mode')) {
-      panel.dataset.graphX = parseInt(panel.style.left, 10) || 100;
-      panel.dataset.graphY = parseInt(panel.style.top, 10) || 100;
-      panel.dataset.graphW = parseInt(panel.style.width, 10) || 720;
-      panel.dataset.graphH = parseInt(panel.style.height, 10) || 480;
+      var x = parseInt(panel.style.left, 10) || 100;
+      var y = parseInt(panel.style.top, 10) || 100;
+      var w = parseInt(panel.style.width, 10) || 720;
+      var h = parseInt(panel.style.height, 10) || 480;
+      panel.dataset.graphX = x;
+      panel.dataset.graphY = y;
+      panel.dataset.graphW = w;
+      panel.dataset.graphH = h;
+      // Persist to localStorage too, so a full reload restores
+      // the user's last position. Don't clobber the minimized
+      // flag here — that's tracked separately.
+      saveWorkspaceState({ x: x, y: y, w: w, h: h });
     }
     var twoCol = document.getElementById('ws-two-col');
     if (twoCol) twoCol.appendChild(panel);
@@ -629,7 +691,6 @@
     var panel = document.getElementById('wsFloatingPanel');
     var area = document.querySelector('#nodeGraphTab .ng-canvas-area');
     if (!panel || !area || !panel.classList.contains('ws-floating-graph-mode')) return;
-    if (panel.classList.contains('ws-floating-folder')) restoreFromMinimized();
     if (_floatingState.maximized) {
       // Restore previous panel rect + pan/zoom
       if (_floatingState.savedRect) {
@@ -650,7 +711,18 @@
       }
       _floatingState.maximized = false;
       panel.classList.remove('ws-floating-maximized');
+      // If the user was minimized when they hit Fullscreen, return
+      // to that state on toggle off — not the un-minimized baseline.
+      if (_floatingState.preFullscreenMinimized) {
+        _floatingState.preFullscreenMinimized = false;
+        // Re-minimize after the rect has settled.
+        setTimeout(function() { minimizeWorkspace(); }, 0);
+      }
     } else {
+      // Track whether the user was minimized so toggle-off can
+      // re-minimize. Capture before un-minimizing.
+      _floatingState.preFullscreenMinimized = panel.classList.contains('ws-floating-folder');
+      if (_floatingState.preFullscreenMinimized) restoreFromMinimized();
       // Save current panel rect + view state
       _floatingState.savedRect = {
         left: parseFloat(panel.style.left) || 0,
@@ -707,6 +779,9 @@
       panel.style.left = savedMin.x + 'px';
       panel.style.top = savedMin.y + 'px';
     }
+    // Remember "minimized" so reopening the Workspace tab next time
+    // (or a full page reload) restores into the folder state.
+    saveWorkspaceState({ minimized: true });
   }
   function restoreFromMinimized() {
     var panel = document.getElementById('wsFloatingPanel');
@@ -734,6 +809,9 @@
     panel.dataset.graphY = newTop;
     panel.dataset.graphW = w;
     panel.dataset.graphH = h;
+    // Persist the un-minimized state + the new rect so the next
+    // tab open / reload comes back here.
+    saveWorkspaceState({ minimized: false, x: newLeft, y: newTop, w: w, h: h });
   }
   // Wire the graph toolbar buttons. Called by attachWorkspaceToGraph
   // after the toolbar DOM exists. Idempotent: only binds once.
