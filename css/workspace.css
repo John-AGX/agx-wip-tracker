@@ -885,12 +885,12 @@
   border-bottom-color: var(--surface, #181820);
 }
 /* Embed host inside the workspace flex column — fills space between
-   formatting toolbars (or instead of the grid) and the sheet tabs. */
+   formatting toolbars (or instead of the grid) and the sheet tabs.
+   Visual surface is owned by the inner .qb-costs-embed so this stays
+   transparent and out of the way. */
 #wsEmbedHost {
-  background: var(--surface, #181820);
   color: var(--text, #e4e6f0);
-  border-left: 1px solid var(--grid-border);
-  border-right: 1px solid var(--grid-border);
+  background: transparent;
 }
 .ws-sheet-tab-add {
   background: transparent;

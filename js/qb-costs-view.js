@@ -148,15 +148,20 @@
     if (customTarget) {
       // Workspace embed mode — host a per-target child div so we don't
       // overwrite anything else the caller put in the container, and so
-      // re-renders are scoped to a stable element.
+      // re-renders are scoped to a stable element. Class +
+      // sub-tab-content-job mirror the right-pane host so any utility
+      // CSS scoped to that selector applies here too. Inline styles
+      // mirror .ws-right-content (12px padding, surface bg, scroll).
       var embed = customTarget.querySelector(':scope > .qb-costs-embed');
       if (!embed) {
         embed = document.createElement('div');
-        embed.className = 'qb-costs-embed';
-        embed.style.padding = '14px';
+        embed.className = 'qb-costs-embed sub-tab-content-job';
+        embed.style.display = 'block';
+        embed.style.padding = '12px';
         embed.style.height = '100%';
         embed.style.overflowY = 'auto';
         embed.style.boxSizing = 'border-box';
+        embed.style.background = 'var(--surface, #1a1d27)';
         customTarget.innerHTML = '';
         customTarget.appendChild(embed);
       }
