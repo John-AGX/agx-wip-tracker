@@ -1144,15 +1144,41 @@
         var wb = allWs[jid];
         if (!wb || !Array.isArray(wb.sheets)) throw new Error('No workspace for this job.');
         var requested = String(input.sheet_name || '');
+        // Hard-block legacy QB Costs import snapshots — the AI was
+        // looping through these (one tool call per import date) when
+        // the user just wants to know about QB spend. The canonical,
+        // deduplicated, server-persisted data is already in the
+        // qbCosts block of every prompt; reading these sheets is
+        // never the right move.
+        if (/^QB Costs /i.test(requested)) {
+          return 'STOP — do not read individual "QB Costs YYYY-MM-DD" sheets. ' +
+            'Those are legacy per-import snapshots. The consolidated, deduplicated, ' +
+            'server-persisted QuickBooks data for this job is in the # QuickBooks cost data ' +
+            'block of the system prompt (with totals, by-category breakdown, top lines, and ' +
+            'most-recent-import date). Answer from that block instead. If you need a specific ' +
+            'line by id, it\'s in the Top-N samples list there.';
+        }
         var norm = function(s) { return String(s || '').replace(/\s+/g, ' ').trim().toLowerCase(); };
         var rNorm = norm(requested);
         var sheet = wb.sheets.find(function(s) { return s.name === requested; }) ||
                     wb.sheets.find(function(s) { return norm(s.name) === rNorm; });
         if (!sheet) {
           // Tell the assistant which sheets DO exist so it can
-          // re-prompt the user with valid options.
-          var available = wb.sheets.map(function(s) { return s.name || '(unnamed)'; });
-          throw new Error('Sheet "' + requested + '" not found. Available tabs: ' + available.join(' · '));
+          // re-prompt the user with valid options. QB Costs sheets
+          // and the embedded "Detailed Costs" view are excluded
+          // since they aren't user-readable via this tool.
+          var available = wb.sheets
+            .filter(function(s) {
+              return !/^QB Costs /i.test(s.name || '') && s.kind !== 'qb-costs';
+            })
+            .map(function(s) { return s.name || '(unnamed)'; });
+          throw new Error('Sheet "' + requested + '" not found. Available tabs: ' + (available.length ? available.join(' · ') : '(none)'));
+        }
+        // Same guard for the embedded Detailed Costs view (kind=qb-costs)
+        // — its data is the qbCosts block, not cells.
+        if (sheet.kind === 'qb-costs') {
+          return 'STOP — the "Detailed Costs" tab is a live view of the # QuickBooks cost data block ' +
+            'in the system prompt, not a grid sheet. Use that block to answer.';
         }
         var cells = sheet.cells || {};
         var grid = {};

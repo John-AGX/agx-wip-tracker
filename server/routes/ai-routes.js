@@ -1288,6 +1288,7 @@ async function buildJobContext(jobId, clientContext) {
           : 'unknown source';
       lines.push('# QuickBooks cost data — ' + sourceLabel);
       lines.push('**This is the imported QuickBooks data**. When the user asks about cost data they imported, USE THIS BLOCK as the source of truth — do NOT tell them to "open the workspace tab and hit Save on each QB Cost sheet." That advice was correct pre-Phase-2 but the data is now server-persisted; the workspace sheets are just a secondary view.');
+      lines.push('**DO NOT call `read_workspace_sheet_full` on "QB Costs YYYY-MM-DD" sheets or on the "Detailed Costs" tab.** Those are legacy per-import snapshots / a live view of THIS block. Reading them one-by-one is a useless loop — every line below is already deduplicated server-side. Answer from this block.');
       lines.push('- Lines: ' + (qb.lineCount || 0) + (qb.unlinkedCount != null ? ' (' + qb.unlinkedCount + ' unlinked to a graph node)' : ''));
       lines.push('- Total: ' + fmtMoney(qb.total || 0));
       if (qb.mostRecentImport) lines.push('- Most recent import: ' + qb.mostRecentImport);
