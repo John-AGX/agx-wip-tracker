@@ -204,9 +204,34 @@
     remove: function(id) { return del('/api/qb-costs/' + encodeURIComponent(id)); }
   };
 
+  // Subcontractor directory + per-job assignment.
+  var subsApi = {
+    list: function() { return get('/api/subs'); },
+    get: function(id) { return get('/api/subs/' + encodeURIComponent(id)); },
+    create: function(payload) { return post('/api/subs', payload); },
+    update: function(id, payload) { return put('/api/subs/' + encodeURIComponent(id), payload); },
+    remove: function(id) { return del('/api/subs/' + encodeURIComponent(id)); },
+    listForJob: function(jobId) { return get('/api/subs/jobs/' + encodeURIComponent(jobId)); },
+    assignToJob: function(jobId, payload) { return post('/api/subs/jobs/' + encodeURIComponent(jobId), payload); },
+    updateAssignment: function(jobId, assignmentId, payload) {
+      // PATCH — use raw fetch since our helpers don't expose patch
+      return fetch('/api/subs/jobs/' + encodeURIComponent(jobId) + '/' + encodeURIComponent(assignmentId), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(payload)
+      }).then(function(r) { return r.json().then(function(b) { if (!r.ok) throw new Error(b.error || 'request failed'); return b; }); });
+    },
+    unassign: function(jobId, assignmentId) {
+      return del('/api/subs/jobs/' + encodeURIComponent(jobId) + '/' + encodeURIComponent(assignmentId));
+    },
+    migratePreview: function(inlineSubs) { return post('/api/subs/migrate-preview', { inlineSubs: inlineSubs }); },
+    migrateApply: function(inlineSubs) { return post('/api/subs/migrate-apply', { inlineSubs: inlineSubs }); }
+  };
+
   window.agxApi = {
     get: get, put: put, post: post, del: del,
-    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai, materials: materials, qbCosts: qbCosts,
+    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai, materials: materials, qbCosts: qbCosts, subs: subsApi,
     isOffline: isOffline,
     isAuthenticated: function() { return !!getToken() && !isOffline(); }
   };

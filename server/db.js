@@ -271,6 +271,61 @@ async function initSchema() {
     -- addition later, not a schema change). One row per unique
     -- (vendor, cleaned-description); SKU is stored as metadata but is
     -- not the primary identity since vendors do change SKUs over time.
+    -- Subcontractor directory. Replaces the inline-per-job sub
+    -- records (which lived on the job JSON blob) with a real
+    -- first-class directory. One row per company; per-job
+    -- contract/billing data lives in job_subs below.
+    --
+    -- trade is freeform but the UI presents a curated dropdown
+    -- (Painter / Drywall / Roofing / etc.) with an "Other" fallback.
+    -- W-9 + insurance expiration are tracked because expiry dates
+    -- need to surface in the directory view as warnings.
+    -- parent_sub_id lets you group sister-companies (a holding +
+    -- subsidiaries) the same way clients have parent_client_id.
+    CREATE TABLE IF NOT EXISTS subs (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      trade TEXT,                          -- "Painter", "Drywall", … or freeform "Other"
+      contact_name TEXT,
+      phone TEXT,
+      email TEXT,
+      license_no TEXT,
+      w9_on_file BOOLEAN DEFAULT FALSE,
+      w9_expires DATE,                     -- W-9 expiration if tracked
+      insurance_expires DATE,              -- general liability expiry
+      parent_sub_id TEXT REFERENCES subs(id) ON DELETE SET NULL,
+      status TEXT DEFAULT 'active',        -- 'active' | 'paused' | 'closed'
+      notes TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_subs_name_lower ON subs(lower(name));
+    CREATE INDEX IF NOT EXISTS idx_subs_trade ON subs(trade);
+    CREATE INDEX IF NOT EXISTS idx_subs_status ON subs(status);
+    CREATE INDEX IF NOT EXISTS idx_subs_parent ON subs(parent_sub_id);
+
+    -- Per-job assignment + financials. Same sub on two jobs gets two
+    -- rows. UNIQUE(job_id, sub_id) so a sub isn't double-assigned to
+    -- the same job (use multiple line entries on the job-side row
+    -- if you have multiple contracts with the same sub on one job).
+    CREATE TABLE IF NOT EXISTS job_subs (
+      id TEXT PRIMARY KEY,
+      job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+      sub_id TEXT NOT NULL REFERENCES subs(id) ON DELETE RESTRICT,
+      level TEXT DEFAULT 'job',            -- 'job' | 'building' | 'phase'
+      building_id TEXT,                    -- when level='building'
+      phase_id TEXT,                       -- when level='phase'
+      contract_amt NUMERIC(12, 2) DEFAULT 0,
+      billed_to_date NUMERIC(12, 2) DEFAULT 0,
+      status TEXT DEFAULT 'active',        -- 'active' | 'paused' | 'closed'
+      notes TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_job_subs_job ON job_subs(job_id);
+    CREATE INDEX IF NOT EXISTS idx_job_subs_sub ON job_subs(sub_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_job_subs_unique ON job_subs(job_id, sub_id, COALESCE(building_id, ''), COALESCE(phase_id, ''));
+
     -- QuickBooks Detailed Job Cost lines. Imported from the weekly
     -- "Project Costs" / "Detailed Job Costs" xlsx export. The id is a
     -- content-derived hash so re-imports of the same QB row land on the

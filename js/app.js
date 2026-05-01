@@ -446,14 +446,16 @@
             jobs: [],
             buildings: [],
             phases: [],
-            subs: [],
+            subs: [],              // legacy per-job inline subs (read-only post-migration)
             changeOrders: [],
             purchaseOrders: [],
             invoices: [],
             estimates: [],
             estimateLines: [],
             estimateAlternates: [],
-            qbCostLines: []
+            qbCostLines: [],
+            subsDirectory: [],     // global sub directory (Phase A)
+            knownTrades: []        // curated trade dropdown
         };
         // Expose on window so other modules (admin.js, insights.js) that
         // use `window.appData` can read the live state. Top-level `let` in a
@@ -649,11 +651,15 @@
                     // QB cost lines now persist server-side. Read all of
                     // them at boot so Job Costs / Audit / WIP Assistant
                     // can reason about them without per-tab fetches.
-                    window.agxApi.qbCosts.list().catch(function() { return { lines: [] }; })
+                    window.agxApi.qbCosts.list().catch(function() { return { lines: [] }; }),
+                    // Subs directory (Phase A) — global sub records.
+                    window.agxApi.subs.list().catch(function() { return { subs: [], trades: [] }; })
                 ]).then(function(results) {
                     hydrateFromServerJobs(results[0].jobs);
                     hydrateFromServerEstimates(results[1].estimates);
                     appData.qbCostLines = (results[2] && results[2].lines) || [];
+                    appData.subsDirectory = (results[3] && results[3].subs) || [];
+                    appData.knownTrades = (results[3] && results[3].trades) || [];
                     writeToLocalStorage();
                     // Re-render whatever's visible. Each renderer no-ops if
                     // its DOM target isn't present, so calling them all is
