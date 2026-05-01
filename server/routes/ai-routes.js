@@ -208,6 +208,62 @@ const JOB_TOOLS = [
       },
       required: ['phase_id', 'pct_complete', 'rationale']
     }
+  },
+  {
+    name: 'set_phase_field',
+    description:
+      'Update a single numeric cost field on a phase: materials, labor, sub, or equipment. ' +
+      'Use when the user gives a specific dollar figure ("phase 1 had $3,500 in materials this week") ' +
+      'or when reconciling against QB lines that map to one specific phase. Only one field per call — ' +
+      'chain calls if multiple fields need updates so each one shows as a separate approval card.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        phase_id: { type: 'string' },
+        field: { type: 'string', enum: ['materials', 'labor', 'sub', 'equipment'] },
+        amount: { type: 'number', minimum: 0 },
+        rationale: { type: 'string' }
+      },
+      required: ['phase_id', 'field', 'amount', 'rationale']
+    }
+  },
+  {
+    name: 'wire_nodes',
+    description:
+      'Connect two nodes in the cost-flow graph (from output port of source → input port of target). ' +
+      'Use when audit findings list a disconnected node and the right parent is obvious from context ' +
+      '(e.g., a sub node that should flow into a phase node). Both ids MUST exist in the # Node graph block. ' +
+      'Default ports are 0 unless the user specified another port.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        from_node_id: { type: 'string' },
+        to_node_id: { type: 'string' },
+        from_port: { type: 'integer', minimum: 0, default: 0 },
+        to_port: { type: 'integer', minimum: 0, default: 0 },
+        rationale: { type: 'string' }
+      },
+      required: ['from_node_id', 'to_node_id', 'rationale']
+    }
+  },
+  {
+    name: 'assign_qb_line',
+    description:
+      'Link a QuickBooks cost line to a node in the graph (sets linked_node_id on the qb_cost_lines row). ' +
+      'Use when the audit lists unlinked QB lines and the right node is identifiable from the line\'s vendor / account / memo. ' +
+      'line_id is the qb_cost_lines.id; node_id is the graph node it should reconcile against.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        line_id: { type: 'string' },
+        node_id: { type: 'string' },
+        rationale: { type: 'string' }
+      },
+      required: ['line_id', 'node_id', 'rationale']
+    }
   }
 ];
 

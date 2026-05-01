@@ -768,15 +768,76 @@
         if (!phase) throw new Error('Phase id "' + input.phase_id + '" not found.');
         var oldPct = Number(phase.pctComplete || 0);
         phase.pctComplete = Math.max(0, Math.min(100, Number(input.pct_complete || 0)));
-        // Persist via the standard save path. The bulk-save serializer
-        // picks up the mutation, jobs API writes it back to the DB.
         if (typeof window.saveData === 'function') window.saveData();
-        // Re-render whatever's open so the user sees the change land.
         if (typeof window.renderJobOverview === 'function' && window.appState && appState.currentJobId) {
           try { window.renderJobOverview(appState.currentJobId); } catch (e) {}
         }
         return Math.round(oldPct) + '% → ' + Math.round(phase.pctComplete) + '% on phase "' + (phase.phase || phase.name || phase.id) + '"';
       }
+
+      case 'set_phase_field': {
+        var ph = (window.appData && (appData.phases || []).find(function(p) { return p.id === input.phase_id; }));
+        if (!ph) throw new Error('Phase id "' + input.phase_id + '" not found.');
+        var allowed = ['materials', 'labor', 'sub', 'equipment'];
+        if (allowed.indexOf(input.field) === -1) throw new Error('Field "' + input.field + '" not allowed.');
+        var oldAmt = Number(ph[input.field] || 0);
+        ph[input.field] = Math.max(0, Number(input.amount || 0));
+        if (typeof window.saveData === 'function') window.saveData();
+        if (typeof window.renderJobOverview === 'function' && window.appState && appState.currentJobId) {
+          try { window.renderJobOverview(appState.currentJobId); } catch (e) {}
+        }
+        return input.field + ': $' + oldAmt.toFixed(0) + ' → $' + Number(ph[input.field]).toFixed(0) + ' on phase "' + (ph.phase || ph.name || ph.id) + '"';
+      }
+
+      case 'wire_nodes': {
+        // Direct mutation of the node-graph localStorage blob — same
+        // pattern populate() uses internally. After saving we ping
+        // ngRender if the graph view is open so the wire shows up.
+        var jid = (window.appState && appState.currentJobId) || null;
+        if (!jid) throw new Error('No job is open.');
+        var graphs = JSON.parse(localStorage.getItem('agx-nodegraphs') || '{}');
+        var g = graphs[jid];
+        if (!g || !Array.isArray(g.nodes)) throw new Error('Job has no node graph yet.');
+        var fromExists = g.nodes.some(function(n) { return n.id === input.from_node_id; });
+        var toExists = g.nodes.some(function(n) { return n.id === input.to_node_id; });
+        if (!fromExists) throw new Error('from_node_id "' + input.from_node_id + '" not in graph.');
+        if (!toExists) throw new Error('to_node_id "' + input.to_node_id + '" not in graph.');
+        if (!Array.isArray(g.wires)) g.wires = [];
+        // Skip if already wired
+        var dup = g.wires.some(function(w) {
+          return w.fromNode === input.from_node_id && w.toNode === input.to_node_id &&
+                 w.fromPort === (input.from_port || 0) && w.toPort === (input.to_port || 0);
+        });
+        if (dup) return 'Wire already existed; no change.';
+        g.wires.push({
+          fromNode: input.from_node_id,
+          fromPort: input.from_port || 0,
+          toNode: input.to_node_id,
+          toPort: input.to_port || 0
+        });
+        graphs[jid] = g;
+        localStorage.setItem('agx-nodegraphs', JSON.stringify(graphs));
+        if (typeof window.ngRender === 'function') {
+          try { window.ngRender(); } catch (e) {}
+        }
+        return 'Wired ' + input.from_node_id + ' → ' + input.to_node_id;
+      }
+
+      case 'assign_qb_line': {
+        // Server is the source of truth for QB lines (Phase 2 schema).
+        // Optimistic local update + PATCH; the next hydration on /chat
+        // /continue rebuild reflects the canonical state.
+        var lines = (window.appData && appData.qbCostLines) || [];
+        var line = lines.find(function(l) { return l.id === input.line_id; });
+        if (line) line.linked_node_id = input.node_id;
+        if (window.agxApi && window.agxApi.isAuthenticated && window.agxApi.isAuthenticated()) {
+          window.agxApi.qbCosts.update(input.line_id, { linkedNodeId: input.node_id }).catch(function(err) {
+            console.warn('[ai] assign_qb_line server patch failed:', err && err.message);
+          });
+        }
+        return 'Linked QB line ' + input.line_id + ' → node ' + input.node_id;
+      }
+
       default:
         throw new Error('Unknown job tool: ' + tu.name);
     }
@@ -911,6 +972,49 @@
           (oldPct != null ? Math.round(oldPct) + '% &rarr; ' : '') +
           '<strong style="color:#34d399;">' + Math.round(Number(input.pct_complete || 0)) + '%</strong>' +
         '</div>';
+    } else if (tu.name === 'set_phase_field') {
+      var ph2 = (window.appData && (appData.phases || []).find(function(p) { return p.id === input.phase_id; })) || null;
+      var bldg2 = ph2 ? (appData.buildings || []).find(function(b) { return b.id === ph2.buildingId; }) : null;
+      var loc2 = ph2 ? ((bldg2 ? bldg2.name + ' › ' : '') + (ph2.phase || ph2.name || '(unnamed)')) : '<em style="color:#fbbf24;">phase id ' + escapeHTMLLocal(input.phase_id) + '</em>';
+      var oldVal = ph2 ? Number(ph2[input.field] || 0) : null;
+      var fmt = function(n) { return '$' + Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 }); };
+      heading = '&#x270F; Set phase ' + escapeHTMLLocal(input.field);
+      detail =
+        '<div style="font-size:13px;color:var(--text,#fff);font-weight:600;">' + loc2 + '</div>' +
+        '<div style="font-size:12px;color:var(--text,#ccc);margin-top:3px;">' +
+          escapeHTMLLocal(input.field) + ': ' +
+          (oldVal != null ? fmt(oldVal) + ' &rarr; ' : '') +
+          '<strong style="color:#34d399;">' + fmt(input.amount) + '</strong>' +
+        '</div>';
+    } else if (tu.name === 'wire_nodes') {
+      var graphs = {};
+      try { graphs = JSON.parse(localStorage.getItem('agx-nodegraphs') || '{}'); } catch (e) {}
+      var jid = (window.appState && appState.currentJobId) || null;
+      var nodes = (jid && graphs[jid] && graphs[jid].nodes) || [];
+      var fromN = nodes.find(function(n) { return n.id === input.from_node_id; });
+      var toN = nodes.find(function(n) { return n.id === input.to_node_id; });
+      heading = '&#x1F50C; Wire nodes';
+      detail =
+        '<div style="font-size:12px;color:var(--text,#ccc);">' +
+          '<strong>' + escapeHTMLLocal(fromN ? (fromN.label || fromN.type) : input.from_node_id) + '</strong>' +
+          ' &rarr; ' +
+          '<strong>' + escapeHTMLLocal(toN ? (toN.label || toN.type) : input.to_node_id) + '</strong>' +
+        '</div>';
+    } else if (tu.name === 'assign_qb_line') {
+      var lines = (window.appData && appData.qbCostLines) || [];
+      var line = lines.find(function(l) { return l.id === input.line_id; });
+      var graphs2 = {};
+      try { graphs2 = JSON.parse(localStorage.getItem('agx-nodegraphs') || '{}'); } catch (e) {}
+      var jid2 = (window.appState && appState.currentJobId) || null;
+      var nodes2 = (jid2 && graphs2[jid2] && graphs2[jid2].nodes) || [];
+      var nodeT = nodes2.find(function(n) { return n.id === input.node_id; });
+      var fmt2 = function(n) { return '$' + Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
+      heading = '&#x1F517; Assign QB line';
+      detail = line
+        ? '<div style="font-size:13px;color:var(--text,#fff);font-weight:600;">' + escapeHTMLLocal(line.vendor || '(no vendor)') + ' &middot; ' + fmt2(line.amount) + '</div>' +
+          '<div style="font-size:11px;color:var(--text-dim,#aaa);margin-top:2px;">' + escapeHTMLLocal(line.account || '') + (line.memo ? ' &middot; ' + escapeHTMLLocal(String(line.memo).slice(0, 60)) : '') + '</div>' +
+          '<div style="font-size:12px;color:var(--text,#ccc);margin-top:6px;">&rarr; <strong>' + escapeHTMLLocal(nodeT ? (nodeT.label || nodeT.type) : input.node_id) + '</strong></div>'
+        : '<div style="font-size:12px;color:#fbbf24;">QB line not found locally — server still has it.</div>';
     } else {
       heading = '? Unknown tool: ' + tu.name;
       detail = '<pre style="font-size:11px;">' + escapeHTMLLocal(JSON.stringify(input, null, 2)) + '</pre>';
