@@ -242,6 +242,7 @@
       '<div style="padding:12px 14px;border-bottom:1px solid var(--border,#333);background:linear-gradient(135deg,#0d1f12 0%,#14351d 100%);display:flex;align-items:center;gap:10px;">' +
         '<button id="ai-close" title="Close (Esc)" style="background:rgba(255,255,255,0.12);color:#fff;border:1px solid rgba(255,255,255,0.2);border-radius:6px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:6px;">&rarr; Close</button>' +
         '<div class="agx-ai-title" style="font-size:14px;font-weight:700;color:#fff;flex:1;text-align:right;">&#x2728; AI Assistant</div>' +
+        '<button id="ai-trust" title="Trust settings — pick which tool types auto-apply (job mode only)" style="background:rgba(255,255,255,0.08);color:#ccc;border:1px solid rgba(255,255,255,0.15);border-radius:6px;padding:6px 8px;font-size:13px;cursor:pointer;display:none;">&#x2699;</button>' +
         '<button id="ai-clear" title="Clear conversation" style="background:rgba(255,255,255,0.08);color:#ccc;border:1px solid rgba(255,255,255,0.15);border-radius:6px;padding:6px 10px;font-size:11px;cursor:pointer;">Clear</button>' +
       '</div>' +
       // Notice strip
@@ -280,6 +281,13 @@
     panel.querySelector('#ai-close').onclick = close;
     panel.querySelector('#ai-clear').onclick = clearConversation;
     panel.querySelector('#ai-send').onclick = onSend;
+    var trustBtn = panel.querySelector('#ai-trust');
+    if (trustBtn) trustBtn.onclick = function(e) {
+      e.stopPropagation();
+      if (typeof window._agxAiPanelOpenTrust === 'function') {
+        window._agxAiPanelOpenTrust(trustBtn);
+      }
+    };
     var input = panel.querySelector('#ai-input');
     var pill = panel.querySelector('#ai-input-pill');
     // Auto-grow: textarea expands as the user types, capped at max-height
@@ -371,6 +379,9 @@
       else if (isClientMode()) headerEl.textContent = '🤝 Customer Relations Agent';
       else headerEl.textContent = '📐 AG · AGX Estimator';
     }
+    // Trust gear visible only in job mode (where the toggles apply).
+    var trustBtn = document.getElementById('ai-trust');
+    if (trustBtn) trustBtn.style.display = isJobMode() ? 'inline-block' : 'none';
     var noticeEl = document.querySelector('#agx-ai-panel #ai-notice');
     if (noticeEl) {
       if (isJobMode()) noticeEl.textContent = 'I see WIP, costs, the node graph, and QB lines — and I can propose edits (e.g. set a phase\'s % complete) for you to approve before they apply.';
@@ -699,6 +710,45 @@
       }
     }
 
+    // ── Trust countdown — for tool types the user has marked as
+    //    "auto-apply." Card still renders so the user sees what
+    //    happened, but a 5s countdown ticks down and applies on
+    //    completion. Click Cancel during the countdown to fall
+    //    back to manual approval.
+    function attachTrustCountdown(card, idx, tu) {
+      if (!isJobMode()) return;          // trust scoped to job tools only
+      if (!isTrusted(tu.name)) return;
+      var actionsRow = card.querySelector('[data-card-actions]');
+      if (!actionsRow) return;
+      actionsRow.innerHTML = '';
+      var bar = document.createElement('div');
+      bar.style.cssText = 'display:flex;align-items:center;gap:8px;flex:1;font-size:11px;color:var(--text-dim,#aaa);';
+      bar.innerHTML =
+        '<span style="color:#34d399;font-weight:700;">&#x2713; Trusted</span>' +
+        '<span data-countdown style="color:var(--text-dim,#888);">auto-applying in 5s…</span>' +
+        '<button data-cancel class="ghost small" style="padding:3px 10px;font-size:10px;margin-left:auto;">Cancel &amp; review</button>';
+      actionsRow.appendChild(bar);
+      var seconds = 5;
+      var iv = setInterval(function() {
+        seconds--;
+        var span = bar.querySelector('[data-countdown]');
+        if (span) span.textContent = seconds > 0 ? 'auto-applying in ' + seconds + 's…' : 'applying…';
+        if (seconds <= 0) {
+          clearInterval(iv);
+          answer(idx, true, card);
+        }
+      }, 1000);
+      bar.querySelector('[data-cancel]').onclick = function() {
+        clearInterval(iv);
+        // Restore the manual buttons
+        actionsRow.innerHTML =
+          '<button data-card-approve class="success small" style="padding:4px 12px;font-size:11px;">&check; Approve</button>' +
+          '<button data-card-reject class="ghost small" style="padding:4px 12px;font-size:11px;">&times; Reject</button>';
+        actionsRow.querySelector('[data-card-approve]').onclick = function() { answer(idx, true, card); };
+        actionsRow.querySelector('[data-card-reject]').onclick = function() { answer(idx, false, card); };
+      };
+    }
+
     // Bulk-action bar when there are 2+ proposals
     if (totalCount >= 2) {
       bulkButtons = document.createElement('div');
@@ -727,9 +777,77 @@
       card.querySelector('[data-card-reject]').onclick = function() { answer(i, false, card); };
       propContainer.appendChild(card);
       cards.push(card);
+      // If this tool type is trusted, swap the buttons for an
+      // auto-apply countdown (with a Cancel & review escape hatch).
+      attachTrustCountdown(card, i, tu);
     });
     scrollToBottom();
   }
+
+  // ── Trust toggles ────────────────────────────────────────────
+  // localStorage map of job-side tool names → true|false. Default
+  // false (always preview). Toggle via the gear in the panel header.
+  function isTrusted(toolName) {
+    try {
+      var raw = localStorage.getItem('agx-ai-trust:job') || '{}';
+      var map = JSON.parse(raw);
+      return !!map[toolName];
+    } catch (e) { return false; }
+  }
+  function setTrusted(toolName, val) {
+    try {
+      var raw = localStorage.getItem('agx-ai-trust:job') || '{}';
+      var map = JSON.parse(raw);
+      if (val) map[toolName] = true; else delete map[toolName];
+      localStorage.setItem('agx-ai-trust:job', JSON.stringify(map));
+    } catch (e) {}
+  }
+  // The four job-side tools available for trust toggling, with friendly
+  // labels for the popover.
+  var TRUSTABLE_TOOLS = [
+    { name: 'set_phase_pct_complete', label: 'Set phase % complete' },
+    { name: 'set_phase_field',        label: 'Set phase $ field (materials/labor/sub/equip)' },
+    { name: 'wire_nodes',             label: 'Wire two graph nodes' },
+    { name: 'assign_qb_line',         label: 'Assign QB line to a node' }
+  ];
+
+  function openTrustPopover(anchorBtn) {
+    var existing = document.getElementById('agx-ai-trust-popover');
+    if (existing) { existing.remove(); return; }
+    var pop = document.createElement('div');
+    pop.id = 'agx-ai-trust-popover';
+    var rect = anchorBtn.getBoundingClientRect();
+    pop.style.cssText =
+      'position:fixed;top:' + (rect.bottom + 4) + 'px;right:' + Math.max(8, window.innerWidth - rect.right) + 'px;' +
+      'background:var(--surface,#0f0f1e);border:1px solid var(--border,#333);border-radius:8px;' +
+      'box-shadow:0 8px 24px rgba(0,0,0,0.6);padding:10px 12px;z-index:1100;width:300px;';
+    pop.innerHTML =
+      '<div style="font-size:11px;font-weight:700;color:var(--text-dim,#aaa);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">Trust auto-apply</div>' +
+      '<div style="font-size:11px;color:var(--text-dim,#888);margin-bottom:8px;line-height:1.4;">Trusted tools still show a card, but auto-apply after a 5s countdown. Cancel &amp; review during the countdown to override.</div>' +
+      TRUSTABLE_TOOLS.map(function(t) {
+        var on = isTrusted(t.name);
+        return '<label style="display:flex;align-items:center;gap:8px;padding:5px 0;font-size:12px;color:var(--text,#e6e6e6);cursor:pointer;">' +
+          '<input type="checkbox" data-tool="' + t.name + '"' + (on ? ' checked' : '') + ' />' +
+          '<span>' + t.label + '</span>' +
+        '</label>';
+      }).join('');
+    document.body.appendChild(pop);
+    pop.querySelectorAll('input[data-tool]').forEach(function(box) {
+      box.addEventListener('change', function() {
+        setTrusted(box.getAttribute('data-tool'), box.checked);
+      });
+    });
+    // Click-outside dismiss
+    setTimeout(function() {
+      document.addEventListener('click', function dismissOnce(e) {
+        if (pop.contains(e.target) || anchorBtn.contains(e.target)) return;
+        pop.remove();
+        document.removeEventListener('click', dismissOnce);
+      });
+    }, 0);
+  }
+  // Public for the panel header button
+  window._agxAiPanelOpenTrust = openTrustPopover;
 
   function applyTool(tu) {
     if (isClientMode()) {
