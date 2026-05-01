@@ -46,6 +46,60 @@
     return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
 
+  // Inject scoped CSS once. Without this, the global rules in
+  // styles.css (`input, select, textarea { width: 100% }` and
+  // `label { display:block; text-transform:uppercase; font-size:10px }`)
+  // squash the checkbox + description into an unreadable layout.
+  function ensureAccountStyles() {
+    if (document.getElementById('agx-account-styles')) return;
+    var style = document.createElement('style');
+    style.id = 'agx-account-styles';
+    style.textContent = [
+      '#agxAccountModal .agx-pref-row {',
+      '  display: flex;',
+      '  align-items: flex-start;',
+      '  gap: 10px;',
+      '  cursor: pointer;',
+      '  background: var(--card-bg, #0f0f1e);',
+      '  border: 1px solid var(--border, #333);',
+      '  border-radius: 6px;',
+      '  padding: 10px 12px;',
+      '  text-transform: none;',
+      '  letter-spacing: normal;',
+      '  font-size: 13px;',
+      '  font-weight: normal;',
+      '  margin-bottom: 0;',
+      '  color: var(--text, #e4e6f0);',
+      '}',
+      '#agxAccountModal .agx-pref-row input[type="checkbox"] {',
+      '  width: auto;',
+      '  margin: 2px 0 0 0;',
+      '  padding: 0;',
+      '  flex: 0 0 auto;',
+      '  background: transparent;',
+      '  border: none;',
+      '}',
+      '#agxAccountModal .agx-pref-body { flex: 1 1 auto; min-width: 0; }',
+      '#agxAccountModal .agx-pref-title {',
+      '  font-weight: 600;',
+      '  color: var(--text, #e4e6f0);',
+      '  font-size: 13px;',
+      '  text-transform: none;',
+      '  letter-spacing: normal;',
+      '}',
+      '#agxAccountModal .agx-pref-desc {',
+      '  font-size: 11px;',
+      '  color: var(--text-dim, #888);',
+      '  margin-top: 3px;',
+      '  line-height: 1.4;',
+      '  text-transform: none;',
+      '  letter-spacing: normal;',
+      '  font-weight: normal;',
+      '}'
+    ].join('\n');
+    document.head.appendChild(style);
+  }
+
   // Open the My Account modal. Pre-loads the user's current prefs from
   // /api/auth/users (already cached by admin module if available) and
   // saves on toggle.
@@ -62,6 +116,7 @@
 
     var prior = document.getElementById('agxAccountModal');
     if (prior) prior.remove();
+    ensureAccountStyles();
     var modal = document.createElement('div');
     modal.id = 'agxAccountModal';
     modal.className = 'modal active';
@@ -112,11 +167,11 @@
     EVENT_DEFS.forEach(function(ev) {
       // Default ON (send). false in the prefs blob = explicitly muted.
       var on = prefs[ev.key] !== false;
-      html += '<label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:6px;padding:10px 12px;">' +
-        '<input type="checkbox" data-pref-key="' + ev.key + '"' + (on ? ' checked' : '') + ' style="margin-top:2px;flex-shrink:0;" />' +
-        '<div style="flex:1;">' +
-          '<div style="font-weight:600;color:var(--text,#e4e6f0);font-size:13px;">' + escapeHTML(ev.label) + '</div>' +
-          '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:3px;line-height:1.4;">' + escapeHTML(ev.desc) + '</div>' +
+      html += '<label class="agx-pref-row">' +
+        '<input type="checkbox" data-pref-key="' + ev.key + '"' + (on ? ' checked' : '') + ' />' +
+        '<div class="agx-pref-body">' +
+          '<div class="agx-pref-title">' + escapeHTML(ev.label) + '</div>' +
+          '<div class="agx-pref-desc">' + escapeHTML(ev.desc) + '</div>' +
         '</div>' +
       '</label>';
     });
