@@ -456,59 +456,161 @@
     // Convert to Monday-start: how many days back to get to Monday?
     var leadingDays = firstDow === 0 ? 6 : (firstDow - 1);
     var gridStart = addDays(first, -leadingDays);
-    var lastOfMonth = endOfMonth(first);
+
     // Always render 6 weeks (42 cells) so the grid has a stable shape
     // — Outlook does the same. Trailing/leading days from sibling
     // months get dimmed.
-    var cells = [];
-    for (var i = 0; i < 42; i++) {
-      cells.push(addDays(gridStart, i));
-    }
-
     var html = '';
+
+    // Day-of-week header row.
     DOW_LABELS.forEach(function(d) {
       html += '<div class="sch-cal-dow">' + d + '</div>';
     });
 
     var today = new Date();
-    cells.forEach(function(d) {
-      var inMonth = (d.getMonth() === first.getMonth());
-      var dow = d.getDay();
-      var isWeekend = (dow === 0 || dow === 6);
-      // Hide weekend cells when the toggle is off — replace them
-      // with an empty placeholder so the grid keeps its 7-col shape.
-      if (isWeekend && !_state.settings.showWeekends) {
-        html += '<div class="sch-cal-day sch-weekend" style="visibility:hidden;"></div>';
-        return;
-      }
-      var cls = 'sch-cal-day';
-      if (!inMonth) cls += ' sch-other-month';
-      if (isWeekend) cls += ' sch-weekend';
-      if (isSameDay(d, today)) cls += ' sch-today';
-      html += '<div class="' + cls + '" data-date="' + toISODate(d) + '">' +
-        '<span class="sch-cal-day-num">' + d.getDate() + '</span>';
-      var ents = entriesOnDay(d);
-      ents.slice(0, 4).forEach(function(e) {
-        var job = jobById(e.jobId);
-        var color = colorForJob(e.jobId);
-        var statusCls = '';
-        if (e.status === 'done') statusCls = ' sch-entry-done';
-        else if (e.status === 'rolled-over') statusCls = ' sch-entry-rolled';
-        var meta = e.crew && e.crew.length ? ' · ' + e.crew.length + '👷' : '';
-        html += '<div class="sch-entry' + statusCls + '" data-entry-id="' + escapeAttr(e.id) + '" style="--entry-color:' + color + ';background:' + color + ';" title="' + escapeAttr(jobLabel(job)) + (e.notes ? ' — ' + escapeAttr(e.notes) : '') + '">' +
-          escapeHTML(job ? (job.jobNumber || job.title || 'Job') : 'Job') +
-          '<span class="sch-entry-meta">' + meta + '</span>' +
-        '</div>';
-      });
-      if (ents.length > 4) {
-        html += '<div style="font-size:9px;color:var(--text-dim,#888);padding:0 2px;">+ ' + (ents.length - 4) + ' more</div>';
-      }
-      html += '</div>';
-    });
+
+    // Per-week rendering — a week is its own positioned container so
+    // entry bars can span multiple day columns continuously.
+    for (var w = 0; w < 6; w++) {
+      var weekStart = addDays(gridStart, w * 7);
+      html += renderWeekRow(weekStart, first, today);
+    }
 
     grid.innerHTML = html;
     wireGridDrop(grid);
     wireGridClicks(grid);
+  }
+
+  // Render a single week row. Day cells form a 7-column sub-grid;
+  // entry bars layer on top using grid-column spans so a multi-day
+  // entry paints as one continuous bar instead of breaking on every
+  // cell boundary. Entries that cross the week boundary get clipped
+  // to the visible week and re-emerge in the next week's bar layer.
+  function renderWeekRow(weekStart, monthCursor, today) {
+    // Collect day metadata for this week.
+    var days = [];
+    for (var i = 0; i < 7; i++) {
+      var d = addDays(weekStart, i);
+      days.push({
+        date: d,
+        iso: toISODate(d),
+        dow: d.getDay(),
+        inMonth: d.getMonth() === monthCursor.getMonth(),
+        isWeekend: (d.getDay() === 0 || d.getDay() === 6),
+        isToday: isSameDay(d, today)
+      });
+    }
+    var weekKeys = days.map(function(x) { return x.iso; });
+
+    // Find entries that touch this week. Compute their per-week
+    // segment (start col, span) so each entry renders as one bar
+    // segment per week it spans.
+    var hideWeekend = !_state.settings.showWeekends;
+    var segments = [];
+    _state.entries.forEach(function(e) {
+      var span = entrySpanDays(e);
+      // Filter the entry's days to the ones inside this week.
+      var here = span.filter(function(k) { return weekKeys.indexOf(k) !== -1; });
+      if (!here.length) return;
+      // Convert dates to column indices (0..6). When weekends are
+      // hidden the user-visible columns shift, but since we keep the
+      // 7-col grid and just hide Sat/Sun cells, indices stay aligned.
+      var cols = here.map(function(k) { return weekKeys.indexOf(k); });
+      cols.sort(function(a, b) { return a - b; });
+      // An entry's days may not be contiguous (e.g. weekends skipped).
+      // Group consecutive runs into separate segments so each renders
+      // as its own bar.
+      var run = [cols[0]];
+      for (var i = 1; i < cols.length; i++) {
+        if (cols[i] === cols[i - 1] + 1) {
+          run.push(cols[i]);
+        } else {
+          segments.push({ entry: e, startCol: run[0], span: run.length });
+          run = [cols[i]];
+        }
+      }
+      segments.push({ entry: e, startCol: run[0], span: run.length });
+    });
+
+    // Stack segments — each gets a row index based on the lowest
+    // available row that doesn't conflict with an earlier-placed
+    // segment in its column range. Greedy left-to-right packing.
+    segments.sort(function(a, b) {
+      if (a.startCol !== b.startCol) return a.startCol - b.startCol;
+      return b.span - a.span;
+    });
+    var rowOccupancy = []; // rowOccupancy[r] = array of {start, end}
+    segments.forEach(function(seg) {
+      var placed = false;
+      for (var r = 0; r < 12 && !placed; r++) {
+        rowOccupancy[r] = rowOccupancy[r] || [];
+        var clash = rowOccupancy[r].some(function(slot) {
+          return !(seg.startCol + seg.span <= slot.start || seg.startCol >= slot.end);
+        });
+        if (!clash) {
+          rowOccupancy[r].push({ start: seg.startCol, end: seg.startCol + seg.span });
+          seg.row = r;
+          placed = true;
+        }
+      }
+      if (!placed) seg.row = 11; // last-resort overflow row
+    });
+
+    // ── DOM
+    var html = '<div class="sch-cal-week-row">';
+
+    // Day-cell base layer (one cell per column).
+    days.forEach(function(d) {
+      if (d.isWeekend && hideWeekend) {
+        html += '<div class="sch-cal-day sch-weekend sch-cal-day-hidden"></div>';
+        return;
+      }
+      var cls = 'sch-cal-day';
+      if (!d.inMonth) cls += ' sch-other-month';
+      if (d.isWeekend) cls += ' sch-weekend';
+      if (d.isToday) cls += ' sch-today';
+      html += '<div class="' + cls + '" data-date="' + d.iso + '">' +
+        '<span class="sch-cal-day-num">' + d.date.getDate() + '</span>' +
+      '</div>';
+    });
+
+    // Overlay layer — absolute container positioned over the week
+    // row. Bars use percent-based left/width so they snap to the
+    // 7-col layout and stay aligned when the row resizes.
+    html += '<div class="sch-cal-bars">';
+    var maxRow = 0;
+    segments.forEach(function(seg) {
+      if (hideWeekend && (days[seg.startCol].isWeekend ||
+          (seg.span > 1 && days[seg.startCol + seg.span - 1].isWeekend))) {
+        // If the segment is purely weekend in a hidden-weekend view,
+        // skip rendering the bar — the underlying cells are hidden.
+        // Mixed-weekday/weekend segments still render across all 7
+        // cols since we keep the grid shape.
+      }
+      var leftPct = (seg.startCol / 7) * 100;
+      var widthPct = (seg.span / 7) * 100;
+      var topPx = 22 + seg.row * 18; // 22px reserved for the day-num
+      if (seg.row > maxRow) maxRow = seg.row;
+      var e = seg.entry;
+      var job = jobById(e.jobId);
+      var color = colorForJob(e.jobId);
+      var statusCls = '';
+      if (e.status === 'done') statusCls = ' sch-entry-bar-done';
+      else if (e.status === 'rolled-over') statusCls = ' sch-entry-bar-rolled';
+      var meta = e.crew && e.crew.length ? ' · ' + e.crew.length + '👷' : '';
+      var label = job ? (job.jobNumber || job.title || 'Job') : 'Job';
+      // Days-remaining hint shown after the label for spans ≥ 2 cols.
+      var hint = seg.span >= 2 ? ' (' + seg.span + 'd)' : '';
+      html += '<div class="sch-entry-bar' + statusCls + '" ' +
+        'data-entry-id="' + escapeAttr(e.id) + '" ' +
+        'style="left:' + leftPct.toFixed(4) + '%;width:calc(' + widthPct.toFixed(4) + '% - 4px);top:' + topPx + 'px;background:' + color + ';" ' +
+        'title="' + escapeAttr(jobLabel(job)) + (e.notes ? ' — ' + escapeAttr(e.notes) : '') + '">' +
+        escapeHTML(label) + hint +
+        (meta ? '<span class="sch-entry-bar-meta">' + meta + '</span>' : '') +
+      '</div>';
+    });
+    html += '</div></div>'; // close .sch-cal-bars + .sch-cal-week-row
+    return html;
   }
 
   // Drag-drop: drop a sidebar job-card onto a day cell to create
@@ -537,7 +639,7 @@
   }
 
   function wireGridClicks(grid) {
-    grid.querySelectorAll('.sch-entry[data-entry-id]').forEach(function(el) {
+    grid.querySelectorAll('.sch-entry-bar[data-entry-id]').forEach(function(el) {
       el.addEventListener('click', function(e) {
         e.stopPropagation();
         var id = el.getAttribute('data-entry-id');
@@ -547,7 +649,7 @@
     });
     grid.querySelectorAll('.sch-cal-day[data-date]').forEach(function(cell) {
       cell.addEventListener('click', function(e) {
-        if (e.target.closest('.sch-entry')) return;
+        if (e.target.closest('.sch-entry-bar')) return;
         var date = cell.getAttribute('data-date');
         openEntryEditor(null, date);
       });
