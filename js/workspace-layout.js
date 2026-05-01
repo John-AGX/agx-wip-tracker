@@ -80,6 +80,30 @@
     }
     ['.action-buttons', '.sub-tabs', '#job-info-card'].forEach(function(sel) { var el = document.querySelector(sel); if (el) el.style.display = ''; });
 
+    // Remove any orphaned floating workspace panels — when the panel
+    // was moved to .ng-canvas (graph mode) and the user navigated away
+    // before detach ran, removing ws-two-col below leaves the panel
+    // alive inside the graph canvas. Next applyLayout would then build
+    // a SECOND panel with the same id, and both would render side by
+    // side. Wipe every #wsFloatingPanel before the rebuild.
+    document.querySelectorAll('#wsFloatingPanel').forEach(function(p) {
+      p.remove();
+    });
+    // Same for any minimized icon clones that may have been promoted
+    // out of the panel.
+    var staleMinIcons = document.querySelectorAll('#wsMinimizedIcon');
+    if (staleMinIcons.length > 1) {
+      // Keep only the first; remove the rest
+      Array.prototype.slice.call(staleMinIcons, 1).forEach(function(el) { el.remove(); });
+    }
+    // Reset the in-memory init flag so the next attachWorkspaceToGraph
+    // re-wires drag/resize/buttons against the fresh panel instance.
+    if (typeof _floatingState !== 'undefined') {
+      _floatingState.inited = false;
+      _floatingState.maximized = false;
+      _floatingState.savedRect = null;
+    }
+
     // Move sub-tab content panels back to detail before destroying two-col
     var twoCol = document.getElementById("ws-two-col");
     if (twoCol && detail) {
@@ -317,6 +341,19 @@
     mainCol.innerHTML = tabsHtml + contentHtml;
     container.appendChild(mainCol);
 
+    // Belt-and-suspenders: even with cleanup() evicting orphans, a
+    // prior panel sitting in .ng-canvas (graph mode left over from a
+    // previous job) would clash with the one we're about to create.
+    // Same id == drag handlers wired to the WRONG element. Remove any
+    // straggler before constructing the new panel.
+    document.querySelectorAll('#wsFloatingPanel').forEach(function(p) {
+      p.remove();
+    });
+    if (typeof _floatingState !== 'undefined') {
+      _floatingState.inited = false;
+      _floatingState.maximized = false;
+      _floatingState.savedRect = null;
+    }
     var fp = document.createElement('div');
     fp.id = 'wsFloatingPanel';
     fp.className = 'ws-floating-panel';
