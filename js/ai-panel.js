@@ -43,10 +43,12 @@
     { label: 'Adjust margin',           prompt: 'I want this estimate at roughly 28% blended GP. Walk through each section and propose new section markup percentages to get there, calling out which lines drove the change.' }
   ];
   var JOB_PRESETS = [
+    { label: 'Audit this job',        prompt: 'Run a full audit of this job. Walk through:\n1. **Node graph connectivity** — list any orphan or disconnected cost nodes, and any phases/buildings that should be wired but aren\'t.\n2. **Missing inputs** — phases without %complete set, buildings without phases, cost nodes without budgets.\n3. **Cost coverage** — compare the QB cost categories against the cost-side nodes in the graph. Call out QB categories with significant spend ($1K+) that don\'t have a matching node, and nodes that have no recorded actual costs.\n4. **Billing posture** — revenue earned vs invoiced; flag under-billing.\n5. **Margin** — as-sold vs revised vs JTD; flag drift > 2 points.\nFormat as a checklist grouped by severity (🔴 needs action, 🟡 worth checking, 🟢 looks fine). Be specific — include node labels, dollar amounts, and category names.' },
     { label: 'Health check',          prompt: 'Run a quick WIP health check on this job. Margin trend, cost-to-complete sanity, any red flags I should look at first.' },
     { label: 'Am I underbilled?',     prompt: 'Compare revenue earned vs. invoiced to date. Am I behind on billing? If so, by how much, and what should I send next?' },
     { label: 'Missing change orders?', prompt: 'Look at the cost lines vs. the original estimated costs. Anything that looks like out-of-scope work that should have been captured as a change order?' },
-    { label: 'Margin drift',          prompt: 'Compare as-sold margin, revised margin, and JTD margin. Is the job drifting? What\'s driving the change?' }
+    { label: 'Margin drift',          prompt: 'Compare as-sold margin, revised margin, and JTD margin. Is the job drifting? What\'s driving the change?' },
+    { label: 'Uncategorized QB costs', prompt: 'Look at the QuickBooks cost data. Which categories have significant spend that don\'t map cleanly to a node in the graph? Group by Distribution Account and tell me which I should create nodes for or assign to existing ones.' }
   ];
   var CLIENT_PRESETS = [
     { label: 'Run full audit',           prompt: 'Run a full audit of the customer directory. Work in this order, using your tools to actually fix things — do not just describe them:\n1. Split any flat clients whose name encodes both a parent management company and a property/community (e.g., "PAC - Solace Tampa", "Associa | Wimbledon Greens", names with " - ", " | ", " / " separators followed by a property name). Reuse existing parents (existing_parent_id) when they already exist in the directory.\n2. Link any unparented properties to their existing parent management company when the company_name field, address, or context makes it obvious.\n3. Merge clear duplicates (typo variants, "Inc."/"LLC" mismatches, same property_address, same CAM email).\n4. Normalize parent-company name spelling to the canonical form across all children.\n5. At the end, in chat, list ambiguous cases that need my judgment — do not act on them.\nChain auto-tier tools efficiently (no preamble), and group approval-tier proposals so I can bulk-approve them.' },
@@ -64,6 +66,122 @@
   function escapeHTMLLocal(s) {
     if (typeof window.escapeHTML === 'function') return window.escapeHTML(s);
     return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  // ── Client context for Job mode ──────────────────────────────
+  // Bundles the node-graph snapshot (localStorage) plus an aggregated
+  // QB cost summary (parsed from workspace sheets named
+  // "QB Costs YYYY-MM-DD") so the WIP Assistant can reason about
+  // wiring + uncategorized costs. Returns null if no useful data is
+  // available — the server tolerates a missing clientContext.
+  function buildJobClientContext() {
+    var jobId = _entityId;
+    if (!jobId) return null;
+    var ctx = {};
+
+    // Node graph
+    try {
+      var allGraphs = JSON.parse(localStorage.getItem('agx-nodegraphs') || '{}');
+      var g = allGraphs[jobId];
+      if (g && Array.isArray(g.nodes)) {
+        ctx.nodeGraph = {
+          nodes: g.nodes.map(function(n) {
+            return {
+              id: n.id, type: n.type, label: n.label,
+              value: n.value, pctComplete: n.pctComplete,
+              budget: n.budget, revenue: n.revenue,
+              dataId: n.dataId, attachedTo: n.attachedTo
+            };
+          }),
+          wires: (g.wires || []).map(function(w) {
+            return { fromNode: w.fromNode, fromPort: w.fromPort, toNode: w.toNode, toPort: w.toPort };
+          })
+        };
+      }
+    } catch (e) { /* defensive */ }
+
+    // QB cost data — aggregated from workspace sheets named
+    // "QB Costs YYYY-MM-DD". Each sheet was built by job-costs-import.js
+    // with row 3 as the header and rows 4+ as data.
+    try {
+      var allWs = JSON.parse(localStorage.getItem('agx-workspaces') || '{}');
+      var wb = allWs[jobId];
+      if (wb && Array.isArray(wb.sheets)) {
+        var qbSheets = wb.sheets.filter(function(s) { return /^QB Costs /.test(s.name || ''); });
+        if (qbSheets.length) {
+          var allLines = [];
+          var mostRecent = '';
+          qbSheets.forEach(function(s) {
+            // Header row at index 3, data starts at 4
+            var cells = s.cells || {};
+            // Find amount column index from header row
+            var headerCells = {};
+            Object.keys(cells).forEach(function(k) {
+              var m = k.match(/^(\d+),(\d+)$/);
+              if (!m) return;
+              var r = parseInt(m[1], 10), c = parseInt(m[2], 10);
+              if (r === 3) headerCells[c] = String(cells[k].value || '').trim();
+            });
+            var col = {};
+            Object.keys(headerCells).forEach(function(c) {
+              var name = headerCells[c].toLowerCase();
+              if (name === 'vendor') col.vendor = +c;
+              else if (name === 'date') col.date = +c;
+              else if (name === 'amount') col.amount = +c;
+              else if (name === 'account') col.account = +c;
+              else if (name === 'class') col.klass = +c;
+              else if (name === 'memo') col.memo = +c;
+            });
+            // Track sheet date for "mostRecent"
+            var dateMatch = (s.name || '').match(/QB Costs (\d{4}-\d{2}-\d{2})/);
+            if (dateMatch && dateMatch[1] > mostRecent) mostRecent = dateMatch[1];
+            // Walk data rows
+            var rowKeys = {};
+            Object.keys(cells).forEach(function(k) {
+              var m = k.match(/^(\d+),(\d+)$/);
+              if (!m) return;
+              var r = parseInt(m[1], 10);
+              if (r >= 4) rowKeys[r] = true;
+            });
+            Object.keys(rowKeys).forEach(function(r) {
+              var ri = parseInt(r, 10);
+              var cellAt = function(c) { var v = cells[ri + ',' + c]; return v ? v.value : null; };
+              var amt = col.amount != null ? Number(cellAt(col.amount)) : 0;
+              if (!isFinite(amt) || amt === 0) return;
+              // Skip the TOTAL row (it has 'TOTAL' text in the row above amount)
+              var labelCell = col.amount != null ? cells[ri + ',' + (col.amount - 1)] : null;
+              if (labelCell && /^TOTAL$/i.test(String(labelCell.value || '').trim())) return;
+              allLines.push({
+                vendor: col.vendor != null ? String(cellAt(col.vendor) || '') : '',
+                date: col.date != null ? String(cellAt(col.date) || '') : '',
+                amount: amt,
+                account: col.account != null ? String(cellAt(col.account) || '') : '',
+                klass: col.klass != null ? String(cellAt(col.klass) || '') : '',
+                memo: col.memo != null ? String(cellAt(col.memo) || '') : ''
+              });
+            });
+          });
+          if (allLines.length) {
+            var total = allLines.reduce(function(s, l) { return s + l.amount; }, 0);
+            var byCategory = {};
+            allLines.forEach(function(l) {
+              var key = l.account || '(uncategorized)';
+              byCategory[key] = (byCategory[key] || 0) + l.amount;
+            });
+            var samples = allLines.slice().sort(function(a, b) { return b.amount - a.amount; }).slice(0, 15);
+            ctx.qbCosts = {
+              total: total,
+              byCategory: byCategory,
+              lineCount: allLines.length,
+              mostRecentImport: mostRecent || null,
+              samples: samples
+            };
+          }
+        }
+      }
+    } catch (e) { /* defensive */ }
+
+    return (ctx.nodeGraph || ctx.qbCosts) ? ctx : null;
   }
 
   // Lightweight markdown — bold, italic, inline code, lists, paragraphs.
@@ -339,7 +457,7 @@
     if (!box) return;
     if (!_messages.length) {
       var hint;
-      if (isJobMode()) hint = 'Pick a preset below or ask anything about the job.<br><span style="font-size:11px;opacity:0.7;">I can see contract, costs, change orders, % complete, billing posture.</span>';
+      if (isJobMode()) hint = 'Pick a preset below or ask anything about the job.<br><span style="font-size:11px;opacity:0.7;">I see contract, costs, COs, %complete, billing — plus the node graph wiring and QuickBooks cost lines.</span>';
       else if (isClientMode()) hint = '<strong style="color:var(--text,#fff);">🤝 Customer Relations Agent</strong><br>Tap <strong>Run full audit</strong> to clean up the directory in one pass — I\'ll split parent+property compounds, link unparented entries, merge dupes, and surface anything ambiguous for you.<br><span style="font-size:11px;opacity:0.7;">I know the AGX hierarchy: parent management company → property/community → CAM contact.</span>';
       else hint = '<strong style="color:var(--text,#fff);">📐 AG — your AGX estimator</strong><br>Pick a preset or describe what you need. I can read the estimate, scope, client, and photos — and propose adds, edits, deletes, and pricing changes for you to approve.<br><span style="font-size:11px;opacity:0.7;">Try "tighten this estimate" or "build my line items".</span>';
       box.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;padding:20px 0;text-align:center;line-height:1.6;">' + hint + '</div>';
@@ -427,6 +545,16 @@
     var body = isEstimateMode()
       ? { message: text, includePhotos: _includePhotos }
       : { message: text };
+    // Job mode: send a snapshot of the node graph + an aggregated
+    // QB cost summary so the assistant can reason about wiring and
+    // uncategorized expenses. Both currently live client-side
+    // (graph in localStorage, QB lines in workspace sheets); when
+    // Phase 2 lands the server can pull them from DB and this
+    // attachment becomes redundant.
+    if (isJobMode()) {
+      var clientCtx = buildJobClientContext();
+      if (clientCtx) body.clientContext = clientCtx;
+    }
     // Combine one-shot images: pre-existing handoff (PDF viewer) + composer.
     var bodyImages = [];
     if (_pendingImages && _pendingImages.images && _pendingImages.images.length) {

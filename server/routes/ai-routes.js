@@ -957,7 +957,12 @@ function computeJobWIP(job, jobBuildings, jobPhases, jobChangeOrders, jobSubs, j
   };
 }
 
-async function buildJobContext(jobId) {
+// clientContext is optional; if provided, the client passed extra
+// state the server can't reach yet (node graph state lives in
+// localStorage; QB cost lines aren't in the DB until Phase 2).
+// Fields used: { nodeGraph: { nodes, wires }, qbCosts: { total,
+// byCategory, lineCount, mostRecentImport, samples[] } }
+async function buildJobContext(jobId, clientContext) {
   // Pull the job + the related data the bulk-save serializes alongside it.
   const jobRes = await pool.query('SELECT id, owner_id, data FROM jobs WHERE id = $1', [jobId]);
   if (!jobRes.rows.length) throw new Error('Job not found');
@@ -1076,6 +1081,89 @@ async function buildJobContext(jobId) {
     lines.push('');
   }
 
+  // ── Client-supplied context (graph + QB cost data) ─────────────
+  // The node graph lives in localStorage; QB cost lines lived in
+  // workspace sheets pre-Phase-2. The client snapshots both and
+  // sends them with the chat request so the assistant can reason
+  // about wiring and uncategorized costs.
+  if (clientContext && clientContext.nodeGraph) {
+    var ng = clientContext.nodeGraph;
+    var nodes = Array.isArray(ng.nodes) ? ng.nodes : [];
+    var wires = Array.isArray(ng.wires) ? ng.wires : [];
+    if (nodes.length) {
+      lines.push('# Node graph (' + nodes.length + ' nodes, ' + wires.length + ' wires)');
+      lines.push('Nodes appear as: TYPE | label | computed-value | %complete | budget. Note types: t1 = building, t2 = phase, sub = subcontractor cost, co = change order, po = purchase order, inv = invoice, wip = WIP rollup, watch = KPI display, note = sticky note (visual only).');
+      var sortedNodes = nodes.slice().sort(function(a, b) { return (a.type || '').localeCompare(b.type || ''); });
+      sortedNodes.slice(0, 60).forEach(function(n) {
+        var pct = (n.pctComplete != null && n.pctComplete > 0) ? ' | ' + Math.round(n.pctComplete) + '%' : '';
+        var bud = (n.budget != null && n.budget > 0) ? ' | budget ' + fmtMoney(n.budget) : '';
+        var val = (n.value != null && n.value !== 0) ? ' | value ' + fmtMoney(n.value) : '';
+        lines.push('- ' + (n.type || '?') + ' "' + (n.label || '(no label)') + '"' + val + pct + bud);
+      });
+      if (nodes.length > 60) lines.push('- …and ' + (nodes.length - 60) + ' more nodes');
+      lines.push('');
+      lines.push('## Wires (' + wires.length + ' connections)');
+      // Group wires by source for readability
+      if (wires.length) {
+        var nodeById = {};
+        nodes.forEach(function(n) { nodeById[n.id] = n; });
+        wires.slice(0, 80).forEach(function(w) {
+          var from = nodeById[w.fromNode];
+          var to = nodeById[w.toNode];
+          if (from && to) {
+            lines.push('- ' + (from.label || from.type) + ' → ' + (to.label || to.type));
+          }
+        });
+        if (wires.length > 80) lines.push('- …and ' + (wires.length - 80) + ' more wires');
+      } else {
+        lines.push('(no wires — every node is currently disconnected)');
+      }
+      // Connectivity hints — pre-compute simple disconnection signals
+      // since the graph data is right here.
+      var hasIncoming = {};
+      var hasOutgoing = {};
+      wires.forEach(function(w) { hasIncoming[w.toNode] = true; hasOutgoing[w.fromNode] = true; });
+      var orphans = nodes.filter(function(n) {
+        if (n.type === 'note' || n.type === 'wip' || n.type === 'watch') return false;
+        return !hasIncoming[n.id] && !hasOutgoing[n.id];
+      });
+      if (orphans.length) {
+        lines.push('## Orphan nodes (disconnected)');
+        orphans.slice(0, 20).forEach(function(n) {
+          lines.push('- ' + (n.type || '?') + ' "' + (n.label || '(no label)') + '"');
+        });
+        if (orphans.length > 20) lines.push('- …and ' + (orphans.length - 20) + ' more');
+      }
+      lines.push('');
+    }
+  }
+
+  if (clientContext && clientContext.qbCosts) {
+    var qb = clientContext.qbCosts;
+    if (qb.lineCount > 0 || qb.total) {
+      lines.push('# QuickBooks cost data (imported, client-side)');
+      lines.push('- Lines: ' + (qb.lineCount || 0));
+      lines.push('- Total: ' + fmtMoney(qb.total || 0));
+      if (qb.mostRecentImport) lines.push('- Most recent import: ' + qb.mostRecentImport);
+      if (qb.byCategory && Object.keys(qb.byCategory).length) {
+        lines.push('## By category (Distribution Account)');
+        Object.keys(qb.byCategory)
+          .sort(function(a, b) { return (qb.byCategory[b] || 0) - (qb.byCategory[a] || 0); })
+          .slice(0, 12)
+          .forEach(function(cat) {
+            lines.push('- ' + cat + ': ' + fmtMoney(qb.byCategory[cat] || 0));
+          });
+      }
+      if (Array.isArray(qb.samples) && qb.samples.length) {
+        lines.push('## Sample lines (top by amount)');
+        qb.samples.slice(0, 15).forEach(function(s) {
+          lines.push('- ' + (s.date || '') + ' ' + fmtMoney(s.amount || 0) + ' ' + (s.vendor || '') + (s.account ? ' | ' + s.account : '') + (s.memo ? ' — ' + String(s.memo).slice(0, 80) : ''));
+        });
+      }
+      lines.push('');
+    }
+  }
+
   if (job.notes) {
     lines.push('# Job notes');
     lines.push(job.notes);
@@ -1140,6 +1228,7 @@ router.post('/jobs/:id/chat',
     const userMessage = (req.body && req.body.message || '').trim();
     if (!userMessage) return res.status(400).json({ error: 'message is required' });
     const jobId = req.params.id;
+    const clientContext = (req.body && req.body.clientContext) || null;
 
     setSSEHeaders(res);
 
@@ -1154,7 +1243,7 @@ router.post('/jobs/:id/chat',
       const cap = MAX_HISTORY_PAIRS * 2;
       if (history.length > cap) history = history.slice(-cap);
 
-      const ctx = await buildJobContext(jobId);
+      const ctx = await buildJobContext(jobId, clientContext);
 
       const messages = [
         ...history.map(m => ({ role: m.role, content: m.content })),
