@@ -927,7 +927,11 @@
         try {
           summary = applyTool(tu);
         } catch (e) {
-          alert('Could not apply: ' + (e.message || e));
+          if (typeof window.agxAlert === 'function') {
+            window.agxAlert({ title: 'Could not apply', message: e.message || String(e) });
+          } else {
+            alert('Could not apply: ' + (e.message || e));
+          }
           return;
         }
       }
@@ -1198,7 +1202,11 @@
         if (typeof NG === 'undefined' || !NG.addNode) {
           throw new Error('Node graph is not loaded — open the Workspace tab on this job first so the engine is initialized.');
         }
-        var t = String(input.type || '').toLowerCase();
+        // Schema field is `node_type` (renamed from `type` to dodge a
+        // JSON Schema keyword collision that was silently dropping the
+        // value). Accept the legacy `type` for any in-flight tool_uses
+        // queued before this rollout.
+        var t = String(input.node_type || input.type || '').toLowerCase();
         var allowedTypes = { t1:1, t2:1, labor:1, mat:1, gc:1, other:1, burden:1, sub:1, po:1, inv:1, co:1, watch:1, note:1 };
         if (!allowedTypes[t]) throw new Error('Unsupported node type "' + t + '". Pick one of: ' + Object.keys(allowedTypes).join(', '));
         var lbl = String(input.label || '').trim();
@@ -1833,6 +1841,8 @@
         sub: 'Subcontractor', po: 'Purchase Order', inv: 'Invoice',
         co: 'Change Order', watch: 'Watch', note: 'Note'
       };
+      // Schema renamed `type` → `node_type`; legacy fallback kept.
+      var cnType = input.node_type || input.type || '?';
       var cnFmt = function(n) { return '$' + Number(n || 0).toLocaleString('en-US', { maximumFractionDigits: 0 }); };
       var meta = [];
       if (input.value != null) meta.push('value: ' + cnFmt(input.value));
@@ -1851,7 +1861,7 @@
         '<div style="font-size:13px;color:var(--text,#fff);font-weight:600;">' +
           escapeHTMLLocal(input.label || '(unnamed)') +
           ' <span style="font-size:11px;color:var(--text-dim,#888);font-weight:400;">(' +
-          escapeHTMLLocal(typeLabels[input.type] || input.type || '?') + ')</span>' +
+          escapeHTMLLocal(typeLabels[cnType] || cnType) + ')</span>' +
         '</div>' +
         (meta.length
           ? '<div style="font-size:12px;color:var(--text,#ccc);margin-top:3px;">' + escapeHTMLLocal(meta.join(' · ')) + '</div>'

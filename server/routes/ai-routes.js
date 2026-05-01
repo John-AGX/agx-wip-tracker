@@ -244,8 +244,12 @@ const JOB_TOOLS = [
     input_schema: {
       type: 'object',
       additionalProperties: false,
+      // node_type (not "type") — JSON Schema reserves `type` as a
+      // meta-keyword and some tool-use validators silently drop a
+      // property literally named `type`, leaving the field empty
+      // when the apply path runs.
       properties: {
-        type: {
+        node_type: {
           type: 'string',
           enum: ['t1', 't2', 'labor', 'mat', 'gc', 'other', 'burden', 'sub', 'po', 'inv', 'co', 'watch', 'note'],
           description:
@@ -271,7 +275,7 @@ const JOB_TOOLS = [
         },
         rationale: { type: 'string', description: 'One short sentence — what this node represents and why it\'s being created.' }
       },
-      required: ['type', 'label', 'rationale']
+      required: ['node_type', 'label', 'rationale']
     }
   },
   {
