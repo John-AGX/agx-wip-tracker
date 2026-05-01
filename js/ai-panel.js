@@ -963,6 +963,7 @@
   var TRUSTABLE_TOOLS = [
     { name: 'set_phase_pct_complete', label: 'Set phase % complete' },
     { name: 'set_phase_field',        label: 'Set phase $ field (materials/labor/sub/equip)' },
+    { name: 'set_node_value',         label: 'Set cost node value (mat/labor/gc/other/sub)' },
     { name: 'wire_nodes',             label: 'Wire two graph nodes' },
     { name: 'assign_qb_line',         label: 'Assign QB line to a node' }
   ];
@@ -1129,6 +1130,61 @@
           try { window.ngRender(); } catch (e) {}
         }
         return 'Wired ' + (fromN.label || fromN.id) + ' → ' + (toN.label || toN.id);
+      }
+
+      case 'set_node_value': {
+        // Set a cost-bucket node's `value` (the QB Total field rendered
+        // on labor/mat/gc/other/sub nodes). Mutates the live engine
+        // nodes array so the graph re-renders / pushes to job. Mirrors
+        // wire_nodes' "live array first, localStorage fallback" pattern
+        // so direct edits aren't overwritten by saveGraph on next render.
+        var jidNV = (window.appState && appState.currentJobId) || null;
+        if (!jidNV) throw new Error('No job is open.');
+
+        var liveNodesV = (typeof NG !== 'undefined' && NG.nodes) ? NG.nodes() : null;
+        var nodesArrV, persistDirectV = false, graphsBlobV = null, gBlobV = null;
+        if (Array.isArray(liveNodesV) && liveNodesV.length) {
+          nodesArrV = liveNodesV;
+        } else {
+          persistDirectV = true;
+          graphsBlobV = JSON.parse(localStorage.getItem('agx-nodegraphs') || '{}');
+          gBlobV = graphsBlobV[jidNV];
+          if (!gBlobV || !Array.isArray(gBlobV.nodes)) throw new Error('Job has no node graph yet.');
+          nodesArrV = gBlobV.nodes;
+        }
+
+        // id → label fallback (same pattern as wire_nodes / assign_qb_line)
+        var idOrLabel = String(input.node_id || '');
+        var node = nodesArrV.find(function(n) { return n.id === idOrLabel; });
+        if (!node) {
+          var lowerL = idOrLabel.trim().toLowerCase();
+          node = nodesArrV.find(function(n) { return (n.label || '').trim().toLowerCase() === lowerL; });
+        }
+        if (!node) throw new Error('Node "' + idOrLabel + '" not in graph. Use a node id from the # Node graph block (not a phase id).');
+
+        var allowedTypes = { labor: 1, mat: 1, gc: 1, other: 1, sub: 1 };
+        if (!allowedTypes[node.type]) {
+          throw new Error('set_node_value only works on cost-bucket nodes (labor/mat/gc/other/sub). Node "' + (node.label || node.id) + '" is type "' + node.type + '". For phase fields use set_phase_field.');
+        }
+
+        var amt = Number(input.amount);
+        if (!isFinite(amt) || amt < 0) throw new Error('amount must be a non-negative number.');
+
+        var prior = Number(node.value || 0);
+        node.value = amt;
+
+        if (persistDirectV) {
+          graphsBlobV[jidNV] = gBlobV;
+          localStorage.setItem('agx-nodegraphs', JSON.stringify(graphsBlobV));
+        } else if (typeof NG !== 'undefined' && NG.saveGraph) {
+          NG.saveGraph();
+        }
+        if (typeof window.ngRender === 'function') {
+          try { window.ngRender(); } catch (e) {}
+        }
+        return 'Set ' + (node.label || node.id) + ' (' + node.type + ') value: $' +
+          prior.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) +
+          ' → $' + amt.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
       }
 
       case 'read_workspace_sheet_full': {
@@ -1475,6 +1531,38 @@
           escapeHTMLLocal(input.field) + ': ' +
           (oldVal != null ? fmt(oldVal) + ' &rarr; ' : '') +
           '<strong style="color:#34d399;">' + fmt(input.amount) + '</strong>' +
+        '</div>';
+    } else if (tu.name === 'set_node_value') {
+      // Mirror the set_phase_field card so the user sees old → new
+      // before approving. Look the node up in the same place the
+      // applier will (live engine first, then localStorage).
+      var liveNV = (typeof NG !== 'undefined' && NG.nodes) ? NG.nodes() : null;
+      var nvJid = (window.appState && appState.currentJobId) || null;
+      var nvNodes = (Array.isArray(liveNV) && liveNV.length)
+        ? liveNV
+        : (function() {
+            try {
+              var g = JSON.parse(localStorage.getItem('agx-nodegraphs') || '{}');
+              return (nvJid && g[nvJid] && g[nvJid].nodes) || [];
+            } catch (e) { return []; }
+          })();
+      var nvNode = nvNodes.find(function(n) { return n.id === input.node_id; });
+      if (!nvNode) {
+        var lowerNV = String(input.node_id || '').trim().toLowerCase();
+        nvNode = nvNodes.find(function(n) { return (n.label || '').trim().toLowerCase() === lowerNV; });
+      }
+      var nvOld = nvNode ? Number(nvNode.value || 0) : null;
+      var fmtNV = function(n) { return '$' + Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 }); };
+      heading = '&#x1F4B5; Set node value';
+      detail =
+        '<div style="font-size:13px;color:var(--text,#fff);font-weight:600;">' +
+          escapeHTMLLocal(nvNode ? (nvNode.label || nvNode.type) : input.node_id) +
+          (nvNode ? ' <span style="font-size:11px;color:var(--text-dim,#888);font-weight:400;">(' + escapeHTMLLocal(nvNode.type) + ')</span>' : '') +
+        '</div>' +
+        '<div style="font-size:12px;color:var(--text,#ccc);margin-top:3px;">' +
+          'value: ' +
+          (nvOld != null ? fmtNV(nvOld) + ' &rarr; ' : '') +
+          '<strong style="color:#34d399;">' + fmtNV(input.amount) + '</strong>' +
         '</div>';
     } else if (tu.name === 'wire_nodes') {
       var graphs = {};

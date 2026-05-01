@@ -249,6 +249,25 @@ const JOB_TOOLS = [
     }
   },
   {
+    name: 'set_node_value',
+    description:
+      'Set the QuickBooks Total / value field on a cost-bucket node in the graph (labor / mat / gc / other / sub). ' +
+      'Use this when the user wants a QB account total (e.g. "Materials & Supplies - COGS = $43,078") loaded into a specific cost node so it flows up through the graph. ' +
+      'node_id MUST be a node id from the # Node graph block (e.g. "n38"), NOT a phase id from # Structure. ' +
+      'For phase-level fields (materials/labor/sub/equipment on a phase record) use set_phase_field instead. ' +
+      'Only valid on labor / mat / gc / other / sub node types — will error on t1, t2, wip, watch, note, co, po, inv.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        node_id: { type: 'string', description: 'The graph node id (e.g. "n38") or exact label.' },
+        amount: { type: 'number', minimum: 0, description: 'Dollar amount to set as the node\'s value / QB Total.' },
+        rationale: { type: 'string', description: 'One short sentence — what QB account/category this is and why it goes on this node.' }
+      },
+      required: ['node_id', 'amount', 'rationale']
+    }
+  },
+  {
     name: 'assign_qb_line',
     description:
       'Link a QuickBooks cost line to a node in the graph (sets linked_node_id on the qb_cost_lines row). ' +
@@ -1346,7 +1365,8 @@ async function buildJobContext(jobId, clientContext) {
   lines.push('- Read the WIP snapshot, change orders, cost lines, node graph, and QB cost data together — they tell a story about whether the job is healthy.');
   lines.push('- Spot mismatches: % complete way ahead of revenue earned (under-pulled progress), revenue earned way ahead of invoiced (under-billed), JTD margin diverging from revised margin (cost overruns), large recurring vendors that should have been a CO, QB lines unlinked to graph nodes.');
   lines.push('- When citing dollar figures, match the field name from the snapshot above so the PM can find them in the UI.');
-  lines.push('- **You CAN make changes.** Available tools: `set_phase_pct_complete`, `set_phase_field` (materials/labor/sub/equipment dollars), `wire_nodes` (connect graph nodes), `assign_qb_line` (link a QB cost line to a graph node), `read_workspace_sheet_full` (auto-applies). Each writes a proposal card the user approves; trusted tool types auto-apply after a 5s countdown.');
+  lines.push('- **You CAN make changes.** Available tools: `set_phase_pct_complete`, `set_phase_field` (materials/labor/sub/equipment dollars on a PHASE record from # Structure), `set_node_value` (QB Total / value on a cost-bucket NODE from # Node graph — labor/mat/gc/other/sub), `wire_nodes` (connect graph nodes), `assign_qb_line` (link a QB cost line to a graph node), `read_workspace_sheet_full` and `read_qb_cost_lines` (auto-apply, no approval). Each writer tool writes a proposal card the user approves; trusted tool types auto-apply after a 5s countdown.');
+  lines.push('- **set_phase_field vs set_node_value — DO NOT MIX THEM UP.** `set_phase_field` writes to a phase record (phase_id from # Structure, e.g. "ph_..."). `set_node_value` writes the QB Total field to a graph node (node_id from # Node graph, e.g. "n38"). When the user says "load the QB Materials & Supplies total into the Materials node" or similar, that is `set_node_value` on a `mat` node — passing a node id like "n38" to `set_phase_field` will fail because n38 is not in appData.phases.');
   lines.push('- **Every block above is LIVE for this turn** — node graph, QB cost lines, workspace sheets all rebuild from the client on every user message and every tool_use continuation. If something was just created/edited, it\'s in the data above. NEVER say "I can\'t see new X" or "the snapshot is stale" or "you need to refresh the session" — those statements are factually wrong about how this assistant works.');
   lines.push('- When the user references a node/sheet/line by name and you can\'t find it, search the relevant block by case-insensitive partial match before asking — it\'s usually there.');
   lines.push('- Be concise and direct. Construction trade vocabulary is welcome. If you need one piece of info to answer well, ask one targeted question first.');
