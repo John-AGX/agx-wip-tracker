@@ -1421,10 +1421,17 @@
           '<div style="display:flex;flex-direction:column;gap:2px;">' +
             '<strong style="font-size:14px;">Attachments</strong>' +
             '<span style="font-size:11px;color:var(--text-dim,#888);">' +
-              'Photos, drawings, PDFs, contracts — anything tied to this job. Synced across devices.' +
+              'Photos, drawings, PDFs, contracts &mdash; anything tied to this job. Synced across devices. ' +
+              '<strong style="color:#a78bfa;">.xlsx / .xls / .csv files auto-import as workspace sheets</strong> so the WIP Assistant can read them.' +
             '</span>' +
           '</div>';
         mount.appendChild(header);
+        // Optional xlsx import notice (toast-style, populated after a
+        // successful intercept so the user sees what happened).
+        var notice = document.createElement('div');
+        notice.className = 'ws-attachments-xlsx-notice';
+        notice.style.cssText = 'display:none;margin-bottom:10px;padding:10px 12px;background:rgba(167,139,250,0.10);border:1px solid rgba(167,139,250,0.4);border-radius:8px;font-size:12px;color:#ddd0ff;';
+        mount.appendChild(notice);
         // Component mount target
         var componentSlot = document.createElement('div');
         componentSlot.className = 'ws-attachments-component';
@@ -1432,12 +1439,91 @@
         host.appendChild(mount);
       }
       var slot = mount.querySelector('.ws-attachments-component');
+      var noticeEl = mount.querySelector('.ws-attachments-xlsx-notice');
       if (slot) {
         window.agxAttachments.mount(slot, {
           entityType: 'job',
           entityId: workbook.jobId,
           canEdit: true
         });
+        // Intercept xlsx/csv files at the drop / file-input level —
+        // route them through wsImportXlsxFile (which adds them as
+        // workspace sheets so the AI can read via read_workspace_sheet_full)
+        // INSTEAD of uploading them as opaque blobs the model can't read.
+        // We keep a single capture-phase listener on the embed mount so
+        // any drop/change inside `slot` is observed even if the
+        // attachments component re-renders its drop-zone.
+        if (!mount._xlsxInterceptWired) {
+          mount._xlsxInterceptWired = true;
+          var SPREADSHEET_RX = /\.(xlsx|xls|csv)$/i;
+          var consumeXlsxFiles = function(fileList) {
+            if (!fileList || !fileList.length) return [];
+            var imported = [];
+            var passthrough = [];
+            Array.prototype.forEach.call(fileList, function(f) {
+              if (f && SPREADSHEET_RX.test(f.name || '')) {
+                imported.push(f);
+              } else {
+                passthrough.push(f);
+              }
+            });
+            if (imported.length && typeof window.wsImportXlsxFile === 'function') {
+              imported.forEach(function(f) {
+                try { window.wsImportXlsxFile(f); } catch (e) { console.warn('[attachments] xlsx import failed:', e); }
+              });
+              if (noticeEl) {
+                noticeEl.style.display = 'block';
+                noticeEl.innerHTML =
+                  '&#x1F4D1; Imported <strong>' + imported.length + '</strong> spreadsheet file' +
+                  (imported.length === 1 ? '' : 's') +
+                  ' as workspace sheet' + (imported.length === 1 ? '' : 's') +
+                  '. The WIP Assistant can now read them via the Detailed Costs / sheet tabs above.' +
+                  ' Click any sheet tab at the bottom to view.';
+                setTimeout(function() {
+                  if (noticeEl) noticeEl.style.display = 'none';
+                }, 8000);
+              }
+            }
+            return passthrough;
+          };
+
+          // Drop intercept (capture phase so we get it before the
+          // component's own drop handler).
+          mount.addEventListener('drop', function(e) {
+            if (!e.dataTransfer || !e.dataTransfer.files || !e.dataTransfer.files.length) return;
+            var hasXlsx = Array.prototype.some.call(e.dataTransfer.files, function(f) {
+              return SPREADSHEET_RX.test(f.name || '');
+            });
+            if (!hasXlsx) return; // let the component handle pure photo/PDF drops
+            // Mixed drop: handle xlsx, let the rest fall through. We
+            // can't selectively cancel, so cancel and re-dispatch the
+            // non-xlsx files to the component's input via a synthetic
+            // change. Simpler — only intercept if EVERY file is xlsx.
+            var allXlsx = Array.prototype.every.call(e.dataTransfer.files, function(f) {
+              return SPREADSHEET_RX.test(f.name || '');
+            });
+            if (!allXlsx) return; // mixed — let component upload all (xlsx will fail to render but at least be saved)
+            e.stopPropagation();
+            e.preventDefault();
+            consumeXlsxFiles(e.dataTransfer.files);
+          }, true);
+
+          // File-input intercept — same logic for the click-to-pick path.
+          mount.addEventListener('change', function(e) {
+            var inp = e.target;
+            if (!inp || inp.tagName !== 'INPUT' || inp.type !== 'file') return;
+            if (!inp.files || !inp.files.length) return;
+            var allXlsx = Array.prototype.every.call(inp.files, function(f) {
+              return SPREADSHEET_RX.test(f.name || '');
+            });
+            if (!allXlsx) return;
+            e.stopPropagation();
+            e.preventDefault();
+            consumeXlsxFiles(inp.files);
+            // Reset the input so the same file can be re-picked.
+            try { inp.value = ''; } catch (_) {}
+          }, true);
+        }
       }
     }
   }
@@ -1653,6 +1739,9 @@
   // ── xlsx / csv import ──────────────────────────────────────
   // Parse a vendor xlsx with SheetJS and append each Excel sheet as a
   // new tab in the workbook. Existing sheets are preserved.
+  // Imported as window.wsImportXlsxFile so the Attachments embed (and
+  // any future drop targets) can reuse the same parser/import path
+  // when the user drops an xlsx anywhere in the workspace UI.
   function handleXlsxImport(file) {
     if (typeof XLSX === 'undefined') {
       alert('Spreadsheet library still loading. Try again in a moment.');
@@ -4095,6 +4184,22 @@
   window.wsAutoSum = autoSum;
   window.wsOpenFindReplace = openFindReplace;
   window.wsSetFreeze = setFreeze;
+  // Public xlsx-import hook so the Attachments embed (and other drop
+  // targets) can route .xlsx / .xls / .csv files into the workbook.
+  window.wsImportXlsxFile = function(file) {
+    if (!file) return;
+    handleXlsxImport(file);
+  };
+  // Switch to a sheet by id from outside this module — used by the
+  // attachments embed after an xlsx import to land the user on the
+  // freshly-imported sheet.
+  window.wsSwitchToSheetByName = function(name) {
+    if (!name) return false;
+    var s = workbook.sheets.find(function(x) { return x.name === name; });
+    if (!s) return false;
+    switchSheet(s.id);
+    return true;
+  };
 
   // ── Public Init ────────────────────────────────────────────
 
