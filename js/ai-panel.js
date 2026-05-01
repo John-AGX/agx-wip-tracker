@@ -1225,6 +1225,15 @@
       detail = '<div style="font-size:12px;color:var(--text,#ccc);">Save the most recent uploaded photo to this client\'s attachments.</div>' +
         '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:2px;font-family:monospace;">client: ' + escapeHTMLLocal(input.client_id || '') + '</div>' +
         (input.caption ? '<div style="font-size:11px;color:var(--text-dim,#aaa);margin-top:3px;">Caption: ' + escapeHTMLLocal(input.caption) + '</div>' : '');
+    } else if (tu.name === 'read_workspace_sheet_full') {
+      // Read-only — the auto-apply intercept normally renders this as
+      // a chip without a card. This case is a safety net for older
+      // cached clients that miss the intercept; user can still click
+      // Approve and the apply path returns the sheet content.
+      heading = '&#x1F4D6; Read full sheet';
+      detail =
+        '<div style="font-size:13px;color:var(--text,#fff);font-weight:600;">' + escapeHTMLLocal(input.sheet_name || '(unspecified)') + '</div>' +
+        '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:3px;">Read-only — returns the full sheet contents to the assistant for analysis.</div>';
     } else if (tu.name === 'set_phase_pct_complete') {
       // Look up the phase locally so the card shows where the change
       // is going + the prior pct (helps user spot "from 0 → 50" vs
