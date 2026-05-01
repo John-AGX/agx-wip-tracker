@@ -1197,6 +1197,7 @@ async function buildJobContext(jobId, clientContext) {
     var wires = Array.isArray(ng.wires) ? ng.wires : [];
     if (nodes.length) {
       lines.push('# Node graph (' + nodes.length + ' nodes, ' + wires.length + ' wires)');
+      lines.push('**This block is LIVE, not a snapshot.** It\'s rebuilt from the client on every user message AND every tool_use continuation. New nodes the user creates (or that you create via tools) WILL appear in the next turn — never tell the user "I can\'t see new nodes in real-time" or "you need to refresh the session." If a node was just added, it\'s in the list below this turn.');
       lines.push('Each node listed as: `[id=NODE_ID] TYPE "label" | value | %complete | budget`. Types: t1 = building, t2 = phase, sub = subcontractor cost, co = change order, po = purchase order, inv = invoice, wip = WIP rollup, watch = KPI display, note = sticky note.');
       lines.push('**CRITICAL** — when calling `wire_nodes`, `assign_qb_line`, or any tool that takes a node id, pass the bracketed `id=` value from this list (e.g. `n_5`, NOT `"Painting - B31"`). Labels can include separator characters (›, /, etc.) and will not match. The client falls back to label lookup as a safety net but you should always send the real id.');
       var sortedNodes = nodes.slice().sort(function(a, b) { return (a.type || '').localeCompare(b.type || ''); });
@@ -1318,10 +1319,12 @@ async function buildJobContext(jobId, clientContext) {
   }
 
   lines.push('# Your role');
-  lines.push('- Read the WIP snapshot, change orders, and cost lines together — they tell a story about whether the job is healthy.');
-  lines.push('- Spot mismatches: % complete way ahead of revenue earned (under-pulled progress), revenue earned way ahead of invoiced (under-billed), JTD margin diverging from revised margin (cost overruns), large recurring vendors that should have been a CO.');
+  lines.push('- Read the WIP snapshot, change orders, cost lines, node graph, and QB cost data together — they tell a story about whether the job is healthy.');
+  lines.push('- Spot mismatches: % complete way ahead of revenue earned (under-pulled progress), revenue earned way ahead of invoiced (under-billed), JTD margin diverging from revised margin (cost overruns), large recurring vendors that should have been a CO, QB lines unlinked to graph nodes.');
   lines.push('- When citing dollar figures, match the field name from the snapshot above so the PM can find them in the UI.');
-  lines.push('- You are READ-ONLY for the job side. When you see something that needs action, format it as a checklist the PM can work through. (Write controls — adjusting % complete, adding a CO, etc. — come in a future phase.)');
+  lines.push('- **You CAN make changes.** Available tools: `set_phase_pct_complete`, `set_phase_field` (materials/labor/sub/equipment dollars), `wire_nodes` (connect graph nodes), `assign_qb_line` (link a QB cost line to a graph node), `read_workspace_sheet_full` (auto-applies). Each writes a proposal card the user approves; trusted tool types auto-apply after a 5s countdown.');
+  lines.push('- **Every block above is LIVE for this turn** — node graph, QB cost lines, workspace sheets all rebuild from the client on every user message and every tool_use continuation. If something was just created/edited, it\'s in the data above. NEVER say "I can\'t see new X" or "the snapshot is stale" or "you need to refresh the session" — those statements are factually wrong about how this assistant works.');
+  lines.push('- When the user references a node/sheet/line by name and you can\'t find it, search the relevant block by case-insensitive partial match before asking — it\'s usually there.');
   lines.push('- Be concise and direct. Construction trade vocabulary is welcome. If you need one piece of info to answer well, ask one targeted question first.');
 
   // Job side stays plain — single string. Lower volume than AG/CRA so
