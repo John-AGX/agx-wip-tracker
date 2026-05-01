@@ -867,6 +867,31 @@
   z-index: 1;
 }
 .ws-sheet-tab-name { display: inline-block; }
+.ws-sheet-tab-icon {
+  display: inline-block;
+  margin-right: 4px;
+  font-size: 11px;
+  opacity: 0.85;
+}
+/* Pinned built-in views (e.g. Detailed Costs) — distinct accent so
+   the user sees they aren't just another grid tab. */
+.ws-sheet-tab-pinned {
+  border-color: rgba(79, 140, 255, 0.45);
+  color: #a6c4ff;
+}
+.ws-sheet-tab-pinned.active {
+  color: #4f8cff;
+  border-color: rgba(79, 140, 255, 0.7);
+  border-bottom-color: var(--surface, #181820);
+}
+/* Embed host inside the workspace flex column — fills space between
+   formatting toolbars (or instead of the grid) and the sheet tabs. */
+#wsEmbedHost {
+  background: var(--surface, #181820);
+  color: var(--text, #e4e6f0);
+  border-left: 1px solid var(--grid-border);
+  border-right: 1px solid var(--grid-border);
+}
 .ws-sheet-tab-add {
   background: transparent;
   border: 1px solid transparent;

@@ -76,6 +76,7 @@
     return {
       id: newSheetId(),
       name: name || 'Sheet1',
+      kind: 'grid',     // 'grid' (default Excel-style sheet) | 'qb-costs' (embedded Detailed Costs view)
       rows: MIN_ROWS,
       cols: MIN_COLS,
       cells: {},
@@ -85,6 +86,29 @@
       merges: [],
       tables: []        // [{ r1, c1, r2, c2, style }] — formatted ranges
     };
+  }
+
+  // Permanent embedded views (one slot per kind). Auto-injected into
+  // every job's workbook on load so the user can switch between them
+  // and grid sheets via the bottom tab strip.
+  const QB_COSTS_SHEET_ID = '__qb_costs__';
+  function makeQBCostsSheet() {
+    return {
+      id: QB_COSTS_SHEET_ID,
+      name: 'Detailed Costs',
+      kind: 'qb-costs',
+      // Grid fields kept as no-ops so existing helpers that touch
+      // sheets (e.g. exporters) don't blow up if they iterate.
+      rows: 0, cols: 0, cells: {}, colWidths: {}, rowHeights: {},
+      links: {}, merges: [], tables: [],
+      pinned: true       // tab strip uses this to lock rename/delete
+    };
+  }
+  function isEmbedSheet(sheet) {
+    return !!(sheet && sheet.kind && sheet.kind !== 'grid');
+  }
+  function activeSheet() {
+    return workbook.sheets.find(s => s.id === workbook.activeSheetId) || null;
   }
 
   let grid = {
@@ -1218,10 +1242,13 @@
 
   // Sync grid (active sheet's working state) back to its sheet object
   // in the workbook. Called before persistence and before switching sheets.
+  // Embedded sheets (qb-costs) carry no grid state, so we skip them —
+  // their content is read live from appData on each render.
   function syncGridToActiveSheet() {
     if (!workbook.sheets.length) return;
     const sheet = workbook.sheets.find(s => s.id === workbook.activeSheetId);
     if (!sheet) return;
+    if (isEmbedSheet(sheet)) return;
     sheet.rows = grid.rows;
     sheet.cols = grid.cols;
     sheet.cells = grid.cells;
@@ -1237,6 +1264,27 @@
   // it always has. Resets transient state — selection / editing / undo
   // history are per-sheet by virtue of being cleared on switch.
   function loadSheetIntoGrid(sheet) {
+    if (isEmbedSheet(sheet)) {
+      // Embedded view (e.g. Detailed Costs). Render path uses
+      // renderEmbedSheet, not renderGrid — but we still clear the
+      // shared `grid` object so any incidental call from a stale
+      // event handler can't render leftovers from the previous
+      // sheet (and so recalcAll has nothing to chew on).
+      grid.cells = {};
+      grid.links = {};
+      grid.merges = [];
+      grid.tables = [];
+      grid.colWidths = {};
+      grid.rowHeights = {};
+      grid.selection = null;
+      grid.selEnd = null;
+      grid.editing = null;
+      grid.refMode = false;
+      grid.refAnchor = null;
+      grid.undoStack = [];
+      grid.redoStack = [];
+      return;
+    }
     grid.rows = Math.max(sheet.rows || MIN_ROWS, MIN_ROWS);
     grid.cols = Math.max(sheet.cols || MIN_COLS, MIN_COLS);
     grid.cells = sheet.cells || {};
@@ -1252,6 +1300,75 @@
     grid.refAnchor = null;
     grid.undoStack = [];
     grid.redoStack = [];
+  }
+
+  // Toggle between the standard grid chrome (formula bar, toolbars,
+  // grid) and an embedded view (e.g. Detailed Costs). Called by
+  // renderActiveSheet whenever the active sheet changes kind.
+  function applyEmbedChrome(sheet) {
+    if (!wsContainer) return;
+    var isEmbed = isEmbedSheet(sheet);
+
+    // Hide grid-only chrome
+    var hideSelectors = [
+      '.ws-toolbar',
+      '.ws-toolbar-fmt',
+      '.ws-link-panel',
+      '.ws-grid-wrapper',
+      '.ws-statusbar'
+    ];
+    hideSelectors.forEach(function(sel) {
+      wsContainer.querySelectorAll(sel).forEach(function(el) {
+        el.style.display = isEmbed ? 'none' : '';
+      });
+    });
+
+    // Embed host — created once, attached just before the sheet tabs.
+    var host = wsContainer.querySelector('#wsEmbedHost');
+    if (!host) {
+      host = document.createElement('div');
+      host.id = 'wsEmbedHost';
+      host.style.flex = '1 1 auto';
+      host.style.minHeight = '0';
+      host.style.overflow = 'hidden';
+      host.style.display = 'none';
+      var tabs = wsContainer.querySelector('#wsSheetTabs');
+      if (tabs && tabs.parentNode) {
+        tabs.parentNode.insertBefore(host, tabs);
+      } else {
+        wsContainer.appendChild(host);
+      }
+    }
+    host.style.display = isEmbed ? 'flex' : 'none';
+    host.style.flexDirection = 'column';
+  }
+
+  // Render whichever sheet is currently active. Grid sheets call into
+  // the existing renderGrid path; embedded sheets dispatch to their
+  // dedicated renderer.
+  function renderActiveSheet() {
+    var sheet = activeSheet();
+    if (!sheet) return;
+    applyEmbedChrome(sheet);
+    if (isEmbedSheet(sheet)) {
+      renderEmbedSheet(sheet);
+    } else {
+      renderGrid();
+    }
+  }
+
+  function renderEmbedSheet(sheet) {
+    var host = wsContainer && wsContainer.querySelector('#wsEmbedHost');
+    if (!host) return;
+    if (sheet.kind === 'qb-costs') {
+      if (typeof window.renderJobQBCosts === 'function' && workbook.jobId) {
+        window.renderJobQBCosts(workbook.jobId, host);
+      } else {
+        host.innerHTML = '<div style="padding:24px;color:var(--text-dim,#888);font-size:13px;">' +
+          'Detailed Costs view is unavailable. Reload the page to retry.' +
+        '</div>';
+      }
+    }
   }
 
   function saveWorkspace() {
@@ -1281,6 +1398,7 @@
       workbook.sheets = saved.sheets.map(s => ({
         id: s.id || newSheetId(),
         name: s.name || 'Sheet',
+        kind: s.kind || 'grid',
         rows: Math.max(s.rows || MIN_ROWS, MIN_ROWS),
         cols: Math.max(s.cols || MIN_COLS, MIN_COLS),
         cells: s.cells || {},
@@ -1288,7 +1406,8 @@
         rowHeights: s.rowHeights || {},
         links: s.links || {},
         merges: s.merges || [],
-        tables: s.tables || []
+        tables: s.tables || [],
+        pinned: !!s.pinned
       }));
       workbook.activeSheetId = saved.activeSheetId && workbook.sheets.find(s => s.id === saved.activeSheetId)
         ? saved.activeSheetId
@@ -1315,6 +1434,13 @@
       workbook.activeSheetId = workbook.sheets[0].id;
     }
 
+    // Auto-inject the permanent Detailed Costs sheet (idempotent —
+    // appended at the end of the tab strip, never duplicated). Pinned
+    // so rename/delete is blocked from the context menu.
+    if (!workbook.sheets.some(s => s.id === QB_COSTS_SHEET_ID)) {
+      workbook.sheets.push(makeQBCostsSheet());
+    }
+
     workbook.dirty = false;
     grid.jobId = jobId;
     grid.dirty = false;
@@ -1334,11 +1460,11 @@
     workbook.activeSheetId = sheetId;
     loadSheetIntoGrid(target);
     workbook.dirty = true;
-    grid.dirty = true;
-    recalcAll();
-    renderGrid();
+    grid.dirty = !isEmbedSheet(target);
+    if (!isEmbedSheet(target)) recalcAll();
+    renderActiveSheet();
     renderSheetTabs();
-    selectCell(0, 0);
+    if (!isEmbedSheet(target)) selectCell(0, 0);
   }
 
   function addSheet(initialName) {
@@ -1350,32 +1476,46 @@
       name = 'Sheet' + n;
     }
     const sheet = makeBlankSheet(name);
-    workbook.sheets.push(sheet);
+    // Insert before any pinned trailing tabs (e.g. Detailed Costs) so
+    // user-created sheets stay grouped on the left.
+    var firstPinned = workbook.sheets.findIndex(s => s.pinned);
+    if (firstPinned === -1) workbook.sheets.push(sheet);
+    else workbook.sheets.splice(firstPinned, 0, sheet);
     workbook.activeSheetId = sheet.id;
     loadSheetIntoGrid(sheet);
     workbook.dirty = true;
     grid.dirty = true;
-    renderGrid();
+    renderActiveSheet();
     renderSheetTabs();
     selectCell(0, 0);
     return sheet.id;
   }
 
   function deleteSheet(sheetId) {
-    if (workbook.sheets.length <= 1) {
-      alert('Workbook must have at least one sheet.');
+    const sheet = workbook.sheets.find(s => s.id === sheetId);
+    if (sheet && sheet.pinned) {
+      alert('"' + sheet.name + '" is a built-in view and cannot be deleted.');
+      return;
+    }
+    // At least one editable (non-pinned) grid sheet must remain.
+    var editableCount = workbook.sheets.filter(s => !s.pinned).length;
+    if (editableCount <= 1) {
+      alert('Workbook must have at least one editable sheet.');
       return;
     }
     const idx = workbook.sheets.findIndex(s => s.id === sheetId);
     if (idx === -1) return;
-    const sheet = workbook.sheets[idx];
     if (!confirm('Delete sheet "' + sheet.name + '"? This cannot be undone.')) return;
     workbook.sheets.splice(idx, 1);
     if (workbook.activeSheetId === sheetId) {
-      workbook.activeSheetId = workbook.sheets[Math.max(0, idx - 1)].id;
+      // Pick the previous non-pinned sheet so we don't land on a
+      // built-in view by accident.
+      var fallback = workbook.sheets.slice(0, idx).reverse().find(s => !s.pinned)
+        || workbook.sheets.find(s => !s.pinned);
+      workbook.activeSheetId = (fallback || workbook.sheets[0]).id;
       loadSheetIntoGrid(workbook.sheets.find(s => s.id === workbook.activeSheetId));
       recalcAll();
-      renderGrid();
+      renderActiveSheet();
       selectCell(0, 0);
     }
     workbook.dirty = true;
@@ -1385,6 +1525,10 @@
   function renameSheet(sheetId, newName) {
     const sheet = workbook.sheets.find(s => s.id === sheetId);
     if (!sheet) return;
+    if (sheet.pinned) {
+      alert('"' + sheet.name + '" is a built-in view and cannot be renamed.');
+      return;
+    }
     const trimmed = String(newName || '').trim();
     if (!trimmed) return;
     if (workbook.sheets.some(s => s.id !== sheetId && s.name === trimmed)) {
@@ -1400,9 +1544,14 @@
     syncGridToActiveSheet();
     const src = workbook.sheets.find(s => s.id === sheetId);
     if (!src) return;
+    if (src.pinned) {
+      alert('"' + src.name + '" is a built-in view and cannot be duplicated.');
+      return;
+    }
     const copy = {
       id: newSheetId(),
       name: src.name + ' (copy)',
+      kind: 'grid',
       rows: src.rows,
       cols: src.cols,
       cells: JSON.parse(JSON.stringify(src.cells)),
@@ -1680,8 +1829,15 @@
     let html = '<div class="ws-sheet-tabs-list">';
     workbook.sheets.forEach(function(s) {
       const active = s.id === workbook.activeSheetId;
-      html += '<div class="ws-sheet-tab' + (active ? ' active' : '') + '" data-sheet-id="' +
+      // Pinned built-in views (e.g. Detailed Costs) get a marker icon
+      // and a different class so the context menu can lock destructive
+      // actions and CSS can style them subtly.
+      var icon = '';
+      if (s.kind === 'qb-costs') icon = '<span class="ws-sheet-tab-icon" aria-hidden="true">&#x1F4CB;</span> ';
+      html += '<div class="ws-sheet-tab' + (active ? ' active' : '') +
+        (s.pinned ? ' ws-sheet-tab-pinned' : '') + '" data-sheet-id="' +
         s.id + '" title="' + escapeAttr(s.name) + '">' +
+        icon +
         '<span class="ws-sheet-tab-name">' + escapeHTML(s.name) + '</span>' +
       '</div>';
     });
@@ -1691,20 +1847,31 @@
     // Wire interactions
     wrap.querySelectorAll('.ws-sheet-tab').forEach(function(tab) {
       const id = tab.dataset.sheetId;
+      const sheet = workbook.sheets.find(s => s.id === id);
+      const pinned = !!(sheet && sheet.pinned);
       tab.addEventListener('click', function() { switchSheet(id); });
       tab.addEventListener('dblclick', function() {
-        const sheet = workbook.sheets.find(s => s.id === id);
-        if (!sheet) return;
-        const newName = prompt('Rename sheet:', sheet.name);
+        if (pinned) return;
+        const s = workbook.sheets.find(x => x.id === id);
+        if (!s) return;
+        const newName = prompt('Rename sheet:', s.name);
         if (newName != null) renameSheet(id, newName);
       });
       tab.addEventListener('contextmenu', function(e) {
         e.preventDefault();
+        if (pinned) {
+          // Built-in views — only the navigation actions make sense.
+          showContextMenu(e.clientX, e.clientY, [
+            { label: 'Move Left',  action: function() { moveSheet(id, 'left'); } },
+            { label: 'Move Right', action: function() { moveSheet(id, 'right'); } }
+          ]);
+          return;
+        }
         const items = [
           { label: 'Rename', action: function() {
-            const sheet = workbook.sheets.find(s => s.id === id);
-            if (!sheet) return;
-            const newName = prompt('Rename sheet:', sheet.name);
+            const s = workbook.sheets.find(x => x.id === id);
+            if (!s) return;
+            const newName = prompt('Rename sheet:', s.name);
             if (newName != null) renameSheet(id, newName);
           } },
           { label: 'Duplicate', action: function() { duplicateSheet(id); } },
@@ -1748,6 +1915,10 @@
 
   function renderGrid() {
     if (!wsTable) return;
+    // Embedded sheets (Detailed Costs etc.) are rendered separately —
+    // bail out so any incidental renderGrid call from edit/save paths
+    // doesn't repaint the hidden grid table.
+    if (isEmbedSheet(activeSheet())) return;
 
     var hidden = buildHiddenSet();
 
@@ -2905,6 +3076,10 @@
   }
 
   function handleKeyDown(e) {
+    // Embedded views (Detailed Costs etc.) own their own keyboard
+    // handling — the grid keymap doesn't apply.
+    if (isEmbedSheet(activeSheet())) return;
+
     // Global shortcuts: undo/redo
     if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
       e.preventDefault(); doUndo(); return;
@@ -3852,11 +4027,12 @@
     wsTable = document.getElementById('wsGrid');
     formulaBar = document.getElementById('wsFormulaBar');
 
-    renderGrid();
+    renderActiveSheet();
     renderSheetTabs();
 
-    // Select first cell
-    selectCell(0, 0);
+    // Select first cell only when starting on a grid sheet — embedded
+    // views don't have cells.
+    if (!isEmbedSheet(activeSheet())) selectCell(0, 0);
 
     // Show linked cell indicators on cost inputs and push linked values
     setTimeout(function(){

@@ -140,7 +140,29 @@
 
   // Build the panel DOM the first time we render this job. Idempotent —
   // nukes any prior content so re-rendering on tab switch is clean.
-  function ensurePanel(jobId) {
+  //
+  // If `customTarget` is supplied, render an embedded panel into it
+  // (used by the workspace's "Detailed Costs" sheet) and skip the
+  // right-pane sub-tab plumbing entirely.
+  function ensurePanel(jobId, customTarget) {
+    if (customTarget) {
+      // Workspace embed mode — host a per-target child div so we don't
+      // overwrite anything else the caller put in the container, and so
+      // re-renders are scoped to a stable element.
+      var embed = customTarget.querySelector(':scope > .qb-costs-embed');
+      if (!embed) {
+        embed = document.createElement('div');
+        embed.className = 'qb-costs-embed';
+        embed.style.padding = '14px';
+        embed.style.height = '100%';
+        embed.style.overflowY = 'auto';
+        embed.style.boxSizing = 'border-box';
+        customTarget.innerHTML = '';
+        customTarget.appendChild(embed);
+      }
+      return embed;
+    }
+
     var panel = document.getElementById('job-qb-costs');
     if (!panel) {
       var rc = document.getElementById('wsRightContent');
@@ -166,10 +188,13 @@
     return panel;
   }
 
-  function renderJobQBCosts(jobId) {
-    var panel = ensurePanel(jobId);
+  function renderJobQBCosts(jobId, customTarget) {
+    var panel = ensurePanel(jobId, customTarget);
     if (!panel) return;
     _state.jobId = jobId;
+    // Track the latest embed target so filter/search/link callbacks
+    // can re-render into the same place rather than the right pane.
+    _state.embedTarget = customTarget || null;
 
     var allLines = getLinesForJob(jobId);
     var byCat = {};
@@ -366,17 +391,24 @@
   }
 
   // ── Filter handlers ──────────────────────────────────────────
+  // _state.embedTarget remembers the last container we rendered into
+  // (workspace embed). Falling through to the right-pane path on a
+  // re-render would erase the workspace UI, so we feed the same target
+  // back through every re-render.
+  function reRender() {
+    if (_state.jobId) renderJobQBCosts(_state.jobId, _state.embedTarget || null);
+  }
   function filterByCategory(cat) {
     _state.filterCategory = (_state.filterCategory === cat) ? '' : cat;
-    if (_state.jobId) renderJobQBCosts(_state.jobId);
+    reRender();
   }
   function setStatusFilter(v) {
     _state.filterStatus = v || '';
-    if (_state.jobId) renderJobQBCosts(_state.jobId);
+    reRender();
   }
   function setSearch(v) {
     _state.search = v || '';
-    if (_state.jobId) renderJobQBCosts(_state.jobId);
+    reRender();
   }
 
   // ── Link / unlink ────────────────────────────────────────────
@@ -422,7 +454,7 @@
         console.warn('[qb-costs] link patch failed:', err && err.message);
       });
     }
-    if (_state.jobId) renderJobQBCosts(_state.jobId);
+    reRender();
   }
 
   // ── Public API ───────────────────────────────────────────────
