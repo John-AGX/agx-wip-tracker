@@ -48,6 +48,12 @@
       if (typeof renderEstimatesList === 'function') renderEstimatesList();
     }
     else if (name === 'clients') renderClientsList();
+    else if (name === 'subs') {
+      // Subs directory — render then refresh so the user sees fresh
+      // counts every time they reopen the tab.
+      if (typeof renderSubsDirectory === 'function') renderSubsDirectory();
+      if (window.agxSubs && typeof window.agxSubs.refresh === 'function') window.agxSubs.refresh();
+    }
   }
 
   // Group clients by parent so the list renders top-level firms with their

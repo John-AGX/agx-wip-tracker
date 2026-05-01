@@ -596,6 +596,7 @@
                         <button class="ws-right-tab active" data-estimates-subtab="leads" onclick="switchEstimatesSubTab('leads')" data-cap="LEADS_VIEW">Leads</button>
                         <button class="ws-right-tab" data-estimates-subtab="list" onclick="switchEstimatesSubTab('list')">Estimates</button>
                         <button class="ws-right-tab" data-estimates-subtab="clients" onclick="switchEstimatesSubTab('clients')">Clients</button>
+                        <button class="ws-right-tab" data-estimates-subtab="subs" onclick="switchEstimatesSubTab('subs')">Subs</button>
                     </div>
 
                     <!-- Leads sub-tab -->
@@ -752,6 +753,33 @@
                         </div>
                         <p id="clients-summary" style="margin:12px 0;color:var(--text-dim,#888);font-size:12px;"></p>
                         <div id="clients-list" style="display:flex;flex-direction:column;gap:8px;"></div>
+                    </div>
+
+                    <!-- Subs sub-tab — first-class directory of subcontractors,
+                         persisted server-side. Cross-job financials roll up via
+                         the job_subs join table. -->
+                    <div id="estimates-subtab-subs" class="estimates-subtab-content" style="display:none;">
+                        <div class="action-buttons">
+                            <button class="primary" onclick="window.agxSubs && window.agxSubs.openNew && window.agxSubs.openNew()">&#x1F477; New Sub</button>
+                            <button class="secondary" onclick="window.agxSubs && window.agxSubs.refresh && window.agxSubs.refresh()">Refresh</button>
+                            <button class="secondary" onclick="window.agxSubs && window.agxSubs.startMigration && window.agxSubs.startMigration()" title="Roll the existing per-job sub records up into the global directory">&#x1F501; Migrate from job records</button>
+                            <select id="subs-filter-trade" onchange="window.agxSubs && window.agxSubs.setFilter && window.agxSubs.setFilter('trade', this.value)" style="width:auto;min-width:140px;margin-left:auto;">
+                                <option value="">All trades</option>
+                            </select>
+                            <select id="subs-filter-status" onchange="window.agxSubs && window.agxSubs.setFilter && window.agxSubs.setFilter('status', this.value)" style="width:auto;min-width:120px;">
+                                <option value="active">Active</option>
+                                <option value="">All statuses</option>
+                                <option value="paused">Paused</option>
+                                <option value="closed">Closed</option>
+                            </select>
+                            <input type="text" id="subs-search" oninput="window.agxSubs && window.agxSubs.setFilter && window.agxSubs.setFilter('search', this.value)" placeholder="Search subs…" style="min-width:200px;" />
+                        </div>
+                        <p id="subs-summary" style="margin:12px 0;color:var(--text-dim,#888);font-size:12px;"></p>
+                        <div id="subs-migration-banner" style="display:none;margin-bottom:12px;padding:10px 14px;background:rgba(251,191,36,0.1);border:1px solid rgba(251,191,36,0.35);border-radius:8px;font-size:12px;color:var(--text,#e6e6e6);">
+                            <span id="subs-migration-banner-text"></span>
+                            <button class="ee-btn primary" style="margin-left:auto;font-size:11px;padding:4px 10px;" onclick="window.agxSubs && window.agxSubs.startMigration()">Review &amp; migrate</button>
+                        </div>
+                        <div id="subs-list"></div>
                     </div>
 
                     <!-- Import result modal — populated after a Buildertrend
@@ -1991,6 +2019,7 @@
     <script src="js/pdf-viewer.js?v=1"></script>
     <script src="js/admin.js?v=13"></script>
     <script src="js/clients.js?v=8"></script>
+    <script src="js/subs.js?v=1"></script>
     <script src="js/leads.js?v=10"></script>
     <script src="js/job-costs-import.js?v=3"></script>
     <script src="js/qb-costs-view.js?v=2"></script>
