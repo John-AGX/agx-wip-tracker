@@ -1072,12 +1072,11 @@
         if (!r.configured) {
           status.innerHTML = '<span style="color:#fbbf24;">&#9888; Not configured.</span> Set <code>RESEND_API_KEY</code> and <code>EMAIL_FROM</code> in Railway environment variables.';
         } else if (r.dryRunMode) {
-          status.innerHTML = '<span style="color:#fbbf24;">DRY-RUN mode active</span> — emails are logged but not actually sent. Unset <code>EMAIL_DRY_RUN</code> to enable real delivery.';
+          status.innerHTML = '<span style="color:#fbbf24;">DRY-RUN mode active</span> &mdash; emails are logged but not actually sent. Unset <code>EMAIL_DRY_RUN</code> to enable real delivery.';
         } else {
-          status.innerHTML = '<span style="color:#34d399;">&#x2713; Configured</span> — provider: Resend &middot; from: <code>' + escapeHTML(process.env_EMAIL_FROM || 'set in env') + '</code>';
-          // We don't actually have process.env on the client — placeholder
-          // text so the user knows it's working without leaking the value.
-          status.innerHTML = '<span style="color:#34d399;">&#x2713; Configured</span> — provider: Resend';
+          // Don't leak EMAIL_FROM into the client UI — server keeps it
+          // implicit. The green check is enough to confirm the pipe.
+          status.innerHTML = '<span style="color:#34d399;">&#x2713; Configured</span> &mdash; provider: Resend';
         }
       }
       var rows = r.rows || [];
