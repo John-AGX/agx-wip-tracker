@@ -1031,21 +1031,33 @@
         var graphs = JSON.parse(localStorage.getItem('agx-nodegraphs') || '{}');
         var g = graphs[jid];
         if (!g || !Array.isArray(g.nodes)) throw new Error('Job has no node graph yet.');
-        var fromExists = g.nodes.some(function(n) { return n.id === input.from_node_id; });
-        var toExists = g.nodes.some(function(n) { return n.id === input.to_node_id; });
-        if (!fromExists) throw new Error('from_node_id "' + input.from_node_id + '" not in graph.');
-        if (!toExists) throw new Error('to_node_id "' + input.to_node_id + '" not in graph.');
+        // Resolve id → fallback to label match if the AI sent a
+        // label instead of the actual id (cheap insurance — labels
+        // can collide so prefer id, but match exact + case-insensitive
+        // label as a safety net).
+        var resolveNode = function(idOrLabel) {
+          if (!idOrLabel) return null;
+          var byId = g.nodes.find(function(n) { return n.id === idOrLabel; });
+          if (byId) return byId;
+          var lower = String(idOrLabel).trim().toLowerCase();
+          var byLabel = g.nodes.find(function(n) { return (n.label || '').trim().toLowerCase() === lower; });
+          return byLabel || null;
+        };
+        var fromN = resolveNode(input.from_node_id);
+        var toN = resolveNode(input.to_node_id);
+        if (!fromN) throw new Error('from_node_id "' + input.from_node_id + '" not in graph.');
+        if (!toN) throw new Error('to_node_id "' + input.to_node_id + '" not in graph.');
         if (!Array.isArray(g.wires)) g.wires = [];
         // Skip if already wired
         var dup = g.wires.some(function(w) {
-          return w.fromNode === input.from_node_id && w.toNode === input.to_node_id &&
+          return w.fromNode === fromN.id && w.toNode === toN.id &&
                  w.fromPort === (input.from_port || 0) && w.toPort === (input.to_port || 0);
         });
-        if (dup) return 'Wire already existed; no change.';
+        if (dup) return 'Wire ' + fromN.id + ' → ' + toN.id + ' already existed; no change.';
         g.wires.push({
-          fromNode: input.from_node_id,
+          fromNode: fromN.id,
           fromPort: input.from_port || 0,
-          toNode: input.to_node_id,
+          toNode: toN.id,
           toPort: input.to_port || 0
         });
         graphs[jid] = g;
@@ -1053,7 +1065,7 @@
         if (typeof window.ngRender === 'function') {
           try { window.ngRender(); } catch (e) {}
         }
-        return 'Wired ' + input.from_node_id + ' → ' + input.to_node_id;
+        return 'Wired ' + (fromN.label || fromN.id) + ' → ' + (toN.label || toN.id);
       }
 
       case 'read_workspace_sheet_full': {
@@ -1127,15 +1139,26 @@
         // Server is the source of truth for QB lines (Phase 2 schema).
         // Optimistic local update + PATCH; the next hydration on /chat
         // /continue rebuild reflects the canonical state.
+        // Same id-or-label fallback as wire_nodes for the node side.
+        var jid2 = (window.appState && appState.currentJobId) || null;
+        var graphs2 = jid2 ? JSON.parse(localStorage.getItem('agx-nodegraphs') || '{}') : {};
+        var nodes2 = (jid2 && graphs2[jid2] && graphs2[jid2].nodes) || [];
+        var resolvedNodeId = input.node_id;
+        var nMatch = nodes2.find(function(n) { return n.id === input.node_id; });
+        if (!nMatch) {
+          var lower2 = String(input.node_id || '').trim().toLowerCase();
+          var byLabel = nodes2.find(function(n) { return (n.label || '').trim().toLowerCase() === lower2; });
+          if (byLabel) resolvedNodeId = byLabel.id;
+        }
         var lines = (window.appData && appData.qbCostLines) || [];
         var line = lines.find(function(l) { return l.id === input.line_id; });
-        if (line) line.linked_node_id = input.node_id;
+        if (line) line.linked_node_id = resolvedNodeId;
         if (window.agxApi && window.agxApi.isAuthenticated && window.agxApi.isAuthenticated()) {
-          window.agxApi.qbCosts.update(input.line_id, { linkedNodeId: input.node_id }).catch(function(err) {
+          window.agxApi.qbCosts.update(input.line_id, { linkedNodeId: resolvedNodeId }).catch(function(err) {
             console.warn('[ai] assign_qb_line server patch failed:', err && err.message);
           });
         }
-        return 'Linked QB line ' + input.line_id + ' → node ' + input.node_id;
+        return 'Linked QB line ' + input.line_id + ' → node ' + resolvedNodeId;
       }
 
       default:

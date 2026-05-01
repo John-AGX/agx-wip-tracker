@@ -1197,18 +1197,19 @@ async function buildJobContext(jobId, clientContext) {
     var wires = Array.isArray(ng.wires) ? ng.wires : [];
     if (nodes.length) {
       lines.push('# Node graph (' + nodes.length + ' nodes, ' + wires.length + ' wires)');
-      lines.push('Nodes appear as: TYPE | label | computed-value | %complete | budget. Note types: t1 = building, t2 = phase, sub = subcontractor cost, co = change order, po = purchase order, inv = invoice, wip = WIP rollup, watch = KPI display, note = sticky note (visual only).');
+      lines.push('Each node listed as: `[id=NODE_ID] TYPE "label" | value | %complete | budget`. Types: t1 = building, t2 = phase, sub = subcontractor cost, co = change order, po = purchase order, inv = invoice, wip = WIP rollup, watch = KPI display, note = sticky note.');
+      lines.push('**CRITICAL** — when calling `wire_nodes`, `assign_qb_line`, or any tool that takes a node id, pass the bracketed `id=` value from this list (e.g. `n_5`, NOT `"Painting - B31"`). Labels can include separator characters (›, /, etc.) and will not match. The client falls back to label lookup as a safety net but you should always send the real id.');
       var sortedNodes = nodes.slice().sort(function(a, b) { return (a.type || '').localeCompare(b.type || ''); });
       sortedNodes.slice(0, 60).forEach(function(n) {
         var pct = (n.pctComplete != null && n.pctComplete > 0) ? ' | ' + Math.round(n.pctComplete) + '%' : '';
         var bud = (n.budget != null && n.budget > 0) ? ' | budget ' + fmtMoney(n.budget) : '';
         var val = (n.value != null && n.value !== 0) ? ' | value ' + fmtMoney(n.value) : '';
-        lines.push('- ' + (n.type || '?') + ' "' + (n.label || '(no label)') + '"' + val + pct + bud);
+        lines.push('- [id=' + (n.id || '?') + '] ' + (n.type || '?') + ' "' + (n.label || '(no label)') + '"' + val + pct + bud);
       });
       if (nodes.length > 60) lines.push('- …and ' + (nodes.length - 60) + ' more nodes');
       lines.push('');
       lines.push('## Wires (' + wires.length + ' connections)');
-      // Group wires by source for readability
+      // Group wires by source for readability — show ids first, labels in parens for context
       if (wires.length) {
         var nodeById = {};
         nodes.forEach(function(n) { nodeById[n.id] = n; });
@@ -1216,7 +1217,7 @@ async function buildJobContext(jobId, clientContext) {
           var from = nodeById[w.fromNode];
           var to = nodeById[w.toNode];
           if (from && to) {
-            lines.push('- ' + (from.label || from.type) + ' → ' + (to.label || to.type));
+            lines.push('- ' + w.fromNode + ' → ' + w.toNode + ' (' + (from.label || from.type) + ' → ' + (to.label || to.type) + ')');
           }
         });
         if (wires.length > 80) lines.push('- …and ' + (wires.length - 80) + ' more wires');
