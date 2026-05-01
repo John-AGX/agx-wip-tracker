@@ -1336,7 +1336,11 @@
             </div>
             <div class="form-group">
                 <label>Vendor</label>
-                <input type="text" id="poVendor" placeholder="Vendor / supplier name">
+                <input type="text" id="poVendor" list="poVendorSubsList" placeholder="Vendor / supplier name (start typing to pick from Subs directory)" autocomplete="off">
+                <!-- Populated by openAddPOModal() / editPO() from appData.subsDirectory.
+                     Lets the user autocomplete to a sub from the global directory; on
+                     save, savePO() resolves the matching directory id into po.subId. -->
+                <datalist id="poVendorSubsList"></datalist>
             </div>
             <div class="form-group">
                 <label>Description</label>
@@ -2028,7 +2032,7 @@
     <script src="js/qb-costs-view.js?v=6"></script>
     <script src="js/insights.js?v=5"></script>
     <script src="js/app.js?v=42"></script>
-    <script src="js/wip.js?v=56"></script>
+    <script src="js/wip.js?v=57"></script>
     <script src="js/estimates.js?v=29"></script>
     <script src="js/proposal.js?v=20"></script>
     <script src="js/estimate-editor.js?v=14"></script>
@@ -2082,6 +2086,6 @@
       </div>
     </div>
     <script src="nodegraph/engine.js?v=69"></script>
-    <script src="nodegraph/ui.js?v=126"></script>
+    <script src="nodegraph/ui.js?v=127"></script>
 </body>
 </html>

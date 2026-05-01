@@ -1325,11 +1325,21 @@ function initEvents(){
       var tgtId=subAddPO.getAttribute('data-target-id');
       var subNode=E.findNode(subNodeId);
       if(!subNode) return;
+      // Resolve the sub's directory name so we can pre-fill the PO
+      // modal's vendor input — this is the user's "pull the sub from
+      // the sub list" expectation. subNode.data is the directory entry
+      // (Phase A wires sub nodes through appData.subsDirectory).
+      var subName = (subNode.data && subNode.data.name) ||
+                    subNode.label ||
+                    '';
       openEntityCreateModal('po', function(newEntry){
         if(!newEntry) return;
         // Store allocTarget on the PO appData entry
         newEntry.allocTarget={type:tgtType, id:tgtId};
         newEntry.subId=subNode.data&&subNode.data.id?subNode.data.id:'';
+        // Make sure the PO record carries the sub's name as the vendor
+        // when the user accepted our pre-fill (or typed nothing else).
+        if(!newEntry.vendor && subName) newEntry.vendor = subName;
         if(typeof saveData==='function') saveData();
         // Create PO node wired to this sub
         var p2=E.pan(),z2=E.zm();
@@ -1343,6 +1353,22 @@ function initEvents(){
         }
         render();
       });
+      // Pre-fill the vendor input AFTER openAddPOModal has cleared it
+      // (synchronous .value = '' inside the opener). Microtask is
+      // enough — the modal element is already in the DOM by then.
+      if (subName) {
+        setTimeout(function() {
+          var vEl = document.getElementById('poVendor');
+          if (vEl && !vEl.value) vEl.value = subName;
+          // If the description is empty, suggest the target's name as
+          // a starting hint — most POs are "scope on phase X".
+          var dEl = document.getElementById('poDescription');
+          if (dEl && !dEl.value) {
+            var tgtNode = E.findNode(subAddPO.getAttribute('data-target-node'));
+            if (tgtNode) dEl.value = subName + ' — ' + (tgtNode.label || tgtNode.type);
+          }
+        }, 0);
+      }
       return;
     }
     // Add sub-item (inline — just adds a blank row)

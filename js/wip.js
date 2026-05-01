@@ -504,6 +504,29 @@ function renderWIPMain() {
             };
         }
 
+        // Populate the <datalist> the poVendor input reads from with
+        // every active sub in appData.subsDirectory. Called every time
+        // the modal opens (Add or Edit) so newly-added subs show up
+        // without a page reload.
+        function populatePOVendorDatalist() {
+            var dl = document.getElementById('poVendorSubsList');
+            if (!dl) return;
+            var subs = (appData && Array.isArray(appData.subsDirectory))
+                ? appData.subsDirectory.filter(function(s) {
+                    return (s.status || 'active') !== 'closed';
+                  })
+                : [];
+            subs.sort(function(a, b) { return (a.name || '').localeCompare(b.name || ''); });
+            dl.innerHTML = subs.map(function(s) {
+                // value is what gets typed into the input on selection;
+                // label hint surfaces trade if present so duplicates
+                // (e.g. two "Smith Drywall" companies) are distinguishable.
+                var hint = s.trade ? ' · ' + s.trade : '';
+                return '<option value="' + escapeHTML(s.name || '') + '">' +
+                       escapeHTML((s.name || '') + hint) + '</option>';
+            }).join('');
+        }
+
         function openAddPOModal() {
             document.getElementById('poModalHeader').textContent = 'Add Purchase Order';
             document.getElementById('poSaveBtn').innerHTML = '&#x1F4C4; Add Purchase Order';
@@ -516,16 +539,29 @@ function renderWIPMain() {
             document.getElementById('poStatus').value = 'Open';
             document.getElementById('poNotes').value = '';
             appState.editPOId = null;
+            populatePOVendorDatalist();
             openModal('addPOModal');
         }
 
         function savePO() {
             const vendor = document.getElementById('poVendor').value.trim();
             if (!vendor) { alert('Enter a vendor name'); return; }
+            // Resolve the typed/selected vendor name back to a directory
+            // id so the PO record links into the canonical subs dataset.
+            // Match is case-insensitive so the user doesn't have to nail
+            // the exact casing the directory stores.
+            var matchedSubId = null;
+            try {
+                var dir = (appData && Array.isArray(appData.subsDirectory)) ? appData.subsDirectory : [];
+                var lower = vendor.toLowerCase();
+                var match = dir.find(function(s) { return (s.name || '').toLowerCase() === lower; });
+                if (match) matchedSubId = match.id;
+            } catch (e) { /* defensive */ }
             const poData = {
                 jobId: appState.currentJobId,
                 poNumber: document.getElementById('poNumber').value.trim(),
                 vendor: vendor,
+                subId: matchedSubId,
                 description: document.getElementById('poDescription').value.trim(),
                 amount: parseFloat(document.getElementById('poAmount').value) || 0,
                 billedToDate: parseFloat(document.getElementById('poBilled').value) || 0,
@@ -559,6 +595,7 @@ function renderWIPMain() {
             document.getElementById('poBilled').value = po.billedToDate || '';
             document.getElementById('poStatus').value = po.status || 'Open';
             document.getElementById('poNotes').value = po.notes || '';
+            populatePOVendorDatalist();
             openModal('addPOModal');
         }
 
