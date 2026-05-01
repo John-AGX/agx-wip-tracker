@@ -72,8 +72,12 @@
     list: function() { return get('/api/jobs'); },
     bulkSave: function(appData) { return put('/api/jobs/bulk/save', { appData: appData }); },
     remove: function(id) { return del('/api/jobs/' + encodeURIComponent(id)); },
-    reassignOwner: function(id, ownerId) {
-      return put('/api/jobs/' + encodeURIComponent(id) + '/owner', { ownerId: ownerId });
+    reassignOwner: function(id, ownerId, notify) {
+      // notify=true asks the server to email the new owner via the
+      // standard job-assignment template. Defaults false so older
+      // call sites that don't pass it stay silent.
+      return put('/api/jobs/' + encodeURIComponent(id) + '/owner',
+        { ownerId: ownerId, notify: !!notify });
     },
     listAccess: function(id) { return get('/api/jobs/' + encodeURIComponent(id) + '/access'); },
     grantAccess: function(id, userId, accessLevel) {

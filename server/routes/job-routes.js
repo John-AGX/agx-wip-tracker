@@ -1,8 +1,41 @@
 const express = require('express');
 const { pool } = require('../db');
 const { requireAuth, requireRole } = require('../auth');
+const { sendEmail } = require('../email');
+const { jobAssigned } = require('../email-templates');
 
 const router = express.Router();
+
+// Fire a job-assigned email to the new owner. Fire-and-forget; respects
+// the user's notification_prefs.job_assignment opt-out.
+async function maybeNotifyJobAssigned({ ownerId, job, action, fromUserName }) {
+  try {
+    const { rows } = await pool.query(
+      'SELECT email, name, notification_prefs FROM users WHERE id = $1 AND active = TRUE',
+      [ownerId]
+    );
+    if (!rows.length) return;
+    const u = rows[0];
+    const prefs = u.notification_prefs || {};
+    if (prefs.job_assignment === false) return;
+    if (!u.email) return;
+    const tpl = jobAssigned({
+      recipientName: u.name,
+      job: job,
+      assignedBy: fromUserName || 'An admin',
+      action: action || 'assigned'
+    });
+    sendEmail({
+      to: u.email,
+      subject: tpl.subject,
+      html: tpl.html,
+      text: tpl.text,
+      tag: 'job_assignment'
+    }).catch((e) => console.warn('[jobs] notify email failed:', e && e.message));
+  } catch (e) {
+    console.warn('[jobs] notify lookup failed:', e && e.message);
+  }
+}
 
 async function canAccess(userId, userRole, jobId) {
   if (userRole === 'admin' || userRole === 'corporate') return true;
@@ -78,6 +111,19 @@ router.post('/', requireAuth, requireRole('admin', 'pm'), async (req, res) => {
     }
     await pool.query('INSERT INTO jobs (id, owner_id, data) VALUES ($1, $2, $3)',
       [id, ownerId, JSON.stringify(req.body)]);
+
+    // Notify the new owner if the saving client opted in. Skip when
+    // the owner == the creator (you don't need an email saying "you
+    // assigned a job to yourself").
+    if (req.body.notify === true && ownerId !== req.user.id) {
+      maybeNotifyJobAssigned({
+        ownerId: ownerId,
+        job: Object.assign({ id: id }, req.body),
+        action: 'assigned',
+        fromUserName: req.user && req.user.name
+      });
+    }
+
     res.json({ id, owner_id: ownerId, ok: true });
   } catch (e) {
     console.error('POST /api/jobs error:', e);
@@ -110,12 +156,26 @@ router.put('/:id/owner', requireAuth, requireRole('admin'), async (req, res) => 
     if (!ownerId) return res.status(400).json({ error: 'ownerId required' });
     const userCheck = await pool.query('SELECT id FROM users WHERE id = $1 AND active = true', [ownerId]);
     if (!userCheck.rows.length) return res.status(400).json({ error: 'Invalid or inactive user' });
-    const jobCheck = await pool.query('SELECT id FROM jobs WHERE id = $1', [req.params.id]);
+    const jobCheck = await pool.query('SELECT id, owner_id, data FROM jobs WHERE id = $1', [req.params.id]);
     if (!jobCheck.rows.length) return res.status(404).json({ error: 'Job not found' });
+    const priorOwnerId = jobCheck.rows[0].owner_id;
     await pool.query(
       'UPDATE jobs SET owner_id = $1, updated_at = NOW() WHERE id = $2',
       [ownerId, req.params.id]
     );
+
+    // Notify the new owner of the reassignment when the client opted
+    // in. No-op when the owner didn't actually change.
+    if (req.body.notify === true && Number(priorOwnerId) !== Number(ownerId) && Number(ownerId) !== req.user.id) {
+      const jobData = jobCheck.rows[0].data || {};
+      maybeNotifyJobAssigned({
+        ownerId: ownerId,
+        job: Object.assign({ id: req.params.id }, jobData),
+        action: 'reassigned',
+        fromUserName: req.user && req.user.name
+      });
+    }
+
     res.json({ ok: true });
   } catch (e) {
     console.error('PUT /api/jobs/:id/owner error:', e);
@@ -244,17 +304,41 @@ router.put('/bulk/save', requireAuth, requireRole('admin', 'pm'), async (req, re
           purchaseOrders: (appData.purchaseOrders || []).filter(p => p.jobId === job.id),
           invoices: (appData.invoices || []).filter(i => i.jobId === job.id),
         };
-        // Strip server-injected hints that shouldn't round-trip back into the blob
+        // Strip server-injected hints + per-save flags that shouldn't
+        // round-trip back into the blob.
         delete jobBlob._canEdit;
+        delete jobBlob._notify;
         // For new jobs, admins can specify owner_id to assign a PM. Non-admins
         // (PMs creating their own jobs) always own what they create. ON CONFLICT
         // never touches owner_id, so existing jobs keep their original PM.
         const ownerId = (req.user.role === 'admin' && job.owner_id) ? job.owner_id : req.user.id;
+        const isNewJob = !existing.rows.length;
+        const priorOwnerId = isNewJob ? null : existing.rows[0].owner_id;
         await client.query(
           `INSERT INTO jobs (id, owner_id, data) VALUES ($1, $2, $3)
            ON CONFLICT (id) DO UPDATE SET data = $3, updated_at = NOW()`,
           [job.id, ownerId, JSON.stringify(jobBlob)]
         );
+        // Notify the owner when the saving client opted in via the
+        // _notify flag on this specific job. Only fires on creation
+        // OR explicit reassignment — silent for routine field edits.
+        if (job._notify === true && Number(ownerId) !== Number(req.user.id)) {
+          if (isNewJob) {
+            maybeNotifyJobAssigned({
+              ownerId: ownerId,
+              job: jobBlob,
+              action: 'assigned',
+              fromUserName: req.user && req.user.name
+            });
+          } else if (Number(priorOwnerId) !== Number(ownerId)) {
+            maybeNotifyJobAssigned({
+              ownerId: ownerId,
+              job: jobBlob,
+              action: 'reassigned',
+              fromUserName: req.user && req.user.name
+            });
+          }
+        }
         saved++;
       }
       await client.query('COMMIT');

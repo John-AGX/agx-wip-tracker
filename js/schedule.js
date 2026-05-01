@@ -1020,6 +1020,21 @@
               '<label>Notes</label>' +
               '<textarea id="schEditNotes" rows="2">' + escapeHTML(notes) + '</textarea>' +
             '</div>' +
+            // Notify checkbox. Default ON for new entries (the crew is
+            // brand-new and should be told they're working that day).
+            // Default OFF for edits (most edits are tweaks like notes
+            // or status — re-emailing every existing crew member would
+            // create spam). The user can override either way per save.
+            // Server only emails users whose ids are NEW in the crew
+            // array (PATCH compares pre/post crew), so flipping this
+            // ON during a routine edit only notifies *added* members.
+            '<div title="Email crew about this assignment. Default ON for new entries, OFF for edits — server only emails newly-added crew members regardless.">' +
+              '<label style="display:flex;align-items:center;gap:6px;cursor:pointer;text-transform:none;letter-spacing:normal;font-weight:500;color:var(--text,#e4e6f0);">' +
+                '<input type="checkbox" id="schEditNotify" ' + (!isEdit ? 'checked' : '') + ' />' +
+                '<span>&#x1F4E7; Notify ' + (isEdit ? 'newly-added' : 'assigned') + ' crew via email</span>' +
+              '</label>' +
+              '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:4px;line-height:1.3;">Only sent to crew members who are new on this save. Existing crew never re-emailed unless removed and re-added.</div>' +
+            '</div>' +
           '</div>' +
           '<div class="modal-footer" style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;">' +
             (isEdit ? '<button class="sch-btn" id="schEditDelete" style="margin-right:auto;color:#f87171;border-color:rgba(248,113,113,0.4);">Delete</button>' : '') +
@@ -1093,6 +1108,8 @@
         var ww = modal.querySelector('#schEditWeekends').checked;
         var st = modal.querySelector('#schEditStatus').value || 'planned';
         var nt = modal.querySelector('#schEditNotes').value || '';
+        var notifyEl = modal.querySelector('#schEditNotify');
+        var notify = !!(notifyEl && notifyEl.checked);
         var payload = {
           jobId: jobId,
           startDate: sd,
@@ -1100,7 +1117,8 @@
           crew: crew.slice(),
           notes: nt,
           status: st,
-          includesWeekends: ww
+          includesWeekends: ww,
+          notify: notify
         };
         setBusy(true);
         var done = function(saved) {

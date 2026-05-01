@@ -18,10 +18,50 @@
 const express = require('express');
 const { pool } = require('../db');
 const { requireAuth, requireCapability } = require('../auth');
+const { sendEmail } = require('../email');
+const { scheduleAssigned } = require('../email-templates');
 
 const router = express.Router();
 
 console.log('[schedule-routes] mounted at /api/schedule (Phase 2 — production-scheduling calendar)');
+
+// Fire schedule-assignment emails to newly-added crew. Fire-and-forget;
+// email failures land in email_log but don't block the save. Respects
+// each user's notification_prefs.schedule_assignment opt-out.
+async function notifyScheduleCrew({ entry, addedUserIds, jobId, fromUserName }) {
+  if (!addedUserIds || !addedUserIds.length) return;
+  try {
+    const { rows: users } = await pool.query(
+      'SELECT id, email, name, notification_prefs FROM users WHERE id = ANY($1::int[]) AND active = TRUE',
+      [addedUserIds]
+    );
+    let job = null;
+    if (jobId) {
+      const j = await pool.query('SELECT id, data FROM jobs WHERE id = $1', [jobId]);
+      if (j.rows.length) job = Object.assign({ id: j.rows[0].id }, j.rows[0].data || {});
+    }
+    users.forEach((u) => {
+      const prefs = u.notification_prefs || {};
+      if (prefs.schedule_assignment === false) return; // user opted out
+      if (!u.email) return;
+      const tpl = scheduleAssigned({
+        recipientName: u.name,
+        entry: entry,
+        job: job,
+        assignedBy: fromUserName || 'An admin'
+      });
+      sendEmail({
+        to: u.email,
+        subject: tpl.subject,
+        html: tpl.html,
+        text: tpl.text,
+        tag: 'schedule_assignment'
+      }).catch((e) => console.warn('[schedule] notify email failed:', e && e.message));
+    });
+  } catch (e) {
+    console.warn('[schedule] notify lookup failed:', e && e.message);
+  }
+}
 
 function genId() {
   return 'sch_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
@@ -208,7 +248,22 @@ router.post('/',
           req.user && req.user.id ? req.user.id : null
         ]
       );
-      res.status(201).json({ entry: rowToJson(ins.rows[0]) });
+      const entry = rowToJson(ins.rows[0]);
+
+      // Notify all newly-assigned crew when the client opts in. POST
+      // is always a "new entry" so every crew member is treated as
+      // newly added — only the notify=true flag from the request body
+      // gates the actual email send.
+      if (req.body && req.body.notify === true && Array.isArray(v.crew) && v.crew.length) {
+        notifyScheduleCrew({
+          entry: entry,
+          addedUserIds: v.crew,
+          jobId: v.jobId,
+          fromUserName: req.user && req.user.name
+        });
+      }
+
+      res.status(201).json({ entry: entry });
     } catch (e) {
       console.error('POST /api/schedule error:', e);
       res.status(500).json({ error: 'Server error' });
@@ -273,6 +328,20 @@ router.patch('/:id',
       if (!sets.length) return res.status(400).json({ error: 'no fields to update' });
       sets.push('updated_at = NOW()');
 
+      // Capture the pre-update crew so we can compute additions for
+      // the notify path. Only newly-added users get an email; users
+      // who were already on the entry are not re-notified.
+      let priorCrew = [];
+      if (req.body && req.body.notify === true) {
+        const before = await pool.query(
+          'SELECT crew FROM schedule_entries WHERE id = $1',
+          [req.params.id]
+        );
+        if (before.rows.length) {
+          priorCrew = Array.isArray(before.rows[0].crew) ? before.rows[0].crew : [];
+        }
+      }
+
       params.push(req.params.id);
       const sql =
         'UPDATE schedule_entries SET ' + sets.join(', ') +
@@ -280,7 +349,25 @@ router.patch('/:id',
         " RETURNING *, to_char(start_date, 'YYYY-MM-DD') AS start_date_iso";
       const { rows } = await pool.query(sql, params);
       if (!rows.length) return res.status(404).json({ error: 'not found' });
-      res.json({ entry: rowToJson(rows[0]) });
+      const entry = rowToJson(rows[0]);
+
+      // Notify newly-added crew only — existing crew shouldn't get
+      // spammed every time someone tweaks notes or status.
+      if (req.body && req.body.notify === true) {
+        const newCrew = Array.isArray(entry.crew) ? entry.crew : [];
+        const priorSet = new Set(priorCrew.map((x) => Number(x)));
+        const added = newCrew.filter((x) => !priorSet.has(Number(x)));
+        if (added.length) {
+          notifyScheduleCrew({
+            entry: entry,
+            addedUserIds: added,
+            jobId: entry.jobId,
+            fromUserName: req.user && req.user.name
+          });
+        }
+      }
+
+      res.json({ entry: entry });
     } catch (e) {
       console.error('PATCH /api/schedule/:id error:', e);
       res.status(500).json({ error: 'Server error' });

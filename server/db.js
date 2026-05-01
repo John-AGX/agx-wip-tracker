@@ -20,9 +20,16 @@ async function initSchema() {
       name TEXT NOT NULL,
       role TEXT NOT NULL DEFAULT 'pm',
       active BOOLEAN NOT NULL DEFAULT true,
+      -- JSONB notification opt-out map. See server/email-templates.js
+      -- for the event keys. Default empty {} = everything enabled
+      -- (opt-out model). Each key, when set to false, suppresses that
+      -- event's email for this user.
+      notification_prefs JSONB NOT NULL DEFAULT '{}'::jsonb,
       created_at TIMESTAMPTZ DEFAULT NOW(),
       updated_at TIMESTAMPTZ DEFAULT NOW()
     );
+    -- Backfill the column on existing deployments. Safe re-run.
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS notification_prefs JSONB NOT NULL DEFAULT '{}'::jsonb;
 
     CREATE TABLE IF NOT EXISTS jobs (
       id TEXT PRIMARY KEY,

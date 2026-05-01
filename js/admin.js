@@ -442,7 +442,12 @@
 
   function reassignJobOwner(jobId, newOwnerId) {
     if (!newOwnerId) return; // ignore the "-- Unassigned --" placeholder
-    window.agxApi.jobs.reassignOwner(jobId, parseInt(newOwnerId, 10))
+    // Confirm reassignment + ask whether to email the new owner.
+    // confirm() returns boolean — pair with a separate confirm for
+    // notify so the admin can refuse the reassignment outright OR
+    // proceed silently. Default proceeds with notification.
+    var notifyOk = confirm('Email the new owner about this assignment?\n\nOK = send email · Cancel = reassign silently');
+    window.agxApi.jobs.reassignOwner(jobId, parseInt(newOwnerId, 10), notifyOk)
       .then(function() {
         // Pull fresh job state so _canEdit recalculates for everyone, and
         // refresh the assignments table to show the new owner.

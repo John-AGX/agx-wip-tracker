@@ -60,6 +60,29 @@ router.post('/register', requireAuth, requireRole('admin'), async (req, res) => 
       [email.toLowerCase().trim(), hash, name, userRole]
     );
 
+    // Fire the invite email — fire-and-forget so a flaky email
+    // service never blocks user creation. Failures land in email_log
+    // and the admin can resend manually.
+    try {
+      const { sendEmail } = require('../email');
+      const { newUserInvite } = require('../email-templates');
+      const tpl = newUserInvite({
+        name: name,
+        email: email.toLowerCase().trim(),
+        password: password,
+        invitedBy: req.user && req.user.name ? req.user.name : 'An admin'
+      });
+      sendEmail({
+        to: email.toLowerCase().trim(),
+        subject: tpl.subject,
+        html: tpl.html,
+        text: tpl.text,
+        tag: 'new_user_invite'
+      }).catch((e) => console.warn('[auth] invite email failed:', e && e.message));
+    } catch (e) {
+      console.warn('[auth] invite email setup failed:', e && e.message);
+    }
+
     res.json({ id: result.rows[0].id, email: email.toLowerCase().trim(), name, role: userRole });
   } catch (e) {
     res.status(500).json({ error: 'Server error' });
@@ -71,11 +94,53 @@ router.post('/register', requireAuth, requireRole('admin'), async (req, res) => 
 // owners can populate the grant-access picker on jobs they own. Data
 // returned is minimal (id/email/name/role/active/created_at) — same as
 // what's needed for the admin Users table, with no auth secrets.
+// notification_prefs included so clients can show "this user has muted
+// schedule notifications" hints in the assignment UI.
 router.get('/users', requireAuth, async (req, res) => {
   try {
-    const { rows } = await pool.query('SELECT id, email, name, role, active, created_at FROM users');
+    const { rows } = await pool.query(
+      'SELECT id, email, name, role, active, notification_prefs, created_at FROM users'
+    );
     res.json({ users: rows });
   } catch (e) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// PUT /api/auth/me/notification-prefs
+// User edits their OWN notification preferences. Body: { prefs: {...} }
+// where prefs is the JSONB blob — opt-out keys (false = don't send).
+// Admin can update any user via PUT /api/auth/users/:id/notification-prefs.
+router.put('/me/notification-prefs', requireAuth, async (req, res) => {
+  try {
+    const prefs = (req.body && req.body.prefs && typeof req.body.prefs === 'object')
+      ? req.body.prefs
+      : {};
+    await pool.query(
+      'UPDATE users SET notification_prefs = $1::jsonb, updated_at = NOW() WHERE id = $2',
+      [JSON.stringify(prefs), req.user.id]
+    );
+    res.json({ ok: true, prefs: prefs });
+  } catch (e) {
+    console.error('PUT /me/notification-prefs error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.put('/users/:id/notification-prefs', requireAuth, requireRole('admin'), async (req, res) => {
+  try {
+    const prefs = (req.body && req.body.prefs && typeof req.body.prefs === 'object')
+      ? req.body.prefs
+      : {};
+    const { rows } = await pool.query('SELECT id FROM users WHERE id = $1', [req.params.id]);
+    if (!rows.length) return res.status(404).json({ error: 'User not found' });
+    await pool.query(
+      'UPDATE users SET notification_prefs = $1::jsonb, updated_at = NOW() WHERE id = $2',
+      [JSON.stringify(prefs), req.params.id]
+    );
+    res.json({ ok: true, prefs: prefs });
+  } catch (e) {
+    console.error('PUT /users/:id/notification-prefs error:', e);
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -106,12 +171,38 @@ router.put('/users/:id/password', requireAuth, requireRole('admin'), async (req,
     if (!newPassword || newPassword.length < 4) {
       return res.status(400).json({ error: 'New password required (min 4 chars)' });
     }
-    const { rows } = await pool.query('SELECT id FROM users WHERE id = $1', [req.params.id]);
+    const { rows } = await pool.query('SELECT id, email, name FROM users WHERE id = $1', [req.params.id]);
     if (!rows.length) return res.status(404).json({ error: 'User not found' });
+    const targetUser = rows[0];
     await pool.query(
       'UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2',
       [bcrypt.hashSync(newPassword, 10), req.params.id]
     );
+
+    // Email the user their new password — security tradeoff is
+    // deliberate: AGX is small + admin-driven. Auth flow is "admin
+    // hands you credentials" not "you self-serve via reset link".
+    // Future flow with token-based resets would replace this.
+    try {
+      const { sendEmail } = require('../email');
+      const { passwordReset } = require('../email-templates');
+      const tpl = passwordReset({
+        name: targetUser.name,
+        email: targetUser.email,
+        password: newPassword,
+        resetBy: req.user && req.user.name ? req.user.name : 'An admin'
+      });
+      sendEmail({
+        to: targetUser.email,
+        subject: tpl.subject,
+        html: tpl.html,
+        text: tpl.text,
+        tag: 'password_reset'
+      }).catch((e) => console.warn('[auth] password reset email failed:', e && e.message));
+    } catch (e) {
+      console.warn('[auth] password reset email setup failed:', e && e.message);
+    }
+
     res.json({ ok: true });
   } catch (e) {
     console.error('PUT /api/auth/users/:id/password error:', e);

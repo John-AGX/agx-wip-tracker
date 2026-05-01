@@ -971,6 +971,11 @@ function renderWIPMain() {
             const pmOpt = pmSelect.options[pmSelect.selectedIndex];
             const pmName = (pmOpt && pmOpt.dataset && pmOpt.dataset.name) ? pmOpt.dataset.name : pmSelect.value;
             const ownerIdRaw = parseInt(pmSelect.value, 10);
+            // Read the notify checkbox if present (added by addJobModal markup).
+            // Defaults ON for new jobs (the new owner deserves an email) but
+            // the user can uncheck before saving.
+            var notifyEl = document.getElementById('jobNotifyOwner');
+            var notify = notifyEl ? !!notifyEl.checked : true;
             const job = {
                 id: 'j' + Date.now(),
                 jobNumber: document.getElementById('jobNumber').value.trim(),
@@ -989,6 +994,10 @@ function renderWIPMain() {
                 notes: document.getElementById('jobNotes').value.trim(),
                 pctComplete: 0,
                 invoicedToDate: 0,
+                // _notify is a transient per-save flag the bulk-save route
+                // reads to decide whether to email the owner. Stripped from
+                // the persisted blob server-side; never round-trips.
+                _notify: notify,
                 createdAt: new Date().toISOString(),
                 updatedAt: new Date().toISOString()
             };
