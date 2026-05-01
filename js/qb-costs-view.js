@@ -417,9 +417,10 @@
   }
 
   // ── Link / unlink ────────────────────────────────────────────
-  // Picker modal — reuses the prompt() flow for now; a richer modal
-  // lands when Phase 3 adds the AI-driven assignments. The chosen
-  // node id is patched on the server (and on the local cache).
+  // In-house picker modal. Replaces the old browser-prompt flow:
+  // grouped by node type, click-to-assign, live search. Closes on
+  // backdrop click / Esc / Cancel. The chosen node id is patched on
+  // the server (and on the local cache).
   function openLinkPicker(lineId) {
     if (!_state.jobId) return;
     var nodes = getNodesForJob(_state.jobId).filter(function(n) {
@@ -429,19 +430,133 @@
       alert('No nodes in this job\'s graph yet. Open the Workspace tab to build the graph first, then come back to assign.');
       return;
     }
-    var label = prompt(
-      'Assign this line to a node. Type the node label exactly:\n\n' +
-      nodes.map(function(n) { return '• ' + (n.label || n.type) + ' (' + n.type + ')'; }).join('\n')
-    );
-    if (!label) return;
-    var match = nodes.find(function(n) {
-      return (n.label || '').toLowerCase() === label.trim().toLowerCase();
-    });
-    if (!match) {
-      alert('No node matched that label. Try copy-pasting the exact label from the list.');
-      return;
+
+    // Look up the line so the modal header shows what's being assigned.
+    var line = (window.appData && Array.isArray(appData.qbCostLines))
+      ? appData.qbCostLines.find(function(l) { return l.id === lineId; })
+      : null;
+    var lineSummary = line
+      ? (fmtMoney(line.amount) + ' · ' + (line.vendor || '(no vendor)') +
+         (line.account ? ' · ' + line.account : '') +
+         (line.memo ? ' — ' + String(line.memo).slice(0, 60) : ''))
+      : 'this line';
+
+    // Type → friendly label mapping for headers
+    var TYPE_LABEL = {
+      t1: 'Building (T1)',
+      t2: 'Phase (T2)',
+      sub: 'Subcontractor',
+      co:  'Change Order',
+      po:  'Purchase Order',
+      inv: 'Invoice',
+      labor: 'Labor',
+      mat:   'Materials',
+      gc:    'General Conditions',
+      other: 'Other Cost',
+      watch: 'Watch'
+    };
+    // Stable sort order — phases & buildings near the top, individual
+    // cost-bucket types after, sub at the very top since most QB lines
+    // are subcontractor charges.
+    var TYPE_ORDER = ['sub', 't2', 't1', 'co', 'po', 'inv', 'labor', 'mat', 'gc', 'other', 'watch'];
+
+    // Strip any prior instance — re-opening shouldn't stack modals.
+    var prior = document.getElementById('qbLinkPickerModal');
+    if (prior) prior.remove();
+
+    var modal = document.createElement('div');
+    modal.id = 'qbLinkPickerModal';
+    modal.className = 'modal active';
+    modal.innerHTML =
+      '<div class="modal-content" style="max-width:560px;">' +
+        '<div class="modal-header">Assign cost line to a node</div>' +
+        '<div style="font-size:12px;color:var(--text-dim,#aaa);margin-bottom:10px;line-height:1.4;">' +
+          escapeHTML(lineSummary) +
+        '</div>' +
+        '<input type="text" id="qbLinkPickerSearch" placeholder="Search nodes…" autocomplete="off" ' +
+          'style="width:100%;margin-bottom:10px;padding:8px 10px;font-size:13px;" />' +
+        '<div id="qbLinkPickerList" style="max-height:50vh;overflow-y:auto;border:1px solid var(--border,#2e3346);border-radius:6px;background:var(--card-bg,#0f0f1e);"></div>' +
+        '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;">' +
+          '<button class="ee-btn secondary" id="qbLinkPickerCancel">Cancel</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(modal);
+
+    var listEl = modal.querySelector('#qbLinkPickerList');
+    var searchEl = modal.querySelector('#qbLinkPickerSearch');
+
+    function paintList() {
+      var q = (searchEl.value || '').trim().toLowerCase();
+      var matched = nodes.filter(function(n) {
+        if (!q) return true;
+        var label = (n.label || n.type || '').toLowerCase();
+        var type = (n.type || '').toLowerCase();
+        return label.indexOf(q) !== -1 || type.indexOf(q) !== -1;
+      });
+
+      // Group by type, then sort within each group by label
+      var byType = {};
+      matched.forEach(function(n) {
+        var k = n.type || 'other';
+        if (!byType[k]) byType[k] = [];
+        byType[k].push(n);
+      });
+
+      var html = '';
+      var typesPresent = TYPE_ORDER.filter(function(t) { return byType[t]; })
+        .concat(Object.keys(byType).filter(function(t) { return TYPE_ORDER.indexOf(t) === -1; }));
+
+      if (!typesPresent.length) {
+        html = '<div style="padding:18px;text-align:center;color:var(--text-dim,#888);font-size:12px;">No nodes match.</div>';
+      } else {
+        typesPresent.forEach(function(t) {
+          var group = byType[t].slice().sort(function(a, b) {
+            return (a.label || '').localeCompare(b.label || '');
+          });
+          html += '<div style="padding:6px 10px;font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-dim,#888);background:rgba(255,255,255,0.03);border-bottom:1px solid var(--border,#2e3346);">' +
+            (TYPE_LABEL[t] || t) + ' &middot; ' + group.length +
+          '</div>';
+          group.forEach(function(n) {
+            html += '<button class="qb-link-pick-row" data-node-id="' + escapeAttr(n.id) + '" ' +
+              'style="display:block;width:100%;text-align:left;padding:8px 12px;background:transparent;border:none;border-bottom:1px solid var(--border,#2e3346);color:var(--text,#e4e6f0);font-size:13px;cursor:pointer;">' +
+              '<span style="font-weight:600;">' + escapeHTML(n.label || n.type) + '</span>' +
+              '<span style="margin-left:8px;font-size:11px;color:var(--text-dim,#888);">' + escapeHTML(n.type || '') + '</span>' +
+            '</button>';
+          });
+        });
+      }
+      listEl.innerHTML = html;
+
+      // Wire row clicks
+      listEl.querySelectorAll('.qb-link-pick-row').forEach(function(btn) {
+        btn.addEventListener('mouseenter', function() { btn.style.background = 'rgba(79,140,255,0.12)'; });
+        btn.addEventListener('mouseleave', function() { btn.style.background = 'transparent'; });
+        btn.addEventListener('click', function() {
+          var nid = btn.getAttribute('data-node-id');
+          if (!nid) return;
+          closePicker();
+          setLinkedNode(lineId, nid);
+        });
+      });
     }
-    setLinkedNode(lineId, match.id);
+
+    function closePicker() {
+      document.removeEventListener('keydown', onKey);
+      modal.remove();
+    }
+    function onKey(e) {
+      if (e.key === 'Escape') { e.preventDefault(); closePicker(); }
+    }
+
+    modal.addEventListener('click', function(e) {
+      if (e.target === modal) closePicker();
+    });
+    modal.querySelector('#qbLinkPickerCancel').addEventListener('click', closePicker);
+    searchEl.addEventListener('input', paintList);
+    document.addEventListener('keydown', onKey);
+
+    paintList();
+    setTimeout(function() { searchEl.focus(); }, 0);
   }
 
   function unlinkLine(lineId) {

@@ -270,7 +270,8 @@ const JOB_TOOLS = [
     description:
       'Read the entire contents of a workspace sheet. Read-only — no approval card; auto-applies and the full sheet text returns as the tool_result so you can analyze it. ' +
       'Use this when the # Workspace sheets preview shows "preview truncated" or the user asks for data that\'s past row 100 / column Z. ' +
-      'sheet_name MUST exactly match one of the names listed in the # Workspace sheets headings.',
+      'sheet_name MUST exactly match one of the names listed in the # Workspace sheets headings. ' +
+      'DO NOT call on "QB Costs YYYY-MM-DD" sheets or the "Detailed Costs" tab — use read_qb_cost_lines for QuickBooks data instead.',
     input_schema: {
       type: 'object',
       additionalProperties: false,
@@ -278,6 +279,27 @@ const JOB_TOOLS = [
         sheet_name: { type: 'string', description: 'The exact sheet name (case-sensitive).' }
       },
       required: ['sheet_name']
+    }
+  },
+  {
+    name: 'read_qb_cost_lines',
+    description:
+      'Read QuickBooks cost lines for the current job from the canonical Detailed Costs view (server-persisted qb_cost_lines table). ' +
+      'Read-only — auto-applies, full result returned as tool_result. ' +
+      'Use this whenever the user asks about specific QB transactions, vendor totals, account roll-ups, or unlinked lines that aren\'t in the # QuickBooks cost data summary block. ' +
+      'Optional filters narrow the result — supply none to get every line. ' +
+      'This is the ONLY way to get individual QB lines; never try to read "QB Costs YYYY-MM-DD" sheets one at a time.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        account: { type: 'string', description: 'Distribution account name to filter by (case-insensitive partial match). Example: "Subcontractors", "Materials".' },
+        vendor: { type: 'string', description: 'Vendor name to filter by (case-insensitive partial match). Example: "Home Depot", "INVO PEO".' },
+        status: { type: 'string', enum: ['linked', 'unlinked', 'all'], description: 'Linked-to-graph-node filter. Default "all".' },
+        search: { type: 'string', description: 'Free-text search across vendor / memo / account / class.' },
+        limit: { type: 'integer', minimum: 1, maximum: 1000, description: 'Cap rows returned. Default 200, max 1000.' }
+      },
+      required: []
     }
   }
 ];
@@ -1287,8 +1309,9 @@ async function buildJobContext(jobId, clientContext) {
           ? 'localStorage workspace sheets (legacy, may be partial — recommend re-importing the QB xlsx so data lands on the server)'
           : 'unknown source';
       lines.push('# QuickBooks cost data — ' + sourceLabel);
-      lines.push('**This is the imported QuickBooks data**. When the user asks about cost data they imported, USE THIS BLOCK as the source of truth — do NOT tell them to "open the workspace tab and hit Save on each QB Cost sheet." That advice was correct pre-Phase-2 but the data is now server-persisted; the workspace sheets are just a secondary view.');
-      lines.push('**DO NOT call `read_workspace_sheet_full` on "QB Costs YYYY-MM-DD" sheets or on the "Detailed Costs" tab.** Those are legacy per-import snapshots / a live view of THIS block. Reading them one-by-one is a useless loop — every line below is already deduplicated server-side. Answer from this block.');
+      lines.push('**This is the SINGLE SOURCE OF TRUTH for all imported QuickBooks cost data on this job.** It is the same data the user sees in the workspace\'s "Detailed Costs" tab (a pinned sheet that renders this exact dataset live — totals, by-account chips, filterable line table). When the user references "the Detailed Costs sheet", "the QB sheet", "imported costs", "the cost data", or any individual transaction, pull from this block — don\'t look anywhere else, and don\'t tell them to re-import or save anything.');
+      lines.push('**For individual lines call `read_qb_cost_lines`** (auto-applies, no approval). It returns the full per-line list filtered by account/vendor/status/search. Use it whenever the user asks about a specific transaction, vendor total, or account that isn\'t already in the summary below.');
+      lines.push('**DO NOT call `read_workspace_sheet_full` on "QB Costs YYYY-MM-DD" sheets or on the "Detailed Costs" tab.** Those are legacy per-import snapshots / a live view of THIS block. Reading them one-by-one is a useless loop — every line below is already deduplicated server-side.');
       lines.push('- Lines: ' + (qb.lineCount || 0) + (qb.unlinkedCount != null ? ' (' + qb.unlinkedCount + ' unlinked to a graph node)' : ''));
       lines.push('- Total: ' + fmtMoney(qb.total || 0));
       if (qb.mostRecentImport) lines.push('- Most recent import: ' + qb.mostRecentImport);

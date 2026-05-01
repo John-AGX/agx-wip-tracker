@@ -793,7 +793,7 @@
   // Read-only tools — no approval friction. The card is replaced by
   // a small "Reading…" chip; the tool runs immediately and feeds its
   // result back to the assistant via the same /chat/continue flow.
-  var AUTO_READ_TOOLS = { read_workspace_sheet_full: true };
+  var AUTO_READ_TOOLS = { read_workspace_sheet_full: true, read_qb_cost_lines: true };
 
   function finalizeProposalBubble(streamDiv, assistantText, toolUses, pendingContent) {
     var contentEl = streamDiv && streamDiv.querySelector('[data-stream-content]');
@@ -1222,6 +1222,75 @@
         }
         var header = 'Sheet "' + sheet.name + '" — ' + rows.length + ' populated rows × ' + (maxC + 1) + ' cols\n\n';
         return header + rows.join('\n');
+      }
+
+      case 'read_qb_cost_lines': {
+        // Pull from appData.qbCostLines (server-hydrated). Returns the
+        // full filtered list as a compact text block so the model can
+        // reason over individual transactions without us having to
+        // pre-stuff hundreds of lines into every system prompt.
+        var jidQ = (window.appState && appState.currentJobId) || null;
+        if (!jidQ) throw new Error('No job is open.');
+        var allQB = (window.appData && Array.isArray(appData.qbCostLines))
+          ? appData.qbCostLines.filter(function(l) { return (l.job_id || l.jobId) === jidQ; })
+          : [];
+        if (!allQB.length) {
+          return 'No QuickBooks cost lines for this job. The user may not have imported QB data yet, or the import is on another device and the qb_cost_lines server table is empty for this job.';
+        }
+        var iLower = function(s) { return String(s == null ? '' : s).toLowerCase(); };
+        var fAccount = iLower(input.account || '');
+        var fVendor  = iLower(input.vendor  || '');
+        var fSearch  = iLower(input.search  || '');
+        var fStatus  = String(input.status  || 'all').toLowerCase();
+        var lim      = Math.max(1, Math.min(1000, parseInt(input.limit, 10) || 200));
+        var filtered = allQB.filter(function(l) {
+          if (fAccount && iLower(l.account).indexOf(fAccount) === -1) return false;
+          if (fVendor  && iLower(l.vendor).indexOf(fVendor) === -1) return false;
+          if (fSearch) {
+            var hay = iLower(l.vendor) + ' ' + iLower(l.memo) + ' ' + iLower(l.account) + ' ' + iLower(l.klass);
+            if (hay.indexOf(fSearch) === -1) return false;
+          }
+          var linked = !!(l.linked_node_id || l.linkedNodeId);
+          if (fStatus === 'linked' && !linked) return false;
+          if (fStatus === 'unlinked' && linked) return false;
+          return true;
+        });
+        // Sort newest first, biggest amount first as tiebreak.
+        filtered.sort(function(a, b) {
+          var da = String(a.txn_date || a.date || '');
+          var db = String(b.txn_date || b.date || '');
+          if (da !== db) return db.localeCompare(da);
+          return Number(b.amount || 0) - Number(a.amount || 0);
+        });
+        var truncated = filtered.length > lim;
+        var slice = filtered.slice(0, lim);
+        var totalShown = slice.reduce(function(s, l) { return s + Number(l.amount || 0); }, 0);
+        var totalAll   = filtered.reduce(function(s, l) { return s + Number(l.amount || 0); }, 0);
+        var header = 'QB cost lines for this job — ' +
+          'matched: ' + filtered.length + ' (showing ' + slice.length + (truncated ? ', truncated by limit' : '') + '), ' +
+          'matched total: $' + totalAll.toFixed(2) + (truncated ? ', shown total: $' + totalShown.toFixed(2) : '') +
+          '\n';
+        if (fAccount || fVendor || fSearch || fStatus !== 'all') {
+          var fparts = [];
+          if (fAccount) fparts.push('account~"' + input.account + '"');
+          if (fVendor)  fparts.push('vendor~"'  + input.vendor  + '"');
+          if (fSearch)  fparts.push('search~"'  + input.search  + '"');
+          if (fStatus !== 'all') fparts.push('status=' + fStatus);
+          header += 'Filters: ' + fparts.join(', ') + '\n';
+        }
+        var body = slice.map(function(l) {
+          var d = String(l.txn_date || l.date || '');
+          if (d.length > 10) d = d.slice(0, 10);
+          var amt = Number(l.amount || 0);
+          var linked = (l.linked_node_id || l.linkedNodeId) ? ' →node:' + (l.linked_node_id || l.linkedNodeId) : ' →UNLINKED';
+          var memo = l.memo ? ' — ' + String(l.memo).slice(0, 80) : '';
+          return '- [id=' + (l.id || '?') + '] ' + d + ' $' + amt.toFixed(2) +
+                 ' ' + (l.vendor || '(no vendor)') +
+                 ' | ' + (l.account || '(no account)') +
+                 (l.klass ? ' | ' + l.klass : '') +
+                 memo + linked;
+        }).join('\n');
+        return header + '\n' + body;
       }
 
       case 'assign_qb_line': {
