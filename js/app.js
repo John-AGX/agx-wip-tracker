@@ -364,6 +364,8 @@
                 } else {
                     renderEstimatesList();
                 }
+            } else if (tabName === 'schedule') {
+                if (typeof window.renderSchedule === 'function') window.renderSchedule();
             } else if (tabName === 'insights') {
                 if (typeof renderInsightsDashboard === 'function') renderInsightsDashboard();
             } else if (tabName === 'admin') {

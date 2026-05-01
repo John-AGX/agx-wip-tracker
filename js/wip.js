@@ -917,6 +917,9 @@ function renderWIPMain() {
             document.getElementById('jobContractAmount').value = '';
             document.getElementById('jobEstimatedCosts').value = '';
             document.getElementById('jobTargetMargin').value = '50';
+            // Schedule page reads totalProductionDays for daily-revenue math.
+            var prodDaysEl = document.getElementById('jobTotalProductionDays');
+            if (prodDaysEl) prodDaysEl.value = '';
             document.getElementById('jobStatus').value = 'New';
             document.getElementById('jobNotes').value = '';
             populateJobPMSelect();
@@ -982,6 +985,7 @@ function renderWIPMain() {
                 contractAmount: parseFloat(document.getElementById('jobContractAmount').value) || 0,
                 estimatedCosts: parseFloat(document.getElementById('jobEstimatedCosts').value) || 0,
                 targetMarginPct: parseFloat(document.getElementById('jobTargetMargin').value) || 50,
+                totalProductionDays: parseInt(document.getElementById('jobTotalProductionDays') ? document.getElementById('jobTotalProductionDays').value : '', 10) || 0,
                 notes: document.getElementById('jobNotes').value.trim(),
                 pctComplete: 0,
                 invoicedToDate: 0,
@@ -1073,6 +1077,9 @@ function renderWIPMain() {
                 job.contractAmount = parseFloat(document.getElementById('edit-jobContract').value) || 0;
                 job.estimatedCosts = parseFloat(document.getElementById('edit-jobEstCosts').value) || 0;
                 job.targetMarginPct = parseFloat(document.getElementById('edit-jobMargin').value) || 50;
+                // Schedule page reads totalProductionDays for daily-revenue math.
+                var prodEl = document.getElementById('edit-jobProductionDays');
+                if (prodEl) job.totalProductionDays = parseInt(prodEl.value, 10) || 0;
                 job.status = document.getElementById('edit-jobStatus').value;
                 job.notes = document.getElementById('edit-jobNotes').value.trim();
                 job.updatedAt = new Date().toISOString();
@@ -1085,7 +1092,7 @@ function renderWIPMain() {
                         const gt = String.fromCharCode(62);
                         return lt + 'div' + gt + lt + 'label style="font-size: 12px; color: var(--text-dim);"' + gt + lbl + lt + '/label' + gt + lt + 'div style="font-size: 14px; color: ' + (extraStyle || 'var(--text)') + ';" id="' + id + '"' + gt + lt + '/div' + gt + lt + '/div' + gt;
                     };
-                    grid.innerHTML = mkDiv('Job Number','job-info-number') + mkDiv('Job Name','job-info-title') + mkDiv('Client','job-info-client') + mkDiv('PM','job-info-pm') + mkDiv('Type','job-info-type') + mkDiv('Work Type','job-info-worktype') + mkDiv('Market','job-info-market') + mkDiv('Contract (As Sold)','job-info-contract','var(--accent); font-weight: 700') + mkDiv('Est. Costs (As Sold)','job-info-estcosts') + mkDiv('Target Margin %','job-info-margin') + mkDiv('Status','job-info-status') + mkDiv('Notes','job-info-notes');
+                    grid.innerHTML = mkDiv('Job Number','job-info-number') + mkDiv('Job Name','job-info-title') + mkDiv('Client','job-info-client') + mkDiv('PM','job-info-pm') + mkDiv('Type','job-info-type') + mkDiv('Work Type','job-info-worktype') + mkDiv('Market','job-info-market') + mkDiv('Contract (As Sold)','job-info-contract','var(--accent); font-weight: 700') + mkDiv('Est. Costs (As Sold)','job-info-estcosts') + mkDiv('Target Margin %','job-info-margin') + mkDiv('Production Days','job-info-prod-days') + mkDiv('Status','job-info-status') + mkDiv('Notes','job-info-notes');
                 }
                 btn.innerHTML = '&#x270F;&#xFE0F; Edit Job';
                 btn.className = 'ee-btn primary';
@@ -1126,6 +1133,7 @@ function renderWIPMain() {
                     d(lbl('Contract (As Sold)') + inp('edit-jobContract', job.contractAmount, 'number')) +
                     d(lbl('Est. Costs (As Sold)') + inp('edit-jobEstCosts', job.estimatedCosts, 'number')) +
                     d(lbl('Target Margin %') + inp('edit-jobMargin', job.targetMarginPct || 50, 'number')) +
+                    d(lbl('Production Days') + inp('edit-jobProductionDays', job.totalProductionDays || '', 'number')) +
                     d(lbl('Status') + sel('edit-jobStatus', statusOpts)) +
                     d(lbl('Notes') + inp('edit-jobNotes', job.notes));
             }
@@ -1202,6 +1210,9 @@ function renderWIPMain() {
             document.getElementById('job-info-contract').textContent = formatCurrency(job.contractAmount);
             document.getElementById('job-info-estcosts').textContent = formatCurrency(job.estimatedCosts);
             document.getElementById('job-info-margin').textContent = (job.targetMarginPct || 50) + '%';
+            // Production days — read by Schedule page for daily-revenue math.
+            var prodDaysCell = document.getElementById('job-info-prod-days');
+            if (prodDaysCell) prodDaysCell.textContent = job.totalProductionDays ? (job.totalProductionDays + ' days') : '—';
             const statusClass = job.status === 'On Hold' ? 'at-risk' : job.status === 'Completed' ? 'on-track' : job.status === 'Archived' ? 'not-started' : 'on-track';
             document.getElementById('job-info-status').innerHTML = `<span class="badge ${statusClass}">${escapeHTML(job.status)}</span>`;
             document.getElementById('job-info-notes').textContent = job.notes || '—';
