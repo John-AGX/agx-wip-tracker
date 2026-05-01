@@ -563,7 +563,13 @@
             appData.invoices = safeLoadJSON('agx-wip-invoices', []);
             appData.estimates = safeLoadJSON('agx-estimates', []);
             appData.estimateLines = safeLoadJSON('agx-estimate-lines', []);
-            appData.estimateAlternates = safeLoadJSON('agx-estimate-alternates', []);
+            // estimateAlternates is no longer a flat top-level array — alternates
+            // live INLINE on each estimate (est.alternates) since the full-page
+            // editor reads/writes them there directly. Keeping a parallel flat
+            // copy was creating dual-source-of-truth corruption on offline
+            // edits. Initialize empty so any old code that reads it sees [],
+            // never undefined.
+            appData.estimateAlternates = [];
         }
 
         function writeToLocalStorage() {
@@ -576,7 +582,10 @@
             localStorage.setItem('agx-wip-invoices', JSON.stringify(appData.invoices));
             localStorage.setItem('agx-estimates', JSON.stringify(appData.estimates));
             localStorage.setItem('agx-estimate-lines', JSON.stringify(appData.estimateLines));
-            localStorage.setItem('agx-estimate-alternates', JSON.stringify(appData.estimateAlternates));
+            // estimateAlternates flat array dropped — see loadFromLocalStorage.
+            // Clean up the legacy key so stale data can't reappear after a
+            // future schema change.
+            try { localStorage.removeItem('agx-estimate-alternates'); } catch (e) {}
         }
 
         // Reconstruct flat appData arrays from server response. The server stores
@@ -617,75 +626,117 @@
         function hydrateFromServerEstimates(serverEstimates) {
             appData.estimates = [];
             appData.estimateLines = [];
+            // Flat estimateAlternates array kept empty for legacy reads —
+            // alternates live INLINE on est.alternates now. Pushing them
+            // both places was the dual-source-of-truth bug that caused
+            // "scope didn't save" on offline edits.
             appData.estimateAlternates = [];
             (serverEstimates || []).forEach(function(e) {
                 var lines = e.lines || [];
-                var alternates = e.alternates || [];
                 var meta = Object.assign({}, e);
                 // Strip lines from the estimate object — the editor always
                 // reads them from appData.estimateLines (a flat array) so
-                // keeping them inline would just duplicate state.
+                // keeping them inline would just duplicate state. Alternates
+                // STAY inline (meta.alternates) — the editor reads them
+                // directly from there.
                 delete meta.lines;
-                // KEEP alternates INLINE on the estimate. The full-page
-                // editor reads est.alternates directly and writes scope /
-                // line membership / etc. straight to those objects. If we
-                // strip them here, ensureAlternates() sees no alternates on
-                // first open, creates a fresh blank "Base", and any typed
-                // scope from a previous session is invisible — which was
-                // exactly the "scope didn't save" bug. The flat
-                // estimateAlternates array stays populated as a fallback
-                // for older callers, but it's not the source of truth.
                 appData.estimates.push(meta);
                 Array.prototype.push.apply(appData.estimateLines, lines);
-                Array.prototype.push.apply(appData.estimateAlternates, alternates);
             });
         }
 
-        // loadData is called once at startup. When authenticated, fetch from the
-        // server and replace local state with the authoritative copy. Offline mode
-        // (or no token) keeps the localStorage-only behavior.
+        // Tracks whether the initial server fetch has completed. Editors
+        // and other long-lived UI surfaces consult this so they don't
+        // paint a stale localStorage snapshot if the user opens an
+        // editor during the ~100ms server-load window.
+        var _serverLoadInFlight = false;
+        var _serverLoadComplete = false;
+        window.agxDataReady = function() { return _serverLoadComplete; };
+        window.agxDataLoading = function() { return _serverLoadInFlight; };
+
+        // loadData is called once at startup. We paint the localStorage
+        // cache immediately so first paint is instant, then fetch fresh
+        // data from the server. The data-loss risk during the in-flight
+        // window (user opens editor with stale data → server fetch
+        // overwrites their unsaved edits) is now closed by gating
+        // editor opens on agxDataReady() — see openNewEstimateForm /
+        // editEstimate / etc.
         function loadData() {
-            loadFromLocalStorage();
-            if (window.agxApi && window.agxApi.isAuthenticated()) {
-                Promise.all([
-                    window.agxApi.jobs.list(),
-                    window.agxApi.estimates.list(),
-                    // QB cost lines now persist server-side. Read all of
-                    // them at boot so Job Costs / Audit / WIP Assistant
-                    // can reason about them without per-tab fetches.
-                    window.agxApi.qbCosts.list().catch(function() { return { lines: [] }; }),
-                    // Subs directory (Phase A) — global sub records.
-                    window.agxApi.subs.list().catch(function() { return { subs: [], trades: [] }; })
-                ]).then(function(results) {
-                    hydrateFromServerJobs(results[0].jobs);
-                    hydrateFromServerEstimates(results[1].estimates);
-                    appData.qbCostLines = (results[2] && results[2].lines) || [];
-                    appData.subsDirectory = (results[3] && results[3].subs) || [];
-                    appData.knownTrades = (results[3] && results[3].trades) || [];
-                    writeToLocalStorage();
-                    // Re-render whatever's visible. Each renderer no-ops if
-                    // its DOM target isn't present, so calling them all is
-                    // safe regardless of which tab the user is on.
-                    if (typeof renderWIPMain === 'function') renderWIPMain();
-                    if (typeof renderEstimatesList === 'function') renderEstimatesList();
-                    if (typeof renderInsightsDashboard === 'function') renderInsightsDashboard();
-                    if (typeof renderAdminMetrics === 'function') renderAdminMetrics();
-                    if (typeof renderAdminJobs === 'function') renderAdminJobs();
-                }).catch(function(err) {
-                    console.warn('Server load failed, staying on localStorage cache:', err.message);
-                });
+            loadFromLocalStorage(); // fast first paint
+            var authed = window.agxApi && window.agxApi.isAuthenticated();
+            if (!authed) {
+                _serverLoadComplete = true;
+                return;
             }
+            _serverLoadInFlight = true;
+            Promise.all([
+                window.agxApi.jobs.list(),
+                window.agxApi.estimates.list(),
+                // QB cost lines now persist server-side. Read all of
+                // them at boot so Job Costs / Audit / WIP Assistant
+                // can reason about them without per-tab fetches.
+                window.agxApi.qbCosts.list().catch(function() { return { lines: [] }; }),
+                // Subs directory (Phase A) — global sub records.
+                window.agxApi.subs.list().catch(function() { return { subs: [], trades: [] }; })
+            ]).then(function(results) {
+                hydrateFromServerJobs(results[0].jobs);
+                hydrateFromServerEstimates(results[1].estimates);
+                appData.qbCostLines = (results[2] && results[2].lines) || [];
+                appData.subsDirectory = (results[3] && results[3].subs) || [];
+                appData.knownTrades = (results[3] && results[3].trades) || [];
+                writeToLocalStorage();
+                _serverLoadComplete = true;
+                _serverLoadInFlight = false;
+                // Re-render whatever's visible. Each renderer no-ops if
+                // its DOM target isn't present, so calling them all is
+                // safe regardless of which tab the user is on.
+                if (typeof renderWIPMain === 'function') renderWIPMain();
+                if (typeof renderEstimatesList === 'function') renderEstimatesList();
+                if (typeof renderInsightsDashboard === 'function') renderInsightsDashboard();
+                if (typeof renderAdminMetrics === 'function') renderAdminMetrics();
+                if (typeof renderAdminJobs === 'function') renderAdminJobs();
+            }).catch(function(err) {
+                _serverLoadInFlight = false;
+                _serverLoadComplete = true; // mark complete so UI doesn't hang waiting
+                console.warn('Server load failed, staying on localStorage cache:', err.message);
+            });
         }
 
         // saveData writes to localStorage immediately (cheap, synchronous) so the
         // existing call sites stay correct, and schedules a debounced push to the
         // server when authenticated. Offline mode is localStorage-only.
+        //
+        // Push pipeline: each saveData() coalesces into a single in-flight push.
+        // On failure we retry with exponential backoff (1s, 2s, 4s) up to 3
+        // attempts, then surface the failure via the agxPushStatus listener so
+        // the estimate editor (and anything else interested) can show an
+        // "unsaved — retrying" badge instead of a silent dropped commit.
         var _serverPushTimer = null;
+        var _activePush = null;          // Promise of the in-flight push
+        var _pushRetryCount = 0;
+        var _pushStatusListeners = [];
+        function notifyPushStatus(status, err) {
+            _pushStatusListeners.forEach(function(fn) {
+                try { fn(status, err); } catch (e) { /* defensive */ }
+            });
+        }
+        window.agxPushStatus = {
+            subscribe: function(fn) {
+                _pushStatusListeners.push(fn);
+                return function() {
+                    _pushStatusListeners = _pushStatusListeners.filter(function(x) { return x !== fn; });
+                };
+            },
+            // Resolves with the current in-flight push (or immediately if none).
+            // Used by editor close to wait for any pending save before unmounting.
+            inFlight: function() { return _activePush || Promise.resolve(); }
+        };
+
         function saveData() {
             writeToLocalStorage();
             if (!window.agxApi || !window.agxApi.isAuthenticated()) return;
             if (_serverPushTimer) clearTimeout(_serverPushTimer);
-            _serverPushTimer = setTimeout(pushToServer, 600);
+            _serverPushTimer = setTimeout(function() { pushToServer(); }, 600);
         }
 
         function pushToServer() {
@@ -707,17 +758,38 @@
                 purchaseOrders: appData.purchaseOrders.filter(function(p) { return editableIds[p.jobId]; }),
                 invoices: appData.invoices.filter(function(i) { return editableIds[i.jobId]; })
             };
+            // Estimates: alternates ride INLINE on each estimate now;
+            // legacy `estimateAlternates: []` stays empty for back-compat
+            // with older server builds that read it as a fallback.
             var estimatesPayload = {
                 estimates: appData.estimates,
                 estimateLines: appData.estimateLines,
-                estimateAlternates: appData.estimateAlternates
+                estimateAlternates: []
             };
-            return Promise.all([
+
+            notifyPushStatus('saving');
+            _activePush = Promise.all([
                 editableJobs.length ? window.agxApi.jobs.bulkSave(jobsPayload) : Promise.resolve(),
                 appData.estimates.length ? window.agxApi.estimates.bulkSave(estimatesPayload) : Promise.resolve()
-            ]).catch(function(err) {
-                console.warn('Server push failed:', err.message);
+            ]).then(function(r) {
+                _pushRetryCount = 0;
+                _activePush = null;
+                notifyPushStatus('saved');
+                return r;
+            }).catch(function(err) {
+                console.warn('Server push failed (attempt ' + (_pushRetryCount + 1) + '):', err.message);
+                _activePush = null;
+                if (_pushRetryCount < 3) {
+                    _pushRetryCount++;
+                    var backoff = Math.pow(2, _pushRetryCount - 1) * 1000; // 1s, 2s, 4s
+                    notifyPushStatus('retrying', err);
+                    setTimeout(function() { pushToServer(); }, backoff);
+                } else {
+                    notifyPushStatus('failed', err);
+                }
+                throw err;
             });
+            return _activePush;
         }
 
         // Expose for explicit triggers (e.g. the import-from-browser button)

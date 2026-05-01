@@ -16,12 +16,33 @@
   // Save status tracker — drives the indicator + Save button in the
   // sticky header. 'idle' = nothing pending, 'pending' = local debounce
   // running, 'saving' = saveData has fired and the server push is in
-  // flight, 'saved' = recently saved (hold for 2s), 'error' = failed.
+  // flight, 'saved' = recently saved (hold for 2s), 'retrying' = push
+  // failed once, app.js is auto-retrying with backoff, 'error' = retries
+  // exhausted (visible until next save).
   var _saveState = 'idle';
 
   function setSaveState(state) {
     _saveState = state;
     renderSaveIndicator();
+  }
+
+  // Subscribe to the global push pipeline once. Translates
+  // app.js push status events into the editor's local state so the
+  // save indicator reflects the actual server result instead of an
+  // optimistic 700ms timer.
+  if (typeof window !== 'undefined' && window.agxPushStatus &&
+      typeof window.agxPushStatus.subscribe === 'function') {
+    window.agxPushStatus.subscribe(function(status, err) {
+      if (status === 'saving')   setSaveState('saving');
+      else if (status === 'saved') {
+        setSaveState('saved');
+        setTimeout(function() {
+          if (_saveState === 'saved') setSaveState('idle');
+        }, 2000);
+      }
+      else if (status === 'retrying') setSaveState('retrying');
+      else if (status === 'failed')   setSaveState('error');
+    });
   }
 
   function debouncedSave() {
@@ -34,23 +55,27 @@
   }
 
   // Force an immediate save — used by closeEstimateEditor and the manual
-  // Save button. Skips the debounce timer and surfaces the result on the
-  // status indicator.
+  // Save button. The push pipeline (in app.js) handles its own retry
+  // and emits status events the subscribe handler above translates
+  // into editor state. Local writes are synchronous so we know that
+  // succeeded; the server-side outcome is async.
   function runSaveNow() {
     if (typeof saveData !== 'function') { setSaveState('error'); return; }
     setSaveState('saving');
     try {
       saveData();
-      // saveData() is fire-and-forget locally; localStorage is synchronous.
-      // Server push is queued ~600ms later. Show "saved" optimistically and
-      // fade after 2s — if the server push fails, the next user action
-      // will retry.
-      setTimeout(function() {
-        if (_saveState === 'saving') setSaveState('saved');
+      // If we're offline (no api / unauth), saveData wrote locally and
+      // returned without scheduling a push — flip to "saved" once.
+      if (!window.agxApi || !window.agxApi.isAuthenticated()) {
         setTimeout(function() {
-          if (_saveState === 'saved') setSaveState('idle');
-        }, 2000);
-      }, 700);
+          if (_saveState === 'saving') setSaveState('saved');
+          setTimeout(function() {
+            if (_saveState === 'saved') setSaveState('idle');
+          }, 2000);
+        }, 200);
+      }
+      // Otherwise the push status subscription drives the indicator
+      // forward as the real network call resolves.
     } catch (e) {
       console.warn('Manual save failed:', e);
       setSaveState('error');
@@ -62,11 +87,12 @@
     if (!el) return;
     var dot, label, color;
     switch (_saveState) {
-      case 'pending': dot = '●'; label = 'Unsaved'; color = '#fbbf24'; break;
-      case 'saving':  dot = '●'; label = 'Saving…'; color = '#60a5fa'; break;
-      case 'saved':   dot = '✓'; label = 'Saved'; color = '#34d399'; break;
-      case 'error':   dot = '!'; label = 'Save failed'; color = '#f87171'; break;
-      default:        dot = '○'; label = 'No changes'; color = 'var(--text-dim,#888)'; break;
+      case 'pending':  dot = '●'; label = 'Unsaved'; color = '#fbbf24'; break;
+      case 'saving':   dot = '●'; label = 'Saving…'; color = '#60a5fa'; break;
+      case 'saved':    dot = '✓'; label = 'Saved'; color = '#34d399'; break;
+      case 'retrying': dot = '⟳'; label = 'Retrying…'; color = '#fbbf24'; break;
+      case 'error':    dot = '!'; label = 'Save failed — will retry on next edit'; color = '#f87171'; break;
+      default:         dot = '○'; label = 'No changes'; color = 'var(--text-dim,#888)'; break;
     }
     el.style.color = color;
     el.innerHTML = '<span style="font-weight:700;margin-right:5px;">' + dot + '</span>' + label;
@@ -148,6 +174,13 @@
   // ──────────────────────────────────────────────────────────────────
 
   function openEstimateEditor(estimateId) {
+    // Block editor while the initial server fetch is in-flight — opens
+    // during the gap could let the user type edits against stale cache
+    // that get silently overwritten when the fetch resolves.
+    if (typeof window.agxDataLoading === 'function' && window.agxDataLoading()) {
+      alert('Still loading from server — try again in a moment.');
+      return;
+    }
     var est = (window.appData && appData.estimates || []).find(function(e) { return e.id === estimateId; });
     if (!est) { alert('Estimate not found.'); return; }
     _currentId = estimateId;
@@ -218,13 +251,35 @@
   function closeEstimateEditor() {
     if (_saveTimer) { clearTimeout(_saveTimer); _saveTimer = null; }
     if (typeof saveData === 'function') saveData();
-    _currentId = null;
-    _saveState = 'idle';
-    var listView = document.getElementById('estimates-list-view');
-    var editorView = document.getElementById('estimate-editor-view');
-    if (editorView) editorView.style.display = 'none';
-    if (listView) listView.style.display = '';
-    if (typeof renderEstimatesList === 'function') renderEstimatesList();
+    // If a push is mid-flight (_saveState saving/retrying/pending),
+    // we briefly hold the close so the request can complete. Without
+    // this hold, a user who edits + immediately closes the editor
+    // could lose the last server commit attempt because the page
+    // tab might unload before the network call resolves.
+    var pending = (_saveState === 'saving' || _saveState === 'retrying' || _saveState === 'pending');
+    var inFlight = (window.agxPushStatus && typeof window.agxPushStatus.inFlight === 'function')
+      ? window.agxPushStatus.inFlight()
+      : Promise.resolve();
+    var actuallyClose = function() {
+      _currentId = null;
+      _saveState = 'idle';
+      var listView = document.getElementById('estimates-list-view');
+      var editorView = document.getElementById('estimate-editor-view');
+      if (editorView) editorView.style.display = 'none';
+      if (listView) listView.style.display = '';
+      if (typeof renderEstimatesList === 'function') renderEstimatesList();
+    };
+    if (pending) {
+      // Wait up to 3 seconds for the push to settle. Beyond that we
+      // close anyway — the local save is already on disk, and the
+      // retry pipeline keeps trying in the background.
+      Promise.race([
+        inFlight,
+        new Promise(function(resolve) { setTimeout(resolve, 3000); })
+      ]).finally(actuallyClose);
+    } else {
+      actuallyClose();
+    }
   }
 
   function switchEstimateEditorTab(name) {

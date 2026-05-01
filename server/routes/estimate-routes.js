@@ -1,6 +1,6 @@
 const express = require('express');
 const { pool } = require('../db');
-const { requireAuth, requireRole } = require('../auth');
+const { requireAuth, requireRole, requireCapability } = require('../auth');
 
 const router = express.Router();
 
@@ -21,7 +21,11 @@ router.get('/', requireAuth, async (req, res) => {
 
 // PUT /api/estimates/bulk/save - upsert all estimates from the frontend appData shape.
 // Mirrors /api/jobs/bulk/save: takes flat arrays and partitions lines/alternates per estimate.
-router.put('/bulk/save', requireAuth, requireRole('admin', 'pm'), async (req, res) => {
+// Gated on ESTIMATES_EDIT — the role-based gate (admin/pm) was loose; the
+// capability is the canonical permission and what the rest of the app's
+// admin/role tooling assigns. Roles without ESTIMATES_EDIT (read-only
+// users, view-only field crew when that exists) are now correctly blocked.
+router.put('/bulk/save', requireAuth, requireCapability('ESTIMATES_EDIT'), async (req, res) => {
   try {
     const { estimates, estimateLines, estimateAlternates } = req.body;
     if (!Array.isArray(estimates)) {

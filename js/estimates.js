@@ -72,6 +72,16 @@ function renderEstimatesList() {
         }
 
         function openNewEstimateForm() {
+            // Block editor open while the initial server fetch is still
+            // landing — otherwise a user clicking through during the
+            // load gap could see stale localStorage data, type edits,
+            // and have them silently overwritten when the fetch
+            // resolves. agxDataReady() returns true once loadData has
+            // settled (success or fail).
+            if (typeof window.agxDataLoading === 'function' && window.agxDataLoading()) {
+                alert('Still loading from server — try again in a moment.');
+                return;
+            }
             document.getElementById('estTitle').value = '';
             document.getElementById('estJobType').value = '';
             document.getElementById('estClient').value = '';
@@ -164,6 +174,12 @@ function renderEstimatesList() {
         }
 
         function editEstimate(estId) {
+    // Block editor open while the initial server fetch is in-flight.
+    // See openNewEstimateForm comment for rationale.
+    if (typeof window.agxDataLoading === 'function' && window.agxDataLoading()) {
+        alert('Still loading from server — try again in a moment.');
+        return;
+    }
     const estimate = appData.estimates.find(e => e.id === estId);
     if (!estimate) { alert('Estimate not found'); return; }
     currentEditEstimateId = estId;

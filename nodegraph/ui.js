@@ -81,11 +81,22 @@ function updateTierLabels(){
       n.label = suffix ? subBase+' \u203A '+suffix : subBase;
     }
   });
-  // Sync aggregated sub→phase/building connections back to data
+  // Sync aggregated sub→phase/building connections back to data.
+  // Phase A introduced appData.subsDirectory (global) alongside the
+  // legacy appData.subs (per-job inline). A sub node may reference
+  // either — when wired into the graph it's the same data record
+  // logically, but it physically lives in only ONE of the two
+  // arrays. Look in both so directory subs get their connection
+  // metadata synced too (was a Phase-A regression).
   if(typeof appData !== 'undefined'){
     var anyDirty = false;
+    var findSubAny = function(id) {
+      var fromInline = appData.subs && appData.subs.find(function(s){return s.id===id;});
+      if (fromInline) return fromInline;
+      return appData.subsDirectory && appData.subsDirectory.find(function(s){return s.id===id;});
+    };
     Object.keys(subAgg).forEach(function(subId){
-      var sub = appData.subs.find(function(s){return s.id===subId;});
+      var sub = findSubAny(subId);
       if(!sub) return;
       var agg = subAgg[subId];
       var pIds = Object.keys(agg.phaseIds);
@@ -1678,7 +1689,19 @@ function showDeleteDialog(delNode){
     deleteBtn.addEventListener('click',function(){
       if(delNode.type==='t1') appData.buildings=appData.buildings.filter(function(b){return b.id!==delNode.data.id;});
       else if(delNode.type==='t2') appData.phases=appData.phases.filter(function(p){return p.id!==delNode.data.id;});
-      else if(delNode.type==='sub') appData.subs=appData.subs.filter(function(s){return s.id!==delNode.data.id;});
+      else if(delNode.type==='sub') {
+        // Phase A: subs in the global directory (appData.subsDirectory)
+        // are SHARED across jobs — deleting them here would silently
+        // delete from every job. Only the legacy inline appData.subs
+        // gets the per-job removal. Directory entries are managed via
+        // the Subs admin page only; here we just unlink the node.
+        var inInline = appData.subs && appData.subs.some(function(s){return s.id===delNode.data.id;});
+        if (inInline) {
+          appData.subs = appData.subs.filter(function(s){return s.id!==delNode.data.id;});
+        }
+        // Either way we drop the node + its wires below — directory
+        // subs survive, inline subs get hard-deleted.
+      }
       else if(delNode.type==='co') appData.changeOrders=appData.changeOrders.filter(function(c){return c.id!==delNode.data.id;});
       if(typeof saveData==='function') saveData();
       var ws=E.wires();
@@ -1843,7 +1866,11 @@ function pushToJob(){
     subTotals[key].accrued += E.getAccrued(n);
   });
   Object.keys(subTotals).forEach(function(subId){
-    var sub = appData.subs.find(function(s){ return s.id === subId; });
+    // Phase A: subs may live in the global directory rather than the
+    // legacy per-job inline array. Update whichever record exists so
+    // the contractAmt/billedToDate reflects the current graph state.
+    var sub = appData.subs && appData.subs.find(function(s){ return s.id === subId; });
+    if (!sub) sub = appData.subsDirectory && appData.subsDirectory.find(function(s){ return s.id === subId; });
     if(!sub) return;
     sub.name = subTotals[subId].name;
     sub.contractAmt = subTotals[subId].contract;

@@ -695,6 +695,11 @@ function getAccrued(n){
   if(_compAc[n.id]) return 0;
   _compAc[n.id] = true;
   var v = 0, iT = _itemsTotal(n);
+  // Cost-leaf types (labor/mat/gc/other/burden) intentionally have NO
+  // explicit branch here — they're always 100% actual, never accrued,
+  // so they fall through to v=0. T1/T2 rollups recurse via getAccrued
+  // and pick up zero from leaves and the real accrued from POs/subs.
+  // This is by design; don't add a leaf branch.
   if(n.type==='po'){
     var contract = (n.value||0) + iT, invSum = 0;
     wires.forEach(function(w){
