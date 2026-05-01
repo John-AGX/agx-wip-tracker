@@ -194,29 +194,32 @@
         var nonQB = wb2.sheets.filter(function(s) { return !/^QB Costs /.test(s.name || ''); });
         if (nonQB.length) {
           ctx.workspaceSheets = nonQB.slice(0, 5).map(function(s) {
-            // Walk the sparse cells map; capture up to 50 rows × 12 cols
-            // of populated content. Reduces a 100-row sheet down to a
-            // tight tabular preview for the assistant.
+            // Default preview: first 100 rows × 26 cols (A–Z). Covers
+            // virtually every real-world AGX sheet. If something deeper
+            // is needed, the assistant calls read_workspace_sheet_full
+            // (an auto-applying read tool) to fetch the entire sheet
+            // on demand without burning tokens preemptively.
             var cells = s.cells || {};
             var maxR = 0, maxC = 0;
+            var trueMaxR = 0, trueMaxC = 0;
             var grid = {};
             Object.keys(cells).forEach(function(k) {
               var m = k.match(/^(\d+),(\d+)$/);
               if (!m) return;
               var r = parseInt(m[1], 10), c = parseInt(m[2], 10);
-              if (r > 50 || c > 12) return;
               var val = cells[k];
               if (val == null) return;
               var raw = (typeof val === 'object' && 'value' in val) ? val.value : val;
               if (raw == null || raw === '') return;
+              if (r > trueMaxR) trueMaxR = r;
+              if (c > trueMaxC) trueMaxC = c;
+              if (r > 100 || c > 26) return; // outside preview window
               if (!grid[r]) grid[r] = {};
               grid[r][c] = String(raw);
               if (r > maxR) maxR = r;
               if (c > maxC) maxC = c;
             });
-            // Render as text table — column letters as header, then
-            // each row as "R | A=val · B=val · …" so the assistant
-            // can reconstruct the grid mentally.
+            // Render preview window as text table.
             var rows = [];
             for (var r = 0; r <= maxR; r++) {
               if (!grid[r]) continue;
@@ -224,15 +227,19 @@
               for (var c = 0; c <= maxC; c++) {
                 if (grid[r][c] != null) {
                   var label = String.fromCharCode(65 + c);
-                  parts.push(label + '=' + String(grid[r][c]).replace(/\s+/g, ' ').slice(0, 80));
+                  parts.push(label + '=' + String(grid[r][c]).replace(/\s+/g, ' ').slice(0, 120));
                 }
               }
               if (parts.length) rows.push((r + 1) + ': ' + parts.join(' · '));
             }
+            var truncated = (trueMaxR > 100) || (trueMaxC > 26);
             return {
               name: s.name || '(unnamed)',
               cellCount: rows.length,
-              preview: rows.slice(0, 50).join('\n')
+              preview: rows.join('\n'),
+              totalRows: trueMaxR + 1,
+              totalCols: trueMaxC + 1,
+              truncated: truncated
             };
           }).filter(function(s) { return s.cellCount > 0; });
           if (!ctx.workspaceSheets.length) delete ctx.workspaceSheets;
@@ -731,6 +738,11 @@
   // with Approve / Reject. When all are answered, continue the
   // conversation with /chat/continue passing the assembled tool_results.
   // ──────────────────────────────────────────────────────────────────
+  // Read-only tools — no approval friction. The card is replaced by
+  // a small "Reading…" chip; the tool runs immediately and feeds its
+  // result back to the assistant via the same /chat/continue flow.
+  var AUTO_READ_TOOLS = { read_workspace_sheet_full: true };
+
   function finalizeProposalBubble(streamDiv, assistantText, toolUses, pendingContent) {
     var contentEl = streamDiv && streamDiv.querySelector('[data-stream-content]');
     if (contentEl) contentEl.innerHTML = renderMarkdown(assistantText || '');
@@ -831,13 +843,46 @@
 
     var cards = [];
     toolUses.forEach(function(tu, i) {
+      // Read-only / auto-apply tools render as a tight chip and run
+      // immediately. No approval card, no Trust countdown — the
+      // result feeds back via /chat/continue with the rest.
+      if (AUTO_READ_TOOLS[tu.name]) {
+        var chip = document.createElement('div');
+        chip.style.cssText = 'background:rgba(79,140,255,0.06);border:1px solid rgba(79,140,255,0.25);border-left:3px solid #4f8cff;border-radius:6px;padding:6px 10px;font-size:11px;color:var(--text-dim,#aaa);display:flex;align-items:center;gap:8px;';
+        chip.innerHTML =
+          '<span style="color:#4f8cff;font-weight:700;">📖</span>' +
+          '<span data-chip-text style="flex:1;">Reading <strong>' + escapeHTMLLocal(tu.input?.sheet_name || tu.name) + '</strong>…</span>';
+        propContainer.appendChild(chip);
+        cards.push(chip);
+        var summary;
+        try {
+          summary = applyTool(tu);
+          var t = chip.querySelector('[data-chip-text]');
+          if (t) t.innerHTML = '✓ Read <strong>' + escapeHTMLLocal(tu.input?.sheet_name || tu.name) + '</strong>';
+          chip.style.borderLeftColor = '#34d399';
+        } catch (e) {
+          summary = 'Read failed: ' + (e.message || String(e));
+          var t2 = chip.querySelector('[data-chip-text]');
+          if (t2) t2.textContent = summary;
+          chip.style.borderLeftColor = '#f87171';
+        }
+        responses.push({ tool_use_id: tu.id, approved: true, applied_summary: summary });
+        // Refresh bulk count if any
+        if (bulkButtons) {
+          var remaining = totalCount - responses.length;
+          if (remaining <= 0) bulkButtons.remove();
+          else bulkButtons.querySelector('[data-bulk-info]').textContent = remaining + ' remaining';
+        }
+        if (responses.length === totalCount) {
+          continueAfterProposals(pendingContent, responses);
+        }
+        return; // skip the approval-card path entirely
+      }
       var card = renderProposalCard(tu);
       card.querySelector('[data-card-approve]').onclick = function() { answer(i, true, card); };
       card.querySelector('[data-card-reject]').onclick = function() { answer(i, false, card); };
       propContainer.appendChild(card);
       cards.push(card);
-      // If this tool type is trusted, swap the buttons for an
-      // auto-apply countdown (with a Cancel & review escape hatch).
       attachTrustCountdown(card, i, tu);
     });
     scrollToBottom();
@@ -998,6 +1043,52 @@
           try { window.ngRender(); } catch (e) {}
         }
         return 'Wired ' + input.from_node_id + ' → ' + input.to_node_id;
+      }
+
+      case 'read_workspace_sheet_full': {
+        // Return the entire sheet's contents as the tool_result so
+        // the assistant can analyze data past the default 100×26
+        // preview window. Capped at 1000 rows × 26 cols defensively
+        // (anything bigger is almost certainly garbage data the AI
+        // shouldn't try to summarize in a single turn).
+        var jid = (window.appState && appState.currentJobId) || null;
+        if (!jid) throw new Error('No job is open.');
+        var allWs = JSON.parse(localStorage.getItem('agx-workspaces') || '{}');
+        var wb = allWs[jid];
+        if (!wb || !Array.isArray(wb.sheets)) throw new Error('No workspace for this job.');
+        var sheet = wb.sheets.find(function(s) { return s.name === input.sheet_name; });
+        if (!sheet) throw new Error('Sheet "' + input.sheet_name + '" not found.');
+        var cells = sheet.cells || {};
+        var grid = {};
+        var maxR = 0, maxC = 0;
+        Object.keys(cells).forEach(function(k) {
+          var m = k.match(/^(\d+),(\d+)$/);
+          if (!m) return;
+          var r = parseInt(m[1], 10), c = parseInt(m[2], 10);
+          if (r > 1000 || c > 26) return;
+          var v = cells[k];
+          if (v == null) return;
+          var raw = (typeof v === 'object' && 'value' in v) ? v.value : v;
+          if (raw == null || raw === '') return;
+          if (!grid[r]) grid[r] = {};
+          grid[r][c] = String(raw);
+          if (r > maxR) maxR = r;
+          if (c > maxC) maxC = c;
+        });
+        var rows = [];
+        for (var r = 0; r <= maxR; r++) {
+          if (!grid[r]) continue;
+          var parts = [];
+          for (var c = 0; c <= maxC; c++) {
+            if (grid[r][c] != null) {
+              var label = String.fromCharCode(65 + c);
+              parts.push(label + '=' + String(grid[r][c]).replace(/\s+/g, ' '));
+            }
+          }
+          if (parts.length) rows.push((r + 1) + ': ' + parts.join(' · '));
+        }
+        var header = 'Sheet "' + sheet.name + '" — ' + rows.length + ' populated rows × ' + (maxC + 1) + ' cols\n\n';
+        return header + rows.join('\n');
       }
 
       case 'assign_qb_line': {

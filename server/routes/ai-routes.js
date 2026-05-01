@@ -264,6 +264,21 @@ const JOB_TOOLS = [
       },
       required: ['line_id', 'node_id', 'rationale']
     }
+  },
+  {
+    name: 'read_workspace_sheet_full',
+    description:
+      'Read the entire contents of a workspace sheet. Read-only — no approval card; auto-applies and the full sheet text returns as the tool_result so you can analyze it. ' +
+      'Use this when the # Workspace sheets preview shows "preview truncated" or the user asks for data that\'s past row 100 / column Z. ' +
+      'sheet_name MUST exactly match one of the names listed in the # Workspace sheets headings.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        sheet_name: { type: 'string', description: 'The exact sheet name (case-sensitive).' }
+      },
+      required: ['sheet_name']
+    }
   }
 ];
 
@@ -1235,10 +1250,10 @@ async function buildJobContext(jobId, clientContext) {
   // phase names, line items, etc. on demand.
   if (clientContext && Array.isArray(clientContext.workspaceSheets) && clientContext.workspaceSheets.length) {
     lines.push('# Workspace sheets (' + clientContext.workspaceSheets.length + ')');
-    lines.push('Each sheet preview is rendered as `<row>: A=val · B=val · …`. Use these to answer "what phases / scope items / line items do I have in my workspace?" When the user asks you to extract the phases, pull the names from the relevant sheet here — do NOT say you can\'t see the workspace.');
+    lines.push('Each sheet preview is rendered as `<row>: A=val · B=val · …` (1-indexed rows, A–Z columns). Use these to answer "what phases / scope items / line items do I have in my workspace?" When the user asks you to extract data, pull it directly from the relevant sheet here — do NOT say you can\'t see the workspace. The default preview window is 100 rows × 26 cols; if a sheet is bigger the totalRows/totalCols line will say so and you can call the `read_workspace_sheet_full` tool with sheet_name to fetch the entire sheet — that tool auto-applies (no approval card), so use it freely whenever the preview is truncated.');
     clientContext.workspaceSheets.forEach(function(s) {
       lines.push('');
-      lines.push('## "' + s.name + '"');
+      lines.push('## "' + s.name + '" (' + s.totalRows + ' rows × ' + s.totalCols + ' cols' + (s.truncated ? ', preview truncated' : '') + ')');
       if (s.preview) lines.push(s.preview);
     });
     lines.push('');
