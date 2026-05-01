@@ -1023,45 +1023,67 @@
       }
 
       case 'wire_nodes': {
-        // Direct mutation of the node-graph localStorage blob — same
-        // pattern populate() uses internally. After saving we ping
-        // ngRender if the graph view is open so the wire shows up.
+        // Push directly to the engine's live wires array. Mutating
+        // localStorage alone doesn't work — ngRender() ends with
+        // E.saveGraph() which writes the engine's IN-MEMORY state
+        // back to localStorage, overwriting any direct edits. So
+        // we read/write through NG.* and let saveGraph persist.
+        // Falls back to a localStorage-only path when the engine
+        // isn't loaded (rare — graph would have to be uninitialized).
         var jid = (window.appState && appState.currentJobId) || null;
         if (!jid) throw new Error('No job is open.');
-        var graphs = JSON.parse(localStorage.getItem('agx-nodegraphs') || '{}');
-        var g = graphs[jid];
-        if (!g || !Array.isArray(g.nodes)) throw new Error('Job has no node graph yet.');
-        // Resolve id → fallback to label match if the AI sent a
-        // label instead of the actual id (cheap insurance — labels
-        // can collide so prefer id, but match exact + case-insensitive
-        // label as a safety net).
+
+        var liveNodes = (typeof NG !== 'undefined' && NG.nodes) ? NG.nodes() : null;
+        var liveWires = (typeof NG !== 'undefined' && NG.wires) ? NG.wires() : null;
+        var nodesArr, wiresArr, persistDirect = false, graphsBlob = null, gBlob = null;
+        if (Array.isArray(liveNodes) && Array.isArray(liveWires) && liveNodes.length) {
+          nodesArr = liveNodes;
+          wiresArr = liveWires;
+        } else {
+          // Engine hasn't loaded this job's graph yet — fall back to
+          // the localStorage blob and persist directly.
+          persistDirect = true;
+          graphsBlob = JSON.parse(localStorage.getItem('agx-nodegraphs') || '{}');
+          gBlob = graphsBlob[jid];
+          if (!gBlob || !Array.isArray(gBlob.nodes)) throw new Error('Job has no node graph yet.');
+          nodesArr = gBlob.nodes;
+          wiresArr = Array.isArray(gBlob.wires) ? gBlob.wires : (gBlob.wires = []);
+        }
+
+        // Resolve id → fallback to label match if the AI sent a label.
         var resolveNode = function(idOrLabel) {
           if (!idOrLabel) return null;
-          var byId = g.nodes.find(function(n) { return n.id === idOrLabel; });
+          var byId = nodesArr.find(function(n) { return n.id === idOrLabel; });
           if (byId) return byId;
           var lower = String(idOrLabel).trim().toLowerCase();
-          var byLabel = g.nodes.find(function(n) { return (n.label || '').trim().toLowerCase() === lower; });
+          var byLabel = nodesArr.find(function(n) { return (n.label || '').trim().toLowerCase() === lower; });
           return byLabel || null;
         };
         var fromN = resolveNode(input.from_node_id);
         var toN = resolveNode(input.to_node_id);
         if (!fromN) throw new Error('from_node_id "' + input.from_node_id + '" not in graph.');
         if (!toN) throw new Error('to_node_id "' + input.to_node_id + '" not in graph.');
-        if (!Array.isArray(g.wires)) g.wires = [];
-        // Skip if already wired
-        var dup = g.wires.some(function(w) {
+
+        var dup = wiresArr.some(function(w) {
           return w.fromNode === fromN.id && w.toNode === toN.id &&
                  w.fromPort === (input.from_port || 0) && w.toPort === (input.to_port || 0);
         });
         if (dup) return 'Wire ' + fromN.id + ' → ' + toN.id + ' already existed; no change.';
-        g.wires.push({
+
+        wiresArr.push({
           fromNode: fromN.id,
           fromPort: input.from_port || 0,
           toNode: toN.id,
           toPort: input.to_port || 0
         });
-        graphs[jid] = g;
-        localStorage.setItem('agx-nodegraphs', JSON.stringify(graphs));
+
+        if (persistDirect) {
+          graphsBlob[jid] = gBlob;
+          localStorage.setItem('agx-nodegraphs', JSON.stringify(graphsBlob));
+        } else if (typeof NG !== 'undefined' && NG.saveGraph) {
+          // Write the now-updated in-memory state through the engine.
+          NG.saveGraph();
+        }
         if (typeof window.ngRender === 'function') {
           try { window.ngRender(); } catch (e) {}
         }
