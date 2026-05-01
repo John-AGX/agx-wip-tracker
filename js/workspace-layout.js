@@ -576,7 +576,18 @@
     var canvas = document.querySelector('#nodeGraphTab .ng-canvas');
     if (!panel || !canvas) return;
     initFloatingPanel(); // safe to call repeatedly
-    panel.classList.remove('ws-floating-tab-mode');
+    // Wipe ALL mode classes before reapplying — otherwise leftover
+    // ws-floating-folder (header hidden → drag handle gone) or
+    // ws-floating-maximized (resize disabled) from a previous job
+    // or session leaves the panel in a stuck state where the user
+    // can't drag it.
+    panel.classList.remove(
+      'ws-floating-tab-mode',
+      'ws-floating-folder',
+      'ws-floating-maximized'
+    );
+    // Reset any in-memory state the prior job might have left.
+    _floatingState.maximized = false;
     panel.classList.add('ws-floating-graph-mode');
     // Prefer localStorage (survives reloads), then dataset (survives
     // sub-tab switches within a session), then defaults.
