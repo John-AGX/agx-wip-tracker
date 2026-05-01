@@ -8,17 +8,33 @@
 // Style: AGX-blue accent (#4f8cff), system font, generous whitespace.
 // Plain-text fallback always provided for clients that strip HTML.
 
+// Pick the public app URL for "Sign in" / "Open in AGX" links in
+// emails. Reads APP_URL env var so the same code works against
+// localhost in dev, the Railway domain by default, and a future
+// custom domain (e.g. https://wip-agxco.com) when the user
+// promotes one without redeploying templates. Defaults to the
+// Railway URL we shipped originally.
+function appUrl() {
+  var u = process.env.APP_URL;
+  if (typeof u === 'string' && /^https?:\/\//.test(u.trim())) {
+    return u.trim().replace(/\/$/, '');
+  }
+  return 'https://wip.up.railway.app';
+}
+
 // Default footer used by every template.
 function footer() {
+  var url = appUrl();
+  var hostname = url.replace(/^https?:\/\//, '').replace(/\/$/, '');
   return {
     html:
       '<div style="margin-top:32px;padding-top:16px;border-top:1px solid #e5e7eb;font-size:12px;color:#6b7280;">' +
-        'AGX WIP Tracker &middot; <a href="https://wip.up.railway.app" style="color:#4f8cff;text-decoration:none;">wip.up.railway.app</a><br/>' +
+        'AGX WIP Tracker &middot; <a href="' + url + '" style="color:#4f8cff;text-decoration:none;">' + hostname + '</a><br/>' +
         'You\'re receiving this because of activity on your AGX account. ' +
         'Toggle notifications in <strong>My Account &rarr; Notifications</strong>.' +
       '</div>',
     text:
-      '\n\n— AGX WIP Tracker · https://wip.up.railway.app\n' +
+      '\n\n— AGX WIP Tracker · ' + url + '\n' +
       'Manage notifications: app → My Account → Notifications.'
   };
 }
@@ -62,7 +78,7 @@ function fmtDate(iso) {
 //   Recommendation in the body to change password on first login.
 function newUserInvite({ name, email, password, invitedBy }) {
   var subject = 'You\'re invited to AGX WIP Tracker';
-  var loginUrl = 'https://wip.up.railway.app';
+  var loginUrl = appUrl();
   var html = shell(
     'Welcome to AGX',
     '<p>Hi ' + escapeHtml(name || 'there') + ',</p>' +
@@ -88,7 +104,7 @@ function newUserInvite({ name, email, password, invitedBy }) {
 //   Sent by /api/auth/users/:id/password when admin sets a new password.
 function passwordReset({ name, email, password, resetBy }) {
   var subject = 'Your AGX password was reset';
-  var loginUrl = 'https://wip.up.railway.app';
+  var loginUrl = appUrl();
   var html = shell(
     'Password reset',
     '<p>Hi ' + escapeHtml(name || 'there') + ',</p>' +
@@ -116,7 +132,7 @@ function jobAssigned({ recipientName, job, assignedBy, action }) {
   // action: "assigned" (new) | "reassigned" (changed)
   var subject = (action === 'reassigned' ? 'Reassigned: ' : 'New job: ') +
     (job.jobNumber || '') + ' — ' + (job.title || '(untitled)');
-  var loginUrl = 'https://wip.up.railway.app';
+  var loginUrl = appUrl();
   var verb = action === 'reassigned' ? 'reassigned to you' : 'assigned to you';
   var html = shell(
     'Job ' + verb,
@@ -150,7 +166,7 @@ function scheduleAssigned({ recipientName, entry, job, assignedBy }) {
   var startDate = entry.startDate || '';
   var subject = 'Scheduled: ' + (job ? (job.jobNumber || job.title || 'Job') : 'Job') +
     ' — ' + fmtDate(startDate);
-  var loginUrl = 'https://wip.up.railway.app';
+  var loginUrl = appUrl();
   var dayPlural = (entry.days > 1) ? 'days' : 'day';
   var html = shell(
     'You\'ve been scheduled',
