@@ -1454,6 +1454,10 @@ function initEvents(){
         var nidF = nel.getAttribute('data-id');
         var nF = E.findNode(nidF);
         if (!nF) return;
+        // Capture this BEFORE we mutate selN so we know whether
+        // this is a repeat focus on the same node (= drill-in zoom)
+        // or a fresh focus on a different node (= just center).
+        var alreadyFocused = (selN === nidF);
         // Select the focused node so the highlight stays visible.
         if (selN && selN !== nidF) {
           var oldF = canvasEl.querySelector('[data-id="' + selN + '"]');
@@ -1462,11 +1466,15 @@ function initEvents(){
         selN = nidF;
         nel.classList.add('ng-sel');
         updateConnectedHighlight();
-        // Zoom target: gentle 1.1 on first hit (was 1.4 — too aggressive
-        // on dense graphs). Repeat-clicks nudge by 0.15 up to 1.8 so
-        // power users can keep zooming with subsequent presses.
+        // Zoom target: keep the user's current zoom on first hit
+        // (just center the node where they were already looking).
+        // Repeat-clicks on the SAME node bump zoom by +0.15 so
+        // power users can drill in with successive presses, capped
+        // at 1.8 so we don't blow past readable.
         var curZ = E.zm();
-        var targetZ = curZ < 1.0 ? 1.1 : Math.min(1.8, curZ + 0.15);
+        var targetZ = alreadyFocused
+          ? Math.min(1.8, curZ + 0.15)
+          : curZ;
         focusNode(nF, { zoom: targetZ });
         return;
       }
