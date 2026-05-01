@@ -1466,15 +1466,14 @@ function initEvents(){
         selN = nidF;
         nel.classList.add('ng-sel');
         updateConnectedHighlight();
-        // Zoom target: keep the user's current zoom on first hit
-        // (just center the node where they were already looking).
-        // Repeat-clicks on the SAME node bump zoom by +0.15 so
-        // power users can drill in with successive presses, capped
-        // at 1.8 so we don't blow past readable.
+        // Zoom target: pull back to 0.75 on first hit so the focused
+        // node sits in the middle of plenty of context (you can see
+        // its wires + neighbors). Repeat-clicks on the SAME node
+        // drill in by +0.15 each press, capped at 1.8.
         var curZ = E.zm();
         var targetZ = alreadyFocused
           ? Math.min(1.8, curZ + 0.15)
-          : curZ;
+          : 0.75;
         focusNode(nF, { zoom: targetZ });
         return;
       }
