@@ -85,9 +85,38 @@ function createDataEntry(type, label){
   }
 
   if(type === 'sub'){
-    id = 's' + Date.now();
-    entry = { id:id, jobId:jobId, name:label||'New Sub', trade:'', level:'job', buildingId:'', buildingIds:[], phaseId:'', phaseIds:[], contractAmt:0, billedToDate:0, notes:'' };
-    appData.subs.push(entry);
+    // Subs are first-class (Phase A) — never push to appData.subs
+    // (the legacy per-job inline array). Add to the global
+    // directory + fire a server-side create so it persists. The
+    // node references the directory id; deleting the node leaves
+    // the directory entry intact (user removes it from the Subs
+    // sub-tab if they want it gone).
+    id = 'sub_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6);
+    entry = {
+      id: id,
+      name: label || 'New Sub',
+      trade: '',
+      contact_name: null,
+      phone: null,
+      email: null,
+      status: 'active'
+    };
+    if (!Array.isArray(appData.subsDirectory)) appData.subsDirectory = [];
+    appData.subsDirectory.push(entry);
+    // Best-effort server persist — keeps directory idempotent
+    // across devices. If unauthenticated/offline, the local copy
+    // is still useful for this session.
+    if (window.agxApi && window.agxApi.isAuthenticated && window.agxApi.isAuthenticated()) {
+      try {
+        window.agxApi.subs.create({
+          id: id,
+          name: entry.name,
+          status: 'active'
+        }).catch(function(err) {
+          console.warn('[engine] sub directory create failed:', err && err.message);
+        });
+      } catch (e) {}
+    }
     if(typeof saveData === 'function') saveData();
     return entry;
   }
@@ -780,7 +809,15 @@ function restoreSnapshot(){
     if(sn.dataId && typeof appData !== 'undefined'){
       if(sn.type === 't1') data = appData.buildings.find(function(b){ return b.id === sn.dataId; }) || {};
       else if(sn.type === 't2') data = appData.phases.find(function(p){ return p.id === sn.dataId; }) || {};
-      else if(sn.type === 'sub') data = appData.subs.find(function(s){ return s.id === sn.dataId; }) || {};
+      else if(sn.type === 'sub') {
+        // Prefer the global directory (Phase A) — that's the
+        // canonical sub record. Fall back to the legacy inline
+        // appData.subs for graphs saved before the directory
+        // existed; the migration tool on the Subs sub-tab moves
+        // those into the directory once the user runs it.
+        data = (appData.subsDirectory || []).find(function(s){ return s.id === sn.dataId; }) ||
+               (appData.subs || []).find(function(s){ return s.id === sn.dataId; }) || {};
+      }
       else if(sn.type === 'co') data = appData.changeOrders.find(function(c){ return c.id === sn.dataId; }) || {};
       else if(sn.type === 'po') data = (appData.purchaseOrders||[]).find(function(p){ return p.id === sn.dataId; }) || {};
       else if(sn.type === 'inv') data = (appData.invoices||[]).find(function(i){ return i.id === sn.dataId; }) || {};
@@ -823,7 +860,15 @@ function loadGraph(){
     if(sn.dataId && typeof appData !== 'undefined'){
       if(sn.type === 't1') data = appData.buildings.find(function(b){ return b.id === sn.dataId; }) || {};
       else if(sn.type === 't2') data = appData.phases.find(function(p){ return p.id === sn.dataId; }) || {};
-      else if(sn.type === 'sub') data = appData.subs.find(function(s){ return s.id === sn.dataId; }) || {};
+      else if(sn.type === 'sub') {
+        // Prefer the global directory (Phase A) — that's the
+        // canonical sub record. Fall back to the legacy inline
+        // appData.subs for graphs saved before the directory
+        // existed; the migration tool on the Subs sub-tab moves
+        // those into the directory once the user runs it.
+        data = (appData.subsDirectory || []).find(function(s){ return s.id === sn.dataId; }) ||
+               (appData.subs || []).find(function(s){ return s.id === sn.dataId; }) || {};
+      }
       else if(sn.type === 'co') data = appData.changeOrders.find(function(c){ return c.id === sn.dataId; }) || {};
       else if(sn.type === 'po') data = (appData.purchaseOrders||[]).find(function(p){ return p.id === sn.dataId; }) || {};
       else if(sn.type === 'inv') data = (appData.invoices||[]).find(function(i){ return i.id === sn.dataId; }) || {};

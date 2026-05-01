@@ -743,7 +743,27 @@ function getJobEntries(type){
   if(type==='co') return (appData.changeOrders||[]).filter(function(c){return c.jobId===jid;});
   if(type==='t1') return (appData.buildings||[]).filter(function(b){return b.jobId===jid;});
   if(type==='t2') return (appData.phases||[]).filter(function(p){return p.jobId===jid;});
-  if(type==='sub') return (appData.subs||[]).filter(function(s){return s.jobId===jid;});
+  if(type==='sub'){
+    // Subs are first-class (Phase A) — pull from the global
+    // directory rather than per-job inline records. The directory
+    // entry is the canonical sub; any job can reference it via a
+    // node without duplicating the company profile.
+    var dir = (appData.subsDirectory || []).filter(function(s) {
+      return (s.status || 'active') !== 'closed';
+    });
+    if (dir.length) {
+      // Map to picker shape: id is the directory id, name is the
+      // company name. Sorted alphabetically for predictable UI.
+      return dir.slice().sort(function(a, b) {
+        return (a.name || '').localeCompare(b.name || '');
+      });
+    }
+    // Legacy fallback: when the directory hasn't been populated
+    // yet, fall back to the inline per-job records so existing
+    // jobs don't lose their picker. The migration tool on the
+    // Subs sub-tab rolls these into the directory.
+    return (appData.subs||[]).filter(function(s){return s.jobId===jid;});
+  }
   if(type==='po') return (appData.purchaseOrders||[]).filter(function(p){return p.jobId===jid;});
   if(type==='inv') return (appData.invoices||[]).filter(function(i){return i.jobId===jid;});
   return [];
@@ -823,6 +843,29 @@ var CREATE_MODAL={
 // Open the same overview-panel modal used to create entities; on save (modal closes
 // with a new entry present), invoke cb(newEntry). On cancel, cb(null).
 function openEntityCreateModal(type, cb){
+  // Sub gets a special path: open the GLOBAL directory modal
+  // (agxSubs.openNew) so the new sub lives in appData.subsDirectory
+  // (and is server-persisted) instead of being duplicated as an
+  // inline appData.subs record. The directory modal is created
+  // dynamically and removes itself from the DOM on close, so we
+  // detect "saved" by polling for new directory entries instead
+  // of watching a static modal element.
+  if(type==='sub' && window.agxSubs && typeof window.agxSubs.openNew==='function'){
+    var beforeIds={};
+    (window.appData && appData.subsDirectory ? appData.subsDirectory : []).forEach(function(s){ beforeIds[s.id]=1; });
+    window.agxSubs.openNew();
+    var checkInterval = setInterval(function(){
+      var stillOpen = !!document.getElementById('subDirModal');
+      if(stillOpen) return;
+      clearInterval(checkInterval);
+      // Directory may have been refreshed by saveFromModal — find
+      // the new entry by id diff.
+      var dir = (window.appData && appData.subsDirectory) || [];
+      var newOnes = dir.filter(function(s){ return !beforeIds[s.id]; });
+      cb(newOnes[0] || null);
+    }, 200);
+    return;
+  }
   var spec=CREATE_MODAL[type]; if(!spec) return cb(null);
   var fn=window[spec.opener];
   var modalEl=document.getElementById(spec.modal);
