@@ -873,8 +873,10 @@
   font-size: 11px;
   opacity: 0.85;
 }
-/* Pinned built-in views (e.g. Detailed Costs) — distinct accent so
-   the user sees they aren't just another grid tab. */
+/* Pinned built-in views (e.g. Detailed Costs, Attachments) — each
+   built-in gets its own accent color so the user can tell them
+   apart at a glance. Default pinned styling falls back to the blue
+   QB Costs accent. */
 .ws-sheet-tab-pinned {
   border-color: rgba(79, 140, 255, 0.45);
   color: #a6c4ff;
@@ -883,6 +885,31 @@
   color: #4f8cff;
   border-color: rgba(79, 140, 255, 0.7);
   border-bottom-color: var(--surface, #181820);
+}
+/* Detailed Costs — blue (kept as default) */
+.ws-sheet-tab-qb-costs {
+  border-color: rgba(79, 140, 255, 0.45);
+  color: #a6c4ff;
+}
+.ws-sheet-tab-qb-costs.active {
+  color: #4f8cff;
+  border-color: rgba(79, 140, 255, 0.7);
+  border-bottom-color: var(--surface, #181820);
+}
+/* Attachments — purple/violet to distinguish from Detailed Costs */
+.ws-sheet-tab-attachments {
+  border-color: rgba(167, 139, 250, 0.45);
+  color: #ddd0ff;
+}
+.ws-sheet-tab-attachments:hover {
+  background: rgba(167, 139, 250, 0.08);
+  color: #c4b5fd;
+}
+.ws-sheet-tab-attachments.active {
+  color: #a78bfa;
+  border-color: rgba(167, 139, 250, 0.75);
+  border-bottom-color: var(--surface, #181820);
+  background: linear-gradient(180deg, rgba(167, 139, 250, 0.10), var(--surface, #181820));
 }
 /* Embed host inside the workspace flex column — fills space between
    formatting toolbars (or instead of the grid) and the sheet tabs.

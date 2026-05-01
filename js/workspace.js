@@ -92,6 +92,7 @@
   // every job's workbook on load so the user can switch between them
   // and grid sheets via the bottom tab strip.
   const QB_COSTS_SHEET_ID = '__qb_costs__';
+  const ATTACHMENTS_SHEET_ID = '__attachments__';
   function makeQBCostsSheet() {
     return {
       id: QB_COSTS_SHEET_ID,
@@ -102,6 +103,16 @@
       rows: 0, cols: 0, cells: {}, colWidths: {}, rowHeights: {},
       links: {}, merges: [], tables: [],
       pinned: true       // tab strip uses this to lock rename/delete
+    };
+  }
+  function makeAttachmentsSheet() {
+    return {
+      id: ATTACHMENTS_SHEET_ID,
+      name: 'Attachments',
+      kind: 'attachments',
+      rows: 0, cols: 0, cells: {}, colWidths: {}, rowHeights: {},
+      links: {}, merges: [], tables: [],
+      pinned: true
     };
   }
   function isEmbedSheet(sheet) {
@@ -1368,6 +1379,66 @@
           'Detailed Costs view is unavailable. Reload the page to retry.' +
         '</div>';
       }
+    } else if (sheet.kind === 'attachments') {
+      // Re-mount the universal attachments component into a host
+      // div inside the embed area. The component owns its own
+      // upload / list / lightbox / delete UI; we just hand it the
+      // entity ids. Re-mounting on every activation is cheap (it
+      // re-fetches the list anyway) and keeps state simple.
+      if (typeof window.agxAttachments === 'undefined' || !window.agxAttachments.mount) {
+        host.innerHTML = '<div style="padding:24px;color:var(--text-dim,#888);font-size:13px;">' +
+          'Attachments component is unavailable. Reload the page to retry.' +
+        '</div>';
+        return;
+      }
+      if (!workbook.jobId) {
+        host.innerHTML = '<div style="padding:24px;color:var(--text-dim,#888);font-size:13px;">' +
+          'Open a job first to manage its attachments.' +
+        '</div>';
+        return;
+      }
+      // Mount target: a per-host child div with padded surface,
+      // mirroring how the Detailed Costs embed sets up its inner
+      // surface so the visual feels native to the panel.
+      var mount = host.querySelector(':scope > .ws-attachments-embed');
+      if (!mount) {
+        host.innerHTML = '';
+        mount = document.createElement('div');
+        mount.className = 'ws-attachments-embed sub-tab-content-job';
+        mount.style.display = 'block';
+        mount.style.padding = '14px';
+        mount.style.height = '100%';
+        mount.style.overflowY = 'auto';
+        mount.style.boxSizing = 'border-box';
+        mount.style.background = 'var(--surface, #1a1d27)';
+        // Header strip — matches the look of the QB Costs sheet so
+        // the two embedded tabs feel like siblings.
+        var header = document.createElement('div');
+        header.className = 'action-buttons';
+        header.style.alignItems = 'center';
+        header.style.marginBottom = '12px';
+        header.innerHTML =
+          '<div style="display:flex;flex-direction:column;gap:2px;">' +
+            '<strong style="font-size:14px;">Attachments</strong>' +
+            '<span style="font-size:11px;color:var(--text-dim,#888);">' +
+              'Photos, drawings, PDFs, contracts — anything tied to this job. Synced across devices.' +
+            '</span>' +
+          '</div>';
+        mount.appendChild(header);
+        // Component mount target
+        var componentSlot = document.createElement('div');
+        componentSlot.className = 'ws-attachments-component';
+        mount.appendChild(componentSlot);
+        host.appendChild(mount);
+      }
+      var slot = mount.querySelector('.ws-attachments-component');
+      if (slot) {
+        window.agxAttachments.mount(slot, {
+          entityType: 'job',
+          entityId: workbook.jobId,
+          canEdit: true
+        });
+      }
     }
   }
 
@@ -1434,11 +1505,14 @@
       workbook.activeSheetId = workbook.sheets[0].id;
     }
 
-    // Auto-inject the permanent Detailed Costs sheet (idempotent —
-    // appended at the end of the tab strip, never duplicated). Pinned
-    // so rename/delete is blocked from the context menu.
+    // Auto-inject permanent built-in views (idempotent — appended at
+    // the end of the tab strip, never duplicated). Pinned so
+    // rename/delete is blocked from the context menu.
     if (!workbook.sheets.some(s => s.id === QB_COSTS_SHEET_ID)) {
       workbook.sheets.push(makeQBCostsSheet());
+    }
+    if (!workbook.sheets.some(s => s.id === ATTACHMENTS_SHEET_ID)) {
+      workbook.sheets.push(makeAttachmentsSheet());
     }
 
     workbook.dirty = false;
@@ -1829,13 +1903,20 @@
     let html = '<div class="ws-sheet-tabs-list">';
     workbook.sheets.forEach(function(s) {
       const active = s.id === workbook.activeSheetId;
-      // Pinned built-in views (e.g. Detailed Costs) get a marker icon
-      // and a different class so the context menu can lock destructive
-      // actions and CSS can style them subtly.
+      // Pinned built-in views (e.g. Detailed Costs, Attachments) get
+      // a marker icon and a different class so the context menu can
+      // lock destructive actions and CSS can style them subtly.
       var icon = '';
-      if (s.kind === 'qb-costs') icon = '<span class="ws-sheet-tab-icon" aria-hidden="true">&#x1F4CB;</span> ';
+      var kindCls = '';
+      if (s.kind === 'qb-costs') {
+        icon = '<span class="ws-sheet-tab-icon" aria-hidden="true">&#x1F4CB;</span> ';
+        kindCls = ' ws-sheet-tab-qb-costs';
+      } else if (s.kind === 'attachments') {
+        icon = '<span class="ws-sheet-tab-icon" aria-hidden="true">&#x1F4CE;</span> ';
+        kindCls = ' ws-sheet-tab-attachments';
+      }
       html += '<div class="ws-sheet-tab' + (active ? ' active' : '') +
-        (s.pinned ? ' ws-sheet-tab-pinned' : '') + '" data-sheet-id="' +
+        (s.pinned ? ' ws-sheet-tab-pinned' : '') + kindCls + '" data-sheet-id="' +
         s.id + '" title="' + escapeAttr(s.name) + '">' +
         icon +
         '<span class="ws-sheet-tab-name">' + escapeHTML(s.name) + '</span>' +
