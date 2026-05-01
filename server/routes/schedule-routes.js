@@ -81,12 +81,21 @@ function readEntry(body, isUpdate) {
 
 function rowToJson(r) {
   if (!r) return null;
+  // start_date_iso comes pre-formatted as YYYY-MM-DD via to_char in
+  // the SELECT — sidesteps pg's TZ-aware Date parsing of DATE columns
+  // (which can shift by a day depending on the server's timezone).
+  // We still tolerate a bare start_date for INSERT/UPDATE RETURNING
+  // rows that come back without the alias.
+  var iso = r.start_date_iso;
+  if (!iso) {
+    if (typeof r.start_date === 'string') iso = r.start_date.slice(0, 10);
+    else if (r.start_date instanceof Date) iso = r.start_date.toISOString().slice(0, 10);
+    else iso = '';
+  }
   return {
     id: r.id,
     jobId: r.job_id,
-    startDate: typeof r.start_date === 'string'
-      ? r.start_date.slice(0, 10)
-      : r.start_date.toISOString().slice(0, 10),
+    startDate: iso,
     days: r.days,
     crew: Array.isArray(r.crew) ? r.crew : [],
     includesWeekends: !!r.includes_weekends,
@@ -129,8 +138,11 @@ router.get('/',
         params.push(String(req.query.jobId));
         where.push('job_id = $' + params.length);
       }
+      // Cast start_date through to_char to dodge pg's timezone-aware
+      // Date parsing for the DATE column (see rowToJson comment).
       const sql =
-        'SELECT * FROM schedule_entries ' +
+        "SELECT *, to_char(start_date, 'YYYY-MM-DD') AS start_date_iso " +
+        'FROM schedule_entries ' +
         (where.length ? 'WHERE ' + where.join(' AND ') + ' ' : '') +
         'ORDER BY start_date ASC, created_at ASC';
       const { rows } = await pool.query(sql, params);
@@ -159,7 +171,7 @@ router.post('/',
         `INSERT INTO schedule_entries
            (id, job_id, start_date, days, crew, includes_weekends, status, notes, created_by)
          VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9)
-         RETURNING *`,
+         RETURNING *, to_char(start_date, 'YYYY-MM-DD') AS start_date_iso`,
         [
           id,
           v.jobId,
@@ -211,7 +223,8 @@ router.patch('/:id',
       params.push(req.params.id);
       const sql =
         'UPDATE schedule_entries SET ' + sets.join(', ') +
-        ' WHERE id = $' + params.length + ' RETURNING *';
+        ' WHERE id = $' + params.length +
+        " RETURNING *, to_char(start_date, 'YYYY-MM-DD') AS start_date_iso";
       const { rows } = await pool.query(sql, params);
       if (!rows.length) return res.status(404).json({ error: 'not found' });
       res.json({ entry: rowToJson(rows[0]) });

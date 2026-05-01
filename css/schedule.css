@@ -202,13 +202,14 @@
    columns continuously. */
 .sch-cal-grid {
   flex: 1;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  grid-auto-rows: auto;
+  gap: 1px;
   background: var(--border, #2e3346);
   min-height: 0;
 }
 .sch-cal-dow {
-  flex: 1;
   background: var(--card-bg, #0f0f1e);
   font-size: 10px;
   font-weight: 700;
@@ -217,22 +218,6 @@
   color: var(--text-dim, #888);
   text-align: center;
   padding: 5px 0;
-}
-/* The DOW row itself uses grid so labels share the 7-col layout
-   with the week rows below. */
-.sch-cal-grid > .sch-cal-dow:first-of-type ~ .sch-cal-dow,
-.sch-cal-grid > .sch-cal-dow:first-of-type {
-  /* Labels are siblings of week-rows, but visually they form a row.
-     A simple wrapper would be cleaner, but keeping them as direct
-     children avoids a markup change — they fall into a flex line via
-     the wrapper rule below. */
-}
-/* Wrap the 7 DOW labels into a single horizontal strip. */
-.sch-cal-grid {
-  display: grid;
-  grid-template-columns: repeat(7, 1fr);
-  grid-auto-rows: auto;
-  gap: 1px;
 }
 .sch-cal-week-row {
   grid-column: 1 / -1;

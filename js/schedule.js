@@ -65,16 +65,26 @@
   // Pull entries from the server and refresh the cache. Returns a
   // Promise so callers can chain a render. Falls back to the cached
   // copy when offline / unauthenticated so the page still works.
+  //
+  // Cache merge rule: any entry whose id starts with "sch_local_"
+  // never made it to the server (offline create). We keep those in
+  // the in-memory list so the user sees them; they're promoted to
+  // real server rows the next time the user edits + saves them.
   function fetchEntries() {
     if (!isApiReady()) {
       _state.entries = loadCachedEntries();
       return Promise.resolve(_state.entries);
     }
     return window.agxApi.schedule.list().then(function(res) {
-      var list = (res && res.entries) || [];
-      _state.entries = list;
-      cacheEntries(list);
-      return list;
+      var serverList = (res && res.entries) || [];
+      var cached = loadCachedEntries();
+      var localOnly = cached.filter(function(e) {
+        return typeof e.id === 'string' && e.id.indexOf('sch_local_') === 0;
+      });
+      var merged = serverList.concat(localOnly);
+      _state.entries = merged;
+      cacheEntries(merged);
+      return merged;
     }).catch(function(err) {
       console.warn('[schedule] fetch failed, using cache:', err && err.message);
       _state.entries = loadCachedEntries();
@@ -396,7 +406,6 @@
     var el = document.getElementById('schCalWrap');
     if (!el) return;
     var cur = _state.cursor;
-    var summary = weekSummaryForCursor(new Date());
 
     el.innerHTML =
       '<div class="sch-cal-toolbar">' +
@@ -414,12 +423,11 @@
         '<button class="sch-btn sch-btn-primary" id="schAddEntry">+ Schedule entry</button>' +
       '</div>' +
       '<div class="sch-cal-grid" id="schGrid"></div>' +
-      '<div class="sch-week-summary" id="schWeekSummary">' +
-        '<span class="sch-week-summary-label">This week</span>' +
-        '<span><span class="sch-week-summary-label">Days</span> <span class="sch-week-summary-val">' + summary.scheduledDays + '</span></span>' +
-        '<span><span class="sch-week-summary-label">Expected revenue</span> <span class="sch-week-summary-val sch-rev">' + fmtMoney(summary.expectedRevenue) + '</span></span>' +
-        '<span><span class="sch-week-summary-label">Jobs</span> <span class="sch-week-summary-val">' + summary.jobsCount + '</span></span>' +
-      '</div>';
+      '<div class="sch-week-summary" id="schWeekSummary"></div>';
+    // refreshWeekSummary populates the bar — single source of truth so
+    // the label / numbers can't drift between initial render and
+    // post-edit refreshes.
+    refreshWeekSummary();
 
     document.getElementById('schPrev').addEventListener('click', function() { stepMonth(-1); });
     document.getElementById('schNext').addEventListener('click', function() { stepMonth(1); });
@@ -672,7 +680,15 @@
       var entryJobId = (entry && entry.jobId) || defaultJobId || '';
       var startDate = (entry && entry.startDate) || defaultDate || toISODate(new Date());
       var days = (entry && entry.days) || 1;
-      var crew = (entry && Array.isArray(entry.crew)) ? entry.crew.slice() : [];
+      // Coerce every crew id to integer up-front. users.id is SERIAL
+      // server-side; if we mix strings (from getAttribute on click)
+      // and ints (from agxApi.users.list), indexOf strict-equality
+      // checks fail and the picker can't tell what's already selected
+      // when re-opening an entry. One canonical type fixes both ends.
+      var crew = (entry && Array.isArray(entry.crew))
+        ? entry.crew.map(function(x) { var n = parseInt(x, 10); return Number.isFinite(n) ? n : null; })
+                    .filter(function(n) { return n !== null; })
+        : [];
       var notes = (entry && entry.notes) || '';
       var status = (entry && entry.status) || 'planned';
       var includesWeekends = !!(entry && entry.includesWeekends);
@@ -691,8 +707,9 @@
       }).join('');
 
       var crewPills = (_state.users || []).map(function(u) {
-        var on = crew.indexOf(u.id) !== -1;
-        return '<span class="sch-crew-pill' + (on ? ' selected' : '') + '" data-user-id="' + escapeAttr(u.id) + '">' +
+        var uid = parseInt(u.id, 10);
+        var on = crew.indexOf(uid) !== -1;
+        return '<span class="sch-crew-pill' + (on ? ' selected' : '') + '" data-user-id="' + uid + '">' +
           escapeHTML(u.name || u.email || '(unnamed)') +
         '</span>';
       }).join('');
@@ -751,10 +768,12 @@
         '</div>';
       document.body.appendChild(modal);
 
-      // Crew pill toggle
+      // Crew pill toggle — store ints to match the integer ids
+      // delivered by /api/auth/users (and expected by /api/schedule).
       modal.querySelectorAll('.sch-crew-pill').forEach(function(p) {
         p.addEventListener('click', function() {
-          var id = p.getAttribute('data-user-id');
+          var id = parseInt(p.getAttribute('data-user-id'), 10);
+          if (!Number.isFinite(id)) return;
           var idx = crew.indexOf(id);
           if (idx >= 0) crew.splice(idx, 1); else crew.push(id);
           p.classList.toggle('selected');
@@ -836,11 +855,21 @@
         };
 
         if (isApiReady()) {
-          var req = isEdit
+          // Offline-created entries (id prefixed sch_local_) never
+          // existed on the server, so a PATCH would 404. Promote them
+          // to a POST instead — the server assigns a real id and we
+          // drop the placeholder from the cache below.
+          var isLocalOnly = isEdit && entry && typeof entry.id === 'string' && entry.id.indexOf('sch_local_') === 0;
+          var req = (isEdit && !isLocalOnly)
             ? window.agxApi.schedule.update(entry.id, payload)
             : window.agxApi.schedule.create(payload);
           req.then(function(res) {
-            done(res && res.entry);
+            var saved = res && res.entry;
+            if (isLocalOnly) {
+              // Replace the local placeholder with the server row.
+              _state.entries = _state.entries.filter(function(x) { return x.id !== entry.id; });
+            }
+            done(saved);
           }).catch(fail);
         } else {
           // Offline / unauthenticated fallback: write to cache only,
@@ -877,12 +906,36 @@
   function refreshWeekSummary() {
     var bar = document.getElementById('schWeekSummary');
     if (!bar) return;
-    var summary = weekSummaryForCursor(new Date());
+    // Week summary follows the visible month: shows the current week
+    // when viewing the current month, otherwise the first full week
+    // of the visible month so PMs planning ahead see relevant numbers.
+    var ref = weekSummaryReferenceDate();
+    var summary = weekSummaryForCursor(ref);
+    var ws = parseISODate(summary.weekStart);
+    var we = parseISODate(summary.weekEnd);
+    var label = (ws && we)
+      ? 'Week of ' + MONTH_NAMES[ws.getMonth()].slice(0, 3) + ' ' + ws.getDate() +
+        '–' + (we.getMonth() === ws.getMonth()
+          ? we.getDate()
+          : MONTH_NAMES[we.getMonth()].slice(0, 3) + ' ' + we.getDate())
+      : 'This week';
     bar.innerHTML =
-      '<span class="sch-week-summary-label">This week</span>' +
+      '<span class="sch-week-summary-label">' + escapeHTML(label) + '</span>' +
       '<span><span class="sch-week-summary-label">Days</span> <span class="sch-week-summary-val">' + summary.scheduledDays + '</span></span>' +
       '<span><span class="sch-week-summary-label">Expected revenue</span> <span class="sch-week-summary-val sch-rev">' + fmtMoney(summary.expectedRevenue) + '</span></span>' +
       '<span><span class="sch-week-summary-label">Jobs</span> <span class="sch-week-summary-val">' + summary.jobsCount + '</span></span>';
+  }
+
+  // Pick the date the bottom-bar week summary reports on:
+  //   viewing current month → today (this week)
+  //   viewing other month   → first day of that month (planning ahead)
+  function weekSummaryReferenceDate() {
+    var today = new Date();
+    var cur = _state.cursor || startOfMonth(today);
+    if (cur.getFullYear() === today.getFullYear() && cur.getMonth() === today.getMonth()) {
+      return today;
+    }
+    return new Date(cur);
   }
 
   // ── Public API ─────────────────────────────────────────────
