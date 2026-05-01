@@ -207,31 +207,42 @@ function renderEstimatesList() {
     }
 
     function deleteEstimate(estId) {
-            if (!confirm('Delete this estimate?')) return;
-            // Delete on the server first — bulk-save is upsert-only, so just
-            // dropping from appData and re-saving leaves the row in Postgres
-            // and it reappears on the next reload. Optimistically remove from
-            // local state after the server confirms.
-            function removeLocal() {
-                appData.estimates = appData.estimates.filter(e => e.id !== estId);
-                appData.estimateLines = appData.estimateLines.filter(l => l.estimateId !== estId);
-                saveData();
-                renderEstimatesList();
-            }
-            if (window.agxApi && window.agxApi.isAuthenticated()) {
-                window.agxApi.estimates.remove(estId)
-                    .then(removeLocal)
-                    .catch(function(err) {
-                        // 404 = already gone server-side, treat as success.
-                        // Anything else: surface the error so the user knows
-                        // to retry rather than thinking the delete worked.
-                        if (err && err.status === 404) { removeLocal(); return; }
-                        alert('Delete failed: ' + (err && err.message ? err.message : 'unknown error'));
-                    });
-            } else {
-                // Offline / unauthenticated: localStorage-only, no server call.
-                removeLocal();
-            }
+            var go = (typeof window.agxConfirm === 'function')
+              ? window.agxConfirm({
+                  title: 'Delete estimate',
+                  message: 'Delete this estimate? This cannot be undone.',
+                  confirmLabel: 'Delete',
+                  danger: true
+                })
+              : Promise.resolve(window.confirm('Delete this estimate?'));
+            go.then(function(ok) {
+              if (!ok) return;
+              // Delete on the server first — bulk-save is upsert-only, so just
+              // dropping from appData and re-saving leaves the row in Postgres
+              // and it reappears on the next reload. Optimistically remove from
+              // local state after the server confirms.
+              function removeLocal() {
+                  appData.estimates = appData.estimates.filter(e => e.id !== estId);
+                  appData.estimateLines = appData.estimateLines.filter(l => l.estimateId !== estId);
+                  saveData();
+                  renderEstimatesList();
+              }
+              if (window.agxApi && window.agxApi.isAuthenticated()) {
+                  window.agxApi.estimates.remove(estId)
+                      .then(removeLocal)
+                      .catch(function(err) {
+                          if (err && err.status === 404) { removeLocal(); return; }
+                          var msg = (err && err.message) ? err.message : 'unknown error';
+                          if (typeof window.agxAlert === 'function') {
+                            window.agxAlert({ title: 'Delete failed', message: msg });
+                          } else {
+                            alert('Delete failed: ' + msg);
+                          }
+                      });
+              } else {
+                  removeLocal();
+              }
+            });
         }
 
         function previewEstimate(estId) {

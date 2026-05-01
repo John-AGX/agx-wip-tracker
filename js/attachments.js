@@ -172,9 +172,23 @@
     }
 
     function deleteAttachment(id, kind) {
-      if (!confirm('Delete this ' + (kind || 'attachment') + '?')) return;
-      window.agxApi.attachments.remove(id).then(fetchList).catch(function(err) {
-        alert('Delete failed: ' + (err.message || ''));
+      var go = (typeof window.agxConfirm === 'function')
+        ? window.agxConfirm({
+            title: 'Delete ' + (kind || 'attachment'),
+            message: 'Delete this ' + (kind || 'attachment') + '? This cannot be undone.',
+            confirmLabel: 'Delete',
+            danger: true
+          })
+        : Promise.resolve(window.confirm('Delete this ' + (kind || 'attachment') + '?'));
+      go.then(function(ok) {
+        if (!ok) return;
+        window.agxApi.attachments.remove(id).then(fetchList).catch(function(err) {
+          if (typeof window.agxAlert === 'function') {
+            window.agxAlert({ title: 'Delete failed', message: err.message || '' });
+          } else {
+            alert('Delete failed: ' + (err.message || ''));
+          }
+        });
       });
     }
 

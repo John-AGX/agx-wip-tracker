@@ -442,22 +442,32 @@
 
   function reassignJobOwner(jobId, newOwnerId) {
     if (!newOwnerId) return; // ignore the "-- Unassigned --" placeholder
-    // Confirm reassignment + ask whether to email the new owner.
-    // confirm() returns boolean — pair with a separate confirm for
-    // notify so the admin can refuse the reassignment outright OR
-    // proceed silently. Default proceeds with notification.
-    var notifyOk = confirm('Email the new owner about this assignment?\n\nOK = send email · Cancel = reassign silently');
-    window.agxApi.jobs.reassignOwner(jobId, parseInt(newOwnerId, 10), notifyOk)
-      .then(function() {
-        // Pull fresh job state so _canEdit recalculates for everyone, and
-        // refresh the assignments table to show the new owner.
-        if (window.agxData) window.agxData.reloadFromServer();
+    // Three-way confirm: send-with-email / send-silently / abort.
+    // Native confirm() can only do binary; the in-house ternary
+    // dialog gives the admin a real "reassign without spam" path.
+    window.agxConfirmTernary({
+      title: 'Reassign job',
+      message: 'Email the new owner about this assignment?',
+      primaryLabel: 'Send email',
+      secondaryLabel: 'Reassign silently',
+      cancelLabel: 'Cancel'
+    }).then(function(action) {
+      if (!action) {
+        // Cancel — undo the dropdown change in the UI.
         renderAdminJobs();
-      })
-      .catch(function(err) {
-        alert('Reassign failed: ' + (err.message || 'unknown error'));
-        renderAdminJobs(); // revert the dropdown
-      });
+        return;
+      }
+      var notifyOk = (action === 'primary');
+      window.agxApi.jobs.reassignOwner(jobId, parseInt(newOwnerId, 10), notifyOk)
+        .then(function() {
+          if (window.agxData) window.agxData.reloadFromServer();
+          renderAdminJobs();
+        })
+        .catch(function(err) {
+          window.agxAlert({ title: 'Reassign failed', message: err.message || 'unknown error' });
+          renderAdminJobs();
+        });
+    });
   }
 
   function openJobShareManager(jobId) {

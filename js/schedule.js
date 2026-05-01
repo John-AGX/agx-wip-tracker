@@ -1081,21 +1081,35 @@
       if (del) {
         del.addEventListener('click', function() {
           if (!entry) return;
-          if (!confirm('Delete this schedule entry?')) return;
-          setBusy(true);
-          var p = isApiReady() && entry.id && entry.id.indexOf('sch_local_') !== 0
-            ? window.agxApi.schedule.remove(entry.id)
-            : Promise.resolve();
-          p.then(function() {
-            _state.entries = _state.entries.filter(function(x) { return x.id !== entry.id; });
-            cacheEntries(_state.entries);
-            close();
-            renderGrid();
-            renderSidebar();
-            refreshWeekSummary();
-          }).catch(function(err) {
-            setBusy(false);
-            alert('Delete failed: ' + (err.message || err));
+          var goDelete = (typeof window.agxConfirm === 'function')
+            ? window.agxConfirm({
+                title: 'Delete schedule entry',
+                message: 'Delete this schedule entry? This cannot be undone.',
+                confirmLabel: 'Delete',
+                danger: true
+              })
+            : Promise.resolve(window.confirm('Delete this schedule entry?'));
+          goDelete.then(function(ok) {
+            if (!ok) return;
+            setBusy(true);
+            var p = isApiReady() && entry.id && entry.id.indexOf('sch_local_') !== 0
+              ? window.agxApi.schedule.remove(entry.id)
+              : Promise.resolve();
+            p.then(function() {
+              _state.entries = _state.entries.filter(function(x) { return x.id !== entry.id; });
+              cacheEntries(_state.entries);
+              close();
+              renderGrid();
+              renderSidebar();
+              refreshWeekSummary();
+            }).catch(function(err) {
+              setBusy(false);
+              if (typeof window.agxAlert === 'function') {
+                window.agxAlert({ title: 'Delete failed', message: err.message || String(err) });
+              } else {
+                alert('Delete failed: ' + (err.message || err));
+              }
+            });
           });
         });
       }
@@ -1173,17 +1187,22 @@
             // elsewhere — refresh and try again." message.
             if (/changed elsewhere|409/i.test(msg)) {
               setBusy(false);
-              var goRefresh = confirm(
-                'This entry was just updated by someone else.\n\n' +
-                'Reload the latest version? (Your unsaved changes will be lost.)'
-              );
-              if (goRefresh) {
+              var goRefresh = (typeof window.agxConfirm === 'function')
+                ? window.agxConfirm({
+                    title: 'Entry changed elsewhere',
+                    message: 'This entry was just updated by someone else.\n\nReload the latest version? Your unsaved changes will be lost.',
+                    confirmLabel: 'Reload',
+                    cancelLabel: 'Keep editing'
+                  })
+                : Promise.resolve(window.confirm('Reload the latest version? (Your unsaved changes will be lost.)'));
+              goRefresh.then(function(ok) {
+                if (!ok) return;
                 fetchEntries().then(function() {
                   close();
                   renderGrid();
                   refreshWeekSummary();
                 });
-              }
+              });
               return;
             }
             fail(err);

@@ -668,15 +668,29 @@
 
   function clearConversation() {
     if (!_entityId) return;
-    if (!confirm('Clear this conversation? Your messages on this ' + _entityType + ' will be deleted.')) return;
-    fetch(apiBase() + '/messages', {
-      method: 'DELETE',
-      headers: authHeaders()
-    }).then(function() {
-      _messages = [];
-      renderMessages();
-    }).catch(function(err) {
-      alert('Clear failed: ' + (err.message || err));
+    var go = (typeof window.agxConfirm === 'function')
+      ? window.agxConfirm({
+          title: 'Clear conversation',
+          message: 'Clear this conversation? Your messages on this ' + _entityType + ' will be deleted.',
+          confirmLabel: 'Clear',
+          danger: true
+        })
+      : Promise.resolve(window.confirm('Clear this conversation?'));
+    go.then(function(ok) {
+      if (!ok) return;
+      fetch(apiBase() + '/messages', {
+        method: 'DELETE',
+        headers: authHeaders()
+      }).then(function() {
+        _messages = [];
+        renderMessages();
+      }).catch(function(err) {
+        if (typeof window.agxAlert === 'function') {
+          window.agxAlert({ title: 'Clear failed', message: err.message || String(err) });
+        } else {
+          alert('Clear failed: ' + (err.message || err));
+        }
+      });
     });
   }
 

@@ -2349,9 +2349,19 @@ function init(){
   // Reset graph — wipe and rebuild
   var resetBtn=tab.querySelector('.ng-reset-btn');
   if(resetBtn) resetBtn.addEventListener('click',function(){
-    if(!confirm('Reset graph? This will delete all node positions and rebuild from job data.')) return;
-    E.setNodes([]); E.setWires([]); E.setNid(1);
-    populate(); ensureWatchFan(); render();
+    var go = (typeof window.agxConfirm === 'function')
+      ? window.agxConfirm({
+          title: 'Reset graph',
+          message: 'Reset graph? This will delete all node positions and rebuild from job data.',
+          confirmLabel: 'Reset',
+          danger: true
+        })
+      : Promise.resolve(window.confirm('Reset graph?'));
+    go.then(function(ok) {
+      if (!ok) return;
+      E.setNodes([]); E.setWires([]); E.setNid(1);
+      populate(); ensureWatchFan(); render();
+    });
   });
 
   // Auto arrange
@@ -2365,15 +2375,26 @@ function init(){
   var snapSaveBtn=tab.querySelector('.ng-snapshot-save-btn');
   if(snapSaveBtn) snapSaveBtn.addEventListener('click',function(){
     var existing = E.getSnapshot ? E.getSnapshot() : null;
+    var doSave = function() {
+      var savedAt = E.saveSnapshot();
+      if(savedAt){
+        flashSaveIndicator('saved', 'Layout saved');
+        snapSaveBtn.title = 'Last saved: ' + new Date(savedAt).toLocaleString();
+      } else {
+        flashSaveIndicator('error', 'Save failed');
+      }
+    };
     if(existing && existing.savedAt){
-      if(!confirm('Replace the previously saved layout (from ' + new Date(existing.savedAt).toLocaleString() + ')?')) return;
-    }
-    var savedAt = E.saveSnapshot();
-    if(savedAt){
-      flashSaveIndicator('saved', 'Layout saved');
-      snapSaveBtn.title = 'Last saved: ' + new Date(savedAt).toLocaleString();
+      var go = (typeof window.agxConfirm === 'function')
+        ? window.agxConfirm({
+            title: 'Replace saved layout',
+            message: 'Replace the previously saved layout (from ' + new Date(existing.savedAt).toLocaleString() + ')?',
+            confirmLabel: 'Replace'
+          })
+        : Promise.resolve(window.confirm('Replace the previously saved layout?'));
+      go.then(function(ok) { if (ok) doSave(); });
     } else {
-      flashSaveIndicator('error', 'Save failed');
+      doSave();
     }
   });
 
@@ -2384,18 +2405,32 @@ function init(){
   if(snapRestoreBtn) snapRestoreBtn.addEventListener('click',function(){
     var snap = E.getSnapshot ? E.getSnapshot() : null;
     if(!snap){
-      alert('No saved layout to restore. Click Save Layout first.');
+      if (typeof window.agxAlert === 'function') {
+        window.agxAlert({ title: 'No saved layout', message: 'No saved layout to restore. Click Save Layout first.' });
+      } else {
+        alert('No saved layout to restore. Click Save Layout first.');
+      }
       return;
     }
     var when = snap.savedAt ? new Date(snap.savedAt).toLocaleString() : 'unknown time';
-    if(!confirm('Restore layout saved at ' + when + '? Anything you\'ve edited since will be replaced.')) return;
-    if(E.restoreSnapshot()){
-      applyTx();
-      render();
-      flashSaveIndicator('saved', 'Layout restored');
-    } else {
-      flashSaveIndicator('error', 'Restore failed');
-    }
+    var go = (typeof window.agxConfirm === 'function')
+      ? window.agxConfirm({
+          title: 'Restore saved layout',
+          message: 'Restore layout saved at ' + when + '?\n\nAnything you\'ve edited since will be replaced.',
+          confirmLabel: 'Restore',
+          danger: true
+        })
+      : Promise.resolve(window.confirm('Restore layout saved at ' + when + '?'));
+    go.then(function(ok) {
+      if (!ok) return;
+      if(E.restoreSnapshot()){
+        applyTx();
+        render();
+        flashSaveIndicator('saved', 'Layout restored');
+      } else {
+        flashSaveIndicator('error', 'Restore failed');
+      }
+    });
   });
 
   // Redraw grid when theme changes so new colors take effect

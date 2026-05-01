@@ -3,6 +3,27 @@ function renderWIPMain() {
             calculateWIPSummary();
         }
 
+        // _confirmDelete — shorthand for the "are you sure you want to
+        // delete X" pattern that's repeated across this file. Uses the
+        // in-house dialog when available (js/dialogs.js) and falls back
+        // to native confirm() so existing flows still work pre-load.
+        // Always returns a Promise<boolean>.
+        function _confirmDelete(label, opts) {
+            opts = opts || {};
+            var msg = opts.message || ('Delete this ' + label + '?' +
+                (opts.note ? '\n\n' + opts.note : ''));
+            if (typeof window.agxConfirm === 'function') {
+                return window.agxConfirm({
+                    title: opts.title || ('Delete ' + label),
+                    message: msg,
+                    confirmLabel: opts.confirmLabel || 'Delete',
+                    cancelLabel: opts.cancelLabel || 'Cancel',
+                    danger: opts.danger !== false
+                });
+            }
+            return Promise.resolve(window.confirm(msg));
+        }
+
         // Calculate sub costs from the Subcontractors tab entries
         function getSubCostForPhase(phaseId) {
             // Sum billedToDate of all subs assigned to this phase (supports multi-phase assignment)
@@ -457,12 +478,14 @@ function renderWIPMain() {
         }
 
         function deleteCO(coId) {
-            if (!confirm('Delete this change order?')) return;
-            var co = appData.changeOrders.find(c => c.id === coId);
-            if (co) reverseCOBudgetImpact(co);
-            appData.changeOrders = appData.changeOrders.filter(c => c.id !== coId);
-            saveData();
-            renderJobDetail(appState.currentJobId);
+            _confirmDelete('change order').then(function(ok) {
+                if (!ok) return;
+                var co = appData.changeOrders.find(c => c.id === coId);
+                if (co) reverseCOBudgetImpact(co);
+                appData.changeOrders = appData.changeOrders.filter(c => c.id !== coId);
+                saveData();
+                renderJobDetail(appState.currentJobId);
+            });
         }
 
         function renderChangeOrders(jobId) {
@@ -600,10 +623,12 @@ function renderWIPMain() {
         }
 
         function deletePO(poId) {
-            if (!confirm('Delete this purchase order?')) return;
-            appData.purchaseOrders = appData.purchaseOrders.filter(p => p.id !== poId);
-            saveData();
-            renderJobDetail(appState.currentJobId);
+            _confirmDelete('purchase order').then(function(ok) {
+                if (!ok) return;
+                appData.purchaseOrders = appData.purchaseOrders.filter(p => p.id !== poId);
+                saveData();
+                renderJobDetail(appState.currentJobId);
+            });
         }
 
         function renderPurchaseOrders(jobId) {
@@ -707,10 +732,12 @@ function renderWIPMain() {
         }
 
         function deleteInvoice(invId) {
-            if (!confirm('Delete this invoice?')) return;
-            appData.invoices = appData.invoices.filter(i => i.id !== invId);
-            saveData();
-            renderJobDetail(appState.currentJobId);
+            _confirmDelete('invoice').then(function(ok) {
+                if (!ok) return;
+                appData.invoices = appData.invoices.filter(i => i.id !== invId);
+                saveData();
+                renderJobDetail(appState.currentJobId);
+            });
         }
 
         function renderInvoices(jobId) {
@@ -1025,22 +1052,48 @@ function renderWIPMain() {
             const job = appData.jobs.find(j => j.id === appState.currentJobId);
             if (!job) return;
             if (job.status === 'Archived') {
+                // Unarchive — no confirm needed, it's a recoverable toggle
                 job.status = 'Completed';
-            } else {
-                if (!confirm('Archive this job? It will be hidden from the active list.')) return;
-                job.status = 'Archived';
-                job.archivedAt = new Date().toISOString();
+                job.updatedAt = new Date().toISOString();
+                saveData();
+                renderJobDetail(job.id);
+                return;
             }
-            job.updatedAt = new Date().toISOString();
-            saveData();
-            renderJobDetail(job.id);
+            var go = (typeof window.agxConfirm === 'function')
+              ? window.agxConfirm({
+                  title: 'Archive job',
+                  message: 'Archive "' + (job.title || 'this job') + '"? It will be hidden from the active list.',
+                  confirmLabel: 'Archive'
+                })
+              : Promise.resolve(window.confirm('Archive this job?'));
+            go.then(function(ok) {
+              if (!ok) return;
+              job.status = 'Archived';
+              job.archivedAt = new Date().toISOString();
+              job.updatedAt = new Date().toISOString();
+              saveData();
+              renderJobDetail(job.id);
+            });
         }
 
         function deleteCurrentJob() {
             const jobId = appState.currentJobId;
             const job = appData.jobs.find(j => j.id === jobId);
             if (!job) return;
-            if (!confirm('Permanently delete "' + (job.title || 'this job') + '" and all its buildings, phases, subs, and change orders? This cannot be undone.')) return;
+            var go = (typeof window.agxConfirm === 'function')
+              ? window.agxConfirm({
+                  title: 'Delete job permanently',
+                  message: 'Permanently delete "' + (job.title || 'this job') + '" and all its buildings, phases, subs, and change orders?\n\nThis cannot be undone.',
+                  confirmLabel: 'Delete forever',
+                  danger: true
+                })
+              : Promise.resolve(window.confirm('Permanently delete this job?'));
+            go.then(function(ok) {
+              if (!ok) return;
+              _deleteJobConfirmed(jobId);
+            });
+        }
+        function _deleteJobConfirmed(jobId) {
             // Remove all related data locally
             appData.buildings = appData.buildings.filter(b => b.jobId !== jobId);
             appData.phases = appData.phases.filter(p => p.jobId !== jobId);
