@@ -1074,6 +1074,7 @@
   // The four job-side tools available for trust toggling, with friendly
   // labels for the popover.
   var TRUSTABLE_TOOLS = [
+    { name: 'create_node',            label: 'Create a new graph node (t1/t2/cost-bucket/etc.)' },
     { name: 'set_phase_pct_complete', label: 'Set phase % complete' },
     { name: 'set_phase_field',        label: 'Set phase $ field (materials/labor/sub/equip)' },
     { name: 'set_node_value',         label: 'Set cost node value (mat/labor/gc/other/sub)' },
@@ -1183,6 +1184,101 @@
           try { window.ngRender(); } catch (e) {}
         }
         return Math.round(oldNodePct) + '% → ' + Math.round(newPct) + '% on node "' + (nodeP.label || nodeP.id) + '" (' + nodeP.type + ')';
+      }
+
+      case 'create_node': {
+        // Spawn a new node on the graph. The engine's createDataEntry
+        // path automatically creates the underlying data record for
+        // structural types (t1=building, t2=phase, co=change order,
+        // po, inv, sub) so the AI doesn't have to plumb ids manually.
+        // Position is auto-cascaded near the WIP master node so the
+        // graph stays tidy on bulk creates.
+        var jidCN = (window.appState && appState.currentJobId) || null;
+        if (!jidCN) throw new Error('No job is open.');
+        if (typeof NG === 'undefined' || !NG.addNode) {
+          throw new Error('Node graph is not loaded — open the Workspace tab on this job first so the engine is initialized.');
+        }
+        var t = String(input.type || '').toLowerCase();
+        var allowedTypes = { t1:1, t2:1, labor:1, mat:1, gc:1, other:1, burden:1, sub:1, po:1, inv:1, co:1, watch:1, note:1 };
+        if (!allowedTypes[t]) throw new Error('Unsupported node type "' + t + '". Pick one of: ' + Object.keys(allowedTypes).join(', '));
+        var lbl = String(input.label || '').trim();
+        if (!lbl && t !== 'note') throw new Error('label required for ' + t + ' nodes.');
+
+        // Compute a tidy position. Cascade newly-created nodes in a
+        // grid so a bulk-create doesn't pile every node on top of the
+        // last one — base off the highest-x existing node + offset.
+        var existingNodes = NG.nodes() || [];
+        var baseX = 80, baseY = 80;
+        if (existingNodes.length) {
+          // Find rightmost x, place 220px to its right; wrap to next
+          // row every 6 nodes so big restructures stay readable.
+          var maxX = 0, maxY = 0;
+          existingNodes.forEach(function(n) {
+            if ((n.x || 0) > maxX) maxX = n.x || 0;
+            if ((n.y || 0) > maxY) maxY = n.y || 0;
+          });
+          // Count nodes recently created (no data.id yet, or just created
+          // in this turn). We use a tiny per-call offset to space them.
+          var spawnOffset = (window._agxAiSpawnCounter = ((window._agxAiSpawnCounter || 0) + 1));
+          baseX = maxX + 220;
+          baseY = 80 + ((spawnOffset - 1) % 6) * 140;
+          if (spawnOffset > 6) baseX = baseX - 220 * Math.floor((spawnOffset - 1) / 6);
+        }
+
+        var newNode = NG.addNode(t, baseX, baseY, lbl);
+        if (!newNode) throw new Error('addNode returned null — type may not support auto-creation.');
+
+        // Optional initial values.
+        if (typeof input.value === 'number' && isFinite(input.value)) {
+          newNode.value = Math.max(0, input.value);
+        }
+        if (typeof input.budget === 'number' && isFinite(input.budget)) {
+          newNode.budget = Math.max(0, input.budget);
+          // Mirror to the underlying data record for t1/t2 so the WIP
+          // page reads the budget correctly.
+          if (newNode.data && (t === 't1' || t === 't2')) {
+            newNode.data.budget = newNode.budget;
+            if (t === 't2') newNode.data.phaseBudget = newNode.budget;
+          }
+        }
+        if (typeof input.pct_complete === 'number' && isFinite(input.pct_complete)) {
+          newNode.pctComplete = Math.max(0, Math.min(100, input.pct_complete));
+          if (newNode.data && (t === 't1' || t === 't2')) {
+            newNode.data.pctComplete = newNode.pctComplete;
+          }
+        }
+
+        // Optional auto-wire to an existing target.
+        var wiredTo = null;
+        if (input.attach_to_node_id) {
+          var liveWiresCN = NG.wires();
+          var attachId = String(input.attach_to_node_id);
+          var attachTarget = existingNodes.find(function(n) { return n.id === attachId; });
+          if (!attachTarget) {
+            // Try label match as a courtesy — same pattern as wire_nodes.
+            var lower = attachId.trim().toLowerCase();
+            attachTarget = existingNodes.find(function(n) { return (n.label || '').trim().toLowerCase() === lower; });
+          }
+          if (attachTarget) {
+            liveWiresCN.push({
+              fromNode: newNode.id,
+              fromPort: 0,
+              toNode: attachTarget.id,
+              toPort: 0
+            });
+            wiredTo = attachTarget;
+          }
+        }
+
+        if (typeof NG.saveGraph === 'function') NG.saveGraph();
+        if (typeof window.saveData === 'function') window.saveData();
+        if (typeof window.ngRender === 'function') {
+          try { window.ngRender(); } catch (e) {}
+        }
+
+        var summary = 'Created ' + t + ' node "' + (newNode.label || newNode.id) + '" (id=' + newNode.id + ')';
+        if (wiredTo) summary += ' → wired to ' + (wiredTo.label || wiredTo.id);
+        return summary;
       }
 
       case 'set_phase_field': {
@@ -1729,6 +1825,38 @@
           (nvOld != null ? fmtNV(nvOld) + ' &rarr; ' : '') +
           '<strong style="color:#34d399;">' + fmtNV(input.amount) + '</strong>' +
         '</div>';
+    } else if (tu.name === 'create_node') {
+      var typeLabels = {
+        t1: 'Building (T1)', t2: 'Phase (T2)',
+        labor: 'Labor', mat: 'Materials', gc: 'Gen. Conditions',
+        other: 'Other', burden: 'Direct Burden',
+        sub: 'Subcontractor', po: 'Purchase Order', inv: 'Invoice',
+        co: 'Change Order', watch: 'Watch', note: 'Note'
+      };
+      var cnFmt = function(n) { return '$' + Number(n || 0).toLocaleString('en-US', { maximumFractionDigits: 0 }); };
+      var meta = [];
+      if (input.value != null) meta.push('value: ' + cnFmt(input.value));
+      if (input.budget != null) meta.push('budget: ' + cnFmt(input.budget));
+      if (input.pct_complete != null) meta.push('% complete: ' + Math.round(Number(input.pct_complete)) + '%');
+      var attachInfo = '';
+      if (input.attach_to_node_id) {
+        var liveCN = (typeof NG !== 'undefined' && NG.nodes) ? NG.nodes() : [];
+        var attachN = liveCN.find(function(n) { return n.id === input.attach_to_node_id; });
+        attachInfo = '<div style="font-size:11px;color:var(--text-dim,#aaa);margin-top:4px;">' +
+          '&rarr; wires to <strong>' + escapeHTMLLocal(attachN ? (attachN.label || attachN.id) : input.attach_to_node_id) + '</strong>' +
+        '</div>';
+      }
+      heading = '&#x2795; Create node';
+      detail =
+        '<div style="font-size:13px;color:var(--text,#fff);font-weight:600;">' +
+          escapeHTMLLocal(input.label || '(unnamed)') +
+          ' <span style="font-size:11px;color:var(--text-dim,#888);font-weight:400;">(' +
+          escapeHTMLLocal(typeLabels[input.type] || input.type || '?') + ')</span>' +
+        '</div>' +
+        (meta.length
+          ? '<div style="font-size:12px;color:var(--text,#ccc);margin-top:3px;">' + escapeHTMLLocal(meta.join(' · ')) + '</div>'
+          : '') +
+        attachInfo;
     } else if (tu.name === 'wire_nodes') {
       var graphs = {};
       try { graphs = JSON.parse(localStorage.getItem('agx-nodegraphs') || '{}'); } catch (e) {}
