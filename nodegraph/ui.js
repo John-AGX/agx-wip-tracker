@@ -790,14 +790,30 @@ function findLoadedNode(type,entry){
   }
   return null;
 }
-function focusNode(n){
+// Pan (and optionally zoom) so the node sits centered in the viewport.
+// targetZoom is optional — when supplied, we ramp to it before computing
+// the centering pan so the math uses the post-zoom scale.
+function focusNode(n, opts){
   if(!wrap) return;
+  opts = opts || {};
+  if (typeof opts.zoom === 'number' && isFinite(opts.zoom)) {
+    var nz = Math.max(0.2, Math.min(3, opts.zoom));
+    E.zm(nz);
+  }
   var z=E.zm();
   var cx=-(n.x+85)+wrap.clientWidth/2/z;
   var cy=-(n.y+30)+wrap.clientHeight/2/z;
   E.pan(cx,cy);
   applyTx();
   render();
+  // Brief highlight pulse so the user sees which node was focused —
+  // helpful when Ctrl+Clicking from a busy area of the graph.
+  setTimeout(function() {
+    var el = canvasEl && canvasEl.querySelector('[data-id="' + n.id + '"]');
+    if (!el) return;
+    el.classList.add('ng-focus-pulse');
+    setTimeout(function() { el.classList.remove('ng-focus-pulse'); }, 900);
+  }, 0);
 }
 function showDataPicker(type, cb){
   var entries=getJobEntries(type);
@@ -1409,6 +1425,32 @@ function initEvents(){
     }
     var nel=e.target.closest('.ng-node');
     if(nel&&!e.target.closest('input')&&!e.target.closest('textarea')&&!e.target.closest('[data-rename]')){
+      // Ctrl+Click (or Cmd+Click on Mac) → focus + zoom on this node.
+      // Doubles as a quick "find" for any node anywhere on the graph
+      // — works on any node type, no need to hunt for it after wiring
+      // / dragging beyond the viewport.
+      if (e.ctrlKey || e.metaKey) {
+        e.stopPropagation();
+        e.preventDefault();
+        var nidF = nel.getAttribute('data-id');
+        var nF = E.findNode(nidF);
+        if (!nF) return;
+        // Select the focused node so the highlight stays visible.
+        if (selN && selN !== nidF) {
+          var oldF = canvasEl.querySelector('[data-id="' + selN + '"]');
+          if (oldF) oldF.classList.remove('ng-sel');
+        }
+        selN = nidF;
+        nel.classList.add('ng-sel');
+        updateConnectedHighlight();
+        // Zoom target: 1.4 if currently zoomed out, otherwise nudge
+        // to 1.6 so a second Ctrl+Click on the same node zooms in
+        // a bit more before plateauing. Keeps repeat-clicking useful.
+        var curZ = E.zm();
+        var targetZ = curZ < 1.2 ? 1.4 : Math.min(2.0, curZ + 0.2);
+        focusNode(nF, { zoom: targetZ });
+        return;
+      }
       e.stopPropagation();
       var nid2=nel.getAttribute('data-id'),n3=E.findNode(nid2);if(!n3)return;
       // Deselect old, select new without full re-render
