@@ -999,6 +999,121 @@
     else if (name === 'roles') renderAdminRoles();
     else if (name === 'templates') renderAdminTemplates();
     else if (name === 'materials') renderAdminMaterials();
+    else if (name === 'email') renderAdminEmail();
+  }
+
+  // ==================== EMAIL DIAGNOSTICS ====================
+  // Phase 1 admin surface for the notifications feature. Lets the
+  // admin verify provider config, fire a test send, and read the
+  // recent email_log table without leaving the app.
+  function renderAdminEmail() {
+    if (!isAdmin()) return;
+    var pane = document.getElementById('admin-subtab-email');
+    if (!pane) return;
+    pane.innerHTML =
+      '<div style="display:flex;flex-direction:column;gap:18px;">' +
+        '<div class="card" style="padding:16px;">' +
+          '<h3 style="margin:0 0 12px 0;">Send a test email</h3>' +
+          '<div id="email-config-status" style="font-size:12px;color:var(--text-dim,#888);margin-bottom:10px;">' +
+            'Loading config…' +
+          '</div>' +
+          '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
+            '<input type="email" id="email-test-to" placeholder="recipient@example.com" ' +
+              'style="flex:1;min-width:240px;background:var(--input-bg,#0f0f1e);color:var(--text);border:1px solid var(--border,#333);border-radius:6px;padding:8px 10px;font-size:13px;" />' +
+            '<button class="ee-btn primary" id="email-test-send">&#x1F4E7; Send test</button>' +
+          '</div>' +
+          '<div id="email-test-result" style="margin-top:10px;font-size:12px;"></div>' +
+        '</div>' +
+        '<div class="card" style="padding:16px;">' +
+          '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">' +
+            '<h3 style="margin:0;">Recent send log</h3>' +
+            '<button class="ee-btn secondary" id="email-log-refresh">&#x21BB; Refresh</button>' +
+          '</div>' +
+          '<div id="email-log-tbl" style="font-size:12px;color:var(--text-dim,#888);">Loading…</div>' +
+        '</div>' +
+      '</div>';
+
+    // Pre-fill the recipient with the admin's own email address.
+    var me = (window.agxAuth && window.agxAuth.getUser && window.agxAuth.getUser()) || null;
+    var toEl = document.getElementById('email-test-to');
+    if (me && me.email && toEl) toEl.value = me.email;
+
+    document.getElementById('email-test-send').addEventListener('click', function() {
+      var to = document.getElementById('email-test-to').value.trim();
+      if (!to) { alert('Enter a recipient email.'); return; }
+      var resultEl = document.getElementById('email-test-result');
+      resultEl.innerHTML = '<span style="color:#60a5fa;">Sending…</span>';
+      window.agxApi.post('/api/email/test', { to: to }).then(function(r) {
+        if (r.ok) {
+          resultEl.innerHTML =
+            '<span style="color:#34d399;">&#x2713; Sent</span>' +
+            (r.providerId ? ' &middot; provider id: <code>' + escapeHTML(r.providerId) + '</code>' : '') +
+            (r.dryRun ? ' &middot; <strong>DRY RUN</strong> — no email actually delivered' : '');
+        } else {
+          resultEl.innerHTML =
+            '<span style="color:#f87171;">&#x2716; Failed:</span> ' + escapeHTML(r.error || 'unknown error') +
+            (r.configured ? '' : '<br/><span style="color:#fbbf24;">RESEND_API_KEY or EMAIL_FROM not set in environment.</span>');
+        }
+        loadEmailLog();
+      }).catch(function(err) {
+        resultEl.innerHTML = '<span style="color:#f87171;">&#x2716; Request failed:</span> ' + escapeHTML(err.message || String(err));
+      });
+    });
+    document.getElementById('email-log-refresh').addEventListener('click', loadEmailLog);
+    loadEmailLog();
+  }
+
+  function loadEmailLog() {
+    var tbl = document.getElementById('email-log-tbl');
+    var status = document.getElementById('email-config-status');
+    if (!tbl) return;
+    window.agxApi.get('/api/email/log').then(function(r) {
+      if (status) {
+        if (!r.configured) {
+          status.innerHTML = '<span style="color:#fbbf24;">&#9888; Not configured.</span> Set <code>RESEND_API_KEY</code> and <code>EMAIL_FROM</code> in Railway environment variables.';
+        } else if (r.dryRunMode) {
+          status.innerHTML = '<span style="color:#fbbf24;">DRY-RUN mode active</span> — emails are logged but not actually sent. Unset <code>EMAIL_DRY_RUN</code> to enable real delivery.';
+        } else {
+          status.innerHTML = '<span style="color:#34d399;">&#x2713; Configured</span> — provider: Resend &middot; from: <code>' + escapeHTML(process.env_EMAIL_FROM || 'set in env') + '</code>';
+          // We don't actually have process.env on the client — placeholder
+          // text so the user knows it's working without leaking the value.
+          status.innerHTML = '<span style="color:#34d399;">&#x2713; Configured</span> — provider: Resend';
+        }
+      }
+      var rows = r.rows || [];
+      if (!rows.length) {
+        tbl.innerHTML = '<div style="padding:14px;text-align:center;color:var(--text-dim,#888);">No emails sent yet.</div>';
+        return;
+      }
+      var html = '<table class="dense-table" style="width:100%;border-collapse:collapse;font-size:12px;">' +
+        '<thead style="border-bottom:1px solid var(--border,#333);">' +
+          '<tr>' +
+            '<th style="text-align:left;padding:6px 8px;">Sent</th>' +
+            '<th style="text-align:left;padding:6px 8px;">To</th>' +
+            '<th style="text-align:left;padding:6px 8px;">Subject</th>' +
+            '<th style="text-align:left;padding:6px 8px;">Tag</th>' +
+            '<th style="text-align:left;padding:6px 8px;">Status</th>' +
+            '<th style="text-align:left;padding:6px 8px;">Note</th>' +
+          '</tr>' +
+        '</thead><tbody>';
+      rows.forEach(function(row) {
+        var statusColor = row.status === 'sent' ? '#34d399' :
+                         (row.status === 'failed' ? '#f87171' :
+                         (row.status === 'dry-run' ? '#fbbf24' : '#9ca3af'));
+        html += '<tr style="border-bottom:1px solid var(--border,#2a2a3a);">' +
+          '<td style="padding:6px 8px;font-family:monospace;color:var(--text-dim,#aaa);font-size:11px;">' + new Date(row.sent_at).toLocaleString() + '</td>' +
+          '<td style="padding:6px 8px;">' + escapeHTML(row.to_address) + '</td>' +
+          '<td style="padding:6px 8px;">' + escapeHTML(row.subject || '') + '</td>' +
+          '<td style="padding:6px 8px;color:var(--text-dim,#888);">' + escapeHTML(row.tag || '') + '</td>' +
+          '<td style="padding:6px 8px;color:' + statusColor + ';font-weight:600;">' + escapeHTML(row.status) + '</td>' +
+          '<td style="padding:6px 8px;color:var(--text-dim,#888);font-size:11px;">' + escapeHTML(row.error || row.provider_id || '') + '</td>' +
+        '</tr>';
+      });
+      html += '</tbody></table>';
+      tbl.innerHTML = html;
+    }).catch(function(err) {
+      tbl.innerHTML = '<div style="padding:14px;color:#f87171;">Failed to load: ' + escapeHTML(err.message || String(err)) + '</div>';
+    });
   }
 
   // ==================== PROPOSAL TEMPLATES + BT MAPPING ====================

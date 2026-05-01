@@ -423,6 +423,25 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_material_purchases_date ON material_purchases(purchase_date);
     CREATE INDEX IF NOT EXISTS idx_material_purchases_job ON material_purchases(job_name);
 
+    -- Email send log — every transactional email goes through
+    -- server/email.js which writes a row here so admins can see
+    -- delivery state, retry failures, and audit who got what.
+    CREATE TABLE IF NOT EXISTS email_log (
+      id TEXT PRIMARY KEY,
+      to_address TEXT NOT NULL,
+      subject TEXT NOT NULL,
+      tag TEXT,                                  -- short event tag ("password_reset" / "schedule_entry" / etc.)
+      status TEXT NOT NULL,                      -- 'sent' | 'failed' | 'dry-run' | 'unconfigured' | 'invalid'
+      provider_id TEXT,                          -- Resend's message id, when available
+      error TEXT,
+      dry_run BOOLEAN NOT NULL DEFAULT FALSE,
+      sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_email_log_sent_at ON email_log(sent_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_email_log_status ON email_log(status);
+    CREATE INDEX IF NOT EXISTS idx_email_log_tag ON email_log(tag);
+    CREATE INDEX IF NOT EXISTS idx_email_log_to ON email_log(to_address);
+
     -- Schedule page: production entries placed on the calendar.
     -- Phase 2 of the schedule feature — replaces the localStorage
     -- shim from Phase 1 with server-persisted, multi-device-synced

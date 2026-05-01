@@ -813,6 +813,7 @@
                         <button class="ws-right-tab" data-admin-subtab="roles" onclick="switchAdminSubTab('roles')">Roles</button>
                         <button class="ws-right-tab" data-admin-subtab="templates" onclick="switchAdminSubTab('templates')">Templates</button>
                         <button class="ws-right-tab" data-admin-subtab="materials" onclick="switchAdminSubTab('materials')">Materials</button>
+                        <button class="ws-right-tab" data-admin-subtab="email" onclick="switchAdminSubTab('email')">Email</button>
                     </div>
 
                     <!-- Users sub-tab -->
@@ -880,6 +881,7 @@
                     <!-- Materials catalog sub-tab — built from vendor purchase
                          history CSVs; AG queries this for line-item proposals -->
                     <div id="admin-subtab-materials" class="admin-subtab-content" style="display:none;"></div>
+                    <div id="admin-subtab-email" class="admin-subtab-content" style="display:none;"></div>
 
                     <!-- Job Assignments sub-tab -->
                     <div id="admin-subtab-jobs" class="admin-subtab-content" style="display:none;">
@@ -2041,7 +2043,7 @@
     <script src="js/api.js?v=12"></script>
     <script src="js/attachments.js?v=3"></script>
     <script src="js/pdf-viewer.js?v=1"></script>
-    <script src="js/admin.js?v=13"></script>
+    <script src="js/admin.js?v=14"></script>
     <script src="js/clients.js?v=8"></script>
     <script src="js/subs.js?v=1"></script>
     <script src="js/job-audit.js?v=1"></script>
