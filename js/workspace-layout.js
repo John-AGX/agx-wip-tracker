@@ -328,11 +328,6 @@
           '<span class="ws-floating-title">Workspace</span>' +
         '</span>' +
         '<div class="ws-floating-actions">' +
-          // Pop-out toggle: only useful when in embed mode (switches
-          // to the fullscreen Node Graph overlay). Hidden via CSS
-          // when the panel is already in graph mode — the graph's
-          // own Close button takes you back to embed.
-          '<button class="ws-floating-btn ws-floating-popout-btn" id="wsFloatingPopOutBtn" title="Open in Node Graph view">&#x1F310;</button>' +
           '<button class="ws-floating-btn" id="wsFloatingMinBtn" title="Minimize to folder icon">&#x2013;</button>' +
         '</div>' +
       '</div>' +
@@ -519,14 +514,6 @@
       minimizeWorkspace();
     });
 
-    var popOutBtn = document.getElementById('wsFloatingPopOutBtn');
-    if (popOutBtn) popOutBtn.addEventListener('click', function(e) {
-      e.stopPropagation();
-      if (typeof window._wsLayoutPopOutToGraph === 'function') {
-        window._wsLayoutPopOutToGraph();
-      }
-    });
-
     _floatingState.inited = true;
   }
 
@@ -550,7 +537,7 @@
     var canvas = document.querySelector('#nodeGraphTab .ng-canvas');
     if (!panel || !canvas) return;
     initFloatingPanel(); // safe to call repeatedly
-    panel.classList.remove('ws-floating-tab-mode', 'ws-floating-embed-mode');
+    panel.classList.remove('ws-floating-tab-mode');
     panel.classList.add('ws-floating-graph-mode');
     // Restore previously-saved graph-mode position+size, or seed defaults
     var x = panel.dataset.graphX != null ? parseFloat(panel.dataset.graphX) : 100;
@@ -584,48 +571,9 @@
     _floatingState.maximized = false;
   }
 
-  // ── Embed mode: workspace lives inline inside the Workspace
-  // sub-tab content area as a normal page block (no fullscreen
-  // graph). Default mode for the Workspace tab; user can opt into
-  // the graph view via the panel-header toggle button. */
-  function embedWorkspaceInTab() {
-    var panel = document.getElementById('wsFloatingPanel');
-    var canvas = document.getElementById('job-workspace');
-    if (!panel || !canvas) return;
-    initFloatingPanel(); // safe to call repeatedly
-    panel.classList.remove('ws-floating-tab-mode', 'ws-floating-graph-mode',
-                            'ws-floating-folder', 'ws-floating-maximized');
-    panel.classList.add('ws-floating-embed-mode');
-    // Drop the absolute coords used by graph mode — embed mode uses
-    // normal page flow.
-    panel.style.position = '';
-    panel.style.left = '';
-    panel.style.top = '';
-    panel.style.width = '';
-    panel.style.height = '';
-    canvas.appendChild(panel);
-    panel.style.display = 'flex';
-    canvas.style.display = 'block';
-    _floatingState.maximized = false;
-  }
-
-  // Toggle from embed → graph view (the previous default behavior).
-  function popOutToGraph() {
-    var jobId = (typeof appState !== 'undefined') ? appState.currentJobId : null;
-    if (!jobId || typeof window.openNodeGraph !== 'function') return;
-    window.openNodeGraph(jobId);
-    setTimeout(function() {
-      watchGraphTabClose();
-      attachWorkspaceToGraph();
-    }, 50);
-  }
-  // Expose so the panel-header button (defined alongside other
-  // floating-panel buttons) can hook into them.
-  window._wsLayoutPopOutToGraph = popOutToGraph;
   // Watch the node graph tab for class changes — when it loses .active
-  // (close button clicked), bring the workspace back to embed mode if
-  // the user is still on the Workspace sub-tab. Otherwise tuck it
-  // offscreen the old way.
+  // (close button clicked), make sure the workspace panel detaches
+  // and the AGX nav header is restored if the user had hidden it.
   function watchGraphTabClose() {
     var tab = document.getElementById('nodeGraphTab');
     if (!tab || tab._wsLayoutWatched) return;
@@ -633,11 +581,18 @@
     var obs = new MutationObserver(function() {
       if (!tab.classList.contains('active')) {
         var panel = document.getElementById('wsFloatingPanel');
-        if (!panel || !panel.classList.contains('ws-floating-graph-mode')) return;
-        var activeSubTab = document.querySelector('.ws-right-tab.active');
-        var stillOnWorkspaceTab = activeSubTab && activeSubTab.dataset.panel === 'job-workspace';
-        if (stillOnWorkspaceTab) embedWorkspaceInTab();
-        else detachWorkspaceFromGraph();
+        if (panel && panel.classList.contains('ws-floating-graph-mode')) {
+          detachWorkspaceFromGraph();
+        }
+        // Bring the header back so other tabs aren't missing it.
+        if (document.body.classList.contains('ng-graph-fullscreen')) {
+          document.body.classList.remove('ng-graph-fullscreen');
+          var maxBtn = document.getElementById('ngFullscreenGraphBtn');
+          if (maxBtn) {
+            maxBtn.innerHTML = '\u{1F5D6} Maximize';
+            maxBtn.title = 'Hide the AGX nav header to give the graph the entire viewport (toggle)';
+          }
+        }
       }
     });
     obs.observe(tab, { attributes: true, attributeFilter: ['class'] });
@@ -786,8 +741,20 @@
     if (_toolbarWired) return;
     var focusBtn = document.getElementById('ngWsFocusBtn');
     var fsBtn = document.getElementById('ngWsFullscreenBtn');
+    var maxBtn = document.getElementById('ngFullscreenGraphBtn');
     if (focusBtn) focusBtn.addEventListener('click', focusOnWorkspace);
     if (fsBtn) fsBtn.addEventListener('click', toggleFullscreenWorkspace);
+    // Toggle the AGX nav header. body class drives the CSS in
+    // nodegraph.css (header { display: none } + #nodeGraphTab top: 0).
+    // Button label flips between Maximize and Restore so the user
+    // sees current state.
+    if (maxBtn) maxBtn.addEventListener('click', function() {
+      var on = document.body.classList.toggle('ng-graph-fullscreen');
+      maxBtn.innerHTML = on ? '\u{1F5D7} Restore' : '\u{1F5D6} Maximize';
+      maxBtn.title = on
+        ? 'Restore the AGX nav header (toggle)'
+        : 'Hide the AGX nav header to give the graph the entire viewport (toggle)';
+    });
     _toolbarWired = true;
   }
   // Click the minimized folder icon to restore. Bound globally on the
@@ -858,18 +825,19 @@
         var targetId = this.getAttribute('data-panel');
         var jobId = (typeof appState !== 'undefined') ? appState.currentJobId : null;
 
-        // Workspace tab embeds the workspace panel inline into the
-        // tab content area by default. Toolbars, formula bar, and
-        // sheet tabs render normally inside the page. The user can
-        // pop out into the fullscreen Node Graph view via the
-        // panel-header globe button when they want the graph
-        // overlay.
+        // Workspace tab opens the node graph and injects the floating
+        // workspace panel into the graph's transformed canvas, so the
+        // workspace lives in graph coordinate space (pan/zoom with the
+        // graph, drag like a node). Every other tab tears that down.
         if (targetId === 'job-workspace') {
           var allPanels = Array.from(rc.children);
           allPanels.forEach(function(p) { if (!p.classList.contains('ws-job-info-details')) p.style.display = 'none'; });
-          if (jobId) {
-            ensureWorkspaceCanvas(rc);
-            embedWorkspaceInTab();
+          if (jobId && typeof window.openNodeGraph === 'function') {
+            window.openNodeGraph(jobId);
+            setTimeout(function() {
+              watchGraphTabClose();
+              attachWorkspaceToGraph();
+            }, 50);
           }
           return;
         }

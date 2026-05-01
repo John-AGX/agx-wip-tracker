@@ -720,29 +720,6 @@ body.light-mode .jh-metrics-strip::-webkit-scrollbar-thumb {
 .ws-floating-panel.ws-floating-tab-mode {
   position: fixed;
 }
-/* embed-mode: workspace lives inline in the Workspace sub-tab as a
-   block-level element. No fullscreen graph, no fixed positioning;
-   the panel takes the available width and a generous fixed height
-   so the spreadsheet has room to breathe. User can pop out into
-   graph mode via the panel-header globe button. */
-.ws-floating-panel.ws-floating-embed-mode {
-  position: relative;
-  left: 0 !important;
-  top: 0 !important;
-  width: 100%;
-  height: calc(100vh - 280px);
-  min-height: 480px;
-  border-radius: 10px;
-  /* Defeats the inherited transform from .ng-canvas if the user
-     bounces in/out of graph mode. */
-  transform: none;
-}
-/* The pop-out (globe) button only makes sense when we have somewhere
-   else to go — i.e. we're in embed mode. In graph mode the graph's
-   own Close button is the way back. Folder/minimized state hides
-   actions entirely (existing rule). */
-.ws-floating-popout-btn { display: none; }
-.ws-floating-panel.ws-floating-embed-mode .ws-floating-popout-btn { display: inline-flex; align-items: center; justify-content: center; }
 /* graph-mode: lives inside the transformed .ng-canvas, pans/zooms
    with the graph. Positioning is absolute relative to the canvas. */
 .ws-floating-panel.ws-floating-graph-mode {
