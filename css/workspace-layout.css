@@ -410,6 +410,30 @@
   box-shadow: 0 4px 14px rgba(0,0,0,0.5);
 }
 
+/* Light-mode metric strip cards: keep the colored value text but
+   swap the deep-navy gradient for a clean white surface so the cards
+   read as proper dashboard tiles instead of dark blocks floating on
+   a light page. The label color (rgba white) needs a darker variant
+   too. */
+body.light-mode .jh-strip-card {
+  background: linear-gradient(135deg, #ffffff 0%, #f8fafc 50%, #f1f5f9 100%);
+  border-color: rgba(0,0,0,0.08);
+  box-shadow: 0 2px 6px rgba(0,0,0,0.06);
+}
+body.light-mode .jh-strip-card:hover {
+  border-color: rgba(0,0,0,0.18);
+  box-shadow: 0 4px 14px rgba(0,0,0,0.12);
+}
+body.light-mode .jh-strip-card::before {
+  background: linear-gradient(120deg, transparent 30%, rgba(0,0,0,0.03) 50%, transparent 70%);
+}
+body.light-mode .jh-strip-label {
+  color: rgba(17, 24, 39, 0.55);
+}
+body.light-mode .jh-metrics-strip::-webkit-scrollbar-thumb {
+  background: rgba(0,0,0,0.15);
+}
+
 .jh-strip-label {
   font-size: 9px;
   font-weight: 600;

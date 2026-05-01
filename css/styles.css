@@ -23,6 +23,12 @@
             --scrollbar-thumb: #3a3f50;
             --context-bg: #242836;
             --input-bg: #0f1117;
+            /* --card-bg sits one step deeper than --surface so nested
+               panels and tables read as elevated cards. Hard-coded in
+               27+ inline styles as the var(--card-bg, #0f0f1e) fallback;
+               defining it here lets light mode override that fallback. */
+            --card-bg: #0f0f1e;
+            --bg-dark: #0a0c12;
             --shadow: rgba(0,0,0,0.3);
             --overlay-light: rgba(255,255,255,0.06);
         }
@@ -51,6 +57,11 @@
             --scrollbar-thumb: #9ca3af;
             --context-bg: #ffffff;
             --input-bg: #ffffff;
+            /* Light-mode --card-bg is white so nested cards / tables /
+               inputs that hardcoded var(--card-bg, #0f0f1e) become
+               readable instead of falling back to the dark literal. */
+            --card-bg: #ffffff;
+            --bg-dark: #e5e7eb;
             --shadow: rgba(0,0,0,0.1);
             --overlay-light: rgba(0,0,0,0.04);
         }
@@ -93,6 +104,50 @@
         }
         body:not(.light-mode) ::-webkit-scrollbar-corner {
             background: var(--surface);
+        }
+
+        /* ── Light-mode AI panel readability ────────────────────
+           The WIP Assistant uses rgba(255,255,255, 0.02–0.08) inline
+           styles to draw subtle card chips on its dark surface. In
+           light mode those backgrounds become invisible on the white
+           panel. Override the inline styles via higher-specificity
+           rules so chips, presets, and the input pill stay legible.
+           Inline-style precedence is matched by id-targeted rules
+           with !important. */
+        body.light-mode #agx-ai-panel #ai-input-pill {
+            background: var(--surface2, #f1f5f9) !important;
+            border-color: var(--border, #d1d5db) !important;
+        }
+        body.light-mode #agx-ai-panel #ai-input-pill:focus-within {
+            background: #fff !important;
+            border-color: var(--accent, #2563eb) !important;
+        }
+        body.light-mode #agx-ai-panel #ai-presets {
+            background: var(--surface2, #f1f5f9) !important;
+        }
+        body.light-mode #agx-ai-panel #ai-clear {
+            background: var(--surface2, #f1f5f9) !important;
+            border-color: var(--border, #d1d5db) !important;
+            color: var(--text-dim, #4b5563) !important;
+        }
+        /* Chips inside the panel: tool-call cards, attached files,
+           applied-edit cards, citation pills. They share the
+           rgba(255,255,255,0.04) hardcoded backdrop. Match by
+           styled inline pattern via attribute starts-with. */
+        body.light-mode #agx-ai-panel [style*="background:rgba(255,255,255,0.04)"],
+        body.light-mode #agx-ai-panel [style*="background: rgba(255,255,255,0.04)"],
+        body.light-mode #agx-ai-panel [style*="background:rgba(255,255,255,0.06)"],
+        body.light-mode #agx-ai-panel [style*="background:rgba(255,255,255,0.08)"] {
+            background: var(--surface2, #f1f5f9) !important;
+            color: var(--text, #111827) !important;
+        }
+        /* Modal sharing-line and admin job-share rows use the same
+           white-with-alpha trick. Same fix. */
+        body.light-mode .modal-content [style*="background:rgba(255,255,255,0.04)"],
+        body.light-mode .modal-content [style*="background: rgba(255,255,255,0.04)"],
+        body.light-mode .modal-content [style*="background:rgba(255,255,255,0.08)"] {
+            background: var(--surface2, #f1f5f9) !important;
+            color: var(--text, #111827) !important;
         }
 
         .container {
