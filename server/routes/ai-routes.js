@@ -1228,6 +1228,22 @@ async function buildJobContext(jobId, clientContext) {
     }
   }
 
+  // Workspace spreadsheet content — anything the user typed into the
+  // in-app Workspace tab (phase lists, scope notes, custom tables).
+  // The client packages each non-QB sheet as a text-table preview;
+  // we drop it into the prompt verbatim so the assistant can extract
+  // phase names, line items, etc. on demand.
+  if (clientContext && Array.isArray(clientContext.workspaceSheets) && clientContext.workspaceSheets.length) {
+    lines.push('# Workspace sheets (' + clientContext.workspaceSheets.length + ')');
+    lines.push('Each sheet preview is rendered as `<row>: A=val · B=val · …`. Use these to answer "what phases / scope items / line items do I have in my workspace?" When the user asks you to extract the phases, pull the names from the relevant sheet here — do NOT say you can\'t see the workspace.');
+    clientContext.workspaceSheets.forEach(function(s) {
+      lines.push('');
+      lines.push('## "' + s.name + '"');
+      if (s.preview) lines.push(s.preview);
+    });
+    lines.push('');
+  }
+
   if (clientContext && clientContext.qbCosts) {
     var qb = clientContext.qbCosts;
     if (qb.lineCount > 0 || qb.total) {

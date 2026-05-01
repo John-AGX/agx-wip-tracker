@@ -181,7 +181,66 @@
       }
     } catch (e) { /* defensive */ }
 
-    return (ctx.nodeGraph || ctx.qbCosts) ? ctx : null;
+    // Workspace sheets (the in-app spreadsheet). Includes anything the
+    // user has typed — phase lists, scope notes, custom tables, etc.
+    // We send a compact snapshot per sheet so the assistant can read
+    // it and answer "what phases do I have in my workspace?" or
+    // "extract the line items from sheet 2." QB Costs sheets are
+    // skipped (their data already rolls up via ctx.qbCosts).
+    try {
+      var allWs2 = JSON.parse(localStorage.getItem('agx-workspaces') || '{}');
+      var wb2 = allWs2[jobId];
+      if (wb2 && Array.isArray(wb2.sheets)) {
+        var nonQB = wb2.sheets.filter(function(s) { return !/^QB Costs /.test(s.name || ''); });
+        if (nonQB.length) {
+          ctx.workspaceSheets = nonQB.slice(0, 5).map(function(s) {
+            // Walk the sparse cells map; capture up to 50 rows × 12 cols
+            // of populated content. Reduces a 100-row sheet down to a
+            // tight tabular preview for the assistant.
+            var cells = s.cells || {};
+            var maxR = 0, maxC = 0;
+            var grid = {};
+            Object.keys(cells).forEach(function(k) {
+              var m = k.match(/^(\d+),(\d+)$/);
+              if (!m) return;
+              var r = parseInt(m[1], 10), c = parseInt(m[2], 10);
+              if (r > 50 || c > 12) return;
+              var val = cells[k];
+              if (val == null) return;
+              var raw = (typeof val === 'object' && 'value' in val) ? val.value : val;
+              if (raw == null || raw === '') return;
+              if (!grid[r]) grid[r] = {};
+              grid[r][c] = String(raw);
+              if (r > maxR) maxR = r;
+              if (c > maxC) maxC = c;
+            });
+            // Render as text table — column letters as header, then
+            // each row as "R | A=val · B=val · …" so the assistant
+            // can reconstruct the grid mentally.
+            var rows = [];
+            for (var r = 0; r <= maxR; r++) {
+              if (!grid[r]) continue;
+              var parts = [];
+              for (var c = 0; c <= maxC; c++) {
+                if (grid[r][c] != null) {
+                  var label = String.fromCharCode(65 + c);
+                  parts.push(label + '=' + String(grid[r][c]).replace(/\s+/g, ' ').slice(0, 80));
+                }
+              }
+              if (parts.length) rows.push((r + 1) + ': ' + parts.join(' · '));
+            }
+            return {
+              name: s.name || '(unnamed)',
+              cellCount: rows.length,
+              preview: rows.slice(0, 50).join('\n')
+            };
+          }).filter(function(s) { return s.cellCount > 0; });
+          if (!ctx.workspaceSheets.length) delete ctx.workspaceSheets;
+        }
+      }
+    } catch (e) { /* defensive */ }
+
+    return (ctx.nodeGraph || ctx.qbCosts || ctx.workspaceSheets) ? ctx : null;
   }
 
   // Lightweight markdown — bold, italic, inline code, lists, paragraphs.
