@@ -263,7 +263,11 @@
       'Revenue Earned': formatCurrency(w.revenueEarned),
       'Invoiced': formatCurrency(w.invoiced),
       'Change Orders': formatCurrency(w.coIncome),
-      'Gross Profit': formatCurrency(w.revisedProfit),
+      // JTD profit (revenueEarned − actualCosts) so the tile matches
+      // the GROSS PROFIT watch node in the graph. The "as-sold +
+      // revised plan" profit was confusing here — the WIP page's
+      // dedicated Margin section is the right home for that metric.
+      'Gross Profit': formatCurrency(w.jtdProfit),
       'Margin JTD': w.jtdMargin.toFixed(1) + '%',
       'Backlog': formatCurrency(w.backlog)
     };

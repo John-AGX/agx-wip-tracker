@@ -242,15 +242,29 @@ function renderWIPMain() {
             const revisedEstCosts = totalEstCosts + revisedCostChanges;
             const asSoldProfit = contractIncome - estimatedCosts;
             const asSoldMargin = contractIncome > 0 ? (asSoldProfit / contractIncome * 100) : 0;
+            // "Revised" profit/margin = the as-sold + change-orders plan
+            // (income vs revised cost). Distinct from JTD.
             const revisedProfit = totalIncome - revisedEstCosts;
             const revisedMargin = totalIncome > 0 ? (revisedProfit / totalIncome * 100) : 0;
             const pctComplete = job.pctComplete || 0;
-            const revenueEarned = totalIncome * (pctComplete / 100);
-            const jtdProfit = revenueEarned - actualCosts;
-            const jtdMargin = revenueEarned > 0 ? (jtdProfit / revenueEarned * 100) : 0;
+            // Prefer the engine's computed values when the node graph has
+            // already pushed them — they use unrounded weighted pct and
+            // match the watch-node displays. Fall back to local formula
+            // when the graph hasn't run yet (job has no graph state).
+            const revenueEarned = (job.ngRevenueEarned != null)
+                ? job.ngRevenueEarned
+                : totalIncome * (pctComplete / 100);
+            const jtdProfit = (job.ngJtdProfit != null)
+                ? job.ngJtdProfit
+                : revenueEarned - actualCosts;
+            const jtdMargin = (job.ngJtdMargin != null)
+                ? job.ngJtdMargin
+                : (revenueEarned > 0 ? (jtdProfit / revenueEarned * 100) : 0);
             const invoiced = job.invoicedToDate || 0;
             const unbilled = revenueEarned - invoiced;
-            const backlog = totalIncome - revenueEarned;
+            const backlog = (job.ngBacklog != null)
+                ? job.ngBacklog
+                : totalIncome - revenueEarned;
             const remainingCosts = revisedEstCosts - actualCosts;
             return {
                 contractIncome, estimatedCosts, coIncome: co.income, coCosts: co.costs,

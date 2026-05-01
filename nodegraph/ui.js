@@ -1757,24 +1757,33 @@ function pushToJob(){
     }
   });
 
-  // Persist WIP node's computed values onto the job so the
-  // sticky header can display them directly instead of re-deriving.
+  // Persist WIP node's computed values onto the job so the sticky
+  // header / metrics strip can display them directly instead of
+  // re-deriving with rounded inputs (which produced ~$98 gaps
+  // between the strip and the watch nodes).
   var wipNode=nodes.find(function(n){return n.type==='wip';});
   if(wipNode){
     E.resetComp();
-    var wipTotalIncome=E.getOutput(wipNode,0);
+    job.ngTotalIncome=E.getOutput(wipNode,0);
     E.resetComp();
     job.ngActualCosts=E.getOutput(wipNode,1);
     E.resetComp();
-    var wipRevEarned=E.getOutput(wipNode,2);
+    job.ngRevenueEarned=E.getOutput(wipNode,2);
     E.resetComp();
     job.ngAccruedCosts=E.getOutput(wipNode,6);
+    // Derived JTD numbers — pushed so getJobWIP can use them
+    // directly and the strip lands on the same dollar figures the
+    // watch nodes display.
+    job.ngJtdProfit=(job.ngRevenueEarned||0)-(job.ngActualCosts||0);
+    job.ngJtdMargin=(job.ngRevenueEarned>0)?(job.ngJtdProfit/job.ngRevenueEarned*100):0;
+    job.ngBacklog=(job.ngTotalIncome||0)-(job.ngRevenueEarned||0);
     // Sync computed % complete (budget-weighted from phases/buildings)
-    // back to the job unless user is overriding manually.
+    // back to the job unless user is overriding manually. Keep FULL
+    // precision in storage — display rounds to 1 decimal where shown.
     if(!job.pctCompleteManual){
       var wipPct=E.getWIPWeightedPct(wipNode);
       if(wipPct!=null){
-        job.pctComplete=Math.round(wipPct*10)/10;
+        job.pctComplete=wipPct;
       }
     }
   }
