@@ -3215,9 +3215,66 @@ function renderWIPMain() {
             document.getElementById('subContract').value = '';
             document.getElementById('subBilled').value = '';
             document.getElementById('subNotes').value = '';
+            populateSubDirectoryList();
+            updateSubDirectoryHint();
             subLevelChanged();
             openModal('addSubModal');
         }
+
+        // Phase C: feed the datalist from appData.subsDirectory so the
+        // user gets typeahead-style autocomplete over existing subs.
+        // Picking a directory match also auto-fills the trade and
+        // surfaces a hint that links to the directory record.
+        function populateSubDirectoryList() {
+            const dl = document.getElementById('subDirectoryList');
+            if (!dl) return;
+            const dir = (window.appData && appData.subsDirectory) || [];
+            dl.innerHTML = dir
+                .filter(s => s.status !== 'closed')
+                .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+                .map(s => '<option value="' + escapeHTML(s.name) + '">' +
+                    escapeHTML(s.trade || '') + (s.contact_name ? ' · ' + escapeHTML(s.contact_name) : '') +
+                '</option>')
+                .join('');
+        }
+
+        function updateSubDirectoryHint() {
+            const nameEl = document.getElementById('subName');
+            const tradeEl = document.getElementById('subTrade');
+            const hintEl = document.getElementById('subDirectoryHint');
+            if (!nameEl || !hintEl) return;
+            const typed = nameEl.value.trim();
+            if (!typed) {
+                hintEl.innerHTML = (appData.subsDirectory && appData.subsDirectory.length)
+                    ? '<span style="color:var(--text-dim,#888);">Pick from ' + appData.subsDirectory.length + ' directory entries — or type a new name to create one.</span>'
+                    : '';
+                return;
+            }
+            const dir = (appData.subsDirectory || []);
+            const match = dir.find(s => (s.name || '').toLowerCase() === typed.toLowerCase());
+            if (match) {
+                hintEl.innerHTML = '<span style="color:#34d399;">&#x2713; Linked to directory: <strong>' + escapeHTML(match.name) + '</strong>' +
+                    (match.trade ? ' (' + escapeHTML(match.trade) + ')' : '') + '</span>';
+                // Auto-fill trade from directory if user hasn't set one
+                if (tradeEl && !tradeEl.value && match.trade) {
+                    // Only set if the option exists; otherwise add it
+                    const exists = [...tradeEl.options].some(o => o.value === match.trade);
+                    if (!exists) {
+                        const opt = document.createElement('option');
+                        opt.value = match.trade; opt.textContent = match.trade;
+                        tradeEl.appendChild(opt);
+                    }
+                    tradeEl.value = match.trade;
+                }
+            } else {
+                hintEl.innerHTML = '<span style="color:#fbbf24;">New sub — will create a directory record on save.</span>';
+            }
+        }
+        // Wire the input change so the hint stays current as the user types/picks
+        document.addEventListener('DOMContentLoaded', function() {
+            const el = document.getElementById('subName');
+            if (el) el.addEventListener('input', updateSubDirectoryHint);
+        });
 
         function populateSubBuildingChecks(selectedIds) {
             const buildings = appData.buildings.filter(b => b.jobId === appState.currentJobId);
@@ -3300,7 +3357,9 @@ function renderWIPMain() {
             appState.editSubId = subId;
             document.getElementById('subModalHeader').textContent = 'Edit Subcontractor';
             document.getElementById('subSaveBtn').innerHTML = '&#x1F4BE; Save Changes';
+            populateSubDirectoryList();
             document.getElementById('subName').value = sub.name || '';
+            updateSubDirectoryHint();
             populateSubTradeSelect();
             if (sub.trade && !Array.from(document.getElementById('subTrade').options).some(o => o.value === sub.trade)) {
                 const c = getCustomItems('agx-wip-custom-trades');

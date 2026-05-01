@@ -1238,7 +1238,9 @@
             <div class="modal-header" id="subModalHeader">Add Subcontractor</div>
             <div class="form-group">
                 <label>Subcontractor Name</label>
-                <input type="text" id="subName" placeholder="e.g., Apex Electrical">
+                <input type="text" id="subName" list="subDirectoryList" autocomplete="off" placeholder="Pick from directory or type a new name">
+                <datalist id="subDirectoryList"></datalist>
+                <div id="subDirectoryHint" style="margin-top:4px;font-size:11px;color:var(--text-dim,#888);"></div>
             </div>
             <div class="form-group">
                 <label>Trade</label>
