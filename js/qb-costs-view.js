@@ -286,9 +286,13 @@
       '</div>';
     } else {
       var nodes = getNodesForJob(jobId);
-      tableHtml = '<div style="border:1px solid var(--border,#333);border-radius:10px;overflow:hidden;background:var(--card-bg,#0f0f1e);">' +
+      // Self-contained scroll container — bounded by viewport so the
+      // user can flip through hundreds of QB lines without scrolling
+      // the whole page. Sticky header keeps column labels visible
+      // while scrolling.
+      tableHtml = '<div style="border:1px solid var(--border,#333);border-radius:10px;overflow-y:auto;overflow-x:auto;background:var(--card-bg,#0f0f1e);max-height:calc(100vh - 360px);min-height:200px;">' +
         '<table class="dense-table" style="width:100%;border-collapse:collapse;table-layout:auto;">' +
-          '<thead style="background:rgba(255,255,255,0.02);border-bottom:1px solid var(--border,#333);">' +
+          '<thead style="background:var(--card-bg,#0f0f1e);border-bottom:1px solid var(--border,#333);position:sticky;top:0;z-index:1;">' +
             '<tr>' +
               th('Date') + th('Vendor') + th('Account') + th('Class') + th('Memo') +
               th('Amount', 'right') + th('Linked Node') +
