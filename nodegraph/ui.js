@@ -245,9 +245,44 @@ function renderNodes(){
     if(d.hasItems){
       var iType = d.itemType || '';
       var UNITS = ['each','SF','LF','gal','bag','box','ton','yd\u00B3','roll','hr'];
-      // PO: base contract input / Labor: QuickBooks total input
+      // PO: base contract input / Labor + Mat + GC + Other + Sub:
+      // QuickBooks total fallback. Used when the user wants to point
+      // at a single QB rollup number instead of entering every line
+      // by hand. getOutput already does `itemsTotal || n.value` for
+      // labor/mat/gc/other; sub's getOutput falls back to n.value
+      // when no wired cost inputs exist (added below).
       if(iType==='po') h+='<div class="ng-edit-val"><label style="font-size:9px;color:#6a7090;display:block;text-align:center;">Base Contract</label><input type="number" value="'+(n.value||0)+'" data-node="'+n.id+'" step="0.01" /></div>';
-      else if(iType==='labor') h+='<div class="ng-edit-val"><label style="font-size:9px;color:#6a7090;display:block;text-align:center;">QuickBooks Total (used if no weekly entries)</label><input type="number" value="'+(n.value||0)+'" data-node="'+n.id+'" step="0.01" placeholder="0.00" /></div>';
+      else if(iType==='labor' || iType==='mat' || iType==='gc' || iType==='other' || iType==='sub') {
+        var labels = {
+          labor: 'QuickBooks Total (used if no weekly entries)',
+          mat:   'QuickBooks Total (used if no line entries)',
+          gc:    'QuickBooks Total (used if no line entries)',
+          other: 'QuickBooks Total (used if no line entries)',
+          sub:   'QuickBooks Total (used if no wired costs)'
+        };
+        // Compute linked QB lines for this node — show the sum so
+        // the user can verify the manual QB Total they typed against
+        // the actual lines linked via the Detailed sub-tab.
+        var linkedTotal = 0, linkedCount = 0;
+        try {
+          var qbLines = (window.appData && window.appData.qbCostLines) || [];
+          qbLines.forEach(function(l) {
+            if ((l.linked_node_id || l.linkedNodeId) === n.id) {
+              linkedTotal += Number(l.amount || 0);
+              linkedCount++;
+            }
+          });
+        } catch (e) {}
+        h += '<div class="ng-edit-val">' +
+          '<label style="font-size:9px;color:#6a7090;display:block;text-align:center;">' + labels[iType] + '</label>' +
+          '<input type="number" value="'+(n.value||0)+'" data-node="'+n.id+'" step="0.01" placeholder="0.00" />';
+        if (linkedCount > 0) {
+          h += '<div style="font-size:9px;color:#34d399;text-align:center;margin-top:3px;">' +
+            '↳ Linked QB lines: ' + E.fmtC(linkedTotal) + ' (' + linkedCount + ')' +
+          '</div>';
+        }
+        h += '</div>';
+      }
       h+='<div class="ng-subitems">';
       // Header row
       if(iType==='labor') h+='<div class="ng-si-hdr"><span class="hd hd-date">Week Of</span><span class="hd hd-sm">Hrs</span><span class="hd hd-sm">Rate</span><span class="hd hd-sm">Total</span><span class="hd hd-del"></span></div>';

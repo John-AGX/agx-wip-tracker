@@ -207,11 +207,16 @@ function getOutput(n, pi){
     _comp[n.id] = false; return v;
   }
 
-  // Sub: single output = sum of wired cost inputs
+  // Sub: single output = sum of wired cost inputs, or n.value
+  // (the QuickBooks Total fallback) when no cost wires feed in.
+  // Lets the user point at a single QB sub-trade rollup without
+  // wiring labor/mat/gc/other children explicitly.
   if(n.type === 'sub'){
+    var subWired = 0;
     wires.forEach(function(w){
-      if(w.toNode === n.id){ var fn = findNode(w.fromNode); if(fn) v += getOutput(fn, w.fromPort); }
+      if(w.toNode === n.id){ var fn = findNode(w.fromNode); if(fn) subWired += getOutput(fn, w.fromPort); }
     });
+    v = subWired || (n.value || 0);
     _comp[n.id] = false; return v;
   }
 
