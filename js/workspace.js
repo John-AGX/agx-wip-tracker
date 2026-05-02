@@ -1651,7 +1651,7 @@
     // PREVIOUS sheet's selection. Letting it persist across tabs
     // shows job-field chips that don't apply to the new active cell.
     var lp = document.getElementById('wsLinkPanel');
-    if (lp) lp.style.display = 'none';
+    if (lp) lp.classList.remove('ws-link-panel-open');
     loadSheetIntoGrid(target);
     workbook.dirty = true;
     grid.dirty = !isEmbedSheet(target);
@@ -2326,7 +2326,7 @@
           <div class="ws-ribbon-label">File</div>
         </div>
       </div>
-      <div class="ws-link-panel" id="wsLinkPanel" style="display:none;">
+      <div class="ws-link-panel" id="wsLinkPanel">
         <div class="ws-link-header">
           <div class="ws-link-title">Link <span id="wsLinkCell">A1</span> → Job Field</div>
           <div class="ws-link-active" id="wsLinkActive"></div>
@@ -3043,7 +3043,7 @@
     var optionsEl = document.getElementById('wsLinkOptions');
     if (!panel || !grid.selection) return;
 
-    panel.style.display = 'block';
+    panel.classList.add('ws-link-panel-open');
     var cellAddr = addr(grid.selection.r, grid.selection.c);
     var html = '';
 
@@ -4983,8 +4983,11 @@
     // Toolbar buttons
     document.getElementById('wsLinkBtn').addEventListener('click', () => {
       const panel = document.getElementById('wsLinkPanel');
-      if (panel.style.display === 'none') showLinkPanel();
-      else panel.style.display = 'none';
+      if (panel.classList.contains('ws-link-panel-open')) {
+        panel.classList.remove('ws-link-panel-open');
+      } else {
+        showLinkPanel();
+      }
     });
 
     document.getElementById('wsSaveBtn').addEventListener('click', () => {

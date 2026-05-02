@@ -471,12 +471,20 @@
 /* ── Link Panel ──────────────────────────────────────── */
 
 .ws-link-panel {
+  /* Default-closed. The Link button (▾) toggles the .ws-link-panel-open
+     class to reveal. Class-based instead of inline display so a stale
+     inline style left over from a prior session can't strand the panel
+     visible — every workspace render starts hidden, period. */
+  display: none;
   padding: 8px 10px;
   background: var(--surface, #1a1d27);
   border: 1px solid var(--border, #2e3346);
   border-top: none;
   max-height: 280px;
   overflow-y: auto;
+}
+.ws-link-panel.ws-link-panel-open {
+  display: block;
 }
 
 .ws-link-header {
