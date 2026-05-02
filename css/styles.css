@@ -478,9 +478,14 @@
             border: 1px solid var(--border);
             border-radius: 10px;
             padding: 14px 18px;
-            max-width: 960px;
-            width: 94%;
-            max-height: 78vh;
+            /* Widened from 960 → 1280 so dense forms (lead editor,
+               estimate editor, job edit) breathe instead of crushing
+               their two- and three-column rows. The 96vw cap keeps
+               margin from the viewport edge so the modal still
+               visually reads as a dialog, not a page takeover. */
+            max-width: 1280px;
+            width: 96%;
+            max-height: 86vh;
             overflow-y: auto;
             box-shadow: 0 12px 40px rgba(0,0,0,0.35);
             font-size: 13px;
@@ -580,11 +585,29 @@
             background: var(--bg);
             border: 1px solid var(--border);
             color: var(--text);
-            padding: 6px 10px;
+            /* Vertical padding tightened 6px → 4px so the input height
+               sits flush with the 13px font + line-height instead of
+               adding ~6px of dead space on top + bottom. Forms render
+               significantly tighter, modals show more rows above the
+               fold. Override per-control with explicit padding when
+               a tall click target is genuinely wanted. */
+            padding: 4px 10px;
             border-radius: 5px;
             font-size: 13px;
+            line-height: 1.35;
             font-family: inherit;
             transition: border-color 0.15s, box-shadow 0.15s;
+        }
+        /* Date inputs need a bit more room — the spinner / picker icon
+           clips at 4px vertical padding in some browsers. */
+        input[type="date"], input[type="datetime-local"], input[type="time"] {
+            padding: 5px 10px;
+        }
+        /* Textareas keep the slightly taller padding so multi-line
+           content doesn't feel cramped against the border. */
+        textarea {
+            padding: 6px 10px;
+            line-height: 1.45;
         }
 
         input:focus, select:focus, textarea:focus {
