@@ -180,75 +180,131 @@
         }
 
         /* HEADER */
+        /* Sleek single-row header. Down from ~130px (two rows + 72px
+           logo) to a hard 46px so the workspace below gets more
+           vertical room. Gradient + 1px green hairline preserved
+           because the user wanted that fade kept. */
         header {
             background: linear-gradient(135deg, #0d1f12 0%, #14351d 40%, #1B8541 100%);
-            border-bottom: 3px solid #3B8542;
-            padding: 10px 30px 6px;
+            border-bottom: 1px solid #3B8542;
+            padding: 0 24px;
             position: sticky;
             top: 0;
             z-index: 100;
+            height: 46px;
         }
 
         .header-content {
             max-width: 1600px;
             margin: 0 auto;
+            display: flex;
+            align-items: center;
+            gap: 24px;
+            height: 100%;
         }
 
-        .header-top {
+        /* Logo lockup. 26px is small enough to share the row with
+           tabs without dominating, large enough to read clearly. */
+        .header-brand {
             display: flex;
-            align-items: stretch;
-            justify-content: space-between;
-        }
-
-        .header-title {
-            line-height: 1;
-            display: flex;
-            align-items: flex-end;
+            align-items: center;
+            text-decoration: none;
+            flex: 0 0 auto;
         }
         .header-logo {
-            height: 72px;
+            height: 26px;
             width: auto;
+            display: block;
         }
 
-        .header-right {
+        /* Right cluster — pushes to the far right via flex auto-margin. */
+        .header-user-menu {
             display: flex;
-            flex-direction: column;
-            align-items: flex-end;
-            justify-content: space-between;
+            align-items: center;
+            gap: 8px;
+            margin-left: auto;
+            flex: 0 0 auto;
         }
-
-        .header-subtitle {
+        .header-user-menu #user-name {
             font-size: 11px;
-            color: rgba(255,255,255,0.5);
-            letter-spacing: 0.5px;
+            color: rgba(255, 255, 255, 0.75);
+            font-weight: 500;
+            white-space: nowrap;
+        }
+        .header-user-menu #user-role-badge {
+            font-size: 9px;
+            padding: 2px 7px;
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.10);
+            color: rgba(255, 255, 255, 0.7);
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+            font-weight: 600;
+        }
+        .header-user-menu #account-btn,
+        .header-user-menu #logout-btn {
+            font-size: 11px;
+            padding: 4px 10px;
+            border-radius: 6px;
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            color: rgba(255, 255, 255, 0.85);
+            cursor: pointer;
+            transition: background 0.12s, border-color 0.12s;
+            white-space: nowrap;
+        }
+        .header-user-menu #account-btn:hover,
+        .header-user-menu #logout-btn:hover {
+            background: rgba(255, 255, 255, 0.16);
+            border-color: rgba(255, 255, 255, 0.25);
         }
 
-        /* NAVIGATION */
+        /* NAVIGATION — inline with logo, height-filling so the active
+           underline sits flush with the header's bottom edge for that
+           "tab is part of the chrome" feel. */
         nav.tabs {
             display: flex;
             gap: 0;
-            margin-top: 4px;
-            border-bottom: 1px solid var(--border);
+            height: 100%;
+            border-bottom: none;
+            margin: 0;
+            flex: 0 0 auto;
         }
 
         nav.tabs button {
             background: transparent;
             border: none;
-            color: var(--text-dim);
-            padding: 6px 20px;
+            color: rgba(255, 255, 255, 0.55);
+            padding: 0 16px;
+            height: 100%;
             cursor: pointer;
             font-size: 13px;
-            border-bottom: 2px solid transparent;
-            transition: all 0.3s ease;
+            font-weight: 500;
+            position: relative;
+            transition: color 0.15s;
+            white-space: nowrap;
         }
 
         nav.tabs button:hover {
-            color: var(--text);
+            color: rgba(255, 255, 255, 0.95);
         }
 
         nav.tabs button.active {
             color: #5ddb7e;
-            border-bottom-color: #5ddb7e;
+            font-weight: 600;
+        }
+        /* Active tab underline lives on a pseudo-element flush with
+           the header's bottom edge, so it visually "anchors" to the
+           1px green hairline. */
+        nav.tabs button.active::after {
+            content: '';
+            position: absolute;
+            left: 8px;
+            right: 8px;
+            bottom: -1px;
+            height: 2px;
+            background: #5ddb7e;
+            box-shadow: 0 0 8px rgba(93, 219, 126, 0.5);
         }
 
 
@@ -1230,12 +1286,30 @@
                 grid-template-columns: 1fr;
             }
 
+            /* Mobile fallback — stack header content into two rows.
+               Bumps the height to ~84px on phones, but the trade-off
+               is each control gets a tappable target. The new
+               single-row layout would crush at <600px otherwise. */
             header {
-                padding: 15px 20px;
+                padding: 8px 16px;
+                height: auto;
             }
-
-            .header-title {
-                font-size: 18px;
+            .header-content {
+                flex-wrap: wrap;
+                gap: 8px 14px;
+            }
+            .header-user-menu {
+                margin-left: 0;
+                flex: 1 1 100%;
+                justify-content: flex-end;
+            }
+            nav.tabs {
+                flex: 1 1 100%;
+                height: 36px;
+                overflow-x: auto;
+            }
+            nav.tabs button {
+                padding: 0 12px;
             }
 
             table {

@@ -295,15 +295,18 @@
 .jh-job-info {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  margin-left: 12px;
+  flex: 0 1 auto;
+  min-width: 0;
 }
 .jh-back-btn {
   background: rgba(0,0,0,0.4);
   color: #e4e6f0;
-  border: 1px solid rgba(255,255,255,0.1);
-  border-radius: 6px;
-  padding: 4px 12px;
-  font-size: 12px;
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 5px;
+  padding: 3px 10px;
+  font-size: 11px;
   cursor: pointer;
   white-space: nowrap;
   font-family: inherit;
@@ -312,22 +315,24 @@
 }
 .jh-back-btn:hover { background: rgba(0,0,0,0.6); }
 .jh-job-title {
-  font-size: 14px;
+  font-size: 12px;
   font-weight: 600;
-  color: rgba(255,255,255,0.9);
+  color: rgba(255,255,255,0.92);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 300px;
+  max-width: 280px;
+  min-width: 0;
 }
 .jh-status-badge {
-  background: #1b8541;
+  background: rgba(27,133,65,0.85);
   color: #fff;
-  padding: 2px 10px;
-  border-radius: 12px;
-  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 9px;
   font-weight: 600;
   text-transform: uppercase;
+  letter-spacing: 0.4px;
   white-space: nowrap;
   flex-shrink: 0;
 }

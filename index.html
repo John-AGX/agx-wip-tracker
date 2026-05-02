@@ -4,8 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AGX Central Florida &mdash; WIP Tracker</title>
-    <link rel="stylesheet" href="css/styles.css?v=18">
-    <link rel="stylesheet" href="css/workspace-layout.css?v=36">
+    <link rel="stylesheet" href="css/styles.css?v=19">
+    <link rel="stylesheet" href="css/workspace-layout.css?v=37">
     <link rel="stylesheet" href="css/workspace.css?v=24">
     <link rel="stylesheet" href="css/schedule.css?v=7">
 
@@ -26,21 +26,16 @@
     </div>
 
     <div class="container" id="app-container" style="display:none;">
+        <!-- Single-row sleek header: logo · tabs · user cluster.
+             Was a two-row layout (logo + nav stacked) at ~130px tall;
+             this fits everything on one ~46px row to give the workspace
+             below more vertical real estate. Mobile breaks back to a
+             stacked fallback in the @media block. -->
         <header>
             <div class="header-content">
-                <div class="header-top">
-                    <div class="header-title"><img src="images/logo-white.png" alt="AGX AG Exteriors" class="header-logo" /></div>
-                    <div class="header-right">
-                        <span class="header-subtitle">Estimating &amp; Project Tracking</span>
-                        <div id="user-menu" style="display:flex;align-items:center;gap:8px;margin-left:auto;">
-                            <span id="user-name" style="font-size:11px;color:rgba(255,255,255,0.7);"></span>
-                            <span id="user-role-badge" style="font-size:9px;padding:2px 6px;border-radius:10px;background:rgba(255,255,255,0.1);color:rgba(255,255,255,0.6);text-transform:uppercase;"></span>
-                            <button id="account-btn" title="My Account &amp; Notifications" style="font-size:10px;padding:3px 10px;border-radius:6px;background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.15);color:rgba(255,255,255,0.7);cursor:pointer;">&#x2699; Account</button>
-                            <button id="logout-btn" style="font-size:10px;padding:3px 10px;border-radius:6px;background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.15);color:rgba(255,255,255,0.7);cursor:pointer;">Logout</button>
-                        </div>
-                        <button id="theme-toggle" class="theme-toggle" title="Toggle light/dark mode"></button>
-                    </div>
-                </div>
+                <a class="header-brand" title="AGX — Estimating &amp; Project Tracking">
+                    <img src="images/logo-white.png" alt="AGX" class="header-logo" />
+                </a>
                 <nav class="tabs">
                     <button class="tab-btn active" data-tab="wip" data-cap="JOBS_VIEW_ALL JOBS_VIEW_ASSIGNED JOBS_EDIT_ANY JOBS_EDIT_OWN">WIP</button>
                     <button class="tab-btn" data-tab="schedule">Schedule</button>
@@ -48,6 +43,13 @@
                     <button class="tab-btn" data-tab="estimates" data-cap="ESTIMATES_VIEW">Estimates</button>
                     <button class="tab-btn" data-tab="admin" data-admin-only style="display:none;">Admin</button>
                 </nav>
+                <div id="user-menu" class="header-user-menu">
+                    <span id="user-name"></span>
+                    <span id="user-role-badge"></span>
+                    <button id="account-btn" title="My Account &amp; Notifications">&#x2699; Account</button>
+                    <button id="logout-btn">Logout</button>
+                    <button id="theme-toggle" class="theme-toggle" title="Toggle light/dark mode"></button>
+                </div>
             </div>
         </header>
 
@@ -2078,7 +2080,7 @@
     <script src="js/ai-panel.js?v=28"></script>
 
     <script src="js/workspace.js?v=28"></script>
-    <script src="js/workspace-layout.js?v=44"></script>
+    <script src="js/workspace-layout.js?v=45"></script>
 
     <!-- Node Graph (Beta) -->
     <link rel="stylesheet" href="nodegraph/nodegraph.css?v=81" />

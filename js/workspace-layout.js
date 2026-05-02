@@ -55,13 +55,20 @@
     var jobInfo = document.querySelector(".jh-job-info");
     if (jobInfo) jobInfo.remove();
 
-    // Remove tab-metrics row and restore nav.tabs to header-content
+    // Remove any stale jh-tab-metrics-row wrapper and restore nav
+    // back into header-content. New layout doesn't create the
+    // wrapper but tolerate one in case a previous render is still
+    // in the DOM after a redeploy / cache miss. Re-anchor nav
+    // BEFORE the user-menu to preserve the brand → tabs → user
+    // order in the slim single-row layout.
     var tabRow = document.getElementById("jh-tab-metrics-row");
     if (tabRow) {
       var nav = tabRow.querySelector("nav.tabs");
       var headerContent = document.querySelector(".header-content");
+      var userMenu = document.querySelector("#user-menu");
       if (nav && headerContent) {
-        headerContent.appendChild(nav);
+        if (userMenu) headerContent.insertBefore(nav, userMenu);
+        else headerContent.appendChild(nav);
         nav.style.flex = "";
       }
       tabRow.remove();
@@ -133,7 +140,6 @@
     var siteHeader = document.querySelector("header");
     if (!siteHeader || document.querySelector(".jh-metrics-strip")) return;
     var headerContent = siteHeader.querySelector(".header-content");
-    var subtitle = headerContent ? headerContent.querySelector(".header-subtitle") : null;
     var nav = headerContent ? headerContent.querySelector("nav.tabs") : null;
 
     // ---- Extract metrics from WIP Calculations card ----
@@ -176,10 +182,13 @@
       { label: "Backlog", value: extractVal(allText, "Backlog (Income - Revenue)") }
     ];
 
-    // ---- Job info (appended into header-right, below subtitle) ----
+    // ---- Job info inserted into the slim header, between the tabs
+    // and the user menu. The legacy `.header-right` column (a stacked
+    // right side of a two-row header) was removed when the header
+    // collapsed to one line, so we anchor on `#user-menu` instead.
     var name = job ? (job.jobNumber || "") + " \u2014 " + (job.name || "") : "Job Detail";
-    var headerRight = siteHeader.querySelector(".header-right");
-    if (headerRight) {
+    var userMenu = siteHeader.querySelector("#user-menu");
+    if (headerContent && userMenu) {
       var jobInfo = document.createElement("div");
       jobInfo.className = "jh-job-info";
 
@@ -202,7 +211,7 @@
       statusBadge.textContent = job && job.status ? job.status : "In Progress";
       jobInfo.appendChild(statusBadge);
 
-      headerRight.appendChild(jobInfo);
+      headerContent.insertBefore(jobInfo, userMenu);
     }
 
     // Map each metric label to a tone hint so the card can color-code itself.
@@ -242,15 +251,12 @@
       strip.appendChild(card);
     });
 
-    // ---- Tab row (nav only — strip moved out of the sticky header) ----
-    if (nav && headerContent) {
-      var tabRow = document.createElement("div");
-      tabRow.id = "jh-tab-metrics-row";
-      tabRow.className = "jh-tab-metrics-row";
-      nav.parentNode.insertBefore(tabRow, nav);
-      nav.style.flex = "0 0 auto";
-      tabRow.appendChild(nav);
-    }
+    // (Old layout used to wrap nav in a `#jh-tab-metrics-row` div for
+    // a side-by-side tabs+strip layout. The strip moved out of the
+    // header months ago, and the new slim header puts nav inline
+    // with the logo + user menu, so the wrapper is no longer needed.
+    // cleanup() still tolerates an old wrapper in case a stale row
+    // is in the DOM from an interrupted render.)
 
     // ---- Metrics strip ----
     // Lives in the detail view directly above the workspace grid so it spans
