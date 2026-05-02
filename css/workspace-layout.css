@@ -354,9 +354,9 @@
 .jh-metrics-strip {
   display: flex;
   flex-wrap: nowrap;
-  gap: 6px;
-  padding: 10px 14px;
-  margin: 0 0 8px 0;
+  gap: 8px;
+  padding: 12px 16px;
+  margin: 0 0 10px 0;
   background: none;
   border: none;
   box-shadow: none;
@@ -372,23 +372,27 @@
 /* When the strip is detached from the sticky header (current layout), it
    sits directly above the workspace grid as a full-width band. */
 #jh-strip-detached {
-  background: linear-gradient(180deg, rgba(0,0,0,0.2), rgba(0,0,0,0));
-  border-bottom: 1px solid rgba(255,255,255,0.06);
-  padding: 12px 16px;
-  margin-bottom: 12px;
+  background: linear-gradient(180deg, rgba(0,0,0,0.15), rgba(0,0,0,0));
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  padding: 14px 18px;
+  margin-bottom: 14px;
 }
 .jh-metrics-strip::-webkit-scrollbar { height: 4px; }
 .jh-metrics-strip::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 2px; }
 
+/* Card backgrounds tuned to feel raised (not punched-out) against the
+   page bg (#0f1117). Old gradient ran #05→#0e→#0a, all DARKER than
+   the page, so cards looked like holes. New gradient lifts ~6-12% above
+   surface so they read as raised tiles with a subtle vertical sheen. */
 .jh-strip-card {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, #05080f 0%, #0e1322 50%, #0a1424 100%);
-  border: 1px solid rgba(255,255,255,0.08);
-  border-radius: 7px;
-  padding: 6px 8px;
+  background: linear-gradient(180deg, rgba(255,255,255,0.04) 0%, rgba(255,255,255,0.015) 100%), var(--surface, #1a1d27);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 8px;
+  padding: 10px 12px;
   text-align: center;
   /* Equal flex share so all 12 cards auto-size to fit the strip width.
      min-width 0 lets them shrink below content size when needed. */
@@ -396,23 +400,32 @@
   min-width: 0;
   position: relative;
   overflow: hidden;
-  box-shadow: 0 2px 6px rgba(0,0,0,0.35);
+  /* Soft ambient shadow — softer than before so cards feel embedded
+     in the band, not floating on top of it. The inset highlight on
+     the top edge picks up overhead light and adds dimension. */
+  box-shadow:
+    0 1px 0 rgba(255,255,255,0.04) inset,
+    0 1px 3px rgba(0,0,0,0.3);
   transition: border-color 0.2s, transform 0.15s, box-shadow 0.2s;
 }
-/* Diagonal sheen sweep, lifted from .ng-watch-kpi::before */
+/* Diagonal sheen sweep, lifted from .ng-watch-kpi::before. Toned
+   down (5% → 3%) since the brighter card surface needs less help to
+   feel alive. */
 .jh-strip-card::before {
   content: "";
   position: absolute;
   inset: 0;
-  background: linear-gradient(120deg, transparent 30%, rgba(255,255,255,0.05) 50%, transparent 70%);
+  background: linear-gradient(120deg, transparent 30%, rgba(255,255,255,0.03) 50%, transparent 70%);
   animation: jh-strip-shine 7s ease-in-out infinite;
   pointer-events: none;
   z-index: 0;
 }
 .jh-strip-card:hover {
   transform: translateY(-1px);
-  border-color: rgba(255,255,255,0.2);
-  box-shadow: 0 4px 14px rgba(0,0,0,0.5);
+  border-color: rgba(255,255,255,0.16);
+  box-shadow:
+    0 1px 0 rgba(255,255,255,0.06) inset,
+    0 4px 12px rgba(0,0,0,0.45);
 }
 
 /* Light-mode metric strip cards: keep the colored value text but
@@ -440,13 +453,13 @@ body.light-mode .jh-metrics-strip::-webkit-scrollbar-thumb {
 }
 
 .jh-strip-label {
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 600;
   color: rgba(255,255,255,0.55);
   text-transform: uppercase;
   letter-spacing: 0.5px;
   white-space: nowrap;
-  margin-bottom: 3px;
+  margin-bottom: 4px;
   position: relative;
   z-index: 1;
   width: 100%;
@@ -454,12 +467,12 @@ body.light-mode .jh-metrics-strip::-webkit-scrollbar-thumb {
   text-overflow: ellipsis;
 }
 .jh-strip-value {
-  font-size: 13px;
+  font-size: 16px;
   font-weight: 700;
   color: #fff;
   white-space: nowrap;
   font-family: 'SF Mono', 'Fira Code', 'Courier New', monospace;
-  letter-spacing: -0.2px;
+  letter-spacing: -0.3px;
   position: relative;
   z-index: 1;
   width: 100%;
@@ -467,47 +480,50 @@ body.light-mode .jh-metrics-strip::-webkit-scrollbar-thumb {
   text-overflow: ellipsis;
 }
 
-/* Tone variants — match the nodegraph watch-kpi color palette. Each tone
-   tints the value text + glow + border, while keeping the dark base bg. */
+/* Tone variants — match the nodegraph watch-kpi color palette. Tone
+   layers a translucent color tint OVER the surface bg from the base
+   .jh-strip-card rule, so each tile reads as a raised surface
+   subtly tinted with its category color rather than a dark
+   contrasting block. Border + value text glow stay punchy. */
 .jh-strip-card[data-tone="gain"] {
-  border-color: rgba(52,211,153,0.35);
-  background: linear-gradient(135deg, #05080f 0%, #0a2418 50%, #0a1424 100%);
+  border-color: rgba(52,211,153,0.30);
+  background: linear-gradient(180deg, rgba(52,211,153,0.10) 0%, rgba(52,211,153,0.03) 100%), var(--surface, #1a1d27);
 }
 .jh-strip-card[data-tone="gain"] .jh-strip-value {
   color: #34d399;
-  text-shadow: 0 0 10px rgba(52,211,153,0.45);
+  text-shadow: 0 0 10px rgba(52,211,153,0.40);
 }
-.jh-strip-card[data-tone="gain"] .jh-strip-label { color: rgba(52,211,153,0.65); }
+.jh-strip-card[data-tone="gain"] .jh-strip-label { color: rgba(52,211,153,0.70); }
 
 .jh-strip-card[data-tone="cost"] {
-  border-color: rgba(248,113,113,0.3);
-  background: linear-gradient(135deg, #05080f 0%, #2a0e14 50%, #0a1424 100%);
+  border-color: rgba(248,113,113,0.28);
+  background: linear-gradient(180deg, rgba(248,113,113,0.10) 0%, rgba(248,113,113,0.03) 100%), var(--surface, #1a1d27);
 }
 .jh-strip-card[data-tone="cost"] .jh-strip-value {
   color: #f87171;
-  text-shadow: 0 0 10px rgba(248,113,113,0.4);
+  text-shadow: 0 0 10px rgba(248,113,113,0.35);
 }
-.jh-strip-card[data-tone="cost"] .jh-strip-label { color: rgba(248,113,113,0.6); }
+.jh-strip-card[data-tone="cost"] .jh-strip-label { color: rgba(248,113,113,0.65); }
 
 .jh-strip-card[data-tone="income"] {
-  border-color: rgba(96,165,250,0.32);
-  background: linear-gradient(135deg, #05080f 0%, #0c1830 50%, #0a1424 100%);
+  border-color: rgba(96,165,250,0.30);
+  background: linear-gradient(180deg, rgba(96,165,250,0.10) 0%, rgba(96,165,250,0.03) 100%), var(--surface, #1a1d27);
 }
 .jh-strip-card[data-tone="income"] .jh-strip-value {
   color: #60a5fa;
-  text-shadow: 0 0 10px rgba(96,165,250,0.4);
+  text-shadow: 0 0 10px rgba(96,165,250,0.35);
 }
-.jh-strip-card[data-tone="income"] .jh-strip-label { color: rgba(96,165,250,0.6); }
+.jh-strip-card[data-tone="income"] .jh-strip-label { color: rgba(96,165,250,0.65); }
 
 .jh-strip-card[data-tone="amber"] {
-  border-color: rgba(251,191,36,0.4);
-  background: linear-gradient(135deg, #05080f 0%, #1a1230 50%, #0a1424 100%);
+  border-color: rgba(251,191,36,0.32);
+  background: linear-gradient(180deg, rgba(251,191,36,0.10) 0%, rgba(251,191,36,0.03) 100%), var(--surface, #1a1d27);
 }
 .jh-strip-card[data-tone="amber"] .jh-strip-value {
   color: #fbbf24;
-  text-shadow: 0 0 10px rgba(251,191,36,0.5);
+  text-shadow: 0 0 10px rgba(251,191,36,0.45);
 }
-.jh-strip-card[data-tone="amber"] .jh-strip-label { color: rgba(251,191,36,0.65); }
+.jh-strip-card[data-tone="amber"] .jh-strip-label { color: rgba(251,191,36,0.70); }
 
 .jh-strip-card[data-tone="neutral"] .jh-strip-value {
   color: #e4e6f0;
