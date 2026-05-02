@@ -200,14 +200,23 @@
    stacked beneath. Each week row is its own positioned container
    so multi-day entry bars can absolute-position over it and span
    columns continuously. */
+/* Sun-start week with weekend bookends. Sat / Sun cols are 0.5fr —
+   half the width of weekday cols — so weekends visually frame the
+   workweek rather than competing for equal space. The
+   `.sch-cal-grid.sch-no-weekends` modifier collapses them to 0fr
+   when the user toggles them off, which keeps the weekday columns
+   the same width as in the 7-day view (no jarring re-flow). */
 .sch-cal-grid {
   flex: 1;
   display: grid;
-  grid-template-columns: repeat(7, 1fr);
+  grid-template-columns: 0.5fr 1fr 1fr 1fr 1fr 1fr 0.5fr;
   grid-auto-rows: auto;
   gap: 1px;
   background: var(--border, #2e3346);
   min-height: 0;
+}
+.sch-cal-grid.sch-no-weekends {
+  grid-template-columns: 0fr 1fr 1fr 1fr 1fr 1fr 0fr;
 }
 .sch-cal-dow {
   background: var(--card-bg, #0f0f1e);
@@ -219,26 +228,42 @@
   text-align: center;
   padding: 5px 0;
 }
+/* Weekend day-of-week labels lighten so Mon-Fri reads as the focus.
+   Index 1 = Sun (first), index 7 = Sat (last) in the Sun-start
+   layout. */
+.sch-cal-dow:nth-child(1),
+.sch-cal-dow:nth-child(7) {
+  color: rgba(255, 255, 255, 0.35);
+}
 .sch-cal-week-row {
   grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: repeat(7, 1fr);
+  grid-template-columns: 0.5fr 1fr 1fr 1fr 1fr 1fr 0.5fr;
   gap: 1px;
   background: var(--border, #2e3346);
   position: relative;
-  /* 92px is dense enough to fit the day-num + 3-4 stacked bars
-     while still leaving headroom on bigger screens — it's the
-     "tightened" target. */
-  min-height: 92px;
+  /* 78px tightens the rows further now that the week-summary lives
+     in the toolbar instead of a footer strip — the calendar uses
+     more of the workspace. */
+  min-height: 78px;
+}
+.sch-cal-grid.sch-no-weekends .sch-cal-week-row {
+  grid-template-columns: 0fr 1fr 1fr 1fr 1fr 1fr 0fr;
 }
 .sch-cal-day {
   background: var(--surface, #181820);
   padding: 4px 5px;
-  min-height: 92px;
+  min-height: 78px;
   cursor: pointer;
   transition: background 0.12s, outline 0.12s;
   position: relative;
   overflow: hidden;
+}
+/* Weekend cells get a slightly muted background so the workweek
+   reads as the visual primary. Applies whether or not "Show Sat/
+   Sun" is on — when off, the cell just collapses to zero width. */
+.sch-cal-day.sch-weekend {
+  background: rgba(255, 255, 255, 0.012);
 }
 .sch-cal-day:hover {
   background: rgba(79, 140, 255, 0.04);
@@ -250,9 +275,6 @@
 .sch-cal-day.sch-today {
   outline: 2px solid #4f8cff;
   outline-offset: -2px;
-}
-.sch-cal-day.sch-weekend {
-  background: rgba(255, 255, 255, 0.015);
 }
 .sch-cal-day.sch-drop-target {
   background: rgba(79, 140, 255, 0.18);
@@ -376,30 +398,68 @@ body.sch-resizing * {
   user-select: none !important;
 }
 
-/* ─── Week summary right rail ────────────────────────────── */
-.sch-week-summary {
-  background: var(--card-bg, #0f0f1e);
-  border-top: 1px solid var(--border, #2e3346);
-  padding: 10px 14px;
+/* ─── Toolbar metric tiles ──────────────────────────────────
+   Production metrics that used to live in a footer strip now sit
+   inline in the calendar toolbar. Each tile = a small uppercase
+   label over a value, separated by 1px dividers. Wraps onto a new
+   line on narrow viewports rather than crushing. */
+.sch-week-metrics {
   display: flex;
-  gap: 14px;
+  gap: 0;
+  align-items: stretch;
+  margin: 0 8px 0 14px;
   flex-wrap: wrap;
-  align-items: center;
-  font-size: 12px;
 }
-.sch-week-summary-label {
-  color: var(--text-dim, #888);
-  font-size: 10px;
+.sch-metric {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 2px 14px;
+  border-left: 1px solid rgba(255, 255, 255, 0.06);
+  min-width: 0;
+}
+.sch-metric:first-child { border-left: none; padding-left: 0; }
+.sch-metric-label {
+  font-size: 9px;
+  font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.5px;
-  margin-right: 4px;
+  color: var(--text-dim, #888);
+  line-height: 1.2;
 }
-.sch-week-summary-val {
-  color: var(--text, #e4e6f0);
+.sch-metric-val {
+  font-size: 13px;
   font-weight: 700;
+  color: var(--text, #e4e6f0);
   font-family: 'SF Mono', Consolas, monospace;
+  line-height: 1.2;
+  margin-top: 1px;
+  white-space: nowrap;
 }
-.sch-week-summary-val.sch-rev { color: #34d399; }
+.sch-metric-val.sch-metric-val-rev { color: #34d399; }
+
+/* Compact icon-style toggle for show/hide weekends. Replaces the
+   old checkbox+label that was eating header space and rendering
+   as block-level uppercase due to global label rules. */
+.sch-btn.sch-btn-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-dim, #aaa);
+  background: var(--card-bg, #0f0f1e);
+  border: 1px solid var(--border, #2e3346);
+}
+.sch-btn.sch-btn-toggle.active {
+  background: rgba(79, 140, 255, 0.15);
+  border-color: rgba(79, 140, 255, 0.4);
+  color: #4f8cff;
+}
+.sch-btn.sch-btn-toggle:hover {
+  filter: brightness(1.15);
+}
 
 /* ─── Entry editor modal ─────────────────────────────────── */
 .sch-modal-form {

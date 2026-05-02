@@ -173,13 +173,13 @@
   function endOfMonth(d)   { return new Date(d.getFullYear(), d.getMonth() + 1, 0); }
   function addDays(d, n)   { var x = new Date(d); x.setDate(x.getDate() + n); return x; }
   function startOfWeek(d) {
-    // Week starts Monday — matches the production-week mental model
-    // ("schedule for the week of Mon Oct 5"). Sunday becomes the
-    // 7th day of the prior week.
+    // Week starts Sunday — Outlook / standard US calendar convention.
+    // Puts Sun at the visual left edge and Sat at the right, so the
+    // weekday block (Mon-Fri) is bookended by the weekends — matches
+    // how PMs read a wall calendar.
     var x = new Date(d);
     var day = x.getDay(); // 0=Sun, 1=Mon, ..., 6=Sat
-    var diff = (day === 0 ? -6 : 1 - day);
-    x.setDate(x.getDate() + diff);
+    x.setDate(x.getDate() - day);
     x.setHours(0, 0, 0, 0);
     return x;
   }
@@ -190,7 +190,37 @@
       a.getDate() === b.getDate();
   }
   var MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
-  var DOW_LABELS  = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+  // Sun-start order matches startOfWeek() and the new "weekends on
+  // either side" layout. Index 0 = Sun, index 6 = Sat. The weekend
+  // columns can collapse to half-width via CSS when showWeekends is
+  // on; toggling it off makes them zero-width via the same CSS hook.
+  var DOW_LABELS  = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  // Weekend cols are 0.5fr (slim bookends) when shown; weekday cols
+  // are 1fr each. Total 6fr units => bars use these proportions when
+  // computing left%/width%.
+  var COL_WEIGHTS_SHOWN  = [0.5, 1, 1, 1, 1, 1, 0.5];
+  var COL_WEIGHTS_HIDDEN = [0,   1, 1, 1, 1, 1, 0  ]; // Sat/Sun collapse to 0
+  function colWeights() {
+    return _state.settings.showWeekends ? COL_WEIGHTS_SHOWN : COL_WEIGHTS_HIDDEN;
+  }
+  function colWeightSum() {
+    var w = colWeights();
+    return w.reduce(function(s, x) { return s + x; }, 0);
+  }
+  // Left% offset of a column (0-indexed) relative to the row's start.
+  function colLeftPct(col) {
+    var w = colWeights();
+    var sum = 0;
+    for (var i = 0; i < col; i++) sum += w[i];
+    return (sum / colWeightSum()) * 100;
+  }
+  // Width% spanning [startCol .. startCol+span-1].
+  function colWidthPct(startCol, span) {
+    var w = colWeights();
+    var sum = 0;
+    for (var i = startCol; i < startCol + span; i++) sum += (w[i] || 0);
+    return (sum / colWeightSum()) * 100;
+  }
 
   // ── Color palette for jobs ─────────────────────────────────
   // Stable hash-mod-palette so the same job always gets the same color
@@ -470,8 +500,13 @@
     var el = document.getElementById('schCalWrap');
     if (!el) return;
     var cur = _state.cursor;
+    var showW = !!_state.settings.showWeekends;
 
     el.innerHTML =
+      // Toolbar — left: nav. Center: production metrics (was a
+      // bottom strip; promoted up so the user reads them at a glance
+      // while planning instead of scrolling to the footer). Right:
+      // compact weekend toggle + add button.
       '<div class="sch-cal-toolbar">' +
         '<div class="sch-cal-nav">' +
           '<button class="sch-btn sch-btn-icon" id="schPrev" title="Previous month">&lsaquo;</button>' +
@@ -479,18 +514,24 @@
           '<button class="sch-btn sch-btn-icon" id="schNext" title="Next month">&rsaquo;</button>' +
           '<button class="sch-btn" id="schToday" style="margin-left:6px;">Today</button>' +
         '</div>' +
-        '<label class="sch-toolbar-toggle" title="Calendar display only — does not change how production days are counted on entries.">' +
-          '<input type="checkbox" id="schWeekendToggle" ' + (_state.settings.showWeekends ? 'checked' : '') + ' /> ' +
-          'Show Sat/Sun columns' +
-        '</label>' +
+        // Production metrics live here now (single source of truth =
+        // refreshWeekSummary). Hidden layout-wise with flex so it
+        // collapses gracefully on narrow viewports.
+        '<div class="sch-week-metrics" id="schWeekSummary"></div>' +
         '<div class="sch-toolbar-spacer"></div>' +
+        // Weekend toggle compacted to an icon button — the bulky
+        // "Show Sat/Sun columns" label was eating header space.
+        // Tooltip carries the explanation.
+        '<button class="sch-btn sch-btn-toggle' + (showW ? ' active' : '') + '" id="schWeekendToggle" ' +
+          'title="' + (showW ? 'Hide' : 'Show') + ' weekend columns. Display only — does not change how production days are counted on entries.">' +
+          (showW ? '&#x1F441; 7-day' : '&#x1F441; 5-day') +
+        '</button>' +
         '<button class="sch-btn sch-btn-primary" id="schAddEntry">+ Schedule entry</button>' +
       '</div>' +
-      '<div class="sch-cal-grid" id="schGrid"></div>' +
-      '<div class="sch-week-summary" id="schWeekSummary"></div>';
-    // refreshWeekSummary populates the bar — single source of truth so
-    // the label / numbers can't drift between initial render and
-    // post-edit refreshes.
+      '<div class="sch-cal-grid" id="schGrid"></div>';
+    // refreshWeekSummary populates the metrics — single source of
+    // truth so the label / numbers can't drift between initial render
+    // and post-edit refreshes.
     refreshWeekSummary();
 
     document.getElementById('schPrev').addEventListener('click', function() { stepMonth(-1); });
@@ -501,10 +542,10 @@
       saveSettings(_state.settings);
       renderCalendar();
     });
-    document.getElementById('schWeekendToggle').addEventListener('change', function(e) {
-      _state.settings.showWeekends = !!e.target.checked;
+    document.getElementById('schWeekendToggle').addEventListener('click', function() {
+      _state.settings.showWeekends = !_state.settings.showWeekends;
       saveSettings(_state.settings);
-      renderGrid();
+      renderCalendar();
     });
     document.getElementById('schAddEntry').addEventListener('click', function() {
       openEntryEditor(null, toISODate(new Date()));
@@ -523,10 +564,14 @@
   function renderGrid() {
     var grid = document.getElementById('schGrid');
     if (!grid) return;
+    // Toggle the no-weekends class so the CSS grid collapses the
+    // Sun/Sat columns to 0fr without re-rendering header labels.
+    grid.classList.toggle('sch-no-weekends', !_state.settings.showWeekends);
     var first = _state.cursor;
     var firstDow = first.getDay(); // 0=Sun … 6=Sat
-    // Convert to Monday-start: how many days back to get to Monday?
-    var leadingDays = firstDow === 0 ? 6 : (firstDow - 1);
+    // Sun-start grid: walk back firstDow days to reach the Sunday
+    // before (or equal to) the 1st of the month.
+    var leadingDays = firstDow;
     var gridStart = addDays(first, -leadingDays);
 
     // Always render 6 weeks (42 cells) so the grid has a stable shape
@@ -671,8 +716,12 @@
       // percentage math stays correct — bar just paints over blank
       // visual area. That's the right call: respect what the entry
       // actually represents instead of dropping data.
-      var leftPct = (seg.startCol / 7) * 100;
-      var widthPct = (seg.span / 7) * 100;
+      // Use variable col widths so weekend bookends (0.5fr each) are
+      // sized correctly relative to weekdays (1fr each). When weekends
+      // are hidden the weights collapse to 0 and bars over Sat/Sun
+      // contribute nothing to width.
+      var leftPct = colLeftPct(seg.startCol);
+      var widthPct = colWidthPct(seg.startCol, seg.span);
       var topPx = 22 + seg.row * 18; // 22px reserved for the day-num
       if (seg.row > maxRow) maxRow = seg.row;
       var e = seg.entry;
@@ -813,14 +862,13 @@
       // its index back.
       var anchorDate = null, anchorCol = 0;
       var dayCells = hostRow.querySelectorAll('.sch-cal-day[data-date]');
-      // Re-derive the actual Monday of this week: take the first
-      // day-cell's date, subtract its dow-offset to Monday.
+      // Re-derive the actual Sunday of this week: take the first
+      // day-cell's date, subtract its dow-offset to Sunday.
       if (dayCells.length) {
         var firstDate = parseISODate(dayCells[0].getAttribute('data-date'));
         if (firstDate) {
           var firstDow = firstDate.getDay();
-          var deltaToMon = firstDow === 0 ? -6 : (1 - firstDow);
-          anchorDate = addDays(firstDate, deltaToMon);
+          anchorDate = addDays(firstDate, -firstDow);
         }
       }
       if (!anchorDate) return originalDays;
@@ -1250,16 +1298,30 @@
     var ws = parseISODate(summary.weekStart);
     var we = parseISODate(summary.weekEnd);
     var label = (ws && we)
-      ? 'Week of ' + MONTH_NAMES[ws.getMonth()].slice(0, 3) + ' ' + ws.getDate() +
+      ? MONTH_NAMES[ws.getMonth()].slice(0, 3) + ' ' + ws.getDate() +
         '–' + (we.getMonth() === ws.getMonth()
           ? we.getDate()
           : MONTH_NAMES[we.getMonth()].slice(0, 3) + ' ' + we.getDate())
       : 'This week';
+    // Compact horizontal metric tiles for the toolbar. Each tile is
+    // a uppercase label over a value so it skims like a dashboard.
     bar.innerHTML =
-      '<span class="sch-week-summary-label">' + escapeHTML(label) + '</span>' +
-      '<span><span class="sch-week-summary-label">Days</span> <span class="sch-week-summary-val">' + summary.scheduledDays + '</span></span>' +
-      '<span><span class="sch-week-summary-label">Expected revenue</span> <span class="sch-week-summary-val sch-rev">' + fmtMoney(summary.expectedRevenue) + '</span></span>' +
-      '<span><span class="sch-week-summary-label">Jobs</span> <span class="sch-week-summary-val">' + summary.jobsCount + '</span></span>';
+      '<div class="sch-metric">' +
+        '<div class="sch-metric-label">Week of</div>' +
+        '<div class="sch-metric-val">' + escapeHTML(label) + '</div>' +
+      '</div>' +
+      '<div class="sch-metric">' +
+        '<div class="sch-metric-label">Days</div>' +
+        '<div class="sch-metric-val">' + summary.scheduledDays + '</div>' +
+      '</div>' +
+      '<div class="sch-metric">' +
+        '<div class="sch-metric-label">Expected revenue</div>' +
+        '<div class="sch-metric-val sch-metric-val-rev">' + fmtMoney(summary.expectedRevenue) + '</div>' +
+      '</div>' +
+      '<div class="sch-metric">' +
+        '<div class="sch-metric-label">Jobs</div>' +
+        '<div class="sch-metric-val">' + summary.jobsCount + '</div>' +
+      '</div>';
   }
 
   // Pick the date the bottom-bar week summary reports on:
