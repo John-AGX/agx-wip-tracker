@@ -371,12 +371,14 @@
 .ws-toolbar-spacer { flex: 1; }
 
 /* Compact freeze-panes select — width-of-content (~32px) when closed,
-   expands when the user opens the dropdown. Matches ws-btn visual. */
+   expands when the user opens the dropdown. Matches ws-btn visual.
+   Hover uses var(--row-hover) so it picks up the right neutral
+   overlay on both dark and Excel themes. */
 .ws-select-compact {
   padding: 4px 4px 4px 6px;
   background: var(--card-bg, #0c0c14);
   color: var(--text);
-  border: 1px solid var(--grid-border, #2e3346);
+  border: 1px solid var(--border, #2e3346);
   border-radius: 4px;
   font-size: 12px;
   height: 26px;
@@ -387,8 +389,17 @@
   text-align-last: center;
 }
 .ws-select-compact:hover {
-  border-color: rgba(255, 255, 255, 0.18);
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--row-hover, rgba(255, 255, 255, 0.04));
+  border-color: var(--text-dim, rgba(255, 255, 255, 0.18));
+}
+/* Native option dropdown — limited cross-browser styling but bg +
+   color get applied. Critical for Excel theme since the default
+   browser-chrome dropdown otherwise inherits OS dark gray on
+   Windows. */
+.ws-select-compact option {
+  background: var(--card-bg, #ffffff);
+  color: var(--text, #252525);
+  padding: 4px 8px;
 }
 
 /* ── Formatting Toolbar ────────────────────────────────── */
