@@ -1639,7 +1639,8 @@ const LEAD_EXTRACTION_SCHEMA = {
   type: 'object',
   properties: {
     title: { type: 'string', description: 'Lead opportunity title — the project / repair name. Usually shown as the heading of the BT print.' },
-    client_company: { type: 'string', description: 'Client company / management firm name. From the Client Contact block. Empty string if not present.' },
+    client_company: { type: 'string', description: 'PARENT company / management firm name only (e.g., "PAC", "Greystar"). When the Client Contact line shows "Company - Property/Site Name", extract the LEFT side only into this field. Empty string if not present.' },
+    client_property: { type: 'string', description: 'PROPERTY / SITE name from the right side of "Company - Property/Site" on the Client Contact line. E.g., from "PAC - Solace Timacuan" set this to "Solace Timacuan". Empty string when the contact line has no " - Site" suffix.' },
     client_first_name: { type: 'string', description: 'Primary contact first name (often shown after the company in BT) or empty string if only a company is listed.' },
     client_last_name: { type: 'string', description: 'Primary contact last name or empty string.' },
     client_email: { type: 'string', description: 'Client contact email address or empty string.' },
@@ -1664,7 +1665,8 @@ const LEAD_EXTRACTION_SCHEMA = {
     notes: { type: 'string', description: 'Full Notes section text. Preserve formatting/line breaks. Includes the SOW summary, POC details, and any other narrative content. Empty string if no notes.' }
   },
   required: [
-    'title', 'client_company', 'client_first_name', 'client_last_name',
+    'title', 'client_company', 'client_property',
+    'client_first_name', 'client_last_name',
     'client_email', 'client_phone', 'client_address', 'client_city',
     'client_state', 'client_zip', 'property_name', 'property_address',
     'property_city', 'property_state', 'property_zip',
@@ -1682,7 +1684,7 @@ const LEAD_EXTRACTION_SYSTEM = [
   '',
   'Field rules:',
   '- Use empty strings for missing text fields, 0 for missing numbers — never null, never the string "N/A".',
-  '- The Client Contact block usually shows "Company Name - Property/Site Name" on line 1, then the mailing address. Extract the company name only (strip the " - Site Name" suffix) into client_company.',
+  '- The Client Contact block usually shows "Company - Property/Site Name" on line 1, then the mailing address. Split this line on the " - " separator: left side → client_company (e.g., "PAC"), right side → client_property (e.g., "Solace Timacuan"). Both halves matter for client matching downstream — keep them separate. If there is no " - " separator, put the whole name in client_company and leave client_property empty.',
   '- Distinguish the client mailing address from the property/job site address. The Lead Opportunity Info block carries the property address; the Client Contact block carries the mailing address.',
   '- The Notes section in BT often contains "**SOW:** ..." and "**POC:** ..." markers. Preserve them in the notes field as-is — they help the PM know the original structure.',
   '- For status: BT "Open" or "Pending" → "in_progress"; "New" → "new"; "Sent" → "sent"; "Sold" → "sold"; "Lost" → "lost"; "No Opportunity" → "no_opportunity". When in doubt, "new".',

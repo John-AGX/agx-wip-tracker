@@ -1191,16 +1191,71 @@
     if (lead.property_state) setField('state', lead.property_state);
     if (lead.property_zip) setField('zip', lead.property_zip);
 
-    // Try to auto-link a client if the company name matches one in the
-    // directory cache. Fall through silently if no match — user can pick
-    // a client in the dropdown OR create one later.
-    if (lead.client_company) {
-      var needle = String(lead.client_company).trim().toLowerCase();
+    // Auto-link a client from the directory cache. Multi-tier match
+    // because PAC's directory has dozens of children ("PAC - Solace
+    // Timacuan", "PAC - Alyssa Barber", etc.) — a naive substring
+    // search on the parent name "PAC" picked the first child it
+    // found, which is wrong. Priority order:
+    //   1. Exact full-name match ("PAC - Solace Timacuan")
+    //   2. Property-side match — when the PDF gave both halves,
+    //      look for a client whose community_name (or name suffix)
+    //      matches the property side AND whose parent / company
+    //      matches the company side
+    //   3. Substring fallback ONLY if it produces a UNIQUE match.
+    //      Multiple matches → leave unset; user picks manually.
+    if (lead.client_company || lead.client_property) {
       var clients = (window.agxClients && window.agxClients.getCached && window.agxClients.getCached()) || [];
+      var company = String(lead.client_company || '').trim();
+      var property = String(lead.client_property || '').trim();
+      var lowerCompany = company.toLowerCase();
+      var lowerProperty = property.toLowerCase();
+      var fullNeedle = (company && property)
+        ? (company + ' - ' + property).toLowerCase()
+        : (company || property).toLowerCase();
+
+      // Tier 1 — exact full-name match. Catches the canonical
+      // "PAC - Solace Timacuan" case directly.
       var match = clients.find(function(c) {
-        return (c.name || '').toLowerCase().indexOf(needle) >= 0
-          || (c.company_name || '').toLowerCase().indexOf(needle) >= 0;
+        return (c.name || '').toLowerCase() === fullNeedle;
       });
+
+      // Tier 2 — property-name match within the right parent. Looks
+      // at community_name AND the suffix after " - " in the client
+      // name. Only fires when the AI extracted both halves.
+      if (!match && property) {
+        match = clients.find(function(c) {
+          var cn = (c.community_name || '').toLowerCase();
+          var nm = (c.name || '').toLowerCase();
+          var dashIdx = nm.indexOf(' - ');
+          var nameSuffix = dashIdx >= 0 ? nm.slice(dashIdx + 3) : '';
+          var propMatches = (cn && cn === lowerProperty) || (nameSuffix && nameSuffix === lowerProperty);
+          if (!propMatches) return false;
+          if (!company) return true; // no parent to filter against
+          var co = (c.company_name || '').toLowerCase();
+          var nameStart = dashIdx >= 0 ? nm.slice(0, dashIdx) : nm;
+          return co === lowerCompany || nameStart === lowerCompany ||
+                 co.indexOf(lowerCompany) >= 0 || nameStart.indexOf(lowerCompany) >= 0;
+        });
+      }
+
+      // Tier 3 — substring fallback. Require uniqueness so we don't
+      // arbitrarily pick the first of N matches. This is the path
+      // the old buggy code took without the uniqueness check.
+      if (!match && fullNeedle && fullNeedle.length >= 3) {
+        var hits = clients.filter(function(c) {
+          var nm = (c.name || '').toLowerCase();
+          var co = (c.company_name || '').toLowerCase();
+          return nm.indexOf(fullNeedle) >= 0 || co.indexOf(fullNeedle) >= 0;
+        });
+        if (hits.length === 1) match = hits[0];
+        // Multiple ambiguous hits → leave the picker empty so the
+        // user resolves it. Logging the count helps debugging without
+        // adding more UI noise.
+        else if (hits.length > 1) {
+          try { console.info('[leads] ambiguous client match for "' + fullNeedle + '" — ' + hits.length + ' candidates; leaving picker empty for user to choose'); } catch (e) {}
+        }
+      }
+
       if (match) {
         var sel = document.getElementById('leadEditor_client_id');
         if (sel) {
