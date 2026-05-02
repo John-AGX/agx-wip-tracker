@@ -305,20 +305,26 @@
            the header's bottom edge, so it visually "anchors" to the
            1px green hairline. */
         nav.tabs button.active {
-            text-shadow: 0 0 10px rgba(93, 219, 126, 0.55), 0 0 18px rgba(93, 219, 126, 0.3);
+            text-shadow: none;
         }
         nav.tabs button.active::after {
             content: '';
             position: absolute;
-            left: 0;
-            right: 0;
-            bottom: -8px;
-            height: 14px;
-            background: radial-gradient(ellipse at top, rgba(93, 219, 126, 0.55) 0%, rgba(93, 219, 126, 0.18) 40%, transparent 75%);
-            filter: blur(3px);
+            left: 4px;
+            right: 4px;
+            bottom: -1px;
+            height: 5px;
+            background: repeating-linear-gradient(
+                -45deg,
+                #5ddb7e 0,
+                #5ddb7e 6px,
+                transparent 6px,
+                transparent 11px
+            );
+            border-radius: 1px;
+            box-shadow: 0 0 6px rgba(93, 219, 126, 0.55);
             border: none;
-            border-radius: 0;
-            box-shadow: none;
+            filter: none;
         }
 
 
@@ -1015,17 +1021,24 @@
             color: #5ddb7e;
             font-weight: 600;
             border-bottom-color: transparent;
-            text-shadow: 0 0 10px rgba(93, 219, 126, 0.55), 0 0 18px rgba(93, 219, 126, 0.3);
+            text-shadow: none;
         }
         .sub-tabs button.active::after {
             content: '';
             position: absolute;
-            left: 0;
-            right: 0;
-            bottom: -8px;
-            height: 14px;
-            background: radial-gradient(ellipse at top, rgba(93, 219, 126, 0.55) 0%, rgba(93, 219, 126, 0.18) 40%, transparent 75%);
-            filter: blur(3px);
+            left: 4px;
+            right: 4px;
+            bottom: -1px;
+            height: 5px;
+            background: repeating-linear-gradient(
+                -45deg,
+                #5ddb7e 0,
+                #5ddb7e 6px,
+                transparent 6px,
+                transparent 11px
+            );
+            border-radius: 1px;
+            box-shadow: 0 0 6px rgba(93, 219, 126, 0.55);
             pointer-events: none;
         }
 
@@ -1049,17 +1062,24 @@
         }
         .sub-modal-tab.active {
             color: #5ddb7e;
-            text-shadow: 0 0 10px rgba(93, 219, 126, 0.55), 0 0 18px rgba(93, 219, 126, 0.3);
+            text-shadow: none;
         }
         .sub-modal-tab.active::after {
             content: '';
             position: absolute;
-            left: 0;
-            right: 0;
-            bottom: -8px;
-            height: 14px;
-            background: radial-gradient(ellipse at top, rgba(93, 219, 126, 0.55) 0%, rgba(93, 219, 126, 0.18) 40%, transparent 75%);
-            filter: blur(3px);
+            left: 4px;
+            right: 4px;
+            bottom: -1px;
+            height: 5px;
+            background: repeating-linear-gradient(
+                -45deg,
+                #5ddb7e 0,
+                #5ddb7e 6px,
+                transparent 6px,
+                transparent 11px
+            );
+            border-radius: 1px;
+            box-shadow: 0 0 6px rgba(93, 219, 126, 0.55);
             pointer-events: none;
         }
 

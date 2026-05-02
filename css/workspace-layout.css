@@ -144,27 +144,33 @@
 .ws-right-tab.active {
   background: transparent;
   color: #5ddb7e;
-  /* "Neon underglow" — no hard underline at all. The active tab
-     reads as backlit: its text glows softly, and a radial halo
-     bleeds out below it like emitted light. Border stays transparent
-     so the layout doesn't shift between active states. */
+  /* "Surveyor's tape" — active tab gets a thick striped underline that
+     reads like construction caution tape. Diagonal lime stripes with
+     transparent gaps so the parent background shows through, giving
+     the tape an industrial / on-site feel that suits AGX. Text stays
+     calm (no glow) since the visual weight lives in the stripe. */
   border-bottom-color: transparent;
   font-weight: 600;
-  text-shadow: 0 0 10px rgba(93, 219, 126, 0.55), 0 0 18px rgba(93, 219, 126, 0.3);
+  text-shadow: none;
 }
-/* The radial halo. ellipse at top means the bright spot sits flush
-   against the tab's bottom edge and fades downward / outward. blur
-   softens the gradient transition so the glow feels like light,
-   not a shape. */
 .ws-right-tab.active::after {
   content: '';
   position: absolute;
-  left: 0;
-  right: 0;
-  bottom: -8px;
-  height: 14px;
-  background: radial-gradient(ellipse at top, rgba(93, 219, 126, 0.55) 0%, rgba(93, 219, 126, 0.18) 40%, transparent 75%);
-  filter: blur(3px);
+  left: 4px;
+  right: 4px;
+  bottom: -1px;
+  height: 5px;
+  background: repeating-linear-gradient(
+    -45deg,
+    #5ddb7e 0,
+    #5ddb7e 6px,
+    transparent 6px,
+    transparent 11px
+  );
+  border-radius: 1px;
+  /* Tight glow so the tape reads as a backlit accent rather than a
+     flat decal. */
+  box-shadow: 0 0 6px rgba(93, 219, 126, 0.55);
   pointer-events: none;
 }
 
