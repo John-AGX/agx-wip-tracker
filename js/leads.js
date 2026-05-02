@@ -658,89 +658,54 @@
     var banner = document.getElementById('estLeadPrefillBanner');
     if (banner) banner.style.display = 'none';
   }
-  // Re-run the lead prefill — callable from the Copy-from-lead button.
-  // Reads the lead + client snapshot stashed by createEstimateFromLead.
-  window.copyFromLeadAgain = function() {
-    var src = window._estimateLeadPrefillSource;
-    if (!src || !src.lead) {
-      alert('No lead context available — open this estimate from a lead to copy.');
-      return;
-    }
-    var l = src.lead;
-    var c = src.client;
+  // Single source of truth for lead → estimate-form prefill. Used by
+  // both the initial open path (createEstimateFromLead) and the
+  // "Copy from lead" recovery button. Always re-resolves the client
+  // from the live cache so a fix to the lead-client link, or a
+  // late-arriving cache load, picks up on the second click.
+  //
+  // Falls back to the lead's OWN fields when no client record is
+  // available — leads carry `client_company`, `client_name`, and
+  // `property_name` even when they aren't yet linked to a client
+  // directory entry. Earlier versions left those fields blank in
+  // that case, which is the bug the user was seeing.
+  function applyLeadPrefill(l) {
+    if (!l) return;
     function set(id, v) {
       var el = document.getElementById(id);
       if (el && v != null) el.value = v;
     }
-    set('estTitle', l.title || '');
-    set('estJobType', l.project_type || '');
-    set('estLeadId', l.id);
-    set('estClientId', l.client_id || '');
-    if (c) {
-      set('estClient', c.company_name || c.name || '');
-      set('estCommunity', c.community_name || c.name || '');
-      var bAddr = [c.address, c.city, c.state, c.zip].filter(Boolean).join(', ');
-      set('estBillingAddr', bAddr);
-      set('estManagerName', c.community_manager || '');
-      set('estManagerEmail', c.cm_email || c.email || '');
-      set('estManagerPhone', c.cm_phone || c.phone || c.cell || '');
-      if (typeof window.populateEstimateClientPicker === 'function') {
-        window.populateEstimateClientPicker('estClientPicker', c.id);
-      }
-    }
-    var hasLeadAddrParts = l.street_address || l.city || l.state || l.zip;
-    var pAddr;
-    if (hasLeadAddrParts) {
-      pAddr = [l.street_address, l.city, l.state, l.zip].filter(Boolean).join(', ');
-    } else if (c) {
-      pAddr = c.property_address || '';
-    } else {
-      pAddr = '';
-    }
-    set('estPropertyAddr', pAddr);
-  };
-
-  // Pre-fill the New Estimate form from the currently-editing lead, then
-  // open it. The estimate save path (createNewEstimate) reads the hidden
-  // estLeadId / estClientId fields to persist the link.
-  function createEstimateFromLead() {
-    var leadId = _currentEditingLeadId;
-    if (!leadId) { alert('Save the lead first.'); return; }
-    var l = _leads.find(function(x) { return x.id === leadId; });
-    if (!l) { alert('Lead not found.'); return; }
-    // Resolve the linked client (if any) so we can pull manager / address fields
+    // Resolve client fresh on every call. cache may have been empty
+    // the first time, or the link may have been added since.
     var clientCache = (window.agxClients && window.agxClients.getCached && window.agxClients.getCached()) || [];
     var c = l.client_id ? clientCache.find(function(x) { return x.id === l.client_id; }) : null;
 
-    closeModal('leadEditorModal');
-    if (typeof window.openNewEstimateForm !== 'function') {
-      alert('Estimate form not available.');
-      return;
-    }
-    window.openNewEstimateForm();
-
-    function set(id, v) {
-      var el = document.getElementById(id);
-      if (el && v != null) el.value = v;
-    }
     set('estTitle', l.title || '');
     set('estJobType', l.project_type || '');
     set('estLeadId', l.id);
     set('estClientId', l.client_id || '');
 
+    // Client company — prefer linked client record, fall back to the
+    // lead's own company-name fields. `client_company` is the typed
+    // input; `client_name` is sometimes the contact name and sometimes
+    // the company depending on lead source — try both.
+    set('estClient',
+      (c && (c.company_name || c.name)) ||
+      l.client_company || l.client_name || '');
+    // Community / property — prefer client.community_name, then the
+    // lead's property_name (the explicit "which community" field).
+    set('estCommunity',
+      (c && (c.community_name || c.name)) ||
+      l.property_name || '');
+
     if (c) {
-      set('estClient', c.company_name || c.name || '');
-      set('estCommunity', c.community_name || c.name || '');
-      // Billing address is the management company's mailing address — always
-      // pulled from the client record, never the lead.
+      // Billing address is the management company's mailing address —
+      // always pulled from the client record, never the lead.
       var bAddr = [c.address, c.city, c.state, c.zip].filter(Boolean).join(', ');
       set('estBillingAddr', bAddr);
       set('estManagerName', c.community_manager || '');
       set('estManagerEmail', c.cm_email || c.email || '');
       set('estManagerPhone', c.cm_phone || c.phone || c.cell || '');
-      // Reflect the picked client in the searchable picker. Re-running
-      // populateEstimateClientPicker with the client id repaints the
-      // visible trigger label so the user sees who they're linked to.
       if (typeof window.populateEstimateClientPicker === 'function') {
         window.populateEstimateClientPicker('estClientPicker', c.id);
       } else {
@@ -748,16 +713,14 @@
         if (picker) picker.value = c.id;
       }
     }
-    // Stash the lead so the "Copy from lead" button on the modal can re-run
-    // this prefill if the user accidentally clears or swaps things.
-    window._estimateLeadPrefillSource = { lead: l, client: c || null };
-    showLeadPrefillBanner(l);
+    // No `else` branch: leads don't currently store manager email /
+    // phone separately from a client record, so we leave those blank
+    // for the user to fill rather than guessing.
 
     // Property (job-site) address: the lead is the authoritative source
-    // because it points at a specific opportunity. Pull street+city+state+zip
-    // from the lead first; only fall back to the client's property_address
-    // (which carries client-mailing city/state — wrong for any client whose
-    // HQ isn't co-located with the property) when the lead has nothing.
+    // because it points at a specific opportunity. Pull street+city+
+    // state+zip from the lead first; only fall back to the client's
+    // mailing address when the lead has nothing.
     var hasLeadAddrParts = l.street_address || l.city || l.state || l.zip;
     var pAddr;
     if (hasLeadAddrParts) {
@@ -768,6 +731,44 @@
       pAddr = '';
     }
     if (pAddr) set('estPropertyAddr', pAddr);
+
+    // Refresh the stash so the banner + button stay accurate even if
+    // we reached this path via copyFromLeadAgain instead of the
+    // initial open.
+    window._estimateLeadPrefillSource = { lead: l, client: c || null };
+  }
+
+  // Re-run the lead prefill — callable from the Copy-from-lead button.
+  // Reads the lead snapshot stashed by createEstimateFromLead and
+  // re-resolves the client live so any cache fix takes effect.
+  window.copyFromLeadAgain = function() {
+    var src = window._estimateLeadPrefillSource;
+    if (!src || !src.lead) {
+      alert('No lead context available — open this estimate from a lead to copy.');
+      return;
+    }
+    applyLeadPrefill(src.lead);
+  };
+
+  // Pre-fill the New Estimate form from the currently-editing lead, then
+  // open it. The estimate save path (createNewEstimate) reads the hidden
+  // estLeadId / estClientId fields to persist the link. Delegates to
+  // the shared applyLeadPrefill helper so the initial open and the
+  // "Copy from lead" button always behave identically.
+  function createEstimateFromLead() {
+    var leadId = _currentEditingLeadId;
+    if (!leadId) { alert('Save the lead first.'); return; }
+    var l = _leads.find(function(x) { return x.id === leadId; });
+    if (!l) { alert('Lead not found.'); return; }
+
+    closeModal('leadEditorModal');
+    if (typeof window.openNewEstimateForm !== 'function') {
+      alert('Estimate form not available.');
+      return;
+    }
+    window.openNewEstimateForm();
+    applyLeadPrefill(l);
+    showLeadPrefillBanner(l);
   }
 
   function submitLeadEditor() {
