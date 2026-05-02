@@ -19,7 +19,7 @@ body.ng-graph-fullscreen #nodeGraphTab.active {
 }
 /* Theme vars */
 :root{--ng-bg:#0b0e16;--ng-surface:#12162a;--ng-surface2:#10141e;--ng-border:#242e50;--ng-border2:#1c2236;--ng-text:#e4e6f0;--ng-dim:#6a7090;--ng-dim2:#4a5068;--ng-input:#0d1019;--ng-grid-dot:#161b2a;--ng-grid-line:#141828;--ng-port-bg:#0b0e16;--ng-shadow:rgba(0,0,0,.5)}
-body.light-mode{--ng-bg:#f0f2f5;--ng-surface:#ffffff;--ng-surface2:#e8eaef;--ng-border:#6b7280;--ng-border2:#9ca3af;--ng-text:#1f2937;--ng-dim:#4b5563;--ng-dim2:#6b7280;--ng-input:#f9fafb;--ng-grid-dot:#c8ccd2;--ng-grid-line:#dcdfe5;--ng-port-bg:#f0f2f5;--ng-shadow:rgba(0,0,0,.12)}
+body.light-mode{--ng-bg:#f7f8fa;--ng-surface:#ffffff;--ng-surface2:#eceef2;--ng-border:#6b7280;--ng-border2:#9ca3af;--ng-text:#1f2937;--ng-dim:#4b5563;--ng-dim2:#6b7280;--ng-input:#f9fafb;--ng-grid-dot:#dde0e6;--ng-grid-line:#eef0f3;--ng-port-bg:#f7f8fa;--ng-shadow:rgba(0,0,0,.12)}
 
 /* Light-mode overrides for hardcoded dark-mode colors */
 body.light-mode .ng-node{border-width:1.5px}
@@ -78,6 +78,11 @@ body.light-mode .ng-del-cancel:hover{background:#e5e7eb}
 .ng-tbtn:hover{background:rgba(79,140,255,.2)}
 .ng-tbtn-close{background:rgba(248,113,113,.08);border:1px solid rgba(248,113,113,.25);color:#f87171;border-radius:4px;padding:4px 12px;font-size:12px;cursor:pointer;font-weight:600}
 .ng-tbtn-close:hover{background:rgba(248,113,113,.2)}
+/* Icon-only variant — tighter padding so the topbar fits more
+   buttons without wrapping. min-width keeps tap area readable. */
+.ng-tbtn-icon{padding:4px 8px;min-width:30px;display:inline-flex;align-items:center;justify-content:center;font-size:14px;line-height:1}
+.ng-tbtn-icon.ng-tbtn-close{padding:4px 8px}
+.ng-topbar-divider{width:1px;height:18px;background:var(--ng-border2);margin:0 2px;flex-shrink:0}
 .ng-main{display:flex;flex:1;overflow:hidden}
 /* Sidebar */
 .ng-sidebar{width:200px;background:var(--ng-input);border-right:1px solid var(--ng-border2);overflow-y:auto;flex-shrink:0;transition:width .15s ease}

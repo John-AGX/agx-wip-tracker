@@ -966,6 +966,21 @@ function buildSidebar(){
   }
   syncToggle();
 
+  // The sidebar's CSS `width` is animated; canvas pixel buffers don't
+  // grow/shrink on their own, so the wire + grid layers clip on the
+  // right when the sidebar collapses. After the transition lands,
+  // re-size the canvases and redraw so they fill the new flex area.
+  sb.addEventListener('transitionend', function(e) {
+    if (e.propertyName !== 'width') return;
+    if (typeof resize === 'function') resize();
+    if (typeof E !== 'undefined' && E.drawGrid && gridCtx && gridC) {
+      E.drawGrid(gridCtx, gridC.width, gridC.height);
+    }
+    if (typeof E !== 'undefined' && E.drawWires && wireCtx && wrap) {
+      E.drawWires(wireCtx, wrap, null, null);
+    }
+  });
+
   sb.addEventListener('click',function(e){
     if(e.target.closest('.ng-sidebar-toggle')){
       e.stopPropagation();
