@@ -1544,7 +1544,10 @@
       // Versioned shape so the next migration knows what it's reading.
       version: 2,
       activeSheetId: workbook.activeSheetId,
-      sheets: workbook.sheets
+      sheets: workbook.sheets,
+      // Per-workbook-group "last active inner sheet" so clicking a
+      // workbook tab returns to the same sheet across reloads.
+      workbookGroupActive: workbook.workbookGroupActive || {}
     };
     const allWs = safeLoadJSON('agx-workspaces', {});
     allWs[workbook.jobId] = data;
@@ -1577,11 +1580,23 @@
         // Preserve xlsx-import provenance across reloads so future
         // tooling (e.g. "remove all sheets from <file>") can find them.
         sourceFile: s.sourceFile || null,
-        sourceSheetName: s.sourceSheetName || null
+        sourceSheetName: s.sourceSheetName || null,
+        // Workbook grouping (Phase: multi-sheet xlsx imports collapse
+        // to a single workbook tab). Both fields are required so the
+        // bottom-strip render can collapse siblings + so the inner
+        // tab strip can find them on re-open.
+        workbookGroupId: s.workbookGroupId || null,
+        workbookGroupName: s.workbookGroupName || null
       }));
       workbook.activeSheetId = saved.activeSheetId && workbook.sheets.find(s => s.id === saved.activeSheetId)
         ? saved.activeSheetId
         : workbook.sheets[0].id;
+      // Restore the per-group "last active sheet" map so clicking a
+      // workbook tab returns the user to the same inner sheet they
+      // had open before the reload.
+      workbook.workbookGroupActive = (saved.workbookGroupActive && typeof saved.workbookGroupActive === 'object')
+        ? saved.workbookGroupActive
+        : {};
     } else if (saved && (saved.cells || saved.rows)) {
       // v1 shape — legacy single-sheet save. Wrap it as Sheet1 of a new
       // workbook so existing data carries forward without loss.
