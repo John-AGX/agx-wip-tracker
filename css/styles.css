@@ -304,18 +304,21 @@
         /* Active tab underline lives on a pseudo-element flush with
            the header's bottom edge, so it visually "anchors" to the
            1px green hairline. */
+        nav.tabs button.active {
+            text-shadow: 0 0 10px rgba(93, 219, 126, 0.55), 0 0 18px rgba(93, 219, 126, 0.3);
+        }
         nav.tabs button.active::after {
             content: '';
             position: absolute;
-            left: 4px;
-            right: 4px;
-            bottom: -1px;
-            height: 9px;
-            border: 2px solid #5ddb7e;
-            border-top: none;
-            border-radius: 0 0 4px 4px;
-            background: transparent;
-            box-shadow: 0 0 8px rgba(93, 219, 126, 0.5);
+            left: 0;
+            right: 0;
+            bottom: -8px;
+            height: 14px;
+            background: radial-gradient(ellipse at top, rgba(93, 219, 126, 0.55) 0%, rgba(93, 219, 126, 0.18) 40%, transparent 75%);
+            filter: blur(3px);
+            border: none;
+            border-radius: 0;
+            box-shadow: none;
         }
 
 
@@ -1011,23 +1014,18 @@
         .sub-tabs button.active {
             color: #5ddb7e;
             font-weight: 600;
-            /* Underline moved to ::after for the soft outer glow ("horns"
-               look). Keep border-bottom transparent so non-active row
-               height stays the same. */
             border-bottom-color: transparent;
+            text-shadow: 0 0 10px rgba(93, 219, 126, 0.55), 0 0 18px rgba(93, 219, 126, 0.3);
         }
         .sub-tabs button.active::after {
             content: '';
             position: absolute;
-            left: 4px;
-            right: 4px;
-            bottom: -1px;
-            height: 9px;
-            border: 2px solid #5ddb7e;
-            border-top: none;
-            border-radius: 0 0 4px 4px;
-            background: transparent;
-            box-shadow: 0 0 8px rgba(93, 219, 126, 0.5);
+            left: 0;
+            right: 0;
+            bottom: -8px;
+            height: 14px;
+            background: radial-gradient(ellipse at top, rgba(93, 219, 126, 0.55) 0%, rgba(93, 219, 126, 0.18) 40%, transparent 75%);
+            filter: blur(3px);
             pointer-events: none;
         }
 
@@ -1051,19 +1049,17 @@
         }
         .sub-modal-tab.active {
             color: #5ddb7e;
+            text-shadow: 0 0 10px rgba(93, 219, 126, 0.55), 0 0 18px rgba(93, 219, 126, 0.3);
         }
         .sub-modal-tab.active::after {
             content: '';
             position: absolute;
-            left: 4px;
-            right: 4px;
-            bottom: -1px;
-            height: 9px;
-            border: 2px solid #5ddb7e;
-            border-top: none;
-            border-radius: 0 0 4px 4px;
-            background: transparent;
-            box-shadow: 0 0 8px rgba(93, 219, 126, 0.5);
+            left: 0;
+            right: 0;
+            bottom: -8px;
+            height: 14px;
+            background: radial-gradient(ellipse at top, rgba(93, 219, 126, 0.55) 0%, rgba(93, 219, 126, 0.18) 40%, transparent 75%);
+            filter: blur(3px);
             pointer-events: none;
         }
 
