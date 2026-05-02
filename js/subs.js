@@ -262,6 +262,19 @@
     if (certsMount && _editingId) {
       mountCertificates(certsMount, _editingId);
     }
+
+    // Notifications matrix — wire master/cell toggles and per-change
+    // serialization to the hidden #subDir_notifPrefs input. Wired
+    // unconditionally (works for new + edit); saveFromModal sends the
+    // prefs JSON to the server with the rest of the payload.
+    wireNotifMatrix(modal);
+
+    // Job access — same gating as Certificates: needs a saved sub id
+    // before we can list assignments / toggle them.
+    var jobAccessMount = modal.querySelector('#subDir_jobAccessMount');
+    if (jobAccessMount && _editingId) {
+      mountJobAccess(jobAccessMount, _editingId);
+    }
   }
 
   // ──────────────────────────────────────────────────────────────────
@@ -424,6 +437,201 @@
           });
         }, 400);
       });
+    });
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  // Phase 1C: Notifications matrix
+  // ──────────────────────────────────────────────────────────────────
+
+  // Event categories (rows) and channels (cols). Order drives visual
+  // order. Keys are persisted to the JSONB column so the row labels
+  // can be renamed without losing user prefs.
+  var NOTIF_CATEGORIES = [
+    { key: 'pm',             label: 'Project management' },
+    { key: 'messaging',      label: 'Messaging' },
+    { key: 'financial',      label: 'Financial' },
+    { key: 'administrative', label: 'Administrative' }
+  ];
+  var NOTIF_CHANNELS = [
+    { key: 'email', label: 'Email',  glyph: '&#x2709;' },
+    { key: 'text',  label: 'Text',   glyph: '&#x1F4AC;' },
+    { key: 'push',  label: 'Push',   glyph: '&#x1F4F1;' }
+  ];
+
+  function getNotifPref(prefs, catKey, chKey) {
+    if (!prefs || !prefs[catKey]) return false;
+    return !!prefs[catKey][chKey];
+  }
+
+  function renderNotifMatrix(prefs) {
+    // Header row — channel labels.
+    var header = '<div style="display:grid;grid-template-columns:1.6fr 1fr 1fr 1fr;gap:8px;align-items:center;padding-bottom:8px;border-bottom:1px solid var(--border,#333);">' +
+      '<div></div>' +
+      NOTIF_CHANNELS.map(function(ch) {
+        return '<div style="font-size:11px;font-weight:700;color:var(--text-dim,#aaa);text-align:center;">' + ch.glyph + ' ' + escapeHTML(ch.label) + '</div>';
+      }).join('') +
+      '</div>';
+    // Master "All notifications" row — bulk toggle per column.
+    var masterRow = '<div style="display:grid;grid-template-columns:1.6fr 1fr 1fr 1fr;gap:8px;align-items:center;padding:10px 0;border-bottom:1px solid var(--border,#333);">' +
+      '<div style="font-size:13px;font-weight:700;color:var(--text,#fff);">All notifications</div>' +
+      NOTIF_CHANNELS.map(function(ch) {
+        // Master is computed: checked if EVERY category is on for this channel.
+        var allOn = NOTIF_CATEGORIES.every(function(c) { return getNotifPref(prefs, c.key, ch.key); });
+        return '<div style="text-align:center;"><input type="checkbox" data-notif-master="' + ch.key + '" ' + (allOn ? 'checked' : '') + ' style="margin:0;width:18px;height:18px;cursor:pointer;" /></div>';
+      }).join('') +
+      '</div>';
+    // One row per category, columns = channels.
+    var catRows = NOTIF_CATEGORIES.map(function(cat) {
+      return '<div style="display:grid;grid-template-columns:1.6fr 1fr 1fr 1fr;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid var(--border,#333);">' +
+        '<div style="font-size:12px;font-weight:600;color:var(--text-dim,#bbb);text-transform:uppercase;letter-spacing:0.4px;">' + escapeHTML(cat.label) + '</div>' +
+        NOTIF_CHANNELS.map(function(ch) {
+          var on = getNotifPref(prefs, cat.key, ch.key);
+          return '<div style="text-align:center;"><input type="checkbox" data-notif-cell data-notif-cat="' + cat.key + '" data-notif-ch="' + ch.key + '" ' + (on ? 'checked' : '') + ' style="margin:0;width:18px;height:18px;cursor:pointer;" /></div>';
+        }).join('') +
+      '</div>';
+    }).join('');
+    return header + masterRow + catRows;
+  }
+
+  // Wire the matrix's cell + master toggles. Master rows bulk-set every
+  // category cell in their column; cell changes recompute the master
+  // for that column. After every change we serialize the matrix back
+  // to the hidden #subDir_notifPrefs input so saveFromModal picks up
+  // the latest state.
+  function wireNotifMatrix(modal) {
+    function readMatrix() {
+      var prefs = {};
+      modal.querySelectorAll('[data-notif-cell]').forEach(function(cb) {
+        var c = cb.getAttribute('data-notif-cat');
+        var h = cb.getAttribute('data-notif-ch');
+        if (!prefs[c]) prefs[c] = {};
+        prefs[c][h] = !!cb.checked;
+      });
+      return prefs;
+    }
+    function syncMaster(chKey) {
+      var allOn = true;
+      modal.querySelectorAll('[data-notif-cell][data-notif-ch="' + chKey + '"]').forEach(function(cb) {
+        if (!cb.checked) allOn = false;
+      });
+      var master = modal.querySelector('[data-notif-master="' + chKey + '"]');
+      if (master) master.checked = allOn;
+    }
+    function persist() {
+      var hidden = modal.querySelector('#subDir_notifPrefs');
+      if (hidden) hidden.value = JSON.stringify(readMatrix());
+    }
+    modal.querySelectorAll('[data-notif-cell]').forEach(function(cb) {
+      cb.addEventListener('change', function() {
+        syncMaster(cb.getAttribute('data-notif-ch'));
+        persist();
+      });
+    });
+    modal.querySelectorAll('[data-notif-master]').forEach(function(cb) {
+      cb.addEventListener('change', function() {
+        var ch = cb.getAttribute('data-notif-master');
+        var on = cb.checked;
+        modal.querySelectorAll('[data-notif-cell][data-notif-ch="' + ch + '"]').forEach(function(cell) {
+          cell.checked = on;
+        });
+        persist();
+      });
+    });
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  // Phase 1C: Job access
+  // ──────────────────────────────────────────────────────────────────
+
+  // Mount the job-access pane. Loads all jobs + this sub's current
+  // assignments, renders one row per job with a checkbox prechecked
+  // when assigned. Toggling fires an immediate POST/DELETE — no Save
+  // round-trip, since access changes are sensitive enough to want
+  // confirmation by checkbox state right away.
+  function mountJobAccess(mountEl, subId) {
+    mountEl.innerHTML = '<div style="padding:8px;color:var(--text-dim,#888);font-size:12px;">Loading…</div>';
+    var jobs = (window.appData && window.appData.jobs) || [];
+    if (!window.agxApi || !window.agxApi.subs || !window.agxApi.subs.listJobsForSub) {
+      mountEl.innerHTML = '<div style="padding:8px;color:#f87171;font-size:12px;">Job access API not available — refresh.</div>';
+      return;
+    }
+    window.agxApi.subs.listJobsForSub(subId).then(function(res) {
+      var assignments = res.assignments || [];
+      // Map job_id → assignment_id so the toggle handler can DELETE
+      // by assignment id when the user unchecks. A sub can have
+      // multiple assignment rows on the same job (level=building or
+      // level=phase) — we treat any presence as "has access" and
+      // remove only the job-level rows on uncheck (so building/phase
+      // overrides don't get clobbered by a top-level toggle).
+      var assignedByJob = {};
+      assignments.forEach(function(a) {
+        if (!assignedByJob[a.job_id]) assignedByJob[a.job_id] = [];
+        assignedByJob[a.job_id].push(a);
+      });
+      // Open jobs first; closed jobs collapse into a footer hint so
+      // the list isn't dominated by archived work.
+      var openJobs = jobs.filter(function(j) {
+        var s = (j.status || '').toLowerCase();
+        return s !== 'closed' && s !== 'archived';
+      });
+      if (!openJobs.length) {
+        mountEl.innerHTML = '<div style="padding:8px;color:var(--text-dim,#888);font-size:12px;font-style:italic;">No open jobs in the system. Create a job first, then come back to grant access.</div>';
+        return;
+      }
+      // Header
+      var header = '<div style="display:grid;grid-template-columns:auto 2.5fr 1fr 1.2fr;gap:10px;align-items:center;padding:8px 4px;border-bottom:1px solid var(--border,#333);font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.4px;">' +
+        '<div></div>' +
+        '<div>Job name</div>' +
+        '<div>Status</div>' +
+        '<div>Date opened</div>' +
+      '</div>';
+      var rows = openJobs.map(function(j) {
+        var hasAccess = !!assignedByJob[j.id];
+        var dateOpened = j.dateAdded || j.created_at || '';
+        var displayName = (j.jobNumber ? '[' + j.jobNumber + '] ' : '') + (j.title || j.name || j.id);
+        return '<div style="display:grid;grid-template-columns:auto 2.5fr 1fr 1.2fr;gap:10px;align-items:center;padding:8px 4px;border-bottom:1px solid var(--border,#333);">' +
+          '<div style="text-align:center;">' +
+            '<input type="checkbox" data-job-access="' + escapeAttr(j.id) + '" ' + (hasAccess ? 'checked' : '') + ' style="margin:0;width:16px;height:16px;cursor:pointer;" />' +
+          '</div>' +
+          '<div style="font-size:13px;color:var(--text,#fff);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTML(displayName) + '</div>' +
+          '<div><span style="font-size:10px;background:rgba(52,211,153,0.15);color:#34d399;padding:2px 8px;border-radius:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.3px;">' + escapeHTML(j.status || 'open') + '</span></div>' +
+          '<div style="font-size:11px;color:var(--text-dim,#aaa);">' + escapeHTML(dateOpened) + '</div>' +
+        '</div>';
+      }).join('');
+      mountEl.innerHTML = header + rows;
+      // Wire toggle handlers.
+      mountEl.querySelectorAll('[data-job-access]').forEach(function(cb) {
+        cb.addEventListener('change', function() {
+          var jobId = cb.getAttribute('data-job-access');
+          if (cb.checked) {
+            // Grant — assign at job level.
+            window.agxApi.subs.assignToJob(jobId, { sub_id: subId, level: 'job' })
+              .catch(function(err) {
+                cb.checked = false; // revert
+                alert('Failed to grant access: ' + (err.message || String(err)));
+              });
+          } else {
+            // Revoke — delete the job-level assignment row(s) for this sub on this job.
+            var rows = (assignedByJob[jobId] || []).filter(function(a) { return a.level === 'job'; });
+            if (!rows.length) {
+              alert('No job-level assignment to remove. This sub may have building/phase-level access — manage from the job page.');
+              cb.checked = true;
+              return;
+            }
+            Promise.all(rows.map(function(a) {
+              return window.agxApi.subs.unassign(jobId, a.assignment_id);
+            })).then(function() {
+              delete assignedByJob[jobId];
+            }).catch(function(err) {
+              cb.checked = true; // revert
+              alert('Failed to revoke access: ' + (err.message || String(err)));
+            });
+          }
+        });
+      });
+    }).catch(function(err) {
+      mountEl.innerHTML = '<div style="padding:8px;color:#f87171;font-size:12px;">Failed to load jobs: ' + escapeHTML(err.message || String(err)) + '</div>';
     });
   }
 
@@ -607,21 +815,30 @@
             : '<div id="subDir_certsMount" style="display:flex;flex-direction:column;gap:0;"></div>') +
         '</div>' +
       '</div>' +
-      // ── Tab: Notifications (Phase 1C stub) ───────────────────────
-      '<div data-sub-tab-pane="notifications" style="padding:24px 22px;display:none;">' +
-        '<div style="text-align:center;padding:40px 20px;color:var(--text-dim,#888);font-size:13px;">' +
-          '<div style="font-size:24px;margin-bottom:8px;">&#x1F4EC;</div>' +
-          '<div style="font-weight:600;color:var(--text,#fff);margin-bottom:4px;">Per-sub notification matrix</div>' +
-          '<div>Email / Text / Push toggles for Project management, Messaging, Financial, and Administrative events. Lands in Phase 1C.</div>' +
-        '</div>' +
+      // ── Tab: Notifications ───────────────────────────────────────
+      // Per-sub notification matrix. Rows are event categories
+      // (PM / Messaging / Financial / Administrative); columns are
+      // delivery channels (Email / Text / Push). Plus a master "All
+      // notifications" row that bulk-toggles every category in a
+      // column at once. State writes to the hidden #subDir_notifPrefs
+      // input as JSON so saveFromModal can pass it through to the
+      // notification_prefs JSONB column on subs.
+      '<div data-sub-tab-pane="notifications" style="padding:18px 22px;display:none;">' +
+        '<div style="font-size:13px;font-weight:700;color:var(--text,#fff);margin-bottom:12px;">Notifications</div>' +
+        renderNotifMatrix(sub.notification_prefs || {}) +
+        '<input type="hidden" id="subDir_notifPrefs" value="' + escapeAttr(JSON.stringify(sub.notification_prefs || {})) + '" />' +
       '</div>' +
-      // ── Tab: Job access (Phase 1C stub) ──────────────────────────
-      '<div data-sub-tab-pane="jobs" style="padding:24px 22px;display:none;">' +
-        '<div style="text-align:center;padding:40px 20px;color:var(--text-dim,#888);font-size:13px;">' +
-          '<div style="font-size:24px;margin-bottom:8px;">&#x1F4CB;</div>' +
-          '<div style="font-weight:600;color:var(--text,#fff);margin-bottom:4px;">Per-sub job access list</div>' +
-          '<div>Toggle this sub on/off for each open job. Backed by the existing job_subs table — UI lands in Phase 1C.</div>' +
-        '</div>' +
+      // ── Tab: Job access ──────────────────────────────────────────
+      // Lists all open jobs with a checkbox per row. Checking creates
+      // a job_subs assignment (POST), unchecking deletes it. Real-
+      // time — each click is its own server round-trip rather than
+      // batched on Save, since granting/revoking access is a sensitive
+      // enough action to want immediate feedback.
+      '<div data-sub-tab-pane="jobs" style="padding:18px 22px;display:none;">' +
+        '<div style="font-size:13px;font-weight:700;color:var(--text,#fff);margin-bottom:12px;">Job access</div>' +
+        (!_editingId
+          ? '<div style="font-size:11px;color:var(--text-dim,#888);font-style:italic;">Save the sub first, then toggle which jobs they have access to.</div>'
+          : '<div id="subDir_jobAccessMount" style="font-size:12px;color:var(--text-dim,#aaa);">Loading jobs…</div>') +
       '</div>' +
       // ── Footer ───────────────────────────────────────────────────
       '<div style="padding:12px 22px;border-top:1px solid var(--border,#333);display:flex;align-items:center;gap:8px;">' +
@@ -692,13 +909,28 @@
       paymentHold:  get('subDir_paymentHold') === '1',
       preferences:  prefs,
       notes: trim(get('subDir_notes')),
-      // Carry-over fields (Phase 1B replaces these with the certificates
-      // sub-table; for now they ride along on the directory record).
+      // Carry-over fields — kept on the directory record alongside
+      // the new sub_certificates rows so existing summary views (the
+      // directory list compliance chips) keep working until they're
+      // migrated to read from sub_certificates directly.
       w9OnFile: get('subDir_w9') === '1',
       w9Expires: get('subDir_w9expires') || null,
       insuranceExpires: get('subDir_insExpires') || null,
       status: get('subDir_status') || 'active'
     };
+
+    // Per-sub notification preferences — Phase 1C. The Notifications
+    // tab serializes its current matrix state to a hidden JSON input
+    // on every change; we just read + parse here to attach the blob
+    // to the save payload.
+    try {
+      var notifRaw = get('subDir_notifPrefs');
+      if (notifRaw) payload.notificationPrefs = JSON.parse(notifRaw);
+    } catch (e) {
+      // Defensive — bad JSON shouldn't block the save. Drop the field
+      // and log; the rest of the form still persists.
+      console.warn('Sub notif_prefs parse failed; skipping:', e.message);
+    }
     if (!payload.name) {
       alert('Company name is required.');
       modal.querySelector('#subDir_name').focus();

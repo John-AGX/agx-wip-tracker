@@ -216,6 +216,7 @@
     update: function(id, payload) { return put('/api/subs/' + encodeURIComponent(id), payload); },
     remove: function(id) { return del('/api/subs/' + encodeURIComponent(id)); },
     listForJob: function(jobId) { return get('/api/subs/jobs/' + encodeURIComponent(jobId)); },
+    listJobsForSub: function(subId) { return get('/api/subs/' + encodeURIComponent(subId) + '/jobs'); },
     assignToJob: function(jobId, payload) { return post('/api/subs/jobs/' + encodeURIComponent(jobId), payload); },
     updateAssignment: function(jobId, assignmentId, payload) {
       // PATCH — use raw fetch since our helpers don't expose patch

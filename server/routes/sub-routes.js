@@ -389,6 +389,51 @@ router.delete('/:subId/certificates/:certType',
 // Per-job assignments (job_subs)
 // ──────────────────────────────────────────────────────────────────
 
+// Phase 1C: GET /api/subs/:subId/jobs — list jobs this sub is
+// assigned to. Inverted view of /jobs/:jobId so the sub-edit modal
+// can render its Job access tab without a second join. Returns the
+// minimal fields the UI needs (job name + status + dates) joined
+// from the jobs table; full assignment metadata is on each row in
+// case the modal grows to surface contract amounts later.
+router.get('/:subId/jobs',
+  requireAuth, requireCapability('JOBS_VIEW_ALL'),
+  async (req, res) => {
+    try {
+      const { rows } = await pool.query(`
+        SELECT js.id AS assignment_id, js.job_id, js.level, js.building_id,
+               js.phase_id, js.contract_amt, js.billed_to_date, js.status,
+               js.created_at AS assigned_at,
+               j.data AS job_data
+        FROM job_subs js
+        LEFT JOIN jobs j ON j.id = js.job_id
+        WHERE js.sub_id = $1
+        ORDER BY js.created_at DESC
+      `, [req.params.subId]);
+      // Pluck the human-readable bits out of the jobs.data JSONB so
+      // the client doesn't have to decode the whole blob just to show
+      // a row.
+      const out = rows.map(r => ({
+        assignment_id: r.assignment_id,
+        job_id: r.job_id,
+        level: r.level,
+        building_id: r.building_id,
+        phase_id: r.phase_id,
+        contract_amt: r.contract_amt,
+        billed_to_date: r.billed_to_date,
+        status: r.status,
+        assigned_at: r.assigned_at,
+        job_title: r.job_data ? (r.job_data.title || r.job_data.name || null) : null,
+        job_number: r.job_data ? (r.job_data.jobNumber || null) : null,
+        job_status: r.job_data ? (r.job_data.status || null) : null
+      }));
+      res.json({ assignments: out });
+    } catch (e) {
+      console.error('GET /api/subs/:subId/jobs error:', e);
+      res.status(500).json({ error: 'Server error' });
+    }
+  }
+);
+
 // GET /api/subs/jobs/:jobId — list this job's sub assignments,
 // joined with directory profile so the UI doesn't need a second
 // fetch.
