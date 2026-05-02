@@ -997,6 +997,8 @@
             font-size: 14px;
             border-bottom: 2px solid transparent;
             transition: all 0.3s ease;
+            /* Anchor for the glowing ::after underline below. */
+            position: relative;
         }
 
         .sub-tabs button:hover {
@@ -1004,8 +1006,58 @@
         }
 
         .sub-tabs button.active {
-            color: var(--accent);
-            border-bottom-color: var(--accent);
+            color: #5ddb7e;
+            font-weight: 600;
+            /* Underline moved to ::after for the soft outer glow ("horns"
+               look). Keep border-bottom transparent so non-active row
+               height stays the same. */
+            border-bottom-color: transparent;
+        }
+        .sub-tabs button.active::after {
+            content: '';
+            position: absolute;
+            left: 8px;
+            right: 8px;
+            bottom: -1px;
+            height: 2px;
+            background: #5ddb7e;
+            box-shadow: 0 0 8px rgba(93, 219, 126, 0.55);
+            border-radius: 1px;
+            pointer-events: none;
+        }
+
+        /* Sub-edit modal tab bar — same "horns" treatment as the other
+           tab variants. position:relative on each button so the active
+           ::after underline can be absolutely-anchored. */
+        .sub-modal-tab {
+            padding: 10px 14px;
+            background: transparent;
+            border: none;
+            border-bottom: 2px solid transparent;
+            color: var(--text-dim, #aaa);
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            position: relative;
+            transition: color 0.15s;
+        }
+        .sub-modal-tab:hover {
+            color: var(--text, #fff);
+        }
+        .sub-modal-tab.active {
+            color: #5ddb7e;
+        }
+        .sub-modal-tab.active::after {
+            content: '';
+            position: absolute;
+            left: 6px;
+            right: 6px;
+            bottom: -1px;
+            height: 2px;
+            background: #5ddb7e;
+            box-shadow: 0 0 8px rgba(93, 219, 126, 0.55);
+            border-radius: 1px;
+            pointer-events: none;
         }
 
         .sub-tab-content, .sub-tab-content-job {

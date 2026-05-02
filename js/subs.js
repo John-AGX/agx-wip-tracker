@@ -226,17 +226,18 @@
     });
 
     // Tabbed lower section — Additional info / Notifications / Job access.
-    // The active tab gets the green underline + bright text; siblings
-    // dim down. Hidden panes get display:none so their inputs don't
-    // submit values from un-shown tabs (defensive — Phase 1A only writes
-    // from Additional info, but the structure is ready for 1B/1C panes).
+    // Toggles the `active` class so the unified .sub-modal-tab.active
+    // CSS rule (in styles.css) handles the green text + glowing
+    // underline. Hidden panes get display:none so their inputs don't
+    // submit values from un-shown tabs (defensive — the cert
+    // auto-saves and notif-prefs hidden carrier all live in
+    // Additional info, but keeping panes truly hidden is the safer
+    // posture).
     modal.querySelectorAll('[data-sub-tab]').forEach(function(btn) {
       btn.addEventListener('click', function() {
         var name = btn.getAttribute('data-sub-tab');
         modal.querySelectorAll('[data-sub-tab]').forEach(function(b) {
-          var on = b === btn;
-          b.style.borderBottomColor = on ? '#1B8541' : 'transparent';
-          b.style.color = on ? '#1B8541' : 'var(--text-dim,#aaa)';
+          b.classList.toggle('active', b === btn);
         });
         modal.querySelectorAll('[data-sub-tab-pane]').forEach(function(pane) {
           pane.style.display = (pane.getAttribute('data-sub-tab-pane') === name) ? '' : 'none';
@@ -776,10 +777,14 @@
         '</div>' +
       '</div>' +
       // ── Tab nav ──────────────────────────────────────────────────
-      '<div style="border-bottom:1px solid var(--border,#333);padding:0 22px;display:flex;gap:4px;">' +
-        '<button type="button" data-sub-tab="additional" class="sub-tab-btn sub-tab-active" style="padding:10px 14px;background:transparent;border:none;border-bottom:2px solid #1B8541;color:#1B8541;font-size:13px;font-weight:600;cursor:pointer;">Additional information</button>' +
-        '<button type="button" data-sub-tab="notifications" class="sub-tab-btn" style="padding:10px 14px;background:transparent;border:none;border-bottom:2px solid transparent;color:var(--text-dim,#aaa);font-size:13px;font-weight:600;cursor:pointer;">Notifications</button>' +
-        '<button type="button" data-sub-tab="jobs" class="sub-tab-btn" style="padding:10px 14px;background:transparent;border:none;border-bottom:2px solid transparent;color:var(--text-dim,#aaa);font-size:13px;font-weight:600;cursor:pointer;">Job access</button>' +
+      // Class-based active state so the unified CSS in styles.css /
+      // workspace-layout.css drives the green text + glowing underline
+      // ("horns" look). Inline styles only carry layout primitives;
+      // color and underline live in CSS.
+      '<div class="sub-modal-tabs" style="border-bottom:1px solid var(--border,#333);padding:0 22px;display:flex;gap:4px;">' +
+        '<button type="button" data-sub-tab="additional"    class="sub-modal-tab active">Additional information</button>' +
+        '<button type="button" data-sub-tab="notifications" class="sub-modal-tab">Notifications</button>' +
+        '<button type="button" data-sub-tab="jobs"          class="sub-modal-tab">Job access</button>' +
       '</div>' +
       // ── Tab: Additional information ──────────────────────────────
       '<div data-sub-tab-pane="additional" style="padding:18px 22px;">' +

@@ -131,6 +131,9 @@
   white-space: nowrap;
   border-radius: 0;
   text-align: center;
+  /* position:relative so the active ::after glow underline can be
+     absolutely-positioned flush with the bottom edge. */
+  position: relative;
 }
 
 .ws-right-tab:hover {
@@ -141,8 +144,24 @@
 .ws-right-tab.active {
   background: transparent;
   color: #5ddb7e;
-  border-bottom-color: #5ddb7e;
+  /* The underline + soft glow now lives on a ::after pseudo so we get
+     the matching "horns" look used elsewhere (top nav, sub modal).
+     Border-bottom stays transparent — keeps non-active layout the
+     same height. */
+  border-bottom-color: transparent;
   font-weight: 600;
+}
+.ws-right-tab.active::after {
+  content: '';
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: -1px;
+  height: 2px;
+  background: #5ddb7e;
+  box-shadow: 0 0 8px rgba(93, 219, 126, 0.55);
+  border-radius: 1px;
+  pointer-events: none;
 }
 
 /* ââ Right Tab Content âââââââââââââââââââââââââââââââââââââ */
