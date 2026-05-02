@@ -304,10 +304,11 @@
 
 /* Focus rail — slim vertical handle on the LEFT edge of each week.
    Click pins that week as the target for the toolbar's week-summary
-   metrics. Always faintly visible so the user can discover it;
-   brightens on hover and locks bright when its week is the focused
-   one. Overlaps the leftmost (Sunday) column so it sits inside
-   the row's visual frame, not outside it. */
+   metrics. Always faintly visible (AGX green at low alpha) so the
+   user can discover it; brightens on hover and recedes when its row
+   becomes the focused one — the top/bottom border glow takes over
+   the highlight job there. Overlaps the leftmost (Sunday) column so
+   it sits inside the row's visual frame, not outside it. */
 .sch-week-focus-rail {
   position: absolute;
   top: 4px;
@@ -318,9 +319,9 @@
   border: none;
   padding: 0;
   cursor: pointer;
-  background: rgba(79, 140, 255, 0.15);
+  background: rgba(27, 133, 65, 0.18);
   transition: background 0.15s, width 0.15s, box-shadow 0.15s;
-  z-index: 3;
+  z-index: 5;
 }
 .sch-week-focus-rail-glow {
   display: block;
@@ -329,32 +330,61 @@
   border-radius: 2px;
 }
 .sch-week-focus-rail:hover {
-  background: rgba(79, 140, 255, 0.6);
+  background: rgba(27, 133, 65, 0.65);
   width: 5px;
 }
 .sch-cal-week-row.sch-week-focused .sch-week-focus-rail {
-  background: #4f8cff;
-  width: 5px;
-  box-shadow: 0 0 10px rgba(79, 140, 255, 0.55);
+  background: #1B8541;
+  width: 4px;
+  box-shadow: 0 0 8px rgba(27, 133, 65, 0.7);
 }
-/* Subtle background tint on the entire focused week so the user
-   can scan from the toolbar metric numbers down to the row that
-   produced them at a glance. */
+/* Focused-week highlight — full-width glowing AGX-green bars across
+   the top and bottom of the row. Implemented as absolutely-positioned
+   pseudo-elements so the bars sit ABOVE the day cells (z-index 4,
+   above entry bars at z-index 1) and span edge-to-edge regardless of
+   weekend collapse. The outer drop-shadow gives the soft bloom that
+   matches the "glow" feel rather than a hard line. */
+.sch-cal-week-row.sch-week-focused::before,
+.sch-cal-week-row.sch-week-focused::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: #1B8541;
+  box-shadow:
+    0 0 4px rgba(27, 133, 65, 0.9),
+    0 0 12px rgba(27, 133, 65, 0.6),
+    0 0 22px rgba(27, 133, 65, 0.35);
+  z-index: 4;
+  pointer-events: none;
+  border-radius: 1px;
+}
+.sch-cal-week-row.sch-week-focused::before { top: 0; }
+.sch-cal-week-row.sch-week-focused::after  { bottom: 0; }
+/* Very faint AGX-green wash so the row reads as "selected" in
+   addition to the glowing bars. Subtle — the borders do the work. */
 .sch-cal-week-row.sch-week-focused {
-  background: linear-gradient(90deg, rgba(79, 140, 255, 0.08) 0%, rgba(79, 140, 255, 0.02) 100%), var(--border, #2e3346);
+  background: linear-gradient(90deg, rgba(27, 133, 65, 0.06) 0%, rgba(27, 133, 65, 0.02) 100%), var(--border, #2e3346);
 }
 body.light-mode .sch-week-focus-rail {
-  background: rgba(37, 99, 235, 0.18);
+  background: rgba(27, 133, 65, 0.20);
 }
 body.light-mode .sch-week-focus-rail:hover {
-  background: rgba(37, 99, 235, 0.55);
+  background: rgba(27, 133, 65, 0.65);
 }
 body.light-mode .sch-cal-week-row.sch-week-focused .sch-week-focus-rail {
-  background: #2563eb;
-  box-shadow: 0 0 10px rgba(37, 99, 235, 0.40);
+  background: #1B8541;
+  box-shadow: 0 0 8px rgba(27, 133, 65, 0.45);
 }
 body.light-mode .sch-cal-week-row.sch-week-focused {
-  background: linear-gradient(90deg, rgba(37, 99, 235, 0.10) 0%, rgba(37, 99, 235, 0.02) 100%), var(--border, #d1d5db);
+  background: linear-gradient(90deg, rgba(27, 133, 65, 0.10) 0%, rgba(27, 133, 65, 0.02) 100%), var(--border, #d1d5db);
+}
+body.light-mode .sch-cal-week-row.sch-week-focused::before,
+body.light-mode .sch-cal-week-row.sch-week-focused::after {
+  box-shadow:
+    0 0 4px rgba(27, 133, 65, 0.55),
+    0 0 12px rgba(27, 133, 65, 0.35);
 }
 .sch-cal-grid.sch-no-weekends .sch-cal-week-row {
   grid-template-columns: 0fr 1fr 1fr 1fr 1fr 1fr 0fr;
@@ -549,16 +579,16 @@ body.sch-resizing * {
 
 /* Pinned-week indicator. When the user picks a specific week via
    the calendar's left-edge focus rail, the toolbar metrics get a
-   subtle accent so the link between rail → metrics is obvious. A
-   thin colored line on the left edge of the metric cluster +
-   a 📌 emoji prefix on the "Week of" label. */
+   subtle AGX-green accent so the link between rail → metrics is
+   obvious. A thin green stripe on the left edge of the metric
+   cluster + a 📌 emoji prefix on the "Week of" label. */
 .sch-week-metrics.sch-week-metrics-pinned {
   position: relative;
-  background: linear-gradient(90deg, rgba(79, 140, 255, 0.10) 0%, rgba(79, 140, 255, 0) 60%);
+  background: linear-gradient(90deg, rgba(27, 133, 65, 0.10) 0%, rgba(27, 133, 65, 0) 60%);
   border-radius: 4px;
   padding-left: 8px;
   margin-left: 6px;
-  box-shadow: inset 3px 0 0 0 #4f8cff;
+  box-shadow: inset 3px 0 0 0 #1B8541;
 }
 .sch-week-metrics.sch-week-metrics-pinned .sch-metric:first-child {
   padding-left: 6px;
@@ -567,11 +597,11 @@ body.sch-resizing * {
   display: inline-block;
   font-size: 9px;
   margin-right: 2px;
-  filter: drop-shadow(0 0 2px rgba(79, 140, 255, 0.5));
+  filter: drop-shadow(0 0 2px rgba(27, 133, 65, 0.6));
 }
 body.light-mode .sch-week-metrics.sch-week-metrics-pinned {
-  background: linear-gradient(90deg, rgba(37, 99, 235, 0.10) 0%, rgba(37, 99, 235, 0) 60%);
-  box-shadow: inset 3px 0 0 0 #2563eb;
+  background: linear-gradient(90deg, rgba(27, 133, 65, 0.10) 0%, rgba(27, 133, 65, 0) 60%);
+  box-shadow: inset 3px 0 0 0 #1B8541;
 }
 
 /* Compact icon-style toggle for show/hide weekends. Replaces the
