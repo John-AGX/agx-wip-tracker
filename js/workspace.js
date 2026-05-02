@@ -4828,6 +4828,12 @@
     wsContainer = document.getElementById(containerId);
     if (!wsContainer) return;
 
+    // Workspace operates as its own visual unit — Excel-style palette
+    // regardless of the app's light/dark mode. The class scopes a set
+    // of CSS custom property overrides + per-element rules in
+    // workspace.css that mimic Excel's actual ribbon + cell colors.
+    wsContainer.classList.add('ws-excel-theme');
+
     loadWorkspace(jobId);
     wsContainer.innerHTML = buildWorkspaceHTML();
 

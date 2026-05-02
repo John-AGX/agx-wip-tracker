@@ -3,6 +3,222 @@
    Excel-like dark theme spreadsheet
    ============================================================ */
 
+/* ──────────────────────────────────────────────────────────────
+   Excel-style theme — workspace operates as its own visual unit
+   independent of the app's light/dark mode. Mimics Excel's actual
+   palette: white cell area, light-gray ribbon, Excel-green accent
+   on active cells / selected sheet tab, light-gray row + column
+   headers. The .ws-excel-theme class is attached to the workspace
+   container in initWorkspace() so every var() reference inside the
+   workspace picks up these values; body.light-mode and
+   body:not(.light-mode) rules don't override because this scope
+   has higher specificity (class + class beats class alone).
+   ────────────────────────────────────────────────────────────── */
+.ws-excel-theme {
+  /* Surface tier */
+  --bg: #ffffff;
+  --surface: #fafafa;
+  --surface2: #f3f2f1;
+  --card-bg: #ffffff;
+  --input-bg: #ffffff;
+  /* Borders */
+  --border: #d4d4d4;
+  /* Type */
+  --text: #252525;
+  --text-dim: #605e5c;
+  /* Accent — Excel green (matches the active-cell border + selected
+     sheet tab color in modern Office) */
+  --accent: #107C41;
+  --accent-dim: #185F3D;
+  --green: #107C41;
+  /* Grid + tables */
+  --cell-bg: #ffffff;
+  --cell-border: #d4d4d4;
+  --row-alt: #f8f8f8;
+  --row-hover: #f3f2f1;
+  --grid-header-bg: #f3f2f1;
+  --grid-header-text: #252525;
+  --grid-border: #d4d4d4;
+  /* Misc */
+  --scrollbar-thumb: #c8c6c4;
+  --shadow: rgba(0,0,0,0.08);
+  --overlay-light: rgba(0,0,0,0.04);
+
+  background: #fafafa;
+  color: #252525;
+}
+
+/* Ribbon — light gray strip with white toolbar groups, matching
+   Excel's grouped-button layout. */
+.ws-excel-theme .ws-ribbon {
+  background: #fafafa;
+  border-color: #d4d4d4;
+  color: #252525;
+}
+.ws-excel-theme .ws-ribbon-group {
+  border-right-color: #e1dfdd;
+}
+.ws-excel-theme .ws-ribbon-label {
+  color: #605e5c;
+}
+
+/* Ribbon buttons — flat, transparent until hovered, then a soft
+   neutral lift. Active / toggle-on uses the Excel-green accent. */
+.ws-excel-theme .ws-ribbon .ws-btn {
+  background: transparent;
+  border-color: transparent;
+  color: #252525;
+}
+.ws-excel-theme .ws-ribbon .ws-btn:hover {
+  background: rgba(0, 0, 0, 0.05);
+  border-color: rgba(0, 0, 0, 0.1);
+  color: #252525;
+}
+.ws-excel-theme .ws-ribbon .ws-btn:active,
+.ws-excel-theme .ws-ribbon .ws-btn.ws-active {
+  background: rgba(16, 124, 65, 0.15);
+  border-color: rgba(16, 124, 65, 0.4);
+  color: #107C41;
+}
+.ws-excel-theme .ws-ribbon .ws-btn.ws-btn-save {
+  background: rgba(16, 124, 65, 0.15);
+  border-color: rgba(16, 124, 65, 0.4);
+  color: #107C41;
+}
+.ws-excel-theme .ws-ribbon .ws-btn.ws-btn-save:hover {
+  background: rgba(16, 124, 65, 0.3);
+  border-color: #107C41;
+  color: #ffffff;
+}
+
+/* Formula bar + cell-ref */
+.ws-excel-theme .ws-cell-ref,
+.ws-excel-theme .ws-formula-bar {
+  background: #ffffff;
+  color: #252525;
+  border-color: #d4d4d4;
+}
+.ws-excel-theme .ws-cell-ref { font-weight: 700; }
+
+/* Grid wrapper + inner table */
+.ws-excel-theme .ws-grid-wrapper {
+  background: #ffffff;
+}
+.ws-excel-theme .ws-grid {
+  background: #ffffff;
+  color: #252525;
+}
+.ws-excel-theme .ws-grid td,
+.ws-excel-theme .ws-grid th {
+  border-color: #d4d4d4;
+  color: #252525;
+}
+
+/* Row + column headers */
+.ws-excel-theme .ws-grid th,
+.ws-excel-theme .ws-grid .ws-row-header,
+.ws-excel-theme .ws-grid .ws-col-header {
+  background: #f3f2f1;
+  color: #252525;
+  font-weight: 600;
+}
+
+/* Sheet tabs — white with green active tab matching Excel */
+.ws-excel-theme .ws-sheet-tabs {
+  background: #f3f2f1;
+  border-top-color: #d4d4d4;
+}
+.ws-excel-theme .ws-sheet-tab {
+  background: #f3f2f1;
+  color: #252525;
+  border-color: #d4d4d4;
+}
+.ws-excel-theme .ws-sheet-tab:hover {
+  background: #ffffff;
+  color: #107C41;
+}
+.ws-excel-theme .ws-sheet-tab.active {
+  background: #ffffff;
+  color: #107C41;
+  border-bottom-color: #ffffff;
+}
+.ws-excel-theme .ws-workbook-tab {
+  background: rgba(16, 124, 65, 0.08);
+  border-color: rgba(16, 124, 65, 0.4);
+  color: #107C41;
+}
+.ws-excel-theme .ws-workbook-tab.active {
+  background: #ffffff;
+  border-color: rgba(16, 124, 65, 0.6);
+  border-bottom-color: #ffffff;
+}
+.ws-excel-theme .ws-workbook-tab-count {
+  background: rgba(16, 124, 65, 0.18);
+  color: #107C41;
+}
+
+/* Inner workbook tab strip */
+.ws-excel-theme .ws-workbook-inner-tabs {
+  background: #ffffff;
+  border-color: #d4d4d4;
+}
+.ws-excel-theme .ws-workbook-inner-tabs-label {
+  color: #107C41;
+  border-right-color: #d4d4d4;
+}
+.ws-excel-theme .ws-workbook-inner-tab {
+  color: #605e5c;
+}
+.ws-excel-theme .ws-workbook-inner-tab:hover {
+  color: #252525;
+  background: #f3f2f1;
+}
+.ws-excel-theme .ws-workbook-inner-tab.active {
+  color: #107C41;
+  background: #ffffff;
+  border-color: #d4d4d4;
+  border-bottom-color: #ffffff;
+}
+
+/* Status bar */
+.ws-excel-theme .ws-statusbar {
+  background: #f3f2f1;
+  color: #252525;
+  border-top-color: #d4d4d4;
+}
+
+/* Link panel — sits between the toolbar and grid */
+.ws-excel-theme .ws-link-panel {
+  background: #ffffff;
+  border-color: #d4d4d4;
+  color: #252525;
+}
+.ws-excel-theme .ws-link-title { color: #605e5c; }
+.ws-excel-theme .ws-link-opt {
+  background: #ffffff;
+  border-color: #d4d4d4;
+  color: #252525;
+}
+.ws-excel-theme .ws-link-opt:hover {
+  background: #f3f2f1;
+  border-color: #107C41;
+  color: #107C41;
+}
+.ws-excel-theme .ws-link-opt.active {
+  background: rgba(16, 124, 65, 0.15);
+  border-color: #107C41;
+  color: #107C41;
+}
+
+/* Borders preset menu */
+.ws-excel-theme .ws-border-preset {
+  color: #252525;
+}
+.ws-excel-theme .ws-border-preset:hover {
+  background: #f3f2f1;
+  border-color: #d4d4d4;
+}
+
 /* ── Toolbar ────────────────────────────────────────────── */
 
 .ws-toolbar {
