@@ -1341,13 +1341,19 @@
     if (!wsContainer) return;
     var isEmbed = isEmbedSheet(sheet);
 
-    // Hide grid-only chrome
+    // Hide grid-only chrome. .ws-toolbar-fmt was the legacy
+    // formatting-toolbar selector; the new Excel-style toolbar uses
+    // .ws-ribbon, so both have to be in the list (older sheets may
+    // still render the legacy toolbar). Inner workbook tabs also
+    // hide on embed views since they only group spreadsheet sheets.
     var hideSelectors = [
       '.ws-toolbar',
       '.ws-toolbar-fmt',
+      '.ws-ribbon',
       '.ws-link-panel',
       '.ws-grid-wrapper',
-      '.ws-statusbar'
+      '.ws-statusbar',
+      '.ws-workbook-inner-tabs'
     ];
     hideSelectors.forEach(function(sel) {
       wsContainer.querySelectorAll(sel).forEach(function(el) {
