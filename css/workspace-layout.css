@@ -369,13 +369,37 @@
   scrollbar-width: thin;
   box-sizing: border-box;
 }
-/* When the strip is detached from the sticky header (current layout), it
-   sits directly above the workspace grid as a full-width band. */
+/* Strip pins right under the slim 46px header (sticky top:46) so the
+   metrics stay visible while the user scrolls long job-detail content.
+   Negative horizontal margin pulls it past main's 30px padding so the
+   gradient bleeds edge-to-edge — the old "trimmed gradient with
+   rounded corners floating in the middle" look is gone. Inside the
+   band, an inner --max-width 1600px wrapper keeps the cards aligned
+   with the rest of the page content. */
 #jh-strip-detached {
-  background: linear-gradient(180deg, rgba(0,0,0,0.15), rgba(0,0,0,0));
-  border-bottom: 1px solid rgba(255,255,255,0.04);
-  padding: 14px 18px;
-  margin-bottom: 14px;
+  position: sticky;
+  top: 46px;
+  z-index: 50;
+  margin: 0 -30px 14px;
+  padding: 12px 30px;
+  background: linear-gradient(180deg, var(--bg, #0f1117) 0%, rgba(0,0,0,0) 100%);
+  border-top: 1px solid rgba(255,255,255,0.03);
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+body.light-mode #jh-strip-detached {
+  background: linear-gradient(180deg, var(--surface2, #e8eaef) 0%, rgba(0,0,0,0) 100%);
+  border-top-color: rgba(0,0,0,0.04);
+  border-bottom-color: rgba(0,0,0,0.06);
+}
+/* The inner strip stays within the 1600px content max-width so the
+   cards still align with the rest of the page even though the band
+   bleeds full-width. */
+#jh-strip-detached .jh-metrics-strip {
+  max-width: 1600px;
+  margin: 0 auto;
+  padding: 0;
 }
 .jh-metrics-strip::-webkit-scrollbar { height: 4px; }
 .jh-metrics-strip::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 2px; }
@@ -428,29 +452,63 @@
     0 4px 12px rgba(0,0,0,0.45);
 }
 
-/* Light-mode metric strip cards: keep the colored value text but
-   swap the deep-navy gradient for a clean white surface so the cards
-   read as proper dashboard tiles instead of dark blocks floating on
-   a light page. The label color (rgba white) needs a darker variant
-   too. */
+/* Light-mode metric strip cards: solid white tile with a clear
+   border + soft shadow. Label opacity bumped 0.55 → 0.78 so the
+   uppercase labels stay readable; tone label colors kept saturated
+   instead of washed out. Value text on neutral cards uses --text
+   directly for max contrast. */
 body.light-mode .jh-strip-card {
-  background: linear-gradient(135deg, #ffffff 0%, #f8fafc 50%, #f1f5f9 100%);
-  border-color: rgba(0,0,0,0.08);
-  box-shadow: 0 2px 6px rgba(0,0,0,0.06);
+  background: #ffffff;
+  border-color: rgba(0,0,0,0.10);
+  box-shadow:
+    0 1px 0 rgba(255,255,255,0.8) inset,
+    0 1px 3px rgba(15,23,42,0.06);
 }
 body.light-mode .jh-strip-card:hover {
-  border-color: rgba(0,0,0,0.18);
-  box-shadow: 0 4px 14px rgba(0,0,0,0.12);
+  border-color: rgba(0,0,0,0.20);
+  box-shadow:
+    0 1px 0 rgba(255,255,255,0.9) inset,
+    0 4px 12px rgba(15,23,42,0.10);
 }
 body.light-mode .jh-strip-card::before {
-  background: linear-gradient(120deg, transparent 30%, rgba(0,0,0,0.03) 50%, transparent 70%);
+  background: linear-gradient(120deg, transparent 30%, rgba(0,0,0,0.02) 50%, transparent 70%);
 }
 body.light-mode .jh-strip-label {
-  color: rgba(17, 24, 39, 0.55);
+  color: rgba(17, 24, 39, 0.78);
+}
+body.light-mode .jh-strip-card[data-tone="neutral"] .jh-strip-value {
+  color: #0a0e15;
 }
 body.light-mode .jh-metrics-strip::-webkit-scrollbar-thumb {
-  background: rgba(0,0,0,0.15);
+  background: rgba(0,0,0,0.20);
 }
+/* Light-mode tone variants — same colored-tint-over-surface trick as
+   dark mode, but tinted onto white. Border + label saturation pushed
+   higher so the categories stay distinguishable on a bright page. */
+body.light-mode .jh-strip-card[data-tone="gain"] {
+  background: linear-gradient(180deg, rgba(5,150,105,0.10) 0%, rgba(5,150,105,0.02) 100%), #ffffff;
+  border-color: rgba(5,150,105,0.35);
+}
+body.light-mode .jh-strip-card[data-tone="gain"] .jh-strip-value { color: #047857; text-shadow: none; }
+body.light-mode .jh-strip-card[data-tone="gain"] .jh-strip-label { color: #047857; }
+body.light-mode .jh-strip-card[data-tone="cost"] {
+  background: linear-gradient(180deg, rgba(220,38,38,0.10) 0%, rgba(220,38,38,0.02) 100%), #ffffff;
+  border-color: rgba(220,38,38,0.32);
+}
+body.light-mode .jh-strip-card[data-tone="cost"] .jh-strip-value { color: #b91c1c; text-shadow: none; }
+body.light-mode .jh-strip-card[data-tone="cost"] .jh-strip-label { color: #b91c1c; }
+body.light-mode .jh-strip-card[data-tone="income"] {
+  background: linear-gradient(180deg, rgba(37,99,235,0.10) 0%, rgba(37,99,235,0.02) 100%), #ffffff;
+  border-color: rgba(37,99,235,0.32);
+}
+body.light-mode .jh-strip-card[data-tone="income"] .jh-strip-value { color: #1d4ed8; text-shadow: none; }
+body.light-mode .jh-strip-card[data-tone="income"] .jh-strip-label { color: #1d4ed8; }
+body.light-mode .jh-strip-card[data-tone="amber"] {
+  background: linear-gradient(180deg, rgba(217,119,6,0.10) 0%, rgba(217,119,6,0.02) 100%), #ffffff;
+  border-color: rgba(217,119,6,0.36);
+}
+body.light-mode .jh-strip-card[data-tone="amber"] .jh-strip-value { color: #b45309; text-shadow: none; }
+body.light-mode .jh-strip-card[data-tone="amber"] .jh-strip-label { color: #b45309; }
 
 .jh-strip-label {
   font-size: 10px;

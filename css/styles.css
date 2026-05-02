@@ -4,8 +4,12 @@
             --surface: #1a1d27;
             --surface2: #242836;
             --border: #2e3346;
-            --text: #e4e6f0;
-            --text-dim: #8b90a5;
+            /* Brightened a step: #e4e6f0 → #eef0f8 (regular) and
+               #8b90a5 → #a3a8bd (dim) so paragraphs and labels read
+               more clearly against the dark backdrop without going
+               full pure-white. */
+            --text: #eef0f8;
+            --text-dim: #a3a8bd;
             --accent: #4f8cff;
             --accent-dim: #2a4a8a;
             --green: #34d399;
@@ -38,8 +42,12 @@
             --surface: #ffffff;
             --surface2: #e8eaef;
             --border: #d1d5db;
-            --text: #111827;
-            --text-dim: #4b5563;
+            /* Darkened a step for better contrast against the light bg.
+               --text: #111827 → #0a0e15 (almost-black) so body copy
+               carries more weight; --text-dim: #4b5563 → #374151 so
+               muted labels stay readable instead of fading out. */
+            --text: #0a0e15;
+            --text-dim: #374151;
             --accent: #2563eb;
             --accent-dim: #93b4f5;
             --green: #059669;
