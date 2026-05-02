@@ -292,13 +292,25 @@
 }
 
 /* ââ Job Header Bar (inside sticky green header) ââ */
+/* Auto-margin shoves the job-info to the right side of the header,
+   adjacent to the user-menu, so the back button + title sit close
+   to the user controls instead of hugging the tabs. The sibling
+   rule below shrinks the user-menu's auto-margin to a 14px gap when
+   jh-job-info is present, keeping a "subtle gap" between them. */
 .jh-job-info {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-left: 12px;
+  margin-left: auto;
   flex: 0 1 auto;
   min-width: 0;
+}
+/* When jh-job-info is in the header, the user-menu loses its default
+   margin-left:auto — instead it sits 14px to the right of the
+   job-info block. On pages without jh-job-info, user-menu keeps its
+   default auto-margin (set in styles.css) and snaps to the far right. */
+header .jh-job-info ~ #user-menu {
+  margin-left: 14px;
 }
 .jh-back-btn {
   background: rgba(0,0,0,0.4);
@@ -376,8 +388,13 @@
    - Top: strip starts flush against the header instead of 30px below.
    The 14px below preserves breathing room before the page content. */
 #jh-strip-detached {
+  /* main is the scroll container (overflow-y:auto). For sticky, top
+     measures from main's content viewport, NOT from page top. main
+     sits right below the header, so top:0 pins the strip at main's
+     top edge — which is right under the header. top:46px was a bug
+     leftover from when I forgot main owned the scroll. */
   position: sticky;
-  top: 46px;
+  top: 0;
   z-index: 50;
   margin: -30px -30px 18px;
   padding: 10px 30px;
