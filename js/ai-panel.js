@@ -2289,6 +2289,8 @@
     var cameraBtn = panel.querySelector('#ai-camera');
     var fileInput = panel.querySelector('#ai-file-input');
     var cameraInput = panel.querySelector('#ai-camera-input');
+    var textInput = panel.querySelector('#ai-input');
+    var pill = panel.querySelector('#ai-input-pill');
     if (!attachBtn || !fileInput) return;
 
     attachBtn.onclick = function() { fileInput.value = ''; fileInput.click(); };
@@ -2297,6 +2299,59 @@
       cameraInput.onchange = function(e) { handleSelectedFiles(e.target.files); };
     }
     fileInput.onchange = function(e) { handleSelectedFiles(e.target.files); };
+
+    // Clipboard paste — pull image data out of paste events and route
+    // through the same handleSelectedFiles pipeline as the + button.
+    // Clipboard images come in with an empty/generic filename ("image.png"),
+    // so we rename them to "pasted-YYYY-MM-DD_HH-MM-SS.<ext>" before
+    // upload — that way the attachment list reads as a meaningful audit
+    // trail of when each screenshot was dropped in.
+    function handlePaste(e) {
+      if (!e || !e.clipboardData) return;
+      var items = e.clipboardData.items;
+      if (!items || !items.length) return;
+      var pastedFiles = [];
+      for (var i = 0; i < items.length; i++) {
+        var item = items[i];
+        if (item.kind === 'file' && item.type && item.type.indexOf('image/') === 0) {
+          var blob = item.getAsFile();
+          if (!blob) continue;
+          var ext = (item.type.split('/')[1] || 'png').toLowerCase();
+          if (ext === 'jpeg') ext = 'jpg';
+          var d = new Date();
+          var pad = function(n) { return n < 10 ? '0' + n : '' + n; };
+          var stamp =
+            d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) +
+            '_' + pad(d.getHours()) + '-' + pad(d.getMinutes()) + '-' + pad(d.getSeconds());
+          var name = 'pasted-' + stamp + '.' + ext;
+          // File constructor lets us rename a blob in one shot. Falls back
+          // to assigning the renamed blob through the original path if File
+          // isn't constructible (very old browsers — Chrome / Edge / Safari
+          // / Firefox have all supported it for years).
+          try {
+            pastedFiles.push(new File([blob], name, { type: blob.type || item.type }));
+          } catch (err) {
+            // Fallback: tag the blob with a name property so handleSelectedFiles
+            // can read it. handleSelectedFiles uses file.name and file.type.
+            blob.name = name;
+            pastedFiles.push(blob);
+          }
+        }
+      }
+      if (pastedFiles.length) {
+        // Suppress the textarea's default paste handling so a "Pasted image"
+        // placeholder string doesn't end up inside the message body.
+        e.preventDefault();
+        handleSelectedFiles(pastedFiles);
+      }
+      // If no images were on the clipboard we let the default text-paste
+      // run normally — typical Ctrl+V of copied text is unaffected.
+    }
+
+    if (textInput) textInput.addEventListener('paste', handlePaste);
+    // Also listen on the pill container so a click anywhere inside the
+    // input area + Ctrl+V works even when the textarea isn't focused.
+    if (pill) pill.addEventListener('paste', handlePaste);
   }
 
   function handleSelectedFiles(fileList) {
