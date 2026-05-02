@@ -1016,6 +1016,43 @@
             color: #5ddb7e;
         }
 
+        /* ─── Tab buttons: suppress global button chrome ─────────────
+           The global `button { background, border, border-radius:6px }`
+           + `button:focus-visible { box-shadow: green ring }` rules
+           leak into tab buttons and draw a rounded box around the
+           active / focused tab — collides with the sliding indicator.
+           Strip those for any element styled as a tab (text-color +
+           the slider are the only tab visual). */
+        .tab-btn,
+        .ws-right-tab,
+        .sub-tab-btn-job,
+        .sub-tabs button,
+        .sub-modal-tab {
+            background: transparent;
+            border-radius: 0;
+        }
+        .tab-btn:hover,
+        .ws-right-tab:hover,
+        .sub-tab-btn-job:hover,
+        .sub-tabs button:hover,
+        .sub-modal-tab:hover {
+            background: transparent;
+            border-color: transparent;
+        }
+        .tab-btn:focus,
+        .ws-right-tab:focus,
+        .sub-tab-btn-job:focus,
+        .sub-tabs button:focus,
+        .sub-modal-tab:focus,
+        .tab-btn:focus-visible,
+        .ws-right-tab:focus-visible,
+        .sub-tab-btn-job:focus-visible,
+        .sub-tabs button:focus-visible,
+        .sub-modal-tab:focus-visible {
+            outline: none;
+            box-shadow: none;
+        }
+
         /* ─── Sliding tab indicator ──────────────────────────────────
            A single 2px lime bar appended to each tab bar by
            js/tab-slider.js. Width + transform get set inline to match
