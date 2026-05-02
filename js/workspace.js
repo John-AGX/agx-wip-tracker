@@ -1736,6 +1736,10 @@
     }
     workbook.dirty = true;
     renderSheetTabs();
+    // Persist the delete to localStorage immediately. Without this the
+    // sheet was only removed in memory — a page refresh re-loaded the
+    // pre-delete workspace from disk and the deleted sheet came back.
+    saveWorkspace();
   }
 
   function renameSheet(sheetId, newName) {
@@ -2302,13 +2306,13 @@
           <div class="ws-ribbon-label">Styles</div>
         </div>
 
-        <!-- Cells (compact icon-only) -->
+        <!-- Cells. Row/col insert + delete buttons removed — the
+             statusbar's +Row / +Col controls cover adding to the
+             grid bottom; per-row/col insert + delete are still
+             available via the right-click context menu on row /
+             column headers. -->
         <div class="ws-ribbon-group">
           <div class="ws-ribbon-controls">
-            <button class="ws-btn ws-btn-icon" id="wsInsertRowBtn" onclick="window.wsInsertRowAbove()" title="Insert row above selection">&#x2795;&#x2501;</button>
-            <button class="ws-btn ws-btn-icon" id="wsInsertColBtn" onclick="window.wsInsertColLeft()" title="Insert column to the left of selection">&#x2795;&#x2503;</button>
-            <button class="ws-btn ws-btn-icon" id="wsDeleteRowBtn" onclick="window.wsDeleteSelectedRow()" title="Delete the selected row">&#x2796;&#x2501;</button>
-            <button class="ws-btn ws-btn-icon" id="wsDeleteColBtn" onclick="window.wsDeleteSelectedCol()" title="Delete the selected column">&#x2796;&#x2503;</button>
             <button class="ws-btn ws-btn-icon" id="wsLinkBtn" title="Link cell to job field">&#x1F517;</button>
             <button class="ws-btn ws-btn-icon" id="wsMakeTableBtn" onclick="window.wsMakeTable()" title="Convert selected range into a styled table">&#x1F5C2;</button>
           </div>
