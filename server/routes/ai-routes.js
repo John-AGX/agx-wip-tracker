@@ -279,6 +279,28 @@ const JOB_TOOLS = [
     }
   },
   {
+    name: 'delete_node',
+    description:
+      'Remove a node from the cost-flow graph. The node and all its incoming + outgoing wires ' +
+      'are removed in one shot. ' +
+      'IMPORTANT: This DOES NOT delete the underlying data record — the building / phase / ' +
+      'change order / PO / invoice / sub data stays in appData. Use when the user wants to ' +
+      'remove a node from the graph without losing the corresponding job-tab data (a graph ' +
+      'cleanup, not a data deletion). For "delete the data too" the user clicks "Delete from ' +
+      'Job" in the node\'s right-click menu instead. ' +
+      'Multi-node restructures: fire delete_node multiple times in a single turn — each card ' +
+      'auto-applies if the user has trusted "Delete graph node", otherwise they\'ll bulk-approve.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        node_id: { type: 'string', description: 'The graph node id (e.g. "n38") or exact label.' },
+        rationale: { type: 'string', description: 'One short sentence — why this node is being removed.' }
+      },
+      required: ['node_id', 'rationale']
+    }
+  },
+  {
     name: 'wire_nodes',
     description:
       'Connect two nodes in the cost-flow graph (from output port of source → input port of target). ' +
@@ -1416,7 +1438,7 @@ async function buildJobContext(jobId, clientContext) {
   lines.push('- Read the WIP snapshot, change orders, cost lines, node graph, and QB cost data together — they tell a story about whether the job is healthy.');
   lines.push('- Spot mismatches: % complete way ahead of revenue earned (under-pulled progress), revenue earned way ahead of invoiced (under-billed), JTD margin diverging from revised margin (cost overruns), large recurring vendors that should have been a CO, QB lines unlinked to graph nodes.');
   lines.push('- When citing dollar figures, match the field name from the snapshot above so the PM can find them in the UI.');
-  lines.push('- **You CAN make changes.** Available tools: `create_node` (add a new graph node — t1/t2/cost-bucket/sub/po/inv/co/watch/note), `set_phase_pct_complete`, `set_phase_field` (materials/labor/sub/equipment dollars on a PHASE record from # Structure), `set_node_value` (QB Total / value on a cost-bucket NODE from # Node graph — labor/mat/gc/other/sub/burden), `wire_nodes` (connect graph nodes), `assign_qb_line` (link a QB cost line to a graph node), `read_workspace_sheet_full` and `read_qb_cost_lines` (auto-apply, no approval). Each writer tool writes a proposal card the user approves; trusted tool types auto-apply after a 5s countdown.');
+  lines.push('- **You CAN make changes.** Available tools: `create_node` (add a new graph node — t1/t2/cost-bucket/sub/po/inv/co/watch/note), `delete_node` (remove a node + its wires — does NOT delete underlying job data), `set_phase_pct_complete`, `set_phase_field` (materials/labor/sub/equipment dollars on a PHASE record from # Structure), `set_node_value` (QB Total / value on a cost-bucket NODE from # Node graph — labor/mat/gc/other/sub/burden), `wire_nodes` (connect graph nodes), `assign_qb_line` (link a QB cost line to a graph node), `read_workspace_sheet_full` and `read_qb_cost_lines` (auto-apply, no approval). Each writer tool writes a proposal card the user approves; trusted tool types auto-apply after a 5s countdown.');
   lines.push('- **set_phase_field vs set_node_value — DO NOT MIX THEM UP.** `set_phase_field` writes to a phase record (phase_id from # Structure, e.g. "ph_..."). `set_node_value` writes the QB Total field to a graph node (node_id from # Node graph, e.g. "n38"). When the user says "load the QB Materials & Supplies total into the Materials node" or similar, that is `set_node_value` on a `mat` node — passing a node id like "n38" to `set_phase_field` will fail because n38 is not in appData.phases.');
   lines.push('- **Every block above is LIVE for this turn** — node graph, QB cost lines, workspace sheets all rebuild from the client on every user message and every tool_use continuation. If something was just created/edited, it\'s in the data above. NEVER say "I can\'t see new X" or "the snapshot is stale" or "you need to refresh the session" — those statements are factually wrong about how this assistant works.');
   lines.push('- When the user references a node/sheet/line by name and you can\'t find it, search the relevant block by case-insensitive partial match before asking — it\'s usually there.');

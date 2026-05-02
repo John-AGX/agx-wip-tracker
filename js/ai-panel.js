@@ -1079,6 +1079,7 @@
   // labels for the popover.
   var TRUSTABLE_TOOLS = [
     { name: 'create_node',            label: 'Create a new graph node (t1/t2/cost-bucket/etc.)' },
+    { name: 'delete_node',            label: 'Remove a graph node + its wires (data preserved)' },
     { name: 'set_phase_pct_complete', label: 'Set phase % complete' },
     { name: 'set_phase_field',        label: 'Set phase $ field (materials/labor/sub/equip)' },
     { name: 'set_node_value',         label: 'Set cost node value (mat/labor/gc/other/sub)' },
@@ -1316,6 +1317,67 @@
           throw new Error('"' + input.phase_id + '" is a graph node (type "' + nodeF.type + '"), not a phase record. Use set_node_value for cost-bucket nodes (labor/mat/gc/other/sub/burden), or set_phase_pct_complete for t2 % complete.');
         }
         throw new Error('Phase id "' + input.phase_id + '" not found.');
+      }
+
+      case 'delete_node': {
+        // Remove a node from the graph + all its incoming/outgoing
+        // wires. Underlying data record is intentionally LEFT IN
+        // PLACE — same semantics as the "Remove from Graph" right-
+        // click action in the node menu (vs "Delete from Job" which
+        // also wipes data). Mirrors wire_nodes' live-engine-first
+        // persistence so direct edits survive saveGraph.
+        var jidDN = (window.appState && appState.currentJobId) || null;
+        if (!jidDN) throw new Error('No job is open.');
+        if (typeof NG === 'undefined' || !NG.nodes || !NG.wires) {
+          throw new Error('Node graph is not loaded — open the Workspace tab on this job first.');
+        }
+        var liveNodesD = NG.nodes();
+        var liveWiresD = NG.wires();
+        var idOrLabelD = String(input.node_id || '');
+        if (!idOrLabelD) throw new Error('node_id required.');
+        // id-or-label fallback (same as wire_nodes / set_node_value)
+        var nodeD = liveNodesD.find(function(n) { return n.id === idOrLabelD; });
+        if (!nodeD) {
+          var lowerD = idOrLabelD.trim().toLowerCase();
+          nodeD = liveNodesD.find(function(n) { return (n.label || '').trim().toLowerCase() === lowerD; });
+        }
+        if (!nodeD) throw new Error('Node "' + idOrLabelD + '" not in graph.');
+
+        // Block deleting the WIP master node — it's the graph's root
+        // output and removing it leaves no place for costs to flow
+        // upward. Re-deletable manually if the user really wants it,
+        // but the AI shouldn't decide that on its own.
+        if (nodeD.type === 'wip') {
+          throw new Error('Refusing to delete the WIP master node — that\'s the graph\'s root output. The user can remove it manually if needed.');
+        }
+
+        // Count wires before removing for the summary line.
+        var attachedWireCount = 0;
+        for (var iD = 0; iD < liveWiresD.length; iD++) {
+          var wD = liveWiresD[iD];
+          if (wD.fromNode === nodeD.id || wD.toNode === nodeD.id) attachedWireCount++;
+        }
+
+        // Mutate live arrays via NG setters when available; fall back
+        // to in-place splice so older builds without setters still
+        // work.
+        var keptWires = liveWiresD.filter(function(w) {
+          return w.fromNode !== nodeD.id && w.toNode !== nodeD.id;
+        });
+        var keptNodes = liveNodesD.filter(function(n) { return n.id !== nodeD.id; });
+        if (NG.setWires) NG.setWires(keptWires);
+        else { liveWiresD.length = 0; Array.prototype.push.apply(liveWiresD, keptWires); }
+        if (NG.setNodes) NG.setNodes(keptNodes);
+        else { liveNodesD.length = 0; Array.prototype.push.apply(liveNodesD, keptNodes); }
+
+        if (typeof NG.saveGraph === 'function') NG.saveGraph();
+        if (typeof window.ngRender === 'function') {
+          try { window.ngRender(); } catch (e) {}
+        }
+
+        return 'Removed ' + nodeD.type + ' node "' + (nodeD.label || nodeD.id) + '" and ' +
+          attachedWireCount + ' wire' + (attachedWireCount === 1 ? '' : 's') +
+          '. Underlying job data preserved.';
       }
 
       case 'wire_nodes': {
@@ -1867,6 +1929,35 @@
           ? '<div style="font-size:12px;color:var(--text,#ccc);margin-top:3px;">' + escapeHTMLLocal(meta.join(' · ')) + '</div>'
           : '') +
         attachInfo;
+    } else if (tu.name === 'delete_node') {
+      // Look up the node so the card shows what's actually being
+      // removed (label + type + wire count) instead of just the
+      // raw id. Falls back to label-match like the apply path.
+      var liveDel = (typeof NG !== 'undefined' && NG.nodes) ? NG.nodes() : [];
+      var liveDelW = (typeof NG !== 'undefined' && NG.wires) ? NG.wires() : [];
+      var idDel = String(input.node_id || '');
+      var nodeDel = liveDel.find(function(n) { return n.id === idDel; });
+      if (!nodeDel) {
+        var lowDel = idDel.trim().toLowerCase();
+        nodeDel = liveDel.find(function(n) { return (n.label || '').trim().toLowerCase() === lowDel; });
+      }
+      var wireCount = 0;
+      if (nodeDel) {
+        liveDelW.forEach(function(w) {
+          if (w.fromNode === nodeDel.id || w.toNode === nodeDel.id) wireCount++;
+        });
+      }
+      heading = '&#x1F5D1; Delete node';
+      detail = nodeDel
+        ? '<div style="font-size:13px;color:var(--text,#fff);font-weight:600;">' +
+            escapeHTMLLocal(nodeDel.label || nodeDel.id) +
+            ' <span style="font-size:11px;color:var(--text-dim,#888);font-weight:400;">(' + escapeHTMLLocal(nodeDel.type) + ')</span>' +
+          '</div>' +
+          '<div style="font-size:11px;color:var(--text-dim,#aaa);margin-top:4px;">' +
+            wireCount + ' attached wire' + (wireCount === 1 ? '' : 's') +
+            ' will be removed. Underlying job data preserved.' +
+          '</div>'
+        : '<div style="font-size:12px;color:#fbbf24;">Node "' + escapeHTMLLocal(idDel) + '" not found in current graph.</div>';
     } else if (tu.name === 'wire_nodes') {
       var graphs = {};
       try { graphs = JSON.parse(localStorage.getItem('agx-nodegraphs') || '{}'); } catch (e) {}
