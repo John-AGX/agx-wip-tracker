@@ -311,6 +311,26 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_subs_status ON subs(status);
     CREATE INDEX IF NOT EXISTS idx_subs_parent ON subs(parent_sub_id);
 
+    -- Phase 1A: expand the sub directory record to a Buildertrend-style
+    -- detail level. Additive only — existing rows get NULL/false defaults.
+    -- preferences + notification_prefs are JSONB so we can grow the
+    -- schema (more checkboxes, per-channel matrix) without another
+    -- migration round.
+    ALTER TABLE subs ADD COLUMN IF NOT EXISTS division TEXT;
+    ALTER TABLE subs ADD COLUMN IF NOT EXISTS primary_contact_first TEXT;
+    ALTER TABLE subs ADD COLUMN IF NOT EXISTS primary_contact_last TEXT;
+    ALTER TABLE subs ADD COLUMN IF NOT EXISTS business_phone TEXT;
+    ALTER TABLE subs ADD COLUMN IF NOT EXISTS cell_phone TEXT;
+    ALTER TABLE subs ADD COLUMN IF NOT EXISTS fax TEXT;
+    ALTER TABLE subs ADD COLUMN IF NOT EXISTS street_address TEXT;
+    ALTER TABLE subs ADD COLUMN IF NOT EXISTS city TEXT;
+    ALTER TABLE subs ADD COLUMN IF NOT EXISTS state TEXT;
+    ALTER TABLE subs ADD COLUMN IF NOT EXISTS zip TEXT;
+    ALTER TABLE subs ADD COLUMN IF NOT EXISTS payment_email TEXT;
+    ALTER TABLE subs ADD COLUMN IF NOT EXISTS payment_hold BOOLEAN DEFAULT FALSE;
+    ALTER TABLE subs ADD COLUMN IF NOT EXISTS preferences JSONB NOT NULL DEFAULT '{}'::jsonb;
+    ALTER TABLE subs ADD COLUMN IF NOT EXISTS notification_prefs JSONB NOT NULL DEFAULT '{}'::jsonb;
+
     -- Per-job assignment + financials. Same sub on two jobs gets two
     -- rows. UNIQUE(job_id, sub_id) so a sub isn't double-assigned to
     -- the same job (use multiple line entries on the job-side row

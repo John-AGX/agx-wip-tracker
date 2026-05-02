@@ -111,10 +111,20 @@ router.post('/',
       const b = req.body || {};
       if (!b.name || !b.name.trim()) return res.status(400).json({ error: 'name is required' });
       const id = b.id || genId('sub');
+      // Phase 1A: extended-detail columns (division, split address, primary
+      // contact name parts, business/cell/fax phones, payment email + hold,
+      // preferences + notification_prefs JSONB). All optional; existing
+      // POST callers without these fields get NULLs and default JSONB.
       const result = await pool.query(`
         INSERT INTO subs (id, name, trade, contact_name, phone, email, license_no,
-                          w9_on_file, w9_expires, insurance_expires, parent_sub_id, status, notes)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+                          w9_on_file, w9_expires, insurance_expires, parent_sub_id, status, notes,
+                          division, primary_contact_first, primary_contact_last,
+                          business_phone, cell_phone, fax,
+                          street_address, city, state, zip,
+                          payment_email, payment_hold,
+                          preferences, notification_prefs)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,
+                $14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27)
         RETURNING *
       `, [
         id, b.name.trim(),
@@ -125,7 +135,21 @@ router.post('/',
         b.insurance_expires || b.insuranceExpires || null,
         b.parent_sub_id || b.parentSubId || null,
         b.status || 'active',
-        b.notes || null
+        b.notes || null,
+        b.division || null,
+        b.primary_contact_first || b.primaryContactFirst || null,
+        b.primary_contact_last  || b.primaryContactLast  || null,
+        b.business_phone || b.businessPhone || null,
+        b.cell_phone     || b.cellPhone     || null,
+        b.fax            || null,
+        b.street_address || b.streetAddress || null,
+        b.city  || null,
+        b.state || null,
+        b.zip   || null,
+        b.payment_email || b.paymentEmail || null,
+        !!(b.payment_hold || b.paymentHold),
+        b.preferences || {},
+        b.notification_prefs || b.notificationPrefs || {}
       ]);
       res.json({ sub: result.rows[0] });
     } catch (e) {
@@ -157,7 +181,21 @@ router.put('/:id',
         w9_expires: 'w9_expires', w9Expires: 'w9_expires',
         insurance_expires: 'insurance_expires', insuranceExpires: 'insurance_expires',
         parent_sub_id: 'parent_sub_id', parentSubId: 'parent_sub_id',
-        status: 'status', notes: 'notes'
+        status: 'status', notes: 'notes',
+        // Phase 1A: extended-detail fields. Both snake_case (server) and
+        // camelCase (legacy/JS-friendly) keys accepted.
+        division: 'division',
+        primary_contact_first: 'primary_contact_first', primaryContactFirst: 'primary_contact_first',
+        primary_contact_last:  'primary_contact_last',  primaryContactLast:  'primary_contact_last',
+        business_phone: 'business_phone', businessPhone: 'business_phone',
+        cell_phone:     'cell_phone',     cellPhone:     'cell_phone',
+        fax: 'fax',
+        street_address: 'street_address', streetAddress: 'street_address',
+        city: 'city', state: 'state', zip: 'zip',
+        payment_email: 'payment_email', paymentEmail: 'payment_email',
+        payment_hold:  'payment_hold',  paymentHold:  'payment_hold',
+        preferences: 'preferences',
+        notification_prefs: 'notification_prefs', notificationPrefs: 'notification_prefs'
       };
       Object.keys(b).forEach(function(k) {
         if (map[k] && b[k] !== undefined) {

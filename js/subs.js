@@ -207,100 +207,308 @@
     if (_editingId) {
       modal.querySelector('[data-delete]')?.addEventListener('click', function() { deleteFromModal(modal); });
     }
+
+    // Activation status segmented control — three buttons, click sets
+    // the hidden #subDir_status input + visually swaps the active fill
+    // to the clicked one. Save reads the hidden input on submit.
+    modal.querySelectorAll('[data-status-btn]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        var v = btn.getAttribute('data-status-btn');
+        var hidden = modal.querySelector('#subDir_status');
+        if (hidden) hidden.value = v;
+        modal.querySelectorAll('[data-status-btn]').forEach(function(b) {
+          var on = b === btn;
+          b.style.background = on ? '#1B8541' : 'transparent';
+          b.style.color = on ? '#fff' : 'var(--text-dim,#aaa)';
+          b.style.borderColor = on ? 'transparent' : 'var(--border,#333)';
+        });
+      });
+    });
+
+    // Tabbed lower section — Additional info / Notifications / Job access.
+    // The active tab gets the green underline + bright text; siblings
+    // dim down. Hidden panes get display:none so their inputs don't
+    // submit values from un-shown tabs (defensive — Phase 1A only writes
+    // from Additional info, but the structure is ready for 1B/1C panes).
+    modal.querySelectorAll('[data-sub-tab]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        var name = btn.getAttribute('data-sub-tab');
+        modal.querySelectorAll('[data-sub-tab]').forEach(function(b) {
+          var on = b === btn;
+          b.style.borderBottomColor = on ? '#1B8541' : 'transparent';
+          b.style.color = on ? '#1B8541' : 'var(--text-dim,#aaa)';
+        });
+        modal.querySelectorAll('[data-sub-tab-pane]').forEach(function(pane) {
+          pane.style.display = (pane.getAttribute('data-sub-tab-pane') === name) ? '' : 'none';
+        });
+      });
+    });
+
+    // "Hold payments" pref shadows the hidden #subDir_paymentHold so save
+    // sees the latest checkbox state. Mirroring keeps the JSONB
+    // preferences blob and the dedicated payment_hold column in sync.
+    var holdCb = modal.querySelector('[data-pref="hold_payments"]');
+    var holdHidden = modal.querySelector('#subDir_paymentHold');
+    if (holdCb && holdHidden) {
+      holdCb.addEventListener('change', function() {
+        holdHidden.value = holdCb.checked ? '1' : '0';
+      });
+    }
   }
 
+  // ──────────────────────────────────────────────────────────────────
+  // Modal layout — Buildertrend-style sub/vendor record (Phase 1A).
+  //
+  // Header:        Company name + close
+  // Sub-header:    Activation status row (Active / Paused / Closed)
+  // Body:          Contact information (always visible) + tabbed lower
+  //                section.
+  // Tabs:          Additional information | Notifications | Job access
+  //
+  // Phase 1A delivers Contact info + Additional info (Preferences,
+  // Notes, Default payment email). Certificates / Notifications matrix
+  // / Job access are stubbed with "Phase 1B/1C" placeholders so the
+  // visual layout matches the user's reference screenshots while the
+  // backing systems land in follow-up commits.
+  //
+  // Skipped per request: Accounting + Trade agreement tabs.
+  // ──────────────────────────────────────────────────────────────────
   function buildSubModalHTML(sub) {
     var trades = (appData.knownTrades || []);
     var tradeOptions = '<option value="">— select trade —</option>' +
       trades.map(function(t) {
         return '<option value="' + escapeAttr(t) + '"' + (sub.trade === t ? ' selected' : '') + '>' + escapeHTML(t) + '</option>';
       }).join('');
-    // If sub.trade is set but not in the curated list, surface as a custom option
     if (sub.trade && trades.indexOf(sub.trade) === -1) {
       tradeOptions += '<option value="' + escapeAttr(sub.trade) + '" selected>' + escapeHTML(sub.trade) + ' (custom)</option>';
     }
 
-    var statusOptions = ['active', 'paused', 'closed'].map(function(st) {
-      return '<option value="' + st + '"' + ((sub.status || 'active') === st ? ' selected' : '') + '>' + st + '</option>';
-    }).join('');
+    // Resolve preferences JSONB into individual checkbox states. Default
+    // everything off so a brand-new sub doesn't auto-grant permissions.
+    var prefs = sub.preferences || {};
+    var prefRow = function(key, label) {
+      var checked = prefs[key] ? 'checked' : '';
+      return '<label class="agx-check-row" style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text,#e6e6e6);padding:6px 0;">' +
+        '<input type="checkbox" data-pref="' + key + '" ' + checked + ' style="margin:0;width:auto;flex:0 0 auto;" /> ' +
+        escapeHTML(label) +
+      '</label>';
+    };
 
+    // Single field renderer (label + input). Used heavily in the contact-
+    // info grid below; lets the whole grid stay in markup-string form
+    // rather than DOM building.
     var input = function(id, label, value, opts) {
       opts = opts || {};
       var type = opts.type || 'text';
-      return '<div style="margin-bottom:10px;">' +
-        '<label style="display:block;font-size:11px;color:var(--text-dim,#aaa);margin-bottom:3px;">' + escapeHTML(label) + '</label>' +
+      return '<div>' +
+        '<label style="display:block;font-size:11px;color:var(--text-dim,#aaa);margin-bottom:3px;text-transform:uppercase;letter-spacing:0.4px;font-weight:600;">' + escapeHTML(label) + '</label>' +
         '<input id="' + id + '" type="' + type + '" value="' + escapeAttr(value || '') + '" ' +
           (opts.placeholder ? 'placeholder="' + escapeAttr(opts.placeholder) + '" ' : '') +
-          'style="width:100%;padding:7px 10px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);font-size:13px;" />' +
+          'style="width:100%;padding:6px 10px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);font-size:13px;line-height:1.35;" />' +
       '</div>';
     };
 
-    return '<div class="modal-content" style="max-width:560px;width:92vw;">' +
-      '<div class="modal-header">' + (_editingId ? 'Edit Subcontractor' : 'New Subcontractor') + '</div>' +
-      '<div style="padding:14px 18px;">' +
-        input('subDir_name', 'Company name *', sub.name, { placeholder: 'e.g. Summit Sealants, Inc.' }) +
-        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">' +
-          '<div>' +
-            '<label style="display:block;font-size:11px;color:var(--text-dim,#aaa);margin-bottom:3px;">Trade</label>' +
-            '<select id="subDir_trade" style="width:100%;padding:7px 10px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);font-size:13px;">' + tradeOptions + '</select>' +
-          '</div>' +
-          '<div>' +
-            '<label style="display:block;font-size:11px;color:var(--text-dim,#aaa);margin-bottom:3px;">Status</label>' +
-            '<select id="subDir_status" style="width:100%;padding:7px 10px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);font-size:13px;">' + statusOptions + '</select>' +
-          '</div>' +
+    // Activation status segmented control. Three buttons: Active /
+    // Paused / Closed. The active one gets the primary fill so it reads
+    // as a state, not just a select.
+    var statusBtn = function(value, label) {
+      var isActive = (sub.status || 'active') === value;
+      return '<button type="button" data-status-btn="' + value + '" ' +
+        'class="' + (isActive ? 'sub-status-on' : 'sub-status-off') + '" ' +
+        'style="padding:5px 14px;font-size:12px;font-weight:600;border-radius:6px;border:1px solid ' +
+        (isActive ? 'transparent' : 'var(--border,#333)') + ';' +
+        'background:' + (isActive ? '#1B8541' : 'transparent') + ';' +
+        'color:' + (isActive ? '#fff' : 'var(--text-dim,#aaa)') + ';' +
+        'cursor:pointer;">' + escapeHTML(label) + '</button>';
+    };
+
+    return '<div class="modal-content" style="max-width:920px;width:96vw;max-height:92vh;overflow-y:auto;padding:0;">' +
+      // ── Header ───────────────────────────────────────────────────
+      '<div style="padding:14px 22px;border-bottom:1px solid var(--border,#333);display:flex;align-items:center;gap:10px;">' +
+        '<div style="font-size:18px;font-weight:700;color:var(--text,#fff);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' +
+          escapeHTML(sub.name || (_editingId ? 'Edit Subcontractor' : 'New Subcontractor')) +
         '</div>' +
-        '<div id="subDir_customTradeWrap" style="margin-bottom:10px;display:none;">' +
-          '<label style="display:block;font-size:11px;color:var(--text-dim,#aaa);margin-bottom:3px;">Custom trade name</label>' +
-          '<input id="subDir_customTrade" type="text" placeholder="Enter trade if Other" style="width:100%;padding:7px 10px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);font-size:13px;" />' +
+        '<button type="button" data-close style="background:transparent;border:none;color:var(--text-dim,#888);font-size:22px;cursor:pointer;padding:0 4px;line-height:1;">&times;</button>' +
+      '</div>' +
+      // ── Activation status row ────────────────────────────────────
+      '<div style="padding:10px 22px;border-bottom:1px solid var(--border,#333);background:rgba(79,140,255,0.04);display:flex;align-items:center;gap:10px;">' +
+        '<span style="font-size:12px;color:var(--text-dim,#aaa);font-weight:600;">Activation status:</span>' +
+        '<div style="display:flex;gap:4px;">' +
+          statusBtn('active', 'Active') +
+          statusBtn('paused', 'Paused') +
+          statusBtn('closed', 'Closed') +
         '</div>' +
-        input('subDir_contactName', 'Contact name', sub.contact_name) +
-        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">' +
-          input('subDir_phone', 'Phone', sub.phone, { type: 'tel' }) +
-          input('subDir_email', 'Email', sub.email, { type: 'email' }) +
-        '</div>' +
-        input('subDir_license', 'License #', sub.license_no) +
-        '<div style="display:grid;grid-template-columns:auto 1fr 1fr;gap:10px;align-items:center;margin-bottom:10px;">' +
-          '<label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text,#e6e6e6);">' +
-            '<input type="checkbox" id="subDir_w9" ' + (sub.w9_on_file ? 'checked' : '') + ' /> W-9 on file' +
-          '</label>' +
+      '</div>' +
+      // ── Contact information ──────────────────────────────────────
+      '<div style="padding:18px 22px;border-bottom:1px solid var(--border,#333);">' +
+        '<div style="font-size:13px;font-weight:700;color:var(--text,#fff);margin-bottom:12px;">Contact information</div>' +
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px 18px;">' +
+          input('subDir_name', 'Company name *', sub.name, { placeholder: 'e.g. Summit Sealants, Inc.' }) +
+          // Trade dropdown — uses the curated list with selected sticky
           '<div>' +
-            '<label style="display:block;font-size:11px;color:var(--text-dim,#aaa);margin-bottom:3px;">W-9 expires</label>' +
-            '<input id="subDir_w9expires" type="date" value="' + escapeAttr(fmtDate(sub.w9_expires)) + '" style="width:100%;padding:7px 10px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);font-size:13px;" />' +
+            '<label style="display:block;font-size:11px;color:var(--text-dim,#aaa);margin-bottom:3px;text-transform:uppercase;letter-spacing:0.4px;font-weight:600;">Division / Trade</label>' +
+            '<select id="subDir_trade" style="width:100%;padding:6px 10px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);font-size:13px;line-height:1.35;">' + tradeOptions + '</select>' +
           '</div>' +
-          '<div>' +
-            '<label style="display:block;font-size:11px;color:var(--text-dim,#aaa);margin-bottom:3px;">Insurance expires</label>' +
-            '<input id="subDir_insExpires" type="date" value="' + escapeAttr(fmtDate(sub.insurance_expires)) + '" style="width:100%;padding:7px 10px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);font-size:13px;" />' +
-          '</div>' +
+          input('subDir_primaryFirst', 'Primary contact (first)', sub.primary_contact_first || '') +
+          input('subDir_primaryLast',  'Primary contact (last)',  sub.primary_contact_last  || '') +
+          input('subDir_businessPhone', 'Business phone', sub.business_phone || sub.phone || '', { type: 'tel' }) +
+          input('subDir_fax', 'Fax', sub.fax || '', { type: 'tel' }) +
+          input('subDir_cellPhone', 'Cell phone', sub.cell_phone || '', { type: 'tel' }) +
+          input('subDir_email', 'Email', sub.email || '', { type: 'email' }) +
+          input('subDir_streetAddress', 'Street address', sub.street_address || '') +
+          input('subDir_city', 'City', sub.city || '') +
         '</div>' +
-        '<div style="margin-bottom:10px;">' +
-          '<label style="display:block;font-size:11px;color:var(--text-dim,#aaa);margin-bottom:3px;">Notes</label>' +
+        // State + Zip (smaller side-by-side row)
+        '<div style="display:grid;grid-template-columns:1fr 1fr 2fr;gap:14px 18px;margin-top:14px;">' +
+          input('subDir_state', 'State', sub.state || '', { placeholder: 'FL' }) +
+          input('subDir_zip', 'Zip', sub.zip || '') +
+          input('subDir_license', 'License #', sub.license_no || '') +
+        '</div>' +
+      '</div>' +
+      // ── Tab nav ──────────────────────────────────────────────────
+      '<div style="border-bottom:1px solid var(--border,#333);padding:0 22px;display:flex;gap:4px;">' +
+        '<button type="button" data-sub-tab="additional" class="sub-tab-btn sub-tab-active" style="padding:10px 14px;background:transparent;border:none;border-bottom:2px solid #1B8541;color:#1B8541;font-size:13px;font-weight:600;cursor:pointer;">Additional information</button>' +
+        '<button type="button" data-sub-tab="notifications" class="sub-tab-btn" style="padding:10px 14px;background:transparent;border:none;border-bottom:2px solid transparent;color:var(--text-dim,#aaa);font-size:13px;font-weight:600;cursor:pointer;">Notifications</button>' +
+        '<button type="button" data-sub-tab="jobs" class="sub-tab-btn" style="padding:10px 14px;background:transparent;border:none;border-bottom:2px solid transparent;color:var(--text-dim,#aaa);font-size:13px;font-weight:600;cursor:pointer;">Job access</button>' +
+      '</div>' +
+      // ── Tab: Additional information ──────────────────────────────
+      '<div data-sub-tab-pane="additional" style="padding:18px 22px;">' +
+        '<div style="font-size:13px;font-weight:700;color:var(--text,#fff);margin-bottom:8px;">Preferences</div>' +
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 24px;margin-bottom:14px;">' +
+          prefRow('view_client_info',     'View client information') +
+          prefRow('auto_permit_new_jobs', 'Automatically permit access to new jobs') +
+          prefRow('share_documents',      'Share documents with client') +
+          prefRow('assign_rfis',          'Assign RFIs to other subs/vendors') +
+          prefRow('hold_payments',        'Hold payments to the sub/vendor') +
+        '</div>' +
+        // Notes
+        '<div style="margin-bottom:14px;">' +
+          '<label style="display:block;font-size:11px;color:var(--text-dim,#aaa);margin-bottom:3px;text-transform:uppercase;letter-spacing:0.4px;font-weight:600;">Notes</label>' +
           '<textarea id="subDir_notes" rows="3" style="width:100%;padding:7px 10px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);font-size:13px;resize:vertical;">' + escapeHTML(sub.notes || '') + '</textarea>' +
         '</div>' +
+        // Default payment email
+        '<div style="margin-bottom:14px;">' +
+          input('subDir_paymentEmail', 'Default payment email address', sub.payment_email || '', { type: 'email', placeholder: 'payments@example.com' }) +
+        '</div>' +
+        // ── Certificates section (Phase 1B stub — visual layout only)
+        '<div style="margin-top:22px;padding-top:16px;border-top:1px dashed var(--border,#333);">' +
+          '<div style="font-size:13px;font-weight:700;color:var(--text,#fff);margin-bottom:6px;">Certificates</div>' +
+          '<div style="font-size:11px;color:var(--text-dim,#888);margin-bottom:10px;font-style:italic;">' +
+            'PDF upload + expiration tracking + reminder schedule lands in Phase 1B. Layout shown for reference.' +
+          '</div>' +
+          ['General liability certificate', "Worker's comp certificate", 'W-9', 'Bank Information'].map(function(certLabel) {
+            return '<div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:10px;align-items:end;padding:8px 0;border-top:1px solid var(--border,#333);opacity:0.55;">' +
+              '<div>' +
+                '<div style="font-size:12px;font-weight:600;color:var(--text,#e6e6e6);margin-bottom:4px;">' + escapeHTML(certLabel) + '</div>' +
+                '<button type="button" disabled style="padding:5px 12px;font-size:11px;border:1px solid var(--border,#333);border-radius:5px;background:var(--card-bg,#0f0f1e);color:var(--text-dim,#888);">⬆ Upload</button>' +
+              '</div>' +
+              '<div>' +
+                '<label style="display:block;font-size:10px;color:var(--text-dim,#888);margin-bottom:2px;">Expiration date</label>' +
+                '<input type="date" disabled style="width:100%;padding:5px 8px;border:1px solid var(--border,#333);border-radius:5px;background:var(--card-bg,#0f0f1e);color:var(--text-dim,#666);font-size:12px;" />' +
+              '</div>' +
+              '<div>' +
+                '<label style="display:block;font-size:10px;color:var(--text-dim,#888);margin-bottom:2px;">Reminder (days)</label>' +
+                '<input type="number" disabled value="30" style="width:100%;padding:5px 8px;border:1px solid var(--border,#333);border-radius:5px;background:var(--card-bg,#0f0f1e);color:var(--text-dim,#666);font-size:12px;" />' +
+              '</div>' +
+              '<div>' +
+                '<label style="display:block;font-size:10px;color:var(--text-dim,#888);margin-bottom:2px;">Reminder limit</label>' +
+                '<input type="number" disabled value="5" style="width:100%;padding:5px 8px;border:1px solid var(--border,#333);border-radius:5px;background:var(--card-bg,#0f0f1e);color:var(--text-dim,#666);font-size:12px;" />' +
+              '</div>' +
+            '</div>';
+          }).join('') +
+        '</div>' +
       '</div>' +
-      '<div class="action-buttons" style="margin:0;padding:12px 18px;border-top:1px solid var(--border,#333);">' +
-        (_editingId ? '<button class="ee-btn danger" data-delete>Delete</button>' : '') +
-        '<button class="ee-btn secondary" data-close style="margin-left:auto;">Cancel</button>' +
-        '<button class="ee-btn primary" data-save>' + (_editingId ? 'Save' : 'Create Sub') + '</button>' +
+      // ── Tab: Notifications (Phase 1C stub) ───────────────────────
+      '<div data-sub-tab-pane="notifications" style="padding:24px 22px;display:none;">' +
+        '<div style="text-align:center;padding:40px 20px;color:var(--text-dim,#888);font-size:13px;">' +
+          '<div style="font-size:24px;margin-bottom:8px;">&#x1F4EC;</div>' +
+          '<div style="font-weight:600;color:var(--text,#fff);margin-bottom:4px;">Per-sub notification matrix</div>' +
+          '<div>Email / Text / Push toggles for Project management, Messaging, Financial, and Administrative events. Lands in Phase 1C.</div>' +
+        '</div>' +
       '</div>' +
+      // ── Tab: Job access (Phase 1C stub) ──────────────────────────
+      '<div data-sub-tab-pane="jobs" style="padding:24px 22px;display:none;">' +
+        '<div style="text-align:center;padding:40px 20px;color:var(--text-dim,#888);font-size:13px;">' +
+          '<div style="font-size:24px;margin-bottom:8px;">&#x1F4CB;</div>' +
+          '<div style="font-weight:600;color:var(--text,#fff);margin-bottom:4px;">Per-sub job access list</div>' +
+          '<div>Toggle this sub on/off for each open job. Backed by the existing job_subs table — UI lands in Phase 1C.</div>' +
+        '</div>' +
+      '</div>' +
+      // ── Footer ───────────────────────────────────────────────────
+      '<div style="padding:12px 22px;border-top:1px solid var(--border,#333);display:flex;align-items:center;gap:8px;">' +
+        (_editingId ? '<button class="ee-btn danger" data-delete style="padding:6px 14px;">Delete</button>' : '') +
+        '<button class="ee-btn secondary" data-close style="margin-left:auto;padding:6px 14px;">Cancel</button>' +
+        '<button class="ee-btn primary" data-save style="padding:6px 18px;">' + (_editingId ? 'Save' : 'Create Sub') + '</button>' +
+      '</div>' +
+
+      // Hidden carriers — w9_on_file + expiration dates kept in the
+      // payload until Phase 1B replaces them with the cert-table flow.
+      '<input type="hidden" id="subDir_status" value="' + escapeAttr(sub.status || 'active') + '" />' +
+      '<input type="hidden" id="subDir_w9" value="' + (sub.w9_on_file ? '1' : '0') + '" />' +
+      '<input type="hidden" id="subDir_w9expires" value="' + escapeAttr(fmtDate(sub.w9_expires)) + '" />' +
+      '<input type="hidden" id="subDir_insExpires" value="' + escapeAttr(fmtDate(sub.insurance_expires)) + '" />' +
+      '<input type="hidden" id="subDir_paymentHold" value="' + (prefs.hold_payments ? '1' : '0') + '" />' +
     '</div>';
   }
 
   function saveFromModal(modal) {
-    var trade = modal.querySelector('#subDir_trade').value;
-    var customTrade = modal.querySelector('#subDir_customTrade').value;
-    if (trade === 'Other' && customTrade.trim()) trade = customTrade.trim();
+    var get = function(id) {
+      var el = modal.querySelector('#' + id);
+      return el ? (el.value || '') : '';
+    };
+    var trim = function(v) { return (v || '').trim() || null; };
+
+    // Trade — the curated dropdown is the only path now (the legacy
+    // "custom trade" override field was dropped in the layout rewrite;
+    // adding a freeform trade can be done by editing the curated list
+    // server-side).
+    var trade = get('subDir_trade') || null;
+
+    // Build the preferences JSONB from the checkboxes inside the
+    // Additional info tab. Each one is keyed by `data-pref="<key>"`.
+    var prefs = {};
+    modal.querySelectorAll('[data-pref]').forEach(function(cb) {
+      prefs[cb.getAttribute('data-pref')] = !!cb.checked;
+    });
+
+    // primary_contact_first/last form the new authoritative contact
+    // name fields. We also write the joined value to legacy contact_name
+    // for older callers (estimate editor read paths, exports) until
+    // those are migrated to read first/last directly.
+    var pcFirst = trim(get('subDir_primaryFirst'));
+    var pcLast  = trim(get('subDir_primaryLast'));
+    var combined = [pcFirst, pcLast].filter(Boolean).join(' ');
+
     var payload = {
-      name: modal.querySelector('#subDir_name').value.trim(),
-      trade: trade || null,
-      contactName: modal.querySelector('#subDir_contactName').value.trim() || null,
-      phone: modal.querySelector('#subDir_phone').value.trim() || null,
-      email: modal.querySelector('#subDir_email').value.trim() || null,
-      licenseNo: modal.querySelector('#subDir_license').value.trim() || null,
-      w9OnFile: modal.querySelector('#subDir_w9').checked,
-      w9Expires: modal.querySelector('#subDir_w9expires').value || null,
-      insuranceExpires: modal.querySelector('#subDir_insExpires').value || null,
-      status: modal.querySelector('#subDir_status').value || 'active',
-      notes: modal.querySelector('#subDir_notes').value.trim() || null
+      name: trim(get('subDir_name')),
+      trade: trade,
+      // Contact info — new fields
+      primaryContactFirst: pcFirst,
+      primaryContactLast:  pcLast,
+      contactName: combined || null,
+      businessPhone: trim(get('subDir_businessPhone')),
+      cellPhone:     trim(get('subDir_cellPhone')),
+      fax:           trim(get('subDir_fax')),
+      // Legacy phone column gets the business phone so the directory
+      // list view (which still reads sub.phone) stays populated.
+      phone: trim(get('subDir_businessPhone')) || trim(get('subDir_cellPhone')),
+      email: trim(get('subDir_email')),
+      streetAddress: trim(get('subDir_streetAddress')),
+      city:  trim(get('subDir_city')),
+      state: trim(get('subDir_state')),
+      zip:   trim(get('subDir_zip')),
+      licenseNo: trim(get('subDir_license')),
+      // Additional info
+      paymentEmail: trim(get('subDir_paymentEmail')),
+      paymentHold:  get('subDir_paymentHold') === '1',
+      preferences:  prefs,
+      notes: trim(get('subDir_notes')),
+      // Carry-over fields (Phase 1B replaces these with the certificates
+      // sub-table; for now they ride along on the directory record).
+      w9OnFile: get('subDir_w9') === '1',
+      w9Expires: get('subDir_w9expires') || null,
+      insuranceExpires: get('subDir_insExpires') || null,
+      status: get('subDir_status') || 'active'
     };
     if (!payload.name) {
       alert('Company name is required.');
