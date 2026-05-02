@@ -711,7 +711,11 @@ body.light-mode .jh-strip-card[data-tone="amber"] .jh-strip-label { color: #b453
    resize freely within the canvas. */
 .ws-floating-panel {
   position: fixed;
-  z-index: 50;
+  /* Bumped from 50 → 100 so the floating workspace + its bottom
+     sheet tabs definitely render above the Node Graph's bottom-
+     right help bar (z-index 10) regardless of any nested stacking
+     contexts. */
+  z-index: 100;
   display: flex;
   flex-direction: column;
   background: var(--surface, #181820);
@@ -725,6 +729,12 @@ body.light-mode .jh-strip-card[data-tone="amber"] .jh-strip-label { color: #b453
   min-height: 280px;
   overflow: hidden;
 }
+/* When the floating workspace is shown inside the Node Graph's
+   fullscreen overlay, hide its own "Workspace" title bar. The
+   Node Graph topbar already identifies the surface and the
+   Minimize action lives on the graph's toolbar — the floating
+   panel header is redundant there and just costs vertical space. */
+#nodeGraphTab .ws-floating-header { display: none; }
 .ws-floating-header {
   flex: 0 0 auto;
   display: flex;

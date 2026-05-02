@@ -1362,6 +1362,17 @@
   color: var(--text, #e4e6f0);
   background: transparent;
 }
+
+/* QB Detailed Costs — per-line dollar amounts. Default green so the
+   amount is the visual anchor of each row at a glance; light mode
+   swaps to plain text color so the page reads like a clean ledger
+   (the user found the green hard to read on white). */
+.qb-line-amount {
+  color: #34d399;
+}
+body.light-mode .qb-line-amount {
+  color: var(--text, #111827);
+}
 .ws-sheet-tab-add {
   background: transparent;
   border: 1px solid transparent;

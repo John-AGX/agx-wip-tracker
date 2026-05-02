@@ -122,6 +122,18 @@
     return workbook.sheets.find(s => s.id === workbook.activeSheetId) || null;
   }
 
+  // Excel theme toggle — only applies to actual spreadsheet sheets,
+  // NOT to embedded views (Detailed Costs, Attachments). Those views
+  // use the app's regular light/dark mode so they look like the rest
+  // of the app rather than wearing an out-of-place white-on-white
+  // Excel skin.
+  function applyExcelThemeForActiveSheet() {
+    if (!wsContainer) return;
+    var s = activeSheet();
+    var shouldTheme = !isEmbedSheet(s);
+    wsContainer.classList.toggle('ws-excel-theme', shouldTheme);
+  }
+
   let grid = {
     rows: MIN_ROWS,
     cols: MIN_COLS,
@@ -1659,6 +1671,10 @@
     renderActiveSheet();
     renderSheetTabs();
     if (!isEmbedSheet(target)) selectCell(0, 0);
+    // Refresh the Excel-theme class — embedded views opt out so the
+    // user sees the regular light/dark mode for QB Costs +
+    // Attachments, while regular grid sheets keep the Excel palette.
+    applyExcelThemeForActiveSheet();
   }
 
   function addSheet(initialName) {
@@ -4828,14 +4844,13 @@
     wsContainer = document.getElementById(containerId);
     if (!wsContainer) return;
 
-    // Workspace operates as its own visual unit — Excel-style palette
-    // regardless of the app's light/dark mode. The class scopes a set
-    // of CSS custom property overrides + per-element rules in
-    // workspace.css that mimic Excel's actual ribbon + cell colors.
-    wsContainer.classList.add('ws-excel-theme');
-
     loadWorkspace(jobId);
     wsContainer.innerHTML = buildWorkspaceHTML();
+    // Excel theme application is sheet-aware — actual grid sheets get
+    // the white Excel palette; Detailed Costs / Attachments embedded
+    // views opt out and use the app's light/dark mode instead. Run
+    // after innerHTML is set so the class lands on the live container.
+    applyExcelThemeForActiveSheet();
 
     wsTable = document.getElementById('wsGrid');
     formulaBar = document.getElementById('wsFormulaBar');

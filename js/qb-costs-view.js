@@ -365,7 +365,7 @@
       td(l.account || '', { dim: true, size: 12 }) +
       td(l.klass || '', { dim: true, size: 12 }) +
       td(l.memo || '', { dim: true, size: 12, truncate: 60 }) +
-      td(fmtMoney(l.amount), { mono: true, weight: 600, align: 'right', color: '#34d399' }) +
+      td(fmtMoney(l.amount), { mono: true, weight: 600, align: 'right', cls: 'qb-line-amount' }) +
       '<td style="padding:6px 10px;">' + statusCell + '</td>' +
     '</tr>';
   }
@@ -382,7 +382,8 @@
     if (opts.truncate && text.length > opts.truncate) {
       text = text.slice(0, opts.truncate) + '…';
     }
-    return '<td style="' + s + '">' + escapeHTML(text) + '</td>';
+    var clsAttr = opts.cls ? ' class="' + opts.cls + '"' : '';
+    return '<td' + clsAttr + ' style="' + s + '">' + escapeHTML(text) + '</td>';
   }
 
   function getNodesForJob(jobId) {
