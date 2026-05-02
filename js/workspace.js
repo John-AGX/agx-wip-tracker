@@ -1882,11 +1882,37 @@
         if (raw == null && !style) continue;
         const out = { raw: raw == null ? '' : raw, value: raw == null ? '' : raw };
         if (style) out.style = style;
-        // Number format pass-through — when Excel format is currency
-        // or percent, set our fmt so values render correctly.
+        // Number format pass-through. Maps Excel format strings to
+        // (fmt, decimals) so values render with the right family +
+        // precision. Covers currency / percent / comma / general
+        // numeric formats. Examples handled:
+        //   $#,##0.00          → currency, 2 decimals
+        //   "$"#,##0           → currency, 0 decimals
+        //   0.00%              → percent, 2 decimals
+        //   #,##0              → comma, 0 decimals
+        //   #,##0.000          → comma, 3 decimals
+        //   0.0                → comma, 1 decimal (treat plain numeric
+        //                        as comma so 1234.5 → "1,234.5")
         if (cell.z) {
-          if (/[\$£€¥]/.test(cell.z) || /\bUSD\b/i.test(cell.z)) out.fmt = 'currency';
-          else if (/%/.test(cell.z)) out.fmt = 'percent';
+          var z = String(cell.z);
+          var hasCurrency = /[\$£€¥]/.test(z) || /\bUSD\b/i.test(z);
+          var hasPercent  = /%/.test(z);
+          var hasComma    = /#,##0/.test(z) || /,/.test(z);
+          // Decimal count = number of zeros after the decimal point in
+          // the format string. Looks at the first occurrence so
+          // "0.00;[Red]0.00" picks up 2 correctly.
+          var decMatch = z.match(/\.([0#]+)/);
+          var decimals = decMatch ? decMatch[1].length : null;
+          if (hasCurrency)      { out.fmt = 'currency'; if (decimals != null) out.decimals = decimals; }
+          else if (hasPercent)  { out.fmt = 'percent';  if (decimals != null) out.decimals = decimals; }
+          else if (hasComma)    { out.fmt = 'comma';    if (decimals != null) out.decimals = decimals; }
+          else if (/^[0]+(\.[0]+)?$/.test(z) && decimals != null) {
+            // Plain "0.00" style — render as comma without thousands
+            // separator visually, but use comma fmt so trailing zeros
+            // hold (e.g., 1.5 displays as "1.50" rather than "1.5").
+            out.fmt = 'comma';
+            out.decimals = decimals;
+          }
         }
         cells[ourAddr] = out;
       }
@@ -1934,17 +1960,98 @@
   // as 6-char hex strings without a leading `#`; some cells use ARGB
   // (8 chars) — strip the alpha byte. Theme colors aren't resolved
   // by the CE build so they fall through silently rather than guess.
+  // Office 2007+ default theme palette, indexed by the *theme attribute*
+  // value as it appears on <color theme="N"/> in xlsx XML. Note the
+  // dk/lt swap — Microsoft remaps 0/1 and 2/3 from the underlying
+  // theme XML order. Files without a custom theme1.xml resolve here;
+  // files WITH a custom theme also fall back here when SheetJS
+  // doesn't expose Themes (older builds). Close enough for most
+  // construction-takeoff aesthetics — accent4 (#FFC000) maps the
+  // common yellow highlights to the right hue.
+  var XLSX_THEME_DEFAULTS = [
+    '#000000', // 0 dk1 (text)
+    '#FFFFFF', // 1 lt1 (bg)
+    '#44546A', // 2 dk2
+    '#E7E6E6', // 3 lt2
+    '#5B9BD5', // 4 accent1 (Office 2016+ blue)
+    '#ED7D31', // 5 accent2 (orange)
+    '#A5A5A5', // 6 accent3 (gray)
+    '#FFC000', // 7 accent4 (yellow)
+    '#4472C4', // 8 accent5
+    '#70AD47', // 9 accent6 (green)
+    '#0563C1', // 10 hyperlink
+    '#954F72'  // 11 followedHyperlink
+  ];
+
+  // Apply Excel's tint (-1..+1) to an RGB hex. Positive = lighten
+  // toward white, negative = darken toward black, 0 = no change.
+  // Cheap RGB-space approximation; matches Excel close enough for
+  // the eye to read it as the same color family without doing full
+  // HSL conversion.
+  function xlsxApplyTint(rgb, tint) {
+    if (!rgb || tint == null || tint === 0) return rgb;
+    var r = parseInt(rgb.slice(1, 3), 16);
+    var g = parseInt(rgb.slice(3, 5), 16);
+    var b = parseInt(rgb.slice(5, 7), 16);
+    if (tint > 0) {
+      var t = Math.min(1, tint);
+      r = Math.round(r + (255 - r) * t);
+      g = Math.round(g + (255 - g) * t);
+      b = Math.round(b + (255 - b) * t);
+    } else {
+      var d = 1 + Math.max(-1, tint); // 0..1
+      r = Math.round(r * d);
+      g = Math.round(g * d);
+      b = Math.round(b * d);
+    }
+    var hex = function(v) {
+      var h = Math.max(0, Math.min(255, v)).toString(16);
+      return h.length === 1 ? '0' + h : h;
+    };
+    return '#' + hex(r) + hex(g) + hex(b);
+  }
+
   function xlsxStyleToAgx(s) {
     if (!s || typeof s !== 'object') return null;
     var out = {};
+    // Resolve any of SheetJS's color shapes to a #RRGGBB hex:
+    //   { rgb: 'AARRGGBB' }      — explicit ARGB (alpha stripped)
+    //   { rgb: 'RRGGBB' }        — explicit RGB
+    //   { theme: N, tint: T }    — theme reference (resolved via
+    //                              XLSX_THEME_DEFAULTS, then tinted)
+    //   { indexed: N }           — legacy palette (sparse mapping)
     var hadColor = function(c) {
       if (!c || typeof c !== 'object') return null;
-      var rgb = c.rgb;
-      if (typeof rgb !== 'string') return null;
-      // ARGB → RGB (drop alpha) and AABBCC → #AABBCC
-      if (rgb.length === 8) rgb = rgb.slice(2);
-      if (rgb.length !== 6) return null;
-      return '#' + rgb.toLowerCase();
+      // Direct RGB — most explicit colors come through this way.
+      if (typeof c.rgb === 'string') {
+        var rgb = c.rgb;
+        if (rgb.length === 8) rgb = rgb.slice(2); // ARGB → RGB
+        if (rgb.length === 6) {
+          return xlsxApplyTint('#' + rgb.toLowerCase(), c.tint || 0);
+        }
+      }
+      // Theme reference — resolve via the Office defaults and apply
+      // the tint. This is what most modern xlsx files use.
+      if (typeof c.theme === 'number') {
+        var base = XLSX_THEME_DEFAULTS[c.theme];
+        if (base) return xlsxApplyTint(base.toLowerCase(), c.tint || 0);
+      }
+      // Indexed (legacy) — only handle the values that come up most
+      // often in real files. Black + white cover the bulk; the rest
+      // mostly fall through to "no color preserved" rather than
+      // showing a wrong color.
+      if (typeof c.indexed === 'number') {
+        if (c.indexed === 64) return null; // 64 = "automatic" — let theme decide
+        var indexedMap = {
+          0: '#000000', 1: '#ffffff',
+          2: '#ff0000', 3: '#00ff00', 4: '#0000ff',
+          5: '#ffff00', 6: '#ff00ff', 7: '#00ffff',
+          8: '#000000', 9: '#ffffff'
+        };
+        var hex = indexedMap[c.indexed];
+        if (hex) return xlsxApplyTint(hex, c.tint || 0);
+      }
+      return null;
     };
     if (s.font) {
       if (s.font.bold) out.bold = true;
