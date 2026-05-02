@@ -594,7 +594,7 @@
     if (countEl) countEl.textContent = linked.length ? '(' + linked.length + ')' : '';
     if (!linked.length) {
       listEl.innerHTML = '<div style="padding:20px;color:var(--text-dim,#888);text-align:center;border:1px dashed var(--border,#333);border-radius:8px;">' +
-        'No estimates yet. Click <strong>+ New Estimate from Lead</strong> to draft the first proposal.' +
+        'No estimates yet. Click <strong>+ New Estimate from Lead</strong> to draft the first estimate.' +
       '</div>';
       return;
     }
@@ -638,11 +638,39 @@
         '</div>' +
       '</div>' +
       '<div style="display:flex;gap:6px;flex-shrink:0;">' +
-        '<button class="ee-btn secondary" onclick="closeModal(\'leadEditorModal\');editEstimate(\'' + escapeAttr(est.id) + '\');">Edit</button>' +
-        '<button class="ee-btn secondary" onclick="closeModal(\'leadEditorModal\');previewEstimate(\'' + escapeAttr(est.id) + '\');">Preview</button>' +
+        '<button class="ee-btn secondary" onclick="openEstimateFromLead(\'' + escapeAttr(est.id) + '\', false);">Edit</button>' +
+        '<button class="ee-btn secondary" onclick="openEstimateFromLead(\'' + escapeAttr(est.id) + '\', true);">Preview</button>' +
       '</div>' +
     '</div>';
   }
+
+  // Navigate from the lead-editor's Estimates tab into the actual
+  // estimate editor (or preview). The estimate views live inside the
+  // Estimates top-tab → Estimates sub-tab, so we have to:
+  //   1. Close the lead modal,
+  //   2. Switch the top tab to "estimates" (the user is currently on
+  //      the Leads sub-tab so the Estimates tab content is hidden),
+  //   3. Switch the Estimates page to its "list" sub-tab so
+  //      #estimate-editor-view is in the visible flow,
+  //   4. Open the editor or preview.
+  // Earlier the navigation skipped steps 2-3, so editEstimate ran but
+  // its target view stayed hidden behind the sub-tab gate — clicking
+  // Edit looked like a no-op.
+  function openEstimateFromLead(estimateId, asPreview) {
+    closeModal('leadEditorModal');
+    if (typeof window.switchTab === 'function') {
+      try { window.switchTab('estimates'); } catch (e) { /* defensive */ }
+    }
+    if (typeof window.switchEstimatesSubTab === 'function') {
+      try { window.switchEstimatesSubTab('list'); } catch (e) { /* defensive */ }
+    }
+    if (asPreview) {
+      if (typeof window.previewEstimate === 'function') window.previewEstimate(estimateId);
+    } else {
+      if (typeof window.editEstimate === 'function') window.editEstimate(estimateId);
+    }
+  }
+  window.openEstimateFromLead = openEstimateFromLead;
 
   // Show the "From lead" banner above the client picker on the New
   // Estimate modal. Hidden by default; opened only when the modal was
