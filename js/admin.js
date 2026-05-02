@@ -1016,6 +1016,8 @@
     else if (name === 'templates') renderAdminTemplates();
     else if (name === 'materials') renderAdminMaterials();
     else if (name === 'email') renderAdminEmail();
+    // Persist nav state so a refresh lands back on this admin sub-tab.
+    if (typeof window.agxNavSave === 'function') window.agxNavSave();
   }
 
   // ==================== EMAIL DIAGNOSTICS ====================

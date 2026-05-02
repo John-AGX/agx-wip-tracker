@@ -215,6 +215,9 @@
     // Reset save state to idle on every fresh editor open so we don't
     // carry "saved" / "error" indicators from a previous session.
     setSaveState('idle');
+    // Persist nav state so a refresh lands back inside this estimate
+    // editor rather than the estimates list.
+    if (typeof window.agxNavSave === 'function') window.agxNavSave();
   }
 
   // Right-panel scope textarea — bound to the ACTIVE alternate's scope so
@@ -1670,6 +1673,7 @@
 
   window.estimateEditorAPI = {
     isOpenFor: function(estimateId) { return _currentId === estimateId; },
+    getOpenId: function() { return _currentId; },
     activeAlternateName: function() { var a = getActiveAlternate(); return a ? a.name : null; },
     applyAddLineItem: applyAddLineItem,
     applyAddSection: applyAddSection,

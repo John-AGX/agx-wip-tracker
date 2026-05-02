@@ -1039,6 +1039,9 @@ function renderWIPMain() {
             renderJobDetail(jobId);
             document.getElementById('wip-main-view').style.display = 'none';
             document.getElementById('wip-job-detail-view').style.display = 'block';
+            // Persist nav state so a refresh lands back on this job
+            // detail rather than the WIP list root.
+            if (typeof window.agxNavSave === 'function') window.agxNavSave();
         }
 
         function backToWIPMain() {

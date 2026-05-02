@@ -386,7 +386,110 @@
                 if (detailView) detailView.style.display = 'none';
                 appState.currentJobId = null;
             }
+            // Persist navigation state on every tab switch so a refresh
+            // lands the user back where they were.
+            saveNavState();
         }
+
+        // ── Nav state persistence ──────────────────────────────────────
+        // Page refresh used to dump the user back on their role's landing
+        // tab regardless of what they were doing. saveNavState() captures
+        // the current tab + sub-tab + active job/estimate to localStorage;
+        // restoreNavState() (called from auth.js showApp) walks it back
+        // before the landing-tab fallback fires. beforeunload is a safety
+        // net so a refresh during an in-flight nav still saves.
+        function captureNavState() {
+            var topBtn = document.querySelector('.tab-btn.active');
+            var top = topBtn ? topBtn.getAttribute('data-tab') : null;
+            if (!top) return null;
+            var st = { top: top };
+
+            if (top === 'estimates') {
+                var subEl = document.querySelector('#estimates [data-estimates-subtab].active');
+                if (subEl) st.estSub = subEl.getAttribute('data-estimates-subtab');
+                // Estimate editor open?
+                var editorView = document.getElementById('estimate-editor-view');
+                var editorOpen = editorView && editorView.style.display !== 'none';
+                if (editorOpen && window.estimateEditorAPI && typeof window.estimateEditorAPI.getOpenId === 'function') {
+                    var eid = window.estimateEditorAPI.getOpenId();
+                    if (eid) st.estId = eid;
+                }
+            } else if (top === 'wip') {
+                var dv = document.getElementById('wip-job-detail-view');
+                if (dv && dv.style.display === 'block' && appState.currentJobId) {
+                    st.jobId = appState.currentJobId;
+                }
+            } else if (top === 'admin') {
+                var adEl = document.querySelector('[data-admin-subtab].active');
+                if (adEl) st.adSub = adEl.getAttribute('data-admin-subtab');
+            }
+            return st;
+        }
+
+        function saveNavState() {
+            try {
+                var st = captureNavState();
+                if (!st) return;
+                localStorage.setItem('agx-nav-state', JSON.stringify(st));
+            } catch (e) { /* localStorage may be unavailable — degrade silently */ }
+        }
+
+        function loadNavState() {
+            try {
+                var raw = localStorage.getItem('agx-nav-state');
+                return raw ? JSON.parse(raw) : null;
+            } catch (e) { return null; }
+        }
+
+        function restoreNavState() {
+            var st = loadNavState();
+            if (!st || !st.top) return false;
+            // Validate the saved tab is still accessible. If the user lost
+            // the role / capability that owned it, the tab button is
+            // hidden via display:none — fall back to landing in that case.
+            var btn = document.querySelector('.tab-btn[data-tab="' + st.top + '"]');
+            if (!btn || btn.offsetParent === null) return false;
+
+            switchTab(st.top);
+
+            // Sub-tab routing + entity-open routing both need the tab
+            // content to have mounted, so defer one tick. Each step is
+            // wrapped in try so a stale id (deleted job, deleted estimate)
+            // can't bork the whole restore.
+            setTimeout(function() {
+                try {
+                    if (st.top === 'estimates') {
+                        if (st.estSub && typeof window.switchEstimatesSubTab === 'function') {
+                            window.switchEstimatesSubTab(st.estSub);
+                        }
+                        if (st.estId && typeof window.editEstimate === 'function') {
+                            // Need to be on the "list" sub-tab for the editor view to mount.
+                            if (typeof window.switchEstimatesSubTab === 'function') {
+                                window.switchEstimatesSubTab('list');
+                            }
+                            window.editEstimate(st.estId);
+                        }
+                    } else if (st.top === 'wip' && st.jobId && typeof window.editJob === 'function') {
+                        window.editJob(st.jobId);
+                    } else if (st.top === 'admin' && st.adSub && typeof window.switchAdminSubTab === 'function') {
+                        window.switchAdminSubTab(st.adSub);
+                    }
+                } catch (e) { console.warn('[nav] entity restore failed:', e); }
+            }, 80);
+
+            return true;
+        }
+
+        // Public hooks — called from auth.js (restore) and from other
+        // navigation paths (job detail, estimate editor open) so the
+        // saved state always reflects the latest position.
+        window.agxNavSave = saveNavState;
+        window.agxNavRestore = restoreNavState;
+
+        // Refresh-during-nav safety net.
+        window.addEventListener('beforeunload', function() {
+            try { saveNavState(); } catch (e) { /* ignore */ }
+        });
 
         // Hardening for read-only mode: walks every button in the detail view
         // and sets the native HTML `disabled` attribute on anything that's not

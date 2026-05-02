@@ -54,6 +54,9 @@
       if (typeof renderSubsDirectory === 'function') renderSubsDirectory();
       if (window.agxSubs && typeof window.agxSubs.refresh === 'function') window.agxSubs.refresh();
     }
+    // Persist nav state so a refresh lands back on this sub-tab
+    // rather than the Estimates page's default Leads sub-tab.
+    if (typeof window.agxNavSave === 'function') window.agxNavSave();
   }
 
   // Group clients by parent so the list renders top-level firms with their

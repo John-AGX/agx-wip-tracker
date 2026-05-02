@@ -43,7 +43,17 @@
     document.getElementById('login-screen').style.display = 'none';
     document.getElementById('app-container').style.display = '';
     updateUserMenu();
-    if (typeof window.switchTab === 'function') {
+    // Try to restore the user's last position first — refresh-to-home
+    // was disorienting when you'd just opened a job or estimate. The
+    // restorer (in app.js) returns false if the saved tab is no longer
+    // accessible (lost permission, deleted entity, etc.); fall back to
+    // the role-based landing in that case.
+    var restored = false;
+    if (typeof window.agxNavRestore === 'function') {
+      try { restored = window.agxNavRestore(); }
+      catch (e) { console.warn('[nav] restore failed:', e); }
+    }
+    if (!restored && typeof window.switchTab === 'function') {
       try { window.switchTab(getLandingTab()); }
       catch (e) { console.warn('Initial tab switch failed:', e); }
     }
