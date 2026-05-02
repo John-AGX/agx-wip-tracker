@@ -281,7 +281,9 @@
 
         nav.tabs button {
             background: transparent;
-            border: none;
+            /* 1px transparent border so the active state's visible
+               border doesn't shift the tab. */
+            border: 1px solid transparent;
             color: rgba(255, 255, 255, 0.55);
             padding: 0 16px;
             height: 100%;
@@ -297,34 +299,33 @@
             color: rgba(255, 255, 255, 0.95);
         }
 
+        /* Folder tab — active fuses with the page content below. The
+           top nav sits on the green-gradient header; matching the
+           content area's --bg means the active tab punches a darker
+           "notch" through the header, with a lime label stripe at
+           the very top reading like a file-folder tab. */
         nav.tabs button.active {
             color: #5ddb7e;
             font-weight: 600;
-        }
-        /* Active tab underline lives on a pseudo-element flush with
-           the header's bottom edge, so it visually "anchors" to the
-           1px green hairline. */
-        nav.tabs button.active {
+            background: var(--bg, #0f1117);
+            border-color: #3B8542;
+            border-bottom-color: transparent;
+            border-radius: 6px 6px 0 0;
+            bottom: -1px;
             text-shadow: none;
+            z-index: 2;
         }
         nav.tabs button.active::after {
             content: '';
             position: absolute;
-            left: 4px;
-            right: 4px;
-            bottom: -1px;
-            height: 5px;
-            background: repeating-linear-gradient(
-                -45deg,
-                #5ddb7e 0,
-                #5ddb7e 6px,
-                transparent 6px,
-                transparent 11px
-            );
-            border-radius: 1px;
-            box-shadow: 0 0 6px rgba(93, 219, 126, 0.55);
-            border: none;
-            filter: none;
+            left: -1px;
+            right: -1px;
+            top: -1px;
+            height: 2px;
+            background: #5ddb7e;
+            border-radius: 6px 6px 0 0;
+            box-shadow: 0 0 8px rgba(93, 219, 126, 0.5);
+            pointer-events: none;
         }
 
 
@@ -1002,14 +1003,13 @@
 
         .sub-tabs button {
             background: transparent;
-            border: none;
+            border: 1px solid transparent;
             color: var(--text-dim);
             padding: 10px 16px;
             cursor: pointer;
             font-size: 14px;
-            border-bottom: 2px solid transparent;
             transition: all 0.3s ease;
-            /* Anchor for the glowing ::after underline below. */
+            /* Anchor for the active ::after lime accent strip. */
             position: relative;
         }
 
@@ -1017,39 +1017,36 @@
             color: var(--text);
         }
 
+        /* Folder tab — same fused look as the other tab variants. */
         .sub-tabs button.active {
             color: #5ddb7e;
             font-weight: 600;
+            background: var(--surface, #1a1d27);
+            border-color: var(--border, #2e3346);
             border-bottom-color: transparent;
+            border-radius: 6px 6px 0 0;
+            bottom: -1px;
             text-shadow: none;
+            z-index: 2;
         }
         .sub-tabs button.active::after {
             content: '';
             position: absolute;
-            left: 4px;
-            right: 4px;
-            bottom: -1px;
-            height: 5px;
-            background: repeating-linear-gradient(
-                -45deg,
-                #5ddb7e 0,
-                #5ddb7e 6px,
-                transparent 6px,
-                transparent 11px
-            );
-            border-radius: 1px;
-            box-shadow: 0 0 6px rgba(93, 219, 126, 0.55);
+            left: -1px;
+            right: -1px;
+            top: -1px;
+            height: 2px;
+            background: #5ddb7e;
+            border-radius: 6px 6px 0 0;
+            box-shadow: 0 0 8px rgba(93, 219, 126, 0.5);
             pointer-events: none;
         }
 
-        /* Sub-edit modal tab bar — same "horns" treatment as the other
-           tab variants. position:relative on each button so the active
-           ::after underline can be absolutely-anchored. */
+        /* Sub-edit modal tab bar — folder tab style. */
         .sub-modal-tab {
             padding: 10px 14px;
             background: transparent;
-            border: none;
-            border-bottom: 2px solid transparent;
+            border: 1px solid transparent;
             color: var(--text-dim, #aaa);
             font-size: 13px;
             font-weight: 600;
@@ -1062,24 +1059,24 @@
         }
         .sub-modal-tab.active {
             color: #5ddb7e;
+            background: var(--surface, #1a1d27);
+            border-color: var(--border, #2e3346);
+            border-bottom-color: transparent;
+            border-radius: 6px 6px 0 0;
+            bottom: -1px;
             text-shadow: none;
+            z-index: 2;
         }
         .sub-modal-tab.active::after {
             content: '';
             position: absolute;
-            left: 4px;
-            right: 4px;
-            bottom: -1px;
-            height: 5px;
-            background: repeating-linear-gradient(
-                -45deg,
-                #5ddb7e 0,
-                #5ddb7e 6px,
-                transparent 6px,
-                transparent 11px
-            );
-            border-radius: 1px;
-            box-shadow: 0 0 6px rgba(93, 219, 126, 0.55);
+            left: -1px;
+            right: -1px;
+            top: -1px;
+            height: 2px;
+            background: #5ddb7e;
+            border-radius: 6px 6px 0 0;
+            box-shadow: 0 0 8px rgba(93, 219, 126, 0.5);
             pointer-events: none;
         }
 
