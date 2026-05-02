@@ -729,12 +729,6 @@ body.light-mode .jh-strip-card[data-tone="amber"] .jh-strip-label { color: #b453
   min-height: 280px;
   overflow: hidden;
 }
-/* When the floating workspace is shown inside the Node Graph's
-   fullscreen overlay, hide its own "Workspace" title bar. The
-   Node Graph topbar already identifies the surface and the
-   Minimize action lives on the graph's toolbar — the floating
-   panel header is redundant there and just costs vertical space. */
-#nodeGraphTab .ws-floating-header { display: none; }
 .ws-floating-header {
   flex: 0 0 auto;
   display: flex;
