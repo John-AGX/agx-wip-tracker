@@ -272,7 +272,11 @@
       statusFilter: Object.assign({}, DEFAULT_STATUS_SET)
     },
     users: [],           // hydrated from /api/auth/users
-    sidebarSearch: ''
+    sidebarSearch: '',
+    // ISO YYYY-MM-DD for the first day (Sun) of the week the user
+    // explicitly picked via the calendar's week-selector ring. null
+    // = use the default reference date logic.
+    focusWeekStart: null
   };
 
   // ── Job pool ───────────────────────────────────────────────
@@ -758,7 +762,23 @@
     });
 
     // ── DOM
-    var html = '<div class="sch-cal-week-row">';
+    // Mark the row as focused when its weekStart matches the user's
+    // selection — drives a colored selection ring + slight tint that
+    // visually anchors the toolbar week-summary numbers to the
+    // calendar week they represent.
+    var weekStartIso = toISODate(weekStart);
+    var isFocusedWeek = (_state.focusWeekStart === weekStartIso);
+    var html = '<div class="sch-cal-week-row' + (isFocusedWeek ? ' sch-week-focused' : '') +
+               '" data-week-start="' + weekStartIso + '">';
+
+    // Focus rail — slim vertical handle at the LEFT edge of the row.
+    // Click pins this week as the metrics target. Visible always so
+    // the user can discover it; brightens on hover and on selection.
+    // Uses a button so it's keyboard-focusable.
+    html += '<button type="button" class="sch-week-focus-rail" data-week-start="' + weekStartIso + '" ' +
+            'title="Show week summary for ' + escapeAttr(weekStart.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })) + '+">' +
+            '<span class="sch-week-focus-rail-glow"></span>' +
+            '</button>';
 
     // Day-cell base layer (one cell per column).
     days.forEach(function(d) {
@@ -875,8 +895,27 @@
     grid.querySelectorAll('.sch-cal-day[data-date]').forEach(function(cell) {
       cell.addEventListener('click', function(e) {
         if (e.target.closest('.sch-entry-bar')) return;
+        if (e.target.closest('.sch-week-focus-rail')) return;
         var date = cell.getAttribute('data-date');
         openEntryEditor(null, date);
+      });
+    });
+    // Week focus rails — click pins that week as the metrics target.
+    grid.querySelectorAll('.sch-week-focus-rail').forEach(function(rail) {
+      rail.addEventListener('click', function(e) {
+        e.stopPropagation();
+        var weekStart = rail.getAttribute('data-week-start');
+        if (!weekStart) return;
+        // Toggle: clicking the already-focused week clears the
+        // selection and falls back to default (this week / first
+        // week of visible month).
+        if (_state.focusWeekStart === weekStart) {
+          _state.focusWeekStart = null;
+        } else {
+          _state.focusWeekStart = weekStart;
+        }
+        renderGrid();
+        refreshWeekSummary();
       });
     });
     wireResizeHandles(grid);
@@ -1359,9 +1398,6 @@
   function refreshWeekSummary() {
     var bar = document.getElementById('schWeekSummary');
     if (!bar) return;
-    // Week summary follows the visible month: shows the current week
-    // when viewing the current month, otherwise the first full week
-    // of the visible month so PMs planning ahead see relevant numbers.
     var ref = weekSummaryReferenceDate();
     var summary = weekSummaryForCursor(ref);
     var ws = parseISODate(summary.weekStart);
@@ -1372,11 +1408,16 @@
           ? we.getDate()
           : MONTH_NAMES[we.getMonth()].slice(0, 3) + ' ' + we.getDate())
       : 'This week';
-    // Compact horizontal metric tiles for the toolbar. Each tile is
-    // a uppercase label over a value so it skims like a dashboard.
+    // Class flag: when the user has explicitly focused a week via the
+    // calendar's left-edge rail, the toolbar metrics get a subtle
+    // pinned styling so the link between the picked row and the
+    // numbers reads immediately.
+    var pinned = !!_state.focusWeekStart;
+    bar.classList.toggle('sch-week-metrics-pinned', pinned);
+    var pinIcon = pinned ? '<span class="sch-metric-pin" title="Click the highlighted week\'s rail again to unpin">&#x1F4CC;</span> ' : '';
     bar.innerHTML =
       '<div class="sch-metric">' +
-        '<div class="sch-metric-label">Week of</div>' +
+        '<div class="sch-metric-label">' + pinIcon + 'Week of</div>' +
         '<div class="sch-metric-val">' + escapeHTML(label) + '</div>' +
       '</div>' +
       '<div class="sch-metric">' +
@@ -1393,10 +1434,17 @@
       '</div>';
   }
 
-  // Pick the date the bottom-bar week summary reports on:
-  //   viewing current month → today (this week)
-  //   viewing other month   → first day of that month (planning ahead)
+  // Pick the date the toolbar week summary reports on. Priority:
+  //   1. _state.focusWeekStart — explicit user pick from clicking
+  //      a week row in the calendar (highlighted with a selection
+  //      ring and remembered for the session).
+  //   2. Today, when viewing the current month.
+  //   3. First day of the visible month, when planning ahead.
   function weekSummaryReferenceDate() {
+    if (_state.focusWeekStart) {
+      var picked = parseISODate(_state.focusWeekStart);
+      if (picked) return picked;
+    }
     var today = new Date();
     var cur = _state.cursor || startOfMonth(today);
     if (cur.getFullYear() === today.getFullYear() && cur.getMonth() === today.getMonth()) {

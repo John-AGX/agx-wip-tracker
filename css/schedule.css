@@ -273,13 +273,13 @@
 }
 .sch-cal-dow {
   background: var(--card-bg, #0f0f1e);
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.6px;
   color: var(--text-dim, #888);
   text-align: center;
-  padding: 5px 0;
+  padding: 3px 0;
 }
 /* Weekend day-of-week labels lighten so Mon-Fri reads as the focus.
    Index 1 = Sun (first), index 7 = Sat (last) in the Sun-start
@@ -299,6 +299,62 @@
      in the toolbar instead of a footer strip — the calendar uses
      more of the workspace. */
   min-height: 78px;
+  transition: background 0.15s;
+}
+
+/* Focus rail — slim vertical handle on the LEFT edge of each week.
+   Click pins that week as the target for the toolbar's week-summary
+   metrics. Always faintly visible so the user can discover it;
+   brightens on hover and locks bright when its week is the focused
+   one. Overlaps the leftmost (Sunday) column so it sits inside
+   the row's visual frame, not outside it. */
+.sch-week-focus-rail {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  left: 2px;
+  width: 4px;
+  border-radius: 2px;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  background: rgba(79, 140, 255, 0.15);
+  transition: background 0.15s, width 0.15s, box-shadow 0.15s;
+  z-index: 3;
+}
+.sch-week-focus-rail-glow {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 2px;
+}
+.sch-week-focus-rail:hover {
+  background: rgba(79, 140, 255, 0.6);
+  width: 5px;
+}
+.sch-cal-week-row.sch-week-focused .sch-week-focus-rail {
+  background: #4f8cff;
+  width: 5px;
+  box-shadow: 0 0 10px rgba(79, 140, 255, 0.55);
+}
+/* Subtle background tint on the entire focused week so the user
+   can scan from the toolbar metric numbers down to the row that
+   produced them at a glance. */
+.sch-cal-week-row.sch-week-focused {
+  background: linear-gradient(90deg, rgba(79, 140, 255, 0.08) 0%, rgba(79, 140, 255, 0.02) 100%), var(--border, #2e3346);
+}
+body.light-mode .sch-week-focus-rail {
+  background: rgba(37, 99, 235, 0.18);
+}
+body.light-mode .sch-week-focus-rail:hover {
+  background: rgba(37, 99, 235, 0.55);
+}
+body.light-mode .sch-cal-week-row.sch-week-focused .sch-week-focus-rail {
+  background: #2563eb;
+  box-shadow: 0 0 10px rgba(37, 99, 235, 0.40);
+}
+body.light-mode .sch-cal-week-row.sch-week-focused {
+  background: linear-gradient(90deg, rgba(37, 99, 235, 0.10) 0%, rgba(37, 99, 235, 0.02) 100%), var(--border, #d1d5db);
 }
 .sch-cal-grid.sch-no-weekends .sch-cal-week-row {
   grid-template-columns: 0fr 1fr 1fr 1fr 1fr 1fr 0fr;
@@ -338,7 +394,7 @@
   visibility: hidden;
 }
 .sch-cal-day-num {
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 600;
   color: var(--text, #e4e6f0);
   display: block;
@@ -490,6 +546,33 @@ body.sch-resizing * {
   white-space: nowrap;
 }
 .sch-metric-val.sch-metric-val-rev { color: #34d399; }
+
+/* Pinned-week indicator. When the user picks a specific week via
+   the calendar's left-edge focus rail, the toolbar metrics get a
+   subtle accent so the link between rail → metrics is obvious. A
+   thin colored line on the left edge of the metric cluster +
+   a 📌 emoji prefix on the "Week of" label. */
+.sch-week-metrics.sch-week-metrics-pinned {
+  position: relative;
+  background: linear-gradient(90deg, rgba(79, 140, 255, 0.10) 0%, rgba(79, 140, 255, 0) 60%);
+  border-radius: 4px;
+  padding-left: 8px;
+  margin-left: 6px;
+  box-shadow: inset 3px 0 0 0 #4f8cff;
+}
+.sch-week-metrics.sch-week-metrics-pinned .sch-metric:first-child {
+  padding-left: 6px;
+}
+.sch-metric-pin {
+  display: inline-block;
+  font-size: 9px;
+  margin-right: 2px;
+  filter: drop-shadow(0 0 2px rgba(79, 140, 255, 0.5));
+}
+body.light-mode .sch-week-metrics.sch-week-metrics-pinned {
+  background: linear-gradient(90deg, rgba(37, 99, 235, 0.10) 0%, rgba(37, 99, 235, 0) 60%);
+  box-shadow: inset 3px 0 0 0 #2563eb;
+}
 
 /* Compact icon-style toggle for show/hide weekends. Replaces the
    old checkbox+label that was eating header space and rendering
