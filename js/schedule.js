@@ -43,12 +43,28 @@
     catch (e) { /* defensive */ }
   }
   function loadSettings() {
+    var defaults = {
+      showWeekends: true,
+      viewMonth: null,
+      // Default status filter selects the actively-relevant set —
+      // these are the jobs PMs schedule production for. The ref to
+      // DEFAULT_STATUS_SET happens after that const is hoisted at
+      // module scope so this is safe.
+      statusFilter: {
+        'New': true, 'In Progress': true, 'Backlog': true
+      }
+    };
     try {
-      return Object.assign(
-        { showWeekends: true, viewMonth: null },
-        JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}')
-      );
-    } catch (e) { return { showWeekends: true, viewMonth: null }; }
+      var saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
+      var merged = Object.assign({}, defaults, saved);
+      // Ensure statusFilter is an object even if the legacy save
+      // omitted it. Don't reset to defaults — empty/explicit
+      // selections must be honored.
+      if (!merged.statusFilter || typeof merged.statusFilter !== 'object') {
+        merged.statusFilter = Object.assign({}, defaults.statusFilter);
+      }
+      return merged;
+    } catch (e) { return defaults; }
   }
   function saveSettings(s) {
     try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(s)); }
@@ -238,29 +254,42 @@
   }
 
   // ── State ──────────────────────────────────────────────────
+  // Status options the sidebar pill bar exposes. Default selection
+  // (the "actively-relevant" set) is New + In Progress + Backlog —
+  // those are the jobs PMs schedule production for. The user can add
+  // On Hold, Completed, or Archived as needed.
+  var STATUS_FILTERS = ['New', 'In Progress', 'Backlog', 'On Hold', 'Completed', 'Archived'];
+  var DEFAULT_STATUS_SET = { 'New': true, 'In Progress': true, 'Backlog': true };
+
   var _state = {
     cursor: null,        // first day of the month being viewed
     entries: [],
-    settings: { showWeekends: true, viewMonth: null },
+    settings: {
+      showWeekends: true,
+      viewMonth: null,
+      // Persisted across sessions. Object keyed by status string,
+      // value true/false. Missing key = false (filtered out).
+      statusFilter: Object.assign({}, DEFAULT_STATUS_SET)
+    },
     users: [],           // hydrated from /api/auth/users
     sidebarSearch: ''
   };
 
   // ── Job pool ───────────────────────────────────────────────
-  // The sidebar lists in-progress jobs. We pull from window.appData.jobs
-  // (already hydrated on login) and filter to status=In Progress.
-  function inProgressJobs() {
+  // Filter jobs by the user's selected status set. Empty selection
+  // surfaces every job so the user isn't stranded with no list.
+  function filteredJobs() {
     var jobs = (window.appData && Array.isArray(window.appData.jobs)) ? window.appData.jobs : [];
+    var sel = _state.settings.statusFilter || {};
+    var anyOn = Object.keys(sel).some(function(k) { return sel[k]; });
+    if (!anyOn) return jobs.slice();
     return jobs.filter(function(j) {
-      var s = String(j.status || '').toLowerCase();
-      // "In Progress" is the canonical status; fall back to any non-
-      // closed/cancelled/archived bucket so jobs created with slightly
-      // different casing still show up.
-      if (s.indexOf('closed') !== -1) return false;
-      if (s.indexOf('cancel') !== -1) return false;
-      if (s.indexOf('archive') !== -1) return false;
-      if (s.indexOf('complete') !== -1 && s.indexOf('progress') === -1) return false;
-      return true;
+      var s = String(j.status || '').trim();
+      // Tolerant matching — config defines canonical labels but jobs
+      // sometimes carry slight case / whitespace variations.
+      return STATUS_FILTERS.some(function(opt) {
+        return sel[opt] && s.toLowerCase() === opt.toLowerCase();
+      });
     });
   }
 
@@ -427,7 +456,7 @@
   function renderSidebar() {
     var el = document.getElementById('schSidebar');
     if (!el) return;
-    var jobs = inProgressJobs();
+    var jobs = filteredJobs();
     var q = _state.sidebarSearch.trim().toLowerCase();
     if (q) {
       jobs = jobs.filter(function(j) {
@@ -438,19 +467,40 @@
     // Sort by jobNumber for predictable order
     jobs.sort(function(a, b) { return (a.jobNumber || '').localeCompare(b.jobNumber || ''); });
 
+    var sel = _state.settings.statusFilter || {};
+    var activeCount = STATUS_FILTERS.filter(function(s) { return sel[s]; }).length;
+
+    var pillsHtml = STATUS_FILTERS.map(function(s) {
+      var on = !!sel[s];
+      return '<button class="sch-status-pill' + (on ? ' active' : '') + '" data-status="' + escapeAttr(s) + '" type="button">' +
+        escapeHTML(s) +
+      '</button>';
+    }).join('');
+
     var html =
       '<div class="sch-sidebar-header">' +
-        '<div class="sch-sidebar-title">In-Progress Jobs</div>' +
+        '<div class="sch-sidebar-title">Jobs</div>' +
         '<div class="sch-sidebar-sub">Drag any job onto a day to schedule it.</div>' +
       '</div>' +
       '<div class="sch-sidebar-search">' +
         '<input type="text" id="schSidebarSearch" placeholder="Search jobs…" value="' + escapeAttr(_state.sidebarSearch) + '" />' +
       '</div>' +
+      // Status filter pill bar — multi-select. Click toggles. Default
+      // selection = New + In Progress + Backlog (the actively-relevant
+      // bucket); user can opt into On Hold / Completed / Archived.
+      '<div class="sch-sidebar-status-bar">' +
+        '<div class="sch-sidebar-status-label">' +
+          'Status <span style="color:var(--text-dim,#666);font-weight:400;">(' + activeCount + ' on)</span>' +
+        '</div>' +
+        '<div class="sch-sidebar-status-pills" id="schStatusPills">' +
+          pillsHtml +
+        '</div>' +
+      '</div>' +
       '<div class="sch-sidebar-list" id="schSidebarList">';
 
     if (!jobs.length) {
       html += '<div class="sch-sidebar-empty">' +
-        (q ? 'No jobs match.' : 'No in-progress jobs.') +
+        (q ? 'No jobs match.' : 'No jobs match the selected status.') +
       '</div>';
     } else {
       jobs.forEach(function(j) {
@@ -458,9 +508,15 @@
         var pct = Number(j.pctComplete || 0);
         var contract = Number(j.contractAmount || 0);
         var prodDays = Number(j.totalProductionDays || 0);
-        html += '<div class="sch-job-card" draggable="true" data-job-id="' + escapeAttr(j.id) + '" style="--job-color:' + color + ';">' +
-          '<div class="sch-job-card-num">' + escapeHTML(j.jobNumber || j.id) + '</div>' +
-          '<div class="sch-job-card-title">' + escapeHTML(j.title || j.name || '(untitled)') + '</div>' +
+        // Slim card — single line of meta (number · title) plus a
+        // bottom row for $/days/pct. Title truncates with ellipsis
+        // instead of clamping to two lines, which kept cards uniform
+        // height and let more fit in the visible area.
+        html += '<div class="sch-job-card" draggable="true" data-job-id="' + escapeAttr(j.id) + '" style="--job-color:' + color + ';" title="' + escapeAttr(jobLabel(j)) + '">' +
+          '<div class="sch-job-card-line">' +
+            '<span class="sch-job-card-num">' + escapeHTML(j.jobNumber || j.id) + '</span>' +
+            '<span class="sch-job-card-title">' + escapeHTML(j.title || j.name || '(untitled)') + '</span>' +
+          '</div>' +
           '<div class="sch-job-card-meta">' +
             '<span>' + fmtMoney(contract) + (prodDays ? ' · ' + prodDays + 'd' : '') + '</span>' +
             '<span class="sch-job-card-pct">' + pct.toFixed(0) + '%</span>' +
@@ -479,6 +535,21 @@
         renderSidebar();
       });
     }
+
+    // Wire status pill toggles. Each click flips one status on/off
+    // and persists the selection to localStorage so the user's
+    // working set sticks across reloads.
+    el.querySelectorAll('.sch-status-pill').forEach(function(p) {
+      p.addEventListener('click', function() {
+        var s = p.getAttribute('data-status');
+        if (!s) return;
+        var cur = _state.settings.statusFilter || {};
+        cur[s] = !cur[s];
+        _state.settings.statusFilter = cur;
+        saveSettings(_state.settings);
+        renderSidebar();
+      });
+    });
 
     // Wire drag events on each card.
     el.querySelectorAll('.sch-job-card').forEach(function(card) {
