@@ -230,7 +230,27 @@
       return del('/api/subs/jobs/' + encodeURIComponent(jobId) + '/' + encodeURIComponent(assignmentId));
     },
     migratePreview: function(inlineSubs) { return post('/api/subs/migrate-preview', { inlineSubs: inlineSubs }); },
-    migrateApply: function(inlineSubs) { return post('/api/subs/migrate-apply', { inlineSubs: inlineSubs }); }
+    migrateApply: function(inlineSubs) { return post('/api/subs/migrate-apply', { inlineSubs: inlineSubs }); },
+    // Phase 1B — per-sub certificates (GL, WC, W-9, Bank).
+    certs: {
+      list: function(subId) {
+        return get('/api/subs/' + encodeURIComponent(subId) + '/certificates');
+      },
+      upsert: function(subId, payload) {
+        return post('/api/subs/' + encodeURIComponent(subId) + '/certificates', payload);
+      },
+      patch: function(subId, certType, payload) {
+        return fetch('/api/subs/' + encodeURIComponent(subId) + '/certificates/' + encodeURIComponent(certType), {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify(payload)
+        }).then(function(r) { return r.json().then(function(b) { if (!r.ok) throw new Error(b.error || 'request failed'); return b; }); });
+      },
+      remove: function(subId, certType) {
+        return del('/api/subs/' + encodeURIComponent(subId) + '/certificates/' + encodeURIComponent(certType));
+      }
+    }
   };
 
   // Production-scheduling calendar (Phase 2).

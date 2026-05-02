@@ -53,7 +53,7 @@ const router = express.Router();
 // handler since it depends on the existing row count.
 const MAX_FILES_PER_ENTITY = 30;
 const MAX_FILE_BYTES = 50 * 1024 * 1024; // 50MB — fits most drawings, big PDFs
-const VALID_ENTITY_TYPES = new Set(['lead', 'estimate', 'client', 'job']);
+const VALID_ENTITY_TYPES = new Set(['lead', 'estimate', 'client', 'job', 'sub']);
 
 // Lightweight MIME detection — sharp only handles raster images, so
 // anything outside this set bypasses the resize pipeline.
@@ -74,12 +74,18 @@ function readCapForEntity(entityType) {
   if (entityType === 'estimate') return 'ESTIMATES_VIEW';
   if (entityType === 'client')   return 'ESTIMATES_VIEW';
   if (entityType === 'job')      return 'JOBS_VIEW';
+  // Subs are part of the jobs/back-office surface — anyone with job-edit
+  // rights can see the subcontractor directory + their certificates.
+  if (entityType === 'sub')      return 'JOBS_VIEW';
   return 'LEADS_VIEW';
 }
 function writeCapForEntity(entityType) {
   if (entityType === 'estimate') return 'ESTIMATES_EDIT';
   if (entityType === 'client')   return 'ESTIMATES_EDIT';
   if (entityType === 'job')      return 'JOBS_EDIT';
+  // Sub uploads (cert PDFs) require the same job-edit capability that
+  // sub-routes.js uses for create/update — keeps the perm story coherent.
+  if (entityType === 'sub')      return 'JOBS_EDIT_ANY';
   return 'LEADS_EDIT';
 }
 

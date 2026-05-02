@@ -254,6 +254,208 @@
         holdHidden.value = holdCb.checked ? '1' : '0';
       });
     }
+
+    // Certificates pane — only mount if we have a saved sub to attach
+    // PDFs to. New subs see the "save first" message; once they save
+    // and re-open the modal, the cert rows render.
+    var certsMount = modal.querySelector('#subDir_certsMount');
+    if (certsMount && _editingId) {
+      mountCertificates(certsMount, _editingId);
+    }
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  // Phase 1B: Certificates (GL / WC / W-9 / Bank info)
+  // ──────────────────────────────────────────────────────────────────
+
+  // Cert types — order drives row order in the modal.
+  var CERT_TYPES = [
+    { key: 'gl',   label: 'General liability certificate' },
+    { key: 'wc',   label: "Worker's comp certificate" },
+    { key: 'w9',   label: 'W-9' },
+    { key: 'bank', label: 'Bank Information' }
+  ];
+
+  function mountCertificates(mountEl, subId) {
+    mountEl.innerHTML = '<div style="padding:12px;color:var(--text-dim,#888);font-size:12px;">Loading certificates…</div>';
+    if (!window.agxApi || !window.agxApi.subs || !window.agxApi.subs.certs) {
+      mountEl.innerHTML = '<div style="padding:12px;color:#f87171;font-size:12px;">Cert API not available — refresh the page.</div>';
+      return;
+    }
+    window.agxApi.subs.certs.list(subId).then(function(res) {
+      var byType = {};
+      (res.certificates || []).forEach(function(c) { byType[c.cert_type] = c; });
+      mountEl.innerHTML = CERT_TYPES.map(function(t) {
+        return certRowHTML(t, byType[t.key]);
+      }).join('');
+      wireCertRows(mountEl, subId);
+    }).catch(function(err) {
+      mountEl.innerHTML = '<div style="padding:12px;color:#f87171;font-size:12px;">Failed to load certs: ' + escapeHTML(err.message || String(err)) + '</div>';
+    });
+  }
+
+  // One row's HTML. cert may be undefined for an empty slot.
+  function certRowHTML(type, cert) {
+    var hasFile = !!(cert && cert.attachment_id);
+    var fileLabel = hasFile
+      ? (cert.attachment_filename || 'cert.pdf')
+      : '';
+    var fileLink = hasFile && cert.attachment_url
+      ? '<a href="' + escapeAttr(cert.attachment_url) + '" target="_blank" style="font-size:11px;color:#4f8cff;text-decoration:none;">📎 ' + escapeHTML(fileLabel) + '</a>'
+      : (hasFile ? '<span style="font-size:11px;color:#4f8cff;">📎 ' + escapeHTML(fileLabel) + '</span>' : '<span style="font-size:11px;color:var(--text-dim,#888);">No file uploaded</span>');
+    var expVal = cert && cert.expiration_date ? String(cert.expiration_date).slice(0, 10) : '';
+    var rDays  = cert && cert.reminder_days != null ? cert.reminder_days : 30;
+    var rDir   = cert && cert.reminder_direction ? cert.reminder_direction : 'before';
+    var rLimit = cert && cert.reminder_limit != null ? cert.reminder_limit : 5;
+    var dirOptions =
+      '<option value="before"' + (rDir === 'before' ? ' selected' : '') + '>before</option>' +
+      '<option value="after"'  + (rDir === 'after'  ? ' selected' : '') + '>after</option>';
+    return '<div data-cert-row="' + type.key + '" style="display:grid;grid-template-columns:2.2fr 1fr 1.1fr 1fr 1fr auto;gap:10px;align-items:end;padding:10px 0;border-top:1px solid var(--border,#333);">' +
+      // Col 1: type label + upload + filename
+      '<div style="min-width:0;">' +
+        '<div style="font-size:12px;font-weight:600;color:var(--text,#e6e6e6);margin-bottom:4px;">' + escapeHTML(type.label) + '</div>' +
+        '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
+          '<button type="button" data-cert-upload="' + type.key + '" style="padding:5px 12px;font-size:11px;border:1px solid var(--border,#333);border-radius:5px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);cursor:pointer;">⬆ ' + (hasFile ? 'Replace' : 'Upload') + '</button>' +
+          '<input type="file" data-cert-file="' + type.key + '" accept="application/pdf,image/*" style="display:none;" />' +
+          '<span data-cert-status="' + type.key + '" style="font-size:11px;min-width:0;overflow:hidden;text-overflow:ellipsis;">' + fileLink + '</span>' +
+        '</div>' +
+      '</div>' +
+      // Col 2: expiration date
+      '<div>' +
+        '<label style="display:block;font-size:10px;color:var(--text-dim,#888);margin-bottom:2px;">Expiration date</label>' +
+        '<input type="date" data-cert-field="expiration_date" data-cert-key="' + type.key + '" value="' + escapeAttr(expVal) + '" style="width:100%;padding:5px 8px;border:1px solid var(--border,#333);border-radius:5px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);font-size:12px;" />' +
+      '</div>' +
+      // Col 3: reminder days
+      '<div>' +
+        '<label style="display:block;font-size:10px;color:var(--text-dim,#888);margin-bottom:2px;">Reminder (days)</label>' +
+        '<input type="number" min="0" data-cert-field="reminder_days" data-cert-key="' + type.key + '" value="' + escapeAttr(String(rDays)) + '" style="width:100%;padding:5px 8px;border:1px solid var(--border,#333);border-radius:5px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);font-size:12px;" />' +
+      '</div>' +
+      // Col 4: direction
+      '<div>' +
+        '<label style="display:block;font-size:10px;color:var(--text-dim,#888);margin-bottom:2px;">Direction</label>' +
+        '<select data-cert-field="reminder_direction" data-cert-key="' + type.key + '" style="width:100%;padding:5px 8px;border:1px solid var(--border,#333);border-radius:5px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);font-size:12px;">' + dirOptions + '</select>' +
+      '</div>' +
+      // Col 5: reminder limit
+      '<div>' +
+        '<label style="display:block;font-size:10px;color:var(--text-dim,#888);margin-bottom:2px;">Reminder limit</label>' +
+        '<input type="number" min="0" data-cert-field="reminder_limit" data-cert-key="' + type.key + '" value="' + escapeAttr(String(rLimit)) + '" style="width:100%;padding:5px 8px;border:1px solid var(--border,#333);border-radius:5px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);font-size:12px;" />' +
+      '</div>' +
+      // Col 6: × remove (only when a file is uploaded)
+      '<div style="align-self:end;padding-bottom:5px;">' +
+        (hasFile
+          ? '<button type="button" data-cert-remove="' + type.key + '" title="Remove this certificate" style="padding:5px 9px;font-size:13px;border:1px solid var(--border,#333);border-radius:5px;background:transparent;color:#f87171;cursor:pointer;">&times;</button>'
+          : '<span></span>') +
+      '</div>' +
+    '</div>';
+  }
+
+  // Wire all the cert-row interactions: Upload / Replace, Remove, and
+  // debounced auto-save on date / reminder field changes.
+  function wireCertRows(rootEl, subId) {
+    // Upload + Replace — clicking the button triggers the matching
+    // hidden file input. The file picker change handler does the
+    // attachment upload + cert upsert in one flow.
+    rootEl.querySelectorAll('[data-cert-upload]').forEach(function(btn) {
+      var key = btn.getAttribute('data-cert-upload');
+      var fileInput = rootEl.querySelector('[data-cert-file="' + key + '"]');
+      if (!fileInput) return;
+      btn.addEventListener('click', function() {
+        fileInput.value = '';
+        fileInput.click();
+      });
+      fileInput.addEventListener('change', function(e) {
+        if (!e.target.files || !e.target.files[0]) return;
+        uploadCert(rootEl, subId, key, e.target.files[0]);
+      });
+    });
+
+    // Remove — DELETE the cert row + its attachment, then re-mount the
+    // section so the row resets to its empty state.
+    rootEl.querySelectorAll('[data-cert-remove]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        var key = btn.getAttribute('data-cert-remove');
+        if (!confirm('Remove this certificate?')) return;
+        window.agxApi.subs.certs.remove(subId, key).then(function() {
+          mountCertificates(rootEl, subId);
+        }).catch(function(err) {
+          alert('Remove failed: ' + (err.message || String(err)));
+        });
+      });
+    });
+
+    // Field changes — date / reminder fields. Debounced PATCH so the
+    // user can edit smoothly. We send only the field that changed
+    // (PATCH route accepts partial updates). If the cert doesn't yet
+    // exist on the server (file uploaded but row never created — edge
+    // case), the PATCH 404s and we fall back to a full upsert.
+    var debouncers = {};
+    rootEl.querySelectorAll('[data-cert-field]').forEach(function(el) {
+      el.addEventListener('change', function() {
+        var key = el.getAttribute('data-cert-key');
+        var field = el.getAttribute('data-cert-field');
+        var val = el.value;
+        var coerced = (field === 'reminder_days' || field === 'reminder_limit')
+          ? (val === '' ? null : Number(val))
+          : (val === '' ? null : val);
+        clearTimeout(debouncers[key + '|' + field]);
+        debouncers[key + '|' + field] = setTimeout(function() {
+          var payload = {};
+          payload[field] = coerced;
+          window.agxApi.subs.certs.patch(subId, key, payload).catch(function(err) {
+            // Fallback: upsert with all fields if PATCH says the row
+            // doesn't exist yet.
+            if (err && /not found/i.test(err.message || '')) {
+              var row = rootEl.querySelector('[data-cert-row="' + key + '"]');
+              if (!row) return;
+              var full = { cert_type: key };
+              row.querySelectorAll('[data-cert-field]').forEach(function(inp) {
+                var f = inp.getAttribute('data-cert-field');
+                var v = inp.value;
+                full[f] = (f === 'reminder_days' || f === 'reminder_limit')
+                  ? (v === '' ? null : Number(v))
+                  : (v === '' ? null : v);
+              });
+              window.agxApi.subs.certs.upsert(subId, full).catch(function(e2) {
+                console.warn('Cert upsert fallback failed:', e2.message);
+              });
+            } else {
+              console.warn('Cert PATCH failed:', err.message);
+            }
+          });
+        }, 400);
+      });
+    });
+  }
+
+  // Upload a cert file: POST attachment with entity_type='sub', then
+  // upsert the cert row pointing at the new attachment id. Re-renders
+  // the cert section on success so the filename + remove button
+  // appear immediately.
+  function uploadCert(rootEl, subId, certKey, file) {
+    var statusSpan = rootEl.querySelector('[data-cert-status="' + certKey + '"]');
+    if (statusSpan) statusSpan.innerHTML = '<span style="font-size:11px;color:var(--text-dim,#888);">Uploading…</span>';
+    window.agxApi.attachments.upload('sub', subId, file).then(function(res) {
+      var att = res.attachment || res;
+      // Pull current row's date/reminder values into the upsert so a
+      // user who already set those fields before uploading doesn't
+      // lose them.
+      var row = rootEl.querySelector('[data-cert-row="' + certKey + '"]');
+      var payload = { cert_type: certKey, attachment_id: att.id };
+      if (row) {
+        row.querySelectorAll('[data-cert-field]').forEach(function(inp) {
+          var f = inp.getAttribute('data-cert-field');
+          var v = inp.value;
+          payload[f] = (f === 'reminder_days' || f === 'reminder_limit')
+            ? (v === '' ? null : Number(v))
+            : (v === '' ? null : v);
+        });
+      }
+      return window.agxApi.subs.certs.upsert(subId, payload);
+    }).then(function() {
+      mountCertificates(rootEl, subId);
+    }).catch(function(err) {
+      if (statusSpan) statusSpan.innerHTML = '<span style="font-size:11px;color:#f87171;">Upload failed: ' + escapeHTML(err.message || String(err)) + '</span>';
+    });
   }
 
   // ──────────────────────────────────────────────────────────────────
@@ -390,32 +592,19 @@
         '<div style="margin-bottom:14px;">' +
           input('subDir_paymentEmail', 'Default payment email address', sub.payment_email || '', { type: 'email', placeholder: 'payments@example.com' }) +
         '</div>' +
-        // ── Certificates section (Phase 1B stub — visual layout only)
+        // ── Certificates section ─────────────────────────────────
+        // PDF upload + expiration tracking + reminder schedule. Each
+        // cert type (GL / WC / W-9 / Bank) is its own row; all four
+        // rows render even when no cert is uploaded yet, so the Upload
+        // button is always there to start fresh. Once a cert exists,
+        // the row shows the filename + a × remove button. Date and
+        // reminder fields auto-save on change (debounced 400ms).
+        // Disabled until the sub is saved (no id to attach to yet).
         '<div style="margin-top:22px;padding-top:16px;border-top:1px dashed var(--border,#333);">' +
-          '<div style="font-size:13px;font-weight:700;color:var(--text,#fff);margin-bottom:6px;">Certificates</div>' +
-          '<div style="font-size:11px;color:var(--text-dim,#888);margin-bottom:10px;font-style:italic;">' +
-            'PDF upload + expiration tracking + reminder schedule lands in Phase 1B. Layout shown for reference.' +
-          '</div>' +
-          ['General liability certificate', "Worker's comp certificate", 'W-9', 'Bank Information'].map(function(certLabel) {
-            return '<div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:10px;align-items:end;padding:8px 0;border-top:1px solid var(--border,#333);opacity:0.55;">' +
-              '<div>' +
-                '<div style="font-size:12px;font-weight:600;color:var(--text,#e6e6e6);margin-bottom:4px;">' + escapeHTML(certLabel) + '</div>' +
-                '<button type="button" disabled style="padding:5px 12px;font-size:11px;border:1px solid var(--border,#333);border-radius:5px;background:var(--card-bg,#0f0f1e);color:var(--text-dim,#888);">⬆ Upload</button>' +
-              '</div>' +
-              '<div>' +
-                '<label style="display:block;font-size:10px;color:var(--text-dim,#888);margin-bottom:2px;">Expiration date</label>' +
-                '<input type="date" disabled style="width:100%;padding:5px 8px;border:1px solid var(--border,#333);border-radius:5px;background:var(--card-bg,#0f0f1e);color:var(--text-dim,#666);font-size:12px;" />' +
-              '</div>' +
-              '<div>' +
-                '<label style="display:block;font-size:10px;color:var(--text-dim,#888);margin-bottom:2px;">Reminder (days)</label>' +
-                '<input type="number" disabled value="30" style="width:100%;padding:5px 8px;border:1px solid var(--border,#333);border-radius:5px;background:var(--card-bg,#0f0f1e);color:var(--text-dim,#666);font-size:12px;" />' +
-              '</div>' +
-              '<div>' +
-                '<label style="display:block;font-size:10px;color:var(--text-dim,#888);margin-bottom:2px;">Reminder limit</label>' +
-                '<input type="number" disabled value="5" style="width:100%;padding:5px 8px;border:1px solid var(--border,#333);border-radius:5px;background:var(--card-bg,#0f0f1e);color:var(--text-dim,#666);font-size:12px;" />' +
-              '</div>' +
-            '</div>';
-          }).join('') +
+          '<div style="font-size:13px;font-weight:700;color:var(--text,#fff);margin-bottom:10px;">Certificates</div>' +
+          (!_editingId
+            ? '<div style="font-size:11px;color:var(--text-dim,#888);margin-bottom:10px;font-style:italic;">Save the sub first, then upload certificate PDFs here.</div>'
+            : '<div id="subDir_certsMount" style="display:flex;flex-direction:column;gap:0;"></div>') +
         '</div>' +
       '</div>' +
       // ── Tab: Notifications (Phase 1C stub) ───────────────────────

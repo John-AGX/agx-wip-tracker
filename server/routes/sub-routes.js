@@ -238,6 +238,154 @@ router.delete('/:id',
 );
 
 // ──────────────────────────────────────────────────────────────────
+// Sub certificates (Phase 1B) — General liability, Worker's comp,
+// W-9, Bank info. Each sub has at most one cert per type (UNIQUE
+// constraint on (sub_id, cert_type)). The PDF itself lives in the
+// attachments table with entity_type='sub'; this table just tracks
+// the metadata layer (expiration date + reminder schedule).
+// ──────────────────────────────────────────────────────────────────
+
+// GET /api/subs/:subId/certificates — list all certs for one sub
+router.get('/:subId/certificates',
+  requireAuth, requireCapability('JOBS_VIEW_ALL'),
+  async (req, res) => {
+    try {
+      const { rows } = await pool.query(`
+        SELECT sc.*,
+               a.filename AS attachment_filename,
+               a.original_url AS attachment_url,
+               a.mime_type AS attachment_mime
+        FROM sub_certificates sc
+        LEFT JOIN attachments a ON a.id = sc.attachment_id
+        WHERE sc.sub_id = $1
+        ORDER BY sc.cert_type
+      `, [req.params.subId]);
+      res.json({ certificates: rows });
+    } catch (e) {
+      console.error('GET /api/subs/:subId/certificates error:', e);
+      res.status(500).json({ error: 'Server error' });
+    }
+  }
+);
+
+// POST /api/subs/:subId/certificates — upsert a cert by (sub_id, cert_type).
+// Body: { cert_type, attachment_id?, expiration_date?, reminder_days?,
+//         reminder_direction?, reminder_limit? }
+router.post('/:subId/certificates',
+  requireAuth, requireCapability('JOBS_EDIT_ANY'),
+  async (req, res) => {
+    try {
+      const b = req.body || {};
+      const certType = String(b.cert_type || b.certType || '').toLowerCase();
+      if (!['gl', 'wc', 'w9', 'bank'].includes(certType)) {
+        return res.status(400).json({ error: 'Invalid cert_type — must be gl, wc, w9, or bank' });
+      }
+      // Upsert. ON CONFLICT updates the metadata fields; attachment_id
+      // is COALESCEd so a metadata-only update (e.g. user changes the
+      // expiration date) doesn't wipe the existing PDF.
+      const id = (b.id || ('cert_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8)));
+      const result = await pool.query(`
+        INSERT INTO sub_certificates
+          (id, sub_id, cert_type, attachment_id, expiration_date,
+           reminder_days, reminder_direction, reminder_limit)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        ON CONFLICT (sub_id, cert_type) DO UPDATE SET
+          attachment_id = COALESCE(EXCLUDED.attachment_id, sub_certificates.attachment_id),
+          expiration_date = EXCLUDED.expiration_date,
+          reminder_days = EXCLUDED.reminder_days,
+          reminder_direction = EXCLUDED.reminder_direction,
+          reminder_limit = EXCLUDED.reminder_limit,
+          updated_at = NOW()
+        RETURNING *
+      `, [
+        id, req.params.subId, certType,
+        b.attachment_id || b.attachmentId || null,
+        b.expiration_date || b.expirationDate || null,
+        b.reminder_days != null ? Number(b.reminder_days) : (b.reminderDays != null ? Number(b.reminderDays) : 30),
+        (b.reminder_direction || b.reminderDirection || 'before'),
+        b.reminder_limit != null ? Number(b.reminder_limit) : (b.reminderLimit != null ? Number(b.reminderLimit) : 5)
+      ]);
+      res.json({ certificate: result.rows[0] });
+    } catch (e) {
+      console.error('POST /api/subs/:subId/certificates error:', e);
+      res.status(500).json({ error: 'Server error' });
+    }
+  }
+);
+
+// PATCH /api/subs/:subId/certificates/:certType — partial update of one cert.
+// Used for inline edits to expiration / reminder fields without re-uploading.
+router.patch('/:subId/certificates/:certType',
+  requireAuth, requireCapability('JOBS_EDIT_ANY'),
+  async (req, res) => {
+    try {
+      const b = req.body || {};
+      const map = {
+        attachment_id: 'attachment_id', attachmentId: 'attachment_id',
+        expiration_date: 'expiration_date', expirationDate: 'expiration_date',
+        reminder_days: 'reminder_days', reminderDays: 'reminder_days',
+        reminder_direction: 'reminder_direction', reminderDirection: 'reminder_direction',
+        reminder_limit: 'reminder_limit', reminderLimit: 'reminder_limit'
+      };
+      const sets = [];
+      const vals = [];
+      let i = 1;
+      Object.keys(b).forEach(function(k) {
+        if (map[k] && b[k] !== undefined) {
+          sets.push(map[k] + ' = $' + i++);
+          vals.push(b[k]);
+        }
+      });
+      if (!sets.length) return res.status(400).json({ error: 'nothing to update' });
+      sets.push('updated_at = NOW()');
+      vals.push(req.params.subId, req.params.certType);
+      const result = await pool.query(
+        'UPDATE sub_certificates SET ' + sets.join(', ') +
+        ' WHERE sub_id = $' + i++ + ' AND cert_type = $' + i + ' RETURNING *',
+        vals
+      );
+      if (!result.rows.length) return res.status(404).json({ error: 'Certificate not found' });
+      res.json({ certificate: result.rows[0] });
+    } catch (e) {
+      console.error('PATCH /api/subs/:subId/certificates/:certType error:', e);
+      res.status(500).json({ error: 'Server error' });
+    }
+  }
+);
+
+// DELETE /api/subs/:subId/certificates/:certType — removes the cert
+// metadata row. Also deletes the underlying attachment so the PDF
+// doesn't stay orphaned. Caller can re-upload to start fresh.
+router.delete('/:subId/certificates/:certType',
+  requireAuth, requireCapability('JOBS_EDIT_ANY'),
+  async (req, res) => {
+    try {
+      const cur = await pool.query(
+        'SELECT attachment_id FROM sub_certificates WHERE sub_id = $1 AND cert_type = $2',
+        [req.params.subId, req.params.certType]
+      );
+      if (!cur.rows.length) return res.status(404).json({ error: 'Certificate not found' });
+      const attId = cur.rows[0].attachment_id;
+      await pool.query(
+        'DELETE FROM sub_certificates WHERE sub_id = $1 AND cert_type = $2',
+        [req.params.subId, req.params.certType]
+      );
+      // Best-effort attachment cleanup. The cert row was already deleted
+      // so a failure here is logged but not surfaced — orphan cleanup
+      // can run separately if it ever becomes a problem.
+      if (attId) {
+        try { await pool.query('DELETE FROM attachments WHERE id = $1', [attId]); }
+        catch (cleanupErr) { console.warn('Sub cert attachment cleanup failed:', cleanupErr.message); }
+      }
+      res.json({ ok: true });
+    } catch (e) {
+      console.error('DELETE /api/subs/:subId/certificates/:certType error:', e);
+      res.status(500).json({ error: 'Server error' });
+    }
+  }
+);
+
+// ──────────────────────────────────────────────────────────────────
 // Per-job assignments (job_subs)
 // ──────────────────────────────────────────────────────────────────
 

@@ -242,7 +242,7 @@ async function initSchema() {
     END $$;
     ALTER TABLE attachments
       ADD CONSTRAINT attachments_entity_type_check
-      CHECK (entity_type IN ('lead', 'estimate', 'client', 'job'));
+      CHECK (entity_type IN ('lead', 'estimate', 'client', 'job', 'sub'));
 
     -- AI estimating-assistant chat. Per-user, per-estimate (so PMs each see
     -- their own conversation). Two messages per round (one user, one
@@ -330,6 +330,32 @@ async function initSchema() {
     ALTER TABLE subs ADD COLUMN IF NOT EXISTS payment_hold BOOLEAN DEFAULT FALSE;
     ALTER TABLE subs ADD COLUMN IF NOT EXISTS preferences JSONB NOT NULL DEFAULT '{}'::jsonb;
     ALTER TABLE subs ADD COLUMN IF NOT EXISTS notification_prefs JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+    -- Phase 1B: certificates table. One row per (sub, cert_type) — UNIQUE
+    -- enforces upsert semantics so a sub has at most one of each cert
+    -- type. attachment_id points to an attachments row with
+    -- entity_type='sub' that holds the actual PDF bytes; ON DELETE SET
+    -- NULL preserves the cert metadata (reminder schedule, expiration)
+    -- if the attachment is removed, so a re-upload doesn't lose the
+    -- reminder config the user already set.
+    CREATE TABLE IF NOT EXISTS sub_certificates (
+      id TEXT PRIMARY KEY,
+      sub_id TEXT NOT NULL REFERENCES subs(id) ON DELETE CASCADE,
+      cert_type TEXT NOT NULL CHECK (cert_type IN ('gl', 'wc', 'w9', 'bank')),
+      attachment_id TEXT REFERENCES attachments(id) ON DELETE SET NULL,
+      expiration_date DATE,
+      reminder_days INTEGER NOT NULL DEFAULT 30,
+      reminder_direction TEXT NOT NULL DEFAULT 'before'
+        CHECK (reminder_direction IN ('before', 'after')),
+      reminder_limit INTEGER NOT NULL DEFAULT 5,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE (sub_id, cert_type)
+    );
+    CREATE INDEX IF NOT EXISTS idx_sub_certificates_sub ON sub_certificates(sub_id);
+    -- Expiration index for the future reminder scheduler — lets it scan
+    -- "what's expiring in the next N days across all subs" cheaply.
+    CREATE INDEX IF NOT EXISTS idx_sub_certificates_expiration ON sub_certificates(expiration_date) WHERE expiration_date IS NOT NULL;
 
     -- Per-job assignment + financials. Same sub on two jobs gets two
     -- rows. UNIQUE(job_id, sub_id) so a sub isn't double-assigned to
