@@ -2018,84 +2018,139 @@
 
   function buildWorkspaceHTML() {
     return `
+      <!-- Formula bar — Excel-style cell reference + formula input,
+           kept as its own row above the ribbon so it gets full width
+           and the long formula text isn't crowded by buttons. -->
       <div class="ws-toolbar">
         <div class="ws-cell-ref" id="wsCellRef">A1</div>
         <input type="text" class="ws-formula-bar" id="wsFormulaBar" placeholder="Enter value or formula (e.g. =A1+B1)" spellcheck="false" />
       </div>
-      <!-- Single compact action row: data + file ops together. Most
-           buttons are icon-only to keep the strip on one line. -->
-      <div class="ws-toolbar ws-toolbar-actions">
-        <button class="ws-btn" id="wsLinkBtn" title="Link cell to job field">&#x1F517;</button>
-        <button class="ws-btn" id="wsAutoSumBtn" onclick="window.wsAutoSum()" title="AutoSum (Σ) — insert =SUM with auto-detected range">&#x03A3;</button>
-        <button class="ws-btn" id="wsMakeTableBtn" onclick="window.wsMakeTable()" title="Convert selected range into a styled table">&#x1F5C2;</button>
-        <button class="ws-btn" id="wsSortAscBtn" onclick="window.wsSortAscHeader()" title="Sort range ascending">&#x2191;A</button>
-        <button class="ws-btn" id="wsSortDescBtn" onclick="window.wsSortDescHeader()" title="Sort range descending">&#x2193;Z</button>
-        <button class="ws-btn" id="wsFindBtn" onclick="window.wsOpenFindReplace()" title="Find &amp; Replace (Ctrl+F)">&#x1F50D;</button>
-        <select id="wsFreezeSelect" class="ws-select-compact" onchange="window.wsSetFreeze(this.value || null); this.value='';" title="Freeze panes">
-          <option value="">&#x2744;</option>
-          <option value="row">Top row</option>
-          <option value="col">First column</option>
-          <option value="both">Top row + first column</option>
-          <option value="">No freeze</option>
-        </select>
+
+      <!-- Ribbon — single grouped row that mirrors Excel's Home tab
+           layout: each section is a vertical stack of controls + a
+           small uppercase label underneath, separated by 1px dividers.
+           All button IDs / data-attrs preserved from the previous
+           flat layout so the wiring code keeps working unchanged. -->
+      <div class="ws-ribbon" id="wsToolbarFmt">
+
+        <!-- History -->
+        <div class="ws-ribbon-group">
+          <div class="ws-ribbon-controls">
+            <button class="ws-btn ws-btn-icon" id="wsUndoBtn" title="Undo (Ctrl+Z)">&#x21A9;</button>
+            <button class="ws-btn ws-btn-icon" id="wsRedoBtn" title="Redo (Ctrl+Y)">&#x21AA;</button>
+          </div>
+          <div class="ws-ribbon-label">History</div>
+        </div>
+
+        <!-- Font -->
+        <div class="ws-ribbon-group">
+          <div class="ws-ribbon-controls">
+            <button class="ws-btn ws-fmt-toggle" id="wsBoldBtn" data-style="bold" title="Bold (Ctrl+B)"><b>B</b></button>
+            <button class="ws-btn ws-fmt-toggle" id="wsItalicBtn" data-style="italic" title="Italic (Ctrl+I)"><i>I</i></button>
+            <button class="ws-btn ws-fmt-toggle" id="wsUnderlineBtn" data-style="underline" title="Underline (Ctrl+U)"><u>U</u></button>
+            <div class="ws-color-dropdown" id="wsFillDropdown">
+              <button class="ws-btn ws-btn-icon ws-color-trigger" id="wsFillBtn" title="Fill color">
+                <span class="ws-color-icon">&#x25A0;</span>
+                <span class="ws-color-swatch" id="wsFillSwatch"></span>
+              </button>
+              <div class="ws-color-panel" id="wsFillPanel">
+                <div class="ws-color-grid" id="wsFillGrid"></div>
+                <div class="ws-color-recent-label">Recent</div>
+                <div class="ws-color-recent" id="wsFillRecent"></div>
+                <div class="ws-color-custom"><label>Custom <input type="color" id="wsFillCustom" value="#1e2130" /></label></div>
+              </div>
+            </div>
+            <div class="ws-color-dropdown" id="wsFontDropdown">
+              <button class="ws-btn ws-btn-icon ws-color-trigger" id="wsFontBtn" title="Font color">
+                <span class="ws-color-icon ws-color-icon-text">A</span>
+                <span class="ws-color-swatch" id="wsFontSwatch"></span>
+              </button>
+              <div class="ws-color-panel" id="wsFontPanel">
+                <div class="ws-color-grid" id="wsFontGrid"></div>
+                <div class="ws-color-recent-label">Recent</div>
+                <div class="ws-color-recent" id="wsFontRecent"></div>
+                <div class="ws-color-custom"><label>Custom <input type="color" id="wsFontCustom" value="#e4e6f0" /></label></div>
+              </div>
+            </div>
+          </div>
+          <div class="ws-ribbon-label">Font</div>
+        </div>
+
+        <!-- Alignment -->
+        <div class="ws-ribbon-group">
+          <div class="ws-ribbon-controls">
+            <button class="ws-btn ws-fmt-align" data-align="left" title="Align left">&#x2190;</button>
+            <button class="ws-btn ws-fmt-align" data-align="center" title="Align center">&#x2194;</button>
+            <button class="ws-btn ws-fmt-align" data-align="right" title="Align right">&#x2192;</button>
+            <button class="ws-btn ws-fmt-toggle" id="wsWrapBtn" data-style="wrap" title="Wrap text">&#x21B5;</button>
+            <button class="ws-btn" id="wsMergeBtn" title="Merge cells">&#x1F500;</button>
+            <button class="ws-btn" id="wsUnmergeBtn" title="Unmerge cells">&#x2702;</button>
+          </div>
+          <div class="ws-ribbon-label">Alignment</div>
+        </div>
+
+        <!-- Number -->
+        <div class="ws-ribbon-group">
+          <div class="ws-ribbon-controls">
+            <button class="ws-btn ws-btn-fmt" data-fmt="currency" title="Currency format">$</button>
+            <button class="ws-btn ws-btn-fmt" data-fmt="percent" title="Percent format">%</button>
+            <button class="ws-btn ws-btn-fmt" data-fmt="null" title="Clear number format">&times;</button>
+          </div>
+          <div class="ws-ribbon-label">Number</div>
+        </div>
+
+        <!-- Styles -->
+        <div class="ws-ribbon-group">
+          <div class="ws-ribbon-controls">
+            <div class="ws-color-dropdown" id="wsStyleDropdown">
+              <button class="ws-btn ws-btn-icon" id="wsStyleBtn" title="Cell styles">&#x1F3A8;</button>
+              <div class="ws-color-panel ws-style-panel" id="wsStylePanel"></div>
+            </div>
+            <button class="ws-btn ws-btn-icon" id="wsClearFmtBtn" title="Clear formatting">&#x2718;</button>
+          </div>
+          <div class="ws-ribbon-label">Styles</div>
+        </div>
+
+        <!-- Cells -->
+        <div class="ws-ribbon-group">
+          <div class="ws-ribbon-controls">
+            <button class="ws-btn" id="wsLinkBtn" title="Link cell to job field">&#x1F517;</button>
+            <button class="ws-btn" id="wsMakeTableBtn" onclick="window.wsMakeTable()" title="Convert selected range into a styled table">&#x1F5C2;</button>
+          </div>
+          <div class="ws-ribbon-label">Cells</div>
+        </div>
+
+        <!-- Editing -->
+        <div class="ws-ribbon-group">
+          <div class="ws-ribbon-controls">
+            <button class="ws-btn" id="wsAutoSumBtn" onclick="window.wsAutoSum()" title="AutoSum (Σ) — insert =SUM with auto-detected range">&#x03A3;</button>
+            <button class="ws-btn" id="wsSortAscBtn" onclick="window.wsSortAscHeader()" title="Sort range ascending">&#x2191;A</button>
+            <button class="ws-btn" id="wsSortDescBtn" onclick="window.wsSortDescHeader()" title="Sort range descending">&#x2193;Z</button>
+            <button class="ws-btn" id="wsFindBtn" onclick="window.wsOpenFindReplace()" title="Find &amp; Replace (Ctrl+F)">&#x1F50D;</button>
+            <select id="wsFreezeSelect" class="ws-select-compact" onchange="window.wsSetFreeze(this.value || null); this.value='';" title="Freeze panes">
+              <option value="">&#x2744;</option>
+              <option value="row">Top row</option>
+              <option value="col">First column</option>
+              <option value="both">Top row + first column</option>
+              <option value="">No freeze</option>
+            </select>
+          </div>
+          <div class="ws-ribbon-label">Editing</div>
+        </div>
+
         <span class="ws-toolbar-spacer"></span>
-        <button class="ws-btn" id="wsImportXlsxBtn" title="Import .xlsx as new sheets">&#x1F4E5;</button>
-        <input type="file" id="wsImportXlsxInput" accept=".xlsx,.xls,.csv" style="display:none;" />
-        <button class="ws-btn" id="wsClearBtn" title="Clear workspace">&#x1F5D1;</button>
-        <button class="ws-btn ws-btn-save" id="wsSaveBtn" title="Save workspace (Ctrl+S)">&#x1F4BE; Save</button>
-        <button class="ws-btn" id="wsNodeGraphBtn" title="Node Graph (Beta)">&#x1F4CA;</button>
-      </div>
-      <div class="ws-toolbar-fmt" id="wsToolbarFmt">
-        <button class="ws-btn ws-btn-icon" id="wsUndoBtn" title="Undo (Ctrl+Z)">&#x21A9;</button>
-        <button class="ws-btn ws-btn-icon" id="wsRedoBtn" title="Redo (Ctrl+Y)">&#x21AA;</button>
-        <span class="ws-separator"></span>
-        <button class="ws-btn ws-btn-fmt" data-fmt="currency" title="Currency format">$</button>
-        <button class="ws-btn ws-btn-fmt" data-fmt="percent" title="Percent format">%</button>
-        <button class="ws-btn ws-btn-fmt" data-fmt="null" title="Clear number format">&times;</button>
-        <span class="ws-separator"></span>
-        <button class="ws-btn ws-fmt-toggle" id="wsBoldBtn" data-style="bold" title="Bold (Ctrl+B)"><b>B</b></button>
-        <button class="ws-btn ws-fmt-toggle" id="wsItalicBtn" data-style="italic" title="Italic (Ctrl+I)"><i>I</i></button>
-        <button class="ws-btn ws-fmt-toggle" id="wsUnderlineBtn" data-style="underline" title="Underline (Ctrl+U)"><u>U</u></button>
-        <span class="ws-separator"></span>
-        <button class="ws-btn ws-fmt-align" data-align="left" title="Align left">&#x2190;</button>
-        <button class="ws-btn ws-fmt-align" data-align="center" title="Align center">&#x2194;</button>
-        <button class="ws-btn ws-fmt-align" data-align="right" title="Align right">&#x2192;</button>
-        <span class="ws-separator"></span>
-        <div class="ws-color-dropdown" id="wsFillDropdown">
-          <button class="ws-btn ws-btn-icon ws-color-trigger" id="wsFillBtn" title="Fill color">
-            <span class="ws-color-icon">&#x25A0;</span>
-            <span class="ws-color-swatch" id="wsFillSwatch"></span>
-          </button>
-          <div class="ws-color-panel" id="wsFillPanel">
-            <div class="ws-color-grid" id="wsFillGrid"></div>
-            <div class="ws-color-recent-label">Recent</div>
-            <div class="ws-color-recent" id="wsFillRecent"></div>
-            <div class="ws-color-custom"><label>Custom <input type="color" id="wsFillCustom" value="#1e2130" /></label></div>
+
+        <!-- File (right-aligned via spacer) -->
+        <div class="ws-ribbon-group">
+          <div class="ws-ribbon-controls">
+            <button class="ws-btn" id="wsImportXlsxBtn" title="Import .xlsx as new sheets">&#x1F4E5;</button>
+            <input type="file" id="wsImportXlsxInput" accept=".xlsx,.xls,.csv" style="display:none;" />
+            <button class="ws-btn" id="wsClearBtn" title="Clear workspace">&#x1F5D1;</button>
+            <button class="ws-btn ws-btn-save" id="wsSaveBtn" title="Save workspace (Ctrl+S)">&#x1F4BE;</button>
+            <button class="ws-btn" id="wsNodeGraphBtn" title="Node Graph (Beta)">&#x1F4CA;</button>
           </div>
+          <div class="ws-ribbon-label">File</div>
         </div>
-        <div class="ws-color-dropdown" id="wsFontDropdown">
-          <button class="ws-btn ws-btn-icon ws-color-trigger" id="wsFontBtn" title="Font color">
-            <span class="ws-color-icon ws-color-icon-text">A</span>
-            <span class="ws-color-swatch" id="wsFontSwatch"></span>
-          </button>
-          <div class="ws-color-panel" id="wsFontPanel">
-            <div class="ws-color-grid" id="wsFontGrid"></div>
-            <div class="ws-color-recent-label">Recent</div>
-            <div class="ws-color-recent" id="wsFontRecent"></div>
-            <div class="ws-color-custom"><label>Custom <input type="color" id="wsFontCustom" value="#e4e6f0" /></label></div>
-          </div>
-        </div>
-        <button class="ws-btn ws-btn-icon" id="wsClearFmtBtn" title="Clear formatting">&#x2718;</button>
-        <span class="ws-separator"></span>
-        <div class="ws-color-dropdown" id="wsStyleDropdown">
-          <button class="ws-btn ws-btn-icon" id="wsStyleBtn" title="Cell styles">&#x1F3A8; Style</button>
-          <div class="ws-color-panel ws-style-panel" id="wsStylePanel"></div>
-        </div>
-        <span class="ws-separator"></span>
-        <button class="ws-btn ws-fmt-toggle" id="wsWrapBtn" data-style="wrap" title="Wrap text">&#x21B5;</button>
-        <span class="ws-separator"></span>
-        <button class="ws-btn" id="wsMergeBtn" title="Merge cells">&#x1F500; Merge</button>
-        <button class="ws-btn" id="wsUnmergeBtn" title="Unmerge cells">&#x2702; Unmerge</button>
       </div>
       <div class="ws-link-panel" id="wsLinkPanel" style="display:none;">
         <div class="ws-link-header">

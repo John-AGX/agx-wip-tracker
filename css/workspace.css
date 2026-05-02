@@ -16,6 +16,67 @@
   flex-wrap: nowrap;
 }
 
+/* ── Excel-style Ribbon ─────────────────────────────────── */
+/* Single grouped toolbar row that mirrors Excel's Home tab. Each
+   .ws-ribbon-group is a column: controls on top, small uppercase
+   label underneath, separated from neighboring groups by a 1px
+   divider on the right edge. Lets the user scan the toolbar by
+   purpose (Font, Alignment, Number…) instead of one big flat
+   stripe of buttons. */
+.ws-ribbon {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  padding: 4px 4px 2px;
+  background: var(--surface2, #242836);
+  border: 1px solid var(--border, #2e3346);
+  border-top: none;
+  border-radius: 0 0 6px 6px;
+  flex-wrap: wrap;
+  /* Allow a horizontal scroll on narrow viewports rather than
+     wrapping groups in half — wrapping mid-group looks broken. */
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+.ws-ribbon-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 8px;
+  border-right: 1px solid var(--border, #2e3346);
+  /* Tighter min-width than groups deserve naturally so the dividers
+     hug the controls. */
+  min-width: 0;
+}
+.ws-ribbon-group:last-child {
+  border-right: none;
+}
+.ws-ribbon-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-bottom: 4px;
+  flex-wrap: nowrap;
+}
+.ws-ribbon-label {
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-dim, #8b90a5);
+  padding-top: 2px;
+  white-space: nowrap;
+  text-align: center;
+  width: 100%;
+}
+/* Spacer pushes the right-edge group (File) to the far right of
+   the ribbon while keeping it inside the wrapping flex layout. */
+.ws-ribbon .ws-toolbar-spacer {
+  flex: 1;
+  border-right: none;
+}
+
 /* Subsequent toolbar rows (data ops, file ops) share the same chrome
    but have no top radius — they stack flush against the formula bar
    row above them. Single-line layout: no wrap. */
