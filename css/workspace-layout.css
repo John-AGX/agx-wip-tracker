@@ -388,24 +388,21 @@ header .jh-job-info ~ #user-menu {
    - Top: strip starts flush against the header instead of 30px below.
    The 14px below preserves breathing room before the page content. */
 #jh-strip-detached {
-  /* main is the scroll container (overflow-y:auto). For sticky, top
-     measures from main's content viewport, NOT from page top. main
-     sits right below the header, so top:0 pins the strip at main's
-     top edge — which is right under the header. top:46px was a bug
-     leftover from when I forgot main owned the scroll. */
-  position: sticky;
-  top: 0;
-  z-index: 50;
-  margin: -30px -30px 18px;
+  /* The strip is now inserted as a sibling of <main> inside
+     .container — flex-column layout puts header → strip → main in
+     order so the strip naturally hugs the header's bottom edge with
+     no margin tricks or sticky positioning needed. width:100% spans
+     the full viewport since .container is also full width. */
+  flex: 0 0 auto;
+  width: 100%;
   padding: 10px 30px;
-  background: linear-gradient(180deg, var(--bg, #0f1117) 0%, rgba(0,0,0,0) 100%);
+  background: linear-gradient(180deg, var(--bg-dark, #0a0c12) 0%, var(--bg, #0f1117) 100%);
   border-top: 1px solid rgba(255,255,255,0.03);
   border-bottom: 1px solid rgba(255,255,255,0.06);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
+  box-sizing: border-box;
 }
 body.light-mode #jh-strip-detached {
-  background: linear-gradient(180deg, var(--surface2, #e8eaef) 0%, rgba(0,0,0,0) 100%);
+  background: linear-gradient(180deg, var(--surface2, #e8eaef) 0%, var(--bg, #f0f2f5) 100%);
   border-top-color: rgba(0,0,0,0.04);
   border-bottom-color: rgba(0,0,0,0.06);
 }

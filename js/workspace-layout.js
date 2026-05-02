@@ -259,11 +259,24 @@
     // is in the DOM from an interrupted render.)
 
     // ---- Metrics strip ----
-    // Lives in the detail view directly above the workspace grid so it spans
-    // the full content width with no competition from the nav. Inserted at
-    // the top of #wip-job-detail-view; cleanup removes it on tear-down.
+    // Inserted as a sibling of <main> inside .container so it sits
+    // directly between the header and the scrollable main area.
+    // Putting it INSIDE main (the previous setup) meant the strip
+    // had to fight main's 30px padding via negative margins, which
+    // never quite went flush against the header. As a sibling of
+    // main it's a regular block element in the column flex —
+    // header → strip → main — and naturally hugs the header's
+    // bottom edge with no margin tricks.
     strip.id = "jh-strip-detached";
-    detail.insertBefore(strip, detail.firstChild);
+    var appContainer = document.getElementById('app-container');
+    var mainEl = appContainer ? appContainer.querySelector('main') : null;
+    if (appContainer && mainEl) {
+      appContainer.insertBefore(strip, mainEl);
+    } else {
+      // Fallback to the legacy in-detail placement if the new
+      // siblings can't be located (e.g., page structure changed).
+      detail.insertBefore(strip, detail.firstChild);
+    }
 
     // Hide original job-detail-header in page content
     var origHeader = detail.querySelector(".job-detail-header");
