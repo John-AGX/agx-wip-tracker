@@ -151,16 +151,23 @@
   border-bottom-color: transparent;
   font-weight: 600;
 }
+/* "Horns" — a 3-sided open-top bracket framing the active tab. The
+   bottom edge is the underline; the left + right edges rise up 9px
+   on either side like little horns, tying the tab visually into
+   the page below. Open top so the tab "wears" the bracket from
+   underneath rather than being fully boxed in. */
 .ws-right-tab.active::after {
   content: '';
   position: absolute;
-  left: 8px;
-  right: 8px;
+  left: 4px;
+  right: 4px;
   bottom: -1px;
-  height: 2px;
-  background: #5ddb7e;
-  box-shadow: 0 0 8px rgba(93, 219, 126, 0.55);
-  border-radius: 1px;
+  height: 9px;
+  border: 2px solid #5ddb7e;
+  border-top: none;
+  border-radius: 0 0 4px 4px;
+  background: transparent;
+  box-shadow: 0 0 8px rgba(93, 219, 126, 0.5);
   pointer-events: none;
 }
 
