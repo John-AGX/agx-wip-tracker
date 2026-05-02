@@ -1631,6 +1631,12 @@
     if (!target) return;
     syncGridToActiveSheet();
     workbook.activeSheetId = sheetId;
+    // Hide the Link panel on sheet switch — it pins itself open
+    // on click, but the link options it shows are scoped to the
+    // PREVIOUS sheet's selection. Letting it persist across tabs
+    // shows job-field chips that don't apply to the new active cell.
+    var lp = document.getElementById('wsLinkPanel');
+    if (lp) lp.style.display = 'none';
     loadSheetIntoGrid(target);
     workbook.dirty = true;
     grid.dirty = !isEmbedSheet(target);
@@ -1784,13 +1790,13 @@
         syncGridToActiveSheet();
         const baseName = file.name.replace(/\.[^.]+$/, '');
         let added = 0;
-        // Multi-sheet xlsx files behave like a workbook themselves —
-        // ALWAYS prefix the file name so the resulting AGX tabs stay
-        // visually grouped ("Q1 · Sales", "Q1 · Costs") and the user
-        // can see at a glance which sheets came from which import.
-        // Single-sheet files don't need the prefix; the bare sheet
-        // name reads cleaner.
+        // Multi-sheet xlsx imports are now grouped under one workbook
+        // entry — single tab in the bottom bar, with the inner sheets
+        // accessible via a secondary tab strip above the grid.
+        // Single-sheet xlsx → standalone tab as before (no group
+        // wrapper makes sense for a one-sheet file).
         const isMulti = wb.SheetNames.length > 1;
+        const groupId = isMulti ? ('wbgrp_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6)) : null;
         // Find the right insertion index — keep imported sheets
         // grouped together at the end of editable tabs but before
         // any pinned built-ins (Detailed Costs, Attachments).
@@ -1799,12 +1805,13 @@
         wb.SheetNames.forEach(function(srcName) {
           const ws = wb.Sheets[srcName];
           if (!ws) return;
-          // Multi-sheet → always prefix with file name. Single-sheet
-          // → bare name; collision-prefix only on conflict.
-          let name = isMulti ? (baseName + ' · ' + srcName) : srcName;
+          // Inside a workbook group, sheet names keep their original
+          // bare form (e.g. "W3 As Sold Budget") since the workbook
+          // name on the outer tab provides the parent context. For
+          // single-sheet imports keep the standalone naming.
+          let name = srcName;
           if (workbook.sheets.some(s => s.name === name)) {
-            // Collision after the standard naming rule — append (n)
-            // until we find a free slot.
+            // Collision — append (n) until we find a free slot.
             let collisionN = 2;
             const stem = name;
             while (workbook.sheets.some(s => s.name === name)) {
@@ -1817,6 +1824,12 @@
             // action can find every sheet from a given file.
             sheet.sourceFile = file.name;
             sheet.sourceSheetName = srcName;
+            // Workbook grouping — both fields persist through save/
+            // load so the group survives reloads.
+            if (groupId) {
+              sheet.workbookGroupId = groupId;
+              sheet.workbookGroupName = baseName;
+            }
             workbook.sheets.splice(insertAt, 0, sheet);
             insertAt++;
             added++;
@@ -2306,6 +2319,11 @@
         </div>
         <div class="ws-link-options" id="wsLinkOptions"></div>
       </div>
+      <!-- Inner workbook tabs — appears only when the active sheet
+           belongs to a multi-sheet xlsx import. Lists the workbook's
+           sheets in their original order so the user can navigate
+           between them without leaving the imported workbook. -->
+      <div class="ws-workbook-inner-tabs" id="wsWorkbookInnerTabs" style="display:none;"></div>
       <div class="ws-grid-wrapper" id="wsGridWrapper">
         <table class="ws-grid" id="wsGrid"></table>
       </div>
@@ -2329,7 +2347,40 @@
     const wrap = document.getElementById('wsSheetTabs');
     if (!wrap) return;
     let html = '<div class="ws-sheet-tabs-list">';
+
+    // Build a map: groupId → the active sheet within that group. When
+    // an active sheet belongs to a group, we want the group tab to
+    // render as "active" so the user can see which workbook is open.
+    var activeSheet = workbook.sheets.find(function(s) { return s.id === workbook.activeSheetId; });
+    var activeGroupId = activeSheet ? activeSheet.workbookGroupId : null;
+
+    // Track which group ids we've already rendered so multi-sheet
+    // workbook imports collapse to a single tab in the bottom bar.
+    var renderedGroups = new Set();
+
     workbook.sheets.forEach(function(s) {
+      // Imported workbook sheet: render the GROUP tab once, in place
+      // of the first sheet in that group. Subsequent sheets of the
+      // same group skip — they'll appear in the inner strip instead.
+      if (s.workbookGroupId) {
+        if (renderedGroups.has(s.workbookGroupId)) return;
+        renderedGroups.add(s.workbookGroupId);
+        var isActiveGroup = (s.workbookGroupId === activeGroupId);
+        // Sheet count in the group — small badge so the user sees
+        // there's more behind the workbook tab.
+        var groupSize = workbook.sheets.reduce(function(acc, x) {
+          return acc + (x.workbookGroupId === s.workbookGroupId ? 1 : 0);
+        }, 0);
+        html += '<div class="ws-sheet-tab ws-workbook-tab' + (isActiveGroup ? ' active' : '') +
+          '" data-workbook-group="' + s.workbookGroupId +
+          '" title="' + escapeAttr(s.workbookGroupName || 'Workbook') + '">' +
+          '<span class="ws-sheet-tab-icon" aria-hidden="true">&#x1F4D2;</span> ' +
+          '<span class="ws-sheet-tab-name">' + escapeHTML(s.workbookGroupName || 'Workbook') + '</span>' +
+          '<span class="ws-workbook-tab-count">' + groupSize + '</span>' +
+        '</div>';
+        return;
+      }
+
       const active = s.id === workbook.activeSheetId;
       // Pinned built-in views (e.g. Detailed Costs, Attachments) get
       // a marker icon and a different class so the context menu can
@@ -2353,6 +2404,28 @@
     html += '<button class="ws-sheet-tab-add" id="wsAddSheetBtn" title="Add sheet">+</button>';
     html += '</div>';
     wrap.innerHTML = html;
+
+    // Workbook group tabs — click activates the group's last-active
+    // sheet (or the first sheet in the group if none has been
+    // visited yet). Each workbook tracks lastActiveSheetId so the
+    // user returns to where they left off.
+    wrap.querySelectorAll('.ws-workbook-tab').forEach(function(tab) {
+      var groupId = tab.getAttribute('data-workbook-group');
+      tab.addEventListener('click', function() {
+        // Already on a sheet in this group? No-op (avoid re-render).
+        if (activeGroupId === groupId) return;
+        var groupSheets = workbook.sheets.filter(function(s) { return s.workbookGroupId === groupId; });
+        if (!groupSheets.length) return;
+        var lastId = workbook.workbookGroupActive && workbook.workbookGroupActive[groupId];
+        var target = lastId && groupSheets.find(function(s) { return s.id === lastId; });
+        if (!target) target = groupSheets[0];
+        switchSheet(target.id);
+      });
+    });
+
+    // Render the inner-tab strip whenever the active sheet belongs
+    // to a workbook group. Hidden otherwise.
+    renderWorkbookInnerTabs();
     // Wire interactions
     wrap.querySelectorAll('.ws-sheet-tab').forEach(function(tab) {
       const id = tab.dataset.sheetId;
@@ -2395,6 +2468,53 @@
     });
     const addBtn = wrap.querySelector('#wsAddSheetBtn');
     if (addBtn) addBtn.addEventListener('click', function() { addSheet(); });
+  }
+
+  // Renders the secondary tab strip that appears above the grid when
+  // the active sheet belongs to a multi-sheet xlsx import. Lists every
+  // sheet in the same workbookGroupId so the user can flip between
+  // them without losing the workbook context. Hidden when active sheet
+  // is standalone.
+  function renderWorkbookInnerTabs() {
+    var strip = document.getElementById('wsWorkbookInnerTabs');
+    if (!strip) return;
+    var active = workbook.sheets.find(function(s) { return s.id === workbook.activeSheetId; });
+    if (!active || !active.workbookGroupId) {
+      strip.style.display = 'none';
+      strip.innerHTML = '';
+      return;
+    }
+    var groupId = active.workbookGroupId;
+    var siblings = workbook.sheets.filter(function(s) { return s.workbookGroupId === groupId; });
+    if (!siblings.length) {
+      strip.style.display = 'none';
+      return;
+    }
+    // Remember which sheet was last active in this group so the
+    // outer workbook tab returns the user to the same place when
+    // they leave + come back.
+    if (!workbook.workbookGroupActive) workbook.workbookGroupActive = {};
+    workbook.workbookGroupActive[groupId] = active.id;
+
+    var html = '<div class="ws-workbook-inner-tabs-list">';
+    html += '<span class="ws-workbook-inner-tabs-label" title="' +
+      escapeAttr(active.workbookGroupName || 'Workbook') + '">&#x1F4D2; ' +
+      escapeHTML(active.workbookGroupName || 'Workbook') + '</span>';
+    siblings.forEach(function(s) {
+      var on = (s.id === active.id);
+      html += '<div class="ws-workbook-inner-tab' + (on ? ' active' : '') +
+        '" data-sheet-id="' + s.id + '" title="' + escapeAttr(s.name) + '">' +
+        escapeHTML(s.name) +
+      '</div>';
+    });
+    html += '</div>';
+    strip.innerHTML = html;
+    strip.style.display = '';
+
+    strip.querySelectorAll('.ws-workbook-inner-tab').forEach(function(tab) {
+      var id = tab.getAttribute('data-sheet-id');
+      tab.addEventListener('click', function() { switchSheet(id); });
+    });
   }
 
   // Light HTML escapers for sheet names. The tab text is user-typed so

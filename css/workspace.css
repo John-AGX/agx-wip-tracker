@@ -997,6 +997,90 @@
   font-size: 11px;
   opacity: 0.85;
 }
+
+/* Workbook tab — represents a multi-sheet xlsx import in the bottom
+   strip. Folder icon + sheet count badge so the user sees there's
+   more behind the tab. AGX-green accent so it stands out from
+   regular sheets and pinned built-ins. */
+.ws-workbook-tab {
+  border-color: rgba(27, 133, 65, 0.45);
+  color: #a8dcb6;
+  background: rgba(27, 133, 65, 0.06);
+}
+.ws-workbook-tab:hover {
+  border-color: rgba(27, 133, 65, 0.7);
+  color: #d6f0dd;
+}
+.ws-workbook-tab.active {
+  color: #5ddb7e;
+  border-color: rgba(27, 133, 65, 0.85);
+  background: var(--surface, #181820);
+  border-bottom-color: var(--surface, #181820);
+}
+.ws-workbook-tab-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 6px;
+  padding: 0 6px;
+  height: 16px;
+  background: rgba(27, 133, 65, 0.25);
+  color: #5ddb7e;
+  border-radius: 8px;
+  font-size: 9px;
+  font-weight: 700;
+  min-width: 16px;
+}
+
+/* Inner workbook tabs — secondary strip above the grid that lets the
+   user navigate between sheets within an active workbook. Sits flush
+   below the toolbar; its tabs are smaller and lighter than the
+   bottom main strip so they read as nested. */
+.ws-workbook-inner-tabs {
+  background: var(--bg, #0f1117);
+  border: 1px solid var(--border, #2e3346);
+  border-top: none;
+  padding: 4px 8px;
+}
+.ws-workbook-inner-tabs-list {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-wrap: wrap;
+}
+.ws-workbook-inner-tabs-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #5ddb7e;
+  margin-right: 8px;
+  padding: 4px 8px;
+  border-right: 1px solid var(--border, #2e3346);
+}
+.ws-workbook-inner-tab {
+  padding: 4px 12px;
+  font-size: 11px;
+  color: var(--text-dim, #8b90a5);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px 4px 0 0;
+  cursor: pointer;
+  transition: all 0.12s;
+  white-space: nowrap;
+  position: relative;
+}
+.ws-workbook-inner-tab:hover {
+  color: var(--text, #e4e6f0);
+  background: rgba(255, 255, 255, 0.04);
+}
+.ws-workbook-inner-tab.active {
+  color: #5ddb7e;
+  background: var(--surface, #1a1d27);
+  border-color: var(--border, #2e3346);
+  border-bottom-color: var(--surface, #1a1d27);
+  font-weight: 600;
+}
 /* Pinned built-in views (e.g. Detailed Costs, Attachments) — each
    built-in gets its own accent color so the user can tell them
    apart at a glance. Default pinned styling falls back to the blue
