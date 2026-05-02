@@ -371,17 +371,16 @@
 }
 /* Strip pins right under the slim 46px header (sticky top:46) so the
    metrics stay visible while the user scrolls long job-detail content.
-   Negative horizontal margin pulls it past main's 30px padding so the
-   gradient bleeds edge-to-edge — the old "trimmed gradient with
-   rounded corners floating in the middle" look is gone. Inside the
-   band, an inner --max-width 1600px wrapper keeps the cards aligned
-   with the rest of the page content. */
+   Negative margin pulls past main's 30px padding on ALL FOUR sides:
+   - Horizontal: gradient bleeds edge-to-edge to the viewport.
+   - Top: strip starts flush against the header instead of 30px below.
+   The 14px below preserves breathing room before the page content. */
 #jh-strip-detached {
   position: sticky;
   top: 46px;
   z-index: 50;
-  margin: 0 -30px 14px;
-  padding: 12px 30px;
+  margin: -30px -30px 18px;
+  padding: 10px 30px;
   background: linear-gradient(180deg, var(--bg, #0f1117) 0%, rgba(0,0,0,0) 100%);
   border-top: 1px solid rgba(255,255,255,0.03);
   border-bottom: 1px solid rgba(255,255,255,0.06);
