@@ -122,57 +122,28 @@
   font-size: 13px;
   font-weight: 500;
   font-family: inherit;
-  /* 1px transparent border so the active state's visible border doesn't
-     shift the tab's width / height. Keeps inactive vs active layout
-     identical. */
-  border: 1px solid transparent;
+  border: none;
   background: transparent;
   color: var(--text-dim, #8b90a5);
   cursor: pointer;
-  transition: all 0.3s ease;
+  transition: color 0.15s;
   white-space: nowrap;
   border-radius: 0;
   text-align: center;
-  /* position:relative so the active ::after lime accent strip can be
-     absolutely-positioned along the tab's top edge. */
   position: relative;
 }
 
 .ws-right-tab:hover {
-  background: transparent;
   color: var(--text, #e4e6f0);
 }
 
+/* Sliding indicator — the visual is a single .agx-tab-slider element
+   shared across the whole bar (positioned by tab-slider.js). Per-tab
+   styling here is just the text-color change so the active tab reads
+   as picked while the slider arrives. */
 .ws-right-tab.active {
-  /* "Folder tab" — active tab fuses with the content panel below.
-     Matching surface fill, 1px border on top + sides, rounded top
-     corners. bottom: -1px + transparent bottom border lets it sit on
-     top of the bar's hairline, giving the illusion that the tab is
-     pulled out of the content area below. */
-  background: var(--surface, #1a1d27);
   color: #5ddb7e;
   font-weight: 600;
-  text-shadow: none;
-  border-color: var(--border, #2e3346);
-  border-bottom-color: transparent;
-  border-radius: 10px 10px 0 0;
-  bottom: -1px;
-  z-index: 2;
-}
-/* Lime accent stripe along the very top edge of the active tab —
-   reads like the colored label tab on a file folder. Tight glow
-   so it pops without dominating. */
-.ws-right-tab.active::after {
-  content: '';
-  position: absolute;
-  left: -1px;
-  right: -1px;
-  top: -1px;
-  height: 2px;
-  background: #5ddb7e;
-  border-radius: 10px 10px 0 0;
-  box-shadow: 0 0 8px rgba(93, 219, 126, 0.5);
-  pointer-events: none;
 }
 
 /* ââ Right Tab Content âââââââââââââââââââââââââââââââââââââ */
