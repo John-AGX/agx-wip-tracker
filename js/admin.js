@@ -855,8 +855,9 @@
             '</div>' +
           '</div>' +
           '<div class="form-group">' +
-            '<label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;text-transform:none !important;letter-spacing:normal !important;">' +
-              '<input type="checkbox" id="matEd_hidden" /> Hide from AG suggestions (noise / one-off / wrong)' +
+            '<label class="agx-check-row">' +
+              '<input type="checkbox" id="matEd_hidden" />' +
+              '<span>Hide from AG suggestions <span class="agx-check-hint">(noise / one-off / wrong)</span></span>' +
             '</label>' +
           '</div>' +
           '<div class="form-group">' +

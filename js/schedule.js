@@ -1044,11 +1044,10 @@
               '</div>' +
             '</div>' +
             '<div title="When ON: Sat/Sun count toward the entry\'s span (e.g. 5 days starting Friday → ends Tuesday). When OFF: weekends are skipped (5 days starting Friday → ends Thursday).">' +
-              '<label style="display:flex;align-items:center;gap:6px;cursor:pointer;text-transform:none;letter-spacing:normal;font-weight:500;color:var(--text,#e4e6f0);">' +
-                '<input type="checkbox" id="schEditWeekends" ' + (includesWeekends ? 'checked' : '') + ' style="width:auto;flex:0 0 auto;" />' +
-                '<span>Count weekends as production days</span>' +
+              '<label class="agx-check-row">' +
+                '<input type="checkbox" id="schEditWeekends" ' + (includesWeekends ? 'checked' : '') + ' />' +
+                '<span>Count weekends as production days <span class="agx-check-hint">— affects how the production-days count expands across the calendar.</span></span>' +
               '</label>' +
-              '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:4px;line-height:1.3;">Affects how the production-days count expands across the calendar.</div>' +
             '</div>' +
             '<div>' +
               '<label>Crew (click to assign)</label>' +
@@ -1077,11 +1076,10 @@
             // array (PATCH compares pre/post crew), so flipping this
             // ON during a routine edit only notifies *added* members.
             '<div title="Email crew about this assignment. Default ON for new entries, OFF for edits — server only emails newly-added crew members regardless.">' +
-              '<label style="display:flex;align-items:center;gap:6px;cursor:pointer;text-transform:none;letter-spacing:normal;font-weight:500;color:var(--text,#e4e6f0);">' +
-                '<input type="checkbox" id="schEditNotify" ' + (!isEdit ? 'checked' : '') + ' style="width:auto;flex:0 0 auto;" />' +
-                '<span>&#x1F4E7; Notify ' + (isEdit ? 'newly-added' : 'assigned') + ' crew via email</span>' +
+              '<label class="agx-check-row">' +
+                '<input type="checkbox" id="schEditNotify" ' + (!isEdit ? 'checked' : '') + ' />' +
+                '<span>&#x1F4E7; Notify ' + (isEdit ? 'newly-added' : 'assigned') + ' crew via email <span class="agx-check-hint">— only sent to newly-added members.</span></span>' +
               '</label>' +
-              '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:4px;line-height:1.3;">Only sent to crew members who are new on this save. Existing crew never re-emailed unless removed and re-added.</div>' +
             '</div>' +
           '</div>' +
           '<div class="modal-footer" style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;">' +

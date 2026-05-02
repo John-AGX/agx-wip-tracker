@@ -535,6 +535,39 @@
             accent-color: #5ddb7e;
         }
 
+        /* Reusable checkbox-with-label row.
+           Use whenever you have a single <input type="checkbox"> sitting
+           next to descriptive text. The global label{} rule
+           (display:block + uppercase + 10px + bold + letter-spacing) and
+           the global input{width:100%} rule wreck native checkbox layout
+           — this class undoes both within its scope. */
+        label.agx-check-row {
+            display: flex;
+            align-items: flex-start;
+            gap: 6px;
+            font-size: 11px;
+            font-weight: 500;
+            line-height: 1.35;
+            text-transform: none;
+            letter-spacing: normal;
+            color: var(--text, #fff);
+            cursor: pointer;
+            margin: 0;
+        }
+        label.agx-check-row input[type="checkbox"],
+        label.agx-check-row input[type="radio"] {
+            width: auto;
+            flex: 0 0 auto;
+            margin: 1px 0 0 0;
+            padding: 0;
+            background: transparent;
+            border: none;
+        }
+        label.agx-check-row .agx-check-hint {
+            color: var(--text-dim, #888);
+            font-weight: normal;
+        }
+
         /* Capability row in the Role editor. Beats the global label rule
            above for these specific rows so the cap text doesn't render as
            tiny uppercase dimmed metadata. */
