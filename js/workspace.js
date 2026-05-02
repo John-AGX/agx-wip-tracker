@@ -1954,15 +1954,44 @@
       // background. For the common "filled cell" case fgColor is what
       // the user actually sees, so prefer it.
       var bg = hadColor(s.fill.fgColor) || hadColor(s.fill.bgColor);
-      // Skip fully white / theme-default fills so unstyled cells stay
-      // unstyled (Excel sometimes writes "ffffff" everywhere).
-      if (bg && bg !== '#ffffff' && bg !== '#000000') out.bg = bg;
+      // Skip fully white / theme-default fills (Excel sometimes writes
+      // "ffffff" on every cell). Black fills ARE preserved — they're
+      // deliberate dividers / separators in construction takeoffs and
+      // dropping them loses an important visual cue.
+      if (bg && bg !== '#ffffff') out.bg = bg;
     }
     if (s.alignment) {
       if (typeof s.alignment.horizontal === 'string' && /^(left|center|right)$/i.test(s.alignment.horizontal)) {
         out.align = s.alignment.horizontal.toLowerCase();
       }
       if (s.alignment.wrapText) out.wrap = true;
+    }
+    // Borders — translate the four-side xlsx border object into a flat
+    // {top,right,bottom,left} map of {style,width,color}. Common xlsx
+    // styles (thin/medium/thick/dashed/dotted/double) get mapped to
+    // their CSS equivalents. buildCellStyle then renders each side as
+    // border-<side> inline so individual edges land in the right cell.
+    if (s.border) {
+      var styleMap = {
+        thin:           { style: 'solid',  width: 1 },
+        hair:           { style: 'solid',  width: 1 },
+        medium:         { style: 'solid',  width: 2 },
+        thick:          { style: 'solid',  width: 3 },
+        dashed:         { style: 'dashed', width: 1 },
+        mediumDashed:   { style: 'dashed', width: 2 },
+        dotted:         { style: 'dotted', width: 1 },
+        double:         { style: 'double', width: 3 }
+      };
+      var bord = {};
+      ['top', 'right', 'bottom', 'left'].forEach(function(side) {
+        var b = s.border[side];
+        if (b && b.style && b.style !== 'none') {
+          var bc = hadColor(b.color) || '#000000';
+          var m = styleMap[b.style] || { style: 'solid', width: 1 };
+          bord[side] = { style: m.style, width: m.width, color: bc };
+        }
+      });
+      if (Object.keys(bord).length) out.borders = bord;
     }
     var anyKey = Object.keys(out).length > 0;
     return anyKey ? out : null;
@@ -2194,6 +2223,19 @@
     // hand-typed cells.
     if (typeof s.fontSize === 'number' && s.fontSize > 0) {
       st += 'font-size:' + s.fontSize + 'px;';
+    }
+    // Per-side borders from xlsx import. Each side overrides the
+    // default grid border on that edge only — keeps the cell looking
+    // like the source spreadsheet (heavy section dividers, thin row
+    // separators, etc.). Inline style wins over the .ws-cell class
+    // border by specificity.
+    if (s.borders) {
+      ['top', 'right', 'bottom', 'left'].forEach(function(side) {
+        var b = s.borders[side];
+        if (b) {
+          st += 'border-' + side + ':' + b.width + 'px ' + b.style + ' ' + b.color + ';';
+        }
+      });
     }
     return st;
   }
