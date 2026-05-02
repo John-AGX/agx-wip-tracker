@@ -1010,6 +1010,56 @@
       };
     }
 
+    // Group same-named proposals into a compact tile grid when 3+ of
+    // the same tool come back in one batch (e.g. five identical
+    // "Assign QB line" warnings stacking up). Tiles still expose the
+    // same `[data-card-*]` selectors so answer/markCardDone work
+    // unchanged. Maps tool name → grid container element so all
+    // siblings drop into the same grid.
+    var GROUP_THRESHOLD = 3;
+    var GROUPABLE = { assign_qb_line: 1, set_node_value: 1, create_node: 1, wire_nodes: 1 };
+    var nameCounts = {};
+    toolUses.forEach(function(tu) { nameCounts[tu.name] = (nameCounts[tu.name] || 0) + 1; });
+    var groupGrids = {};   // name -> grid div
+    var groupHeaders = {}; // name -> header div (for count refresh + bulk buttons)
+    function shouldGroup(tu) {
+      return GROUPABLE[tu.name] && nameCounts[tu.name] >= GROUP_THRESHOLD;
+    }
+    function groupHeadingFor(name) {
+      // Mirror the heading text used in renderProposalCard so the
+      // grouped header reads the same as the individual cards would.
+      switch (name) {
+        case 'assign_qb_line':  return '&#x1F517; Assign QB line';
+        case 'set_node_value':  return '&#x1F4B5; Set node value';
+        case 'create_node':     return '&#x2795; Create node';
+        case 'wire_nodes':      return '&#x1F50C; Wire nodes';
+        default: return name;
+      }
+    }
+    function ensureGroup(name) {
+      if (groupGrids[name]) return groupGrids[name];
+      var box = document.createElement('div');
+      box.style.cssText = 'border:1px solid var(--border,#2e3346);border-left:3px solid #4f8cff;border-radius:6px;background:rgba(79,140,255,0.04);padding:8px 10px;display:flex;flex-direction:column;gap:8px;';
+      var header = document.createElement('div');
+      header.style.cssText = 'display:flex;align-items:center;gap:8px;font-size:11px;color:var(--text-dim,#aaa);flex-wrap:wrap;';
+      header.innerHTML =
+        '<span style="font-weight:700;color:#4f8cff;">' + groupHeadingFor(name) + '</span>' +
+        '<span data-group-count style="background:rgba(79,140,255,0.18);color:#4f8cff;padding:1px 7px;border-radius:9px;font-weight:700;font-size:10px;">× ' + nameCounts[name] + '</span>' +
+        '<button data-group-approve class="success small" style="padding:3px 10px;font-size:10px;margin-left:auto;">&check; Approve all</button>' +
+        '<button data-group-reject class="ghost small" style="padding:3px 10px;font-size:10px;">&times; Reject all</button>';
+      box.appendChild(header);
+      var grid = document.createElement('div');
+      // Tile grid — Google-apps-launcher style. Auto-fills as wide as
+      // the panel allows; tiles wrap onto new rows. min 150px keeps the
+      // smallest summary readable.
+      grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px;';
+      box.appendChild(grid);
+      propContainer.appendChild(box);
+      groupGrids[name] = grid;
+      groupHeaders[name] = header;
+      return grid;
+    }
+
     var cards = [];
     toolUses.forEach(function(tu, i) {
       // Read-only / auto-apply tools render as a tight chip and run
@@ -1047,12 +1097,63 @@
         }
         return; // skip the approval-card path entirely
       }
-      var card = renderProposalCard(tu);
+      var card;
+      if (shouldGroup(tu)) {
+        card = renderProposalTile(tu);
+        ensureGroup(tu.name).appendChild(card);
+      } else {
+        card = renderProposalCard(tu);
+        propContainer.appendChild(card);
+      }
       card.querySelector('[data-card-approve]').onclick = function() { answer(i, true, card); };
       card.querySelector('[data-card-reject]').onclick = function() { answer(i, false, card); };
-      propContainer.appendChild(card);
       cards.push(card);
       attachTrustCountdown(card, i, tu);
+    });
+
+    // Wire group-level Approve/Reject — fires answer() for every
+    // pending tile in this group only. (The top-level "Approve all"
+    // at totalCount level still applies across the whole batch.)
+    Object.keys(groupHeaders).forEach(function(name) {
+      var hdr = groupHeaders[name];
+      function refreshGroupCount() {
+        var span = hdr.querySelector('[data-group-count]');
+        if (!span) return;
+        var pending = 0;
+        cards.forEach(function(c, j) {
+          if (toolUses[j].name === name && !isCardAnswered(c)) pending++;
+        });
+        if (pending <= 0) {
+          // Hide group buttons when nothing left to act on; keep the
+          // header label so the user still sees what got done.
+          var apr = hdr.querySelector('[data-group-approve]');
+          var rjr = hdr.querySelector('[data-group-reject]');
+          if (apr) apr.remove();
+          if (rjr) rjr.remove();
+          span.textContent = 'all answered';
+        } else {
+          span.textContent = pending + ' pending';
+        }
+      }
+      hdr.querySelector('[data-group-approve]').onclick = function() {
+        cards.forEach(function(c, j) {
+          if (toolUses[j].name === name && !isCardAnswered(c)) answer(j, true, c);
+        });
+        refreshGroupCount();
+      };
+      hdr.querySelector('[data-group-reject]').onclick = function() {
+        cards.forEach(function(c, j) {
+          if (toolUses[j].name === name && !isCardAnswered(c)) answer(j, false, c);
+        });
+        refreshGroupCount();
+      };
+      // Update the count when tiles get answered individually too.
+      groupGrids[name].addEventListener('click', function(e) {
+        if (e.target.matches('[data-card-approve],[data-card-reject]')) {
+          // Defer to after answer() runs (it removes the actions row).
+          setTimeout(refreshGroupCount, 0);
+        }
+      });
     });
     scrollToBottom();
   }
@@ -2008,6 +2109,97 @@
       '</div>';
 
     return card;
+  }
+
+  // Compact tile variant of the approval card. Used when 3+ proposals
+  // of the same tool name come back in a single batch (e.g. five
+  // identical "Assign QB line — server still has it" warnings). The
+  // tile keeps the same `[data-card-*]` selectors so the existing
+  // answer/markCardDone/isCardAnswered logic works unchanged — just a
+  // tighter render. One- or two-line summary + small ✓/× buttons.
+  function renderProposalTile(tu) {
+    var tile = document.createElement('div');
+    tile.style.cssText = 'background:rgba(255,255,255,0.04);border:1px solid var(--border,#333);border-left:3px solid #4f8cff;border-radius:5px;padding:6px 8px;display:flex;flex-direction:column;gap:4px;min-width:0;';
+
+    var input = tu.input || {};
+    var summary = '';
+    var fmtMoney = function(n) { return '$' + Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 }); };
+
+    if (tu.name === 'assign_qb_line') {
+      var lines = (window.appData && appData.qbCostLines) || [];
+      var line = lines.find(function(l) { return l.id === input.line_id; });
+      var graphsT = {};
+      try { graphsT = JSON.parse(localStorage.getItem('agx-nodegraphs') || '{}'); } catch (e) {}
+      var jidT = (window.appState && appState.currentJobId) || null;
+      var nodesT = (jidT && graphsT[jidT] && graphsT[jidT].nodes) || [];
+      var nodeT = nodesT.find(function(n) { return n.id === input.node_id; });
+      var nodeLabel = nodeT ? (nodeT.label || nodeT.type) : input.node_id;
+      if (line) {
+        summary =
+          '<div style="font-size:11px;color:var(--text,#fff);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' +
+            escapeHTMLLocal(line.vendor || '(no vendor)') + ' &middot; ' + fmtMoney(line.amount) +
+          '</div>' +
+          '<div style="font-size:10px;color:var(--text-dim,#aaa);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' +
+            '&rarr; ' + escapeHTMLLocal(nodeLabel) +
+          '</div>';
+      } else {
+        summary =
+          '<div style="font-size:11px;color:#fbbf24;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">QB line not found locally</div>' +
+          '<div style="font-size:10px;color:var(--text-dim,#aaa);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' +
+            '&rarr; ' + escapeHTMLLocal(nodeLabel) +
+          '</div>';
+      }
+    } else if (tu.name === 'set_node_value') {
+      var nv = (typeof NG !== 'undefined' && NG.nodes) ? NG.nodes() : [];
+      var nvN = nv.find(function(n) { return n.id === input.node_id; });
+      summary =
+        '<div style="font-size:11px;color:var(--text,#fff);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' +
+          escapeHTMLLocal(nvN ? (nvN.label || nvN.type) : input.node_id) +
+        '</div>' +
+        '<div style="font-size:10px;color:var(--text-dim,#aaa);">' +
+          (nvN ? fmtMoney(nvN.value || 0) + ' &rarr; ' : '') +
+          '<strong style="color:#34d399;">' + fmtMoney(input.amount) + '</strong>' +
+        '</div>';
+    } else if (tu.name === 'create_node') {
+      var cnType2 = input.node_type || input.type || '?';
+      summary =
+        '<div style="font-size:11px;color:var(--text,#fff);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' +
+          escapeHTMLLocal(input.label || '(unnamed)') +
+        '</div>' +
+        '<div style="font-size:10px;color:var(--text-dim,#aaa);">' +
+          escapeHTMLLocal(cnType2) +
+          (input.value != null ? ' &middot; ' + fmtMoney(input.value) : '') +
+        '</div>';
+    } else if (tu.name === 'wire_nodes') {
+      var graphsW = {};
+      try { graphsW = JSON.parse(localStorage.getItem('agx-nodegraphs') || '{}'); } catch (e) {}
+      var jidW = (window.appState && appState.currentJobId) || null;
+      var nodesW = (jidW && graphsW[jidW] && graphsW[jidW].nodes) || [];
+      var fromW = nodesW.find(function(n) { return n.id === input.from_node_id; });
+      var toW = nodesW.find(function(n) { return n.id === input.to_node_id; });
+      summary =
+        '<div style="font-size:11px;color:var(--text,#fff);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' +
+          '<strong>' + escapeHTMLLocal(fromW ? (fromW.label || fromW.type) : input.from_node_id) + '</strong>' +
+          ' &rarr; <strong>' + escapeHTMLLocal(toW ? (toW.label || toW.type) : input.to_node_id) + '</strong>' +
+        '</div>';
+    } else {
+      // Fallback for any other groupable tool — show name + a small
+      // signature so the user can at least tell tiles apart.
+      var sig = input.label || input.name || input.id || JSON.stringify(input).slice(0, 40);
+      summary =
+        '<div style="font-size:11px;color:var(--text,#fff);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' +
+          escapeHTMLLocal(String(sig)) +
+        '</div>';
+    }
+
+    tile.innerHTML =
+      '<div data-card-status style="font-size:10px;font-weight:600;min-height:0;"></div>' +
+      summary +
+      '<div data-card-actions style="display:flex;gap:4px;margin-top:2px;">' +
+        '<button data-card-approve class="success small" title="Approve" style="padding:2px 8px;font-size:11px;flex:1;">&check;</button>' +
+        '<button data-card-reject class="ghost small" title="Reject" style="padding:2px 8px;font-size:11px;flex:1;">&times;</button>' +
+      '</div>';
+    return tile;
   }
 
   function markCardDone(card, approved, summary) {
