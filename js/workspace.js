@@ -192,8 +192,17 @@
     if (cell.value === '' || cell.value === null || cell.value === undefined) return '';
     if (cell.error) return cell.error;
     if (typeof cell.value === 'number') {
-      if (cell.fmt === 'currency') return '$' + cell.value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-      if (cell.fmt === 'percent') return (cell.value * 100).toFixed(1) + '%';
+      // Decimal count comes from cell.decimals when explicitly set
+      // (the increase/decrease-decimal buttons write that field), else
+      // each format has a sensible default (currency=2, percent=1,
+      // comma=0). Lets the user nudge precision without losing the
+      // base format choice.
+      var fmtDecimals = (typeof cell.decimals === 'number')
+        ? cell.decimals
+        : (cell.fmt === 'currency' ? 2 : cell.fmt === 'percent' ? 1 : 0);
+      if (cell.fmt === 'currency') return '$' + cell.value.toLocaleString('en-US', { minimumFractionDigits: fmtDecimals, maximumFractionDigits: fmtDecimals });
+      if (cell.fmt === 'percent') return (cell.value * 100).toFixed(fmtDecimals) + '%';
+      if (cell.fmt === 'comma') return cell.value.toLocaleString('en-US', { minimumFractionDigits: fmtDecimals, maximumFractionDigits: fmtDecimals });
       // Auto-format: if it looks like money (has decimals)
       if (Number.isFinite(cell.value) && !Number.isInteger(cell.value)) {
         return cell.value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -2048,6 +2057,7 @@
             <button class="ws-btn ws-fmt-toggle" id="wsBoldBtn" data-style="bold" title="Bold (Ctrl+B)"><b>B</b></button>
             <button class="ws-btn ws-fmt-toggle" id="wsItalicBtn" data-style="italic" title="Italic (Ctrl+I)"><i>I</i></button>
             <button class="ws-btn ws-fmt-toggle" id="wsUnderlineBtn" data-style="underline" title="Underline (Ctrl+U)"><u>U</u></button>
+            <button class="ws-btn ws-fmt-toggle" id="wsStrikeBtn" data-style="strikethrough" title="Strikethrough"><s>S</s></button>
             <div class="ws-color-dropdown" id="wsFillDropdown">
               <button class="ws-btn ws-btn-icon ws-color-trigger" id="wsFillBtn" title="Fill color">
                 <span class="ws-color-icon">&#x25A0;</span>
@@ -2094,9 +2104,33 @@
           <div class="ws-ribbon-controls">
             <button class="ws-btn ws-btn-fmt" data-fmt="currency" title="Currency format">$</button>
             <button class="ws-btn ws-btn-fmt" data-fmt="percent" title="Percent format">%</button>
+            <button class="ws-btn ws-btn-fmt" data-fmt="comma" title="Comma format (1,234.56)">,</button>
+            <button class="ws-btn ws-btn-icon" id="wsIncDecBtn" onclick="window.wsIncDecimal()" title="Increase decimal places">&larr;.0</button>
+            <button class="ws-btn ws-btn-icon" id="wsDecDecBtn" onclick="window.wsDecDecimal()" title="Decrease decimal places">.0&rarr;</button>
             <button class="ws-btn ws-btn-fmt" data-fmt="null" title="Clear number format">&times;</button>
           </div>
           <div class="ws-ribbon-label">Number</div>
+        </div>
+
+        <!-- Borders -->
+        <div class="ws-ribbon-group">
+          <div class="ws-ribbon-controls">
+            <div class="ws-color-dropdown" id="wsBorderDropdown">
+              <button class="ws-btn ws-btn-icon" id="wsBorderBtn" title="Borders">&#x25A6;</button>
+              <div class="ws-color-panel ws-border-panel" id="wsBorderPanel">
+                <button class="ws-border-preset" data-border="all" title="All borders">&#x25A6; All borders</button>
+                <button class="ws-border-preset" data-border="outside" title="Outside borders">&#x25A2; Outside</button>
+                <button class="ws-border-preset" data-border="inside" title="Inside borders only">&#x25A4; Inside</button>
+                <button class="ws-border-preset" data-border="thick-outside" title="Thick box border">&#x25A0; Thick outside</button>
+                <button class="ws-border-preset" data-border="top" title="Top border">&#x2594; Top</button>
+                <button class="ws-border-preset" data-border="bottom" title="Bottom border">&#x2581; Bottom</button>
+                <button class="ws-border-preset" data-border="left" title="Left border">&#x258F; Left</button>
+                <button class="ws-border-preset" data-border="right" title="Right border">&#x2595; Right</button>
+                <button class="ws-border-preset" data-border="none" title="No border">&#x2718; None</button>
+              </div>
+            </div>
+          </div>
+          <div class="ws-ribbon-label">Borders</div>
         </div>
 
         <!-- Styles -->
@@ -2111,11 +2145,15 @@
           <div class="ws-ribbon-label">Styles</div>
         </div>
 
-        <!-- Cells -->
+        <!-- Cells (compact icon-only) -->
         <div class="ws-ribbon-group">
           <div class="ws-ribbon-controls">
-            <button class="ws-btn" id="wsLinkBtn" title="Link cell to job field">&#x1F517;</button>
-            <button class="ws-btn" id="wsMakeTableBtn" onclick="window.wsMakeTable()" title="Convert selected range into a styled table">&#x1F5C2;</button>
+            <button class="ws-btn ws-btn-icon" id="wsInsertRowBtn" onclick="window.wsInsertRowAbove()" title="Insert row above selection">&#x2795;&#x2501;</button>
+            <button class="ws-btn ws-btn-icon" id="wsInsertColBtn" onclick="window.wsInsertColLeft()" title="Insert column to the left of selection">&#x2795;&#x2503;</button>
+            <button class="ws-btn ws-btn-icon" id="wsDeleteRowBtn" onclick="window.wsDeleteSelectedRow()" title="Delete the selected row">&#x2796;&#x2501;</button>
+            <button class="ws-btn ws-btn-icon" id="wsDeleteColBtn" onclick="window.wsDeleteSelectedCol()" title="Delete the selected column">&#x2796;&#x2503;</button>
+            <button class="ws-btn ws-btn-icon" id="wsLinkBtn" title="Link cell to job field">&#x1F517;</button>
+            <button class="ws-btn ws-btn-icon" id="wsMakeTableBtn" onclick="window.wsMakeTable()" title="Convert selected range into a styled table">&#x1F5C2;</button>
           </div>
           <div class="ws-ribbon-label">Cells</div>
         </div>
@@ -2126,6 +2164,7 @@
             <button class="ws-btn" id="wsAutoSumBtn" onclick="window.wsAutoSum()" title="AutoSum (Σ) — insert =SUM with auto-detected range">&#x03A3;</button>
             <button class="ws-btn" id="wsSortAscBtn" onclick="window.wsSortAscHeader()" title="Sort range ascending">&#x2191;A</button>
             <button class="ws-btn" id="wsSortDescBtn" onclick="window.wsSortDescHeader()" title="Sort range descending">&#x2193;Z</button>
+            <button class="ws-btn" id="wsClearContentsBtn" onclick="window.wsClearContents()" title="Clear contents (Delete)">&#x232B;</button>
             <button class="ws-btn" id="wsFindBtn" onclick="window.wsOpenFindReplace()" title="Find &amp; Replace (Ctrl+F)">&#x1F50D;</button>
             <select id="wsFreezeSelect" class="ws-select-compact" onchange="window.wsSetFreeze(this.value || null); this.value='';" title="Freeze panes">
               <option value="">&#x2744;</option>
@@ -2270,7 +2309,12 @@
     if (s.color) st += 'color:' + s.color + ';';
     if (s.bold) st += 'font-weight:700;';
     if (s.italic) st += 'font-style:italic;';
-    if (s.underline) st += 'text-decoration:underline;';
+    // Combined text-decoration so underline + strikethrough can stack
+    // on one cell (e.g., "ordered + cancelled" in a takeoff).
+    var deco = [];
+    if (s.underline) deco.push('underline');
+    if (s.strikethrough) deco.push('line-through');
+    if (deco.length) st += 'text-decoration:' + deco.join(' ') + ';';
     if (s.align) st += 'text-align:' + s.align + ';';
     if (s.wrap) st += 'white-space:normal;word-wrap:break-word;';
     // Imported xlsx cells carry an explicit pt → px font size; only
@@ -4394,6 +4438,129 @@
   window.wsSortAscHeader = function() { sortSelection('asc', true); };
   window.wsSortDescHeader = function() { sortSelection('desc', true); };
   window.wsAutoSum = autoSum;
+  // Ribbon's Cells group — wrappers around the existing internal
+  // insertRow / deleteRow / insertColumn / deleteColumn helpers.
+  // Read the active selection so the buttons act on whatever the
+  // user has clicked into.
+  window.wsInsertRowAbove = function() {
+    if (grid && grid.selection) insertRow(grid.selection.r, 'above');
+  };
+  window.wsInsertColLeft = function() {
+    if (grid && grid.selection) insertColumn(grid.selection.c, 'left');
+  };
+  window.wsDeleteSelectedRow = function() {
+    if (grid && grid.selection) deleteRow(grid.selection.r);
+  };
+  window.wsDeleteSelectedCol = function() {
+    if (grid && grid.selection) deleteColumn(grid.selection.c);
+  };
+
+  // Number group — increase / decrease decimals on the selected cells.
+  // Stores the chosen precision on cell.decimals so it persists; the
+  // renderer reads it via the fmtDecimals helper in getDisplayValue.
+  function bumpDecimalsOnSelection(delta) {
+    var rng = getSelRange();
+    if (!rng) return;
+    pushUndo();
+    for (var r = rng.r1; r <= rng.r2; r++) {
+      for (var c = rng.c1; c <= rng.c2; c++) {
+        var cell = getCell(r, c);
+        var cur = (typeof cell.decimals === 'number')
+          ? cell.decimals
+          : (cell.fmt === 'currency' ? 2 : cell.fmt === 'percent' ? 1 : 0);
+        var next = Math.max(0, Math.min(10, cur + delta));
+        cell.decimals = next;
+      }
+    }
+    grid.dirty = true;
+    renderGrid();
+    if (grid.selection) selectCell(grid.selection.r, grid.selection.c, !!grid.selEnd);
+    saveWorkspace();
+  }
+  window.wsIncDecimal = function() { bumpDecimalsOnSelection(+1); };
+  window.wsDecDecimal = function() { bumpDecimalsOnSelection(-1); };
+
+  // Editing group — Clear contents on the selected range. Empties
+  // values + formulas but preserves cell styling (fills, borders,
+  // alignment) so a clear-and-retype keeps the spreadsheet's look.
+  // For a full clear-everything, the existing Clear-formatting button
+  // (✘ in Styles) plus this together do the job.
+  window.wsClearContents = function() {
+    var rng = getSelRange();
+    if (!rng) return;
+    pushUndo();
+    for (var r = rng.r1; r <= rng.r2; r++) {
+      for (var c = rng.c1; c <= rng.c2; c++) {
+        var cell = getCell(r, c);
+        cell.value = '';
+        cell.raw = '';
+        if (cell.formula) delete cell.formula;
+      }
+    }
+    grid.dirty = true;
+    renderGrid();
+    if (grid.selection) selectCell(grid.selection.r, grid.selection.c, !!grid.selEnd);
+    saveWorkspace();
+  };
+
+  // Borders group — apply a preset to the selected range. Each preset
+  // computes which sides of each cell get a border:
+  //   all          — every side of every cell
+  //   outside      — only the outer perimeter of the range
+  //   thick-outside— same as outside but 2px (heavy box)
+  //   inside       — interior gridlines (not the outside)
+  //   top/bottom/left/right — that single side on every cell
+  //   none         — clear all borders on every cell
+  // Defaults: 1px solid, color tuned for the dark theme so borders
+  // read clearly on the surface.
+  function applyBorderPreset(preset) {
+    var rng = getSelRange();
+    if (!rng) return;
+    pushUndo();
+    var thin  = { style: 'solid', width: 1, color: '#94a3b8' };
+    var thick = { style: 'solid', width: 2, color: '#94a3b8' };
+    for (var r = rng.r1; r <= rng.r2; r++) {
+      for (var c = rng.c1; c <= rng.c2; c++) {
+        var cell = getCell(r, c);
+        if (!cell.style) cell.style = {};
+        if (preset === 'none') {
+          delete cell.style.borders;
+          continue;
+        }
+        var bord = cell.style.borders ? Object.assign({}, cell.style.borders) : {};
+        var b = (preset === 'thick-outside') ? thick : thin;
+        var setTop, setBottom, setLeft, setRight;
+        if (preset === 'all') {
+          setTop = setBottom = setLeft = setRight = true;
+        } else if (preset === 'outside' || preset === 'thick-outside') {
+          setTop    = (r === rng.r1);
+          setBottom = (r === rng.r2);
+          setLeft   = (c === rng.c1);
+          setRight  = (c === rng.c2);
+        } else if (preset === 'inside') {
+          setTop    = (r > rng.r1);
+          setBottom = (r < rng.r2);
+          setLeft   = (c > rng.c1);
+          setRight  = (c < rng.c2);
+        } else {
+          setTop    = (preset === 'top');
+          setBottom = (preset === 'bottom');
+          setLeft   = (preset === 'left');
+          setRight  = (preset === 'right');
+        }
+        if (setTop)    bord.top    = b;
+        if (setBottom) bord.bottom = b;
+        if (setLeft)   bord.left   = b;
+        if (setRight)  bord.right  = b;
+        cell.style.borders = bord;
+      }
+    }
+    grid.dirty = true;
+    renderGrid();
+    if (grid.selection) selectCell(grid.selection.r, grid.selection.c, !!grid.selEnd);
+    saveWorkspace();
+  }
+  window.wsApplyBorder = applyBorderPreset;
   window.wsOpenFindReplace = openFindReplace;
   window.wsSetFreeze = setFreeze;
   // Public xlsx-import hook so the Attachments embed (and other drop
@@ -4691,6 +4858,26 @@
       buildStylePanel();
       toggleColorPanel('wsStylePanel');
     });
+
+    // Borders dropdown — opens the preset grid; clicking a preset
+    // applies it to the current selection and closes the panel.
+    var borderBtnEl = document.getElementById('wsBorderBtn');
+    if (borderBtnEl) {
+      borderBtnEl.addEventListener('click', function(e) {
+        e.stopPropagation();
+        toggleColorPanel('wsBorderPanel');
+      });
+    }
+    var borderPanelEl = document.getElementById('wsBorderPanel');
+    if (borderPanelEl) {
+      borderPanelEl.addEventListener('click', function(e) {
+        var btn = e.target.closest('.ws-border-preset');
+        if (!btn) return;
+        e.stopPropagation();
+        applyBorderPreset(btn.getAttribute('data-border'));
+        closeColorPanels();
+      });
+    }
 
     // Close panels when clicking outside
     document.addEventListener('click', function (e) {

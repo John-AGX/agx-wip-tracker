@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>AGX Workspace Ribbon Preview</title>
+<!-- Pull in the actual stylesheets from the project so the preview
+     reflects exactly what production will render. The serve.js
+     fallback path means /css/styles.css resolves to the project root
+     even though this file lives in /preview/. -->
+<link rel="stylesheet" href="/css/styles.css">
+<link rel="stylesheet" href="/css/workspace.css">
+<style>
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    margin: 0;
+    padding: 24px;
+  }
+  .preview-frame {
+    max-width: 1380px;
+    margin: 0 auto;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+  }
+  .preview-title {
+    font-size: 13px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-dim);
+    margin-bottom: 12px;
+  }
+  /* Hide the hover/focus button styling tweaks the prod app applies
+     globally so the ribbon reads cleanly here too. */
+  button { font-family: inherit; }
+  /* Match the workspace's button base style since this preview
+     doesn't load workspace.js (which builds them dynamically).
+     Ribbon-context buttons use the lighter "flat" look matching
+     the production .ws-ribbon .ws-btn override in workspace.css. */
+  .ws-btn {
+    background: transparent;
+    color: var(--text);
+    border: 1px solid transparent;
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 12px;
+    cursor: pointer;
+    height: 26px;
+    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+  }
+  .ws-btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.14);
+  }
+  .ws-btn-save {
+    background: rgba(27, 133, 65, 0.18);
+    border-color: rgba(27, 133, 65, 0.5);
+    color: #5ddb7e;
+  }
+  .ws-btn-icon { min-width: 26px; padding: 4px 6px; }
+  .ws-fmt-toggle { min-width: 26px; padding: 4px 8px; }
+  .ws-fmt-align { min-width: 26px; padding: 4px 8px; }
+  .ws-cell-ref {
+    background: var(--card-bg, #0f0f1e);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 4px 10px;
+    font-size: 12px;
+    font-family: monospace;
+    width: 80px;
+    height: 26px;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+  }
+  .ws-formula-bar {
+    flex: 1;
+    background: var(--card-bg, #0f0f1e);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 4px 10px;
+    font-size: 12px;
+    height: 26px;
+  }
+  .ws-color-trigger { display: inline-flex; align-items: center; gap: 2px; }
+  .ws-color-icon { font-size: 14px; }
+  .ws-color-icon-text { font-weight: 700; font-size: 12px; }
+  .ws-color-swatch { width: 12px; height: 3px; background: #fbbf24; }
+</style>
+</head>
+<body>
+  <div class="preview-frame">
+    <div class="preview-title">Workspace toolbar — Excel-style ribbon (preview)</div>
+
+    <!-- Formula bar -->
+    <div class="ws-toolbar">
+      <div class="ws-cell-ref" id="wsCellRef">A1</div>
+      <input type="text" class="ws-formula-bar" placeholder="Enter value or formula (e.g. =A1+B1)" />
+    </div>
+
+    <!-- Ribbon -->
+    <div class="ws-ribbon">
+
+      <div class="ws-ribbon-group">
+        <div class="ws-ribbon-controls">
+          <button class="ws-btn ws-btn-icon" title="Undo (Ctrl+Z)">&#x21A9;</button>
+          <button class="ws-btn ws-btn-icon" title="Redo (Ctrl+Y)">&#x21AA;</button>
+        </div>
+        <div class="ws-ribbon-label">History</div>
+      </div>
+
+      <div class="ws-ribbon-group">
+        <div class="ws-ribbon-controls">
+          <button class="ws-btn ws-fmt-toggle" title="Bold"><b>B</b></button>
+          <button class="ws-btn ws-fmt-toggle" title="Italic"><i>I</i></button>
+          <button class="ws-btn ws-fmt-toggle" title="Underline"><u>U</u></button>
+          <button class="ws-btn ws-fmt-toggle" title="Strikethrough"><s>S</s></button>
+          <button class="ws-btn ws-btn-icon ws-color-trigger" title="Fill color">
+            <span class="ws-color-icon">&#x25A0;</span>
+            <span class="ws-color-swatch"></span>
+          </button>
+          <button class="ws-btn ws-btn-icon ws-color-trigger" title="Font color">
+            <span class="ws-color-icon ws-color-icon-text">A</span>
+            <span class="ws-color-swatch"></span>
+          </button>
+        </div>
+        <div class="ws-ribbon-label">Font</div>
+      </div>
+
+      <div class="ws-ribbon-group">
+        <div class="ws-ribbon-controls">
+          <button class="ws-btn ws-fmt-align" title="Align left">&#x2190;</button>
+          <button class="ws-btn ws-fmt-align" title="Align center">&#x2194;</button>
+          <button class="ws-btn ws-fmt-align" title="Align right">&#x2192;</button>
+          <button class="ws-btn ws-fmt-toggle" title="Wrap text">&#x21B5;</button>
+          <button class="ws-btn" title="Merge cells">&#x1F500;</button>
+          <button class="ws-btn" title="Unmerge cells">&#x2702;</button>
+        </div>
+        <div class="ws-ribbon-label">Alignment</div>
+      </div>
+
+      <div class="ws-ribbon-group">
+        <div class="ws-ribbon-controls">
+          <button class="ws-btn" title="Currency">$</button>
+          <button class="ws-btn" title="Percent">%</button>
+          <button class="ws-btn" title="Comma format">,</button>
+          <button class="ws-btn ws-btn-icon" title="Increase decimals">&larr;.0</button>
+          <button class="ws-btn ws-btn-icon" title="Decrease decimals">.0&rarr;</button>
+          <button class="ws-btn" title="Clear number format">&times;</button>
+        </div>
+        <div class="ws-ribbon-label">Number</div>
+      </div>
+
+      <div class="ws-ribbon-group">
+        <div class="ws-ribbon-controls">
+          <button class="ws-btn ws-btn-icon" title="Borders ▾">&#x25A6;</button>
+        </div>
+        <div class="ws-ribbon-label">Borders</div>
+      </div>
+
+      <div class="ws-ribbon-group">
+        <div class="ws-ribbon-controls">
+          <button class="ws-btn ws-btn-icon" title="Cell styles">&#x1F3A8;</button>
+          <button class="ws-btn ws-btn-icon" title="Clear formatting">&#x2718;</button>
+        </div>
+        <div class="ws-ribbon-label">Styles</div>
+      </div>
+
+      <div class="ws-ribbon-group">
+        <div class="ws-ribbon-controls">
+          <button class="ws-btn ws-btn-icon" title="Insert row above">&#x2795;&#x2501;</button>
+          <button class="ws-btn ws-btn-icon" title="Insert column left">&#x2795;&#x2503;</button>
+          <button class="ws-btn ws-btn-icon" title="Delete row">&#x2796;&#x2501;</button>
+          <button class="ws-btn ws-btn-icon" title="Delete column">&#x2796;&#x2503;</button>
+          <button class="ws-btn ws-btn-icon" title="Link cell to job field">&#x1F517;</button>
+          <button class="ws-btn ws-btn-icon" title="Make table">&#x1F5C2;</button>
+        </div>
+        <div class="ws-ribbon-label">Cells</div>
+      </div>
+
+      <div class="ws-ribbon-group">
+        <div class="ws-ribbon-controls">
+          <button class="ws-btn" title="AutoSum">&#x03A3;</button>
+          <button class="ws-btn" title="Sort ascending">&#x2191;A</button>
+          <button class="ws-btn" title="Sort descending">&#x2193;Z</button>
+          <button class="ws-btn" title="Clear contents">&#x232B;</button>
+          <button class="ws-btn" title="Find">&#x1F50D;</button>
+          <select class="ws-select-compact" title="Freeze panes">
+            <option>&#x2744;</option>
+          </select>
+        </div>
+        <div class="ws-ribbon-label">Editing</div>
+      </div>
+
+      <span class="ws-toolbar-spacer"></span>
+
+      <div class="ws-ribbon-group">
+        <div class="ws-ribbon-controls">
+          <button class="ws-btn" title="Import xlsx">&#x1F4E5;</button>
+          <button class="ws-btn" title="Clear workspace">&#x1F5D1;</button>
+          <button class="ws-btn ws-btn-save" title="Save">&#x1F4BE;</button>
+          <button class="ws-btn" title="Node Graph">&#x1F4CA;</button>
+        </div>
+        <div class="ws-ribbon-label">File</div>
+      </div>
+
+    </div>
+
+    <div style="margin-top:18px;font-size:12px;color:var(--text-dim);line-height:1.6;">
+      Each group stacks its controls over a small uppercase label, separated by a 1px divider on the right.
+      Spacer pushes the <strong>File</strong> group to the far right edge. The formula bar sits above as
+      its own row so long formulas don't get crowded.
+    </div>
+  </div>
+</body>
+</html>

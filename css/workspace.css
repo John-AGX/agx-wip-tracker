@@ -77,6 +77,69 @@
   border-right: none;
 }
 
+/* Excel-style flat ribbon buttons. The base .ws-btn rule ships with a
+   dark fill (var(--surface)) which fights the ribbon's surface2 bg —
+   buttons end up looking like dark lozenges instead of icons. Scope
+   a transparent override + brighter hover so the ribbon reads as a
+   row of icons that lift on interaction. */
+.ws-ribbon .ws-btn {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text, #e4e6f0);
+}
+.ws-ribbon .ws-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.14);
+  color: var(--text, #e4e6f0);
+}
+.ws-ribbon .ws-btn:active,
+.ws-ribbon .ws-btn.ws-active {
+  background: rgba(79, 140, 255, 0.18);
+  border-color: rgba(79, 140, 255, 0.45);
+  color: var(--text, #fff);
+}
+/* Save button keeps its accent so the primary action still pops. */
+.ws-ribbon .ws-btn.ws-btn-save {
+  background: rgba(27, 133, 65, 0.18);
+  border-color: rgba(27, 133, 65, 0.5);
+  color: #5ddb7e;
+}
+.ws-ribbon .ws-btn.ws-btn-save:hover {
+  background: rgba(27, 133, 65, 0.32);
+  border-color: #1B8541;
+}
+
+/* ── Borders dropdown panel ───────────────────────────────
+   Vertical menu of preset buttons (All / Outside / Inside /
+   Top / Bottom / etc). Each button is icon + label, full
+   width within the panel for easy clicking. */
+.ws-border-panel {
+  min-width: 180px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px;
+}
+.ws-border-preset {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--text, #e4e6f0);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.1s;
+}
+.ws-border-preset:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
 /* Subsequent toolbar rows (data ops, file ops) share the same chrome
    but have no top radius — they stack flush against the formula bar
    row above them. Single-line layout: no wrap. */
