@@ -696,12 +696,6 @@
                                     <button class="ws-right-tab" data-ee-tab="photos" onclick="switchEstimateEditorTab('photos')">&#x1F4CE; Attachments</button>
                                     <button class="ws-right-tab" data-ee-tab="preview" onclick="switchEstimateEditorTab('preview')">Preview</button>
                                 </div>
-                                <!-- Line-items column header host. Populated by renderLineItems
-                                     when on the Line Items tab; emptied on other tabs. Living
-                                     inside #ee-header guarantees it's part of the same sticky
-                                     stack — no separate sticky offset to drift. Starts hidden
-                                     so the strip doesn't reserve empty space until mounted. -->
-                                <div id="ee-line-header-host" style="margin-top:10px;display:none;"></div>
                             </div>
 
                             <!-- Line Items tab — two-column grid: line items on the left,
@@ -2105,7 +2099,7 @@
     <script src="js/wip.js?v=61"></script>
     <script src="js/estimates.js?v=34"></script>
     <script src="js/proposal.js?v=20"></script>
-    <script src="js/estimate-editor.js?v=27"></script>
+    <script src="js/estimate-editor.js?v=28"></script>
     <script src="js/estimate-preview.js?v=6"></script>
     <script src="js/bt-export.js?v=4"></script>
     <script src="js/ai-panel.js?v=30"></script>

@@ -310,13 +310,19 @@
         main {
             flex: 1;
             overflow-y: auto;
-            padding: 30px;
+            /* Padding lives on .main-inner instead of main itself so
+               position:sticky descendants (the estimate editor and lead
+               detail headers) can pin flush to the top of the scroll
+               viewport. With padding here, sticky:top:0 anchors at the
+               inside edge of the padding, leaving a strip where scroll
+               content would bleed through above the sticky element. */
         }
 
         .main-inner {
             max-width: 1600px;
             margin: 0 auto;
             width: 100%;
+            padding: 30px;
         }
 
         .tab-content {
@@ -1349,7 +1355,7 @@
 
         /* RESPONSIVE */
         @media (max-width: 768px) {
-            main {
+            .main-inner {
                 padding: 15px;
             }
 
@@ -1421,7 +1427,7 @@
                 display: none !important;
             }
 
-            main {
+            main, .main-inner {
                 padding: 0;
             }
 
