@@ -74,7 +74,11 @@ router.get('/', requireAuth, async (req, res) => {
       else if (req.user.role === 'corporate') canEdit = false;
       else if (j.owner_id === req.user.id) canEdit = true;
       else if (j.access_level === 'edit') canEdit = true;
-      return { id: j.id, owner_id: j.owner_id, _canEdit: canEdit, ...j.data };
+      // Spread `data` FIRST so canonical column values (id, owner_id)
+      // override any stale copies that may have crept into the JSONB
+      // blob via a prior bulk-save round-trip. owner_id specifically
+      // is mutable via PUT /:id/owner, so the column is the truth.
+      return { ...j.data, id: j.id, owner_id: j.owner_id, _canEdit: canEdit };
     });
     res.json({ jobs: result });
   } catch (e) {
@@ -91,7 +95,9 @@ router.get('/:id', requireAuth, async (req, res) => {
     }
     const { rows } = await pool.query('SELECT * FROM jobs WHERE id = $1', [req.params.id]);
     if (!rows.length) return res.status(404).json({ error: 'Job not found' });
-    res.json({ id: rows[0].id, owner_id: rows[0].owner_id, ...rows[0].data });
+    // Same shape rule as the list endpoint: spread the JSONB first so
+    // the canonical column values override anything stale in the blob.
+    res.json({ ...rows[0].data, id: rows[0].id, owner_id: rows[0].owner_id });
   } catch (e) {
     res.status(500).json({ error: 'Server error' });
   }
@@ -305,9 +311,13 @@ router.put('/bulk/save', requireAuth, requireRole('admin', 'pm'), async (req, re
           invoices: (appData.invoices || []).filter(i => i.jobId === job.id),
         };
         // Strip server-injected hints + per-save flags that shouldn't
-        // round-trip back into the blob.
+        // round-trip back into the blob. owner_id is also stripped —
+        // it lives on the canonical column (changes via PUT /:id/owner)
+        // and a stale copy in the JSONB would shadow the column on the
+        // next GET (see the spread order in router.get('/')).
         delete jobBlob._canEdit;
         delete jobBlob._notify;
+        delete jobBlob.owner_id;
         // For new jobs, admins can specify owner_id to assign a PM. Non-admins
         // (PMs creating their own jobs) always own what they create. ON CONFLICT
         // never touches owner_id, so existing jobs keep their original PM.
