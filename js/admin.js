@@ -2006,8 +2006,13 @@
   // to that agent's system prompt on every turn.
   // Note: agentKey 'cra' kept for backward compat with skill packs that
   // already reference it. Display label is HR; the underlying agent
-  // assignment value stays 'cra'.
-  var AGENT_LABELS = { ag: '📐 AG (Estimator)', cra: '🤝 HR (Customer Relations)' };
+  // assignment value stays 'cra'. Elle's key is 'job' (matches her
+  // entity_type) — assignments target the job-side WIP analyst.
+  var AGENT_LABELS = {
+    ag:  '📐 AG (Estimator)',
+    job: '📊 Elle (WIP Analyst)',
+    cra: '🤝 HR (Customer Relations)'
+  };
 
   function renderAgentSkillsHTML() {
     if (!_skillsDraft || !Array.isArray(_skillsDraft.skills)) _skillsDraft = { skills: [] };

@@ -1560,7 +1560,22 @@ async function buildJobContext(jobId, clientContext) {
   lines.push('  • Look up a product/material SKU charged to the job when the PM asks "what did we buy here?".');
   lines.push('Do NOT search for AGX-internal financial questions, margin math, or anything answered by the data above. Cap at ~2 searches per turn.');
 
-  // Job side stays plain — single string. Lower volume than AG/CRA so
+  // Skill packs targeted at Elle. Same loader as AG / HR; agentKey
+  // for Elle is 'job' (matches entity_type for back-compat). Appended
+  // as standalone sections so the model sees them as binding.
+  const elleSkills = await loadActiveSkillsFor('job');
+  if (elleSkills.length) {
+    lines.push('');
+    lines.push('# Loaded skills');
+    lines.push('Skill packs your admin has assigned to Elle. Treat each as binding additional guidance on top of the baseline rules above.');
+    elleSkills.forEach(function(s) {
+      lines.push('');
+      lines.push('## ' + s.name);
+      lines.push(s.body);
+    });
+  }
+
+  // Job side stays plain — single string. Lower volume than AG/HR so
   // the marginal caching benefit isn't worth the structural complexity.
   return { system: lines.join('\n'), photoBlocks: [] };
 }
@@ -2987,7 +3002,7 @@ const STAFF_TOOLS = [
       properties: {
         name: { type: 'string', description: 'Short, unique title (e.g., "Trex decking spec reference"). Must not collide with an existing pack.' },
         body: { type: 'string', description: 'The skill content. Markdown allowed. Be tight — every always-on pack costs tokens on every turn.' },
-        agents: { type: 'array', items: { type: 'string', enum: ['ag', 'cra'] }, description: 'Which agents load this pack. Use "ag" for the estimator, "cra" for HR (customer relations — internal key is "cra" for back-compat with existing skill packs; display name is HR).' },
+        agents: { type: 'array', items: { type: 'string', enum: ['ag', 'cra', 'job'] }, description: 'Which agents load this pack. Use "ag" for AG (estimator), "cra" for HR (customer relations — key is "cra" for back-compat), "job" for Elle (WIP analyst).' },
         alwaysOn: { type: 'boolean', description: 'If true (default), pack is appended on every turn. If false, the pack is registered but inactive.' },
         rationale: { type: 'string', description: 'One short sentence shown on the approval card explaining why this pack is worth keeping.' }
       },
@@ -3006,7 +3021,7 @@ const STAFF_TOOLS = [
         name: { type: 'string', description: 'Existing pack name (must match exactly).' },
         new_name: { type: 'string', description: 'Optional rename.' },
         new_body: { type: 'string', description: 'Optional replacement body. Pass the full new content.' },
-        agents: { type: 'array', items: { type: 'string', enum: ['ag', 'cra'] }, description: 'Optional updated agent assignment.' },
+        agents: { type: 'array', items: { type: 'string', enum: ['ag', 'cra', 'job'] }, description: 'Optional updated agent assignment. ag=AG, cra=HR (back-compat key), job=Elle.' },
         alwaysOn: { type: 'boolean', description: 'Optional updated alwaysOn flag.' },
         rationale: { type: 'string', description: 'One short sentence shown on the approval card explaining the change.' }
       },
@@ -3055,7 +3070,7 @@ async function buildStaffContext() {
   stable.push('  • `read_conversation_detail(key)` — full message log of one conversation. Pass the `key` from read_recent_conversations.');
   stable.push('  • `read_skill_packs()` — admin-editable instruction packs the agents load each turn.');
   stable.push('Propose tools (approval-required — user clicks Approve/Reject on a card):');
-  stable.push('  • `propose_skill_pack_add(name, body, agents, alwaysOn?, rationale)` — add a new skill pack. ALWAYS call read_skill_packs first to confirm no name collision.');
+  stable.push('  • `propose_skill_pack_add(name, body, agents, alwaysOn?, rationale)` — add a new skill pack. agents accepts ["ag", "cra", "job"] (ag=AG, cra=HR, job=Elle). ALWAYS call read_skill_packs first to confirm no name collision.');
   stable.push('  • `propose_skill_pack_edit(name, new_name?, new_body?, agents?, alwaysOn?, rationale)` — change an existing pack. body edits replace the whole body.');
   stable.push('  • `propose_skill_pack_delete(name, rationale)` — remove a pack entirely. alwaysOn=false is usually a softer alternative.');
   stable.push('');
@@ -3064,6 +3079,7 @@ async function buildStaffContext() {
   stable.push('- Drill before generalizing. If you spot something odd in metrics, pull recent conversations and inspect a few before proposing a theory.');
   stable.push('- When citing a conversation, include the user and the entity title so the admin can locate it.');
   stable.push('- When proposing a skill pack, write tight, specific instructions — every always-on pack costs tokens on every turn forever. Propose deletions of stale ones too.');
+  stable.push('- **Always close the loop with a brief summary after a tool runs.** When an approval-tier tool (skill pack add/edit/delete) executes, you receive its result as a tool_result block. Respond with a one- or two-sentence confirmation of what happened and what (if anything) the user should do next. NEVER end a turn with a tool_result and no follow-up text — the panel renders an empty turn as "(no response)" which looks broken.');
   stable.push('- Be candid about limits. You can\'t replay conversations directly from your tools (the admin runs replays manually from Admin → Agents → Conversations → 🔁 Replay), but you can suggest exact replay parameters (model, effort, system_prefix) when a question would benefit from one.');
   stable.push('- Skip the assistant filler. The admin is technical; lead with the answer.');
   stable.push('');
