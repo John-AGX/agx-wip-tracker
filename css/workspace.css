@@ -269,11 +269,18 @@
   border-right: none;
 }
 .ws-ribbon-controls {
-  display: flex;
+  /* CSS grid with auto-flow so groups with more than 4 buttons
+     spill into a second row automatically. Cap at 4 columns ×
+     2 rows. Each cell sizes to its content; minimum cell width
+     keeps icon-only buttons from collapsing too narrow. */
+  display: grid;
+  grid-auto-flow: row;
+  grid-template-columns: repeat(4, minmax(28px, auto));
+  grid-auto-rows: minmax(26px, auto);
   align-items: center;
+  justify-items: center;
   gap: 2px;
   padding-bottom: 4px;
-  flex-wrap: nowrap;
 }
 .ws-ribbon-label {
   font-size: 9px;

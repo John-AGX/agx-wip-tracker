@@ -389,6 +389,15 @@
           '<span class="ws-floating-title">Workspace</span>' +
         '</span>' +
         '<div class="ws-floating-actions">' +
+          // Quick Access Toolbar — Import / Clear / Save promoted out
+          // of the ribbon's File group so the ribbon's right edge
+          // stays clear. Size matches the Minimize button. The
+          // file-input that backs Import is a hidden sibling so
+          // wsImportXlsxBtn's click can still trigger it.
+          '<button class="ws-floating-btn" id="wsImportXlsxBtnHeader" title="Import .xlsx as new sheets">&#x1F4E5;</button>' +
+          '<input type="file" id="wsImportXlsxInputHeader" accept=".xlsx,.xls,.csv" style="display:none;" />' +
+          '<button class="ws-floating-btn" id="wsClearBtnHeader" title="Clear workspace">&#x1F5D1;</button>' +
+          '<button class="ws-floating-btn" id="wsSaveBtnHeader" title="Save workspace (Ctrl+S)">&#x1F4BE;</button>' +
           '<button class="ws-floating-btn" id="wsFloatingMinBtn" title="Minimize to folder icon">&#x2013;</button>' +
         '</div>' +
       '</div>' +

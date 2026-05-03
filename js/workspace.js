@@ -2338,19 +2338,10 @@
           <div class="ws-ribbon-label">Editing</div>
         </div>
 
-        <span class="ws-toolbar-spacer"></span>
-
-        <!-- File (right-aligned via spacer) -->
-        <div class="ws-ribbon-group">
-          <div class="ws-ribbon-controls">
-            <button class="ws-btn" id="wsImportXlsxBtn" title="Import .xlsx as new sheets">&#x1F4E5;</button>
-            <input type="file" id="wsImportXlsxInput" accept=".xlsx,.xls,.csv" style="display:none;" />
-            <button class="ws-btn" id="wsClearBtn" title="Clear workspace">&#x1F5D1;</button>
-            <button class="ws-btn ws-btn-save" id="wsSaveBtn" title="Save workspace (Ctrl+S)">&#x1F4BE;</button>
-            <button class="ws-btn" id="wsNodeGraphBtn" title="Node Graph (Beta)">&#x1F4CA;</button>
-          </div>
-          <div class="ws-ribbon-label">File</div>
-        </div>
+        <!-- File group + Node Graph button removed. Import / Clear /
+             Save now live in the floating panel header (Quick Access
+             Toolbar pattern); Node Graph stays accessible from the
+             WIP page sidebar. -->
       </div>
       <div class="ws-link-panel" id="wsLinkPanel">
         <div class="ws-link-header">
@@ -4998,11 +4989,12 @@
       insertColumn(grid.cols - 1, 'right');
     });
 
-    // xlsx / csv import — picker triggered by toolbar button. Each
-    // sheet in the file appends as a new tab; the workbook switches
-    // focus to the first imported sheet so the result is visible.
-    const importBtn = document.getElementById('wsImportXlsxBtn');
-    const importInput = document.getElementById('wsImportXlsxInput');
+    // xlsx / csv import — picker triggered by the header Import button
+    // (Quick Access Toolbar). Each sheet in the file appends as a new
+    // tab; the workbook switches focus to the first imported sheet so
+    // the result is visible.
+    const importBtn = document.getElementById('wsImportXlsxBtnHeader');
+    const importInput = document.getElementById('wsImportXlsxInputHeader');
     if (importBtn && importInput) {
       importBtn.addEventListener('click', function() { importInput.value = ''; importInput.click(); });
       importInput.addEventListener('change', function(e) {
@@ -5021,38 +5013,36 @@
       }
     });
 
-    document.getElementById('wsSaveBtn').addEventListener('click', () => {
-      saveWorkspace();
-      const status = document.getElementById('wsStatus');
-      if (status) { status.textContent = '✓ Saved'; setTimeout(() => status.textContent = 'Ready', 2000); }
-    });
-
-    document.getElementById('wsNodeGraphBtn').addEventListener('click', () => {
-      var ngTab = document.getElementById('nodeGraphTab');
-      if (!ngTab) return;
-      if (ngTab.classList.contains('active')) {
-        // Switch back to spreadsheet
-        ngTab.classList.remove('active');
-      } else {
-        // Switch to node graph
-        if (typeof openNodeGraph === 'function') openNodeGraph(grid.jobId);
-      }
-    });
-
-    document.getElementById('wsClearBtn').addEventListener('click', () => {
-      if (confirm('Clear all workspace data?')) {
-        pushUndo();
-        grid.cells = {};
-        grid.links = {};
-        grid.merges = [];
-        grid.rows = MIN_ROWS;
-        grid.cols = MIN_COLS;
-        grid.colWidths = {};
+    // File-action buttons — Save, Clear. These now live in the
+     // floating panel header (Quick Access Toolbar). The wsImportXlsxBtn
+     // / wsImportXlsxInput pair is wired below in the import block.
+    // Node Graph button removed; the graph is reachable from the WIP
+    // page sidebar.
+    var saveBtn = document.getElementById('wsSaveBtnHeader');
+    if (saveBtn) {
+      saveBtn.addEventListener('click', () => {
         saveWorkspace();
-        renderGrid();
-        selectCell(0, 0);
-      }
-    });
+        const status = document.getElementById('wsStatus');
+        if (status) { status.textContent = '✓ Saved'; setTimeout(() => status.textContent = 'Ready', 2000); }
+      });
+    }
+    var clearBtn = document.getElementById('wsClearBtnHeader');
+    if (clearBtn) {
+      clearBtn.addEventListener('click', () => {
+        if (confirm('Clear all workspace data?')) {
+          pushUndo();
+          grid.cells = {};
+          grid.links = {};
+          grid.merges = [];
+          grid.rows = MIN_ROWS;
+          grid.cols = MIN_COLS;
+          grid.colWidths = {};
+          saveWorkspace();
+          renderGrid();
+          selectCell(0, 0);
+        }
+      });
+    }
 
     // Format buttons
     wsContainer.querySelectorAll('.ws-btn-fmt').forEach(btn => {
