@@ -93,6 +93,7 @@ async function logSend(row) {
 async function sendEmail(opts) {
   opts = opts || {};
   const to = opts.to;
+  const bcc = opts.bcc;
   const subject = opts.subject;
   const html = opts.html;
   const text = opts.text;
@@ -141,6 +142,9 @@ async function sendEmail(opts) {
       html: html,
       text: text
     };
+    if (bcc && (Array.isArray(bcc) ? bcc.length : true)) {
+      payload.bcc = Array.isArray(bcc) ? bcc : [bcc];
+    }
     if (replyTo) payload.reply_to = replyTo;
     if (tag) payload.tags = [{ name: 'agx-tag', value: tag.slice(0, 100) }];
 
@@ -210,8 +214,68 @@ async function isEventEnabled(eventKey) {
   return !!(s.events && s.events[eventKey] && s.events[eventKey].enabled);
 }
 
+// ── sendForEvent ─────────────────────────────────────────────────────
+// Canonical helper for firing notification emails by event key. Gates on
+// the per-event toggle in app_settings('email'), renders the template
+// (override-aware via email-templates.render), and merges per-event +
+// global BCC lists onto the send. Fire-and-forget by design — caller
+// should NOT await this on the request path; failures land in email_log.
+//
+//   sendForEvent('sub_assigned', { sub: {...}, job: {...}, ... }, {
+//     to: 'mike@summit.com',          // single addr or array
+//     tag: 'sub_assigned'             // optional, defaults to eventKey
+//   });
+//
+// Returns the same shape as sendEmail. Skipped sends (event disabled, no
+// recipients) resolve to { ok: false, skipped: true, reason }.
+async function sendForEvent(eventKey, params, opts) {
+  opts = opts || {};
+  try {
+    var enabled = await isEventEnabled(eventKey);
+    if (!enabled) {
+      return { ok: false, skipped: true, reason: 'event_disabled' };
+    }
+    var to = opts.to;
+    if (Array.isArray(to)) to = to.filter(Boolean);
+    if (!to || (Array.isArray(to) && !to.length)) {
+      return { ok: false, skipped: true, reason: 'no_recipient' };
+    }
+
+    // Build BCC list: per-event BCC + global BCC. Dedupe so the same
+    // address doesn't get N copies if it's in both lists.
+    var settings = await getEmailSettings();
+    var perEvent = (settings.events && settings.events[eventKey] && settings.events[eventKey].bcc) || [];
+    var globalBcc = (settings.globalBcc || '').split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+    var bccSet = {};
+    perEvent.concat(globalBcc).forEach(function(addr) { if (addr) bccSet[addr.toLowerCase()] = addr; });
+    var bcc = Object.keys(bccSet).map(function(k) { return bccSet[k]; });
+
+    // Lazy require to avoid a circular import (email-templates requires
+    // ./db, which is already imported above; keeping the require inside
+    // the function makes the dependency one-directional at module init).
+    var emailTemplates = require('./email-templates');
+    var rendered = await emailTemplates.render(eventKey, params || {});
+
+    var payload = {
+      to: to,
+      subject: rendered.subject,
+      html: rendered.html,
+      text: rendered.text,
+      tag: opts.tag || eventKey
+    };
+    if (bcc.length) payload.bcc = bcc;
+    if (opts.replyTo) payload.replyTo = opts.replyTo;
+
+    return await sendEmail(payload);
+  } catch (e) {
+    console.error('[email] sendForEvent failed for ' + eventKey + ':', e && e.message);
+    return { ok: false, error: e && e.message };
+  }
+}
+
 module.exports = {
   sendEmail,
+  sendForEvent,
   isEnabled,
   isDryRun,
   getEmailSettings,

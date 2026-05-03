@@ -1,6 +1,7 @@
 const express = require('express');
 const { pool } = require('../db');
 const { requireAuth, requireCapability } = require('../auth');
+const { sendForEvent } = require('../email');
 
 const router = express.Router();
 
@@ -124,8 +125,15 @@ router.post('/', requireAuth, requireCapability('LEADS_EDIT'), async (req, res) 
 
 router.put('/:id', requireAuth, requireCapability('LEADS_EDIT'), async (req, res) => {
   try {
-    const exists = await pool.query('SELECT id FROM leads WHERE id = $1', [req.params.id]);
-    if (!exists.rows.length) return res.status(404).json({ error: 'Lead not found' });
+    // Fetch the prior status (and salesperson_id) so we can detect a
+    // status transition after the UPDATE — drives lead_status_sold /
+    // lead_status_lost notification triggers.
+    const prior = await pool.query(
+      'SELECT status, salesperson_id FROM leads WHERE id = $1',
+      [req.params.id]
+    );
+    if (!prior.rows.length) return res.status(404).json({ error: 'Lead not found' });
+    const oldStatus = prior.rows[0].status;
 
     const fields = pickEditable(req.body || {});
     const sets = [];
@@ -140,11 +148,64 @@ router.put('/:id', requireAuth, requireCapability('LEADS_EDIT'), async (req, res
     params.push(req.params.id);
     await pool.query(`UPDATE leads SET ${sets.join(', ')} WHERE id = $${p}`, params);
     res.json({ ok: true });
+
+    // Fire status-change notifications (gated by isEventEnabled).
+    // Sold: any prior status → 'sold'. Lost: any prior non-lost/no-opp
+    // status → 'lost' or 'no_opportunity'. Skip if status didn't move.
+    if (fields.status && fields.status !== oldStatus) {
+      var newStatus = fields.status;
+      if (newStatus === 'sold' && oldStatus !== 'sold') {
+        notifyLeadStatusChange(req.params.id, 'sold', req.user, req.body || {})
+          .catch(function(e) { console.warn('[lead_status_sold] notify failed:', e && e.message); });
+      } else if ((newStatus === 'lost' || newStatus === 'no_opportunity') &&
+                  oldStatus !== 'lost' && oldStatus !== 'no_opportunity') {
+        notifyLeadStatusChange(req.params.id, newStatus, req.user, req.body || {})
+          .catch(function(e) { console.warn('[lead_status_lost] notify failed:', e && e.message); });
+      }
+    }
   } catch (e) {
     console.error('PUT /api/leads/:id error:', e);
     res.status(500).json({ error: 'Server error: ' + e.message });
   }
 });
+
+// Build the lead-status-change params payload + recipient and dispatch.
+// Recipient is the salesperson assigned to the lead; falls back to the
+// user who made the change if no salesperson is set (so the event isn't
+// silently swallowed when assignments haven't been filled in yet).
+async function notifyLeadStatusChange(leadId, newStatus, changedByUser, body) {
+  var sql =
+    'SELECT l.id, l.title, l.estimated_revenue_high, l.notes, ' +
+    '       c.company_name AS client_company, ' +
+    '       u.email AS salesperson_email, u.name AS salesperson_name ' +
+    'FROM leads l ' +
+    'LEFT JOIN clients c ON c.id = l.client_id ' +
+    'LEFT JOIN users u ON u.id = l.salesperson_id ' +
+    'WHERE l.id = $1';
+  var r = await pool.query(sql, [leadId]);
+  if (!r.rows.length) return;
+  var row = r.rows[0];
+  var to = row.salesperson_email || (changedByUser && changedByUser.email);
+  if (!to) return;
+
+  var eventKey = newStatus === 'sold' ? 'lead_status_sold' : 'lead_status_lost';
+  var params = {
+    lead: {
+      title: row.title || '',
+      client_company: row.client_company || '',
+      estimated_revenue_high: row.estimated_revenue_high
+    },
+    salesperson: { name: row.salesperson_name || '' },
+    changedBy: { name: (changedByUser && changedByUser.name) || (changedByUser && changedByUser.email) || 'someone' }
+  };
+  if (eventKey === 'lead_status_lost') {
+    params.status = newStatus;
+    // Use latest notes as the "reason" surface — admin can override
+    // template to use any other lead field.
+    params.reason = (body && body.notes) || row.notes || '';
+  }
+  return sendForEvent(eventKey, params, { to: to, tag: eventKey });
+}
 
 // POST /api/leads/import — bulk insert leads from a Buildertrend Leads
 // xlsx export. The client parses the workbook with SheetJS and POSTs a

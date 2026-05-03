@@ -103,6 +103,17 @@ function startServer() {
     } else {
       console.log('No ADMIN_EMAIL/ADMIN_PASSWORD env vars set — using dev admin@local / changeme');
     }
+    // Daily scanner for cert-expiry reminders. Self-gated: if the
+    // cert_expiring event is disabled in admin settings, sendForEvent
+    // skips each row; the scanner still runs harmlessly. Skipped on
+    // offline mode (no DATABASE_URL) since it relies on Postgres.
+    if (process.env.DATABASE_URL) {
+      try {
+        require('./cert-expiry-cron').start();
+      } catch (e) {
+        console.warn('[cert-expiry] failed to start scanner:', e && e.message);
+      }
+    }
   });
 }
 

@@ -28,10 +28,35 @@
 const express = require('express');
 const { pool } = require('../db');
 const { requireAuth, requireCapability } = require('../auth');
+const { sendForEvent } = require('../email');
 
 const router = express.Router();
 
 console.log('[sub-routes] mounted at /api/subs (Phase A — sub directory + job_subs join)');
+
+// Build the params payload + recipient list for the sub_assigned event
+// and hand it to sendForEvent. Looks up sub/job after the assignment
+// insert so the email reflects current data even if the request body
+// only had ids.
+async function notifySubAssigned({ subId, jobId, contractAmt, assignedByName }) {
+  var subRow = await pool.query(
+    'SELECT id, name, email, primary_contact_first FROM subs WHERE id = $1',
+    [subId]
+  );
+  if (!subRow.rows.length || !subRow.rows[0].email) return; // no recipient
+  var sub = subRow.rows[0];
+  var jobData = {};
+  if (jobId) {
+    var j = await pool.query('SELECT data FROM jobs WHERE id = $1', [jobId]);
+    if (j.rows.length) jobData = j.rows[0].data || {};
+  }
+  return sendForEvent('sub_assigned', {
+    sub: { name: sub.name, primaryContactFirst: sub.primary_contact_first || '' },
+    job: { title: jobData.title || '', jobNumber: jobData.jobNumber || '' },
+    contractAmt: contractAmt,
+    assignedBy: { name: assignedByName }
+  }, { to: sub.email, tag: 'sub_assigned' });
+}
 
 function genId(prefix) {
   return prefix + '_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
@@ -482,6 +507,20 @@ router.post('/jobs/:jobId',
         b.notes || null
       ]);
       res.json({ assignment: result.rows[0] });
+
+      // Fire sub_assigned notification (gated by isEventEnabled in
+      // sendForEvent). Fire-and-forget — failures land in email_log
+      // but don't block the response. Only fires for the top-level
+      // 'job' assignment row, not building/phase children, to avoid
+      // re-notifying when an admin is just refining the assignment level.
+      if ((b.level || 'job') === 'job') {
+        notifySubAssigned({
+          subId: subId,
+          jobId: req.params.jobId,
+          contractAmt: Number(b.contract_amt || b.contractAmt || 0),
+          assignedByName: (req.user && req.user.name) || (req.user && req.user.email) || 'AGX'
+        }).catch(function(e) { console.warn('[sub_assigned] notify failed:', e && e.message); });
+      }
     } catch (e) {
       if (e.code === '23505') {
         return res.status(409).json({ error: 'Sub is already assigned to this job at that level. Edit the existing assignment.' });

@@ -62,7 +62,7 @@ const EVENTS = [
     defaultEnabled: false,
     audience: 'Sub primary contact',
     variables: ['sub.name', 'sub.primaryContactFirst', 'job.title', 'job.jobNumber', 'contractAmt', 'assignedBy.name', 'appUrl'],
-    wired: false
+    wired: true
   },
   {
     key: 'lead_status_sold',
@@ -72,7 +72,7 @@ const EVENTS = [
     defaultEnabled: false,
     audience: 'Salesperson',
     variables: ['lead.title', 'lead.client_company', 'lead.estimated_revenue_high', 'salesperson.name', 'changedBy.name', 'appUrl'],
-    wired: false
+    wired: true
   },
   {
     key: 'lead_status_lost',
@@ -82,7 +82,7 @@ const EVENTS = [
     defaultEnabled: false,
     audience: 'Salesperson',
     variables: ['lead.title', 'lead.client_company', 'salesperson.name', 'changedBy.name', 'reason', 'appUrl'],
-    wired: false
+    wired: true
   },
   {
     key: 'cert_expiring',
@@ -92,7 +92,7 @@ const EVENTS = [
     defaultEnabled: false,
     audience: 'Sub primary contact (+ admin BCC)',
     variables: ['sub.name', 'sub.primaryContactFirst', 'cert.type', 'cert.expirationDate', 'cert.daysUntilExpiry', 'appUrl'],
-    wired: false
+    wired: true
   }
 ];
 

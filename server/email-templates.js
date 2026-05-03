@@ -191,6 +191,143 @@ function scheduleAssigned({ recipientName, entry, job, assignedBy }) {
   return { subject: subject, html: html, text: text };
 }
 
+// Sub assigned to job (sent to the sub's primary contact email)
+//   Recipient learns they've been added to a job and at what contract amount.
+//   Params shape: { sub: { name, primaryContactFirst }, job: { title, jobNumber },
+//     contractAmt, assignedBy: { name } }
+function subAssigned({ sub, job, contractAmt, assignedBy }) {
+  sub = sub || {}; job = job || {}; assignedBy = assignedBy || {};
+  var jobLabel = (job.jobNumber ? job.jobNumber + ' — ' : '') + (job.title || '(untitled)');
+  var subject = 'Assigned to ' + jobLabel;
+  var loginUrl = appUrl();
+  var html = shell(
+    'You\'ve been assigned to a job',
+    '<p>Hi ' + escapeHtml(sub.primaryContactFirst || sub.name || 'there') + ',</p>' +
+    '<p>' + escapeHtml(assignedBy.name || 'AGX') + ' just added <strong>' + escapeHtml(sub.name || 'your company') +
+      '</strong> as a subcontractor on this AGX job:</p>' +
+    '<table style="width:100%;background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:12px;margin:16px 0;font-size:13px;">' +
+      (job.jobNumber ? '<tr><td style="padding:4px 8px;color:#6b7280;">Job number</td><td style="padding:4px 8px;font-weight:600;">' + escapeHtml(job.jobNumber) + '</td></tr>' : '') +
+      '<tr><td style="padding:4px 8px;color:#6b7280;">Job</td><td style="padding:4px 8px;font-weight:600;">' + escapeHtml(job.title || '(untitled)') + '</td></tr>' +
+      (contractAmt ? '<tr><td style="padding:4px 8px;color:#6b7280;">Contract</td><td style="padding:4px 8px;font-weight:600;color:#059669;">' + fmtMoney(contractAmt) + '</td></tr>' : '') +
+    '</table>' +
+    '<p style="color:#6b7280;font-size:13px;">If you have questions about scope or schedule, reply to this email and we\'ll loop in the right person.</p>'
+  );
+  var text = (sub.primaryContactFirst || sub.name || 'Hi') + ',\n\n' +
+    (assignedBy.name || 'AGX') + ' just assigned ' + (sub.name || 'your company') + ' to a job:\n\n' +
+    (job.jobNumber ? 'Job number: ' + job.jobNumber + '\n' : '') +
+    'Job: ' + (job.title || '(untitled)') + '\n' +
+    (contractAmt ? 'Contract: ' + fmtMoney(contractAmt) + '\n' : '') +
+    '\nReply with questions about scope or schedule.' + footer().text;
+  return { subject: subject, html: html, text: text };
+}
+
+// Lead status → Sold (sent to the salesperson)
+//   Variables: lead.title, lead.client_company, lead.estimated_revenue_high,
+//   salesperson.name, changedBy.name
+function leadStatusSold({ lead, salesperson, changedBy }) {
+  lead = lead || {}; salesperson = salesperson || {}; changedBy = changedBy || {};
+  var subject = '\u{1F389} Lead won: ' + (lead.title || '(untitled)');
+  var loginUrl = appUrl();
+  var html = shell(
+    'Lead won — Sold',
+    '<p>Hi ' + escapeHtml(salesperson.name || 'there') + ',</p>' +
+    '<p>Congrats &mdash; <strong>' + escapeHtml(lead.title || '(untitled)') + '</strong> just flipped to ' +
+      '<span style="color:#059669;font-weight:700;">Sold</span>.</p>' +
+    '<table style="width:100%;background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:12px;margin:16px 0;font-size:13px;">' +
+      '<tr><td style="padding:4px 8px;color:#6b7280;">Lead</td><td style="padding:4px 8px;font-weight:600;">' + escapeHtml(lead.title || '') + '</td></tr>' +
+      (lead.client_company ? '<tr><td style="padding:4px 8px;color:#6b7280;">Client</td><td style="padding:4px 8px;">' + escapeHtml(lead.client_company) + '</td></tr>' : '') +
+      (lead.estimated_revenue_high ? '<tr><td style="padding:4px 8px;color:#6b7280;">Est. revenue</td><td style="padding:4px 8px;font-weight:600;color:#059669;">' + fmtMoney(lead.estimated_revenue_high) + '</td></tr>' : '') +
+      '<tr><td style="padding:4px 8px;color:#6b7280;">Marked by</td><td style="padding:4px 8px;">' + escapeHtml(changedBy.name || 'someone') + '</td></tr>' +
+    '</table>' +
+    '<p><a href="' + loginUrl + '" style="display:inline-block;background:#4f8cff;color:#fff;text-decoration:none;padding:10px 20px;border-radius:6px;font-weight:600;">Open in AGX</a></p>'
+  );
+  var text = (salesperson.name || 'Hi') + ',\n\n' +
+    'Lead won! "' + (lead.title || '') + '" was just marked Sold by ' + (changedBy.name || 'someone') + '.\n\n' +
+    (lead.client_company ? 'Client: ' + lead.client_company + '\n' : '') +
+    (lead.estimated_revenue_high ? 'Est. revenue: ' + fmtMoney(lead.estimated_revenue_high) + '\n' : '') +
+    '\nOpen: ' + loginUrl + footer().text;
+  return { subject: subject, html: html, text: text };
+}
+
+// Lead status → Lost / No Opportunity (sent to the salesperson)
+//   Variables: lead.title, lead.client_company, salesperson.name, changedBy.name, reason
+function leadStatusLost({ lead, salesperson, changedBy, reason, status }) {
+  lead = lead || {}; salesperson = salesperson || {}; changedBy = changedBy || {};
+  // status param: 'lost' | 'no_opportunity' (drives the verb in subject line)
+  var verb = status === 'no_opportunity' ? 'No opportunity' : 'Lost';
+  var subject = verb + ': ' + (lead.title || '(untitled)');
+  var loginUrl = appUrl();
+  var html = shell(
+    'Lead status: ' + verb,
+    '<p>Hi ' + escapeHtml(salesperson.name || 'there') + ',</p>' +
+    '<p><strong>' + escapeHtml(lead.title || '(untitled)') + '</strong> just flipped to ' +
+      '<span style="color:#dc2626;font-weight:700;">' + escapeHtml(verb) + '</span>.</p>' +
+    '<table style="width:100%;background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:12px;margin:16px 0;font-size:13px;">' +
+      '<tr><td style="padding:4px 8px;color:#6b7280;">Lead</td><td style="padding:4px 8px;font-weight:600;">' + escapeHtml(lead.title || '') + '</td></tr>' +
+      (lead.client_company ? '<tr><td style="padding:4px 8px;color:#6b7280;">Client</td><td style="padding:4px 8px;">' + escapeHtml(lead.client_company) + '</td></tr>' : '') +
+      '<tr><td style="padding:4px 8px;color:#6b7280;">Marked by</td><td style="padding:4px 8px;">' + escapeHtml(changedBy.name || 'someone') + '</td></tr>' +
+      (reason ? '<tr><td style="padding:4px 8px;color:#6b7280;">Reason / notes</td><td style="padding:4px 8px;">' + escapeHtml(reason) + '</td></tr>' : '') +
+    '</table>' +
+    '<p><a href="' + loginUrl + '" style="display:inline-block;background:#4f8cff;color:#fff;text-decoration:none;padding:10px 20px;border-radius:6px;font-weight:600;">Open in AGX</a></p>'
+  );
+  var text = (salesperson.name || 'Hi') + ',\n\n' +
+    '"' + (lead.title || '') + '" was marked ' + verb + ' by ' + (changedBy.name || 'someone') + '.\n\n' +
+    (lead.client_company ? 'Client: ' + lead.client_company + '\n' : '') +
+    (reason ? 'Reason: ' + reason + '\n' : '') +
+    '\nOpen: ' + loginUrl + footer().text;
+  return { subject: subject, html: html, text: text };
+}
+
+// Certificate expiring (sent by daily cron to the sub primary contact)
+//   Variables: sub.name, sub.primaryContactFirst, cert.type, cert.expirationDate, cert.daysUntilExpiry
+//
+// `cert.type` may arrive as the raw enum ('gl', 'wc', 'w9', 'bank') or
+// the friendly label ('General Liability', etc.). Normalize so the
+// email reads the same either way.
+function certExpiring({ sub, cert }) {
+  sub = sub || {}; cert = cert || {};
+  var typeLabel = certTypeLabel(cert.type);
+  var days = Number(cert.daysUntilExpiry);
+  var urgency = isFinite(days) ?
+    (days <= 0 ? '<span style="color:#dc2626;font-weight:700;">Already expired</span>' :
+     days <= 7 ? '<span style="color:#dc2626;font-weight:700;">Expires in ' + days + ' day' + (days === 1 ? '' : 's') + '</span>' :
+                 '<span style="color:#d97706;font-weight:600;">Expires in ' + days + ' days</span>') :
+    'Expiring soon';
+  var subject = 'Cert expiring: ' + typeLabel + ' (' + (sub.name || 'sub') + ')';
+  var loginUrl = appUrl();
+  var html = shell(
+    typeLabel + ' certificate expiring',
+    '<p>Hi ' + escapeHtml(sub.primaryContactFirst || sub.name || 'there') + ',</p>' +
+    '<p>Your <strong>' + escapeHtml(typeLabel) + '</strong> certificate on file with AGX is approaching expiration.</p>' +
+    '<table style="width:100%;background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:12px;margin:16px 0;font-size:13px;">' +
+      '<tr><td style="padding:4px 8px;color:#6b7280;">Sub</td><td style="padding:4px 8px;font-weight:600;">' + escapeHtml(sub.name || '') + '</td></tr>' +
+      '<tr><td style="padding:4px 8px;color:#6b7280;">Certificate</td><td style="padding:4px 8px;font-weight:600;">' + escapeHtml(typeLabel) + '</td></tr>' +
+      '<tr><td style="padding:4px 8px;color:#6b7280;">Expiration date</td><td style="padding:4px 8px;font-weight:600;">' + escapeHtml(fmtDate(cert.expirationDate)) + '</td></tr>' +
+      '<tr><td style="padding:4px 8px;color:#6b7280;">Status</td><td style="padding:4px 8px;">' + urgency + '</td></tr>' +
+    '</table>' +
+    '<p>Please send an updated copy at your earliest convenience &mdash; reply to this email or use the button below.</p>' +
+    '<p><a href="' + loginUrl + '" style="display:inline-block;background:#4f8cff;color:#fff;text-decoration:none;padding:10px 20px;border-radius:6px;font-weight:600;">Open in AGX</a></p>'
+  );
+  var text = (sub.primaryContactFirst || sub.name || 'Hi') + ',\n\n' +
+    'Your ' + typeLabel + ' certificate on file with AGX is expiring.\n\n' +
+    'Sub: ' + (sub.name || '') + '\n' +
+    'Expiration: ' + fmtDate(cert.expirationDate) + '\n' +
+    (isFinite(days) ? 'Days until expiry: ' + days + '\n' : '') +
+    '\nPlease send an updated copy.\n' +
+    'Open: ' + loginUrl + footer().text;
+  return { subject: subject, html: html, text: text };
+}
+
+function certTypeLabel(t) {
+  var key = String(t || '').toLowerCase();
+  if (key === 'gl') return 'General Liability';
+  if (key === 'wc') return 'Workers Comp';
+  if (key === 'w9') return 'W-9';
+  if (key === 'bank') return 'Bank / ACH';
+  // Already a friendly label (admin-edited override or sample data) — pass through.
+  return t || 'Certificate';
+}
+
 // ── Override resolution ─────────────────────────────────────────────
 // Admins can customize template subject + body via the Email Templates
 // admin sub-tab; overrides land in email_template_overrides keyed by
@@ -263,10 +400,11 @@ function renderDefault(eventKey, params) {
     case 'password_reset':    return passwordReset(params);
     case 'job_assigned':      return jobAssigned(params);
     case 'schedule_entry':    return scheduleAssigned(params);
+    case 'sub_assigned':      return subAssigned(params);
+    case 'lead_status_sold':  return leadStatusSold(params);
+    case 'lead_status_lost':  return leadStatusLost(params);
+    case 'cert_expiring':     return certExpiring(params);
     default:
-      // E2 will add: sub_assigned, lead_status_sold, lead_status_lost,
-      // cert_expiring. Until then, missing event keys throw so the
-      // caller knows to add the template.
       throw new Error('No baked-in template for event: ' + eventKey);
   }
 }
@@ -330,6 +468,11 @@ module.exports = {
   passwordReset,
   jobAssigned,
   scheduleAssigned,
+  subAssigned,
+  leadStatusSold,
+  leadStatusLost,
+  certExpiring,
+  certTypeLabel,
   render,
   renderSample,
   renderSampleDefault,
