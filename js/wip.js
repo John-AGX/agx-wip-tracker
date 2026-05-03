@@ -1045,6 +1045,17 @@ function renderWIPMain() {
         }
 
         function backToWIPMain() {
+            // If the node graph is up as a fullscreen overlay, save +
+            // close it before showing the WIP list. The graph is a
+            // position:fixed sibling, so without explicitly removing
+            // its .active class it would float over the list.
+            var ngTab = document.getElementById('nodeGraphTab');
+            if (ngTab && ngTab.classList.contains('active')) {
+                if (typeof NG !== 'undefined' && NG.saveGraph) {
+                    try { NG.saveGraph(); } catch (e) { /* defensive */ }
+                }
+                ngTab.classList.remove('active');
+            }
             document.getElementById('wip-main-view').style.display = 'block';
             document.getElementById('wip-job-detail-view').style.display = 'none';
             appState.currentJobId = null;

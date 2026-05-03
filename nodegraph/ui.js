@@ -2340,9 +2340,9 @@ function init(){
   E.setCanvasEl(canvasEl);
   buildSidebar(); initEvents(); applyTx();
 
-  tab.querySelector('.ng-tbtn-close').addEventListener('click',function(){
-    E.saveGraph(); tab.classList.remove('active');
-  });
+  // Close-graph button removed — the back-to-WIP nav and top-level
+  // tab switch both save + close the graph automatically, so the
+  // explicit Close button was redundant clutter on the topbar.
   // Collapse all
   var cab=tab.querySelector('.ng-collapse-all-btn');
   if(cab) cab.addEventListener('click',function(){
