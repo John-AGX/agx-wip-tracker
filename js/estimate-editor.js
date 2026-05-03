@@ -290,26 +290,48 @@
       btn.classList.toggle('active', btn.dataset.eeTab === name);
     });
     document.querySelectorAll('.ee-tab-content').forEach(function(el) {
+      // Use the explicit token instead of '' so any stale inline display
+      // value left over from CSS-rule confusion can't override us. Display
+      // gets re-set below for the target pane.
       el.style.display = 'none';
     });
     var target = document.getElementById('ee-tab-' + name);
-    if (target) target.style.display = '';
-    // Preview tab is rendered on demand by js/estimate-preview.js since
-    // pulling the template is async (one network round-trip the first time).
-    if (name === 'preview' && typeof window.renderEstimatePreview === 'function') {
-      window.renderEstimatePreview();
-    }
-    // Photos tab — mount the shared widget. agxAttachments handles its own
-    // state, so re-mounting on each switch is fine and keeps things simple.
-    if (name === 'photos' && _currentId && window.agxAttachments) {
-      var mountEl = document.getElementById('ee-photos-mount');
-      if (mountEl) {
-        window.agxAttachments.mount(mountEl, {
-          entityType: 'estimate',
-          entityId: _currentId,
-          canEdit: true
-        });
+    if (target) target.style.display = 'block';
+
+    // Per-tab on-show renderers. Wrapped in try/catch so a renderer
+    // failure surfaces in the console instead of leaving the tab
+    // visually swapped but content broken / empty.
+    try {
+      if (name === 'details') {
+        // Re-render the form on every show so values reflect the latest
+        // estimate state. The init-time render at openEstimateEditor was
+        // a one-shot — without this, changes that originated outside the
+        // form (e.g., via the AI assistant) wouldn't appear here.
+        renderDetailsForm();
+      } else if (name === 'preview' && typeof window.renderEstimatePreview === 'function') {
+        // Preview tab is rendered on demand by js/estimate-preview.js
+        // since pulling the template is async (one network round-trip
+        // the first time).
+        window.renderEstimatePreview();
+      } else if (name === 'photos') {
+        var mountEl = document.getElementById('ee-photos-mount');
+        if (!mountEl) {
+          console.warn('[estimate-editor] photos mount point missing');
+        } else if (!_currentId) {
+          mountEl.innerHTML = '<div style="padding:18px;color:var(--text-dim,#888);font-size:12px;font-style:italic;">No estimate loaded.</div>';
+        } else if (window.agxAttachments && typeof window.agxAttachments.mount === 'function') {
+          window.agxAttachments.mount(mountEl, {
+            entityType: 'estimate',
+            entityId: _currentId,
+            canEdit: true
+          });
+        } else {
+          mountEl.innerHTML = '<div style="padding:18px;color:#fbbf24;font-size:12px;">Attachments widget not loaded — refresh the page.</div>';
+          console.warn('[estimate-editor] window.agxAttachments not available; can not mount photos tab');
+        }
       }
+    } catch (e) {
+      console.warn('[estimate-editor] switchEstimateEditorTab(' + name + ') renderer threw:', e);
     }
   }
 
@@ -672,10 +694,14 @@
     var t = computeTotals();
     var totalsEl = document.getElementById('ee-totals');
     if (!totalsEl) return;
-    function chip(label, value, color) {
+    function chip(label, value, color, cls) {
+      // Optional cls hoists color out of inline style and into a class
+      // so light mode can flip green amounts to plain text.
+      var clsAttr = cls ? ' class="' + cls + '"' : '';
+      var colorStyle = cls ? '' : ('color:' + color + ';');
       return '<div style="background:rgba(255,255,255,0.03);border:1px solid var(--border,#333);border-radius:6px;padding:6px 12px;min-width:120px;">' +
         '<div style="font-size:9px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;">' + label + '</div>' +
-        '<div style="font-size:14px;font-weight:700;color:' + color + ';font-family:\'SF Mono\',\'Fira Code\',monospace;">' + value + '</div>' +
+        '<div' + clsAttr + ' style="font-size:14px;font-weight:700;' + colorStyle + 'font-family:\'SF Mono\',\'Fira Code\',monospace;">' + value + '</div>' +
       '</div>';
     }
     var groupCountChip = (t.includedGroups && t.includedGroups.length > 1)
@@ -686,7 +712,7 @@
       chip('Subtotal', fmtCurrency(t.subtotal), 'var(--text,#fff)') +
       chip('Markup', fmtCurrency(t.markupAmount), '#fbbf24') +
       chip('Tax + Fees', fmtCurrency(t.feeFlat + t.feePctAmount + t.taxAmount), '#60a5fa') +
-      chip('Proposal Total', fmtCurrency(t.total), '#34d399') +
+      chip('Proposal Total', fmtCurrency(t.total), null, 'ee-grand-total') +
       chip('Lines', t.lineCount, 'var(--text-dim,#888)');
     // Also refresh the detailed breakdown card under the line items.
     renderPricingBreakdown();
@@ -705,9 +731,13 @@
       var weight = opts.bold ? 700 : 500;
       var size = opts.bold ? 14 : 12;
       var divider = opts.divider ? 'border-top:1px solid var(--border,#333);padding-top:8px;margin-top:8px;' : '';
+      // Optional cls puts color on a class instead of inline so light
+      // mode can override (used for the Proposal Total row).
+      var valClsAttr = opts.cls ? ' class="' + opts.cls + '"' : '';
+      var valColorStyle = opts.cls ? '' : ('color:' + color + ';');
       return '<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;' + divider + '">' +
         '<span style="font-size:' + (opts.bold ? 12 : 11) + 'px;color:var(--text-dim,#888);' + (opts.bold ? 'text-transform:uppercase;letter-spacing:0.5px;font-weight:700;' : '') + '">' + label + '</span>' +
-        '<span style="font-family:\'SF Mono\',monospace;font-size:' + size + 'px;font-weight:' + weight + ';color:' + color + ';">' + fmtCurrency(value) + '</span>' +
+        '<span' + valClsAttr + ' style="font-family:\'SF Mono\',monospace;font-size:' + size + 'px;font-weight:' + weight + ';' + valColorStyle + '">' + fmtCurrency(value) + '</span>' +
       '</div>';
     }
     var html = '';
@@ -737,7 +767,7 @@
     if (t.feeFlat || t.feePctAmount) html += row('Pre-Tax Total', t.preTax, { divider: true });
     if (t.taxAmount) html += row('+ Tax', t.taxAmount, { color: '#60a5fa' });
     if (t.rounded) html += row('+ Round Up', t.rounded, { color: 'var(--text-dim,#888)' });
-    html += row('Proposal Total', t.total, { bold: true, color: '#34d399', divider: true });
+    html += row('Proposal Total', t.total, { bold: true, cls: 'ee-grand-total', divider: true });
     el.innerHTML = html;
   }
 
@@ -888,8 +918,13 @@
           '" />' +
         '</div>';
     };
-    var readOnly = function(value, flex, color) {
-      return '<div style="flex:' + flex + ';padding:8px 10px;font-size:12px;text-align:right;color:' + (color || 'var(--text-dim,#888)') + ';font-family:\'SF Mono\',monospace;">' + value + '</div>';
+    var readOnly = function(value, flex, color, cls) {
+      // Optional cls lets the caller move color out of inline style and
+      // into a class — needed for the per-line client-price column so
+      // light mode can flip the green to plain text via CSS.
+      var clsAttr = cls ? ' class="' + cls + '"' : '';
+      var colorStyle = cls ? '' : ('color:' + (color || 'var(--text-dim,#888)') + ';');
+      return '<div' + clsAttr + ' style="flex:' + flex + ';padding:8px 10px;font-size:12px;text-align:right;' + colorStyle + 'font-family:\'SF Mono\',monospace;">' + value + '</div>';
     };
 
     return '<div data-line-id="' + idAttr + '" ' +
@@ -903,7 +938,7 @@
       input('unitCost', line.unitCost, { flex: '0 0 110px', type: 'number', align: 'right', mono: true }) +
       input('markup', line.markup, { flex: '0 0 90px', type: 'number', align: 'right', mono: true, placeholder: markupPlaceholder }) +
       readOnly(fmtCurrency(ext), '0 0 110px') +
-      readOnly(fmtCurrency(clientPrice), '0 0 120px', '#34d399') +
+      readOnly(fmtCurrency(clientPrice), '0 0 120px', null, 'ee-line-amount') +
       '<div style="flex:0 0 36px;text-align:center;">' +
         '<button class="ee-btn ee-icon-btn danger" onclick="deleteLineFromEditor(\'' + idAttr + '\')" title="Delete line">&#x1F5D1;</button>' +
       '</div>' +
@@ -919,7 +954,7 @@
       '<div style="flex:0 0 110px;"></div>' +
       '<div style="flex:0 0 90px;"></div>' +
       '<div style="flex:0 0 110px;text-align:right;font-family:\'SF Mono\',monospace;font-size:12px;color:var(--text,#fff);padding:0 10px;">' + fmtCurrency(rawSum) + '</div>' +
-      '<div style="flex:0 0 120px;text-align:right;font-family:\'SF Mono\',monospace;font-size:12px;color:#34d399;font-weight:700;padding:0 10px;">' + fmtCurrency(markedUp) + '</div>' +
+      '<div class="ee-section-total" style="flex:0 0 120px;text-align:right;font-family:\'SF Mono\',monospace;font-size:12px;font-weight:700;padding:0 10px;">' + fmtCurrency(markedUp) + '</div>' +
       '<div style="flex:0 0 36px;"></div>' +
     '</div>';
   }

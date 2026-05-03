@@ -1378,6 +1378,21 @@
 body.light-mode .qb-line-amount {
   color: var(--text, #111827);
 }
+
+/* Estimate editor amounts — same dark-green/light-mode-black pattern
+   as the QB Costs page. Covers the per-line client-price column,
+   section subtotals, and the Proposal Total in both the totals strip
+   and the detailed breakdown. */
+.ee-line-amount,
+.ee-section-total,
+.ee-grand-total {
+  color: #34d399;
+}
+body.light-mode .ee-line-amount,
+body.light-mode .ee-section-total,
+body.light-mode .ee-grand-total {
+  color: var(--text, #111827);
+}
 .ws-sheet-tab-add {
   background: transparent;
   border: 1px solid transparent;
