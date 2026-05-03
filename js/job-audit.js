@@ -296,7 +296,31 @@
 
     function wireModalEvents() {
       modal.querySelector('[data-close]')?.addEventListener('click', function() { modal.remove(); });
-      modal.querySelector('[data-refresh]')?.addEventListener('click', function() { paint(); });
+      // Refresh button: brief visual feedback (button label flips +
+      // disabled while running) so the user sees the click landed
+      // even when the underlying findings haven't changed.
+      var refreshBtn = modal.querySelector('[data-refresh]');
+      if (refreshBtn) {
+        refreshBtn.addEventListener('click', function(e) {
+          e.preventDefault();
+          e.stopPropagation();
+          refreshBtn.disabled = true;
+          var origHTML = refreshBtn.innerHTML;
+          refreshBtn.innerHTML = '&#x21BB; Refreshing&hellip;';
+          // Defer paint() one frame so the disabled+label flip is
+          // visible before the heavy re-render kicks in. paint
+          // replaces innerHTML, which discards refreshBtn's element
+          // reference — but the brief flash before that is what the
+          // user actually needs to see.
+          setTimeout(function() {
+            try { paint(); }
+            catch (err) {
+              console.error('[audit] refresh failed:', err);
+              alert('Audit refresh failed: ' + (err && err.message || err));
+            }
+          }, 30);
+        });
+      }
       modal.querySelectorAll('[data-jump]').forEach(function(btn) {
         btn.addEventListener('click', function() {
           var nodeId = btn.getAttribute('data-jump');
@@ -382,11 +406,13 @@
              sectionHTML('🟢 Low priority', '#34d399', bySeverity.low);
     }
 
+    var nowStr = new Date().toLocaleTimeString();
     return '<div class="modal-content" style="max-width:720px;width:92vw;max-height:90vh;display:flex;flex-direction:column;">' +
       '<div class="modal-header" style="display:flex;align-items:center;gap:10px;">' +
         '<span>&#x26A0; Job Audit</span>' +
         '<span style="font-size:11px;color:var(--text-dim,#888);font-weight:normal;">' + (result.context.job?.title || '') + '</span>' +
-        '<button class="ee-btn secondary" data-refresh title="Re-run the audit against the current job state" style="margin-left:auto;font-size:11px;padding:4px 12px;display:inline-flex;align-items:center;gap:4px;">&#x21BB; Refresh</button>' +
+        '<span style="font-size:10px;color:var(--text-dim,#666);font-weight:normal;margin-left:auto;" title="Audit was last run at this time">Run: ' + nowStr + '</span>' +
+        '<button type="button" class="ee-btn secondary" data-refresh="1" title="Re-run the audit against the current job state" style="font-size:11px;padding:4px 12px;display:inline-flex;align-items:center;gap:4px;">&#x21BB; Refresh</button>' +
       '</div>' +
       '<div style="padding:14px 18px 0;display:grid;grid-template-columns:repeat(4,1fr);gap:10px;">' +
         headStat('Total findings', result.findings.length, result.findings.length > 0 ? '#fbbf24' : '#34d399') +
