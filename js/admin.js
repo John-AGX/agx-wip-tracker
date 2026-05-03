@@ -2563,8 +2563,9 @@
   //      that admin surface stays where it is).
 
   var _agentsRange = '7d';
-  var _agentsView = 'metrics'; // 'metrics' | 'conversations'
+  var _agentsView = 'metrics'; // 'metrics' | 'conversations' | 'evals'
   var _agentsConvKey = null;   // when drilled into one conversation
+  var _agentsEvalId = null;    // when drilled into one eval's run history
 
   function renderAdminAgents() {
     var pane = document.getElementById('admin-subtab-agents');
@@ -2578,6 +2579,7 @@
         '<div class="ws-right-tabs" style="margin:0;">' +
           '<button class="ws-right-tab' + (_agentsView === 'metrics' ? ' active' : '') + '" onclick="switchAgentsView(\'metrics\')">&#x1F4CA; Metrics</button>' +
           '<button class="ws-right-tab' + (_agentsView === 'conversations' ? ' active' : '') + '" onclick="switchAgentsView(\'conversations\')">&#x1F4AC; Conversations</button>' +
+          '<button class="ws-right-tab' + (_agentsView === 'evals' ? ' active' : '') + '" onclick="switchAgentsView(\'evals\')">&#x1F9EA; Evals</button>' +
         '</div>' +
         '<div style="flex:1;"></div>' +
         '<button class="ee-btn" onclick="openChiefOfStaff()" title="Open the Chief of Staff agent — observes AG / WIP / CRA, audits conversations, reviews skill packs" style="background:linear-gradient(135deg,#fbbf24,#f97316);color:#fff;border:none;font-weight:600;">&#x1F3A9; Ask Chief of Staff</button>' +
@@ -2589,9 +2591,11 @@
         '<button class="ee-btn ghost" onclick="renderAdminAgents()" title="Refresh">&#x21BB;</button>' +
       '</div>' +
       '<div id="agents-content"></div>';
-    if (_agentsView === 'metrics')           renderAgentsMetrics();
-    else if (_agentsConvKey)                 renderAgentsConversationDetail(_agentsConvKey);
-    else                                     renderAgentsConversationList();
+    if (_agentsView === 'metrics')                   renderAgentsMetrics();
+    else if (_agentsView === 'evals' && _agentsEvalId) renderAgentEvalDetail(_agentsEvalId);
+    else if (_agentsView === 'evals')                renderAgentEvalsList();
+    else if (_agentsConvKey)                         renderAgentsConversationDetail(_agentsConvKey);
+    else                                             renderAgentsConversationList();
   }
 
   function setAgentsRange(r) {
@@ -2601,6 +2605,7 @@
   function switchAgentsView(v) {
     _agentsView = v;
     _agentsConvKey = null;
+    _agentsEvalId = null;
     renderAdminAgents();
   }
 
@@ -2781,10 +2786,193 @@
     window.agxAI.open({ entityType: 'staff' });
   }
 
+  // ─────────── Evals view ───────────
+  function renderAgentEvalsList() {
+    var host = document.getElementById('agents-content');
+    if (!host) return;
+    host.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;font-style:italic;padding:20px 0;">Loading evals…</div>';
+    window.agxApi.get('/api/admin/agents/evals').then(function(resp) {
+      var rows = (resp && resp.evals) || [];
+      var btn = '<button class="ee-btn primary" onclick="openNewEvalModal()" style="margin-bottom:14px;">+ Add fixture</button>';
+      var help = '<p style="margin:0 0 10px;font-size:12px;color:var(--text-dim,#888);">' +
+        'Curated fixtures replayed against AG to catch regressions. Each fixture references an existing estimate id; the runner rebuilds AG\'s normal context, sends a known prompt, and scores the response against expected_signals.' +
+        '</p>';
+      if (!rows.length) {
+        host.innerHTML = btn + help + '<div style="color:var(--text-dim,#888);font-size:12px;font-style:italic;padding:20px 0;">No fixtures yet. Add one to start tracking AG quality across changes.</div>';
+        return;
+      }
+      var html = btn + help + '<div class="table-container"><table>' +
+        '<thead><tr><th>Name</th><th>Kind</th><th>Runs</th><th>Last result</th><th>Last run</th><th></th></tr></thead><tbody>';
+      rows.forEach(function(e) {
+        var lr = e.latest_run || {};
+        var pill = '—';
+        if (lr.run_at) {
+          pill = lr.passed
+            ? '<span style="display:inline-block;background:rgba(52,211,153,0.15);color:#34d399;font-size:11px;padding:2px 8px;border-radius:10px;font-weight:600;">PASS</span>'
+            : '<span style="display:inline-block;background:rgba(248,113,113,0.15);color:#f87171;font-size:11px;padding:2px 8px;border-radius:10px;font-weight:600;">FAIL</span>';
+        }
+        var when = '';
+        try { if (lr.run_at) when = new Date(lr.run_at).toLocaleString(); } catch (ex) {}
+        html += '<tr style="cursor:pointer;" onclick="openEvalDetail(\'' + escapeAttr(e.id) + '\')">' +
+          '<td>' + escapeHTML(e.name) + (e.description ? '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:2px;">' + escapeHTML(e.description) + '</div>' : '') + '</td>' +
+          '<td>' + escapeHTML(e.kind) + '</td>' +
+          '<td>' + (e.run_count || 0) + '</td>' +
+          '<td>' + pill + (lr.duration_ms ? ' <span style="color:var(--text-dim,#888);font-size:11px;">(' + Math.round(lr.duration_ms / 100) / 10 + 's)</span>' : '') + '</td>' +
+          '<td style="font-size:11px;color:var(--text-dim,#aaa);">' + escapeHTML(when) + '</td>' +
+          '<td><button class="ee-btn primary" type="button" onclick="event.stopPropagation();runEval(\'' + escapeAttr(e.id) + '\')">&#x25B6; Run</button></td>' +
+        '</tr>';
+      });
+      html += '</tbody></table></div>';
+      host.innerHTML = html;
+    }).catch(function(err) {
+      host.innerHTML = '<div style="color:#e74c3c;font-size:12px;padding:20px 0;">Failed: ' + escapeHTML(err.message || 'unknown') + '</div>';
+    });
+  }
+
+  function openEvalDetail(id) {
+    _agentsEvalId = id;
+    renderAdminAgents();
+  }
+
+  function runEval(id) {
+    var btn = document.activeElement;
+    if (btn && btn.tagName === 'BUTTON') { btn.disabled = true; btn.textContent = 'Running…'; }
+    window.agxApi.post('/api/admin/agents/evals/' + encodeURIComponent(id) + '/run', {}).then(function(resp) {
+      var ok = resp && resp.passed;
+      alert((ok ? '✓ PASSED' : '✗ FAILED') + '\n\nModel: ' + (resp.model || '—') + '\nDuration: ' + (resp.duration_ms ? Math.round(resp.duration_ms / 100) / 10 + 's' : '—') + '\nTool calls: ' + (resp.tool_calls ? resp.tool_calls.length : 0) + '\nTokens in/out: ' + (resp.input_tokens || 0) + ' / ' + (resp.output_tokens || 0));
+      if (_agentsEvalId === id) renderAgentEvalDetail(id);
+      else renderAgentEvalsList();
+    }).catch(function(err) {
+      alert('Run failed: ' + (err.message || 'unknown'));
+      if (_agentsEvalId === id) renderAgentEvalDetail(id);
+      else renderAgentEvalsList();
+    });
+  }
+
+  function renderAgentEvalDetail(id) {
+    var host = document.getElementById('agents-content');
+    if (!host) return;
+    host.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;font-style:italic;padding:20px 0;">Loading eval…</div>';
+    window.agxApi.get('/api/admin/agents/evals/' + encodeURIComponent(id)).then(function(resp) {
+      var ev = resp && resp.eval;
+      var runs = (resp && resp.runs) || [];
+      if (!ev) {
+        host.innerHTML = '<div style="color:#e74c3c;">Eval not found.</div>';
+        return;
+      }
+      var fixturePretty = '';
+      try { fixturePretty = JSON.stringify(ev.fixture, null, 2); } catch (e) { fixturePretty = String(ev.fixture); }
+      var signalsPretty = '';
+      try { signalsPretty = JSON.stringify(ev.expected_signals, null, 2); } catch (e) { signalsPretty = String(ev.expected_signals); }
+      var html = '<div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">' +
+          '<button class="ee-btn secondary" onclick="closeEvalDetail()">&larr; Back to evals</button>' +
+          '<div style="flex:1;font-size:14px;font-weight:600;color:var(--text,#fff);">' + escapeHTML(ev.name) + '</div>' +
+          '<button class="ee-btn primary" onclick="runEval(\'' + escapeAttr(ev.id) + '\')">&#x25B6; Run now</button>' +
+          '<button class="ee-btn danger" onclick="deleteEval(\'' + escapeAttr(ev.id) + '\')">&#x1F5D1; Delete</button>' +
+        '</div>';
+      if (ev.description) html += '<div style="font-size:12px;color:var(--text-dim,#aaa);margin-bottom:14px;">' + escapeHTML(ev.description) + '</div>';
+      html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px;">' +
+          '<div><div style="font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-dim,#888);margin-bottom:6px;">Fixture</div>' +
+            '<pre style="background:rgba(0,0,0,0.2);padding:10px;border-radius:6px;font-size:11px;color:var(--text-dim,#aaa);max-height:300px;overflow:auto;margin:0;">' + escapeHTML(fixturePretty) + '</pre>' +
+          '</div>' +
+          '<div><div style="font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-dim,#888);margin-bottom:6px;">Expected signals</div>' +
+            '<pre style="background:rgba(0,0,0,0.2);padding:10px;border-radius:6px;font-size:11px;color:var(--text-dim,#aaa);max-height:300px;overflow:auto;margin:0;">' + escapeHTML(signalsPretty) + '</pre>' +
+          '</div>' +
+        '</div>';
+      html += '<div style="font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-dim,#888);margin-bottom:6px;">Run history (' + runs.length + ')</div>';
+      if (!runs.length) {
+        html += '<div style="color:var(--text-dim,#888);font-style:italic;font-size:12px;padding:10px 0;">No runs yet — click "Run now".</div>';
+      } else {
+        html += '<div style="display:flex;flex-direction:column;gap:8px;">';
+        runs.forEach(function(r) {
+          var when = '';
+          try { when = new Date(r.run_at).toLocaleString(); } catch (e) {}
+          var pill = r.passed
+            ? '<span style="display:inline-block;background:rgba(52,211,153,0.15);color:#34d399;font-size:11px;padding:2px 8px;border-radius:10px;font-weight:600;">PASS</span>'
+            : '<span style="display:inline-block;background:rgba(248,113,113,0.15);color:#f87171;font-size:11px;padding:2px 8px;border-radius:10px;font-weight:600;">FAIL</span>';
+          var scorePretty = '';
+          try { scorePretty = JSON.stringify(r.score, null, 2); } catch (e) {}
+          html += '<details style="background:rgba(255,255,255,0.03);border:1px solid var(--border,#333);border-radius:6px;padding:8px 10px;">' +
+              '<summary style="cursor:pointer;display:flex;align-items:center;gap:8px;font-size:12px;">' +
+                pill +
+                '<span style="color:var(--text-dim,#aaa);">' + escapeHTML(when) + '</span>' +
+                '<span style="font-family:\'SF Mono\',monospace;color:var(--text-dim,#aaa);font-size:11px;">' + escapeHTML(r.model || '') + '</span>' +
+                '<span style="font-family:\'SF Mono\',monospace;color:var(--text-dim,#aaa);font-size:11px;">' + (r.duration_ms ? Math.round(r.duration_ms / 100) / 10 + 's' : '—') + '</span>' +
+                '<span style="font-family:\'SF Mono\',monospace;color:var(--text-dim,#aaa);font-size:11px;">' + (r.input_tokens || 0) + ' in / ' + (r.output_tokens || 0) + ' out</span>' +
+              '</summary>' +
+              (r.error
+                ? '<div style="color:#f87171;font-size:12px;margin-top:8px;">' + escapeHTML(r.error) + '</div>'
+                : '<div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:10px;">' +
+                    '<div><div style="font-size:10px;text-transform:uppercase;color:var(--text-dim,#666);">Score</div>' +
+                      '<pre style="font-size:11px;color:var(--text-dim,#aaa);background:rgba(0,0,0,0.15);padding:8px;border-radius:4px;margin:4px 0 0;max-height:200px;overflow:auto;">' + escapeHTML(scorePretty) + '</pre></div>' +
+                    '<div><div style="font-size:10px;text-transform:uppercase;color:var(--text-dim,#666);">Tool calls (' + ((r.tool_calls || []).length) + ')</div>' +
+                      '<pre style="font-size:11px;color:var(--text-dim,#aaa);background:rgba(0,0,0,0.15);padding:8px;border-radius:4px;margin:4px 0 0;max-height:200px;overflow:auto;">' + escapeHTML((r.tool_calls || []).map(function(t) { return t.name + '(' + JSON.stringify(t.input).slice(0, 80) + ')'; }).join('\n')) + '</pre></div>' +
+                  '</div>' +
+                  (r.response_text ? '<div style="margin-top:10px;"><div style="font-size:10px;text-transform:uppercase;color:var(--text-dim,#666);">Response text</div><pre style="font-size:12px;color:var(--text-dim,#ccc);background:rgba(0,0,0,0.15);padding:8px;border-radius:4px;margin:4px 0 0;max-height:300px;overflow:auto;white-space:pre-wrap;">' + escapeHTML(r.response_text) + '</pre></div>' : '')
+              ) +
+            '</details>';
+        });
+        html += '</div>';
+      }
+      host.innerHTML = html;
+    }).catch(function(err) {
+      host.innerHTML = '<div style="color:#e74c3c;">Failed: ' + escapeHTML(err.message || 'unknown') + '</div>';
+    });
+  }
+
+  function closeEvalDetail() {
+    _agentsEvalId = null;
+    renderAdminAgents();
+  }
+
+  function deleteEval(id) {
+    if (!confirm('Delete this eval fixture? Its run history will also be removed.')) return;
+    window.agxApi.del('/api/admin/agents/evals/' + encodeURIComponent(id)).then(function() {
+      _agentsEvalId = null;
+      renderAdminAgents();
+    }).catch(function(err) {
+      alert('Delete failed: ' + (err.message || 'unknown'));
+    });
+  }
+
+  function openNewEvalModal() {
+    var name = prompt('Fixture name (e.g., "Wimbledon Greens deck rebuild — line-item draft")');
+    if (!name) return;
+    var estimateId = prompt('Estimate ID to replay (must exist in DB)');
+    if (!estimateId) return;
+    var userPrompt = prompt('User prompt to send (e.g., "Build my line items")', 'Build my line items');
+    if (!userPrompt) return;
+    var minLines = prompt('Min line items expected (number, blank to skip)', '');
+    var maxLines = prompt('Max line items expected (number, blank to skip)', '');
+    var keywordsStr = prompt('Must-mention keywords (comma-separated, blank to skip)', '');
+    var sectionsStr = prompt('Must-have sections (comma-separated, blank to skip)', '');
+    var fixture = { estimate_id: estimateId.trim(), user_prompt: userPrompt.trim() };
+    var expected = {};
+    if (minLines && Number(minLines)) expected.min_line_items = Number(minLines);
+    if (maxLines && Number(maxLines)) expected.max_line_items = Number(maxLines);
+    if (keywordsStr.trim()) expected.must_mention = keywordsStr.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+    if (sectionsStr.trim()) expected.must_have_section = sectionsStr.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+    window.agxApi.post('/api/admin/agents/evals', {
+      name: name.trim(),
+      kind: 'estimate_draft',
+      fixture: fixture,
+      expected_signals: expected
+    }).then(function() {
+      renderAgentEvalsList();
+    }).catch(function(err) {
+      alert('Save failed: ' + (err.message || 'unknown'));
+    });
+  }
+
   window.renderAdminAgents = renderAdminAgents;
   window.setAgentsRange = setAgentsRange;
   window.switchAgentsView = switchAgentsView;
   window.openAgentConversation = openAgentConversation;
   window.closeAgentConversation = closeAgentConversation;
   window.openChiefOfStaff = openChiefOfStaff;
+  window.openEvalDetail = openEvalDetail;
+  window.closeEvalDetail = closeEvalDetail;
+  window.runEval = runEval;
+  window.deleteEval = deleteEval;
+  window.openNewEvalModal = openNewEvalModal;
 })();

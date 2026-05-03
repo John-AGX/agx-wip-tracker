@@ -3351,4 +3351,13 @@ router.post('/staff/chat',
   }
 );
 
+// Internals exposed for sibling modules (eval harness in
+// admin-agents-routes). NOT for general use — these bypass the
+// streaming + auth flow that production AG depends on.
 module.exports = router;
+module.exports.internals = {
+  buildEstimateContext,
+  estimateTools: () => [...WEB_TOOLS, ...ESTIMATE_TOOLS],
+  defaultModel: () => MODEL,
+  maxTokens: () => MAX_TOKENS
+};

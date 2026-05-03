@@ -562,6 +562,48 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_schedule_entries_job ON schedule_entries(job_id);
     CREATE INDEX IF NOT EXISTS idx_schedule_entries_start ON schedule_entries(start_date);
     CREATE INDEX IF NOT EXISTS idx_schedule_entries_status ON schedule_entries(status);
+
+    -- AI eval harness — curated fixtures we replay against the agents to
+    -- catch regressions when prompts / models / skill packs change.
+    --
+    -- One row = one fixture. The kind column discriminates the runner
+    -- (today only estimate_draft which replays a known estimate
+    -- snapshot through AG with a known prompt and scores the response).
+    -- The fixture column carries everything the runner needs to
+    -- reconstruct context (estimate id, photo refs, user prompt).
+    -- The expected_signals column describes pass/fail criteria —
+    -- keyword presence, line-count ranges, total within +/- pct.
+    --
+    -- Idempotent so repeat init() calls do not error.
+    CREATE TABLE IF NOT EXISTS ai_evals (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      kind TEXT NOT NULL DEFAULT 'estimate_draft',
+      description TEXT,
+      fixture JSONB NOT NULL,
+      expected_signals JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    -- One row per replay. Lets us see whether a fixture passed/failed
+    -- across model / prompt changes over time.
+    CREATE TABLE IF NOT EXISTS ai_eval_runs (
+      id TEXT PRIMARY KEY,
+      eval_id TEXT NOT NULL REFERENCES ai_evals(id) ON DELETE CASCADE,
+      run_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      run_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      model TEXT,
+      input_tokens INTEGER,
+      output_tokens INTEGER,
+      duration_ms INTEGER,
+      passed BOOLEAN,
+      score JSONB,         -- per-signal pass/fail breakdown
+      response_text TEXT,
+      tool_calls JSONB,    -- array of {name, input}
+      error TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_ai_eval_runs_eval ON ai_eval_runs(eval_id, run_at DESC);
   `);
 
   // Seed built-in roles. ON CONFLICT lets us re-run safely without

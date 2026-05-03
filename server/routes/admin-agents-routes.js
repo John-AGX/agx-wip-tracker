@@ -344,4 +344,227 @@ router.get('/conversations/:key', requireAuth, requireCapability('ROLES_MANAGE')
   }
 });
 
+// ══════════════════════════════════════════════════════════════════════
+// Eval harness
+// ══════════════════════════════════════════════════════════════════════
+// Curated fixtures replayed against AG to catch regressions when
+// prompts / models / skill packs change. Today only `estimate_draft`
+// kind is supported — fixture references a real estimate id; runner
+// rebuilds AG's normal context, sends a known user prompt, captures
+// tool_use proposals + assistant text, and scores against
+// expected_signals (line count range, must-mention keywords, must-
+// have section names).
+//
+// Approach: reuse buildEstimateContext from ai-routes by lazy-requiring
+// it. The fixture estimate must exist in the DB (drop a fixture by
+// pointing at a finalized estimate's id).
+// ══════════════════════════════════════════════════════════════════════
+const { Anthropic } = require('@anthropic-ai/sdk');
+let _anth = null;
+function getAnthropic() {
+  if (_anth) return _anth;
+  const key = (process.env.ANTHROPIC_API_KEY || '').trim();
+  if (!key) return null;
+  _anth = new Anthropic({ apiKey: key });
+  return _anth;
+}
+
+// Pull the AG context builder + tools from the same module that powers
+// production AG via a tiny shim (./ai-routes-internals). Lazy required
+// inside the run handler to avoid load-time circulars.
+
+router.get('/evals', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT e.id, e.name, e.kind, e.description, e.created_at, e.updated_at,
+              (SELECT COUNT(*)::int FROM ai_eval_runs r WHERE r.eval_id = e.id) AS run_count,
+              (SELECT row_to_json(latest) FROM (
+                  SELECT run_at, passed, model, input_tokens, output_tokens, duration_ms
+                    FROM ai_eval_runs WHERE eval_id = e.id ORDER BY run_at DESC LIMIT 1
+              ) latest) AS latest_run
+         FROM ai_evals e
+        ORDER BY e.created_at DESC`
+    );
+    res.json({ evals: r.rows });
+  } catch (e) {
+    console.error('GET /api/admin/agents/evals error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.get('/evals/:id', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+  try {
+    const r = await pool.query('SELECT * FROM ai_evals WHERE id = $1', [req.params.id]);
+    if (!r.rows.length) return res.status(404).json({ error: 'Eval not found' });
+    const runs = await pool.query(
+      `SELECT id, run_at, run_by, model, input_tokens, output_tokens, duration_ms,
+              passed, score, response_text, tool_calls, error
+         FROM ai_eval_runs WHERE eval_id = $1 ORDER BY run_at DESC LIMIT 50`,
+      [req.params.id]
+    );
+    res.json({ eval: r.rows[0], runs: runs.rows });
+  } catch (e) {
+    console.error('GET /api/admin/agents/evals/:id error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.post('/evals', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+  try {
+    const body = req.body || {};
+    if (!body.name || typeof body.name !== 'string') return res.status(400).json({ error: 'name is required' });
+    if (!body.fixture || typeof body.fixture !== 'object') return res.status(400).json({ error: 'fixture (object) is required' });
+    const id = 'eval_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+    const kind = body.kind || 'estimate_draft';
+    await pool.query(
+      `INSERT INTO ai_evals (id, name, kind, description, fixture, expected_signals)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [id, body.name, kind, body.description || null, JSON.stringify(body.fixture), JSON.stringify(body.expected_signals || {})]
+    );
+    res.json({ ok: true, id });
+  } catch (e) {
+    console.error('POST /api/admin/agents/evals error:', e);
+    res.status(500).json({ error: 'Server error: ' + e.message });
+  }
+});
+
+router.put('/evals/:id', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+  try {
+    const body = req.body || {};
+    const sets = [];
+    const params = [];
+    let p = 1;
+    if (body.name)             { sets.push('name = $' + p++);             params.push(body.name); }
+    if (body.description != null) { sets.push('description = $' + p++);   params.push(body.description); }
+    if (body.fixture)          { sets.push('fixture = $' + p++);          params.push(JSON.stringify(body.fixture)); }
+    if (body.expected_signals) { sets.push('expected_signals = $' + p++); params.push(JSON.stringify(body.expected_signals)); }
+    if (!sets.length) return res.json({ ok: true, unchanged: true });
+    sets.push('updated_at = NOW()');
+    params.push(req.params.id);
+    await pool.query(`UPDATE ai_evals SET ${sets.join(', ')} WHERE id = $${p}`, params);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('PUT /api/admin/agents/evals/:id error:', e);
+    res.status(500).json({ error: 'Server error: ' + e.message });
+  }
+});
+
+router.delete('/evals/:id', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+  try {
+    await pool.query('DELETE FROM ai_evals WHERE id = $1', [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('DELETE /api/admin/agents/evals/:id error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.post('/evals/:id/run', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+  const t0 = Date.now();
+  let runId = 'run_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+  try {
+    const evalRes = await pool.query('SELECT * FROM ai_evals WHERE id = $1', [req.params.id]);
+    if (!evalRes.rows.length) return res.status(404).json({ error: 'Eval not found' });
+    const ev = evalRes.rows[0];
+    if (ev.kind !== 'estimate_draft') {
+      return res.status(400).json({ error: 'Only estimate_draft kind is supported in this version.' });
+    }
+
+    const anthropic = getAnthropic();
+    if (!anthropic) return res.status(503).json({ error: 'AI not configured (ANTHROPIC_API_KEY missing).' });
+
+    const fixture = ev.fixture || {};
+    if (!fixture.estimate_id) return res.status(400).json({ error: 'fixture.estimate_id is required.' });
+    if (!fixture.user_prompt) return res.status(400).json({ error: 'fixture.user_prompt is required.' });
+
+    const aiInternals = require('./ai-routes-internals');  // lazy require to defer circular load
+    if (!aiInternals || !aiInternals.buildEstimateContext) {
+      throw new Error('ai-routes internals not available — server may not be fully booted yet.');
+    }
+    const ctx = await aiInternals.buildEstimateContext(fixture.estimate_id, false);
+    const tools = aiInternals.estimateTools();
+    const model = (req.body && req.body.model_override) || aiInternals.defaultModel();
+    const maxTokens = aiInternals.maxTokens();
+
+    const userContent = fixture.user_prompt;
+
+    const response = await anthropic.messages.create({
+      model,
+      max_tokens: maxTokens,
+      system: ctx.system,
+      tools,
+      messages: [{ role: 'user', content: userContent }]
+    });
+
+    const content = response.content || [];
+    const text = content.filter(b => b.type === 'text').map(b => b.text).join('\n');
+    const toolUses = content.filter(b => b.type === 'tool_use').map(b => ({ name: b.name, input: b.input || {} }));
+    const usage = response.usage || {};
+    const elapsed = Date.now() - t0;
+
+    // Score against expected_signals.
+    const exp = ev.expected_signals || {};
+    const signalResults = {};
+    let allPassed = true;
+
+    if (exp.min_line_items != null || exp.max_line_items != null) {
+      const lineCount = toolUses.filter(t => t.name === 'propose_add_line_item').length;
+      const minOk = exp.min_line_items == null || lineCount >= exp.min_line_items;
+      const maxOk = exp.max_line_items == null || lineCount <= exp.max_line_items;
+      const passed = minOk && maxOk;
+      signalResults.line_count = { passed, observed: lineCount, expected: { min: exp.min_line_items, max: exp.max_line_items } };
+      if (!passed) allPassed = false;
+    }
+
+    if (Array.isArray(exp.must_mention) && exp.must_mention.length) {
+      const haystack = (text + '\n' + JSON.stringify(toolUses)).toLowerCase();
+      const missing = exp.must_mention.filter(kw => !haystack.includes(String(kw).toLowerCase()));
+      const passed = missing.length === 0;
+      signalResults.must_mention = { passed, observed: { missing } };
+      if (!passed) allPassed = false;
+    }
+
+    if (Array.isArray(exp.must_have_section) && exp.must_have_section.length) {
+      const sections = new Set();
+      toolUses.forEach(t => {
+        if (t.name === 'propose_add_line_item' && t.input && t.input.section_name) sections.add(t.input.section_name);
+        if (t.name === 'propose_add_section'  && t.input && t.input.name)         sections.add(t.input.name);
+      });
+      const missing = exp.must_have_section.filter(s => !sections.has(s));
+      const passed = missing.length === 0;
+      signalResults.must_have_section = { passed, observed: { sections: [...sections], missing } };
+      if (!passed) allPassed = false;
+    }
+
+    await pool.query(
+      `INSERT INTO ai_eval_runs (id, eval_id, run_by, model, input_tokens, output_tokens,
+                                 duration_ms, passed, score, response_text, tool_calls)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+      [
+        runId, ev.id, req.user ? req.user.id : null, model,
+        usage.input_tokens || null, usage.output_tokens || null,
+        elapsed, allPassed, JSON.stringify(signalResults),
+        text, JSON.stringify(toolUses)
+      ]
+    );
+
+    res.json({
+      ok: true, run_id: runId, passed: allPassed, model,
+      duration_ms: elapsed,
+      input_tokens: usage.input_tokens, output_tokens: usage.output_tokens,
+      tool_calls: toolUses, response_text: text, score: signalResults
+    });
+  } catch (e) {
+    console.error('POST /api/admin/agents/evals/:id/run error:', e);
+    try {
+      await pool.query(
+        `INSERT INTO ai_eval_runs (id, eval_id, run_by, duration_ms, passed, error)
+         VALUES ($1, $2, $3, $4, false, $5)`,
+        [runId, req.params.id, req.user ? req.user.id : null, Date.now() - t0, e.message || 'failed']
+      );
+    } catch (logErr) { /* ignore secondary failure */ }
+    res.status(500).json({ error: 'Eval run failed: ' + (e.message || 'unknown') });
+  }
+});
+
 module.exports = router;
