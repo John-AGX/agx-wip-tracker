@@ -352,7 +352,7 @@
       tabsHtml += '<button class="ws-right-tab' + (i === 0 ? ' active' : '') + '" data-panel="' + tab.id + '">' + tab.label + '</button>';
     });
     tabsHtml += '<div class="ws-right-tabs-actions">' +
-      '<button class="ee-btn" onclick="openJobAI()" title="WIP / financial AI assistant" style="background:linear-gradient(135deg,#8b5cf6,#4f8cff);color:#fff;border-color:transparent;">✨ Ask AI</button>' +
+      '<button class="ee-btn" onclick="openJobAI()" title="Ask Elle, AGX\'s WIP analyst" style="background:linear-gradient(135deg,#8b5cf6,#4f8cff);color:#fff;border-color:transparent;">✨ Ask Elle</button>' +
     '</div>';
     tabsHtml += '</div>';
 

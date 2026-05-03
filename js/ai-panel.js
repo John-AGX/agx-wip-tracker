@@ -160,7 +160,7 @@
     { label: 'Add a property',           prompt: 'Walk me through adding a new property. Ask which parent management company first (search existing parents in the directory). Then collect property name, property_address, on-site CAM name + email + phone, market, and gate code if any. Use create_property to apply.' }
   ];
   var STAFF_PRESETS = [
-    { label: 'How is AG doing this week?',  prompt: 'Pull last 7d metrics for all three agents and tell me what stands out. Then surface the 3 most active conversations across AG / WIP / CRA so I can spot-check.' },
+    { label: 'How is AG doing this week?',  prompt: 'Pull last 7d metrics for all three agents and tell me what stands out. Then surface the 3 most active conversations across AG / Elle / CRA so I can spot-check.' },
     { label: 'Audit AG search usage',       prompt: 'Of AG\'s recent conversations, how often did web_search get invoked? Pull a few examples and summarize what AG was searching for. If a pattern emerges (e.g., the same product specs over and over), propose a new skill pack that bakes in the answer so AG stops searching.' },
     { label: 'Audit & clean skill packs',   prompt: 'Read all skill packs. For each, tell me whether the wording is tight, whether it overlaps with another, and whether it\'s being applied to the right agents. If anything is stale, propose a skill_pack_edit or skill_pack_delete with rationale.' },
     { label: 'Most expensive conversations', prompt: 'Show me the 5 most token-expensive conversations in the last 30 days across all agents. For the top one, drill in and summarize what happened. If you spot a recurring waste pattern (e.g., AG re-asking the same thing every turn), propose a skill pack that fixes it.' },
@@ -181,7 +181,7 @@
   // ── Client context for Job mode ──────────────────────────────
   // Bundles the node-graph snapshot (localStorage) plus an aggregated
   // QB cost summary (parsed from workspace sheets named
-  // "QB Costs YYYY-MM-DD") so the WIP Assistant can reason about
+  // "QB Costs YYYY-MM-DD") so Elle can reason about
   // wiring + uncategorized costs. Returns null if no useful data is
   // available — the server tolerates a missing clientContext.
   function buildJobClientContext() {
@@ -482,7 +482,7 @@
     panel = document.createElement('div');
     panel.id = 'agx-ai-panel';
     // z-index 200 sits above the node graph (#nodeGraphTab z-index:99)
-    // so the WIP Assistant slides in over the graph rather than being
+    // so Elle slides in over the graph rather than being
     // covered by it. Modals (.modal z:1000) still trump the panel.
     var initialWidth = clampAIPanelWidth(loadAIPanelWidth());
     panel.style.cssText = 'position:fixed;top:0;right:0;bottom:0;width:' + initialWidth + 'px;max-width:92vw;min-width:' + AI_PANEL_WIDTH_MIN + 'px;background:var(--surface,#0f0f1e);border-left:1px solid var(--border,#333);box-shadow:-4px 0 22px rgba(0,0,0,0.6);z-index:200;display:flex;flex-direction:column;transform:translateX(100%);transition:transform 0.22s ease;';
@@ -725,7 +725,7 @@
   function refreshModeSpecificUI() {
     var headerEl = document.querySelector('#agx-ai-panel .agx-ai-title');
     if (headerEl) {
-      if (isJobMode())            headerEl.textContent = '📊 WIP Assistant';
+      if (isJobMode())            headerEl.textContent = '📊 Elle · WIP Analyst';
       else if (isClientMode())    headerEl.textContent = '🤝 Customer Relations Agent';
       else if (isStaffMode())     headerEl.textContent = '🎩 Chief of Staff';
       else                        headerEl.textContent = '📐 AG · AGX Estimator';
@@ -735,7 +735,7 @@
     if (trustBtn) trustBtn.style.display = isJobMode() ? 'inline-block' : 'none';
     var noticeEl = document.querySelector('#agx-ai-panel #ai-notice');
     if (noticeEl) {
-      if (isJobMode()) noticeEl.textContent = 'I see WIP, costs, the node graph, and QB lines — and I can propose edits (e.g. set a phase\'s % complete) for you to approve before they apply.';
+      if (isJobMode()) noticeEl.textContent = 'I\'m Elle, your WIP analyst. I see WIP, costs, the node graph, and QB lines — and I can propose edits (e.g. set a phase\'s % complete) for you to approve before they apply.';
       else if (isClientMode()) noticeEl.textContent = 'Customer Relations Agent — I keep the parent-company / property hierarchy clean. Simple writes apply automatically; restructural changes (new parent, merges, splits, deletes) require approval.';
       else if (isStaffMode()) noticeEl.textContent = 'Chief of Staff — I observe AG / WIP / CRA. I read metrics, audit conversations, and propose skill-pack edits for you to approve. Conversation replay still queued.';
       else noticeEl.textContent = 'I\'m AG — your AGX estimator. I can draft scopes, add/edit/delete line items and sections, and tweak pricing. Every change is shown as a card with Approve / Reject before it lands.';
@@ -835,7 +835,7 @@
     if (!box) return;
     if (!_messages.length) {
       var hint;
-      if (isJobMode()) hint = 'Pick a preset below or ask anything about the job.<br><span style="font-size:11px;opacity:0.7;">I see contract, costs, COs, %complete, billing — plus the node graph wiring and QuickBooks cost lines.</span>';
+      if (isJobMode()) hint = '<strong style="color:var(--text,#fff);">📊 Elle · WIP Analyst</strong><br>Pick a preset below or ask anything about this job.<br><span style="font-size:11px;opacity:0.7;">I see contract, costs, COs, %complete, billing — plus the node graph wiring and QuickBooks cost lines.</span>';
       else if (isClientMode()) hint = '<strong style="color:var(--text,#fff);">🤝 Customer Relations Agent</strong><br>Tap <strong>Run full audit</strong> to clean up the directory in one pass — I\'ll split parent+property compounds, link unparented entries, merge dupes, and surface anything ambiguous for you.<br><span style="font-size:11px;opacity:0.7;">I know the AGX hierarchy: parent management company → property/community → CAM contact.</span>';
       else if (isStaffMode()) hint = '<strong style="color:var(--text,#fff);">🎩 Chief of Staff</strong><br>I observe AG / WIP / CRA — usage, cost, conversations, skill packs — and I can propose skill-pack edits for you to approve.<br><span style="font-size:11px;opacity:0.7;">Conversation replay is still queued.</span>';
       else hint = '<strong style="color:var(--text,#fff);">📐 AG — your AGX estimator</strong><br>Pick a preset or describe what you need. I can read the estimate, scope, client, and photos — and propose adds, edits, deletes, and pricing changes for you to approve.<br><span style="font-size:11px;opacity:0.7;">Try "tighten this estimate" or "build my line items".</span>';

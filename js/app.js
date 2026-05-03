@@ -806,7 +806,7 @@
                 window.agxApi.jobs.list(),
                 window.agxApi.estimates.list(),
                 // QB cost lines now persist server-side. Read all of
-                // them at boot so Job Costs / Audit / WIP Assistant
+                // them at boot so Job Costs / Audit / Elle (WIP analyst)
                 // can reason about them without per-tab fetches.
                 window.agxApi.qbCosts.list().catch(function() { return { lines: [] }; }),
                 // Subs directory (Phase A) — global sub records.

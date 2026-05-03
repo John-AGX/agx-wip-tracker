@@ -2688,7 +2688,7 @@
         '</tr></thead><tbody>';
       rows.forEach(function(c) {
         var agentLabel = c.entity_type === 'estimate' ? '📐 AG'
-                       : c.entity_type === 'job'      ? '📊 WIP'
+                       : c.entity_type === 'job'      ? '📊 Elle'
                        : c.entity_type === 'client'   ? '🤝 CRA'
                        : c.entity_type;
         var when = '';

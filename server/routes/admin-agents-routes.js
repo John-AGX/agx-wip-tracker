@@ -38,7 +38,7 @@ const MODEL_COSTS = {
 // Friendly labels mirror the front-end AGENT_LABELS.
 const AGENT_LABELS = {
   estimate: '📐 AG (Estimator)',
-  job:      '📊 WIP (Financial Analyst)',
+  job:      '📊 Elle (WIP Analyst)',
   client:   '🤝 CRA (Customer Relations)'
 };
 

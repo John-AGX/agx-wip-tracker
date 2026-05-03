@@ -236,7 +236,7 @@ const ESTIMATE_TOOLS = [
 ];
 
 // ──────────────────────────────────────────────────────────────────
-// Job-side tools — write capabilities for the WIP Assistant.
+// Job-side tools — write capabilities for Elle (WIP analyst).
 // All proposals route through the same approval-card flow as the
 // estimate side: assistant emits a tool_use block, client renders
 // a card, user approves, client applies the change locally and
@@ -1314,7 +1314,7 @@ async function buildJobContext(jobId, clientContext) {
   const wip = computeJobWIP(job, buildings, phases, changeOrders, subs, invoices);
 
   const lines = [];
-  lines.push('You are a WIP-and-financial analyst for AG Exteriors, a Central Florida construction services company. The PM is working on the job below — help them spot margin issues, missing change orders, billing gaps, and progress risks.');
+  lines.push('You are Elle, AGX\'s WIP analyst. AGX = AG Exteriors, a Central Florida construction services company. The PM is working on the job below — help them spot margin issues, missing change orders, billing gaps, and progress risks. (Your name is a nod to Lisa.)');
   lines.push('');
   lines.push('# Job');
   lines.push('- Title: ' + (job.title || job.jobName || '(untitled)'));
@@ -3040,11 +3040,11 @@ function isStaffToolAutoTier(name) {
 // current week as a second block (refreshed each turn).
 async function buildStaffContext() {
   const stable = [];
-  stable.push('You are the Chief of Staff for AGX\'s in-app AI agents — AG (estimating), WIP (financial analyst), and CRA (customer relations). Your user is the AGX admin / owner. Your job is to observe how the three agents are being used, surface trends and anomalies, audit specific conversations on request, and (in future versions) propose skill-pack improvements based on what you see.');
+  stable.push('You are the Chief of Staff for AGX\'s in-app AI agents — AG (estimating), Elle (WIP analyst), and CRA (customer relations). Your user is the AGX admin / owner. Your job is to observe how the three agents are being used, surface trends and anomalies, audit specific conversations on request, and propose skill-pack improvements based on what you see.');
   stable.push('');
   stable.push('# Who the three agents are');
   stable.push('  • **AG (estimate-side)** — helps PMs draft scopes, propose line items with AGX-typical Central-FL pricing, and edit the estimate via approval-gated tools. Heavy vision use (photos, PDFs of RFPs / takeoffs).');
-  stable.push('  • **WIP (job-side)** — financial analyst on live jobs. Reads WIP snapshot, change orders, QB cost lines, and the node graph; spots margin issues, missing COs, billing gaps.');
+  stable.push('  • **Elle (job-side)** — WIP analyst on live jobs. Reads WIP snapshot, change orders, QB cost lines, and the node graph; spots margin issues, missing COs, billing gaps.');
   stable.push('  • **CRA (customer-side)** — owns the customer directory. Splits parent+property compounds, links unparented properties, merges duplicates, attaches business cards, and writes durable client notes.');
   stable.push('All three log into the same ai_messages table (different entity_type values).');
   stable.push('');
@@ -3083,7 +3083,7 @@ async function buildStaffContext() {
     `);
     if (r.rows.length) {
       liveLines.push('# Live snapshot (last 7 days, assistant turns)');
-      const labelMap = { estimate: 'AG', job: 'WIP', client: 'CRA', staff: 'Chief of Staff (you)' };
+      const labelMap = { estimate: 'AG', job: 'Elle', client: 'CRA', staff: 'Chief of Staff (you)' };
       r.rows.forEach(row => {
         liveLines.push('  • ' + (labelMap[row.entity_type] || row.entity_type) + ': ' + Number(row.turns) + ' turns');
       });
@@ -3125,7 +3125,7 @@ async function execStaffTool(name, input) {
       `;
       const r = await pool.query(aggSql);
       const out = [];
-      const labels = { estimate: 'AG (estimate)', job: 'WIP (job)', client: 'CRA (client)' };
+      const labels = { estimate: 'AG (estimate)', job: 'Elle (job/WIP)', client: 'CRA (client)' };
       const all = ['estimate', 'job', 'client'];
       const byType = new Map(r.rows.map(row => [row.entity_type, row]));
       out.push('Metrics for last ' + range + ':');
