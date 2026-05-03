@@ -306,6 +306,12 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_ai_messages_entity
       ON ai_messages(entity_type, estimate_id, user_id, created_at);
 
+    -- tool_use_count — assistant rows record how many tool_use blocks
+    -- were emitted that turn. Used by the admin Agents page to spot
+    -- tool-heavy conversations. Existing rows default to 0; new inserts
+    -- populate from the streamed turn.
+    ALTER TABLE ai_messages ADD COLUMN IF NOT EXISTS tool_use_count INTEGER DEFAULT 0;
+
     -- Materials catalog — AGX's purchase history (Home Depot to start;
     -- vendor column makes Lowe's / Sherwin Williams / etc. a config
     -- addition later, not a schema change). One row per unique

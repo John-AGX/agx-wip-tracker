@@ -210,14 +210,16 @@ router.get('/conversations', requireAuth, requireCapability('ROLES_MANAGE'), asy
     };
     const estIds = groupBy('estimate');
     if (estIds.length) {
-      const r = await pool.query(`SELECT id, title FROM estimates WHERE id = ANY($1::text[])`, [estIds]);
+      // estimates / jobs store everything in a JSONB `data` column —
+      // title and name are NOT top-level columns. Extract via ->>.
+      const r = await pool.query(`SELECT id, data->>'title' AS title FROM estimates WHERE id = ANY($1::text[])`, [estIds]);
       r.rows.forEach(x => entityTitleByKey.set('estimate|' + x.id, x.title));
     }
     const jobIds = groupBy('job');
     if (jobIds.length) {
       // jobs.id is text in this schema; same lookup pattern.
       const r = await pool.query(
-        `SELECT id, COALESCE(NULLIF(name, ''), 'Job ' || id) AS title FROM jobs WHERE id = ANY($1::text[])`,
+        `SELECT id, COALESCE(NULLIF(data->>'name', ''), NULLIF(data->>'jobName', ''), 'Job ' || id) AS title FROM jobs WHERE id = ANY($1::text[])`,
         [jobIds]
       );
       r.rows.forEach(x => entityTitleByKey.set('job|' + x.id, x.title));
@@ -319,13 +321,13 @@ router.get('/conversations/:key', requireAuth, requireCapability('ROLES_MANAGE')
     const user = uRes.rows[0] || null;
     let entityTitle = entityId;
     if (entityType === 'estimate') {
-      const e = await pool.query('SELECT title FROM estimates WHERE id = $1', [entityId]);
+      const e = await pool.query(`SELECT data->>'title' AS title FROM estimates WHERE id = $1`, [entityId]);
       if (e.rows[0]) entityTitle = e.rows[0].title || entityId;
     } else if (entityType === 'job') {
-      const j = await pool.query('SELECT name FROM jobs WHERE id = $1', [entityId]);
-      if (j.rows[0]) entityTitle = j.rows[0].name || entityId;
-    } else if (entityId === '__global__') {
-      entityTitle = 'Customer directory';
+      const j = await pool.query(`SELECT COALESCE(NULLIF(data->>'name', ''), NULLIF(data->>'jobName', ''), 'Job ' || id) AS title FROM jobs WHERE id = $1`, [entityId]);
+      if (j.rows[0]) entityTitle = j.rows[0].title || entityId;
+    } else if (entityId === '__global__' || entityId === 'global') {
+      entityTitle = entityType === 'staff' ? 'Chief of Staff' : 'Customer directory';
     }
 
     res.json({

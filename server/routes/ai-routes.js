@@ -3184,12 +3184,13 @@ async function execStaffTool(name, input) {
       const ids = (et) => [...new Set(r.rows.filter(x => x.entity_type === et).map(x => x.entity_id))];
       const eIds = ids('estimate');
       if (eIds.length) {
-        const er = await pool.query('SELECT id, title FROM estimates WHERE id = ANY($1::text[])', [eIds]);
+        // estimates / jobs store title + name in JSONB `data`; pull via ->>.
+        const er = await pool.query(`SELECT id, data->>'title' AS title FROM estimates WHERE id = ANY($1::text[])`, [eIds]);
         er.rows.forEach(x => titleByKey.set('estimate|' + x.id, x.title));
       }
       const jIds = ids('job');
       if (jIds.length) {
-        const jr = await pool.query(`SELECT id, COALESCE(NULLIF(name,''),'Job '||id) AS title FROM jobs WHERE id = ANY($1::text[])`, [jIds]);
+        const jr = await pool.query(`SELECT id, COALESCE(NULLIF(data->>'name',''), NULLIF(data->>'jobName',''), 'Job '||id) AS title FROM jobs WHERE id = ANY($1::text[])`, [jIds]);
         jr.rows.forEach(x => titleByKey.set('job|' + x.id, x.title));
       }
       const lines = [];
