@@ -78,6 +78,10 @@
     var overlay = document.createElement('div');
     overlay.id = 'agx-markup-overlay';
     overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.88);z-index:5000;display:flex;flex-direction:column;padding:14px;';
+    // The sticker popup positions itself relative to the overlay
+    // bounding box. position:fixed creates its own containing block so
+    // child position:absolute is relative to the overlay; no override
+    // needed beyond ensuring we measure off the overlay rect.
     overlay.innerHTML =
       // Top bar — filename + actions (Cancel / Save)
       '<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;background:rgba(15,15,30,0.95);border:1px solid #2a2a3a;border-radius:10px;padding:8px 14px;">' +
@@ -114,9 +118,13 @@
           // Undo / Clear
           '<button id="agx-mk-undo" title="Undo (Ctrl+Z)" style="width:48px;height:32px;background:rgba(255,255,255,0.05);color:#ddd;border:1px solid #444;border-radius:6px;font-size:14px;cursor:pointer;">↶</button>' +
           '<button id="agx-mk-clear" title="Clear all" style="width:48px;height:32px;background:rgba(248,113,113,0.10);color:#f87171;border:1px solid rgba(248,113,113,0.35);border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;">CLR</button>' +
-          // Sticker picker (rendered conditionally below toolbar when sticker tool active)
-          '<div id="agx-mk-sticker-picker" style="display:none;width:100%;margin-top:6px;padding:6px 4px;background:rgba(0,0,0,0.3);border:1px solid #3a3a4a;border-radius:6px;"></div>' +
         '</div>' +
+        // Floating sticker picker — absolutely positioned to the right of the
+        // sidebar so it overlays the canvas instead of pushing the sidebar
+        // height taller (which used to squeeze the canvas off-screen on
+        // narrow viewports / phones). Visible only when the Sticker tool
+        // is active.
+        '<div id="agx-mk-sticker-picker" style="display:none;position:absolute;left:88px;top:78px;background:rgba(15,15,30,0.97);border:1px solid #3a3a4a;border-radius:8px;padding:8px;box-shadow:0 6px 20px rgba(0,0,0,0.5);z-index:5050;max-height:70vh;overflow-y:auto;width:140px;"></div>' +
         // Canvas area
         '<div style="flex:1;background:#000;border:1px solid #2a2a3a;border-radius:10px;overflow:hidden;display:flex;align-items:center;justify-content:center;min-height:0;">' +
           '<canvas id="agx-mk-canvas" style="display:block;max-width:100%;max-height:100%;"></canvas>' +
@@ -252,16 +260,28 @@
     var picker = overlay.querySelector('#agx-mk-sticker-picker');
     if (!picker) return;
     if (state.tool !== 'sticker') { picker.style.display = 'none'; return; }
+    // Anchor vertically to the Sticker button (so the popup sits at
+    // the same row), and horizontally to the sidebar's right edge so
+    // the popup never overlaps the sidebar regardless of width.
+    var stickerBtn = overlay.querySelector('[data-mk-tool="sticker"]');
+    var sidebar = overlay.querySelector('#agx-mk-sidebar');
+    if (stickerBtn && sidebar) {
+      var btnRect = stickerBtn.getBoundingClientRect();
+      var sidebarRect = sidebar.getBoundingClientRect();
+      var ovRect = overlay.getBoundingClientRect();
+      picker.style.top = (btnRect.top - ovRect.top) + 'px';
+      picker.style.left = (sidebarRect.right - ovRect.left + 8) + 'px';
+    }
     picker.style.display = '';
     picker.innerHTML =
-      '<div style="font-size:9px;color:#888;text-transform:uppercase;letter-spacing:0.5px;text-align:center;margin-bottom:4px;">Pick</div>' +
-      '<div style="display:grid;grid-template-columns:1fr;gap:3px;">' +
+      '<div style="font-size:9px;color:#888;text-transform:uppercase;letter-spacing:0.5px;text-align:center;margin-bottom:6px;">Stickers</div>' +
+      '<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:4px;">' +
       STICKERS.map(function(st) {
         var active = state.stickerKind === st.kind;
         return '<button data-mk-sticker="' + st.kind + '" title="' + escapeHTML(st.label) + '" ' +
-          'style="width:48px;height:30px;background:' + (active ? '#4f8cff' : 'rgba(255,255,255,0.05)') +
+          'style="height:34px;background:' + (active ? '#4f8cff' : 'rgba(255,255,255,0.05)') +
           ';color:' + (active ? '#fff' : '#ddd') + ';border:1px solid ' + (active ? '#4f8cff' : '#444') +
-          ';border-radius:5px;font-size:11px;cursor:pointer;font-weight:600;padding:0 4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' +
+          ';border-radius:5px;font-size:12px;cursor:pointer;font-weight:600;padding:0 4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:flex;align-items:center;justify-content:center;">' +
           st.previewHtml + '</button>';
       }).join('') +
       '</div>';
