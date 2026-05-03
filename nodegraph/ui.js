@@ -1104,14 +1104,27 @@ function initEvents(){
     }
   });
 
+  // Zoom factor per scroll-wheel tick. Bumped from 1.07/0.93 (~7%)
+  // to 1.15/0.87 (~15%) for snappier feel. Anchored at the cursor
+  // position so the point under the mouse stays put while the rest
+  // scales around it.
+  var ZOOM_IN_FACTOR  = 1.15;
+  var ZOOM_OUT_FACTOR = 0.87;
+  function zoomAt(clientX, clientY, factor){
+    var cur = E.zm();
+    var nz = Math.max(0.2, Math.min(3, cur * factor));
+    if (nz === cur) return;
+    var r = wrap.getBoundingClientRect();
+    var mx = clientX - r.left, my = clientY - r.top;
+    var p = E.pan();
+    E.pan(mx/nz - (mx/cur - p.x), my/nz - (my/cur - p.y));
+    E.zm(nz);
+    applyTx();
+    render();
+  }
   wrap.addEventListener('wheel',function(e){
     e.preventDefault();
-    var f=e.deltaY>0?0.93:1.07, cur=E.zm();
-    var nz=Math.max(0.2,Math.min(3,cur*f));
-    var r=wrap.getBoundingClientRect(),mx=e.clientX-r.left,my=e.clientY-r.top;
-    var p=E.pan();
-    E.pan(mx/nz-(mx/cur-p.x), my/nz-(my/cur-p.y));
-    E.zm(nz); applyTx(); render();
+    zoomAt(e.clientX, e.clientY, e.deltaY > 0 ? ZOOM_OUT_FACTOR : ZOOM_IN_FACTOR);
   },{passive:false});
 
   canvasEl.addEventListener('mousedown',function(e){
@@ -1621,9 +1634,16 @@ function initEvents(){
     }
   });
 
-  // Right-click wire to delete
+  // Right-click wire to delete. Ctrl+right-click (or Cmd on Mac) is
+  // an alternate zoom-out gesture for users who'd rather not roll
+  // the wheel — anchored at cursor position like the wheel zoom so
+  // the point under the mouse stays put.
   wrap.addEventListener('contextmenu',function(e){
     e.preventDefault();
+    if (e.ctrlKey || e.metaKey) {
+      zoomAt(e.clientX, e.clientY, ZOOM_OUT_FACTOR);
+      return;
+    }
     var r=wrap.getBoundingClientRect(),p=E.pan(),z2=E.zm();
     var mx=(e.clientX-r.left)/z2-p.x, my=(e.clientY-r.top)/z2-p.y;
     var ci=-1,cd=40,ws=E.wires();
