@@ -923,7 +923,19 @@
     var th = function(label, w, align) {
       return '<div style="flex:' + (w || '1 1 auto') + ';padding:8px 10px;font-size:10px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;text-align:' + (align || 'left') + ';">' + label + '</div>';
     };
-    return '<div style="display:flex;background:rgba(255,255,255,0.02);border-bottom:1px solid var(--border,#333);">' +
+    // Stick the column header beneath the main #ee-header so as the
+    // user scrolls the line list, the column labels stay visible
+    // instead of disappearing behind (and bleeding through) the sticky
+    // title strip. Top offset is measured at render time off the live
+    // #ee-header height — so it auto-tracks any header layout change.
+    var hdr = document.getElementById('ee-header');
+    var topOffset = hdr ? Math.ceil(hdr.getBoundingClientRect().height) : 180;
+    return '<div data-ee-line-header style="' +
+      'position:sticky;top:' + topOffset + 'px;z-index:30;' +
+      'display:flex;background:var(--bg,#0a0a0f);' +
+      'border-top:1px solid var(--border,#333);' +
+      'border-bottom:1px solid var(--border,#333);' +
+      'box-shadow:0 4px 8px rgba(0,0,0,0.4);">' +
       th('', '0 0 28px') + // drag handle column
       th('Description', '2 1 200px') +
       th('Qty', '0 0 70px', 'right') +
