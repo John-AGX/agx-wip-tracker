@@ -392,21 +392,47 @@
           '<span>&#x1F4CB;</span>From lead: ' + escapeHTML(lead.title) + ' &rarr;' +
         '</button>';
       } else {
-        html += '<span style="display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:14px;background:rgba(251,191,36,0.10);color:var(--yellow,#fbbf24);font-size:11px;">' +
-          '<span>&#x1F4CB;</span>Linked to lead' +
-        '</span>';
+        // Lead isn't in the local cache yet (user opened the estimate
+        // without first visiting the Leads tab). Render a clickable
+        // placeholder, fetch the lead by id, and re-render once it
+        // resolves so the title shows up.
+        html += '<button class="ee-btn secondary" onclick="jumpToLeadFromEstimate(\'' + escapeHTML(est.lead_id) + '\')" style="display:inline-flex;align-items:center;gap:6px;background:rgba(251,191,36,0.10);color:var(--yellow,#fbbf24);">' +
+          '<span>&#x1F4CB;</span>Linked to lead &rarr;' +
+        '</button>';
+        if (window.agxApi && window.agxApi.leads && typeof window.agxApi.leads.get === 'function') {
+          window.agxApi.leads.get(est.lead_id).then(function(res) {
+            if (res && res.lead) {
+              // Push into the cache so subsequent renders are instant.
+              if (window.agxLeads && typeof window.agxLeads.cacheLead === 'function') {
+                window.agxLeads.cacheLead(res.lead);
+              }
+              renderHeaderChips();
+            }
+          }).catch(function() { /* lead deleted or no perms — leave placeholder */ });
+        }
       }
     }
     chipsEl.innerHTML = html;
   }
 
-  // Closes the editor and switches to the lead's modal — handy quick-jump
-  // from the estimate header chip back to the parent lead.
+  // Closes the editor, switches to the Leads sub-tab, then opens the
+  // lead detail page. The sub-tab switch matters now that the lead
+  // detail renders inline inside the Leads sub-tab — without it, the
+  // detail view mounts but stays hidden because the sub-tab is on
+  // Estimates.
   function jumpToLeadFromEstimate(leadId) {
     closeEstimateEditor();
-    if (typeof window.openEditLeadModal === 'function') {
-      setTimeout(function() { window.openEditLeadModal(leadId); }, 100);
-    }
+    setTimeout(function() {
+      if (typeof window.switchEstimatesSubTab === 'function') {
+        window.switchEstimatesSubTab('leads');
+      }
+      if (typeof window.openEditLeadModal === 'function') {
+        // A second tick lets the leads list render before the detail
+        // view re-parents the form — avoids re-rendering races where
+        // the leads cache reload kicks off concurrently.
+        setTimeout(function() { window.openEditLeadModal(leadId); }, 50);
+      }
+    }, 80);
   }
 
   // ──────────────────────────────────────────────────────────────────

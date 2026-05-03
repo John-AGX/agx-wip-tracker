@@ -1444,6 +1444,15 @@
   window.handleLeadsImportFile = handleLeadsImportFile;
   window.agxLeads = {
     getCached: function() { return _leads.slice(); },
-    reload: reloadLeadsCache
+    reload: reloadLeadsCache,
+    // Push a single fetched lead into the cache. Used by the estimate
+    // editor's chip when it has to fetch by id (lead wasn't loaded
+    // yet). Replaces an existing entry by id, or appends.
+    cacheLead: function(lead) {
+      if (!lead || !lead.id) return;
+      var idx = _leads.findIndex(function(x) { return x.id === lead.id; });
+      if (idx >= 0) _leads[idx] = lead;
+      else _leads.push(lead);
+    }
   };
 })();
