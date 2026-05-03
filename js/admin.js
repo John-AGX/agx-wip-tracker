@@ -2310,7 +2310,39 @@
       metricCard('Contract Value', formatCurrency(totalContract), 'across all jobs') +
       metricCard('Revenue Earned', formatCurrency(totalRev), 'live state') +
       metricCard('Gross Profit', formatCurrency(totalProfit), 'live state') +
-      metricCard('Active Users', activeUsers, users.length + ' total');
+      metricCard('Active Users', activeUsers, users.length + ' total') +
+      metricCard('Online Now', '<span id="admin-metric-online-count" style="color:var(--text-dim,#888);">…</span>',
+                 '<span id="admin-metric-online-asof"></span>');
+
+    // Async fetch — doesn't block the rest of the metrics rendering.
+    // 5-min threshold matches the API default. Self-clears the
+    // placeholder if the request fails (e.g. offline mode) so the card
+    // doesn't get stuck on "…".
+    if (window.agxApi && window.agxApi.isAuthenticated && window.agxApi.isAuthenticated()) {
+      window.agxApi.get('/api/auth/active-users').then(function(r) {
+        var countEl = document.getElementById('admin-metric-online-count');
+        var asOfEl = document.getElementById('admin-metric-online-asof');
+        if (countEl) {
+          countEl.textContent = r.activeCount;
+          countEl.style.color = 'var(--text,#fff)';
+        }
+        if (asOfEl) {
+          var t = new Date(r.asOf);
+          var hh = t.getHours();
+          var mm = String(t.getMinutes()).padStart(2, '0');
+          var ampm = hh >= 12 ? 'PM' : 'AM';
+          var hh12 = hh % 12; if (hh12 === 0) hh12 = 12;
+          asOfEl.textContent = 'as of ' + hh12 + ':' + mm + ' ' + ampm +
+            ' · last ' + r.thresholdMinutes + ' min';
+        }
+      }).catch(function() {
+        var countEl = document.getElementById('admin-metric-online-count');
+        if (countEl) countEl.textContent = '—';
+      });
+    } else {
+      var countEl = document.getElementById('admin-metric-online-count');
+      if (countEl) countEl.textContent = '—';
+    }
 
     // ── Job status table ──────────────────────────────────
     if (!jobs.length) {

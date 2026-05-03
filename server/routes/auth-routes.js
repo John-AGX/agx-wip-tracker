@@ -99,10 +99,35 @@ router.post('/register', requireAuth, requireRole('admin'), async (req, res) => 
 router.get('/users', requireAuth, async (req, res) => {
   try {
     const { rows } = await pool.query(
-      'SELECT id, email, name, role, active, notification_prefs, created_at FROM users'
+      'SELECT id, email, name, role, active, notification_prefs, created_at, last_seen_at FROM users'
     );
     res.json({ users: rows });
   } catch (e) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// GET /api/auth/active-users — count of users seen in the last
+// `threshold` minutes (default 5). Drives the "Online Now" metric
+// card on Admin → Metrics. Cheap query backed by idx_users_last_seen_at.
+// Admin-only because it leaks aggregate presence info.
+router.get('/active-users', requireAuth, requireRole('admin'), async (req, res) => {
+  try {
+    const threshold = Math.max(1, Math.min(60, parseInt(req.query.threshold, 10) || 5));
+    const { rows } = await pool.query(
+      "SELECT COUNT(*)::int AS active_count " +
+      "FROM users " +
+      "WHERE active = TRUE AND last_seen_at IS NOT NULL " +
+      "  AND last_seen_at > NOW() - ($1 || ' minutes')::interval",
+      [String(threshold)]
+    );
+    res.json({
+      activeCount: rows[0].active_count,
+      asOf: new Date().toISOString(),
+      thresholdMinutes: threshold
+    });
+  } catch (e) {
+    console.error('GET /api/auth/active-users error:', e);
     res.status(500).json({ error: 'Server error' });
   }
 });

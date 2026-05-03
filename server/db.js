@@ -30,6 +30,11 @@ async function initSchema() {
     );
     -- Backfill the column on existing deployments. Safe re-run.
     ALTER TABLE users ADD COLUMN IF NOT EXISTS notification_prefs JSONB NOT NULL DEFAULT '{}'::jsonb;
+    -- last_seen_at is bumped by requireAuth on each authenticated
+    -- request (throttled to once per 30s per user). Drives the
+    -- "users online now" metric on Admin → Metrics. NULL = never seen.
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ;
+    CREATE INDEX IF NOT EXISTS idx_users_last_seen_at ON users(last_seen_at) WHERE last_seen_at IS NOT NULL;
 
     CREATE TABLE IF NOT EXISTS jobs (
       id TEXT PRIMARY KEY,

@@ -74,11 +74,33 @@ function signToken(user) {
   );
 }
 
+// Per-user throttle for last_seen_at writes — without it every API
+// request (which is dozens per page-load) would hammer the users
+// table. 30s window means an idle tab still ticks "active" for ~5min
+// after last interaction (the threshold the active-users endpoint
+// uses), but a chatty client only bumps the column twice a minute.
+const LAST_SEEN_THROTTLE_MS = 30 * 1000;
+const _lastSeenWriteAt = new Map(); // userId -> epoch ms of last bump
+
+function bumpLastSeen(userId) {
+  if (!_pool || !userId) return;
+  const now = Date.now();
+  const prev = _lastSeenWriteAt.get(userId) || 0;
+  if (now - prev < LAST_SEEN_THROTTLE_MS) return;
+  _lastSeenWriteAt.set(userId, now);
+  // Fire-and-forget — never block the request. Errors are silent
+  // because this is best-effort presence tracking, not a hard
+  // dependency of any API call.
+  _pool.query('UPDATE users SET last_seen_at = NOW() WHERE id = $1', [userId])
+    .catch(function(e) { /* swallow */ });
+}
+
 function requireAuth(req, res, next) {
   const token = req.cookies?.token || req.headers.authorization?.replace('Bearer ', '');
   if (!token) return res.status(401).json({ error: 'Not authenticated' });
   try {
     req.user = jwt.verify(token, JWT_SECRET);
+    bumpLastSeen(req.user.id);
     next();
   } catch (e) {
     return res.status(401).json({ error: 'Invalid or expired token' });
