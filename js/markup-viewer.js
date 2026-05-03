@@ -18,15 +18,30 @@
 
   // ── Tool catalog (left sidebar order) ────────────────────────────
   var TOOLS = [
-    { key: 'select',  glyph: '\u{1F446}', label: 'Select / move' },
-    { key: 'arrow',   glyph: '↗',     label: 'Arrow' },
-    { key: 'line',    glyph: '─',     label: 'Line' },
-    { key: 'rect',    glyph: '▭',     label: 'Rectangle' },
-    { key: 'ellipse', glyph: '◯',     label: 'Ellipse' },
-    { key: 'draw',    glyph: '✎',     label: 'Free draw' },
-    { key: 'text',    glyph: 'T',          label: 'Text' },
-    { key: 'sticker', glyph: '\u{1F3F7}',  label: 'Sticker / stamp' }
+    { key: 'select',   glyph: '\u{1F446}', label: 'Select / move' },
+    { key: 'arrow',    glyph: '↗',     label: 'Arrow' },
+    { key: 'line',     glyph: '─',     label: 'Line' },
+    { key: 'polyline', glyph: '⌇',     label: 'Polyline (click to add points; double-click / Esc to finish; snaps to existing endpoints)' },
+    { key: 'rect',     glyph: '▭',     label: 'Rectangle' },
+    { key: 'ellipse',  glyph: '◯',     label: 'Ellipse' },
+    { key: 'draw',     glyph: '✎',     label: 'Free draw' },
+    { key: 'text',     glyph: 'T',          label: 'Text' },
+    { key: 'sticker',  glyph: '\u{1F3F7}',  label: 'Sticker / stamp' }
   ];
+
+  // Thickness presets — click the Thickness button to swap among them.
+  // Sized so the visual difference is obvious at typical photo
+  // resolutions (the canvas is at native image size, often 1600+px wide).
+  var THICKNESS_PRESETS = [
+    { key: 'thin',  value: 3,  label: 'Thin' },
+    { key: 'med',   value: 8,  label: 'Medium' },
+    { key: 'thick', value: 16, label: 'Thick' }
+  ];
+
+  // Endpoint snap radius — in canvas pixels. When drawing a line /
+  // polyline / arrow, if a candidate end point is within this many
+  // pixels of an existing stroke's endpoint, snap to it.
+  var SNAP_RADIUS = 14;
   var DEFAULT_COLORS = ['#ef4444', '#f59e0b', '#facc15', '#22c55e', '#3b82f6', '#a855f7', '#000000', '#ffffff'];
 
   // Sticker catalog. Each entry has a `kind` key, a `label`, and a
@@ -70,9 +85,11 @@
       tool: 'arrow',
       stickerKind: null,
       color: '#ef4444',
-      lineWidth: 4,
+      lineWidth: 8,
       strokes: [],
       currentStroke: null,
+      activePolyline: null,    // mid-build polyline (committed on dblclick / Esc / tool switch)
+      hoverPoint: null,        // last known canvas-local cursor (for polyline preview + snap)
       selectedIdx: null,
       dragLast: null,
       img: null,
@@ -116,11 +133,10 @@
           '</div>' +
           // Divider
           '<div style="width:36px;height:1px;background:#3a3a4a;margin:6px 0;"></div>' +
-          // Width slider (vertical)
-          '<div style="text-align:center;">' +
-            '<div style="font-size:9px;color:#888;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Width</div>' +
-            '<input id="agx-mk-width" type="range" min="1" max="100" value="4" style="width:48px;" />' +
-          '</div>' +
+          // Thickness button — opens a popup with preset thickness circles.
+          '<button id="agx-mk-thickness" title="Thickness" style="width:48px;height:44px;background:rgba(255,255,255,0.05);color:#ddd;border:1px solid #444;border-radius:6px;cursor:pointer;display:flex;align-items:center;justify-content:center;line-height:1;padding:0;">' +
+            '<span id="agx-mk-thickness-dot" style="display:block;width:14px;height:14px;border-radius:50%;background:#ddd;"></span>' +
+          '</button>' +
           // Divider
           '<div style="width:36px;height:1px;background:#3a3a4a;margin:6px 0;"></div>' +
           // Undo / Clear
@@ -146,11 +162,14 @@
     // Tool buttons
     overlay.querySelectorAll('[data-mk-tool]').forEach(function(btn) {
       btn.onclick = function() {
+        // Finish any in-progress polyline before switching tools.
+        commitPolylineIfActive();
         state.tool = btn.dataset.mkTool;
         if (state.tool !== 'sticker') state.stickerKind = null;
         if (state.tool !== 'select') state.selectedIdx = null;
         refreshToolbar(overlay);
         renderStickerPicker(overlay);
+        updateThicknessIndicator(overlay);
         updateHint(overlay);
         redraw();
       };
@@ -165,12 +184,9 @@
         }
       };
     });
-    overlay.querySelector('#agx-mk-width').oninput = function(e) {
-      state.lineWidth = parseInt(e.target.value, 10) || 4;
-      if (state.selectedIdx != null) {
-        var s = state.strokes[state.selectedIdx];
-        if (s) { s.lineWidth = state.lineWidth; redraw(); }
-      }
+    overlay.querySelector('#agx-mk-thickness').onclick = function(e) {
+      e.stopPropagation();
+      openThicknessPopup(overlay);
     };
     overlay.querySelector('#agx-mk-undo').onclick = function() {
       state.strokes.pop();
@@ -178,16 +194,23 @@
       redraw();
     };
     overlay.querySelector('#agx-mk-clear').onclick = function() {
-      if (!state.strokes.length || confirm('Clear all markup?')) {
+      var hasContent = state.strokes.length || state.activePolyline;
+      if (!hasContent || confirm('Clear all markup?')) {
         state.strokes = [];
         state.selectedIdx = null;
+        state.activePolyline = null;
         redraw();
       }
     };
     overlay.querySelector('#agx-mk-cancel').onclick = function() {
       if (!state.strokes.length || confirm('Discard your markup?')) closeOverlay();
     };
-    overlay.querySelector('#agx-mk-save').onclick = function() { openSaveDialog(); };
+    overlay.querySelector('#agx-mk-save').onclick = function() {
+      // Commit any in-progress polyline before opening the save dialog.
+      commitPolylineIfActive();
+      redraw();
+      openSaveDialog();
+    };
 
     refreshToolbar(overlay);
     renderStickerPicker(overlay);
@@ -198,9 +221,27 @@
     overlay.tabIndex = -1;
     overlay.focus();
     overlay.onkeydown = function(e) {
-      if (e.key === 'Escape') overlay.querySelector('#agx-mk-cancel').click();
+      if (e.key === 'Escape') {
+        // If a polyline is mid-build, Esc commits it first instead of
+        // closing the editor — same convention as Bluebeam / Illustrator.
+        if (state.activePolyline) {
+          commitPolylineIfActive();
+          redraw();
+          return;
+        }
+        overlay.querySelector('#agx-mk-cancel').click();
+        return;
+      }
       if (e.key === 'z' && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
+        // Undo while polyline is active: pop the last placed point;
+        // commit cancellation if it was the only one.
+        if (state.activePolyline && state.activePolyline.points && state.activePolyline.points.length) {
+          state.activePolyline.points.pop();
+          if (!state.activePolyline.points.length) state.activePolyline = null;
+          redraw();
+          return;
+        }
         state.strokes.pop();
         state.selectedIdx = null;
         redraw();
@@ -253,15 +294,98 @@
   function refreshToolbar(overlay) {
     overlay.querySelectorAll('[data-mk-tool]').forEach(function(btn) {
       var active = btn.dataset.mkTool === state.tool;
-      btn.style.background = active ? '#4f8cff' : 'rgba(255,255,255,0.05)';
-      btn.style.color = active ? '#fff' : '#ddd';
-      btn.style.borderColor = active ? '#4f8cff' : '#444';
+      // Active state uses a yellow accent border instead of a solid
+      // fill, so the icon stays readable and the choice still feels
+      // distinct without overpowering the canvas underneath.
+      btn.style.background = active ? 'rgba(251,191,36,0.10)' : 'rgba(255,255,255,0.05)';
+      btn.style.color = active ? '#fbbf24' : '#ddd';
+      btn.style.borderColor = active ? '#fbbf24' : '#444';
+      btn.style.boxShadow = active ? 'inset 0 0 0 1px #fbbf24' : 'none';
     });
     overlay.querySelectorAll('[data-mk-color]').forEach(function(btn) {
       var active = btn.dataset.mkColor === state.color;
       btn.style.borderColor = active ? '#fff' : 'rgba(255,255,255,0.2)';
       btn.style.boxShadow = active ? '0 0 0 2px rgba(255,255,255,0.4)' : 'none';
     });
+    updateThicknessIndicator(overlay);
+  }
+
+  // Refresh the thickness button's inner dot so it visually reflects
+  // the currently-selected line width.
+  function updateThicknessIndicator(overlay) {
+    var dot = overlay.querySelector('#agx-mk-thickness-dot');
+    if (!dot) return;
+    var w = state.lineWidth || 4;
+    // Clamp display size 6..22px so the button stays compact.
+    var display = Math.max(6, Math.min(22, Math.round(w * 1.1)));
+    dot.style.width = display + 'px';
+    dot.style.height = display + 'px';
+    dot.style.background = state.color || '#ddd';
+  }
+
+  // Thickness popup — three preset circles + a close X. Click a preset
+  // to apply, click outside or X to close.
+  function openThicknessPopup(overlay) {
+    var existing = document.getElementById('agx-mk-thickness-popup');
+    if (existing) { existing.remove(); return; }
+    var anchor = overlay.querySelector('#agx-mk-thickness');
+    var anchorRect = anchor ? anchor.getBoundingClientRect() : null;
+    var ovRect = overlay.getBoundingClientRect();
+    var popup = document.createElement('div');
+    popup.id = 'agx-mk-thickness-popup';
+    popup.style.cssText = 'position:absolute;background:#fff;color:#1f2937;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,0.4);padding:14px 18px;z-index:5060;min-width:240px;';
+    if (anchorRect) {
+      popup.style.top = (anchorRect.top - ovRect.top) + 'px';
+      popup.style.left = (anchorRect.right - ovRect.left + 8) + 'px';
+    }
+    popup.innerHTML =
+      '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">' +
+        '<strong style="font-size:14px;">Thickness</strong>' +
+        '<button id="agx-mk-thickness-close" style="background:rgba(0,0,0,0.06);color:#1f2937;border:0;width:30px;height:30px;border-radius:50%;font-size:16px;cursor:pointer;">&times;</button>' +
+      '</div>' +
+      '<hr style="border:0;border-top:1px solid #e5e7eb;margin:6px 0 14px;" />' +
+      '<div style="display:flex;align-items:center;justify-content:space-around;gap:18px;">' +
+        THICKNESS_PRESETS.map(function(p) {
+          var size = Math.max(8, Math.min(34, p.value * 1.6));
+          var active = state.lineWidth === p.value;
+          return '<button data-mk-thick="' + p.value + '" title="' + escapeHTML(p.label) + '" ' +
+            'style="background:' + (active ? '#1e293b' : 'transparent') + ';border:0;cursor:pointer;width:54px;height:54px;border-radius:50%;display:flex;align-items:center;justify-content:center;padding:0;">' +
+            '<span style="display:block;width:' + size + 'px;height:' + size + 'px;border-radius:50%;background:' + (active ? '#fff' : '#1e293b') + ';"></span>' +
+          '</button>';
+        }).join('') +
+      '</div>';
+    overlay.appendChild(popup);
+    popup.querySelector('#agx-mk-thickness-close').onclick = function(e) { e.stopPropagation(); popup.remove(); };
+    popup.querySelectorAll('[data-mk-thick]').forEach(function(btn) {
+      btn.onclick = function(e) {
+        e.stopPropagation();
+        state.lineWidth = parseInt(btn.dataset.mkThick, 10) || 4;
+        if (state.selectedIdx != null) {
+          var s = state.strokes[state.selectedIdx];
+          if (s) { s.lineWidth = state.lineWidth; redraw(); }
+        }
+        updateThicknessIndicator(overlay);
+        popup.remove();
+      };
+    });
+    // Click-outside-to-close (next click on overlay).
+    setTimeout(function() {
+      function onAway(e) {
+        if (popup.contains(e.target)) return;
+        popup.remove();
+        document.removeEventListener('mousedown', onAway, true);
+      }
+      document.addEventListener('mousedown', onAway, true);
+    }, 0);
+  }
+
+  // If a polyline is mid-build, push it onto strokes so it renders
+  // and becomes selectable. Used when the tool changes / save fires.
+  function commitPolylineIfActive() {
+    if (state && state.activePolyline && state.activePolyline.points && state.activePolyline.points.length >= 2) {
+      state.strokes.push(state.activePolyline);
+    }
+    if (state) state.activePolyline = null;
   }
 
   function renderStickerPicker(overlay) {
@@ -311,6 +435,8 @@
       hint.textContent = state.stickerKind ? 'Click on the photo to place' : 'Pick a sticker on the left';
     } else if (state.tool === 'text') {
       hint.textContent = 'Click on the photo to place text';
+    } else if (state.tool === 'polyline') {
+      hint.textContent = 'Click to add points · double-click or Esc to finish · snaps to existing endpoints';
     } else {
       hint.textContent = 'Click and drag on the photo';
     }
@@ -384,16 +510,43 @@
         return;
       }
 
-      // Drawing tools: start a new stroke.
+      // Polyline tool: each click adds a point. Snap to existing
+      // endpoints when within SNAP_RADIUS. Double-click or Esc commits.
+      if (state.tool === 'polyline') {
+        var snapped = snapToEndpoint(p);
+        if (!state.activePolyline) {
+          state.activePolyline = {
+            tool: 'polyline', color: state.color, lineWidth: state.lineWidth,
+            points: [snapped]
+          };
+        } else {
+          state.activePolyline.points.push(snapped);
+        }
+        redraw();
+        return;
+      }
+
+      // Drawing tools: start a new stroke. Single-segment shapes
+      // (line / arrow) get endpoint snap on the start point too.
+      var startP = (state.tool === 'line' || state.tool === 'arrow') ? snapToEndpoint(p) : p;
       state.currentStroke = {
         tool: state.tool, color: state.color, lineWidth: state.lineWidth,
-        startX: p.x, startY: p.y, endX: p.x, endY: p.y,
-        points: state.tool === 'draw' ? [p] : null
+        startX: startP.x, startY: startP.y, endX: startP.x, endY: startP.y,
+        points: state.tool === 'draw' ? [startP] : null
       };
+    };
+
+    // Polyline finalization on double-click anywhere on the canvas.
+    canvas.ondblclick = function(e) {
+      if (state.tool !== 'polyline') return;
+      e.preventDefault();
+      commitPolylineIfActive();
+      redraw();
     };
 
     canvas.onmousemove = function(e) {
       var p = localPoint(e);
+      state.hoverPoint = p;
       // Select-drag: move the selected stroke.
       if (state.tool === 'select' && state.dragLast && state.selectedIdx != null) {
         var s = state.strokes[state.selectedIdx];
@@ -406,13 +559,22 @@
         }
         return;
       }
+      // Polyline mid-build: redraw to show the rubber-band segment
+      // from the last placed point to the cursor.
+      if (state.tool === 'polyline' && state.activePolyline) {
+        redraw();
+        return;
+      }
       // Drawing in progress.
       if (!state.currentStroke) return;
+      var endP = (state.currentStroke.tool === 'line' || state.currentStroke.tool === 'arrow')
+        ? snapToEndpoint(p, state.currentStroke)
+        : p;
       if (state.currentStroke.tool === 'draw') {
         state.currentStroke.points.push(p);
       } else {
-        state.currentStroke.endX = p.x;
-        state.currentStroke.endY = p.y;
+        state.currentStroke.endX = endP.x;
+        state.currentStroke.endY = endP.y;
       }
       redraw(state.currentStroke);
     };
@@ -441,7 +603,7 @@
 
   // ── Hit testing & translation ──────────────────────────────────
   function strokeBBox(s) {
-    if (s.tool === 'draw' && s.points && s.points.length) {
+    if ((s.tool === 'draw' || s.tool === 'polyline') && s.points && s.points.length) {
       var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
       s.points.forEach(function(p) {
         if (p.x < minX) minX = p.x; if (p.y < minY) minY = p.y;
@@ -486,6 +648,40 @@
     return null;
   }
 
+  // Collect every endpoint candidate from existing strokes — line /
+  // arrow / polyline endpoints. Used by snapToEndpoint to pull a
+  // candidate point onto the nearest existing endpoint within radius.
+  function collectEndpoints(excludeStroke) {
+    var pts = [];
+    state.strokes.forEach(function(s) {
+      if (s === excludeStroke) return;
+      if (s.tool === 'line' || s.tool === 'arrow') {
+        pts.push({ x: s.startX, y: s.startY });
+        pts.push({ x: s.endX, y: s.endY });
+      } else if (s.tool === 'polyline' && s.points && s.points.length) {
+        pts.push(s.points[0]);
+        pts.push(s.points[s.points.length - 1]);
+      }
+    });
+    // Mid-build polyline: snap to its own placed points so the user
+    // can close a path back onto its start.
+    if (state.activePolyline && state.activePolyline !== excludeStroke && state.activePolyline.points) {
+      state.activePolyline.points.forEach(function(pp) { pts.push(pp); });
+    }
+    return pts;
+  }
+
+  function snapToEndpoint(p, excludeStroke) {
+    var candidates = collectEndpoints(excludeStroke);
+    var best = null;
+    var bestDist = SNAP_RADIUS;
+    candidates.forEach(function(c) {
+      var d = Math.hypot(c.x - p.x, c.y - p.y);
+      if (d < bestDist) { bestDist = d; best = c; }
+    });
+    return best ? { x: best.x, y: best.y } : p;
+  }
+
   function translateStroke(s, dx, dy) {
     if (s.points) s.points.forEach(function(p) { p.x += dx; p.y += dy; });
     if (s.startX != null) { s.startX += dx; s.endX += dx; s.startY += dy; s.endY += dy; }
@@ -504,6 +700,52 @@
       if (i === state.selectedIdx) drawSelection(ctx, s);
     });
     if (extra) drawStroke(ctx, extra);
+    // Polyline in progress: draw committed points as a polyline plus
+    // a rubber-band segment from the last placed point to the cursor.
+    if (state.activePolyline && state.activePolyline.points && state.activePolyline.points.length) {
+      drawStroke(ctx, state.activePolyline);
+      drawPolylineDots(ctx, state.activePolyline);
+      var hp = state.hoverPoint;
+      if (hp) {
+        var snapped = snapToEndpoint(hp, state.activePolyline);
+        var snappedToExisting = snapped !== hp;
+        var last = state.activePolyline.points[state.activePolyline.points.length - 1];
+        ctx.save();
+        ctx.strokeStyle = state.activePolyline.color;
+        ctx.lineWidth = state.activePolyline.lineWidth;
+        ctx.setLineDash([6, 4]);
+        ctx.beginPath();
+        ctx.moveTo(last.x, last.y);
+        ctx.lineTo(snapped.x, snapped.y);
+        ctx.stroke();
+        ctx.restore();
+        // Snap target indicator — small ring at the snap point.
+        if (snappedToExisting) drawSnapMarker(ctx, snapped);
+      }
+    }
+  }
+
+  function drawPolylineDots(ctx, s) {
+    if (!s.points) return;
+    ctx.save();
+    ctx.fillStyle = s.color;
+    s.points.forEach(function(p) {
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, Math.max(3, s.lineWidth / 2), 0, Math.PI * 2);
+      ctx.fill();
+    });
+    ctx.restore();
+  }
+
+  function drawSnapMarker(ctx, p) {
+    ctx.save();
+    ctx.strokeStyle = '#fbbf24';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 8, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
   }
 
   function drawStroke(ctx, s) {
@@ -513,7 +755,7 @@
     ctx.lineWidth = s.lineWidth;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
-    if (s.tool === 'draw' && s.points && s.points.length > 1) {
+    if ((s.tool === 'draw' || s.tool === 'polyline') && s.points && s.points.length > 1) {
       ctx.beginPath();
       ctx.moveTo(s.points[0].x, s.points[0].y);
       for (var i = 1; i < s.points.length; i++) ctx.lineTo(s.points[i].x, s.points[i].y);
