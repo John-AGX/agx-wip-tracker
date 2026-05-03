@@ -270,10 +270,10 @@ function renderEstimatesList() {
         // estimate-editor.js for the rationale. Markup can be dialed per
         // job via the slider/number input on each section header.
         const ESTIMATE_STANDARD_SECTIONS = [
-            { name: 'Materials & Supplies Costs', btCategory: 'materials', markup: 20 },
-            { name: 'Direct Labor',               btCategory: 'labor',     markup: 35 },
-            { name: 'General Conditions',         btCategory: 'gc',        markup: 25 },
-            { name: 'Subcontractors Costs',       btCategory: 'sub',       markup: 10 }
+            { name: 'Materials & Supplies Costs', btCategory: 'materials', markup: 0 },
+            { name: 'Direct Labor',               btCategory: 'labor',     markup: 0 },
+            { name: 'General Conditions',         btCategory: 'gc',        markup: 0 },
+            { name: 'Subcontractors Costs',       btCategory: 'sub',       markup: 0 }
         ];
 
         function createNewEstimate() {

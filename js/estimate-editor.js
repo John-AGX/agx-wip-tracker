@@ -784,12 +784,20 @@
     var groupCountChip = (t.includedGroups && t.includedGroups.length > 1)
       ? chip('Active Group', fmtCurrency(t.activeGroupSubtotal) + (t.activeGroupExcluded ? ' (excluded)' : ''), t.activeGroupExcluded ? 'var(--text-dim,#888)' : 'var(--accent,#60a5fa)')
       : '';
+    // Gross margin % — markup as a share of the proposal total, the
+    // figure most estimators care about. Falls back to '—' when there's
+    // no revenue yet so we don't divide by zero.
+    var marginPct = (t.markedUp > 0)
+      ? (((t.markedUp - t.subtotal) / t.markedUp) * 100)
+      : null;
+    var marginText = (marginPct == null) ? '—' : marginPct.toFixed(1) + '%';
     totalsEl.innerHTML =
       groupCountChip +
       chip('Subtotal', fmtCurrency(t.subtotal), 'var(--text,#fff)') +
       chip('Markup', fmtCurrency(t.markupAmount), 'var(--yellow,#fbbf24)') +
       chip('Tax + Fees', fmtCurrency(t.feeFlat + t.feePctAmount + t.taxAmount), 'var(--accent,#60a5fa)') +
       chip('Proposal Total', fmtCurrency(t.total), null, 'ee-grand-total') +
+      chip('Margin', marginText, 'var(--green,#34d399)') +
       chip('Lines', t.lineCount, 'var(--text-dim,#888)');
     // Also refresh the detailed breakdown card under the line items.
     renderPricingBreakdown();
@@ -1240,10 +1248,10 @@
   // usually a flat percentage. Estimators can dial each section's slider
   // up or down per job in the editor.
   var STANDARD_SECTIONS_PRESET = [
-    { name: 'Materials & Supplies Costs', btCategory: 'materials', markup: 20 },
-    { name: 'Direct Labor',               btCategory: 'labor',     markup: 35 },
-    { name: 'General Conditions',         btCategory: 'gc',        markup: 25 },
-    { name: 'Subcontractors Costs',       btCategory: 'sub',       markup: 10 }
+    { name: 'Materials & Supplies Costs', btCategory: 'materials', markup: 0 },
+    { name: 'Direct Labor',               btCategory: 'labor',     markup: 0 },
+    { name: 'General Conditions',         btCategory: 'gc',        markup: 0 },
+    { name: 'Subcontractors Costs',       btCategory: 'sub',       markup: 0 }
   ];
 
   function addStandardSectionsFromEditor() {
