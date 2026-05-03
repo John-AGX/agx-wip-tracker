@@ -232,12 +232,20 @@ router.get('/templates/:key',
         defaultRender = null;
       }
 
+      // Source — the SAME {{var}}-placeholder strings the renderer
+      // uses for the default. The admin Email Templates editor loads
+      // this into the textareas so what they edit is what's rendered.
+      const defaultSource = (typeof emailTemplates.getDefaultSource === 'function')
+        ? emailTemplates.getDefaultSource(eventKey)
+        : null;
+
       res.json({
         event: event,
         override: override,
         sampleParams: emailTemplates.sampleParams(eventKey),
         preview: preview,
-        defaultRender: defaultRender
+        defaultRender: defaultRender,
+        defaultSource: defaultSource
       });
     } catch (e) {
       console.error('GET /api/email/templates/:key error:', e);

@@ -1481,8 +1481,17 @@
     var ev = d.event || {};
     var override = d.override || null;
     var preview = d.preview || { subject: '', html: '', text: '' };
-    var subjectVal = override ? (override.subject || '') : (preview.subject || '');
-    var bodyVal = override ? (override.html_body || '') : (preview.html || '');
+    var defaultSource = d.defaultSource || null;
+    // Editor shows the SOURCE — either the admin's saved override (with
+    // their {{var}} placeholders) or the baked-in default source. The
+    // preview pane below renders sample data through whichever is
+    // currently loaded so the admin can see the result.
+    var subjectVal = override
+      ? (override.subject || '')
+      : (defaultSource && defaultSource.subject) || '';
+    var bodyVal = override
+      ? (override.html_body || '')
+      : (defaultSource && defaultSource.html_body) || '';
     var vars = ev.variables || [];
     var sample = d.sampleParams || {};
 
@@ -1602,25 +1611,25 @@
     saveTemplate();
   }
 
-  // Drop the baked-in default subject + HTML into the editor, so the
-  // admin can tweak the entire template (header, footer, signature,
-  // links — everything) instead of starting from a blank slate. The
-  // overrides aren't saved until they click Save.
+  // Drop the baked-in template SOURCE (with {{var}} placeholders) into
+  // the editor so the admin can tweak the entire template — header,
+  // footer, signature, links, everything — without losing the variable
+  // bindings. Doesn't save until they click Save override.
   function loadDefaultIntoEditor() {
     if (!_templateDetail) return;
-    var def = _templateDetail.defaultRender;
-    if (!def) {
-      var statusEl = document.getElementById('email-tpl-status');
-      if (statusEl) statusEl.innerHTML = '<span style="color:#fbbf24;">No default available for this template.</span>';
+    var src = _templateDetail.defaultSource;
+    if (!src) {
+      var statusEl0 = document.getElementById('email-tpl-status');
+      if (statusEl0) statusEl0.innerHTML = '<span style="color:#fbbf24;">No default source available for this template.</span>';
       return;
     }
-    if (!confirm('Load the default into the editor?\n\nThis replaces whatever is in the Subject + HTML body fields with the baked-in default. Nothing is saved until you click Save override.')) return;
+    if (!confirm('Load the default template source into the editor?\n\nThis replaces whatever is in the Subject + HTML body fields with the baked-in source (including {{variable}} placeholders). Nothing is saved until you click Save override.')) return;
     var subjectEl = document.getElementById('email-tpl-subject');
     var bodyEl = document.getElementById('email-tpl-body');
-    if (subjectEl) subjectEl.value = def.subject || '';
-    if (bodyEl) bodyEl.value = def.html || '';
+    if (subjectEl) subjectEl.value = src.subject || '';
+    if (bodyEl) bodyEl.value = src.html_body || '';
     var statusEl = document.getElementById('email-tpl-status');
-    if (statusEl) statusEl.innerHTML = '<span style="color:#34d399;">&#x2713; Default loaded into editor — edit freely, then click Save.</span>';
+    if (statusEl) statusEl.innerHTML = '<span style="color:#34d399;">&#x2713; Default loaded — edit freely, then click Save.</span>';
   }
 
   function sendTemplateTest() {
