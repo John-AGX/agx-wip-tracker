@@ -161,10 +161,10 @@
   ];
   var STAFF_PRESETS = [
     { label: 'How is AG doing this week?',  prompt: 'Pull last 7d metrics for all three agents and tell me what stands out. Then surface the 3 most active conversations across AG / WIP / CRA so I can spot-check.' },
-    { label: 'Audit AG search usage',       prompt: 'Of AG\'s recent conversations, how often did web_search get invoked? Pull a few examples and summarize what AG was searching for. If a pattern emerges (e.g., the same product specs over and over), recommend a skill-pack addition.' },
-    { label: 'What skills are loaded?',     prompt: 'List every skill pack currently configured, which agents load each, and whether each is always-on. Flag any that look stale or that overlap.' },
-    { label: 'Most expensive conversations', prompt: 'Show me the 5 most token-expensive conversations in the last 30 days across all agents. For the top one, drill in and summarize what happened.' },
-    { label: 'Where is CRA being used?',    prompt: 'How is CRA being used? Is it actually getting traction or is it sitting idle? Pull recent CRA conversations and characterize the work.' }
+    { label: 'Audit AG search usage',       prompt: 'Of AG\'s recent conversations, how often did web_search get invoked? Pull a few examples and summarize what AG was searching for. If a pattern emerges (e.g., the same product specs over and over), propose a new skill pack that bakes in the answer so AG stops searching.' },
+    { label: 'Audit & clean skill packs',   prompt: 'Read all skill packs. For each, tell me whether the wording is tight, whether it overlaps with another, and whether it\'s being applied to the right agents. If anything is stale, propose a skill_pack_edit or skill_pack_delete with rationale.' },
+    { label: 'Most expensive conversations', prompt: 'Show me the 5 most token-expensive conversations in the last 30 days across all agents. For the top one, drill in and summarize what happened. If you spot a recurring waste pattern (e.g., AG re-asking the same thing every turn), propose a skill pack that fixes it.' },
+    { label: 'Where is CRA being used?',    prompt: 'How is CRA being used? Is it actually getting traction or is it sitting idle? Pull recent CRA conversations and characterize the work. If a pattern emerges that could shift from per-turn instruction to a skill pack, propose it.' }
   ];
   function getActivePresets() {
     if (isJobMode())    return JOB_PRESETS;
@@ -737,7 +737,7 @@
     if (noticeEl) {
       if (isJobMode()) noticeEl.textContent = 'I see WIP, costs, the node graph, and QB lines — and I can propose edits (e.g. set a phase\'s % complete) for you to approve before they apply.';
       else if (isClientMode()) noticeEl.textContent = 'Customer Relations Agent — I keep the parent-company / property hierarchy clean. Simple writes apply automatically; restructural changes (new parent, merges, splits, deletes) require approval.';
-      else if (isStaffMode()) noticeEl.textContent = 'Chief of Staff (read-only V1) — I observe AG / WIP / CRA. I can read metrics, audit recent conversations, and review skill packs. Skill-pack edits and replay are queued.';
+      else if (isStaffMode()) noticeEl.textContent = 'Chief of Staff — I observe AG / WIP / CRA. I read metrics, audit conversations, and propose skill-pack edits for you to approve. Conversation replay still queued.';
       else noticeEl.textContent = 'I\'m AG — your AGX estimator. I can draft scopes, add/edit/delete line items and sections, and tweak pricing. Every change is shown as a card with Approve / Reject before it lands.';
     }
     var inputEl = document.getElementById('ai-input');
@@ -837,7 +837,7 @@
       var hint;
       if (isJobMode()) hint = 'Pick a preset below or ask anything about the job.<br><span style="font-size:11px;opacity:0.7;">I see contract, costs, COs, %complete, billing — plus the node graph wiring and QuickBooks cost lines.</span>';
       else if (isClientMode()) hint = '<strong style="color:var(--text,#fff);">🤝 Customer Relations Agent</strong><br>Tap <strong>Run full audit</strong> to clean up the directory in one pass — I\'ll split parent+property compounds, link unparented entries, merge dupes, and surface anything ambiguous for you.<br><span style="font-size:11px;opacity:0.7;">I know the AGX hierarchy: parent management company → property/community → CAM contact.</span>';
-      else if (isStaffMode()) hint = '<strong style="color:var(--text,#fff);">🎩 Chief of Staff</strong><br>I observe AG / WIP / CRA — usage, cost, conversations, skill packs.<br><span style="font-size:11px;opacity:0.7;">Read-only in V1. Skill-pack proposals + conversation replay are queued.</span>';
+      else if (isStaffMode()) hint = '<strong style="color:var(--text,#fff);">🎩 Chief of Staff</strong><br>I observe AG / WIP / CRA — usage, cost, conversations, skill packs — and I can propose skill-pack edits for you to approve.<br><span style="font-size:11px;opacity:0.7;">Conversation replay is still queued.</span>';
       else hint = '<strong style="color:var(--text,#fff);">📐 AG — your AGX estimator</strong><br>Pick a preset or describe what you need. I can read the estimate, scope, client, and photos — and propose adds, edits, deletes, and pricing changes for you to approve.<br><span style="font-size:11px;opacity:0.7;">Try "tighten this estimate" or "build my line items".</span>';
       box.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;padding:20px 0;text-align:center;line-height:1.6;">' + hint + '</div>';
       return;
@@ -1390,8 +1390,9 @@
   window._agxAiPanelOpenTrust = openTrustPopover;
 
   function applyTool(tu) {
-    if (isClientMode()) {
-      // Server applies client tools on /chat/continue. Just signal approval.
+    if (isClientMode() || isStaffMode()) {
+      // Server applies these tools on /chat/continue. Just signal
+      // approval — there's no client-side mutation to perform.
       return '';
     }
     if (isJobMode()) {
@@ -2098,6 +2099,31 @@
         '</div>' +
         '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:6px;">Auto-injects into AG and CRA system prompts on every future turn touching this client.</div>' +
         (input.client_id ? '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:2px;font-family:monospace;">client: ' + escapeHTMLLocal(input.client_id) + '</div>' : '');
+    } else if (tu.name === 'propose_skill_pack_add') {
+      heading = '&#x1F9E0; Add skill pack';
+      var spaAgents = Array.isArray(input.agents) ? input.agents.join(', ') : '(none)';
+      detail = '<div style="font-size:13px;color:var(--text,#fff);font-weight:600;">' + escapeHTMLLocal(input.name || '') + '</div>' +
+        '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:2px;">agents: ' + escapeHTMLLocal(spaAgents) + (input.alwaysOn === false ? ' · inactive' : ' · always-on') + '</div>' +
+        '<pre style="white-space:pre-wrap;font-size:11px;color:var(--text-dim,#ccc);background:rgba(0,0,0,0.2);padding:8px;border-radius:4px;margin:6px 0 0;max-height:180px;overflow:auto;font-family:inherit;">' + escapeHTMLLocal(input.body || '') + '</pre>' +
+        '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:6px;">Loads into the named agents\' system prompt every turn.</div>';
+    } else if (tu.name === 'propose_skill_pack_edit') {
+      heading = '&#x270F; Edit skill pack';
+      var speChanges = [];
+      if (input.new_name) speChanges.push('rename → "' + input.new_name + '"');
+      if (input.new_body != null) speChanges.push('body (' + (input.new_body.length || 0) + ' chars)');
+      if (Array.isArray(input.agents)) speChanges.push('agents → ' + input.agents.join(','));
+      if (typeof input.alwaysOn === 'boolean') speChanges.push(input.alwaysOn ? 'activate' : 'deactivate');
+      detail = '<div style="font-size:13px;color:var(--text,#fff);font-weight:600;">' + escapeHTMLLocal(input.name || '') + '</div>' +
+        (speChanges.length
+          ? '<div style="font-size:12px;color:var(--text,#ccc);margin-top:4px;">' + escapeHTMLLocal(speChanges.join(' · ')) + '</div>'
+          : '<div style="font-size:11px;color:var(--text-dim,#888);font-style:italic;margin-top:4px;">No fields specified.</div>') +
+        (input.new_body
+          ? '<pre style="white-space:pre-wrap;font-size:11px;color:var(--text-dim,#ccc);background:rgba(0,0,0,0.2);padding:8px;border-radius:4px;margin:6px 0 0;max-height:180px;overflow:auto;font-family:inherit;">' + escapeHTMLLocal(input.new_body) + '</pre>'
+          : '');
+    } else if (tu.name === 'propose_skill_pack_delete') {
+      heading = '&#x1F5D1; Delete skill pack';
+      detail = '<div style="font-size:13px;color:#f87171;font-weight:600;">' + escapeHTMLLocal(input.name || '') + '</div>' +
+        '<div style="font-size:11px;color:var(--text-dim,#aaa);margin-top:4px;">This pack will be removed entirely. Cannot be undone (re-add via propose_skill_pack_add).</div>';
     } else if (tu.name === 'read_workspace_sheet_full') {
       // Read-only — the auto-apply intercept normally renders this as
       // a chip without a card. This case is a safety net for older

@@ -2975,12 +2975,61 @@ const STAFF_TOOLS = [
       properties: {},
       required: []
     }
+  },
+  {
+    name: 'propose_skill_pack_add',
+    tier: 'approval',
+    description:
+      'Propose creating a new admin-editable skill pack. Skill packs are reusable instruction blocks that get appended to an agent\'s system prompt every turn — perfect place to teach AGX-specific workflows, pricing rules, slotting preferences, and common-scope playbooks. Only call this AFTER you have read the existing packs (read_skill_packs) to confirm you are not creating a duplicate. Approval-required so the user vets the wording before it lands and starts shaping every future agent turn.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        name: { type: 'string', description: 'Short, unique title (e.g., "Trex decking spec reference"). Must not collide with an existing pack.' },
+        body: { type: 'string', description: 'The skill content. Markdown allowed. Be tight — every always-on pack costs tokens on every turn.' },
+        agents: { type: 'array', items: { type: 'string', enum: ['ag', 'cra'] }, description: 'Which agents load this pack. AG = estimating, CRA = customer relations.' },
+        alwaysOn: { type: 'boolean', description: 'If true (default), pack is appended on every turn. If false, the pack is registered but inactive.' },
+        rationale: { type: 'string', description: 'One short sentence shown on the approval card explaining why this pack is worth keeping.' }
+      },
+      required: ['name', 'body', 'agents', 'rationale']
+    }
+  },
+  {
+    name: 'propose_skill_pack_edit',
+    tier: 'approval',
+    description:
+      'Propose editing an existing skill pack. Pass the exact name from read_skill_packs and only the fields you want to change. Body edits replace the entire body — pass the full new content, not a diff. Approval-required so the user vets every change to a prompt-shaping artifact.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        name: { type: 'string', description: 'Existing pack name (must match exactly).' },
+        new_name: { type: 'string', description: 'Optional rename.' },
+        new_body: { type: 'string', description: 'Optional replacement body. Pass the full new content.' },
+        agents: { type: 'array', items: { type: 'string', enum: ['ag', 'cra'] }, description: 'Optional updated agent assignment.' },
+        alwaysOn: { type: 'boolean', description: 'Optional updated alwaysOn flag.' },
+        rationale: { type: 'string', description: 'One short sentence shown on the approval card explaining the change.' }
+      },
+      required: ['name', 'rationale']
+    }
+  },
+  {
+    name: 'propose_skill_pack_delete',
+    tier: 'approval',
+    description:
+      'Propose removing a skill pack entirely. Only call this when the pack is genuinely stale or has been superseded — alwaysOn=false is usually a softer alternative. Approval-required since deletion is irreversible.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        name: { type: 'string', description: 'Existing pack name (must match exactly).' },
+        rationale: { type: 'string', description: 'One short sentence shown on the approval card explaining why removal is the right call.' }
+      },
+      required: ['name', 'rationale']
+    }
   }
 ];
 
-// Auto-tier predicate — staff V1 is all-auto so this is trivially true
-// for any defined tool, but we keep the indirection so adding propose
-// tools later (`tier: 'approval'`) just works.
 function isStaffToolAutoTier(name) {
   const t = STAFF_TOOLS.find(t => t.name === name);
   return !!(t && t.tier === 'auto');
@@ -2999,17 +3048,23 @@ async function buildStaffContext() {
   stable.push('  • **CRA (customer-side)** — owns the customer directory. Splits parent+property compounds, links unparented properties, merges duplicates, attaches business cards, and writes durable client notes.');
   stable.push('All three log into the same ai_messages table (different entity_type values).');
   stable.push('');
-  stable.push('# Your tools (all auto-apply, no approval)');
+  stable.push('# Your tools');
+  stable.push('Read tools (auto-apply, no approval):');
   stable.push('  • `read_metrics(range)` — per-agent aggregate stats for last 7d or 30d. Default range is 7d.');
   stable.push('  • `read_recent_conversations(range, entity_type?, limit?)` — recent conversation list with rollup numbers.');
   stable.push('  • `read_conversation_detail(key)` — full message log of one conversation. Pass the `key` from read_recent_conversations.');
   stable.push('  • `read_skill_packs()` — admin-editable instruction packs the agents load each turn.');
+  stable.push('Propose tools (approval-required — user clicks Approve/Reject on a card):');
+  stable.push('  • `propose_skill_pack_add(name, body, agents, alwaysOn?, rationale)` — add a new skill pack. ALWAYS call read_skill_packs first to confirm no name collision.');
+  stable.push('  • `propose_skill_pack_edit(name, new_name?, new_body?, agents?, alwaysOn?, rationale)` — change an existing pack. body edits replace the whole body.');
+  stable.push('  • `propose_skill_pack_delete(name, rationale)` — remove a pack entirely. alwaysOn=false is usually a softer alternative.');
   stable.push('');
   stable.push('# How to work');
   stable.push('- Default to data first. When asked "how is AG doing?", call `read_metrics` and report concrete numbers, not opinions.');
   stable.push('- Drill before generalizing. If you spot something odd in metrics, pull recent conversations and inspect a few before proposing a theory.');
   stable.push('- When citing a conversation, include the user and the entity title so the admin can locate it.');
-  stable.push('- Be candid about limits. You can READ everything but you cannot YET edit skill packs or replay conversations — those are queued. If asked, say so plainly.');
+  stable.push('- When proposing a skill pack, write tight, specific instructions — every always-on pack costs tokens on every turn forever. Propose deletions of stale ones too.');
+  stable.push('- Be candid about limits. Conversation replay is still queued — if asked to re-run a conversation under a different model, say it\'s not yet wired and offer to set up an eval fixture instead.');
   stable.push('- Skip the assistant filler. The admin is technical; lead with the answer.');
   stable.push('');
   stable.push('# Tone');
@@ -3206,6 +3261,94 @@ async function execStaffTool(name, input) {
   }
 }
 
+// Approval-tier executor for skill-pack mutations. Called from the
+// /staff/chat/continue endpoint after the user approves a propose
+// card. Reads + writes app_settings.agent_skills as a single JSONB
+// blob, optimistic-concurrency be damned (single admin user, no race).
+async function execStaffApprovalTool(name, input) {
+  switch (name) {
+    case 'propose_skill_pack_add': {
+      if (!input || !input.name || !input.body) throw new Error('name and body are required');
+      if (!Array.isArray(input.agents) || !input.agents.length) throw new Error('agents must be a non-empty array');
+      const r = await pool.query(`SELECT value FROM app_settings WHERE key = 'agent_skills'`);
+      const cfg = r.rows.length ? (r.rows[0].value || {}) : {};
+      const skills = Array.isArray(cfg.skills) ? cfg.skills.slice() : [];
+      if (skills.some(s => s && s.name === input.name)) {
+        throw new Error('A skill pack named "' + input.name + '" already exists. Use propose_skill_pack_edit to modify it.');
+      }
+      skills.push({
+        name: input.name,
+        body: input.body,
+        agents: input.agents,
+        alwaysOn: input.alwaysOn === false ? false : true
+      });
+      const newCfg = Object.assign({}, cfg, { skills });
+      await pool.query(
+        `INSERT INTO app_settings (key, value, updated_at) VALUES ('agent_skills', $1, NOW())
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
+        [JSON.stringify(newCfg)]
+      );
+      return 'Added skill pack "' + input.name + '" → agents=' + input.agents.join(',') + (input.alwaysOn === false ? ' (inactive)' : ' (always-on)');
+    }
+    case 'propose_skill_pack_edit': {
+      if (!input || !input.name) throw new Error('name is required');
+      const r = await pool.query(`SELECT value FROM app_settings WHERE key = 'agent_skills'`);
+      const cfg = r.rows.length ? (r.rows[0].value || {}) : {};
+      const skills = Array.isArray(cfg.skills) ? cfg.skills.slice() : [];
+      const idx = skills.findIndex(s => s && s.name === input.name);
+      if (idx < 0) throw new Error('No skill pack named "' + input.name + '"');
+      const updated = Object.assign({}, skills[idx]);
+      const changes = [];
+      if (input.new_name && input.new_name !== updated.name) {
+        if (skills.some(s => s && s !== updated && s.name === input.new_name)) {
+          throw new Error('A skill pack named "' + input.new_name + '" already exists.');
+        }
+        changes.push('name "' + updated.name + '" → "' + input.new_name + '"');
+        updated.name = input.new_name;
+      }
+      if (input.new_body != null) {
+        updated.body = input.new_body;
+        changes.push('body (' + (input.new_body.length || 0) + ' chars)');
+      }
+      if (Array.isArray(input.agents)) {
+        updated.agents = input.agents;
+        changes.push('agents → ' + input.agents.join(','));
+      }
+      if (typeof input.alwaysOn === 'boolean') {
+        updated.alwaysOn = input.alwaysOn;
+        changes.push(input.alwaysOn ? 'activated' : 'deactivated');
+      }
+      if (!changes.length) return 'No changes specified for "' + input.name + '".';
+      skills[idx] = updated;
+      const newCfg = Object.assign({}, cfg, { skills });
+      await pool.query(
+        `INSERT INTO app_settings (key, value, updated_at) VALUES ('agent_skills', $1, NOW())
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
+        [JSON.stringify(newCfg)]
+      );
+      return 'Edited skill pack "' + input.name + '": ' + changes.join('; ');
+    }
+    case 'propose_skill_pack_delete': {
+      if (!input || !input.name) throw new Error('name is required');
+      const r = await pool.query(`SELECT value FROM app_settings WHERE key = 'agent_skills'`);
+      const cfg = r.rows.length ? (r.rows[0].value || {}) : {};
+      const skills = Array.isArray(cfg.skills) ? cfg.skills.slice() : [];
+      const idx = skills.findIndex(s => s && s.name === input.name);
+      if (idx < 0) throw new Error('No skill pack named "' + input.name + '"');
+      skills.splice(idx, 1);
+      const newCfg = Object.assign({}, cfg, { skills });
+      await pool.query(
+        `INSERT INTO app_settings (key, value, updated_at) VALUES ('agent_skills', $1, NOW())
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
+        [JSON.stringify(newCfg)]
+      );
+      return 'Deleted skill pack "' + input.name + '".';
+    }
+    default:
+      throw new Error('Unknown approval-tier staff tool: ' + name);
+  }
+}
+
 // Streaming helper — same shape as streamClientTurn.
 async function streamStaffTurn({ anthropic, res, system, messages }) {
   const cleanTools = STAFF_TOOLS.map(({ tier, ...t }) => t);
@@ -3336,17 +3479,34 @@ router.post('/staff/chat',
           return;
         }
 
-        // V1: every tool is auto-tier. Execute, append tool_result, loop.
-        // (When propose_skill_pack_* tools land, they'll route into an
-        // approval branch like the CRA chat handler.)
-        const toolResultBlocks = [];
-        for (const tu of turn.toolUseBlocks) {
-          if (!isStaffToolAutoTier(tu.name)) {
-            // Defensive: should never trigger in V1 since all tools are auto.
-            res.write('data: ' + JSON.stringify({ tool_failed: { id: tu.id, name: tu.name, error: 'Approval-tier tools not yet supported by staff agent.' } }) + '\n\n');
-            toolResultBlocks.push({ type: 'tool_result', tool_use_id: tu.id, content: 'Tool requires approval but staff agent is read-only in V1.', is_error: true });
-            continue;
+        // Partition tool blocks by tier — read tools auto-execute, skill-
+        // pack proposes pause for user approval.
+        const autoBlocks     = turn.toolUseBlocks.filter(b => isStaffToolAutoTier(b.name));
+        const approvalBlocks = turn.toolUseBlocks.filter(b => !isStaffToolAutoTier(b.name));
+
+        if (approvalBlocks.length) {
+          // Mixed or all-approval — stop and let the user decide. If
+          // there are also auto-tier blocks in the same turn, treat them
+          // ALL as approval so the user sees the full plan together.
+          for (const tu of turn.toolUseBlocks) {
+            res.write('data: ' + JSON.stringify({
+              tool_use: { id: tu.id, name: tu.name, input: tu.input, tier: isStaffToolAutoTier(tu.name) ? 'auto' : 'approval' }
+            }) + '\n\n');
           }
+          res.write('data: ' + JSON.stringify({
+            awaiting_approval: true,
+            pending_assistant_content: turn.finalContent,
+            tool_use_count: turn.toolUseBlocks.length,
+            usage: totalUsage
+          }) + '\n\n');
+          res.write('data: [DONE]\n\n');
+          res.end();
+          return;
+        }
+
+        // All auto. Execute, append tool_result, loop.
+        const toolResultBlocks = [];
+        for (const tu of autoBlocks) {
           let summary, isError = false;
           try {
             summary = await execStaffTool(tu.name, tu.input || {});
@@ -3366,6 +3526,147 @@ router.post('/staff/chat',
       res.end();
     } catch (e) {
       console.error('AI staff chat error:', e);
+      res.write('data: ' + JSON.stringify({ error: e.message || 'Server error' }) + '\n\n');
+      res.write('data: [DONE]\n\n');
+      res.end();
+    }
+  }
+);
+
+// Continuation after the user approves/rejects skill-pack proposes.
+// Mirrors the CRA /clients/chat/continue shape: the client sends the
+// pending assistant content + a tool_results array with per-tool
+// approval booleans; the server executes the approved propose tools
+// and continues the loop so further auto-tier reads can chain.
+router.post('/staff/chat/continue',
+  requireAuth, requireCapability('ROLES_MANAGE'),
+  async (req, res) => {
+    const anthropic = getAnthropic();
+    if (!anthropic) return res.status(503).json({ error: 'AI assistant is not configured.' });
+    const pendingContent = req.body && req.body.pending_assistant_content;
+    const decisions = req.body && req.body.tool_results;
+    if (!Array.isArray(pendingContent) || !Array.isArray(decisions) || !decisions.length) {
+      return res.status(400).json({ error: 'pending_assistant_content and tool_results required' });
+    }
+    setSSEHeaders(res);
+    try {
+      const histRes = await pool.query(
+        `SELECT role, content FROM ai_messages
+          WHERE entity_type='staff' AND user_id=$1
+          ORDER BY created_at ASC`,
+        [req.user.id]
+      );
+      let history = histRes.rows;
+      const cap = MAX_HISTORY_PAIRS * 2;
+      if (history.length > cap) history = history.slice(-cap);
+
+      // Map of tool_use_id → tool_use block for execution lookup.
+      const pendingToolUseById = new Map();
+      for (const block of pendingContent) {
+        if (block && block.type === 'tool_use') pendingToolUseById.set(block.id, block);
+      }
+
+      // Execute approved propose tools server-side. Auto-tier blocks
+      // that came along for the ride get executed too (read tools
+      // bundled with proposes). Rejected blocks become an error
+      // tool_result so the model knows.
+      const toolResultBlocks = [];
+      for (const d of decisions) {
+        const tu = pendingToolUseById.get(d.id);
+        if (!tu) {
+          toolResultBlocks.push({ type: 'tool_result', tool_use_id: d.id, content: 'Tool not found in pending content.', is_error: true });
+          continue;
+        }
+        if (d.approved === false) {
+          toolResultBlocks.push({ type: 'tool_result', tool_use_id: tu.id, content: 'User rejected this proposal.', is_error: true });
+          res.write('data: ' + JSON.stringify({ tool_rejected: { id: tu.id, name: tu.name } }) + '\n\n');
+          continue;
+        }
+        let summary, isError = false;
+        try {
+          summary = isStaffToolAutoTier(tu.name)
+            ? await execStaffTool(tu.name, tu.input || {})
+            : await execStaffApprovalTool(tu.name, tu.input || {});
+          res.write('data: ' + JSON.stringify({ tool_applied: { id: tu.id, name: tu.name, input: tu.input, summary: String(summary).slice(0, 500) } }) + '\n\n');
+        } catch (e) {
+          summary = 'Error: ' + (e.message || 'failed');
+          isError = true;
+          res.write('data: ' + JSON.stringify({ tool_failed: { id: tu.id, name: tu.name, input: tu.input, error: summary } }) + '\n\n');
+        }
+        toolResultBlocks.push({ type: 'tool_result', tool_use_id: tu.id, content: summary, is_error: isError || undefined });
+      }
+
+      const messages = [
+        ...history.map(m => ({ role: m.role, content: m.content })),
+        { role: 'assistant', content: pendingContent },
+        { role: 'user', content: toolResultBlocks }
+      ];
+
+      // Resume the same loop the initial /staff/chat handler runs so
+      // the model can chain follow-up reads after a successful edit.
+      let totalUsage = { input_tokens: 0, output_tokens: 0 };
+      let finalAssistantText = '';
+      for (let loop = 0; loop < MAX_STAFF_TOOL_LOOPS; loop++) {
+        const ctx = await buildStaffContext();
+        const turn = await streamStaffTurn({ anthropic, res, system: ctx.system, messages });
+        finalAssistantText = turn.assistantText;
+        if (turn.usage.input_tokens) totalUsage.input_tokens += turn.usage.input_tokens;
+        if (turn.usage.output_tokens) totalUsage.output_tokens += turn.usage.output_tokens;
+
+        if (!turn.toolUseBlocks.length) {
+          if (finalAssistantText) {
+            const aMsgId = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+            await pool.query(
+              `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content, model, input_tokens, output_tokens)
+               VALUES ($1, 'staff', 'global', $2, 'assistant', $3, $4, $5, $6)`,
+              [aMsgId, req.user.id, finalAssistantText, MODEL, totalUsage.input_tokens, totalUsage.output_tokens]
+            );
+          }
+          res.write('data: ' + JSON.stringify({ done: true, usage: totalUsage }) + '\n\n');
+          res.write('data: [DONE]\n\n');
+          res.end();
+          return;
+        }
+
+        const autoBlocks2     = turn.toolUseBlocks.filter(b => isStaffToolAutoTier(b.name));
+        const approvalBlocks2 = turn.toolUseBlocks.filter(b => !isStaffToolAutoTier(b.name));
+        if (approvalBlocks2.length) {
+          for (const tu of turn.toolUseBlocks) {
+            res.write('data: ' + JSON.stringify({
+              tool_use: { id: tu.id, name: tu.name, input: tu.input, tier: isStaffToolAutoTier(tu.name) ? 'auto' : 'approval' }
+            }) + '\n\n');
+          }
+          res.write('data: ' + JSON.stringify({
+            awaiting_approval: true,
+            pending_assistant_content: turn.finalContent,
+            tool_use_count: turn.toolUseBlocks.length,
+            usage: totalUsage
+          }) + '\n\n');
+          res.write('data: [DONE]\n\n');
+          res.end();
+          return;
+        }
+        const trBlocks2 = [];
+        for (const tu of autoBlocks2) {
+          let summary, isError = false;
+          try {
+            summary = await execStaffTool(tu.name, tu.input || {});
+            res.write('data: ' + JSON.stringify({ tool_applied: { id: tu.id, name: tu.name, input: tu.input, summary: String(summary).slice(0, 500) } }) + '\n\n');
+          } catch (e) {
+            summary = 'Error: ' + (e.message || 'failed');
+            isError = true;
+            res.write('data: ' + JSON.stringify({ tool_failed: { id: tu.id, name: tu.name, input: tu.input, error: summary } }) + '\n\n');
+          }
+          trBlocks2.push({ type: 'tool_result', tool_use_id: tu.id, content: summary, is_error: isError || undefined });
+        }
+        messages.push({ role: 'assistant', content: turn.finalContent });
+        messages.push({ role: 'user', content: trBlocks2 });
+      }
+      res.write('data: ' + JSON.stringify({ error: 'Tool loop exceeded maximum iterations' }) + '\n\n');
+      res.write('data: [DONE]\n\n');
+      res.end();
+    } catch (e) {
+      console.error('AI staff chat/continue error:', e);
       res.write('data: ' + JSON.stringify({ error: e.message || 'Server error' }) + '\n\n');
       res.write('data: [DONE]\n\n');
       res.end();
