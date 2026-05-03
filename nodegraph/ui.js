@@ -1518,11 +1518,12 @@ function initEvents(){
     }
     var nel=e.target.closest('.ng-node');
     if(nel&&!e.target.closest('input')&&!e.target.closest('textarea')&&!e.target.closest('[data-rename]')){
-      // Ctrl+Click (or Cmd+Click on Mac) → focus + zoom on this node.
-      // Doubles as a quick "find" for any node anywhere on the graph
-      // — works on any node type, no need to hunt for it after wiring
-      // / dragging beyond the viewport.
-      if (e.ctrlKey || e.metaKey) {
+      // Ctrl+LEFT-click (or Cmd+left-click on Mac) → focus + zoom on
+      // this node. Restricted to left-button (e.button === 0) so a
+      // Ctrl+right-click doesn't accidentally trigger this AND the
+      // contextmenu fit-all gesture both — which would zoom in then
+      // immediately back out, looking glitchy.
+      if ((e.ctrlKey || e.metaKey) && e.button === 0) {
         e.stopPropagation();
         e.preventDefault();
         var nidF = nel.getAttribute('data-id');
@@ -1530,7 +1531,7 @@ function initEvents(){
         if (!nF) return;
         // Capture this BEFORE we mutate selN so we know whether
         // this is a repeat focus on the same node (= drill-in zoom)
-        // or a fresh focus on a different node (= just center).
+        // or a fresh focus on a different node (= jump to 100%).
         var alreadyFocused = (selN === nidF);
         // Select the focused node so the highlight stays visible.
         if (selN && selN !== nidF) {
@@ -1540,14 +1541,13 @@ function initEvents(){
         selN = nidF;
         nel.classList.add('ng-sel');
         updateConnectedHighlight();
-        // Zoom target: pull back to 0.75 on first hit so the focused
-        // node sits in the middle of plenty of context (you can see
-        // its wires + neighbors). Repeat-clicks on the SAME node
-        // drill in by +0.15 each press, capped at 1.8.
+        // Zoom target: snap to 1.0 (100%) on first hit so the user
+        // sees the node at native size, centered. Repeat-clicks on
+        // the SAME node drill in by +0.15 each press, capped at 1.8.
         var curZ = E.zm();
         var targetZ = alreadyFocused
           ? Math.min(1.8, curZ + 0.15)
-          : 0.75;
+          : 1.0;
         focusNode(nF, { zoom: targetZ });
         return;
       }
@@ -1670,22 +1670,21 @@ function initEvents(){
   });
 
   // Right-click handlers:
-  //   - On a node: don't intercept — let any node-level handlers
-  //     run (Ctrl+left-click for selection/focus already exists;
-  //     Ctrl+right-click on a node should be a no-op so the
-  //     "select node" gesture isn't disrupted by the zoom-out
-  //     gesture firing as well).
-  //   - Ctrl/Cmd + right-click on empty canvas: fit-all overview
-  //     (zoom out + center on every node).
+  //   - Ctrl/Cmd + right-click ANYWHERE (including on a node):
+  //     fit-all overview. Now restricted to button === 2 in the
+  //     mousedown path, so Ctrl+left-click on a node still focuses
+  //     the node and Ctrl+right-click always overrides to fit-all.
+  //   - Plain right-click on a node: no-op (browser context menu
+  //     still suppressed by preventDefault).
   //   - Plain right-click on empty canvas: delete the wire under
   //     the cursor (existing behavior).
   wrap.addEventListener('contextmenu',function(e){
     e.preventDefault();
-    if (e.target.closest('.ng-node')) return;
     if (e.ctrlKey || e.metaKey) {
       zoomFitAll();
       return;
     }
+    if (e.target.closest('.ng-node')) return;
     var r=wrap.getBoundingClientRect(),p=E.pan(),z2=E.zm();
     var mx=(e.clientX-r.left)/z2-p.x, my=(e.clientY-r.top)/z2-p.y;
     var ci=-1,cd=40,ws=E.wires();
