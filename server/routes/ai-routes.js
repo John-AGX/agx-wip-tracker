@@ -3706,9 +3706,15 @@ module.exports.internals = {
   staffTools:    () => [...WEB_TOOLS, ...STAFF_TOOLS.map(({ tier, ...t }) => t)],
   defaultModel: () => MODEL,
   maxTokens: () => MAX_TOKENS,
-  effortFor: (modelOverride) => {
-    if (!modelOverride) return null;
-    if (!EFFORT_SUPPORTED_MODELS.has(modelOverride)) return null;
-    return EFFORT || null;
+  // Resolve the effort string for a given model. Caller passes the
+  // resolved model (default OR override) plus an optional explicit
+  // override; we fall back to env AI_EFFORT and gate by model support.
+  // Returns the effort string ("xhigh", "high", etc.) or null when
+  // none should be sent.
+  effortFor: (resolvedModel, effortOverride) => {
+    const eff = ((effortOverride || '') + '').trim().toLowerCase() || EFFORT;
+    if (!eff) return null;
+    if (!EFFORT_SUPPORTED_MODELS.has(resolvedModel)) return null;
+    return eff;
   }
 };

@@ -2593,6 +2593,7 @@
       '<p style="margin:0 0 14px 0;color:var(--text-dim,#888);font-size:12px;">' +
         'Observability and configuration for the three in-app AI agents — usage, cost, conversations, and the skill packs they load each turn.' +
       '</p>' +
+      '<div id="agents-server-config" style="margin-bottom:10px;font-size:11px;color:var(--text-dim,#666);font-family:\'SF Mono\',monospace;">Loading server config…</div>' +
       '<div style="display:flex;gap:8px;align-items:center;margin-bottom:14px;flex-wrap:wrap;">' +
         '<div class="ws-right-tabs" style="margin:0;">' +
           '<button class="ws-right-tab' + (_agentsView === 'metrics' ? ' active' : '') + '" onclick="switchAgentsView(\'metrics\')">&#x1F4CA; Metrics</button>' +
@@ -2612,12 +2613,36 @@
           : '') +
       '</div>' +
       '<div id="agents-content"></div>';
+    loadAgentsServerConfig();
     if (_agentsView === 'metrics')                   renderAgentsMetrics();
     else if (_agentsView === 'evals' && _agentsEvalId) renderAgentEvalDetail(_agentsEvalId);
     else if (_agentsView === 'evals')                renderAgentEvalsList();
     else if (_agentsView === 'skills')               renderAgentsSkillsView();
     else if (_agentsConvKey)                         renderAgentsConversationDetail(_agentsConvKey);
     else                                             renderAgentsConversationList();
+  }
+
+  // Loads the server's live agent runtime config (model + effort) and
+  // renders it as a small badge above the tab bar. Lets the user verify
+  // env-var flips (AI_MODEL, AI_EFFORT) without opening a chat — the
+  // badge changes immediately on the next page render.
+  function loadAgentsServerConfig() {
+    var el = document.getElementById('agents-server-config');
+    if (!el) return;
+    window.agxApi.get('/api/admin/agents/config').then(function(cfg) {
+      if (!cfg) { el.style.display = 'none'; return; }
+      var modelLabel = cfg.model || '(none)';
+      var effortLabel = cfg.effort ? ' · effort=' + cfg.effort : '';
+      // Subtle green accent when running on Opus (xhigh effort surfaces
+      // it explicitly so an env flip is visually obvious).
+      var isOpus = (cfg.model || '').indexOf('opus') >= 0;
+      var color = isOpus ? '#a78bfa' : 'var(--text-dim,#888)';
+      el.innerHTML = '<span style="color:var(--text-dim,#666);">Server config:</span> ' +
+        '<span style="color:' + color + ';font-weight:600;">' + escapeHTML(modelLabel) + '</span>' +
+        '<span style="color:var(--text-dim,#888);">' + escapeHTML(effortLabel) + '</span>';
+    }).catch(function(err) {
+      el.innerHTML = '<span style="color:#f87171;">config load failed: ' + escapeHTML(err.message || 'unknown') + '</span>';
+    });
   }
 
   function setAgentsRange(r) {
@@ -2997,7 +3022,7 @@
     if (btn && btn.tagName === 'BUTTON') { btn.disabled = true; btn.textContent = 'Running…'; }
     window.agxApi.post('/api/admin/agents/evals/' + encodeURIComponent(id) + '/run', {}).then(function(resp) {
       var ok = resp && resp.passed;
-      alert((ok ? '✓ PASSED' : '✗ FAILED') + '\n\nModel: ' + (resp.model || '—') + '\nDuration: ' + (resp.duration_ms ? Math.round(resp.duration_ms / 100) / 10 + 's' : '—') + '\nTool calls: ' + (resp.tool_calls ? resp.tool_calls.length : 0) + '\nTokens in/out: ' + (resp.input_tokens || 0) + ' / ' + (resp.output_tokens || 0));
+      alert((ok ? '✓ PASSED' : '✗ FAILED') + '\n\nModel: ' + (resp.model || '—') + (resp.effort ? ' · effort=' + resp.effort : '') + '\nDuration: ' + (resp.duration_ms ? Math.round(resp.duration_ms / 100) / 10 + 's' : '—') + '\nTool calls: ' + (resp.tool_calls ? resp.tool_calls.length : 0) + '\nTokens in/out: ' + (resp.input_tokens || 0) + ' / ' + (resp.output_tokens || 0));
       if (_agentsEvalId === id) renderAgentEvalDetail(id);
       else renderAgentEvalsList();
     }).catch(function(err) {
@@ -3054,7 +3079,7 @@
               '<summary style="cursor:pointer;display:flex;align-items:center;gap:8px;font-size:12px;">' +
                 pill +
                 '<span style="color:var(--text-dim,#aaa);">' + escapeHTML(when) + '</span>' +
-                '<span style="font-family:\'SF Mono\',monospace;color:var(--text-dim,#aaa);font-size:11px;">' + escapeHTML(r.model || '') + '</span>' +
+                '<span style="font-family:\'SF Mono\',monospace;color:var(--text-dim,#aaa);font-size:11px;">' + escapeHTML(r.model || '') + (r.effort ? ' · ' + escapeHTML(r.effort) : '') + '</span>' +
                 '<span style="font-family:\'SF Mono\',monospace;color:var(--text-dim,#aaa);font-size:11px;">' + (r.duration_ms ? Math.round(r.duration_ms / 100) / 10 + 's' : '—') + '</span>' +
                 '<span style="font-family:\'SF Mono\',monospace;color:var(--text-dim,#aaa);font-size:11px;">' + (r.input_tokens || 0) + ' in / ' + (r.output_tokens || 0) + ' out</span>' +
               '</summary>' +

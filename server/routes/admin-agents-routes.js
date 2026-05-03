@@ -375,13 +375,42 @@ function getAnthropic() {
 // production AG via a tiny shim (./ai-routes-internals). Lazy required
 // inside the run handler to avoid load-time circulars.
 
+// GET /api/admin/agents/config — returns the live agent runtime config
+// (model + effort) the server is using. Read straight from the same
+// internals that production AG / Elle / HR consult on every chat turn,
+// so a non-null effort or non-default model here means the env vars
+// genuinely took effect on this deployment. Surfaced as a "Server
+// config" badge on the Agents page so the user can verify env flips
+// without having to open a chat and read a model name from a metric.
+router.get('/config', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+  try {
+    const aiInternals = require('./ai-routes-internals');
+    if (!aiInternals) throw new Error('ai-routes internals not available.');
+    const model = aiInternals.defaultModel();
+    // Resolve effort the same way every chat turn does — passes the
+    // resolved model so we get the same null-or-string production gets.
+    const effort = aiInternals.effortFor(model, null);
+    res.json({
+      model,
+      effort,
+      env: {
+        AI_MODEL: process.env.AI_MODEL || null,
+        AI_EFFORT: process.env.AI_EFFORT || null
+      }
+    });
+  } catch (e) {
+    console.error('GET /api/admin/agents/config error:', e);
+    res.status(500).json({ error: 'Server error: ' + (e.message || 'unknown') });
+  }
+});
+
 router.get('/evals', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
   try {
     const r = await pool.query(
       `SELECT e.id, e.name, e.kind, e.description, e.created_at, e.updated_at,
               (SELECT COUNT(*)::int FROM ai_eval_runs r WHERE r.eval_id = e.id) AS run_count,
               (SELECT row_to_json(latest) FROM (
-                  SELECT run_at, passed, model, input_tokens, output_tokens, duration_ms
+                  SELECT run_at, passed, model, effort, input_tokens, output_tokens, duration_ms
                     FROM ai_eval_runs WHERE eval_id = e.id ORDER BY run_at DESC LIMIT 1
               ) latest) AS latest_run
          FROM ai_evals e
@@ -399,7 +428,7 @@ router.get('/evals/:id', requireAuth, requireCapability('ROLES_MANAGE'), async (
     const r = await pool.query('SELECT * FROM ai_evals WHERE id = $1', [req.params.id]);
     if (!r.rows.length) return res.status(404).json({ error: 'Eval not found' });
     const runs = await pool.query(
-      `SELECT id, run_at, run_by, model, input_tokens, output_tokens, duration_ms,
+      `SELECT id, run_at, run_by, model, effort, input_tokens, output_tokens, duration_ms,
               passed, score, response_text, tool_calls, error
          FROM ai_eval_runs WHERE eval_id = $1 ORDER BY run_at DESC LIMIT 50`,
       [req.params.id]
@@ -492,6 +521,11 @@ router.post('/evals/:id/run', requireAuth, requireCapability('ROLES_MANAGE'), as
     const tools = aiInternals.estimateTools();
     const model = (req.body && req.body.model_override) || aiInternals.defaultModel();
     const maxTokens = aiInternals.maxTokens();
+    // effort honors AI_EFFORT env (default) unless the request body
+    // overrides it. Mirrors what production AG does on every turn so
+    // an eval is a faithful re-run of the live config.
+    const effortOverride = req.body && req.body.effort_override;
+    const effort = aiInternals.effortFor(model, effortOverride);
 
     // Production AG attaches photos as image blocks on the user message.
     // Mirror that here so the model has the same input shape as a real
@@ -501,13 +535,15 @@ router.post('/evals/:id/run', requireAuth, requireCapability('ROLES_MANAGE'), as
       ? [...photoBlocks, { type: 'text', text: fixture.user_prompt }]
       : fixture.user_prompt;
 
-    const response = await anthropic.messages.create({
+    const apiBody = {
       model,
       max_tokens: maxTokens,
       system: ctx.system,
       tools,
       messages: [{ role: 'user', content: userContent }]
-    });
+    };
+    if (effort) apiBody.output_config = { effort };
+    const response = await anthropic.messages.create(apiBody);
 
     const content = response.content || [];
     const text = content.filter(b => b.type === 'text').map(b => b.text).join('\n');
@@ -550,11 +586,11 @@ router.post('/evals/:id/run', requireAuth, requireCapability('ROLES_MANAGE'), as
     }
 
     await pool.query(
-      `INSERT INTO ai_eval_runs (id, eval_id, run_by, model, input_tokens, output_tokens,
+      `INSERT INTO ai_eval_runs (id, eval_id, run_by, model, effort, input_tokens, output_tokens,
                                  duration_ms, passed, score, response_text, tool_calls)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
       [
-        runId, ev.id, req.user ? req.user.id : null, model,
+        runId, ev.id, req.user ? req.user.id : null, model, effort || null,
         usage.input_tokens || null, usage.output_tokens || null,
         elapsed, allPassed, JSON.stringify(signalResults),
         text, JSON.stringify(toolUses)
@@ -562,7 +598,7 @@ router.post('/evals/:id/run', requireAuth, requireCapability('ROLES_MANAGE'), as
     );
 
     res.json({
-      ok: true, run_id: runId, passed: allPassed, model,
+      ok: true, run_id: runId, passed: allPassed, model, effort: effort || null,
       duration_ms: elapsed,
       input_tokens: usage.input_tokens, output_tokens: usage.output_tokens,
       tool_calls: toolUses, response_text: text, score: signalResults

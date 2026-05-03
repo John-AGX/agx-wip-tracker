@@ -610,6 +610,9 @@ async function initSchema() {
       error TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_ai_eval_runs_eval ON ai_eval_runs(eval_id, run_at DESC);
+    -- Idempotent column add — captures the effort param used on each run
+    -- so the history can show whether runs were on xhigh / high / etc.
+    ALTER TABLE ai_eval_runs ADD COLUMN IF NOT EXISTS effort TEXT;
 
     -- Conversation replays — sandboxed re-runs of an existing
     -- conversation (or a prefix of it) under different model / effort /
