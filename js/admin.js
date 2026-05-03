@@ -1524,6 +1524,7 @@
         '<button class="ee-btn primary" id="email-tpl-save">&#x1F4BE; Save override</button>' +
         '<button class="ee-btn secondary" id="email-tpl-preview">&#x1F441; Refresh preview</button>' +
         '<button class="ee-btn secondary" id="email-tpl-test">&#x1F4E7; Send test</button>' +
+        '<button class="ee-btn secondary" id="email-tpl-loaddefault" title="Copy the baked-in default subject + HTML into the editor as a starting point. Doesn\'t save until you click Save override.">&#x1F4CB; Load default into editor</button>' +
         (override ?
           '<button class="ee-btn danger" id="email-tpl-reset" style="margin-left:auto;">&#x21BA; Revert to default</button>' :
           '') +
@@ -1550,6 +1551,7 @@
     document.getElementById('email-tpl-save').addEventListener('click', saveTemplate);
     document.getElementById('email-tpl-preview').addEventListener('click', refreshTemplatePreview);
     document.getElementById('email-tpl-test').addEventListener('click', sendTemplateTest);
+    document.getElementById('email-tpl-loaddefault').addEventListener('click', loadDefaultIntoEditor);
     var resetBtn = document.getElementById('email-tpl-reset');
     if (resetBtn) resetBtn.addEventListener('click', resetTemplate);
     // Render the current preview into the iframe.
@@ -1598,6 +1600,27 @@
     // Save first (so the preview reflects what's in the editor) then
     // reload detail.
     saveTemplate();
+  }
+
+  // Drop the baked-in default subject + HTML into the editor, so the
+  // admin can tweak the entire template (header, footer, signature,
+  // links — everything) instead of starting from a blank slate. The
+  // overrides aren't saved until they click Save.
+  function loadDefaultIntoEditor() {
+    if (!_templateDetail) return;
+    var def = _templateDetail.defaultRender;
+    if (!def) {
+      var statusEl = document.getElementById('email-tpl-status');
+      if (statusEl) statusEl.innerHTML = '<span style="color:#fbbf24;">No default available for this template.</span>';
+      return;
+    }
+    if (!confirm('Load the default into the editor?\n\nThis replaces whatever is in the Subject + HTML body fields with the baked-in default. Nothing is saved until you click Save override.')) return;
+    var subjectEl = document.getElementById('email-tpl-subject');
+    var bodyEl = document.getElementById('email-tpl-body');
+    if (subjectEl) subjectEl.value = def.subject || '';
+    if (bodyEl) bodyEl.value = def.html || '';
+    var statusEl = document.getElementById('email-tpl-status');
+    if (statusEl) statusEl.innerHTML = '<span style="color:#34d399;">&#x2713; Default loaded into editor — edit freely, then click Save.</span>';
   }
 
   function sendTemplateTest() {

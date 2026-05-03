@@ -10,16 +10,15 @@
 
 // Pick the public app URL for "Sign in" / "Open in AGX" links in
 // emails. Reads APP_URL env var so the same code works against
-// localhost in dev, the Railway domain by default, and a future
-// custom domain (e.g. https://wip-agxco.com) when the user
-// promotes one without redeploying templates. Defaults to the
-// Railway URL we shipped originally.
+// localhost in dev, the prod custom domain by default, and a
+// staging deploy can point at its own URL without redeploying
+// templates. Default tracks the live AGX domain.
 function appUrl() {
   var u = process.env.APP_URL;
   if (typeof u === 'string' && /^https?:\/\//.test(u.trim())) {
     return u.trim().replace(/\/$/, '');
   }
-  return 'https://wip.up.railway.app';
+  return 'https://wip-agxco.com';
 }
 
 // Default footer used by every template.
@@ -412,18 +411,41 @@ function renderDefault(eventKey, params) {
 // Public render — preferred call site for sending. Routes pass the
 // event key + params; this function does override-or-default
 // dispatch and returns { subject, html, text }.
+//
+// Override behavior: the admin's html_body is rendered AS-IS — no
+// AGX shell wrap, no auto footer. Whatever the admin wrote is the
+// entire email body. {{appUrl}} is auto-injected into params so
+// links can resolve without the admin pasting the literal URL.
+//
+// Partial overrides: if html_body is empty, fall back to the
+// default body. Same for subject. Lets an admin tweak just the
+// subject or just the body without retyping the rest.
 async function render(eventKey, params) {
+  // Auto-inject appUrl so {{appUrl}} works in admin-edited templates.
+  params = Object.assign({ appUrl: appUrl() }, params || {});
+
   var override = await getOverride(eventKey);
-  if (override && (override.subject || override.html_body)) {
-    var subject = interpolate(override.subject || '', params);
-    var bodyHtml = interpolate(override.html_body || '', params);
-    return {
-      subject: subject || '(no subject)',
-      html: shell(subject || '', bodyHtml),
-      text: htmlToText(bodyHtml) + footer().text
-    };
+  if (!override || (!override.subject && !override.html_body)) {
+    return renderDefault(eventKey, params);
   }
-  return renderDefault(eventKey, params);
+
+  var def = null;
+  if (!override.subject || !override.html_body) {
+    try { def = renderDefault(eventKey, params); } catch (e) { def = null; }
+  }
+
+  var subject = override.subject
+    ? interpolate(override.subject, params)
+    : (def && def.subject) || '(no subject)';
+  var bodyHtml = override.html_body
+    ? interpolate(override.html_body, params)
+    : (def && def.html) || '';
+
+  return {
+    subject: subject || '(no subject)',
+    html: bodyHtml,
+    text: htmlToText(bodyHtml)
+  };
 }
 
 // Sample params for each event — used by the Email Templates editor
