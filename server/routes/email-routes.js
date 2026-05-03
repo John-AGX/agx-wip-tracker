@@ -239,10 +239,19 @@ router.get('/templates/:key',
         ? emailTemplates.getDefaultSource(eventKey)
         : null;
 
+      // Enriched sample params — the same params the renderer
+      // interpolates against. Sent so the admin editor can do
+      // client-side live preview as the admin types, without
+      // round-tripping every keystroke through the server.
+      const enrichedParams = (typeof emailTemplates.enrichedSampleParams === 'function')
+        ? emailTemplates.enrichedSampleParams(eventKey)
+        : null;
+
       res.json({
         event: event,
         override: override,
         sampleParams: emailTemplates.sampleParams(eventKey),
+        enrichedSampleParams: enrichedParams,
         preview: preview,
         defaultRender: defaultRender,
         defaultSource: defaultSource

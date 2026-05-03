@@ -119,7 +119,10 @@ function shellWrap(title, bodyHtml) {
   return (
     '<!doctype html><html><body style="margin:0;padding:0;background:#f3f4f6;font-family:Arial,Helvetica,sans-serif;">' +
       '<div style="max-width:560px;margin:24px auto;padding:24px;background:#fff;border-radius:10px;color:#1f2937;line-height:1.5;">' +
-        '<div style="font-size:13px;font-weight:700;color:#4f8cff;letter-spacing:1px;text-transform:uppercase;margin-bottom:12px;">AGX</div>' +
+        // AGX logo. Email clients fetch this via absolute URL since the
+        // email is rendered outside our domain. {{appUrl}} resolves at
+        // render time so dev/staging/prod each load the right image.
+        '<div style="margin-bottom:12px;"><img src="{{appUrl}}/images/logo-color.png" alt="AGX" style="height:40px;display:block;" /></div>' +
         '<h2 style="margin:0 0 16px 0;color:#111827;font-size:20px;">' + title + '</h2>' +
         bodyHtml +
         COMMON_FOOTER +
@@ -461,6 +464,13 @@ function leadStatusSold(params) { return renderDefault('lead_status_sold', param
 function leadStatusLost(params) { return renderDefault('lead_status_lost', params); }
 function certExpiring(params) { return renderDefault('cert_expiring', params); }
 
+// Returns the enriched sample params for an event — the same params
+// the renderer interpolates against. Used by the admin Email Templates
+// editor to do client-side live preview as the admin types.
+function enrichedSampleParams(eventKey) {
+  return enrichParams(eventKey, sampleParams(eventKey));
+}
+
 module.exports = {
   // Per-event back-compat wrappers (unchanged signature for callers)
   newUserInvite,
@@ -478,6 +488,7 @@ module.exports = {
   renderSampleDefault,
   getDefaultSource,
   sampleParams,
+  enrichedSampleParams,
   // Helpers exposed for tests / utilities
   interpolate,
   htmlToText

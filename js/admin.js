@@ -1445,8 +1445,10 @@
             '<div style="min-width:0;flex:1;">' +
               '<div style="color:var(--text);font-size:13px;' + (active ? 'font-weight:600;' : '') + 'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escapeHTML(t.label) + '</div>' +
               '<div style="color:var(--text-dim,#888);font-size:10px;margin-top:1px;">' +
-                (t.hasOverride ? '<span style="color:#fbbf24;">&#9999; Override</span>' : '<span>Default</span>') +
-                (t.wired ? '' : ' &middot; <span style="color:#fbbf24;">pending</span>') +
+                (t.hasOverride && t.updatedAt
+                  ? '<span style="color:#34d399;">Saved ' + escapeHTML(new Date(t.updatedAt).toLocaleDateString()) + '</span>'
+                  : '<span>Factory default</span>') +
+                (t.wired ? '' : ' &middot; <span style="color:#fbbf24;">trigger pending</span>') +
               '</div>' +
             '</div>' +
           '</div>';
@@ -1495,6 +1497,13 @@
     var vars = ev.variables || [];
     var sample = d.sampleParams || {};
 
+    var lastSavedLabel;
+    if (override && override.updated_at) {
+      var dt = new Date(override.updated_at);
+      lastSavedLabel = '<span style="color:#34d399;">Last saved ' + escapeHTML(dt.toLocaleString()) + '</span>';
+    } else {
+      lastSavedLabel = '<span style="color:var(--text-dim,#888);">Not yet customized — editing factory default</span>';
+    }
     ed.innerHTML =
       '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:14px;margin-bottom:12px;flex-wrap:wrap;">' +
         '<div style="min-width:0;flex:1;">' +
@@ -1502,8 +1511,8 @@
           '<div style="color:var(--text-dim,#888);font-size:12px;">' + escapeHTML(ev.description || '') + '</div>' +
           '<div style="color:var(--text-dim,#aaa);font-size:11px;margin-top:6px;">' +
             '<strong>Audience:</strong> ' + escapeHTML(ev.audience || '—') + ' &middot; ' +
-            '<strong>Status:</strong> ' + (ev.wired ? '<span style="color:#34d399;">Active</span>' : '<span style="color:#fbbf24;">Trigger pending</span>') + ' &middot; ' +
-            '<strong>Override:</strong> ' + (override ? '<span style="color:#fbbf24;">Yes</span>' : '<span>No (using baked-in default)</span>') +
+            '<strong>Trigger:</strong> ' + (ev.wired ? '<span style="color:#34d399;">Active</span>' : '<span style="color:#fbbf24;">Pending</span>') + ' &middot; ' +
+            lastSavedLabel +
           '</div>' +
         '</div>' +
       '</div>' +
@@ -1530,20 +1539,19 @@
       '</div>' +
       // Action buttons.
       '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;align-items:center;">' +
-        '<button class="ee-btn primary" id="email-tpl-save">&#x1F4BE; Save override</button>' +
+        '<button class="ee-btn primary" id="email-tpl-save">&#x1F4BE; Save template</button>' +
         '<button class="ee-btn secondary" id="email-tpl-preview">&#x1F441; Refresh preview</button>' +
         '<button class="ee-btn secondary" id="email-tpl-test">&#x1F4E7; Send test</button>' +
-        '<button class="ee-btn secondary" id="email-tpl-loaddefault" title="Copy the baked-in default subject + HTML into the editor as a starting point. Doesn\'t save until you click Save override.">&#x1F4CB; Load default into editor</button>' +
         (override ?
-          '<button class="ee-btn danger" id="email-tpl-reset" style="margin-left:auto;">&#x21BA; Revert to default</button>' :
+          '<button class="ee-btn danger" id="email-tpl-reset" style="margin-left:auto;" title="Discard your saved template and re-load the factory default into the editor.">&#x21BA; Reset to factory default</button>' :
           '') +
       '</div>' +
       '<div id="email-tpl-status" style="margin-top:8px;font-size:12px;min-height:16px;"></div>' +
-      // Preview pane.
+      // Live preview pane — re-renders as the admin types the source.
       '<div style="margin-top:14px;border:1px solid var(--border,#2a2a3a);border-radius:8px;overflow:hidden;">' +
-        '<div style="background:rgba(255,255,255,0.04);padding:8px 12px;border-bottom:1px solid var(--border,#2a2a3a);font-size:11px;color:var(--text-dim,#aaa);display:flex;justify-content:space-between;align-items:center;">' +
-          '<span><strong>Preview</strong> &middot; rendered with sample data</span>' +
-          '<span style="font-family:monospace;font-size:10px;">sampleParams: ' + escapeHTML(JSON.stringify(sample).slice(0, 120)) + (JSON.stringify(sample).length > 120 ? '…' : '') + '</span>' +
+        '<div style="background:rgba(255,255,255,0.04);padding:8px 12px;border-bottom:1px solid var(--border,#2a2a3a);font-size:11px;color:var(--text-dim,#aaa);display:flex;justify-content:space-between;align-items:center;gap:8px;">' +
+          '<span><strong>Live preview</strong> &middot; updates as you type, rendered with sample data</span>' +
+          '<span style="font-family:monospace;font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">sampleParams: ' + escapeHTML(JSON.stringify(sample).slice(0, 120)) + (JSON.stringify(sample).length > 120 ? '…' : '') + '</span>' +
         '</div>' +
         '<div style="padding:10px 14px;background:rgba(255,255,255,0.02);border-bottom:1px solid var(--border,#2a2a3a);font-size:12px;">' +
           '<strong>Subject:</strong> <span id="email-tpl-preview-subject">' + escapeHTML(preview.subject || '') + '</span>' +
@@ -1560,10 +1568,17 @@
     document.getElementById('email-tpl-save').addEventListener('click', saveTemplate);
     document.getElementById('email-tpl-preview').addEventListener('click', refreshTemplatePreview);
     document.getElementById('email-tpl-test').addEventListener('click', sendTemplateTest);
-    document.getElementById('email-tpl-loaddefault').addEventListener('click', loadDefaultIntoEditor);
     var resetBtn = document.getElementById('email-tpl-reset');
     if (resetBtn) resetBtn.addEventListener('click', resetTemplate);
-    // Render the current preview into the iframe.
+    // Live preview as the admin types — debounced so we don't re-render
+    // the iframe on every keystroke. Uses the enriched sample params
+    // shipped by the detail endpoint, so client-side interpolation
+    // produces the same output as a server-side render.
+    var subjectInput = document.getElementById('email-tpl-subject');
+    var bodyInput = document.getElementById('email-tpl-body');
+    if (subjectInput) subjectInput.addEventListener('input', scheduleLivePreview);
+    if (bodyInput) bodyInput.addEventListener('input', scheduleLivePreview);
+    // Render the current preview into the iframe (initial render, server-side).
     setIframeContent('email-tpl-preview-frame', preview.html || '');
   }
 
@@ -1609,6 +1624,48 @@
     // Save first (so the preview reflects what's in the editor) then
     // reload detail.
     saveTemplate();
+  }
+
+  // ── Live preview (client-side render) ──────────────────────────
+  // Mirrors the server's interpolate(): {{path}} HTML-escapes, {{{path}}}
+  // is raw. Resolves dotted paths against the enriched sample params
+  // shipped from the detail endpoint.
+  function tplResolvePath(path, obj) {
+    return path.split('.').reduce(function(o, k) {
+      return (o && o[k] != null) ? o[k] : null;
+    }, obj);
+  }
+  function tplEscapeHtml(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+  function tplInterpolate(str, params) {
+    if (typeof str !== 'string') return '';
+    return str
+      .replace(/\{\{\{\s*([^}]+?)\s*\}\}\}/g, function(_, p) {
+        var v = tplResolvePath(p, params);
+        return v == null ? '' : String(v);
+      })
+      .replace(/\{\{\s*([^}]+?)\s*\}\}/g, function(_, p) {
+        var v = tplResolvePath(p, params);
+        return v == null ? '' : tplEscapeHtml(String(v));
+      });
+  }
+
+  var _livePreviewTimer = null;
+  function scheduleLivePreview() {
+    if (_livePreviewTimer) clearTimeout(_livePreviewTimer);
+    _livePreviewTimer = setTimeout(runLivePreview, 200);
+  }
+  function runLivePreview() {
+    if (!_templateDetail) return;
+    var params = _templateDetail.enrichedSampleParams || _templateDetail.sampleParams || {};
+    var subjectEl = document.getElementById('email-tpl-subject');
+    var bodyEl = document.getElementById('email-tpl-body');
+    var subjPreview = document.getElementById('email-tpl-preview-subject');
+    if (subjPreview && subjectEl) subjPreview.textContent = tplInterpolate(subjectEl.value || '', params);
+    if (bodyEl) setIframeContent('email-tpl-preview-frame', tplInterpolate(bodyEl.value || '', params));
   }
 
   // Drop the baked-in template SOURCE (with {{var}} placeholders) into
