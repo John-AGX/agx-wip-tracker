@@ -581,8 +581,18 @@
       _messages = [];
       loadHistory();
     }
-    panel.style.transform = 'translateX(0)';
-    document.body.classList.add('agx-ai-open');
+    // Slide the panel in lockstep with the body padding shift.
+    // Force a layout commit on the off-screen state first (the initial
+    // panel cssText sets transform:translateX(100%)) so the browser has
+    // a starting frame to animate FROM. Without this, on first open
+    // some browsers fold the create + open into one paint and the
+    // panel pops in instantly while the body smoothly slides — feels
+    // disconnected, like the panel and page aren't attached.
+    void panel.offsetWidth; // force reflow on the off-screen state
+    requestAnimationFrame(function() {
+      panel.style.transform = 'translateX(0)';
+      document.body.classList.add('agx-ai-open');
+    });
     _open = true;
     // Photos toggle and proposal cards only make sense on the estimate
     // side. Hide / disable them when running against a job.

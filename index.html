@@ -680,15 +680,23 @@
                                 <div class="ee-header-row" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:8px;">
                                     <button class="ee-btn secondary" onclick="closeEstimateEditor()">&larr; Back</button>
                                     <input id="ee-title" type="text" placeholder="Estimate title" style="flex:1;min-width:200px;font-size:17px;font-weight:600;padding:5px 10px;background:transparent;border:1px solid transparent;border-radius:6px;color:var(--text,#fff);" onfocus="this.style.borderColor='var(--border,#333)'" onblur="this.style.borderColor='transparent'" />
-                                    <div id="ee-linked-chips" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
-                                    <span id="ee-save-indicator" style="font-size:11px;color:var(--text-dim,#888);padding:0 6px;display:flex;align-items:center;font-weight:500;cursor:pointer;" onclick="saveEstimateNow()" title="Click to save now"><span style="font-weight:700;margin-right:5px;">&#x25CB;</span>No changes</span>
-                                    <button class="ee-btn" onclick="saveEstimateNow()" title="Save the estimate now (also auto-saves on edit)">&#x1F4BE; Save</button>
-                                    <button class="ee-btn" onclick="openEstimateAI()" title="AI estimating assistant" style="background:linear-gradient(135deg,#8b5cf6,#4f8cff);color:#fff;border:none;">&#x2728; Ask AI</button>
                                     <button class="ee-btn success" onclick="exportEstimateToBuildertrend()" title="Download Buildertrend-format xlsx">&#x1F4E4; Export</button>
                                     <button class="ee-btn ee-icon-btn danger" onclick="deleteEstimateFromEditor()" title="Delete this estimate (cannot be undone)" aria-label="Delete estimate">&#x1F5D1;</button>
                                 </div>
-                                <!-- Live totals strip -->
-                                <div id="ee-totals" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
+                                <!-- Linked-lead chips on the left, save state + Ask AI right-aligned
+                                     so Ask AI lines up with the right edge of the totals strip below
+                                     (LINES bubble). Sits right above the totals so the chip + bubbles
+                                     read as one stack visually. -->
+                                <div class="ee-action-row" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+                                    <div id="ee-linked-chips" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
+                                    <div style="flex:1;"></div>
+                                    <span id="ee-save-indicator" style="font-size:11px;color:var(--text-dim,#888);padding:0 6px;display:flex;align-items:center;font-weight:500;cursor:pointer;" onclick="saveEstimateNow()" title="Click to save now"><span style="font-weight:700;margin-right:5px;">&#x25CB;</span>No changes</span>
+                                    <button class="ee-btn" onclick="saveEstimateNow()" title="Save the estimate now (also auto-saves on edit)">&#x1F4BE; Save</button>
+                                    <button class="ee-btn" onclick="openEstimateAI()" title="AI estimating assistant" style="background:linear-gradient(135deg,#8b5cf6,#4f8cff);color:#fff;border:none;">&#x2728; Ask AI</button>
+                                </div>
+                                <!-- Live totals strip — also justify-end so the LINES bubble lines up
+                                     under the Ask AI button on the row above. -->
+                                <div id="ee-totals" style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;"></div>
                                 <!-- Sub-tab nav -->
                                 <div class="ws-right-tabs" style="margin-top:10px;margin-bottom:0;">
                                     <button class="ws-right-tab active" data-ee-tab="lines" onclick="switchEstimateEditorTab('lines')">Line Items</button>
@@ -2121,7 +2129,7 @@
     <script src="js/estimate-editor.js?v=30"></script>
     <script src="js/estimate-preview.js?v=6"></script>
     <script src="js/bt-export.js?v=4"></script>
-    <script src="js/ai-panel.js?v=34"></script>
+    <script src="js/ai-panel.js?v=35"></script>
     <script src="js/tab-slider.js?v=1"></script>
 
     <script src="js/workspace.js?v=40"></script>
