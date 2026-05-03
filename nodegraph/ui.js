@@ -1122,6 +1122,41 @@ function initEvents(){
     applyTx();
     render();
   }
+
+  // Zoom out to fit ALL nodes in the viewport, with padding.
+  // Used by Ctrl+right-click as an "overview mode" gesture.
+  // Calculates the bounding box of every node, picks a zoom that
+  // fits the box inside the viewport (clamped to engine bounds),
+  // then pans so the box is centered.
+  function zoomFitAll(){
+    var ns = E.nodes();
+    if (!ns.length) {
+      E.zm(0.2);
+      applyTx(); render();
+      return;
+    }
+    // Approximate node footprint — actual width/height vary by type
+    // and collapsed state, but ~250×120 covers most.
+    var NW = 250, NH = 120;
+    var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    ns.forEach(function(n){
+      if (n.x < minX) minX = n.x;
+      if (n.y < minY) minY = n.y;
+      if (n.x + NW > maxX) maxX = n.x + NW;
+      if (n.y + NH > maxY) maxY = n.y + NH;
+    });
+    var bw = maxX - minX, bh = maxY - minY;
+    var pad = 80;
+    var vw = Math.max(1, wrap.clientWidth - pad * 2);
+    var vh = Math.max(1, wrap.clientHeight - pad * 2);
+    var fitZ = Math.min(vw / bw, vh / bh);
+    fitZ = Math.max(0.2, Math.min(3, fitZ));
+    E.zm(fitZ);
+    // Center the bounding box in the viewport.
+    var bcx = (minX + maxX) / 2, bcy = (minY + maxY) / 2;
+    E.pan(wrap.clientWidth / 2 / fitZ - bcx, wrap.clientHeight / 2 / fitZ - bcy);
+    applyTx(); render();
+  }
   wrap.addEventListener('wheel',function(e){
     e.preventDefault();
     zoomAt(e.clientX, e.clientY, e.deltaY > 0 ? ZOOM_OUT_FACTOR : ZOOM_IN_FACTOR);
@@ -1634,14 +1669,21 @@ function initEvents(){
     }
   });
 
-  // Right-click wire to delete. Ctrl+right-click (or Cmd on Mac) is
-  // an alternate zoom-out gesture for users who'd rather not roll
-  // the wheel — anchored at cursor position like the wheel zoom so
-  // the point under the mouse stays put.
+  // Right-click handlers:
+  //   - On a node: don't intercept — let any node-level handlers
+  //     run (Ctrl+left-click for selection/focus already exists;
+  //     Ctrl+right-click on a node should be a no-op so the
+  //     "select node" gesture isn't disrupted by the zoom-out
+  //     gesture firing as well).
+  //   - Ctrl/Cmd + right-click on empty canvas: fit-all overview
+  //     (zoom out + center on every node).
+  //   - Plain right-click on empty canvas: delete the wire under
+  //     the cursor (existing behavior).
   wrap.addEventListener('contextmenu',function(e){
     e.preventDefault();
+    if (e.target.closest('.ng-node')) return;
     if (e.ctrlKey || e.metaKey) {
-      zoomAt(e.clientX, e.clientY, ZOOM_OUT_FACTOR);
+      zoomFitAll();
       return;
     }
     var r=wrap.getBoundingClientRect(),p=E.pan(),z2=E.zm();
