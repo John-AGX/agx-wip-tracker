@@ -162,8 +162,59 @@ async function sendEmail(opts) {
   }
 }
 
+// ── Email settings (admin-configurable per-event toggles + globals) ──
+// Stored under app_settings(key='email'). DEFAULT_SETTINGS lives in
+// server/email-events.js as the source of truth for shape; persisted
+// values get merged on top so an event added to the catalog later
+// shows up with its default state without breaking saved configs.
+const { DEFAULT_SETTINGS, EVENTS } = require('./email-events');
+
+async function getEmailSettings() {
+  try {
+    const { rows } = await pool.query(
+      "SELECT value FROM app_settings WHERE key = 'email'"
+    );
+    var stored = (rows.length && rows[0].value) || {};
+    var merged = {
+      events: Object.assign({}, DEFAULT_SETTINGS.events, stored.events || {}),
+      globalBcc: stored.globalBcc != null ? stored.globalBcc : DEFAULT_SETTINGS.globalBcc,
+      digestMode: stored.digestMode != null ? stored.digestMode : DEFAULT_SETTINGS.digestMode,
+      quietHours: Object.assign({}, DEFAULT_SETTINGS.quietHours, stored.quietHours || {})
+    };
+    // Ensure every event in the canonical catalog has an entry — new
+    // events added in code won't have stored values; fall back to default.
+    EVENTS.forEach(function(e) {
+      if (!merged.events[e.key]) {
+        merged.events[e.key] = { enabled: e.defaultEnabled, bcc: [] };
+      }
+    });
+    return merged;
+  } catch (e) {
+    console.error('[email] getEmailSettings failed:', e.message);
+    return DEFAULT_SETTINGS;
+  }
+}
+
+async function setEmailSettings(settings) {
+  await pool.query(
+    "INSERT INTO app_settings (key, value) VALUES ('email', $1) " +
+    "ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = NOW()",
+    [JSON.stringify(settings)]
+  );
+}
+
+// Check if a given event key is enabled in the current settings.
+// Used at trigger sites in E2 to gate sends.
+async function isEventEnabled(eventKey) {
+  var s = await getEmailSettings();
+  return !!(s.events && s.events[eventKey] && s.events[eventKey].enabled);
+}
+
 module.exports = {
   sendEmail,
   isEnabled,
-  isDryRun
+  isDryRun,
+  getEmailSettings,
+  setEmailSettings,
+  isEventEnabled
 };

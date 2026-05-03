@@ -495,6 +495,20 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_email_log_tag ON email_log(tag);
     CREATE INDEX IF NOT EXISTS idx_email_log_to ON email_log(to_address);
 
+    -- Per-event template overrides. The codebase ships baked-in defaults
+    -- in server/email-templates.js; admins can customize subject + body
+    -- without redeploying by saving a row here. Lookup at send time
+    -- prefers the override (if present) over the baked-in default.
+    -- One row per event key (PK), so there's exactly one customization
+    -- per template type.
+    CREATE TABLE IF NOT EXISTS email_template_overrides (
+      event_key TEXT PRIMARY KEY,
+      subject TEXT,
+      html_body TEXT,
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL
+    );
+
     -- Schedule page: production entries placed on the calendar.
     -- Phase 2 of the schedule feature — replaces the localStorage
     -- shim from Phase 1 with server-persisted, multi-device-synced

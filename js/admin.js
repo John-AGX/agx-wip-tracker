@@ -1020,25 +1020,57 @@
     else if (name === 'templates') renderAdminTemplates();
     else if (name === 'materials') renderAdminMaterials();
     else if (name === 'email') renderAdminEmail();
+    else if (name === 'email-templates') renderAdminEmailTemplates();
     // Persist nav state so a refresh lands back on this admin sub-tab.
     if (typeof window.agxNavSave === 'function') window.agxNavSave();
   }
 
-  // ==================== EMAIL DIAGNOSTICS ====================
-  // Phase 1 admin surface for the notifications feature. Lets the
-  // admin verify provider config, fire a test send, and read the
-  // recent email_log table without leaving the app.
+  // ==================== EMAIL ADMIN ====================
+  // Sectioned admin surface for the notifications feature:
+  //   1. Provider status banner (configured? dry-run?)
+  //   2. Events & triggers table (per-event toggle + per-event BCC)
+  //   3. Global defaults (global BCC, digest mode, quiet hours)
+  //   4. Send test message
+  //   5. Recent send log
+  //
+  // The events table + global defaults read/write app_settings('email')
+  // via /api/email/settings; toggles are saved as the user clicks.
+  // Templates live in a separate sub-tab — see renderAdminEmailTemplates.
+  var _emailSettings = null;   // last-loaded settings blob (mutated as user edits)
+  var _emailEvents = [];       // EVENTS catalog merged with current settings
+
   function renderAdminEmail() {
     if (!isAdmin()) return;
     var pane = document.getElementById('admin-subtab-email');
     if (!pane) return;
     pane.innerHTML =
       '<div style="display:flex;flex-direction:column;gap:18px;">' +
+        // Provider status banner.
+        '<div id="email-config-status" class="card" style="padding:14px 16px;font-size:13px;color:var(--text-dim,#888);">' +
+          'Loading provider status…' +
+        '</div>' +
+        // Events & triggers table.
         '<div class="card" style="padding:16px;">' +
-          '<h3 style="margin:0 0 12px 0;">Send a test email</h3>' +
-          '<div id="email-config-status" style="font-size:12px;color:var(--text-dim,#888);margin-bottom:10px;">' +
-            'Loading config…' +
+          '<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:8px;gap:10px;">' +
+            '<div>' +
+              '<h3 style="margin:0 0 4px 0;">Events &amp; triggers</h3>' +
+              '<p style="margin:0;color:var(--text-dim,#888);font-size:12px;">Toggle an event to enable/disable that notification across the app. ' +
+                'Add comma-separated BCC addresses to copy admins on a given event.</p>' +
+            '</div>' +
+            '<button class="ee-btn secondary" id="email-events-refresh" style="white-space:nowrap;">&#x21BB; Refresh</button>' +
           '</div>' +
+          '<div id="email-events-tbl" style="font-size:13px;color:var(--text-dim,#888);">Loading…</div>' +
+        '</div>' +
+        // Global defaults card.
+        '<div class="card" style="padding:16px;">' +
+          '<h3 style="margin:0 0 4px 0;">Global defaults</h3>' +
+          '<p style="margin:0 0 12px 0;color:var(--text-dim,#888);font-size:12px;">Applied to every outbound notification.</p>' +
+          '<div id="email-globals" style="display:flex;flex-direction:column;gap:14px;font-size:13px;">Loading…</div>' +
+        '</div>' +
+        // Send test message card.
+        '<div class="card" style="padding:16px;">' +
+          '<h3 style="margin:0 0 4px 0;">Send a test email</h3>' +
+          '<p style="margin:0 0 12px 0;color:var(--text-dim,#888);font-size:12px;">Fires a hardcoded test message — useful for verifying provider config + DNS.</p>' +
           '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
             '<input type="email" id="email-test-to" placeholder="recipient@example.com" ' +
               'style="flex:1;min-width:240px;background:var(--input-bg,#0f0f1e);color:var(--text);border:1px solid var(--border,#333);border-radius:6px;padding:8px 10px;font-size:13px;" />' +
@@ -1046,16 +1078,25 @@
           '</div>' +
           '<div id="email-test-result" style="margin-top:10px;font-size:12px;"></div>' +
         '</div>' +
+        // Recent log card.
         '<div class="card" style="padding:16px;">' +
           '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">' +
             '<h3 style="margin:0;">Recent send log</h3>' +
-            '<button class="ee-btn secondary" id="email-log-refresh">&#x21BB; Refresh</button>' +
+            '<div style="display:flex;gap:6px;align-items:center;">' +
+              '<select id="email-log-status-filter" style="background:var(--input-bg,#0f0f1e);color:var(--text);border:1px solid var(--border,#333);border-radius:6px;padding:4px 8px;font-size:12px;">' +
+                '<option value="">All statuses</option>' +
+                '<option value="sent">Sent</option>' +
+                '<option value="failed">Failed</option>' +
+                '<option value="dry-run">Dry-run</option>' +
+                '<option value="unconfigured">Unconfigured</option>' +
+              '</select>' +
+              '<button class="ee-btn secondary" id="email-log-refresh">&#x21BB; Refresh</button>' +
+            '</div>' +
           '</div>' +
           '<div id="email-log-tbl" style="font-size:12px;color:var(--text-dim,#888);">Loading…</div>' +
         '</div>' +
       '</div>';
 
-    // Pre-fill the recipient with the admin's own email address.
     var me = (window.agxAuth && window.agxAuth.getUser && window.agxAuth.getUser()) || null;
     var toEl = document.getElementById('email-test-to');
     if (me && me.email && toEl) toEl.value = me.email;
@@ -1082,25 +1123,213 @@
       });
     });
     document.getElementById('email-log-refresh').addEventListener('click', loadEmailLog);
+    document.getElementById('email-log-status-filter').addEventListener('change', loadEmailLog);
+    document.getElementById('email-events-refresh').addEventListener('click', loadEmailEventsAndSettings);
+
+    loadEmailEventsAndSettings();
     loadEmailLog();
+  }
+
+  // Load the events catalog + settings together, then render the
+  // events table and the globals card. Saving any control on the page
+  // mutates _emailSettings in-place and re-PUTs to /api/email/settings.
+  function loadEmailEventsAndSettings() {
+    var evtBox = document.getElementById('email-events-tbl');
+    var globBox = document.getElementById('email-globals');
+    if (!evtBox || !globBox) return;
+    Promise.all([
+      window.agxApi.get('/api/email/events'),
+      window.agxApi.get('/api/email/settings')
+    ]).then(function(results) {
+      _emailEvents = (results[0] && results[0].events) || [];
+      _emailSettings = (results[1] && results[1].settings) || {
+        events: {}, globalBcc: '', digestMode: false,
+        quietHours: { enabled: false, start: '21:00', end: '07:00' }
+      };
+      renderProviderStatus(results[1] && results[1].configured, results[1] && results[1].dryRunMode);
+      renderEmailEventsTable();
+      renderEmailGlobals();
+    }).catch(function(err) {
+      evtBox.innerHTML = '<div style="padding:14px;color:#f87171;">Failed to load: ' + escapeHTML(err.message || String(err)) + '</div>';
+    });
+  }
+
+  function renderProviderStatus(configured, dryRun) {
+    var el = document.getElementById('email-config-status');
+    if (!el) return;
+    if (!configured) {
+      el.innerHTML = '<span style="color:#fbbf24;font-weight:600;">&#9888; Email not configured.</span> ' +
+        'Set <code>RESEND_API_KEY</code> and <code>EMAIL_FROM</code> in Railway environment variables. ' +
+        'No emails will send until both are present.';
+    } else if (dryRun) {
+      el.innerHTML = '<span style="color:#fbbf24;font-weight:600;">DRY-RUN mode active</span> &mdash; ' +
+        'emails are logged but not actually delivered. Unset <code>EMAIL_DRY_RUN</code> to enable real sends.';
+    } else {
+      el.innerHTML = '<span style="color:#34d399;font-weight:600;">&#x2713; Configured</span> &mdash; provider: Resend. ' +
+        'Outbound emails will be sent and logged.';
+    }
+  }
+
+  function renderEmailEventsTable() {
+    var box = document.getElementById('email-events-tbl');
+    if (!box) return;
+    if (!_emailEvents.length) {
+      box.innerHTML = '<div style="padding:14px;color:var(--text-dim,#888);">No events defined.</div>';
+      return;
+    }
+    // Group events by category so the table reads as a structured menu
+    // rather than a flat dump.
+    var byCat = {};
+    _emailEvents.forEach(function(e) {
+      var cat = e.category || 'Other';
+      if (!byCat[cat]) byCat[cat] = [];
+      byCat[cat].push(e);
+    });
+    var cats = Object.keys(byCat).sort();
+    var html = '<table class="dense-table" style="width:100%;border-collapse:collapse;font-size:13px;">' +
+      '<thead style="border-bottom:1px solid var(--border,#333);">' +
+        '<tr>' +
+          '<th style="text-align:left;padding:8px;">Event</th>' +
+          '<th style="text-align:left;padding:8px;">Audience</th>' +
+          '<th style="text-align:center;padding:8px;width:90px;">Enabled</th>' +
+          '<th style="text-align:left;padding:8px;width:260px;">Per-event BCC (comma-sep.)</th>' +
+          '<th style="text-align:center;padding:8px;width:80px;">Wired</th>' +
+        '</tr>' +
+      '</thead><tbody>';
+    cats.forEach(function(cat) {
+      html += '<tr><td colspan="5" style="padding:10px 8px 4px 8px;color:var(--text-dim,#aaa);font-size:11px;text-transform:uppercase;letter-spacing:0.6px;">' + escapeHTML(cat) + '</td></tr>';
+      byCat[cat].forEach(function(e) {
+        var bccVal = Array.isArray(e.bcc) ? e.bcc.join(', ') : '';
+        html += '<tr style="border-bottom:1px solid var(--border,#2a2a3a);">' +
+          '<td style="padding:8px;vertical-align:top;">' +
+            '<div style="font-weight:600;color:var(--text);">' + escapeHTML(e.label) + '</div>' +
+            '<div style="color:var(--text-dim,#888);font-size:11px;margin-top:2px;">' + escapeHTML(e.description || '') + '</div>' +
+          '</td>' +
+          '<td style="padding:8px;vertical-align:top;color:var(--text-dim,#aaa);">' + escapeHTML(e.audience || '') + '</td>' +
+          '<td style="padding:8px;vertical-align:top;text-align:center;">' +
+            '<label class="agx-switch" style="display:inline-flex;align-items:center;cursor:pointer;">' +
+              '<input type="checkbox" data-email-event-toggle="' + escapeHTML(e.key) + '" ' + (e.enabled ? 'checked' : '') + ' style="cursor:pointer;width:18px;height:18px;" />' +
+            '</label>' +
+          '</td>' +
+          '<td style="padding:8px;vertical-align:top;">' +
+            '<input type="text" data-email-event-bcc="' + escapeHTML(e.key) + '" value="' + escapeHTML(bccVal).replace(/"/g, '&quot;') + '" placeholder="ops@example.com" ' +
+              'style="width:100%;background:var(--input-bg,#0f0f1e);color:var(--text);border:1px solid var(--border,#333);border-radius:6px;padding:5px 8px;font-size:12px;" />' +
+          '</td>' +
+          '<td style="padding:8px;vertical-align:top;text-align:center;">' +
+            (e.wired ?
+              '<span style="color:#34d399;font-size:11px;">&#x2713; Active</span>' :
+              '<span style="color:#fbbf24;font-size:11px;" title="Trigger not yet wired in code; toggle is for forward-compat.">Pending</span>') +
+          '</td>' +
+        '</tr>';
+      });
+    });
+    html += '</tbody></table>';
+    box.innerHTML = html;
+    // Wire toggle/bcc handlers — saves on change.
+    box.querySelectorAll('[data-email-event-toggle]').forEach(function(cb) {
+      cb.addEventListener('change', function() {
+        var key = cb.dataset.emailEventToggle;
+        if (!_emailSettings.events) _emailSettings.events = {};
+        if (!_emailSettings.events[key]) _emailSettings.events[key] = { enabled: false, bcc: [] };
+        _emailSettings.events[key].enabled = cb.checked;
+        // Mirror into _emailEvents so a re-render keeps state.
+        var evt = _emailEvents.find(function(x) { return x.key === key; });
+        if (evt) evt.enabled = cb.checked;
+        saveEmailSettings();
+      });
+    });
+    box.querySelectorAll('[data-email-event-bcc]').forEach(function(inp) {
+      inp.addEventListener('change', function() {
+        var key = inp.dataset.emailEventBcc;
+        var list = inp.value.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+        if (!_emailSettings.events) _emailSettings.events = {};
+        if (!_emailSettings.events[key]) _emailSettings.events[key] = { enabled: false, bcc: [] };
+        _emailSettings.events[key].bcc = list;
+        var evt = _emailEvents.find(function(x) { return x.key === key; });
+        if (evt) evt.bcc = list;
+        saveEmailSettings();
+      });
+    });
+  }
+
+  function renderEmailGlobals() {
+    var box = document.getElementById('email-globals');
+    if (!box) return;
+    var s = _emailSettings || {};
+    var qh = s.quietHours || { enabled: false, start: '21:00', end: '07:00' };
+    box.innerHTML =
+      // Global BCC.
+      '<div style="display:flex;flex-direction:column;gap:4px;">' +
+        '<label style="font-weight:600;color:var(--text);">Global BCC</label>' +
+        '<div style="color:var(--text-dim,#888);font-size:11px;">Always BCC these addresses on every outbound email. Comma-separated.</div>' +
+        '<input type="text" id="email-global-bcc" value="' + escapeHTML(s.globalBcc || '').replace(/"/g, '&quot;') + '" placeholder="ops@agxco.com, owner@agxco.com" ' +
+          'style="background:var(--input-bg,#0f0f1e);color:var(--text);border:1px solid var(--border,#333);border-radius:6px;padding:7px 10px;font-size:13px;" />' +
+      '</div>' +
+      // Digest mode (placeholder — pending implementation in E3).
+      '<div style="display:flex;align-items:center;gap:10px;">' +
+        '<input type="checkbox" id="email-digest-mode" ' + (s.digestMode ? 'checked' : '') + ' style="width:18px;height:18px;cursor:pointer;" />' +
+        '<label for="email-digest-mode" style="cursor:pointer;">' +
+          '<span style="font-weight:600;color:var(--text);">Digest mode</span> ' +
+          '<span style="color:var(--text-dim,#888);font-size:11px;margin-left:6px;">Coalesce non-urgent notifications into a daily summary (pending wiring).</span>' +
+        '</label>' +
+      '</div>' +
+      // Quiet hours.
+      '<div style="display:flex;flex-direction:column;gap:6px;">' +
+        '<div style="display:flex;align-items:center;gap:10px;">' +
+          '<input type="checkbox" id="email-quiet-enabled" ' + (qh.enabled ? 'checked' : '') + ' style="width:18px;height:18px;cursor:pointer;" />' +
+          '<label for="email-quiet-enabled" style="cursor:pointer;font-weight:600;color:var(--text);">Quiet hours</label>' +
+          '<span style="color:var(--text-dim,#888);font-size:11px;">Hold non-urgent emails during this window (pending wiring).</span>' +
+        '</div>' +
+        '<div style="display:flex;align-items:center;gap:10px;padding-left:28px;">' +
+          '<label style="color:var(--text-dim,#aaa);font-size:12px;">Start</label>' +
+          '<input type="time" id="email-quiet-start" value="' + escapeHTML(qh.start || '21:00') + '" style="background:var(--input-bg,#0f0f1e);color:var(--text);border:1px solid var(--border,#333);border-radius:6px;padding:5px 8px;font-size:12px;" />' +
+          '<label style="color:var(--text-dim,#aaa);font-size:12px;">End</label>' +
+          '<input type="time" id="email-quiet-end" value="' + escapeHTML(qh.end || '07:00') + '" style="background:var(--input-bg,#0f0f1e);color:var(--text);border:1px solid var(--border,#333);border-radius:6px;padding:5px 8px;font-size:12px;" />' +
+        '</div>' +
+      '</div>' +
+      '<div id="email-globals-status" style="font-size:12px;color:var(--text-dim,#888);"></div>';
+
+    function syncAndSave() {
+      _emailSettings.globalBcc = document.getElementById('email-global-bcc').value;
+      _emailSettings.digestMode = document.getElementById('email-digest-mode').checked;
+      _emailSettings.quietHours = {
+        enabled: document.getElementById('email-quiet-enabled').checked,
+        start: document.getElementById('email-quiet-start').value || '21:00',
+        end: document.getElementById('email-quiet-end').value || '07:00'
+      };
+      saveEmailSettings();
+    }
+    ['email-global-bcc', 'email-digest-mode', 'email-quiet-enabled', 'email-quiet-start', 'email-quiet-end'].forEach(function(id) {
+      var el = document.getElementById(id);
+      if (el) el.addEventListener('change', syncAndSave);
+    });
+  }
+
+  // Coalesce rapid changes into a single PUT so the user can flip
+  // multiple toggles without hammering the API.
+  var _emailSaveTimer = null;
+  function saveEmailSettings() {
+    var statusEl = document.getElementById('email-globals-status');
+    if (statusEl) statusEl.textContent = 'Saving…';
+    if (_emailSaveTimer) clearTimeout(_emailSaveTimer);
+    _emailSaveTimer = setTimeout(function() {
+      window.agxApi.put('/api/email/settings', _emailSettings).then(function(r) {
+        if (statusEl) {
+          statusEl.innerHTML = '<span style="color:#34d399;">&#x2713; Saved ' + new Date().toLocaleTimeString() + '</span>';
+          setTimeout(function() { if (statusEl) statusEl.textContent = ''; }, 3000);
+        }
+      }).catch(function(err) {
+        if (statusEl) statusEl.innerHTML = '<span style="color:#f87171;">Save failed: ' + escapeHTML(err.message || '') + '</span>';
+      });
+    }, 250);
   }
 
   function loadEmailLog() {
     var tbl = document.getElementById('email-log-tbl');
-    var status = document.getElementById('email-config-status');
     if (!tbl) return;
-    window.agxApi.get('/api/email/log').then(function(r) {
-      if (status) {
-        if (!r.configured) {
-          status.innerHTML = '<span style="color:#fbbf24;">&#9888; Not configured.</span> Set <code>RESEND_API_KEY</code> and <code>EMAIL_FROM</code> in Railway environment variables.';
-        } else if (r.dryRunMode) {
-          status.innerHTML = '<span style="color:#fbbf24;">DRY-RUN mode active</span> &mdash; emails are logged but not actually sent. Unset <code>EMAIL_DRY_RUN</code> to enable real delivery.';
-        } else {
-          // Don't leak EMAIL_FROM into the client UI — server keeps it
-          // implicit. The green check is enough to confirm the pipe.
-          status.innerHTML = '<span style="color:#34d399;">&#x2713; Configured</span> &mdash; provider: Resend';
-        }
-      }
+    var statusFilter = (document.getElementById('email-log-status-filter') || {}).value || '';
+    var url = '/api/email/log' + (statusFilter ? '?status=' + encodeURIComponent(statusFilter) : '');
+    window.agxApi.get(url).then(function(r) {
       var rows = r.rows || [];
       if (!rows.length) {
         tbl.innerHTML = '<div style="padding:14px;text-align:center;color:var(--text-dim,#888);">No emails sent yet.</div>';
@@ -1134,6 +1363,277 @@
       tbl.innerHTML = html;
     }).catch(function(err) {
       tbl.innerHTML = '<div style="padding:14px;color:#f87171;">Failed to load: ' + escapeHTML(err.message || String(err)) + '</div>';
+    });
+  }
+
+  // ==================== EMAIL TEMPLATES ====================
+  // List view (left) + editor pane (right). Each event has a baked-in
+  // default template; the editor saves a DB override that supersedes
+  // the default at render time. {{path.to.var}} is HTML-escaped at
+  // render — variables are listed in EVENTS[].variables.
+  var _templatesList = [];          // [{ key, label, category, wired, hasOverride, updatedAt }]
+  var _templateActiveKey = null;     // key of currently-edited template
+  var _templateDetail = null;        // last-loaded detail blob
+
+  function renderAdminEmailTemplates() {
+    if (!isAdmin()) return;
+    var pane = document.getElementById('admin-subtab-email-templates');
+    if (!pane) return;
+    pane.innerHTML =
+      '<div style="display:flex;gap:16px;align-items:flex-start;min-height:600px;">' +
+        // Left rail: list of templates.
+        '<div class="card" style="flex:0 0 320px;padding:14px;align-self:stretch;">' +
+          '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">' +
+            '<h3 style="margin:0;">Templates</h3>' +
+            '<button class="ee-btn secondary" id="email-templates-refresh" style="padding:4px 10px;font-size:11px;">&#x21BB;</button>' +
+          '</div>' +
+          '<div id="email-templates-list" style="font-size:13px;color:var(--text-dim,#888);">Loading…</div>' +
+        '</div>' +
+        // Right pane: editor (or empty state).
+        '<div id="email-template-editor" class="card" style="flex:1;padding:18px;align-self:stretch;min-width:0;">' +
+          '<div style="color:var(--text-dim,#888);text-align:center;padding:60px 20px;">' +
+            '<div style="font-size:32px;margin-bottom:8px;">&#x1F4E7;</div>' +
+            'Select a template on the left to edit.' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+
+    document.getElementById('email-templates-refresh').addEventListener('click', loadTemplatesList);
+    loadTemplatesList();
+  }
+
+  function loadTemplatesList() {
+    var box = document.getElementById('email-templates-list');
+    if (!box) return;
+    window.agxApi.get('/api/email/templates').then(function(r) {
+      _templatesList = r.templates || [];
+      renderTemplatesList();
+      // Auto-select previously active key, or the first wired template.
+      if (_templateActiveKey && _templatesList.find(function(t) { return t.key === _templateActiveKey; })) {
+        loadTemplateDetail(_templateActiveKey);
+      } else {
+        var first = _templatesList.find(function(t) { return t.wired; });
+        if (first) loadTemplateDetail(first.key);
+      }
+    }).catch(function(err) {
+      box.innerHTML = '<div style="padding:10px;color:#f87171;">Failed to load: ' + escapeHTML(err.message || '') + '</div>';
+    });
+  }
+
+  function renderTemplatesList() {
+    var box = document.getElementById('email-templates-list');
+    if (!box) return;
+    if (!_templatesList.length) {
+      box.innerHTML = '<div style="padding:10px;color:var(--text-dim,#888);">No templates.</div>';
+      return;
+    }
+    var byCat = {};
+    _templatesList.forEach(function(t) {
+      var c = t.category || 'Other';
+      if (!byCat[c]) byCat[c] = [];
+      byCat[c].push(t);
+    });
+    var html = '';
+    Object.keys(byCat).sort().forEach(function(cat) {
+      html += '<div style="margin-top:10px;color:var(--text-dim,#aaa);font-size:10px;text-transform:uppercase;letter-spacing:0.6px;padding:0 4px;">' + escapeHTML(cat) + '</div>';
+      byCat[cat].forEach(function(t) {
+        var active = t.key === _templateActiveKey;
+        html += '<div data-template-key="' + escapeHTML(t.key) + '" class="email-tpl-row" ' +
+          'style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;border-radius:6px;cursor:pointer;margin-top:2px;' +
+          (active ? 'background:rgba(79,140,255,0.18);border:1px solid rgba(79,140,255,0.4);' : 'border:1px solid transparent;') +
+          '">' +
+            '<div style="min-width:0;flex:1;">' +
+              '<div style="color:var(--text);font-size:13px;' + (active ? 'font-weight:600;' : '') + 'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escapeHTML(t.label) + '</div>' +
+              '<div style="color:var(--text-dim,#888);font-size:10px;margin-top:1px;">' +
+                (t.hasOverride ? '<span style="color:#fbbf24;">&#9999; Override</span>' : '<span>Default</span>') +
+                (t.wired ? '' : ' &middot; <span style="color:#fbbf24;">pending</span>') +
+              '</div>' +
+            '</div>' +
+          '</div>';
+      });
+    });
+    box.innerHTML = html;
+    box.querySelectorAll('[data-template-key]').forEach(function(row) {
+      row.addEventListener('click', function() {
+        loadTemplateDetail(row.dataset.templateKey);
+      });
+    });
+  }
+
+  function loadTemplateDetail(eventKey) {
+    _templateActiveKey = eventKey;
+    renderTemplatesList(); // re-highlight active row
+    var ed = document.getElementById('email-template-editor');
+    if (!ed) return;
+    ed.innerHTML = '<div style="padding:30px;text-align:center;color:var(--text-dim,#888);">Loading template…</div>';
+    window.agxApi.get('/api/email/templates/' + encodeURIComponent(eventKey)).then(function(r) {
+      _templateDetail = r;
+      renderTemplateEditor();
+    }).catch(function(err) {
+      ed.innerHTML = '<div style="padding:30px;color:#f87171;">Failed to load: ' + escapeHTML(err.message || '') + '</div>';
+    });
+  }
+
+  function renderTemplateEditor() {
+    var ed = document.getElementById('email-template-editor');
+    if (!ed || !_templateDetail) return;
+    var d = _templateDetail;
+    var ev = d.event || {};
+    var override = d.override || null;
+    var preview = d.preview || { subject: '', html: '', text: '' };
+    var subjectVal = override ? (override.subject || '') : (preview.subject || '');
+    var bodyVal = override ? (override.html_body || '') : (preview.html || '');
+    var vars = ev.variables || [];
+    var sample = d.sampleParams || {};
+
+    ed.innerHTML =
+      '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:14px;margin-bottom:12px;flex-wrap:wrap;">' +
+        '<div style="min-width:0;flex:1;">' +
+          '<h3 style="margin:0 0 4px 0;">' + escapeHTML(ev.label || ev.key || '') + '</h3>' +
+          '<div style="color:var(--text-dim,#888);font-size:12px;">' + escapeHTML(ev.description || '') + '</div>' +
+          '<div style="color:var(--text-dim,#aaa);font-size:11px;margin-top:6px;">' +
+            '<strong>Audience:</strong> ' + escapeHTML(ev.audience || '—') + ' &middot; ' +
+            '<strong>Status:</strong> ' + (ev.wired ? '<span style="color:#34d399;">Active</span>' : '<span style="color:#fbbf24;">Trigger pending</span>') + ' &middot; ' +
+            '<strong>Override:</strong> ' + (override ? '<span style="color:#fbbf24;">Yes</span>' : '<span>No (using baked-in default)</span>') +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+      // Variables hint chips.
+      '<div style="margin-bottom:10px;">' +
+        '<div style="font-size:11px;color:var(--text-dim,#888);margin-bottom:4px;">Available variables (click to insert):</div>' +
+        '<div id="email-tpl-vars" style="display:flex;flex-wrap:wrap;gap:5px;">' +
+          vars.map(function(v) {
+            return '<button type="button" data-tpl-var="' + escapeHTML(v) + '" class="ee-btn secondary" ' +
+              'style="padding:3px 8px;font-size:11px;font-family:monospace;">{{' + escapeHTML(v) + '}}</button>';
+          }).join('') +
+        '</div>' +
+      '</div>' +
+      // Subject + body editors.
+      '<div style="display:flex;flex-direction:column;gap:10px;">' +
+        '<label style="font-size:12px;color:var(--text-dim,#aaa);">Subject</label>' +
+        '<input type="text" id="email-tpl-subject" value="' + escapeHTML(subjectVal).replace(/"/g, '&quot;') + '" ' +
+          'style="background:var(--input-bg,#0f0f1e);color:var(--text);border:1px solid var(--border,#333);border-radius:6px;padding:8px 10px;font-size:13px;" />' +
+        '<label style="font-size:12px;color:var(--text-dim,#aaa);">HTML body</label>' +
+        '<textarea id="email-tpl-body" spellcheck="false" ' +
+          'style="background:var(--input-bg,#0f0f1e);color:var(--text);border:1px solid var(--border,#333);border-radius:6px;padding:8px 10px;font-size:12px;font-family:Menlo,Consolas,monospace;min-height:240px;resize:vertical;">' +
+          escapeHTML(bodyVal) +
+        '</textarea>' +
+      '</div>' +
+      // Action buttons.
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;align-items:center;">' +
+        '<button class="ee-btn primary" id="email-tpl-save">&#x1F4BE; Save override</button>' +
+        '<button class="ee-btn secondary" id="email-tpl-preview">&#x1F441; Refresh preview</button>' +
+        '<button class="ee-btn secondary" id="email-tpl-test">&#x1F4E7; Send test</button>' +
+        (override ?
+          '<button class="ee-btn danger" id="email-tpl-reset" style="margin-left:auto;">&#x21BA; Revert to default</button>' :
+          '') +
+      '</div>' +
+      '<div id="email-tpl-status" style="margin-top:8px;font-size:12px;min-height:16px;"></div>' +
+      // Preview pane.
+      '<div style="margin-top:14px;border:1px solid var(--border,#2a2a3a);border-radius:8px;overflow:hidden;">' +
+        '<div style="background:rgba(255,255,255,0.04);padding:8px 12px;border-bottom:1px solid var(--border,#2a2a3a);font-size:11px;color:var(--text-dim,#aaa);display:flex;justify-content:space-between;align-items:center;">' +
+          '<span><strong>Preview</strong> &middot; rendered with sample data</span>' +
+          '<span style="font-family:monospace;font-size:10px;">sampleParams: ' + escapeHTML(JSON.stringify(sample).slice(0, 120)) + (JSON.stringify(sample).length > 120 ? '…' : '') + '</span>' +
+        '</div>' +
+        '<div style="padding:10px 14px;background:rgba(255,255,255,0.02);border-bottom:1px solid var(--border,#2a2a3a);font-size:12px;">' +
+          '<strong>Subject:</strong> <span id="email-tpl-preview-subject">' + escapeHTML(preview.subject || '') + '</span>' +
+        '</div>' +
+        '<iframe id="email-tpl-preview-frame" style="width:100%;height:420px;border:0;background:#fff;"></iframe>' +
+      '</div>';
+
+    // Variable insertion buttons.
+    ed.querySelectorAll('[data-tpl-var]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        insertAtCursor(document.getElementById('email-tpl-body'), '{{' + btn.dataset.tplVar + '}}');
+      });
+    });
+    document.getElementById('email-tpl-save').addEventListener('click', saveTemplate);
+    document.getElementById('email-tpl-preview').addEventListener('click', refreshTemplatePreview);
+    document.getElementById('email-tpl-test').addEventListener('click', sendTemplateTest);
+    var resetBtn = document.getElementById('email-tpl-reset');
+    if (resetBtn) resetBtn.addEventListener('click', resetTemplate);
+    // Render the current preview into the iframe.
+    setIframeContent('email-tpl-preview-frame', preview.html || '');
+  }
+
+  function insertAtCursor(textarea, text) {
+    if (!textarea) return;
+    var start = textarea.selectionStart;
+    var end = textarea.selectionEnd;
+    var v = textarea.value;
+    textarea.value = v.slice(0, start) + text + v.slice(end);
+    textarea.focus();
+    textarea.selectionStart = textarea.selectionEnd = start + text.length;
+  }
+
+  function setIframeContent(id, html) {
+    var f = document.getElementById(id);
+    if (!f) return;
+    var doc = f.contentDocument || (f.contentWindow && f.contentWindow.document);
+    if (!doc) return;
+    doc.open();
+    doc.write(html || '<div style="font-family:Arial;color:#888;padding:20px;">(empty)</div>');
+    doc.close();
+  }
+
+  function saveTemplate() {
+    if (!_templateActiveKey) return;
+    var subject = document.getElementById('email-tpl-subject').value;
+    var html_body = document.getElementById('email-tpl-body').value;
+    var status = document.getElementById('email-tpl-status');
+    if (status) status.innerHTML = '<span style="color:#60a5fa;">Saving…</span>';
+    window.agxApi.put('/api/email/templates/' + encodeURIComponent(_templateActiveKey), {
+      subject: subject, html_body: html_body
+    }).then(function() {
+      if (status) status.innerHTML = '<span style="color:#34d399;">&#x2713; Saved.</span>';
+      // Reload to reflect hasOverride + refreshed preview.
+      loadTemplatesList();
+      loadTemplateDetail(_templateActiveKey);
+    }).catch(function(err) {
+      if (status) status.innerHTML = '<span style="color:#f87171;">Save failed: ' + escapeHTML(err.message || '') + '</span>';
+    });
+  }
+
+  function refreshTemplatePreview() {
+    // Save first (so the preview reflects what's in the editor) then
+    // reload detail.
+    saveTemplate();
+  }
+
+  function sendTemplateTest() {
+    if (!_templateActiveKey) return;
+    var me = (window.agxAuth && window.agxAuth.getUser && window.agxAuth.getUser()) || null;
+    var defaultTo = me && me.email ? me.email : '';
+    var to = prompt('Send test of "' + (_templateDetail && _templateDetail.event && _templateDetail.event.label || _templateActiveKey) + '" to:', defaultTo);
+    if (!to) return;
+    var status = document.getElementById('email-tpl-status');
+    if (status) status.innerHTML = '<span style="color:#60a5fa;">Sending test to ' + escapeHTML(to) + '…</span>';
+    window.agxApi.post('/api/email/templates/' + encodeURIComponent(_templateActiveKey) + '/test', { to: to }).then(function(r) {
+      if (status) {
+        if (r.ok) {
+          status.innerHTML = '<span style="color:#34d399;">&#x2713; Sent</span>' +
+            (r.dryRun ? ' &middot; <strong>DRY RUN</strong>' : '') +
+            (r.providerId ? ' &middot; <code>' + escapeHTML(r.providerId) + '</code>' : '');
+        } else {
+          status.innerHTML = '<span style="color:#f87171;">Failed: ' + escapeHTML(r.error || 'unknown error') + '</span>';
+        }
+      }
+    }).catch(function(err) {
+      if (status) status.innerHTML = '<span style="color:#f87171;">Request failed: ' + escapeHTML(err.message || '') + '</span>';
+    });
+  }
+
+  function resetTemplate() {
+    if (!_templateActiveKey) return;
+    if (!confirm('Revert this template to the baked-in default? Your override will be discarded.')) return;
+    var status = document.getElementById('email-tpl-status');
+    if (status) status.innerHTML = '<span style="color:#60a5fa;">Reverting…</span>';
+    window.agxApi.del('/api/email/templates/' + encodeURIComponent(_templateActiveKey)).then(function() {
+      if (status) status.innerHTML = '<span style="color:#34d399;">&#x2713; Reverted to default.</span>';
+      loadTemplatesList();
+      loadTemplateDetail(_templateActiveKey);
+    }).catch(function(err) {
+      if (status) status.innerHTML = '<span style="color:#f87171;">Revert failed: ' + escapeHTML(err.message || '') + '</span>';
     });
   }
 
@@ -1923,6 +2423,8 @@
   window.submitRoleEditor = submitRoleEditor;
   window.deleteAdminRole = deleteAdminRole;
   window.renderAdminTemplates = renderAdminTemplates;
+  window.renderAdminEmail = renderAdminEmail;
+  window.renderAdminEmailTemplates = renderAdminEmailTemplates;
   window.saveAdminTemplate = saveAdminTemplate;
   window.addExclusion = addExclusion;
   window.deleteExclusion = deleteExclusion;

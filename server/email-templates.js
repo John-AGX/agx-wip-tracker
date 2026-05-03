@@ -191,9 +191,149 @@ function scheduleAssigned({ recipientName, entry, job, assignedBy }) {
   return { subject: subject, html: html, text: text };
 }
 
+// ── Override resolution ─────────────────────────────────────────────
+// Admins can customize template subject + body via the Email Templates
+// admin sub-tab; overrides land in email_template_overrides keyed by
+// event_key. render(eventKey, params) prefers the override (with
+// {{path}} variable interpolation against params); falls back to the
+// baked-in default if no override is saved.
+
+const { pool } = require('./db');
+
+async function getOverride(eventKey) {
+  try {
+    const { rows } = await pool.query(
+      'SELECT subject, html_body FROM email_template_overrides WHERE event_key = $1',
+      [eventKey]
+    );
+    return rows.length ? { subject: rows[0].subject, html_body: rows[0].html_body } : null;
+  } catch (e) {
+    console.warn('[email-templates] override lookup failed:', e.message);
+    return null;
+  }
+}
+
+// {{path.to.value}} interpolation — looks up dotted paths in params.
+// Missing values render as empty string. Output IS escaped via
+// escapeHtml since admin-edited text could otherwise smuggle HTML
+// (intentional or accidental). Use {{{raw.path}}} for unescaped if
+// the admin needs to embed HTML — but most templates don't need it.
+function interpolate(str, params) {
+  if (typeof str !== 'string') return '';
+  return str
+    .replace(/\{\{\{\s*([^}]+?)\s*\}\}\}/g, function(_, path) {
+      var val = resolvePath(path, params);
+      return val == null ? '' : String(val);
+    })
+    .replace(/\{\{\s*([^}]+?)\s*\}\}/g, function(_, path) {
+      var val = resolvePath(path, params);
+      return val == null ? '' : escapeHtml(String(val));
+    });
+}
+
+function resolvePath(path, obj) {
+  return path.split('.').reduce(function(o, k) {
+    return (o && o[k] != null) ? o[k] : null;
+  }, obj);
+}
+
+// Strip HTML to plain text for the text/plain fallback when rendering
+// an override. Cheap regex-based, not bulletproof — fine for the
+// kinds of HTML admins write in the editor.
+function htmlToText(html) {
+  return String(html || '')
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+// Defaults dispatch — call the baked-in template for an event.
+function renderDefault(eventKey, params) {
+  switch (eventKey) {
+    case 'user_invite':       return newUserInvite(params);
+    case 'password_reset':    return passwordReset(params);
+    case 'job_assigned':      return jobAssigned(params);
+    case 'schedule_entry':    return scheduleAssigned(params);
+    default:
+      // E2 will add: sub_assigned, lead_status_sold, lead_status_lost,
+      // cert_expiring. Until then, missing event keys throw so the
+      // caller knows to add the template.
+      throw new Error('No baked-in template for event: ' + eventKey);
+  }
+}
+
+// Public render — preferred call site for sending. Routes pass the
+// event key + params; this function does override-or-default
+// dispatch and returns { subject, html, text }.
+async function render(eventKey, params) {
+  var override = await getOverride(eventKey);
+  if (override && (override.subject || override.html_body)) {
+    var subject = interpolate(override.subject || '', params);
+    var bodyHtml = interpolate(override.html_body || '', params);
+    return {
+      subject: subject || '(no subject)',
+      html: shell(subject || '', bodyHtml),
+      text: htmlToText(bodyHtml) + footer().text
+    };
+  }
+  return renderDefault(eventKey, params);
+}
+
+// Sample params for each event — used by the Email Templates editor
+// for live preview rendering before any real data exists.
+function sampleParams(eventKey) {
+  switch (eventKey) {
+    case 'user_invite':
+      return { name: 'Jane Smith', email: 'jane@example.com', password: 'temp-pass-123', invitedBy: 'John AGX' };
+    case 'password_reset':
+      return { name: 'Jane Smith', email: 'jane@example.com', password: 'new-pass-123', resetBy: 'John AGX' };
+    case 'job_assigned':
+      return { recipientName: 'Jane Smith', job: { title: 'Madeira Bay Restoration', jobNumber: 'S2245', client: 'Madeira Bay HOA', contractAmount: 125000, status: 'In Progress' }, assignedBy: 'John AGX', action: 'assigned' };
+    case 'schedule_entry':
+      return { recipientName: 'Mike Crew', entry: { startDate: '2026-05-10', days: 3, includesWeekends: false, notes: 'Bring scaffold' }, job: { title: 'Madeira Bay Restoration', jobNumber: 'S2245' }, assignedBy: 'John AGX' };
+    case 'sub_assigned':
+      return { sub: { name: 'Summit Sealants', primaryContactFirst: 'Mike' }, job: { title: 'Madeira Bay Restoration', jobNumber: 'S2245' }, contractAmt: 12500, assignedBy: { name: 'John AGX' } };
+    case 'lead_status_sold':
+      return { lead: { title: 'Solace Powerwash', client_company: 'Solace Communities', estimated_revenue_high: 18000 }, salesperson: { name: 'Jane Smith' }, changedBy: { name: 'John AGX' } };
+    case 'lead_status_lost':
+      return { lead: { title: 'Solace Powerwash', client_company: 'Solace Communities' }, salesperson: { name: 'Jane Smith' }, changedBy: { name: 'John AGX' }, reason: 'Lost to competitor' };
+    case 'cert_expiring':
+      return { sub: { name: 'Summit Sealants', primaryContactFirst: 'Mike' }, cert: { type: 'General Liability', expirationDate: '2026-05-15', daysUntilExpiry: 12 } };
+    default: return {};
+  }
+}
+
+// Render with sample data — used by the editor's Preview pane and
+// "Reset to default" button.
+async function renderSample(eventKey) {
+  return render(eventKey, sampleParams(eventKey));
+}
+
+// Render the baked-in default with sample data — used by "Reset to
+// default" button to show the admin what the original looks like
+// (bypasses any saved override).
+function renderSampleDefault(eventKey) {
+  return renderDefault(eventKey, sampleParams(eventKey));
+}
+
 module.exports = {
   newUserInvite,
   passwordReset,
   jobAssigned,
-  scheduleAssigned
+  scheduleAssigned,
+  render,
+  renderSample,
+  renderSampleDefault,
+  sampleParams,
+  interpolate,
+  htmlToText
 };
