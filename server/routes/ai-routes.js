@@ -61,7 +61,14 @@ function getAnthropic() {
 // Sonnet 4.6 = the right cost/capability tier for an estimating assistant.
 // Override via env if we want to A/B against Opus.
 const MODEL = process.env.AI_MODEL || 'claude-sonnet-4-6';
-const MAX_TOKENS = 2000;
+// Bumped from 2000 → 8000 because multi-section audit/summary
+// responses (e.g. "Top 5 Actions" tables with rationale per row)
+// were hitting the 2000 cap and truncating mid-cell. Sonnet 4.6
+// can do up to 64K output; 8000 is enough headroom for detailed
+// answers without unbounded cost. Standalone calls that have a
+// known-short shape (e.g. lead extraction → JSON) keep their own
+// tighter caps.
+const MAX_TOKENS = 8000;
 
 // Cap chat history fed back to the API so a long conversation doesn't
 // balloon the per-call cost. Keep the most recent N round-trips
