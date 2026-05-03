@@ -134,6 +134,20 @@ async function initSchema() {
     -- existing rows just get NULL — front-end falls back to the contact name.
     ALTER TABLE clients ADD COLUMN IF NOT EXISTS salutation TEXT;
 
+    -- Agent notes — accumulated free-form facts about how to handle this
+    -- client, written by either the user or one of the AI agents (CRA, AG)
+    -- and auto-injected into agent system prompts on every turn that
+    -- touches this client. Examples: "PAC always wants 15% materials
+    -- markup, not 20%", "Wimbledon Greens proposals must include the gate
+    -- code in the cover page", "FSR billing prefers a single combined
+    -- invoice per property — don't split by group".
+    --
+    -- Stored as JSONB so we can grow the entry shape without migrations.
+    -- Current shape: array of { id, body, created_at, created_by_user_id,
+    -- source_agent } where source_agent is null (user-authored), 'cra',
+    -- or 'ag'.
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS agent_notes JSONB NOT NULL DEFAULT '[]'::jsonb;
+
     -- Site-wide settings keyed by short string (e.g. 'proposal_template').
     -- value is JSONB so each setting can store whatever shape it needs without
     -- a schema change. Read/write gated by the ROLES_MANAGE capability.

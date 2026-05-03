@@ -118,7 +118,16 @@
     create: function(payload) { return post('/api/clients', payload); },
     update: function(id, payload) { return put('/api/clients/' + encodeURIComponent(id), payload); },
     remove: function(id) { return del('/api/clients/' + encodeURIComponent(id)); },
-    importBatch: function(rows) { return post('/api/clients/import', { rows: rows }); }
+    importBatch: function(rows) { return post('/api/clients/import', { rows: rows }); },
+    addNote: function(id, body, sourceAgent) {
+      return post('/api/clients/' + encodeURIComponent(id) + '/notes', {
+        body: body,
+        source_agent: sourceAgent || null
+      });
+    },
+    deleteNote: function(id, noteId) {
+      return del('/api/clients/' + encodeURIComponent(id) + '/notes/' + encodeURIComponent(noteId));
+    }
   };
 
   var settings = {

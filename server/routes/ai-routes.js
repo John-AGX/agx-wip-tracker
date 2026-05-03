@@ -201,6 +201,18 @@ const ESTIMATE_TOOLS = [
       },
       required: ['section_id', 'rationale']
     }
+  },
+  {
+    name: 'propose_add_client_note',
+    description: 'Propose appending a durable, agent-readable note to the linked client. Notes auto-inject into AG and CRA system prompts on every future turn touching this client, so they compound knowledge across sessions. Only call when you\'ve learned something the user told you that should outlive this conversation — pricing preferences, billing quirks, gate codes, scope rules, contact preferences. NEVER call for facts already in the client record (name, address, salesperson) or for ephemeral state (current weather, today\'s schedule). Only available when the estimate is linked to a client (see context above); skipped otherwise.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        body: { type: 'string', description: 'The note itself, ≤ 2000 chars. Should read as a standalone instruction or fact — full sentence, ends with a period. Examples: "PAC always wants 15% materials markup, not 20%.", "Wimbledon Greens proposals must include the gate code on the cover page."' },
+        rationale: { type: 'string', description: 'One short sentence shown on the approval card explaining why this note is worth keeping.' }
+      },
+      required: ['body', 'rationale']
+    }
   }
 ];
 
@@ -544,6 +556,20 @@ async function buildEstimateContext(estimateId, includePhotos) {
   if (blob.community && (!clientRow || clientRow.community_name !== blob.community)) lines.push('- Community / property: ' + blob.community);
   if (blob.propertyAddr) lines.push('- Job address: ' + blob.propertyAddr);
   lines.push('');
+
+  // Client agent notes — durable, hand-curated facts about how to handle
+  // this client. Auto-injected on every turn so they compound across
+  // sessions. Surfaced before the line items / scope so the model sees
+  // them while reading the rest of the context.
+  if (clientRow && Array.isArray(clientRow.agent_notes) && clientRow.agent_notes.length) {
+    lines.push('# Client notes (' + clientRow.agent_notes.length + ' — ' + (clientRow.name || 'this client') + ')');
+    lines.push('Durable instructions about how to handle this client. Treat as binding additional guidance — they were written by the user or proposed by an agent and approved by the user.');
+    clientRow.agent_notes.forEach(function(n, i) {
+      var src = n.source_agent ? ' [' + n.source_agent + ']' : '';
+      lines.push((i + 1) + '. ' + (n.body || '') + src);
+    });
+    lines.push('');
+  }
 
   // Linked lead context. The lead's notes often carry the original
   // BT-imported SOW summary, POC contact, gate codes, and special
@@ -2046,6 +2072,20 @@ const CLIENT_TOOLS = [
       },
       required: ['client_id', 'rationale']
     }
+  },
+  {
+    name: 'add_client_note',
+    tier: 'approval',
+    description: 'Append a short, durable fact about how to handle this client to their agent notes. These notes auto-inject into AG (estimating) and CRA (this) system prompts on every future turn that touches the client, so they compound knowledge across sessions. Good notes: "PAC always wants 15% materials markup, not 20%", "Wimbledon Greens proposals must include the gate code on the cover page", "FSR billing prefers a single combined invoice per property — don\'t split by group", "Solace Tampa has a strict noise window (8a-5p) — note it in scope". Bad notes: anything ephemeral ("user is on PTO this week"), anything personal, anything that would already be obvious from the client record. Approval-required so the user vets the wording before it lands. Cap one note per call — call multiple times in parallel for multiple notes.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        client_id: { type: 'string', description: 'Client to attach the note to.' },
+        body: { type: 'string', description: 'The note itself, ≤ 2000 chars. Should read as a standalone instruction or fact — full sentence, ends with a period.' },
+        rationale: { type: 'string', description: 'One short sentence shown on the approval card explaining why this note is worth keeping.' }
+      },
+      required: ['client_id', 'body', 'rationale']
+    }
   }
 ];
 
@@ -2223,15 +2263,43 @@ async function execClientTool(name, input) {
       // We pass it via execClientTool's options arg (added below).
       throw new Error('attach_business_card_to_client must be invoked via execClientToolWithCtx');
     }
+    case 'add_client_note': {
+      // Like the business-card tool, this needs userId for audit trail
+      // (created_by_user_id). Routed through execClientToolWithCtx.
+      throw new Error('add_client_note must be invoked via execClientToolWithCtx');
+    }
     default:
       throw new Error('Unknown tool: ' + name);
   }
 }
 
 // Wrapper that adds context (userId, storage) for tools that need it
-// (currently only attach_business_card_to_client). Falls through to the
-// stateless executor for everything else.
+// (attach_business_card_to_client, add_client_note). Falls through to
+// the stateless executor for everything else.
 async function execClientToolWithCtx(name, input, ctx) {
+  if (name === 'add_client_note') {
+    if (!input.client_id || !input.body) throw new Error('client_id and body are required');
+    const body = String(input.body).trim();
+    if (!body) throw new Error('body is empty');
+    if (body.length > 2000) throw new Error('note body cannot exceed 2000 chars');
+    const exists = await pool.query('SELECT id, name FROM clients WHERE id = $1', [input.client_id]);
+    if (!exists.rows.length) throw new Error('client_id not found');
+    const note = {
+      id: 'note_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
+      body,
+      created_at: new Date().toISOString(),
+      created_by_user_id: (ctx && ctx.userId) || null,
+      source_agent: 'cra'
+    };
+    await pool.query(
+      `UPDATE clients
+         SET agent_notes = COALESCE(agent_notes, '[]'::jsonb) || $1::jsonb,
+             updated_at = NOW()
+       WHERE id = $2`,
+      [JSON.stringify([note]), input.client_id]
+    );
+    return `Added note to "${exists.rows[0].name}": "${body.slice(0, 80)}${body.length > 80 ? '…' : ''}".`;
+  }
   if (name !== 'attach_business_card_to_client') {
     return execClientTool(name, input);
   }
@@ -2297,7 +2365,7 @@ async function buildClientDirectoryContext() {
   const { rows } = await pool.query(
     `SELECT id, name, parent_client_id, client_type, company_name, community_name,
             community_manager, cm_email, cm_phone, market, property_address,
-            city, state, zip, email, phone
+            city, state, zip, email, phone, agent_notes
      FROM clients ORDER BY COALESCE(parent_client_id, id), name`
   );
   const byId = new Map(rows.map(r => [r.id, r]));
@@ -2418,6 +2486,25 @@ async function buildClientDirectoryContext() {
 
   out.push('# Directory snapshot (' + rows.length + ' clients)');
   out.push('');
+
+  // Pre-existing agent notes — short list of every client that has at
+  // least one note, with their notes inline. Lets CRA reference them
+  // when proposing changes ("PAC has a 15% materials note from AG, do
+  // you want me to copy that to the new sub-property?").
+  const withNotes = rows.filter(r => Array.isArray(r.agent_notes) && r.agent_notes.length);
+  if (withNotes.length) {
+    out.push('## Clients with agent notes (' + withNotes.length + ')');
+    out.push('Durable hand-curated facts. Treat as binding when working with these clients. Reference by client id when proposing related changes.');
+    for (const r of withNotes) {
+      out.push(`- **${r.name}** (id=${r.id})`);
+      r.agent_notes.forEach(function(n, i) {
+        const src = n.source_agent ? ' [' + n.source_agent + ']' : '';
+        out.push(`    ${i + 1}. ${n.body || ''}${src}`);
+      });
+    }
+    out.push('');
+  }
+
   out.push('## Parent companies with properties:');
   for (const p of parents) {
     const kids = childrenByParent.get(p.id);

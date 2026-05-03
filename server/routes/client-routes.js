@@ -122,6 +122,78 @@ router.put('/:id', requireAuth, requireCapability('ESTIMATES_EDIT'), async (req,
   }
 });
 
+// ──────────────────────────────────────────────────────────────────
+// Agent notes — small, structured bullets that get auto-injected into
+// AI agent system prompts (AG, CRA) when their work touches this
+// client. Both the user and the AI agents (with approval) can write
+// these. Stored on clients.agent_notes as a JSONB array.
+//
+// Shape:
+//   { id, body, created_at, created_by_user_id, source_agent }
+//   source_agent ∈ { null (user), 'ag', 'cra' }
+//
+// Anyone with ESTIMATES_EDIT can add/remove (same surface as updating
+// other client fields). The agent path goes through tool execution,
+// which uses these same endpoints under the hood.
+// ──────────────────────────────────────────────────────────────────
+function newNoteId() {
+  return 'note_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+}
+
+router.post('/:id/notes', requireAuth, requireCapability('ESTIMATES_EDIT'), async (req, res) => {
+  try {
+    const body = (req.body && typeof req.body.body === 'string') ? req.body.body.trim() : '';
+    if (!body) return res.status(400).json({ error: 'body is required' });
+    if (body.length > 2000) return res.status(400).json({ error: 'note body cannot exceed 2000 chars' });
+    const sourceAgent = (req.body && typeof req.body.source_agent === 'string') ? req.body.source_agent : null;
+    if (sourceAgent && sourceAgent !== 'ag' && sourceAgent !== 'cra') {
+      return res.status(400).json({ error: 'source_agent must be "ag", "cra", or omitted' });
+    }
+    const exists = await pool.query('SELECT id FROM clients WHERE id = $1', [req.params.id]);
+    if (!exists.rows.length) return res.status(404).json({ error: 'Client not found' });
+    const note = {
+      id: newNoteId(),
+      body,
+      created_at: new Date().toISOString(),
+      created_by_user_id: req.user ? req.user.id : null,
+      source_agent: sourceAgent
+    };
+    await pool.query(
+      `UPDATE clients
+         SET agent_notes = COALESCE(agent_notes, '[]'::jsonb) || $1::jsonb,
+             updated_at = NOW()
+       WHERE id = $2`,
+      [JSON.stringify([note]), req.params.id]
+    );
+    res.json({ ok: true, note });
+  } catch (e) {
+    console.error('POST /api/clients/:id/notes error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.delete('/:id/notes/:noteId', requireAuth, requireCapability('ESTIMATES_EDIT'), async (req, res) => {
+  try {
+    const exists = await pool.query('SELECT id FROM clients WHERE id = $1', [req.params.id]);
+    if (!exists.rows.length) return res.status(404).json({ error: 'Client not found' });
+    const r = await pool.query(
+      `UPDATE clients
+         SET agent_notes = COALESCE((
+           SELECT jsonb_agg(elem) FROM jsonb_array_elements(agent_notes) elem
+            WHERE elem->>'id' <> $1
+         ), '[]'::jsonb),
+             updated_at = NOW()
+       WHERE id = $2
+       RETURNING agent_notes`,
+      [req.params.noteId, req.params.id]
+    );
+    res.json({ ok: true, agent_notes: r.rows[0].agent_notes });
+  } catch (e) {
+    console.error('DELETE /api/clients/:id/notes/:noteId error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // DELETE /api/clients/:id — children are detached (parent_client_id -> NULL
 // via the FK on-delete rule), not deleted. Estimates referencing this client
 // are not modified here yet (no FK exists yet); will be tightened when

@@ -1277,8 +1277,25 @@
       case 'propose_update_line_item': return window.estimateEditorAPI.applyUpdateLine(tu.input);
       case 'propose_delete_section':   return window.estimateEditorAPI.applyDeleteSection(tu.input);
       case 'propose_update_section':   return window.estimateEditorAPI.applyUpdateSection(tu.input);
+      case 'propose_add_client_note':  return applyAddClientNote(tu.input);
       default: throw new Error('Unknown tool: ' + tu.name);
     }
+  }
+
+  // propose_add_client_note — POSTs to the linked client's notes endpoint.
+  // Reads the linked client_id off the editor's open estimate so the AG
+  // agent doesn't have to know it. Errors surface back as tool_result
+  // is_error so the model can apologize / retry.
+  async function applyAddClientNote(input) {
+    if (!window.estimateEditorAPI || !window.estimateEditorAPI.getLinkedClientId) {
+      throw new Error('Estimate editor API not ready.');
+    }
+    var clientId = window.estimateEditorAPI.getLinkedClientId();
+    if (!clientId) throw new Error('This estimate is not linked to a client — link a client first, then add the note.');
+    var body = (input && input.body || '').trim();
+    if (!body) throw new Error('Note body is empty.');
+    await window.agxApi.clients.addNote(clientId, body, 'ag');
+    return 'Saved note on linked client: "' + body.slice(0, 80) + (body.length > 80 ? '…' : '') + '"';
   }
 
   // Job-side tool application. All writes go through appData + the
@@ -1940,6 +1957,13 @@
       detail = '<div style="font-size:12px;color:var(--text,#ccc);">Save the most recent uploaded photo to this client\'s attachments.</div>' +
         '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:2px;font-family:monospace;">client: ' + escapeHTMLLocal(input.client_id || '') + '</div>' +
         (input.caption ? '<div style="font-size:11px;color:var(--text-dim,#aaa);margin-top:3px;">Caption: ' + escapeHTMLLocal(input.caption) + '</div>' : '');
+    } else if (tu.name === 'propose_add_client_note' || tu.name === 'add_client_note') {
+      heading = '&#x1F4DD; Save client note';
+      detail = '<div style="font-size:13px;color:var(--text,#fff);background:rgba(255,255,255,0.04);padding:8px 10px;border-radius:4px;border-left:2px solid #fbbf24;">' +
+          escapeHTMLLocal(input.body || '') +
+        '</div>' +
+        '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:6px;">Auto-injects into AG and CRA system prompts on every future turn touching this client.</div>' +
+        (input.client_id ? '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:2px;font-family:monospace;">client: ' + escapeHTMLLocal(input.client_id) + '</div>' : '');
     } else if (tu.name === 'read_workspace_sheet_full') {
       // Read-only — the auto-apply intercept normally renders this as
       // a chip without a card. This case is a safety net for older

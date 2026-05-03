@@ -1917,6 +1917,15 @@
     isOpenFor: function(estimateId) { return _currentId === estimateId; },
     getOpenId: function() { return _currentId; },
     activeAlternateName: function() { var a = getActiveAlternate(); return a ? a.name : null; },
+    // Returns the client_id of the client linked to the open estimate,
+    // or null if the estimate is unlinked. Used by propose_add_client_note
+    // so the AG applier can route the note write to the right client
+    // without making the model carry the id.
+    getLinkedClientId: function() {
+      if (!_currentId || !window.appData) return null;
+      var e = (appData.estimates || []).find(function(x) { return x.id === _currentId; });
+      return e ? (e.client_id || null) : null;
+    },
     applyAddLineItem: applyAddLineItem,
     applyAddSection: applyAddSection,
     applyUpdateScope: applyUpdateScope,
