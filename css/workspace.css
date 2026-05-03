@@ -269,18 +269,16 @@
   border-right: none;
 }
 .ws-ribbon-controls {
-  /* CSS grid with auto-flow so groups with more than 4 buttons
-     spill into a second row automatically. Cap at 4 columns ×
-     2 rows. Each cell sizes to its content; minimum cell width
-     keeps icon-only buttons from collapsing too narrow. */
-  display: grid;
-  grid-auto-flow: row;
-  grid-template-columns: repeat(4, minmax(28px, auto));
-  grid-auto-rows: minmax(26px, auto);
+  /* Natural-width flex — each group sizes to its actual button
+     count. 2-button groups (History, Styles, Cells) stay narrow;
+     6-button groups (Font, Alignment, Number, Editing) take more
+     width but stay on a single row. Net: the whole ribbon
+     collapses to 2 rows total (button row + label row). */
+  display: flex;
   align-items: center;
-  justify-items: center;
   gap: 2px;
   padding-bottom: 4px;
+  flex-wrap: nowrap;
 }
 .ws-ribbon-label {
   font-size: 9px;
