@@ -407,12 +407,19 @@
             if (top === 'estimates') {
                 var subEl = document.querySelector('#estimates [data-estimates-subtab].active');
                 if (subEl) st.estSub = subEl.getAttribute('data-estimates-subtab');
-                // Estimate editor open?
-                var editorView = document.getElementById('estimate-editor-view');
-                var editorOpen = editorView && editorView.style.display !== 'none';
-                if (editorOpen && window.estimateEditorAPI && typeof window.estimateEditorAPI.getOpenId === 'function') {
-                    var eid = window.estimateEditorAPI.getOpenId();
-                    if (eid) st.estId = eid;
+                // Estimate editor open? Only count it as open if we're
+                // ACTUALLY on the list sub-tab — the editor's parent
+                // container is hidden when on Clients/Leads/Subs, but
+                // the editor's own inline style still says display:'',
+                // which would falsely tag every cross-sub-tab navigate
+                // as "editor open" and force a re-open on restore.
+                if (st.estSub === 'list') {
+                    var editorView = document.getElementById('estimate-editor-view');
+                    var editorOpen = editorView && editorView.style.display !== 'none';
+                    if (editorOpen && window.estimateEditorAPI && typeof window.estimateEditorAPI.getOpenId === 'function') {
+                        var eid = window.estimateEditorAPI.getOpenId();
+                        if (eid) st.estId = eid;
+                    }
                 }
             } else if (top === 'wip') {
                 var dv = document.getElementById('wip-job-detail-view');
@@ -452,30 +459,53 @@
 
             switchTab(st.top);
 
-            // Sub-tab routing + entity-open routing both need the tab
-            // content to have mounted, so defer one tick. Each step is
-            // wrapped in try so a stale id (deleted job, deleted estimate)
-            // can't bork the whole restore.
+            // Wait for the initial server data fetch to settle before
+            // opening entity views — opening editEstimate / editJob
+            // while data is still loading hits the "Still loading from
+            // server" alert path. Polls agxDataLoading every 200ms with
+            // a hard ceiling so we don't loop forever if the fetch
+            // hangs.
+            function whenLoaded(cb, attempts) {
+                attempts = attempts || 0;
+                var stillLoading = (typeof window.agxDataLoading === 'function') && window.agxDataLoading();
+                if (stillLoading && attempts < 30) {
+                    setTimeout(function() { whenLoaded(cb, attempts + 1); }, 200);
+                } else {
+                    cb();
+                }
+            }
+
+            // Sub-tab routing happens immediately (cheap DOM work, no
+            // server dependency). Entity-open routing waits for data
+            // to settle. Each step is try-wrapped so a stale id
+            // (deleted job, deleted estimate) can't bork the rest.
             setTimeout(function() {
                 try {
                     if (st.top === 'estimates') {
                         if (st.estSub && typeof window.switchEstimatesSubTab === 'function') {
                             window.switchEstimatesSubTab(st.estSub);
                         }
-                        if (st.estId && typeof window.editEstimate === 'function') {
-                            // Need to be on the "list" sub-tab for the editor view to mount.
-                            if (typeof window.switchEstimatesSubTab === 'function') {
-                                window.switchEstimatesSubTab('list');
-                            }
-                            window.editEstimate(st.estId);
-                        }
-                    } else if (st.top === 'wip' && st.jobId && typeof window.editJob === 'function') {
-                        window.editJob(st.jobId);
                     } else if (st.top === 'admin' && st.adSub && typeof window.switchAdminSubTab === 'function') {
                         window.switchAdminSubTab(st.adSub);
                     }
-                } catch (e) { console.warn('[nav] entity restore failed:', e); }
+                } catch (e) { console.warn('[nav] sub-tab restore failed:', e); }
             }, 80);
+
+            // Defer entity-opens until data is loaded.
+            whenLoaded(function() {
+                try {
+                    if (st.top === 'estimates' && st.estId && typeof window.editEstimate === 'function') {
+                        // Editor view lives inside the list sub-tab;
+                        // override the saved sub-tab to put us there.
+                        if (typeof window.switchEstimatesSubTab === 'function') {
+                            window.switchEstimatesSubTab('list');
+                        }
+                        window.editEstimate(st.estId);
+                    } else if (st.top === 'wip' && st.jobId && typeof window.editJob === 'function') {
+                        window.editJob(st.jobId);
+                    }
+                } catch (e) { console.warn('[nav] entity restore failed:', e); }
+            });
 
             return true;
         }
