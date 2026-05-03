@@ -771,13 +771,139 @@ function buildGraphState(){
     panX:panX, panY:panY, zoom:zoom, nid:nid
   };
 }
+
+// ── Migration framework ─────────────────────────────────────────
+// Phase B — instead of a blanket reject when state.ver < GRAPH_VER,
+// run the saved state through any registered migrations to bring it
+// up to the current version. Each entry transforms a state of `key`
+// version to one version higher. Add entries here when a future
+// commit changes node shape in an incompatible way.
+//
+// MIGRATIONS[7] = function(state) {
+//   // example: drop the unbilled output from WIP nodes (April 24 change)
+//   state.nodes.forEach(function(n) { if (n.type === 'wip') delete n._unbilled; });
+//   state.ver = 8;
+//   return state;
+// };
+//
+// If a migration is missing for a given step, fall back to the old
+// blanket-reject behavior (re-populate from defaults).
+var MIGRATIONS = {};
+
+function migrateIfNeeded(state){
+  if (!state) return null;
+  var v = state.ver || 0;
+  while (v < GRAPH_VER) {
+    var fn = MIGRATIONS[v];
+    if (typeof fn !== 'function') return null; // no path → reject (defaults take over)
+    try {
+      state = fn(state) || state;
+      v = state.ver || (v + 1);
+    } catch (e) {
+      console.warn('[nodegraph] migration ' + v + ' threw:', e);
+      return null;
+    }
+  }
+  return state;
+}
+
+// ── Cloud sync (Phase A) ────────────────────────────────────────
+// localStorage is now a fast offline cache; the canonical store is
+// the node_graphs Postgres table behind /api/jobs/:id/graph. saveGraph
+// writes both: localStorage immediately (sync), cloud in background
+// (fire-and-forget, indicator updates on response). Browser quota
+// pressure no longer wipes user layouts since the cloud copy is
+// authoritative.
+function saveGraphToCloud(state){
+  if (!jobId) return;
+  try {
+    fetch('/api/jobs/' + encodeURIComponent(jobId) + '/graph', {
+      method: 'PUT',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(state)
+    }).then(function(r){
+      if (!r.ok) {
+        console.warn('[nodegraph] cloud save failed:', r.status);
+        if (typeof window.ngMarkSaved === 'function') window.ngMarkSaved('error');
+      }
+      // Successful cloud writes don't change indicator state — the
+      // local saveGraph already marked it 'saved'. Cloud is the
+      // background safety net.
+    }).catch(function(err){
+      // Offline / network error — local save still landed, so the
+      // user's work isn't lost. Don't flash error for this case;
+      // the next save will retry.
+      console.warn('[nodegraph] cloud save network error:', err && err.message);
+    });
+  } catch (e) {
+    // fetch itself threw (very rare; misconfigured environment)
+    console.warn('[nodegraph] cloud save threw:', e && e.message);
+  }
+}
+
+// Pull cloud state for the current job. Returns a Promise that
+// resolves with the deserialized graph state (post-migration), or
+// null if the cloud has nothing/the response is malformed.
+function loadGraphFromCloud(){
+  if (!jobId) return Promise.resolve(null);
+  return fetch('/api/jobs/' + encodeURIComponent(jobId) + '/graph', {
+    credentials: 'include'
+  }).then(function(r){
+    if (!r.ok) return null;
+    return r.json();
+  }).then(function(body){
+    if (!body || !body.graph || !body.graph.nodes || !body.graph.nodes.length) return null;
+    var migrated = migrateIfNeeded(body.graph);
+    return migrated || null;
+  }).catch(function(err){
+    console.warn('[nodegraph] cloud load failed:', err && err.message);
+    return null;
+  });
+}
+
+// One-shot cloud sync: fetch + apply by re-using the existing
+// loadGraph deserializer. Stages the cloud state into localStorage
+// (as if it were a fresh save) so loadGraph picks it up, then runs
+// loadGraph to populate the engine. ui.js calls this after the
+// initial synchronous loadGraph render so cloud catches up if it has
+// fresher data. Resolves with true if cloud had data + applied,
+// false otherwise (offline / no cloud state / malformed).
+function loadGraphFromCloudAndApply(){
+  return loadGraphFromCloud().then(function(state){
+    if (!state || !jobId) return false;
+    try {
+      var all = JSON.parse(localStorage.getItem('agx-nodegraphs') || '{}');
+      all[jobId] = state;
+      localStorage.setItem('agx-nodegraphs', JSON.stringify(all));
+    } catch (e) {
+      // Cache write failed (probably quota) — loadGraph below will
+      // also fail to read, so cloud sync effectively becomes a no-op
+      // for this session. The next save attempt will retry the cache
+      // or cloud as appropriate.
+      console.warn('[nodegraph] cloud-staged state cache write failed:', e && e.message);
+      return false;
+    }
+    return loadGraph();
+  });
+}
+
 function saveGraph(){
   if(!jobId) return;
   try {
     var state = buildGraphState();
-    var all = JSON.parse(localStorage.getItem('agx-nodegraphs') || '{}');
-    all[jobId] = state;
-    localStorage.setItem('agx-nodegraphs', JSON.stringify(all));
+    // Local cache write — fast, used as offline fallback + initial-paint
+    // source on next open. Wrapped in its own try so a quota-exceeded
+    // failure here doesn't block the cloud write.
+    try {
+      var all = JSON.parse(localStorage.getItem('agx-nodegraphs') || '{}');
+      all[jobId] = state;
+      localStorage.setItem('agx-nodegraphs', JSON.stringify(all));
+    } catch (lsErr) {
+      console.warn('[nodegraph] localStorage save failed (likely quota exceeded):', lsErr && lsErr.message);
+    }
+    // Cloud write — authoritative, fires async.
+    saveGraphToCloud(state);
     if (typeof window.ngMarkSaved === 'function') window.ngMarkSaved();
   } catch (e) {
     if (typeof window.ngMarkSaved === 'function') window.ngMarkSaved('error');
@@ -859,7 +985,15 @@ function loadGraph(){
   var all = JSON.parse(localStorage.getItem('agx-nodegraphs') || '{}');
   var state = all[jobId];
   if(!state || !state.nodes || !state.nodes.length) return false;
-  if((state.ver||0) < GRAPH_VER) return false; // stale version → re-populate
+  // Phase B: try migrations before rejecting. If MIGRATIONS doesn't
+  // have a path from state.ver up to GRAPH_VER, the function returns
+  // null and we fall through to the old "re-populate from defaults"
+  // behavior.
+  if((state.ver||0) < GRAPH_VER) {
+    var migrated = migrateIfNeeded(state);
+    if (!migrated) return false;
+    state = migrated;
+  }
 
   nodes = []; wires = state.wires || []; nid = state.nid || 1;
   panX = state.panX || 0; panY = state.panY || 0; zoom = state.zoom || 1;
@@ -1092,6 +1226,7 @@ return {
   getWIPWeightedPct:getWIPWeightedPct, getT2ShareToT1:getT2ShareToT1,
   fmtC:fmtC, fmtP:fmtP, fmtV:fmtV,
   saveGraph:saveGraph, loadGraph:loadGraph,
+  loadGraphFromCloudAndApply:loadGraphFromCloudAndApply,
   saveSnapshot:saveSnapshot, restoreSnapshot:restoreSnapshot, getSnapshot:getSnapshot,
   drawWires:drawWires, drawGrid:drawGrid,
   portPos:portPos, setCanvasEl:setCanvasEl,

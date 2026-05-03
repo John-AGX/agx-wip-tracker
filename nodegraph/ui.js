@@ -2892,20 +2892,43 @@ window.openNodeGraph=function(jid){
   tab.classList.add('active');
   if(!wrap) init();
   resize();
+  // Initial render off the synchronous localStorage cache for instant
+  // paint; cloud sync runs underneath and re-renders if it returns
+  // newer data. Avoids the dead-air pause of awaiting a network call
+  // before showing anything.
   if(jid && jid!==E.job()){
     E.job(jid);
     E.setNodes([]); E.setWires([]); E.setNid(1);
     if(!E.loadGraph()){ populate(); }
     ensureWatchFan();
     applyTx(); render();
+    syncFromCloud();
   } else if(E.nodes().length===0){
     E.job(jid||(typeof appState!=='undefined'?appState.currentJobId:null));
     if(!E.loadGraph()){ populate(); }
     ensureWatchFan();
     applyTx(); render();
+    syncFromCloud();
   } else {
     ensureWatchFan();
     render();
+    syncFromCloud();
   }
 };
+
+// Cloud sync — fires after the initial local-cache render. If cloud
+// has newer/different state, replaces local state and re-renders. If
+// cloud has nothing (first time using cloud sync for this job), the
+// next save will write up the current local state. Failures are
+// silent (offline-tolerant); the user keeps working with their cache.
+function syncFromCloud(){
+  if (!E || typeof E.loadGraphFromCloudAndApply !== 'function') return;
+  E.loadGraphFromCloudAndApply().then(function(applied){
+    if (applied) {
+      ensureWatchFan();
+      applyTx();
+      render();
+    }
+  });
+}
 })();
