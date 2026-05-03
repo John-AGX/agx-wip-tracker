@@ -36,20 +36,20 @@ function computeEstimateTotals(est) {
         var ext = (l.qty || 0) * (l.unitCost || 0);
         baseCost += ext;
         var section = sectionHeaderForIdx(idx);
-        // Dollar-mode section: lines have no percent markup.
-        if (section && section.markupMode === 'dollar') {
-            markedUp += ext;
-            return;
-        }
+        var inDollar = section && section.markupMode === 'dollar';
         var m;
         if (section && section.overrideLineMarkups) {
-            // Forced section markup.
-            m = (section.markup === '' || section.markup == null) ? null : Number(section.markup);
+            // Override on: per-line markup ignored. % mode forces section's %;
+            // $ mode forces 0 per line (section flat $ added separately above).
+            m = inDollar ? 0 : ((section.markup === '' || section.markup == null) ? null : Number(section.markup));
         } else {
+            // Override off: per-line markup honored. In $ mode, the section
+            // does NOT provide a per-line default — lines without their own
+            // % render at raw ext.
             m = (l.markup === '' || l.markup == null) ? null : Number(l.markup);
-            if (m == null && section && section.markup !== '' && section.markup != null) m = Number(section.markup);
+            if (m == null && !inDollar && section && section.markup !== '' && section.markup != null) m = Number(section.markup);
         }
-        if (m == null && est.defaultMarkup != null && est.defaultMarkup !== '') m = Number(est.defaultMarkup);
+        if (m == null && !inDollar && est.defaultMarkup != null && est.defaultMarkup !== '') m = Number(est.defaultMarkup);
         if (m == null) m = 0;
         markedUp += ext * (1 + m / 100);
     });

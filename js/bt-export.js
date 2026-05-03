@@ -129,13 +129,15 @@
   // section's % regardless of any per-line value.
   function effectiveMarkup(line, allLines, estimate) {
     var section = sectionHeaderFor(line, allLines);
-    if (section && section.markupMode === 'dollar') return 0;
+    var inDollar = section && section.markupMode === 'dollar';
     if (section && section.overrideLineMarkups) {
+      if (inDollar) return 0;
       if (section.markup !== '' && section.markup != null) return num(section.markup);
       if (estimate && estimate.defaultMarkup != null && estimate.defaultMarkup !== '') return num(estimate.defaultMarkup);
       return 0;
     }
     if (line && line.markup !== '' && line.markup != null) return num(line.markup);
+    if (inDollar) return 0;
     if (section && section.markup !== '' && section.markup != null) return num(section.markup);
     if (estimate && estimate.defaultMarkup != null && estimate.defaultMarkup !== '') return num(estimate.defaultMarkup);
     return 0;

@@ -132,13 +132,19 @@
   // level by the caller).
   function effectiveMarkup(line, allLines, estimate) {
     var section = sectionHeaderFor(line, allLines);
-    if (section && section.markupMode === 'dollar') return 0;
+    var inDollar = section && section.markupMode === 'dollar';
     if (section && section.overrideLineMarkups) {
+      // Override on: ignore per-line markup. $ mode → 0. % mode → section's %.
+      if (inDollar) return 0;
       if (section.markup !== '' && section.markup != null) return parseFloat(section.markup) || 0;
       if (estimate && estimate.defaultMarkup != null && estimate.defaultMarkup !== '') return parseFloat(estimate.defaultMarkup) || 0;
       return 0;
     }
+    // Override off: per-line markup wins.
     if (line && line.markup !== '' && line.markup != null) return parseFloat(line.markup) || 0;
+    // No per-line value: $ mode supplies no per-line default; % mode falls
+    // back to the section then est.defaultMarkup.
+    if (inDollar) return 0;
     if (section && section.markup !== '' && section.markup != null) return parseFloat(section.markup) || 0;
     if (estimate && estimate.defaultMarkup != null && estimate.defaultMarkup !== '') return parseFloat(estimate.defaultMarkup) || 0;
     return 0;

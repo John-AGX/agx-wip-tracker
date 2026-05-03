@@ -658,14 +658,19 @@
 
   function effectiveMarkupForLine(line, allLines, est) {
     var section = sectionHeaderFor(line, allLines);
-    // Dollar-mode sections: lines have NO percent markup. The section's
-    // flat $ is added once at the section-subtotal level (see markedUpForGroup).
-    if (section && section.markupMode === 'dollar') return 0;
-    // Override-on sections: ignore per-line markup, use the section's % directly.
+    // Override-on: per-line markup is ignored. In $ mode the line gets
+    // 0% (section flat $ adds at section level); in % mode the section
+    // value is forced.
     if (section && section.overrideLineMarkups) {
+      if (section.markupMode === 'dollar') return 0;
       return sectionMarkupForLine(line, allLines, est);
     }
+    // No override: per-line markup wins. If the line has none, fall back
+    // to the section default — but only in % mode. In $ mode the section
+    // doesn't supply a per-line default; lines without their own %
+    // render at raw extension cost.
     if (line && line.markup !== '' && line.markup != null) return num(line.markup);
+    if (section && section.markupMode === 'dollar') return 0;
     return sectionMarkupForLine(line, allLines, est);
   }
   // The section-derived percent markup for a line, ignoring any per-line
@@ -978,17 +983,16 @@
           'onfocus="this.style.borderColor=\'var(--border,#333)\';" onblur="this.style.borderColor=\'transparent\';" />' +
         (suffix ? '<span style="font-size:11px;color:var(--text-dim,#888);">' + suffix + '</span>' : '') +
       '</div>' +
-      // Override checkbox — when on, every line under this section uses
-      // the section markup, ignoring per-line overrides. Hidden in
-      // dollar mode (lines have no per-line markup in $ mode anyway).
-      (isDollar ? '' :
-      '<label title="Force this section\'s markup on every line below; ignores per-line overrides" ' +
-        'style="display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--text-dim,#aaa);cursor:pointer;user-select:none;padding:0 4px;">' +
+      // Override checkbox — when on, per-line markups are ignored.
+      // In % mode the section's % is forced on every line; in $ mode
+      // each line's % drops to 0 (the section flat $ is added at the
+      // section subtotal regardless). Visible in both modes.
+      '<label title="Override per-line markups (use the section value for every line below)" ' +
+        'style="display:inline-flex;align-items:center;cursor:pointer;padding:0 4px;">' +
         '<input type="checkbox" ' + (override ? 'checked' : '') + ' ' +
           'onchange="toggleSectionOverride(\'' + idAttr + '\', this.checked)" ' +
           'style="cursor:pointer;width:14px;height:14px;" />' +
-        'Override line markups' +
-      '</label>') +
+      '</label>' +
       '<button class="ee-btn primary" onclick="addEstimateLineFromEditor(\'' + idAttr + '\')" title="Add a line under this section">&#x2795; Line Item</button>' +
       '<button class="ee-btn ee-icon-btn ghost" onclick="deleteSectionFromEditor(\'' + idAttr + '\')" title="Remove section header (lines stay)">&#x1F5D1;</button>' +
     '</div>';
@@ -1007,10 +1011,15 @@
     var effective = effectiveMarkupForLine(line, allLines, est);
     var clientPrice = ext * (1 + effective / 100);
     var inherited = sectionMarkupForLine(line, allLines, est);
-    var markupPlaceholder = sectionDollarMode
-      ? '— (section flat $)'
-      : (sectionOverride
-          ? inherited + ' (forced)'
+    // Placeholder hint for the per-line markup field.
+    // - Override on: line markup is ignored either way; show "(forced)"
+    //   with the section's % (or 0 in $ mode).
+    // - No override + $ mode: line markup is honored if entered, else 0.
+    // - No override + % mode: line falls back to the section's %.
+    var markupPlaceholder = sectionOverride
+      ? (sectionDollarMode ? '0 (forced)' : inherited + ' (forced)')
+      : (sectionDollarMode
+          ? (line.markup === '' || line.markup == null ? '0' : '')
           : (line.markup === '' || line.markup == null ? inherited + ' (section)' : ''));
     var idAttr = escapeHTML(line.id);
 
