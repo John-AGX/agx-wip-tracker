@@ -654,30 +654,33 @@ async function buildEstimateContext(estimateId, includePhotos) {
     lines.push('');
   }
 
-  // Document manifest. We can't read PDF/Excel/Word contents directly, but
-  // surfacing what's attached lets the assistant ask the user to summarize
-  // a relevant doc, OR cite a doc by name when recommending follow-ups
-  // ("see the RFP attached on the lead for the spec on caulk type").
+  // Document manifest. PDF, Excel, Word, CSV, and plain-text contents are
+  // extracted at upload time and inlined below in fenced blocks — read them
+  // as authoritative content (RFPs, scopes, takeoffs, lead reports). For
+  // formats without an extractor or for scanned PDFs that have no text
+  // layer, the user can click "Ask AI" from the PDF viewer to attach
+  // rendered page images this turn — treat those images as the doc.
   if (docManifest.length) {
     lines.push('# Attached documents (' + docManifest.length + ')');
     var anyWithText = docManifest.some(function(d) { return d.extracted_text; });
     var headerLine = anyWithText
-      ? 'PDF text below has been extracted at upload time. Quote / cite directly when relevant.'
+      ? 'Extracted text below — quote / cite directly when relevant. Excel takeoffs render as tab-separated rows under `## Sheet:` headers; treat each sheet as a table.'
       : 'Filenames listed for reference.';
-    headerLine += ' For docs WITHOUT extracted text (scanned PDFs, photo reports like CompanyCam, Excel, Word):' +
+    headerLine += ' For docs WITHOUT extracted text (scanned PDFs, photo reports like CompanyCam, image-only formats):' +
       ' if the user has clicked "Ask AI" from the PDF viewer, the page renders are attached as images this turn — read them with vision and treat that as the document content.' +
       ' Only ask the user to paste excerpts if no images were attached.';
     lines.push(headerLine);
     lines.push('');
     docManifest.forEach(function(d) {
       var sizeStr = d.size != null ? ' (' + (d.size > 1048576 ? (d.size / 1048576).toFixed(1) + ' MB' : Math.round(d.size / 1024) + ' KB') + ')' : '';
-      lines.push('## [' + d.source + '] ' + d.filename + sizeStr);
+      var mimeBit = d.mime ? ' · ' + d.mime : '';
+      lines.push('## [' + d.source + '] ' + d.filename + sizeStr + mimeBit);
       if (d.extracted_text) {
         lines.push('```');
         lines.push(d.extracted_text);
         lines.push('```');
       } else {
-        lines.push('_(no embedded text layer — read the rendered page images attached this turn, if any)_');
+        lines.push('_(no extracted text — either an unsupported format or a scanned image. Read the rendered page images attached this turn, if any.)_');
       }
       lines.push('');
     });
