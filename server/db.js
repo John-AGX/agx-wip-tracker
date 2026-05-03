@@ -604,6 +604,33 @@ async function initSchema() {
       error TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_ai_eval_runs_eval ON ai_eval_runs(eval_id, run_at DESC);
+
+    -- Conversation replays — sandboxed re-runs of an existing
+    -- conversation (or a prefix of it) under different model / effort /
+    -- system-prefix params. Stored separately from ai_messages so a
+    -- replay never pollutes a real user thread or skews metrics.
+    --
+    -- Conversation key is the same entity_type|entity_id|user_id triple
+    -- the admin agents page surfaces. from_index is the message offset
+    -- to start replaying from (0 = full conversation, N = last user
+    -- message at index N becomes the new turn).
+    CREATE TABLE IF NOT EXISTS ai_replays (
+      id TEXT PRIMARY KEY,
+      conversation_key TEXT NOT NULL,
+      from_index INTEGER NOT NULL DEFAULT 0,
+      model_override TEXT,
+      effort_override TEXT,
+      system_prefix TEXT,
+      run_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      run_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      input_tokens INTEGER,
+      output_tokens INTEGER,
+      duration_ms INTEGER,
+      response_text TEXT,
+      tool_calls JSONB,
+      error TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_ai_replays_conv ON ai_replays(conversation_key, run_at DESC);
   `);
 
   // Seed built-in roles. ON CONFLICT lets us re-run safely without

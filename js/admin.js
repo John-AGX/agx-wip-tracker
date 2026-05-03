@@ -2723,19 +2723,100 @@
     var host = document.getElementById('agents-content');
     if (!host) return;
     host.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;font-style:italic;padding:20px 0;">Loading messages…</div>';
-    window.agxApi.get('/api/admin/agents/conversations/' + encodeURIComponent(key)).then(function(c) {
+    Promise.all([
+      window.agxApi.get('/api/admin/agents/conversations/' + encodeURIComponent(key)),
+      window.agxApi.get('/api/admin/agents/conversations/' + encodeURIComponent(key) + '/replays').catch(function() { return { replays: [] }; })
+    ]).then(function(results) {
+      var c = results[0];
+      var replays = (results[1] && results[1].replays) || [];
       var header = '<div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap;">' +
           '<button class="ee-btn secondary" onclick="closeAgentConversation()">&larr; Back to list</button>' +
           '<div style="flex:1;">' +
             '<div style="font-size:14px;font-weight:600;color:var(--text,#fff);">' + escapeHTML(c.entity_title || c.entity_id || '') + '</div>' +
             '<div style="font-size:11px;color:var(--text-dim,#888);">' + escapeHTML(c.entity_type) + ' &middot; ' + escapeHTML(c.user_email || ('user ' + c.user_id)) + ' &middot; ' + (c.messages || []).length + ' messages</div>' +
           '</div>' +
+          '<button class="ee-btn" onclick="openReplayDialog(\'' + escapeAttr(key) + '\')" style="background:linear-gradient(135deg,#8b5cf6,#4f8cff);color:#fff;border:none;font-weight:600;">&#x1F501; Replay last turn</button>' +
         '</div>';
       var msgs = (c.messages || []).map(renderAgentMessage).join('');
       if (!msgs) msgs = '<div style="color:var(--text-dim,#888);font-style:italic;">No messages.</div>';
-      host.innerHTML = header + '<div style="display:flex;flex-direction:column;gap:10px;">' + msgs + '</div>';
+      var replaysHtml = '';
+      if (replays.length) {
+        replaysHtml = '<div style="margin-top:18px;border-top:1px solid var(--border,#333);padding-top:14px;">' +
+          '<div style="font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-dim,#888);margin-bottom:8px;">Replays (' + replays.length + ')</div>' +
+          '<div style="display:flex;flex-direction:column;gap:8px;">' +
+          replays.map(renderReplayRow).join('') +
+          '</div></div>';
+      }
+      host.innerHTML = header + '<div style="display:flex;flex-direction:column;gap:10px;">' + msgs + '</div>' + replaysHtml;
     }).catch(function(err) {
       host.innerHTML = '<div style="color:#e74c3c;font-size:12px;padding:20px 0;">Failed: ' + escapeHTML(err.message || 'unknown') + '</div>';
+    });
+  }
+
+  function renderReplayRow(r) {
+    var when = '';
+    try { when = new Date(r.run_at).toLocaleString(); } catch (e) {}
+    var paramBits = [];
+    if (r.model_override)  paramBits.push('model=' + r.model_override);
+    if (r.effort_override) paramBits.push('effort=' + r.effort_override);
+    if (r.system_prefix)   paramBits.push('+system_prefix');
+    if (!paramBits.length) paramBits.push('default params');
+    var toolPreview = (r.tool_calls && r.tool_calls.length)
+      ? r.tool_calls.map(function(t) { return t.name; }).join(', ')
+      : '(no tool calls)';
+    return '<details style="background:rgba(139,92,246,0.04);border:1px solid rgba(139,92,246,0.25);border-radius:6px;padding:8px 10px;">' +
+      '<summary style="cursor:pointer;display:flex;align-items:center;gap:8px;font-size:12px;flex-wrap:wrap;">' +
+        '<span style="display:inline-block;background:rgba(139,92,246,0.18);color:#a78bfa;font-size:10px;padding:2px 8px;border-radius:10px;font-weight:600;">REPLAY</span>' +
+        '<span style="color:var(--text-dim,#aaa);">' + escapeHTML(when) + '</span>' +
+        '<span style="font-family:\'SF Mono\',monospace;color:var(--text-dim,#aaa);font-size:11px;">' + escapeHTML(paramBits.join(' · ')) + '</span>' +
+        '<span style="font-family:\'SF Mono\',monospace;color:var(--text-dim,#aaa);font-size:11px;">' + (r.duration_ms ? Math.round(r.duration_ms / 100) / 10 + 's' : '—') + '</span>' +
+        '<span style="font-family:\'SF Mono\',monospace;color:var(--text-dim,#aaa);font-size:11px;">' + (r.input_tokens || 0) + ' in / ' + (r.output_tokens || 0) + ' out</span>' +
+      '</summary>' +
+      (r.error
+        ? '<div style="color:#f87171;font-size:12px;margin-top:8px;">' + escapeHTML(r.error) + '</div>'
+        : '<div style="margin-top:8px;">' +
+            '<div style="font-size:10px;text-transform:uppercase;color:var(--text-dim,#666);">Tool calls</div>' +
+            '<div style="font-family:\'SF Mono\',monospace;font-size:11px;color:var(--text-dim,#aaa);margin-top:2px;">' + escapeHTML(toolPreview) + '</div>' +
+            (r.response_text ? '<div style="margin-top:8px;"><div style="font-size:10px;text-transform:uppercase;color:var(--text-dim,#666);">Response text</div><pre style="font-size:12px;color:var(--text-dim,#ccc);background:rgba(0,0,0,0.15);padding:8px;border-radius:4px;margin:4px 0 0;max-height:300px;overflow:auto;white-space:pre-wrap;">' + escapeHTML(r.response_text) + '</pre></div>' : '') +
+          '</div>'
+      ) +
+    '</details>';
+  }
+
+  function openReplayDialog(key) {
+    var modelChoice = prompt(
+      'Replay this conversation with which model?\n\n' +
+      'Available:\n' +
+      '  claude-opus-4-7   (most capable, $5/$25 per 1M)\n' +
+      '  claude-opus-4-6\n' +
+      '  claude-sonnet-4-6 (default)\n' +
+      '  claude-haiku-4-5  (cheapest)\n\n' +
+      'Leave blank to use the env default.',
+      'claude-opus-4-7'
+    );
+    if (modelChoice === null) return;
+    var effortChoice = prompt('Thinking effort? (low / medium / high / xhigh / max — Opus 4.7 + Sonnet 4.6 only). Leave blank for none.', 'xhigh');
+    if (effortChoice === null) return;
+    var systemPrefix = prompt('Optional extra system-prompt prefix (e.g., a draft skill pack to test). Leave blank to skip.', '');
+    if (systemPrefix === null) return;
+
+    var hostNotice = document.getElementById('agents-content');
+    if (hostNotice) {
+      var notice = document.createElement('div');
+      notice.style.cssText = 'margin-bottom:10px;padding:10px;background:rgba(139,92,246,0.08);border:1px solid rgba(139,92,246,0.25);border-radius:6px;font-size:12px;color:#c4b5fd;';
+      notice.textContent = '🔁 Running replay… (model: ' + (modelChoice || 'default') + (effortChoice ? ', effort: ' + effortChoice : '') + ')';
+      hostNotice.insertBefore(notice, hostNotice.firstChild);
+    }
+    window.agxApi.post('/api/admin/agents/conversations/' + encodeURIComponent(key) + '/replay', {
+      model_override: modelChoice.trim() || undefined,
+      effort_override: effortChoice.trim() || undefined,
+      system_prefix: systemPrefix.trim() || undefined
+    }).then(function(resp) {
+      alert('✓ Replay complete\n\nModel: ' + (resp.model || '—') + '\nDuration: ' + (resp.duration_ms ? Math.round(resp.duration_ms / 100) / 10 + 's' : '—') + '\nTool calls: ' + (resp.tool_calls ? resp.tool_calls.length : 0) + '\nTokens in/out: ' + (resp.input_tokens || 0) + ' / ' + (resp.output_tokens || 0));
+      renderAgentsConversationDetail(key);
+    }).catch(function(err) {
+      alert('Replay failed: ' + (err.message || 'unknown'));
+      renderAgentsConversationDetail(key);
     });
   }
 
@@ -2969,6 +3050,7 @@
   window.switchAgentsView = switchAgentsView;
   window.openAgentConversation = openAgentConversation;
   window.closeAgentConversation = closeAgentConversation;
+  window.openReplayDialog = openReplayDialog;
   window.openChiefOfStaff = openChiefOfStaff;
   window.openEvalDetail = openEvalDetail;
   window.closeEvalDetail = closeEvalDetail;

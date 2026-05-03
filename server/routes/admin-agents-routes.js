@@ -567,4 +567,188 @@ router.post('/evals/:id/run', requireAuth, requireCapability('ROLES_MANAGE'), as
   }
 });
 
+// ══════════════════════════════════════════════════════════════════════
+// Conversation replay
+// ══════════════════════════════════════════════════════════════════════
+// Sandboxed re-run of an existing ai_messages thread under different
+// model / effort / system-prefix params. Returns the new response
+// side-by-side with the original so an admin can A/B compare prompts
+// and models on real production conversations without polluting
+// user-facing history or skewing metrics.
+//
+// Stored in ai_replays. NEVER writes to ai_messages.
+// ══════════════════════════════════════════════════════════════════════
+
+router.get('/conversations/:key/replays', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT id, conversation_key, from_index, model_override, effort_override,
+              system_prefix, run_at, run_by, input_tokens, output_tokens,
+              duration_ms, response_text, tool_calls, error
+         FROM ai_replays
+        WHERE conversation_key = $1
+        ORDER BY run_at DESC
+        LIMIT 50`,
+      [req.params.key]
+    );
+    res.json({ replays: r.rows });
+  } catch (e) {
+    console.error('GET /api/admin/agents/conversations/:key/replays error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.post('/conversations/:key/replay', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+  const t0 = Date.now();
+  const replayId = 'rep_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+  const key = req.params.key || '';
+  try {
+    const parts = key.split('|');
+    if (parts.length !== 3) return res.status(400).json({ error: 'Bad conversation key' });
+    const [entityType, entityId, userIdRaw] = parts;
+    const userId = Number(userIdRaw);
+    if (!entityType || !entityId || !Number.isFinite(userId)) {
+      return res.status(400).json({ error: 'Bad conversation key components' });
+    }
+
+    const body = req.body || {};
+    const modelOverride  = (body.model_override || '').trim() || null;
+    const effortOverride = (body.effort_override || '').trim().toLowerCase() || null;
+    const systemPrefix   = (typeof body.system_prefix === 'string') ? body.system_prefix : null;
+    const fromIndex      = Number.isFinite(Number(body.from_index)) ? Number(body.from_index) : null;
+
+    // Pull the conversation. Replay needs the FULL row content (not the
+    // 16KB-trimmed view the conversation detail endpoint returns) so we
+    // can faithfully reconstruct what the model originally saw.
+    const msgsRes = await pool.query(
+      `SELECT role, content, model FROM ai_messages
+        WHERE entity_type=$1 AND estimate_id=$2 AND user_id=$3
+        ORDER BY created_at ASC`,
+      [entityType, entityId, userId]
+    );
+    const allMessages = msgsRes.rows;
+    if (!allMessages.length) return res.status(404).json({ error: 'Conversation has no messages' });
+
+    // from_index slices the conversation. Default: replay the LAST user
+    // message of the thread (so the admin sees what the agent would
+    // have answered with different params on the most recent turn).
+    let cutAt = (fromIndex != null) ? fromIndex : -1;
+    if (cutAt < 0) {
+      // Find last user-role message and use its index.
+      for (let i = allMessages.length - 1; i >= 0; i--) {
+        if (allMessages[i].role === 'user') { cutAt = i; break; }
+      }
+      if (cutAt < 0) return res.status(400).json({ error: 'No user message found in conversation' });
+    }
+    if (cutAt >= allMessages.length) return res.status(400).json({ error: 'from_index past end of conversation' });
+
+    // Use messages [0..cutAt] inclusive — cutAt is the last user message
+    // we want to replay. Anthropic expects the conversation to end with
+    // a user message before generating the next assistant turn.
+    const replayMessages = allMessages.slice(0, cutAt + 1).map(m => ({ role: m.role, content: m.content }));
+    if (replayMessages[replayMessages.length - 1].role !== 'user') {
+      return res.status(400).json({ error: 'Replay slice must end with a user message — adjust from_index.' });
+    }
+
+    const anthropic = getAnthropic();
+    if (!anthropic) return res.status(503).json({ error: 'AI not configured (ANTHROPIC_API_KEY missing).' });
+
+    const aiInternals = require('./ai-routes-internals');
+    if (!aiInternals) throw new Error('ai-routes internals not available.');
+
+    // Build the system context for whichever agent owned the original
+    // conversation. Replays an estimate against AG, a job against WIP,
+    // a client thread against CRA, a staff thread against the chief
+    // of staff.
+    let system, tools;
+    if (entityType === 'estimate') {
+      const ctx = await aiInternals.buildEstimateContext(entityId, false);
+      system = ctx.system;
+      tools = aiInternals.estimateTools();
+    } else if (entityType === 'job') {
+      // Job context wants a clientContext arg; replays don't have one
+      // since the original lived only in the chat session. Pass null;
+      // WIP degrades to summary-only.
+      const ctx = await aiInternals.buildJobContext(entityId, null);
+      system = ctx.system;
+      tools = aiInternals.jobTools();
+    } else if (entityType === 'client') {
+      const ctx = await aiInternals.buildClientDirectoryContext();
+      system = ctx.system;
+      tools = aiInternals.clientTools();
+    } else if (entityType === 'staff') {
+      const ctx = await aiInternals.buildStaffContext();
+      system = ctx.system;
+      tools = aiInternals.staffTools();
+    } else {
+      return res.status(400).json({ error: 'Unknown entity_type: ' + entityType });
+    }
+
+    // Optional system_prefix prepends a custom block in front of the
+    // existing system prompt — useful for "what if I added this skill
+    // pack?" experiments without actually saving it. Stays sandboxed
+    // to this replay only.
+    if (systemPrefix && Array.isArray(system)) {
+      system = [{ type: 'text', text: systemPrefix }, ...system];
+    } else if (systemPrefix) {
+      system = systemPrefix + '\n\n' + system;
+    }
+
+    const model = modelOverride || aiInternals.defaultModel();
+    const maxTokens = aiInternals.maxTokens();
+    // Effort gating mirrors the production agent: only attach when the
+    // model supports it and an effort value is set.
+    const effortClause = effortOverride
+      ? (new Set(['claude-opus-4-5','claude-opus-4-6','claude-opus-4-7','claude-sonnet-4-6']).has(model)
+          ? { effort: effortOverride } : null)
+      : null;
+
+    const apiBody = {
+      model,
+      max_tokens: maxTokens,
+      system,
+      tools,
+      messages: replayMessages
+    };
+    if (effortClause) apiBody.output_config = effortClause;
+
+    const response = await anthropic.messages.create(apiBody);
+    const content = response.content || [];
+    const text = content.filter(b => b.type === 'text').map(b => b.text).join('\n');
+    const toolUses = content.filter(b => b.type === 'tool_use').map(b => ({ name: b.name, input: b.input || {} }));
+    const usage = response.usage || {};
+    const elapsed = Date.now() - t0;
+
+    await pool.query(
+      `INSERT INTO ai_replays (id, conversation_key, from_index, model_override, effort_override,
+                               system_prefix, run_by, input_tokens, output_tokens,
+                               duration_ms, response_text, tool_calls)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+      [
+        replayId, key, cutAt, modelOverride, effortOverride, systemPrefix,
+        req.user ? req.user.id : null,
+        usage.input_tokens || null, usage.output_tokens || null,
+        elapsed, text, JSON.stringify(toolUses)
+      ]
+    );
+
+    res.json({
+      ok: true, replay_id: replayId, model, from_index: cutAt,
+      duration_ms: elapsed,
+      input_tokens: usage.input_tokens, output_tokens: usage.output_tokens,
+      response_text: text, tool_calls: toolUses
+    });
+  } catch (e) {
+    console.error('POST /api/admin/agents/conversations/:key/replay error:', e);
+    try {
+      await pool.query(
+        `INSERT INTO ai_replays (id, conversation_key, run_by, duration_ms, error)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [replayId, key, req.user ? req.user.id : null, Date.now() - t0, e.message || 'failed']
+      );
+    } catch (_) { /* ignore secondary */ }
+    res.status(500).json({ error: 'Replay failed: ' + (e.message || 'unknown') });
+  }
+});
+
 module.exports = router;

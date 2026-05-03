@@ -3064,7 +3064,7 @@ async function buildStaffContext() {
   stable.push('- Drill before generalizing. If you spot something odd in metrics, pull recent conversations and inspect a few before proposing a theory.');
   stable.push('- When citing a conversation, include the user and the entity title so the admin can locate it.');
   stable.push('- When proposing a skill pack, write tight, specific instructions — every always-on pack costs tokens on every turn forever. Propose deletions of stale ones too.');
-  stable.push('- Be candid about limits. Conversation replay is still queued — if asked to re-run a conversation under a different model, say it\'s not yet wired and offer to set up an eval fixture instead.');
+  stable.push('- Be candid about limits. You can\'t replay conversations directly from your tools (the admin runs replays manually from Admin → Agents → Conversations → 🔁 Replay), but you can suggest exact replay parameters (model, effort, system_prefix) when a question would benefit from one.');
   stable.push('- Skip the assistant filler. The admin is technical; lead with the answer.');
   stable.push('');
   stable.push('# Tone');
@@ -3680,7 +3680,18 @@ router.post('/staff/chat/continue',
 module.exports = router;
 module.exports.internals = {
   buildEstimateContext,
+  buildJobContext,
+  buildClientDirectoryContext,
+  buildStaffContext,
   estimateTools: () => [...WEB_TOOLS, ...ESTIMATE_TOOLS],
+  jobTools:      () => [...WEB_TOOLS, ...JOB_TOOLS],
+  clientTools:   () => [...WEB_TOOLS, ...CLIENT_TOOLS.map(({ tier, ...t }) => t)],
+  staffTools:    () => [...WEB_TOOLS, ...STAFF_TOOLS.map(({ tier, ...t }) => t)],
   defaultModel: () => MODEL,
-  maxTokens: () => MAX_TOKENS
+  maxTokens: () => MAX_TOKENS,
+  effortFor: (modelOverride) => {
+    if (!modelOverride) return null;
+    if (!EFFORT_SUPPORTED_MODELS.has(modelOverride)) return null;
+    return EFFORT || null;
+  }
 };
