@@ -2880,4 +2880,475 @@ router.post('/clients/chat/continue',
   }
 );
 
+// ══════════════════════════════════════════════════════════════════════
+// Chief of Staff agent
+// ══════════════════════════════════════════════════════════════════════
+// A meta-agent that observes the three task agents (AG / WIP / CRA),
+// reads their metrics + recent conversations, and (in later versions)
+// proposes skill-pack improvements based on observed failure patterns
+// or recurring user requests.
+//
+// V1 is read-only — only auto-tier read tools, no proposes. The user
+// asks "how is AG doing this week?" or "what does CRA usually search
+// for?" and the agent answers by calling read tools and synthesizing.
+//
+// Reuses the same ai_messages table for history, partitioned by
+// entity_type='staff'. Like CRA, there's no entity_id — the agent is
+// global, scoped per user. estimate_id stores the literal sentinel
+// 'global'.
+// ══════════════════════════════════════════════════════════════════════
+
+const STAFF_TOOLS = [
+  {
+    name: 'read_metrics',
+    tier: 'auto',
+    description:
+      'Read aggregate AI-agent usage metrics for the requested window. Returns per-agent (AG / WIP / CRA) totals: turns, conversations, unique users, tool uses, photos attached, tokens in/out, model mix, and estimated cost in USD. Use this to answer "how much is AG being used?", "what does WIP cost us?", "is anyone using CRA?" types of questions.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        range: { type: 'string', enum: ['7d', '30d'], description: 'Time window. Default 7d.' }
+      },
+      required: []
+    }
+  },
+  {
+    name: 'read_recent_conversations',
+    tier: 'auto',
+    description:
+      'List recent AI-agent conversations. Each row is a (entity, user) pair with turn count, tool uses, tokens, cost, and last activity. Use this to spot patterns ("which estimates does AG get used on most?"), audit usage ("did anyone burn 100K tokens this week?"), or pick a conversation to drill into via read_conversation_detail.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        range: { type: 'string', enum: ['7d', '30d'], description: 'Time window. Default 7d.' },
+        entity_type: { type: 'string', enum: ['estimate', 'job', 'client'], description: 'Filter to one agent. Omit for all.' },
+        limit: { type: 'integer', minimum: 1, maximum: 200, description: 'Cap rows returned. Default 50.' }
+      },
+      required: []
+    }
+  },
+  {
+    name: 'read_conversation_detail',
+    tier: 'auto',
+    description:
+      'Read every message of a specific conversation. Pass the `key` from read_recent_conversations (entity_type|entity_id|user_id, joined with pipes). Returns user + assistant turns with role, model, token usage, content (capped at 16KB per message). Use this to investigate a specific case — "show me what AG did on the Solace Tampa estimate", "find out why this conversation used so many tools".',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        key: { type: 'string', description: 'Conversation key from read_recent_conversations.' }
+      },
+      required: ['key']
+    }
+  },
+  {
+    name: 'read_skill_packs',
+    tier: 'auto',
+    description:
+      'List the admin-editable skill packs that the AI agents load at chat time. Each pack has a name, body (instructions), agent assignments (which of AG / CRA load it), and an alwaysOn flag. Use this to recommend new skills, audit existing ones for staleness, or answer "what context does AG always see?".',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {},
+      required: []
+    }
+  }
+];
+
+// Auto-tier predicate — staff V1 is all-auto so this is trivially true
+// for any defined tool, but we keep the indirection so adding propose
+// tools later (`tier: 'approval'`) just works.
+function isStaffToolAutoTier(name) {
+  const t = STAFF_TOOLS.find(t => t.name === name);
+  return !!(t && t.tier === 'auto');
+}
+
+// Build the chief-of-staff system prompt. Stable identity + role +
+// tools rolled into one cached block; a slim live snapshot of the
+// current week as a second block (refreshed each turn).
+async function buildStaffContext() {
+  const stable = [];
+  stable.push('You are the Chief of Staff for AGX\'s in-app AI agents — AG (estimating), WIP (financial analyst), and CRA (customer relations). Your user is the AGX admin / owner. Your job is to observe how the three agents are being used, surface trends and anomalies, audit specific conversations on request, and (in future versions) propose skill-pack improvements based on what you see.');
+  stable.push('');
+  stable.push('# Who the three agents are');
+  stable.push('  • **AG (estimate-side)** — helps PMs draft scopes, propose line items with AGX-typical Central-FL pricing, and edit the estimate via approval-gated tools. Heavy vision use (photos, PDFs of RFPs / takeoffs).');
+  stable.push('  • **WIP (job-side)** — financial analyst on live jobs. Reads WIP snapshot, change orders, QB cost lines, and the node graph; spots margin issues, missing COs, billing gaps.');
+  stable.push('  • **CRA (customer-side)** — owns the customer directory. Splits parent+property compounds, links unparented properties, merges duplicates, attaches business cards, and writes durable client notes.');
+  stable.push('All three log into the same ai_messages table (different entity_type values).');
+  stable.push('');
+  stable.push('# Your tools (all auto-apply, no approval)');
+  stable.push('  • `read_metrics(range)` — per-agent aggregate stats for last 7d or 30d. Default range is 7d.');
+  stable.push('  • `read_recent_conversations(range, entity_type?, limit?)` — recent conversation list with rollup numbers.');
+  stable.push('  • `read_conversation_detail(key)` — full message log of one conversation. Pass the `key` from read_recent_conversations.');
+  stable.push('  • `read_skill_packs()` — admin-editable instruction packs the agents load each turn.');
+  stable.push('');
+  stable.push('# How to work');
+  stable.push('- Default to data first. When asked "how is AG doing?", call `read_metrics` and report concrete numbers, not opinions.');
+  stable.push('- Drill before generalizing. If you spot something odd in metrics, pull recent conversations and inspect a few before proposing a theory.');
+  stable.push('- When citing a conversation, include the user and the entity title so the admin can locate it.');
+  stable.push('- Be candid about limits. You can READ everything but you cannot YET edit skill packs or replay conversations — those are queued. If asked, say so plainly.');
+  stable.push('- Skip the assistant filler. The admin is technical; lead with the answer.');
+  stable.push('');
+  stable.push('# Tone');
+  stable.push('- Concise, structured (bullets and short paragraphs over walls of text). Quote token / dollar / count numbers exactly. If a tool call returned an empty result, say so.');
+
+  // Live snapshot for the current week so the agent has cheap baseline
+  // numbers without spending a tool call. Best-effort — failures degrade
+  // silently, the agent will still call read_metrics if it needs detail.
+  const liveLines = [];
+  try {
+    const r = await pool.query(`
+      SELECT entity_type, COUNT(*) FILTER (WHERE role='assistant') AS turns
+        FROM ai_messages
+       WHERE created_at >= NOW() - INTERVAL '7 days'
+       GROUP BY entity_type
+    `);
+    if (r.rows.length) {
+      liveLines.push('# Live snapshot (last 7 days, assistant turns)');
+      const labelMap = { estimate: 'AG', job: 'WIP', client: 'CRA', staff: 'Chief of Staff (you)' };
+      r.rows.forEach(row => {
+        liveLines.push('  • ' + (labelMap[row.entity_type] || row.entity_type) + ': ' + Number(row.turns) + ' turns');
+      });
+      liveLines.push('Use `read_metrics` for full breakdowns (tokens, cost, model mix, conversations).');
+    }
+  } catch (e) { /* ignore — agent will call read_metrics if needed */ }
+
+  return {
+    system: [
+      { type: 'text', text: stable.join('\n'), cache_control: { type: 'ephemeral' } },
+      { type: 'text', text: '\n\n' + (liveLines.length ? liveLines.join('\n') : '_(No agent activity recorded in the last 7 days.)_') }
+    ]
+  };
+}
+
+// Read-tool executor. Inlines the same logic the admin REST endpoints
+// use so we don't have to round-trip through HTTP.
+async function execStaffTool(name, input) {
+  switch (name) {
+    case 'read_metrics': {
+      const range = (input && input.range === '30d') ? '30 days' : '7 days';
+      const aggSql = `
+        SELECT
+          entity_type,
+          COUNT(*) FILTER (WHERE role = 'assistant') AS turns,
+          COUNT(*) FILTER (WHERE role = 'user')      AS user_msgs,
+          COUNT(DISTINCT (estimate_id, user_id))     AS conversations,
+          COUNT(DISTINCT user_id)                    AS unique_users,
+          COALESCE(SUM(input_tokens),  0)::bigint    AS input_tokens,
+          COALESCE(SUM(output_tokens), 0)::bigint    AS output_tokens,
+          COALESCE(SUM(tool_use_count), 0)::bigint   AS tool_uses,
+          COALESCE(SUM(photos_included), 0)::bigint  AS photos,
+          STRING_AGG(DISTINCT model, ',')            AS models
+        FROM ai_messages
+        WHERE created_at >= NOW() - INTERVAL '${range}'
+          AND entity_type IN ('estimate','job','client')
+        GROUP BY entity_type
+        ORDER BY entity_type
+      `;
+      const r = await pool.query(aggSql);
+      const out = [];
+      const labels = { estimate: 'AG (estimate)', job: 'WIP (job)', client: 'CRA (client)' };
+      const all = ['estimate', 'job', 'client'];
+      const byType = new Map(r.rows.map(row => [row.entity_type, row]));
+      out.push('Metrics for last ' + range + ':');
+      for (const et of all) {
+        const row = byType.get(et);
+        if (!row) {
+          out.push('• ' + labels[et] + ': no activity');
+          continue;
+        }
+        out.push('• ' + labels[et] + ': ' + Number(row.turns) + ' turns, ' +
+          Number(row.conversations) + ' conversations, ' +
+          Number(row.unique_users) + ' users, ' +
+          Number(row.tool_uses) + ' tool uses, ' +
+          Number(row.photos) + ' photos, ' +
+          'tokens in/out ' + Number(row.input_tokens) + '/' + Number(row.output_tokens) +
+          ', models: ' + (row.models || '(none)'));
+      }
+      return out.join('\n');
+    }
+
+    case 'read_recent_conversations': {
+      const range = (input && input.range === '30d') ? '30 days' : '7 days';
+      const limit = Math.max(1, Math.min(200, Number(input && input.limit) || 50));
+      const params = [];
+      const conds = [`created_at >= NOW() - INTERVAL '${range}'`];
+      if (input && input.entity_type) {
+        params.push(input.entity_type);
+        conds.push(`entity_type = $${params.length}`);
+      }
+      conds.push(`entity_type IN ('estimate','job','client')`);
+      const rollupSql = `
+        SELECT entity_type, estimate_id AS entity_id, user_id,
+               COUNT(*) FILTER (WHERE role='assistant') AS turns,
+               COUNT(*) FILTER (WHERE role='user')      AS user_msgs,
+               MAX(created_at) AS last_at,
+               COALESCE(SUM(input_tokens),0)::bigint AS input_tokens,
+               COALESCE(SUM(output_tokens),0)::bigint AS output_tokens,
+               COALESCE(SUM(tool_use_count),0)::bigint AS tool_uses,
+               STRING_AGG(DISTINCT model, ',') AS models
+          FROM ai_messages
+         WHERE ${conds.join(' AND ')}
+         GROUP BY entity_type, estimate_id, user_id
+         ORDER BY MAX(created_at) DESC
+         LIMIT ${limit}
+      `;
+      const r = await pool.query(rollupSql, params);
+      if (!r.rows.length) return 'No conversations in the last ' + range + '.';
+      // Enrich with user emails + entity titles.
+      const userIds = [...new Set(r.rows.map(x => x.user_id).filter(x => x != null))];
+      const userMap = new Map();
+      if (userIds.length) {
+        const u = await pool.query('SELECT id, email FROM users WHERE id = ANY($1::int[])', [userIds]);
+        u.rows.forEach(row => userMap.set(row.id, row.email));
+      }
+      const titleByKey = new Map();
+      const ids = (et) => [...new Set(r.rows.filter(x => x.entity_type === et).map(x => x.entity_id))];
+      const eIds = ids('estimate');
+      if (eIds.length) {
+        const er = await pool.query('SELECT id, title FROM estimates WHERE id = ANY($1::text[])', [eIds]);
+        er.rows.forEach(x => titleByKey.set('estimate|' + x.id, x.title));
+      }
+      const jIds = ids('job');
+      if (jIds.length) {
+        const jr = await pool.query(`SELECT id, COALESCE(NULLIF(name,''),'Job '||id) AS title FROM jobs WHERE id = ANY($1::text[])`, [jIds]);
+        jr.rows.forEach(x => titleByKey.set('job|' + x.id, x.title));
+      }
+      const lines = [];
+      for (const x of r.rows) {
+        const t = titleByKey.get(x.entity_type + '|' + x.entity_id) || (x.entity_id === '__global__' ? 'Customer directory' : x.entity_id);
+        const u = userMap.get(x.user_id) || ('user ' + x.user_id);
+        const key = x.entity_type + '|' + x.entity_id + '|' + x.user_id;
+        lines.push('- [' + x.entity_type + '] "' + t + '" · ' + u +
+          ' · ' + Number(x.turns) + ' turns · ' + Number(x.tool_uses) + ' tools · ' +
+          'tokens ' + (Number(x.input_tokens) + Number(x.output_tokens)) +
+          ' · ' + new Date(x.last_at).toISOString().slice(0, 16).replace('T', ' ') +
+          ' · key=' + key);
+      }
+      return lines.join('\n');
+    }
+
+    case 'read_conversation_detail': {
+      const key = (input && input.key) || '';
+      const parts = key.split('|');
+      if (parts.length !== 3) throw new Error('key must be entity_type|entity_id|user_id');
+      const [et, eid, uidRaw] = parts;
+      const uid = Number(uidRaw);
+      if (!Number.isFinite(uid)) throw new Error('user_id portion of key is not a number');
+      const r = await pool.query(
+        `SELECT role, content, model, input_tokens, output_tokens,
+                tool_use_count, photos_included, created_at
+           FROM ai_messages
+          WHERE entity_type=$1 AND estimate_id=$2 AND user_id=$3
+          ORDER BY created_at ASC`,
+        [et, eid, uid]
+      );
+      if (!r.rows.length) return 'No messages found for that key.';
+      const out = [];
+      for (const m of r.rows) {
+        const meta = [];
+        if (m.model) meta.push(m.model);
+        if (m.tool_use_count) meta.push(m.tool_use_count + ' tools');
+        if (m.photos_included) meta.push(m.photos_included + ' photos');
+        let body = String(m.content || '');
+        if (body.length > 4000) body = body.slice(0, 4000) + ' [...truncated]';
+        out.push('--- ' + m.role.toUpperCase() + ' (' + new Date(m.created_at).toISOString() + ')' + (meta.length ? ' [' + meta.join(', ') + ']' : '') + ' ---');
+        out.push(body);
+      }
+      return out.join('\n\n');
+    }
+
+    case 'read_skill_packs': {
+      const r = await pool.query(`SELECT value FROM app_settings WHERE key = 'agent_skills'`);
+      const cfg = r.rows.length ? (r.rows[0].value || {}) : {};
+      const skills = Array.isArray(cfg.skills) ? cfg.skills : [];
+      if (!skills.length) return 'No skill packs configured.';
+      const lines = ['Skill packs (' + skills.length + '):'];
+      for (const s of skills) {
+        const agents = Array.isArray(s.agents) ? s.agents.join(',') : '(none)';
+        const onOff = s.alwaysOn === false ? 'inactive' : 'always-on';
+        lines.push('• "' + (s.name || '(untitled)') + '" → agents=' + agents + ', ' + onOff);
+        const body = String(s.body || '');
+        if (body) {
+          lines.push('  ```');
+          lines.push('  ' + (body.length > 600 ? body.slice(0, 600) + ' [...truncated]' : body).split('\n').join('\n  '));
+          lines.push('  ```');
+        }
+      }
+      return lines.join('\n');
+    }
+
+    default:
+      throw new Error('Unknown staff tool: ' + name);
+  }
+}
+
+// Streaming helper — same shape as streamClientTurn.
+async function streamStaffTurn({ anthropic, res, system, messages }) {
+  const cleanTools = STAFF_TOOLS.map(({ tier, ...t }) => t);
+  // Web tools at the front so the cache breakpoint stays on the last
+  // user-defined tool (matches the pattern in the other agents).
+  const allTools = [...WEB_TOOLS, ...cleanTools];
+  const cachedTools = allTools.length
+    ? [
+        ...allTools.slice(0, -1),
+        Object.assign({}, allTools[allTools.length - 1], { cache_control: { type: 'ephemeral' } })
+      ]
+    : allTools;
+
+  let assistantText = '';
+  let finalContent = null;
+  let usage = { input_tokens: null, output_tokens: null };
+  const stream = anthropic.messages.stream({
+    model: MODEL,
+    max_tokens: MAX_TOKENS,
+    system: system,
+    tools: cachedTools,
+    messages
+  });
+  stream.on('text', (delta) => {
+    assistantText += delta;
+    res.write('data: ' + JSON.stringify({ delta }) + '\n\n');
+  });
+  stream.on('finalMessage', (msg) => {
+    if (msg && msg.usage) usage = msg.usage;
+    if (msg && Array.isArray(msg.content)) finalContent = msg.content;
+  });
+  await stream.done();
+  const toolUseBlocks = (finalContent || []).filter(b => b.type === 'tool_use');
+  return { assistantText, finalContent, toolUseBlocks, usage };
+}
+
+router.get('/staff/messages',
+  requireAuth, requireCapability('ROLES_MANAGE'),
+  async (req, res) => {
+    try {
+      const r = await pool.query(
+        `SELECT id, role, content, created_at, model, input_tokens, output_tokens
+           FROM ai_messages
+          WHERE entity_type='staff' AND user_id=$1
+          ORDER BY created_at ASC`,
+        [req.user.id]
+      );
+      res.json({ messages: r.rows });
+    } catch (e) {
+      console.error('GET /staff/messages error:', e);
+      res.status(500).json({ error: 'Server error' });
+    }
+  }
+);
+
+router.delete('/staff/messages',
+  requireAuth, requireCapability('ROLES_MANAGE'),
+  async (req, res) => {
+    try {
+      await pool.query(
+        `DELETE FROM ai_messages WHERE entity_type='staff' AND user_id=$1`,
+        [req.user.id]
+      );
+      res.json({ ok: true });
+    } catch (e) {
+      console.error('DELETE /staff/messages error:', e);
+      res.status(500).json({ error: 'Server error' });
+    }
+  }
+);
+
+const MAX_STAFF_TOOL_LOOPS = 8;
+router.post('/staff/chat',
+  requireAuth, requireCapability('ROLES_MANAGE'),
+  async (req, res) => {
+    const anthropic = getAnthropic();
+    if (!anthropic) return res.status(503).json({ error: 'AI assistant is not configured.' });
+    const userMessage = (req.body && req.body.message || '').trim();
+    if (!userMessage) return res.status(400).json({ error: 'message is required' });
+
+    setSSEHeaders(res);
+    try {
+      const histRes = await pool.query(
+        `SELECT role, content FROM ai_messages
+          WHERE entity_type='staff' AND user_id=$1
+          ORDER BY created_at ASC`,
+        [req.user.id]
+      );
+      let history = histRes.rows;
+      const cap = MAX_HISTORY_PAIRS * 2;
+      if (history.length > cap) history = history.slice(-cap);
+
+      const userMsgId = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+      await pool.query(
+        `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content)
+         VALUES ($1, 'staff', 'global', $2, 'user', $3)`,
+        [userMsgId, req.user.id, userMessage]
+      );
+
+      const messages = [
+        ...history.map(m => ({ role: m.role, content: m.content })),
+        { role: 'user', content: userMessage }
+      ];
+
+      let totalUsage = { input_tokens: 0, output_tokens: 0 };
+      let finalAssistantText = '';
+
+      for (let loop = 0; loop < MAX_STAFF_TOOL_LOOPS; loop++) {
+        const ctx = await buildStaffContext();
+        const turn = await streamStaffTurn({ anthropic, res, system: ctx.system, messages });
+        finalAssistantText = turn.assistantText;
+        if (turn.usage.input_tokens) totalUsage.input_tokens += turn.usage.input_tokens;
+        if (turn.usage.output_tokens) totalUsage.output_tokens += turn.usage.output_tokens;
+
+        if (!turn.toolUseBlocks.length) {
+          if (finalAssistantText) {
+            const aMsgId = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+            await pool.query(
+              `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content, model, input_tokens, output_tokens)
+               VALUES ($1, 'staff', 'global', $2, 'assistant', $3, $4, $5, $6)`,
+              [aMsgId, req.user.id, finalAssistantText, MODEL, totalUsage.input_tokens, totalUsage.output_tokens]
+            );
+          }
+          res.write('data: ' + JSON.stringify({ done: true, usage: totalUsage }) + '\n\n');
+          res.write('data: [DONE]\n\n');
+          res.end();
+          return;
+        }
+
+        // V1: every tool is auto-tier. Execute, append tool_result, loop.
+        // (When propose_skill_pack_* tools land, they'll route into an
+        // approval branch like the CRA chat handler.)
+        const toolResultBlocks = [];
+        for (const tu of turn.toolUseBlocks) {
+          if (!isStaffToolAutoTier(tu.name)) {
+            // Defensive: should never trigger in V1 since all tools are auto.
+            res.write('data: ' + JSON.stringify({ tool_failed: { id: tu.id, name: tu.name, error: 'Approval-tier tools not yet supported by staff agent.' } }) + '\n\n');
+            toolResultBlocks.push({ type: 'tool_result', tool_use_id: tu.id, content: 'Tool requires approval but staff agent is read-only in V1.', is_error: true });
+            continue;
+          }
+          let summary, isError = false;
+          try {
+            summary = await execStaffTool(tu.name, tu.input || {});
+            res.write('data: ' + JSON.stringify({ tool_applied: { id: tu.id, name: tu.name, input: tu.input, summary: summary.slice(0, 500) } }) + '\n\n');
+          } catch (e) {
+            summary = 'Error: ' + (e.message || 'failed');
+            isError = true;
+            res.write('data: ' + JSON.stringify({ tool_failed: { id: tu.id, name: tu.name, input: tu.input, error: summary } }) + '\n\n');
+          }
+          toolResultBlocks.push({ type: 'tool_result', tool_use_id: tu.id, content: summary, is_error: isError || undefined });
+        }
+        messages.push({ role: 'assistant', content: turn.finalContent });
+        messages.push({ role: 'user', content: toolResultBlocks });
+      }
+      res.write('data: ' + JSON.stringify({ error: 'Tool loop exceeded maximum iterations' }) + '\n\n');
+      res.write('data: [DONE]\n\n');
+      res.end();
+    } catch (e) {
+      console.error('AI staff chat error:', e);
+      res.write('data: ' + JSON.stringify({ error: e.message || 'Server error' }) + '\n\n');
+      res.write('data: [DONE]\n\n');
+      res.end();
+    }
+  }
+);
+
 module.exports = router;

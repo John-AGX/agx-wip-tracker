@@ -42,11 +42,13 @@
   function apiBase() {
     if (_entityType === 'job') return '/api/ai/jobs/' + encodeURIComponent(_entityId);
     if (_entityType === 'client') return '/api/ai/clients';
+    if (_entityType === 'staff') return '/api/ai/staff';
     return '/api/ai/estimates/' + encodeURIComponent(_entityId);
   }
   function isEstimateMode() { return _entityType === 'estimate'; }
   function isJobMode() { return _entityType === 'job'; }
   function isClientMode() { return _entityType === 'client'; }
+  function isStaffMode() { return _entityType === 'staff'; }
 
   // ────────────────────────────────────────────────────────────────────
   // Auto-render PDF pages for AG. PDFs without a text layer (scanned
@@ -157,9 +159,17 @@
     { label: 'Audit incomplete records', prompt: 'Show me properties missing key fields (no CAM contact, no property_address, no parent linkage, no market). Group by what\'s missing so I can fill them in efficiently. If you can fill anything from context (e.g., copying market from siblings under the same parent), do it via update_client_field.' },
     { label: 'Add a property',           prompt: 'Walk me through adding a new property. Ask which parent management company first (search existing parents in the directory). Then collect property name, property_address, on-site CAM name + email + phone, market, and gate code if any. Use create_property to apply.' }
   ];
+  var STAFF_PRESETS = [
+    { label: 'How is AG doing this week?',  prompt: 'Pull last 7d metrics for all three agents and tell me what stands out. Then surface the 3 most active conversations across AG / WIP / CRA so I can spot-check.' },
+    { label: 'Audit AG search usage',       prompt: 'Of AG\'s recent conversations, how often did web_search get invoked? Pull a few examples and summarize what AG was searching for. If a pattern emerges (e.g., the same product specs over and over), recommend a skill-pack addition.' },
+    { label: 'What skills are loaded?',     prompt: 'List every skill pack currently configured, which agents load each, and whether each is always-on. Flag any that look stale or that overlap.' },
+    { label: 'Most expensive conversations', prompt: 'Show me the 5 most token-expensive conversations in the last 30 days across all agents. For the top one, drill in and summarize what happened.' },
+    { label: 'Where is CRA being used?',    prompt: 'How is CRA being used? Is it actually getting traction or is it sitting idle? Pull recent CRA conversations and characterize the work.' }
+  ];
   function getActivePresets() {
-    if (isJobMode()) return JOB_PRESETS;
+    if (isJobMode())    return JOB_PRESETS;
     if (isClientMode()) return CLIENT_PRESETS;
+    if (isStaffMode())  return STAFF_PRESETS;
     return ESTIMATE_PRESETS;
   }
 
@@ -665,9 +675,10 @@
       entityType = arg.entityType || 'estimate';
       entityId = arg.entityId;
     }
-    // Client mode is global to the user — no entity ID needed (the
-    // directory IS the context). Other modes still require an entity.
-    var requiresEntity = entityType !== 'client';
+    // Client and staff modes are global to the user — no entity ID needed
+    // (the directory / agent observability surface IS the context). Other
+    // modes still require an entity.
+    var requiresEntity = entityType !== 'client' && entityType !== 'staff';
     if (requiresEntity && !entityId) {
       alert('Save the ' + (entityType || 'record') + ' first to enable the AI assistant.');
       return;
@@ -714,9 +725,10 @@
   function refreshModeSpecificUI() {
     var headerEl = document.querySelector('#agx-ai-panel .agx-ai-title');
     if (headerEl) {
-      if (isJobMode()) headerEl.textContent = '📊 WIP Assistant';
-      else if (isClientMode()) headerEl.textContent = '🤝 Customer Relations Agent';
-      else headerEl.textContent = '📐 AG · AGX Estimator';
+      if (isJobMode())            headerEl.textContent = '📊 WIP Assistant';
+      else if (isClientMode())    headerEl.textContent = '🤝 Customer Relations Agent';
+      else if (isStaffMode())     headerEl.textContent = '🎩 Chief of Staff';
+      else                        headerEl.textContent = '📐 AG · AGX Estimator';
     }
     // Trust gear visible only in job mode (where the toggles apply).
     var trustBtn = document.getElementById('ai-trust');
@@ -725,12 +737,14 @@
     if (noticeEl) {
       if (isJobMode()) noticeEl.textContent = 'I see WIP, costs, the node graph, and QB lines — and I can propose edits (e.g. set a phase\'s % complete) for you to approve before they apply.';
       else if (isClientMode()) noticeEl.textContent = 'Customer Relations Agent — I keep the parent-company / property hierarchy clean. Simple writes apply automatically; restructural changes (new parent, merges, splits, deletes) require approval.';
+      else if (isStaffMode()) noticeEl.textContent = 'Chief of Staff (read-only V1) — I observe AG / WIP / CRA. I can read metrics, audit recent conversations, and review skill packs. Skill-pack edits and replay are queued.';
       else noticeEl.textContent = 'I\'m AG — your AGX estimator. I can draft scopes, add/edit/delete line items and sections, and tweak pricing. Every change is shown as a card with Approve / Reject before it lands.';
     }
     var inputEl = document.getElementById('ai-input');
     if (inputEl) {
       if (isClientMode()) inputEl.placeholder = 'Describe a change, ask a question, or tap "Run full audit" below…';
       else if (isJobMode()) inputEl.placeholder = 'Ask anything about this job…';
+      else if (isStaffMode()) inputEl.placeholder = 'Ask about agent usage, audit a conversation, review skill packs…';
       else inputEl.placeholder = 'Ask AG to draft, edit, or clean up the estimate…';
     }
     renderPresets();
@@ -823,6 +837,7 @@
       var hint;
       if (isJobMode()) hint = 'Pick a preset below or ask anything about the job.<br><span style="font-size:11px;opacity:0.7;">I see contract, costs, COs, %complete, billing — plus the node graph wiring and QuickBooks cost lines.</span>';
       else if (isClientMode()) hint = '<strong style="color:var(--text,#fff);">🤝 Customer Relations Agent</strong><br>Tap <strong>Run full audit</strong> to clean up the directory in one pass — I\'ll split parent+property compounds, link unparented entries, merge dupes, and surface anything ambiguous for you.<br><span style="font-size:11px;opacity:0.7;">I know the AGX hierarchy: parent management company → property/community → CAM contact.</span>';
+      else if (isStaffMode()) hint = '<strong style="color:var(--text,#fff);">🎩 Chief of Staff</strong><br>I observe AG / WIP / CRA — usage, cost, conversations, skill packs.<br><span style="font-size:11px;opacity:0.7;">Read-only in V1. Skill-pack proposals + conversation replay are queued.</span>';
       else hint = '<strong style="color:var(--text,#fff);">📐 AG — your AGX estimator</strong><br>Pick a preset or describe what you need. I can read the estimate, scope, client, and photos — and propose adds, edits, deletes, and pricing changes for you to approve.<br><span style="font-size:11px;opacity:0.7;">Try "tighten this estimate" or "build my line items".</span>';
       box.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;padding:20px 0;text-align:center;line-height:1.6;">' + hint + '</div>';
       return;

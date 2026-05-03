@@ -2580,6 +2580,7 @@
           '<button class="ws-right-tab' + (_agentsView === 'conversations' ? ' active' : '') + '" onclick="switchAgentsView(\'conversations\')">&#x1F4AC; Conversations</button>' +
         '</div>' +
         '<div style="flex:1;"></div>' +
+        '<button class="ee-btn" onclick="openChiefOfStaff()" title="Open the Chief of Staff agent — observes AG / WIP / CRA, audits conversations, reviews skill packs" style="background:linear-gradient(135deg,#fbbf24,#f97316);color:#fff;border:none;font-weight:600;">&#x1F3A9; Ask Chief of Staff</button>' +
         '<label style="font-size:11px;color:var(--text-dim,#888);">Window</label>' +
         '<select id="agents-range-select" onchange="setAgentsRange(this.value)" style="font-size:12px;padding:4px 8px;">' +
           '<option value="7d"' + (_agentsRange === '7d' ? ' selected' : '') + '>Last 7 days</option>' +
@@ -2772,9 +2773,18 @@
     '</div>';
   }
 
+  function openChiefOfStaff() {
+    if (!window.agxAI || typeof window.agxAI.open !== 'function') {
+      alert('AI panel not loaded — refresh the page.');
+      return;
+    }
+    window.agxAI.open({ entityType: 'staff' });
+  }
+
   window.renderAdminAgents = renderAdminAgents;
   window.setAgentsRange = setAgentsRange;
   window.switchAgentsView = switchAgentsView;
   window.openAgentConversation = openAgentConversation;
   window.closeAgentConversation = closeAgentConversation;
+  window.openChiefOfStaff = openChiefOfStaff;
 })();
