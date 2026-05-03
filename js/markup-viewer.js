@@ -58,6 +58,14 @@
     _numberCounter = 1;
     state = {
       attachment: opts.attachment,
+      // Where the saved markup uploads to. Defaults to the source
+      // attachment's own entity. Pass an override when marking up a
+      // foreign attachment (e.g. a lead photo surfaced on an estimate)
+      // so the new markup lands on the current entity instead.
+      saveTarget: opts.saveTarget || {
+        entityType: opts.attachment.entity_type,
+        entityId: opts.attachment.entity_id
+      },
       onDone: opts.onDone || function() {},
       tool: 'arrow',
       stickerKind: null,
@@ -669,19 +677,32 @@
     var dlg = document.createElement('div');
     dlg.id = 'agx-mk-savedlg';
     dlg.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:5100;display:flex;align-items:center;justify-content:center;';
+    // Cross-entity markup (e.g. marking up a lead photo from the
+    // estimate's Attachments tab): hide the "Replace original" option
+    // since we don't want users overwriting attachments they don't
+    // technically own from the wrong context. The new markup just
+    // lands on the current entity with markup_of pointing back.
+    var sourceOwner = state.attachment.entity_type + '/' + state.attachment.entity_id;
+    var targetOwner = state.saveTarget.entityType + '/' + state.saveTarget.entityId;
+    var isCrossEntity = sourceOwner !== targetOwner;
+    var crossEntityNote = isCrossEntity
+      ? '<div style="color:#fbbf24;font-size:11px;margin-bottom:10px;padding:8px 10px;background:rgba(251,191,36,0.06);border:1px solid rgba(251,191,36,0.25);border-radius:6px;">Saving into the current ' + escapeHTML(state.saveTarget.entityType) + '. Original ' + escapeHTML(state.attachment.entity_type) + ' photo is left untouched.</div>'
+      : '';
     dlg.innerHTML =
       '<div style="background:var(--surface,#15152a);border:1px solid var(--border,#333);border-radius:12px;padding:20px 22px;width:420px;max-width:90vw;color:var(--text,#fff);">' +
         '<h3 style="margin:0 0 12px 0;font-size:15px;">Save markup</h3>' +
         '<p style="margin:0 0 14px 0;color:var(--text-dim,#888);font-size:12px;">Pick where this annotated copy lands.</p>' +
+        crossEntityNote +
         '<div style="display:flex;flex-direction:column;gap:8px;font-size:13px;">' +
           '<label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;padding:10px;border:1px solid var(--border,#333);border-radius:8px;">' +
             '<input type="radio" name="mk-save-mode" value="new" checked style="margin-top:3px;" />' +
             '<div><div style="font-weight:600;">Save as new</div><div style="color:var(--text-dim,#888);font-size:11px;">Original is kept. Markup appears under "Markups" linked to the original.</div></div>' +
           '</label>' +
+          (isCrossEntity ? '' :
           '<label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;padding:10px;border:1px solid var(--border,#333);border-radius:8px;">' +
             '<input type="radio" name="mk-save-mode" value="replace" style="margin-top:3px;" />' +
             '<div><div style="font-weight:600;">Replace original</div><div style="color:var(--text-dim,#888);font-size:11px;">Original photo is overwritten with the marked-up version. Cannot be undone.</div></div>' +
-          '</label>' +
+          '</label>') +
           '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;padding:8px 10px;border:1px solid var(--border,#333);border-radius:8px;background:rgba(79,140,255,0.04);">' +
             '<input type="checkbox" id="mk-include-in-proposal" />' +
             '<span><strong>Attach to proposal</strong> <span style="color:var(--text-dim,#888);font-size:11px;margin-left:4px;">— include in the estimate\'s proposal output.</span></span>' +
@@ -741,12 +762,21 @@
     var canvas = document.getElementById('agx-mk-canvas');
     if (!canvas) return Promise.reject(new Error('Canvas missing.'));
     var att = state.attachment;
+    var target = state.saveTarget;
     return canvasToFile(canvas, deriveMarkupFilename(att)).then(function(file) {
       var extra = {};
       if (mode === 'new' && att.id) extra.markup_of = att.id;
       if (includeInProposal) extra.include_in_proposal = true;
-      var uploadP = window.agxApi.attachments.upload(att.entity_type, att.entity_id, file, extra);
+      var uploadP = window.agxApi.attachments.upload(target.entityType, target.entityId, file, extra);
       if (mode === 'replace') {
+        // Replace only deletes the source if the markup is uploading
+        // back into the same entity that owns it — replacing a foreign
+        // (parent-surfaced) attachment from the wrong entity would
+        // delete it from its real owner without warning.
+        var sameOwner = target.entityType === att.entity_type && target.entityId === att.entity_id;
+        if (!sameOwner) {
+          return uploadP; // treat as save-as-new instead
+        }
         return uploadP.then(function(r) {
           return window.agxApi.attachments.remove(att.id).catch(function() {}).then(function() { return r; });
         });

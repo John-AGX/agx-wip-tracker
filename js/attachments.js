@@ -309,7 +309,12 @@
             parentPhotos.forEach(function(att, i) {
               html += '<div class="att-thumb-tile" style="position:relative;border:1px solid rgba(79,140,255,0.35);border-radius:8px;overflow:hidden;background:#000;aspect-ratio:1/1;">' +
                 '<img data-att-thumb-parent="' + i + '" src="' + escapeAttr(att.thumb_url) + '" alt="' + escapeAttr(att.filename) + '" onerror="this.parentNode.classList.add(\'att-thumb-broken\')" style="width:100%;height:100%;object-fit:cover;cursor:zoom-in;display:block;" />' +
+                // Top-left: entity-source badge ("LEAD")
                 '<div style="position:absolute;top:4px;left:4px;background:rgba(79,140,255,0.85);color:#fff;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;padding:2px 5px;border-radius:3px;z-index:2;">' + escapeHTMLLocal((parentEntity && parentEntity.entityType) || 'parent') + '</div>' +
+                // Top-right: Mark-up button. Result uploads into the
+                // CURRENT entity (not the parent's), with markup_of
+                // pointing back at this parent attachment.
+                (canEdit ? '<button data-att-markup-parent="' + escapeAttr(att.id) + '" title="Mark up — saves into this ' + escapeAttr(entityType) + '" style="position:absolute;top:4px;right:4px;background:rgba(0,0,0,0.7);color:#fbbf24;border:none;border-radius:4px;padding:3px 6px;font-size:10px;font-weight:700;cursor:pointer;z-index:2;">&#x270F; MARK</button>' : '') +
                 '<div style="position:absolute;bottom:0;left:0;right:0;background:linear-gradient(transparent,rgba(0,0,0,0.7));color:#fff;font-size:10px;padding:14px 6px 4px;font-family:Arial,sans-serif;pointer-events:none;z-index:1;">' + escapeHTMLLocal(att.filename) + '</div>' +
               '</div>';
             });
@@ -450,6 +455,27 @@
         img.onclick = function() {
           var i = parseInt(img.getAttribute('data-att-thumb-parent'), 10);
           openLightbox(parentPhotos, i);
+        };
+      });
+      // Mark-up on a parent (e.g. lead) photo — opens the markup
+      // viewer with saveTarget pointing at the CURRENT entity so the
+      // saved markup lands here, with markup_of pointing back at the
+      // parent. Original parent attachment is left untouched.
+      container.querySelectorAll('[data-att-markup-parent]').forEach(function(btn) {
+        btn.onclick = function(e) {
+          e.stopPropagation();
+          if (!window.agxMarkup || typeof window.agxMarkup.open !== 'function') {
+            alert('Markup viewer not loaded — refresh the page.');
+            return;
+          }
+          var attId = btn.getAttribute('data-att-markup-parent');
+          var att = state.parentAttachments.find(function(a) { return a.id === attId; });
+          if (!att) return;
+          window.agxMarkup.open({
+            attachment: att,
+            saveTarget: { entityType: entityType, entityId: entityId },
+            onDone: fetchList
+          });
         };
       });
       container.querySelectorAll('[data-att-view-parent]').forEach(function(btn) {

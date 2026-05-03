@@ -242,14 +242,18 @@ router.post('/:entityType/:entityId',
 
       // Optional markup linkage: form-data field `markup_of` carries the
       // source attachment id when the upload comes from the markup
-      // viewer's "Save as new" path. Validated to belong to the same
-      // entity so a rogue client can't link to arbitrary attachments.
+      // viewer's "Save as new" path. We allow cross-entity references
+      // so an estimate's markup can point at a lead's photo (the lead
+      // attachments surface read-only on the estimate's Attachments
+      // tab, and marking one up uploads the result into the estimate).
+      // Validated only to confirm the source exists; the FK enforces
+      // referential integrity beyond that.
       let markupOf = null;
       if (req.body && typeof req.body.markup_of === 'string' && req.body.markup_of.trim()) {
         const srcId = req.body.markup_of.trim();
         const srcRes = await pool.query(
-          'SELECT id FROM attachments WHERE id = $1 AND entity_type = $2 AND entity_id = $3',
-          [srcId, entityType, entityId]
+          'SELECT id FROM attachments WHERE id = $1',
+          [srcId]
         );
         if (srcRes.rows.length) markupOf = srcId;
       }
