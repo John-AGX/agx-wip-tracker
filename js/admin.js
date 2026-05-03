@@ -1021,6 +1021,7 @@
     else if (name === 'materials') renderAdminMaterials();
     else if (name === 'email') renderAdminEmail();
     else if (name === 'email-templates') renderAdminEmailTemplates();
+    else if (name === 'agents') renderAdminAgents();
     // Persist nav state so a refresh lands back on this admin sub-tab.
     if (typeof window.agxNavSave === 'function') window.agxNavSave();
   }
@@ -2550,4 +2551,230 @@
   window.addExclusion = addExclusion;
   window.deleteExclusion = deleteExclusion;
   window.moveExclusion = moveExclusion;
+
+  // ==================== ADMIN AGENTS ====================
+  // Observability surface for the in-app AI agents (AG, WIP, CRA).
+  // Three sub-views:
+  //   1. Metrics — last 7d / 30d aggregate per agent (turns, tokens,
+  //      cost, tool uses, model mix).
+  //   2. Conversations — recent threads list with drill-down into the
+  //      full message log of any one.
+  //   3. Skills (link out to the existing Templates → Skills tab —
+  //      that admin surface stays where it is).
+
+  var _agentsRange = '7d';
+  var _agentsView = 'metrics'; // 'metrics' | 'conversations'
+  var _agentsConvKey = null;   // when drilled into one conversation
+
+  function renderAdminAgents() {
+    var pane = document.getElementById('admin-subtab-agents');
+    if (!pane) return;
+    pane.innerHTML =
+      '<p style="margin:0 0 14px 0;color:var(--text-dim,#888);font-size:12px;">' +
+        'Observability for the three in-app AI agents — usage, cost, and conversations. ' +
+        'For editing the system prompts and skill packs the agents load, see <a href="#" onclick="switchAdminSubTab(\'templates\');return false;" style="color:#4f8cff;">Templates &rarr; Skills</a>.' +
+      '</p>' +
+      '<div style="display:flex;gap:8px;align-items:center;margin-bottom:14px;flex-wrap:wrap;">' +
+        '<div class="ws-right-tabs" style="margin:0;">' +
+          '<button class="ws-right-tab' + (_agentsView === 'metrics' ? ' active' : '') + '" onclick="switchAgentsView(\'metrics\')">&#x1F4CA; Metrics</button>' +
+          '<button class="ws-right-tab' + (_agentsView === 'conversations' ? ' active' : '') + '" onclick="switchAgentsView(\'conversations\')">&#x1F4AC; Conversations</button>' +
+        '</div>' +
+        '<div style="flex:1;"></div>' +
+        '<label style="font-size:11px;color:var(--text-dim,#888);">Window</label>' +
+        '<select id="agents-range-select" onchange="setAgentsRange(this.value)" style="font-size:12px;padding:4px 8px;">' +
+          '<option value="7d"' + (_agentsRange === '7d' ? ' selected' : '') + '>Last 7 days</option>' +
+          '<option value="30d"' + (_agentsRange === '30d' ? ' selected' : '') + '>Last 30 days</option>' +
+        '</select>' +
+        '<button class="ee-btn ghost" onclick="renderAdminAgents()" title="Refresh">&#x21BB;</button>' +
+      '</div>' +
+      '<div id="agents-content"></div>';
+    if (_agentsView === 'metrics')           renderAgentsMetrics();
+    else if (_agentsConvKey)                 renderAgentsConversationDetail(_agentsConvKey);
+    else                                     renderAgentsConversationList();
+  }
+
+  function setAgentsRange(r) {
+    _agentsRange = (r === '30d') ? '30d' : '7d';
+    renderAdminAgents();
+  }
+  function switchAgentsView(v) {
+    _agentsView = v;
+    _agentsConvKey = null;
+    renderAdminAgents();
+  }
+
+  // ─────────── Metrics view ───────────
+  function renderAgentsMetrics() {
+    var host = document.getElementById('agents-content');
+    if (!host) return;
+    host.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;font-style:italic;padding:20px 0;">Loading metrics…</div>';
+    window.agxApi.get('/api/admin/agents/metrics?range=' + _agentsRange).then(function(resp) {
+      var agents = (resp && resp.agents) || [];
+      if (!agents.length) {
+        host.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;font-style:italic;padding:20px 0;">No data.</div>';
+        return;
+      }
+      host.innerHTML = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px;">' +
+        agents.map(renderAgentMetricsCard).join('') +
+      '</div>';
+    }).catch(function(err) {
+      host.innerHTML = '<div style="color:#e74c3c;font-size:12px;padding:20px 0;">Failed: ' + escapeHTML(err.message || 'unknown') + '</div>';
+    });
+  }
+
+  function renderAgentMetricsCard(a) {
+    var totalCost = (a.models || []).reduce(function(s, m) { return s + (m.cost_usd || 0); }, 0);
+    var modelMix = (a.models || []).map(function(m) {
+      return '<div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text-dim,#aaa);font-family:\'SF Mono\',monospace;">' +
+        '<span>' + escapeHTML(m.model) + '</span>' +
+        '<span>' + m.turns + ' turns</span>' +
+      '</div>';
+    }).join('');
+    if (!modelMix) modelMix = '<div style="font-size:11px;color:var(--text-dim,#666);font-style:italic;">No assistant turns yet</div>';
+    return '<div style="background:rgba(255,255,255,0.03);border:1px solid var(--border,#333);border-radius:8px;padding:14px;">' +
+      '<div style="font-size:14px;font-weight:600;color:var(--text,#fff);margin-bottom:10px;">' + escapeHTML(a.label) + '</div>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px 16px;font-size:12px;color:var(--text-dim,#aaa);">' +
+        statRow('Turns', a.turns) +
+        statRow('Conversations', a.conversations) +
+        statRow('Unique users', a.unique_users) +
+        statRow('Tool uses', a.tool_uses) +
+        statRow('Photos', a.photos_attached) +
+        statRow('Tokens in / out', tokFmt(a.input_tokens) + ' / ' + tokFmt(a.output_tokens)) +
+        statRow('Est. cost', '$' + (totalCost || 0).toFixed(2)) +
+      '</div>' +
+      '<div style="margin-top:10px;border-top:1px solid var(--border,#333);padding-top:8px;">' + modelMix + '</div>' +
+    '</div>';
+  }
+
+  function statRow(k, v) {
+    return '<div><div style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-dim,#666);">' + escapeHTML(k) + '</div>' +
+      '<div style="font-size:14px;font-weight:600;color:var(--text,#fff);">' + escapeHTML(String(v == null ? '—' : v)) + '</div></div>';
+  }
+  function tokFmt(n) {
+    n = Number(n) || 0;
+    if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
+    if (n >= 1_000)     return (n / 1_000).toFixed(1) + 'K';
+    return String(n);
+  }
+
+  // ─────────── Conversations list view ───────────
+  function renderAgentsConversationList() {
+    var host = document.getElementById('agents-content');
+    if (!host) return;
+    host.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;font-style:italic;padding:20px 0;">Loading conversations…</div>';
+    window.agxApi.get('/api/admin/agents/conversations?range=' + _agentsRange + '&limit=100').then(function(resp) {
+      var rows = (resp && resp.conversations) || [];
+      if (!rows.length) {
+        host.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;font-style:italic;padding:20px 0;">No conversations in this window.</div>';
+        return;
+      }
+      var html = '<div class="table-container"><table>' +
+        '<thead><tr>' +
+          '<th>Agent</th>' +
+          '<th>Entity</th>' +
+          '<th>User</th>' +
+          '<th style="text-align:right;">Turns</th>' +
+          '<th style="text-align:right;">Tool uses</th>' +
+          '<th style="text-align:right;">Tokens</th>' +
+          '<th style="text-align:right;">Est. cost</th>' +
+          '<th>Last activity</th>' +
+          '<th>Models</th>' +
+        '</tr></thead><tbody>';
+      rows.forEach(function(c) {
+        var agentLabel = c.entity_type === 'estimate' ? '📐 AG'
+                       : c.entity_type === 'job'      ? '📊 WIP'
+                       : c.entity_type === 'client'   ? '🤝 CRA'
+                       : c.entity_type;
+        var when = '';
+        try { when = new Date(c.last_at).toLocaleString(); } catch (e) {}
+        var totalTok = (Number(c.input_tokens) || 0) + (Number(c.output_tokens) || 0);
+        html += '<tr style="cursor:pointer;" onclick="openAgentConversation(\'' + escapeAttr(c.key) + '\')">' +
+          '<td>' + escapeHTML(agentLabel) + '</td>' +
+          '<td>' + escapeHTML(c.entity_title || c.entity_id || '') + '</td>' +
+          '<td>' + escapeHTML(c.user_email || c.user_name || ('user ' + c.user_id)) + '</td>' +
+          '<td style="text-align:right;">' + c.turns + '</td>' +
+          '<td style="text-align:right;">' + c.tool_uses + '</td>' +
+          '<td style="text-align:right;font-family:\'SF Mono\',monospace;font-size:11px;">' + tokFmt(totalTok) + '</td>' +
+          '<td style="text-align:right;font-family:\'SF Mono\',monospace;font-size:11px;">' + (c.cost_usd != null ? '$' + c.cost_usd.toFixed(2) : '—') + '</td>' +
+          '<td style="font-size:11px;color:var(--text-dim,#aaa);">' + escapeHTML(when) + '</td>' +
+          '<td style="font-size:11px;color:var(--text-dim,#aaa);font-family:\'SF Mono\',monospace;">' + escapeHTML((c.models || []).join(', ')) + '</td>' +
+        '</tr>';
+      });
+      html += '</tbody></table></div>';
+      host.innerHTML = html;
+    }).catch(function(err) {
+      host.innerHTML = '<div style="color:#e74c3c;font-size:12px;padding:20px 0;">Failed: ' + escapeHTML(err.message || 'unknown') + '</div>';
+    });
+  }
+
+  function openAgentConversation(key) {
+    _agentsConvKey = key;
+    renderAdminAgents();
+  }
+
+  // ─────────── Conversation detail view ───────────
+  function renderAgentsConversationDetail(key) {
+    var host = document.getElementById('agents-content');
+    if (!host) return;
+    host.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;font-style:italic;padding:20px 0;">Loading messages…</div>';
+    window.agxApi.get('/api/admin/agents/conversations/' + encodeURIComponent(key)).then(function(c) {
+      var header = '<div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap;">' +
+          '<button class="ee-btn secondary" onclick="closeAgentConversation()">&larr; Back to list</button>' +
+          '<div style="flex:1;">' +
+            '<div style="font-size:14px;font-weight:600;color:var(--text,#fff);">' + escapeHTML(c.entity_title || c.entity_id || '') + '</div>' +
+            '<div style="font-size:11px;color:var(--text-dim,#888);">' + escapeHTML(c.entity_type) + ' &middot; ' + escapeHTML(c.user_email || ('user ' + c.user_id)) + ' &middot; ' + (c.messages || []).length + ' messages</div>' +
+          '</div>' +
+        '</div>';
+      var msgs = (c.messages || []).map(renderAgentMessage).join('');
+      if (!msgs) msgs = '<div style="color:var(--text-dim,#888);font-style:italic;">No messages.</div>';
+      host.innerHTML = header + '<div style="display:flex;flex-direction:column;gap:10px;">' + msgs + '</div>';
+    }).catch(function(err) {
+      host.innerHTML = '<div style="color:#e74c3c;font-size:12px;padding:20px 0;">Failed: ' + escapeHTML(err.message || 'unknown') + '</div>';
+    });
+  }
+
+  function closeAgentConversation() {
+    _agentsConvKey = null;
+    renderAdminAgents();
+  }
+
+  function renderAgentMessage(m) {
+    var roleColor = m.role === 'user' ? '#4f8cff' : (m.role === 'assistant' ? '#a78bfa' : '#888');
+    var when = '';
+    try { when = new Date(m.created_at).toLocaleString(); } catch (e) {}
+    var meta = [];
+    if (m.model)            meta.push(m.model);
+    if (m.input_tokens)     meta.push('in ' + tokFmt(m.input_tokens));
+    if (m.output_tokens)    meta.push('out ' + tokFmt(m.output_tokens));
+    if (m.tool_use_count)   meta.push(m.tool_use_count + ' tools');
+    if (m.photos_included)  meta.push(m.photos_included + ' photos');
+    var content = m.content || '';
+    // Detect the JSON-array form used by tool-use turns. Render those
+    // as an indented block so the structure is visible.
+    var displayContent;
+    if (content && content.charAt(0) === '[') {
+      try {
+        var parsed = JSON.parse(content);
+        displayContent = '<pre style="white-space:pre-wrap;font-size:11px;color:var(--text-dim,#aaa);background:rgba(0,0,0,0.2);padding:8px;border-radius:4px;margin:0;font-family:\'SF Mono\',monospace;">' + escapeHTML(JSON.stringify(parsed, null, 2)) + '</pre>';
+      } catch (e) {
+        displayContent = '<pre style="white-space:pre-wrap;font-size:12px;color:var(--text,#ccc);margin:0;">' + escapeHTML(content) + '</pre>';
+      }
+    } else {
+      displayContent = '<pre style="white-space:pre-wrap;font-size:12px;color:var(--text,#ccc);margin:0;font-family:inherit;">' + escapeHTML(content) + '</pre>';
+    }
+    return '<div style="background:rgba(255,255,255,0.03);border:1px solid var(--border,#333);border-left:3px solid ' + roleColor + ';border-radius:6px;padding:10px 12px;">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;font-size:11px;">' +
+        '<span style="font-weight:600;color:' + roleColor + ';text-transform:uppercase;letter-spacing:0.5px;">' + escapeHTML(m.role) + '</span>' +
+        '<span style="color:var(--text-dim,#888);font-family:\'SF Mono\',monospace;">' + escapeHTML(meta.join(' &middot; ')) + '</span>' +
+      '</div>' +
+      displayContent +
+      '<div style="margin-top:6px;font-size:10px;color:var(--text-dim,#666);">' + escapeHTML(when) + '</div>' +
+    '</div>';
+  }
+
+  window.renderAdminAgents = renderAdminAgents;
+  window.setAgentsRange = setAgentsRange;
+  window.switchAgentsView = switchAgentsView;
+  window.openAgentConversation = openAgentConversation;
+  window.closeAgentConversation = closeAgentConversation;
 })();
