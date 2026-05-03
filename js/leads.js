@@ -50,7 +50,7 @@
   // BT-style column layout — sortable header, dense rows, status pill,
   // numeric columns right-aligned. Click anywhere on a row to open the
   // editor.
-  var _leadsSort = { key: 'created_at', dir: 'desc' };
+  var _leadsSort = { key: 'updated_at', dir: 'desc' };
 
   function leadRowHTML(l) {
     var sm = statusMeta(l.status);
@@ -73,6 +73,16 @@
     var conf = (l.confidence != null && l.confidence > 0) ? l.confidence + '%' : '';
     var location = [l.city, l.state].filter(Boolean).join(', ');
 
+    // Projected sale: show the date if set; flag as "overdue" in red
+    // when the date has passed and the lead isn't terminal (sold/lost/no_opp).
+    var projDateStr = l.projected_sale_date ? fmtDate(l.projected_sale_date) : '';
+    var projColor = 'var(--text-dim,#aaa)';
+    if (l.projected_sale_date) {
+      var pd = new Date(l.projected_sale_date).getTime();
+      var terminal = ['sold', 'lost', 'no_opportunity'].indexOf(l.status) !== -1;
+      if (!terminal && !isNaN(pd) && pd < Date.now() - 86400000) projColor = '#f87171';
+    }
+
     return '<tr class="leads-row" onclick="openEditLeadModal(\'' + escapeAttr(l.id) + '\')">' +
       '<td class="lead-title-cell">' +
         '<div style="font-weight:600;color:var(--text,#fff);font-size:13px;line-height:1.3;">' + escapeHTML(l.title) + '</div>' +
@@ -83,8 +93,10 @@
       '<td class="num" style="font-family:\'SF Mono\',monospace;color:#34d399;font-weight:600;font-size:13px;">' + escapeHTML(revenue) + '</td>' +
       '<td class="num" style="font-family:\'SF Mono\',monospace;color:var(--text-dim,#aaa);font-size:12px;">' + escapeHTML(conf) + '</td>' +
       '<td style="font-size:12px;color:var(--text-dim,#aaa);">' + escapeHTML(l.salesperson_name || '') + '</td>' +
+      '<td style="font-size:12px;color:var(--text-dim,#aaa);">' + escapeHTML(l.source || '') + '</td>' +
       '<td style="font-size:12px;color:var(--text-dim,#aaa);">' + escapeHTML(l.project_type || '') + '</td>' +
-      '<td style="font-size:11px;color:var(--text-dim,#888);white-space:nowrap;">' + escapeHTML(fmtDate(l.created_at)) + '</td>' +
+      '<td style="font-size:11px;color:' + projColor + ';white-space:nowrap;">' + escapeHTML(projDateStr) + '</td>' +
+      '<td style="font-size:11px;color:var(--text-dim,#888);white-space:nowrap;" title="created ' + escapeAttr(fmtDate(l.created_at)) + '">' + escapeHTML(fmtDate(l.updated_at || l.created_at)) + '</td>' +
     '</tr>';
   }
 
@@ -102,15 +114,22 @@
       bv = Number(b.estimated_revenue_low || 0);
     } else if (key === 'confidence') {
       av = Number(a.confidence || 0); bv = Number(b.confidence || 0);
-    } else if (key === 'created_at') {
-      av = a.created_at ? new Date(a.created_at).getTime() : 0;
-      bv = b.created_at ? new Date(b.created_at).getTime() : 0;
+    } else if (key === 'created_at' || key === 'updated_at') {
+      av = a[key] ? new Date(a[key]).getTime() : 0;
+      bv = b[key] ? new Date(b[key]).getTime() : 0;
+    } else if (key === 'projected_sale_date') {
+      // Dates with no value sort as "very far future" when ascending so
+      // the unscheduled leads land at the end of the pipeline view.
+      av = a.projected_sale_date ? new Date(a.projected_sale_date).getTime() : Infinity;
+      bv = b.projected_sale_date ? new Date(b.projected_sale_date).getTime() : Infinity;
     } else if (key === 'client') {
       av = (a.client_name || '').toLowerCase(); bv = (b.client_name || '').toLowerCase();
     } else if (key === 'salesperson') {
       av = (a.salesperson_name || '').toLowerCase(); bv = (b.salesperson_name || '').toLowerCase();
     } else if (key === 'project_type') {
       av = (a.project_type || '').toLowerCase(); bv = (b.project_type || '').toLowerCase();
+    } else if (key === 'source') {
+      av = (a.source || '').toLowerCase(); bv = (b.source || '').toLowerCase();
     } else { // title
       av = (a.title || '').toLowerCase(); bv = (b.title || '').toLowerCase();
     }
@@ -125,8 +144,10 @@
     } else {
       _leadsSort.key = key;
       // Default direction: dates and numerics descend (newest/biggest
-      // first); text columns ascend.
-      _leadsSort.dir = (key === 'created_at' || key === 'revenue' || key === 'confidence') ? 'desc' : 'asc';
+      // first); text columns ascend. Projected-sale-date is the
+      // exception — ascending puts the next-up sales first.
+      var descKeys = ['created_at', 'updated_at', 'revenue', 'confidence'];
+      _leadsSort.dir = descKeys.indexOf(key) !== -1 ? 'desc' : 'asc';
     }
     renderLeadsList();
   }
@@ -215,8 +236,10 @@
       leadsHeaderCell('Revenue',       'revenue', { num: true }) +
       leadsHeaderCell('Conf',          'confidence', { num: true }) +
       leadsHeaderCell('Salesperson',   'salesperson') +
+      leadsHeaderCell('Source',        'source') +
       leadsHeaderCell('Project Type',  'project_type') +
-      leadsHeaderCell('Created',       'created_at');
+      leadsHeaderCell('Proj. Sale',    'projected_sale_date') +
+      leadsHeaderCell('Updated',       'updated_at');
 
     listEl.innerHTML =
       '<div class="leads-table-wrap" style="border:1px solid var(--border,#333);border-radius:10px;overflow:hidden;background:var(--card-bg,#0f0f1e);">' +

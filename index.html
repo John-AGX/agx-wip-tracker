@@ -641,20 +641,7 @@
                                 <input type="text" id="estimates-search" oninput="renderEstimatesList()" placeholder="Search estimates…" style="margin-left:auto;min-width:220px;" />
                             </div>
                             <p id="estimates-summary" style="margin:12px 0;color:var(--text-dim,#888);font-size:12px;"></p>
-                            <div style="border:1px solid var(--border,#333);border-radius:10px;overflow:hidden;background:var(--card-bg,#0f0f1e);">
-                                <table id="estimates-table" class="dense-table">
-                                    <thead>
-                                        <tr>
-                                            <th>Title</th>
-                                            <th>Client / Community</th>
-                                            <th class="num">Base Cost</th>
-                                            <th class="num">Markup %</th>
-                                            <th class="num">Client Price</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody></tbody>
-                                </table>
-                            </div>
+                            <div id="estimates-list"></div>
                         </div>
 
                         <!-- Full-page estimate editor (Phase A). Sticky header
@@ -2067,14 +2054,14 @@
     <script src="js/clients.js?v=10"></script>
     <script src="js/subs.js?v=5"></script>
     <script src="js/job-audit.js?v=3"></script>
-    <script src="js/leads.js?v=13"></script>
+    <script src="js/leads.js?v=14"></script>
     <script src="js/job-costs-import.js?v=3"></script>
     <script src="js/qb-costs-view.js?v=8"></script>
     <script src="js/insights.js?v=5"></script>
     <script src="js/schedule.js?v=14"></script>
     <script src="js/app.js?v=45"></script>
     <script src="js/wip.js?v=61"></script>
-    <script src="js/estimates.js?v=31"></script>
+    <script src="js/estimates.js?v=32"></script>
     <script src="js/proposal.js?v=20"></script>
     <script src="js/estimate-editor.js?v=18"></script>
     <script src="js/estimate-preview.js?v=3"></script>

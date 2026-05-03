@@ -9,9 +9,19 @@ const router = express.Router();
 router.get('/', requireAuth, async (req, res) => {
   try {
     const { rows } = await pool.query(
-      'SELECT id, owner_id, data, updated_at FROM estimates ORDER BY updated_at DESC'
+      'SELECT id, owner_id, data, created_at, updated_at FROM estimates ORDER BY updated_at DESC'
     );
-    const estimates = rows.map(r => ({ id: r.id, owner_id: r.owner_id, ...r.data }));
+    // Surface created_at/updated_at on the returned estimate so the
+    // list view can sort/display them. Spread data first so any
+    // mistakenly-stored "updated_at" inside the JSONB blob doesn't
+    // shadow the canonical column-derived value.
+    const estimates = rows.map(r => ({
+      ...r.data,
+      id: r.id,
+      owner_id: r.owner_id,
+      created_at: r.created_at,
+      updated_at: r.updated_at
+    }));
     res.json({ estimates });
   } catch (e) {
     console.error('GET /api/estimates error:', e);

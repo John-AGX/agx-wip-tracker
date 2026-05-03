@@ -1,10 +1,114 @@
+// Sort state for the estimates list. Click a column header to toggle
+// direction; clicking a different header switches to it (descending for
+// numerics/dates, ascending for text — same convention as the Leads
+// list so the two sub-tabs feel consistent).
+var _estimatesSort = { key: 'updated_at', dir: 'desc' };
+
+// Pre-compute the totals + line count once per estimate. Used both by
+// the row renderer and the sort comparator so sorting by Base Cost /
+// Client Price doesn't recalculate on every comparison.
+function computeEstimateTotals(est) {
+    var allLines = (appData.estimateLines || []).filter(function(l) { return l.estimateId === est.id; });
+    var lineCount = 0;
+    var sectionCount = 0;
+    var baseCost = 0;
+    var markedUp = 0;
+    allLines.forEach(function(l, idx) {
+        if (l.section === '__section_header__') { sectionCount++; return; }
+        lineCount++;
+        var ext = (l.qty || 0) * (l.unitCost || 0);
+        baseCost += ext;
+        var m = (l.markup === '' || l.markup == null) ? null : Number(l.markup);
+        if (m == null) {
+            for (var i = idx - 1; i >= 0; i--) {
+                var L = allLines[i];
+                if (L && L.section === '__section_header__') {
+                    if (L.markup !== '' && L.markup != null) m = Number(L.markup);
+                    break;
+                }
+            }
+        }
+        if (m == null && est.defaultMarkup != null && est.defaultMarkup !== '') m = Number(est.defaultMarkup);
+        if (m == null) m = 0;
+        markedUp += ext * (1 + m / 100);
+    });
+    var blendedMarkup = baseCost > 0 ? (markedUp / baseCost - 1) * 100 : 0;
+    return {
+        baseCost: baseCost,
+        markedUp: markedUp,
+        blendedMarkup: blendedMarkup,
+        clientPrice: markedUp,
+        lineCount: lineCount,
+        sectionCount: sectionCount
+    };
+}
+
+function compareEstimates(a, b, key, dir) {
+    var av, bv;
+    var ta = a.__totals || {};
+    var tb = b.__totals || {};
+    if (key === 'baseCost') { av = ta.baseCost || 0; bv = tb.baseCost || 0; }
+    else if (key === 'markup') { av = ta.blendedMarkup || 0; bv = tb.blendedMarkup || 0; }
+    else if (key === 'clientPrice') { av = ta.clientPrice || 0; bv = tb.clientPrice || 0; }
+    else if (key === 'lines') { av = ta.lineCount || 0; bv = tb.lineCount || 0; }
+    else if (key === 'updated_at') {
+        av = a.updated_at ? new Date(a.updated_at).getTime() : 0;
+        bv = b.updated_at ? new Date(b.updated_at).getTime() : 0;
+    } else if (key === 'client') {
+        av = (a.client || a.community || '').toLowerCase();
+        bv = (b.client || b.community || '').toLowerCase();
+    } else { // title
+        av = (a.title || '').toLowerCase(); bv = (b.title || '').toLowerCase();
+    }
+    if (av < bv) return dir === 'desc' ? 1 : -1;
+    if (av > bv) return dir === 'desc' ? -1 : 1;
+    return 0;
+}
+
+function sortEstimatesBy(key) {
+    if (_estimatesSort.key === key) {
+        _estimatesSort.dir = _estimatesSort.dir === 'asc' ? 'desc' : 'asc';
+    } else {
+        _estimatesSort.key = key;
+        // Numerics + dates default to descending so "biggest/newest first"
+        // matches how a user usually wants to scan the list.
+        _estimatesSort.dir = (key === 'baseCost' || key === 'markup' || key === 'clientPrice' ||
+                              key === 'lines' || key === 'updated_at') ? 'desc' : 'asc';
+    }
+    renderEstimatesList();
+}
+window.sortEstimatesBy = sortEstimatesBy;
+
+function estimatesHeaderCell(label, key, opts) {
+    opts = opts || {};
+    var active = _estimatesSort.key === key;
+    var arrow = active ? (_estimatesSort.dir === 'asc' ? ' &uarr;' : ' &darr;') : '';
+    var color = active ? '#4f8cff' : 'var(--text-dim,#888)';
+    return '<th style="text-align:' + (opts.num ? 'right' : 'left') +
+        ';padding:8px 10px;cursor:pointer;user-select:none;" onclick="sortEstimatesBy(\'' + key + '\')">' +
+        '<span style="color:' + color + ';font-size:10px;text-transform:uppercase;letter-spacing:0.5px;font-weight:700;">' +
+        label + arrow +
+        '</span>' +
+    '</th>';
+}
+
+function fmtRelativeDate(s) {
+    if (!s) return '';
+    var d = new Date(s);
+    if (isNaN(d.getTime())) return '';
+    var diffMs = Date.now() - d.getTime();
+    var days = Math.floor(diffMs / 86400000);
+    if (days < 1) return 'today';
+    if (days < 7) return days + 'd ago';
+    if (days < 30) return Math.floor(days / 7) + 'w ago';
+    return d.toLocaleDateString();
+}
+
 function renderEstimatesList() {
-            const tbody = document.querySelector('#estimates-table tbody');
+            const listEl = document.getElementById('estimates-list');
             const searchEl = document.getElementById('estimates-search');
             const summaryEl = document.getElementById('estimates-summary');
-            const tableWrap = tbody && tbody.closest('div[style]');
-            if (!tbody) return;
-            tbody.innerHTML = '';
+            if (!listEl) return;
 
             // Search across title + client + community + addresses so the
             // user can filter by any visible piece of info.
@@ -15,60 +119,85 @@ function renderEstimatesList() {
                     .filter(Boolean).join(' ').toLowerCase().indexOf(q) !== -1;
             });
 
-            // Summary count line — mirrors the Leads pattern so switching
-            // sub-tabs doesn't feel like dropping a tooling level.
             if (summaryEl) {
                 if (q) summaryEl.textContent = 'Showing ' + filtered.length + ' of ' + all.length + ' estimates';
                 else summaryEl.textContent = all.length + ' estimate' + (all.length === 1 ? '' : 's');
             }
 
-            if (!filtered.length) {
+            // Compute totals once per estimate, store on the object so the
+            // sort comparator can use them without repeat work.
+            const enriched = filtered.map(function(est) {
+                est.__totals = computeEstimateTotals(est);
+                return est;
+            });
+
+            const headerRow =
+                estimatesHeaderCell('Title',         'title') +
+                estimatesHeaderCell('Client / Community', 'client') +
+                estimatesHeaderCell('Lines',         'lines',       { num: true }) +
+                estimatesHeaderCell('Base Cost',     'baseCost',    { num: true }) +
+                estimatesHeaderCell('Markup %',      'markup',      { num: true }) +
+                estimatesHeaderCell('Client Price',  'clientPrice', { num: true }) +
+                estimatesHeaderCell('Updated',       'updated_at');
+
+            if (!enriched.length) {
                 const msg = q
                     ? 'No estimates match.'
                     : 'No estimates yet. Click ' + '“' + 'New Estimate' + '”' + ' to create your first.';
-                tbody.innerHTML = '<tr><td colspan="5" style="padding:24px;text-align:center;color:var(--text-dim,#888);font-size:13px;">' + msg + '</td></tr>';
-                if (tableWrap) tableWrap.style.display = '';
+                listEl.innerHTML =
+                    '<div style="border:1px solid var(--border,#333);border-radius:10px;overflow:hidden;background:var(--card-bg,#0f0f1e);">' +
+                        '<table class="dense-table" style="width:100%;border-collapse:collapse;">' +
+                            '<thead style="background:rgba(255,255,255,0.02);border-bottom:1px solid var(--border,#333);"><tr>' + headerRow + '</tr></thead>' +
+                            '<tbody><tr><td colspan="7" style="padding:24px;text-align:center;color:var(--text-dim,#888);font-size:13px;">' + msg + '</td></tr></tbody>' +
+                        '</table>' +
+                    '</div>';
                 return;
             }
 
-            filtered.forEach(est => {
-                const allLines = (appData.estimateLines || []).filter(l => l.estimateId === est.id);
-                let baseCost = 0;
-                let markedUp = 0;
-                allLines.forEach((l, idx) => {
-                    if (l.section === '__section_header__') return;
-                    const ext = (l.qty || 0) * (l.unitCost || 0);
-                    baseCost += ext;
-                    // Per-line override OR walk back to section header markup
-                    let m = (l.markup === '' || l.markup == null) ? null : Number(l.markup);
-                    if (m == null) {
-                        for (let i = idx - 1; i >= 0; i--) {
-                            const L = allLines[i];
-                            if (L && L.section === '__section_header__') {
-                                if (L.markup !== '' && L.markup != null) m = Number(L.markup);
-                                break;
-                            }
-                        }
-                    }
-                    if (m == null && est.defaultMarkup != null && est.defaultMarkup !== '') m = Number(est.defaultMarkup);
-                    if (m == null) m = 0;
-                    markedUp += ext * (1 + m / 100);
-                });
-                const blendedMarkup = baseCost > 0 ? (markedUp / baseCost - 1) * 100 : 0;
-                const clientPrice = markedUp;
-                const clientLabel = [est.client, est.community].filter(Boolean).join(' · ') || '<span style="color:var(--text-dim,#666);font-style:italic;">no client</span>';
-
-                const row = document.createElement('tr');
-                row.onclick = function() { editEstimate(est.id); };
-                row.innerHTML = `
-                    <td><strong style="color:var(--text,#fff);">${escapeHTML(est.title || '(untitled)')}</strong>${est.jobType ? '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:2px;">' + escapeHTML(est.jobType) + '</div>' : ''}</td>
-                    <td style="font-size:13px;color:var(--text,#e6e6e6);">${clientLabel}</td>
-                    <td class="num" style="font-family:'SF Mono',monospace;">${formatCurrency(baseCost)}</td>
-                    <td class="num" style="color:#fbbf24;font-family:'SF Mono',monospace;">${blendedMarkup.toFixed(1)}%</td>
-                    <td class="num" style="font-family:'SF Mono',monospace;color:#34d399;font-weight:600;">${formatCurrency(clientPrice)}</td>
-                `;
-                tbody.appendChild(row);
+            const sorted = enriched.slice().sort(function(a, b) {
+                return compareEstimates(a, b, _estimatesSort.key, _estimatesSort.dir);
             });
+
+            const rowsHtml = sorted.map(function(est) {
+                const t = est.__totals;
+                const clientLabel = [est.client, est.community].filter(Boolean).join(' &middot; ') ||
+                    '<span style="color:var(--text-dim,#666);font-style:italic;">no client</span>';
+                const propertyLine = est.propertyAddr ?
+                    '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:1px;">' + escapeHTML(est.propertyAddr) + '</div>' : '';
+                const titleSub = [];
+                if (est.jobType) titleSub.push(escapeHTML(est.jobType));
+                if (est.nickName) titleSub.push(escapeHTML(est.nickName));
+                const titleSubLine = titleSub.length ?
+                    '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:2px;">' + titleSub.join(' &middot; ') + '</div>' : '';
+                return '<tr style="cursor:pointer;border-bottom:1px solid var(--border,#2a2a3a);" onclick="editEstimate(\'' + est.id + '\')">' +
+                    '<td style="padding:8px 10px;">' +
+                        '<strong style="color:var(--text,#fff);font-size:13px;">' + escapeHTML(est.title || '(untitled)') + '</strong>' +
+                        titleSubLine +
+                    '</td>' +
+                    '<td style="padding:8px 10px;font-size:13px;color:var(--text,#e6e6e6);">' +
+                        clientLabel + propertyLine +
+                    '</td>' +
+                    '<td class="num" style="padding:8px 10px;font-family:\'SF Mono\',monospace;color:var(--text-dim,#aaa);font-size:12px;">' +
+                        t.lineCount + (t.sectionCount ? '<div style="font-size:10px;color:var(--text-dim,#666);">' + t.sectionCount + ' sections</div>' : '') +
+                    '</td>' +
+                    '<td class="num" style="padding:8px 10px;font-family:\'SF Mono\',monospace;">' + formatCurrency(t.baseCost) + '</td>' +
+                    '<td class="num" style="padding:8px 10px;color:#fbbf24;font-family:\'SF Mono\',monospace;">' + t.blendedMarkup.toFixed(1) + '%</td>' +
+                    '<td class="num" style="padding:8px 10px;font-family:\'SF Mono\',monospace;color:#34d399;font-weight:600;">' + formatCurrency(t.clientPrice) + '</td>' +
+                    '<td style="padding:8px 10px;font-size:11px;color:var(--text-dim,#888);white-space:nowrap;" title="' + escapeHTML(est.updated_at || '') + '">' +
+                        escapeHTML(fmtRelativeDate(est.updated_at)) +
+                    '</td>' +
+                '</tr>';
+            }).join('');
+
+            listEl.innerHTML =
+                '<div style="border:1px solid var(--border,#333);border-radius:10px;overflow:hidden;background:var(--card-bg,#0f0f1e);">' +
+                    '<table class="dense-table" style="width:100%;border-collapse:collapse;">' +
+                        '<thead style="background:rgba(255,255,255,0.02);border-bottom:1px solid var(--border,#333);">' +
+                            '<tr>' + headerRow + '</tr>' +
+                        '</thead>' +
+                        '<tbody>' + rowsHtml + '</tbody>' +
+                    '</table>' +
+                '</div>';
         }
 
         function openNewEstimateForm() {
