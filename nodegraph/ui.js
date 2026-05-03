@@ -2990,6 +2990,15 @@ function syncFromCloud(){
       applyTx();
       render();
     }
+    // Always refresh the audit badge after we've settled on the
+    // graph state (whether cloud or local cache won) — the user
+    // may have edited things on other tabs (WIP %, QB lines) that
+    // don't trigger the engine's render path. render() above
+    // already refreshes the badge if cloud applied; this catches
+    // the cloud-no-op case too.
+    if (typeof window._wsRefreshAuditBadge === 'function') {
+      try { window._wsRefreshAuditBadge(); } catch (e) {}
+    }
   });
 }
 })();

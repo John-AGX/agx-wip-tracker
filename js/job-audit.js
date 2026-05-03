@@ -269,51 +269,69 @@
     var existing = document.getElementById('jobAuditModal');
     if (existing) existing.remove();
 
-    var result = runAudit(jobId);
-    var bySeverity = { high: [], med: [], low: [] };
-    result.findings.forEach(function(f) {
-      (bySeverity[f.severity] || bySeverity.low).push(f);
-    });
-
     var modal = document.createElement('div');
     modal.id = 'jobAuditModal';
     modal.className = 'modal active';
-    modal.innerHTML = buildAuditHTML(result, bySeverity);
     document.body.appendChild(modal);
 
-    modal.querySelector('[data-close]')?.addEventListener('click', function() { modal.remove(); });
-    modal.querySelectorAll('[data-jump]').forEach(function(btn) {
-      btn.addEventListener('click', function() {
-        var nodeId = btn.getAttribute('data-jump');
-        modal.remove();
-        jumpToNode(nodeId);
+    // Render is split out so the Refresh button can re-run the audit
+    // without rebuilding the modal frame from scratch (no flash, no
+    // close/reopen). buildAuditHTML returns the full inner content;
+    // wireModalEvents re-binds the per-finding action buttons each
+    // time since the inner DOM is replaced.
+    function paint() {
+      var result = runAudit(jobId);
+      var bySeverity = { high: [], med: [], low: [] };
+      result.findings.forEach(function(f) {
+        (bySeverity[f.severity] || bySeverity.low).push(f);
       });
-    });
-    modal.querySelectorAll('[data-target]').forEach(function(btn) {
-      btn.addEventListener('click', function() {
-        var target = btn.getAttribute('data-target');
-        modal.remove();
-        if (target.indexOf('tab:') === 0) {
-          var t = [].slice.call(document.querySelectorAll('.ws-right-tab')).find(function(x) {
-            return x.dataset.panel === target.slice(4);
-          });
-          if (t) t.click();
-        }
+      modal.innerHTML = buildAuditHTML(result, bySeverity);
+      wireModalEvents();
+      // Push the fresh count up to the topbar badge too so it stays
+      // in sync with what the user just saw.
+      if (typeof window._wsRefreshAuditBadge === 'function') {
+        try { window._wsRefreshAuditBadge(); } catch (e) {}
+      }
+    }
+
+    function wireModalEvents() {
+      modal.querySelector('[data-close]')?.addEventListener('click', function() { modal.remove(); });
+      modal.querySelector('[data-refresh]')?.addEventListener('click', function() { paint(); });
+      modal.querySelectorAll('[data-jump]').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          var nodeId = btn.getAttribute('data-jump');
+          modal.remove();
+          jumpToNode(nodeId);
+        });
       });
-    });
-    modal.querySelectorAll('[data-ai]').forEach(function(btn) {
-      btn.addEventListener('click', function() {
-        var prompt = btn.getAttribute('data-ai');
-        modal.remove();
-        if (typeof window.openJobAI === 'function') window.openJobAI();
-        // Stuff the prompt into the AI input after the panel renders
-        setTimeout(function() {
-          var input = document.getElementById('ai-input');
-          if (input) input.value = prompt;
-          input?.focus();
-        }, 200);
+      modal.querySelectorAll('[data-target]').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          var target = btn.getAttribute('data-target');
+          modal.remove();
+          if (target.indexOf('tab:') === 0) {
+            var t = [].slice.call(document.querySelectorAll('.ws-right-tab')).find(function(x) {
+              return x.dataset.panel === target.slice(4);
+            });
+            if (t) t.click();
+          }
+        });
       });
-    });
+      modal.querySelectorAll('[data-ai]').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          var prompt = btn.getAttribute('data-ai');
+          modal.remove();
+          if (typeof window.openJobAI === 'function') window.openJobAI();
+          // Stuff the prompt into the AI input after the panel renders
+          setTimeout(function() {
+            var input = document.getElementById('ai-input');
+            if (input) input.value = prompt;
+            input?.focus();
+          }, 200);
+        });
+      });
+    }
+
+    paint();
   }
 
   function buildAuditHTML(result, bySeverity) {
@@ -368,6 +386,7 @@
       '<div class="modal-header" style="display:flex;align-items:center;gap:10px;">' +
         '<span>&#x26A0; Job Audit</span>' +
         '<span style="font-size:11px;color:var(--text-dim,#888);font-weight:normal;">' + (result.context.job?.title || '') + '</span>' +
+        '<button class="ee-btn secondary" data-refresh title="Re-run the audit against the current job state" style="margin-left:auto;font-size:11px;padding:4px 12px;display:inline-flex;align-items:center;gap:4px;">&#x21BB; Refresh</button>' +
       '</div>' +
       '<div style="padding:14px 18px 0;display:grid;grid-template-columns:repeat(4,1fr);gap:10px;">' +
         headStat('Total findings', result.findings.length, result.findings.length > 0 ? '#fbbf24' : '#34d399') +
