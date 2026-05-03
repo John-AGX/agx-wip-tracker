@@ -64,6 +64,11 @@ if (storage.localRoot) {
     fallthrough: true,
     maxAge: '7d'
   }));
+  console.log('[storage] local backend serving from', storage.localRoot, 'at', storage.publicBase);
+} else if (storage.backend === 'r2') {
+  console.log('[storage] R2 backend; public base =', storage.publicBase);
+} else {
+  console.log('[storage] backend =', storage.backend);
 }
 
 // Health check
