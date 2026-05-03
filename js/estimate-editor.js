@@ -228,36 +228,74 @@
     if (typeof window.agxNavSave === 'function') window.agxNavSave();
   }
 
-  // Right-panel scope textarea — bound to the ACTIVE alternate's scope so
-  // Good / Better / Best can each carry their own narrative. Falls back to
-  // the legacy estimate.scopeOfWork only on first migration (handled in
-  // ensureAlternates). Changes write straight through to the alternate.
+  // Scope textarea — bound to the ACTIVE alternate's scope so Good /
+  // Better / Best can each carry their own narrative. Falls back to
+  // the legacy estimate.scopeOfWork only on first migration (handled
+  // in ensureAlternates). Changes write straight through to the
+  // alternate.
+  //
+  // Three host divs may exist depending on the user's path:
+  //   #ee-scope-panel        — legacy id (now unused but tolerated)
+  //   #ee-scope-panel-modal  — popup quick-access modal body
+  //   #ee-scope-panel-page   — full-page Scope sub-tab body
+  // Whichever is visible (or all of them) gets populated. Each
+  // textarea writes back to the same alt.scope so they stay in sync.
   function renderScopePanel() {
-    var pane = document.getElementById('ee-scope-panel');
-    if (!pane) return;
+    var hosts = ['ee-scope-panel', 'ee-scope-panel-modal', 'ee-scope-panel-page']
+      .map(function(id) { return document.getElementById(id); })
+      .filter(Boolean);
+    if (!hosts.length) return;
     var est = getEstimate();
     var alt = getActiveAlternate();
-    if (!est || !alt) { pane.innerHTML = ''; return; }
-    pane.innerHTML =
-      '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;gap:8px;">' +
-        '<div style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;">Scope of Work</div>' +
-        '<div style="font-size:11px;color:#4f8cff;font-weight:600;">' + escapeHTML(alt.name || 'Alternate') + '</div>' +
-      '</div>' +
-      '<textarea id="ee-alt-scope" rows="14" placeholder="Bulleted scope, narrative, or whatever the proposal needs. This is per-alternate." ' +
-        'style="width:100%;resize:vertical;font-family:inherit;font-size:12px;line-height:1.5;padding:10px 12px;background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:8px;color:var(--text,#fff);">' +
-        escapeHTML(alt.scope || '') +
-      '</textarea>' +
-      '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:6px;">Saved per alternate. Used by the Preview tab and PDF/Buildertrend exports.</div>';
-    var ta = document.getElementById('ee-alt-scope');
-    if (ta) {
-      ta.oninput = function() {
-        var a = getActiveAlternate();
-        if (!a) return;
-        a.scope = ta.value;
-        debouncedSave();
-      };
-    }
+    hosts.forEach(function(pane, i) {
+      if (!est || !alt) { pane.innerHTML = ''; return; }
+      var taId = 'ee-alt-scope-' + i;
+      pane.innerHTML =
+        '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:8px;">' +
+          '<div style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;">Scope of Work</div>' +
+          '<div style="font-size:11px;color:#4f8cff;font-weight:600;">' + escapeHTML(alt.name || 'Alternate') + '</div>' +
+        '</div>' +
+        '<textarea id="' + taId + '" rows="18" placeholder="Bulleted scope, narrative, or whatever the proposal needs. This is per-alternate." ' +
+          'style="width:100%;resize:vertical;font-family:inherit;font-size:13px;line-height:1.55;padding:12px 14px;background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:8px;color:var(--text,#fff);">' +
+          escapeHTML(alt.scope || '') +
+        '</textarea>' +
+        '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:6px;">Saved per alternate. Used by the Preview tab and PDF/Buildertrend exports.</div>';
+      var ta = document.getElementById(taId);
+      if (ta) {
+        ta.oninput = function() {
+          var a = getActiveAlternate();
+          if (!a) return;
+          a.scope = ta.value;
+          debouncedSave();
+          // Mirror across the other open scope textareas so modal +
+          // sub-tab stay in sync without a full re-render.
+          hosts.forEach(function(otherPane, j) {
+            if (j === i) return;
+            var otherTa = otherPane.querySelector('textarea');
+            if (otherTa && otherTa.value !== ta.value) otherTa.value = ta.value;
+          });
+        };
+      }
+    });
   }
+
+  // Open / close the Scope of Work modal. Exposed on window so the
+  // AI assistant (or any other code) can drive it programmatically.
+  function openScopeModal() {
+    var modal = document.getElementById('ee-scope-modal');
+    if (!modal) return;
+    renderScopePanel();
+    modal.classList.add('active');
+    // Focus the textarea on open so the user can start typing.
+    var ta = modal.querySelector('textarea');
+    if (ta) setTimeout(function() { ta.focus(); }, 0);
+  }
+  function closeScopeModal() {
+    var modal = document.getElementById('ee-scope-modal');
+    if (modal) modal.classList.remove('active');
+  }
+  window.openScopeModal = openScopeModal;
+  window.closeScopeModal = closeScopeModal;
 
   function closeEstimateEditor() {
     if (_saveTimer) { clearTimeout(_saveTimer); _saveTimer = null; }
@@ -319,6 +357,11 @@
         // a one-shot — without this, changes that originated outside the
         // form (e.g., via the AI assistant) wouldn't appear here.
         renderDetailsForm();
+      } else if (name === 'scope') {
+        // Re-render so the textarea reflects the active alternate's
+        // current scope. Both the page tab + the modal share the same
+        // populator — renderScopePanel walks all known hosts.
+        renderScopePanel();
       } else if (name === 'preview' && typeof window.renderEstimatePreview === 'function') {
         // Preview tab is rendered on demand by js/estimate-preview.js
         // since pulling the template is async (one network round-trip
@@ -924,6 +967,14 @@
 
     html += '</div>';
     container.innerHTML = html;
+
+    // Auto-size every description textarea to fit its current content.
+    // The HTML strings can't compute scrollHeight (no DOM yet), so we
+    // do it once after innerHTML is committed.
+    container.querySelectorAll('textarea').forEach(function(ta) {
+      ta.style.height = 'auto';
+      ta.style.height = Math.min(ta.scrollHeight, 180) + 'px';
+    });
   }
 
   // (Column header row removed — the per-line inputs are self-labeled
@@ -971,7 +1022,12 @@
         '</button>' +
         (prefix ? '<span style="font-size:11px;color:var(--text-dim,#888);">' + prefix + '</span>' : '') +
         '<input type="number" min="0" step="0.5" placeholder="0" value="' + markupVal + '" ' +
-          'oninput="updateSectionMarkup(\'' + idAttr + '\', this.value)" ' +
+          // onchange (not oninput) — updateSectionMarkup re-renders the
+          // line items, which destroys this very input. With oninput,
+          // every keystroke nuked the input mid-typing and characters
+          // landed in unexpected positions / got dropped. onchange
+          // fires on blur, after the user is done typing.
+          'onchange="updateSectionMarkup(\'' + idAttr + '\', this.value)" ' +
           'style="width:64px;padding:2px 4px;font-size:12px;background:transparent;border:1px solid transparent;border-radius:4px;color:var(--text,#fff);text-align:right;font-family:\'SF Mono\',monospace;" ' +
           'onfocus="this.style.borderColor=\'var(--border,#333)\';" onblur="this.style.borderColor=\'transparent\';" />' +
         (suffix ? '<span style="font-size:11px;color:var(--text-dim,#888);">' + suffix + '</span>' : '') +
@@ -1018,16 +1074,33 @@
 
     var input = function(field, value, opts) {
       opts = opts || {};
+      var inputAttrs =
+        ' value="' + escapeHTML(value == null ? '' : String(value)) + '"' +
+        (opts.placeholder ? ' placeholder="' + escapeHTML(opts.placeholder) + '"' : '') +
+        ' onchange="updateLineField(\'' + idAttr + '\', \'' + field + '\', this.value)"' +
+        ' style="width:100%;padding:6px 8px;font-size:12px;background:transparent;border:1px solid var(--border,#333);border-radius:4px;color:var(--text,#fff);' +
+        (opts.align ? 'text-align:' + opts.align + ';' : '') +
+        (opts.mono ? 'font-family:\'SF Mono\',monospace;' : '') +
+        '"';
+      var typeAttr = opts.type ? 'type="' + opts.type + '"' : 'type="text"';
       return '<div style="flex:' + (opts.flex || '1') + ';padding:4px 6px;">' +
-        '<input ' + (opts.type ? 'type="' + opts.type + '"' : 'type="text"') +
-          ' value="' + escapeHTML(value == null ? '' : String(value)) + '"' +
-          (opts.placeholder ? ' placeholder="' + escapeHTML(opts.placeholder) + '"' : '') +
-          ' onchange="updateLineField(\'' + idAttr + '\', \'' + field + '\', this.value)"' +
-          ' style="width:100%;padding:6px 8px;font-size:12px;background:transparent;border:1px solid var(--border,#333);border-radius:4px;color:var(--text,#fff);' +
-          (opts.align ? 'text-align:' + opts.align + ';' : '') +
-          (opts.mono ? 'font-family:\'SF Mono\',monospace;' : '') +
-          '" />' +
-        '</div>';
+        '<input ' + typeAttr + inputAttrs + ' />' +
+      '</div>';
+    };
+
+    // Description gets its own textarea variant so the cell auto-grows
+    // when the user types a long description — single-line inputs were
+    // truncating mid-text. Auto-grow on input via JS-set inline height.
+    var descTextarea = function() {
+      var v = line.description == null ? '' : String(line.description);
+      return '<div style="flex:2 1 200px;padding:4px 6px;">' +
+        '<textarea rows="1" ' +
+          ' onchange="updateLineField(\'' + idAttr + '\', \'description\', this.value)"' +
+          ' oninput="this.style.height=\'auto\';this.style.height=Math.min(this.scrollHeight,180)+\'px\';"' +
+          ' style="width:100%;padding:6px 8px;font-size:12px;background:transparent;border:1px solid var(--border,#333);border-radius:4px;color:var(--text,#fff);resize:none;overflow:hidden;line-height:1.45;font-family:inherit;display:block;">' +
+          escapeHTML(v) +
+        '</textarea>' +
+      '</div>';
     };
     var readOnly = function(value, flex, color, cls) {
       // Optional cls lets the caller move color out of inline style and
@@ -1038,19 +1111,22 @@
       return '<div' + clsAttr + ' style="flex:' + flex + ';padding:8px 10px;font-size:12px;text-align:right;' + colorStyle + 'font-family:\'SF Mono\',monospace;">' + value + '</div>';
     };
 
+    // align-items:flex-start so the row keeps its natural height when
+    // the description textarea grows; numeric / readonly cells stay
+    // at the top instead of getting stretched vertically.
     return '<div data-line-id="' + idAttr + '" ' +
         'ondragover="onLineDragOver(event)" ondragleave="onLineDragLeave(event)" ' +
         'ondrop="onLineDrop(event, \'' + idAttr + '\')" ' +
-        'style="display:flex;align-items:center;border-bottom:1px solid var(--border,#333);">' +
+        'style="display:flex;align-items:flex-start;border-bottom:1px solid var(--border,#333);">' +
       dragHandleHTML(line.id) +
-      input('description', line.description, { flex: '2 1 200px' }) +
+      descTextarea() +
       input('qty', line.qty, { flex: '0 0 70px', type: 'number', align: 'right', mono: true }) +
       input('unit', line.unit, { flex: '0 0 70px' }) +
       input('unitCost', line.unitCost, { flex: '0 0 110px', type: 'number', align: 'right', mono: true }) +
       input('markup', line.markup, { flex: '0 0 90px', type: 'number', align: 'right', mono: true, placeholder: markupPlaceholder }) +
       readOnly(fmtCurrency(ext), '0 0 110px') +
       readOnly(fmtCurrency(clientPrice), '0 0 120px', null, 'ee-line-amount') +
-      '<div style="flex:0 0 36px;text-align:center;">' +
+      '<div style="flex:0 0 36px;text-align:center;padding-top:8px;">' +
         '<button class="ee-btn ee-icon-btn danger" onclick="deleteLineFromEditor(\'' + idAttr + '\')" title="Delete line">&#x1F5D1;</button>' +
       '</div>' +
     '</div>';

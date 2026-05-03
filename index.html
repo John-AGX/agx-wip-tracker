@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AGX Central Florida &mdash; WIP Tracker</title>
-    <link rel="stylesheet" href="css/styles.css?v=30">
+    <link rel="stylesheet" href="css/styles.css?v=31">
     <link rel="stylesheet" href="css/workspace-layout.css?v=51">
     <link rel="stylesheet" href="css/workspace.css?v=34">
     <link rel="stylesheet" href="css/schedule.css?v=9">
@@ -693,6 +693,7 @@
                                 <div class="ws-right-tabs" style="margin-top:10px;margin-bottom:0;">
                                     <button class="ws-right-tab active" data-ee-tab="lines" onclick="switchEstimateEditorTab('lines')">Line Items</button>
                                     <button class="ws-right-tab" data-ee-tab="details" onclick="switchEstimateEditorTab('details')">Details</button>
+                                    <button class="ws-right-tab" data-ee-tab="scope" onclick="switchEstimateEditorTab('scope')">&#x1F4DD; Scope</button>
                                     <button class="ws-right-tab" data-ee-tab="photos" onclick="switchEstimateEditorTab('photos')">&#x1F4CE; Attachments</button>
                                     <button class="ws-right-tab" data-ee-tab="preview" onclick="switchEstimateEditorTab('preview')">Preview</button>
                                 </div>
@@ -713,25 +714,20 @@
                                     </div>
                                 </div>
 
-                                <div class="ee-lines-grid" style="display:grid;grid-template-columns:minmax(0,2fr) minmax(280px,1fr);gap:16px;align-items:start;">
-                                    <!-- LEFT: line items workspace -->
-                                    <div class="ee-lines-left" style="min-width:0;">
-                                        <div class="action-buttons" style="margin-bottom:10px;">
-                                            <button class="primary" onclick="addEstimateLineFromEditor()">&#x2795; Line Item</button>
-                                            <button class="secondary" onclick="addEstimateSectionFromEditor()">&#x2795; Subgroup</button>
-                                            <button class="ghost" onclick="addStandardSectionsFromEditor()" title="Add the four BT-aligned subgroups (Materials / Labor / GC / Subs)">&#x2795; Standard Subgroups</button>
-                                        </div>
-                                        <div id="ee-lines-container"></div>
-                                        <div style="font-size:11px;color:var(--text-dim,#888);margin-top:8px;">Edits autosave on blur. Drag the &#x2630; handle to reorder. Per-line markup overrides the default.</div>
+                                <div style="display:flex;flex-direction:column;gap:16px;">
+                                    <div class="action-buttons" style="margin-bottom:0;">
+                                        <button class="primary" onclick="addEstimateLineFromEditor()">&#x2795; Line Item</button>
+                                        <button class="secondary" onclick="addEstimateSectionFromEditor()">&#x2795; Subgroup</button>
+                                        <button class="ghost" onclick="addStandardSectionsFromEditor()" title="Add the four BT-aligned subgroups (Materials / Labor / GC / Subs)">&#x2795; Standard Subgroups</button>
+                                        <button class="ghost" onclick="window.openScopeModal && window.openScopeModal()" title="Open the scope of work as a quick-edit popup" style="margin-left:auto;">&#x1F4DD; Scope</button>
                                     </div>
-
-                                    <!-- RIGHT: per-alternate scope of work + pricing breakdown -->
-                                    <div class="ee-lines-right" style="display:flex;flex-direction:column;gap:14px;min-width:0;">
-                                        <div id="ee-scope-panel" style="background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:10px;padding:12px 14px;"></div>
-                                        <div style="background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:10px;padding:12px 14px;">
-                                            <div style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">Pricing</div>
-                                            <div id="ee-pricing-breakdown"></div>
-                                        </div>
+                                    <div id="ee-lines-container"></div>
+                                    <div style="font-size:11px;color:var(--text-dim,#888);">Edits autosave on blur. Drag the &#x2630; handle to reorder. Per-line markup overrides the default.</div>
+                                    <!-- Pricing breakdown — moved below the line items now that scope
+                                         lives in its own modal/tab. Lets line items take the full width. -->
+                                    <div style="background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:10px;padding:12px 14px;max-width:520px;">
+                                        <div style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">Pricing</div>
+                                        <div id="ee-pricing-breakdown"></div>
                                     </div>
                                 </div>
                             </div>
@@ -739,6 +735,13 @@
                             <!-- Details tab -->
                             <div id="ee-tab-details" class="ee-tab-content" style="display:none;">
                                 <div id="ee-details-form"></div>
+                            </div>
+
+                            <!-- Scope tab — full-page version of the scope of work for the
+                                 active alternate. Same edits as the popup modal; both
+                                 read/write the same per-alternate scope text. -->
+                            <div id="ee-tab-scope" class="ee-tab-content" style="display:none;">
+                                <div id="ee-scope-panel-page" style="background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:10px;padding:14px 16px;"></div>
                             </div>
 
                             <!-- Photos tab — drag-drop upload + thumbnail grid + lightbox.
@@ -1628,6 +1631,22 @@
     <!-- Lead editor modal — Phase 2. Mirrors BT's lead detail layout with
          a General tab for the form fields + a Proposals tab listing the
          estimates linked to this lead via estimate.lead_id. -->
+    <!-- Scope of Work modal — quick-access popup used while estimating
+         + working with the AI assistant. The same scope text is also
+         editable on the full Scope sub-tab; both paths bind to the
+         active alternate's scope. The AI assistant can open this
+         modal via window.openScopeModal() to surface the scope while
+         drafting changes. -->
+    <div id="ee-scope-modal" class="modal">
+      <div class="modal-content" style="max-width:920px;width:96%;max-height:88vh;overflow-y:auto;">
+        <div class="modal-header" style="display:flex;align-items:center;gap:10px;">
+          <span style="flex:1;">&#x1F4DD; Scope of Work</span>
+          <button class="ee-btn secondary" onclick="window.closeScopeModal && window.closeScopeModal()">Done</button>
+        </div>
+        <div id="ee-scope-panel-modal" style="padding:18px 20px;"></div>
+      </div>
+    </div>
+
     <div id="leadEditorModal" class="modal">
       <div class="modal-content" style="max-width:780px;max-height:88vh;overflow-y:auto;">
         <div class="modal-header" style="display:flex;align-items:center;gap:10px;">
@@ -2099,10 +2118,10 @@
     <script src="js/wip.js?v=61"></script>
     <script src="js/estimates.js?v=35"></script>
     <script src="js/proposal.js?v=20"></script>
-    <script src="js/estimate-editor.js?v=29"></script>
+    <script src="js/estimate-editor.js?v=30"></script>
     <script src="js/estimate-preview.js?v=6"></script>
     <script src="js/bt-export.js?v=4"></script>
-    <script src="js/ai-panel.js?v=33"></script>
+    <script src="js/ai-panel.js?v=34"></script>
     <script src="js/tab-slider.js?v=1"></script>
 
     <script src="js/workspace.js?v=40"></script>

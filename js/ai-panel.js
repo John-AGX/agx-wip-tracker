@@ -2632,11 +2632,12 @@
       '#ai-send { transition: transform 0.12s, opacity 0.12s; } ' +
       '#ai-send:hover:not(:disabled) { transform: translateY(-1px); opacity: 0.92; } ' +
       '#ai-send:disabled { opacity: 0.5; cursor: not-allowed; } ' +
-      // Panel is a floating overlay — no longer pushes the page over.
-      // (Previously body.agx-ai-open added padding-right:420px so the
-      // editor stayed visible alongside, but the layout shift on every
-      // open felt jarring; the user's preference is overlay only.)
-      'body.agx-ai-open { /* overlay mode — no body shift */ } ' +
+      // When the panel is open, push the page content over so the
+      // editor + sticky totals stay fully visible alongside the panel
+      // (otherwise the rightmost totals chips get hidden behind the
+      // 420px-wide overlay). Smooth transition keeps the shift from
+      // feeling jarring.
+      'body.agx-ai-open { padding-right: 420px; transition: padding-right 0.22s ease; } ' +
       // On narrow screens fall back to the overlay behavior — no point
       // shoving a tablet's content into a 200px column.
       '@media (max-width: 1100px) { body.agx-ai-open { padding-right: 0; } }';

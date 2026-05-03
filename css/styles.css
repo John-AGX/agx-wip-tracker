@@ -589,6 +589,24 @@
             border-top: 1px solid var(--border);
         }
 
+        /* Hide native number-input spinner buttons in the estimate
+           editor's line-item rows. The spinners take up cell width and
+           occasionally intercept clicks meant for the input itself.
+           Scoped to the editor so other places (e.g. modals) keep
+           native spinners if they're useful there. */
+        #ee-lines-container input[type=number]::-webkit-inner-spin-button,
+        #ee-lines-container input[type=number]::-webkit-outer-spin-button,
+        [data-section-id] input[type=number]::-webkit-inner-spin-button,
+        [data-section-id] input[type=number]::-webkit-outer-spin-button {
+            -webkit-appearance: none;
+            margin: 0;
+        }
+        #ee-lines-container input[type=number],
+        [data-section-id] input[type=number] {
+            -moz-appearance: textfield;
+            appearance: textfield;
+        }
+
         /* FORMS */
         .form-group {
             margin-bottom: 8px;
