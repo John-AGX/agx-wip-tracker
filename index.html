@@ -1938,6 +1938,24 @@
             <textarea id="clientEditor_notes" rows="3" style="resize:vertical;"></textarea>
           </fieldset>
 
+          <!-- Agent notes — durable bullets that auto-inject into AG and CRA
+               system prompts on every turn touching this client. Distinct
+               from the freeform Notes field above (which is human-only). -->
+          <fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;">
+            <legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">&#x1F916; Agent Notes <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--text-dim,#888);">— auto-injected into AI prompts</span></legend>
+            <div id="clientEditor_agentNotesList" style="display:flex;flex-direction:column;gap:6px;"></div>
+            <div id="clientEditor_agentNoteComposer" style="display:none;margin-top:10px;border-top:1px solid var(--border,#333);padding-top:10px;">
+              <textarea id="clientEditor_agentNoteInput" rows="2" placeholder="e.g., PAC always wants 15% materials markup, not 20%." maxlength="2000" style="resize:vertical;width:100%;"></textarea>
+              <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:6px;">
+                <button class="ee-btn secondary" type="button" onclick="cancelAddClientNote()">Cancel</button>
+                <button class="ee-btn primary" type="button" onclick="submitAddClientNote()">Save note</button>
+              </div>
+            </div>
+            <div style="margin-top:10px;">
+              <button class="ee-btn ghost" type="button" id="clientEditor_addNoteBtn" onclick="showAddClientNoteComposer()">&#x2795; Add note</button>
+            </div>
+          </fieldset>
+
           <div id="clientEditor_status" style="font-size:13px;"></div>
         </div>
         <div class="modal-footer">
@@ -2114,7 +2132,7 @@
     <script src="js/markup-viewer.js?v=12"></script>
     <script src="js/pdf-viewer.js?v=3"></script>
     <script src="js/admin.js?v=25"></script>
-    <script src="js/clients.js?v=11"></script>
+    <script src="js/clients.js?v=12"></script>
     <script src="js/subs.js?v=5"></script>
     <script src="js/job-audit.js?v=3"></script>
     <script src="js/leads.js?v=17"></script>

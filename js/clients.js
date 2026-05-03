@@ -746,7 +746,99 @@
       EDITABLE_FIELDS.forEach(function(f) { setEditorField(f, c[f]); });
       populateParentSelect(c.id, c.parent_client_id);
       document.getElementById('clientEditor_deleteBtn').style.display = '';
+      // Agent notes panel — fresh server fetch so we have the canonical
+      // up-to-date list (cache may be stale if another tab/agent added
+      // notes since this user's last reload).
+      renderAgentNotesPanel(id);
       openModal('clientEditorModal');
+    });
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  // Agent notes panel inside the client editor modal. Lists each note
+  // with its source-agent badge + a delete button, and exposes an
+  // inline composer for adding new ones.
+  // ──────────────────────────────────────────────────────────────────
+  function renderAgentNotesPanel(clientId) {
+    var listEl = document.getElementById('clientEditor_agentNotesList');
+    if (!listEl) return;
+    listEl.innerHTML = '<div style="font-size:11px;color:var(--text-dim,#888);font-style:italic;">Loading…</div>';
+    window.agxApi.clients.get(clientId).then(function(resp) {
+      var notes = (resp && resp.client && Array.isArray(resp.client.agent_notes))
+        ? resp.client.agent_notes
+        : [];
+      if (!notes.length) {
+        listEl.innerHTML = '<div style="font-size:12px;color:var(--text-dim,#888);font-style:italic;">No agent notes yet. Notes added here auto-inject into AG and CRA system prompts on every future turn that touches this client.</div>';
+        return;
+      }
+      listEl.innerHTML = notes.map(function(n) {
+        var badge = '';
+        if (n.source_agent === 'ag')       badge = '<span style="display:inline-block;background:rgba(79,140,255,0.15);color:#4f8cff;font-size:10px;padding:1px 6px;border-radius:3px;font-weight:600;margin-right:6px;">AG</span>';
+        else if (n.source_agent === 'cra') badge = '<span style="display:inline-block;background:rgba(167,139,250,0.18);color:#a78bfa;font-size:10px;padding:1px 6px;border-radius:3px;font-weight:600;margin-right:6px;">CRA</span>';
+        else                               badge = '<span style="display:inline-block;background:rgba(180,180,180,0.14);color:var(--text-dim,#888);font-size:10px;padding:1px 6px;border-radius:3px;font-weight:600;margin-right:6px;">USER</span>';
+        var when = '';
+        if (n.created_at) {
+          try {
+            when = new Date(n.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+          } catch (e) {}
+        }
+        return '<div style="display:flex;gap:8px;align-items:flex-start;background:rgba(255,255,255,0.03);border:1px solid var(--border,#333);border-left:2px solid #fbbf24;border-radius:5px;padding:8px 10px;">' +
+            '<div style="flex:1;min-width:0;">' +
+              '<div style="font-size:13px;color:var(--text,#fff);line-height:1.4;">' + escapeHTML(n.body || '') + '</div>' +
+              '<div style="margin-top:4px;font-size:10px;color:var(--text-dim,#888);">' + badge + (when ? '<span>' + escapeHTML(when) + '</span>' : '') + '</div>' +
+            '</div>' +
+            '<button class="ee-btn ee-icon-btn ghost" type="button" title="Delete note" onclick="deleteClientNote(\'' + escapeAttr(clientId) + '\', \'' + escapeAttr(n.id || '') + '\')">&#x1F5D1;</button>' +
+          '</div>';
+      }).join('');
+    }).catch(function(err) {
+      listEl.innerHTML = '<div style="font-size:12px;color:#e74c3c;">Failed to load notes: ' + escapeHTML(err.message || 'unknown') + '</div>';
+    });
+  }
+
+  function showAddClientNoteComposer() {
+    var c = document.getElementById('clientEditor_agentNoteComposer');
+    var btn = document.getElementById('clientEditor_addNoteBtn');
+    var inp = document.getElementById('clientEditor_agentNoteInput');
+    if (c) c.style.display = 'block';
+    if (btn) btn.style.display = 'none';
+    if (inp) { inp.value = ''; inp.focus(); }
+  }
+
+  function cancelAddClientNote() {
+    var c = document.getElementById('clientEditor_agentNoteComposer');
+    var btn = document.getElementById('clientEditor_addNoteBtn');
+    if (c) c.style.display = 'none';
+    if (btn) btn.style.display = '';
+  }
+
+  function submitAddClientNote() {
+    var clientId = document.getElementById('clientEditor_id').value;
+    var inp = document.getElementById('clientEditor_agentNoteInput');
+    if (!clientId || !inp) return;
+    var body = (inp.value || '').trim();
+    if (!body) {
+      alert('Note body is empty.');
+      return;
+    }
+    if (body.length > 2000) {
+      alert('Note is too long (' + body.length + ' chars). Keep under 2000.');
+      return;
+    }
+    window.agxApi.clients.addNote(clientId, body, null /* user-authored */).then(function() {
+      cancelAddClientNote();
+      renderAgentNotesPanel(clientId);
+    }).catch(function(err) {
+      alert('Save failed: ' + (err.message || 'unknown'));
+    });
+  }
+
+  function deleteClientNote(clientId, noteId) {
+    if (!clientId || !noteId) return;
+    if (!confirm('Delete this note? Cannot be undone.')) return;
+    window.agxApi.clients.deleteNote(clientId, noteId).then(function() {
+      renderAgentNotesPanel(clientId);
+    }).catch(function(err) {
+      alert('Delete failed: ' + (err.message || 'unknown'));
     });
   }
 
@@ -1006,6 +1098,10 @@
   window.openEditClientModal = openEditClientModal;
   window.submitClientEditor = submitClientEditor;
   window.deleteClientFromEditor = deleteClientFromEditor;
+  window.showAddClientNoteComposer = showAddClientNoteComposer;
+  window.cancelAddClientNote = cancelAddClientNote;
+  window.submitAddClientNote = submitAddClientNote;
+  window.deleteClientNote = deleteClientNote;
   window.reloadClientsCache = reloadClientsCache;
   window.handleClientsImportFile = handleClientsImportFile;
   window.toggleClientParent = toggleClientParent;
