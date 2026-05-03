@@ -483,12 +483,23 @@ router.post('/evals/:id/run', requireAuth, requireCapability('ROLES_MANAGE'), as
     if (!aiInternals || !aiInternals.buildEstimateContext) {
       throw new Error('ai-routes internals not available — server may not be fully booted yet.');
     }
-    const ctx = await aiInternals.buildEstimateContext(fixture.estimate_id, false);
+    // Photos are included by default — AG's value is largely photo-driven
+    // (counting damage areas, identifying materials, sizing scope), and
+    // running an eval without them would test a hobbled version of the
+    // agent. fixture.include_photos = false opts out for text-only fixtures.
+    const includePhotos = fixture.include_photos !== false;
+    const ctx = await aiInternals.buildEstimateContext(fixture.estimate_id, includePhotos);
     const tools = aiInternals.estimateTools();
     const model = (req.body && req.body.model_override) || aiInternals.defaultModel();
     const maxTokens = aiInternals.maxTokens();
 
-    const userContent = fixture.user_prompt;
+    // Production AG attaches photos as image blocks on the user message.
+    // Mirror that here so the model has the same input shape as a real
+    // chat turn. When no photos, send the prompt as a plain string.
+    const photoBlocks = (ctx.photoBlocks || []);
+    const userContent = photoBlocks.length
+      ? [...photoBlocks, { type: 'text', text: fixture.user_prompt }]
+      : fixture.user_prompt;
 
     const response = await anthropic.messages.create({
       model,
@@ -659,14 +670,20 @@ router.post('/conversations/:key/replay', requireAuth, requireCapability('ROLES_
     if (!aiInternals) throw new Error('ai-routes internals not available.');
 
     // Build the system context for whichever agent owned the original
-    // conversation. Replays an estimate against AG, a job against WIP,
-    // a client thread against CRA, a staff thread against the chief
+    // conversation. Replays an estimate against AG, a job against Elle,
+    // a client thread against HR, a staff thread against the chief
     // of staff.
-    let system, tools;
+    //
+    // For estimate replays, attach photo blocks to the last user message
+    // so AG sees the same input shape it saw in production. ai_messages
+    // persists only text; the original image content is regenerated
+    // here from the estimate's current attachments.
+    let system, tools, photoBlocks = [];
     if (entityType === 'estimate') {
-      const ctx = await aiInternals.buildEstimateContext(entityId, false);
+      const ctx = await aiInternals.buildEstimateContext(entityId, true);
       system = ctx.system;
       tools = aiInternals.estimateTools();
+      photoBlocks = ctx.photoBlocks || [];
     } else if (entityType === 'job') {
       // Job context wants a clientContext arg; replays don't have one
       // since the original lived only in the chat session. Pass null;
@@ -704,6 +721,19 @@ router.post('/conversations/:key/replay', requireAuth, requireCapability('ROLES_
       ? (new Set(['claude-opus-4-5','claude-opus-4-6','claude-opus-4-7','claude-sonnet-4-6']).has(model)
           ? { effort: effortOverride } : null)
       : null;
+
+    // Promote the last user message to a content-array form with the
+    // photo blocks prepended, when applicable. Anthropic accepts both
+    // string and array content; arrays are required to mix images.
+    if (photoBlocks.length && replayMessages.length) {
+      const last = replayMessages[replayMessages.length - 1];
+      if (last && last.role === 'user' && typeof last.content === 'string') {
+        replayMessages[replayMessages.length - 1] = {
+          role: 'user',
+          content: [...photoBlocks, { type: 'text', text: last.content }]
+        };
+      }
+    }
 
     const apiBody = {
       model,
