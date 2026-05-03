@@ -113,21 +113,30 @@
     return { lines: orderedLines, byLineId: byLineId, groupNameByLineId: groupNameByLineId };
   }
 
-  // Walk back from a line index to find its enclosing section header's
-  // markup. Per-line markup overrides; section header markup is the
-  // baseline. Falls back to legacy estimate.defaultMarkup if a section
-  // doesn't carry its own markup yet.
-  function effectiveMarkup(line, allLines, estimate) {
-    if (line && line.markup !== '' && line.markup != null) return num(line.markup);
+  function sectionHeaderFor(line, allLines) {
     var idx = allLines.indexOf(line);
     if (idx < 0) idx = allLines.length;
     for (var i = idx - 1; i >= 0; i--) {
       var L = allLines[i];
-      if (L && L.section === '__section_header__') {
-        if (L.markup !== '' && L.markup != null) return num(L.markup);
-        break;
-      }
+      if (L && L.section === '__section_header__') return L;
     }
+    return null;
+  }
+
+  // Per-line percent markup used in the BT cost rows. Dollar-mode
+  // sections return 0 here (their flat $ is captured in the income
+  // line via computeClientTotal). Override-on sections return the
+  // section's % regardless of any per-line value.
+  function effectiveMarkup(line, allLines, estimate) {
+    var section = sectionHeaderFor(line, allLines);
+    if (section && section.markupMode === 'dollar') return 0;
+    if (section && section.overrideLineMarkups) {
+      if (section.markup !== '' && section.markup != null) return num(section.markup);
+      if (estimate && estimate.defaultMarkup != null && estimate.defaultMarkup !== '') return num(estimate.defaultMarkup);
+      return 0;
+    }
+    if (line && line.markup !== '' && line.markup != null) return num(line.markup);
+    if (section && section.markup !== '' && section.markup != null) return num(section.markup);
     if (estimate && estimate.defaultMarkup != null && estimate.defaultMarkup !== '') return num(estimate.defaultMarkup);
     return 0;
   }
@@ -147,7 +156,13 @@
     includedIds.forEach(function(gid) {
       var group = allLines.filter(function(l) { return l.alternateId === gid; });
       group.forEach(function(l) {
-        if (l.section === '__section_header__') return;
+        if (l.section === '__section_header__') {
+          // Dollar-mode section: flat $ added once to the income line.
+          if (l.markupMode === 'dollar' && l.markup !== '' && l.markup != null) {
+            markedUp += num(l.markup);
+          }
+          return;
+        }
         var ext = num(l.qty) * num(l.unitCost);
         var m = effectiveMarkup(l, group, estimate);
         markedUp += ext * (1 + m / 100);

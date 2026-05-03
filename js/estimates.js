@@ -13,20 +13,41 @@ function computeEstimateTotals(est) {
     var sectionCount = 0;
     var baseCost = 0;
     var markedUp = 0;
+
+    // Helper: find the enclosing section header for a line index.
+    function sectionHeaderForIdx(idx) {
+        for (var i = idx - 1; i >= 0; i--) {
+            var L = allLines[i];
+            if (L && L.section === '__section_header__') return L;
+        }
+        return null;
+    }
+
     allLines.forEach(function(l, idx) {
-        if (l.section === '__section_header__') { sectionCount++; return; }
+        if (l.section === '__section_header__') {
+            sectionCount++;
+            // Dollar-mode section: tack on the flat amount once.
+            if (l.markupMode === 'dollar' && l.markup !== '' && l.markup != null) {
+                markedUp += Number(l.markup) || 0;
+            }
+            return;
+        }
         lineCount++;
         var ext = (l.qty || 0) * (l.unitCost || 0);
         baseCost += ext;
-        var m = (l.markup === '' || l.markup == null) ? null : Number(l.markup);
-        if (m == null) {
-            for (var i = idx - 1; i >= 0; i--) {
-                var L = allLines[i];
-                if (L && L.section === '__section_header__') {
-                    if (L.markup !== '' && L.markup != null) m = Number(L.markup);
-                    break;
-                }
-            }
+        var section = sectionHeaderForIdx(idx);
+        // Dollar-mode section: lines have no percent markup.
+        if (section && section.markupMode === 'dollar') {
+            markedUp += ext;
+            return;
+        }
+        var m;
+        if (section && section.overrideLineMarkups) {
+            // Forced section markup.
+            m = (section.markup === '' || section.markup == null) ? null : Number(section.markup);
+        } else {
+            m = (l.markup === '' || l.markup == null) ? null : Number(l.markup);
+            if (m == null && section && section.markup !== '' && section.markup != null) m = Number(section.markup);
         }
         if (m == null && est.defaultMarkup != null && est.defaultMarkup !== '') m = Number(est.defaultMarkup);
         if (m == null) m = 0;

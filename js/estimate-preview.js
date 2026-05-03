@@ -115,21 +115,31 @@
     return included.map(function(a) { return a.id; });
   }
 
-  // Walk back from a line to find its enclosing section header's markup.
-  // Per-line markup overrides; section header markup is the baseline.
-  // Falls back to legacy est.defaultMarkup so estimates from before the
-  // section-markup change still price the same.
-  function effectiveMarkup(line, allLines, estimate) {
-    if (line && line.markup !== '' && line.markup != null) return parseFloat(line.markup) || 0;
+  function sectionHeaderFor(line, allLines) {
     var idx = allLines.indexOf(line);
     if (idx < 0) idx = allLines.length;
     for (var i = idx - 1; i >= 0; i--) {
       var L = allLines[i];
-      if (L && L.section === '__section_header__') {
-        if (L.markup !== '' && L.markup != null) return parseFloat(L.markup) || 0;
-        break;
-      }
+      if (L && L.section === '__section_header__') return L;
     }
+    return null;
+  }
+
+  // Walk back from a line to find its enclosing section header's markup.
+  // Honors the section's markupMode (percent/dollar) and overrideLineMarkups
+  // flag. Returns the percent value to multiply line ext by; for dollar-mode
+  // sections the function returns 0 (the flat amount is added at section
+  // level by the caller).
+  function effectiveMarkup(line, allLines, estimate) {
+    var section = sectionHeaderFor(line, allLines);
+    if (section && section.markupMode === 'dollar') return 0;
+    if (section && section.overrideLineMarkups) {
+      if (section.markup !== '' && section.markup != null) return parseFloat(section.markup) || 0;
+      if (estimate && estimate.defaultMarkup != null && estimate.defaultMarkup !== '') return parseFloat(estimate.defaultMarkup) || 0;
+      return 0;
+    }
+    if (line && line.markup !== '' && line.markup != null) return parseFloat(line.markup) || 0;
+    if (section && section.markup !== '' && section.markup != null) return parseFloat(section.markup) || 0;
     if (estimate && estimate.defaultMarkup != null && estimate.defaultMarkup !== '') return parseFloat(estimate.defaultMarkup) || 0;
     return 0;
   }
@@ -148,7 +158,13 @@
         return l.estimateId === estimate.id && l.alternateId === gid;
       });
       groupLines.forEach(function(l) {
-        if (l.section === '__section_header__') return;
+        if (l.section === '__section_header__') {
+          // Dollar-mode section: flat $ added once.
+          if (l.markupMode === 'dollar' && l.markup !== '' && l.markup != null) {
+            markedUp += parseFloat(l.markup) || 0;
+          }
+          return;
+        }
         var ext = (parseFloat(l.qty) || 0) * (parseFloat(l.unitCost) || 0);
         subtotal += ext;
         var m = effectiveMarkup(l, groupLines, estimate);

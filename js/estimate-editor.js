@@ -643,31 +643,47 @@
   // For legacy estimates that still carry an estimate-wide `defaultMarkup`,
   // fall through to it so existing data keeps pricing the same until the
   // user assigns explicit section markups.
+  // Returns the section header (line with section === '__section_header__')
+  // that encloses the given line, or null if the line precedes any header.
+  function sectionHeaderFor(line, allLines) {
+    if (!allLines || !allLines.length) return null;
+    var idx = allLines.indexOf(line);
+    if (idx < 0) idx = allLines.length;
+    for (var i = idx - 1; i >= 0; i--) {
+      var L = allLines[i];
+      if (L && L.section === '__section_header__') return L;
+    }
+    return null;
+  }
+
   function effectiveMarkupForLine(line, allLines, est) {
+    var section = sectionHeaderFor(line, allLines);
+    // Dollar-mode sections: lines have NO percent markup. The section's
+    // flat $ is added once at the section-subtotal level (see markedUpForGroup).
+    if (section && section.markupMode === 'dollar') return 0;
+    // Override-on sections: ignore per-line markup, use the section's % directly.
+    if (section && section.overrideLineMarkups) {
+      return sectionMarkupForLine(line, allLines, est);
+    }
     if (line && line.markup !== '' && line.markup != null) return num(line.markup);
     return sectionMarkupForLine(line, allLines, est);
   }
-  // The section-derived markup for a line, ignoring any per-line override.
-  // Used to populate the placeholder on the per-line markup field so the
-  // user knows what they'd be overriding if they typed a value.
+  // The section-derived percent markup for a line, ignoring any per-line
+  // override. Used to populate the placeholder on the per-line markup
+  // field so the user knows what they'd be overriding if they typed a
+  // value. Dollar-mode sections still return their numeric value here
+  // for the placeholder UI's sake — but math callers should branch on
+  // section.markupMode and skip applying it as a percentage.
   function sectionMarkupForLine(line, allLines, est) {
-    if (allLines && allLines.length) {
-      var idx = allLines.indexOf(line);
-      if (idx < 0) idx = allLines.length;
-      for (var i = idx - 1; i >= 0; i--) {
-        var L = allLines[i];
-        if (L && L.section === '__section_header__') {
-          if (L.markup !== '' && L.markup != null) return num(L.markup);
-          break;
-        }
-      }
-    }
+    var section = sectionHeaderFor(line, allLines);
+    if (section && section.markup !== '' && section.markup != null) return num(section.markup);
     if (est && est.defaultMarkup != null && est.defaultMarkup !== '') return num(est.defaultMarkup);
     return 0;
   }
 
   // Helper: marked-up subtotal for a single group (alternate). Used by the
   // active-group subtotal display and by the cross-group sum below.
+  // Section dollar markups are added once per dollar-mode section header.
   function markedUpForGroup(est, alt) {
     if (!est || !alt) return { subtotal: 0, markedUp: 0 };
     var lines = (appData.estimateLines || []).filter(function(l) {
@@ -675,7 +691,13 @@
     });
     var subtotal = 0, markedUp = 0;
     lines.forEach(function(l) {
-      if (l.section === '__section_header__') return;
+      if (l.section === '__section_header__') {
+        // Dollar-mode section adds its flat amount once to the marked-up total.
+        if (l.markupMode === 'dollar' && l.markup !== '' && l.markup != null) {
+          markedUp += num(l.markup);
+        }
+        return;
+      }
       var ext = num(l.qty) * num(l.unitCost);
       subtotal += ext;
       var m = effectiveMarkupForLine(l, lines, est);
@@ -857,6 +879,7 @@
     var sectionStartIdx = null;
     function flushSectionSubtotal(endIdx) {
       if (currentSection == null) return;
+      var header = lines[sectionStartIdx];
       var sum = 0;
       var marked = 0;
       for (var i = sectionStartIdx + 1; i < endIdx; i++) {
@@ -866,6 +889,10 @@
         sum += ext;
         var m = effectiveMarkupForLine(L, lines, est);
         marked += ext * (1 + m / 100);
+      }
+      // Dollar-mode section: tack on the flat $ once.
+      if (header && header.markupMode === 'dollar' && header.markup !== '' && header.markup != null) {
+        marked += num(header.markup);
       }
       html += renderSectionSubtotal(sum, marked);
     }
@@ -919,29 +946,49 @@
   function renderSectionHeaderRow(line) {
     var idAttr = escapeHTML(line.id);
     var markupVal = (line.markup === '' || line.markup == null) ? '' : num(line.markup);
+    var mode = (line.markupMode === 'dollar') ? 'dollar' : 'percent';
+    var override = !!line.overrideLineMarkups;
+    var isDollar = mode === 'dollar';
+    var prefix = isDollar ? '$' : '';
+    var suffix = isDollar ? '' : '%';
     return '<div data-section-id="' + idAttr + '" data-line-id="' + idAttr + '" ' +
         'ondragover="onLineDragOver(event)" ondragleave="onLineDragLeave(event)" ' +
         'ondrop="onLineDrop(event, \'' + idAttr + '\')" ' +
-        'style="display:flex;align-items:center;background:rgba(79,140,255,0.06);border-bottom:1px solid var(--border,#333);padding:6px 10px;gap:8px;">' +
+        'style="display:flex;align-items:center;flex-wrap:wrap;background:rgba(79,140,255,0.06);border-bottom:1px solid var(--border,#333);padding:6px 10px;gap:8px;">' +
       dragHandleHTML(line.id) +
       '<input type="text" value="' + escapeHTML(line.description || '') + '" placeholder="Section name" ' +
         'oninput="updateSectionName(\'' + idAttr + '\', this.value)" ' +
-        'style="flex:1;font-size:13px;font-weight:700;background:transparent;border:1px solid transparent;border-radius:4px;padding:4px 8px;color:#4f8cff;text-transform:uppercase;letter-spacing:0.5px;" ' +
+        'style="flex:1;min-width:140px;font-size:13px;font-weight:700;background:transparent;border:1px solid transparent;border-radius:4px;padding:4px 8px;color:#4f8cff;text-transform:uppercase;letter-spacing:0.5px;" ' +
         'onfocus="this.style.borderColor=\'var(--border,#333)\';" onblur="this.style.borderColor=\'transparent\';" />' +
-      // Section markup — all lines under this header inherit this %.
-      // Slider snaps to common increments; the number input is the source
-      // of truth and accepts any value.
-      '<div style="display:inline-flex;align-items:center;gap:6px;background:rgba(0,0,0,0.18);padding:3px 8px;border-radius:14px;border:1px solid var(--border,#333);">' +
+      // Section markup pill — number input + $/% toggle + override checkbox.
+      // Slider was removed; the number input alone is the source of truth.
+      '<div style="display:inline-flex;align-items:center;gap:6px;background:rgba(0,0,0,0.18);padding:4px 10px;border-radius:14px;border:1px solid var(--border,#333);">' +
         '<span style="font-size:10px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.4px;font-weight:600;">Markup</span>' +
-        '<input type="range" min="0" max="100" step="1" value="' + (markupVal === '' ? 0 : markupVal) + '" ' +
-          'oninput="updateSectionMarkup(\'' + idAttr + '\', this.value, true)" ' +
-          'style="width:70px;height:14px;cursor:pointer;accent-color:#4f8cff;" />' +
+        // $/% toggle — flips between percent (multiplier on each line) and
+        // dollar (flat add at section subtotal). Click switches.
+        '<button type="button" onclick="toggleSectionMarkupMode(\'' + idAttr + '\')" ' +
+          'title="Switch between percentage and flat dollar markup" ' +
+          'style="background:rgba(79,140,255,0.18);color:#4f8cff;border:1px solid rgba(79,140,255,0.35);border-radius:4px;width:24px;height:24px;font-size:12px;font-weight:700;cursor:pointer;line-height:1;">' +
+          (isDollar ? '$' : '%') +
+        '</button>' +
+        (prefix ? '<span style="font-size:11px;color:var(--text-dim,#888);">' + prefix + '</span>' : '') +
         '<input type="number" min="0" step="0.5" placeholder="0" value="' + markupVal + '" ' +
-          'oninput="updateSectionMarkup(\'' + idAttr + '\', this.value, false)" ' +
-          'style="width:50px;padding:2px 4px;font-size:12px;background:transparent;border:1px solid transparent;border-radius:4px;color:var(--text,#fff);text-align:right;font-family:\'SF Mono\',monospace;" ' +
+          'oninput="updateSectionMarkup(\'' + idAttr + '\', this.value)" ' +
+          'style="width:64px;padding:2px 4px;font-size:12px;background:transparent;border:1px solid transparent;border-radius:4px;color:var(--text,#fff);text-align:right;font-family:\'SF Mono\',monospace;" ' +
           'onfocus="this.style.borderColor=\'var(--border,#333)\';" onblur="this.style.borderColor=\'transparent\';" />' +
-        '<span style="font-size:11px;color:var(--text-dim,#888);">%</span>' +
+        (suffix ? '<span style="font-size:11px;color:var(--text-dim,#888);">' + suffix + '</span>' : '') +
       '</div>' +
+      // Override checkbox — when on, every line under this section uses
+      // the section markup, ignoring per-line overrides. Hidden in
+      // dollar mode (lines have no per-line markup in $ mode anyway).
+      (isDollar ? '' :
+      '<label title="Force this section\'s markup on every line below; ignores per-line overrides" ' +
+        'style="display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--text-dim,#aaa);cursor:pointer;user-select:none;padding:0 4px;">' +
+        '<input type="checkbox" ' + (override ? 'checked' : '') + ' ' +
+          'onchange="toggleSectionOverride(\'' + idAttr + '\', this.checked)" ' +
+          'style="cursor:pointer;width:14px;height:14px;" />' +
+        'Override line markups' +
+      '</label>') +
       '<button class="ee-btn primary" onclick="addEstimateLineFromEditor(\'' + idAttr + '\')" title="Add a line under this section">&#x2795; Line Item</button>' +
       '<button class="ee-btn ee-icon-btn ghost" onclick="deleteSectionFromEditor(\'' + idAttr + '\')" title="Remove section header (lines stay)">&#x1F5D1;</button>' +
     '</div>';
@@ -949,10 +996,22 @@
 
   function renderLineItemRow(line, allLines, est) {
     var ext = num(line.qty) * num(line.unitCost);
+    var section = sectionHeaderFor(line, allLines);
+    var sectionDollarMode = !!(section && section.markupMode === 'dollar');
+    var sectionOverride = !!(section && section.overrideLineMarkups);
+    // Effective markup driving the per-line client price preview.
+    // Dollar-mode section: lines render at raw extension (no %). The
+    // section's flat $ shows up in the section subtotal row instead.
+    // Override-on section: forced section %.
+    // Otherwise: per-line override > section > est default.
+    var effective = effectiveMarkupForLine(line, allLines, est);
+    var clientPrice = ext * (1 + effective / 100);
     var inherited = sectionMarkupForLine(line, allLines, est);
-    var lineMarkup = (line.markup === '' || line.markup == null) ? inherited : num(line.markup);
-    var clientPrice = ext * (1 + lineMarkup / 100);
-    var markupPlaceholder = (line.markup === '' || line.markup == null) ? inherited + ' (section)' : '';
+    var markupPlaceholder = sectionDollarMode
+      ? '— (section flat $)'
+      : (sectionOverride
+          ? inherited + ' (forced)'
+          : (line.markup === '' || line.markup == null ? inherited + ' (section)' : ''));
     var idAttr = escapeHTML(line.id);
 
     var input = function(field, value, opts) {
@@ -1032,26 +1091,44 @@
     // its value as-typed; subtotals don't depend on the section name.
   }
 
-  // Section markup — applies to every line under the header unless the
-  // line carries its own override. `fromSlider` syncs the matching number
-  // input in the same row; both inputs feed into the same line.markup.
-  function updateSectionMarkup(lineId, value, fromSlider) {
+  // Section markup — applies to every line under the header. In
+  // percent mode the value is the markup % multiplier; in dollar
+  // mode it's a flat $ added at section subtotal. The override
+  // checkbox decides whether per-line markups are honored or
+  // forcibly replaced by the section value.
+  function updateSectionMarkup(lineId, value) {
     var line = (appData.estimateLines || []).find(function(l) { return l.id === lineId; });
     if (!line) return;
     var raw = (value == null) ? '' : String(value).trim();
     line.markup = raw === '' ? '' : Number(raw);
     debouncedSave();
-    // Sync the sibling input visually so slider drag matches the number
-    // box in real time.
-    var row = document.querySelector('[data-section-id="' + lineId + '"]');
-    if (row) {
-      var sliderEl = row.querySelector('input[type="range"]');
-      var numEl = row.querySelector('input[type="number"]');
-      if (fromSlider && numEl) numEl.value = raw;
-      if (!fromSlider && sliderEl) sliderEl.value = (raw === '' ? 0 : Number(raw));
-    }
-    // Markup change cascades into every line under this section AND the
-    // grand totals strip. Re-render both.
+    renderLineItems();
+    renderTotals();
+  }
+
+  // Toggle the section markup mode between percent and dollar.
+  // Percent (default) multiplies each line's extension; dollar adds
+  // a single flat amount once at the section subtotal level. The
+  // numeric `markup` value is preserved across the toggle so a 20%
+  // section flipped to $ shows "$20" — the user can edit from there.
+  function toggleSectionMarkupMode(lineId) {
+    var line = (appData.estimateLines || []).find(function(l) { return l.id === lineId; });
+    if (!line) return;
+    line.markupMode = (line.markupMode === 'dollar') ? 'percent' : 'dollar';
+    debouncedSave();
+    renderLineItems();
+    renderTotals();
+  }
+
+  // Toggle the section's "override line markups" flag. When on,
+  // every line under this section uses the section's % markup
+  // regardless of any per-line override. Hidden in dollar mode where
+  // line markups don't apply anyway.
+  function toggleSectionOverride(lineId, checked) {
+    var line = (appData.estimateLines || []).find(function(l) { return l.id === lineId; });
+    if (!line) return;
+    line.overrideLineMarkups = !!checked;
+    debouncedSave();
     renderLineItems();
     renderTotals();
   }
@@ -1488,6 +1565,8 @@
   window.switchEstimateEditorTab = switchEstimateEditorTab;
   window.updateLineField = updateLineField;
   window.updateSectionMarkup = updateSectionMarkup;
+  window.toggleSectionMarkupMode = toggleSectionMarkupMode;
+  window.toggleSectionOverride = toggleSectionOverride;
   window.updateSectionName = updateSectionName;
   window.addEstimateLineFromEditor = addEstimateLineFromEditor;
   window.addEstimateSectionFromEditor = addEstimateSectionFromEditor;
