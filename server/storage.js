@@ -82,7 +82,13 @@ class R2Storage extends StorageAdapter {
     });
 
     this.bucket = opts.bucket;
-    this.publicBase = opts.publicBase.replace(/\/$/, ''); // strip trailing slash
+    // Normalize publicBase: strip trailing slash, prepend https:// if
+    // the env var was set without a scheme. A bare hostname like
+    // 'attachments.wip-agxco.com' would otherwise produce relative
+    // URLs that the browser resolves under the AGX origin, 404ing.
+    var pb = opts.publicBase.replace(/\/$/, '');
+    if (!/^https?:\/\//i.test(pb)) pb = 'https://' + pb;
+    this.publicBase = pb;
     this.client = new this._S3Client({
       region: 'auto', // R2 ignores region but the SDK demands one
       endpoint: 'https://' + opts.accountId + '.r2.cloudflarestorage.com',

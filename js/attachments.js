@@ -226,21 +226,12 @@
           html += sectionHeader('📷 Photos', photos.length);
           html += '<div data-att-grid="1" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;margin-bottom:18px;">';
           photos.forEach(function(att, i) {
-            // onerror → swap to a labeled placeholder so the user sees
-            // "missing on server" instead of a black box with a broken-
-            // image glyph. Helps diagnose the common Railway-ephemeral-
-            // disk failure mode where the DB has urls but the files
-            // were wiped on redeploy.
-            var brokenSwapJs =
-              "this.style.display='none';" +
-              "var p=this.parentNode;" +
-              "p.style.background='var(--surface2,#1a1d27)';" +
-              "var ph=document.createElement('div');" +
-              "ph.style.cssText='position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;padding:8px;text-align:center;font-size:10px;color:var(--text-dim,#888);';" +
-              "ph.innerHTML='<div style=\"font-size:28px;\">&#x1F5BC;&#x274C;</div><div>missing on server</div>';" +
-              "p.appendChild(ph);";
-            html += '<div style="position:relative;border:1px solid var(--border,#333);border-radius:8px;overflow:hidden;background:#000;aspect-ratio:1/1;">' +
-              '<img data-att-thumb="' + i + '" src="' + escapeAttr(att.thumb_url) + '" alt="' + escapeAttr(att.filename) + '" onerror="' + brokenSwapJs + '" style="width:100%;height:100%;object-fit:cover;cursor:zoom-in;display:block;" />' +
+            // onerror just adds a CSS class to the parent; CSS handles
+            // the placeholder rendering. Earlier version had inline JS
+            // with nested innerHTML quotes that broke the onerror
+            // attribute's quoting and spilled raw JS into the page.
+            html += '<div class="att-thumb-tile" style="position:relative;border:1px solid var(--border,#333);border-radius:8px;overflow:hidden;background:#000;aspect-ratio:1/1;">' +
+              '<img data-att-thumb="' + i + '" src="' + escapeAttr(att.thumb_url) + '" alt="' + escapeAttr(att.filename) + '" onerror="this.parentNode.classList.add(\'att-thumb-broken\')" style="width:100%;height:100%;object-fit:cover;cursor:zoom-in;display:block;" />' +
               (canEdit ? '<button data-att-del-photo="' + escapeAttr(att.id) + '" title="Delete" style="position:absolute;top:4px;right:4px;background:rgba(0,0,0,0.7);color:#f87171;border:none;border-radius:4px;width:24px;height:24px;font-size:13px;cursor:pointer;line-height:1;z-index:2;">&times;</button>' : '') +
               '<div style="position:absolute;bottom:0;left:0;right:0;background:linear-gradient(transparent,rgba(0,0,0,0.7));color:#fff;font-size:10px;padding:14px 6px 4px;font-family:Arial,sans-serif;pointer-events:none;z-index:1;">' + escapeHTMLLocal(att.filename) + '</div>' +
             '</div>';

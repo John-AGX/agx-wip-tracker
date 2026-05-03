@@ -1463,4 +1463,30 @@
     .estimate-line-delete { background: var(--red); color: white; border: none; padding: 4px 8px; border-radius: 3px; cursor: pointer; font-size: 12px; }
     .estimate-line-delete:hover { opacity: 0.8; }
     @media print { .modal-header, .modal-footer { display: none !important; } }
+
+    /* ── Attachment thumbnail broken-image placeholder ────────────
+       The img's onerror handler adds .att-thumb-broken to the tile
+       when the thumbnail fails to load (file missing on server, R2
+       URL not yet propagating, etc.). CSS swaps the dead img for a
+       labeled placeholder so the user can identify which attachment
+       is broken and clean it up via the × button. */
+    .att-thumb-tile.att-thumb-broken img {
+      display: none;
+    }
+    .att-thumb-tile.att-thumb-broken {
+      background: var(--surface2, #1a1d27);
+    }
+    .att-thumb-tile.att-thumb-broken::after {
+      content: '🖼❌  missing on server';
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 8px;
+      text-align: center;
+      font-size: 10px;
+      color: var(--text-dim, #888);
+      pointer-events: none;
+    }
     
