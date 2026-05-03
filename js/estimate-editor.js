@@ -274,6 +274,9 @@
     var actuallyClose = function() {
       _currentId = null;
       _saveState = 'idle';
+      // Drop the line column header from the sticky strip so the next
+      // estimate doesn't open with stale rows briefly visible.
+      clearLineColumnHeader();
       var listView = document.getElementById('estimates-list-view');
       var editorView = document.getElementById('estimate-editor-view');
       if (editorView) editorView.style.display = 'none';
@@ -308,6 +311,18 @@
     });
     var target = document.getElementById('ee-tab-' + name);
     if (target) target.style.display = 'block';
+
+    // Line column header lives in the sticky title strip — only show
+    // it when the Line Items tab is active. Other tabs clear it so the
+    // strip doesn't hold a stale "Description / Qty / …" row.
+    if (name === 'lines') {
+      // renderLineItems below remounts the column header, but tab
+      // switches that don't trigger renderLineItems (e.g. coming back
+      // to lines without state changes) need it too.
+      mountLineColumnHeader();
+    } else {
+      clearLineColumnHeader();
+    }
 
     // Per-tab on-show renderers. Wrapped in try/catch so a renderer
     // failure surfaces in the console instead of leaving the tab
@@ -874,8 +889,11 @@
       return;
     }
 
+    // Hoist the column header into the sticky title strip so it's
+    // always visible — it lives inside #ee-header which already
+    // sticks correctly. The list itself starts straight at the rows.
+    mountLineColumnHeader();
     var html = bannerHtml + '<div class="ee-line-table" style="border:1px solid var(--border,#333);border-radius:8px;overflow:hidden;">';
-    html += renderLineHeaderRow();
 
     // Group rendering: walk lines in order, render section headers + lines
     // + per-section subtotals. Markup is now per-section — every line
@@ -923,19 +941,9 @@
     var th = function(label, w, align) {
       return '<div style="flex:' + (w || '1 1 auto') + ';padding:8px 10px;font-size:10px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;text-align:' + (align || 'left') + ';">' + label + '</div>';
     };
-    // Stick the column header beneath the main #ee-header so as the
-    // user scrolls the line list, the column labels stay visible
-    // instead of disappearing behind (and bleeding through) the sticky
-    // title strip. Top offset is measured at render time off the live
-    // #ee-header height — so it auto-tracks any header layout change.
-    var hdr = document.getElementById('ee-header');
-    var topOffset = hdr ? Math.ceil(hdr.getBoundingClientRect().height) : 180;
-    return '<div data-ee-line-header style="' +
-      'position:sticky;top:' + topOffset + 'px;z-index:30;' +
-      'display:flex;background:var(--bg,#0a0a0f);' +
-      'border-top:1px solid var(--border,#333);' +
-      'border-bottom:1px solid var(--border,#333);' +
-      'box-shadow:0 4px 8px rgba(0,0,0,0.4);">' +
+    // Plain (non-sticky) row — sticking is handled by the host
+    // (#ee-line-header-host) inside #ee-header where this is mounted.
+    return '<div data-ee-line-header style="display:flex;background:var(--bg,#0a0a0f);border:1px solid var(--border,#333);border-radius:6px;">' +
       th('', '0 0 28px') + // drag handle column
       th('Description', '2 1 200px') +
       th('Qty', '0 0 70px', 'right') +
@@ -946,6 +954,18 @@
       th('Client Price', '0 0 120px', 'right') +
       th('', '0 0 36px') +
     '</div>';
+  }
+
+  // Drop the column header into the sticky title strip's host.
+  // Called from renderLineItems; cleared in switchEstimateEditorTab
+  // when the user navigates to a non-line-items tab.
+  function mountLineColumnHeader() {
+    var host = document.getElementById('ee-line-header-host');
+    if (host) host.innerHTML = renderLineHeaderRow();
+  }
+  function clearLineColumnHeader() {
+    var host = document.getElementById('ee-line-header-host');
+    if (host) host.innerHTML = '';
   }
 
   // Drag handle markup shared by section headers + line rows. The HTML5
