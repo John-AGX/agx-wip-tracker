@@ -844,6 +844,32 @@ function setSSEHeaders(res) {
   res.flushHeaders();
 }
 
+// Build an Anthropic image content block from a base64-encoded image
+// shipped by the client (clipboard paste, PDF page render, etc.).
+// Detects the media_type from the base64 magic bytes — the client
+// strips the data: URI prefix and we'd otherwise mis-label every
+// image as JPEG, which makes Anthropic silently return an empty
+// response when the bytes are actually PNG / WebP / GIF.
+function inlineImageBlock(b64) {
+  if (typeof b64 !== 'string' || !b64) return null;
+  // Tolerate clients that pass either pure base64 or "data:...;base64,..."
+  const stripped = b64.indexOf('base64,') >= 0
+    ? b64.slice(b64.indexOf('base64,') + 7)
+    : b64;
+  // Inspect the leading bytes (in their base64 form — these prefixes are
+  // distinct enough to identify each image type without decoding).
+  const head = stripped.slice(0, 12);
+  let mediaType = 'image/jpeg';
+  if (head.startsWith('iVBOR')) mediaType = 'image/png';
+  else if (head.startsWith('R0lGOD')) mediaType = 'image/gif';
+  else if (head.startsWith('UklGR')) mediaType = 'image/webp';
+  else if (head.startsWith('/9j/')) mediaType = 'image/jpeg';
+  return {
+    type: 'image',
+    source: { type: 'base64', media_type: mediaType, data: stripped }
+  };
+}
+
 async function runStream({ anthropic, res, system, messages, persistAssistantText, persistArgs, tools }) {
   function send(payload) { res.write('data: ' + JSON.stringify(payload) + '\n\n'); }
   function endWithDone() { res.write('data: [DONE]\n\n'); res.end(); }
@@ -992,14 +1018,8 @@ router.post('/estimates/:id/chat',
       // trim the combined list to a safe ceiling (20 minus headroom).
       const inlineImageBlocks = [...ctx.photoBlocks];
       additionalImages.forEach(b64 => {
-        // Tolerate clients that pass either pure base64 or "data:...;base64,..."
-        const stripped = typeof b64 === 'string' && b64.indexOf('base64,') >= 0
-          ? b64.slice(b64.indexOf('base64,') + 7)
-          : b64;
-        inlineImageBlocks.push({
-          type: 'image',
-          source: { type: 'base64', media_type: 'image/jpeg', data: stripped }
-        });
+        const block = inlineImageBlock(b64);
+        if (block) inlineImageBlocks.push(block);
       });
       const cappedImages = inlineImageBlocks.slice(0, 18);
 
@@ -1719,16 +1739,9 @@ router.post('/extract-lead',
     }
 
     try {
-      // Strip "data:image/...;base64," prefixes if any so the API gets pure base64
-      const imageBlocks = images.map(b64 => {
-        const stripped = typeof b64 === 'string' && b64.indexOf('base64,') >= 0
-          ? b64.slice(b64.indexOf('base64,') + 7)
-          : b64;
-        return {
-          type: 'image',
-          source: { type: 'base64', media_type: 'image/jpeg', data: stripped }
-        };
-      });
+      // Detect each image's media_type from its base64 magic bytes —
+      // hardcoding image/jpeg makes Anthropic silently fail on PNGs etc.
+      const imageBlocks = images.map(b64 => inlineImageBlock(b64)).filter(Boolean);
 
       const userContent = [
         ...imageBlocks,
@@ -2513,12 +2526,9 @@ router.post('/clients/chat',
       // vision). The agent reads the business card / photo this turn.
       const userContent = additionalImages.length
         ? [
-            ...additionalImages.map(b64 => {
-              const stripped = typeof b64 === 'string' && b64.indexOf('base64,') >= 0
-                ? b64.slice(b64.indexOf('base64,') + 7)
-                : b64;
-              return { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: stripped } };
-            }),
+            ...additionalImages
+              .map(b64 => inlineImageBlock(b64))
+              .filter(Boolean),
             { type: 'text', text: userMessage }
           ]
         : userMessage;
