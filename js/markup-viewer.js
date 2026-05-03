@@ -82,24 +82,54 @@
     document.body.appendChild(overlay);
 
     var canvas = overlay.querySelector('#agx-mk-canvas');
-    var img = new Image();
-    // Load through the same-origin proxy endpoint so the canvas isn't
-    // tainted on draw — direct R2 URLs (different subdomain) would
-    // require CORS headers we don't currently set, and toBlob() would
-    // throw a SecurityError. The proxy carries cookie auth.
+    // Fetch the bytes via the same-origin proxy and load from a blob
+    // URL. Doing this with fetch() (instead of plain <img src=>) means
+    // we get explicit status codes on failure AND we can attach the
+    // Bearer token from agxApi the same way the rest of the API does
+    // — falling back from cookie auth that may not be present on
+    // tokens-only sessions.
     var proxyUrl = '/api/attachments/' + encodeURIComponent(state.attachment.id) + '/raw?variant=web';
-    img.onload = function() {
-      state.img = img;
-      state.naturalSize = { w: img.naturalWidth, h: img.naturalHeight };
-      canvas.width = img.naturalWidth;
-      canvas.height = img.naturalHeight;
-      redraw();
-    };
-    img.onerror = function() {
-      alert('Failed to load image for markup.');
-      closeOverlay();
-    };
-    img.src = proxyUrl;
+    var headers = {};
+    var token = (window.agxAuth && typeof window.agxAuth.getToken === 'function') ? window.agxAuth.getToken() : null;
+    if (!token) {
+      try { token = localStorage.getItem('agx-auth-token'); } catch (e) { /* ignore */ }
+    }
+    if (token) headers['Authorization'] = 'Bearer ' + token;
+
+    fetch(proxyUrl, { headers: headers, credentials: 'same-origin' })
+      .then(function(r) {
+        if (!r.ok) {
+          // Surface the real status — was 401/403/404/500 — so we know
+          // whether to fix auth, missing key, or server.
+          return r.text().then(function(body) {
+            throw new Error('HTTP ' + r.status + ': ' + (body || r.statusText).slice(0, 200));
+          });
+        }
+        return r.blob();
+      })
+      .then(function(blob) {
+        var blobUrl = URL.createObjectURL(blob);
+        var img = new Image();
+        img.onload = function() {
+          state.img = img;
+          state.naturalSize = { w: img.naturalWidth, h: img.naturalHeight };
+          canvas.width = img.naturalWidth;
+          canvas.height = img.naturalHeight;
+          redraw();
+          // Free the blob URL once the decode is done — img stays in
+          // memory regardless because we hold a ref on state.img.
+          setTimeout(function() { try { URL.revokeObjectURL(blobUrl); } catch (e) {} }, 0);
+        };
+        img.onerror = function() {
+          alert('Image decoded but failed to render. Try the original variant.');
+          closeOverlay();
+        };
+        img.src = blobUrl;
+      })
+      .catch(function(err) {
+        alert('Failed to load image for markup.\n\n' + (err && err.message ? err.message : ''));
+        closeOverlay();
+      });
 
     // Toolbar interactions.
     overlay.querySelectorAll('[data-mk-tool]').forEach(function(btn) {
