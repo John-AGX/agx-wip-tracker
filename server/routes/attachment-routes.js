@@ -131,17 +131,20 @@ router.get('/:entityType/:entityId',
   }
 );
 
-// GET /api/attachments/:id/raw — stream the attachment bytes back through
+// GET /api/attachments/raw/:id — stream the attachment bytes back through
 // the API so the browser fetches them same-origin. Used by the photo
 // markup viewer: <img crossOrigin="anonymous" src="https://attachments.
 // wip-agxco.com/...">  fails when R2's CORS isn't configured to allow our
 // domain, and without crossOrigin the canvas becomes tainted on draw,
 // blocking toBlob(). Routing the bytes through here side-steps both
-// problems. Cookie auth works because login sets the `token` cookie that
-// requireAuth reads.
+// problems.
+//
+// Path is /raw/:id (not /:id/raw) so it doesn't collide with the
+// existing GET /:entityType/:entityId list route — that pattern would
+// otherwise match /:something/raw and reject "raw" as a bad entity.
 //
 // Query: ?variant=web|original (default web — smaller / faster).
-router.get('/:id/raw', requireAuth, async (req, res) => {
+router.get('/raw/:id', requireAuth, async (req, res) => {
   try {
     const { rows } = await pool.query('SELECT * FROM attachments WHERE id = $1', [req.params.id]);
     if (!rows.length) return res.status(404).json({ error: 'Not found' });

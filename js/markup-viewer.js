@@ -88,7 +88,7 @@
     // Bearer token from agxApi the same way the rest of the API does
     // — falling back from cookie auth that may not be present on
     // tokens-only sessions.
-    var proxyUrl = '/api/attachments/' + encodeURIComponent(state.attachment.id) + '/raw?variant=web';
+    var proxyUrl = '/api/attachments/raw/' + encodeURIComponent(state.attachment.id) + '?variant=web';
     var headers = {};
     var token = (window.agxAuth && typeof window.agxAuth.getToken === 'function') ? window.agxAuth.getToken() : null;
     if (!token) {
