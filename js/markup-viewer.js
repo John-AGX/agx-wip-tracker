@@ -111,7 +111,7 @@
           // Width slider (vertical)
           '<div style="text-align:center;">' +
             '<div style="font-size:9px;color:#888;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Width</div>' +
-            '<input id="agx-mk-width" type="range" min="1" max="20" value="4" style="width:48px;" />' +
+            '<input id="agx-mk-width" type="range" min="1" max="100" value="4" style="width:48px;" />' +
           '</div>' +
           // Divider
           '<div style="width:36px;height:1px;background:#3a3a4a;margin:6px 0;"></div>' +

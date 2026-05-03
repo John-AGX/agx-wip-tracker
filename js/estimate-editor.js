@@ -907,7 +907,7 @@
       // of truth and accepts any value.
       '<div style="display:inline-flex;align-items:center;gap:6px;background:rgba(0,0,0,0.18);padding:3px 8px;border-radius:14px;border:1px solid var(--border,#333);">' +
         '<span style="font-size:10px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.4px;font-weight:600;">Markup</span>' +
-        '<input type="range" min="0" max="60" step="1" value="' + (markupVal === '' ? 0 : markupVal) + '" ' +
+        '<input type="range" min="0" max="100" step="1" value="' + (markupVal === '' ? 0 : markupVal) + '" ' +
           'oninput="updateSectionMarkup(\'' + idAttr + '\', this.value, true)" ' +
           'style="width:70px;height:14px;cursor:pointer;accent-color:#4f8cff;" />' +
         '<input type="number" min="0" step="0.5" placeholder="0" value="' + markupVal + '" ' +
