@@ -121,18 +121,42 @@
       }
     });
 
-    // Kick off the render
+    // Kick off the render. Fetch the bytes through the same-origin
+    // proxy (attachment.original_url points at the R2 CDN — different
+    // subdomain, so a direct PDF.js fetch hits CORS and fails). Hand
+    // the ArrayBuffer to PDF.js via the {data: ...} form.
     statusEl.textContent = 'Loading PDF…';
-    window.pdfjsLib.getDocument(attachment.original_url).promise.then(function(pdf) {
-      pageContainer.innerHTML = ''; // clear "Loading..." placeholder
-      return renderAllPages(pdf, pageContainer, statusEl).then(function(canvases) {
-        renderedCanvases = canvases;
+    var proxyUrl = '/api/attachments/raw/' + encodeURIComponent(attachment.id) + '?variant=original';
+    var headers = {};
+    var token = (window.agxAuth && typeof window.agxAuth.getToken === 'function')
+      ? window.agxAuth.getToken() : null;
+    if (!token) {
+      try { token = localStorage.getItem('agx-auth-token'); } catch (e) { /* ignore */ }
+    }
+    if (token) headers['Authorization'] = 'Bearer ' + token;
+    fetch(proxyUrl, { headers: headers, credentials: 'same-origin' })
+      .then(function(r) {
+        if (!r.ok) {
+          return r.text().then(function(body) {
+            throw new Error('HTTP ' + r.status + ': ' + (body || r.statusText).slice(0, 200));
+          });
+        }
+        return r.arrayBuffer();
+      })
+      .then(function(buffer) {
+        return window.pdfjsLib.getDocument({ data: buffer }).promise;
+      })
+      .then(function(pdf) {
+        pageContainer.innerHTML = ''; // clear "Loading..." placeholder
+        return renderAllPages(pdf, pageContainer, statusEl).then(function(canvases) {
+          renderedCanvases = canvases;
+        });
+      })
+      .catch(function(err) {
+        console.error('PDF render failed:', err);
+        pageContainer.innerHTML = '<div style="text-align:center;color:#f87171;padding:40px;font-size:13px;">Could not render this PDF: ' + escapeHTMLLocal(err.message || err) + '</div>';
+        statusEl.textContent = 'Failed';
       });
-    }).catch(function(err) {
-      console.error('PDF render failed:', err);
-      pageContainer.innerHTML = '<div style="text-align:center;color:#f87171;padding:40px;font-size:13px;">Could not render this PDF: ' + escapeHTMLLocal(err.message || err) + '</div>';
-      statusEl.textContent = 'Failed';
-    });
   }
 
   // Convert rendered canvases to base64 JPEGs and hand them off to the AI
