@@ -131,6 +131,42 @@ router.get('/:entityType/:entityId',
   }
 );
 
+// GET /api/attachments/:id/raw — stream the attachment bytes back through
+// the API so the browser fetches them same-origin. Used by the photo
+// markup viewer: <img crossOrigin="anonymous" src="https://attachments.
+// wip-agxco.com/...">  fails when R2's CORS isn't configured to allow our
+// domain, and without crossOrigin the canvas becomes tainted on draw,
+// blocking toBlob(). Routing the bytes through here side-steps both
+// problems. Cookie auth works because login sets the `token` cookie that
+// requireAuth reads.
+//
+// Query: ?variant=web|original (default web — smaller / faster).
+router.get('/:id/raw', requireAuth, async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM attachments WHERE id = $1', [req.params.id]);
+    if (!rows.length) return res.status(404).json({ error: 'Not found' });
+    const att = rows[0];
+
+    const cap = readCapForEntity(att.entity_type);
+    const ok = await hasCapability(req.user, cap);
+    if (!ok) return res.status(403).json({ error: 'Forbidden' });
+
+    const variant = (req.query.variant || 'web').toLowerCase();
+    const key = (variant === 'original' || !att.web_key) ? att.original_key : att.web_key;
+    if (!key) return res.status(404).json({ error: 'No bytes for this variant' });
+
+    const buf = await storage.getBuffer(key);
+    // Variants are JPEG; originals carry their original mime type.
+    const mime = (key === att.original_key) ? (att.mime_type || 'application/octet-stream') : 'image/jpeg';
+    res.setHeader('Content-Type', mime);
+    res.setHeader('Cache-Control', 'private, max-age=300');
+    res.send(buf);
+  } catch (e) {
+    console.error('GET /api/attachments/:id/raw error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // POST /api/attachments/:entityType/:entityId — upload one file as form-data
 // field `file`. Returns the inserted attachment row.
 router.post('/:entityType/:entityId',

@@ -83,7 +83,11 @@
 
     var canvas = overlay.querySelector('#agx-mk-canvas');
     var img = new Image();
-    img.crossOrigin = 'anonymous';
+    // Load through the same-origin proxy endpoint so the canvas isn't
+    // tainted on draw — direct R2 URLs (different subdomain) would
+    // require CORS headers we don't currently set, and toBlob() would
+    // throw a SecurityError. The proxy carries cookie auth.
+    var proxyUrl = '/api/attachments/' + encodeURIComponent(state.attachment.id) + '/raw?variant=web';
     img.onload = function() {
       state.img = img;
       state.naturalSize = { w: img.naturalWidth, h: img.naturalHeight };
@@ -95,8 +99,7 @@
       alert('Failed to load image for markup.');
       closeOverlay();
     };
-    // Use the web variant if available (smaller, faster); fall back to original.
-    img.src = state.attachment.web_url || state.attachment.original_url;
+    img.src = proxyUrl;
 
     // Toolbar interactions.
     overlay.querySelectorAll('[data-mk-tool]').forEach(function(btn) {
