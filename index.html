@@ -635,11 +635,29 @@
                             <p id="leads-summary" style="margin:12px 0;color:var(--text-dim,#888);font-size:12px;"></p>
                             <div id="leads-list" style="display:flex;flex-direction:column;gap:8px;"></div>
                         </div>
-                        <!-- Lead detail host. The lead editor modal (#leadEditorModal)
-                             is re-parented into here when opened on an existing lead,
-                             then moved back to <body> on close. Same DOM, two
-                             surface modes — driven by the .modal-as-page class. -->
-                        <div id="lead-detail-host"></div>
+                        <!-- Full-page lead detail view. Mirrors the estimate
+                             editor's layout: sticky header with Back button +
+                             title, internal sub-tabs (Overview / Estimates /
+                             Attachments), and a body host that receives the
+                             form contents (#leadEditor_formBody) on open. -->
+                        <div id="lead-detail-view" style="display:none;">
+                            <div id="ld-header" style="position:sticky;top:0;z-index:40;background:var(--bg,#0a0a0f);border-bottom:1px solid var(--border,#333);padding:14px 4px;margin-bottom:14px;box-shadow:0 4px 12px rgba(0,0,0,0.4);">
+                                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+                                    <button class="ee-btn secondary" onclick="closeLeadDetail()" title="Back to leads list">&larr; Back</button>
+                                    <h2 id="ld-title" style="flex:1;min-width:200px;margin:0;font-size:17px;font-weight:600;color:var(--text,#fff);"></h2>
+                                    <span id="ld-status-pill"></span>
+                                    <button class="ee-btn danger" id="ld-delete-btn" style="display:none;" onclick="deleteLeadFromEditor()" title="Delete this lead (cannot be undone)">&#x1F5D1; Delete</button>
+                                    <button class="ee-btn success" id="ld-convert-btn" style="display:none;" onclick="convertLeadToJob()" data-cap="JOBS_EDIT_ANY JOBS_EDIT_OWN" title="Create a WIP job from this lead">&#x1F3D7; Create Job</button>
+                                    <button class="ee-btn primary" onclick="submitLeadEditor()" title="Save lead">&#x1F4BE; Save</button>
+                                </div>
+                                <div id="ld-status-msg" style="font-size:12px;min-height:14px;color:var(--text-dim,#888);"></div>
+                            </div>
+                            <!-- The lead form body (#leadEditor_formBody) is moved
+                                 into this host when the page opens. Tabs inside the
+                                 form body (General/Estimates/Attachments) drive the
+                                 visible pane via switchLeadEditorTab(). -->
+                            <div id="lead-detail-body-host"></div>
+                        </div>
                     </div>
 
                     <!-- Estimates list sub-tab -->
@@ -1613,10 +1631,14 @@
     <div id="leadEditorModal" class="modal">
       <div class="modal-content" style="max-width:780px;max-height:88vh;overflow-y:auto;">
         <div class="modal-header" style="display:flex;align-items:center;gap:10px;">
-          <button type="button" class="ee-btn secondary modal-page-back" onclick="closeLeadDetail()" title="Back to leads list">&larr; Back</button>
           <span id="leadEditor_title" style="flex:1;">New Lead</span>
         </div>
 
+        <!-- Form body — wrapped so it can be re-parented into the
+             #lead-detail-view container when an existing lead is opened
+             (full-page detail view). On close it moves back here. The
+             modal stays as the host only for the create flow. -->
+        <div id="leadEditor_formBody">
         <!-- In-modal tabs (General | Proposals N) — only shown in edit mode.
              Hidden on create since there's nothing to put on the Proposals
              tab until the lead has an id. -->
@@ -1762,11 +1784,12 @@
         <div id="leadEditor_tab_photos" style="display:none;padding:18px 20px;">
           <div id="leadEditor_photosMount"></div>
         </div>
+        </div><!-- /leadEditor_formBody -->
 
-        <div class="modal-footer">
+        <div class="modal-footer" id="leadEditor_modalFooter">
           <button id="leadEditor_deleteBtn" class="danger" style="margin-right:auto;display:none;" onclick="deleteLeadFromEditor()">Delete</button>
           <button id="leadEditor_convertJobBtn" class="success" style="display:none;" onclick="convertLeadToJob()" data-cap="JOBS_EDIT_ANY JOBS_EDIT_OWN">&#x1F3D7; Create Job from Lead</button>
-          <button data-modal-cancel onclick="closeModal('leadEditorModal')" class="secondary">Cancel</button>
+          <button onclick="closeModal('leadEditorModal')" class="secondary">Cancel</button>
           <button onclick="submitLeadEditor()" class="primary" id="leadEditor_submitBtn">Save Lead</button>
         </div>
       </div>
@@ -2066,7 +2089,7 @@
     <script src="js/clients.js?v=11"></script>
     <script src="js/subs.js?v=5"></script>
     <script src="js/job-audit.js?v=3"></script>
-    <script src="js/leads.js?v=15"></script>
+    <script src="js/leads.js?v=16"></script>
     <script src="js/job-costs-import.js?v=3"></script>
     <script src="js/qb-costs-view.js?v=8"></script>
     <script src="js/insights.js?v=5"></script>

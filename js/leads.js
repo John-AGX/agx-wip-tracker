@@ -438,54 +438,99 @@
     refreshLinkedJobChip(l);
     refreshConvertJobButton(l);
     openLeadDetailView();
+    // Live-refresh the detail-view sticky header when the user edits
+    // the title or flips the status select. Bound after the form
+    // renders so the elements exist; idempotent because we replace
+    // .onchange/.oninput rather than addEventListener.
+    var titleField = document.getElementById('leadEditor_title_field');
+    var statusField = document.getElementById('leadEditor_status');
+    if (titleField) {
+      titleField.oninput = function() {
+        var t = document.getElementById('ld-title');
+        if (t) t.textContent = titleField.value || 'Lead';
+      };
+    }
+    if (statusField) {
+      statusField.onchange = function() { refreshLeadDetailHeader(); };
+    }
   }
 
-  // Re-parent the lead modal into the leads sub-tab as a full-page
-  // detail view. The same form is used for both modes — `.modal-as-page`
-  // strips the backdrop/centering/z-index in CSS.
+  // Open the dedicated #lead-detail-view as a full-page surface
+  // (mirrors the estimate editor pattern). Re-parents the form body
+  // (#leadEditor_formBody) from inside the modal into the detail
+  // view's body host so the same form fields are reused without
+  // duplicating IDs. Hides the leads list + the parent
+  // Leads/Estimates/Clients/Subs nav so the Back button is the only
+  // return path.
   function openLeadDetailView() {
-    var modal = document.getElementById('leadEditorModal');
-    var host = document.getElementById('lead-detail-host');
+    var detailView = document.getElementById('lead-detail-view');
+    var bodyHost = document.getElementById('lead-detail-body-host');
+    var formBody = document.getElementById('leadEditor_formBody');
     var listView = document.getElementById('leads-list-view');
     var mainTabs = document.getElementById('estimates-main-tabs');
-    if (!modal || !host) {
-      // Container is missing on this build — fall back to modal mode.
+    if (!detailView || !bodyHost || !formBody) {
+      // Build is missing the new markup — fall back to modal mode.
       openModal('leadEditorModal');
       return;
     }
-    // Move the modal element into the leads sub-tab so it lays out
-    // inline. Re-parenting preserves event listeners + form state.
-    if (modal.parentNode !== host) host.appendChild(modal);
-    modal.classList.add('modal-as-page');
-    modal.classList.add('active'); // reuses existing display rule path
+    if (formBody.parentNode !== bodyHost) bodyHost.appendChild(formBody);
+    detailView.style.display = '';
     if (listView) listView.style.display = 'none';
     if (mainTabs) mainTabs.style.display = 'none';
-    // Scroll to top so the user lands at the form's start, not wherever
-    // the leads list was scrolled to.
-    var scroller = document.getElementById('estimates-subtab-leads') ||
-      modal.parentNode || window;
-    if (scroller && typeof scroller.scrollTo === 'function') {
-      scroller.scrollTo(0, 0);
-    } else {
-      window.scrollTo(0, 0);
-    }
+    // Refresh the sticky-header title + status pill from the loaded form.
+    refreshLeadDetailHeader();
+    // Scroll to top so the user lands at the form's start.
+    window.scrollTo(0, 0);
   }
 
-  // Reverse openLeadDetailView. Moves the modal back to <body> so future
-  // create-flow opens render as a normal centered modal again.
+  // Update the sticky-header title + status pill + delete/convert
+  // button visibility from current form state. Called on open and
+  // whenever the status select changes.
+  function refreshLeadDetailHeader() {
+    var l = _leads.find(function(x) { return x.id === _currentEditingLeadId; });
+    var titleEl = document.getElementById('ld-title');
+    var pillEl = document.getElementById('ld-status-pill');
+    var delBtn = document.getElementById('ld-delete-btn');
+    var convertBtn = document.getElementById('ld-convert-btn');
+    if (titleEl) titleEl.textContent = (l && l.title) || 'Lead';
+    if (pillEl) {
+      var statusVal = (document.getElementById('leadEditor_status') || {}).value || (l && l.status) || 'new';
+      var sm = statusMeta(statusVal);
+      pillEl.innerHTML =
+        '<span style="display:inline-block;padding:3px 10px;border-radius:10px;background:' + sm.bg +
+        ';color:' + sm.color + ';font-size:11px;text-transform:uppercase;letter-spacing:0.5px;font-weight:700;">' +
+        escapeHTML(sm.label) + '</span>';
+    }
+    // Delete + Convert buttons only meaningful in edit mode (we have an id).
+    if (delBtn) delBtn.style.display = (l && l.id) ? '' : 'none';
+    if (convertBtn && l) {
+      var canEditJobs = window.agxAuth && (
+        window.agxAuth.hasCapability('JOBS_EDIT_ANY') ||
+        window.agxAuth.hasCapability('JOBS_EDIT_OWN')
+      );
+      convertBtn.style.display = (canEditJobs && !l.job_id) ? '' : 'none';
+    }
+  }
+  window.refreshLeadDetailHeader = refreshLeadDetailHeader;
+
+  // Reverse openLeadDetailView. Moves the form body back into the
+  // modal so a subsequent "New Lead" click renders the same form as
+  // a centered popup again.
   function closeLeadDetail() {
-    var modal = document.getElementById('leadEditorModal');
+    var detailView = document.getElementById('lead-detail-view');
+    var formBody = document.getElementById('leadEditor_formBody');
+    var modalContent = document.querySelector('#leadEditorModal .modal-content');
+    var modalFooter = document.getElementById('leadEditor_modalFooter');
     var listView = document.getElementById('leads-list-view');
     var mainTabs = document.getElementById('estimates-main-tabs');
-    if (modal) {
-      modal.classList.remove('modal-as-page');
-      modal.classList.remove('active');
-      if (modal.parentNode && modal.parentNode.id === 'lead-detail-host') {
-        document.body.appendChild(modal);
-      }
+    // Move the form body back into the modal, just before the footer.
+    if (formBody && modalContent && modalFooter && formBody.parentNode !== modalContent) {
+      modalContent.insertBefore(formBody, modalFooter);
     }
+    if (detailView) detailView.style.display = 'none';
     if (listView) listView.style.display = '';
     if (mainTabs) mainTabs.style.display = '';
+    _currentEditingLeadId = null;
     reloadLeadsCache();
   }
   window.closeLeadDetail = closeLeadDetail;
@@ -494,8 +539,9 @@
   // the right teardown based on which mode the lead editor is currently
   // displayed in (modal for create vs page for edit).
   function closeLeadEditorAny() {
-    var modal = document.getElementById('leadEditorModal');
-    if (modal && modal.classList.contains('modal-as-page')) {
+    var detailView = document.getElementById('lead-detail-view');
+    var inDetailMode = detailView && detailView.style.display !== 'none';
+    if (inDetailMode) {
       closeLeadDetail();
     } else {
       if (typeof closeModal === 'function') closeModal('leadEditorModal');
