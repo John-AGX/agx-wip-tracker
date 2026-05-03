@@ -127,10 +127,19 @@
   };
 
   // Multipart upload — bypasses the JSON-only `post` helper since we need
-  // a FormData body. Auth header still gets attached.
-  function uploadFile(path, file) {
+  // a FormData body. Auth header still gets attached. `extra` is an
+  // optional plain-object map of extra form fields appended alongside
+  // the file (e.g. markup_of, include_in_proposal).
+  function uploadFile(path, file, extra) {
     var fd = new FormData();
     fd.append('file', file);
+    if (extra && typeof extra === 'object') {
+      Object.keys(extra).forEach(function(k) {
+        var v = extra[k];
+        if (v == null) return;
+        fd.append(k, typeof v === 'boolean' ? String(v) : v);
+      });
+    }
     var headers = {};
     var token = getToken();
     if (token) headers['Authorization'] = 'Bearer ' + token;
@@ -150,8 +159,8 @@
     list: function(entityType, entityId) {
       return get('/api/attachments/' + encodeURIComponent(entityType) + '/' + encodeURIComponent(entityId));
     },
-    upload: function(entityType, entityId, file) {
-      return uploadFile('/api/attachments/' + encodeURIComponent(entityType) + '/' + encodeURIComponent(entityId), file);
+    upload: function(entityType, entityId, file, extra) {
+      return uploadFile('/api/attachments/' + encodeURIComponent(entityType) + '/' + encodeURIComponent(entityId), file, extra);
     },
     update: function(id, payload) { return put('/api/attachments/' + encodeURIComponent(id), payload); },
     remove: function(id) { return del('/api/attachments/' + encodeURIComponent(id)); }

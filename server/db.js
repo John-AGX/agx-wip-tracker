@@ -228,6 +228,20 @@ async function initSchema() {
     ALTER TABLE attachments ADD COLUMN IF NOT EXISTS extracted_text TEXT;
     ALTER TABLE attachments ADD COLUMN IF NOT EXISTS extracted_text_at TIMESTAMPTZ;
 
+    -- Markup linkage: when a user annotates a photo and saves it as a NEW
+    -- attachment (rather than replacing the original), markup_of points
+    -- back at the source attachment id. Lets the UI render a "Markups"
+    -- section grouped under each original. ON DELETE SET NULL so deleting
+    -- the original doesn't cascade-kill the markups.
+    ALTER TABLE attachments ADD COLUMN IF NOT EXISTS markup_of TEXT REFERENCES attachments(id) ON DELETE SET NULL;
+    CREATE INDEX IF NOT EXISTS idx_attachments_markup_of ON attachments(markup_of) WHERE markup_of IS NOT NULL;
+
+    -- include_in_proposal: when true, the estimate's proposal preview +
+    -- export embeds this attachment. Both photos and PDFs respect the
+    -- flag; admin/PM can toggle it from the attachments tab. Lead-side
+    -- attachments use it too (surfaced into the estimate as parent set).
+    ALTER TABLE attachments ADD COLUMN IF NOT EXISTS include_in_proposal BOOLEAN NOT NULL DEFAULT FALSE;
+
     -- Extend the entity_type enum to support clients (business-card photos,
     -- W9s, COIs, etc. attached to a parent management company or property).
     -- The CHECK constraint is named implicitly so we have to drop and re-add

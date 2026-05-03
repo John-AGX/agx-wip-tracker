@@ -213,7 +213,11 @@
       // lightbox, documents as a vertical list with file icons. The split
       // is by mime + presence of a thumbnail, so server-side classification
       // and frontend rendering stay in sync.
-      var photos = state.attachments.filter(isImageAttachment);
+      // Markup-of attachments are pulled into their own "Markups" sub-grid
+      // so they don't double-render alongside the original they describe.
+      var allPhotos = state.attachments.filter(isImageAttachment);
+      var photos = allPhotos.filter(function(a) { return !a.markup_of; });
+      var markups = allPhotos.filter(function(a) { return !!a.markup_of; });
       var docs = state.attachments.filter(function(a) { return !isImageAttachment(a); });
 
       var html = '';
@@ -244,15 +248,20 @@
           html += sectionHeader('📷 Photos', photos.length);
           html += '<div data-att-grid="1" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;margin-bottom:18px;">';
           photos.forEach(function(att, i) {
-            // onerror just adds a CSS class to the parent; CSS handles
-            // the placeholder rendering. Earlier version had inline JS
-            // with nested innerHTML quotes that broke the onerror
-            // attribute's quoting and spilled raw JS into the page.
-            html += '<div class="att-thumb-tile" style="position:relative;border:1px solid var(--border,#333);border-radius:8px;overflow:hidden;background:#000;aspect-ratio:1/1;">' +
-              '<img data-att-thumb="' + i + '" src="' + escapeAttr(att.thumb_url) + '" alt="' + escapeAttr(att.filename) + '" onerror="this.parentNode.classList.add(\'att-thumb-broken\')" style="width:100%;height:100%;object-fit:cover;cursor:zoom-in;display:block;" />' +
-              (canEdit ? '<button data-att-del-photo="' + escapeAttr(att.id) + '" title="Delete" style="position:absolute;top:4px;right:4px;background:rgba(0,0,0,0.7);color:#f87171;border:none;border-radius:4px;width:24px;height:24px;font-size:13px;cursor:pointer;line-height:1;z-index:2;">&times;</button>' : '') +
-              '<div style="position:absolute;bottom:0;left:0;right:0;background:linear-gradient(transparent,rgba(0,0,0,0.7));color:#fff;font-size:10px;padding:14px 6px 4px;font-family:Arial,sans-serif;pointer-events:none;z-index:1;">' + escapeHTMLLocal(att.filename) + '</div>' +
-            '</div>';
+            html += renderPhotoTile(att, i, false);
+          });
+          html += '</div>';
+        }
+
+        // ── Markups section ──────────────────────────────────────────
+        // Annotated copies (markup_of points back at an original photo).
+        // Rendered in a labeled sub-grid so the user can scan their
+        // edits separately from raw uploads.
+        if (markups.length) {
+          html += sectionHeader('✏ Markups', markups.length);
+          html += '<div data-att-grid-markups="1" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;margin-bottom:18px;">';
+          markups.forEach(function(att, i) {
+            html += renderPhotoTile(att, i, true);
           });
           html += '</div>';
         }
@@ -264,12 +273,19 @@
           docs.forEach(function(att) {
             var isPdf = (att.mime_type && att.mime_type.indexOf('pdf') >= 0) ||
                         (att.filename || '').toLowerCase().endsWith('.pdf');
+            var pinActive = !!att.include_in_proposal;
+            var pinTitle = pinActive ? 'In proposal — click to remove' : 'Attach to proposal';
+            var pinColor = pinActive ? '#34d399' : 'var(--text-dim,#888)';
+            var pinBorder = pinActive ? '1px solid rgba(52,211,153,0.4)' : '1px solid var(--border,#333)';
             html += '<div style="display:flex;align-items:center;gap:8px;padding:10px 12px;background:rgba(255,255,255,0.02);border-bottom:1px solid var(--border,#2a2a3a);">' +
               '<div style="font-size:24px;flex:0 0 auto;line-height:1;">' + fileIconFor(att.filename, att.mime_type) + '</div>' +
               '<div style="flex:1;min-width:0;">' +
                 '<div style="font-size:13px;color:var(--text,#fff);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTMLLocal(att.filename) + '</div>' +
-                '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:2px;">' + fmtBytes(att.size_bytes) + (att.mime_type ? ' &middot; ' + escapeHTMLLocal(att.mime_type) : '') + '</div>' +
+                '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:2px;">' + fmtBytes(att.size_bytes) + (att.mime_type ? ' &middot; ' + escapeHTMLLocal(att.mime_type) : '') +
+                  (pinActive ? ' &middot; <span style="color:#34d399;">&#x1F4CC; in proposal</span>' : '') +
+                '</div>' +
               '</div>' +
+              (canEdit ? '<button data-att-pin="' + escapeAttr(att.id) + '" title="' + escapeAttr(pinTitle) + '" style="flex:0 0 auto;background:' + (pinActive ? 'rgba(52,211,153,0.10)' : 'transparent') + ';color:' + pinColor + ';border:' + pinBorder + ';border-radius:6px;width:30px;height:30px;font-size:13px;cursor:pointer;line-height:1;">&#x1F4CC;</button>' : '') +
               (isPdf ? '<button data-att-view="' + escapeAttr(att.id) + '" title="Preview pages and send to the AI assistant" style="flex:0 0 auto;background:rgba(139,92,246,0.12);color:#c4b5fd;border:1px solid rgba(139,92,246,0.3);border-radius:6px;padding:6px 12px;font-size:11px;font-weight:600;cursor:pointer;">&#x1F441; View</button>' : '') +
               '<a href="' + escapeAttr(att.original_url) + '" download="' + escapeAttr(att.filename) + '" target="_blank" rel="noopener" title="Download" style="flex:0 0 auto;background:rgba(79,140,255,0.12);color:#4f8cff;border:1px solid rgba(79,140,255,0.3);border-radius:6px;padding:6px 12px;text-decoration:none;font-size:11px;font-weight:600;">&#x2B07; Download</a>' +
               (canEdit ? '<button data-att-del-doc="' + escapeAttr(att.id) + '" title="Delete" style="flex:0 0 auto;background:rgba(248,113,113,0.10);color:#f87171;border:1px solid rgba(248,113,113,0.25);border-radius:6px;width:30px;height:30px;font-size:14px;cursor:pointer;line-height:1;">&times;</button>' : '') +
@@ -357,10 +373,55 @@
           openLightbox(photos, i);
         };
       });
+      container.querySelectorAll('[data-att-thumb-markup]').forEach(function(img) {
+        img.onclick = function() {
+          var i = parseInt(img.getAttribute('data-att-thumb-markup'), 10);
+          openLightbox(markups, i);
+        };
+      });
       container.querySelectorAll('[data-att-del-photo]').forEach(function(btn) {
         btn.onclick = function(e) {
           e.stopPropagation();
           deleteAttachment(btn.getAttribute('data-att-del-photo'), 'photo');
+        };
+      });
+      // Mark-up button on a photo — opens the canvas markup viewer.
+      // On Save the viewer either replaces the original or uploads a
+      // new attachment with markup_of set; in both cases we re-fetch.
+      container.querySelectorAll('[data-att-markup]').forEach(function(btn) {
+        btn.onclick = function(e) {
+          e.stopPropagation();
+          if (!window.agxMarkup || typeof window.agxMarkup.open !== 'function') {
+            alert('Markup viewer not loaded — refresh the page.');
+            return;
+          }
+          var attId = btn.getAttribute('data-att-markup');
+          var att = state.attachments.find(function(a) { return a.id === attId; });
+          if (!att) return;
+          window.agxMarkup.open({
+            attachment: att,
+            onDone: fetchList
+          });
+        };
+      });
+      // Pin (include_in_proposal) toggle — fires a PUT to flip the flag.
+      // Optimistic: update local state + re-render so the icon flips
+      // immediately; rollback on server failure.
+      container.querySelectorAll('[data-att-pin]').forEach(function(btn) {
+        btn.onclick = function(e) {
+          e.stopPropagation();
+          var attId = btn.getAttribute('data-att-pin');
+          var att = state.attachments.find(function(a) { return a.id === attId; });
+          if (!att) return;
+          var next = !att.include_in_proposal;
+          att.include_in_proposal = next;
+          render();
+          window.agxApi.attachments.update(attId, { include_in_proposal: next })
+            .catch(function(err) {
+              att.include_in_proposal = !next; // rollback
+              render();
+              alert('Failed to update: ' + (err.message || ''));
+            });
         };
       });
       container.querySelectorAll('[data-att-del-doc]').forEach(function(btn) {
@@ -411,6 +472,35 @@
     function sectionHeader(label, count) {
       return '<div style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;margin:6px 2px 8px;">' +
         label + ' <span style="font-weight:400;color:var(--text-dim,#666);margin-left:4px;">' + count + '</span>' +
+      '</div>';
+    }
+
+    // Render a single photo thumbnail tile. `isMarkup` flips a small
+    // accent so users can tell markup tiles apart from the originals
+    // at a glance. The Mark-up button + Attach-to-proposal pin are
+    // overlaid on hover via inline corners.
+    function renderPhotoTile(att, idx, isMarkup) {
+      var indexAttr = isMarkup ? 'data-att-thumb-markup="' + idx + '"' : 'data-att-thumb="' + idx + '"';
+      var border = isMarkup ? '1px solid rgba(251,191,36,0.5)' : '1px solid var(--border,#333)';
+      var pinActive = !!att.include_in_proposal;
+      var pinTitle = pinActive ? 'In proposal — click to remove' : 'Attach to proposal';
+      var pinColor = pinActive ? '#34d399' : '#aaa';
+      var pinBg = pinActive ? 'rgba(52,211,153,0.18)' : 'rgba(0,0,0,0.7)';
+      return '<div class="att-thumb-tile" style="position:relative;border:' + border + ';border-radius:8px;overflow:hidden;background:#000;aspect-ratio:1/1;">' +
+        '<img ' + indexAttr + ' src="' + escapeAttr(att.thumb_url) + '" alt="' + escapeAttr(att.filename) + '" onerror="this.parentNode.classList.add(\'att-thumb-broken\')" style="width:100%;height:100%;object-fit:cover;cursor:zoom-in;display:block;" />' +
+        // Top-left: Mark-up button (only on photos, edit mode).
+        (canEdit ? '<button data-att-markup="' + escapeAttr(att.id) + '" title="Mark up this photo" style="position:absolute;top:4px;left:4px;background:rgba(0,0,0,0.7);color:#fbbf24;border:none;border-radius:4px;padding:3px 6px;font-size:10px;font-weight:700;cursor:pointer;z-index:2;">&#x270F; MARK</button>' : '') +
+        // Top-right: Pin (proposal toggle) + Delete.
+        (canEdit ?
+          '<div style="position:absolute;top:4px;right:4px;display:flex;gap:3px;z-index:2;">' +
+            '<button data-att-pin="' + escapeAttr(att.id) + '" title="' + escapeAttr(pinTitle) + '" style="background:' + pinBg + ';color:' + pinColor + ';border:none;border-radius:4px;width:24px;height:24px;font-size:12px;cursor:pointer;line-height:1;">&#x1F4CC;</button>' +
+            '<button data-att-del-photo="' + escapeAttr(att.id) + '" title="Delete" style="background:rgba(0,0,0,0.7);color:#f87171;border:none;border-radius:4px;width:24px;height:24px;font-size:13px;cursor:pointer;line-height:1;">&times;</button>' +
+          '</div>' : '') +
+        // Bottom: filename + (if pinned) "In proposal" badge.
+        '<div style="position:absolute;bottom:0;left:0;right:0;background:linear-gradient(transparent,rgba(0,0,0,0.7));color:#fff;font-size:10px;padding:14px 6px 4px;font-family:Arial,sans-serif;pointer-events:none;z-index:1;">' +
+          escapeHTMLLocal(att.filename) +
+          (pinActive ? '<div style="color:#34d399;font-size:9px;font-weight:700;margin-top:1px;">&#x1F4CC; IN PROPOSAL</div>' : '') +
+        '</div>' +
       '</div>';
     }
 

@@ -200,14 +200,37 @@ router.post('/:entityType/:entityId',
       // Position = current count so new uploads append to the end of the list.
       const position = countRes.rows[0].c;
 
+      // Optional markup linkage: form-data field `markup_of` carries the
+      // source attachment id when the upload comes from the markup
+      // viewer's "Save as new" path. Validated to belong to the same
+      // entity so a rogue client can't link to arbitrary attachments.
+      let markupOf = null;
+      if (req.body && typeof req.body.markup_of === 'string' && req.body.markup_of.trim()) {
+        const srcId = req.body.markup_of.trim();
+        const srcRes = await pool.query(
+          'SELECT id FROM attachments WHERE id = $1 AND entity_type = $2 AND entity_id = $3',
+          [srcId, entityType, entityId]
+        );
+        if (srcRes.rows.length) markupOf = srcId;
+      }
+      // Optional include_in_proposal flag from upload (markup save dialog
+      // can pre-set this on the new attachment so the user doesn't have
+      // to toggle it separately).
+      const includeInProposal = !!(req.body && (
+        req.body.include_in_proposal === true ||
+        req.body.include_in_proposal === 'true' ||
+        req.body.include_in_proposal === '1'
+      ));
+
       const ins = await pool.query(
         `INSERT INTO attachments
          (id, entity_type, entity_id, filename, mime_type, size_bytes,
           width, height,
           thumb_url, web_url, original_url,
           thumb_key, web_key, original_key,
-          position, uploaded_by, extracted_text, extracted_text_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+          position, uploaded_by, extracted_text, extracted_text_at,
+          markup_of, include_in_proposal)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
          RETURNING *`,
         [
           id, entityType, entityId,
@@ -215,7 +238,8 @@ router.post('/:entityType/:entityId',
           width, height,
           thumbUrl, webUrl, originalUrl,
           thumbKey, webKey, originalKey,
-          position, req.user.id, extractedText, extractedAt
+          position, req.user.id, extractedText, extractedAt,
+          markupOf, includeInProposal
         ]
       );
       res.json({ ok: true, attachment: ins.rows[0] });
@@ -271,6 +295,10 @@ router.put('/:id', requireAuth, async (req, res) => {
     if (req.body && typeof req.body.position === 'number') {
       sets.push('position = $' + p++);
       params.push(req.body.position);
+    }
+    if (req.body && typeof req.body.include_in_proposal === 'boolean') {
+      sets.push('include_in_proposal = $' + p++);
+      params.push(req.body.include_in_proposal);
     }
     if (!sets.length) return res.json({ ok: true, unchanged: true });
     params.push(req.params.id);

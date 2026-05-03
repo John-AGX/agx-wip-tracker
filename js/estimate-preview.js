@@ -198,6 +198,51 @@
     };
   }
 
+  // Build the "Attached Photos / Documents" block for the proposal —
+  // pulls from ctx.proposalAttachments which is populated by
+  // renderEstimatePreview / printEstimateProposal before render. Photos
+  // get a 2-column responsive grid; non-image docs get a list.
+  function renderAttachmentsBlock(atts) {
+    if (!atts || !atts.length) return '';
+    var photos = atts.filter(function(a) {
+      return a && a.mime_type && /^image\//i.test(a.mime_type);
+    });
+    var docs = atts.filter(function(a) {
+      return !(a && a.mime_type && /^image\//i.test(a.mime_type));
+    });
+    if (!photos.length && !docs.length) return '';
+    var html = '<h2 class="section-heading">Attached Photos &amp; Documents</h2>';
+    if (photos.length) {
+      html += '<div class="attached-photos">';
+      photos.forEach(function(p) {
+        // Prefer the web variant (smaller, faster); fall back to the
+        // original. The original_url is used for href so the print PDF
+        // links to the full-resolution copy.
+        var src = p.web_url || p.original_url;
+        if (!src) return;
+        html += '<figure class="attached-photo">' +
+          '<img src="' + escapeAttrLocal(src) + '" alt="' + escapeAttrLocal(p.filename || '') + '" />' +
+          (p.filename ? '<figcaption>' + escapeHTMLLocal(p.filename) + '</figcaption>' : '') +
+        '</figure>';
+      });
+      html += '</div>';
+    }
+    if (docs.length) {
+      html += '<ul class="attached-docs">';
+      docs.forEach(function(d) {
+        html += '<li>' + escapeHTMLLocal(d.filename || 'Document') +
+          (d.original_url ? ' &mdash; <a href="' + escapeAttrLocal(d.original_url) + '" target="_blank" rel="noopener">View</a>' : '') +
+        '</li>';
+      });
+      html += '</ul>';
+    }
+    return html;
+  }
+
+  function escapeAttrLocal(s) {
+    return escapeHTMLLocal(s).replace(/"/g, '&quot;');
+  }
+
   // Build the proposal HTML for in-tab render. Print stylesheet (below) hides
   // any chrome that shouldn't appear in the PDF.
   function buildProposalHTML(estimate, template, ctx) {
@@ -304,6 +349,12 @@
         '<h2 class="section-heading italic-heading">Assumptions, Clarifications and Exclusions:</h2>' +
         '<ol class="exclusions">' + exclusionsHTML + '</ol>' +
 
+        // Attached photos / documents — every attachment with
+        // include_in_proposal=true on either the estimate itself or the
+        // originating lead. Photos render as a 2-up grid; PDFs/docs
+        // appear as a small bulleted list with a download note.
+        renderAttachmentsBlock(ctx.proposalAttachments) +
+
         '<p class="sig-intro">' + escapeHTMLLocal(template.signature_text || '') + '</p>' +
 
         '<div class="sig-block">' +
@@ -348,6 +399,13 @@
       '.agx-proposal .sig-row { display: flex; align-items: center; gap: 10px; margin: 12px 0; font-size: 10pt; }' +
       '.agx-proposal .sig-label { font-weight: 700; min-width: 80px; }' +
       '.agx-proposal .sig-line { flex: 1; border-bottom: 1px solid #333; height: 0; }' +
+      '.agx-proposal .attached-photos { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin: 10px 0 18px; }' +
+      '.agx-proposal .attached-photo { margin: 0; border: 1px solid #ddd; border-radius: 4px; overflow: hidden; background: #fafafa; page-break-inside: avoid; }' +
+      '.agx-proposal .attached-photo img { width: 100%; height: auto; display: block; }' +
+      '.agx-proposal .attached-photo figcaption { padding: 4px 8px; font-size: 9pt; color: #555; background: #f3f4f6; border-top: 1px solid #e5e7eb; word-break: break-all; }' +
+      '.agx-proposal .attached-docs { padding-left: 22px; margin: 6px 0 18px; font-size: 10pt; }' +
+      '.agx-proposal .attached-docs li { margin: 4px 0; }' +
+      '.agx-proposal .attached-docs a { color: #0b5fff; text-decoration: underline; }' +
       ''
     );
   }
@@ -360,6 +418,29 @@
       '.agx-proposal { box-shadow: none; padding: 0; max-width: 100%; }' +
       '.no-print { display: none !important; }'
     );
+  }
+
+  // Fetch attachments where include_in_proposal=true for the estimate
+  // (and for the originating lead if linked). Used by both the in-tab
+  // preview and the print window. Resolves with [] on any failure so
+  // a missing attachment server doesn't break the preview itself.
+  function fetchProposalAttachments(estimate) {
+    if (!estimate || !window.agxApi || !window.agxApi.attachments) return Promise.resolve([]);
+    var calls = [
+      window.agxApi.attachments.list('estimate', estimate.id).catch(function() { return { attachments: [] }; })
+    ];
+    if (estimate.lead_id) {
+      calls.push(window.agxApi.attachments.list('lead', estimate.lead_id).catch(function() { return { attachments: [] }; }));
+    }
+    return Promise.all(calls).then(function(results) {
+      var all = [];
+      results.forEach(function(r) {
+        (r && r.attachments || []).forEach(function(a) {
+          if (a && a.include_in_proposal) all.push(a);
+        });
+      });
+      return all;
+    });
   }
 
   // Render into the Preview tab pane. Called by the editor when the user
@@ -381,8 +462,11 @@
       '</div>' +
       '<div id="ee-preview-render" style="padding:20px;background:#1a1a2e;min-height:600px;"><div style="text-align:center;color:#888;padding:40px;">Loading template…</div></div>';
 
-    getTemplate().then(function(template) {
+    Promise.all([getTemplate(), fetchProposalAttachments(estimate)]).then(function(both) {
+      var template = both[0];
+      var atts = both[1];
       var ctx = buildContext(estimate);
+      ctx.proposalAttachments = atts;
       var html = buildProposalHTML(estimate, template, ctx);
       var target = document.getElementById('ee-preview-render');
       if (target) target.innerHTML = html;
@@ -396,8 +480,11 @@
     var estimate = getCurrentEstimate();
     if (!estimate) { alert('No estimate is currently open.'); return; }
 
-    getTemplate().then(function(template) {
+    Promise.all([getTemplate(), fetchProposalAttachments(estimate)]).then(function(both) {
+      var template = both[0];
+      var atts = both[1];
       var ctx = buildContext(estimate);
+      ctx.proposalAttachments = atts;
       var html = buildProposalHTML(estimate, template, ctx);
       var title = 'Proposal - ' + (estimate.title || 'AGX').replace(/[^\w \-]+/g, '');
 
