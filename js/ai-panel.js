@@ -398,8 +398,8 @@
       '<div id="ai-notice" style="padding:8px 14px;background:rgba(79,140,255,0.08);border-bottom:1px solid var(--border,#333);font-size:11px;color:var(--text-dim,#aaa);">' +
         'Read-only — I see your estimate and photos but cannot change anything. Apply suggestions by hand.' +
       '</div>' +
-      // Messages scroll area
-      '<div id="ai-messages" style="flex:1;overflow-y:auto;padding:14px 16px;display:flex;flex-direction:column;gap:10px;font-size:13px;color:var(--text,#e6e6e6);"></div>' +
+      // Messages scroll area — dotted background for a Claude-style canvas feel.
+      '<div id="ai-messages" style="flex:1;overflow-y:auto;padding:18px 18px;display:flex;flex-direction:column;gap:14px;font-size:13px;color:var(--text,#e6e6e6);background-image:radial-gradient(circle, rgba(255,140,80,0.18) 1px, transparent 1px);background-size:14px 14px;"></div>' +
       // Preset prompts
       '<div id="ai-presets" style="padding:8px 12px;border-top:1px solid var(--border,#333);display:flex;flex-wrap:wrap;gap:6px;background:rgba(255,255,255,0.02);"></div>' +
       // Input row. Photos are auto-included via the entity's attachments
@@ -413,14 +413,18 @@
         '<div id="ai-input-pill" style="background:rgba(255,255,255,0.04);border:1px solid var(--border,#333);border-radius:14px;padding:10px 12px 8px;transition:border-color 0.15s, background 0.15s;">' +
           '<div id="ai-attachments-strip" style="display:none;flex-wrap:wrap;gap:6px;margin-bottom:8px;"></div>' +
           '<textarea id="ai-input" rows="1" placeholder="Ask anything about this estimate…" style="width:100%;resize:none;overflow-y:auto;min-height:22px;max-height:320px;background:transparent;border:none;outline:none;padding:0;color:var(--text,#fff);font-size:13px;line-height:1.5;font-family:inherit;box-sizing:border-box;display:block;"></textarea>' +
-          '<div style="display:flex;align-items:center;gap:4px;margin-top:6px;">' +
-            '<button id="ai-attach" type="button" title="Attach file (image or PDF)" aria-label="Attach file" style="background:transparent;border:none;color:var(--text-dim,#888);width:30px;height:30px;border-radius:50%;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;font-size:18px;padding:0;transition:background 0.12s, color 0.12s;">&#x002B;</button>' +
-            '<button id="ai-camera" type="button" title="Take a photo" aria-label="Take a photo" style="background:transparent;border:none;color:var(--text-dim,#888);width:30px;height:30px;border-radius:50%;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;font-size:14px;padding:0;transition:background 0.12s, color 0.12s;">&#x1F4F7;</button>' +
+          // Toolbar — all action icons on the left, send on the right.
+          // Buttons share a uniform compact style; circular hover-fill
+          // gives a sleek Claude-style feel without per-button bespoke
+          // styling. Send is the only one that's accent-colored at rest.
+          '<div style="display:flex;align-items:center;gap:2px;margin-top:6px;">' +
+            '<button id="ai-attach" type="button" title="Attach file (image or PDF)" aria-label="Attach file" class="ai-tool-btn" style="font-size:18px;">&#x002B;</button>' +
+            '<button id="ai-camera" type="button" title="Take a photo" aria-label="Take a photo" class="ai-tool-btn" style="font-size:13px;">&#x1F4F7;</button>' +
+            '<button id="ai-mic" type="button" title="Dictate (voice → text)" aria-label="Dictate" class="ai-tool-btn" style="font-size:14px;">&#x1F3A4;</button>' +
             '<input id="ai-file-input" type="file" accept="image/*,application/pdf" multiple style="display:none;" />' +
             '<input id="ai-camera-input" type="file" accept="image/*" capture="environment" style="display:none;" />' +
             '<div style="flex:1;"></div>' +
-            '<button id="ai-mic" type="button" title="Dictate (voice → text)" aria-label="Dictate" style="background:transparent;border:none;color:var(--text-dim,#888);width:30px;height:30px;border-radius:50%;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;font-size:15px;padding:0;transition:background 0.12s, color 0.12s;">&#x1F3A4;</button>' +
-            '<button id="ai-send" type="button" title="Send (Enter)" aria-label="Send" style="background:rgba(79,140,255,0.18);border:1px solid rgba(79,140,255,0.4);color:#4f8cff;width:30px;height:30px;border-radius:50%;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;font-size:14px;padding:0;transition:background 0.12s, color 0.12s;">&#x27A4;</button>' +
+            '<button id="ai-send" type="button" title="Send (Enter)" aria-label="Send" style="background:linear-gradient(135deg,#4f8cff,#34d399);border:0;color:#fff;width:30px;height:30px;border-radius:50%;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;font-size:14px;padding:0;transition:transform 0.12s, opacity 0.12s;">&#x2191;</button>' +
           '</div>' +
         '</div>' +
       '</div>';
@@ -713,16 +717,27 @@
     box.scrollTop = box.scrollHeight;
   }
 
+  // Message rendering — Claude-style:
+  //  - User: small right-aligned bubble (rounded, subtle bg). Like a chat
+  //    message — fast to read, clearly user-authored.
+  //  - Assistant: unboxed, full-width markdown flow with a small cloud
+  //    avatar on the left. Reads as long-form output rather than a
+  //    chat reply.
   function renderBubble(m) {
-    var isUser = m.role === 'user';
-    var bg = isUser ? 'rgba(79,140,255,0.12)' : 'rgba(255,255,255,0.04)';
-    var border = isUser ? '#4f8cff' : 'var(--border,#333)';
-    var labelColor = isUser ? '#4f8cff' : '#34d399';
-    var label = isUser ? 'You' : 'Claude';
-    var photoNote = (isUser && m.photos_included) ? ' <span style="color:var(--text-dim,#888);font-weight:400;">(' + m.photos_included + ' photo' + (m.photos_included === 1 ? '' : 's') + ' attached)</span>' : '';
-    return '<div style="background:' + bg + ';border-left:3px solid ' + border + ';border-radius:6px;padding:8px 10px;">' +
-      '<div style="font-size:10px;font-weight:700;color:' + labelColor + ';text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">' + label + photoNote + '</div>' +
-      '<div class="ai-content" style="font-size:13px;line-height:1.5;">' + (isUser ? '<p style="margin:0;white-space:pre-wrap;">' + escapeHTMLLocal(m.content) + '</p>' : renderMarkdown(m.content)) + '</div>' +
+    if (m.role === 'user') {
+      var photoNote = m.photos_included
+        ? '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:4px;text-align:right;">' + m.photos_included + ' photo' + (m.photos_included === 1 ? '' : 's') + ' attached</div>'
+        : '';
+      return '<div style="display:flex;justify-content:flex-end;">' +
+        '<div style="max-width:78%;background:rgba(255,255,255,0.08);color:var(--text,#fff);border-radius:14px;padding:8px 14px;font-size:13px;line-height:1.5;white-space:pre-wrap;">' +
+          escapeHTMLLocal(m.content) +
+          photoNote +
+        '</div>' +
+      '</div>';
+    }
+    return '<div style="display:flex;align-items:flex-start;gap:10px;">' +
+      '<div style="flex:0 0 22px;font-size:18px;line-height:1;margin-top:2px;">☁️</div>' +
+      '<div class="ai-content" style="flex:1;min-width:0;font-size:13px;line-height:1.55;">' + renderMarkdown(m.content) + '</div>' +
     '</div>';
   }
 
@@ -731,10 +746,10 @@
     if (!box) return null;
     var div = document.createElement('div');
     div.className = 'ai-streaming';
-    div.style.cssText = 'background:rgba(255,255,255,0.04);border-left:3px solid #34d399;border-radius:6px;padding:8px 10px;';
+    div.style.cssText = 'display:flex;align-items:flex-start;gap:10px;';
     div.innerHTML =
-      '<div style="font-size:10px;font-weight:700;color:#34d399;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Claude</div>' +
-      '<div class="ai-content" data-stream-content style="font-size:13px;line-height:1.5;"><span style="color:var(--text-dim,#888);font-style:italic;">Thinking…</span></div>';
+      '<div style="flex:0 0 22px;font-size:18px;line-height:1;margin-top:2px;">☁️</div>' +
+      '<div class="ai-content" data-stream-content style="flex:1;min-width:0;font-size:13px;line-height:1.55;"><span style="color:var(--text-dim,#888);font-style:italic;">Doing brain yoga…</span></div>';
     box.appendChild(div);
     box.scrollTop = box.scrollHeight;
     return div;
@@ -2601,10 +2616,18 @@
       '#agx-ai-panel ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.06); border-radius: 3px; transition: background 0.2s; } ' +
       '#agx-ai-panel ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.14); } ' +
       '#agx-ai-panel { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.06) transparent; } ' +
-      '#ai-mic:hover { background: rgba(255,255,255,0.08) !important; color: var(--text,#fff) !important; } ' +
-      '#ai-attach:hover { background: rgba(255,255,255,0.08) !important; color: var(--text,#fff) !important; } ' +
-      '#ai-camera:hover { background: rgba(255,255,255,0.08) !important; color: var(--text,#fff) !important; } ' +
-      '#ai-send:hover:not(:disabled) { background: rgba(79,140,255,0.32) !important; } ' +
+      // Shared style for the input toolbar action buttons (attach,
+      // camera, mic). Compact + transparent at rest, subtle fill on
+      // hover. Per-button font-size set inline since each glyph wants
+      // a different size.
+      '.ai-tool-btn { background: transparent; border: 0; color: var(--text-dim,#888); ' +
+        'width: 28px; height: 28px; border-radius: 8px; cursor: pointer; ' +
+        'display: inline-flex; align-items: center; justify-content: center; ' +
+        'padding: 0; transition: background 0.12s, color 0.12s; } ' +
+      '.ai-tool-btn:hover { background: rgba(79,140,255,0.10); color: var(--text,#fff); } ' +
+      '#ai-send { transition: transform 0.12s, opacity 0.12s; } ' +
+      '#ai-send:hover:not(:disabled) { transform: translateY(-1px); opacity: 0.92; } ' +
+      '#ai-send:disabled { opacity: 0.5; cursor: not-allowed; } ' +
       // When the panel is open, push the entire page over so the editor
       // stays fully visible. Sticky elements (page nav, editor header)
       // respect this since they sit in the document flow. The fixed
