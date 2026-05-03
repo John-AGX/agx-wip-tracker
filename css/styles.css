@@ -157,6 +157,23 @@
             background: var(--surface2, #f1f5f9) !important;
             color: var(--text, #111827) !important;
         }
+        /* Estimate editor sticky header — light-mode cleanup. The dark-
+           mode shadow/border treatment reads as a heavy boxed strip on
+           a light background. Strip the drop shadow, soften the bottom
+           edge to a hairline, and lighten the totals chips so they
+           don't feel chunky against the cream backdrop. */
+        body.light-mode #ee-header {
+            box-shadow: 0 1px 0 rgba(0,0,0,0.04) !important;
+            border-bottom-color: rgba(0,0,0,0.06) !important;
+        }
+        /* Totals chips inside the header — find them via their inline
+           rgba(255,255,255,0.03) bg signature. Replace with a flat
+           soft surface and a feather-weight border. */
+        body.light-mode #ee-totals > div[style*="background:rgba(255,255,255,0.03)"],
+        body.light-mode #ee-totals > div[style*="background: rgba(255,255,255,0.03)"] {
+            background: rgba(0,0,0,0.02) !important;
+            border-color: rgba(0,0,0,0.05) !important;
+        }
 
         .container {
             display: flex;
