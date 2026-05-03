@@ -527,6 +527,39 @@
             display: flex;
         }
 
+        /* Modal-as-page mode — used by the Lead detail view to render
+           the same form as a full-page detail surface (no backdrop,
+           no centering, no z-index above the app shell). The Back
+           button drives return to the list. Toggled on the .modal
+           element by leads.js's openEditLeadModal. */
+        .modal.modal-as-page {
+            position: static;
+            background: transparent;
+            display: block;
+            z-index: auto;
+            top: auto; left: auto; right: auto; bottom: auto;
+        }
+        .modal.modal-as-page .modal-content {
+            max-width: 100%;
+            width: 100%;
+            max-height: none;
+            margin: 0;
+            border: 0;
+            border-radius: 0;
+            padding: 0;
+            box-shadow: none;
+            background: transparent;
+            overflow: visible;
+        }
+        .modal.modal-as-page .modal-header { cursor: default; }
+        /* Back button is rendered inside every modal but only revealed
+           in page mode — keeps the markup uniform for create vs edit. */
+        .modal-page-back { display: none; }
+        .modal.modal-as-page .modal-page-back { display: inline-flex; }
+        /* In page mode, hide the original "Cancel" footer button — Back
+           replaces it. Tagged via data-modal-cancel for explicit pickup. */
+        .modal.modal-as-page [data-modal-cancel] { display: none; }
+
         .modal-content {
             background: var(--surface);
             border: 1px solid var(--border);

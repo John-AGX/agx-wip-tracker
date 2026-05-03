@@ -437,7 +437,69 @@
     renderLeadProposals(l.id);
     refreshLinkedJobChip(l);
     refreshConvertJobButton(l);
-    openModal('leadEditorModal');
+    openLeadDetailView();
+  }
+
+  // Re-parent the lead modal into the leads sub-tab as a full-page
+  // detail view. The same form is used for both modes — `.modal-as-page`
+  // strips the backdrop/centering/z-index in CSS.
+  function openLeadDetailView() {
+    var modal = document.getElementById('leadEditorModal');
+    var host = document.getElementById('lead-detail-host');
+    var listView = document.getElementById('leads-list-view');
+    var mainTabs = document.getElementById('estimates-main-tabs');
+    if (!modal || !host) {
+      // Container is missing on this build — fall back to modal mode.
+      openModal('leadEditorModal');
+      return;
+    }
+    // Move the modal element into the leads sub-tab so it lays out
+    // inline. Re-parenting preserves event listeners + form state.
+    if (modal.parentNode !== host) host.appendChild(modal);
+    modal.classList.add('modal-as-page');
+    modal.classList.add('active'); // reuses existing display rule path
+    if (listView) listView.style.display = 'none';
+    if (mainTabs) mainTabs.style.display = 'none';
+    // Scroll to top so the user lands at the form's start, not wherever
+    // the leads list was scrolled to.
+    var scroller = document.getElementById('estimates-subtab-leads') ||
+      modal.parentNode || window;
+    if (scroller && typeof scroller.scrollTo === 'function') {
+      scroller.scrollTo(0, 0);
+    } else {
+      window.scrollTo(0, 0);
+    }
+  }
+
+  // Reverse openLeadDetailView. Moves the modal back to <body> so future
+  // create-flow opens render as a normal centered modal again.
+  function closeLeadDetail() {
+    var modal = document.getElementById('leadEditorModal');
+    var listView = document.getElementById('leads-list-view');
+    var mainTabs = document.getElementById('estimates-main-tabs');
+    if (modal) {
+      modal.classList.remove('modal-as-page');
+      modal.classList.remove('active');
+      if (modal.parentNode && modal.parentNode.id === 'lead-detail-host') {
+        document.body.appendChild(modal);
+      }
+    }
+    if (listView) listView.style.display = '';
+    if (mainTabs) mainTabs.style.display = '';
+    reloadLeadsCache();
+  }
+  window.closeLeadDetail = closeLeadDetail;
+
+  // Single close-helper used by save / cancel / delete handlers. Picks
+  // the right teardown based on which mode the lead editor is currently
+  // displayed in (modal for create vs page for edit).
+  function closeLeadEditorAny() {
+    var modal = document.getElementById('leadEditorModal');
+    if (modal && modal.classList.contains('modal-as-page')) {
+      closeLeadDetail();
+    } else {
+      if (typeof closeModal === 'function') closeModal('leadEditorModal');
+    }
   }
 
   // Show the green "Sold — linked to a job" chip when the lead has a job_id.
@@ -478,7 +540,7 @@
     var leadId = _currentEditingLeadId;
     var l = _leads.find(function(x) { return x.id === leadId; });
     if (!l || !l.job_id) return;
-    closeModal('leadEditorModal');
+    closeLeadEditorAny();
     if (typeof window.switchTab === 'function') {
       window.switchTab('wip');
       // editJob is defined in wip.js; give the WIP render a tick before opening
@@ -556,7 +618,7 @@
     window.agxApi.leads.update(leadId, { job_id: jobId, status: 'sold' }).then(function() {
       l.job_id = jobId;
       l.status = 'sold';
-      closeModal('leadEditorModal');
+      closeLeadEditorAny();
       reloadLeadsCache();
       // Hand off to WIP so the user sees the new job
       if (typeof window.switchTab === 'function') window.switchTab('wip');
@@ -566,7 +628,7 @@
     }).catch(function(err) {
       alert('Job created, but linking it back to the lead failed: ' + err.message +
             '\n\nThe job is in WIP — you can re-link it manually if needed.');
-      closeModal('leadEditorModal');
+      closeLeadEditorAny();
       reloadLeadsCache();
       if (typeof window.switchTab === 'function') window.switchTab('wip');
     });
@@ -680,7 +742,7 @@
   // its target view stayed hidden behind the sub-tab gate — clicking
   // Edit looked like a no-op.
   function openEstimateFromLead(estimateId, asPreview) {
-    closeModal('leadEditorModal');
+    closeLeadEditorAny();
     if (typeof window.switchTab === 'function') {
       try { window.switchTab('estimates'); } catch (e) { /* defensive */ }
     }
@@ -812,7 +874,7 @@
     var l = _leads.find(function(x) { return x.id === leadId; });
     if (!l) { alert('Lead not found.'); return; }
 
-    closeModal('leadEditorModal');
+    closeLeadEditorAny();
     if (typeof window.openNewEstimateForm !== 'function') {
       alert('Estimate form not available.');
       return;
@@ -851,7 +913,7 @@
       statusEl.style.color = '#34d399';
       statusEl.textContent = 'Saved.';
       setTimeout(function() {
-        closeModal('leadEditorModal');
+        closeLeadEditorAny();
         reloadLeadsCache();
       }, 600);
     }).catch(function(err) {
@@ -902,7 +964,7 @@
       }
       return window.agxApi.leads.remove(id);
     }).then(function() {
-      closeModal('leadEditorModal');
+      closeLeadEditorAny();
       reloadLeadsCache();
     }).catch(function(err) {
       alert('Delete failed: ' + (err.message || 'unknown error') +

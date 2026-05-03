@@ -604,7 +604,7 @@
 
                 <!-- ESTIMATES TAB -->
                 <div id="estimates" class="tab-content">
-                    <div class="ws-right-tabs">
+                    <div id="estimates-main-tabs" class="ws-right-tabs">
                         <button class="ws-right-tab active" data-estimates-subtab="leads" onclick="switchEstimatesSubTab('leads')" data-cap="LEADS_VIEW">Leads</button>
                         <button class="ws-right-tab" data-estimates-subtab="list" onclick="switchEstimatesSubTab('list')">Estimates</button>
                         <button class="ws-right-tab" data-estimates-subtab="clients" onclick="switchEstimatesSubTab('clients')">Clients</button>
@@ -613,24 +613,33 @@
 
                     <!-- Leads sub-tab -->
                     <div id="estimates-subtab-leads" class="estimates-subtab-content">
-                        <div class="action-buttons">
-                            <button class="primary" onclick="openNewLeadModal()" data-cap="LEADS_EDIT">&#x1F465; New Lead</button>
-                            <button class="success" onclick="document.getElementById('leads-import-file').click()" data-cap="LEADS_EDIT" title="Import a Buildertrend Leads xlsx export">&#x1F4E5; Import from Buildertrend</button>
-                            <input type="file" id="leads-import-file" accept=".xlsx" style="display:none;" onchange="handleLeadsImportFile(event)" />
-                            <button class="secondary" onclick="reloadLeadsCache()">Refresh</button>
-                            <select id="leads-filter-status" onchange="renderLeadsList()" style="width:auto;min-width:140px;margin-left:6px;">
-                                <option value="">All statuses</option>
-                                <option value="new">New</option>
-                                <option value="in_progress">In Progress</option>
-                                <option value="sent">Sent</option>
-                                <option value="sold">Sold</option>
-                                <option value="lost">Lost</option>
-                                <option value="no_opportunity">No Opportunity</option>
-                            </select>
-                            <input type="text" id="leads-search" oninput="renderLeadsList()" placeholder="Search leads…" style="margin-left:auto;min-width:220px;" />
+                        <!-- List view (action bar + summary + list) — hidden when
+                             the lead detail page is open. -->
+                        <div id="leads-list-view">
+                            <div class="action-buttons">
+                                <button class="primary" onclick="openNewLeadModal()" data-cap="LEADS_EDIT">&#x1F465; New Lead</button>
+                                <button class="success" onclick="document.getElementById('leads-import-file').click()" data-cap="LEADS_EDIT" title="Import a Buildertrend Leads xlsx export">&#x1F4E5; Import from Buildertrend</button>
+                                <input type="file" id="leads-import-file" accept=".xlsx" style="display:none;" onchange="handleLeadsImportFile(event)" />
+                                <button class="secondary" onclick="reloadLeadsCache()">Refresh</button>
+                                <select id="leads-filter-status" onchange="renderLeadsList()" style="width:auto;min-width:140px;margin-left:6px;">
+                                    <option value="">All statuses</option>
+                                    <option value="new">New</option>
+                                    <option value="in_progress">In Progress</option>
+                                    <option value="sent">Sent</option>
+                                    <option value="sold">Sold</option>
+                                    <option value="lost">Lost</option>
+                                    <option value="no_opportunity">No Opportunity</option>
+                                </select>
+                                <input type="text" id="leads-search" oninput="renderLeadsList()" placeholder="Search leads…" style="margin-left:auto;min-width:220px;" />
+                            </div>
+                            <p id="leads-summary" style="margin:12px 0;color:var(--text-dim,#888);font-size:12px;"></p>
+                            <div id="leads-list" style="display:flex;flex-direction:column;gap:8px;"></div>
                         </div>
-                        <p id="leads-summary" style="margin:12px 0;color:var(--text-dim,#888);font-size:12px;"></p>
-                        <div id="leads-list" style="display:flex;flex-direction:column;gap:8px;"></div>
+                        <!-- Lead detail host. The lead editor modal (#leadEditorModal)
+                             is re-parented into here when opened on an existing lead,
+                             then moved back to <body> on close. Same DOM, two
+                             surface modes — driven by the .modal-as-page class. -->
+                        <div id="lead-detail-host"></div>
                     </div>
 
                     <!-- Estimates list sub-tab -->
@@ -1603,7 +1612,10 @@
          estimates linked to this lead via estimate.lead_id. -->
     <div id="leadEditorModal" class="modal">
       <div class="modal-content" style="max-width:780px;max-height:88vh;overflow-y:auto;">
-        <div class="modal-header" id="leadEditor_title">New Lead</div>
+        <div class="modal-header" style="display:flex;align-items:center;gap:10px;">
+          <button type="button" class="ee-btn secondary modal-page-back" onclick="closeLeadDetail()" title="Back to leads list">&larr; Back</button>
+          <span id="leadEditor_title" style="flex:1;">New Lead</span>
+        </div>
 
         <!-- In-modal tabs (General | Proposals N) — only shown in edit mode.
              Hidden on create since there's nothing to put on the Proposals
@@ -1754,7 +1766,7 @@
         <div class="modal-footer">
           <button id="leadEditor_deleteBtn" class="danger" style="margin-right:auto;display:none;" onclick="deleteLeadFromEditor()">Delete</button>
           <button id="leadEditor_convertJobBtn" class="success" style="display:none;" onclick="convertLeadToJob()" data-cap="JOBS_EDIT_ANY JOBS_EDIT_OWN">&#x1F3D7; Create Job from Lead</button>
-          <button onclick="closeModal('leadEditorModal')" class="secondary">Cancel</button>
+          <button data-modal-cancel onclick="closeModal('leadEditorModal')" class="secondary">Cancel</button>
           <button onclick="submitLeadEditor()" class="primary" id="leadEditor_submitBtn">Save Lead</button>
         </div>
       </div>
@@ -2051,10 +2063,10 @@
     <script src="js/attachments.js?v=6"></script>
     <script src="js/pdf-viewer.js?v=1"></script>
     <script src="js/admin.js?v=22"></script>
-    <script src="js/clients.js?v=10"></script>
+    <script src="js/clients.js?v=11"></script>
     <script src="js/subs.js?v=5"></script>
     <script src="js/job-audit.js?v=3"></script>
-    <script src="js/leads.js?v=14"></script>
+    <script src="js/leads.js?v=15"></script>
     <script src="js/job-costs-import.js?v=3"></script>
     <script src="js/qb-costs-view.js?v=8"></script>
     <script src="js/insights.js?v=5"></script>
@@ -2063,7 +2075,7 @@
     <script src="js/wip.js?v=61"></script>
     <script src="js/estimates.js?v=32"></script>
     <script src="js/proposal.js?v=20"></script>
-    <script src="js/estimate-editor.js?v=18"></script>
+    <script src="js/estimate-editor.js?v=19"></script>
     <script src="js/estimate-preview.js?v=3"></script>
     <script src="js/bt-export.js?v=2"></script>
     <script src="js/ai-panel.js?v=30"></script>

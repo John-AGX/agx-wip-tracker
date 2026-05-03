@@ -16,6 +16,14 @@
   // Toggle which Estimates sub-tab is visible. Renders the section's data
   // on first reveal so we don't fire API calls for tabs no one opens.
   function switchEstimatesSubTab(name) {
+    // If the user is currently inside the lead detail page (modal-as-page
+    // mode), close it on every sub-tab switch so they don't come back to
+    // a leads tab whose list-view is still hidden under the detail host.
+    var leadModal = document.getElementById('leadEditorModal');
+    if (leadModal && leadModal.classList.contains('modal-as-page') &&
+        typeof window.closeLeadDetail === 'function') {
+      window.closeLeadDetail();
+    }
     document.querySelectorAll('[data-estimates-subtab]').forEach(function(btn) {
       btn.classList.toggle('active', btn.dataset.estimatesSubtab === name);
     });

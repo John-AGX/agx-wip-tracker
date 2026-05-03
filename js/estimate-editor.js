@@ -196,6 +196,11 @@
     var editorView = document.getElementById('estimate-editor-view');
     if (listView) listView.style.display = 'none';
     if (editorView) editorView.style.display = '';
+    // Hide the parent Leads/Estimates/Clients/Subs nav while in the
+    // editor — the sticky header's Back button drives return. Restored
+    // on closeEstimateEditor.
+    var mainTabs = document.getElementById('estimates-main-tabs');
+    if (mainTabs) mainTabs.style.display = 'none';
 
     // Title input — keystrokes update the estimate title live; debounced save
     var titleEl = document.getElementById('ee-title');
@@ -273,6 +278,9 @@
       var editorView = document.getElementById('estimate-editor-view');
       if (editorView) editorView.style.display = 'none';
       if (listView) listView.style.display = '';
+      // Restore the parent Leads/Estimates/Clients/Subs nav we hid on open.
+      var mainTabs = document.getElementById('estimates-main-tabs');
+      if (mainTabs) mainTabs.style.display = '';
       if (typeof renderEstimatesList === 'function') renderEstimatesList();
     };
     if (pending) {
