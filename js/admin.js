@@ -1996,7 +1996,10 @@
   // has a name, free-form body, agents it applies to, and an alwaysOn
   // flag. v1 only honors alwaysOn = true — when on, the skill is appended
   // to that agent's system prompt on every turn.
-  var AGENT_LABELS = { ag: '📐 AG (Estimator)', cra: '🤝 CRA (Customer Relations)' };
+  // Note: agentKey 'cra' kept for backward compat with skill packs that
+  // already reference it. Display label is HR; the underlying agent
+  // assignment value stays 'cra'.
+  var AGENT_LABELS = { ag: '📐 AG (Estimator)', cra: '🤝 HR (Customer Relations)' };
 
   function renderAgentSkillsHTML() {
     if (!_skillsDraft || !Array.isArray(_skillsDraft.skills)) _skillsDraft = { skills: [] };
@@ -2582,7 +2585,7 @@
           '<button class="ws-right-tab' + (_agentsView === 'evals' ? ' active' : '') + '" onclick="switchAgentsView(\'evals\')">&#x1F9EA; Evals</button>' +
         '</div>' +
         '<div style="flex:1;"></div>' +
-        '<button class="ee-btn" onclick="openChiefOfStaff()" title="Open the Chief of Staff agent — observes AG / WIP / CRA, audits conversations, reviews skill packs" style="background:linear-gradient(135deg,#fbbf24,#f97316);color:#fff;border:none;font-weight:600;">&#x1F3A9; Ask Chief of Staff</button>' +
+        '<button class="ee-btn" onclick="openChiefOfStaff()" title="Open the Chief of Staff agent — observes AG / Elle / HR, audits conversations, reviews skill packs" style="background:linear-gradient(135deg,#fbbf24,#f97316);color:#fff;border:none;font-weight:600;">&#x1F3A9; Ask Chief of Staff</button>' +
         '<label style="font-size:11px;color:var(--text-dim,#888);">Window</label>' +
         '<select id="agents-range-select" onchange="setAgentsRange(this.value)" style="font-size:12px;padding:4px 8px;">' +
           '<option value="7d"' + (_agentsRange === '7d' ? ' selected' : '') + '>Last 7 days</option>' +
@@ -2689,7 +2692,7 @@
       rows.forEach(function(c) {
         var agentLabel = c.entity_type === 'estimate' ? '📐 AG'
                        : c.entity_type === 'job'      ? '📊 Elle'
-                       : c.entity_type === 'client'   ? '🤝 CRA'
+                       : c.entity_type === 'client'   ? '🤝 HR'
                        : c.entity_type;
         var when = '';
         try { when = new Date(c.last_at).toLocaleString(); } catch (e) {}

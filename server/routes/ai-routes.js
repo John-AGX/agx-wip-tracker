@@ -223,7 +223,7 @@ const ESTIMATE_TOOLS = [
   },
   {
     name: 'propose_add_client_note',
-    description: 'Propose appending a durable, agent-readable note to the linked client. Notes auto-inject into AG and CRA system prompts on every future turn touching this client, so they compound knowledge across sessions. Only call when you\'ve learned something the user told you that should outlive this conversation — pricing preferences, billing quirks, gate codes, scope rules, contact preferences. NEVER call for facts already in the client record (name, address, salesperson) or for ephemeral state (current weather, today\'s schedule). Only available when the estimate is linked to a client (see context above); skipped otherwise.',
+    description: 'Propose appending a durable, agent-readable note to the linked client. Notes auto-inject into AG and HR system prompts on every future turn touching this client, so they compound knowledge across sessions. Only call when you\'ve learned something the user told you that should outlive this conversation — pricing preferences, billing quirks, gate codes, scope rules, contact preferences. NEVER call for facts already in the client record (name, address, salesperson) or for ephemeral state (current weather, today\'s schedule). Only available when the estimate is linked to a client (see context above); skipped otherwise.',
     input_schema: {
       type: 'object',
       properties: {
@@ -2096,7 +2096,7 @@ const CLIENT_TOOLS = [
   {
     name: 'add_client_note',
     tier: 'approval',
-    description: 'Append a short, durable fact about how to handle this client to their agent notes. These notes auto-inject into AG (estimating) and CRA (this) system prompts on every future turn that touches the client, so they compound knowledge across sessions. Good notes: "PAC always wants 15% materials markup, not 20%", "Wimbledon Greens proposals must include the gate code on the cover page", "FSR billing prefers a single combined invoice per property — don\'t split by group", "Solace Tampa has a strict noise window (8a-5p) — note it in scope". Bad notes: anything ephemeral ("user is on PTO this week"), anything personal, anything that would already be obvious from the client record. Approval-required so the user vets the wording before it lands. Cap one note per call — call multiple times in parallel for multiple notes.',
+    description: 'Append a short, durable fact about how to handle this client to their agent notes. These notes auto-inject into AG (estimating) and HR (this — customer relations) system prompts on every future turn that touches the client, so they compound knowledge across sessions. Good notes: "PAC always wants 15% materials markup, not 20%", "Wimbledon Greens proposals must include the gate code on the cover page", "FSR billing prefers a single combined invoice per property — don\'t split by group", "Solace Tampa has a strict noise window (8a-5p) — note it in scope". Bad notes: anything ephemeral ("user is on PTO this week"), anything personal, anything that would already be obvious from the client record. Approval-required so the user vets the wording before it lands. Cap one note per call — call multiple times in parallel for multiple notes.',
     input_schema: {
       type: 'object',
       properties: {
@@ -2403,7 +2403,7 @@ async function buildClientDirectoryContext() {
   // prefix) + dynamic directory snapshot (refreshed each turn).
   const stable = [];
   const out = []; // dynamic directory snapshot
-  stable.push('You are AGX\'s Customer Relations Agent — the dedicated assistant for keeping AG Exteriors\' customer directory clean, accurate, and properly structured. You understand the property-management industry in Central Florida and you take pride in a tidy, hierarchical, dedupe-clean directory.');
+  stable.push('You are HR, AGX\'s customer relations agent — the dedicated assistant for keeping AG Exteriors\' customer directory clean, accurate, and properly structured. You understand the property-management industry in Central Florida and you take pride in a tidy, hierarchical, dedupe-clean directory. (Yes, "HR" — your name is a small AGX inside joke; the role is customer relations, not human resources.)');
   stable.push('');
   stable.push('# About AGX');
   stable.push('AG Exteriors is a Central-Florida construction-services company (painting, deck repair, roofing, exterior services). AGX\'s customers are overwhelmingly:');
@@ -2464,7 +2464,7 @@ async function buildClientDirectoryContext() {
   stable.push('  • If asked to "run a full audit": work the directory in this order — (1) split obvious parent+property compounds, (2) link unparented children to existing parents, (3) merge clear duplicates, (4) flag (in chat, no tool call) the rest as ambiguous for the user to decide on.');
   stable.push('');
   stable.push('# Web research (web_search tool)');
-  stable.push('You have a web_search tool. The CRA role is the highest-value place to use it — Central-FL property management is constantly reorganizing, and the directory often has stale or ambiguous data. Good reasons to search:');
+  stable.push('You have a web_search tool. The HR role is the highest-value place to use it — Central-FL property management is constantly reorganizing, and the directory often has stale or ambiguous data. Good reasons to search:');
   stable.push('  • Confirm a parent-company / property relationship before linking (e.g., "Is Solace Tampa managed by PAC or by Bainbridge?" — search the property name + "managed by").');
   stable.push('  • Find the current canonical name for a parent company before renaming variants (e.g., "Preferred Apartment Communities" merged with another entity — look up the current corporate name).');
   stable.push('  • Look up a property\'s physical address when only the community name is known and we need to populate property_address.');
@@ -2489,7 +2489,7 @@ async function buildClientDirectoryContext() {
   stable.push('Only call attach_business_card_to_client ONCE per uploaded card — the image is consumed from the pending bucket.');
   stable.push('');
 
-  // Skill packs targeted at the Customer Relations Agent. Same loader as
+  // Skill packs targeted at HR (customer relations). Same loader as
   // AG — admin-editable additions to the baseline prompt. Stable across
   // the cache window since admins rarely edit them mid-session.
   const craSkills = await loadActiveSkillsFor('cra');
@@ -2924,7 +2924,7 @@ const STAFF_TOOLS = [
     name: 'read_metrics',
     tier: 'auto',
     description:
-      'Read aggregate AI-agent usage metrics for the requested window. Returns per-agent (AG / WIP / CRA) totals: turns, conversations, unique users, tool uses, photos attached, tokens in/out, model mix, and estimated cost in USD. Use this to answer "how much is AG being used?", "what does WIP cost us?", "is anyone using CRA?" types of questions.',
+      'Read aggregate AI-agent usage metrics for the requested window. Returns per-agent (AG / Elle / HR) totals: turns, conversations, unique users, tool uses, photos attached, tokens in/out, model mix, and estimated cost in USD. Use this to answer "how much is AG being used?", "what does Elle cost us?", "is anyone using HR?" types of questions.',
     input_schema: {
       type: 'object',
       additionalProperties: false,
@@ -2968,7 +2968,7 @@ const STAFF_TOOLS = [
     name: 'read_skill_packs',
     tier: 'auto',
     description:
-      'List the admin-editable skill packs that the AI agents load at chat time. Each pack has a name, body (instructions), agent assignments (which of AG / CRA load it), and an alwaysOn flag. Use this to recommend new skills, audit existing ones for staleness, or answer "what context does AG always see?".',
+      'List the admin-editable skill packs that the AI agents load at chat time. Each pack has a name, body (instructions), agent assignments (which of AG / HR load it — internal key for HR is "cra" for back-compat), and an alwaysOn flag. Use this to recommend new skills, audit existing ones for staleness, or answer "what context does AG always see?".',
     input_schema: {
       type: 'object',
       additionalProperties: false,
@@ -2987,7 +2987,7 @@ const STAFF_TOOLS = [
       properties: {
         name: { type: 'string', description: 'Short, unique title (e.g., "Trex decking spec reference"). Must not collide with an existing pack.' },
         body: { type: 'string', description: 'The skill content. Markdown allowed. Be tight — every always-on pack costs tokens on every turn.' },
-        agents: { type: 'array', items: { type: 'string', enum: ['ag', 'cra'] }, description: 'Which agents load this pack. AG = estimating, CRA = customer relations.' },
+        agents: { type: 'array', items: { type: 'string', enum: ['ag', 'cra'] }, description: 'Which agents load this pack. Use "ag" for the estimator, "cra" for HR (customer relations — internal key is "cra" for back-compat with existing skill packs; display name is HR).' },
         alwaysOn: { type: 'boolean', description: 'If true (default), pack is appended on every turn. If false, the pack is registered but inactive.' },
         rationale: { type: 'string', description: 'One short sentence shown on the approval card explaining why this pack is worth keeping.' }
       },
@@ -3040,12 +3040,12 @@ function isStaffToolAutoTier(name) {
 // current week as a second block (refreshed each turn).
 async function buildStaffContext() {
   const stable = [];
-  stable.push('You are the Chief of Staff for AGX\'s in-app AI agents — AG (estimating), Elle (WIP analyst), and CRA (customer relations). Your user is the AGX admin / owner. Your job is to observe how the three agents are being used, surface trends and anomalies, audit specific conversations on request, and propose skill-pack improvements based on what you see.');
+  stable.push('You are the Chief of Staff for AGX\'s in-app AI agents — AG (estimating), Elle (WIP analyst), and HR (customer relations). Your user is the AGX admin / owner. Your job is to observe how the three agents are being used, surface trends and anomalies, audit specific conversations on request, and propose skill-pack improvements based on what you see.');
   stable.push('');
   stable.push('# Who the three agents are');
   stable.push('  • **AG (estimate-side)** — helps PMs draft scopes, propose line items with AGX-typical Central-FL pricing, and edit the estimate via approval-gated tools. Heavy vision use (photos, PDFs of RFPs / takeoffs).');
   stable.push('  • **Elle (job-side)** — WIP analyst on live jobs. Reads WIP snapshot, change orders, QB cost lines, and the node graph; spots margin issues, missing COs, billing gaps.');
-  stable.push('  • **CRA (customer-side)** — owns the customer directory. Splits parent+property compounds, links unparented properties, merges duplicates, attaches business cards, and writes durable client notes.');
+  stable.push('  • **HR (customer-side)** — owns the customer directory. Splits parent+property compounds, links unparented properties, merges duplicates, attaches business cards, and writes durable client notes. Internal entity_type is "client" and skill-pack agentKey is "cra" (both kept for back-compat); display name is HR.');
   stable.push('All three log into the same ai_messages table (different entity_type values).');
   stable.push('');
   stable.push('# Your tools');
@@ -3083,7 +3083,7 @@ async function buildStaffContext() {
     `);
     if (r.rows.length) {
       liveLines.push('# Live snapshot (last 7 days, assistant turns)');
-      const labelMap = { estimate: 'AG', job: 'Elle', client: 'CRA', staff: 'Chief of Staff (you)' };
+      const labelMap = { estimate: 'AG', job: 'Elle', client: 'HR', staff: 'Chief of Staff (you)' };
       r.rows.forEach(row => {
         liveLines.push('  • ' + (labelMap[row.entity_type] || row.entity_type) + ': ' + Number(row.turns) + ' turns');
       });
@@ -3125,7 +3125,7 @@ async function execStaffTool(name, input) {
       `;
       const r = await pool.query(aggSql);
       const out = [];
-      const labels = { estimate: 'AG (estimate)', job: 'Elle (job/WIP)', client: 'CRA (client)' };
+      const labels = { estimate: 'AG (estimate)', job: 'Elle (job/WIP)', client: 'HR (client)' };
       const all = ['estimate', 'job', 'client'];
       const byType = new Map(r.rows.map(row => [row.entity_type, row]));
       out.push('Metrics for last ' + range + ':');

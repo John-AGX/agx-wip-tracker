@@ -160,11 +160,11 @@
     { label: 'Add a property',           prompt: 'Walk me through adding a new property. Ask which parent management company first (search existing parents in the directory). Then collect property name, property_address, on-site CAM name + email + phone, market, and gate code if any. Use create_property to apply.' }
   ];
   var STAFF_PRESETS = [
-    { label: 'How is AG doing this week?',  prompt: 'Pull last 7d metrics for all three agents and tell me what stands out. Then surface the 3 most active conversations across AG / Elle / CRA so I can spot-check.' },
+    { label: 'How is AG doing this week?',  prompt: 'Pull last 7d metrics for all three agents and tell me what stands out. Then surface the 3 most active conversations across AG / Elle / HR so I can spot-check.' },
     { label: 'Audit AG search usage',       prompt: 'Of AG\'s recent conversations, how often did web_search get invoked? Pull a few examples and summarize what AG was searching for. If a pattern emerges (e.g., the same product specs over and over), propose a new skill pack that bakes in the answer so AG stops searching.' },
     { label: 'Audit & clean skill packs',   prompt: 'Read all skill packs. For each, tell me whether the wording is tight, whether it overlaps with another, and whether it\'s being applied to the right agents. If anything is stale, propose a skill_pack_edit or skill_pack_delete with rationale.' },
     { label: 'Most expensive conversations', prompt: 'Show me the 5 most token-expensive conversations in the last 30 days across all agents. For the top one, drill in and summarize what happened. If you spot a recurring waste pattern (e.g., AG re-asking the same thing every turn), propose a skill pack that fixes it.' },
-    { label: 'Where is CRA being used?',    prompt: 'How is CRA being used? Is it actually getting traction or is it sitting idle? Pull recent CRA conversations and characterize the work. If a pattern emerges that could shift from per-turn instruction to a skill pack, propose it.' }
+    { label: 'Where is HR being used?',     prompt: 'How is HR being used? Is it actually getting traction or is it sitting idle? Pull recent HR (entity_type=client) conversations and characterize the work. If a pattern emerges that could shift from per-turn instruction to a skill pack, propose it.' }
   ];
   function getActivePresets() {
     if (isJobMode())    return JOB_PRESETS;
@@ -726,7 +726,7 @@
     var headerEl = document.querySelector('#agx-ai-panel .agx-ai-title');
     if (headerEl) {
       if (isJobMode())            headerEl.textContent = '📊 Elle · WIP Analyst';
-      else if (isClientMode())    headerEl.textContent = '🤝 Customer Relations Agent';
+      else if (isClientMode())    headerEl.textContent = '🤝 HR · Customer Relations';
       else if (isStaffMode())     headerEl.textContent = '🎩 Chief of Staff';
       else                        headerEl.textContent = '📐 AG · AGX Estimator';
     }
@@ -736,8 +736,8 @@
     var noticeEl = document.querySelector('#agx-ai-panel #ai-notice');
     if (noticeEl) {
       if (isJobMode()) noticeEl.textContent = 'I\'m Elle, your WIP analyst. I see WIP, costs, the node graph, and QB lines — and I can propose edits (e.g. set a phase\'s % complete) for you to approve before they apply.';
-      else if (isClientMode()) noticeEl.textContent = 'Customer Relations Agent — I keep the parent-company / property hierarchy clean. Simple writes apply automatically; restructural changes (new parent, merges, splits, deletes) require approval.';
-      else if (isStaffMode()) noticeEl.textContent = 'Chief of Staff — I observe AG / WIP / CRA. I read metrics, audit conversations, and propose skill-pack edits for you to approve. Conversation replay still queued.';
+      else if (isClientMode()) noticeEl.textContent = 'I\'m HR, AGX\'s customer relations agent. I keep the parent-company / property hierarchy clean. Simple writes apply automatically; restructural changes (new parent, merges, splits, deletes) require approval.';
+      else if (isStaffMode()) noticeEl.textContent = 'Chief of Staff — I observe AG / Elle / HR. I read metrics, audit conversations, and propose skill-pack edits for you to approve. Conversation replay still queued.';
       else noticeEl.textContent = 'I\'m AG — your AGX estimator. I can draft scopes, add/edit/delete line items and sections, and tweak pricing. Every change is shown as a card with Approve / Reject before it lands.';
     }
     var inputEl = document.getElementById('ai-input');
@@ -836,8 +836,8 @@
     if (!_messages.length) {
       var hint;
       if (isJobMode()) hint = '<strong style="color:var(--text,#fff);">📊 Elle · WIP Analyst</strong><br>Pick a preset below or ask anything about this job.<br><span style="font-size:11px;opacity:0.7;">I see contract, costs, COs, %complete, billing — plus the node graph wiring and QuickBooks cost lines.</span>';
-      else if (isClientMode()) hint = '<strong style="color:var(--text,#fff);">🤝 Customer Relations Agent</strong><br>Tap <strong>Run full audit</strong> to clean up the directory in one pass — I\'ll split parent+property compounds, link unparented entries, merge dupes, and surface anything ambiguous for you.<br><span style="font-size:11px;opacity:0.7;">I know the AGX hierarchy: parent management company → property/community → CAM contact.</span>';
-      else if (isStaffMode()) hint = '<strong style="color:var(--text,#fff);">🎩 Chief of Staff</strong><br>I observe AG / WIP / CRA — usage, cost, conversations, skill packs — and I can propose skill-pack edits for you to approve.<br><span style="font-size:11px;opacity:0.7;">Conversation replay is still queued.</span>';
+      else if (isClientMode()) hint = '<strong style="color:var(--text,#fff);">🤝 HR · Customer Relations</strong><br>Tap <strong>Run full audit</strong> to clean up the directory in one pass — I\'ll split parent+property compounds, link unparented entries, merge dupes, and surface anything ambiguous for you.<br><span style="font-size:11px;opacity:0.7;">I know the AGX hierarchy: parent management company → property/community → CAM contact.</span>';
+      else if (isStaffMode()) hint = '<strong style="color:var(--text,#fff);">🎩 Chief of Staff</strong><br>I observe AG / Elle / HR — usage, cost, conversations, skill packs — and I can propose skill-pack edits for you to approve.<br><span style="font-size:11px;opacity:0.7;">Conversation replay is still queued.</span>';
       else hint = '<strong style="color:var(--text,#fff);">📐 AG — your AGX estimator</strong><br>Pick a preset or describe what you need. I can read the estimate, scope, client, and photos — and propose adds, edits, deletes, and pricing changes for you to approve.<br><span style="font-size:11px;opacity:0.7;">Try "tighten this estimate" or "build my line items".</span>';
       box.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;padding:20px 0;text-align:center;line-height:1.6;">' + hint + '</div>';
       return;
@@ -2097,7 +2097,7 @@
       detail = '<div style="font-size:13px;color:var(--text,#fff);background:rgba(255,255,255,0.04);padding:8px 10px;border-radius:4px;border-left:2px solid #fbbf24;">' +
           escapeHTMLLocal(input.body || '') +
         '</div>' +
-        '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:6px;">Auto-injects into AG and CRA system prompts on every future turn touching this client.</div>' +
+        '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:6px;">Auto-injects into AG and HR system prompts on every future turn touching this client.</div>' +
         (input.client_id ? '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:2px;font-family:monospace;">client: ' + escapeHTMLLocal(input.client_id) + '</div>' : '');
     } else if (tu.name === 'propose_skill_pack_add') {
       heading = '&#x1F9E0; Add skill pack';
@@ -2483,7 +2483,7 @@
   //              chip in pill with view link, AI sees it via context
   //     pdf    → upload to entity attachments AND render pages client-side
   //              into _pendingImages so the AI can read them as vision
-  //   client (Customer Relations Agent)
+  //   client (HR — customer relations)
   //     image  → no persistence (no client_id chosen yet); send as
   //              one-shot inline vision image so the AI can read e.g.
   //              a business card. Future tool will let the agent attach

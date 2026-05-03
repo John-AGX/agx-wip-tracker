@@ -39,7 +39,7 @@ const MODEL_COSTS = {
 const AGENT_LABELS = {
   estimate: '📐 AG (Estimator)',
   job:      '📊 Elle (WIP Analyst)',
-  client:   '🤝 CRA (Customer Relations)'
+  client:   '🤝 HR (Customer Relations)'
 };
 
 function costFor(model, inputTokens, outputTokens) {
