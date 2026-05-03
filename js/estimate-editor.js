@@ -86,12 +86,15 @@
     var el = document.getElementById('ee-save-indicator');
     if (!el) return;
     var dot, label, color;
+    // CSS vars instead of hardcoded hex so the indicator picks up
+    // light-mode-darker variants automatically (e.g. --yellow goes
+    // #fbbf24 → #d97706 in light mode for legibility on white).
     switch (_saveState) {
-      case 'pending':  dot = '●'; label = 'Unsaved'; color = '#fbbf24'; break;
-      case 'saving':   dot = '●'; label = 'Saving…'; color = '#60a5fa'; break;
-      case 'saved':    dot = '✓'; label = 'Saved'; color = '#34d399'; break;
-      case 'retrying': dot = '⟳'; label = 'Retrying…'; color = '#fbbf24'; break;
-      case 'error':    dot = '!'; label = 'Save failed — will retry on next edit'; color = '#f87171'; break;
+      case 'pending':  dot = '●'; label = 'Unsaved'; color = 'var(--yellow,#fbbf24)'; break;
+      case 'saving':   dot = '●'; label = 'Saving…'; color = 'var(--accent,#60a5fa)'; break;
+      case 'saved':    dot = '✓'; label = 'Saved'; color = 'var(--green,#34d399)'; break;
+      case 'retrying': dot = '⟳'; label = 'Retrying…'; color = 'var(--yellow,#fbbf24)'; break;
+      case 'error':    dot = '!'; label = 'Save failed — will retry on next edit'; color = 'var(--red,#f87171)'; break;
       default:         dot = '○'; label = 'No changes'; color = 'var(--text-dim,#888)'; break;
     }
     el.style.color = color;
@@ -326,7 +329,7 @@
             canEdit: true
           });
         } else {
-          mountEl.innerHTML = '<div style="padding:18px;color:#fbbf24;font-size:12px;">Attachments widget not loaded — refresh the page.</div>';
+          mountEl.innerHTML = '<div style="padding:18px;color:var(--yellow,#fbbf24);font-size:12px;">Attachments widget not loaded — refresh the page.</div>';
           console.warn('[estimate-editor] window.agxAttachments not available; can not mount photos tab');
         }
       }
@@ -368,7 +371,7 @@
           '<span>&#x1F4CB;</span>From lead: ' + escapeHTML(lead.title) + ' &rarr;' +
         '</button>';
       } else {
-        html += '<span style="display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:14px;background:rgba(251,191,36,0.10);color:#fbbf24;font-size:11px;">' +
+        html += '<span style="display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:14px;background:rgba(251,191,36,0.10);color:var(--yellow,#fbbf24);font-size:11px;">' +
           '<span>&#x1F4CB;</span>Linked to lead' +
         '</span>';
       }
@@ -705,13 +708,13 @@
       '</div>';
     }
     var groupCountChip = (t.includedGroups && t.includedGroups.length > 1)
-      ? chip('Active Group', fmtCurrency(t.activeGroupSubtotal) + (t.activeGroupExcluded ? ' (excluded)' : ''), t.activeGroupExcluded ? 'var(--text-dim,#888)' : '#60a5fa')
+      ? chip('Active Group', fmtCurrency(t.activeGroupSubtotal) + (t.activeGroupExcluded ? ' (excluded)' : ''), t.activeGroupExcluded ? 'var(--text-dim,#888)' : 'var(--accent,#60a5fa)')
       : '';
     totalsEl.innerHTML =
       groupCountChip +
       chip('Subtotal', fmtCurrency(t.subtotal), 'var(--text,#fff)') +
-      chip('Markup', fmtCurrency(t.markupAmount), '#fbbf24') +
-      chip('Tax + Fees', fmtCurrency(t.feeFlat + t.feePctAmount + t.taxAmount), '#60a5fa') +
+      chip('Markup', fmtCurrency(t.markupAmount), 'var(--yellow,#fbbf24)') +
+      chip('Tax + Fees', fmtCurrency(t.feeFlat + t.feePctAmount + t.taxAmount), 'var(--accent,#60a5fa)') +
       chip('Proposal Total', fmtCurrency(t.total), null, 'ee-grand-total') +
       chip('Lines', t.lineCount, 'var(--text-dim,#888)');
     // Also refresh the detailed breakdown card under the line items.
@@ -760,12 +763,12 @@
       html += '<div style="border-top:1px solid var(--border,#333);margin:8px 0;"></div>';
     }
     html += row('Subtotal (cost, all included groups)', t.subtotal);
-    html += row('Markup', t.markupAmount, { color: '#fbbf24' });
+    html += row('Markup', t.markupAmount, { color: 'var(--yellow,#fbbf24)' });
     html += row('Marked-Up Subtotal', t.markedUp, { divider: true });
-    if (t.feeFlat) html += row('+ Flat Fee', t.feeFlat, { color: '#60a5fa' });
-    if (t.feePctAmount) html += row('+ Percentage Fee', t.feePctAmount, { color: '#60a5fa' });
+    if (t.feeFlat) html += row('+ Flat Fee', t.feeFlat, { color: 'var(--accent,#60a5fa)' });
+    if (t.feePctAmount) html += row('+ Percentage Fee', t.feePctAmount, { color: 'var(--accent,#60a5fa)' });
     if (t.feeFlat || t.feePctAmount) html += row('Pre-Tax Total', t.preTax, { divider: true });
-    if (t.taxAmount) html += row('+ Tax', t.taxAmount, { color: '#60a5fa' });
+    if (t.taxAmount) html += row('+ Tax', t.taxAmount, { color: 'var(--accent,#60a5fa)' });
     if (t.rounded) html += row('+ Round Up', t.rounded, { color: 'var(--text-dim,#888)' });
     html += row('Proposal Total', t.total, { bold: true, cls: 'ee-grand-total', divider: true });
     el.innerHTML = html;
@@ -786,7 +789,7 @@
     var activeAlt = getActiveAlternate();
     var bannerHtml = '';
     if (activeAlt && activeAlt.excludeFromTotal) {
-      bannerHtml = '<div style="padding:10px 14px;background:rgba(251,191,36,0.10);border:1px solid rgba(251,191,36,0.35);border-radius:8px;margin-bottom:10px;font-size:12px;color:#fbbf24;">' +
+      bannerHtml = '<div style="padding:10px 14px;background:rgba(251,191,36,0.10);border:1px solid rgba(251,191,36,0.35);border-radius:8px;margin-bottom:10px;font-size:12px;color:var(--yellow,#fbbf24);">' +
         '⚠ This group is <strong>excluded</strong> from the proposal total. Lines you edit here won\'t ship to the client. Toggle the group on in the strip above to include it.' +
       '</div>';
     }
