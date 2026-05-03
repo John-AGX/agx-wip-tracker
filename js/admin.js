@@ -3017,31 +3017,124 @@
   }
 
   function openNewEvalModal() {
-    var name = prompt('Fixture name (e.g., "Wimbledon Greens deck rebuild — line-item draft")');
-    if (!name) return;
-    var estimateId = prompt('Estimate ID to replay (must exist in DB)');
-    if (!estimateId) return;
-    var userPrompt = prompt('User prompt to send (e.g., "Build my line items")', 'Build my line items');
-    if (!userPrompt) return;
-    var minLines = prompt('Min line items expected (number, blank to skip)', '');
-    var maxLines = prompt('Max line items expected (number, blank to skip)', '');
-    var keywordsStr = prompt('Must-mention keywords (comma-separated, blank to skip)', '');
-    var sectionsStr = prompt('Must-have sections (comma-separated, blank to skip)', '');
-    var fixture = { estimate_id: estimateId.trim(), user_prompt: userPrompt.trim() };
+    var host = document.getElementById('agents-content');
+    if (!host) return;
+    host.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;font-style:italic;padding:20px 0;">Loading recent estimates…</div>';
+    window.agxApi.estimates.list().then(function(resp) {
+      var estimates = (resp && resp.estimates) || [];
+      // Sort newest-first; cap at 200 so the dropdown stays usable.
+      estimates.sort(function(a, b) { return (b.updated_at || '').localeCompare(a.updated_at || ''); });
+      estimates = estimates.slice(0, 200);
+      var options = '<option value="">— Pick an estimate —</option>' +
+        estimates.map(function(e) {
+          var when = '';
+          try { when = new Date(e.updated_at).toLocaleDateString(); } catch (ex) {}
+          var label = (e.title || '(untitled)') + (when ? ' · ' + when : '') + ' · ' + e.id.slice(-8);
+          return '<option value="' + escapeAttr(e.id) + '">' + escapeHTML(label) + '</option>';
+        }).join('');
+      host.innerHTML =
+        '<div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">' +
+          '<button class="ee-btn secondary" onclick="cancelNewEval()">&larr; Back to evals</button>' +
+          '<div style="flex:1;font-size:14px;font-weight:600;color:var(--text,#fff);">New eval fixture</div>' +
+        '</div>' +
+        '<p style="margin:0 0 14px 0;font-size:12px;color:var(--text-dim,#888);">' +
+          'Replays a known estimate through AG with a fixed prompt and scores the response. Pick an estimate you trust as ground truth — the runner rebuilds AG\'s normal context (photos, attachments, linked-lead notes, client notes, skill packs) just like a real chat session.' +
+        '</p>' +
+        '<div style="display:flex;flex-direction:column;gap:14px;background:rgba(255,255,255,0.03);border:1px solid var(--border,#333);border-radius:8px;padding:16px;">' +
+          fieldset('Identity',
+            '<div><label style="display:block;font-size:11px;color:var(--text-dim,#888);margin-bottom:4px;">Fixture name *</label>' +
+              '<input id="evalNew_name" type="text" placeholder="e.g., Wimbledon Greens deck rebuild — line-item draft" style="width:100%;" /></div>' +
+            '<div style="margin-top:10px;"><label style="display:block;font-size:11px;color:var(--text-dim,#888);margin-bottom:4px;">Description (optional)</label>' +
+              '<textarea id="evalNew_description" rows="2" style="resize:vertical;width:100%;" placeholder="What this fixture is testing"></textarea></div>'
+          ) +
+          fieldset('Source estimate',
+            '<div><label style="display:block;font-size:11px;color:var(--text-dim,#888);margin-bottom:4px;">Pick estimate * <span style="color:var(--text-dim,#888);font-weight:400;">(' + estimates.length + ' shown, newest first)</span></label>' +
+              '<select id="evalNew_estimateId" style="width:100%;font-family:inherit;">' + options + '</select></div>' +
+            '<div style="margin-top:10px;"><label style="display:block;font-size:11px;color:var(--text-dim,#888);margin-bottom:4px;">User prompt *</label>' +
+              '<textarea id="evalNew_userPrompt" rows="2" style="resize:vertical;width:100%;font-family:inherit;">Build my line items</textarea></div>'
+          ) +
+          fieldset('Expected signals (all optional — leave blank to skip a check)',
+            '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">' +
+              '<div><label style="display:block;font-size:11px;color:var(--text-dim,#888);margin-bottom:4px;">Min line items</label>' +
+                '<input id="evalNew_minLines" type="number" min="0" max="200" placeholder="e.g., 8" /></div>' +
+              '<div><label style="display:block;font-size:11px;color:var(--text-dim,#888);margin-bottom:4px;">Max line items</label>' +
+                '<input id="evalNew_maxLines" type="number" min="0" max="200" placeholder="e.g., 25" /></div>' +
+            '</div>' +
+            '<div style="margin-top:10px;"><label style="display:block;font-size:11px;color:var(--text-dim,#888);margin-bottom:4px;">Must-mention keywords <span style="color:var(--text-dim,#888);font-weight:400;">(comma-separated)</span></label>' +
+              '<input id="evalNew_keywords" type="text" placeholder="e.g., pickets, demo, fasteners" style="width:100%;" /></div>' +
+            '<div style="margin-top:10px;"><label style="display:block;font-size:11px;color:var(--text-dim,#888);margin-bottom:4px;">Must-have sections <span style="color:var(--text-dim,#888);font-weight:400;">(comma-separated)</span></label>' +
+              '<input id="evalNew_sections" type="text" placeholder="e.g., Materials &amp; Supplies, Direct Labor" style="width:100%;" /></div>'
+          ) +
+          '<div id="evalNew_error" style="color:#e74c3c;font-size:12px;display:none;"></div>' +
+          '<div style="display:flex;gap:8px;justify-content:flex-end;">' +
+            '<button class="ee-btn secondary" onclick="cancelNewEval()">Cancel</button>' +
+            '<button class="ee-btn primary" id="evalNew_submitBtn" onclick="submitNewEval()">Save fixture</button>' +
+          '</div>' +
+        '</div>';
+
+      // Pre-fill estimate dropdown if the user is currently inside the
+      // estimate editor — quick-snapshot path.
+      try {
+        if (window.estimateEditorAPI && typeof window.estimateEditorAPI.getOpenId === 'function') {
+          var openId = window.estimateEditorAPI.getOpenId();
+          if (openId) {
+            var sel = document.getElementById('evalNew_estimateId');
+            if (sel) sel.value = openId;
+          }
+        }
+      } catch (e) { /* ignore */ }
+    }).catch(function(err) {
+      host.innerHTML = '<div style="color:#e74c3c;font-size:12px;padding:20px 0;">Could not load estimates: ' + escapeHTML(err.message || 'unknown') + '</div>';
+    });
+  }
+
+  function fieldset(legend, body) {
+    return '<fieldset style="border:1px solid var(--border,#333);border-radius:6px;padding:10px 14px;margin:0;">' +
+      '<legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">' + escapeHTML(legend) + '</legend>' +
+      body +
+      '</fieldset>';
+  }
+
+  function cancelNewEval() {
+    renderAgentEvalsList();
+  }
+
+  function submitNewEval() {
+    var name = (document.getElementById('evalNew_name').value || '').trim();
+    var description = (document.getElementById('evalNew_description').value || '').trim();
+    var estimateId = (document.getElementById('evalNew_estimateId').value || '').trim();
+    var userPrompt = (document.getElementById('evalNew_userPrompt').value || '').trim();
+    var minLines = (document.getElementById('evalNew_minLines').value || '').trim();
+    var maxLines = (document.getElementById('evalNew_maxLines').value || '').trim();
+    var keywordsStr = (document.getElementById('evalNew_keywords').value || '').trim();
+    var sectionsStr = (document.getElementById('evalNew_sections').value || '').trim();
+    var errEl = document.getElementById('evalNew_error');
+    function showErr(msg) { errEl.textContent = msg; errEl.style.display = 'block'; }
+
+    if (!name)         return showErr('Fixture name is required.');
+    if (!estimateId)   return showErr('Pick an estimate from the dropdown.');
+    if (!userPrompt)   return showErr('User prompt is required.');
+
+    var fixture = { estimate_id: estimateId, user_prompt: userPrompt };
     var expected = {};
-    if (minLines && Number(minLines)) expected.min_line_items = Number(minLines);
-    if (maxLines && Number(maxLines)) expected.max_line_items = Number(maxLines);
-    if (keywordsStr.trim()) expected.must_mention = keywordsStr.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
-    if (sectionsStr.trim()) expected.must_have_section = sectionsStr.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+    if (minLines && Number(minLines) >= 0) expected.min_line_items = Number(minLines);
+    if (maxLines && Number(maxLines) >= 0) expected.max_line_items = Number(maxLines);
+    if (keywordsStr) expected.must_mention = keywordsStr.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+    if (sectionsStr) expected.must_have_section = sectionsStr.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+
+    var btn = document.getElementById('evalNew_submitBtn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
     window.agxApi.post('/api/admin/agents/evals', {
-      name: name.trim(),
+      name: name,
+      description: description || undefined,
       kind: 'estimate_draft',
       fixture: fixture,
       expected_signals: expected
     }).then(function() {
       renderAgentEvalsList();
     }).catch(function(err) {
-      alert('Save failed: ' + (err.message || 'unknown'));
+      showErr('Save failed: ' + (err.message || 'unknown'));
+      if (btn) { btn.disabled = false; btn.textContent = 'Save fixture'; }
     });
   }
 
@@ -3057,4 +3150,6 @@
   window.runEval = runEval;
   window.deleteEval = deleteEval;
   window.openNewEvalModal = openNewEvalModal;
+  window.cancelNewEval = cancelNewEval;
+  window.submitNewEval = submitNewEval;
 })();
