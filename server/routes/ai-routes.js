@@ -59,8 +59,27 @@ function getAnthropic() {
 })();
 
 // Sonnet 4.6 = the right cost/capability tier for an estimating assistant.
-// Override via env if we want to A/B against Opus.
+// Override via env if we want to A/B against Opus 4.7 (the right
+// flip when the eval harness shows quality is the bottleneck, not
+// cost): set AI_MODEL=claude-opus-4-7 on Railway.
 const MODEL = process.env.AI_MODEL || 'claude-sonnet-4-6';
+
+// Optional thinking-effort knob. Opus 4.7 supports "low" | "medium" |
+// "high" | "xhigh" | "max". xhigh is the recommended default for most
+// agentic / coding-style work on 4.7. Sonnet 4.6 supports the same
+// scale up to "high". Sonnet 4.5 / Haiku 4.5 do NOT support effort —
+// passing it there would 400, so we only attach the param when the
+// model is in the supported set.
+const EFFORT = (process.env.AI_EFFORT || '').trim().toLowerCase();
+const EFFORT_SUPPORTED_MODELS = new Set([
+  'claude-opus-4-5', 'claude-opus-4-6', 'claude-opus-4-7', 'claude-sonnet-4-6'
+]);
+function effortClause() {
+  if (!EFFORT) return null;
+  if (!EFFORT_SUPPORTED_MODELS.has(MODEL)) return null;
+  return { effort: EFFORT };
+}
+
 // Bumped from 2000 → 8000 because multi-section audit/summary
 // responses (e.g. "Top 5 Actions" tables with rationale per row)
 // were hitting the 2000 cap and truncating mid-cell. Sonnet 4.6
@@ -955,13 +974,14 @@ async function runStream({ anthropic, res, system, messages, persistAssistantTex
         Object.assign({}, toolList[toolList.length - 1], { cache_control: { type: 'ephemeral' } })
       ]
     : toolList;
-  const stream = anthropic.messages.stream({
+  const _effort = effortClause();
+  const stream = anthropic.messages.stream(Object.assign({
     model: MODEL,
     max_tokens: MAX_TOKENS,
     system: system,
     tools: cachedTools,
     messages: messages
-  });
+  }, _effort ? { output_config: _effort } : {}));
 
   stream.on('text', (delta) => {
     assistantText += delta;
@@ -2569,13 +2589,14 @@ async function streamClientTurn({ anthropic, res, system, messages }) {
         Object.assign({}, allClientTools[allClientTools.length - 1], { cache_control: { type: 'ephemeral' } })
       ]
     : allClientTools;
-  const stream = anthropic.messages.stream({
+  const _effortC = effortClause();
+  const stream = anthropic.messages.stream(Object.assign({
     model: MODEL,
     max_tokens: MAX_TOKENS,
     system: system,
     tools: cachedClientTools,
     messages
-  });
+  }, _effortC ? { output_config: _effortC } : {}));
   stream.on('text', (delta) => {
     assistantText += delta;
     res.write('data: ' + JSON.stringify({ delta }) + '\n\n');
@@ -3201,13 +3222,14 @@ async function streamStaffTurn({ anthropic, res, system, messages }) {
   let assistantText = '';
   let finalContent = null;
   let usage = { input_tokens: null, output_tokens: null };
-  const stream = anthropic.messages.stream({
+  const _effortS = effortClause();
+  const stream = anthropic.messages.stream(Object.assign({
     model: MODEL,
     max_tokens: MAX_TOKENS,
     system: system,
     tools: cachedTools,
     messages
-  });
+  }, _effortS ? { output_config: _effortS } : {}));
   stream.on('text', (delta) => {
     assistantText += delta;
     res.write('data: ' + JSON.stringify({ delta }) + '\n\n');
