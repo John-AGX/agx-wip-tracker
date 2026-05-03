@@ -77,6 +77,23 @@ const MAX_TOKENS = 8000;
 const MAX_HISTORY_PAIRS = 12;
 
 // ──────────────────────────────────────────────────────────────────
+// Server-hosted web tools. Anthropic runs these — we just declare them
+// and the model decides when to invoke. `web_search` is GA (no beta
+// header needed). max_uses caps per-turn calls so a runaway loop can't
+// rack up search spend (~$10 / 1k searches as of writing). All three
+// agents (estimate, job, client) get the same allowance — researching
+// material specs, supplier sites, parent-company background, etc. is
+// useful in every role.
+//
+// `web_fetch` is intentionally not included yet — it's still beta and
+// requires a beta header (`web-fetch-2025-09-10`) plumbed through the
+// stream call. Add it as a follow-up once we decide we want URL fetch.
+// ──────────────────────────────────────────────────────────────────
+const WEB_TOOLS = [
+  { type: 'web_search_20250305', name: 'web_search', max_uses: 5 }
+];
+
+// ──────────────────────────────────────────────────────────────────
 // Tools — write controls. Claude can propose edits via these; the UI
 // shows each proposal as an Approve/Reject card. Nothing lands in the
 // estimate until the user approves. The "propose_" prefix in every tool
@@ -707,6 +724,14 @@ async function buildEstimateContext(estimateId, includePhotos) {
   stableLines.push('- Subgroup markup typical: Materials 20%, Labor 35%, GC 25%, Subs 10%. Per-line markup overrides the subgroup only when there\'s a real reason (special-order item priced higher, or a loss-leader line).');
   stableLines.push('- Always include a rationale on each proposal — it\'s shown to the user on the approval card.');
   stableLines.push('');
+  stableLines.push('# Web research (web_search tool)');
+  stableLines.push('You have a web_search tool. Use it judiciously — it adds a few seconds and a small cost per call. Good reasons to search:');
+  stableLines.push('  • Material specs / SKUs the user references (e.g., "Trex Transcend Spiced Rum" — confirm board dimensions, install method, current MSRP at Home Depot / Lowe\'s).');
+  stableLines.push('  • Manufacturer install guides when scope hinges on a method detail (Hardie siding nailing schedule, GAF roofing underlayment requirements).');
+  stableLines.push('  • Current Central-FL labor / material price benchmarks when the user asks for a quick gut-check on a number.');
+  stableLines.push('  • Code or permit references (FBC chapter X requires Y) when the line item depends on it.');
+  stableLines.push('Do NOT search for things already answered in the estimate context, the loaded skills, or your own trade knowledge. Cap usage at ~2 searches per turn unless the user explicitly asks for deeper research. Cite sources briefly when you use a search result to support a number or claim.');
+  stableLines.push('');
 
   // Load admin-editable skill packs targeted at AG. Stable across the
   // 5-min cache window since admins rarely edit them mid-session.
@@ -890,7 +915,11 @@ async function runStream({ anthropic, res, system, messages, persistAssistantTex
   // under the per-request limit.
   // Caller can pass `tools` to swap in JOB_TOOLS (or any other tool
   // set). Defaults to ESTIMATE_TOOLS for backwards-compat.
-  const toolList = Array.isArray(tools) ? tools : ESTIMATE_TOOLS;
+  // Web tools sit at the FRONT of the array so the cache_control
+  // breakpoint stays on the last user-defined tool — that way the cached
+  // prefix covers system + WEB_TOOLS + user tools as one block.
+  const userTools = Array.isArray(tools) ? tools : ESTIMATE_TOOLS;
+  const toolList = [...WEB_TOOLS, ...userTools];
   const cachedTools = toolList.length
     ? [
         ...toolList.slice(0, -1),
@@ -1474,6 +1503,13 @@ async function buildJobContext(jobId, clientContext) {
   lines.push('- **Every block above is LIVE for this turn** — node graph, QB cost lines, workspace sheets all rebuild from the client on every user message and every tool_use continuation. If something was just created/edited, it\'s in the data above. NEVER say "I can\'t see new X" or "the snapshot is stale" or "you need to refresh the session" — those statements are factually wrong about how this assistant works.');
   lines.push('- When the user references a node/sheet/line by name and you can\'t find it, search the relevant block by case-insensitive partial match before asking — it\'s usually there.');
   lines.push('- Be concise and direct. Construction trade vocabulary is welcome. If you need one piece of info to answer well, ask one targeted question first.');
+  lines.push('');
+  lines.push('# Web research (web_search tool)');
+  lines.push('You have a web_search tool. Use it sparingly on the job side — most answers are already in the WIP snapshot, change orders, QB cost lines, and node graph above. Good reasons to search:');
+  lines.push('  • Look up a recurring vendor name to figure out what trade/category they serve when the QB account label is ambiguous (e.g., "is ACME Supply Co a roofing supplier or a general lumberyard?").');
+  lines.push('  • Confirm a sub\'s scope or licensing when categorizing their cost lines.');
+  lines.push('  • Look up a product/material SKU charged to the job when the PM asks "what did we buy here?".');
+  lines.push('Do NOT search for AGX-internal financial questions, margin math, or anything answered by the data above. Cap at ~2 searches per turn.');
 
   // Job side stays plain — single string. Lower volume than AG/CRA so
   // the marginal caching benefit isn't worth the structural complexity.
@@ -2336,6 +2372,15 @@ async function buildClientDirectoryContext() {
   stable.push('  • After a batch of changes, give the user a one-line summary in plain text. Skip narration — they want results, not commentary.');
   stable.push('  • If asked to "run a full audit": work the directory in this order — (1) split obvious parent+property compounds, (2) link unparented children to existing parents, (3) merge clear duplicates, (4) flag (in chat, no tool call) the rest as ambiguous for the user to decide on.');
   stable.push('');
+  stable.push('# Web research (web_search tool)');
+  stable.push('You have a web_search tool. The CRA role is the highest-value place to use it — Central-FL property management is constantly reorganizing, and the directory often has stale or ambiguous data. Good reasons to search:');
+  stable.push('  • Confirm a parent-company / property relationship before linking (e.g., "Is Solace Tampa managed by PAC or by Bainbridge?" — search the property name + "managed by").');
+  stable.push('  • Find the current canonical name for a parent company before renaming variants (e.g., "Preferred Apartment Communities" merged with another entity — look up the current corporate name).');
+  stable.push('  • Look up a property\'s physical address when only the community name is known and we need to populate property_address.');
+  stable.push('  • Find a property\'s on-site CAM or maintenance manager from a public LinkedIn / management-company website / apartments.com listing when we have a name but no email/phone.');
+  stable.push('  • Resolve abbreviation ambiguity — "RPM" could be RPM Living OR a regional smaller firm. Search before guessing.');
+  stable.push('Cap at ~3 searches per turn. When a search result drives a propose_* call, include a brief source citation in the rationale shown on the approval card so the user can audit.');
+  stable.push('');
   stable.push('# Tool tiers — system handles the gating, you just call');
   stable.push('  AUTO (applies immediately, model continues in same turn):');
   stable.push('    create_property, update_client_field, link_property_to_parent');
@@ -2424,12 +2469,16 @@ async function streamClientTurn({ anthropic, res, system, messages }) {
   // Strip our local `tier` field before sending; cache the whole tools
   // block by marking the last entry.
   const cleanTools = CLIENT_TOOLS.map(({ tier, ...t }) => t);
-  const cachedClientTools = cleanTools.length
+  // Web tools sit at the FRONT so the cache_control breakpoint stays on
+  // the last user-defined tool (covers system + WEB_TOOLS + CLIENT_TOOLS
+  // in the cached prefix).
+  const allClientTools = [...WEB_TOOLS, ...cleanTools];
+  const cachedClientTools = allClientTools.length
     ? [
-        ...cleanTools.slice(0, -1),
-        Object.assign({}, cleanTools[cleanTools.length - 1], { cache_control: { type: 'ephemeral' } })
+        ...allClientTools.slice(0, -1),
+        Object.assign({}, allClientTools[allClientTools.length - 1], { cache_control: { type: 'ephemeral' } })
       ]
-    : cleanTools;
+    : allClientTools;
   const stream = anthropic.messages.stream({
     model: MODEL,
     max_tokens: MAX_TOKENS,
