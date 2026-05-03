@@ -109,28 +109,6 @@ function requireDynamicCapability(getCap) {
 
 function entityTypeOk(t) { return VALID_ENTITY_TYPES.has(t); }
 
-// GET /api/attachments/:entityType/:entityId — list. Ordered by `position`
-// so reorder later (drag-drop) is just a column update.
-router.get('/:entityType/:entityId',
-  requireAuth,
-  requireDynamicCapability(req => entityTypeOk(req.params.entityType) ? readCapForEntity(req.params.entityType) : null),
-  async (req, res) => {
-    try {
-      const { entityType, entityId } = req.params;
-      const { rows } = await pool.query(
-        `SELECT * FROM attachments
-         WHERE entity_type = $1 AND entity_id = $2
-         ORDER BY position ASC, uploaded_at ASC`,
-        [entityType, entityId]
-      );
-      res.json({ attachments: rows });
-    } catch (e) {
-      console.error('GET /api/attachments error:', e);
-      res.status(500).json({ error: 'Server error' });
-    }
-  }
-);
-
 // GET /api/attachments/raw/:id — stream the attachment bytes back through
 // the API so the browser fetches them same-origin. Used by the photo
 // markup viewer: <img crossOrigin="anonymous" src="https://attachments.
@@ -139,9 +117,9 @@ router.get('/:entityType/:entityId',
 // blocking toBlob(). Routing the bytes through here side-steps both
 // problems.
 //
-// Path is /raw/:id (not /:id/raw) so it doesn't collide with the
-// existing GET /:entityType/:entityId list route — that pattern would
-// otherwise match /:something/raw and reject "raw" as a bad entity.
+// MUST be registered BEFORE the GET /:entityType/:entityId list route
+// below — Express matches in declaration order, and that pattern would
+// otherwise capture /raw/:id with entityType="raw" and reject it.
 //
 // Query: ?variant=web|original (default web — smaller / faster).
 router.get('/raw/:id', requireAuth, async (req, res) => {
@@ -165,10 +143,33 @@ router.get('/raw/:id', requireAuth, async (req, res) => {
     res.setHeader('Cache-Control', 'private, max-age=300');
     res.send(buf);
   } catch (e) {
-    console.error('GET /api/attachments/:id/raw error:', e);
+    console.error('GET /api/attachments/raw/:id error:', e);
     res.status(500).json({ error: 'Server error' });
   }
 });
+
+// GET /api/attachments/:entityType/:entityId — list. Ordered by `position`
+// so reorder later (drag-drop) is just a column update.
+router.get('/:entityType/:entityId',
+  requireAuth,
+  requireDynamicCapability(req => entityTypeOk(req.params.entityType) ? readCapForEntity(req.params.entityType) : null),
+  async (req, res) => {
+    try {
+      const { entityType, entityId } = req.params;
+      const { rows } = await pool.query(
+        `SELECT * FROM attachments
+         WHERE entity_type = $1 AND entity_id = $2
+         ORDER BY position ASC, uploaded_at ASC`,
+        [entityType, entityId]
+      );
+      res.json({ attachments: rows });
+    } catch (e) {
+      console.error('GET /api/attachments error:', e);
+      res.status(500).json({ error: 'Server error' });
+    }
+  }
+);
+
 
 // POST /api/attachments/:entityType/:entityId — upload one file as form-data
 // field `file`. Returns the inserted attachment row.
