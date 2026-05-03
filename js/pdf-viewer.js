@@ -199,4 +199,65 @@
   }
 
   window.openPdfViewer = openPdfViewer;
+
+  // Headless render — fetches a PDF attachment, rasterizes the first
+  // `maxPages` pages off-screen, and returns the page renders as base64
+  // JPEGs. No DOM side effects. Used by the AI panel's auto-render path
+  // for PDFs whose server-side text extraction came up empty (scanned
+  // RFPs, photo-report-style PDFs from CompanyCam, drawing PDFs).
+  //
+  // Caller is responsible for caching — this function re-renders every
+  // call. Default maxPages is intentionally lower than the manual
+  // viewer's MAX_AI_PAGES (which is 10) to keep auto-attached images
+  // cheap on every-turn cost; raise via the arg if needed.
+  function renderForAI(attachment, maxPages, scale) {
+    if (!window.pdfjsLib) return Promise.reject(new Error('pdfjsLib not loaded'));
+    var cap = Math.max(1, Math.min(20, maxPages || 6));
+    var s   = scale || 1.5;
+    var proxyUrl = '/api/attachments/raw/' + encodeURIComponent(attachment.id) + '?variant=original';
+    var headers = {};
+    var token = (window.agxAuth && typeof window.agxAuth.getToken === 'function')
+      ? window.agxAuth.getToken() : null;
+    if (!token) {
+      try { token = localStorage.getItem('agx-auth-token'); } catch (e) { /* ignore */ }
+    }
+    if (token) headers['Authorization'] = 'Bearer ' + token;
+    return fetch(proxyUrl, { headers: headers, credentials: 'same-origin' })
+      .then(function(r) {
+        if (!r.ok) throw new Error('PDF fetch HTTP ' + r.status);
+        return r.arrayBuffer();
+      })
+      .then(function(buffer) {
+        return window.pdfjsLib.getDocument({ data: buffer }).promise;
+      })
+      .then(function(pdf) {
+        var total = Math.min(pdf.numPages, cap);
+        var images = [];
+        var chain = Promise.resolve();
+        for (var i = 1; i <= total; i++) {
+          (function(pageNum) {
+            chain = chain.then(function() {
+              return pdf.getPage(pageNum).then(function(page) {
+                var viewport = page.getViewport({ scale: s });
+                var canvas = document.createElement('canvas');
+                canvas.width = viewport.width;
+                canvas.height = viewport.height;
+                return page.render({ canvasContext: canvas.getContext('2d'), viewport: viewport }).promise.then(function() {
+                  var dataUrl = canvas.toDataURL('image/jpeg', 0.82);
+                  var idx = dataUrl.indexOf('base64,');
+                  images.push(idx >= 0 ? dataUrl.slice(idx + 7) : dataUrl);
+                  // Detach immediately so memory frees up on the next tick.
+                  canvas.width = 0; canvas.height = 0;
+                });
+              });
+            });
+          })(i);
+        }
+        return chain.then(function() {
+          return { images: images, totalPages: pdf.numPages, renderedPages: total };
+        });
+      });
+  }
+
+  window.agxPdfRender = { renderForAI: renderForAI };
 })();

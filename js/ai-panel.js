@@ -24,6 +24,21 @@
   var _includePhotos = true;    // default-on with toggle, per the user
   var _abortController = null;
 
+  // Auto-rendered PDF page images for the current estimate. Populated
+  // lazily on panel open so by the time the user sends a turn, scanned
+  // PDFs (no extracted text layer) have already been rasterized client-
+  // side and are ready to attach as additional_images. Keyed by
+  // attachment id so each PDF is rendered at most once per session.
+  //
+  // _autoPdfCache:    id → { images: [base64], totalPages, renderedPages, filename }
+  // _autoPdfPromises: id → Promise (in-flight render, awaited on send)
+  // _autoPdfBudget:   per-turn cap on how many auto-render images we
+  //                   actually attach (Anthropic per-request image cap
+  //                   minus reserved photos slots minus composer slots).
+  var _autoPdfCache = {};
+  var _autoPdfPromises = {};
+  var _autoPdfBudget = 12;
+
   function apiBase() {
     if (_entityType === 'job') return '/api/ai/jobs/' + encodeURIComponent(_entityId);
     if (_entityType === 'client') return '/api/ai/clients';
@@ -32,6 +47,91 @@
   function isEstimateMode() { return _entityType === 'estimate'; }
   function isJobMode() { return _entityType === 'job'; }
   function isClientMode() { return _entityType === 'client'; }
+
+  // ────────────────────────────────────────────────────────────────────
+  // Auto-render PDF pages for AG. PDFs without a text layer (scanned
+  // RFPs, photo reports, drawing-only PDFs) are invisible to the
+  // server-side text extractor, so AG would otherwise just see a
+  // filename. We rasterize the first 6 pages client-side via PDF.js
+  // and ship them as additional_images on every chat turn — vision
+  // is dramatically better than no content at all.
+  //
+  // Rendered once per session, cached in _autoPdfCache. Fired in the
+  // background when the panel opens so the cache is warm by the time
+  // the user hits send.
+  // ────────────────────────────────────────────────────────────────────
+
+  // Async-safe: kicks off rendering for every PDF in the estimate that
+  // lacks extracted_text. Records the in-flight promise per attachment
+  // id so a concurrent gather can await the same promise instead of
+  // racing a second render.
+  function kickoffAutoPdfRender(estimateId) {
+    if (!window.agxApi || !window.agxApi.attachments || !window.agxPdfRender) return;
+    if (!estimateId) return;
+    window.agxApi.attachments.list('estimate', estimateId)
+      .then(function(resp) {
+        var atts = (resp && resp.attachments) || [];
+        atts.forEach(function(att) {
+          if (!att) return;
+          if (att.mime_type !== 'application/pdf') return;
+          if (att.extracted_text && att.extracted_text.length > 0) return; // text-layer PDF, server-side already covers it
+          if (_autoPdfCache[att.id] || _autoPdfPromises[att.id]) return;
+          _autoPdfPromises[att.id] = window.agxPdfRender.renderForAI(att, 6, 1.5)
+            .then(function(result) {
+              _autoPdfCache[att.id] = {
+                images: result.images,
+                totalPages: result.totalPages,
+                renderedPages: result.renderedPages,
+                filename: att.filename
+              };
+              delete _autoPdfPromises[att.id];
+              return _autoPdfCache[att.id];
+            })
+            .catch(function(err) {
+              console.warn('[ai-panel] auto-PDF render failed for ' + att.filename + ':', err && err.message);
+              delete _autoPdfPromises[att.id];
+              // Stash an empty result so we don't keep retrying on every send.
+              _autoPdfCache[att.id] = { images: [], totalPages: 0, renderedPages: 0, filename: att.filename };
+              return _autoPdfCache[att.id];
+            });
+        });
+      })
+      .catch(function(err) {
+        console.warn('[ai-panel] could not list attachments for auto-PDF render:', err && err.message);
+      });
+  }
+
+  // Awaited by sendMessage right before posting. Resolves all in-flight
+  // renders (if the user clicked send before kickoff finished) and
+  // returns a flat, capped array of base64 image strings to ship as
+  // additional_images. If the panel hasn't kicked off rendering for the
+  // current estimate yet (e.g. AG opened without going through the
+  // editor's Ask AI button), this triggers it now and waits.
+  function gatherAutoPdfImages() {
+    if (!isEstimateMode() || !_estimateId) return Promise.resolve([]);
+    // If nothing has been kicked off yet, do it now and wait. Common when
+    // the panel was opened via a non-editor entry point.
+    if (!Object.keys(_autoPdfCache).length && !Object.keys(_autoPdfPromises).length) {
+      kickoffAutoPdfRender(_estimateId);
+    }
+    var inFlight = Object.values(_autoPdfPromises);
+    var settled = inFlight.length ? Promise.all(inFlight) : Promise.resolve([]);
+    return settled.then(function() {
+      var out = [];
+      var entries = Object.keys(_autoPdfCache).map(function(k) { return _autoPdfCache[k]; });
+      // Distribute the budget evenly so a single huge PDF doesn't crowd
+      // out a small one. Round-robin pages across PDFs until the budget
+      // is exhausted.
+      var perPdf = entries.map(function(e) { return (e.images || []).slice(); });
+      var idx = 0;
+      while (out.length < _autoPdfBudget && perPdf.some(function(p) { return p.length; })) {
+        var slot = perPdf[idx % perPdf.length];
+        if (slot.length) out.push(slot.shift());
+        idx++;
+      }
+      return out;
+    });
+  }
 
   // Preset prompts surfaced as quick-tap buttons. Different presets per
   // entity — estimates focus on scope/materials, jobs on margin/billing.
@@ -579,7 +679,15 @@
       _entityId = entityId;
       _estimateId = entityType === 'estimate' ? entityId : null;
       _messages = [];
+      // Drop the auto-PDF cache when switching entities so we don't
+      // accidentally surface another estimate's renders.
+      _autoPdfCache = {};
+      _autoPdfPromises = {};
       loadHistory();
+      // Fire-and-forget: pre-render scanned PDFs in the background so
+      // the cache is warm by the time the user hits send. No awaits — if
+      // the user types fast we'll catch the in-flight promise on send.
+      if (_estimateId) kickoffAutoPdfRender(_estimateId);
     }
     // Slide the panel in lockstep with the body padding shift.
     // Force a layout commit on the off-screen state first (the initial
@@ -829,12 +937,23 @@
       _pendingImages = null;
     }
     if (composerImages.length) bodyImages = bodyImages.concat(composerImages);
-    if (bodyImages.length) body.additional_images = bodyImages.slice(0, 18);
 
     _pendingComposer = [];
     renderAttachmentsStrip();
 
-    streamFromEndpoint(apiBase() + '/chat', body);
+    // Auto-rendered PDF page images. Gather AFTER the explicit images
+    // (pdf-viewer handoff, composer paste) so those keep priority — the
+    // user's explicit attachment outranks an auto-render of the same PDF.
+    gatherAutoPdfImages().then(function(autoImages) {
+      if (autoImages && autoImages.length) {
+        // Cap the combined payload at 18 (Anthropic's per-request image
+        // ceiling minus a small buffer), matching the prior behavior
+        // for explicit images.
+        bodyImages = bodyImages.concat(autoImages);
+      }
+      if (bodyImages.length) body.additional_images = bodyImages.slice(0, 18);
+      streamFromEndpoint(apiBase() + '/chat', body);
+    });
   }
 
   // Shared streaming runner — used by sendMessage (initial turn) and by
