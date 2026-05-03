@@ -23,7 +23,10 @@
       c.style.display = 'none';
     });
     var target = document.getElementById('estimates-subtab-' + name);
-    if (target) target.style.display = '';
+    // Explicit 'block' so the inline style:display:none; on the
+    // markup definitely loses (same fix as switchAdminSubTab,
+    // switchEstimateEditorTab, switchLeadEditorTab).
+    if (target) target.style.display = 'block';
     if (name === 'leads') {
       // Always re-fetch on tab open so changes from other tabs / users show up
       // immediately instead of requiring a manual Refresh click.

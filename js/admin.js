@@ -1008,7 +1008,11 @@
       c.style.display = 'none';
     });
     var target = document.getElementById('admin-subtab-' + name);
-    if (target) target.style.display = '';
+    // Use explicit 'block' instead of '' — the latter only clears the
+    // inline display attr, which doesn't always win against the
+    // markup's initial style="display:none;" depending on browser
+    // state. Setting block guarantees the pane shows.
+    if (target) target.style.display = 'block';
     if (name === 'users') renderAdminUsers();
     else if (name === 'jobs') renderAdminJobs();
     else if (name === 'metrics') renderAdminMetrics();
