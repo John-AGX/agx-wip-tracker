@@ -2342,6 +2342,11 @@
         // Suppress the textarea's default paste handling so a "Pasted image"
         // placeholder string doesn't end up inside the message body.
         e.preventDefault();
+        // Stop the event from bubbling up to the pill listener — without
+        // this, both handlers would fire and the same image would be
+        // attached twice (the AI then sees doubles and sometimes returns
+        // an empty response).
+        e.stopPropagation();
         handleSelectedFiles(pastedFiles);
       }
       // If no images were on the clipboard we let the default text-paste
@@ -2351,6 +2356,8 @@
     if (textInput) textInput.addEventListener('paste', handlePaste);
     // Also listen on the pill container so a click anywhere inside the
     // input area + Ctrl+V works even when the textarea isn't focused.
+    // Paste events from the textarea call stopPropagation above, so this
+    // only fires when the focus target is the pill itself.
     if (pill) pill.addEventListener('paste', handlePaste);
   }
 
