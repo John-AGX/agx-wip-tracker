@@ -958,14 +958,20 @@
 
   // Drop the column header into the sticky title strip's host.
   // Called from renderLineItems; cleared in switchEstimateEditorTab
-  // when the user navigates to a non-line-items tab.
+  // when the user navigates to a non-line-items tab. The host hides
+  // (display:none) when empty so the sticky strip doesn't reserve
+  // header space the user can't see content for.
   function mountLineColumnHeader() {
     var host = document.getElementById('ee-line-header-host');
-    if (host) host.innerHTML = renderLineHeaderRow();
+    if (!host) return;
+    host.innerHTML = renderLineHeaderRow();
+    host.style.display = '';
   }
   function clearLineColumnHeader() {
     var host = document.getElementById('ee-line-header-host');
-    if (host) host.innerHTML = '';
+    if (!host) return;
+    host.innerHTML = '';
+    host.style.display = 'none';
   }
 
   // Drag handle markup shared by section headers + line rows. The HTML5
