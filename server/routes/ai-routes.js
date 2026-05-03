@@ -644,9 +644,13 @@ async function buildEstimateContext(estimateId, includePhotos) {
   if (docManifest.length) {
     lines.push('# Attached documents (' + docManifest.length + ')');
     var anyWithText = docManifest.some(function(d) { return d.extracted_text; });
-    lines.push(anyWithText
-      ? 'PDF text below has been extracted at upload time. Quote / cite directly when relevant. For docs without extracted text (scanned PDFs, Excel, Word), ask the user to paste excerpts.'
-      : 'Filenames listed for reference. Ask the user to paste relevant excerpts if needed.');
+    var headerLine = anyWithText
+      ? 'PDF text below has been extracted at upload time. Quote / cite directly when relevant.'
+      : 'Filenames listed for reference.';
+    headerLine += ' For docs WITHOUT extracted text (scanned PDFs, photo reports like CompanyCam, Excel, Word):' +
+      ' if the user has clicked "Ask AI" from the PDF viewer, the page renders are attached as images this turn — read them with vision and treat that as the document content.' +
+      ' Only ask the user to paste excerpts if no images were attached.';
+    lines.push(headerLine);
     lines.push('');
     docManifest.forEach(function(d) {
       var sizeStr = d.size != null ? ' (' + (d.size > 1048576 ? (d.size / 1048576).toFixed(1) + ' MB' : Math.round(d.size / 1024) + ' KB') + ')' : '';
@@ -656,7 +660,7 @@ async function buildEstimateContext(estimateId, includePhotos) {
         lines.push(d.extracted_text);
         lines.push('```');
       } else {
-        lines.push('_(no extractable text — likely a scanned PDF or non-PDF doc)_');
+        lines.push('_(no embedded text layer — read the rendered page images attached this turn, if any)_');
       }
       lines.push('');
     });
