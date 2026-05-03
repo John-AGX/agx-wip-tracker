@@ -731,9 +731,13 @@
         statusEl.style.color = '#34d399';
         statusEl.textContent = 'Saved.';
         setTimeout(function() {
+          // Capture onDone BEFORE closeOverlay nulls state. Without
+          // this, the refresh callback never fires and the new markup
+          // doesn't show until the user manually reloads.
+          var done = state && state.onDone;
           dlg.remove();
           closeOverlay();
-          state && state.onDone && state.onDone();
+          if (typeof done === 'function') done();
         }, 350);
       }).catch(function(err) {
         btn.disabled = false;
