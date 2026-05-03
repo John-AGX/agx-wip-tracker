@@ -18,6 +18,14 @@
     return d.toLocaleDateString();
   }
 
+  // Local escape helper — null-safe wrapper around the global escapeHTML.
+  // Used for inline-string attribute interpolation (onclick handlers,
+  // data-* attrs, value attrs) where a null/undefined would otherwise
+  // serialize as the literal string "null" / "undefined".
+  function escapeAttr(v) {
+    return escapeHTML(v == null ? '' : String(v));
+  }
+
   function roleBadge(role) {
     var colors = { admin: '#34d399', corporate: '#4f8cff', pm: '#fbbf24' };
     var color = colors[role] || '#8b90a5';
@@ -2566,37 +2574,43 @@
   //      that admin surface stays where it is).
 
   var _agentsRange = '7d';
-  var _agentsView = 'metrics'; // 'metrics' | 'conversations' | 'evals'
+  var _agentsView = 'metrics'; // 'metrics' | 'conversations' | 'evals' | 'skills'
   var _agentsConvKey = null;   // when drilled into one conversation
   var _agentsEvalId = null;    // when drilled into one eval's run history
 
   function renderAdminAgents() {
     var pane = document.getElementById('admin-subtab-agents');
     if (!pane) return;
+    // Range selector + refresh button hide on the Skills view since neither
+    // applies to skill-pack editing.
+    var showRange = _agentsView !== 'skills';
     pane.innerHTML =
       '<p style="margin:0 0 14px 0;color:var(--text-dim,#888);font-size:12px;">' +
-        'Observability for the three in-app AI agents — usage, cost, and conversations. ' +
-        'For editing the system prompts and skill packs the agents load, see <a href="#" onclick="switchAdminSubTab(\'templates\');return false;" style="color:#4f8cff;">Templates &rarr; Skills</a>.' +
+        'Observability and configuration for the three in-app AI agents — usage, cost, conversations, and the skill packs they load each turn.' +
       '</p>' +
       '<div style="display:flex;gap:8px;align-items:center;margin-bottom:14px;flex-wrap:wrap;">' +
         '<div class="ws-right-tabs" style="margin:0;">' +
           '<button class="ws-right-tab' + (_agentsView === 'metrics' ? ' active' : '') + '" onclick="switchAgentsView(\'metrics\')">&#x1F4CA; Metrics</button>' +
           '<button class="ws-right-tab' + (_agentsView === 'conversations' ? ' active' : '') + '" onclick="switchAgentsView(\'conversations\')">&#x1F4AC; Conversations</button>' +
           '<button class="ws-right-tab' + (_agentsView === 'evals' ? ' active' : '') + '" onclick="switchAgentsView(\'evals\')">&#x1F9EA; Evals</button>' +
+          '<button class="ws-right-tab' + (_agentsView === 'skills' ? ' active' : '') + '" onclick="switchAgentsView(\'skills\')">&#x1F9E0; Skills</button>' +
         '</div>' +
         '<div style="flex:1;"></div>' +
         '<button class="ee-btn" onclick="openChiefOfStaff()" title="Open the Chief of Staff agent — observes AG / Elle / HR, audits conversations, reviews skill packs" style="background:linear-gradient(135deg,#fbbf24,#f97316);color:#fff;border:none;font-weight:600;">&#x1F3A9; Ask Chief of Staff</button>' +
-        '<label style="font-size:11px;color:var(--text-dim,#888);">Window</label>' +
-        '<select id="agents-range-select" onchange="setAgentsRange(this.value)" style="font-size:12px;padding:4px 8px;">' +
-          '<option value="7d"' + (_agentsRange === '7d' ? ' selected' : '') + '>Last 7 days</option>' +
-          '<option value="30d"' + (_agentsRange === '30d' ? ' selected' : '') + '>Last 30 days</option>' +
-        '</select>' +
-        '<button class="ee-btn ghost" onclick="renderAdminAgents()" title="Refresh">&#x21BB;</button>' +
+        (showRange
+          ? ('<label style="font-size:11px;color:var(--text-dim,#888);">Window</label>' +
+             '<select id="agents-range-select" onchange="setAgentsRange(this.value)" style="font-size:12px;padding:4px 8px;">' +
+               '<option value="7d"' + (_agentsRange === '7d' ? ' selected' : '') + '>Last 7 days</option>' +
+               '<option value="30d"' + (_agentsRange === '30d' ? ' selected' : '') + '>Last 30 days</option>' +
+             '</select>' +
+             '<button class="ee-btn ghost" onclick="renderAdminAgents()" title="Refresh">&#x21BB;</button>')
+          : '') +
       '</div>' +
       '<div id="agents-content"></div>';
     if (_agentsView === 'metrics')                   renderAgentsMetrics();
     else if (_agentsView === 'evals' && _agentsEvalId) renderAgentEvalDetail(_agentsEvalId);
     else if (_agentsView === 'evals')                renderAgentEvalsList();
+    else if (_agentsView === 'skills')               renderAgentsSkillsView();
     else if (_agentsConvKey)                         renderAgentsConversationDetail(_agentsConvKey);
     else                                             renderAgentsConversationList();
   }
@@ -2606,6 +2620,9 @@
     renderAdminAgents();
   }
   function switchAgentsView(v) {
+    // Sync any in-flight skill edits before swapping away so the user
+    // doesn't lose changes by clicking another tab.
+    syncAgentsSkillsIfActive();
     _agentsView = v;
     _agentsConvKey = null;
     _agentsEvalId = null;
@@ -2868,6 +2885,58 @@
       return;
     }
     window.agxAI.open({ entityType: 'staff' });
+  }
+
+  // ─────────── Skills view (mounted on the Agents page) ───────────
+  // Reuses the existing skill-pack renderer + draft state from the
+  // Templates → Skills surface. The draft (_skillsDraft) is shared
+  // between the two surfaces, and saving from either persists to the
+  // same app_settings.agent_skills row. We sync inputs into the draft
+  // before any view switch so unsaved edits don't get clobbered.
+  function renderAgentsSkillsView() {
+    var host = document.getElementById('agents-content');
+    if (!host) return;
+    host.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;font-style:italic;padding:20px 0;">Loading skill packs…</div>';
+    window.agxApi.settings.get('agent_skills').then(function(res) {
+      _skillsDraft = (res && res.setting && res.setting.value) || { skills: [] };
+      if (!Array.isArray(_skillsDraft.skills)) _skillsDraft.skills = [];
+      // Reuse the same body markup the Templates → Skills tab renders,
+      // wrap with a save bar tailored for the agents page (lighter than
+      // saveAdminTemplate's "save all settings" action).
+      host.innerHTML =
+        '<p style="margin:0 0 14px 0;color:var(--text-dim,#888);font-size:12px;">' +
+          'Reusable instruction blocks loaded into the in-app AI agents at chat time. The Chief of Staff can also propose skill-pack edits — those land here on approval. Edits made here are also visible from <a href="#" onclick="switchAdminSubTab(\'templates\');return false;" style="color:#4f8cff;">Templates &rarr; Skills</a>.' +
+        '</p>' +
+        '<div id="agents-skills-body">' + renderAgentSkillsHTML() + '</div>' +
+        '<div style="display:flex;gap:8px;align-items:center;margin-top:14px;padding:10px 12px;background:rgba(255,255,255,0.03);border:1px solid var(--border,#333);border-radius:6px;">' +
+          '<span id="agents-skills-status" style="flex:1;font-size:12px;color:var(--text-dim,#888);"></span>' +
+          '<button class="ee-btn secondary" onclick="renderAgentsSkillsView()">Discard changes</button>' +
+          '<button class="ee-btn primary" onclick="saveAgentsSkills()">&#x1F4BE; Save skills</button>' +
+        '</div>';
+    }).catch(function(err) {
+      host.innerHTML = '<div style="color:#e74c3c;font-size:12px;padding:20px 0;">Failed: ' + escapeHTML(err.message || 'unknown') + '</div>';
+    });
+  }
+
+  function saveAgentsSkills() {
+    syncSkillsFromInputs();
+    var statusEl = document.getElementById('agents-skills-status');
+    if (statusEl) { statusEl.textContent = 'Saving…'; statusEl.style.color = 'var(--text-dim,#888)'; }
+    window.agxApi.settings.put('agent_skills', _skillsDraft).then(function() {
+      if (statusEl) { statusEl.textContent = 'Saved.'; statusEl.style.color = '#34d399'; }
+      setTimeout(function() { if (statusEl) statusEl.textContent = ''; }, 2400);
+    }).catch(function(err) {
+      if (statusEl) { statusEl.textContent = 'Save failed: ' + (err.message || ''); statusEl.style.color = '#f87171'; }
+    });
+  }
+
+  // When swapping away from the Skills view (within the Agents page),
+  // sync any in-flight input edits into _skillsDraft so they survive
+  // until either save or discard. switchAgentsView calls this.
+  function syncAgentsSkillsIfActive() {
+    if (_agentsView === 'skills' && _skillsDraft && Array.isArray(_skillsDraft.skills)) {
+      try { syncSkillsFromInputs(); } catch (e) { /* ignore — inputs may not be in DOM yet */ }
+    }
   }
 
   // ─────────── Evals view ───────────
@@ -3148,6 +3217,8 @@
   window.closeAgentConversation = closeAgentConversation;
   window.openReplayDialog = openReplayDialog;
   window.openChiefOfStaff = openChiefOfStaff;
+  window.renderAgentsSkillsView = renderAgentsSkillsView;
+  window.saveAgentsSkills = saveAgentsSkills;
   window.openEvalDetail = openEvalDetail;
   window.closeEvalDetail = closeEvalDetail;
   window.runEval = runEval;
