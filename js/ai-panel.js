@@ -929,7 +929,11 @@
 
     var propContainer = document.createElement('div');
     propContainer.style.cssText = 'margin-top:10px;display:flex;flex-direction:column;gap:6px;';
-    streamDiv.appendChild(propContainer);
+    // Append into the content column (not the streamDiv flex parent),
+    // otherwise the proposal cards become a horizontal flex sibling
+    // of the cloud avatar and the markdown text — which squashes the
+    // markdown into a narrow column and overlaps the cards on top.
+    (contentEl || streamDiv).appendChild(propContainer);
 
     var responses = [];
     var totalCount = toolUses.length;
@@ -2628,12 +2632,11 @@
       '#ai-send { transition: transform 0.12s, opacity 0.12s; } ' +
       '#ai-send:hover:not(:disabled) { transform: translateY(-1px); opacity: 0.92; } ' +
       '#ai-send:disabled { opacity: 0.5; cursor: not-allowed; } ' +
-      // When the panel is open, push the entire page over so the editor
-      // stays fully visible. Sticky elements (page nav, editor header)
-      // respect this since they sit in the document flow. The fixed
-      // panel itself stays at right:0 since fixed-position elements
-      // ignore body padding.
-      'body.agx-ai-open { padding-right: 420px; transition: padding-right 0.22s ease; } ' +
+      // Panel is a floating overlay — no longer pushes the page over.
+      // (Previously body.agx-ai-open added padding-right:420px so the
+      // editor stayed visible alongside, but the layout shift on every
+      // open felt jarring; the user's preference is overlay only.)
+      'body.agx-ai-open { /* overlay mode — no body shift */ } ' +
       // On narrow screens fall back to the overlay behavior — no point
       // shoving a tablet's content into a 200px column.
       '@media (max-width: 1100px) { body.agx-ai-open { padding-right: 0; } }';
