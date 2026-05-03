@@ -802,22 +802,48 @@
     ctx.restore();
   }
 
+  // Arrow rendering: tapered tail (narrow at start, widening as it
+  // approaches the head) + a clean filled triangle tip. Drawn entirely
+  // with fills, not strokes — strokes leaked the line through the tip
+  // and made it look chunky on the back of the arrowhead.
   function drawArrow(ctx, x1, y1, x2, y2, width) {
     var dx = x2 - x1, dy = y2 - y1;
     var len = Math.sqrt(dx * dx + dy * dy);
     if (len < 1) return;
-    var headLen = Math.max(10, width * 4);
+    var w = Math.max(2, width);
+    // Arrowhead size scales with line width but caps at 60% of total
+    // length so short arrows don't end up as just a triangle.
+    var headLen = Math.min(len * 0.6, Math.max(12, w * 3.5));
+    var headHalfWidth = w * 1.5;
     var angle = Math.atan2(dy, dx);
+    var cosA = Math.cos(angle), sinA = Math.sin(angle);
+    // Base of the arrowhead (meeting point with the tail).
+    var xb = x2 - headLen * cosA;
+    var yb = y2 - headLen * sinA;
+    // Perpendicular unit vector.
+    var px = -sinA, py = cosA;
+    var startHalf = w / 3;   // tail starts narrow
+    var baseHalf = w * 0.55; // tail at the head base — slightly wider
+
+    ctx.save();
+    ctx.fillStyle = ctx.strokeStyle;
+    ctx.lineJoin = 'miter';
+    // Tapered tail quad.
     ctx.beginPath();
-    ctx.moveTo(x1, y1);
-    ctx.lineTo(x2, y2);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(x2, y2);
-    ctx.lineTo(x2 - headLen * Math.cos(angle - Math.PI / 6), y2 - headLen * Math.sin(angle - Math.PI / 6));
-    ctx.lineTo(x2 - headLen * Math.cos(angle + Math.PI / 6), y2 - headLen * Math.sin(angle + Math.PI / 6));
+    ctx.moveTo(x1 + px * startHalf, y1 + py * startHalf);
+    ctx.lineTo(xb + px * baseHalf, yb + py * baseHalf);
+    ctx.lineTo(xb - px * baseHalf, yb - py * baseHalf);
+    ctx.lineTo(x1 - px * startHalf, y1 - py * startHalf);
     ctx.closePath();
     ctx.fill();
+    // Arrowhead triangle.
+    ctx.beginPath();
+    ctx.moveTo(x2, y2);
+    ctx.lineTo(xb + px * headHalfWidth, yb + py * headHalfWidth);
+    ctx.lineTo(xb - px * headHalfWidth, yb - py * headHalfWidth);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
   }
 
   // ── Stickers ────────────────────────────────────────────────────
