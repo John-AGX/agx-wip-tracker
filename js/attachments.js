@@ -112,18 +112,32 @@
     var entityType = opts.entityType;
     var entityId = opts.entityId;
     var canEdit = opts.canEdit !== false;
+    // Optional parent entity — when supplied, the widget also fetches
+    // that entity's attachments and renders them in their own read-only
+    // section ("From lead", etc.). Used by the estimate editor to
+    // surface the originating lead's attachments alongside the
+    // estimate's own. Shape: { entityType, entityId, label }.
+    var parentEntity = opts.parentEntity || null;
     if (!entityType || !entityId) {
       container.innerHTML = '<div style="padding:14px;color:var(--text-dim,#888);">Save the ' + escapeHTMLLocal(entityType || 'record') + ' first to attach photos.</div>';
       return;
     }
 
-    var state = { attachments: [], loading: true, uploading: 0 };
+    // state.attachments holds OWN attachments only — parent attachments
+    // live on state.parentAttachments so the slot-count math, delete
+    // gating, and upload limit only apply to what the user owns.
+    var state = { attachments: [], parentAttachments: [], loading: true, uploading: 0 };
 
     function fetchList() {
       state.loading = true;
       render();
-      window.agxApi.attachments.list(entityType, entityId).then(function(res) {
-        state.attachments = res.attachments || [];
+      var ownP = window.agxApi.attachments.list(entityType, entityId);
+      var parentP = parentEntity
+        ? window.agxApi.attachments.list(parentEntity.entityType, parentEntity.entityId).catch(function() { return { attachments: [] }; })
+        : Promise.resolve({ attachments: [] });
+      Promise.all([ownP, parentP]).then(function(results) {
+        state.attachments = (results[0] && results[0].attachments) || [];
+        state.parentAttachments = (results[1] && results[1].attachments) || [];
         state.loading = false;
         render();
       }).catch(function(err) {
@@ -214,11 +228,15 @@
         '</div>';
       }
 
-      if (state.loading && !state.attachments.length) {
+      var parentPhotos = (state.parentAttachments || []).filter(isImageAttachment);
+      var parentDocs = (state.parentAttachments || []).filter(function(a) { return !isImageAttachment(a); });
+      var hasParent = parentPhotos.length + parentDocs.length > 0;
+
+      if (state.loading && !state.attachments.length && !hasParent) {
         html += '<div style="padding:14px;color:var(--text-dim,#888);font-size:12px;">Loading attachments…</div>';
       } else if (state.error) {
         html += '<div style="padding:14px;color:#f87171;font-size:12px;">' + escapeHTMLLocal(state.error) + '</div>';
-      } else if (!state.attachments.length) {
+      } else if (!state.attachments.length && !hasParent) {
         html += '<div style="padding:18px;text-align:center;color:var(--text-dim,#888);font-size:12px;border:1px dashed var(--border,#333);border-radius:8px;">No attachments yet.</div>';
       } else {
         // ── Photos section ──────────────────────────────────────────────
@@ -260,6 +278,46 @@
           // last row should not draw the trailing border
           html = html.replace(/border-bottom:1px solid var\(--border,#2a2a3a\);(?![\s\S]*border-bottom:1px solid var\(--border,#2a2a3a\);)/, '');
           html += '</div>';
+        }
+
+        // ── Parent (read-only) sections ──────────────────────────────
+        // Surfaces e.g. the originating lead's attachments alongside
+        // the estimate's own. Same render as above but no delete
+        // buttons and indexes into a separate lightbox set.
+        if (hasParent) {
+          var parentLabel = (parentEntity && parentEntity.label) ||
+            ('From ' + (parentEntity && parentEntity.entityType ? parentEntity.entityType : 'parent'));
+          if (parentPhotos.length) {
+            html += sectionHeader('📷 ' + parentLabel + ' — Photos', parentPhotos.length);
+            html += '<div data-att-grid-parent="1" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;margin-bottom:18px;opacity:0.92;">';
+            parentPhotos.forEach(function(att, i) {
+              html += '<div class="att-thumb-tile" style="position:relative;border:1px solid rgba(79,140,255,0.35);border-radius:8px;overflow:hidden;background:#000;aspect-ratio:1/1;">' +
+                '<img data-att-thumb-parent="' + i + '" src="' + escapeAttr(att.thumb_url) + '" alt="' + escapeAttr(att.filename) + '" onerror="this.parentNode.classList.add(\'att-thumb-broken\')" style="width:100%;height:100%;object-fit:cover;cursor:zoom-in;display:block;" />' +
+                '<div style="position:absolute;top:4px;left:4px;background:rgba(79,140,255,0.85);color:#fff;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;padding:2px 5px;border-radius:3px;z-index:2;">' + escapeHTMLLocal((parentEntity && parentEntity.entityType) || 'parent') + '</div>' +
+                '<div style="position:absolute;bottom:0;left:0;right:0;background:linear-gradient(transparent,rgba(0,0,0,0.7));color:#fff;font-size:10px;padding:14px 6px 4px;font-family:Arial,sans-serif;pointer-events:none;z-index:1;">' + escapeHTMLLocal(att.filename) + '</div>' +
+              '</div>';
+            });
+            html += '</div>';
+          }
+          if (parentDocs.length) {
+            html += sectionHeader('📎 ' + parentLabel + ' — Documents', parentDocs.length);
+            html += '<div style="display:flex;flex-direction:column;gap:6px;border:1px solid rgba(79,140,255,0.25);border-radius:8px;overflow:hidden;opacity:0.95;">';
+            parentDocs.forEach(function(att) {
+              var isPdf = (att.mime_type && att.mime_type.indexOf('pdf') >= 0) ||
+                          (att.filename || '').toLowerCase().endsWith('.pdf');
+              html += '<div style="display:flex;align-items:center;gap:8px;padding:10px 12px;background:rgba(79,140,255,0.04);border-bottom:1px solid rgba(79,140,255,0.15);">' +
+                '<div style="font-size:24px;flex:0 0 auto;line-height:1;">' + fileIconFor(att.filename, att.mime_type) + '</div>' +
+                '<div style="flex:1;min-width:0;">' +
+                  '<div style="font-size:13px;color:var(--text,#fff);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTMLLocal(att.filename) + '</div>' +
+                  '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:2px;">' + fmtBytes(att.size_bytes) + (att.mime_type ? ' &middot; ' + escapeHTMLLocal(att.mime_type) : '') + '</div>' +
+                '</div>' +
+                (isPdf ? '<button data-att-view-parent="' + escapeAttr(att.id) + '" title="Preview pages" style="flex:0 0 auto;background:rgba(139,92,246,0.12);color:#c4b5fd;border:1px solid rgba(139,92,246,0.3);border-radius:6px;padding:6px 12px;font-size:11px;font-weight:600;cursor:pointer;">&#x1F441; View</button>' : '') +
+                '<a href="' + escapeAttr(att.original_url) + '" download="' + escapeAttr(att.filename) + '" target="_blank" rel="noopener" title="Download" style="flex:0 0 auto;background:rgba(79,140,255,0.12);color:#4f8cff;border:1px solid rgba(79,140,255,0.3);border-radius:6px;padding:6px 12px;text-decoration:none;font-size:11px;font-weight:600;">&#x2B07; Download</a>' +
+              '</div>';
+            });
+            html = html.replace(/border-bottom:1px solid rgba\(79,140,255,0\.15\);(?![\s\S]*border-bottom:1px solid rgba\(79,140,255,0\.15\);)/, '');
+            html += '</div>';
+          }
         }
       }
       container.innerHTML = html;
@@ -319,6 +377,30 @@
           var att = state.attachments.find(function(a) { return a.id === attId; });
           if (att && typeof window.openPdfViewer === 'function') {
             window.openPdfViewer(att, { entityType: entityType, entityId: entityId });
+          } else {
+            alert('PDF viewer not loaded — refresh the page.');
+          }
+        };
+      });
+      // Parent (read-only) sections — same lightbox / PDF viewer
+      // wiring as the owned set, but indexed against parentPhotos and
+      // scoped to the parent entity for the viewer's "Ask AI" context.
+      container.querySelectorAll('[data-att-thumb-parent]').forEach(function(img) {
+        img.onclick = function() {
+          var i = parseInt(img.getAttribute('data-att-thumb-parent'), 10);
+          openLightbox(parentPhotos, i);
+        };
+      });
+      container.querySelectorAll('[data-att-view-parent]').forEach(function(btn) {
+        btn.onclick = function(e) {
+          e.stopPropagation();
+          var attId = btn.getAttribute('data-att-view-parent');
+          var att = state.parentAttachments.find(function(a) { return a.id === attId; });
+          if (att && typeof window.openPdfViewer === 'function') {
+            window.openPdfViewer(att, {
+              entityType: parentEntity && parentEntity.entityType,
+              entityId: parentEntity && parentEntity.entityId
+            });
           } else {
             alert('PDF viewer not loaded — refresh the page.');
           }

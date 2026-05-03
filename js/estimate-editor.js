@@ -331,11 +331,24 @@
         } else if (!_currentId) {
           mountEl.innerHTML = '<div style="padding:18px;color:var(--text-dim,#888);font-size:12px;font-style:italic;">No estimate loaded.</div>';
         } else if (window.agxAttachments && typeof window.agxAttachments.mount === 'function') {
-          window.agxAttachments.mount(mountEl, {
+          // If the estimate was created from a lead (has lead_id), surface
+          // the lead's attachments alongside the estimate's own as a
+          // read-only "From lead" section. Read-only is enforced in the
+          // attachments widget — no upload/delete UI for the parent set.
+          var est = getEstimate();
+          var mountOpts = {
             entityType: 'estimate',
             entityId: _currentId,
             canEdit: true
-          });
+          };
+          if (est && est.lead_id) {
+            mountOpts.parentEntity = {
+              entityType: 'lead',
+              entityId: est.lead_id,
+              label: 'From lead'
+            };
+          }
+          window.agxAttachments.mount(mountEl, mountOpts);
         } else {
           mountEl.innerHTML = '<div style="padding:18px;color:var(--yellow,#fbbf24);font-size:12px;">Attachments widget not loaded — refresh the page.</div>';
           console.warn('[estimate-editor] window.agxAttachments not available; can not mount photos tab');
