@@ -3635,7 +3635,14 @@ router.post('/staff/chat/continue',
       // that came along for the ride get executed too (read tools
       // bundled with proposes). Rejected blocks become an error
       // tool_result so the model knows.
+      //
+      // successfulApprovalSummaries — tracks the human-readable result
+      // string from each approval-tier tool that succeeded. Used as
+      // the fallback assistant text when the model produces empty
+      // text after the tool ran, so the panel never renders
+      // "(no response)" on a successful approval.
       const toolResultBlocks = [];
+      const successfulApprovalSummaries = [];
       for (const d of decisions) {
         const tu = pendingToolUseById.get(d.id);
         if (!tu) {
@@ -3653,6 +3660,11 @@ router.post('/staff/chat/continue',
             ? await execStaffTool(tu.name, tu.input || {})
             : await execStaffApprovalTool(tu.name, tu.input || {});
           res.write('data: ' + JSON.stringify({ tool_applied: { id: tu.id, name: tu.name, input: tu.input, summary: String(summary).slice(0, 500) } }) + '\n\n');
+          // Track approval-tier successes so we can synthesize a
+          // confirmation if the model later produces no follow-up text.
+          if (!isStaffToolAutoTier(tu.name)) {
+            successfulApprovalSummaries.push(String(summary));
+          }
         } catch (e) {
           summary = 'Error: ' + (e.message || 'failed');
           isError = true;
@@ -3679,6 +3691,14 @@ router.post('/staff/chat/continue',
         if (turn.usage.output_tokens) totalUsage.output_tokens += turn.usage.output_tokens;
 
         if (!turn.toolUseBlocks.length) {
+          // Fallback synthesis: if the model returned no text after a
+          // successful approval-tier tool execution (e.g. it felt
+          // "done" and produced nothing despite the prompt nudge),
+          // assemble a one-line confirmation from the tool summaries
+          // so the panel never renders an empty "(no response)" turn.
+          if (!finalAssistantText && successfulApprovalSummaries.length) {
+            finalAssistantText = '✓ ' + successfulApprovalSummaries.join(' Also: ');
+          }
           if (finalAssistantText) {
             const aMsgId = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
             await pool.query(
@@ -3686,6 +3706,11 @@ router.post('/staff/chat/continue',
                VALUES ($1, 'staff', 'global', $2, 'assistant', $3, $4, $5, $6)`,
               [aMsgId, req.user.id, finalAssistantText, MODEL, totalUsage.input_tokens, totalUsage.output_tokens]
             );
+            // Stream the synthesized fallback as a delta so the panel
+            // displays it instead of the empty turn.
+            if (!turn.assistantText) {
+              res.write('data: ' + JSON.stringify({ delta: finalAssistantText }) + '\n\n');
+            }
           }
           res.write('data: ' + JSON.stringify({ done: true, usage: totalUsage }) + '\n\n');
           res.write('data: [DONE]\n\n');
