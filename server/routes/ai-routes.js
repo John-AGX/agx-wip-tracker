@@ -3644,9 +3644,17 @@ router.post('/staff/chat/continue',
       const toolResultBlocks = [];
       const successfulApprovalSummaries = [];
       for (const d of decisions) {
-        const tu = pendingToolUseById.get(d.id);
+        // Panel sends `tool_use_id` (matches CRA continue handler);
+        // earlier this read `d.id` which was always undefined →
+        // pendingToolUseById.get returned undefined → tool never ran
+        // and the model got back "Tool not found in pending content."
+        // as is_error. Result: skill packs silently failed to save
+        // and the model often produced no follow-up text →
+        // "(no response)" in the panel.
+        const tuId = d.tool_use_id || d.id;
+        const tu = pendingToolUseById.get(tuId);
         if (!tu) {
-          toolResultBlocks.push({ type: 'tool_result', tool_use_id: d.id, content: 'Tool not found in pending content.', is_error: true });
+          toolResultBlocks.push({ type: 'tool_result', tool_use_id: tuId, content: 'Tool not found in pending content.', is_error: true });
           continue;
         }
         if (d.approved === false) {
