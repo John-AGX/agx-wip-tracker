@@ -142,6 +142,103 @@
 </svg>
 
 
+<!-- ═══════════════ WIP Assistant Composer Buttons (mixed library) ═══════════════ -->
+<div class="section-divider" style="margin-top:0;border-top:0;">
+  <h2>WIP Assistant Composer — Attach · Camera · Mic · Send</h2>
+  <p class="sub">The four buttons in the AI panel input bar. <strong>Heroicons</strong> for Camera / Mic / Send, <strong>Phosphor</strong> for the Attach (+) button, per your call. Pick by number — e.g. <code>Attach=2, Camera=1, Mic=1, Send=1</code> — and I'll wire them in.</p>
+</div>
+
+<div id="composer-rows"></div>
+
+<style>
+  .cb-row { display: grid; grid-template-columns: 140px 1fr; gap: 24px; align-items: center; padding: 14px 0; border-top: 1px solid #1a1d27; }
+  .cb-row:first-of-type { border-top: 0; }
+  .cb-label { font-size: 13px; font-weight: 600; color: #e4e6f0; text-transform: uppercase; letter-spacing: 0.6px; }
+  .cb-label .cb-lib {
+    display: block;
+    font-size: 9px; color: #6d7080;
+    text-transform: uppercase; letter-spacing: 0.4px;
+    font-weight: 500; margin-top: 2px;
+  }
+  .cb-opts { display: flex; gap: 28px; }
+  .cb-opt { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  .cb-tile {
+    width: 84px; height: 84px;
+    background: #0b0c10;
+    border: 1px solid #1a1d27;
+    border-radius: 16px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .cb-tile svg { width: 56px; height: 56px; }
+  .cb-name {
+    font-size: 9px; color: #6d7080; font-family: 'SF Mono', Consolas, monospace;
+    max-width: 84px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    text-align: center;
+  }
+  .cb-num {
+    font-size: 11px; color: #888; font-weight: 600;
+    background: rgba(255,255,255,0.04); border: 1px solid #1a1d27;
+    border-radius: 12px; padding: 1px 8px; min-width: 18px; text-align: center;
+  }
+</style>
+
+<script>
+  // Composer buttons: 4 concepts, mixed library per concept.
+  // [label, library, [iconName, iconName, ...]]
+  // library is the directory under /assets/icons/agx/.
+  (function () {
+    var COMPOSER = [
+      ['Attach',  'phosphor',  ['paperclip-light', 'plus-light', 'plus-circle-light']],
+      ['Camera',  'heroicons', ['camera', 'photo', 'video-camera']],
+      ['Mic',     'heroicons', ['microphone', 'speaker-wave']],
+      ['Send',    'heroicons', ['paper-airplane', 'arrow-up', 'arrow-up-right']]
+    ];
+
+    var host = document.getElementById('composer-rows');
+    COMPOSER.forEach(function (entry) {
+      var label = entry[0];
+      var lib = entry[1];
+      var icons = entry[2];
+      var row = document.createElement('section');
+      row.className = 'cb-row';
+      row.innerHTML =
+        '<div class="cb-label">' + label +
+          '<span class="cb-lib">' + lib + '</span>' +
+        '</div>' +
+        '<div class="cb-opts"></div>';
+      var opts = row.querySelector('.cb-opts');
+      icons.forEach(function (iconName, idx) {
+        var opt = document.createElement('div');
+        opt.className = 'cb-opt';
+        var tile = document.createElement('div');
+        tile.className = 'cb-tile';
+        var name = document.createElement('div');
+        name.className = 'cb-name';
+        name.textContent = iconName;
+        var num = document.createElement('div');
+        num.className = 'cb-num';
+        num.textContent = (idx + 1);
+        opt.appendChild(tile);
+        opt.appendChild(name);
+        opt.appendChild(num);
+        opts.appendChild(opt);
+        fetch('/assets/icons/agx/' + lib + '/' + iconName + '.svg')
+          .then(function (r) { return r.ok ? r.text() : Promise.reject('http ' + r.status); })
+          .then(function (svgText) {
+            var themed = svgText
+              .replace(/stroke="currentColor"/g, 'stroke="url(#ag)"')
+              .replace(/fill="currentColor"/g, 'fill="url(#ag)"');
+            tile.innerHTML = themed;
+          })
+          .catch(function () {
+            tile.innerHTML = '<span style="color:#f87171;font-size:9px;">' + iconName + '<br>not found</span>';
+          });
+      });
+      host.appendChild(row);
+    });
+  })();
+</script>
+
 <!-- ═══════════════ Heroicons (24/outline) — 3 options per concept ═══════════════ -->
 <div class="section-divider" style="margin-top:0;border-top:0;">
   <h2>Heroicons (24/outline) — 3 options per concept</h2>
