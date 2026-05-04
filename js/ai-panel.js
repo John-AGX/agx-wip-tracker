@@ -1049,11 +1049,15 @@
         '</div>' +
       '</div>';
     }
-    // Grid layout matches appendStreamingBubble — see comment there
-    // for why grid beats flex for this row shape.
-    return '<div style="display:grid;grid-template-columns:22px 1fr;gap:10px;align-items:start;width:100%;min-width:0;">' +
-      '<div style="font-size:18px;line-height:1;margin-top:2px;">☁️</div>' +
-      '<div class="ai-content" style="min-width:0;width:100%;overflow-x:hidden;font-size:13px;line-height:1.55;overflow-wrap:break-word;word-break:normal;">' + renderMarkdown(m.content) + '</div>' +
+    // Stacked layout matches appendStreamingBubble — avatar + role
+    // header on top, content takes full panel width below. See
+    // appendStreamingBubble for why stacked beats avatar-beside-
+    // content for this kind of free-form chat output.
+    return '<div style="width:100%;display:block;">' +
+      '<div style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-dim,#888);margin-bottom:4px;">' +
+        '<span style="font-size:14px;line-height:1;">☁️</span>' +
+      '</div>' +
+      '<div class="ai-content" style="width:100%;overflow-x:hidden;font-size:13px;line-height:1.55;overflow-wrap:anywhere;word-break:normal;">' + renderMarkdown(m.content) + '</div>' +
     '</div>';
   }
 
@@ -1062,20 +1066,22 @@
     if (!box) return null;
     var div = document.createElement('div');
     div.className = 'ai-streaming';
-    // Grid layout — much more predictable than flex for "fixed gutter +
-    // fluid content" rows. Flex with `flex:1; min-width:0` on the
-    // content column was collapsing to single-character width when a
-    // descendant had a wider intrinsic min-content (overflow-auto pre,
-    // long tokens, etc.). Grid's `1fr` is genuinely "remainder of the
-    // row" and ignores child min-content for sizing.
-    div.style.cssText = 'display:grid;grid-template-columns:22px 1fr;gap:10px;align-items:start;width:100%;min-width:0;';
+    // Stacked layout — avatar + role badge on top as a small header,
+    // content takes the full panel width below. Same pattern Claude.ai
+    // and ChatGPT use. Replaces the avatar-beside-content row, which
+    // was fragile to deep-content min-content shenanigans (single-char
+    // wraps, sibling-bubble overlaps) regardless of flex / grid choice
+    // on the row. Block layout sidesteps all of that.
+    div.style.cssText = 'width:100%;display:block;';
     div.innerHTML =
-      '<div style="font-size:18px;line-height:1;margin-top:2px;">☁️</div>' +
-      // overflow-x:hidden caps any wide descendant (a code block, a
-      // long unbreakable URL) so it can\'t push the row wider than
-      // the panel. min-width:0 + width:100% pin the column to the
-      // grid track\'s 1fr, which is the actual remaining-width.
-      '<div class="ai-content" data-stream-content style="min-width:0;width:100%;overflow-x:hidden;font-size:13px;line-height:1.55;overflow-wrap:break-word;word-break:normal;"><span style="color:var(--text-dim,#888);font-style:italic;">Doing brain yoga…</span></div>';
+      '<div style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-dim,#888);margin-bottom:4px;">' +
+        '<span style="font-size:14px;line-height:1;">☁️</span>' +
+        '<span style="font-style:italic;">Doing brain yoga…</span>' +
+      '</div>' +
+      // Content lives in its own block at full panel width. overflow
+      // safety pins remain so a long unbreakable string can\'t push
+      // the panel wider than the parent.
+      '<div class="ai-content" data-stream-content style="width:100%;overflow-x:hidden;font-size:13px;line-height:1.55;overflow-wrap:anywhere;word-break:normal;"></div>';
     box.appendChild(div);
     box.scrollTop = box.scrollHeight;
     return div;
