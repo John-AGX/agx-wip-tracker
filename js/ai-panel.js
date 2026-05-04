@@ -501,6 +501,16 @@
       '<div style="padding:12px 14px;border-bottom:1px solid var(--border,#333);background:linear-gradient(135deg,#0d1f12 0%,#14351d 100%);display:flex;align-items:center;gap:10px;">' +
         '<button id="ai-close" title="Close (Esc)" style="background:rgba(255,255,255,0.12);color:#fff;border:1px solid rgba(255,255,255,0.2);border-radius:6px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:6px;">&rarr; Close</button>' +
         '<div class="agx-ai-title" style="font-size:14px;font-weight:700;color:#fff;flex:1;text-align:right;">&#x2728; AI Assistant</div>' +
+        // AG phase pill — visible only in estimate mode, hidden for
+        // Elle / HR / Chief of Staff. Click flips the estimate\'s
+        // aiPhase, which gates whether AG can propose line items
+        // server-side. Lives in the panel header so the toggle is
+        // right next to AG\'s identity, where the user is already
+        // looking when deciding whether to plan or build.
+        '<div id="agx-ai-phase-pill" role="group" aria-label="AG phase" style="display:none;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);border-radius:14px;padding:2px;font-size:11px;font-weight:600;">' +
+          '<button data-ai-phase="plan" onclick="window.setEstimateAIPhase && window.setEstimateAIPhase(\'plan\')" title="Plan mode — AG discusses scope without proposing line items" style="border:none;background:transparent;color:rgba(255,255,255,0.65);padding:3px 10px;border-radius:12px;cursor:pointer;">&#x1F5FA;</button>' +
+          '<button data-ai-phase="build" onclick="window.setEstimateAIPhase && window.setEstimateAIPhase(\'build\')" title="Build mode — AG proposes line items, sections, and edits" style="border:none;background:transparent;color:rgba(255,255,255,0.65);padding:3px 10px;border-radius:12px;cursor:pointer;">&#x1F528;</button>' +
+        '</div>' +
         '<button id="ai-trust" title="Trust settings — pick which tool types auto-apply (job mode only)" style="background:rgba(255,255,255,0.08);color:#ccc;border:1px solid rgba(255,255,255,0.15);border-radius:6px;padding:6px 8px;font-size:13px;cursor:pointer;display:none;">&#x2699;</button>' +
         '<button id="ai-clear" title="Clear conversation" style="background:rgba(255,255,255,0.08);color:#ccc;border:1px solid rgba(255,255,255,0.15);border-radius:6px;padding:6px 10px;font-size:11px;cursor:pointer;">Clear</button>' +
       '</div>' +
@@ -728,14 +738,35 @@
       if (isJobMode())            headerEl.textContent = '📊 Elle · WIP Analyst';
       else if (isClientMode())    headerEl.textContent = '🤝 HR · Customer Relations';
       else if (isStaffMode())     headerEl.textContent = '🎩 Chief of Staff';
-      else {
-        // AG header includes the active phase suffix (Plan vs Build).
-        // Pulled fresh from the editor API so a phase flip mid-conversation
-        // updates immediately when refreshPhaseChip() fires.
+      else                        headerEl.textContent = '📐 AG · AGX Estimator';
+    }
+    // Plan/Build pill — visible only in estimate mode. Active side
+    // gradient mirrors the editor pill conventions (purple Plan,
+    // green Build). Pulled fresh from the editor API so flips
+    // mid-conversation update immediately when refreshPhaseChip()
+    // fires from the editor side.
+    var pill = document.getElementById('agx-ai-phase-pill');
+    if (pill) {
+      if (isEstimateMode()) {
+        pill.style.display = 'inline-flex';
         var phase = (window.estimateEditorAPI && window.estimateEditorAPI.getAIPhase)
           ? window.estimateEditorAPI.getAIPhase() : 'build';
-        var phaseLabel = phase === 'plan' ? ' · 🗺️ Plan' : '';
-        headerEl.textContent = '📐 AG · AGX Estimator' + phaseLabel;
+        pill.querySelectorAll('[data-ai-phase]').forEach(function(btn) {
+          var isActive = btn.getAttribute('data-ai-phase') === phase;
+          if (isActive) {
+            btn.style.background = phase === 'plan'
+              ? 'linear-gradient(135deg,#a78bfa,#8b5cf6)'
+              : 'linear-gradient(135deg,#4ade80,#22c55e)';
+            btn.style.color = '#fff';
+            btn.style.boxShadow = '0 1px 3px rgba(0,0,0,0.25)';
+          } else {
+            btn.style.background = 'transparent';
+            btn.style.color = 'rgba(255,255,255,0.65)';
+            btn.style.boxShadow = 'none';
+          }
+        });
+      } else {
+        pill.style.display = 'none';
       }
     }
     // Trust gear visible only in job mode (where the toggles apply).

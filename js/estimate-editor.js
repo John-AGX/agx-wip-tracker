@@ -214,7 +214,6 @@
     }
 
     renderHeaderChips();
-    renderAIPhasePill();
     renderAlternateTabs();
     renderTotals();
     renderDetailsForm();
@@ -419,8 +418,11 @@
   //
   // Stored on the estimate's JSONB blob as `aiPhase` ('plan' | 'build').
   // Defaults to 'build' for back-compat with existing estimates.
-  // The server reads the same field on every chat turn and filters
-  // tools + injects mode-specific instructions.
+  //
+  // Server reads the same field on every chat turn and filters tools +
+  // injects mode-specific instructions. The toggle pill itself lives in
+  // the AI panel header (rendered by ai-panel.js) — these helpers stay
+  // here because the editor owns the estimate state.
   // ──────────────────────────────────────────────────────────────────
   function getEstimateAIPhase() {
     var est = getEstimate();
@@ -434,35 +436,10 @@
     if (est.aiPhase === nextPhase) return;
     est.aiPhase = nextPhase;
     debouncedSave();
-    renderAIPhasePill();
-    // Notify the AI panel so its mode chip updates without waiting
-    // for the next turn (visual feedback parity with the toggle click).
+    // Tell the AI panel to re-render its pill + notice + header.
     if (window.agxAI && typeof window.agxAI.refreshPhaseChip === 'function') {
       try { window.agxAI.refreshPhaseChip(); } catch (e) { /* ignore */ }
     }
-  }
-
-  function renderAIPhasePill() {
-    var phase = getEstimateAIPhase();
-    var pill = document.getElementById('ee-ai-phase');
-    if (!pill) return;
-    pill.querySelectorAll('[data-ai-phase]').forEach(function(btn) {
-      var isActive = btn.getAttribute('data-ai-phase') === phase;
-      if (isActive) {
-        // Plan mode = warm purple (matches the Ask AI brand). Build =
-        // green for "shipping" feel. Inactive sides stay neutral.
-        var bg = phase === 'plan'
-          ? 'linear-gradient(135deg,#a78bfa,#8b5cf6)'
-          : 'linear-gradient(135deg,#4ade80,#22c55e)';
-        btn.style.background = bg;
-        btn.style.color = '#fff';
-        btn.style.boxShadow = '0 1px 4px rgba(0,0,0,0.25)';
-      } else {
-        btn.style.background = 'transparent';
-        btn.style.color = 'var(--text-dim,#aaa)';
-        btn.style.boxShadow = 'none';
-      }
-    });
   }
 
   function renderHeaderChips() {
