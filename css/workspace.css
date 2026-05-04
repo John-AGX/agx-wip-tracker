@@ -48,48 +48,13 @@
   color: #252525;
 }
 
-/* Ribbon — light gray strip with white toolbar groups, matching
-   Excel's grouped-button layout. */
-.ws-excel-theme .ws-ribbon {
-  background: #fafafa;
-  border-color: #d4d4d4;
-  color: #252525;
-}
-.ws-excel-theme .ws-ribbon-group {
-  border-right-color: #e1dfdd;
-}
-.ws-excel-theme .ws-ribbon-label {
-  color: #605e5c;
-}
-
-/* Ribbon buttons — flat, transparent until hovered, then a soft
-   neutral lift. Active / toggle-on uses the Excel-green accent. */
-.ws-excel-theme .ws-ribbon .ws-btn {
-  background: transparent;
-  border-color: transparent;
-  color: #252525;
-}
-.ws-excel-theme .ws-ribbon .ws-btn:hover {
-  background: rgba(0, 0, 0, 0.05);
-  border-color: rgba(0, 0, 0, 0.1);
-  color: #252525;
-}
-.ws-excel-theme .ws-ribbon .ws-btn:active,
-.ws-excel-theme .ws-ribbon .ws-btn.ws-active {
-  background: rgba(16, 124, 65, 0.15);
-  border-color: rgba(16, 124, 65, 0.4);
-  color: #107C41;
-}
-.ws-excel-theme .ws-ribbon .ws-btn.ws-btn-save {
-  background: rgba(16, 124, 65, 0.15);
-  border-color: rgba(16, 124, 65, 0.4);
-  color: #107C41;
-}
-.ws-excel-theme .ws-ribbon .ws-btn.ws-btn-save:hover {
-  background: rgba(16, 124, 65, 0.3);
-  border-color: #107C41;
-  color: #ffffff;
-}
+/* Ribbon stays dark (Outlook style) even when the Excel theme is
+   active on the rest of the workspace — the user wants dark-mode
+   toolbar chrome with a light grid below. The grid + headers + cell
+   colors keep their Excel skin via the rules further down; only the
+   ribbon override is suppressed here.
+   (Old white-skin ribbon rules removed; the dark base styling in
+   the main .ws-ribbon block below applies regardless of theme.) */
 
 /* Formula bar + cell-ref */
 .ws-excel-theme .ws-cell-ref,
@@ -239,18 +204,22 @@
    divider on the right edge. Lets the user scan the toolbar by
    purpose (Font, Alignment, Number…) instead of one big flat
    stripe of buttons. */
+/* Outlook-style ribbon — dark fixed strip, grouped sections with
+   small uppercase captions underneath, vertical 1px dividers
+   between groups. Buttons stay compact (icon-only or short label)
+   so the whole strip fits without wrapping. */
 .ws-ribbon {
   display: flex;
   align-items: stretch;
   gap: 0;
-  padding: 4px 4px 2px;
+  padding: 6px 6px 0;
   background: var(--surface2, #242836);
   border: 1px solid var(--border, #2e3346);
   border-top: none;
   border-radius: 0 0 6px 6px;
-  flex-wrap: wrap;
-  /* Allow a horizontal scroll on narrow viewports rather than
-     wrapping groups in half — wrapping mid-group looks broken. */
+  flex-wrap: nowrap;
+  /* Horizontal scroll on narrow viewports rather than wrapping mid-
+     group (which looks broken). */
   overflow-x: auto;
   scrollbar-width: thin;
 }
@@ -258,44 +227,45 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: space-between;
-  padding: 0 8px;
+  flex: 0 0 auto;
+  padding: 0 6px;
+  /* Caption divider replaces the right-side line — Outlook draws
+     a faint vertical between groups via the .ws-ribbon-sep span /
+     the caption\'s top border. Drop the inter-group right border
+     and let the section caption + caption-top-border carry the
+     visual divide. */
   border-right: 1px solid var(--border, #2e3346);
-  /* Tighter min-width than groups deserve naturally so the dividers
-     hug the controls. */
   min-width: 0;
 }
 .ws-ribbon-group:last-child {
   border-right: none;
 }
 .ws-ribbon-controls {
-  /* Natural-width flex — each group sizes to its actual button
-     count. 2-button groups (History, Styles, Cells) stay narrow;
-     6-button groups (Font, Alignment, Number, Editing) take more
-     width but stay on a single row. Net: the whole ribbon
-     collapses to 2 rows total (button row + label row). */
   display: flex;
   align-items: center;
   gap: 2px;
-  padding-bottom: 4px;
+  padding: 2px 0 6px;
   flex-wrap: nowrap;
 }
 .ws-ribbon-label {
-  font-size: 9px;
-  font-weight: 600;
+  font-size: 10px;
+  font-weight: 500;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.6px;
   color: var(--text-dim, #8b90a5);
-  padding-top: 2px;
+  padding: 3px 4px 4px;
+  border-top: 1px solid var(--border, #2e3346);
   white-space: nowrap;
   text-align: center;
   width: 100%;
 }
-/* Spacer pushes the right-edge group (File) to the far right of
-   the ribbon while keeping it inside the wrapping flex layout. */
+/* Spacer pushes the Editing group to the far right of the ribbon
+   so secondary controls sit against the right edge — Outlook does
+   the same with Quick Steps / Tags / Print on its right side. */
 .ws-ribbon .ws-toolbar-spacer {
-  flex: 1;
+  flex: 1 1 auto;
   border-right: none;
+  min-width: 8px;
 }
 
 /* Excel-style flat ribbon buttons. The base .ws-btn rule ships with a

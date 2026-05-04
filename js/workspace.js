@@ -2319,6 +2319,12 @@
           <div class="ws-ribbon-label">Cells</div>
         </div>
 
+        <!-- Spacer pushes the Editing group to the far right of the
+             ribbon so Σ / sort / find / freeze cluster against the
+             right edge — matches the Outlook ribbon layout where
+             secondary controls sit on the right. -->
+        <div class="ws-toolbar-spacer"></div>
+
         <!-- Editing -->
         <div class="ws-ribbon-group">
           <div class="ws-ribbon-controls">
