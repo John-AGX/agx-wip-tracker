@@ -1274,7 +1274,10 @@
   var AUTO_READ_TOOLS = {
     read_workspace_sheet_full: true,
     read_qb_cost_lines: true,
-    read_materials: true
+    read_materials: true,
+    read_purchase_history: true,
+    read_subs: true,
+    read_lead_pipeline: true
   };
 
   function finalizeProposalBubble(streamDiv, assistantText, toolUses, pendingContent) {
@@ -1623,11 +1626,12 @@
     if (isJobMode()) {
       return applyJobTool(tu);
     }
-    // read_materials doesn\'t need the estimate editor open — it\'s a
-    // pure catalog query. Handle it before the editor checks so AG
-    // can run a price lookup even if the user is on a different page.
-    if (tu.name === 'read_materials') {
-      return applyReadMaterials(tu.input || {});
+    // Auto-tier read tools that hit the server-side /api/ai/exec-tool
+    // endpoint. None of these need the estimate editor open — they\'re
+    // pure data lookups against the AGX database. Handled before the
+    // editor checks so AG can run them from any context.
+    if (AG_SERVER_AUTO_TOOLS[tu.name]) {
+      return execAGAutoTool(tu.name, tu.input || {});
     }
     if (!window.estimateEditorAPI) {
       throw new Error('Estimate editor not loaded — refresh the page.');
@@ -1648,38 +1652,23 @@
     }
   }
 
-  // Hits /api/materials and formats results as a string the assistant
-  // can read in its tool_result. Trims rows past the requested limit.
-  function applyReadMaterials(input) {
-    var params = {};
-    if (input.q && String(input.q).trim()) params.q = String(input.q).trim();
-    if (input.subgroup) params.subgroup = input.subgroup;
-    if (input.category) params.category = input.category;
-    if (input.limit) params.limit = Math.max(1, Math.min(100, Number(input.limit) || 20));
-    else params.limit = 20;
-    return window.agxApi.materials.list(params).then(function(resp) {
-      var rows = (resp && resp.materials) || [];
-      var total = (resp && resp.totalInDb) || 0;
-      if (!rows.length) {
-        var queryDesc = params.q ? '"' + params.q + '"' : '(no filter)';
-        return 'No materials matched ' + queryDesc + '. Catalog has ' + total + ' total entries. Try a broader keyword or different subgroup/category.';
-      }
-      var lines = ['Found ' + rows.length + ' material' + (rows.length === 1 ? '' : 's') + ' (catalog: ' + total + ' total). Format: description · unit · last $/avg $ · last seen · purchase count.'];
-      rows.forEach(function(r) {
-        var fmtMoney = function(n) { return n == null ? '—' : '$' + Number(n).toFixed(2); };
-        var lastSeen = r.last_seen ? String(r.last_seen).slice(0, 10) : 'never';
-        lines.push('- ' + r.description +
-          (r.sku ? ' [SKU ' + r.sku + ']' : '') +
-          ' · ' + (r.unit || '?') +
-          ' · last ' + fmtMoney(r.last_unit_price) + '/avg ' + fmtMoney(r.avg_unit_price) +
-          ' (range ' + fmtMoney(r.min_unit_price) + '-' + fmtMoney(r.max_unit_price) + ')' +
-          ' · ' + lastSeen +
-          ' · ' + (r.purchase_count || 0) + 'x' +
-          (r.category ? ' · ' + r.category : '') +
-          (r.agx_subgroup ? ' [' + r.agx_subgroup + ']' : ''));
+  // AG\'s auto-tier read tools that hit the unified server-side
+  // executor at /api/ai/exec-tool. The server formats the result
+  // (same code path the chief of staff uses) and returns a string;
+  // we pass it straight back as the tool_result so the model sees
+  // identical output regardless of which agent invokes the tool.
+  var AG_SERVER_AUTO_TOOLS = {
+    read_materials: true,
+    read_purchase_history: true,
+    read_subs: true,
+    read_lead_pipeline: true
+  };
+  function execAGAutoTool(name, input) {
+    return window.agxApi.post('/api/ai/exec-tool', { name: name, input: input || {} })
+      .then(function(resp) {
+        if (resp && typeof resp.summary === 'string') return resp.summary;
+        return '(empty result)';
       });
-      return lines.join('\n');
-    });
   }
 
   // propose_add_client_note — POSTs to the linked client's notes endpoint.

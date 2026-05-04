@@ -247,6 +247,54 @@ const ESTIMATE_TOOLS = [
       },
       required: []
     }
+  },
+  {
+    name: 'read_purchase_history',
+    description: 'Drill into the per-purchase log for a specific material (or by free-text query). Returns purchase_date, quantity, unit_price, store_number, job_name, and net_unit_price for individual receipts — the source rows that aggregate into read_materials\' last/avg/min/max stats. Use this to answer "what did we pay last time we bought X?", "is this material trending up in price?", "which jobs used this SKU recently?". Pair with read_materials: read_materials gets you the rolled-up summary, read_purchase_history gets you the receipt-level detail.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        material_id: { type: 'integer', description: 'Specific material id (from read_materials results). Skip free-text matching when you already know the SKU.' },
+        q: { type: 'string', description: 'Free-text search across the material description if you don\'t have the id yet.' },
+        days: { type: 'integer', minimum: 1, maximum: 730, description: 'Only show purchases in the last N days. Default 365 (last year).' },
+        job_name: { type: 'string', description: 'Filter to purchases tagged to a specific job name (case-insensitive partial match).' },
+        limit: { type: 'integer', minimum: 1, maximum: 200, description: 'Cap rows returned. Default 30.' }
+      },
+      required: []
+    }
+  },
+  {
+    name: 'read_subs',
+    description: 'Query AGX\'s subcontractor directory. Returns name, trade, status, cert (GL / WC / W9 / Bank) expiration dates, primary contact, business phone — everything you need to know if a sub is available + paperwork-current before scoping work to them. Use it when you\'re drafting a Subcontractors line, or when the user mentions "use ABC Drywall" and you want to confirm they\'re an active sub.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        q: { type: 'string', description: 'Free-text search across name / trade / contact name.' },
+        trade: { type: 'string', description: 'Filter to one trade, e.g. "Painter", "Drywall", "Roofer".' },
+        status: { type: 'string', enum: ['active', 'paused', 'closed'], description: 'Filter by status. Default: active only.' },
+        with_expiring_certs: { type: 'boolean', description: 'When true, only return subs with at least one cert expiring in the next 60 days OR already expired. Useful for audits.' },
+        limit: { type: 'integer', minimum: 1, maximum: 200, description: 'Cap rows returned. Default 30.' }
+      },
+      required: []
+    }
+  },
+  {
+    name: 'read_lead_pipeline',
+    description: 'Query the AGX leads pipeline. Returns title, status, projected_revenue, salesperson, market, source, age, projected_sale_date — both individual leads and rollup counts by status. Use it when scoping a new estimate ("what other leads do we have like this?"), when the user asks about pipeline health, or when the linked-lead context above isn\'t enough and you want sibling context.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        q: { type: 'string', description: 'Free-text search across title / property_name / notes.' },
+        status: { type: 'string', enum: ['new', 'in_progress', 'sent', 'sold', 'lost', 'no_opportunity'], description: 'Filter to one status.' },
+        market: { type: 'string', description: 'Filter to one market (Tampa, Orlando, Sarasota, Brevard, Lakeland, etc.).' },
+        salesperson_email: { type: 'string', description: 'Filter to leads owned by a specific salesperson (matches by email substring).' },
+        limit: { type: 'integer', minimum: 1, maximum: 200, description: 'Cap rows returned. Default 30.' }
+      },
+      required: []
+    }
   }
 ];
 
@@ -813,8 +861,12 @@ async function buildEstimateContext(estimateId, includePhotos) {
   stableLines.push('- Subgroup markup typical: Materials 20%, Labor 35%, GC 25%, Subs 10%. Per-line markup overrides the subgroup only when there\'s a real reason (special-order item priced higher, or a loss-leader line).');
   stableLines.push('- Always include a rationale on each proposal — it\'s shown to the user on the approval card. When the unit cost came from `read_materials`, mention "from catalog (last seen YYYY-MM-DD, Nx purchases)" so the PM knows the number is grounded.');
   stableLines.push('');
-  stableLines.push('# Materials catalog (`read_materials` tool)');
-  stableLines.push('Auto-applies, no approval. Searches AGX\'s purchase history and returns each match with description, SKU, unit, last/avg/min/max unit price, last-seen date, and total purchases. Use the most specific keyword you can — "5/4 PT decking", "Hardie lap 8.25", "joist hanger 2x10", "Behr Marquee deck stain". Cap at ~3 lookups per turn for normal estimates; only chain more for big batched line-item drafts.');
+  stableLines.push('# Auto-tier read tools (no approval, run as inline chips)');
+  stableLines.push('  • `read_materials(q?, subgroup?, category?, limit?)` — catalog summary: description, SKU, unit, last/avg/min/max prices, last-seen, purchase count. Use BEFORE quoting any materials line. Most specific keyword you can — "5/4 PT decking", "Hardie lap 8.25", "joist hanger 2x10".');
+  stableLines.push('  • `read_purchase_history(material_id?, q?, days?, job_name?, limit?)` — receipt-level rows for a SKU. Use to spot trends ("is this getting more expensive?"), find which jobs used a SKU, or answer "what did we pay last time?".');
+  stableLines.push('  • `read_subs(q?, trade?, status?, with_expiring_certs?, limit?)` — subcontractor directory with cert (GL / WC / W9 / Bank) expiry. Use when scoping to a sub: confirm they\'re active and paperwork-current. with_expiring_certs=true for pre-bid audit.');
+  stableLines.push('  • `read_lead_pipeline(q?, status?, market?, salesperson_email?, limit?)` — leads list + status rollup. Use for sibling context ("what other deck jobs are in pipeline?") or pipeline-shape questions.');
+  stableLines.push('Cap auto-tier reads at ~4 per turn for normal estimates; only chain more for big batched line-item drafts. Each chip costs no approval but does cost API tokens.');
   stableLines.push('');
   stableLines.push('# Web research (web_search tool)');
   stableLines.push('You have a web_search tool. Use it judiciously — it adds a few seconds and a small cost per call. Good reasons to search:');
@@ -3101,6 +3153,57 @@ const STAFF_TOOLS = [
     }
   },
   {
+    name: 'read_purchase_history',
+    tier: 'auto',
+    description: 'Per-purchase log for a specific material — the receipt-level rows that aggregate into read_materials\' summary stats. Use to spot pricing trends, find which jobs used a SKU, answer "what did we pay last time?".',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        material_id: { type: 'integer' },
+        q: { type: 'string' },
+        days: { type: 'integer', minimum: 1, maximum: 730 },
+        job_name: { type: 'string' },
+        limit: { type: 'integer', minimum: 1, maximum: 200 }
+      },
+      required: []
+    }
+  },
+  {
+    name: 'read_subs',
+    tier: 'auto',
+    description: 'Query AGX\'s subcontractor directory. Returns name, trade, status, cert (GL / WC / W9 / Bank) expiration dates, contacts. Use to audit cert health, list subs in a trade, or check if a named sub is active.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        q: { type: 'string' },
+        trade: { type: 'string' },
+        status: { type: 'string', enum: ['active', 'paused', 'closed'] },
+        with_expiring_certs: { type: 'boolean' },
+        limit: { type: 'integer', minimum: 1, maximum: 200 }
+      },
+      required: []
+    }
+  },
+  {
+    name: 'read_lead_pipeline',
+    tier: 'auto',
+    description: 'Query the AGX leads pipeline. Returns titles, statuses, projected revenue, salespeople, markets, ages. Use to characterize sales activity, find lead clusters by source/market, or audit pipeline health.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        q: { type: 'string' },
+        status: { type: 'string', enum: ['new', 'in_progress', 'sent', 'sold', 'lost', 'no_opportunity'] },
+        market: { type: 'string' },
+        salesperson_email: { type: 'string' },
+        limit: { type: 'integer', minimum: 1, maximum: 200 }
+      },
+      required: []
+    }
+  },
+  {
     name: 'propose_skill_pack_add',
     tier: 'approval',
     description:
@@ -3179,6 +3282,9 @@ async function buildStaffContext() {
   stable.push('  • `read_conversation_detail(key)` — full message log of one conversation. Pass the `key` from read_recent_conversations.');
   stable.push('  • `read_skill_packs()` — admin-editable instruction packs the agents load each turn.');
   stable.push('  • `read_materials(q?, subgroup?, category?, limit?)` — query AGX\'s materials catalog (Home Depot purchase history, etc.). Same tool AG uses for line-item pricing. Use it to answer "do we have a price book?", spot patterns in what AG should be searching, or audit whether AG quotes are catalog-backed.');
+  stable.push('  • `read_purchase_history(material_id?, q?, days?, job_name?, limit?)` — receipt-level material purchase rows. Use to spot pricing trends, find jobs that used a SKU, or audit whether AG\'s quoted prices match what AGX actually paid recently.');
+  stable.push('  • `read_subs(q?, trade?, status?, with_expiring_certs?, limit?)` — subcontractor directory with cert expiry. Use to surface paperwork-expiring subs, list subs by trade, or confirm a named sub is active. with_expiring_certs=true for compliance audits.');
+  stable.push('  • `read_lead_pipeline(q?, status?, market?, salesperson_email?, limit?)` — leads list + always-included status rollup ($ counts per status). Use for "what does our pipeline look like?", spotting deal-source patterns, or seeing which markets are hot.');
   stable.push('Propose tools (approval-required — user clicks Approve/Reject on a card):');
   stable.push('  • `propose_skill_pack_add(name, body, agents, alwaysOn?, rationale)` — add a new skill pack. agents accepts ["ag", "cra", "job"] (ag=AG, cra=HR, job=Elle). ALWAYS call read_skill_packs first to confirm no name collision.');
   stable.push('  • `propose_skill_pack_edit(name, new_name?, new_body?, agents?, alwaysOn?, rationale)` — change an existing pack. body edits replace the whole body.');
@@ -3431,6 +3537,195 @@ async function execStaffTool(name, input) {
           ' · ' + (m.purchase_count || 0) + 'x' +
           (m.category ? ' · ' + m.category : '') +
           (m.agx_subgroup ? ' [' + m.agx_subgroup + ']' : ''));
+      }
+      return out.join('\n');
+    }
+
+    case 'read_purchase_history': {
+      const days = Math.max(1, Math.min(730, Number(input && input.days) || 365));
+      const limit = Math.max(1, Math.min(200, Number(input && input.limit) || 30));
+      const where = [`purchase_date >= NOW() - INTERVAL '${days} days'`];
+      const params = [];
+      let p = 1;
+      if (input && input.material_id) {
+        params.push(Number(input.material_id));
+        where.push('mp.material_id = $' + p++);
+      } else if (input && input.q && input.q.trim()) {
+        params.push('%' + input.q.trim() + '%');
+        where.push('(m.description ILIKE $' + p + ' OR m.raw_description ILIKE $' + p + ' OR m.sku ILIKE $' + p + ')');
+        p++;
+      }
+      if (input && input.job_name && input.job_name.trim()) {
+        params.push('%' + input.job_name.trim() + '%');
+        where.push('mp.job_name ILIKE $' + p++);
+      }
+      params.push(limit);
+      const r = await pool.query(
+        `SELECT mp.purchase_date, mp.quantity, mp.unit_price, mp.net_unit_price,
+                mp.store_number, mp.job_name, mp.is_return,
+                m.description, m.sku, m.unit
+           FROM material_purchases mp
+           LEFT JOIN materials m ON m.id = mp.material_id
+          WHERE ${where.join(' AND ')}
+          ORDER BY mp.purchase_date DESC
+          LIMIT $${p}`,
+        params
+      );
+      if (!r.rows.length) return 'No purchase records matched in the last ' + days + ' days.';
+      const out = ['Found ' + r.rows.length + ' purchase' + (r.rows.length === 1 ? '' : 's') + ' (last ' + days + ' days):'];
+      for (const x of r.rows) {
+        const date = x.purchase_date ? String(x.purchase_date).slice(0, 10) : '?';
+        const ret = x.is_return ? ' [RETURN]' : '';
+        out.push('- ' + date + ': ' + (x.description || '(unknown)') +
+          (x.sku ? ' [' + x.sku + ']' : '') +
+          ' · qty ' + (x.quantity == null ? '?' : Number(x.quantity)) +
+          ' ' + (x.unit || '') +
+          ' @ $' + (x.unit_price == null ? '?' : Number(x.unit_price).toFixed(2)) +
+          (x.net_unit_price != null && Math.abs(Number(x.net_unit_price) - Number(x.unit_price || 0)) > 0.01 ? ' (net $' + Number(x.net_unit_price).toFixed(2) + ')' : '') +
+          (x.job_name ? ' · ' + x.job_name : '') +
+          (x.store_number ? ' · store #' + x.store_number : '') +
+          ret);
+      }
+      return out.join('\n');
+    }
+
+    case 'read_subs': {
+      const status = (input && input.status) || 'active';
+      const limit = Math.max(1, Math.min(200, Number(input && input.limit) || 30));
+      const where = [];
+      const params = [];
+      let p = 1;
+      if (status !== 'all') { where.push('s.status = $' + p++); params.push(status); }
+      if (input && input.trade && input.trade.trim()) {
+        where.push('s.trade ILIKE $' + p++);
+        params.push('%' + input.trade.trim() + '%');
+      }
+      if (input && input.q && input.q.trim()) {
+        where.push('(s.name ILIKE $' + p + ' OR s.contact_name ILIKE $' + p + ' OR s.primary_contact_first ILIKE $' + p + ' OR s.primary_contact_last ILIKE $' + p + ')');
+        params.push('%' + input.q.trim() + '%');
+        p++;
+      }
+      params.push(limit);
+      const r = await pool.query(
+        `SELECT s.id, s.name, s.trade, s.status, s.contact_name,
+                s.primary_contact_first, s.primary_contact_last,
+                s.business_phone, s.cell_phone, s.email,
+                s.license_no,
+                (SELECT json_agg(json_build_object(
+                   'cert_type', c.cert_type, 'expires', c.expiration_date)
+                   ORDER BY c.cert_type)
+                 FROM sub_certificates c WHERE c.sub_id = s.id) AS certs
+           FROM subs s
+          ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+          ORDER BY lower(s.name)
+          LIMIT $${p}`,
+        params
+      );
+      if (!r.rows.length) return 'No subs matched.';
+      // Optional with_expiring_certs filter — applied in JS since the
+      // expiry condition spans multiple cert rows aggregated as JSON.
+      const today = new Date();
+      const sixtyDaysOut = new Date(today.getTime() + 60 * 24 * 3600 * 1000);
+      let rows = r.rows;
+      if (input && input.with_expiring_certs) {
+        rows = rows.filter(s => {
+          const certs = s.certs || [];
+          return certs.some(c => {
+            if (!c.expires) return false;
+            const d = new Date(c.expires);
+            return d <= sixtyDaysOut;
+          });
+        });
+        if (!rows.length) return 'No subs have certs expiring in the next 60 days.';
+      }
+      const out = ['Found ' + rows.length + ' sub' + (rows.length === 1 ? '' : 's') + ' (status=' + status + '):'];
+      for (const s of rows) {
+        const fullName = [s.primary_contact_first, s.primary_contact_last].filter(Boolean).join(' ') || s.contact_name || '';
+        const certBits = (s.certs || []).map(c => {
+          if (!c.expires) return c.cert_type + ': none';
+          const d = new Date(c.expires);
+          const daysOut = Math.round((d.getTime() - today.getTime()) / (24 * 3600 * 1000));
+          let tag;
+          if (daysOut < 0) tag = ' (EXPIRED ' + Math.abs(daysOut) + 'd ago)';
+          else if (daysOut <= 60) tag = ' (expires in ' + daysOut + 'd)';
+          else tag = '';
+          return c.cert_type + ': ' + String(c.expires).slice(0, 10) + tag;
+        });
+        out.push('- ' + s.name +
+          (s.trade ? ' · ' + s.trade : '') +
+          ' · ' + s.status +
+          (fullName ? ' · ' + fullName : '') +
+          (s.business_phone || s.cell_phone ? ' · ' + (s.business_phone || s.cell_phone) : '') +
+          (s.email ? ' · ' + s.email : '') +
+          (s.license_no ? ' · lic ' + s.license_no : '') +
+          (certBits.length ? '\n    certs: ' + certBits.join(', ') : '\n    certs: (none on file)'));
+      }
+      return out.join('\n');
+    }
+
+    case 'read_lead_pipeline': {
+      const limit = Math.max(1, Math.min(200, Number(input && input.limit) || 30));
+      const where = [];
+      const params = [];
+      let p = 1;
+      if (input && input.status) { where.push('l.status = $' + p++); params.push(input.status); }
+      if (input && input.market) { where.push('l.market ILIKE $' + p++); params.push('%' + input.market + '%'); }
+      if (input && input.q && input.q.trim()) {
+        where.push('(l.title ILIKE $' + p + ' OR l.property_name ILIKE $' + p + ' OR l.notes ILIKE $' + p + ')');
+        params.push('%' + input.q.trim() + '%');
+        p++;
+      }
+      if (input && input.salesperson_email && input.salesperson_email.trim()) {
+        where.push('u.email ILIKE $' + p++);
+        params.push('%' + input.salesperson_email.trim() + '%');
+      }
+      params.push(limit);
+      const r = await pool.query(
+        `SELECT l.id, l.title, l.status, l.confidence, l.market, l.source,
+                l.estimated_revenue_low, l.estimated_revenue_high,
+                l.projected_sale_date, l.created_at, l.updated_at,
+                c.name AS client_name,
+                u.email AS salesperson_email, u.name AS salesperson_name
+           FROM leads l
+           LEFT JOIN clients c ON c.id = l.client_id
+           LEFT JOIN users u ON u.id = l.salesperson_id
+          ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+          ORDER BY l.updated_at DESC
+          LIMIT $${p}`,
+        params
+      );
+      // Always include a status rollup so the model can reason about pipeline shape
+      // without asking for it separately.
+      const rollupQ = await pool.query(
+        `SELECT status, COUNT(*)::int AS n,
+                COALESCE(SUM((estimated_revenue_low + estimated_revenue_high) / 2), 0)::numeric AS midpoint_rev
+           FROM leads GROUP BY status ORDER BY status`
+      );
+      const out = [];
+      out.push('Pipeline rollup (all leads): ' +
+        rollupQ.rows.map(x => x.status + '=' + x.n + ' ($' + Math.round(Number(x.midpoint_rev || 0) / 1000) + 'K)').join(', ') || '(empty)');
+      out.push('');
+      if (!r.rows.length) {
+        out.push('No leads matched the filter.');
+        return out.join('\n');
+      }
+      out.push('Matching leads (' + r.rows.length + '):');
+      for (const x of r.rows) {
+        const lo = Number(x.estimated_revenue_low || 0);
+        const hi = Number(x.estimated_revenue_high || 0);
+        const rev = lo && hi ? '$' + Math.round(lo / 1000) + 'K-$' + Math.round(hi / 1000) + 'K'
+                  : lo || hi ? '$' + Math.round((lo || hi) / 1000) + 'K'
+                  : '?';
+        const days = x.created_at ? Math.round((Date.now() - new Date(x.created_at).getTime()) / (24 * 3600 * 1000)) : null;
+        out.push('- ' + x.title +
+          (x.client_name ? ' · ' + x.client_name : '') +
+          ' · ' + x.status +
+          (x.confidence ? ' · conf ' + x.confidence + '%' : '') +
+          ' · ' + rev +
+          (x.market ? ' · ' + x.market : '') +
+          (x.source ? ' · src ' + x.source : '') +
+          (x.salesperson_email ? ' · sales ' + x.salesperson_email : '') +
+          (days != null ? ' · age ' + days + 'd' : ''));
       }
       return out.join('\n');
     }
@@ -3885,6 +4180,37 @@ router.post('/staff/chat/continue',
     }
   }
 );
+
+// POST /api/ai/exec-tool — generic auto-tier read-tool executor.
+// AG\'s client-side AUTO_READ_TOOLS appliers POST { name, input }
+// here; the server runs execStaffTool inline (the same auto-tier
+// read paths the chief of staff uses) and returns the formatted
+// result string. One endpoint covers read_materials,
+// read_purchase_history, read_subs, read_lead_pipeline — adding a
+// new auto-tier read tool just needs a new case in execStaffTool,
+// no per-tool endpoint.
+//
+// Auth: ESTIMATES_VIEW (the cap PMs running AG sessions already have).
+// The tools themselves are read-only — no mutation paths here.
+const ALLOWED_AG_AUTO_TOOLS = new Set([
+  'read_materials',
+  'read_purchase_history',
+  'read_subs',
+  'read_lead_pipeline'
+]);
+router.post('/exec-tool', requireAuth, requireCapability('ESTIMATES_VIEW'), async (req, res) => {
+  try {
+    const name = req.body && req.body.name;
+    const input = (req.body && req.body.input) || {};
+    if (!name || typeof name !== 'string') return res.status(400).json({ error: 'name is required' });
+    if (!ALLOWED_AG_AUTO_TOOLS.has(name)) return res.status(400).json({ error: 'tool not allowed via this endpoint' });
+    const summary = await execStaffTool(name, input);
+    res.json({ ok: true, summary });
+  } catch (e) {
+    console.error('POST /api/ai/exec-tool error:', e);
+    res.status(500).json({ error: e.message || 'Server error' });
+  }
+});
 
 // Internals exposed for sibling modules (eval harness in
 // admin-agents-routes). NOT for general use — these bypass the
