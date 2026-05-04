@@ -1292,15 +1292,7 @@
         var key = btn.dataset.emailEventSend;
         var label = btn.dataset.emailEventLabel || key;
         if (key === 'user_invite') {
-          // Real flow: open the existing Add User modal. Creating the
-          // user automatically fires the welcome/invite email with
-          // their actual password (the only moment the cleartext
-          // password is in scope).
-          if (typeof window.openNewUserModal === 'function') {
-            window.openNewUserModal();
-          } else {
-            alert('Add User modal not loaded. Switch to Admin → Users and click + New User.');
-          }
+          fireInviteWithChoice();
           return;
         }
         if (key === 'password_reset') {
@@ -1339,6 +1331,109 @@
           });
       });
     });
+  }
+
+  // The Invite-user button opens a 2-way choice: brand-new user (the
+  // existing Add User modal flow) OR existing user (re-send a working
+  // credential by resetting their password). The existing-user path is
+  // functionally a password reset — we can\'t recover the original
+  // plaintext password to re-send, so the only way to give them a
+  // working login is to set a new one. The email uses the password
+  // reset template (accurate wording) rather than user_invite (which
+  // says "just created an account").
+  function fireInviteWithChoice() {
+    var pick = window.prompt(
+      'Send invite to:\n\n' +
+      '  1 — New user (open the Add User modal; creates the user + emails the welcome with their password)\n' +
+      '  2 — Existing user (resets their password and emails them a working credential — uses the password-reset template)\n\n' +
+      'Enter 1 or 2:',
+      '1'
+    );
+    if (!pick) return;
+    pick = pick.trim();
+    if (pick === '1') {
+      if (typeof window.openNewUserModal === 'function') {
+        window.openNewUserModal();
+      } else {
+        alert('Add User modal not loaded. Switch to Admin → Users and click + New User.');
+      }
+      return;
+    }
+    if (pick === '2') {
+      // Same picker + reset path as the password_reset button, but
+      // auto-generates the temp password so the admin gets a one-step
+      // "resend a working login" action. The user receives the
+      // password_reset template (which has accurate wording for an
+      // already-existing account).
+      fireExistingUserResend();
+      return;
+    }
+    alert('Pick 1 or 2 to continue.');
+  }
+
+  // Generates a memorable but unguessable temp password — one short
+  // alpha word + a 4-digit suffix (e.g. "agx-bird-7384"). Easier to
+  // type than a random string for the user\'s first login; admin
+  // tells them to change it after.
+  function genTempPassword() {
+    var words = ['bird', 'oak', 'pine', 'lark', 'wren', 'finch', 'sage', 'fern', 'dawn', 'mist'];
+    var w = words[Math.floor(Math.random() * words.length)];
+    var n = String(Math.floor(1000 + Math.random() * 9000));
+    return 'agx-' + w + '-' + n;
+  }
+
+  function fireExistingUserResend() {
+    var go = function() {
+      if (!_users || !_users.length) {
+        alert('User list not loaded yet — open Admin → Users once, then come back.');
+        return;
+      }
+      var emailQuery = window.prompt('Resend login to which existing user? Enter their email (or part of it):');
+      if (!emailQuery) return;
+      var query = emailQuery.trim().toLowerCase();
+      if (!query) return;
+      var matches = _users.filter(function(u) {
+        return (u.email || '').toLowerCase().indexOf(query) >= 0
+            || (u.name || '').toLowerCase().indexOf(query) >= 0;
+      });
+      if (!matches.length) {
+        alert('No user matched "' + emailQuery + '".');
+        return;
+      }
+      var target;
+      if (matches.length === 1) {
+        target = matches[0];
+      } else {
+        var pickEmail = window.prompt('Multiple matches — pick by full email:\n' +
+          matches.map(function(u) { return '  ' + u.email + ' (' + (u.name || '') + ')'; }).join('\n'));
+        if (!pickEmail) return;
+        target = matches.find(function(u) { return u.email && u.email.toLowerCase() === pickEmail.trim().toLowerCase(); });
+        if (!target) {
+          alert('No exact email match. Aborting.');
+          return;
+        }
+      }
+      var tempPwd = genTempPassword();
+      var ok = window.confirm('Resend login to ' + target.email + '?\n\n' +
+        'A new temporary password will be generated and emailed to them:\n  ' + tempPwd + '\n\n' +
+        '(They\'ll be told to change it after first login.)\n\nProceed?');
+      if (!ok) return;
+      window.agxApi.users.resetPassword(target.id, tempPwd).then(function() {
+        alert('✓ Sent to ' + target.email + '.\n\nTemp password: ' + tempPwd + '\n\nThe email contents use the password_reset template so the wording is accurate for an existing account.');
+      }).catch(function(err) {
+        alert('Send failed: ' + (err.message || 'unknown'));
+      });
+    };
+    if (!_users || !_users.length) {
+      window.agxApi.users.list().then(function(r) {
+        _users = (r && r.users) || [];
+        go();
+      }).catch(function(err) {
+        alert('Could not load users: ' + (err.message || 'unknown'));
+      });
+    } else {
+      go();
+    }
   }
 
   // Fires a real password reset against an existing user. Walks the
