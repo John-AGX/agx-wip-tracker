@@ -804,13 +804,53 @@ async function buildEstimateContext(estimateId, includePhotos) {
   // refreshed each turn. The cache_control marker on the stable block
   // tells Anthropic to cache everything from the start of the request
   // (including the tools array) up through that block.
+  // AG phase — controls whether the model can propose line-item /
+  // section edits this turn. Lives on the estimate JSONB blob; defaults
+  // to 'build' when unset (back-compat with estimates created before
+  // the toggle existed). Caller filters tools + injects mode block.
+  const aiPhase = blob.aiPhase === 'plan' ? 'plan' : 'build';
+
+  // Inject the active-mode block last in the dynamic context so the
+  // model sees it just before reading the user message. Strong language
+  // because the soft prompt rule pairs with hard tool-array filtering
+  // server-side — both belt and suspenders.
+  if (aiPhase === 'plan') {
+    lines.push('');
+    lines.push('# CURRENT MODE: PLAN');
+    lines.push('The user has set this estimate to **Plan mode**. They are still thinking through scope, materials, sequencing — not ready for line-item proposals yet.');
+    lines.push('In Plan mode you SHOULD:');
+    lines.push('  - Discuss scope, ask clarifying questions, surface gotchas, suggest considerations.');
+    lines.push('  - Use `propose_update_scope` to capture the scope of work as the conversation evolves — that\'s a planning activity, not an estimate edit.');
+    lines.push('  - Use `propose_add_client_note` for durable facts the user shares.');
+    lines.push('  - Use `web_search` for spec lookups, code references, supplier research.');
+    lines.push('In Plan mode you MUST NOT propose line items, sections, or any other estimate edits — those tools have been removed from your tool list this turn so you literally cannot call them. Don\'t apologize, don\'t hint at line items, don\'t pre-format what you would have proposed; just keep planning. When the user is ready to build, they\'ll flip the mode switch.');
+  } else {
+    lines.push('');
+    lines.push('# CURRENT MODE: BUILD');
+    lines.push('The user is in Build mode — propose line items, sections, scope updates, and edits as your tools allow. Default behavior.');
+  }
+
   return {
     system: [
       { type: 'text', text: stableLines.join('\n'), cache_control: { type: 'ephemeral' } },
       { type: 'text', text: '\n\n# Current estimate context (refreshed each turn)\n\n' + lines.join('\n') }
     ],
-    photoBlocks: photoBlocks
+    photoBlocks: photoBlocks,
+    aiPhase: aiPhase
   };
+}
+
+// Filter the AG tool list for Plan mode — drops every editing-style
+// propose_* tool while keeping conversational + scope-capture + note
+// + web search. Build mode passes through the full list. Used by the
+// AG chat + continue handlers; web tools are added back by runStream.
+const PLAN_MODE_ALLOWED_AG_TOOLS = new Set([
+  'propose_update_scope',
+  'propose_add_client_note'
+]);
+function filterToolsForPhase(tools, phase) {
+  if (phase !== 'plan') return tools;
+  return (tools || []).filter(t => PLAN_MODE_ALLOWED_AG_TOOLS.has(t.name));
 }
 
 // Load skill packs from app_settings.agent_skills filtered by agent +
@@ -1122,6 +1162,10 @@ router.post('/estimates/:id/chat',
       await runStream({
         anthropic, res,
         system: ctx.system,
+        // Plan mode hard-filters editing tools — the model literally
+        // cannot call them (not just a soft prompt rule). Build mode
+        // passes through the full ESTIMATE_TOOLS list.
+        tools: filterToolsForPhase(ESTIMATE_TOOLS, ctx.aiPhase),
         messages: messages,
         persistAssistantText: async (text, usage) => {
           await saveAssistantMessage({ estimateId, userId: req.user.id, text, usage });
@@ -1203,6 +1247,10 @@ router.post('/estimates/:id/chat/continue',
       await runStream({
         anthropic, res,
         system: ctx.system,
+        // Re-apply phase filtering on the continue path so a Plan-mode
+        // estimate can't slip an editing tool back in via the
+        // post-approval round-trip.
+        tools: filterToolsForPhase(ESTIMATE_TOOLS, ctx.aiPhase),
         messages: messages,
         persistAssistantText: async (text, usage) => {
           await saveAssistantMessage({ estimateId, userId: req.user.id, text, usage });

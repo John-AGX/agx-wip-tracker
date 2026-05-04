@@ -214,6 +214,7 @@
     }
 
     renderHeaderChips();
+    renderAIPhasePill();
     renderAlternateTabs();
     renderTotals();
     renderDetailsForm();
@@ -410,6 +411,59 @@
   // Header chips — linked lead and linked client surface here so users
   // can jump back to either with one click.
   // ──────────────────────────────────────────────────────────────────
+
+  // ──────────────────────────────────────────────────────────────────
+  // AG phase (Plan vs Build). A per-estimate flag that gates whether
+  // AG can propose line-item / section edits. Plan mode = AG asks
+  // questions and discusses scope; Build mode = AG proposes freely.
+  //
+  // Stored on the estimate's JSONB blob as `aiPhase` ('plan' | 'build').
+  // Defaults to 'build' for back-compat with existing estimates.
+  // The server reads the same field on every chat turn and filters
+  // tools + injects mode-specific instructions.
+  // ──────────────────────────────────────────────────────────────────
+  function getEstimateAIPhase() {
+    var est = getEstimate();
+    return (est && est.aiPhase === 'plan') ? 'plan' : 'build';
+  }
+
+  function setEstimateAIPhase(phase) {
+    var est = getEstimate();
+    if (!est) return;
+    var nextPhase = phase === 'plan' ? 'plan' : 'build';
+    if (est.aiPhase === nextPhase) return;
+    est.aiPhase = nextPhase;
+    debouncedSave();
+    renderAIPhasePill();
+    // Notify the AI panel so its mode chip updates without waiting
+    // for the next turn (visual feedback parity with the toggle click).
+    if (window.agxAI && typeof window.agxAI.refreshPhaseChip === 'function') {
+      try { window.agxAI.refreshPhaseChip(); } catch (e) { /* ignore */ }
+    }
+  }
+
+  function renderAIPhasePill() {
+    var phase = getEstimateAIPhase();
+    var pill = document.getElementById('ee-ai-phase');
+    if (!pill) return;
+    pill.querySelectorAll('[data-ai-phase]').forEach(function(btn) {
+      var isActive = btn.getAttribute('data-ai-phase') === phase;
+      if (isActive) {
+        // Plan mode = warm purple (matches the Ask AI brand). Build =
+        // green for "shipping" feel. Inactive sides stay neutral.
+        var bg = phase === 'plan'
+          ? 'linear-gradient(135deg,#a78bfa,#8b5cf6)'
+          : 'linear-gradient(135deg,#4ade80,#22c55e)';
+        btn.style.background = bg;
+        btn.style.color = '#fff';
+        btn.style.boxShadow = '0 1px 4px rgba(0,0,0,0.25)';
+      } else {
+        btn.style.background = 'transparent';
+        btn.style.color = 'var(--text-dim,#aaa)';
+        btn.style.boxShadow = 'none';
+      }
+    });
+  }
 
   function renderHeaderChips() {
     var est = getEstimate();
@@ -1926,6 +1980,9 @@
       var e = (appData.estimates || []).find(function(x) { return x.id === _currentId; });
       return e ? (e.client_id || null) : null;
     },
+    // AG phase — read by the AI panel to render its mode chip in
+    // sync with the editor's pill.
+    getAIPhase: getEstimateAIPhase,
     applyAddLineItem: applyAddLineItem,
     applyAddSection: applyAddSection,
     applyUpdateScope: applyUpdateScope,
@@ -1939,4 +1996,5 @@
   window.duplicateActiveAlternate = duplicateActiveAlternate;
   window.deleteActiveAlternate = deleteActiveAlternate;
   window.toggleGroupInclude = toggleGroupInclude;
+  window.setEstimateAIPhase = setEstimateAIPhase;
 })();

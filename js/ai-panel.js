@@ -728,7 +728,15 @@
       if (isJobMode())            headerEl.textContent = '📊 Elle · WIP Analyst';
       else if (isClientMode())    headerEl.textContent = '🤝 HR · Customer Relations';
       else if (isStaffMode())     headerEl.textContent = '🎩 Chief of Staff';
-      else                        headerEl.textContent = '📐 AG · AGX Estimator';
+      else {
+        // AG header includes the active phase suffix (Plan vs Build).
+        // Pulled fresh from the editor API so a phase flip mid-conversation
+        // updates immediately when refreshPhaseChip() fires.
+        var phase = (window.estimateEditorAPI && window.estimateEditorAPI.getAIPhase)
+          ? window.estimateEditorAPI.getAIPhase() : 'build';
+        var phaseLabel = phase === 'plan' ? ' · 🗺️ Plan' : '';
+        headerEl.textContent = '📐 AG · AGX Estimator' + phaseLabel;
+      }
     }
     // Trust gear visible only in job mode (where the toggles apply).
     var trustBtn = document.getElementById('ai-trust');
@@ -738,7 +746,17 @@
       if (isJobMode()) noticeEl.textContent = 'I\'m Elle, your WIP analyst. I see WIP, costs, the node graph, and QB lines — and I can propose edits (e.g. set a phase\'s % complete) for you to approve before they apply.';
       else if (isClientMode()) noticeEl.textContent = 'I\'m HR, AGX\'s customer relations agent. I keep the parent-company / property hierarchy clean. Simple writes apply automatically; restructural changes (new parent, merges, splits, deletes) require approval.';
       else if (isStaffMode()) noticeEl.textContent = 'Chief of Staff — I observe AG / Elle / HR. I read metrics, audit conversations, and propose skill-pack edits for you to approve. Conversation replay still queued.';
-      else noticeEl.textContent = 'I\'m AG — your AGX estimator. I can draft scopes, add/edit/delete line items and sections, and tweak pricing. Every change is shown as a card with Approve / Reject before it lands.';
+      else {
+        // AG notice changes wording in Plan mode so the user sees a
+        // clear cue that AG won't propose line items right now.
+        var phaseN = (window.estimateEditorAPI && window.estimateEditorAPI.getAIPhase)
+          ? window.estimateEditorAPI.getAIPhase() : 'build';
+        if (phaseN === 'plan') {
+          noticeEl.textContent = '🗺️ Plan mode — I\'ll think through scope with you and ask questions, but I won\'t propose line items until you flip to 🔨 Build.';
+        } else {
+          noticeEl.textContent = 'I\'m AG — your AGX estimator. I can draft scopes, add/edit/delete line items and sections, and tweak pricing. Every change is shown as a card with Approve / Reject before it lands.';
+        }
+      }
     }
     var inputEl = document.getElementById('ai-input');
     if (inputEl) {
@@ -2878,7 +2896,10 @@
     openWithImages: openWithImages,
     close: close,
     toggle: toggle,
-    isOpen: function() { return _open; }
+    isOpen: function() { return _open; },
+    // Re-render the AG header + notice when the editor's Plan/Build
+    // pill flips. Cheap call (just two DOM text writes).
+    refreshPhaseChip: function() { try { refreshModeSpecificUI(); } catch (e) {} }
   };
 
   // Sticky-header shim mirroring openEstimateAI() — finds the active job id
