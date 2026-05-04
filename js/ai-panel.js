@@ -1111,7 +1111,16 @@
     sendMessage(text);
   }
 
+  // Per-user-turn safety net: count how many CONSECUTIVE round-trips
+  // we've made where the only tool calls were auto-tier reads
+  // (read_materials, read_purchase_history, etc.). If the model never
+  // progresses to a propose_* or final text, abort the chain so it
+  // can't loop forever. Reset on each new user message.
+  var _autoHopCount = 0;
+  var MAX_AUTO_HOPS = 8;
+
   function sendMessage(text) {
+    _autoHopCount = 0;
     // Pull any base64 images from the composer chips (uploads or PDF
     // renders) for one-shot vision on this turn. The same images are
     // ALSO persisted to the entity's attachments via processFile, so
@@ -2244,6 +2253,39 @@
   }
 
   function continueAfterProposals(pendingContent, responses) {
+    // Loop guard: if every tool_use this turn was an auto-tier read
+    // tool, bump the consecutive-research counter. Once the model has
+    // done MAX_AUTO_HOPS straight rounds of research without
+    // progressing to a propose_* or to a final text answer, we abort
+    // — the model is almost certainly stuck retrying narrower
+    // queries against an empty/sparse catalog.
+    var toolUseBlocks = (Array.isArray(pendingContent) ? pendingContent : [])
+      .filter(function(b) { return b && b.type === 'tool_use'; });
+    var allAutoReads = toolUseBlocks.length > 0 && toolUseBlocks.every(function(b) {
+      return AUTO_READ_TOOLS[b.name];
+    });
+    if (allAutoReads) {
+      _autoHopCount++;
+      if (_autoHopCount > MAX_AUTO_HOPS) {
+        var lastBubble = appendStreamingBubble();
+        var ce = lastBubble && lastBubble.querySelector('[data-stream-content]');
+        if (ce) {
+          ce.innerHTML = '<span style="color:#fbbf24;">' +
+            'I kept calling the same read tools without producing line items, ' +
+            'so I stopped to avoid a runaway loop. Try giving me a more specific ' +
+            'instruction — e.g., "draft the materials list using whatever\'s in the catalog, ' +
+            'flag missing SKUs as TBD" — or restart the conversation.' +
+            '</span>';
+        }
+        _streaming = false;
+        setSendDisabled(false);
+        return;
+      }
+    } else {
+      // Productive turn (manual approval or mixed) — reset the counter
+      // so a follow-up research burst gets its own budget.
+      _autoHopCount = 0;
+    }
     var body = { pending_assistant_content: pendingContent, tool_results: responses };
     // Job mode: re-attach the latest clientContext so the assistant
     // sees fresh state after the user-applied changes (e.g. updated

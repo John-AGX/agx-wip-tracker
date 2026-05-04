@@ -783,6 +783,7 @@ async function buildEstimateContext(estimateId, includePhotos) {
       lines.push('# Materials catalog');
       lines.push(`AGX has ${totalMat} materials in the catalog (${recentMat} purchased in the last 90 days). Top categories: ${topCats.join(', ') || '(uncategorized)'}.`);
       lines.push('Call `read_materials` to query this catalog before quoting any materials line item — see the # Pricing rules above.');
+      lines.push('**Search budget: cap reads at ~3 per scope of work.** If a query returns nothing, do NOT keep narrowing forever — go ahead and quote with a reasonable estimate, mark the line `unit_cost source: estimated (catalog miss)`, and tell the user the SKU isn\'t logged yet so they can add it later. The catalog is small and many real SKUs are missing.');
       lines.push('');
     }
   } catch (e) { /* materials table may not exist yet on a fresh deploy */ }
@@ -867,6 +868,7 @@ async function buildEstimateContext(estimateId, includePhotos) {
   stableLines.push('  • `read_subs(q?, trade?, status?, with_expiring_certs?, limit?)` — subcontractor directory with cert (GL / WC / W9 / Bank) expiry. Use when scoping to a sub: confirm they\'re active and paperwork-current. with_expiring_certs=true for pre-bid audit.');
   stableLines.push('  • `read_lead_pipeline(q?, status?, market?, salesperson_email?, limit?)` — leads list + status rollup. Use for sibling context ("what other deck jobs are in pipeline?") or pipeline-shape questions.');
   stableLines.push('Cap auto-tier reads at ~4 per turn for normal estimates; only chain more for big batched line-item drafts. Each chip costs no approval but does cost API tokens.');
+  stableLines.push('**Hard rule — no read loops.** If a `read_materials` query comes back empty or sparse, DO NOT keep retrying narrower queries. Quote the line with a defensible Central-FL estimate, mark the rationale "estimated — SKU not in catalog yet (catalog miss)", and move on. The catalog is small; missing SKUs are normal. After ~3 read_materials calls in a row without producing a propose_*, the panel will hard-stop the loop on you.');
   stableLines.push('');
   stableLines.push('# Web research (web_search tool)');
   stableLines.push('You have a web_search tool. Use it judiciously — it adds a few seconds and a small cost per call. Good reasons to search:');
