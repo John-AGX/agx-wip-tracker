@@ -1238,7 +1238,19 @@
               '<span style="color:#fbbf24;font-size:11px;" title="Trigger not yet wired in code; toggle is for forward-compat.">Pending</span>') +
           '</td>' +
           '<td style="padding:8px;vertical-align:top;text-align:center;">' +
-            '<button class="ee-btn ghost" data-email-event-send="' + escapeHTML(e.key) + '" data-email-event-label="' + escapeHTML(e.label).replace(/"/g, '&quot;') + '" style="font-size:11px;padding:4px 10px;" title="Render this template with sample data and send to a recipient you pick. Useful for invitations, password resets, and demos.">&#x1F4E4; Send</button>' +
+            (function() {
+              // Button label depends on event type — the click handler
+              // routes user_invite to the Add User flow and password_reset
+              // to the existing reset action; everything else falls back
+              // to a sample-data preview send.
+              if (e.key === 'user_invite') {
+                return '<button class="ee-btn primary" data-email-event-send="' + escapeHTML(e.key) + '" data-email-event-label="' + escapeHTML(e.label).replace(/"/g, '&quot;') + '" style="font-size:11px;padding:4px 10px;" title="Open the Add User modal — creates a real user and fires the welcome email with their actual password.">&#x1F464; Invite user</button>';
+              }
+              if (e.key === 'password_reset') {
+                return '<button class="ee-btn primary" data-email-event-send="' + escapeHTML(e.key) + '" data-email-event-label="' + escapeHTML(e.label).replace(/"/g, '&quot;') + '" style="font-size:11px;padding:4px 10px;" title="Pick an existing user and reset their password — the system emails the new password automatically.">&#x1F511; Reset password</button>';
+              }
+              return '<button class="ee-btn ghost" data-email-event-send="' + escapeHTML(e.key) + '" data-email-event-label="' + escapeHTML(e.label).replace(/"/g, '&quot;') + '" style="font-size:11px;padding:4px 10px;" title="No one-click real workflow for this event on this admin page — it normally fires from a real action elsewhere. Click to render the template with placeholder data and send a preview.">&#x1F4E4; Send sample</button>';
+            })() +
           '</td>' +
         '</tr>';
       });
@@ -1270,17 +1282,39 @@
         saveEmailSettings();
       });
     });
-    // Per-event Send sample buttons. Opens a small prompt for recipient,
-    // POSTs to /api/email/templates/:key/test with as_test:false so the
-    // subject doesn\'t carry the "[TEST]" prefix — this is a real send
-    // (rendered with sample placeholder data).
+    // Per-event Send buttons. The action depends on the event key —
+    // some have a real workflow that should fire (creating a user,
+    // resetting a password) and others only support a sample-preview
+    // send because they don\'t correspond to a single re-runnable
+    // action (e.g. cert_expiring fires per cert from a cron job).
     box.querySelectorAll('[data-email-event-send]').forEach(function(btn) {
       btn.addEventListener('click', function() {
         var key = btn.dataset.emailEventSend;
         var label = btn.dataset.emailEventLabel || key;
+        if (key === 'user_invite') {
+          // Real flow: open the existing Add User modal. Creating the
+          // user automatically fires the welcome/invite email with
+          // their actual password (the only moment the cleartext
+          // password is in scope).
+          if (typeof window.openNewUserModal === 'function') {
+            window.openNewUserModal();
+          } else {
+            alert('Add User modal not loaded. Switch to Admin → Users and click + New User.');
+          }
+          return;
+        }
+        if (key === 'password_reset') {
+          fireRealPasswordReset();
+          return;
+        }
+        // Fallback: render-with-sample-data preview send. as_test:false
+        // strips the "[TEST]" subject prefix so the result looks like
+        // a real send — useful for demoing template designs.
         var me = (window.agxAuth && window.agxAuth.getUser && window.agxAuth.getUser()) || null;
         var defaultTo = (me && me.email) || '';
-        var to = window.prompt('Send "' + label + '" to:\n\n(Renders with sample placeholder data — perfect for previews, invitations, and password-reset walkthroughs.)', defaultTo);
+        var to = window.prompt('Send sample "' + label + '" to:\n\n' +
+          '(This event doesn\'t have a one-click real workflow on this admin page — it normally fires from a real action elsewhere in the app. ' +
+          'The send below renders the template with placeholder data.)', defaultTo);
         if (!to) return;
         to = to.trim();
         if (!to) return;
@@ -1292,7 +1326,7 @@
             btn.innerHTML = oldText;
             btn.disabled = false;
             if (resp && resp.ok) {
-              var msg = resp.dryRun ? '✓ Dry-run logged (no real send).' : '✓ Sent to ' + to + '.';
+              var msg = resp.dryRun ? '✓ Dry-run logged (no real send).' : '✓ Sample sent to ' + to + '.';
               alert(msg);
             } else {
               alert('Send failed: ' + ((resp && resp.error) || 'unknown'));
@@ -1305,6 +1339,69 @@
           });
       });
     });
+  }
+
+  // Fires a real password reset against an existing user. Walks the
+  // admin through: pick user (by email match) → set new password →
+  // server hashes + saves + emails the user the new password (the
+  // existing PUT /api/auth/users/:id/password flow). Uses the cached
+  // _users list populated by renderAdminUsers — refreshes if empty.
+  function fireRealPasswordReset() {
+    var go = function() {
+      if (!_users || !_users.length) {
+        alert('User list not loaded yet — open Admin → Users once, then come back.');
+        return;
+      }
+      var emailQuery = window.prompt('Reset whose password? Enter their email (or part of it):');
+      if (!emailQuery) return;
+      var query = emailQuery.trim().toLowerCase();
+      if (!query) return;
+      var matches = _users.filter(function(u) {
+        return (u.email || '').toLowerCase().indexOf(query) >= 0
+            || (u.name || '').toLowerCase().indexOf(query) >= 0;
+      });
+      if (!matches.length) {
+        alert('No user matched "' + emailQuery + '".');
+        return;
+      }
+      var target;
+      if (matches.length === 1) {
+        target = matches[0];
+      } else {
+        var pick = window.prompt('Multiple matches — pick by full email:\n' +
+          matches.map(function(u) { return '  ' + u.email + ' (' + (u.name || '') + ')'; }).join('\n'));
+        if (!pick) return;
+        target = matches.find(function(u) { return u.email && u.email.toLowerCase() === pick.trim().toLowerCase(); });
+        if (!target) {
+          alert('No exact email match. Aborting.');
+          return;
+        }
+      }
+      var newPwd = window.prompt('New password for ' + target.email + ':\n\n' +
+        '(They\'ll receive an email with this password and a note to change it after login.)');
+      if (!newPwd) return;
+      newPwd = newPwd.trim();
+      if (newPwd.length < 4) {
+        alert('Password must be at least 4 characters.');
+        return;
+      }
+      window.agxApi.users.resetPassword(target.id, newPwd).then(function() {
+        alert('✓ Reset and emailed to ' + target.email + '.\n\nNew password: ' + newPwd);
+      }).catch(function(err) {
+        alert('Reset failed: ' + (err.message || 'unknown'));
+      });
+    };
+    // Ensure the user list is loaded.
+    if (!_users || !_users.length) {
+      window.agxApi.users.list().then(function(r) {
+        _users = (r && r.users) || [];
+        go();
+      }).catch(function(err) {
+        alert('Could not load users: ' + (err.message || 'unknown'));
+      });
+    } else {
+      go();
+    }
   }
 
   function renderEmailGlobals() {
