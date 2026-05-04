@@ -46,6 +46,48 @@
     min-width: 18px;
     text-align: center;
   }
+  .theme-toggle {
+    display: inline-flex;
+    gap: 0;
+    margin: 0 0 24px;
+    border: 1px solid var(--tile-border);
+    border-radius: 8px;
+    padding: 3px;
+    background: rgba(255,255,255,0.02);
+  }
+  .theme-toggle button {
+    background: transparent;
+    border: none;
+    color: var(--text-dim);
+    font-size: 12px;
+    font-weight: 600;
+    padding: 6px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    letter-spacing: 0.4px;
+    transition: background 0.12s, color 0.12s;
+  }
+  .theme-toggle button:hover { color: var(--text); }
+  .theme-toggle button.active {
+    background: rgba(212, 168, 81, 0.18);
+    color: #d4a851;
+  }
+  body.theme-white .theme-toggle button.active { background: rgba(255,255,255,0.14); color: #fff; }
+  body.theme-grey  .theme-toggle button.active { background: rgba(200,203,213,0.18); color: #c8cbd5; }
+  .section-divider {
+    margin: 40px 0 8px;
+    padding: 18px 0 10px;
+    border-top: 2px solid var(--tile-border);
+  }
+  .section-divider h2 {
+    font-size: 14px; font-weight: 600; color: var(--text);
+    text-transform: uppercase; letter-spacing: 1px;
+    margin: 0 0 4px;
+  }
+  .section-divider .sub {
+    font-size: 11px; color: var(--text-dim);
+    line-height: 1.5;
+  }
   .pick-form {
     margin-top: 36px;
     padding: 18px 22px;
@@ -70,6 +112,12 @@
 
 <h1>AGX Icon Set — design options</h1>
 <p class="lede">Three numbered variations per concept. Tell me your picks like <code>WIP=2, Schedule=1, Insights=3, …</code> and I'll lock those in as the official AGX set + spin off individual SVG files.</p>
+
+<div class="theme-toggle" role="tablist" aria-label="Glyph color">
+  <button data-theme="gold" class="active">Gold</button>
+  <button data-theme="white">White</button>
+  <button data-theme="grey">Light grey</button>
+</div>
 
 <svg width="0" height="0" style="position:absolute;">
   <defs>
@@ -395,6 +443,33 @@
   <br><br>
   <strong>Concepts in this set:</strong> WIP, Schedule, Insights, Admin, Estimates, Leads, Clients, Subs, Materials, Phases, Buildings, Photos, Daily Logs, Attachments, Workspace, Node Graph.
 </div>
+
+<script>
+  // Recolor the shared #ag gradient stops on theme toggle. All 48 SVG
+  // glyphs reference url(#ag) so switching the stops here re-tints the
+  // whole set without touching individual icons.
+  (function () {
+    var THEMES = {
+      gold:  ['#f7e29b', '#d4a851', '#8d6520'],
+      white: ['#ffffff', '#f4f4f4', '#cfcfcf'],
+      grey:  ['#eef0f6', '#c8cbd5', '#9aa0b0']
+    };
+    function apply(theme) {
+      var stops = document.querySelectorAll('#ag stop');
+      var palette = THEMES[theme] || THEMES.gold;
+      stops.forEach(function (s, i) { s.setAttribute('stop-color', palette[i]); });
+      document.body.classList.remove('theme-gold', 'theme-white', 'theme-grey');
+      document.body.classList.add('theme-' + theme);
+      document.querySelectorAll('.theme-toggle button').forEach(function (b) {
+        b.classList.toggle('active', b.dataset.theme === theme);
+      });
+    }
+    document.querySelectorAll('.theme-toggle button').forEach(function (btn) {
+      btn.addEventListener('click', function () { apply(btn.dataset.theme); });
+    });
+    apply('gold');
+  })();
+</script>
 
 </body>
 </html>
