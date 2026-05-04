@@ -142,6 +142,75 @@
 </svg>
 
 
+<!-- ═══════════════ Phosphor Icons (Light weight) — actual production candidates ═══════════════ -->
+<div class="section-divider" style="margin-top:0;border-top:0;">
+  <h2>Phosphor Icons (Light weight) — re-skinned for AGX</h2>
+  <p class="sub">16 AGX concepts mapped to Phosphor's MIT-licensed Light-weight icons (loaded from <code>/assets/icons/agx/phosphor/</code>) and re-skinned with the AGX dark tile + light-grey gradient. This is the production-quality direction — battle-tested artwork, hundreds of additional icons available in the same library if we need more later.</p>
+</div>
+
+<div class="phosphor-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:18px;margin-bottom:36px;">
+  <div class="ph-cell" data-icon="clipboard-text-light"  data-label="WIP"></div>
+  <div class="ph-cell" data-icon="calendar-dots-light"   data-label="Schedule"></div>
+  <div class="ph-cell" data-icon="chart-line-up-light"   data-label="Insights"></div>
+  <div class="ph-cell" data-icon="gear-six-light"        data-label="Admin"></div>
+  <div class="ph-cell" data-icon="receipt-light"         data-label="Estimates"></div>
+  <div class="ph-cell" data-icon="funnel-light"          data-label="Leads"></div>
+  <div class="ph-cell" data-icon="users-three-light"     data-label="Clients"></div>
+  <div class="ph-cell" data-icon="wrench-light"          data-label="Subs"></div>
+  <div class="ph-cell" data-icon="package-light"         data-label="Materials"></div>
+  <div class="ph-cell" data-icon="stack-simple-light"    data-label="Phases"></div>
+  <div class="ph-cell" data-icon="house-line-light"      data-label="Buildings"></div>
+  <div class="ph-cell" data-icon="camera-light"          data-label="Photos"></div>
+  <div class="ph-cell" data-icon="list-checks-light"     data-label="Daily Logs"></div>
+  <div class="ph-cell" data-icon="paperclip-light"       data-label="Attachments"></div>
+  <div class="ph-cell" data-icon="table-light"           data-label="Workspace"></div>
+  <div class="ph-cell" data-icon="tree-structure-light"  data-label="Node Graph"></div>
+</div>
+
+<style>
+  .ph-cell { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+  .ph-tile {
+    width: 96px; height: 96px;
+    background: #0b0c10;
+    border: 1px solid #1a1d27;
+    border-radius: 18px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .ph-tile svg { width: 64px; height: 64px; }
+  .ph-cell .ph-label { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; }
+</style>
+
+<script>
+  // Load each Phosphor SVG, re-color stroke to the shared #ag gradient,
+  // and inject into its tile. Phosphor uses currentColor + a rect
+  // placeholder; we swap currentColor → url(#ag) so the same toggle
+  // (Light grey / White / Gold) re-tints these icons too.
+  (function () {
+    var cells = document.querySelectorAll('.ph-cell[data-icon]');
+    cells.forEach(function (cell) {
+      var name = cell.dataset.icon;
+      var label = cell.dataset.label;
+      var tile = document.createElement('div');
+      tile.className = 'ph-tile';
+      var lbl = document.createElement('div');
+      lbl.className = 'ph-label';
+      lbl.textContent = label;
+      cell.appendChild(tile);
+      cell.appendChild(lbl);
+      fetch('/assets/icons/agx/phosphor/' + name + '.svg')
+        .then(function (r) { return r.text(); })
+        .then(function (svgText) {
+          // Replace currentColor with the gradient ref.
+          var themed = svgText
+            .replace(/stroke="currentColor"/g, 'stroke="url(#ag)"')
+            .replace(/fill="currentColor"/g, 'fill="url(#ag)"');
+          tile.innerHTML = themed;
+        })
+        .catch(function () { tile.innerHTML = '<span style="color:#f87171;font-size:10px;">load failed</span>'; });
+    });
+  })();
+</script>
+
 <!-- ═══════════════ Refined v2 line-art (Outlook / Fluent inspired) ═══════════════ -->
 <div class="section-divider" style="margin-top:0;border-top:0;">
   <h2>Refined v2 — thinner strokes, cleaner geometry</h2>
