@@ -461,7 +461,7 @@
     var html = escapeHTMLLocal(text);
     // Code blocks (triple backtick)
     html = html.replace(/```([\s\S]*?)```/g, function(_, code) {
-      return '<pre style="background:rgba(255,255,255,0.06);padding:8px 10px;border-radius:6px;overflow-x:auto;font-size:11px;font-family:SF Mono,Consolas,monospace;margin:6px 0;">' + code.trim() + '</pre>';
+      return '<pre style="background:rgba(255,255,255,0.06);padding:8px 10px;border-radius:6px;overflow-x:auto;font-size:11px;font-family:SF Mono,Consolas,monospace;margin:6px 0;max-width:100%;box-sizing:border-box;">' + code.trim() + '</pre>';
     });
     // Inline code
     html = html.replace(/`([^`]+)`/g, '<code style="background:rgba(255,255,255,0.08);padding:1px 5px;border-radius:3px;font-family:SF Mono,Consolas,monospace;font-size:0.9em;">$1</code>');
@@ -585,7 +585,12 @@
         'Read-only — I see your estimate and photos but cannot change anything. Apply suggestions by hand.' +
       '</div>' +
       // Messages scroll area — dotted background for a Claude-style canvas feel.
-      '<div id="ai-messages" style="flex:1;overflow-y:auto;padding:18px 18px;display:flex;flex-direction:column;gap:14px;font-size:13px;color:var(--text,#e6e6e6);background-image:radial-gradient(circle, rgba(255,140,80,0.18) 1px, transparent 1px);background-size:14px 14px;"></div>' +
+      // overflow-x:hidden + min-width:0 are critical: without them, a
+      // child with intrinsic min-content wider than the panel (e.g. a
+      // <pre> overflow:auto block, or a long unbreakable token) makes
+      // every flex child collapse to single-character width — the
+      // browser tries to find a feasible layout and fails ugly.
+      '<div id="ai-messages" style="flex:1;overflow-y:auto;overflow-x:hidden;min-width:0;padding:18px 18px;display:flex;flex-direction:column;gap:14px;font-size:13px;color:var(--text,#e6e6e6);background-image:radial-gradient(circle, rgba(255,140,80,0.18) 1px, transparent 1px);background-size:14px 14px;"></div>' +
       // Preset prompts
       '<div id="ai-presets" style="padding:8px 12px;border-top:1px solid var(--border,#333);display:flex;flex-wrap:wrap;gap:6px;background:rgba(255,255,255,0.02);"></div>' +
       // Input row. Photos are auto-included via the entity's attachments
