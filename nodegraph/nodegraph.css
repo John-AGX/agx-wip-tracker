@@ -337,11 +337,27 @@ body.light-mode .ng-del-cancel:hover{background:#e5e7eb}
   display:flex;
   flex-direction:column;
   justify-content:center;
-  gap:1px;
-  padding:2px 12px 8px 0;
+  gap:0;
+  padding:2px 12px 4px 0;
   border-right:1px solid var(--ng-border2);
   margin-right:4px;
 }
+/* Tighten the title typography — the original "Node Graph /
+   Visual Cost Flow Editor / ○ Saved" stack was the tallest column
+   in the ribbon and pulled every other group up to match via
+   align-items:stretch. Smaller font + dropped subtitle keeps the
+   identity legible without inflating the row. */
+.ng-topbar.ng-ribbon .ng-topbar-title{font-size:13px;line-height:1.1}
+.ng-topbar.ng-ribbon .ng-topbar-sub{display:none}
+.ng-topbar.ng-ribbon .ng-save-indicator{
+  font-size:10px;
+  padding:2px 8px;
+  margin-top:1px;
+  align-self:flex-start;
+}
+/* Spacer hidden — groups flow naturally to the LEFT after the
+   title (per the user\'s latest preference). If the right-align
+   layout is ever wanted again, set flex:1 on this. */
 .ng-topbar.ng-ribbon .ng-topbar-spacer{display:none}
 .ng-topbar.ng-ribbon .ng-ribbon-group{
   display:flex;
@@ -349,15 +365,6 @@ body.light-mode .ng-del-cancel:hover{background:#e5e7eb}
   align-items:center;
   flex:0 0 auto;
   padding:0 3px;
-}
-/* Push the first ribbon group (and everything after it) to the
-   right edge. :first-of-type doesn\'t work here because the title
-   is also a <div> and matches first. Use the adjacent-sibling
-   combinator: the ribbon-group that immediately follows the title
-   is the first true group, and margin-left:auto on it consumes
-   all slack space, pushing every group to the right edge. */
-.ng-topbar.ng-ribbon .ng-ribbon-title + .ng-ribbon-group{
-  margin-left:auto;
 }
 .ng-topbar.ng-ribbon .ng-ribbon-group-buttons{
   display:flex;
