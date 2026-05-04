@@ -926,3 +926,155 @@ body.light-mode .jh-strip-card[data-tone="amber"] .jh-strip-label { color: #b453
   margin: 0 6px;
   display: inline-block;
 }
+
+/* ── Ribbon-style tab strip ──────────────────────────── */
+/* Outlook-inspired layout: each tab is a vertical button (icon on
+   top, label below), grouped into named sections with vertical
+   dividers. Replaces the old flat pill row when .ws-right-tabs
+   has the .ws-ribbon modifier class. */
+.ws-right-tabs.ws-ribbon {
+  align-items: stretch;
+  padding: 6px 8px 0;
+  gap: 4px;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border, #2e3346);
+}
+
+.ws-right-tabs.ws-ribbon .ws-ribbon-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex: 0 0 auto;
+  padding: 0 4px;
+}
+
+.ws-right-tabs.ws-ribbon .ws-ribbon-group-buttons {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+}
+
+.ws-right-tabs.ws-ribbon .ws-ribbon-group-name {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-dim, #6b7280);
+  font-weight: 500;
+  margin-top: 2px;
+  padding: 2px 4px 4px;
+  /* Sit on top of the bottom border with a thin line above to read
+     as a section caption — matches Outlook\'s layout. */
+  border-top: 1px solid var(--border, #2e3346);
+  width: 100%;
+  text-align: center;
+}
+
+.ws-right-tabs.ws-ribbon .ws-ribbon-sep {
+  flex: 0 0 1px;
+  width: 1px;
+  background: var(--border, #2e3346);
+  margin: 4px 2px 0;
+}
+
+.ws-right-tabs.ws-ribbon .ws-ribbon-tab {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 64px;
+  padding: 6px 10px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--text, #e4e6f0);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, transform 0.06s;
+  position: relative;
+}
+
+.ws-right-tabs.ws-ribbon .ws-ribbon-icon {
+  font-size: 22px;
+  line-height: 1;
+  display: inline-block;
+  filter: saturate(1.05);
+  /* Subtle accent-tinted halo on hover so the icon\'s native colors
+     read against the dark background. */
+  transition: transform 0.12s;
+}
+
+.ws-right-tabs.ws-ribbon .ws-ribbon-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-dim, #b8becc);
+  white-space: nowrap;
+}
+
+.ws-right-tabs.ws-ribbon .ws-ribbon-tab:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+.ws-right-tabs.ws-ribbon .ws-ribbon-tab:hover .ws-ribbon-label {
+  color: var(--text, #fff);
+}
+
+.ws-right-tabs.ws-ribbon .ws-ribbon-tab:hover .ws-ribbon-icon {
+  transform: translateY(-1px);
+}
+
+.ws-right-tabs.ws-ribbon .ws-ribbon-tab.active {
+  background: color-mix(in srgb, var(--tab-accent, #4f8cff) 14%, transparent);
+  border-color: color-mix(in srgb, var(--tab-accent, #4f8cff) 35%, transparent);
+}
+
+.ws-right-tabs.ws-ribbon .ws-ribbon-tab.active .ws-ribbon-label {
+  color: var(--text, #fff);
+  font-weight: 600;
+}
+
+/* Active tab gets a thin colored underline that bleeds into the
+   section caption — Outlook does the same selected-state cue. */
+.ws-right-tabs.ws-ribbon .ws-ribbon-tab.active::after {
+  content: '';
+  position: absolute;
+  left: 8%;
+  right: 8%;
+  bottom: -7px;
+  height: 2px;
+  background: var(--tab-accent, #4f8cff);
+  border-radius: 2px;
+}
+
+/* AI section button — gradient fill so it stands out as the
+   "primary action" button in the strip even before hover. */
+.ws-right-tabs.ws-ribbon .ws-ribbon-tab-ai {
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.18), rgba(79, 140, 255, 0.18));
+  border-color: rgba(139, 92, 246, 0.35);
+}
+
+.ws-right-tabs.ws-ribbon .ws-ribbon-tab-ai:hover {
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.28), rgba(79, 140, 255, 0.28));
+  border-color: rgba(139, 92, 246, 0.55);
+}
+
+/* Light-mode parity — the dark/light theme variables already swap on
+   text/bg, but the section-caption divider needs a light-friendly
+   color so it doesn\'t disappear on white. */
+body.light-mode .ws-right-tabs.ws-ribbon .ws-ribbon-group-name {
+  border-top-color: var(--border, #d4d8e0);
+  color: #6b7280;
+}
+
+body.light-mode .ws-right-tabs.ws-ribbon .ws-ribbon-sep {
+  background: var(--border, #d4d8e0);
+}
+
+body.light-mode .ws-right-tabs.ws-ribbon .ws-ribbon-tab:hover {
+  background: rgba(0, 0, 0, 0.04);
+  border-color: rgba(0, 0, 0, 0.06);
+}

@@ -18,16 +18,21 @@
   // Overview is the landing tab (first). The new "Workspace" tab swaps
   // in a node-graph-style canvas with the spreadsheet rendered as a
   // floating, draggable, resizable panel on top.
+  // Workspace tabs grouped Outlook-ribbon style. Each tab gets an icon
+  // (emoji for color-without-SVG-overhead) + a section label so the
+  // strip reads as "Job · Money · Changes · Resources" rather than a
+  // flat row of pills. The accent color drives the icon hover/active
+  // treatment in injectCSS below.
   const RIGHT_TABS = [
-    { id: 'job-overview',      label: 'Overview' },
-    { id: 'job-workspace',     label: '\u{1F4CA} Workspace' },
-    { id: 'job-wip',           label: 'WIP' },
-    { id: 'job-costs',         label: 'Costs' },
-    { id: 'job-qb-costs',      label: '\u{1F4CB} Detailed' },
-    { id: 'job-changeorders',  label: 'CO\'s' },
-    { id: 'job-purchaseorders',label: 'PO\'s' },
-    { id: 'job-invoices',      label: 'Invoices' },
-    { id: 'job-subs',          label: 'Subs' }
+    { id: 'job-overview',       label: 'Overview',  icon: '\u{1F3E0}', accent: '#4f8cff', section: 'Job' },        // house
+    { id: 'job-workspace',      label: 'Workspace', icon: '\u{1F4CA}', accent: '#a78bfa', section: 'Job' },        // chart
+    { id: 'job-wip',            label: 'WIP',       icon: '\u{1F4B5}', accent: '#34d399', section: 'Money' },      // dollar bills
+    { id: 'job-costs',          label: 'Costs',     icon: '\u{1F4B0}', accent: '#22c55e', section: 'Money' },      // money bag
+    { id: 'job-qb-costs',       label: 'Detailed',  icon: '\u{1F4D1}', accent: '#16a34a', section: 'Money' },      // bookmark tabs
+    { id: 'job-changeorders',   label: 'CO\'s',     icon: '\u{1F504}', accent: '#fb923c', section: 'Changes' },    // refresh/sync
+    { id: 'job-purchaseorders', label: 'PO\'s',     icon: '\u{1F6D2}', accent: '#f97316', section: 'Changes' },    // shopping cart
+    { id: 'job-invoices',       label: 'Invoices',  icon: '\u{1F9FE}', accent: '#fbbf24', section: 'Changes' },    // receipt
+    { id: 'job-subs',           label: 'Subs',      icon: '\u{1F477}', accent: '#f87171', section: 'Resources' }   // construction worker
   ];
 
   // ── CSS injection ─────────────────────────────────────────
@@ -36,7 +41,7 @@
     var link = document.createElement('link');
     link.id = 'ws-layout-v2-css';
     link.rel = 'stylesheet';
-    link.href = 'css/workspace-layout.css?v=29';
+    link.href = 'css/workspace-layout.css?v=30';
     document.head.appendChild(link);
   }
 
@@ -347,12 +352,67 @@
     var mainCol = document.createElement('div');
     mainCol.className = 'ws-col-right';
 
-    var tabsHtml = '<div class="ws-right-tabs">';
+    // Outlook-ribbon-style tab strip — grouped sections with vertical
+    // dividers + a small section label underneath each group. Each tab
+    // is a vertical button: colored icon on top, label below. Active
+    // state shows a colored bottom underline (matches the Outlook
+    // selected-tab cue).
+    //
+    // Sections render in the order they first appear in RIGHT_TABS.
+    // We don\'t hard-code the section list so reordering / adding tabs
+    // is just a metadata edit.
+    var tabsByGroup = [];
+    var seenSections = {};
     RIGHT_TABS.forEach(function(tab, i) {
-      tabsHtml += '<button class="ws-right-tab' + (i === 0 ? ' active' : '') + '" data-panel="' + tab.id + '">' + tab.label + '</button>';
+      var sec = tab.section || 'Other';
+      if (!seenSections[sec]) {
+        seenSections[sec] = tabsByGroup.length;
+        tabsByGroup.push({ name: sec, tabs: [] });
+      }
+      tabsByGroup[seenSections[sec]].tabs.push({ tab: tab, idx: i });
     });
-    tabsHtml += '<div class="ws-right-tabs-actions">' +
-      '<button class="ee-btn" onclick="openJobAI()" title="Ask Elle, AGX\'s WIP analyst" style="background:linear-gradient(135deg,#8b5cf6,#4f8cff);color:#fff;border-color:transparent;">✨ Ask Elle</button>' +
+
+    var tabsHtml = '<div class="ws-right-tabs ws-ribbon">';
+    tabsByGroup.forEach(function(group, gi) {
+      tabsHtml += '<div class="ws-ribbon-group">';
+      tabsHtml += '<div class="ws-ribbon-group-buttons">';
+      group.tabs.forEach(function(entry) {
+        var t = entry.tab;
+        var isActive = entry.idx === 0;
+        // accent color drives both the icon background-bubble and
+        // the active-state underline
+        var accent = t.accent || '#888';
+        // Keep .ws-right-tab on the element so wireTabSwitching\'s
+        // existing selector (.ws-right-tab) still hooks the click +
+        // active-class toggle. .ws-ribbon-tab carries the new ribbon
+        // styling.
+        tabsHtml += '<button class="ws-right-tab ws-ribbon-tab' + (isActive ? ' active' : '') + '" ' +
+          'data-panel="' + t.id + '" data-accent="' + accent + '" ' +
+          'style="--tab-accent:' + accent + ';">' +
+          '<span class="ws-ribbon-icon">' + (t.icon || '') + '</span>' +
+          '<span class="ws-ribbon-label">' + t.label + '</span>' +
+        '</button>';
+      });
+      tabsHtml += '</div>';
+      tabsHtml += '<div class="ws-ribbon-group-name">' + group.name + '</div>';
+      tabsHtml += '</div>';
+      // Vertical separator between groups (skip after the last group;
+      // the AI section adds its own).
+      if (gi < tabsByGroup.length - 1) {
+        tabsHtml += '<div class="ws-ribbon-sep"></div>';
+      }
+    });
+    // AI group on the far right — Ask Elle in the same ribbon shape
+    // with its own section label.
+    tabsHtml += '<div class="ws-ribbon-sep"></div>';
+    tabsHtml += '<div class="ws-ribbon-group ws-ribbon-group-ai">' +
+      '<div class="ws-ribbon-group-buttons">' +
+        '<button class="ws-ribbon-tab ws-ribbon-tab-ai" onclick="openJobAI()" title="Ask Elle, AGX\'s WIP analyst" style="--tab-accent:#a78bfa;">' +
+          '<span class="ws-ribbon-icon">✨</span>' +
+          '<span class="ws-ribbon-label">Ask Elle</span>' +
+        '</button>' +
+      '</div>' +
+      '<div class="ws-ribbon-group-name">AI</div>' +
     '</div>';
     tabsHtml += '</div>';
 
