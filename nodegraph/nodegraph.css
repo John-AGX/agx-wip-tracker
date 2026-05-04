@@ -318,3 +318,124 @@ body.light-mode .ng-del-cancel:hover{background:#e5e7eb}
 /* HUD */
 .ng-zoom{position:absolute;bottom:10px;left:10px;font-size:11px;color:var(--ng-dim2);background:var(--ng-surface);border:1px solid var(--ng-border2);border-radius:4px;padding:4px 10px;z-index:10}
 .ng-help{position:absolute;bottom:10px;right:10px;font-size:10px;color:var(--ng-dim2);background:var(--ng-surface);border:1px solid var(--ng-border2);border-radius:4px;padding:5px 12px;z-index:10;line-height:1.5}
+
+/* ── Outlook-style ribbon toolbar ───────────────────────── */
+/* Activates when .ng-topbar has the .ng-ribbon modifier class.
+   Each .ng-ribbon-btn is a vertical button (colored emoji on top,
+   label below); buttons cluster into named .ng-ribbon-group blocks
+   with a small caption underneath each group; vertical .ng-ribbon-sep
+   lines divide groups. Modeled on the Outlook ribbon screenshot
+   the user shared. */
+.ng-topbar.ng-ribbon{
+  align-items:stretch;
+  gap:0;
+  padding:6px 12px 0;
+  flex-wrap:wrap;
+  border-bottom:1px solid var(--ng-border2);
+  min-height:64px;
+}
+.ng-topbar.ng-ribbon .ng-ribbon-title{
+  display:flex;
+  flex-direction:column;
+  justify-content:center;
+  gap:2px;
+  padding:2px 12px 14px 0;
+  border-right:1px solid var(--ng-border2);
+  margin-right:6px;
+}
+.ng-topbar.ng-ribbon .ng-topbar-spacer{display:none}
+.ng-topbar.ng-ribbon .ng-ribbon-group{
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  flex:0 0 auto;
+  padding:0 4px;
+}
+.ng-topbar.ng-ribbon .ng-ribbon-group-buttons{
+  display:flex;
+  align-items:stretch;
+  gap:0;
+}
+.ng-topbar.ng-ribbon .ng-ribbon-group-name{
+  font-size:10px;
+  text-transform:uppercase;
+  letter-spacing:0.6px;
+  color:var(--ng-dim2,#6b7280);
+  font-weight:500;
+  margin-top:2px;
+  padding:3px 4px 4px;
+  border-top:1px solid var(--ng-border2);
+  width:100%;
+  text-align:center;
+}
+.ng-topbar.ng-ribbon .ng-ribbon-sep{
+  flex:0 0 1px;
+  width:1px;
+  background:var(--ng-border2);
+  margin:4px 4px 0;
+}
+.ng-topbar.ng-ribbon .ng-ribbon-btn{
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  gap:4px;
+  min-width:64px;
+  padding:5px 10px;
+  background:transparent;
+  border:1px solid transparent;
+  border-radius:6px;
+  color:var(--ng-text);
+  font-family:inherit;
+  font-size:11px;
+  font-weight:500;
+  cursor:pointer;
+  transition:background .12s,border-color .12s,transform .06s;
+}
+.ng-topbar.ng-ribbon .ng-ribbon-icon{
+  font-size:22px;
+  line-height:1;
+  display:inline-block;
+  filter:saturate(1.05);
+  transition:transform .12s;
+}
+.ng-topbar.ng-ribbon .ng-ribbon-label{
+  font-size:11px;
+  font-weight:500;
+  color:var(--ng-dim,#b8becc);
+  white-space:nowrap;
+}
+.ng-topbar.ng-ribbon .ng-ribbon-btn:hover{
+  background:rgba(255,255,255,0.05);
+  border-color:rgba(255,255,255,0.08);
+}
+.ng-topbar.ng-ribbon .ng-ribbon-btn:hover .ng-ribbon-label{
+  color:var(--ng-text,#fff);
+}
+.ng-topbar.ng-ribbon .ng-ribbon-btn:hover .ng-ribbon-icon{
+  transform:translateY(-1px);
+}
+/* AI button gets a gradient-tint background so it reads as the
+   "primary action" without the user having to hover. */
+.ng-topbar.ng-ribbon .ng-ribbon-btn-ai{
+  background:linear-gradient(135deg,rgba(139,92,246,.18),rgba(79,140,255,.18));
+  border-color:rgba(139,92,246,.35);
+}
+.ng-topbar.ng-ribbon .ng-ribbon-btn-ai:hover{
+  background:linear-gradient(135deg,rgba(139,92,246,.28),rgba(79,140,255,.28));
+  border-color:rgba(139,92,246,.55);
+}
+
+/* Light-mode parity for the ribbon dividers + hover */
+body.light-mode .ng-topbar.ng-ribbon .ng-ribbon-group-name{
+  border-top-color:var(--ng-border2,#d4d8e0);
+  color:#6b7280;
+}
+body.light-mode .ng-topbar.ng-ribbon .ng-ribbon-sep,
+body.light-mode .ng-topbar.ng-ribbon .ng-ribbon-title{
+  background:var(--ng-border2,#d4d8e0);
+}
+body.light-mode .ng-topbar.ng-ribbon .ng-ribbon-btn:hover{
+  background:rgba(0,0,0,.04);
+  border-color:rgba(0,0,0,.06);
+}

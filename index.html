@@ -2166,42 +2166,101 @@
     <script src="js/tab-slider.js?v=1"></script>
 
     <script src="js/workspace.js?v=41"></script>
-    <script src="js/workspace-layout.js?v=49"></script>
+    <script src="js/workspace-layout.js?v=50"></script>
 
     <!-- Node Graph (Beta) -->
-    <link rel="stylesheet" href="nodegraph/nodegraph.css?v=82" />
+    <link rel="stylesheet" href="nodegraph/nodegraph.css?v=83" />
     <div id="nodeGraphTab">
-      <div class="ng-topbar">
-        <span class="ng-topbar-title">&#x26A1; Node Graph</span>
-        <span class="ng-topbar-sub">Visual Cost Flow Editor</span>
-        <!-- Save indicator — mirrors the estimate editor's ee-save
-             pattern (○ idle / ● pending / ● saving / ✓ saved /
-             ! error). Engine calls window.ngMarkSaved() after every
-             saveGraph() write so the dot reflects live state. -->
-        <span id="ngSaveIndicator" class="ng-save-indicator" title="Auto-save status — every change persists immediately">
-          <span class="ng-save-dot">&#x25CB;</span><span class="ng-save-label">Saved</span>
-        </span>
+      <!-- Workspace canvas toolbar — Outlook ribbon style. Each
+           button is icon-on-top + label-below, buttons cluster into
+           named sections (View / Layout / Focus / AI) with vertical
+           dividers, and section captions sit underneath each group.
+           Class names on individual buttons preserved so existing
+           ng-graph wiring still finds them. -->
+      <div class="ng-topbar ng-ribbon">
+        <div class="ng-ribbon-title">
+          <span class="ng-topbar-title">&#x26A1; Node Graph</span>
+          <span class="ng-topbar-sub">Visual Cost Flow Editor</span>
+          <span id="ngSaveIndicator" class="ng-save-indicator" title="Auto-save status — every change persists immediately">
+            <span class="ng-save-dot">&#x25CB;</span><span class="ng-save-label">Saved</span>
+          </span>
+        </div>
         <span class="ng-topbar-spacer"></span>
-        <!-- Icon-only toolbar buttons. Tooltips kept verbose so the
-             user can hover for the full label; visual is just the
-             unicode glyph so the row stays compact and the
-             "Visual Cost Flow Editor" subtitle gets room to fit
-             on a single line. -->
-        <button class="ng-tbtn ng-tbtn-icon ng-collapse-all-btn" title="Collapse all nodes">&#x25BC;</button>
-        <button class="ng-tbtn ng-tbtn-icon ng-expand-all-btn" title="Expand all nodes">&#x25B6;</button>
-        <button class="ng-tbtn ng-tbtn-icon ng-arrange-btn" title="Arrange — auto-layout the full tree, or only the selected node's children if one is selected">&#x2725;</button>
-        <button class="ng-tbtn ng-tbtn-icon ng-sync-btn" title="Sync — add missing nodes from job data without moving existing ones">&#x1F504;</button>
-        <button class="ng-tbtn ng-tbtn-icon ng-reset-btn" title="Reset — delete graph and rebuild from scratch">&#x26A0;</button>
-        <span class="ng-topbar-divider"></span>
-        <button class="ng-tbtn ng-tbtn-icon ng-snapshot-save-btn" id="ngSnapshotSaveBtn" title="Save Layout — checkpoint the current layout so you can restore to it later">&#x1F4BE;</button>
-        <button class="ng-tbtn ng-tbtn-icon ng-snapshot-restore-btn" id="ngSnapshotRestoreBtn" title="Restore Layout — replace the current graph with the last saved layout">&#x21BA;</button>
-        <span class="ng-topbar-divider"></span>
-        <button class="ng-tbtn ng-tbtn-icon ng-ws-focus-btn" id="ngWsFocusBtn" title="Focus Workspace — zoom 100% and center on it">&#x1F3AF;</button>
-        <button class="ng-tbtn ng-tbtn-icon ng-ws-fullscreen-btn" id="ngWsFullscreenBtn" title="Workspace Fullscreen — expand workspace to fill the canvas (toggle to restore)">&#x26F6;</button>
-        <button class="ng-tbtn ng-tbtn-icon ng-fullscreen-graph-btn" id="ngFullscreenGraphBtn" title="Maximize — hide the AGX nav header to give the graph the entire viewport (toggle)">&#x1F5D6;</button>
-        <button class="ng-tbtn ng-tbtn-icon ng-audit-btn" id="ngAuditBtn" title="Audit — connectivity + completeness check (orphan nodes, missing %complete, unlinked QB lines, margin drift)">&#x26A0;<span id="ngAuditBadge" style="display:none;margin-left:2px;font-size:9px;padding:1px 5px;border-radius:8px;background:rgba(248,113,113,0.25);color:#f87171;font-weight:700;"></span></button>
-        <span class="ng-topbar-divider"></span>
-        <button class="ng-tbtn ng-tbtn-icon" onclick="openJobAI()" title="Ask AI — WIP / financial AI assistant" style="background:linear-gradient(135deg,#8b5cf6,#4f8cff);color:#fff;border:none;">&#x2728;</button>
+        <!-- View group: collapse / expand / arrange / sync / reset -->
+        <div class="ng-ribbon-group">
+          <div class="ng-ribbon-group-buttons">
+            <button class="ng-tbtn ng-ribbon-btn ng-collapse-all-btn" title="Collapse all nodes">
+              <span class="ng-ribbon-icon">&#x1F4C1;</span>
+              <span class="ng-ribbon-label">Collapse</span>
+            </button>
+            <button class="ng-tbtn ng-ribbon-btn ng-expand-all-btn" title="Expand all nodes">
+              <span class="ng-ribbon-icon">&#x1F4C2;</span>
+              <span class="ng-ribbon-label">Expand</span>
+            </button>
+            <button class="ng-tbtn ng-ribbon-btn ng-arrange-btn" title="Arrange — auto-layout the full tree, or only the selected node's children if one is selected">
+              <span class="ng-ribbon-icon">&#x2728;</span>
+              <span class="ng-ribbon-label">Arrange</span>
+            </button>
+            <button class="ng-tbtn ng-ribbon-btn ng-sync-btn" title="Sync — add missing nodes from job data without moving existing ones">
+              <span class="ng-ribbon-icon">&#x1F504;</span>
+              <span class="ng-ribbon-label">Sync</span>
+            </button>
+            <button class="ng-tbtn ng-ribbon-btn ng-reset-btn" title="Reset — delete graph and rebuild from scratch">
+              <span class="ng-ribbon-icon">&#x267B;&#xFE0F;</span>
+              <span class="ng-ribbon-label">Reset</span>
+            </button>
+          </div>
+          <div class="ng-ribbon-group-name">View</div>
+        </div>
+        <span class="ng-ribbon-sep"></span>
+        <!-- Layout group: save / restore checkpoints -->
+        <div class="ng-ribbon-group">
+          <div class="ng-ribbon-group-buttons">
+            <button class="ng-tbtn ng-ribbon-btn ng-snapshot-save-btn" id="ngSnapshotSaveBtn" title="Save Layout — checkpoint the current layout so you can restore to it later">
+              <span class="ng-ribbon-icon">&#x1F4BE;</span>
+              <span class="ng-ribbon-label">Save layout</span>
+            </button>
+            <button class="ng-tbtn ng-ribbon-btn ng-snapshot-restore-btn" id="ngSnapshotRestoreBtn" title="Restore Layout — replace the current graph with the last saved layout">
+              <span class="ng-ribbon-icon">&#x21BA;</span>
+              <span class="ng-ribbon-label">Restore</span>
+            </button>
+          </div>
+          <div class="ng-ribbon-group-name">Layout</div>
+        </div>
+        <span class="ng-ribbon-sep"></span>
+        <!-- Focus group: focus workspace / fullscreen / audit -->
+        <div class="ng-ribbon-group">
+          <div class="ng-ribbon-group-buttons">
+            <button class="ng-tbtn ng-ribbon-btn ng-ws-focus-btn" id="ngWsFocusBtn" title="Focus Workspace — zoom 100% and center on it">
+              <span class="ng-ribbon-icon">&#x1F3AF;</span>
+              <span class="ng-ribbon-label">Focus</span>
+            </button>
+            <button class="ng-tbtn ng-ribbon-btn ng-ws-fullscreen-btn" id="ngWsFullscreenBtn" title="Workspace Fullscreen — expand workspace to fill the canvas (toggle to restore)">
+              <span class="ng-ribbon-icon">&#x26F6;</span>
+              <span class="ng-ribbon-label">Workspace</span>
+            </button>
+            <button class="ng-tbtn ng-ribbon-btn ng-fullscreen-graph-btn" id="ngFullscreenGraphBtn" title="Maximize — hide the AGX nav header to give the graph the entire viewport (toggle)">
+              <span class="ng-ribbon-icon">&#x1F5D6;</span>
+              <span class="ng-ribbon-label">Maximize</span>
+            </button>
+            <button class="ng-tbtn ng-ribbon-btn ng-audit-btn" id="ngAuditBtn" title="Audit — connectivity + completeness check (orphan nodes, missing %complete, unlinked QB lines, margin drift)">
+              <span class="ng-ribbon-icon">&#x1F50D;</span>
+              <span class="ng-ribbon-label">Audit<span id="ngAuditBadge" style="display:none;margin-left:3px;font-size:9px;padding:1px 5px;border-radius:8px;background:rgba(248,113,113,0.25);color:#f87171;font-weight:700;"></span></span>
+            </button>
+          </div>
+          <div class="ng-ribbon-group-name">Focus</div>
+        </div>
+        <span class="ng-ribbon-sep"></span>
+        <!-- AI group: Ask Elle (job/WIP analyst) -->
+        <div class="ng-ribbon-group ng-ribbon-group-ai">
+          <div class="ng-ribbon-group-buttons">
+            <button class="ng-tbtn ng-ribbon-btn ng-ribbon-btn-ai" onclick="openJobAI()" title="Ask Elle, AGX's WIP analyst">
+              <span class="ng-ribbon-icon">&#x2728;</span>
+              <span class="ng-ribbon-label">Ask Elle</span>
+            </button>
+          </div>
+          <div class="ng-ribbon-group-name">AI</div>
+        </div>
       </div>
       <div class="ng-main">
         <div class="ng-sidebar"></div>
