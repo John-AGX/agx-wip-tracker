@@ -1373,14 +1373,16 @@
 
       var box = document.createElement('div');
       box.style.cssText = 'background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:12px;padding:22px 24px;max-width:560px;width:100%;box-sizing:border-box;box-shadow:0 16px 48px rgba(0,0,0,0.6);';
-      // Common card style — grid items default to min-width:auto
-      // (= min-content), which lets the descriptive text inside push
-      // the columns wider than 1fr can constrain. width:100% +
-      // min-width:0 + box-sizing:border-box force each card to honor
-      // its grid track width, and overflow-wrap on the description
-      // breaks any long words that would otherwise overflow.
-      var cardBase = 'display:flex;flex-direction:column;align-items:flex-start;gap:6px;text-align:left;border-radius:8px;padding:14px;color:var(--text,#fff);font-family:inherit;cursor:pointer;transition:background 0.12s, border-color 0.12s, transform 0.06s;width:100%;min-width:0;box-sizing:border-box;';
-      var descStyle = 'font-size:11px;color:var(--text-dim,#aaa);font-weight:400;line-height:1.4;overflow-wrap:break-word;word-break:normal;width:100%;';
+      // Common card style — flex column with align-items:stretch so
+      // each child fills the card\'s cross axis (otherwise inline spans
+      // size to content-width and the description text bleeds out of
+      // the card on long lines). min-width:0 + box-sizing:border-box
+      // keep the card honoring its grid track width.
+      var cardBase = 'display:flex;flex-direction:column;align-items:stretch;gap:6px;text-align:left;border-radius:8px;padding:14px;color:var(--text,#fff);font-family:inherit;cursor:pointer;transition:background 0.12s, border-color 0.12s, transform 0.06s;width:100%;min-width:0;box-sizing:border-box;';
+      // display:block forces the span to behave as a block-level
+      // element so its width is the parent card width and the text
+      // wraps inside instead of growing to max-content.
+      var descStyle = 'display:block;font-size:11px;color:var(--text-dim,#aaa);font-weight:400;line-height:1.4;overflow-wrap:break-word;word-break:normal;';
       box.innerHTML =
         '<div style="font-size:16px;font-weight:700;color:var(--text,#fff);margin-bottom:4px;">Send invite to</div>' +
         '<div style="font-size:12px;color:var(--text-dim,#aaa);margin-bottom:16px;">Pick whether this is a brand-new account or a reissue for someone already in the system.</div>' +
