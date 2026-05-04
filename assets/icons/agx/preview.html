@@ -142,71 +142,105 @@
 </svg>
 
 
-<!-- ═══════════════ Phosphor Icons (Light weight) — actual production candidates ═══════════════ -->
+<!-- ═══════════════ Heroicons (24/outline) — 3 options per concept ═══════════════ -->
 <div class="section-divider" style="margin-top:0;border-top:0;">
-  <h2>Phosphor Icons (Light weight) — re-skinned for AGX</h2>
-  <p class="sub">16 AGX concepts mapped to Phosphor's MIT-licensed Light-weight icons (loaded from <code>/assets/icons/agx/phosphor/</code>) and re-skinned with the AGX dark tile + light-grey gradient. This is the production-quality direction — battle-tested artwork, hundreds of additional icons available in the same library if we need more later.</p>
+  <h2>Heroicons (24/outline) — 3 options per concept</h2>
+  <p class="sub">16 AGX concepts × 3 alternate Heroicons each. MIT-licensed (Tailwind Labs). Loaded from <code>/assets/icons/agx/heroicons/</code> and re-skinned with the AGX dark tile + light-grey gradient. Send picks like <code>WIP=2, Schedule=1, Admin=3, …</code> and I'll lock the set.</p>
 </div>
 
-<div class="phosphor-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:18px;margin-bottom:36px;">
-  <div class="ph-cell" data-icon="clipboard-text-light"  data-label="WIP"></div>
-  <div class="ph-cell" data-icon="calendar-dots-light"   data-label="Schedule"></div>
-  <div class="ph-cell" data-icon="chart-line-up-light"   data-label="Insights"></div>
-  <div class="ph-cell" data-icon="gear-six-light"        data-label="Admin"></div>
-  <div class="ph-cell" data-icon="receipt-light"         data-label="Estimates"></div>
-  <div class="ph-cell" data-icon="funnel-light"          data-label="Leads"></div>
-  <div class="ph-cell" data-icon="users-three-light"     data-label="Clients"></div>
-  <div class="ph-cell" data-icon="wrench-light"          data-label="Subs"></div>
-  <div class="ph-cell" data-icon="package-light"         data-label="Materials"></div>
-  <div class="ph-cell" data-icon="stack-simple-light"    data-label="Phases"></div>
-  <div class="ph-cell" data-icon="house-line-light"      data-label="Buildings"></div>
-  <div class="ph-cell" data-icon="camera-light"          data-label="Photos"></div>
-  <div class="ph-cell" data-icon="list-checks-light"     data-label="Daily Logs"></div>
-  <div class="ph-cell" data-icon="paperclip-light"       data-label="Attachments"></div>
-  <div class="ph-cell" data-icon="table-light"           data-label="Workspace"></div>
-  <div class="ph-cell" data-icon="tree-structure-light"  data-label="Node Graph"></div>
-</div>
+<div id="heroicons-rows"></div>
 
 <style>
-  .ph-cell { display: flex; flex-direction: column; align-items: center; gap: 8px; }
-  .ph-tile {
-    width: 96px; height: 96px;
+  .hi-row { display: grid; grid-template-columns: 140px 1fr; gap: 24px; align-items: center; padding: 14px 0; border-top: 1px solid #1a1d27; }
+  .hi-row:first-of-type { border-top: 0; }
+  .hi-label { font-size: 13px; font-weight: 600; color: #e4e6f0; text-transform: uppercase; letter-spacing: 0.6px; }
+  .hi-opts { display: flex; gap: 28px; }
+  .hi-opt { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  .hi-tile {
+    width: 84px; height: 84px;
     background: #0b0c10;
     border: 1px solid #1a1d27;
-    border-radius: 18px;
+    border-radius: 16px;
     display: flex; align-items: center; justify-content: center;
   }
-  .ph-tile svg { width: 64px; height: 64px; }
-  .ph-cell .ph-label { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; }
+  .hi-tile svg { width: 56px; height: 56px; }
+  .hi-name {
+    font-size: 9px; color: #6d7080; font-family: 'SF Mono', Consolas, monospace;
+    max-width: 84px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    text-align: center;
+  }
+  .hi-num {
+    font-size: 11px; color: #888; font-weight: 600;
+    background: rgba(255,255,255,0.04); border: 1px solid #1a1d27;
+    border-radius: 12px; padding: 1px 8px; min-width: 18px; text-align: center;
+  }
 </style>
 
 <script>
-  // Load each Phosphor SVG, re-color stroke to the shared #ag gradient,
-  // and inject into its tile. Phosphor uses currentColor + a rect
-  // placeholder; we swap currentColor → url(#ag) so the same toggle
-  // (Light grey / White / Gold) re-tints these icons too.
+  // 16 AGX concepts × 3 Heroicons options each. Each entry is the
+  // bare filename (no .svg) — fetched from /assets/icons/agx/heroicons/
+  // at boot, currentColor swapped for url(#ag) so the global theme
+  // toggle re-tints the whole set.
   (function () {
-    var cells = document.querySelectorAll('.ph-cell[data-icon]');
-    cells.forEach(function (cell) {
-      var name = cell.dataset.icon;
-      var label = cell.dataset.label;
-      var tile = document.createElement('div');
-      tile.className = 'ph-tile';
-      var lbl = document.createElement('div');
-      lbl.className = 'ph-label';
-      lbl.textContent = label;
-      cell.appendChild(tile);
-      cell.appendChild(lbl);
-      fetch('/assets/icons/agx/phosphor/' + name + '.svg')
-        .then(function (r) { return r.text(); })
-        .then(function (svgText) {
-          // Replace currentColor with the gradient ref.
-          var themed = svgText
-            .replace(/stroke="currentColor"/g, 'stroke="url(#ag)"')
-            .replace(/fill="currentColor"/g, 'fill="url(#ag)"');
-          tile.innerHTML = themed;
-        })
-        .catch(function () { tile.innerHTML = '<span style="color:#f87171;font-size:10px;">load failed</span>'; });
+    var CONCEPTS = [
+      ['WIP',         ['clipboard-document-list', 'clipboard-document-check', 'rectangle-stack']],
+      ['Schedule',    ['calendar-days', 'calendar', 'clock']],
+      ['Insights',    ['presentation-chart-line', 'chart-bar', 'chart-pie']],
+      ['Admin',       ['cog-6-tooth', 'cog-8-tooth', 'shield-check']],
+      ['Estimates',   ['document-currency-dollar', 'document-text', 'banknotes']],
+      ['Leads',       ['funnel', 'megaphone', 'sparkles']],
+      ['Clients',     ['users', 'user-group', 'identification']],
+      ['Subs',        ['wrench-screwdriver', 'wrench', 'building-office']],
+      ['Materials',   ['cube', 'archive-box', 'rectangle-stack']],
+      ['Phases',      ['queue-list', 'bars-3-bottom-left', 'squares-plus']],
+      ['Buildings',   ['home', 'building-office', 'building-storefront']],
+      ['Photos',      ['camera', 'photo', 'film']],
+      ['Daily Logs',  ['clipboard-document-check', 'document-check', 'calendar-days']],
+      ['Attachments', ['paper-clip', 'link', 'document-arrow-up']],
+      ['Workspace',   ['table-cells', 'squares-2x2', 'view-columns']],
+      ['Node Graph',  ['share', 'rectangle-stack', 'command-line']]
+    ];
+
+    var host = document.getElementById('heroicons-rows');
+    var pendingFetches = [];
+
+    CONCEPTS.forEach(function (entry) {
+      var label = entry[0];
+      var icons = entry[1];
+      var row = document.createElement('section');
+      row.className = 'hi-row';
+      row.innerHTML = '<div class="hi-label">' + label + '</div><div class="hi-opts"></div>';
+      var opts = row.querySelector('.hi-opts');
+      icons.forEach(function (iconName, idx) {
+        var opt = document.createElement('div');
+        opt.className = 'hi-opt';
+        var tile = document.createElement('div');
+        tile.className = 'hi-tile';
+        var name = document.createElement('div');
+        name.className = 'hi-name';
+        name.textContent = iconName;
+        var num = document.createElement('div');
+        num.className = 'hi-num';
+        num.textContent = (idx + 1);
+        opt.appendChild(tile);
+        opt.appendChild(name);
+        opt.appendChild(num);
+        opts.appendChild(opt);
+        pendingFetches.push(
+          fetch('/assets/icons/agx/heroicons/' + iconName + '.svg')
+            .then(function (r) { return r.ok ? r.text() : Promise.reject('http ' + r.status); })
+            .then(function (svgText) {
+              var themed = svgText
+                .replace(/stroke="currentColor"/g, 'stroke="url(#ag)"')
+                .replace(/fill="currentColor"/g, 'fill="url(#ag)"');
+              tile.innerHTML = themed;
+            })
+            .catch(function (e) {
+              tile.innerHTML = '<span style="color:#f87171;font-size:9px;">' + iconName + '<br>not found</span>';
+            })
+        );
+      });
+      host.appendChild(row);
     });
   })();
 </script>
