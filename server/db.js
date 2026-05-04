@@ -747,27 +747,22 @@ async function initSchema() {
     [JSON.stringify(DEFAULT_PROPOSAL_TEMPLATE)]
   );
 
-  // BT export mapping — drives the Buildertrend xlsx exporter. Keys map
-  // each btCategory (and the auto-injected income line) to a BT Parent
-  // Group / Subgroup / Cost Type / Cost Code. Cost Code is intentionally
-  // blank by default; admins fill it in with their own BT codes.
+  // BT export mapping — drives the Buildertrend xlsx exporter. As of
+  // the new BT proposal-import format (Phase D), each AGX btCategory
+  // maps to a single BT Cost Code string. The old Parent Group /
+  // Subgroup / Cost Type fields and the auto-injected Service &
+  // Repair Income line are gone — the export emits pure cost lines at
+  // their real markups. Section flat-$, fees, and tax are pro-rata
+  // distributed onto each line so the export total matches the
+  // proposal exactly.
   const DEFAULT_BT_MAPPING = {
     categories: {
-      materials: { parentGroup: 'Materials & Supplies', parentDesc: 'Materials and supplies costs', subgroup: 'Materials',              subgroupDesc: 'General materials',          costCode: '', costType: 'Material' },
-      labor:     { parentGroup: 'Direct Labor',         parentDesc: 'AG Exteriors direct labor',     subgroup: 'Field Labor',            subgroupDesc: 'Field crew labor',           costCode: '', costType: 'Labor' },
-      gc:        { parentGroup: 'General Conditions',   parentDesc: 'Project general conditions',     subgroup: 'Site Operations',        subgroupDesc: 'General site operations',   costCode: '', costType: 'Other' },
-      sub:       { parentGroup: 'Subcontractors',       parentDesc: 'Subcontracted scopes',           subgroup: 'General Subcontractors', subgroupDesc: 'General subcontracted work', costCode: '', costType: 'Subcontractor' }
+      materials: { costCode: 'Materials & Supplies Costs' },
+      labor:     { costCode: 'Direct Labor' },
+      gc:        { costCode: 'General Conditions' },
+      sub:       { costCode: 'Subcontractors Costs' }
     },
-    fallback: { parentGroup: 'Uncategorized', parentDesc: '', subgroup: 'General', subgroupDesc: '', costCode: '', costType: 'Other' },
-    income: {
-      title: 'Service & Repair Income',
-      parentGroup: 'Income',
-      parentDesc: 'Client-facing income line',
-      subgroup: 'Service & Repair',
-      subgroupDesc: 'Service and repair income',
-      costCode: 'Service & Repair Income',
-      costType: 'Other'
-    }
+    fallback: { costCode: 'General Conditions' }
   };
   await pool.query(
     `INSERT INTO app_settings (key, value)

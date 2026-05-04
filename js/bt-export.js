@@ -1,43 +1,48 @@
-// Buildertrend xlsx export — Phase C.
+// Buildertrend xlsx export — Phase D.
 //
-// Writes the active estimate (active alternate only) as a single-sheet
-// xlsx matching Buildertrend's "Sample Estimate Import" layout: 16 columns
-// with a row per line item carrying the line's btCategory mapped to a BT
-// Parent Group / Subgroup / Cost Type. A "Service & Repair Income" line is
-// auto-injected first carrying the total client price — that's the line
-// AGX uses in BT to surface the proposal price to the client.
+// Writes the active estimate (every INCLUDED group) as a single-sheet
+// xlsx matching Buildertrend's NEW 13-column proposal-import layout
+// (sample: ProposalReport (3).xls). One row per cost line, with the
+// line's btCategory mapped to a BT Cost Code.
+//
+// What changed from Phase C:
+//   - Dropped the auto-injected "Service & Repair Income" line and the
+//     -100% per-line workaround. The export is now pure cost lines at
+//     their real markups.
+//   - Dropped the Parent Group / Subgroup / Cost Type tri-column —
+//     BT's new import only needs Category + Cost Code.
+//   - Section flat-$ markups + estimate-level fees + tax + round-up
+//     are pro-rata distributed onto each line's effective % markup, so
+//     the export total matches the proposal exactly without leaking a
+//     pseudo "income" row.
 //
 // SheetJS (XLSX global) is loaded by js/proposal.js, so it's already
 // available by the time this module is invoked from the editor.
-(function() {
+(function () {
   'use strict';
 
-  // Hardcoded fallback used if the API lookup fails (offline, network
-  // glitch, settings row missing). Mirrors the seed in server/db.js so a
-  // first-time export still produces a usable file. Real values are loaded
-  // from /api/settings/bt_export_mapping and edited via Admin -> Templates.
+  // BT Cost Code names, copy/pasted from the BT dropdown so they match
+  // exactly. The mapping admins edit is now just btCategory -> costCode
+  // (a single string per category) — no more Parent Group / Subgroup /
+  // Description fields. Cost Type column is gone too.
   var DEFAULT_MAPPING = {
     categories: {
-      materials: { parentGroup: 'Materials & Supplies', parentDesc: 'Materials and supplies costs', subgroup: 'Materials',              subgroupDesc: 'General materials',          costCode: '', costType: 'Material' },
-      labor:     { parentGroup: 'Direct Labor',         parentDesc: 'AG Exteriors direct labor',     subgroup: 'Field Labor',            subgroupDesc: 'Field crew labor',           costCode: '', costType: 'Labor' },
-      gc:        { parentGroup: 'General Conditions',   parentDesc: 'Project general conditions',     subgroup: 'Site Operations',        subgroupDesc: 'General site operations',   costCode: '', costType: 'Other' },
-      sub:       { parentGroup: 'Subcontractors',       parentDesc: 'Subcontracted scopes',           subgroup: 'General Subcontractors', subgroupDesc: 'General subcontracted work', costCode: '', costType: 'Subcontractor' }
+      materials: { costCode: 'Materials & Supplies Costs' },
+      labor:     { costCode: 'Direct Labor' },
+      gc:        { costCode: 'General Conditions' },
+      sub:       { costCode: 'Subcontractors Costs' }
     },
-    fallback: { parentGroup: 'Uncategorized', parentDesc: '', subgroup: 'General', subgroupDesc: '', costCode: '', costType: 'Other' },
-    income: {
-      title: 'Service & Repair Income',
-      parentGroup: 'Income',
-      parentDesc: 'Client-facing income line',
-      subgroup: 'Service & Repair',
-      subgroupDesc: 'Service and repair income',
-      costCode: 'Service & Repair Income',
-      costType: 'Other'
-    }
+    fallback: { costCode: 'General Conditions' }
   };
 
   var _mappingCache = null;
   var _mappingPromise = null;
 
+  // Reads the saved mapping from /api/settings. Migrates legacy mappings
+  // (Phase C shape with parentGroup/subgroup/costType) by stripping
+  // those fields — only `costCode` is consulted. If the legacy
+  // costCode was blank (admins skipped it), we fall back to the
+  // built-in default for that category so the export still works.
   function loadMapping() {
     if (_mappingCache) return Promise.resolve(_mappingCache);
     if (_mappingPromise) return _mappingPromise;
@@ -46,20 +51,31 @@
       return Promise.resolve(_mappingCache);
     }
     _mappingPromise = window.agxApi.settings.get('bt_export_mapping')
-      .then(function(res) {
+      .then(function (res) {
         var v = res && res.setting && res.setting.value;
-        _mappingCache = (v && v.categories && v.income) ? v : DEFAULT_MAPPING;
+        _mappingCache = normalizeMapping(v);
         return _mappingCache;
       })
-      .catch(function() {
+      .catch(function () {
         _mappingCache = DEFAULT_MAPPING;
         return _mappingCache;
       });
     return _mappingPromise;
   }
 
-  // Called by the Admin Templates UI after a save so the next export uses
-  // the freshly-edited mapping without a page refresh.
+  function normalizeMapping(v) {
+    if (!v || typeof v !== 'object') return DEFAULT_MAPPING;
+    var out = { categories: {}, fallback: { costCode: '' } };
+    Object.keys(DEFAULT_MAPPING.categories).forEach(function (k) {
+      var src = (v.categories && v.categories[k]) || {};
+      var def = DEFAULT_MAPPING.categories[k];
+      out.categories[k] = { costCode: src.costCode || def.costCode };
+    });
+    var fb = v.fallback || {};
+    out.fallback = { costCode: fb.costCode || DEFAULT_MAPPING.fallback.costCode };
+    return out;
+  }
+
   function invalidateMappingCache() {
     _mappingCache = null;
     _mappingPromise = null;
@@ -67,68 +83,59 @@
 
   function num(v) { var n = parseFloat(v); return isNaN(n) ? 0 : n; }
 
-  // Returns the list of group ids that should be included in the export.
-  // Excluded groups are dropped entirely. If no group flags are set yet
-  // (legacy estimates), every group is included.
   function includedGroupIds(estimate) {
     var alts = (estimate && estimate.alternates) || [];
-    var included = alts.filter(function(a) { return !a.excludeFromTotal; });
-    if (!included.length) return alts.map(function(a) { return a.id; }); // safety: never empty
-    return included.map(function(a) { return a.id; });
+    var included = alts.filter(function (a) { return !a.excludeFromTotal; });
+    if (!included.length) return alts.map(function (a) { return a.id; });
+    return included.map(function (a) { return a.id; });
   }
 
-  // Walks lines in their stored order; each line inherits the btCategory
-  // of the most recent section header above it. Lines before the first
-  // section (or under a section with no btCategory) get null and fall
-  // back to BT_FALLBACK at write time. Spans every INCLUDED group so a
-  // multi-deck estimate exports as one cohesive cost-side line list.
+  // Walks lines in stored order; each line inherits the btCategory of
+  // the most recent section header above it. Spans every INCLUDED
+  // group so a multi-deck estimate exports as one cost-line list.
   function buildLineCategoryMap(estimate) {
     var includedIds = includedGroupIds(estimate);
     var altById = {};
-    (estimate.alternates || []).forEach(function(a) { altById[a.id] = a; });
-    var allLines = (window.appData && window.appData.estimateLines || []).filter(function(l) {
+    (estimate.alternates || []).forEach(function (a) { altById[a.id] = a; });
+    var allLines = (window.appData && window.appData.estimateLines || []).filter(function (l) {
       return l.estimateId === estimate.id && includedIds.indexOf(l.alternateId) >= 0;
     });
-    // Group lines by alternateId so we walk each group's section structure
-    // independently — section-header context shouldn't bleed across groups.
     var byGroup = {};
-    includedIds.forEach(function(gid) { byGroup[gid] = []; });
-    allLines.forEach(function(l) { if (byGroup[l.alternateId]) byGroup[l.alternateId].push(l); });
+    includedIds.forEach(function (gid) { byGroup[gid] = []; });
+    allLines.forEach(function (l) { if (byGroup[l.alternateId]) byGroup[l.alternateId].push(l); });
     var orderedLines = [];
     var byLineId = {};
+    var sectionByLineId = {};
     var groupNameByLineId = {};
-    includedIds.forEach(function(gid) {
+    includedIds.forEach(function (gid) {
       var group = byGroup[gid] || [];
       var currentCat = null;
-      group.forEach(function(l) {
+      var currentSection = null;
+      group.forEach(function (l) {
         if (l.section === '__section_header__') {
           currentCat = l.btCategory || null;
+          currentSection = l;
         } else {
           byLineId[l.id] = currentCat;
+          sectionByLineId[l.id] = currentSection;
           groupNameByLineId[l.id] = altById[gid] ? altById[gid].name : '';
         }
         orderedLines.push(l);
       });
     });
-    return { lines: orderedLines, byLineId: byLineId, groupNameByLineId: groupNameByLineId };
+    return {
+      lines: orderedLines,
+      byLineId: byLineId,
+      sectionByLineId: sectionByLineId,
+      groupNameByLineId: groupNameByLineId
+    };
   }
 
-  function sectionHeaderFor(line, allLines) {
-    var idx = allLines.indexOf(line);
-    if (idx < 0) idx = allLines.length;
-    for (var i = idx - 1; i >= 0; i--) {
-      var L = allLines[i];
-      if (L && L.section === '__section_header__') return L;
-    }
-    return null;
-  }
-
-  // Per-line percent markup used in the BT cost rows. Dollar-mode
-  // sections return 0 here (their flat $ is captured in the income
-  // line via computeClientTotal). Override-on sections return the
-  // section's % regardless of any per-line value.
-  function effectiveMarkup(line, allLines, estimate) {
-    var section = sectionHeaderFor(line, allLines);
+  // Per-line percent markup. Mirrors the editor pipeline. Returns a
+  // plain percent (e.g. 35 = 35%). Dollar-mode sections return 0 here;
+  // the section-flat-$ is folded into the per-line markup later by
+  // pro-rata distribution.
+  function effectiveMarkup(line, section, estimate) {
     var inDollar = section && section.markupMode === 'dollar';
     if (section && section.overrideLineMarkups) {
       if (inDollar) return 0;
@@ -143,30 +150,27 @@
     return 0;
   }
 
-  // Mirrors the editor's pricing pipeline: subtotal -> per-line markup ->
-  // marked-up subtotal -> + flat fee -> + percent fee -> + tax -> round-up.
-  // Sums across every INCLUDED group so a multi-group estimate's BT income
-  // line carries the full proposal price.
+  // Final client total — must match the editor's pricing pipeline so
+  // the BT export totals match the proposal exactly.
   function computeClientTotal(estimate) {
     var includedIds = includedGroupIds(estimate);
-    var allLines = (window.appData && window.appData.estimateLines || []).filter(function(l) {
+    var allLines = (window.appData && window.appData.estimateLines || []).filter(function (l) {
       return l.estimateId === estimate.id && includedIds.indexOf(l.alternateId) >= 0;
     });
     var markedUp = 0;
-    // Walk each group's lines independently so section-header context (used
-    // by effectiveMarkup) doesn't bleed across groups.
-    includedIds.forEach(function(gid) {
-      var group = allLines.filter(function(l) { return l.alternateId === gid; });
-      group.forEach(function(l) {
+    includedIds.forEach(function (gid) {
+      var group = allLines.filter(function (l) { return l.alternateId === gid; });
+      var currentSection = null;
+      group.forEach(function (l) {
         if (l.section === '__section_header__') {
-          // Dollar-mode section: flat $ added once to the income line.
+          currentSection = l;
           if (l.markupMode === 'dollar' && l.markup !== '' && l.markup != null) {
             markedUp += num(l.markup);
           }
           return;
         }
         var ext = num(l.qty) * num(l.unitCost);
-        var m = effectiveMarkup(l, group, estimate);
+        var m = effectiveMarkup(l, currentSection, estimate);
         markedUp += ext * (1 + m / 100);
       });
     });
@@ -184,6 +188,103 @@
     return String(s || 'AGX_Estimate').replace(/[^\w \-]+/g, '').replace(/\s+/g, '_').slice(0, 60);
   }
 
+  // Build the per-line export rows. Pro-rata distributes section
+  // flat-$ markups + estimate-level feeFlat + feePct + taxPct + round-up
+  // onto each line's effective markup so the row totals add up to the
+  // proposal's client total without any pseudo "income" line.
+  function buildExportRows(estimate, mapping) {
+    var categories = mapping.categories || {};
+    var fallback = mapping.fallback || DEFAULT_MAPPING.fallback;
+    var catMap = buildLineCategoryMap(estimate);
+    var nonHeaderLines = catMap.lines.filter(function (l) { return l.section !== '__section_header__'; });
+
+    // Pass 1: compute each line's "base revenue" — builder cost +
+    // line-level markup + its share of the section's flat-$ pool.
+    // Section flat-$ is distributed pro-rata by builder cost so a
+    // line with a $0 cost in a $-mode section still gets nothing
+    // (avoids divide-by-zero when the section subtotal is 0).
+    var sectionTotals = {}; // sectionId -> {bcTotal, flatDollars}
+    nonHeaderLines.forEach(function (l) {
+      var section = catMap.sectionByLineId[l.id];
+      if (!section) return;
+      var key = section.id;
+      if (!sectionTotals[key]) {
+        sectionTotals[key] = { bcTotal: 0, flatDollars: 0 };
+        if (section.markupMode === 'dollar' && section.markup !== '' && section.markup != null) {
+          sectionTotals[key].flatDollars = num(section.markup);
+        }
+      }
+      sectionTotals[key].bcTotal += num(l.qty) * num(l.unitCost);
+    });
+
+    var lineRows = nonHeaderLines.map(function (l) {
+      var bc = num(l.qty) * num(l.unitCost);
+      var section = catMap.sectionByLineId[l.id];
+      var pctMarkup = effectiveMarkup(l, section, estimate);
+      var sectionFlatShare = 0;
+      if (section) {
+        var st = sectionTotals[section.id];
+        if (st && st.flatDollars && st.bcTotal > 0) {
+          sectionFlatShare = st.flatDollars * (bc / st.bcTotal);
+        }
+      }
+      var baseRev = bc * (1 + pctMarkup / 100) + sectionFlatShare;
+      return { line: l, bc: bc, baseRev: baseRev };
+    });
+
+    // Pass 2: scale all line revenues so they sum to the editor's
+    // computed client total. This bakes in feeFlat + feePct + taxPct
+    // + round-up automatically. Lines with $0 builder cost still get
+    // their baseRev (which is just sectionFlatShare) preserved.
+    var subtotal = lineRows.reduce(function (s, r) { return s + r.baseRev; }, 0);
+    var target = computeClientTotal(estimate);
+    var scale = (subtotal > 0) ? (target / subtotal) : 1;
+
+    // Header row — exact column order from BT's ProposalReport sample.
+    var headers = [
+      'Category', 'Cost Code', 'Title', 'Description',
+      'Quantity', 'Unit', 'Unit Cost', 'Builder Cost',
+      'Markup', 'Markup Type', 'Client Price', 'Margin', 'Profit'
+    ];
+    var rows = [headers];
+
+    lineRows.forEach(function (r) {
+      var l = r.line;
+      var cat = catMap.byLineId[l.id];
+      var m = (cat && categories[cat]) || fallback;
+      var qty = num(l.qty);
+      var unitCost = num(l.unitCost);
+      var bc = r.bc;
+      var clientPrice = r.baseRev * scale;
+      var profit = clientPrice - bc;
+      var margin = (clientPrice > 0) ? (profit / clientPrice * 100) : 0;
+      // Derive the effective % markup so BT shows it on each line.
+      // For zero-cost lines we use $-mode so the dollar amount lands
+      // verbatim in BT (otherwise % markup × 0 = 0 and the row
+      // disappears).
+      var markupType = '%';
+      var markupVal = (bc > 0) ? ((clientPrice / bc - 1) * 100) : clientPrice;
+      if (bc <= 0) markupType = '$';
+      rows.push([
+        'Costs',
+        m.costCode || fallback.costCode || '',
+        '',                                    // Title (BT sample leaves this blank)
+        l.description || '',
+        Number(qty.toFixed(4)),
+        l.unit || 'ea',
+        Number(unitCost.toFixed(2)),
+        Number(bc.toFixed(2)),
+        Number(markupVal.toFixed(4)),
+        markupType,
+        Number(clientPrice.toFixed(2)),
+        Number(margin.toFixed(2)),
+        Number(profit.toFixed(2))
+      ]);
+    });
+
+    return rows;
+  }
+
   function exportEstimateToBuildertrend(estId) {
     if (typeof XLSX === 'undefined') {
       alert('Excel library is still loading. Please try again in a moment.');
@@ -193,73 +294,27 @@
       var live = window.getActiveEstimateForPreview();
       if (live) estId = live.id;
     }
-    var estimate = (window.appData && window.appData.estimates || []).find(function(e) { return e.id === estId; });
+    var estimate = (window.appData && window.appData.estimates || []).find(function (e) { return e.id === estId; });
     if (!estimate) { alert('Estimate not found.'); return; }
 
-    loadMapping().then(function(mapping) {
-      var categories = mapping.categories || {};
-      var fallback = mapping.fallback || DEFAULT_MAPPING.fallback;
-      var income = mapping.income || DEFAULT_MAPPING.income;
-
-      var catMap = buildLineCategoryMap(estimate);
-      var allLines = catMap.lines;
-      var nonHeader = allLines.filter(function(l) { return l.section !== '__section_header__'; });
-      var clientTotal = computeClientTotal(estimate);
-
-      // Column order matches the BT sample exactly so an admin can drop the
-      // file straight into BT's Estimate Import without remapping.
-      var headers = [
-        'Title', 'Description',
-        'Parent Group', 'Parent Group Description',
-        'Subgroup', 'Subgroup Description',
-        'Cost Code', 'Quantity', 'Unit', 'Unit Cost',
-        'Cost Type', 'Total Cost', 'Internal Notes',
-        'Markup', 'Markup Type', 'Line Item Type'
-      ];
-      var rows = [headers];
-
-      // === Service & Repair Income (auto-injected first row) ===
-      rows.push([
-        income.title, '',
-        income.parentGroup, income.parentDesc,
-        income.subgroup, income.subgroupDesc,
-        income.costCode,
-        1, 'ea',
-        Number(clientTotal.toFixed(2)),
-        income.costType,
-        Number(clientTotal.toFixed(2)),
-        'AGX export — total client price (auto-injected)',
-        0, '$', 'Estimate'
-      ]);
-
-      // === Cost-side line items, in stored order ===
-      nonHeader.forEach(function(l) {
-        var cat = catMap.byLineId[l.id];
-        var m = (cat && categories[cat]) || fallback;
-        var qty = num(l.qty);
-        var unitCost = num(l.unitCost);
-        var totalCost = qty * unitCost;
-        var markup = effectiveMarkup(l, allLines, estimate);
-        rows.push([
-          l.description || '', '',
-          m.parentGroup, m.parentDesc,
-          m.subgroup, m.subgroupDesc,
-          m.costCode,
-          qty, l.unit || 'ea',
-          Number(unitCost.toFixed(2)),
-          m.costType,
-          Number(totalCost.toFixed(2)),
-          l.notes || '',
-          Number(markup), '%', 'Estimate'
-        ]);
-      });
+    loadMapping().then(function (mapping) {
+      var rows = buildExportRows(estimate, mapping);
 
       var ws = XLSX.utils.aoa_to_sheet(rows);
       ws['!cols'] = [
-        { wch: 24 }, { wch: 30 }, { wch: 22 }, { wch: 32 },
-        { wch: 22 }, { wch: 32 }, { wch: 22 }, { wch: 9 }, { wch: 6 },
-        { wch: 11 }, { wch: 14 }, { wch: 12 }, { wch: 30 },
-        { wch: 8 }, { wch: 12 }, { wch: 13 }
+        { wch: 8 },   // Category
+        { wch: 26 },  // Cost Code
+        { wch: 14 },  // Title
+        { wch: 40 },  // Description
+        { wch: 9 },   // Quantity
+        { wch: 6 },   // Unit
+        { wch: 11 },  // Unit Cost
+        { wch: 12 },  // Builder Cost
+        { wch: 9 },   // Markup
+        { wch: 11 },  // Markup Type
+        { wch: 12 },  // Client Price
+        { wch: 9 },   // Margin
+        { wch: 11 }   // Profit
       ];
       var wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, 'Estimate Import');

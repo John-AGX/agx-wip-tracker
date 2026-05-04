@@ -2063,15 +2063,26 @@
       // agent_skills loads independently from Admin → Agents → Skills now.
     ]).then(function(results) {
       _templateDraft = (results[0] && results[0].setting && results[0].setting.value) || {};
-      _btMappingDraft = (results[1] && results[1].setting && results[1].setting.value) || { categories: {}, fallback: {}, income: {} };
-      // Make sure all four built-in categories exist in the draft so the
-      // form renders all rows even if a saved mapping was missing one.
-      ['materials', 'labor', 'gc', 'sub'].forEach(function(k) {
-        if (!_btMappingDraft.categories) _btMappingDraft.categories = {};
-        if (!_btMappingDraft.categories[k]) _btMappingDraft.categories[k] = { parentGroup: '', parentDesc: '', subgroup: '', subgroupDesc: '', costCode: '', costType: '' };
+      _btMappingDraft = (results[1] && results[1].setting && results[1].setting.value) || { categories: {}, fallback: {} };
+      // Phase D: mapping is just costCode per category. Pre-fill with
+      // sensible defaults if the saved value is blank — covers both
+      // brand-new installs AND legacy mappings whose costCode was
+      // never set (it used to be '' by default in the seed).
+      var BT_DEFAULTS = {
+        materials: 'Materials & Supplies Costs',
+        labor:     'Direct Labor',
+        gc:        'General Conditions',
+        sub:       'Subcontractors Costs'
+      };
+      if (!_btMappingDraft.categories) _btMappingDraft.categories = {};
+      Object.keys(BT_DEFAULTS).forEach(function(k) {
+        var c = _btMappingDraft.categories[k] || {};
+        _btMappingDraft.categories[k] = { costCode: c.costCode || BT_DEFAULTS[k] };
       });
-      if (!_btMappingDraft.fallback) _btMappingDraft.fallback = { parentGroup: '', parentDesc: '', subgroup: '', subgroupDesc: '', costCode: '', costType: '' };
-      if (!_btMappingDraft.income) _btMappingDraft.income = { title: '', parentGroup: '', parentDesc: '', subgroup: '', subgroupDesc: '', costCode: '', costType: '' };
+      var fb = _btMappingDraft.fallback || {};
+      _btMappingDraft.fallback = { costCode: fb.costCode || 'General Conditions' };
+      // Strip the old income block if present — Phase D drops it.
+      if (_btMappingDraft.income) delete _btMappingDraft.income;
       renderTemplatesForm();
     }).catch(function(err) {
       pane.innerHTML = '<div style="padding:15px;color:#f87171;">Failed to load template: ' + escapeHTML(err.message || '') + '</div>';
@@ -2255,25 +2266,30 @@
   }
 
   // ==================== BT MAPPING (sub-section of Templates tab) ====================
-  // Renders the editable form for the bt_export_mapping setting. Each
-  // built-in btCategory (materials/labor/gc/sub) gets a row; the fallback
-  // bucket (no-category lines) and the Service & Repair Income line each
-  // get their own block.
+  // Renders the editable form for the bt_export_mapping setting. As of
+  // the new BT proposal-import format (Phase D), the mapping is just
+  // btCategory -> BT Cost Code (one string per category). The old
+  // Parent Group / Subgroup / Cost Type fields and the auto-injected
+  // Service & Repair Income line are gone — pure cost lines at real
+  // markups now.
   var BT_CATEGORY_LABELS = {
     materials: 'Materials & Supplies',
     labor:     'Direct Labor',
     gc:        'General Conditions',
     sub:       'Subcontractors'
   };
-  var BT_FIELD_KEYS = ['parentGroup', 'parentDesc', 'subgroup', 'subgroupDesc', 'costCode', 'costType'];
-  var BT_FIELD_LABELS = {
-    parentGroup:  'Parent Group',
-    parentDesc:   'Parent Group Desc',
-    subgroup:     'Subgroup',
-    subgroupDesc: 'Subgroup Desc',
-    costCode:     'Cost Code',
-    costType:     'Cost Type'
-  };
+  // BT cost code dropdown values (copy/pasted from Buildertrend's
+  // Cost code picker so they match exactly).
+  var BT_COST_CODE_OPTIONS = [
+    'Buildertrend Flat Rate',
+    'Direct Labor',
+    'General Conditions',
+    'Materials & Supplies Costs',
+    'Renovation Income',
+    'Residential Income',
+    'Service & Repair Income',
+    'Subcontractors Costs'
+  ];
 
   function renderBTMappingHTML() {
     var bt = _btMappingDraft || {};
@@ -2282,46 +2298,42 @@
     html += '<fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;margin-bottom:14px;">';
     html += '<legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Buildertrend Export Mapping</legend>';
     html += '<p style="margin:0 0 10px 0;color:var(--text-dim,#888);font-size:12px;">' +
-      'Drives the <strong>Export to Buildertrend</strong> xlsx. Each built-in cost category maps to a BT Parent Group / Subgroup / Cost Type. ' +
-      '<strong>Cost Type</strong> must match BT\'s vocabulary (Material, Labor, Subcontractor, Other, Equipment).' +
+      'Drives the <strong>Export to Buildertrend</strong> xlsx. Each AGX cost category maps to one BT <strong>Cost Code</strong>. ' +
+      'Section flat-$ markups, estimate fees, and tax are pro-rata distributed onto each line\'s markup so the export total matches the proposal exactly — no more auto-injected income line or -100% workaround.' +
       '</p>';
 
-    // Per-category rows
-    Object.keys(BT_CATEGORY_LABELS).forEach(function(key) {
-      var c = cats[key] || {};
-      html += '<div style="border:1px solid var(--border,#333);border-radius:6px;padding:10px 12px;margin-bottom:10px;">';
-      html += '<div style="font-size:12px;font-weight:700;color:#4f8cff;margin-bottom:8px;">' + escapeHTML(BT_CATEGORY_LABELS[key]) + ' <span style="color:var(--text-dim,#888);font-weight:400;font-size:11px;">(btCategory: ' + key + ')</span></div>';
-      html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">';
-      BT_FIELD_KEYS.forEach(function(fk) {
-        html += '<div><label style="display:block;font-size:11px;">' + BT_FIELD_LABELS[fk] + '</label>' +
-          '<input type="text" data-bt-cat="' + key + '" data-bt-field="' + fk + '" value="' + escapeHTML(c[fk] || '') + '" style="width:100%;" /></div>';
+    function costCodeSelect(currentVal, dataAttrs) {
+      var s = '<select ' + dataAttrs + ' style="width:100%;">';
+      s += '<option value="">— Select —</option>';
+      BT_COST_CODE_OPTIONS.forEach(function (opt) {
+        var sel = (opt === currentVal) ? ' selected' : '';
+        s += '<option value="' + escapeHTML(opt) + '"' + sel + '>' + escapeHTML(opt) + '</option>';
       });
-      html += '</div></div>';
+      s += '</select>';
+      return s;
+    }
+
+    // Per-category rows
+    Object.keys(BT_CATEGORY_LABELS).forEach(function (key) {
+      var c = cats[key] || {};
+      html += '<div style="display:flex;align-items:center;gap:12px;border:1px solid var(--border,#333);border-radius:6px;padding:10px 12px;margin-bottom:8px;">';
+      html += '<div style="flex:0 0 200px;font-size:12px;font-weight:700;color:#4f8cff;">' +
+        escapeHTML(BT_CATEGORY_LABELS[key]) +
+        ' <span style="color:var(--text-dim,#888);font-weight:400;font-size:11px;">(' + key + ')</span></div>';
+      html += '<div style="flex:1;">' +
+        costCodeSelect(c.costCode || '', 'data-bt-cat="' + key + '" data-bt-field="costCode"') +
+        '</div>';
+      html += '</div>';
     });
 
-    // Fallback bucket
+    // Fallback bucket — lines with no tagged section header
     var fb = bt.fallback || {};
-    html += '<div style="border:1px solid var(--border,#333);border-radius:6px;padding:10px 12px;margin-bottom:10px;">';
-    html += '<div style="font-size:12px;font-weight:700;color:#fbbf24;margin-bottom:8px;">Fallback (lines with no tagged section)</div>';
-    html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">';
-    BT_FIELD_KEYS.forEach(function(fk) {
-      html += '<div><label style="display:block;font-size:11px;">' + BT_FIELD_LABELS[fk] + '</label>' +
-        '<input type="text" data-bt-fb-field="' + fk + '" value="' + escapeHTML(fb[fk] || '') + '" style="width:100%;" /></div>';
-    });
-    html += '</div></div>';
-
-    // Income line
-    var inc = bt.income || {};
-    html += '<div style="border:1px solid #34d399;border-radius:6px;padding:10px 12px;background:rgba(52,211,153,0.05);">';
-    html += '<div style="font-size:12px;font-weight:700;color:#34d399;margin-bottom:8px;">&#x1F4B0; Service &amp; Repair Income (auto-injected first row)</div>';
-    html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">';
-    html += '<div style="grid-column:1 / -1;"><label style="display:block;font-size:11px;">Title</label>' +
-      '<input type="text" data-bt-inc-field="title" value="' + escapeHTML(inc.title || '') + '" style="width:100%;" /></div>';
-    BT_FIELD_KEYS.forEach(function(fk) {
-      html += '<div><label style="display:block;font-size:11px;">' + BT_FIELD_LABELS[fk] + '</label>' +
-        '<input type="text" data-bt-inc-field="' + fk + '" value="' + escapeHTML(inc[fk] || '') + '" style="width:100%;" /></div>';
-    });
-    html += '</div></div>';
+    html += '<div style="display:flex;align-items:center;gap:12px;border:1px solid var(--border,#333);border-radius:6px;padding:10px 12px;margin-bottom:0;background:rgba(251,191,36,0.04);">';
+    html += '<div style="flex:0 0 200px;font-size:12px;font-weight:700;color:#fbbf24;">Fallback <span style="color:var(--text-dim,#888);font-weight:400;font-size:11px;">(untagged lines)</span></div>';
+    html += '<div style="flex:1;">' +
+      costCodeSelect(fb.costCode || '', 'data-bt-fb-field="costCode"') +
+      '</div>';
+    html += '</div>';
 
     html += '</fieldset>';
     return html;
@@ -2435,24 +2447,23 @@
   window.deleteSkill = deleteSkill;
 
   function syncBTMappingFromInputs() {
-    if (!_btMappingDraft) _btMappingDraft = { categories: {}, fallback: {}, income: {} };
+    if (!_btMappingDraft) _btMappingDraft = { categories: {}, fallback: {} };
     if (!_btMappingDraft.categories) _btMappingDraft.categories = {};
     if (!_btMappingDraft.fallback) _btMappingDraft.fallback = {};
-    if (!_btMappingDraft.income) _btMappingDraft.income = {};
-    document.querySelectorAll('[data-bt-cat]').forEach(function(el) {
+    document.querySelectorAll('[data-bt-cat]').forEach(function (el) {
       var k = el.getAttribute('data-bt-cat');
       var f = el.getAttribute('data-bt-field');
       if (!_btMappingDraft.categories[k]) _btMappingDraft.categories[k] = {};
       _btMappingDraft.categories[k][f] = el.value;
     });
-    document.querySelectorAll('[data-bt-fb-field]').forEach(function(el) {
+    document.querySelectorAll('[data-bt-fb-field]').forEach(function (el) {
       var f = el.getAttribute('data-bt-fb-field');
       _btMappingDraft.fallback[f] = el.value;
     });
-    document.querySelectorAll('[data-bt-inc-field]').forEach(function(el) {
-      var f = el.getAttribute('data-bt-inc-field');
-      _btMappingDraft.income[f] = el.value;
-    });
+    // The Phase-D form drops the Service & Repair Income block. Strip
+    // any stale `income` field from the draft so the saved JSON matches
+    // the new schema (no orphan keys lingering from the old shape).
+    if (_btMappingDraft.income) delete _btMappingDraft.income;
   }
 
   function addExclusion() {
