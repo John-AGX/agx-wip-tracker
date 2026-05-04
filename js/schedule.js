@@ -380,18 +380,51 @@
   }
 
   // ── Week summary math ──────────────────────────────────────
-  // Walk the visible month's weeks, sum scheduled days × estimated
-  // daily revenue per job. Daily revenue is contractAmount /
-  // job.totalProductionDays — we add that field to the WIP page; until
-  // the user fills it in we fall back to (contractAmount / 5) just so
-  // the summary shows something instead of $0.
-  function jobDailyRate(job) {
+  // Each job's "expected revenue per scheduled day" is its remaining
+  // backlog spread evenly across every day it currently sits on the
+  // schedule. Example: a $100k-backlog job scheduled for 3 days this
+  // week + 2 days next week = $20k/day. The week the job is viewed in
+  // gets `inWeekDays × $20k`. This replaces the old
+  // contractAmount / totalProductionDays math, which double-counted
+  // revenue once a job was already partly billed.
+  //
+  // Backlog source priority:
+  //   1. job.ngBacklog — pushed by the node-graph engine after compute.
+  //   2. Otherwise: (contractAmount or 0) × (1 − pctComplete/100), a
+  //      contract-based proxy that ignores change orders. The schedule
+  //      page doesn't have easy access to CO totals, but this is a
+  //      reasonable planning estimate until the engine has run.
+  function jobBacklog(job) {
     if (!job) return 0;
+    if (job.ngBacklog != null) return Number(job.ngBacklog) || 0;
     var contract = Number(job.contractAmount || 0);
-    var days = Number(job.totalProductionDays || 0);
+    var pct = Number(job.pctComplete || 0);
     if (contract <= 0) return 0;
-    if (days > 0) return contract / days;
-    return contract / 5; // placeholder — see comment above
+    var remainingFrac = Math.max(0, 1 - (pct / 100));
+    return contract * remainingFrac;
+  }
+
+  // Sum of every scheduled day for a job across every entry in state.
+  // Used as the divisor for the per-day backlog allocation. Cached per
+  // weekSummary call via a closure so we don't re-scan entries for
+  // every job.
+  function buildScheduledDaysIndex() {
+    var index = {};
+    _state.entries.forEach(function(e) {
+      var span = entrySpanDays(e);
+      if (!span.length) return;
+      index[e.jobId] = (index[e.jobId] || 0) + span.length;
+    });
+    return index;
+  }
+
+  function jobDailyRate(job, scheduledDaysIndex) {
+    if (!job) return 0;
+    var totalDays = scheduledDaysIndex[job.id] || 0;
+    if (totalDays <= 0) return 0;
+    var backlog = jobBacklog(job);
+    if (backlog <= 0) return 0;
+    return backlog / totalDays;
   }
 
   function weekSummaryForCursor(cursor) {
@@ -400,6 +433,7 @@
     var totalDays = 0;
     var totalRev = 0;
     var jobsTouching = {};
+    var scheduledDaysIndex = buildScheduledDaysIndex();
     _state.entries.forEach(function(e) {
       var span = entrySpanDays(e);
       var inWeek = span.filter(function(k) {
@@ -408,7 +442,7 @@
       });
       if (!inWeek.length) return;
       var job = jobById(e.jobId);
-      var rate = jobDailyRate(job);
+      var rate = jobDailyRate(job, scheduledDaysIndex);
       totalDays += inWeek.length;
       totalRev += rate * inWeek.length;
       jobsTouching[e.jobId] = true;
@@ -1424,7 +1458,8 @@
         '<div class="sch-metric-label">Days</div>' +
         '<div class="sch-metric-val">' + summary.scheduledDays + '</div>' +
       '</div>' +
-      '<div class="sch-metric">' +
+      '<div class="sch-metric" title="Each job\'s remaining backlog (Total Income − Revenue Earned) split evenly across every day it sits on the schedule. ' +
+        'A $100k-backlog job scheduled for 5 days = $20k/day. Sums those daily values for the days inside this week.">' +
         '<div class="sch-metric-label">Expected revenue</div>' +
         '<div class="sch-metric-val sch-metric-val-rev">' + fmtMoney(summary.expectedRevenue) + '</div>' +
       '</div>' +
