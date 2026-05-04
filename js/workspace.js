@@ -500,6 +500,36 @@
 
   // ── Formula Helpers ──────────────────────────────────────
 
+  // Per-evaluation cross-sheet range registry. evaluate() resets this
+  // at the start of each formula and pre-resolves every `Sheet!A1:B10`
+  // reference into a sentinel token (`__XR<n>__`). getRange2D and
+  // getRangeCells detect those tokens and return the registered values
+  // — letting VLOOKUP / INDEX / MATCH / SUM-style functions consume
+  // ranges from any sheet, not just the active one.
+  var xrRegistry = [];
+
+  function registerXRange(sheet, r1, c1, r2, c2) {
+    var rows = [];
+    var minR = Math.min(r1, r2), maxR = Math.max(r1, r2);
+    var minC = Math.min(c1, c2), maxC = Math.max(c1, c2);
+    for (var r = minR; r <= maxR; r++) {
+      var row = [];
+      for (var c = minC; c <= maxC; c++) {
+        row.push(getCellFromSheet(sheet, r, c).value);
+      }
+      rows.push(row);
+    }
+    var idx = xrRegistry.length;
+    xrRegistry.push(rows);
+    return '__XR' + idx + '__';
+  }
+
+  function lookupXRange2D(token) {
+    var m = String(token).match(/__XR(\d+)__/);
+    if (!m) return null;
+    return xrRegistry[+m[1]] || null;
+  }
+
   /** Split function args by comma, respecting nested parens */
   function splitArgs(str) {
     var args = [], depth = 0, cur = '';
@@ -515,6 +545,18 @@
 
   /** Collect numeric values from a range like A1:B5 */
   function getRangeValues(rangeStr) {
+    // Cross-sheet sentinel: flatten + filter numerics so SUM/AVERAGE/etc.
+    // ranges from another sheet behave like in-sheet ranges.
+    var xr = lookupXRange2D(rangeStr.trim());
+    if (xr) {
+      var vals = [];
+      for (var i = 0; i < xr.length; i++)
+        for (var j = 0; j < xr[i].length; j++) {
+          var v = xr[i][j];
+          if (typeof v === 'number') vals.push(v);
+        }
+      return vals;
+    }
     var m = rangeStr.match(/^([A-Z]+\d+):([A-Z]+\d+)$/i);
     if (!m) return [];
     var s = parseAddr(m[1].toUpperCase()), e = parseAddr(m[2].toUpperCase());
@@ -534,6 +576,14 @@
   /** Collect raw cell values (any type) from a range. Used by text and
    *  lookup functions where numeric coercion would lose information. */
   function getRangeCells(rangeStr) {
+    // Cross-sheet range sentinel — flatten the registered 2D grid.
+    var xr = lookupXRange2D(rangeStr.trim());
+    if (xr) {
+      var flat = [];
+      for (var i = 0; i < xr.length; i++)
+        for (var j = 0; j < xr[i].length; j++) flat.push(xr[i][j]);
+      return flat;
+    }
     var m = rangeStr.match(/^([A-Z]+\d+):([A-Z]+\d+)$/i);
     if (!m) {
       // single cell?
@@ -559,6 +609,8 @@
   /** Return the 2D cell-value array for a range — preserves rows/cols
    *  shape, needed by INDEX/VLOOKUP/MATCH. */
   function getRange2D(rangeStr) {
+    var xr = lookupXRange2D(rangeStr.trim());
+    if (xr) return xr;
     var m = rangeStr.match(/^([A-Z]+\d+):([A-Z]+\d+)$/i);
     if (!m) return [];
     var s = parseAddr(m[1].toUpperCase()), e = parseAddr(m[2].toUpperCase());
@@ -995,11 +1047,34 @@
     const expr = raw.substring(1);
 
     try {
-      // Cross-sheet refs first: `Sheet2!A1` or `'Sheet Two'!A1`. These
+      // Reset the cross-sheet range registry — each evaluate() call
+      // resolves its own ranges; tokens MUST NOT leak across formulas.
+      xrRegistry = [];
+
+      // Cross-sheet RANGES first: `Sheet2!A1:B10` or `'Sheet Two'!A1:B10`.
+      // We replace each one with a sentinel token (`__XR<n>__`) and
+      // stash the resolved 2D values in xrRegistry. Range helpers
+      // (getRange2D / getRangeCells / getRangeValues) detect the
+      // token and return registered values. Must run BEFORE the
+      // single-cell cross-sheet pass — otherwise that pass would
+      // match `Sheet2!A1` and leave `:B10` dangling.
+      var resolved = expr.replace(
+        /(?:'([^']+)'|([A-Za-z_][A-Za-z0-9_ ]*))!([A-Z]+\d+):([A-Z]+\d+)/gi,
+        function (match, quotedName, bareName, a1, a2) {
+          var sheetName = quotedName || bareName;
+          var sheet = findSheetByName(sheetName);
+          if (!sheet) return '0';
+          var s = parseAddr(a1.toUpperCase()), e = parseAddr(a2.toUpperCase());
+          if (!s || !e) return '0';
+          return registerXRange(sheet, s.r, s.c, e.r, e.c);
+        }
+      );
+
+      // Cross-sheet single refs: `Sheet2!A1` or `'Sheet Two'!A1`. These
       // need to be resolved BEFORE the same-sheet ref pass below,
       // otherwise the bare `A1` inside `Sheet2!A1` would match the
       // local-sheet regex and produce the wrong value.
-      var resolved = expr.replace(
+      resolved = resolved.replace(
         /(?:'([^']+)'|([A-Za-z_][A-Za-z0-9_ ]*))!([A-Z]+\d+)/gi,
         function (match, quotedName, bareName, addr) {
           var sheetName = quotedName || bareName;
@@ -1604,7 +1679,10 @@
         // bottom-strip render can collapse siblings + so the inner
         // tab strip can find them on re-open.
         workbookGroupId: s.workbookGroupId || null,
-        workbookGroupName: s.workbookGroupName || null
+        workbookGroupName: s.workbookGroupName || null,
+        // Hidden sheets stay in the workbook (so cross-sheet formulas
+        // keep resolving) but disappear from the tab strips.
+        hidden: !!s.hidden
       }));
       workbook.activeSheetId = saved.activeSheetId && workbook.sheets.find(s => s.id === saved.activeSheetId)
         ? saved.activeSheetId
@@ -1740,6 +1818,76 @@
     // sheet was only removed in memory — a page refresh re-loaded the
     // pre-delete workspace from disk and the deleted sheet came back.
     saveWorkspace();
+  }
+
+  // Hide a single sheet — kept in the workbook so cross-sheet formulas
+  // still resolve, but disappears from both tab strips. Pinned built-in
+  // views can't be hidden (they're always reachable from the bottom
+  // strip). At least one visible non-pinned sheet must remain so the
+  // user isn't stranded with nothing to edit.
+  function hideSheet(sheetId) {
+    const sheet = workbook.sheets.find(s => s.id === sheetId);
+    if (!sheet) return;
+    if (sheet.pinned) {
+      alert('"' + sheet.name + '" is a built-in view and cannot be hidden.');
+      return;
+    }
+    var visibleNonPinned = workbook.sheets.filter(s => !s.pinned && !s.hidden).length;
+    if (visibleNonPinned <= 1) {
+      alert('At least one visible sheet must remain.');
+      return;
+    }
+    sheet.hidden = true;
+    workbook.dirty = true;
+    if (workbook.activeSheetId === sheetId) {
+      // If the hidden sheet was active, fall back to the next visible
+      // sibling in the same group, or any visible non-pinned sheet.
+      var siblings = workbook.sheets.filter(s =>
+        s.workbookGroupId && s.workbookGroupId === sheet.workbookGroupId && !s.hidden);
+      var fallback = siblings[0]
+        || workbook.sheets.find(s => !s.pinned && !s.hidden)
+        || workbook.sheets.find(s => !s.hidden);
+      if (fallback) {
+        workbook.activeSheetId = fallback.id;
+        loadSheetIntoGrid(fallback);
+        recalcAll();
+        renderActiveSheet();
+        selectCell(0, 0);
+      }
+    }
+    renderSheetTabs();
+    saveWorkspace();
+  }
+
+  function unhideSheet(sheetId) {
+    const sheet = workbook.sheets.find(s => s.id === sheetId);
+    if (!sheet) return;
+    sheet.hidden = false;
+    workbook.dirty = true;
+    renderSheetTabs();
+    saveWorkspace();
+  }
+
+  // Pop a small picker listing every hidden sheet (optionally scoped to
+  // a workbook group) so the user can restore one. Mirrors Excel's
+  // "Unhide..." dialog.
+  function showUnhideMenu(x, y, groupId) {
+    var hidden = workbook.sheets.filter(function(s) {
+      if (!s.hidden) return false;
+      if (groupId) return s.workbookGroupId === groupId;
+      return true;
+    });
+    if (!hidden.length) {
+      alert('No hidden sheets.');
+      return;
+    }
+    var items = hidden.map(function(s) {
+      var label = s.workbookGroupName && !groupId
+        ? s.name + '  —  ' + s.workbookGroupName
+        : s.name;
+      return { label: label, action: function() { unhideSheet(s.id); } };
+    });
+    showContextMenu(x, y, items);
   }
 
   function renameSheet(sheetId, newName) {
@@ -2397,6 +2545,11 @@
     var renderedGroups = new Set();
 
     workbook.sheets.forEach(function(s) {
+      // Hidden sheets disappear entirely from the bottom strip —
+      // restore via the "Unhide..." action on the inner tabs or the
+      // group tab's context menu.
+      if (s.hidden && !s.workbookGroupId) return;
+
       // Imported workbook sheet: render the GROUP tab once, in place
       // of the first sheet in that group. Subsequent sheets of the
       // same group skip — they'll appear in the inner strip instead.
@@ -2404,17 +2557,19 @@
         if (renderedGroups.has(s.workbookGroupId)) return;
         renderedGroups.add(s.workbookGroupId);
         var isActiveGroup = (s.workbookGroupId === activeGroupId);
-        // Sheet count in the group — small badge so the user sees
-        // there's more behind the workbook tab.
-        var groupSize = workbook.sheets.reduce(function(acc, x) {
-          return acc + (x.workbookGroupId === s.workbookGroupId ? 1 : 0);
+        // Sheet count in the group — visible-only so the badge
+        // matches what shows in the inner strip.
+        var visibleSize = workbook.sheets.reduce(function(acc, x) {
+          return acc + (x.workbookGroupId === s.workbookGroupId && !x.hidden ? 1 : 0);
         }, 0);
+        // If every sheet in the group is hidden, hide the group tab too.
+        if (visibleSize === 0) return;
         html += '<div class="ws-sheet-tab ws-workbook-tab' + (isActiveGroup ? ' active' : '') +
           '" data-workbook-group="' + s.workbookGroupId +
           '" title="' + escapeAttr(s.workbookGroupName || 'Workbook') + '">' +
           '<span class="ws-sheet-tab-icon" aria-hidden="true">&#x1F4D2;</span> ' +
           '<span class="ws-sheet-tab-name">' + escapeHTML(s.workbookGroupName || 'Workbook') + '</span>' +
-          '<span class="ws-workbook-tab-count">' + groupSize + '</span>' +
+          '<span class="ws-workbook-tab-count">' + visibleSize + '</span>' +
         '</div>';
         return;
       }
@@ -2452,12 +2607,61 @@
       tab.addEventListener('click', function() {
         // Already on a sheet in this group? No-op (avoid re-render).
         if (activeGroupId === groupId) return;
-        var groupSheets = workbook.sheets.filter(function(s) { return s.workbookGroupId === groupId; });
+        var groupSheets = workbook.sheets.filter(function(s) {
+          return s.workbookGroupId === groupId && !s.hidden;
+        });
         if (!groupSheets.length) return;
         var lastId = workbook.workbookGroupActive && workbook.workbookGroupActive[groupId];
         var target = lastId && groupSheets.find(function(s) { return s.id === lastId; });
-        if (!target) target = groupSheets[0];
+        if (!target || target.hidden) target = groupSheets[0];
         switchSheet(target.id);
+      });
+      // Right-click on the workbook group tab: bulk operations on the
+      // entire imported file (hide/unhide all, delete all). Per-sheet
+      // actions live on the inner-tab strip.
+      tab.addEventListener('contextmenu', function(e) {
+        e.preventDefault();
+        var groupSheets = workbook.sheets.filter(function(s) { return s.workbookGroupId === groupId; });
+        if (!groupSheets.length) return;
+        var groupName = groupSheets[0].workbookGroupName || 'Workbook';
+        var hasHidden = groupSheets.some(function(s) { return s.hidden; });
+        var items = [
+          { label: 'Open', action: function() {
+            var visible = groupSheets.filter(function(s) { return !s.hidden; });
+            if (visible.length) switchSheet(visible[0].id);
+          } }
+        ];
+        if (hasHidden) {
+          items.push({ label: 'Unhide sheet…', action: function() {
+            showUnhideMenu(e.clientX, e.clientY, groupId);
+          } });
+        }
+        items.push('---');
+        items.push({ label: 'Delete entire workbook (' + groupSheets.length + ' sheets)', action: function() {
+          if (!confirm('Delete the entire "' + groupName + '" workbook? All ' + groupSheets.length + ' sheets will be removed. This cannot be undone.')) return;
+          // Remove sheets in reverse so splice indices stay valid.
+          var ids = groupSheets.map(function(s) { return s.id; });
+          ids.forEach(function(id) {
+            var idx = workbook.sheets.findIndex(function(s) { return s.id === id; });
+            if (idx !== -1) workbook.sheets.splice(idx, 1);
+          });
+          // If active sheet was in this group, fall back.
+          if (!workbook.sheets.find(function(s) { return s.id === workbook.activeSheetId; })) {
+            var fallback = workbook.sheets.find(function(s) { return !s.pinned && !s.hidden; })
+              || workbook.sheets.find(function(s) { return !s.hidden; });
+            if (fallback) {
+              workbook.activeSheetId = fallback.id;
+              loadSheetIntoGrid(fallback);
+              recalcAll();
+              renderActiveSheet();
+              selectCell(0, 0);
+            }
+          }
+          workbook.dirty = true;
+          renderSheetTabs();
+          saveWorkspace();
+        } });
+        showContextMenu(e.clientX, e.clientY, items);
       });
     });
 
@@ -2487,6 +2691,7 @@
           ]);
           return;
         }
+        var hasHiddenAny = workbook.sheets.some(function(x) { return x.hidden; });
         const items = [
           { label: 'Rename', action: function() {
             const s = workbook.sheets.find(x => x.id === id);
@@ -2499,8 +2704,15 @@
           { label: 'Move Left',  action: function() { moveSheet(id, 'left'); } },
           { label: 'Move Right', action: function() { moveSheet(id, 'right'); } },
           '---',
-          { label: 'Delete', action: function() { deleteSheet(id); } }
+          { label: 'Hide', action: function() { hideSheet(id); } }
         ];
+        if (hasHiddenAny) {
+          items.push({ label: 'Unhide sheet…', action: function() {
+            showUnhideMenu(e.clientX, e.clientY, null);
+          } });
+        }
+        items.push('---');
+        items.push({ label: 'Delete', action: function() { deleteSheet(id); } });
         showContextMenu(e.clientX, e.clientY, items);
       });
     });
@@ -2523,7 +2735,9 @@
       return;
     }
     var groupId = active.workbookGroupId;
-    var siblings = workbook.sheets.filter(function(s) { return s.workbookGroupId === groupId; });
+    var allSiblings = workbook.sheets.filter(function(s) { return s.workbookGroupId === groupId; });
+    var siblings = allSiblings.filter(function(s) { return !s.hidden; });
+    var hiddenCount = allSiblings.length - siblings.length;
     if (!siblings.length) {
       strip.style.display = 'none';
       return;
@@ -2545,13 +2759,55 @@
         escapeHTML(s.name) +
       '</div>';
     });
+    if (hiddenCount > 0) {
+      html += '<div class="ws-workbook-inner-tab ws-workbook-inner-tab-unhide" data-unhide-group="' + groupId +
+        '" title="Show hidden sheets in this workbook">' +
+        '&#x1F441; ' + hiddenCount + ' hidden' +
+      '</div>';
+    }
     html += '</div>';
     strip.innerHTML = html;
     strip.style.display = '';
 
     strip.querySelectorAll('.ws-workbook-inner-tab').forEach(function(tab) {
       var id = tab.getAttribute('data-sheet-id');
+      var unhideGroup = tab.getAttribute('data-unhide-group');
+      if (unhideGroup) {
+        tab.addEventListener('click', function(e) {
+          showUnhideMenu(e.clientX, e.clientY, unhideGroup);
+        });
+        return;
+      }
       tab.addEventListener('click', function() { switchSheet(id); });
+      // Right-click on an inner sheet tab: per-sheet operations
+      // (rename / hide / delete) — Excel-style.
+      tab.addEventListener('contextmenu', function(e) {
+        e.preventDefault();
+        var s = workbook.sheets.find(function(x) { return x.id === id; });
+        if (!s) return;
+        var hasHiddenInGroup = workbook.sheets.some(function(x) {
+          return x.workbookGroupId === groupId && x.hidden;
+        });
+        var items = [
+          { label: 'Rename', action: function() {
+            var sh = workbook.sheets.find(function(x) { return x.id === id; });
+            if (!sh) return;
+            var newName = prompt('Rename sheet:', sh.name);
+            if (newName != null) renameSheet(id, newName);
+          } },
+          { label: 'Duplicate', action: function() { duplicateSheet(id); } },
+          '---',
+          { label: 'Hide', action: function() { hideSheet(id); } }
+        ];
+        if (hasHiddenInGroup) {
+          items.push({ label: 'Unhide sheet…', action: function() {
+            showUnhideMenu(e.clientX, e.clientY, groupId);
+          } });
+        }
+        items.push('---');
+        items.push({ label: 'Delete', action: function() { deleteSheet(id); } });
+        showContextMenu(e.clientX, e.clientY, items);
+      });
     });
   }
 

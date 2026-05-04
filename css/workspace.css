@@ -1291,6 +1291,16 @@
   border-bottom-color: var(--surface, #1a1d27);
   font-weight: 600;
 }
+.ws-workbook-inner-tab-unhide {
+  margin-left: 8px;
+  font-style: italic;
+  color: var(--text-dim, #8b90a5);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+.ws-workbook-inner-tab-unhide:hover {
+  color: var(--text, #e4e6f0);
+  border-color: rgba(255, 255, 255, 0.18);
+}
 /* Pinned built-in views (e.g. Detailed Costs, Attachments) — each
    built-in gets its own accent color so the user can tell them
    apart at a glance. Default pinned styling falls back to the blue
