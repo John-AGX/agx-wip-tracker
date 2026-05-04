@@ -3,6 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- Pin every relative URL to the site root. Required because the SPA
+         router uses pathname routing (/wip/jobs/:id, /admin/roles); without
+         this, a hard refresh on a deep link would resolve `js/foo.js`
+         against the deep path (e.g., /admin/js/foo.js) which the Express
+         catch-all serves as index.html, causing every script to fail to
+         parse. -->
+    <base href="/">
     <title>AGX Central Florida &mdash; WIP Tracker</title>
     <link rel="stylesheet" href="css/styles.css?v=31">
     <link rel="stylesheet" href="css/workspace-layout.css?v=51">
@@ -2139,7 +2146,7 @@
     </script>
 
     <script src="js/modal-drag.js?v=1"></script>
-    <script src="js/auth.js?v=7"></script>
+    <script src="js/auth.js?v=8"></script>
     <script src="js/dialogs.js?v=1"></script>
     <script src="js/api.js?v=17"></script>
     <script src="js/account.js?v=2"></script>
@@ -2167,6 +2174,11 @@
 
     <script src="js/workspace.js?v=43"></script>
     <script src="js/workspace-layout.js?v=50"></script>
+
+    <!-- URL router — pathname-based navigation. Loads last so all
+         top-level nav functions (switchTab, editJob, etc.) exist
+         before the router wraps them. -->
+    <script src="js/router.js?v=1"></script>
 
     <!-- Node Graph (Beta) -->
     <link rel="stylesheet" href="nodegraph/nodegraph.css?v=89" />

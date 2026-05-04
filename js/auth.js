@@ -48,12 +48,17 @@
     // restorer (in app.js) returns false if the saved tab is no longer
     // accessible (lost permission, deleted entity, etc.); fall back to
     // the role-based landing in that case.
+    // URL takes priority over localStorage nav-state — if the user
+    // deep-linked or hit Back from a previous session, honor the URL.
+    // The router's own boot will replay it; we only need to make sure
+    // we don't ALSO call switchTab() here and stomp on it.
+    var urlHasRoute = !!(window.agxRouter && window.agxRouter.route().top);
     var restored = false;
-    if (typeof window.agxNavRestore === 'function') {
+    if (!urlHasRoute && typeof window.agxNavRestore === 'function') {
       try { restored = window.agxNavRestore(); }
       catch (e) { console.warn('[nav] restore failed:', e); }
     }
-    if (!restored && typeof window.switchTab === 'function') {
+    if (!urlHasRoute && !restored && typeof window.switchTab === 'function') {
       try { window.switchTab(getLandingTab()); }
       catch (e) { console.warn('Initial tab switch failed:', e); }
     }
