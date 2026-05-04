@@ -334,12 +334,17 @@ router.post('/templates/:key/test',
         return res.status(400).json({ error: 'Cannot render: ' + e.message });
       }
 
+      // as_test=false → real send, no "[TEST]" prefix on the subject.
+      // Used by the per-event "Send sample" button on the admin Email
+      // page so admins can fire a manual invitation / password-reset /
+      // demo without the subject line screaming TEST.
+      const asTest = req.body && req.body.as_test === false ? false : true;
       const result = await sendEmail({
         to: to,
-        subject: '[TEST] ' + rendered.subject,
+        subject: (asTest ? '[TEST] ' : '') + rendered.subject,
         html: rendered.html,
         text: rendered.text,
-        tag: 'admin_test_' + eventKey
+        tag: (asTest ? 'admin_test_' : 'admin_send_') + eventKey
       });
       res.json({
         ok: result.ok,

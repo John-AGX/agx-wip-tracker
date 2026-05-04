@@ -1028,8 +1028,15 @@
     else if (name === 'templates') renderAdminTemplates();
     else if (name === 'materials') renderAdminMaterials();
     else if (name === 'email') renderAdminEmail();
-    else if (name === 'email-templates') renderAdminEmailTemplates();
     else if (name === 'agents') renderAdminAgents();
+    // 'email-templates' moved into Templates → Email; if a saved nav state
+    // points at the old top-level tab, reroute to templates.
+    else if (name === 'email-templates') {
+      _templatesActiveTab = 'email';
+      try { sessionStorage.setItem('agx_templates_tab', 'email'); } catch (e) {}
+      switchAdminSubTab('templates');
+      return;
+    }
     // Persist nav state so a refresh lands back on this admin sub-tab.
     if (typeof window.agxNavSave === 'function') window.agxNavSave();
   }
@@ -1201,12 +1208,13 @@
           '<th style="text-align:left;padding:8px;">Event</th>' +
           '<th style="text-align:left;padding:8px;">Audience</th>' +
           '<th style="text-align:center;padding:8px;width:90px;">Enabled</th>' +
-          '<th style="text-align:left;padding:8px;width:260px;">Per-event BCC (comma-sep.)</th>' +
+          '<th style="text-align:left;padding:8px;width:240px;">Per-event BCC (comma-sep.)</th>' +
           '<th style="text-align:center;padding:8px;width:80px;">Wired</th>' +
+          '<th style="text-align:center;padding:8px;width:120px;">Send sample</th>' +
         '</tr>' +
       '</thead><tbody>';
     cats.forEach(function(cat) {
-      html += '<tr><td colspan="5" style="padding:10px 8px 4px 8px;color:var(--text-dim,#aaa);font-size:11px;text-transform:uppercase;letter-spacing:0.6px;">' + escapeHTML(cat) + '</td></tr>';
+      html += '<tr><td colspan="6" style="padding:10px 8px 4px 8px;color:var(--text-dim,#aaa);font-size:11px;text-transform:uppercase;letter-spacing:0.6px;">' + escapeHTML(cat) + '</td></tr>';
       byCat[cat].forEach(function(e) {
         var bccVal = Array.isArray(e.bcc) ? e.bcc.join(', ') : '';
         html += '<tr style="border-bottom:1px solid var(--border,#2a2a3a);">' +
@@ -1228,6 +1236,9 @@
             (e.wired ?
               '<span style="color:#34d399;font-size:11px;">&#x2713; Active</span>' :
               '<span style="color:#fbbf24;font-size:11px;" title="Trigger not yet wired in code; toggle is for forward-compat.">Pending</span>') +
+          '</td>' +
+          '<td style="padding:8px;vertical-align:top;text-align:center;">' +
+            '<button class="ee-btn ghost" data-email-event-send="' + escapeHTML(e.key) + '" data-email-event-label="' + escapeHTML(e.label).replace(/"/g, '&quot;') + '" style="font-size:11px;padding:4px 10px;" title="Render this template with sample data and send to a recipient you pick. Useful for invitations, password resets, and demos.">&#x1F4E4; Send</button>' +
           '</td>' +
         '</tr>';
       });
@@ -1257,6 +1268,41 @@
         var evt = _emailEvents.find(function(x) { return x.key === key; });
         if (evt) evt.bcc = list;
         saveEmailSettings();
+      });
+    });
+    // Per-event Send sample buttons. Opens a small prompt for recipient,
+    // POSTs to /api/email/templates/:key/test with as_test:false so the
+    // subject doesn\'t carry the "[TEST]" prefix — this is a real send
+    // (rendered with sample placeholder data).
+    box.querySelectorAll('[data-email-event-send]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        var key = btn.dataset.emailEventSend;
+        var label = btn.dataset.emailEventLabel || key;
+        var me = (window.agxAuth && window.agxAuth.getUser && window.agxAuth.getUser()) || null;
+        var defaultTo = (me && me.email) || '';
+        var to = window.prompt('Send "' + label + '" to:\n\n(Renders with sample placeholder data — perfect for previews, invitations, and password-reset walkthroughs.)', defaultTo);
+        if (!to) return;
+        to = to.trim();
+        if (!to) return;
+        btn.disabled = true;
+        var oldText = btn.innerHTML;
+        btn.innerHTML = 'Sending…';
+        window.agxApi.post('/api/email/templates/' + encodeURIComponent(key) + '/test', { to: to, as_test: false })
+          .then(function(resp) {
+            btn.innerHTML = oldText;
+            btn.disabled = false;
+            if (resp && resp.ok) {
+              var msg = resp.dryRun ? '✓ Dry-run logged (no real send).' : '✓ Sent to ' + to + '.';
+              alert(msg);
+            } else {
+              alert('Send failed: ' + ((resp && resp.error) || 'unknown'));
+            }
+          })
+          .catch(function(err) {
+            btn.innerHTML = oldText;
+            btn.disabled = false;
+            alert('Send failed: ' + (err.message || 'unknown'));
+          });
       });
     });
   }
@@ -1753,13 +1799,11 @@
     pane.innerHTML = '<div style="padding:15px;color:var(--text-dim,#888);">Loading…</div>';
     Promise.all([
       window.agxApi.settings.get('proposal_template').catch(function() { return null; }),
-      window.agxApi.settings.get('bt_export_mapping').catch(function() { return null; }),
-      window.agxApi.settings.get('agent_skills').catch(function() { return null; })
+      window.agxApi.settings.get('bt_export_mapping').catch(function() { return null; })
+      // agent_skills loads independently from Admin → Agents → Skills now.
     ]).then(function(results) {
       _templateDraft = (results[0] && results[0].setting && results[0].setting.value) || {};
       _btMappingDraft = (results[1] && results[1].setting && results[1].setting.value) || { categories: {}, fallback: {}, income: {} };
-      _skillsDraft = (results[2] && results[2].setting && results[2].setting.value) || { skills: [] };
-      if (!Array.isArray(_skillsDraft.skills)) _skillsDraft.skills = [];
       // Make sure all four built-in categories exist in the draft so the
       // form renders all rows even if a saved mapping was missing one.
       ['materials', 'labor', 'gc', 'sub'].forEach(function(k) {
@@ -1779,14 +1823,23 @@
   // the first tab. Default 'proposal' since that's the most-edited
   // section.
   var _templatesActiveTab = (function() {
-    try { return sessionStorage.getItem('agx_templates_tab') || 'proposal'; }
-    catch (e) { return 'proposal'; }
+    try {
+      var saved = sessionStorage.getItem('agx_templates_tab') || 'proposal';
+      // 'skills' migrated out to Admin → Agents — fall back to proposal
+      // for any session-cached state still pointing at the old tab.
+      if (saved === 'skills') saved = 'proposal';
+      return saved;
+    } catch (e) { return 'proposal'; }
   })();
 
+  // Skills moved to its own home on Admin → Agents → Skills (the AI
+  // agents page owns skill packs now). Email Templates moved IN here
+  // since they share the "edit a template the system uses" mental
+  // model with Proposal + BT Export.
   var TEMPLATES_TABS = [
     { key: 'proposal', label: '📄 Proposal',  desc: 'Header, letter body, exclusions, signature.' },
     { key: 'bt',       label: '📊 BT Export', desc: 'Buildertrend cost-category mapping.' },
-    { key: 'skills',   label: '🧠 Skills',    desc: 'Editable instruction packs the in-app AI agents load at chat time.' }
+    { key: 'email',    label: '📧 Email',     desc: 'Per-event email subject + HTML body templates.' }
   ];
 
   function switchTemplatesTab(key) {
@@ -1884,23 +1937,39 @@
       contentHTML = renderProposalTemplateHTML();
     } else if (_templatesActiveTab === 'bt') {
       contentHTML = renderBTMappingHTML();
-    } else if (_templatesActiveTab === 'skills') {
-      contentHTML = renderAgentSkillsHTML();
+    } else if (_templatesActiveTab === 'email') {
+      // Placeholder — renderAdminEmailTemplates writes into
+      // #admin-subtab-email-templates after innerHTML is assigned below.
+      contentHTML = '<div id="admin-subtab-email-templates"></div>';
     }
 
     var tabHint = activeTab && activeTab.desc
       ? '<p style="margin:0 0 12px 0;color:var(--text-dim,#888);font-size:12px;">' + activeTab.desc + '</p>'
       : '';
 
+    // Save All footer applies to proposal + bt — email templates have
+    // their own per-template save flow inside renderAdminEmailTemplates,
+    // so hide the global footer when the email tab is active.
+    var showSaveAllFooter = (_templatesActiveTab !== 'email');
     pane.innerHTML =
       tabsHTML +
       tabHint +
       '<div id="tpl-tab-content">' + contentHTML + '</div>' +
-      '<div class="action-buttons" style="margin-top:14px;border-top:1px solid var(--border,#333);padding-top:14px;">' +
-        '<button class="primary" onclick="saveAdminTemplate()">&#x1F4BE; Save All</button>' +
-        '<button class="secondary" onclick="renderAdminTemplates()">Discard Changes</button>' +
-        '<span id="tpl-status" style="margin-left:14px;color:var(--text-dim,#888);font-size:12px;align-self:center;"></span>' +
-      '</div>';
+      (showSaveAllFooter
+        ? '<div class="action-buttons" style="margin-top:14px;border-top:1px solid var(--border,#333);padding-top:14px;">' +
+            '<button class="primary" onclick="saveAdminTemplate()">&#x1F4BE; Save All</button>' +
+            '<button class="secondary" onclick="renderAdminTemplates()">Discard Changes</button>' +
+            '<span id="tpl-status" style="margin-left:14px;color:var(--text-dim,#888);font-size:12px;align-self:center;"></span>' +
+          '</div>'
+        : '');
+
+    // Email tab body is rendered into the placeholder div by the
+    // existing renderAdminEmailTemplates function (it targets
+    // #admin-subtab-email-templates). Just call it after innerHTML
+    // is set so the element exists.
+    if (_templatesActiveTab === 'email') {
+      renderAdminEmailTemplates();
+    }
 
     // Wire textarea blur to sync edits into the in-memory draft so reordering
     // (which re-renders the list) doesn't clobber unsaved text.
@@ -2159,13 +2228,13 @@
   function saveAdminTemplate() {
     syncTopLevelDraftFromInputs();
     syncBTMappingFromInputs();
-    syncSkillsFromInputs();
+    // agent_skills moved to Admin → Agents → Skills (saved there via
+    // saveAgentsSkills); not touched by this Save All anymore.
     var statusEl = document.getElementById('tpl-status');
     if (statusEl) { statusEl.textContent = 'Saving…'; statusEl.style.color = 'var(--text-dim,#888)'; }
     Promise.all([
       window.agxApi.settings.put('proposal_template', _templateDraft),
-      window.agxApi.settings.put('bt_export_mapping', _btMappingDraft),
-      window.agxApi.settings.put('agent_skills', _skillsDraft)
+      window.agxApi.settings.put('bt_export_mapping', _btMappingDraft)
     ]).then(function() {
       if (statusEl) { statusEl.textContent = 'Saved.'; statusEl.style.color = '#34d399'; }
       // Bust the cached copies on the consumer modules so the next preview /
