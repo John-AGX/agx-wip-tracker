@@ -332,8 +332,6 @@ body.light-mode .ng-del-cancel:hover{background:#e5e7eb}
   padding:2px 10px 0;
   flex-wrap:wrap;
   border-bottom:1px solid var(--ng-border2);
-  /* Removed the 64px min-height — let content drive height so the
-     strip is no thicker than (icon + label + caption) needs. */
 }
 .ng-topbar.ng-ribbon .ng-ribbon-title{
   display:flex;
@@ -343,6 +341,10 @@ body.light-mode .ng-del-cancel:hover{background:#e5e7eb}
   padding:2px 10px 8px 0;
   border-right:1px solid var(--ng-border2);
   margin-right:4px;
+  /* Push everything after the title to the right edge — flex
+     spacer effect via margin-right:auto on the title itself. */
+  margin-right:auto;
+  padding-right:12px;
 }
 .ng-topbar.ng-ribbon .ng-topbar-spacer{display:none}
 .ng-topbar.ng-ribbon .ng-ribbon-group{
@@ -364,10 +366,16 @@ body.light-mode .ng-del-cancel:hover{background:#e5e7eb}
   color:var(--ng-dim2,#6b7280);
   font-weight:500;
   margin-top:0;
-  padding:2px 4px 3px;
+  /* Padding-bottom 0 + line-height 1 so the caption text sits flush
+     against the bottom border with no dead space below. */
+  padding:2px 4px 0;
+  line-height:1;
   border-top:1px solid var(--ng-border2);
   width:100%;
   text-align:center;
+  /* Pull the caption down to the topbar\'s bottom edge so the row
+     ends right where the caption text ends. */
+  margin-bottom:-1px;
 }
 .ng-topbar.ng-ribbon .ng-ribbon-sep{
   flex:0 0 1px;
