@@ -329,19 +329,20 @@ body.light-mode .ng-del-cancel:hover{background:#e5e7eb}
 .ng-topbar.ng-ribbon{
   align-items:stretch;
   gap:0;
-  padding:6px 12px 0;
+  padding:2px 10px 0;
   flex-wrap:wrap;
   border-bottom:1px solid var(--ng-border2);
-  min-height:64px;
+  /* Removed the 64px min-height — let content drive height so the
+     strip is no thicker than (icon + label + caption) needs. */
 }
 .ng-topbar.ng-ribbon .ng-ribbon-title{
   display:flex;
   flex-direction:column;
   justify-content:center;
-  gap:2px;
-  padding:2px 12px 14px 0;
+  gap:1px;
+  padding:2px 10px 8px 0;
   border-right:1px solid var(--ng-border2);
-  margin-right:6px;
+  margin-right:4px;
 }
 .ng-topbar.ng-ribbon .ng-topbar-spacer{display:none}
 .ng-topbar.ng-ribbon .ng-ribbon-group{
@@ -349,7 +350,7 @@ body.light-mode .ng-del-cancel:hover{background:#e5e7eb}
   flex-direction:column;
   align-items:center;
   flex:0 0 auto;
-  padding:0 4px;
+  padding:0 3px;
 }
 .ng-topbar.ng-ribbon .ng-ribbon-group-buttons{
   display:flex;
@@ -357,13 +358,13 @@ body.light-mode .ng-del-cancel:hover{background:#e5e7eb}
   gap:0;
 }
 .ng-topbar.ng-ribbon .ng-ribbon-group-name{
-  font-size:10px;
+  font-size:9px;
   text-transform:uppercase;
-  letter-spacing:0.6px;
+  letter-spacing:0.5px;
   color:var(--ng-dim2,#6b7280);
   font-weight:500;
-  margin-top:2px;
-  padding:3px 4px 4px;
+  margin-top:0;
+  padding:2px 4px 3px;
   border-top:1px solid var(--ng-border2);
   width:100%;
   text-align:center;
@@ -372,38 +373,39 @@ body.light-mode .ng-del-cancel:hover{background:#e5e7eb}
   flex:0 0 1px;
   width:1px;
   background:var(--ng-border2);
-  margin:4px 4px 0;
+  margin:2px 3px 0;
 }
 .ng-topbar.ng-ribbon .ng-ribbon-btn{
   display:flex;
   flex-direction:column;
   align-items:center;
   justify-content:center;
-  gap:4px;
-  min-width:64px;
-  padding:5px 10px;
+  gap:1px;
+  min-width:54px;
+  padding:2px 8px 3px;
   background:transparent;
   border:1px solid transparent;
-  border-radius:6px;
+  border-radius:5px;
   color:var(--ng-text);
   font-family:inherit;
-  font-size:11px;
+  font-size:10px;
   font-weight:500;
   cursor:pointer;
   transition:background .12s,border-color .12s,transform .06s;
 }
 .ng-topbar.ng-ribbon .ng-ribbon-icon{
-  font-size:22px;
+  font-size:18px;
   line-height:1;
   display:inline-block;
   filter:saturate(1.05);
   transition:transform .12s;
 }
 .ng-topbar.ng-ribbon .ng-ribbon-label{
-  font-size:11px;
+  font-size:10px;
   font-weight:500;
   color:var(--ng-dim,#b8becc);
   white-space:nowrap;
+  line-height:1.1;
 }
 .ng-topbar.ng-ribbon .ng-ribbon-btn:hover{
   background:rgba(255,255,255,0.05);
