@@ -39,6 +39,28 @@
   var _autoPdfPromises = {};
   var _autoPdfBudget = 12;
 
+  // AG phase icons. Hand-crafted line-art SVGs in a Lucide-style
+  // aesthetic — chosen over emoji so the icons inherit text color and
+  // sit cleanly on a transparent button (emoji on transparent looks
+  // washed out at small sizes). currentColor lets the active-state
+  // tint flow through naturally.
+  //
+  // Plan → drafting triangle with hash marks (the universal "blueprint
+  //         tool" silhouette).
+  // Build → hammer with handle + claw shape.
+  var SVG_PLAN_ICON =
+    '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      '<path d="M3 21 L21 21 L3 3 Z"/>' +
+      '<line x1="3" y1="9" x2="9" y2="9"/>' +
+      '<line x1="3" y1="15" x2="15" y2="15"/>' +
+    '</svg>';
+  var SVG_BUILD_ICON =
+    '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      '<path d="M14.5 4 L20 9.5 L17 12.5 L11.5 7 Z"/>' +
+      '<line x1="11.5" y1="7" x2="3" y2="15.5"/>' +
+      '<line x1="3" y1="15.5" x2="6" y2="18.5"/>' +
+    '</svg>';
+
   function apiBase() {
     if (_entityType === 'job') return '/api/ai/jobs/' + encodeURIComponent(_entityId);
     if (_entityType === 'client') return '/api/ai/clients';
@@ -507,11 +529,18 @@
         // option, so only one pill is on screen at any moment. Lives in
         // the panel header so the toggle is right next to AG\'s identity.
         '<div id="agx-ai-phase-pill" role="group" aria-label="AG phase" style="display:none;position:relative;">' +
-          '<button id="agx-ai-phase-toggle" type="button" aria-haspopup="menu" aria-expanded="false" title="" style="background:rgba(255,255,255,0.10);border:1px solid rgba(255,255,255,0.18);color:#fff;border-radius:14px;padding:4px 12px;font-size:14px;line-height:1;cursor:pointer;display:inline-flex;align-items:center;gap:4px;">' +
-            '<span data-phase-icon>&#x1F4D0;</span>' +
-            '<span style="font-size:9px;opacity:0.75;line-height:1;">&#x25BE;</span>' +
+          // Transparent button — no fill, no border. Hover gives a faint
+          // overlay so the user knows it\'s clickable. The SVG icon uses
+          // currentColor so it inherits the surrounding header\'s white
+          // text color, and "active" mode is conveyed by full opacity.
+          '<button id="agx-ai-phase-toggle" type="button" aria-haspopup="menu" aria-expanded="false" title="" ' +
+            'style="background:transparent;border:none;color:#fff;padding:4px 6px;line-height:0;cursor:pointer;display:inline-flex;align-items:center;gap:3px;border-radius:6px;transition:background 0.12s;" ' +
+            'onmouseenter="this.style.background=\'rgba(255,255,255,0.08)\'" ' +
+            'onmouseleave="this.style.background=\'transparent\'">' +
+            '<span data-phase-icon style="display:inline-flex;align-items:center;"></span>' +
+            '<span style="font-size:9px;opacity:0.6;line-height:1;">&#x25BE;</span>' +
           '</button>' +
-          '<div id="agx-ai-phase-menu" role="menu" style="display:none;position:absolute;top:100%;right:0;margin-top:4px;background:#1a2230;border:1px solid rgba(255,255,255,0.14);border-radius:8px;padding:4px;font-size:12px;white-space:nowrap;z-index:10;box-shadow:0 6px 16px rgba(0,0,0,0.4);min-width:140px;">' +
+          '<div id="agx-ai-phase-menu" role="menu" style="display:none;position:absolute;top:100%;right:0;margin-top:4px;background:#1a2230;border:1px solid rgba(255,255,255,0.14);border-radius:8px;padding:4px;font-size:12px;white-space:nowrap;z-index:10;box-shadow:0 6px 16px rgba(0,0,0,0.4);min-width:160px;">' +
             // Body filled in by refreshModeSpecificUI based on current phase.
           '</div>' +
         '</div>' +
@@ -795,29 +824,26 @@
         var toggleBtn = document.getElementById('agx-ai-phase-toggle');
         var iconEl = pill.querySelector('[data-phase-icon]');
         if (toggleBtn && iconEl) {
-          // Icon: 📐 for Plan, 🛠️ for Build.
-          iconEl.textContent = phase === 'plan' ? '📐' : '🛠️';
+          // Inline SVG (line-art) for the active phase. Background
+          // stays transparent — the icon itself communicates the mode
+          // and the dropdown caret signals "click for options".
+          iconEl.innerHTML = phase === 'plan' ? SVG_PLAN_ICON : SVG_BUILD_ICON;
           toggleBtn.title = phase === 'plan'
             ? 'Plan mode — AG discusses scope without proposing line items. Click to switch to Build.'
             : 'Build mode — AG proposes line items and edits. Click to switch to Plan.';
-          // Active background tint hints which mode is on without a
-          // second pill being visible — purple for Plan, green for Build.
-          toggleBtn.style.background = phase === 'plan'
-            ? 'linear-gradient(135deg,#a78bfa,#8b5cf6)'
-            : 'linear-gradient(135deg,#4ade80,#22c55e)';
         }
         // Populate the dropdown body with the *other* option only.
         var menu = document.getElementById('agx-ai-phase-menu');
         if (menu) {
           var alt = phase === 'plan'
-            ? { key: 'build', icon: '🛠️', label: 'Build', desc: 'AG proposes line items + edits' }
-            : { key: 'plan',  icon: '📐',         label: 'Plan',  desc: 'Discuss scope, no proposals' };
+            ? { key: 'build', svg: SVG_BUILD_ICON, label: 'Build', desc: 'AG proposes line items + edits' }
+            : { key: 'plan',  svg: SVG_PLAN_ICON,  label: 'Plan',  desc: 'Discuss scope, no proposals' };
           menu.innerHTML =
             '<button type="button" data-ai-phase-pick="' + alt.key + '" ' +
-              'style="display:flex;align-items:center;gap:8px;width:100%;background:transparent;border:none;color:#fff;padding:8px 10px;border-radius:6px;cursor:pointer;text-align:left;font-family:inherit;font-size:12px;" ' +
+              'style="display:flex;align-items:center;gap:10px;width:100%;background:transparent;border:none;color:#fff;padding:8px 10px;border-radius:6px;cursor:pointer;text-align:left;font-family:inherit;font-size:12px;" ' +
               'onmouseenter="this.style.background=\'rgba(255,255,255,0.08)\'" ' +
               'onmouseleave="this.style.background=\'transparent\'">' +
-              '<span style="font-size:16px;line-height:1;">' + alt.icon + '</span>' +
+              '<span style="display:inline-flex;align-items:center;line-height:0;">' + alt.svg + '</span>' +
               '<span style="display:flex;flex-direction:column;gap:1px;">' +
                 '<span style="font-weight:600;">Switch to ' + alt.label + '</span>' +
                 '<span style="font-size:10px;color:rgba(255,255,255,0.55);font-weight:400;">' + alt.desc + '</span>' +
