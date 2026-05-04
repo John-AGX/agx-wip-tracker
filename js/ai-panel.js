@@ -1264,7 +1264,18 @@
   // Read-only tools — no approval friction. The card is replaced by
   // a small "Reading…" chip; the tool runs immediately and feeds its
   // result back to the assistant via the same /chat/continue flow.
-  var AUTO_READ_TOOLS = { read_workspace_sheet_full: true, read_qb_cost_lines: true };
+  // Auto-tier read tools — server emits these as tool_use, the panel
+  // executes them inline (rendered as a small "Reading…" chip rather
+  // than an approval card) and feeds the result back via /chat/continue
+  // along with any user-approved propose_* tools.
+  // read_materials is async: it hits /api/materials over the network,
+  // unlike read_workspace_sheet_full which reads from localStorage.
+  // The chip handler awaits the applier so both shapes work.
+  var AUTO_READ_TOOLS = {
+    read_workspace_sheet_full: true,
+    read_qb_cost_lines: true,
+    read_materials: true
+  };
 
   function finalizeProposalBubble(streamDiv, assistantText, toolUses, pendingContent) {
     var contentEl = streamDiv && streamDiv.querySelector('[data-stream-content]');
@@ -1434,35 +1445,43 @@
       // Read-only / auto-apply tools render as a tight chip and run
       // immediately. No approval card, no Trust countdown — the
       // result feeds back via /chat/continue with the rest.
+      // applyTool may return a sync string OR a Promise<string>
+      // (read_materials hits /api/materials over the network); both
+      // shapes are handled by the Promise.resolve wrapper below.
       if (AUTO_READ_TOOLS[tu.name]) {
+        var chipLabel = tu.input?.sheet_name || tu.name;
         var chip = document.createElement('div');
         chip.style.cssText = 'background:rgba(79,140,255,0.06);border:1px solid rgba(79,140,255,0.25);border-left:3px solid #4f8cff;border-radius:6px;padding:6px 10px;font-size:11px;color:var(--text-dim,#aaa);display:flex;align-items:center;gap:8px;';
         chip.innerHTML =
           '<span style="color:#4f8cff;font-weight:700;">📖</span>' +
-          '<span data-chip-text style="flex:1;">Reading <strong>' + escapeHTMLLocal(tu.input?.sheet_name || tu.name) + '</strong>…</span>';
+          '<span data-chip-text style="flex:1;">Reading <strong>' + escapeHTMLLocal(chipLabel) + '</strong>…</span>';
         propContainer.appendChild(chip);
         cards.push(chip);
-        var summary;
-        try {
-          summary = applyTool(tu);
-          var t = chip.querySelector('[data-chip-text]');
-          if (t) t.innerHTML = '✓ Read <strong>' + escapeHTMLLocal(tu.input?.sheet_name || tu.name) + '</strong>';
-          chip.style.borderLeftColor = '#34d399';
-        } catch (e) {
-          summary = 'Read failed: ' + (e.message || String(e));
-          var t2 = chip.querySelector('[data-chip-text]');
-          if (t2) t2.textContent = summary;
-          chip.style.borderLeftColor = '#f87171';
-        }
-        responses.push({ tool_use_id: tu.id, approved: true, applied_summary: summary });
-        // Refresh bulk count if any
-        if (bulkButtons) {
-          var remaining = totalCount - responses.length;
-          if (remaining <= 0) bulkButtons.remove();
-          else bulkButtons.querySelector('[data-bulk-info]').textContent = remaining + ' remaining';
-        }
-        if (responses.length === totalCount) {
-          continueAfterProposals(pendingContent, responses);
+        Promise.resolve().then(function() { return applyTool(tu); })
+          .then(function(summary) {
+            var t = chip.querySelector('[data-chip-text]');
+            if (t) t.innerHTML = '✓ Read <strong>' + escapeHTMLLocal(chipLabel) + '</strong>';
+            chip.style.borderLeftColor = '#34d399';
+            finishAutoRead(tu, summary);
+          })
+          .catch(function(e) {
+            var summary = 'Read failed: ' + (e.message || String(e));
+            var t2 = chip.querySelector('[data-chip-text]');
+            if (t2) t2.textContent = summary;
+            chip.style.borderLeftColor = '#f87171';
+            finishAutoRead(tu, summary);
+          });
+
+        function finishAutoRead(tu, summary) {
+          responses.push({ tool_use_id: tu.id, approved: true, applied_summary: summary });
+          if (bulkButtons) {
+            var remaining = totalCount - responses.length;
+            if (remaining <= 0) bulkButtons.remove();
+            else bulkButtons.querySelector('[data-bulk-info]').textContent = remaining + ' remaining';
+          }
+          if (responses.length === totalCount) {
+            continueAfterProposals(pendingContent, responses);
+          }
         }
         return; // skip the approval-card path entirely
       }
@@ -1604,6 +1623,12 @@
     if (isJobMode()) {
       return applyJobTool(tu);
     }
+    // read_materials doesn\'t need the estimate editor open — it\'s a
+    // pure catalog query. Handle it before the editor checks so AG
+    // can run a price lookup even if the user is on a different page.
+    if (tu.name === 'read_materials') {
+      return applyReadMaterials(tu.input || {});
+    }
     if (!window.estimateEditorAPI) {
       throw new Error('Estimate editor not loaded — refresh the page.');
     }
@@ -1621,6 +1646,40 @@
       case 'propose_add_client_note':  return applyAddClientNote(tu.input);
       default: throw new Error('Unknown tool: ' + tu.name);
     }
+  }
+
+  // Hits /api/materials and formats results as a string the assistant
+  // can read in its tool_result. Trims rows past the requested limit.
+  function applyReadMaterials(input) {
+    var params = {};
+    if (input.q && String(input.q).trim()) params.q = String(input.q).trim();
+    if (input.subgroup) params.subgroup = input.subgroup;
+    if (input.category) params.category = input.category;
+    if (input.limit) params.limit = Math.max(1, Math.min(100, Number(input.limit) || 20));
+    else params.limit = 20;
+    return window.agxApi.materials.list(params).then(function(resp) {
+      var rows = (resp && resp.materials) || [];
+      var total = (resp && resp.totalInDb) || 0;
+      if (!rows.length) {
+        var queryDesc = params.q ? '"' + params.q + '"' : '(no filter)';
+        return 'No materials matched ' + queryDesc + '. Catalog has ' + total + ' total entries. Try a broader keyword or different subgroup/category.';
+      }
+      var lines = ['Found ' + rows.length + ' material' + (rows.length === 1 ? '' : 's') + ' (catalog: ' + total + ' total). Format: description · unit · last $/avg $ · last seen · purchase count.'];
+      rows.forEach(function(r) {
+        var fmtMoney = function(n) { return n == null ? '—' : '$' + Number(n).toFixed(2); };
+        var lastSeen = r.last_seen ? String(r.last_seen).slice(0, 10) : 'never';
+        lines.push('- ' + r.description +
+          (r.sku ? ' [SKU ' + r.sku + ']' : '') +
+          ' · ' + (r.unit || '?') +
+          ' · last ' + fmtMoney(r.last_unit_price) + '/avg ' + fmtMoney(r.avg_unit_price) +
+          ' (range ' + fmtMoney(r.min_unit_price) + '-' + fmtMoney(r.max_unit_price) + ')' +
+          ' · ' + lastSeen +
+          ' · ' + (r.purchase_count || 0) + 'x' +
+          (r.category ? ' · ' + r.category : '') +
+          (r.agx_subgroup ? ' [' + r.agx_subgroup + ']' : ''));
+      });
+      return lines.join('\n');
+    });
   }
 
   // propose_add_client_note — POSTs to the linked client's notes endpoint.

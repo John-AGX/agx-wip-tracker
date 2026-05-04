@@ -232,6 +232,21 @@ const ESTIMATE_TOOLS = [
       },
       required: ['body', 'rationale']
     }
+  },
+  {
+    name: 'read_materials',
+    description: 'Search AGX\'s materials catalog (real purchase history from Home Depot + other vendors — actual prices AGX has paid). Auto-applies, no approval. **CALL THIS BEFORE QUOTING ANY MATERIALS LINE ITEM** so your unit costs come from real AGX purchase data instead of guesses. Returns each match with cleaned description, unit, last/avg/min/max prices, last-seen date, and total times purchased. Use the most specific keyword you can — "5/4 deck board PT", "trex transcend", "drywall mud", "joist hanger 2x10". If nothing matches, narrow further (or tell the user the SKU isn\'t in our catalog yet so they know to log it after buying).',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        q: { type: 'string', description: 'Free-text search across description / raw_description / SKU. Use trade words: "PT pickets", "joist hanger", "Behr Marquee", "Hardie lap siding".' },
+        subgroup: { type: 'string', enum: ['materials', 'labor', 'gc', 'sub'], description: 'Filter to one AGX subgroup. Default: all.' },
+        category: { type: 'string', description: 'Filter to one AGX category, e.g. "Lumber & Decking", "Paint", "Fasteners". Use read_materials with no filters first if unsure what categories exist.' },
+        limit: { type: 'integer', minimum: 1, maximum: 100, description: 'Cap rows returned. Default 20.' }
+      },
+      required: []
+    }
   }
 ];
 
@@ -699,6 +714,31 @@ async function buildEstimateContext(estimateId, includePhotos) {
     lines.push('');
   }
 
+  // Materials catalog snapshot — small overview so the model knows the
+  // catalog exists and how big it is. Detailed lookups go through the
+  // `read_materials` tool. Best-effort: if the count query fails (no
+  // table yet on a fresh deploy), skip silently.
+  try {
+    const matRes = await pool.query(
+      `SELECT
+         (SELECT COUNT(*)::int FROM materials WHERE is_hidden = false) AS total,
+         (SELECT COUNT(*)::int FROM materials WHERE is_hidden = false AND last_seen >= NOW() - INTERVAL '90 days') AS recent,
+         (SELECT array_agg(DISTINCT category) FROM (
+            SELECT category FROM materials WHERE is_hidden = false AND category IS NOT NULL
+              GROUP BY category ORDER BY COUNT(*) DESC LIMIT 8
+         ) c) AS top_cats`
+    );
+    const totalMat = matRes.rows[0].total || 0;
+    const recentMat = matRes.rows[0].recent || 0;
+    const topCats = (matRes.rows[0].top_cats || []).filter(Boolean);
+    if (totalMat > 0) {
+      lines.push('# Materials catalog');
+      lines.push(`AGX has ${totalMat} materials in the catalog (${recentMat} purchased in the last 90 days). Top categories: ${topCats.join(', ') || '(uncategorized)'}.`);
+      lines.push('Call `read_materials` to query this catalog before quoting any materials line item — see the # Pricing rules above.');
+      lines.push('');
+    }
+  } catch (e) { /* materials table may not exist yet on a fresh deploy */ }
+
   // Document manifest. PDF, Excel, Word, CSV, and plain-text contents are
   // extracted at upload time and inlined below in fenced blocks — read them
   // as authoritative content (RFPs, scopes, takeoffs, lead reports). For
@@ -769,8 +809,12 @@ async function buildEstimateContext(estimateId, includePhotos) {
   stableLines.push('');
   stableLines.push('# Pricing rules');
   stableLines.push('- AGX cost-side prices for Central-FL construction. Quantities should be specific (calculated from photos / scope when possible).');
+  stableLines.push('- **Use real AGX purchase data, not guesses.** AGX has a materials catalog populated from actual purchase history (Home Depot + other vendors). Call the `read_materials` tool with a tight keyword BEFORE quoting any line item that has materials cost. Use the returned `last_unit_price` (most recent AGX purchase) or `avg_unit_price` (smoothed) — not training-data memory. If the SKU isn\'t in the catalog, say so in your rationale and quote a defensible Central-FL number with a note that we should log the purchase next time.');
   stableLines.push('- Subgroup markup typical: Materials 20%, Labor 35%, GC 25%, Subs 10%. Per-line markup overrides the subgroup only when there\'s a real reason (special-order item priced higher, or a loss-leader line).');
-  stableLines.push('- Always include a rationale on each proposal — it\'s shown to the user on the approval card.');
+  stableLines.push('- Always include a rationale on each proposal — it\'s shown to the user on the approval card. When the unit cost came from `read_materials`, mention "from catalog (last seen YYYY-MM-DD, Nx purchases)" so the PM knows the number is grounded.');
+  stableLines.push('');
+  stableLines.push('# Materials catalog (`read_materials` tool)');
+  stableLines.push('Auto-applies, no approval. Searches AGX\'s purchase history and returns each match with description, SKU, unit, last/avg/min/max unit price, last-seen date, and total purchases. Use the most specific keyword you can — "5/4 PT decking", "Hardie lap 8.25", "joist hanger 2x10", "Behr Marquee deck stain". Cap at ~3 lookups per turn for normal estimates; only chain more for big batched line-item drafts.');
   stableLines.push('');
   stableLines.push('# Web research (web_search tool)');
   stableLines.push('You have a web_search tool. Use it judiciously — it adds a few seconds and a small cost per call. Good reasons to search:');
@@ -3040,6 +3084,23 @@ const STAFF_TOOLS = [
     }
   },
   {
+    name: 'read_materials',
+    tier: 'auto',
+    description:
+      'Search AGX\'s materials catalog (real purchase history from Home Depot + other vendors). Same tool AG uses for pricing line items. Use it to answer "do we have a price book?", "what does AGX typically pay for X?", or to audit whether AG\'s recent quotes are using catalog data or guessing.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        q: { type: 'string', description: 'Free-text search across description / SKU. Trade words: "PT pickets", "Hardie lap siding", "5/4 deck board".' },
+        subgroup: { type: 'string', enum: ['materials', 'labor', 'gc', 'sub'], description: 'Filter to one AGX subgroup. Default: all.' },
+        category: { type: 'string', description: 'Filter to one AGX category, e.g. "Lumber & Decking", "Paint", "Fasteners".' },
+        limit: { type: 'integer', minimum: 1, maximum: 100, description: 'Cap rows returned. Default 20.' }
+      },
+      required: []
+    }
+  },
+  {
     name: 'propose_skill_pack_add',
     tier: 'approval',
     description:
@@ -3117,6 +3178,7 @@ async function buildStaffContext() {
   stable.push('  • `read_recent_conversations(range, entity_type?, limit?)` — recent conversation list with rollup numbers.');
   stable.push('  • `read_conversation_detail(key)` — full message log of one conversation. Pass the `key` from read_recent_conversations.');
   stable.push('  • `read_skill_packs()` — admin-editable instruction packs the agents load each turn.');
+  stable.push('  • `read_materials(q?, subgroup?, category?, limit?)` — query AGX\'s materials catalog (Home Depot purchase history, etc.). Same tool AG uses for line-item pricing. Use it to answer "do we have a price book?", spot patterns in what AG should be searching, or audit whether AG quotes are catalog-backed.');
   stable.push('Propose tools (approval-required — user clicks Approve/Reject on a card):');
   stable.push('  • `propose_skill_pack_add(name, body, agents, alwaysOn?, rationale)` — add a new skill pack. agents accepts ["ag", "cra", "job"] (ag=AG, cra=HR, job=Elle). ALWAYS call read_skill_packs first to confirm no name collision.');
   stable.push('  • `propose_skill_pack_edit(name, new_name?, new_body?, agents?, alwaysOn?, rationale)` — change an existing pack. body edits replace the whole body.');
@@ -3319,6 +3381,58 @@ async function execStaffTool(name, input) {
         }
       }
       return lines.join('\n');
+    }
+
+    case 'read_materials': {
+      // Same query shape as the GET /api/materials endpoint that AG\'s
+      // client-side applier hits — kept inline rather than HTTP-loop
+      // through self so the staff agent doesn\'t need to forge a
+      // bearer token.
+      const q = (input && input.q || '').trim();
+      const subgroup = (input && input.subgroup || '').trim();
+      const category = (input && input.category || '').trim();
+      const limit = Math.max(1, Math.min(100, Number(input && input.limit) || 20));
+      const where = ['is_hidden = false'];
+      const params = [];
+      let p = 1;
+      if (subgroup) { where.push('agx_subgroup = $' + p++); params.push(subgroup); }
+      if (category) { where.push('category = $' + p++); params.push(category); }
+      if (q) {
+        where.push('(description ILIKE $' + p + ' OR raw_description ILIKE $' + p + ' OR sku ILIKE $' + p + ')');
+        params.push('%' + q + '%');
+        p++;
+      }
+      params.push(limit);
+      const r = await pool.query(
+        `SELECT description, sku, unit, agx_subgroup, category,
+                last_unit_price, avg_unit_price, min_unit_price, max_unit_price,
+                last_seen, purchase_count
+           FROM materials WHERE ${where.join(' AND ')}
+           ORDER BY purchase_count DESC, last_seen DESC NULLS LAST
+           LIMIT $${p}`,
+        params
+      );
+      const totalQ = await pool.query('SELECT COUNT(*)::int AS c FROM materials');
+      const total = totalQ.rows[0].c;
+      if (!r.rows.length) {
+        const queryDesc = q ? '"' + q + '"' : '(no filter)';
+        return 'No materials matched ' + queryDesc + '. Catalog has ' + total + ' total entries. Try a broader keyword or different subgroup/category.';
+      }
+      const fmtMoney = (n) => n == null ? '—' : '$' + Number(n).toFixed(2);
+      const out = ['Found ' + r.rows.length + ' material' + (r.rows.length === 1 ? '' : 's') + ' (catalog: ' + total + ' total).'];
+      for (const m of r.rows) {
+        const lastSeen = m.last_seen ? String(m.last_seen).slice(0, 10) : 'never';
+        out.push('- ' + m.description +
+          (m.sku ? ' [SKU ' + m.sku + ']' : '') +
+          ' · ' + (m.unit || '?') +
+          ' · last ' + fmtMoney(m.last_unit_price) + '/avg ' + fmtMoney(m.avg_unit_price) +
+          ' (range ' + fmtMoney(m.min_unit_price) + '-' + fmtMoney(m.max_unit_price) + ')' +
+          ' · ' + lastSeen +
+          ' · ' + (m.purchase_count || 0) + 'x' +
+          (m.category ? ' · ' + m.category : '') +
+          (m.agx_subgroup ? ' [' + m.agx_subgroup + ']' : ''));
+      }
+      return out.join('\n');
     }
 
     default:
