@@ -1342,33 +1342,91 @@
   // reset template (accurate wording) rather than user_invite (which
   // says "just created an account").
   function fireInviteWithChoice() {
-    var pick = window.prompt(
-      'Send invite to:\n\n' +
-      '  1 — New user (open the Add User modal; creates the user + emails the welcome with their password)\n' +
-      '  2 — Existing user (resets their password and emails them a working credential — uses the password-reset template)\n\n' +
-      'Enter 1 or 2:',
-      '1'
-    );
-    if (!pick) return;
-    pick = pick.trim();
-    if (pick === '1') {
-      if (typeof window.openNewUserModal === 'function') {
-        window.openNewUserModal();
-      } else {
-        alert('Add User modal not loaded. Switch to Admin → Users and click + New User.');
+    chooseInviteRecipient().then(function(choice) {
+      if (choice === 'new') {
+        if (typeof window.openNewUserModal === 'function') {
+          window.openNewUserModal();
+        } else {
+          alert('Add User modal not loaded. Switch to Admin → Users and click + New User.');
+        }
+      } else if (choice === 'existing') {
+        // Same picker + reset path as the password_reset button, but
+        // auto-generates the temp password so the admin gets a one-step
+        // "resend a working login" action. The user receives the
+        // password_reset template (which has accurate wording for an
+        // already-existing account).
+        fireExistingUserResend();
       }
-      return;
-    }
-    if (pick === '2') {
-      // Same picker + reset path as the password_reset button, but
-      // auto-generates the temp password so the admin gets a one-step
-      // "resend a working login" action. The user receives the
-      // password_reset template (which has accurate wording for an
-      // already-existing account).
-      fireExistingUserResend();
-      return;
-    }
-    alert('Pick 1 or 2 to continue.');
+      // null → user dismissed; no-op
+    });
+  }
+
+  // AGX-styled two-card chooser. Returns a Promise resolving to
+  // 'new' | 'existing' | null. Mirrors agxConfirm\'s overlay styling
+  // (modal, blur backdrop, escape-to-cancel) but renders two large
+  // action cards instead of an OK/Cancel pair, since both options are
+  // affirmative actions and the user picks WHICH, not whether.
+  function chooseInviteRecipient() {
+    return new Promise(function(resolve) {
+      var overlay = document.createElement('div');
+      overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.65);z-index:10000;display:flex;align-items:center;justify-content:center;padding:20px;backdrop-filter:blur(2px);';
+
+      var box = document.createElement('div');
+      box.style.cssText = 'background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:12px;padding:22px 24px;max-width:520px;width:100%;box-shadow:0 16px 48px rgba(0,0,0,0.6);';
+      box.innerHTML =
+        '<div style="font-size:16px;font-weight:700;color:var(--text,#fff);margin-bottom:4px;">Send invite to</div>' +
+        '<div style="font-size:12px;color:var(--text-dim,#aaa);margin-bottom:16px;">Pick whether this is a brand-new account or a reissue for someone already in the system.</div>' +
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;">' +
+          // New user card
+          '<button data-choose="new" type="button" ' +
+            'style="display:flex;flex-direction:column;align-items:flex-start;gap:6px;text-align:left;background:rgba(79,140,255,0.08);border:1px solid rgba(79,140,255,0.35);border-radius:8px;padding:14px;color:var(--text,#fff);font-family:inherit;cursor:pointer;transition:background 0.12s, border-color 0.12s, transform 0.06s;" ' +
+            'onmouseenter="this.style.background=\'rgba(79,140,255,0.16)\';this.style.borderColor=\'rgba(79,140,255,0.6)\';" ' +
+            'onmouseleave="this.style.background=\'rgba(79,140,255,0.08)\';this.style.borderColor=\'rgba(79,140,255,0.35)\';">' +
+            '<span style="font-size:24px;line-height:1;">&#x1F464;</span>' +
+            '<span style="font-size:14px;font-weight:600;">New user</span>' +
+            '<span style="font-size:11px;color:var(--text-dim,#aaa);font-weight:400;line-height:1.4;">Opens the Add User modal. Creates the account and emails the welcome with their password.</span>' +
+          '</button>' +
+          // Existing user card
+          '<button data-choose="existing" type="button" ' +
+            'style="display:flex;flex-direction:column;align-items:flex-start;gap:6px;text-align:left;background:rgba(167,139,250,0.08);border:1px solid rgba(167,139,250,0.35);border-radius:8px;padding:14px;color:var(--text,#fff);font-family:inherit;cursor:pointer;transition:background 0.12s, border-color 0.12s, transform 0.06s;" ' +
+            'onmouseenter="this.style.background=\'rgba(167,139,250,0.16)\';this.style.borderColor=\'rgba(167,139,250,0.6)\';" ' +
+            'onmouseleave="this.style.background=\'rgba(167,139,250,0.08)\';this.style.borderColor=\'rgba(167,139,250,0.35)\';">' +
+            '<span style="font-size:24px;line-height:1;">&#x1F511;</span>' +
+            '<span style="font-size:14px;font-weight:600;">Existing user</span>' +
+            '<span style="font-size:11px;color:var(--text-dim,#aaa);font-weight:400;line-height:1.4;">Resets their password and emails them a working credential. Uses the password-reset template.</span>' +
+          '</button>' +
+        '</div>' +
+        '<div style="display:flex;justify-content:flex-end;">' +
+          '<button data-choose-cancel type="button" class="secondary small" style="padding:7px 14px;">Cancel</button>' +
+        '</div>';
+
+      overlay.appendChild(box);
+      document.body.appendChild(overlay);
+
+      function cleanup(answer) {
+        document.removeEventListener('keydown', onKey);
+        if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+        resolve(answer);
+      }
+      function onKey(e) {
+        if (e.key === 'Escape') cleanup(null);
+      }
+      box.querySelectorAll('[data-choose]').forEach(function(btn) {
+        btn.onclick = function() { cleanup(btn.getAttribute('data-choose')); };
+      });
+      box.querySelector('[data-choose-cancel]').onclick = function() { cleanup(null); };
+      overlay.addEventListener('click', function(e) {
+        if (e.target === overlay) cleanup(null);
+      });
+      document.addEventListener('keydown', onKey);
+
+      // Focus the New-user card so keyboard users land on a sensible
+      // default; Tab moves to Existing, Esc cancels.
+      setTimeout(function() {
+        var btn = box.querySelector('[data-choose="new"]');
+        if (btn) btn.focus();
+      }, 0);
+    });
   }
 
   // Generates a memorable but unguessable temp password — one short
