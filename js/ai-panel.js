@@ -476,12 +476,26 @@
     lines.forEach(function(line) {
       var bulletMatch = line.match(/^\s*[-*]\s+(.+)$/);
       var numberedMatch = line.match(/^\s*(\d+)\.\s+(.+)$/);
+      // Headings — match #, ##, ### at line start. Keeps the model's
+      // common "### Skill pack proposal" markdown from rendering as
+      // raw `### Skill pack proposal` text, which on flex containers
+      // can collapse to single-word-per-line when the browser
+      // shrink-wraps the line.
+      var headingMatch = line.match(/^\s*(#{1,6})\s+(.+)$/);
       if (bulletMatch) {
         if (!inList) { out.push('<ul style="margin:6px 0;padding-left:20px;">'); inList = 'ul'; }
         out.push('<li>' + bulletMatch[1] + '</li>');
       } else if (numberedMatch) {
         if (!inList) { out.push('<ol style="margin:6px 0;padding-left:22px;">'); inList = 'ol'; }
         out.push('<li>' + numberedMatch[2] + '</li>');
+      } else if (headingMatch) {
+        if (inList) { out.push(inList === 'ul' ? '</ul>' : '</ol>'); inList = false; }
+        var level = headingMatch[1].length;
+        // Sizes scale: h1 16px down to h3+ 13px. Bold + tighter
+        // margins so headings read as section markers without
+        // dominating the chat bubble.
+        var sizes = { 1: 16, 2: 15, 3: 14, 4: 13, 5: 13, 6: 13 };
+        out.push('<div style="font-weight:700;font-size:' + (sizes[level] || 13) + 'px;margin:8px 0 4px;color:var(--text,#fff);">' + headingMatch[2] + '</div>');
       } else {
         if (inList) { out.push(inList === 'ul' ? '</ul>' : '</ol>'); inList = false; }
         if (line.trim()) out.push('<p style="margin:4px 0;">' + line + '</p>');
@@ -1044,7 +1058,10 @@
     div.style.cssText = 'display:flex;align-items:flex-start;gap:10px;';
     div.innerHTML =
       '<div style="flex:0 0 22px;font-size:18px;line-height:1;margin-top:2px;">☁️</div>' +
-      '<div class="ai-content" data-stream-content style="flex:1;min-width:0;font-size:13px;line-height:1.55;"><span style="color:var(--text-dim,#888);font-style:italic;">Doing brain yoga…</span></div>';
+      // overflow-wrap:break-word keeps long unbreakable tokens (URLs,
+      // skill-pack names with no spaces) from forcing the flex parent
+      // wider than the panel; pairs with min-width:0 on the flex item.
+      '<div class="ai-content" data-stream-content style="flex:1;min-width:0;font-size:13px;line-height:1.55;overflow-wrap:break-word;word-break:normal;"><span style="color:var(--text-dim,#888);font-style:italic;">Doing brain yoga…</span></div>';
     box.appendChild(div);
     box.scrollTop = box.scrollHeight;
     return div;
@@ -1234,7 +1251,14 @@
     if (contentEl) contentEl.innerHTML = renderMarkdown(assistantText || '');
 
     var propContainer = document.createElement('div');
-    propContainer.style.cssText = 'margin-top:10px;display:flex;flex-direction:column;gap:6px;';
+    // width:100% + box-sizing keeps the cards stretched across the
+    // content column. Without an explicit width the flex parent
+    // sometimes collapses to min-content (each word on its own line)
+    // — most reliably reproduced when the assistant text contains a
+    // bare `### heading` line, which our markdown renderer leaves as
+    // raw text and the browser then wraps oddly inside the implicit
+    // shrink-wrap context.
+    propContainer.style.cssText = 'margin-top:10px;display:flex;flex-direction:column;gap:6px;width:100%;box-sizing:border-box;';
     // Append into the content column (not the streamDiv flex parent),
     // otherwise the proposal cards become a horizontal flex sibling
     // of the cloud avatar and the markdown text — which squashes the
@@ -2166,7 +2190,11 @@
   // Card rendering — one per tool_use block, formatted by tool type.
   function renderProposalCard(tu) {
     var card = document.createElement('div');
-    card.style.cssText = 'background:rgba(255,255,255,0.04);border:1px solid var(--border,#333);border-left:3px solid #4f8cff;border-radius:6px;padding:10px 12px;';
+    // width:100% + box-sizing belt-and-suspenders so the card always
+    // takes the column width even when the flex parent gets confused
+    // (e.g. when the assistant text contains long unbroken strings or
+    // a `<pre>` body that browsers shrink-wrap by default).
+    card.style.cssText = 'background:rgba(255,255,255,0.04);border:1px solid var(--border,#333);border-left:3px solid #4f8cff;border-radius:6px;padding:10px 12px;width:100%;box-sizing:border-box;min-width:0;';
 
     var heading = '';
     var detail = '';
