@@ -1049,9 +1049,11 @@
         '</div>' +
       '</div>';
     }
-    return '<div style="display:flex;align-items:flex-start;gap:10px;">' +
-      '<div style="flex:0 0 22px;font-size:18px;line-height:1;margin-top:2px;">☁️</div>' +
-      '<div class="ai-content" style="flex:1;min-width:0;font-size:13px;line-height:1.55;">' + renderMarkdown(m.content) + '</div>' +
+    // Grid layout matches appendStreamingBubble — see comment there
+    // for why grid beats flex for this row shape.
+    return '<div style="display:grid;grid-template-columns:22px 1fr;gap:10px;align-items:start;width:100%;min-width:0;">' +
+      '<div style="font-size:18px;line-height:1;margin-top:2px;">☁️</div>' +
+      '<div class="ai-content" style="min-width:0;width:100%;overflow-x:hidden;font-size:13px;line-height:1.55;overflow-wrap:break-word;word-break:normal;">' + renderMarkdown(m.content) + '</div>' +
     '</div>';
   }
 
@@ -1060,13 +1062,20 @@
     if (!box) return null;
     var div = document.createElement('div');
     div.className = 'ai-streaming';
-    div.style.cssText = 'display:flex;align-items:flex-start;gap:10px;';
+    // Grid layout — much more predictable than flex for "fixed gutter +
+    // fluid content" rows. Flex with `flex:1; min-width:0` on the
+    // content column was collapsing to single-character width when a
+    // descendant had a wider intrinsic min-content (overflow-auto pre,
+    // long tokens, etc.). Grid's `1fr` is genuinely "remainder of the
+    // row" and ignores child min-content for sizing.
+    div.style.cssText = 'display:grid;grid-template-columns:22px 1fr;gap:10px;align-items:start;width:100%;min-width:0;';
     div.innerHTML =
-      '<div style="flex:0 0 22px;font-size:18px;line-height:1;margin-top:2px;">☁️</div>' +
-      // overflow-wrap:break-word keeps long unbreakable tokens (URLs,
-      // skill-pack names with no spaces) from forcing the flex parent
-      // wider than the panel; pairs with min-width:0 on the flex item.
-      '<div class="ai-content" data-stream-content style="flex:1;min-width:0;font-size:13px;line-height:1.55;overflow-wrap:break-word;word-break:normal;"><span style="color:var(--text-dim,#888);font-style:italic;">Doing brain yoga…</span></div>';
+      '<div style="font-size:18px;line-height:1;margin-top:2px;">☁️</div>' +
+      // overflow-x:hidden caps any wide descendant (a code block, a
+      // long unbreakable URL) so it can\'t push the row wider than
+      // the panel. min-width:0 + width:100% pin the column to the
+      // grid track\'s 1fr, which is the actual remaining-width.
+      '<div class="ai-content" data-stream-content style="min-width:0;width:100%;overflow-x:hidden;font-size:13px;line-height:1.55;overflow-wrap:break-word;word-break:normal;"><span style="color:var(--text-dim,#888);font-style:italic;">Doing brain yoga…</span></div>';
     box.appendChild(div);
     box.scrollTop = box.scrollHeight;
     return div;
