@@ -501,15 +501,19 @@
       '<div style="padding:12px 14px;border-bottom:1px solid var(--border,#333);background:linear-gradient(135deg,#0d1f12 0%,#14351d 100%);display:flex;align-items:center;gap:10px;">' +
         '<button id="ai-close" title="Close (Esc)" style="background:rgba(255,255,255,0.12);color:#fff;border:1px solid rgba(255,255,255,0.2);border-radius:6px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:6px;">&rarr; Close</button>' +
         '<div class="agx-ai-title" style="font-size:14px;font-weight:700;color:#fff;flex:1;text-align:right;">&#x2728; AI Assistant</div>' +
-        // AG phase pill — visible only in estimate mode, hidden for
-        // Elle / HR / Chief of Staff. Click flips the estimate\'s
-        // aiPhase, which gates whether AG can propose line items
-        // server-side. Lives in the panel header so the toggle is
-        // right next to AG\'s identity, where the user is already
-        // looking when deciding whether to plan or build.
-        '<div id="agx-ai-phase-pill" role="group" aria-label="AG phase" style="display:none;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);border-radius:14px;padding:2px;font-size:11px;font-weight:600;">' +
-          '<button data-ai-phase="plan" onclick="window.setEstimateAIPhase && window.setEstimateAIPhase(\'plan\')" title="Plan mode — AG discusses scope without proposing line items" style="border:none;background:transparent;color:rgba(255,255,255,0.65);padding:3px 10px;border-radius:12px;cursor:pointer;">&#x1F5FA;</button>' +
-          '<button data-ai-phase="build" onclick="window.setEstimateAIPhase && window.setEstimateAIPhase(\'build\')" title="Build mode — AG proposes line items, sections, and edits" style="border:none;background:transparent;color:rgba(255,255,255,0.65);padding:3px 10px;border-radius:12px;cursor:pointer;">&#x1F528;</button>' +
+        // AG phase pill — single-icon dropdown. Visible only in estimate
+        // mode. The visible icon reflects the active phase (📐 for Plan,
+        // 🛠️ for Build); clicking opens a tiny popover with the *other*
+        // option, so only one pill is on screen at any moment. Lives in
+        // the panel header so the toggle is right next to AG\'s identity.
+        '<div id="agx-ai-phase-pill" role="group" aria-label="AG phase" style="display:none;position:relative;">' +
+          '<button id="agx-ai-phase-toggle" type="button" aria-haspopup="menu" aria-expanded="false" title="" style="background:rgba(255,255,255,0.10);border:1px solid rgba(255,255,255,0.18);color:#fff;border-radius:14px;padding:4px 12px;font-size:14px;line-height:1;cursor:pointer;display:inline-flex;align-items:center;gap:4px;">' +
+            '<span data-phase-icon>&#x1F4D0;</span>' +
+            '<span style="font-size:9px;opacity:0.75;line-height:1;">&#x25BE;</span>' +
+          '</button>' +
+          '<div id="agx-ai-phase-menu" role="menu" style="display:none;position:absolute;top:100%;right:0;margin-top:4px;background:#1a2230;border:1px solid rgba(255,255,255,0.14);border-radius:8px;padding:4px;font-size:12px;white-space:nowrap;z-index:10;box-shadow:0 6px 16px rgba(0,0,0,0.4);min-width:140px;">' +
+            // Body filled in by refreshModeSpecificUI based on current phase.
+          '</div>' +
         '</div>' +
         '<button id="ai-trust" title="Trust settings — pick which tool types auto-apply (job mode only)" style="background:rgba(255,255,255,0.08);color:#ccc;border:1px solid rgba(255,255,255,0.15);border-radius:6px;padding:6px 8px;font-size:13px;cursor:pointer;display:none;">&#x2699;</button>' +
         '<button id="ai-clear" title="Clear conversation" style="background:rgba(255,255,255,0.08);color:#ccc;border:1px solid rgba(255,255,255,0.15);border-radius:6px;padding:6px 10px;font-size:11px;cursor:pointer;">Clear</button>' +
@@ -562,6 +566,36 @@
         window._agxAiPanelOpenTrust(trustBtn);
       }
     };
+    // AG phase dropdown — toggle on click; outside click closes the
+    // popover. The body of the menu (single alternate option) is
+    // populated inside refreshModeSpecificUI so it always reflects
+    // the current phase.
+    var phaseToggle = panel.querySelector('#agx-ai-phase-toggle');
+    if (phaseToggle) {
+      phaseToggle.onclick = function(e) {
+        e.stopPropagation();
+        var menu = panel.querySelector('#agx-ai-phase-menu');
+        if (!menu) return;
+        var isOpen = menu.style.display === 'block';
+        if (isOpen) {
+          menu.style.display = 'none';
+          phaseToggle.setAttribute('aria-expanded', 'false');
+        } else {
+          menu.style.display = 'block';
+          phaseToggle.setAttribute('aria-expanded', 'true');
+        }
+      };
+    }
+    document.addEventListener('click', function(e) {
+      var menu = panel.querySelector('#agx-ai-phase-menu');
+      var pillEl = panel.querySelector('#agx-ai-phase-pill');
+      if (!menu || !pillEl) return;
+      if (menu.style.display !== 'block') return;
+      if (pillEl.contains(e.target)) return;
+      menu.style.display = 'none';
+      var t = panel.querySelector('#agx-ai-phase-toggle');
+      if (t) t.setAttribute('aria-expanded', 'false');
+    });
     var input = panel.querySelector('#ai-input');
     var pill = panel.querySelector('#ai-input-pill');
     // Auto-grow: textarea expands as the user types, capped at max-height
@@ -732,6 +766,13 @@
     }, 240);
   }
 
+  function closeAIPhaseMenu() {
+    var menu = document.getElementById('agx-ai-phase-menu');
+    if (menu) menu.style.display = 'none';
+    var toggle = document.getElementById('agx-ai-phase-toggle');
+    if (toggle) toggle.setAttribute('aria-expanded', 'false');
+  }
+
   function refreshModeSpecificUI() {
     var headerEl = document.querySelector('#agx-ai-panel .agx-ai-title');
     if (headerEl) {
@@ -740,33 +781,60 @@
       else if (isStaffMode())     headerEl.textContent = '🎩 Chief of Staff';
       else                        headerEl.textContent = '📐 AG · AGX Estimator';
     }
-    // Plan/Build pill — visible only in estimate mode. Active side
-    // gradient mirrors the editor pill conventions (purple Plan,
-    // green Build). Pulled fresh from the editor API so flips
-    // mid-conversation update immediately when refreshPhaseChip()
+    // Plan/Build pill — visible only in estimate mode. Single-icon
+    // dropdown: visible icon shows active phase, click opens a popover
+    // with the *other* option. Pulled fresh from the editor API so
+    // flips mid-conversation update immediately when refreshPhaseChip()
     // fires from the editor side.
     var pill = document.getElementById('agx-ai-phase-pill');
     if (pill) {
       if (isEstimateMode()) {
-        pill.style.display = 'inline-flex';
+        pill.style.display = 'inline-block';
         var phase = (window.estimateEditorAPI && window.estimateEditorAPI.getAIPhase)
           ? window.estimateEditorAPI.getAIPhase() : 'build';
-        pill.querySelectorAll('[data-ai-phase]').forEach(function(btn) {
-          var isActive = btn.getAttribute('data-ai-phase') === phase;
-          if (isActive) {
-            btn.style.background = phase === 'plan'
-              ? 'linear-gradient(135deg,#a78bfa,#8b5cf6)'
-              : 'linear-gradient(135deg,#4ade80,#22c55e)';
-            btn.style.color = '#fff';
-            btn.style.boxShadow = '0 1px 3px rgba(0,0,0,0.25)';
-          } else {
-            btn.style.background = 'transparent';
-            btn.style.color = 'rgba(255,255,255,0.65)';
-            btn.style.boxShadow = 'none';
+        var toggleBtn = document.getElementById('agx-ai-phase-toggle');
+        var iconEl = pill.querySelector('[data-phase-icon]');
+        if (toggleBtn && iconEl) {
+          // Icon: 📐 for Plan, 🛠️ for Build.
+          iconEl.textContent = phase === 'plan' ? '📐' : '🛠️';
+          toggleBtn.title = phase === 'plan'
+            ? 'Plan mode — AG discusses scope without proposing line items. Click to switch to Build.'
+            : 'Build mode — AG proposes line items and edits. Click to switch to Plan.';
+          // Active background tint hints which mode is on without a
+          // second pill being visible — purple for Plan, green for Build.
+          toggleBtn.style.background = phase === 'plan'
+            ? 'linear-gradient(135deg,#a78bfa,#8b5cf6)'
+            : 'linear-gradient(135deg,#4ade80,#22c55e)';
+        }
+        // Populate the dropdown body with the *other* option only.
+        var menu = document.getElementById('agx-ai-phase-menu');
+        if (menu) {
+          var alt = phase === 'plan'
+            ? { key: 'build', icon: '🛠️', label: 'Build', desc: 'AG proposes line items + edits' }
+            : { key: 'plan',  icon: '📐',         label: 'Plan',  desc: 'Discuss scope, no proposals' };
+          menu.innerHTML =
+            '<button type="button" data-ai-phase-pick="' + alt.key + '" ' +
+              'style="display:flex;align-items:center;gap:8px;width:100%;background:transparent;border:none;color:#fff;padding:8px 10px;border-radius:6px;cursor:pointer;text-align:left;font-family:inherit;font-size:12px;" ' +
+              'onmouseenter="this.style.background=\'rgba(255,255,255,0.08)\'" ' +
+              'onmouseleave="this.style.background=\'transparent\'">' +
+              '<span style="font-size:16px;line-height:1;">' + alt.icon + '</span>' +
+              '<span style="display:flex;flex-direction:column;gap:1px;">' +
+                '<span style="font-weight:600;">Switch to ' + alt.label + '</span>' +
+                '<span style="font-size:10px;color:rgba(255,255,255,0.55);font-weight:400;">' + alt.desc + '</span>' +
+              '</span>' +
+            '</button>';
+          var pickBtn = menu.querySelector('[data-ai-phase-pick]');
+          if (pickBtn) {
+            pickBtn.onclick = function() {
+              var key = pickBtn.getAttribute('data-ai-phase-pick');
+              if (window.setEstimateAIPhase) window.setEstimateAIPhase(key);
+              closeAIPhaseMenu();
+            };
           }
-        });
+        }
       } else {
         pill.style.display = 'none';
+        closeAIPhaseMenu();
       }
     }
     // Trust gear visible only in job mode (where the toggles apply).
