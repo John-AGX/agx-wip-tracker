@@ -1372,28 +1372,36 @@
       overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.65);z-index:10000;display:flex;align-items:center;justify-content:center;padding:20px;backdrop-filter:blur(2px);';
 
       var box = document.createElement('div');
-      box.style.cssText = 'background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:12px;padding:22px 24px;max-width:520px;width:100%;box-shadow:0 16px 48px rgba(0,0,0,0.6);';
+      box.style.cssText = 'background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:12px;padding:22px 24px;max-width:560px;width:100%;box-sizing:border-box;box-shadow:0 16px 48px rgba(0,0,0,0.6);';
+      // Common card style — grid items default to min-width:auto
+      // (= min-content), which lets the descriptive text inside push
+      // the columns wider than 1fr can constrain. width:100% +
+      // min-width:0 + box-sizing:border-box force each card to honor
+      // its grid track width, and overflow-wrap on the description
+      // breaks any long words that would otherwise overflow.
+      var cardBase = 'display:flex;flex-direction:column;align-items:flex-start;gap:6px;text-align:left;border-radius:8px;padding:14px;color:var(--text,#fff);font-family:inherit;cursor:pointer;transition:background 0.12s, border-color 0.12s, transform 0.06s;width:100%;min-width:0;box-sizing:border-box;';
+      var descStyle = 'font-size:11px;color:var(--text-dim,#aaa);font-weight:400;line-height:1.4;overflow-wrap:break-word;word-break:normal;width:100%;';
       box.innerHTML =
         '<div style="font-size:16px;font-weight:700;color:var(--text,#fff);margin-bottom:4px;">Send invite to</div>' +
         '<div style="font-size:12px;color:var(--text-dim,#aaa);margin-bottom:16px;">Pick whether this is a brand-new account or a reissue for someone already in the system.</div>' +
         '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;">' +
           // New user card
           '<button data-choose="new" type="button" ' +
-            'style="display:flex;flex-direction:column;align-items:flex-start;gap:6px;text-align:left;background:rgba(79,140,255,0.08);border:1px solid rgba(79,140,255,0.35);border-radius:8px;padding:14px;color:var(--text,#fff);font-family:inherit;cursor:pointer;transition:background 0.12s, border-color 0.12s, transform 0.06s;" ' +
+            'style="' + cardBase + 'background:rgba(79,140,255,0.08);border:1px solid rgba(79,140,255,0.35);" ' +
             'onmouseenter="this.style.background=\'rgba(79,140,255,0.16)\';this.style.borderColor=\'rgba(79,140,255,0.6)\';" ' +
             'onmouseleave="this.style.background=\'rgba(79,140,255,0.08)\';this.style.borderColor=\'rgba(79,140,255,0.35)\';">' +
             '<span style="font-size:24px;line-height:1;">&#x1F464;</span>' +
             '<span style="font-size:14px;font-weight:600;">New user</span>' +
-            '<span style="font-size:11px;color:var(--text-dim,#aaa);font-weight:400;line-height:1.4;">Opens the Add User modal. Creates the account and emails the welcome with their password.</span>' +
+            '<span style="' + descStyle + '">Opens the Add User modal. Creates the account and emails the welcome with their password.</span>' +
           '</button>' +
           // Existing user card
           '<button data-choose="existing" type="button" ' +
-            'style="display:flex;flex-direction:column;align-items:flex-start;gap:6px;text-align:left;background:rgba(167,139,250,0.08);border:1px solid rgba(167,139,250,0.35);border-radius:8px;padding:14px;color:var(--text,#fff);font-family:inherit;cursor:pointer;transition:background 0.12s, border-color 0.12s, transform 0.06s;" ' +
+            'style="' + cardBase + 'background:rgba(167,139,250,0.08);border:1px solid rgba(167,139,250,0.35);" ' +
             'onmouseenter="this.style.background=\'rgba(167,139,250,0.16)\';this.style.borderColor=\'rgba(167,139,250,0.6)\';" ' +
             'onmouseleave="this.style.background=\'rgba(167,139,250,0.08)\';this.style.borderColor=\'rgba(167,139,250,0.35)\';">' +
             '<span style="font-size:24px;line-height:1;">&#x1F511;</span>' +
             '<span style="font-size:14px;font-weight:600;">Existing user</span>' +
-            '<span style="font-size:11px;color:var(--text-dim,#aaa);font-weight:400;line-height:1.4;">Resets their password and emails them a working credential. Uses the password-reset template.</span>' +
+            '<span style="' + descStyle + '">Resets their password and emails them a working credential. Uses the password-reset template.</span>' +
           '</button>' +
         '</div>' +
         '<div style="display:flex;justify-content:flex-end;">' +
