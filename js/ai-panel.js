@@ -39,26 +39,45 @@
   var _autoPdfPromises = {};
   var _autoPdfBudget = 12;
 
-  // AG phase icons. Hand-crafted line-art SVGs in a Lucide-style
-  // aesthetic — chosen over emoji so the icons inherit text color and
-  // sit cleanly on a transparent button (emoji on transparent looks
-  // washed out at small sizes). currentColor lets the active-state
-  // tint flow through naturally.
+  // AG phase icons. No Unicode emoji exists for the elaborate blueprint
+  // / drafting-tools look — the closest emoji is 📐 (just a triangular
+  // ruler), so we hand-craft inline SVGs. currentColor stroke lets
+  // the icons inherit the surrounding header\'s text color, and the
+  // transparent fill keeps them readable on the panel\'s dark gradient.
   //
-  // Plan → drafting triangle with hash marks (the universal "blueprint
-  //         tool" silhouette).
-  // Build → hammer with handle + claw shape.
+  // Plan → blueprint sheet with a curled left edge, a drafting compass
+  //         at the top (pivot + two legs), and a small floor-plan
+  //         layout inside. Mirrors the construction-document
+  //         iconography the user shared.
+  // Build → hammer (head + diagonal handle) crossed with a carpenter\'s
+  //         L-square at the bottom — the two tools you\'d pick up
+  //         when you stop drafting and start swinging.
   var SVG_PLAN_ICON =
-    '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
-      '<path d="M3 21 L21 21 L3 3 Z"/>' +
-      '<line x1="3" y1="9" x2="9" y2="9"/>' +
-      '<line x1="3" y1="15" x2="15" y2="15"/>' +
+    '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      // Sheet rectangle + rolled left edge (the "blueprint paper" cue)
+      '<path d="M7 3 H20 V21 H7 Z"/>' +
+      '<path d="M7 3 C5 3 4 4 4 6 V18 C4 20 5 21 7 21"/>' +
+      // Drafting compass at top: pivot circle + two diverging legs
+      '<circle cx="13.5" cy="6.3" r="0.75" fill="currentColor"/>' +
+      '<line x1="13" y1="7" x2="11" y2="10.5"/>' +
+      '<line x1="14" y1="7" x2="16" y2="10.5"/>' +
+      // Floor-plan rectangles below the compass
+      '<rect x="8.5" y="13" width="3.5" height="2.3"/>' +
+      '<rect x="12.5" y="13" width="2.8" height="2.3"/>' +
+      '<rect x="8.5" y="16" width="6.8" height="2.5"/>' +
     '</svg>';
   var SVG_BUILD_ICON =
-    '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
-      '<path d="M14.5 4 L20 9.5 L17 12.5 L11.5 7 Z"/>' +
-      '<line x1="11.5" y1="7" x2="3" y2="15.5"/>' +
-      '<line x1="3" y1="15.5" x2="6" y2="18.5"/>' +
+    '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      // Hammer head (top-left rectangle)
+      '<rect x="2.5" y="2.5" width="8" height="4" rx="0.4"/>' +
+      // Hammer handle going diagonally down-right
+      '<line x1="10.5" y1="6.5" x2="20" y2="16"/>' +
+      // Carpenter\'s L-square along the bottom + left
+      '<path d="M3 18 V21 H19 V18 H6 V13 H3 Z"/>' +
+      // Hash marks along the square (suggests measurement)
+      '<line x1="9" y1="19.5" x2="9" y2="20.5"/>' +
+      '<line x1="12" y1="19.5" x2="12" y2="20.5"/>' +
+      '<line x1="15" y1="19.5" x2="15" y2="20.5"/>' +
     '</svg>';
 
   function apiBase() {
