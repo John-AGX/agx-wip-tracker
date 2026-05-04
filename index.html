@@ -2169,7 +2169,7 @@
     <script src="js/workspace-layout.js?v=50"></script>
 
     <!-- Node Graph (Beta) -->
-    <link rel="stylesheet" href="nodegraph/nodegraph.css?v=88" />
+    <link rel="stylesheet" href="nodegraph/nodegraph.css?v=89" />
     <div id="nodeGraphTab">
       <!-- Workspace canvas toolbar — Outlook ribbon style. Each
            button is icon-on-top + label-below, buttons cluster into
@@ -2179,11 +2179,15 @@
            ng-graph wiring still finds them. -->
       <div class="ng-topbar ng-ribbon">
         <div class="ng-ribbon-title">
-          <span class="ng-topbar-title">&#x26A1; Node Graph</span>
+          <!-- Row 1: title + Save indicator side-by-side -->
+          <div class="ng-ribbon-title-row">
+            <span class="ng-topbar-title">&#x26A1; Node Graph</span>
+            <span id="ngSaveIndicator" class="ng-save-indicator" title="Auto-save status — every change persists immediately">
+              <span class="ng-save-dot">&#x25CB;</span><span class="ng-save-label">Saved</span>
+            </span>
+          </div>
+          <!-- Row 2: subtitle -->
           <span class="ng-topbar-sub">Visual Cost Flow Editor</span>
-          <span id="ngSaveIndicator" class="ng-save-indicator" title="Auto-save status — every change persists immediately">
-            <span class="ng-save-dot">&#x25CB;</span><span class="ng-save-label">Saved</span>
-          </span>
         </div>
         <span class="ng-topbar-spacer"></span>
         <!-- View group: collapse / expand / arrange / sync / reset -->

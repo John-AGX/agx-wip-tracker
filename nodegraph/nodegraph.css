@@ -337,28 +337,45 @@ body.light-mode .ng-del-cancel:hover{background:#e5e7eb}
   display:flex;
   flex-direction:column;
   justify-content:center;
-  gap:0;
+  gap:1px;
   padding:2px 12px 4px 0;
   border-right:1px solid var(--ng-border2);
   margin-right:4px;
 }
-/* Tighten the title typography — the original "Node Graph /
-   Visual Cost Flow Editor / ○ Saved" stack was the tallest column
-   in the ribbon and pulled every other group up to match via
-   align-items:stretch. Smaller font + dropped subtitle keeps the
-   identity legible without inflating the row. */
-.ng-topbar.ng-ribbon .ng-topbar-title{font-size:13px;line-height:1.1}
-.ng-topbar.ng-ribbon .ng-topbar-sub{display:none}
+/* Row 1 of the title block — "⚡ Node Graph" + Save indicator
+   inline, separated by a small gap. */
+.ng-topbar.ng-ribbon .ng-ribbon-title-row{
+  display:flex;
+  align-items:center;
+  gap:8px;
+}
+.ng-topbar.ng-ribbon .ng-topbar-title{
+  font-size:13px;
+  line-height:1.1;
+  white-space:nowrap;
+}
+/* Row 2 — subtitle restored. */
+.ng-topbar.ng-ribbon .ng-topbar-sub{
+  display:block;
+  font-size:10px;
+  color:var(--ng-dim2,#6b7280);
+  white-space:nowrap;
+}
 .ng-topbar.ng-ribbon .ng-save-indicator{
   font-size:10px;
   padding:2px 8px;
-  margin-top:1px;
-  align-self:flex-start;
+  margin-top:0;
+  /* Removed align-self:flex-start so it sits centered with the
+     title text on its own row instead of stacking below it. */
 }
-/* Spacer hidden — groups flow naturally to the LEFT after the
-   title (per the user\'s latest preference). If the right-align
-   layout is ever wanted again, set flex:1 on this. */
-.ng-topbar.ng-ribbon .ng-topbar-spacer{display:none}
+/* Spacer enabled — flex-grow:1 to consume slack space and push
+   button groups to the right edge of the ribbon. The title block
+   stays on the left. */
+.ng-topbar.ng-ribbon .ng-topbar-spacer{
+  display:block;
+  flex:1 1 auto;
+  min-width:8px;
+}
 .ng-topbar.ng-ribbon .ng-ribbon-group{
   display:flex;
   flex-direction:column;
