@@ -932,11 +932,17 @@
                 '<div style="font-size:10px;color:rgba(255,255,255,0.45);padding:0 4px 6px;line-height:1.35;white-space:normal;max-width:260px;">Trusted tools still show a card, but auto-apply after a 5s countdown. Cancel during the countdown to override.</div>' +
                 TRUSTABLE_TOOLS.map(function(t) {
                   var on = isTrusted(t.name);
-                  return '<label style="display:flex;align-items:flex-start;gap:6px;padding:4px 6px;font-size:11px;color:#e6e6e6;cursor:pointer;border-radius:4px;line-height:1.35;white-space:normal;" ' +
+                  // Grid layout: auto column for the checkbox, 1fr for
+                  // the label text. Grid handles long unbreakable text
+                  // (e.g. "(t1/t2/cost-bucket/etc.)") cleanly — flex
+                  // collapsed the text column to ~74px because the
+                  // intrinsic min-width of the unbreakable token kept
+                  // overflowing the row in flex layout.
+                  return '<label style="display:grid;grid-template-columns:auto 1fr;align-items:start;column-gap:8px;padding:5px 6px;font-size:11px;color:#e6e6e6;cursor:pointer;border-radius:4px;line-height:1.4;" ' +
                     'onmouseenter="this.style.background=\'rgba(255,255,255,0.04)\'" ' +
                     'onmouseleave="this.style.background=\'transparent\'">' +
-                    '<input type="checkbox" data-trust-tool="' + t.name + '"' + (on ? ' checked' : '') + ' style="margin-top:2px;flex-shrink:0;" />' +
-                    '<span style="flex:1;">' + t.label + '</span>' +
+                    '<input type="checkbox" data-trust-tool="' + t.name + '"' + (on ? ' checked' : '') + ' style="margin-top:2px;" />' +
+                    '<span style="word-break:break-word;overflow-wrap:anywhere;">' + t.label + '</span>' +
                   '</label>';
                 }).join('') +
               '</div>';
