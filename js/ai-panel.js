@@ -865,7 +865,11 @@
           // Inline SVG (line-art) for the active phase. Background
           // stays transparent — the icon itself communicates the mode
           // and the dropdown caret signals "click for options".
-          iconEl.innerHTML = phase === 'plan' ? SVG_PLAN_ICON : SVG_BUILD_ICON;
+          // Prefer the AGX icon set when loaded; fall back to the
+          // hand-crafted SVGs above if agx-icons.js hasn't loaded.
+          iconEl.innerHTML = (typeof agxIcon === 'function')
+            ? agxIcon(phase === 'plan' ? 'plan-mode' : 'build-mode')
+            : (phase === 'plan' ? SVG_PLAN_ICON : SVG_BUILD_ICON);
           toggleBtn.title = phase === 'plan'
             ? 'Plan mode — AG discusses scope without proposing line items. Click to switch to Build.'
             : 'Build mode — AG proposes line items and edits. Click to switch to Plan.';
@@ -873,9 +877,11 @@
         // Populate the dropdown body with the *other* option only.
         var menu = document.getElementById('agx-ai-phase-menu');
         if (menu) {
+          var planSvg  = (typeof agxIcon === 'function') ? agxIcon('plan-mode')  : SVG_PLAN_ICON;
+          var buildSvg = (typeof agxIcon === 'function') ? agxIcon('build-mode') : SVG_BUILD_ICON;
           var alt = phase === 'plan'
-            ? { key: 'build', svg: SVG_BUILD_ICON, label: 'Build', desc: 'AG proposes line items + edits' }
-            : { key: 'plan',  svg: SVG_PLAN_ICON,  label: 'Plan',  desc: 'Discuss scope, no proposals' };
+            ? { key: 'build', svg: buildSvg, label: 'Build', desc: 'AG proposes line items + edits' }
+            : { key: 'plan',  svg: planSvg,  label: 'Plan',  desc: 'Discuss scope, no proposals' };
           menu.innerHTML =
             '<button type="button" data-ai-phase-pick="' + alt.key + '" ' +
               'style="display:flex;align-items:center;gap:10px;width:100%;background:transparent;border:none;color:#fff;padding:8px 10px;border-radius:6px;cursor:pointer;text-align:left;font-family:inherit;font-size:12px;" ' +
