@@ -44,6 +44,18 @@
   icons["exports"] = "<svg xmlns=\"http://www.w3.org/2000/svg\" fill=\"none\" viewBox=\"0 0 24 24\" stroke-width=\"1.2\" stroke=\"currentColor\" aria-hidden=\"true\" data-slot=\"icon\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" d=\"M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m6.75 12-3-3m0 0-3 3m3-3v6m-1.5-15H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z\"/></svg>";
   icons["plan-mode"] = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 256 256\"><rect width=\"256\" height=\"256\" fill=\"none\"/><path d=\"M24,176V64A24,24,0,0,1,48,40H64V152H48a24,24,0,0,0,0,48H232V64H64\" fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"12\"/><line x1=\"128\" y1=\"96\" x2=\"128\" y2=\"160\" fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"12\"/><line x1=\"168\" y1=\"96\" x2=\"168\" y2=\"160\" fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"12\"/><line x1=\"104\" y1=\"112\" x2=\"192\" y2=\"112\" fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"12\"/><line x1=\"104\" y1=\"144\" x2=\"192\" y2=\"144\" fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"12\"/></svg>";
   icons["build-mode"] = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 256 256\"><rect width=\"256\" height=\"256\" fill=\"none\"/><line x1=\"108\" y1=\"116\" x2=\"140\" y2=\"148\" fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"12\"/><line x1=\"228.06\" y1=\"99.94\" x2=\"188\" y2=\"140\" fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"12\"/><path d=\"M40,64,53.77,49.77a88,88,0,0,1,124.46,0l67.43,67.89a8,8,0,0,1,0,11.31L217,157.66a8,8,0,0,1-11.31,0L168,120,66.34,221.66a8,8,0,0,1-11.31,0L34.34,201a8,8,0,0,1,0-11.31L136,88,79.78,31.78\" fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"12\"/></svg>";
+  icons["delete"] = "<svg xmlns=\"http://www.w3.org/2000/svg\" fill=\"none\" viewBox=\"0 0 24 24\" stroke-width=\"1.2\" stroke=\"currentColor\" aria-hidden=\"true\" data-slot=\"icon\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" d=\"m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0\"/></svg>";
+  icons["edit"] = "<svg xmlns=\"http://www.w3.org/2000/svg\" fill=\"none\" viewBox=\"0 0 24 24\" stroke-width=\"1.2\" stroke=\"currentColor\" aria-hidden=\"true\" data-slot=\"icon\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" d=\"m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0 1 15.75 21H5.25A2.25 2.25 0 0 1 3 18.75V8.25A2.25 2.25 0 0 1 5.25 6H10\"/></svg>";
+  icons["save"] = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 256 256\"><rect width=\"256\" height=\"256\" fill=\"none\"/><path d=\"M216,83.31V208a8,8,0,0,1-8,8H48a8,8,0,0,1-8-8V48a8,8,0,0,1,8-8H172.69a8,8,0,0,1,5.65,2.34l35.32,35.32A8,8,0,0,1,216,83.31Z\" fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"12\"/><path d=\"M80,216V152a8,8,0,0,1,8-8h80a8,8,0,0,1,8,8v64\" fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"12\"/><line x1=\"152\" y1=\"72\" x2=\"96\" y2=\"72\" fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"12\"/></svg>";
+  icons["add"] = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 256 256\"><rect width=\"256\" height=\"256\" fill=\"none\"/><circle cx=\"128\" cy=\"128\" r=\"96\" fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"12\"/><line x1=\"88\" y1=\"128\" x2=\"168\" y2=\"128\" fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"12\"/><line x1=\"128\" y1=\"88\" x2=\"128\" y2=\"168\" fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"12\"/></svg>";
+  icons["refresh"] = "<svg xmlns=\"http://www.w3.org/2000/svg\" fill=\"none\" viewBox=\"0 0 24 24\" stroke-width=\"1.2\" stroke=\"currentColor\" aria-hidden=\"true\" data-slot=\"icon\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" d=\"M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99\"/></svg>";
+  icons["sparkle"] = "<svg xmlns=\"http://www.w3.org/2000/svg\" fill=\"none\" viewBox=\"0 0 24 24\" stroke-width=\"1.2\" stroke=\"currentColor\" aria-hidden=\"true\" data-slot=\"icon\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" d=\"M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715 18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 0 0-2.456 2.456ZM16.894 20.567 16.5 21.75l-.394-1.183a2.25 2.25 0 0 0-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 0 0 1.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 0 0 1.423 1.423l1.183.394-1.183.394a2.25 2.25 0 0 0-1.423 1.423Z\"/></svg>";
+  icons["reset"] = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 256 256\"><rect width=\"256\" height=\"256\" fill=\"none\"/><polyline points=\"24 56 24 104 72 104\" fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"12\"/><path d=\"M67.59,192A88,88,0,1,0,65.77,65.77L24,104\" fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"12\"/></svg>";
+  icons["restore"] = "<svg xmlns=\"http://www.w3.org/2000/svg\" fill=\"none\" viewBox=\"0 0 24 24\" stroke-width=\"1.2\" stroke=\"currentColor\" aria-hidden=\"true\" data-slot=\"icon\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" d=\"M9 15 3 9m0 0 6-6M3 9h12a6 6 0 0 1 0 12h-3\"/></svg>";
+  icons["target"] = "<svg xmlns=\"http://www.w3.org/2000/svg\" fill=\"none\" viewBox=\"0 0 24 24\" stroke-width=\"1.2\" stroke=\"currentColor\" aria-hidden=\"true\" data-slot=\"icon\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" d=\"M7.5 3.75H6A2.25 2.25 0 0 0 3.75 6v1.5M16.5 3.75H18A2.25 2.25 0 0 1 20.25 6v1.5m0 9V18A2.25 2.25 0 0 1 18 20.25h-1.5m-9 0H6A2.25 2.25 0 0 1 3.75 18v-1.5M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z\"/></svg>";
+  icons["fullscreen"] = "<svg xmlns=\"http://www.w3.org/2000/svg\" fill=\"none\" viewBox=\"0 0 24 24\" stroke-width=\"1.2\" stroke=\"currentColor\" aria-hidden=\"true\" data-slot=\"icon\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" d=\"M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9m5.25 11.25h-4.5m4.5 0v-4.5m0 4.5L15 15\"/></svg>";
+  icons["collapse"] = "<svg xmlns=\"http://www.w3.org/2000/svg\" fill=\"none\" viewBox=\"0 0 24 24\" stroke-width=\"1.2\" stroke=\"currentColor\" aria-hidden=\"true\" data-slot=\"icon\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" d=\"m4.5 18.75 7.5-7.5 7.5 7.5\"/><path stroke-linecap=\"round\" stroke-linejoin=\"round\" d=\"m4.5 12.75 7.5-7.5 7.5 7.5\"/></svg>";
+  icons["expand"] = "<svg xmlns=\"http://www.w3.org/2000/svg\" fill=\"none\" viewBox=\"0 0 24 24\" stroke-width=\"1.2\" stroke=\"currentColor\" aria-hidden=\"true\" data-slot=\"icon\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" d=\"m4.5 5.25 7.5 7.5 7.5-7.5m-15 6 7.5 7.5 7.5-7.5\"/></svg>";
 
   /**
    * Returns an inline SVG markup string for the given AGX icon name.
@@ -82,15 +94,102 @@
     slot.innerHTML = agxIcon(name);
     el.insertBefore(slot, el.firstChild);
   }
+
+  // ── Emoji → AGX icon swapper ─────────────────────────────────
+  // Maps emoji characters (as rendered in the DOM, after HTML entity
+  // decoding) to AGX icon concept names. Two passes per pass:
+  //   1. Icon-only elements (textContent is just the emoji, possibly
+  //      with a U+FE0F variation selector) — swap innerHTML with SVG.
+  //   2. Leading-emoji elements (innerHTML starts with emoji + space
+  //      + label) — set data-agx-icon and let decorate() prepend.
+  // Skipped on elements already swapped (data-agx-emoji-swapped=1) or
+  // already decorated (data-agx-icon-decorated=1). The MutationObserver
+  // re-runs the swap on dynamically rendered buttons (WIP list rows,
+  // modal headers, node graph topbar, etc.).
+  var EMOJI_ICONS = {
+    '🗑': 'delete',     // 1F5D1 wastebasket
+    '✏':       'edit',        // 270F  pencil
+    '📝': 'edit',        // 1F4DD memo (used as "edit" in WIP)
+    '💾': 'save',        // 1F4BE floppy disk
+    '➕':       'add',         // 2795  heavy plus
+    '🔄': 'refresh',     // 1F504 anti-clockwise sync
+    '✨':       'sparkle',     // 2728  sparkles
+    '♻':       'reset',       // 267B  recycling
+    '↺':       'restore',     // 21BA  anticlockwise open circle
+    '🎯': 'target',      // 1F3AF direct hit
+    '⛶':       'fullscreen',  // 26F6  square four corners
+    '🗖': 'fullscreen',  // 1F5D6 maximize alt
+    '📁': 'collapse',    // 1F4C1 file folder closed
+    '📂': 'expand',      // 1F4C2 file folder open
+    // Node-graph node types — visible inside .ng-ribbon-icon spans
+    // and other contexts where the engine renders a type icon.
+    '🏗': 'buildings',   // 1F3D7 building construction (t1)
+    '📋': 'wip',         // 1F4CB clipboard (t2)
+    '👷': 'subs',        // 1F477 construction worker
+    '📄': 'attachments'  // 1F4C4 page facing up (po)
+  };
+  // Match an emoji at start of string with optional U+FE0F + whitespace.
+  function matchLeadingEmoji(text) {
+    var t = (text || '').replace(/^s+/, '');
+    var keys = Object.keys(EMOJI_ICONS);
+    for (var i = 0; i < keys.length; i++) {
+      var k = keys[i];
+      if (t.indexOf(k) === 0) {
+        return { emoji: k, concept: EMOJI_ICONS[k], rest: t.slice(k.length).replace(/^️/, '').replace(/^s+/, '') };
+      }
+    }
+    return null;
+  }
+  // Strip U+FE0F + whitespace; return the bare text content.
+  function strippedText(el) {
+    var t = (el.textContent || '').replace(/️/g, '').replace(/s+/g, '');
+    return t;
+  }
+  function emojiSwap(el) {
+    if (!el || el.nodeType !== 1) return;
+    if (el.dataset.agxEmojiSwapped === '1' || el.dataset.agxIconDecorated === '1' || el.dataset.agxIcon) return;
+    if (!el.children) return;
+    // Case 1: icon-only element (textContent is just one mapped emoji).
+    var bare = strippedText(el);
+    if (bare && EMOJI_ICONS[bare]) {
+      el.dataset.agxEmojiSwapped = '1';
+      el.innerHTML = agxIcon(EMOJI_ICONS[bare]);
+      return;
+    }
+    // Case 2: leading emoji + " Label" pattern. Only swap when the
+    // first child is a text node (not a structured layout) so we
+    // don't blow away nested buttons / inputs.
+    var first = el.firstChild;
+    if (first && first.nodeType === 3 /* TEXT_NODE */) {
+      var match = matchLeadingEmoji(first.nodeValue);
+      if (match) {
+        el.dataset.agxEmojiSwapped = '1';
+        first.nodeValue = (match.rest ? ' ' + match.rest : '');
+        el.dataset.agxIcon = match.concept;
+        decorate(el);
+      }
+    }
+  }
+  function scanEmoji(root) {
+    if (!root || !root.querySelectorAll) return;
+    // Buttons + node-graph icon spans + ribbon icons cover the main hit list.
+    var sel = 'button, .ng-ribbon-icon, .ng-tbtn, .ee-btn, .ee-icon-btn';
+    root.querySelectorAll(sel).forEach(emojiSwap);
+  }
+
   function scan(root) {
     if (!root || !root.querySelectorAll) return;
     root.querySelectorAll('[data-agx-icon]:not([data-agx-icon-decorated])').forEach(decorate);
+    scanEmoji(root);
   }
   function boot() {
     scan(document);
+    scanEmoji(document);
     var mo = new MutationObserver(function (records) {
       records.forEach(function (r) {
-        r.addedNodes.forEach(function (n) { if (n.nodeType === 1) scan(n); });
+        r.addedNodes.forEach(function (n) {
+          if (n.nodeType === 1) { scan(n); scanEmoji(n); }
+        });
       });
     });
     mo.observe(document.body, { childList: true, subtree: true });

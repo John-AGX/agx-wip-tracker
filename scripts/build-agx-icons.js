@@ -38,7 +38,20 @@ const MAP = {
   'links':           'phosphor/link-light',
   'exports':         'heroicons/document-arrow-up',
   'plan-mode':       'phosphor/blueprint-light',
-  'build-mode':      'phosphor/hammer-light'
+  'build-mode':      'phosphor/hammer-light',
+  // Action / utility icons (added later — defaults from user audit)
+  'delete':          'heroicons/trash',
+  'edit':            'heroicons/pencil-square',
+  'save':            'phosphor/floppy-disk-light',
+  'add':             'phosphor/plus-circle-light',
+  'refresh':         'heroicons/arrow-path',
+  'sparkle':         'heroicons/sparkles',
+  'reset':           'phosphor/arrow-counter-clockwise-light',
+  'restore':         'heroicons/arrow-uturn-left',
+  'target':          'heroicons/viewfinder-circle',
+  'fullscreen':      'heroicons/arrows-pointing-out',
+  'collapse':        'heroicons/chevron-double-up',
+  'expand':          'heroicons/chevron-double-down'
 };
 
 const HEADER = `// AGX Icon Helper — inline SVG icons (auto-generated).
@@ -103,15 +116,102 @@ const FOOTER = `
     slot.innerHTML = agxIcon(name);
     el.insertBefore(slot, el.firstChild);
   }
+
+  // ── Emoji → AGX icon swapper ─────────────────────────────────
+  // Maps emoji characters (as rendered in the DOM, after HTML entity
+  // decoding) to AGX icon concept names. Two passes per pass:
+  //   1. Icon-only elements (textContent is just the emoji, possibly
+  //      with a U+FE0F variation selector) — swap innerHTML with SVG.
+  //   2. Leading-emoji elements (innerHTML starts with emoji + space
+  //      + label) — set data-agx-icon and let decorate() prepend.
+  // Skipped on elements already swapped (data-agx-emoji-swapped=1) or
+  // already decorated (data-agx-icon-decorated=1). The MutationObserver
+  // re-runs the swap on dynamically rendered buttons (WIP list rows,
+  // modal headers, node graph topbar, etc.).
+  var EMOJI_ICONS = {
+    '🗑': 'delete',     // 1F5D1 wastebasket
+    '✏':       'edit',        // 270F  pencil
+    '📝': 'edit',        // 1F4DD memo (used as "edit" in WIP)
+    '💾': 'save',        // 1F4BE floppy disk
+    '➕':       'add',         // 2795  heavy plus
+    '🔄': 'refresh',     // 1F504 anti-clockwise sync
+    '✨':       'sparkle',     // 2728  sparkles
+    '♻':       'reset',       // 267B  recycling
+    '↺':       'restore',     // 21BA  anticlockwise open circle
+    '🎯': 'target',      // 1F3AF direct hit
+    '⛶':       'fullscreen',  // 26F6  square four corners
+    '🗖': 'fullscreen',  // 1F5D6 maximize alt
+    '📁': 'collapse',    // 1F4C1 file folder closed
+    '📂': 'expand',      // 1F4C2 file folder open
+    // Node-graph node types — visible inside .ng-ribbon-icon spans
+    // and other contexts where the engine renders a type icon.
+    '🏗': 'buildings',   // 1F3D7 building construction (t1)
+    '📋': 'wip',         // 1F4CB clipboard (t2)
+    '👷': 'subs',        // 1F477 construction worker
+    '📄': 'attachments'  // 1F4C4 page facing up (po)
+  };
+  // Match an emoji at start of string with optional U+FE0F + whitespace.
+  function matchLeadingEmoji(text) {
+    var t = (text || '').replace(/^\s+/, '');
+    var keys = Object.keys(EMOJI_ICONS);
+    for (var i = 0; i < keys.length; i++) {
+      var k = keys[i];
+      if (t.indexOf(k) === 0) {
+        return { emoji: k, concept: EMOJI_ICONS[k], rest: t.slice(k.length).replace(/^️/, '').replace(/^\s+/, '') };
+      }
+    }
+    return null;
+  }
+  // Strip U+FE0F + whitespace; return the bare text content.
+  function strippedText(el) {
+    var t = (el.textContent || '').replace(/️/g, '').replace(/\s+/g, '');
+    return t;
+  }
+  function emojiSwap(el) {
+    if (!el || el.nodeType !== 1) return;
+    if (el.dataset.agxEmojiSwapped === '1' || el.dataset.agxIconDecorated === '1' || el.dataset.agxIcon) return;
+    if (!el.children) return;
+    // Case 1: icon-only element (textContent is just one mapped emoji).
+    var bare = strippedText(el);
+    if (bare && EMOJI_ICONS[bare]) {
+      el.dataset.agxEmojiSwapped = '1';
+      el.innerHTML = agxIcon(EMOJI_ICONS[bare]);
+      return;
+    }
+    // Case 2: leading emoji + " Label" pattern. Only swap when the
+    // first child is a text node (not a structured layout) so we
+    // don't blow away nested buttons / inputs.
+    var first = el.firstChild;
+    if (first && first.nodeType === 3 /* TEXT_NODE */) {
+      var match = matchLeadingEmoji(first.nodeValue);
+      if (match) {
+        el.dataset.agxEmojiSwapped = '1';
+        first.nodeValue = (match.rest ? ' ' + match.rest : '');
+        el.dataset.agxIcon = match.concept;
+        decorate(el);
+      }
+    }
+  }
+  function scanEmoji(root) {
+    if (!root || !root.querySelectorAll) return;
+    // Buttons + node-graph icon spans + ribbon icons cover the main hit list.
+    var sel = 'button, .ng-ribbon-icon, .ng-tbtn, .ee-btn, .ee-icon-btn';
+    root.querySelectorAll(sel).forEach(emojiSwap);
+  }
+
   function scan(root) {
     if (!root || !root.querySelectorAll) return;
     root.querySelectorAll('[data-agx-icon]:not([data-agx-icon-decorated])').forEach(decorate);
+    scanEmoji(root);
   }
   function boot() {
     scan(document);
+    scanEmoji(document);
     var mo = new MutationObserver(function (records) {
       records.forEach(function (r) {
-        r.addedNodes.forEach(function (n) { if (n.nodeType === 1) scan(n); });
+        r.addedNodes.forEach(function (n) {
+          if (n.nodeType === 1) { scan(n); scanEmoji(n); }
+        });
       });
     });
     mo.observe(document.body, { childList: true, subtree: true });
