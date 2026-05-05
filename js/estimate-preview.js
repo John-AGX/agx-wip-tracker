@@ -522,8 +522,16 @@
       var w = window.open('', '_blank');
       if (!w) { alert('Pop-up blocked. Allow pop-ups for this site to export the PDF.'); return; }
 
+      // The print window opens to about:blank, which has no origin —
+      // any relative URL in the proposal HTML (logo image, attached
+      // photos served from /uploads, etc.) would resolve against
+      // about:blank and 404. Pin the base to the main site's origin
+      // so all relative refs resolve cleanly.
+      var baseHref = (window.location && window.location.origin) ? window.location.origin + '/' : '/';
       w.document.write(
-        '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>' + escapeHTMLLocal(title) + '</title>' +
+        '<!DOCTYPE html><html><head><meta charset="UTF-8">' +
+        '<base href="' + escapeAttrLocal(baseHref) + '">' +
+        '<title>' + escapeHTMLLocal(title) + '</title>' +
         '<style>' + getProposalCSS() + getPrintCSS() + '</style>' +
         '</head><body>' +
         html +
