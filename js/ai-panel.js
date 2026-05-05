@@ -1702,6 +1702,37 @@
     return 'Saved note on linked client: "' + body.slice(0, 80) + (body.length > 80 ? '…' : '') + '"';
   }
 
+  // Cascade a building-level % complete update to every phase record
+  // under that building. The WIP rollup reads from appData.phases
+  // (each phase's pctComplete weighted by phase budget), so changing
+  // the t1 node's pctComplete alone is a no-op — the underlying
+  // phases drive the visible building number. Cascading is the only
+  // way "set building B to 100%" actually shows up in the rollup.
+  // Returns a one-line summary string for the approval card.
+  function applyBuildingPctCascade(building, newPct, optionalNode) {
+    var jobId = building.jobId;
+    var bldgId = building.id;
+    var phases = (window.appData && (appData.phases || []).filter(function(p) {
+      return p.jobId === jobId && p.buildingId === bldgId;
+    })) || [];
+    if (!phases.length) {
+      throw new Error('Building "' + (building.name || bldgId) + '" has no phases — nothing to update.');
+    }
+    var oldAvg = phases.reduce(function(s, p) { return s + (Number(p.pctComplete) || 0); }, 0) / phases.length;
+    phases.forEach(function(p) { p.pctComplete = newPct; });
+    // Also reflect the change on the t1 node so the canvas matches.
+    if (optionalNode) optionalNode.pctComplete = newPct;
+    if (typeof window.saveData === 'function') window.saveData();
+    if (optionalNode && typeof NG !== 'undefined' && NG.saveGraph) NG.saveGraph();
+    if (typeof window.ngRender === 'function') { try { window.ngRender(); } catch (e) {} }
+    if (typeof window.renderJobOverview === 'function' && window.appState && appState.currentJobId) {
+      try { window.renderJobOverview(appState.currentJobId); } catch (e) {}
+    }
+    return 'Set ' + phases.length + ' phase' + (phases.length === 1 ? '' : 's') +
+      ' under building "' + (building.name || bldgId) + '" to ' + Math.round(newPct) + '% ' +
+      '(was avg ' + Math.round(oldAvg) + '%)';
+  }
+
   // Job-side tool application. All writes go through appData + the
   // existing CRUD APIs so the rest of the app picks up changes via
   // the standard saveData() persistence path.
@@ -1709,13 +1740,18 @@
     var input = tu.input || {};
     switch (tu.name) {
       case 'set_phase_pct_complete': {
-        // Phase IDs vs Node IDs: the AI sometimes hands us a graph
-        // node id ("n2") instead of a phase record id ("ph_..."). Try
-        // appData.phases first; if not found, look for a t2 node with
-        // that id and route through it. T2 nodes carry their own
-        // pctComplete which the engine syncs to the phase record on
-        // the next render cycle, so either path lands the same value.
+        // Resolves four possible IDs in order:
+        //   1. Phase record id  ("ph_...")  → set that one phase's pct
+        //   2. Building record id ("b1")    → cascade to every phase under that building
+        //   3. Graph t1 node id ("n3")      → resolve to the building record, then cascade
+        //   4. Graph t2 node id ("n2")      → set the t2 node's pct (the engine syncs to the phase record)
+        // The previous behavior set t1 node's pctComplete only — a no-op
+        // for the WIP rollup, which reads from per-phase records. Now t1
+        // updates cascade to phases so the building actually reflects the
+        // requested value (Elle gap report #1).
         var newPct = Math.max(0, Math.min(100, Number(input.pct_complete || 0)));
+
+        // (1) Phase record id
         var phase = (window.appData && (appData.phases || []).find(function(p) { return p.id === input.phase_id; }));
         if (phase) {
           var oldPct = Number(phase.pctComplete || 0);
@@ -1724,22 +1760,45 @@
           if (typeof window.renderJobOverview === 'function' && window.appState && appState.currentJobId) {
             try { window.renderJobOverview(appState.currentJobId); } catch (e) {}
           }
+          if (typeof window.ngRender === 'function') { try { window.ngRender(); } catch (e) {} }
           return Math.round(oldPct) + '% → ' + Math.round(phase.pctComplete) + '% on phase "' + (phase.phase || phase.name || phase.id) + '"';
         }
-        // Fallback — try as a graph node id.
+
+        // (2) Building record id — cascade to every phase under it
+        var bldgDirect = (window.appData && (appData.buildings || []).find(function(b) { return b.id === input.phase_id; }));
+        if (bldgDirect) {
+          return applyBuildingPctCascade(bldgDirect, newPct, null);
+        }
+
+        // (3) / (4) Graph node id
         var liveNodesP = (typeof NG !== 'undefined' && NG.nodes) ? NG.nodes() : [];
         var nodeP = liveNodesP.find(function(n) { return n.id === input.phase_id; });
-        if (!nodeP) throw new Error('Phase id "' + input.phase_id + '" not found in appData.phases or in the node graph.');
+        if (!nodeP) throw new Error('Phase id "' + input.phase_id + '" not found as a phase record, building record, or graph node.');
         if (nodeP.type !== 't2' && nodeP.type !== 't1') {
           throw new Error('Node "' + input.phase_id + '" is type "' + nodeP.type + '" — set_phase_pct_complete only works on t2 (phase) or t1 (building) nodes. For cost-bucket nodes use set_node_value.');
         }
-        var oldNodePct = Number(nodeP.pctComplete || 0);
+
+        if (nodeP.type === 't1') {
+          // Resolve t1 → building record by buildingId
+          var bldgId = nodeP.buildingId;
+          var bldg = bldgId && (window.appData && (appData.buildings || []).find(function(b) { return b.id === bldgId; }));
+          if (bldg) return applyBuildingPctCascade(bldg, newPct, nodeP);
+          // No linked building record — at least set the node's own pct so
+          // the visual reflects the request, even though the WIP rollup
+          // can't see it.
+          var oldT1 = Number(nodeP.pctComplete || 0);
+          nodeP.pctComplete = newPct;
+          if (typeof NG !== 'undefined' && NG.saveGraph) NG.saveGraph();
+          if (typeof window.ngRender === 'function') { try { window.ngRender(); } catch (e) {} }
+          return Math.round(oldT1) + '% → ' + Math.round(newPct) + '% on t1 node "' + (nodeP.label || nodeP.id) + '" (no buildingId — node-only update; WIP rollup unchanged).';
+        }
+
+        // t2 node
+        var oldT2Pct = Number(nodeP.pctComplete || 0);
         nodeP.pctComplete = newPct;
         if (typeof NG !== 'undefined' && NG.saveGraph) NG.saveGraph();
-        if (typeof window.ngRender === 'function') {
-          try { window.ngRender(); } catch (e) {}
-        }
-        return Math.round(oldNodePct) + '% → ' + Math.round(newPct) + '% on node "' + (nodeP.label || nodeP.id) + '" (' + nodeP.type + ')';
+        if (typeof window.ngRender === 'function') { try { window.ngRender(); } catch (e) {} }
+        return Math.round(oldT2Pct) + '% → ' + Math.round(newPct) + '% on t2 node "' + (nodeP.label || nodeP.id) + '"';
       }
 
       case 'create_node': {

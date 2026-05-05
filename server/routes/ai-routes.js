@@ -312,19 +312,20 @@ const JOB_TOOLS = [
   {
     name: 'set_phase_pct_complete',
     description:
-      'Update a phase\'s % complete. Use when the user verbally confirms a number ' +
-      '("phase 1 is at 50%") or when audit findings show a phase has cost data but pctComplete=0. ' +
-      'phase_id accepts EITHER a phase record id from the # Structure block (e.g. "ph_...") OR ' +
-      'a t2 / t1 graph node id from the # Node graph block (e.g. "n2"). The applier resolves both — ' +
-      'pick whichever is more clearly identifiable in the user\'s context. ' +
+      'Update % complete. The id parameter accepts FOUR shapes and resolves them in this order:\n' +
+      '  1. Phase record id ("ph_...") → updates that single phase.\n' +
+      '  2. Building record id ("b1") → CASCADES to every phase with buildingId=b1 (so the WIP rollup actually reflects the change).\n' +
+      '  3. Graph t1 (building) node id ("n3") → resolves to the underlying building record, then cascades as in (2).\n' +
+      '  4. Graph t2 (phase) node id ("n2") → updates that t2 node\'s pct (engine syncs to phase record on next compute).\n' +
+      'WHY THE CASCADE: building % complete is computed as a budget-weighted rollup over its phases — setting only the t1 node\'s pctComplete is a no-op for the WIP snapshot. Cascading to the underlying phases is what makes "this building is 100% done" actually show up. If the user wants ONLY a single phase changed, pass that phase\'s id, not the building.\n' +
       'Always include rationale (1 short sentence) explaining why this number.',
     input_schema: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        phase_id: { type: 'string', description: 'A phase id from # Structure ("ph_...") or a t2/t1 node id from # Node graph ("n2").' },
+        phase_id: { type: 'string', description: 'A phase record id ("ph_..."), a building record id ("b1"), or a t1/t2 node id ("n2"). The applier resolves all four.' },
         pct_complete: { type: 'number', minimum: 0, maximum: 100, description: 'New % complete value (0–100).' },
-        rationale: { type: 'string', description: 'One short sentence — why this number, not the old one.' }
+        rationale: { type: 'string', description: 'One short sentence — why this number, not the old one. For building/t1 ids, mention you understand this cascades to every phase under that building.' }
       },
       required: ['phase_id', 'pct_complete', 'rationale']
     }
