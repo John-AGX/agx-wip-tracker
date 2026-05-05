@@ -2385,6 +2385,123 @@
         return 'CO ' + (co.coNumber || co.id) + ' ' + field + ': ' + fmtOld + ' → ' + fmtNew;
       }
 
+      case 'create_po': {
+        // New purchase order on the active job. vendor + amount required;
+        // everything else falls back to sensible defaults. subId is auto-
+        // resolved from vendor when the name matches a row in subsDirectory
+        // (case-insensitive) so PMs can keep the existing chain link.
+        var jidPo = (window.appState && appState.currentJobId) || null;
+        if (!jidPo) throw new Error('create_po: no active job.');
+        var vendorPo = String(input.vendor || '').trim();
+        if (!vendorPo) throw new Error('create_po: vendor is required.');
+        var amountPo = Number(input.amount) || 0;
+        var subDir = (window.appData && Array.isArray(appData.subsDirectory)) ? appData.subsDirectory : [];
+        var subMatch = subDir.find(function(s) { return (s.name || '').toLowerCase() === vendorPo.toLowerCase(); });
+        var newPo = {
+          id: 'po' + Date.now(),
+          jobId: jidPo,
+          poNumber: String(input.poNumber || '').trim(),
+          vendor: vendorPo,
+          subId: subMatch ? subMatch.id : null,
+          description: String(input.description || '').trim(),
+          amount: amountPo,
+          billedToDate: Number(input.billedToDate) || 0,
+          date: String(input.date || '').trim() || new Date().toISOString().slice(0, 10),
+          status: ['Open', 'Closed', 'Pending'].indexOf(input.status) >= 0 ? input.status : 'Open',
+          notes: String(input.notes || '').trim()
+        };
+        if (!Array.isArray(window.appData.purchaseOrders)) window.appData.purchaseOrders = [];
+        window.appData.purchaseOrders.push(newPo);
+        if (typeof window.saveData === 'function') window.saveData();
+        if (typeof window.renderJobOverview === 'function') {
+          try { window.renderJobOverview(jidPo); } catch (e) {}
+        }
+        return 'Created PO ' + (newPo.poNumber || newPo.id) + ' — ' + newPo.vendor + ' $' + amountPo.toLocaleString() + ' (' + newPo.status + ')';
+      }
+
+      case 'set_po_field': {
+        var ALLOWED_PO_FIELDS = { vendor: 'string', amount: 'number', poNumber: 'string', description: 'string', billedToDate: 'number', date: 'string', status: 'string', notes: 'string' };
+        var poField = String(input.field || '');
+        var poFieldType = ALLOWED_PO_FIELDS[poField];
+        if (!poFieldType) {
+          throw new Error('set_po_field: field "' + poField + '" not allowed. Allowed: ' + Object.keys(ALLOWED_PO_FIELDS).join(', '));
+        }
+        var poRec = (window.appData && (appData.purchaseOrders || []).find(function(p) { return p.id === input.po_id; }));
+        if (!poRec) throw new Error('set_po_field: PO "' + input.po_id + '" not found.');
+        var poOldVal = poRec[poField];
+        var poNewVal;
+        if (poFieldType === 'number') poNewVal = Number(input.value) || 0;
+        else poNewVal = String(input.value == null ? '' : input.value).trim();
+        poRec[poField] = poNewVal;
+        if (typeof window.saveData === 'function') window.saveData();
+        if (typeof window.renderJobOverview === 'function' && window.appState && appState.currentJobId) {
+          try { window.renderJobOverview(appState.currentJobId); } catch (e) {}
+        }
+        var poFmtOld = (poFieldType === 'number') ? ('$' + (Number(poOldVal) || 0).toLocaleString()) : ('"' + (poOldVal || '') + '"');
+        var poFmtNew = (poFieldType === 'number') ? ('$' + (Number(poNewVal) || 0).toLocaleString()) : ('"' + (poNewVal || '') + '"');
+        return 'PO ' + (poRec.poNumber || poRec.id) + ' ' + poField + ': ' + poFmtOld + ' → ' + poFmtNew;
+      }
+
+      case 'create_invoice': {
+        var jidInv = (window.appState && appState.currentJobId) || null;
+        if (!jidInv) throw new Error('create_invoice: no active job.');
+        var vendorInv = String(input.vendor || '').trim();
+        if (!vendorInv) throw new Error('create_invoice: vendor is required.');
+        var amountInv = Number(input.amount) || 0;
+        var dateInv = String(input.date || '').trim() || new Date().toISOString().slice(0, 10);
+        // Default due = date + 30 days
+        var dueDateInv = String(input.dueDate || '').trim();
+        if (!dueDateInv && dateInv) {
+          try {
+            var d = new Date(dateInv);
+            d.setDate(d.getDate() + 30);
+            dueDateInv = d.toISOString().slice(0, 10);
+          } catch (e) { dueDateInv = ''; }
+        }
+        var newInv = {
+          id: 'inv' + Date.now(),
+          jobId: jidInv,
+          invNumber: String(input.invNumber || '').trim(),
+          vendor: vendorInv,
+          description: String(input.description || '').trim(),
+          amount: amountInv,
+          date: dateInv,
+          dueDate: dueDateInv,
+          status: ['Draft', 'Pending', 'Paid', 'Overdue'].indexOf(input.status) >= 0 ? input.status : 'Draft',
+          notes: String(input.notes || '').trim()
+        };
+        if (!Array.isArray(window.appData.invoices)) window.appData.invoices = [];
+        window.appData.invoices.push(newInv);
+        if (typeof window.saveData === 'function') window.saveData();
+        if (typeof window.renderJobOverview === 'function') {
+          try { window.renderJobOverview(jidInv); } catch (e) {}
+        }
+        return 'Created invoice ' + (newInv.invNumber || newInv.id) + ' — ' + newInv.vendor + ' $' + amountInv.toLocaleString() + ' (' + newInv.status + ')';
+      }
+
+      case 'set_invoice_field': {
+        var ALLOWED_INV_FIELDS = { vendor: 'string', amount: 'number', invNumber: 'string', description: 'string', date: 'string', dueDate: 'string', status: 'string', notes: 'string' };
+        var invField = String(input.field || '');
+        var invFieldType = ALLOWED_INV_FIELDS[invField];
+        if (!invFieldType) {
+          throw new Error('set_invoice_field: field "' + invField + '" not allowed. Allowed: ' + Object.keys(ALLOWED_INV_FIELDS).join(', '));
+        }
+        var invRec = (window.appData && (appData.invoices || []).find(function(i) { return i.id === input.inv_id; }));
+        if (!invRec) throw new Error('set_invoice_field: invoice "' + input.inv_id + '" not found.');
+        var invOldVal = invRec[invField];
+        var invNewVal;
+        if (invFieldType === 'number') invNewVal = Number(input.value) || 0;
+        else invNewVal = String(input.value == null ? '' : input.value).trim();
+        invRec[invField] = invNewVal;
+        if (typeof window.saveData === 'function') window.saveData();
+        if (typeof window.renderJobOverview === 'function' && window.appState && appState.currentJobId) {
+          try { window.renderJobOverview(appState.currentJobId); } catch (e) {}
+        }
+        var invFmtOld = (invFieldType === 'number') ? ('$' + (Number(invOldVal) || 0).toLocaleString()) : ('"' + (invOldVal || '') + '"');
+        var invFmtNew = (invFieldType === 'number') ? ('$' + (Number(invNewVal) || 0).toLocaleString()) : ('"' + (invNewVal || '') + '"');
+        return 'Invoice ' + (invRec.invNumber || invRec.id) + ' ' + invField + ': ' + invFmtOld + ' → ' + invFmtNew;
+      }
+
       case 'assign_qb_lines_bulk': {
         // Same logic as assign_qb_line, looped over an array of pairs.
         // Returns a multi-line summary so the model sees per-pair

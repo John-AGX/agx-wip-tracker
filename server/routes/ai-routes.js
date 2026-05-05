@@ -507,6 +507,87 @@ const JOB_TOOLS = [
     }
   },
   {
+    name: 'create_po',
+    description:
+      'Create a new purchase order on the active job. Use when the user describes a sub commitment ("$25k to ABC Drywall for B1 hang and finish") and there\'s no existing PO record, or when the playbook\'s QB→PO→Invoice chain rule requires a PO that\'s missing. ' +
+      'Required: vendor + amount. Strongly preferred: poNumber, description, date (defaults to today). ' +
+      'subId is auto-resolved from vendor when the name matches a row in the subs directory; pass it explicitly only if you already know the id from the # Subs block.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        vendor:        { type: 'string', description: 'Vendor / sub name. Used as the display label and for sub-directory matching.' },
+        amount:        { type: 'number', description: 'PO amount in dollars (not cents). The committed dollar value at issue.' },
+        poNumber:      { type: 'string', description: 'PO number string (e.g. "PO-1042"). Often blank when the PM hasn\'t numbered it yet.' },
+        description:   { type: 'string', description: 'Scope summary — what this PO covers.' },
+        billedToDate:  { type: 'number', description: 'Optional — already-invoiced amount against this PO. Default 0.' },
+        date:          { type: 'string', description: 'Issue date (YYYY-MM-DD). Defaults to today if omitted.' },
+        status:        { type: 'string', enum: ['Open', 'Closed', 'Pending'], description: 'PO status. Default "Open".' },
+        notes:         { type: 'string', description: 'Free-form notes.' },
+        rationale:     { type: 'string', description: 'One short sentence — why this PO needs to exist.' }
+      },
+      required: ['vendor', 'amount', 'rationale']
+    }
+  },
+  {
+    name: 'set_po_field',
+    description:
+      'Update a single field on an existing purchase order. One field per call so each shows as its own approval card. ' +
+      'po_id is the purchaseOrders[].id from the # Purchase orders block. ' +
+      'Allowed: vendor, amount, poNumber, description, billedToDate (already-invoiced amount), date, status (Open/Closed/Pending), notes.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        po_id:     { type: 'string', description: 'purchaseOrders[].id from the # Purchase orders block.' },
+        field:     { type: 'string', enum: ['vendor', 'amount', 'poNumber', 'description', 'billedToDate', 'date', 'status', 'notes'] },
+        value:     { type: ['string', 'number'], description: 'Numbers for amount / billedToDate; strings for the rest.' },
+        rationale: { type: 'string', description: 'One short sentence — why this change.' }
+      },
+      required: ['po_id', 'field', 'value', 'rationale']
+    }
+  },
+  {
+    name: 'create_invoice',
+    description:
+      'Create a new invoice on the active job. Use when QB shows a vendor invoice that hasn\'t been logged into AGX yet, when the user dictates one ("Acme sent us $12,400 for Apr 15"), or when the playbook\'s chain rule (PO → Invoice → QB-line) requires a missing invoice node. ' +
+      'Required: vendor + amount. Strongly preferred: invNumber, date, status. dueDate defaults to date+30 days when omitted.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        vendor:      { type: 'string', description: 'Vendor name on the invoice.' },
+        amount:      { type: 'number', description: 'Invoice amount in dollars.' },
+        invNumber:   { type: 'string', description: 'Invoice number from the document.' },
+        description: { type: 'string', description: 'What the invoice covers.' },
+        date:        { type: 'string', description: 'Invoice date (YYYY-MM-DD). Defaults to today.' },
+        dueDate:     { type: 'string', description: 'Due date (YYYY-MM-DD). Defaults to date + 30 days.' },
+        status:      { type: 'string', enum: ['Draft', 'Pending', 'Paid', 'Overdue'], description: 'Default "Draft".' },
+        notes:       { type: 'string' },
+        rationale:   { type: 'string', description: 'One short sentence — why log this invoice.' }
+      },
+      required: ['vendor', 'amount', 'rationale']
+    }
+  },
+  {
+    name: 'set_invoice_field',
+    description:
+      'Update a single field on an existing invoice. One field per call. ' +
+      'inv_id is the invoices[].id from the # Invoices block. ' +
+      'Allowed: vendor, amount, invNumber, description, date, dueDate, status (Draft/Pending/Paid/Overdue), notes.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        inv_id:    { type: 'string', description: 'invoices[].id from the # Invoices block.' },
+        field:     { type: 'string', enum: ['vendor', 'amount', 'invNumber', 'description', 'date', 'dueDate', 'status', 'notes'] },
+        value:     { type: ['string', 'number'] },
+        rationale: { type: 'string', description: 'One short sentence — why this change.' }
+      },
+      required: ['inv_id', 'field', 'value', 'rationale']
+    }
+  },
+  {
     name: 'assign_qb_lines_bulk',
     description:
       'Bulk-link many QuickBooks cost lines to graph nodes in a single approval card. ' +
@@ -1858,6 +1939,9 @@ async function buildJobContext(jobId, clientContext, aiPhase) {
     lines.push('Your live tool list this turn is the source of truth — IGNORE any skill-pack instruction that says you "cannot create nodes" or "must tell the user to drop a node manually." Those are stale. `create_node` and `delete_node` are working tools and you should use them when the situation calls for it (e.g. user asks to add a sub node for a vendor, or asks you to remove an obsolete legacy node). Each one still routes through the approval card so the PM can veto.');
     lines.push('When you have 5+ QB lines that all map cleanly to nodes, prefer `assign_qb_lines_bulk` (one card) over many individual `assign_qb_line` calls.');
     lines.push('When a CO has $0 cost loaded but the audit suggests it should have a real number, propose `set_co_field` with field=estimatedCosts — that\'s the canonical fix.');
+    lines.push('');
+    lines.push('## Schema notes (so you don\'t propose tools that can\'t exist)');
+    lines.push('Buildings store ONLY {id, jobId, name, budget, address}. They do NOT have materials / labor / sub / equipment dollar fields — those live on phase records (which carry buildingId). There is no `set_building_field` tool because the cost data lives one layer down. To "set materials cost on B1," update the phase under B1 with `set_phase_field`, OR allocate via the relevant cost-bucket node with `set_node_value`.');
   }
 
   // Job side stays plain — single string. Lower volume than AG/HR so
