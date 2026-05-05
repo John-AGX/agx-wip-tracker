@@ -662,10 +662,21 @@ body.light-mode .jh-strip-card[data-tone="amber"] .jh-strip-label { color: #b453
 .ws-two-col.ws-single-col {
   grid-template-columns: 1fr;
   display: block;
+  /* The base .ws-two-col rule clamps height to calc(100vh - 260px) and
+     hides overflow — that was for the two-column variant where each
+     side scrolled independently. In single-col, <main> is the scroller
+     (see .ws-right-tabs sticky:top:0 comment). Releasing height/overflow
+     here lets the page grow naturally and main handle scrolling. */
+  height: auto;
+  overflow: visible;
 }
 .ws-two-col.ws-single-col > .ws-col-right {
   width: 100%;
   border-left: none;
+  /* Match: the inner overflow-y:auto from .ws-col-right's base rule
+     would create a nested scroll region competing with main. Disable it
+     in single-col so the page reads as one scroll surface. */
+  overflow-y: visible;
 }
 
 /* Tabs row gets an actions slot on the right edge for the Ask AI
