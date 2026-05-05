@@ -239,13 +239,13 @@
   })();
 </script>
 
-<!-- ═══════════════ Heroicons (24/outline) — 3 options per concept ═══════════════ -->
+<!-- ═══════════════ Mixed library — Phosphor + Heroicons side-by-side ═══════════════ -->
 <div class="section-divider" style="margin-top:0;border-top:0;">
-  <h2>Heroicons (24/outline) — 3 options per concept</h2>
-  <p class="sub">16 AGX concepts × 3 alternate Heroicons each. MIT-licensed (Tailwind Labs). Loaded from <code>/assets/icons/agx/heroicons/</code> and re-skinned with the AGX dark tile + light-grey gradient. Send picks like <code>WIP=2, Schedule=1, Admin=3, …</code> and I'll lock the set.</p>
+  <h2>Remaining 14 concepts — Phosphor (left) vs Heroicons (right)</h2>
+  <p class="sub">Each row shows 3 Phosphor options on the left and 3 Heroicons options on the right. Pick by number per concept — e.g. <code>WIP=4, Schedule=2, Admin=5, …</code>. Numbering runs 1–6 left to right; the library tag under each tile makes it unambiguous. <strong>Photos is locked</strong> to <code>heroicons/photo</code> per your earlier pick.</p>
 </div>
 
-<div id="heroicons-rows"></div>
+<div id="mixed-rows"></div>
 
 <style>
   .hi-row { display: grid; grid-template-columns: 140px 1fr; gap: 24px; align-items: center; padding: 14px 0; border-top: 1px solid #1a1d27; }
@@ -273,70 +273,145 @@
   }
 </style>
 
+<style>
+  /* Mixed library row layout: label · 3 Phosphor · divider · 3 Heroicons */
+  .mx-row {
+    display: grid;
+    grid-template-columns: 130px 1fr;
+    gap: 18px; align-items: center;
+    padding: 14px 0; border-top: 1px solid #1a1d27;
+  }
+  .mx-row:first-of-type { border-top: 0; }
+  .mx-row.locked { opacity: 0.55; }
+  .mx-label {
+    font-size: 13px; font-weight: 600; color: #e4e6f0;
+    text-transform: uppercase; letter-spacing: 0.6px;
+  }
+  .mx-label .mx-locked-tag {
+    display: block; font-size: 9px; color: #34d399;
+    text-transform: uppercase; letter-spacing: 0.4px;
+    font-weight: 500; margin-top: 2px;
+  }
+  .mx-cells {
+    display: flex; align-items: center; gap: 14px; flex-wrap: nowrap; overflow-x: auto;
+  }
+  .mx-divider {
+    width: 1px; align-self: stretch; background: #2a2e3d; margin: 0 4px;
+  }
+  .mx-cell { display: flex; flex-direction: column; align-items: center; gap: 4px; flex-shrink: 0; }
+  .mx-tile {
+    width: 76px; height: 76px;
+    background: #0b0c10;
+    border: 1px solid #1a1d27;
+    border-radius: 14px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .mx-tile svg { width: 50px; height: 50px; }
+  .mx-name {
+    font-size: 8.5px; color: #6d7080; font-family: 'SF Mono', Consolas, monospace;
+    max-width: 76px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    text-align: center;
+  }
+  .mx-num {
+    font-size: 10px; color: #888; font-weight: 600;
+    background: rgba(255,255,255,0.04); border: 1px solid #1a1d27;
+    border-radius: 10px; padding: 0 7px; min-width: 16px; text-align: center;
+    display: inline-flex; align-items: center; gap: 4px;
+  }
+  .mx-num .mx-lib {
+    color: #6d7080; font-size: 8.5px; font-weight: 500;
+    text-transform: uppercase; letter-spacing: 0.3px;
+  }
+</style>
+
 <script>
-  // 16 AGX concepts × 3 Heroicons options each. Each entry is the
-  // bare filename (no .svg) — fetched from /assets/icons/agx/heroicons/
-  // at boot, currentColor swapped for url(#ag) so the global theme
-  // toggle re-tints the whole set.
+  // 14 remaining concepts (Photos locked, composer concepts handled
+  // separately). Each entry: [label, [phosphorAlts], [heroiconAlts]].
+  // Numbers run 1-6 left to right (P 1-3, then H 4-6) so picks like
+  // "WIP=4" unambiguously map to Heroicons option 1.
   (function () {
     var CONCEPTS = [
-      ['WIP',         ['clipboard-document-list', 'clipboard-document-check', 'rectangle-stack']],
-      ['Schedule',    ['calendar-days', 'calendar', 'clock']],
-      ['Insights',    ['presentation-chart-line', 'chart-bar', 'chart-pie']],
-      ['Admin',       ['cog-6-tooth', 'cog-8-tooth', 'shield-check']],
-      ['Estimates',   ['document-currency-dollar', 'document-text', 'banknotes']],
-      ['Leads',       ['funnel', 'megaphone', 'sparkles']],
-      ['Clients',     ['users', 'user-group', 'identification']],
-      ['Subs',        ['wrench-screwdriver', 'wrench', 'building-office']],
-      ['Materials',   ['cube', 'archive-box', 'rectangle-stack']],
-      ['Phases',      ['queue-list', 'bars-3-bottom-left', 'squares-plus']],
-      ['Buildings',   ['home', 'building-office', 'building-storefront']],
-      ['Photos',      ['camera', 'photo', 'film']],
-      ['Daily Logs',  ['clipboard-document-check', 'document-check', 'calendar-days']],
-      ['Attachments', ['paper-clip', 'link', 'document-arrow-up']],
-      ['Workspace',   ['table-cells', 'squares-2x2', 'view-columns']],
-      ['Node Graph',  ['share', 'rectangle-stack', 'command-line']]
+      ['WIP',         ['clipboard-text-light',   'kanban-light',          'clipboard-light'],
+                      ['clipboard-document-list', 'clipboard-document-check', 'rectangle-stack']],
+      ['Schedule',    ['calendar-dots-light',    'calendar-blank-light',  'calendar-check-light'],
+                      ['calendar-days',           'calendar',                 'clock']],
+      ['Insights',    ['chart-line-up-light',    'chart-bar-light',       'chart-pie-light'],
+                      ['presentation-chart-line', 'chart-bar',                'chart-pie']],
+      ['Admin',       ['gear-six-light',         'shield-check-light',    'gear-light'],
+                      ['cog-6-tooth',             'cog-8-tooth',              'shield-check']],
+      ['Estimates',   ['receipt-light',          'file-text-light',       'currency-dollar-light'],
+                      ['document-currency-dollar','document-text',            'banknotes']],
+      ['Leads',       ['funnel-light',           'megaphone-light',       'funnel-simple-light'],
+                      ['funnel',                  'megaphone',                'sparkles']],
+      ['Clients',     ['users-three-light',      'users-light',           'address-book-light'],
+                      ['users',                   'user-group',               'identification']],
+      ['Subs',        ['wrench-light',           'hammer-light',          'toolbox-light'],
+                      ['wrench-screwdriver',      'wrench',                   'building-office']],
+      ['Materials',   ['package-light',          'cube-light',            'stack-light'],
+                      ['cube',                    'archive-box',              'rectangle-stack']],
+      ['Phases',      ['stack-simple-light',     'flag-light',            'list-numbers-light'],
+                      ['queue-list',              'bars-3-bottom-left',       'squares-plus']],
+      ['Buildings',   ['house-line-light',       'buildings-light',       'house-light'],
+                      ['home',                    'building-office',          'building-storefront']],
+      ['Daily Logs',  ['list-checks-light',      'notepad-light',         'note-pencil-light'],
+                      ['clipboard-document-check','document-check',           'calendar-days']],
+      ['Attachments', ['paperclip-light',        'link-light',            'paperclip-horizontal-light'],
+                      ['paper-clip',              'link',                     'document-arrow-up']],
+      ['Workspace',   ['table-light',            'grid-four-light',       'grid-nine-light'],
+                      ['table-cells',             'squares-2x2',              'view-columns']],
+      ['Node Graph',  ['tree-structure-light',   'graph-light',           'share-network-light'],
+                      ['share',                   'rectangle-stack',          'command-line']]
     ];
 
-    var host = document.getElementById('heroicons-rows');
-    var pendingFetches = [];
+    var host = document.getElementById('mixed-rows');
+    if (!host) return;
 
     CONCEPTS.forEach(function (entry) {
       var label = entry[0];
-      var icons = entry[1];
+      var phosphor = entry[1];
+      var heroicons = entry[2];
+
       var row = document.createElement('section');
-      row.className = 'hi-row';
-      row.innerHTML = '<div class="hi-label">' + label + '</div><div class="hi-opts"></div>';
-      var opts = row.querySelector('.hi-opts');
-      icons.forEach(function (iconName, idx) {
-        var opt = document.createElement('div');
-        opt.className = 'hi-opt';
+      row.className = 'mx-row';
+      row.innerHTML =
+        '<div class="mx-label">' + label + '</div>' +
+        '<div class="mx-cells"></div>';
+      var cells = row.querySelector('.mx-cells');
+
+      function addCell(iconName, lib, num) {
+        var cell = document.createElement('div');
+        cell.className = 'mx-cell';
         var tile = document.createElement('div');
-        tile.className = 'hi-tile';
+        tile.className = 'mx-tile';
         var name = document.createElement('div');
-        name.className = 'hi-name';
+        name.className = 'mx-name';
         name.textContent = iconName;
-        var num = document.createElement('div');
-        num.className = 'hi-num';
-        num.textContent = (idx + 1);
-        opt.appendChild(tile);
-        opt.appendChild(name);
-        opt.appendChild(num);
-        opts.appendChild(opt);
-        pendingFetches.push(
-          fetch('/assets/icons/agx/heroicons/' + iconName + '.svg')
-            .then(function (r) { return r.ok ? r.text() : Promise.reject('http ' + r.status); })
-            .then(function (svgText) {
-              var themed = svgText
-                .replace(/stroke="currentColor"/g, 'stroke="url(#ag)"')
-                .replace(/fill="currentColor"/g, 'fill="url(#ag)"');
-              tile.innerHTML = themed;
-            })
-            .catch(function (e) {
-              tile.innerHTML = '<span style="color:#f87171;font-size:9px;">' + iconName + '<br>not found</span>';
-            })
-        );
-      });
+        var num$ = document.createElement('div');
+        num$.className = 'mx-num';
+        num$.innerHTML = num + '<span class="mx-lib">' + lib.charAt(0).toUpperCase() + '</span>';
+        cell.appendChild(tile);
+        cell.appendChild(name);
+        cell.appendChild(num$);
+        cells.appendChild(cell);
+        fetch('/assets/icons/agx/' + lib + '/' + iconName + '.svg')
+          .then(function (r) { return r.ok ? r.text() : Promise.reject('http ' + r.status); })
+          .then(function (svgText) {
+            tile.innerHTML = svgText
+              .replace(/stroke="currentColor"/g, 'stroke="url(#ag)"')
+              .replace(/fill="currentColor"/g, 'fill="url(#ag)"');
+          })
+          .catch(function () {
+            tile.innerHTML = '<span style="color:#f87171;font-size:8px;text-align:center;">' + iconName + '<br>404</span>';
+          });
+      }
+
+      // Phosphor first (1-3), divider, Heroicons (4-6)
+      phosphor.forEach(function (n, i) { addCell(n, 'phosphor', i + 1); });
+      var div = document.createElement('div');
+      div.className = 'mx-divider';
+      cells.appendChild(div);
+      heroicons.forEach(function (n, i) { addCell(n, 'heroicons', i + 4); });
+
       host.appendChild(row);
     });
   })();
