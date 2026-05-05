@@ -2353,6 +2353,90 @@
         return 'Linked QB line ' + input.line_id + ' → node ' + resolvedNodeId;
       }
 
+      case 'set_co_field': {
+        // Update one field on a change order. Whitelisted fields only.
+        // Numeric coercion for income / estimatedCosts; everything else
+        // is stored as a trimmed string. saveData() persists to the
+        // server; renderJobOverview() refreshes the visible WIP rollup.
+        var ALLOWED_CO_FIELDS = { income: 'number', estimatedCosts: 'number', description: 'string', notes: 'string', coNumber: 'string', date: 'string' };
+        var field = String(input.field || '');
+        var fieldType = ALLOWED_CO_FIELDS[field];
+        if (!fieldType) {
+          throw new Error('set_co_field: field "' + field + '" not allowed. Allowed: ' + Object.keys(ALLOWED_CO_FIELDS).join(', '));
+        }
+        var co = (window.appData && (appData.changeOrders || []).find(function(c) { return c.id === input.co_id; }));
+        if (!co) throw new Error('set_co_field: change order "' + input.co_id + '" not found.');
+        var oldVal = co[field];
+        var newVal;
+        if (fieldType === 'number') {
+          newVal = Number(input.value) || 0;
+        } else {
+          newVal = String(input.value == null ? '' : input.value).trim();
+        }
+        co[field] = newVal;
+        if (typeof window.saveData === 'function') window.saveData();
+        if (typeof window.renderJobOverview === 'function' && window.appState && appState.currentJobId) {
+          try { window.renderJobOverview(appState.currentJobId); } catch (e) {}
+        }
+        if (typeof window.ngRender === 'function') { try { window.ngRender(); } catch (e) {} }
+        // Format the summary based on field type — currency for $ fields, raw for text.
+        var fmtOld = (fieldType === 'number') ? ('$' + (Number(oldVal) || 0).toLocaleString()) : ('"' + (oldVal || '') + '"');
+        var fmtNew = (fieldType === 'number') ? ('$' + (Number(newVal) || 0).toLocaleString()) : ('"' + (newVal || '') + '"');
+        return 'CO ' + (co.coNumber || co.id) + ' ' + field + ': ' + fmtOld + ' → ' + fmtNew;
+      }
+
+      case 'assign_qb_lines_bulk': {
+        // Same logic as assign_qb_line, looped over an array of pairs.
+        // Returns a multi-line summary so the model sees per-pair
+        // outcomes (success / node-not-found / line-not-found). One
+        // server PATCH per pair fires concurrently — they're idempotent
+        // and order-independent.
+        var pairs = Array.isArray(input.pairs) ? input.pairs : [];
+        if (!pairs.length) throw new Error('assign_qb_lines_bulk: pairs array is empty');
+        var jidB = (window.appState && appState.currentJobId) || null;
+        var graphsB = jidB ? JSON.parse(localStorage.getItem('agx-nodegraphs') || '{}') : {};
+        var nodesB = (jidB && graphsB[jidB] && graphsB[jidB].nodes) || [];
+        var qbLinesB = (window.appData && appData.qbCostLines) || [];
+        var ok = 0, missingNode = 0, missingLine = 0;
+        var perNode = {};
+        var serverPatches = [];
+        var apiAvail = window.agxApi && window.agxApi.isAuthenticated && window.agxApi.isAuthenticated();
+        pairs.forEach(function(p) {
+          var nMatchB = nodesB.find(function(n) { return n.id === p.node_id; });
+          var resolvedB = nMatchB ? p.node_id : null;
+          if (!resolvedB) {
+            var lowerB = String(p.node_id || '').trim().toLowerCase();
+            var byLabelB = nodesB.find(function(n) { return (n.label || '').trim().toLowerCase() === lowerB; });
+            if (byLabelB) resolvedB = byLabelB.id;
+          }
+          if (!resolvedB) { missingNode++; return; }
+          var lineB = qbLinesB.find(function(l) { return l.id === p.line_id; });
+          if (!lineB) { missingLine++; return; }
+          lineB.linked_node_id = resolvedB;
+          ok++;
+          perNode[resolvedB] = (perNode[resolvedB] || 0) + 1;
+          if (apiAvail) {
+            serverPatches.push(
+              window.agxApi.qbCosts.update(p.line_id, { linkedNodeId: resolvedB }).catch(function(err) {
+                console.warn('[ai] assign_qb_lines_bulk patch failed for ' + p.line_id + ':', err && err.message);
+              })
+            );
+          }
+        });
+        // We don't await the server patches — they run in the background.
+        // The optimistic local updates are already in place for the next
+        // /chat/continue context build.
+        var perNodeLines = Object.keys(perNode).map(function(nid) {
+          return '  • ' + nid + ': ' + perNode[nid] + ' line' + (perNode[nid] === 1 ? '' : 's');
+        }).join('\n');
+        var summary = 'Linked ' + ok + ' of ' + pairs.length + ' QB line' + (pairs.length === 1 ? '' : 's') + '.';
+        if (missingNode || missingLine) {
+          summary += ' Skipped: ' + missingNode + ' missing-node, ' + missingLine + ' missing-line.';
+        }
+        if (perNodeLines) summary += '\nPer node:\n' + perNodeLines;
+        return summary;
+      }
+
       default:
         throw new Error('Unknown job tool: ' + tu.name);
     }

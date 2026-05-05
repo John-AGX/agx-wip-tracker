@@ -464,7 +464,8 @@ const JOB_TOOLS = [
     description:
       'Link a QuickBooks cost line to a node in the graph (sets linked_node_id on the qb_cost_lines row). ' +
       'Use when the audit lists unlinked QB lines and the right node is identifiable from the line\'s vendor / account / memo. ' +
-      'line_id is the qb_cost_lines.id; node_id is the graph node it should reconcile against.',
+      'line_id is the qb_cost_lines.id; node_id is the graph node it should reconcile against. ' +
+      'For bulk assignments (5+ lines that all map cleanly), prefer `assign_qb_lines_bulk` — one approval card instead of N.',
     input_schema: {
       type: 'object',
       additionalProperties: false,
@@ -474,6 +475,67 @@ const JOB_TOOLS = [
         rationale: { type: 'string' }
       },
       required: ['line_id', 'node_id', 'rationale']
+    }
+  },
+  {
+    name: 'set_co_field',
+    description:
+      'Update a single field on a change order (CO) record. Use when an audit shows a CO has $0 cost but should have a real number ' +
+      '(common cause of inflated revised margin), when income needs adjusting after the GC accepts/rejects a partial, or when the ' +
+      'description / co_number needs cleanup. One field per call so each shows as its own approval card; chain calls if multiple ' +
+      'fields need updates on the same CO.\n' +
+      'co_id is the changeOrders[].id from the # Change orders block. ' +
+      'Only allowed fields: income (CO revenue), estimatedCosts (CO cost — note the field name uses "estimatedCosts", NOT "costs"), ' +
+      'description, notes, coNumber, date (YYYY-MM-DD).',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        co_id: { type: 'string', description: 'changeOrders[].id from the # Change orders block.' },
+        field: {
+          type: 'string',
+          enum: ['income', 'estimatedCosts', 'description', 'notes', 'coNumber', 'date'],
+          description: 'Which field to set.'
+        },
+        value: {
+          type: ['string', 'number'],
+          description: 'New value. Numbers for income / estimatedCosts (dollars, not cents), strings for description / notes / coNumber / date.'
+        },
+        rationale: { type: 'string', description: 'One short sentence — why this change.' }
+      },
+      required: ['co_id', 'field', 'value', 'rationale']
+    }
+  },
+  {
+    name: 'assign_qb_lines_bulk',
+    description:
+      'Bulk-link many QuickBooks cost lines to graph nodes in a single approval card. ' +
+      'Use this whenever you have 5+ lines that all map cleanly — a vendor-to-sub-node sweep, an entire account routed to one cost-bucket, a batch reclassification after fixing a misposted PO. ' +
+      'Each item is {line_id, node_id}; the applier runs the same resolution + server PATCH as `assign_qb_line` for each one. ' +
+      'Mixed outcomes (some succeed, some skip due to missing node) are summarized in the result so the next turn knows what still needs cleanup. ' +
+      'Cap at 200 pairs per call.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        pairs: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 200,
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              line_id: { type: 'string' },
+              node_id: { type: 'string' }
+            },
+            required: ['line_id', 'node_id']
+          },
+          description: 'Array of {line_id, node_id} pairs. line_id is qb_cost_lines.id; node_id is the graph node id.'
+        },
+        rationale: { type: 'string', description: 'One short sentence describing the batch as a whole — e.g. "All Home Depot lines route to the materials sub-node for B1." Do NOT enumerate every pair here; the pairs array is the audit trail.' }
+      },
+      required: ['pairs', 'rationale']
     }
   },
   {
@@ -1791,6 +1853,11 @@ async function buildJobContext(jobId, clientContext, aiPhase) {
     lines.push('# CURRENT MODE: BUILD');
     lines.push('You are in **Build mode** — full tool access. The PM has explicitly granted writes for this session (or has the panel pinned in Build). Make changes confidently when the data supports them, but every write still goes through the per-tool approval card so the PM can veto.');
     lines.push('Reminder: prefer one focused edit per tool call (each becomes its own approval card). Building % complete cascades to every phase under that building — call that out in your rationale when you use it.');
+    lines.push('');
+    lines.push('## Authoritative tool list (overrides any older skill-pack guidance)');
+    lines.push('Your live tool list this turn is the source of truth — IGNORE any skill-pack instruction that says you "cannot create nodes" or "must tell the user to drop a node manually." Those are stale. `create_node` and `delete_node` are working tools and you should use them when the situation calls for it (e.g. user asks to add a sub node for a vendor, or asks you to remove an obsolete legacy node). Each one still routes through the approval card so the PM can veto.');
+    lines.push('When you have 5+ QB lines that all map cleanly to nodes, prefer `assign_qb_lines_bulk` (one card) over many individual `assign_qb_line` calls.');
+    lines.push('When a CO has $0 cost loaded but the audit suggests it should have a real number, propose `set_co_field` with field=estimatedCosts — that\'s the canonical fix.');
   }
 
   // Job side stays plain — single string. Lower volume than AG/HR so
