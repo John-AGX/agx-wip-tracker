@@ -587,17 +587,21 @@
           // currentColor so it inherits the surrounding header\'s white
           // text color, and "active" mode is conveyed by full opacity.
           '<button id="agx-ai-phase-toggle" type="button" aria-haspopup="menu" aria-expanded="false" title="" ' +
-            'style="background:transparent;border:none;color:#fff;padding:4px 6px;line-height:0;cursor:pointer;display:inline-flex;align-items:center;gap:3px;border-radius:6px;transition:background 0.12s;" ' +
-            'onmouseenter="this.style.background=\'rgba(255,255,255,0.08)\'" ' +
-            'onmouseleave="this.style.background=\'transparent\'">' +
+            'style="background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.15);color:#fff;padding:5px 9px;line-height:0;cursor:pointer;display:inline-flex;align-items:center;gap:5px;border-radius:6px;font-size:22px;transition:background 0.12s, border-color 0.12s;" ' +
+            'onmouseenter="this.style.background=\'rgba(255,255,255,0.14)\'" ' +
+            'onmouseleave="this.style.background=\'rgba(255,255,255,0.08)\'">' +
             '<span data-phase-icon style="display:inline-flex;align-items:center;"></span>' +
-            '<span style="font-size:9px;opacity:0.6;line-height:1;">&#x25BE;</span>' +
+            '<span style="font-size:10px;opacity:0.7;line-height:1;">&#x25BE;</span>' +
           '</button>' +
           '<div id="agx-ai-phase-menu" role="menu" style="display:none;position:absolute;top:100%;right:0;margin-top:4px;background:#1a2230;border:1px solid rgba(255,255,255,0.14);border-radius:8px;padding:4px;font-size:12px;white-space:nowrap;z-index:10;box-shadow:0 6px 16px rgba(0,0,0,0.4);min-width:160px;">' +
             // Body filled in by refreshModeSpecificUI based on current phase.
           '</div>' +
         '</div>' +
-        '<button id="ai-trust" title="Trust settings — pick which tool types auto-apply (job mode only)" style="background:rgba(255,255,255,0.08);color:#ccc;border:1px solid rgba(255,255,255,0.15);border-radius:6px;padding:6px 8px;font-size:13px;cursor:pointer;display:none;">&#x2699;</button>' +
+        // Standalone trust gear — superseded by the trust section that
+        // now lives inside the phase pill's Build-mode dropdown. Kept
+        // in the DOM (display:none, never re-shown) so any code that
+        // queries #ai-trust by id stays stable.
+        '<button id="ai-trust" title="Trust settings (now in the phase pill dropdown)" style="display:none;">&#x2699;</button>' +
         '<button id="ai-clear" title="Clear conversation" style="background:rgba(255,255,255,0.08);color:#ccc;border:1px solid rgba(255,255,255,0.15);border-radius:6px;padding:6px 10px;font-size:11px;cursor:pointer;">Clear</button>' +
       '</div>' +
       // Notice strip
@@ -913,9 +917,37 @@
           var alt = phase === 'plan'
             ? { key: 'build', svg: buildSvg, label: 'Build', desc: buildDesc }
             : { key: 'plan',  svg: planSvg,  label: 'Plan',  desc: planDesc };
+          // Trust toggles section — visible only in job mode + Build
+          // phase. (Plan mode never auto-applies anything; estimate
+          // mode has no trust toggles since AG only proposes
+          // line-items, never silently mutates.) The trust map lives
+          // in localStorage under agx-ai-trust:job, so changes here
+          // persist across reloads.
+          var trustSectionHtml = '';
+          var showTrust = isJobMode() && phase === 'build';
+          if (showTrust) {
+            trustSectionHtml =
+              '<div style="margin:6px 6px 4px;border-top:1px solid rgba(255,255,255,0.08);padding-top:8px;">' +
+                '<div style="font-size:10px;font-weight:700;color:rgba(255,255,255,0.55);text-transform:uppercase;letter-spacing:0.5px;padding:0 4px 4px;">Trust auto-apply</div>' +
+                '<div style="font-size:10px;color:rgba(255,255,255,0.45);padding:0 4px 6px;line-height:1.35;white-space:normal;max-width:260px;">Trusted tools still show a card, but auto-apply after a 5s countdown. Cancel during the countdown to override.</div>' +
+                TRUSTABLE_TOOLS.map(function(t) {
+                  var on = isTrusted(t.name);
+                  return '<label style="display:flex;align-items:flex-start;gap:6px;padding:4px 6px;font-size:11px;color:#e6e6e6;cursor:pointer;border-radius:4px;line-height:1.35;white-space:normal;" ' +
+                    'onmouseenter="this.style.background=\'rgba(255,255,255,0.04)\'" ' +
+                    'onmouseleave="this.style.background=\'transparent\'">' +
+                    '<input type="checkbox" data-trust-tool="' + t.name + '"' + (on ? ' checked' : '') + ' style="margin-top:2px;flex-shrink:0;" />' +
+                    '<span style="flex:1;">' + t.label + '</span>' +
+                  '</label>';
+                }).join('') +
+              '</div>';
+          }
+          // Reset menu width: narrow for AG / plan mode, wider for the
+          // trust toggles so the labels don't wrap awkwardly.
+          menu.style.minWidth = showTrust ? '280px' : '160px';
+          menu.style.whiteSpace = showTrust ? 'normal' : 'nowrap';
           menu.innerHTML =
             '<button type="button" data-ai-phase-pick="' + alt.key + '" ' +
-              'style="display:flex;align-items:center;gap:10px;width:100%;background:transparent;border:none;color:#fff;padding:8px 10px;border-radius:6px;cursor:pointer;text-align:left;font-family:inherit;font-size:12px;" ' +
+              'style="display:flex;align-items:center;gap:10px;width:100%;background:transparent;border:none;color:#fff;padding:8px 10px;border-radius:6px;cursor:pointer;text-align:left;font-family:inherit;font-size:12px;box-sizing:border-box;" ' +
               'onmouseenter="this.style.background=\'rgba(255,255,255,0.08)\'" ' +
               'onmouseleave="this.style.background=\'transparent\'">' +
               '<span style="display:inline-flex;align-items:center;line-height:0;">' + alt.svg + '</span>' +
@@ -923,10 +955,13 @@
                 '<span style="font-weight:600;">Switch to ' + alt.label + '</span>' +
                 '<span style="font-size:10px;color:rgba(255,255,255,0.55);font-weight:400;">' + alt.desc + '</span>' +
               '</span>' +
-            '</button>';
+            '</button>' +
+            trustSectionHtml;
           var pickBtn = menu.querySelector('[data-ai-phase-pick]');
           if (pickBtn) {
-            pickBtn.onclick = function() {
+            pickBtn.onclick = function(e) {
+              // Don't close-on-click for trust checkboxes inside the menu
+              if (e.target && e.target.closest && e.target.closest('[data-trust-tool]')) return;
               var key = pickBtn.getAttribute('data-ai-phase-pick');
               if (isEstimateMode() && window.setEstimateAIPhase) {
                 window.setEstimateAIPhase(key);
@@ -936,15 +971,26 @@
               closeAIPhaseMenu();
             };
           }
+          // Wire trust checkboxes — stop propagation so clicking a
+          // checkbox doesn't bubble up and trigger the "Switch to X"
+          // button's click handler.
+          menu.querySelectorAll('input[data-trust-tool]').forEach(function(box) {
+            box.addEventListener('click', function(e) { e.stopPropagation(); });
+            box.addEventListener('change', function() {
+              setTrusted(box.getAttribute('data-trust-tool'), box.checked);
+            });
+          });
         }
       } else {
         pill.style.display = 'none';
         closeAIPhaseMenu();
       }
     }
-    // Trust gear visible only in job mode (where the toggles apply).
+    // Trust toggles moved into the phase pill's Build-mode dropdown.
+    // The standalone gear button stays in the DOM (so any code holding
+    // a ref to #ai-trust keeps working) but is permanently hidden.
     var trustBtn = document.getElementById('ai-trust');
-    if (trustBtn) trustBtn.style.display = isJobMode() ? 'inline-block' : 'none';
+    if (trustBtn) trustBtn.style.display = 'none';
     var noticeEl = document.querySelector('#agx-ai-panel #ai-notice');
     if (noticeEl) {
       if (isJobMode()) noticeEl.textContent = 'I\'m Elle, your WIP analyst. I see WIP, costs, the node graph, and QB lines — and I can propose edits (e.g. set a phase\'s % complete) for you to approve before they apply.';
