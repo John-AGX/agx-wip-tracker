@@ -1792,6 +1792,40 @@
     return 'Saved note on linked client: "' + body.slice(0, 80) + (body.length > 80 ? '…' : '') + '"';
   }
 
+  // Resolve a t1 (building) graph node to its underlying building
+  // record. Tries three approaches in order:
+  //   1. Explicit buildingId field on the node (newer graphs).
+  //   2. Node id directly matches a building record id — this is the
+  //      case for graph-created t1 nodes where engine.js uses the
+  //      same id for both the node and the building.
+  //   3. Label match (case-insensitive, exact then contains either
+  //      direction) against the job's building names — handles older
+  //      graphs where the t1 nodes were imported with arbitrary ids
+  //      ("n1", "n2") and the buildings array was populated
+  //      separately. This is the RV2001 case.
+  function findBuildingForT1Node(node, jobId) {
+    if (!node || !window.appData) return null;
+    var buildings = (appData.buildings || []).filter(function(b) {
+      return !jobId || b.jobId === jobId;
+    });
+    if (!buildings.length) return null;
+    if (node.buildingId) {
+      var byField = buildings.find(function(b) { return b.id === node.buildingId; });
+      if (byField) return byField;
+    }
+    var byNodeId = buildings.find(function(b) { return b.id === node.id; });
+    if (byNodeId) return byNodeId;
+    var label = String(node.label || '').trim().toLowerCase();
+    if (!label) return null;
+    var exact = buildings.find(function(b) { return (b.name || '').trim().toLowerCase() === label; });
+    if (exact) return exact;
+    var fuzzy = buildings.find(function(b) {
+      var n = (b.name || '').trim().toLowerCase();
+      return n && (n.indexOf(label) !== -1 || label.indexOf(n) !== -1);
+    });
+    return fuzzy || null;
+  }
+
   // Cascade a building-level % complete update to every phase record
   // under that building. The WIP rollup reads from appData.phases
   // (each phase's pctComplete weighted by phase budget), so changing
@@ -1883,18 +1917,23 @@
         }
 
         if (nodeP.type === 't1') {
-          // Resolve t1 → building record by buildingId
-          var bldgId = nodeP.buildingId;
-          var bldg = bldgId && (window.appData && (appData.buildings || []).find(function(b) { return b.id === bldgId; }));
+          // Resolve t1 → building record. The resolver tries (in
+          // order): explicit buildingId field, node-id-matches-
+          // building-record-id (graph-created buildings), and
+          // case-insensitive label match. Last one is the RV2001
+          // path — older graphs where t1 nodes have arbitrary ids
+          // ("n1", "n2") but their labels match a building name.
+          var jidT1 = (window.appState && appState.currentJobId) || nodeP.jobId || null;
+          var bldg = findBuildingForT1Node(nodeP, jidT1);
           if (bldg) return applyBuildingPctCascade(bldg, newPct, nodeP);
-          // No linked building record — at least set the node's own pct so
-          // the visual reflects the request, even though the WIP rollup
-          // can't see it.
+          // No linked building record AND no label match — at least
+          // set the node's own pct so the visual reflects the request,
+          // even though the WIP rollup can't see it.
           var oldT1 = Number(nodeP.pctComplete || 0);
           nodeP.pctComplete = newPct;
           if (typeof NG !== 'undefined' && NG.saveGraph) NG.saveGraph();
           if (typeof window.ngRender === 'function') { try { window.ngRender(); } catch (e) {} }
-          return Math.round(oldT1) + '% → ' + Math.round(newPct) + '% on t1 node "' + (nodeP.label || nodeP.id) + '" (no buildingId — node-only update; WIP rollup unchanged).';
+          return Math.round(oldT1) + '% → ' + Math.round(newPct) + '% on t1 node "' + (nodeP.label || nodeP.id) + '" (no matching building record by id or label — node-only update; WIP rollup unchanged).';
         }
 
         // t2 node
