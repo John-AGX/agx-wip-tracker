@@ -13,7 +13,8 @@
 //   /wip/jobs/:jobId                  job detail (default sub-tab)
 //   /wip/jobs/:jobId/:jobSub          job detail at specific sub-tab
 //   /estimates                        estimates landing (current active sub)
-//   /estimates/:sub                   sub: list | leads | clients | subs | lead-pipeline
+//   /estimates/:sub                   sub: list | leads | clients | subs
+//   /estimates/leads/:leadId          lead detail view open
 //   /estimates/edit/:estId            estimate editor open
 //   /schedule
 //   /insights
@@ -37,13 +38,14 @@
   // doesn't capture it). Keeps URLs from leaking ad-hoc sub-tabs the
   // user might add later without touching the router.
   var KNOWN_JOB_SUBS = [
-    'job-overview', 'job-costs', 'job-buildings', 'job-phases',
-    'job-subs', 'job-billing', 'job-wip', 'job-takeoffs',
-    'job-attachments', 'job-photos', 'job-daily-logs', 'job-schedule',
-    'job-materials', 'job-audit', 'job-ai'
+    'job-overview', 'job-costs', 'job-buildings', 'job-wip',
+    'job-changeorders', 'job-invoices', 'job-labor', 'job-purchaseorders'
   ];
-  var KNOWN_EST_SUBS = ['list', 'leads', 'clients', 'subs', 'lead-pipeline'];
-  var KNOWN_ADMIN_SUBS = ['users', 'roles', 'ai', 'email', 'templates', 'agents', 'settings'];
+  var KNOWN_EST_SUBS = ['list', 'leads', 'clients', 'subs'];
+  var KNOWN_ADMIN_SUBS = [
+    'users', 'roles', 'email', 'templates', 'agents',
+    'jobs', 'materials', 'metrics'
+  ];
   var KNOWN_TOP_TABS = ['wip', 'estimates', 'schedule', 'insights', 'admin'];
 
   // ── URL <-> route object ──────────────────────────────────────
@@ -63,9 +65,12 @@
         }
       }
     } else if (top === 'estimates') {
-      // /estimates/edit/:id  OR  /estimates/:sub
+      // /estimates/edit/:id  OR  /estimates/leads/:id  OR  /estimates/:sub
       if (parts[1] === 'edit' && parts[2]) {
         route.estId = parts[2];
+      } else if (parts[1] === 'leads' && parts[2]) {
+        route.estSub = 'leads';
+        route.leadId = parts[2];
       } else if (parts[1] && KNOWN_EST_SUBS.indexOf(parts[1]) !== -1) {
         route.estSub = parts[1];
       }
@@ -88,6 +93,7 @@
     }
     if (route.top === 'estimates') {
       if (route.estId) return '/estimates/edit/' + encodeURIComponent(route.estId);
+      if (route.leadId) return '/estimates/leads/' + encodeURIComponent(route.leadId);
       if (route.estSub) return '/estimates/' + route.estSub;
       return '/estimates';
     }
@@ -124,6 +130,14 @@
         if (editorOpen && window.estimateEditorAPI && typeof window.estimateEditorAPI.getOpenId === 'function') {
           var eid = window.estimateEditorAPI.getOpenId();
           if (eid) { route.estId = eid; return route; }
+        }
+      }
+      if (estSub === 'leads') {
+        var leadDetail = document.getElementById('lead-detail-view');
+        var leadOpen = leadDetail && leadDetail.style.display !== 'none';
+        if (leadOpen && window.agxLeads && typeof window.agxLeads.getOpenId === 'function') {
+          var lid = window.agxLeads.getOpenId();
+          if (lid) { route.estSub = 'leads'; route.leadId = lid; return route; }
         }
       }
       if (estSub && KNOWN_EST_SUBS.indexOf(estSub) !== -1) route.estSub = estSub;
@@ -234,6 +248,19 @@
           }
           var origEditEst = window.editEstimate.__agxRouterOrig || window.editEstimate;
           origEditEst(route.estId);
+        } else if (route.top === 'estimates' && route.estSub === 'leads' && route.leadId &&
+                   typeof window.openEditLeadModal === 'function') {
+          var origOpenLead = window.openEditLeadModal.__agxRouterOrig || window.openEditLeadModal;
+          origOpenLead(route.leadId);
+        } else if (route.top === 'estimates' && route.estSub === 'leads' && !route.leadId) {
+          // Back-nav from /estimates/leads/:id to /estimates/leads — close
+          // the detail view if it's still up so the list shows through.
+          var leadDetailEl = document.getElementById('lead-detail-view');
+          if (leadDetailEl && leadDetailEl.style.display !== 'none' &&
+              typeof window.closeLeadDetail === 'function') {
+            var origCloseLead = window.closeLeadDetail.__agxRouterOrig || window.closeLeadDetail;
+            origCloseLead();
+          }
         }
       } catch (e) {
         console.warn('[router] entity open failed:', e);
@@ -271,7 +298,9 @@
       'switchEstimatesSubTab',
       'switchAdminSubTab',
       'editJob',
-      'editEstimate'
+      'editEstimate',
+      'openEditLeadModal',
+      'closeLeadDetail'
     ].forEach(wrapNav);
 
     window.addEventListener('popstate', onPopState);

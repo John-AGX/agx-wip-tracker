@@ -1444,6 +1444,7 @@
   window.handleLeadsImportFile = handleLeadsImportFile;
   window.agxLeads = {
     getCached: function() { return _leads.slice(); },
+    getOpenId: function() { return _currentEditingLeadId; },
     reload: reloadLeadsCache,
     // Push a single fetched lead into the cache. Used by the estimate
     // editor's chip when it has to fetch by id (lead wasn't loaded
