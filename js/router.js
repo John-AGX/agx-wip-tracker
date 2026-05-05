@@ -21,6 +21,9 @@
 //   /insights
 //   /admin
 //   /admin/:sub                       sub: users | roles | ai | email | etc.
+//   /admin/agents/conversations/:key  agent conversation detail
+//   /admin/agents/evals/:evalId       eval fixture detail
+//   /admin/agents/evals/new           new eval fixture form
 //
 // Server-side: server/index.js already serves index.html for any non-
 // API path (the SPA fallback at app.get('*', ...)), so deep-link
@@ -80,6 +83,16 @@
     } else if (top === 'admin') {
       if (parts[1] && KNOWN_ADMIN_SUBS.indexOf(parts[1]) !== -1) {
         route.adSub = parts[1];
+        // /admin/agents/conversations/:key
+        // /admin/agents/evals/:id  OR  /admin/agents/evals/new
+        if (parts[1] === 'agents') {
+          if (parts[2] === 'conversations' && parts[3]) {
+            route.adAgentConvKey = parts[3];
+          } else if (parts[2] === 'evals' && parts[3]) {
+            if (parts[3] === 'new') route.adAgentEvalNew = true;
+            else route.adAgentEvalId = parts[3];
+          }
+        }
       }
     }
     return route;
@@ -102,6 +115,11 @@
       return '/estimates';
     }
     if (route.top === 'admin') {
+      if (route.adSub === 'agents') {
+        if (route.adAgentConvKey) return '/admin/agents/conversations/' + encodeURIComponent(route.adAgentConvKey);
+        if (route.adAgentEvalNew) return '/admin/agents/evals/new';
+        if (route.adAgentEvalId)  return '/admin/agents/evals/' + encodeURIComponent(route.adAgentEvalId);
+      }
       return route.adSub ? '/admin/' + route.adSub : '/admin';
     }
     return '/' + route.top;
@@ -154,6 +172,18 @@
       var adEl = document.querySelector('[data-admin-subtab].active');
       var adSub = adEl ? adEl.getAttribute('data-admin-subtab') : null;
       if (adSub && KNOWN_ADMIN_SUBS.indexOf(adSub) !== -1) route.adSub = adSub;
+      // /admin/agents drill-downs — read from adminAgentsAPI which
+      // tracks conv key / eval id / new-eval-form state internally.
+      if (adSub === 'agents' && window.adminAgentsAPI) {
+        try {
+          var convKey = window.adminAgentsAPI.getOpenConvKey && window.adminAgentsAPI.getOpenConvKey();
+          var evalId = window.adminAgentsAPI.getOpenEvalId && window.adminAgentsAPI.getOpenEvalId();
+          var newOpen = window.adminAgentsAPI.isNewEvalOpen && window.adminAgentsAPI.isNewEvalOpen();
+          if (convKey) route.adAgentConvKey = convKey;
+          else if (newOpen) route.adAgentEvalNew = true;
+          else if (evalId) route.adAgentEvalId = evalId;
+        } catch (e) { /* defensive */ }
+      }
     }
     return route;
   }
@@ -280,6 +310,32 @@
             var origCloseLead = window.closeLeadDetail.__agxRouterOrig || window.closeLeadDetail;
             origCloseLead();
           }
+        } else if (route.top === 'admin' && route.adSub === 'agents') {
+          // Three drill-downs share /admin/agents — pick the right one
+          // by which route field is set, then call switchAgentsView for
+          // the matching parent view (conversations | evals) before
+          // opening the entity. Without the view-switch the rendered
+          // pane shows the wrong tab pill even though the entity opens
+          // correctly.
+          if (route.adAgentConvKey && typeof window.openAgentConversation === 'function') {
+            if (typeof window.switchAgentsView === 'function') {
+              try { window.switchAgentsView('conversations'); } catch (e) { /* defensive */ }
+            }
+            var origOpenConv = window.openAgentConversation.__agxRouterOrig || window.openAgentConversation;
+            origOpenConv(route.adAgentConvKey);
+          } else if (route.adAgentEvalNew && typeof window.openNewEvalModal === 'function') {
+            if (typeof window.switchAgentsView === 'function') {
+              try { window.switchAgentsView('evals'); } catch (e) { /* defensive */ }
+            }
+            var origOpenNewEval = window.openNewEvalModal.__agxRouterOrig || window.openNewEvalModal;
+            origOpenNewEval();
+          } else if (route.adAgentEvalId && typeof window.openEvalDetail === 'function') {
+            if (typeof window.switchAgentsView === 'function') {
+              try { window.switchAgentsView('evals'); } catch (e) { /* defensive */ }
+            }
+            var origOpenEval = window.openEvalDetail.__agxRouterOrig || window.openEvalDetail;
+            origOpenEval(route.adAgentEvalId);
+          }
         }
       } catch (e) {
         console.warn('[router] entity open failed:', e);
@@ -320,7 +376,14 @@
       'editEstimate',
       'openEditLeadModal',
       'closeLeadDetail',
-      'showArchivedJobs'
+      'showArchivedJobs',
+      'openAgentConversation',
+      'closeAgentConversation',
+      'openEvalDetail',
+      'closeEvalDetail',
+      'openNewEvalModal',
+      'cancelNewEval',
+      'switchAgentsView'
     ].forEach(wrapNav);
 
     window.addEventListener('popstate', onPopState);

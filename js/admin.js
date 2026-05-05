@@ -2922,6 +2922,7 @@
   var _agentsView = 'metrics'; // 'metrics' | 'conversations' | 'evals' | 'skills'
   var _agentsConvKey = null;   // when drilled into one conversation
   var _agentsEvalId = null;    // when drilled into one eval's run history
+  var _agentsEvalNew = false;  // when the new-eval fixture form is showing
 
   function renderAdminAgents() {
     var pane = document.getElementById('admin-subtab-agents');
@@ -2996,6 +2997,7 @@
     _agentsView = v;
     _agentsConvKey = null;
     _agentsEvalId = null;
+    _agentsEvalNew = false;
     renderAdminAgents();
   }
 
@@ -3105,6 +3107,8 @@
 
   function openAgentConversation(key) {
     _agentsConvKey = key;
+    _agentsEvalId = null;
+    _agentsEvalNew = false;
     renderAdminAgents();
   }
 
@@ -3212,6 +3216,7 @@
 
   function closeAgentConversation() {
     _agentsConvKey = null;
+    _agentsEvalNew = false;
     renderAdminAgents();
   }
 
@@ -3354,6 +3359,8 @@
 
   function openEvalDetail(id) {
     _agentsEvalId = id;
+    _agentsConvKey = null;
+    _agentsEvalNew = false;
     renderAdminAgents();
   }
 
@@ -3445,6 +3452,7 @@
 
   function closeEvalDetail() {
     _agentsEvalId = null;
+    _agentsEvalNew = false;
     renderAdminAgents();
   }
 
@@ -3459,6 +3467,9 @@
   }
 
   function openNewEvalModal() {
+    _agentsEvalNew = true;
+    _agentsConvKey = null;
+    _agentsEvalId = null;
     var host = document.getElementById('agents-content');
     if (!host) return;
     host.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;font-style:italic;padding:20px 0;">Loading recent estimates…</div>';
@@ -3538,6 +3549,7 @@
   }
 
   function cancelNewEval() {
+    _agentsEvalNew = false;
     renderAgentEvalsList();
   }
 
@@ -3573,12 +3585,25 @@
       fixture: fixture,
       expected_signals: expected
     }).then(function() {
+      _agentsEvalNew = false;
       renderAgentEvalsList();
     }).catch(function(err) {
       showErr('Save failed: ' + (err.message || 'unknown'));
       if (btn) { btn.disabled = false; btn.textContent = 'Save fixture'; }
     });
   }
+
+  // Accessors used by the URL router to read which agents drill-down
+  // (if any) is currently showing. Mirrors estimateEditorAPI.getOpenId
+  // and agxLeads.getOpenId — captureRouteFromDOM uses these to decide
+  // whether the path should include /conversations/:key, /evals/:id,
+  // or /evals/new.
+  window.adminAgentsAPI = {
+    getView: function() { return _agentsView; },
+    getOpenConvKey: function() { return _agentsConvKey; },
+    getOpenEvalId: function() { return _agentsEvalId; },
+    isNewEvalOpen: function() { return _agentsEvalNew; }
+  };
 
   window.renderAdminAgents = renderAdminAgents;
   window.setAgentsRange = setAgentsRange;
