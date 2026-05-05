@@ -270,6 +270,15 @@
   function buildProposalHTML(estimate, template, ctx) {
     var clientLineLeft = '';
     if (estimate.client) clientLineLeft += '<div style="font-weight:700;">' + escapeHTMLLocal(estimate.client) + '</div>';
+    // When the picker resolves a child property under a parent firm,
+    // estimate.client stores the parent firm name and estimate.community
+    // stores the child property name. Show the community as a secondary
+    // line in the header so the property is visible at a glance — used
+    // to live only in the intro paragraph, which made it look like the
+    // child pick wasn't saving.
+    if (estimate.community && estimate.community !== estimate.client) {
+      clientLineLeft += '<div style="font-size:12px;color:#333;">' + escapeHTMLLocal(estimate.community) + '</div>';
+    }
     if (ctx.client && (ctx.client.cell || ctx.client.phone)) {
       clientLineLeft += '<div style="font-size:11px;color:#555;">Cell: ' + escapeHTMLLocal(ctx.client.cell || ctx.client.phone) + '</div>';
     }
