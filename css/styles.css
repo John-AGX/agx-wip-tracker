@@ -1604,8 +1604,10 @@
       margin-right: 6px;
     }
     /* When the icon-slot sits inside a top-level tab-btn, give the
-       icon a touch more visual presence than the surrounding text. */
-    .tab-btn .agx-icon-slot { margin-right: 7px; }
+       icon a touch more visual presence than the surrounding text.
+       Bumped from 1.05em → 1.4em so the icons read clearly on the
+       sticky header without needing to squint. */
+    .tab-btn .agx-icon-slot { margin-right: 8px; }
     .tab-btn .agx-icon-slot .agx-icon {
-      width: 1.05em; height: 1.05em; vertical-align: -0.18em;
+      width: 1.4em; height: 1.4em; vertical-align: -0.32em;
     }
