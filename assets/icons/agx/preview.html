@@ -142,6 +142,128 @@
 </svg>
 
 
+<!-- ═══════════════ Locked picks — final selection ═══════════════ -->
+<div class="section-divider" style="margin-top:0;border-top:0;">
+  <h2>Locked picks (so far)</h2>
+  <p class="sub">Your confirmed selections. <strong>Workspace</strong> is the one remaining undecided concept — pick a number from the mixed-library section below. Heroicons are rendered with a slimmed stroke-width to match Phosphor's lighter line weight per your call.</p>
+</div>
+
+<div id="locked-picks" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:18px;margin-bottom:36px;"></div>
+
+<style>
+  .lk-cell { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  .lk-tile {
+    width: 92px; height: 92px;
+    background: #0b0c10;
+    border: 1px solid #1a1d27;
+    border-radius: 18px;
+    display: flex; align-items: center; justify-content: center;
+    position: relative;
+  }
+  .lk-tile svg { width: 60px; height: 60px; }
+  .lk-tile.lk-undecided {
+    border: 1px dashed #4a4f60;
+    color: #6d7080; font-size: 24px; font-weight: 300;
+  }
+  .lk-label { font-size: 12px; color: #e4e6f0; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+  .lk-meta { font-size: 9px; color: #6d7080; font-family: 'SF Mono', Consolas, monospace; text-align: center; }
+  .lk-badge {
+    position: absolute; top: -6px; right: -6px;
+    background: #34d399; color: #0b0c10;
+    font-size: 9px; font-weight: 700; padding: 1px 6px; border-radius: 8px;
+    letter-spacing: 0.4px;
+  }
+  .lk-badge.lk-question { background: #fbbf24; }
+</style>
+
+<script>
+  // Final concept → icon assignments per the user's picks.
+  // [label, library, iconFilename, status]
+  // status: 'locked' | 'undecided' | 'pending-confirm'
+  (function () {
+    var LOCKED = [
+      // Composer (AI panel input bar)
+      ['Composer Attach',  'phosphor',  'paperclip-light',           'locked'],
+      ['Composer Camera',  'heroicons', 'camera',                    'locked'],
+      ['Composer Mic',     'heroicons', 'microphone',                'locked'],
+      ['Composer Send',    'heroicons', 'paper-airplane',            'locked'],
+      // Main 16 concepts
+      ['WIP',              'heroicons', 'clipboard-document-list',   'locked'],
+      ['Schedule',         'heroicons', 'calendar-days',             'locked'],
+      ['Insights',         'phosphor',  'chart-line-up-light',       'locked'],
+      ['Admin',            'heroicons', 'shield-check',              'locked'],
+      ['Estimates',        'heroicons', 'document-currency-dollar',  'locked'],
+      ['Leads',            'phosphor',  'funnel-light',              'locked'],
+      ['Clients',          'phosphor',  'users-light',               'locked'],
+      ['Subs',             'heroicons', 'wrench-screwdriver',        'locked'],
+      ['Materials',        'phosphor',  'package-light',             'locked'],
+      ['Phases',           'heroicons', 'squares-plus',              'locked'],
+      ['Buildings',        'phosphor',  'buildings-light',           'locked'],
+      ['Photos',           'heroicons', 'photo',                     'locked'],
+      ['Daily Logs',       'heroicons', 'clipboard-document-check',  'locked'],
+      ['Attachments',      'phosphor',  'paperclip-light',           'locked'],
+      ['Workspace',        null,        null,                        'undecided'],
+      ['Node Graph',       'phosphor',  'graph-light',               'locked'],
+      // Bonus concepts you added
+      ['Links',            'phosphor',  'link-light',                'locked'],
+      ['Exports',          'heroicons', 'document-arrow-up',         'pending-confirm']
+    ];
+
+    var host = document.getElementById('locked-picks');
+    LOCKED.forEach(function (entry) {
+      var label = entry[0], lib = entry[1], file = entry[2], status = entry[3];
+      var cell = document.createElement('div');
+      cell.className = 'lk-cell';
+      var tile = document.createElement('div');
+      tile.className = 'lk-tile';
+      var lbl = document.createElement('div');
+      lbl.className = 'lk-label';
+      lbl.textContent = label;
+      var meta = document.createElement('div');
+      meta.className = 'lk-meta';
+
+      if (status === 'undecided') {
+        tile.className += ' lk-undecided';
+        tile.textContent = '?';
+        meta.textContent = 'pick a number from the mixed-library section';
+      } else {
+        var badge = document.createElement('div');
+        badge.className = 'lk-badge';
+        if (status === 'pending-confirm') {
+          badge.className += ' lk-question';
+          badge.textContent = '?';
+        } else {
+          badge.textContent = '✓';
+        }
+        tile.appendChild(badge);
+        meta.textContent = lib + ' / ' + file;
+        fetch('/assets/icons/agx/' + lib + '/' + file + '.svg')
+          .then(function (r) { return r.text(); })
+          .then(function (svg) {
+            var themed = svg
+              .replace(/stroke="currentColor"/g, 'stroke="url(#ag)"')
+              .replace(/fill="currentColor"/g, 'fill="url(#ag)"');
+            // Match Phosphor's lighter line weight on Heroicons.
+            // Heroicons 24-outline uses stroke-width="1.5"; trim to 1.2
+            // so it visually matches Phosphor Light's stroke-to-bbox
+            // ratio at our render size.
+            if (lib === 'heroicons') {
+              themed = themed.replace(/stroke-width="1\.5"/g, 'stroke-width="1.2"');
+            }
+            // Append the badge after the SVG so the green checkmark
+            // sits over the icon's top-right corner.
+            tile.innerHTML = themed;
+            tile.appendChild(badge);
+          });
+      }
+      cell.appendChild(tile);
+      cell.appendChild(lbl);
+      cell.appendChild(meta);
+      host.appendChild(cell);
+    });
+  })();
+</script>
+
 <!-- ═══════════════ WIP Assistant Composer Buttons (mixed library) ═══════════════ -->
 <div class="section-divider" style="margin-top:0;border-top:0;">
   <h2>WIP Assistant Composer — Attach · Camera · Mic · Send</h2>
@@ -228,6 +350,10 @@
             var themed = svgText
               .replace(/stroke="currentColor"/g, 'stroke="url(#ag)"')
               .replace(/fill="currentColor"/g, 'fill="url(#ag)"');
+            // Heroicons → match Phosphor's lighter stroke ratio.
+            if (lib === 'heroicons') {
+              themed = themed.replace(/stroke-width="1\.5"/g, 'stroke-width="1.2"');
+            }
             tile.innerHTML = themed;
           })
           .catch(function () {
