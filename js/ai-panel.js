@@ -1382,7 +1382,9 @@
     read_materials: true,
     read_purchase_history: true,
     read_subs: true,
-    read_lead_pipeline: true
+    read_lead_pipeline: true,
+    read_building_breakdown: true,
+    read_job_pct_audit: true
   };
 
   function finalizeProposalBubble(streamDiv, assistantText, toolUses, pendingContent) {
@@ -2706,6 +2708,244 @@
         }
         if (perNodeLines) summary += '\nPer node:\n' + perNodeLines;
         return summary;
+      }
+
+      // ── Diagnostic + surgical tools (Elle robustness pass) ────
+      case 'read_building_breakdown': {
+        var rbJobId = (window.appState && appState.currentJobId) || null;
+        if (!rbJobId) throw new Error('read_building_breakdown: no active job.');
+        var rbInput = String(input.building_id || '').trim();
+        if (!rbInput) throw new Error('read_building_breakdown: building_id is required.');
+        // Resolve to a building record. Try direct id, then t1 node label match.
+        var rbBuildings = (window.appData && (appData.buildings || []).filter(function(b) { return b.jobId === rbJobId; })) || [];
+        var rbBldg = rbBuildings.find(function(b) { return b.id === rbInput; });
+        if (!rbBldg) {
+          var rbGraphsForId = JSON.parse(localStorage.getItem('agx-nodegraphs') || '{}');
+          var rbNodesForId = (rbGraphsForId[rbJobId] && rbGraphsForId[rbJobId].nodes) || [];
+          var rbT1ById = rbNodesForId.find(function(n) { return n.type === 't1' && n.id === rbInput; });
+          if (rbT1ById) {
+            rbBldg = findBuildingForT1Node(rbT1ById, rbJobId);
+          }
+        }
+        if (!rbBldg) {
+          // Last try: case-insensitive label match on building name
+          var rbLower = rbInput.toLowerCase();
+          rbBldg = rbBuildings.find(function(b) { return (b.name || '').trim().toLowerCase() === rbLower; });
+        }
+        if (!rbBldg) {
+          return 'Building "' + rbInput + '" not found. Buildings on this job: ' +
+            rbBuildings.map(function(b) { return b.name + ' [' + b.id + ']'; }).join(', ');
+        }
+        var rbPhases = (window.appData && (appData.phases || []).filter(function(p) {
+          return p.jobId === rbJobId && p.buildingId === rbBldg.id;
+        })) || [];
+        var rbTotalBudget = rbPhases.reduce(function(s, p) { return s + (Number(p.phaseBudget) || 0); }, 0);
+        var rbWeightedPct = 0;
+        if (rbPhases.length) {
+          if (rbTotalBudget > 0) {
+            rbWeightedPct = rbPhases.reduce(function(s, p) {
+              return s + (Number(p.pctComplete) || 0) * (Number(p.phaseBudget) || 0);
+            }, 0) / rbTotalBudget;
+          } else {
+            rbWeightedPct = rbPhases.reduce(function(s, p) { return s + (Number(p.pctComplete) || 0); }, 0) / rbPhases.length;
+          }
+        }
+        var rbGraphs = JSON.parse(localStorage.getItem('agx-nodegraphs') || '{}');
+        var rbNodes = (rbGraphs[rbJobId] && rbGraphs[rbJobId].nodes) || [];
+        var rbWires = (rbGraphs[rbJobId] && rbGraphs[rbJobId].wires) || [];
+        var rbT1 = rbNodes.find(function(n) { return n.type === 't1' && n.buildingId === rbBldg.id; })
+          || rbNodes.find(function(n) {
+              return n.type === 't1' && (n.label || '').trim().toLowerCase() === (rbBldg.name || '').trim().toLowerCase();
+            })
+          || null;
+        var rbIncoming = [];
+        if (rbT1) {
+          rbWires.forEach(function(w) {
+            if (w.toNode !== rbT1.id) return;
+            var src = rbNodes.find(function(n) { return n.id === w.fromNode; });
+            if (src && (src.type === 't2' || src.type === 'co')) {
+              rbIncoming.push({ wire: w, src: src });
+            }
+          });
+        }
+        var rbOut = [];
+        rbOut.push('Building: ' + (rbBldg.name || rbBldg.id) + ' [' + rbBldg.id + ']' +
+          (rbBldg.budget ? ' · budget $' + Number(rbBldg.budget).toLocaleString() : ''));
+        rbOut.push('');
+        rbOut.push('## Phase records (' + rbPhases.length + ' linked by buildingId)');
+        if (!rbPhases.length) {
+          rbOut.push('  (none — legacy WIP rollup will read 0% for this building)');
+        } else {
+          rbPhases.forEach(function(p) {
+            var w = (rbTotalBudget > 0)
+              ? Math.round(((Number(p.phaseBudget) || 0) / rbTotalBudget) * 100) + '% weight'
+              : 'equal weight';
+            rbOut.push('  • [' + p.id + '] ' + (p.phase || '(unnamed)') +
+              ' · pct=' + Math.round(Number(p.pctComplete) || 0) + '%' +
+              ' · budget=$' + Number(p.phaseBudget || 0).toLocaleString() +
+              ' · ' + w);
+          });
+          rbOut.push('  → Computed legacy WIP pct (budget-weighted): ' + Math.round(rbWeightedPct) + '%');
+        }
+        rbOut.push('');
+        rbOut.push('## Graph wires INTO t1 (' + rbIncoming.length + ' from t2/co sources)');
+        if (!rbT1) {
+          rbOut.push('  (no t1 node found for this building — graph rollup unavailable)');
+        } else if (!rbIncoming.length) {
+          rbOut.push('  (none — graph rollup will read 0% for this building)');
+        } else {
+          rbIncoming.forEach(function(r) {
+            var srcLabel = r.src.label || r.src.id;
+            var ap = (r.wire.allocPct != null) ? r.wire.allocPct : 100;
+            var pc = (r.wire.pctComplete != null) ? r.wire.pctComplete : (r.src.pctComplete || 0);
+            var pcSrc = (r.wire.pctComplete != null) ? '(wire override)' : '(falls back to source)';
+            rbOut.push('  • [from=' + r.src.id + ' to=' + rbT1.id + '] ' + r.src.type + ' "' + srcLabel + '"' +
+              ' · allocPct=' + ap + '%' +
+              ' · pctComplete=' + Math.round(pc) + '% ' + pcSrc);
+          });
+          rbOut.push('  → t1 node id is ' + rbT1.id + '; t1.pctComplete=' + Math.round(Number(rbT1.pctComplete) || 0) + '% (ignored when wires exist)');
+        }
+        return rbOut.join('\n');
+      }
+
+      case 'read_job_pct_audit': {
+        var auJobId = (window.appState && appState.currentJobId) || null;
+        if (!auJobId) throw new Error('read_job_pct_audit: no active job.');
+        var auBuildings = (window.appData && (appData.buildings || []).filter(function(b) { return b.jobId === auJobId; })) || [];
+        var auPhases = (window.appData && (appData.phases || []).filter(function(p) { return p.jobId === auJobId; })) || [];
+        var auGraphs = JSON.parse(localStorage.getItem('agx-nodegraphs') || '{}');
+        var auNodes = (auGraphs[auJobId] && auGraphs[auJobId].nodes) || [];
+        var auWires = (auGraphs[auJobId] && auGraphs[auJobId].wires) || [];
+
+        var auBldgIds = {};
+        auBuildings.forEach(function(b) { auBldgIds[b.id] = true; });
+
+        // 1. Orphan phases
+        var orphans = auPhases.filter(function(p) { return !p.buildingId || !auBldgIds[p.buildingId]; });
+        // 2. Dangling t1 (graph t1 with no matching building record)
+        var dangling = auNodes.filter(function(n) {
+          if (n.type !== 't1') return false;
+          if (n.buildingId && auBldgIds[n.buildingId]) return false;
+          if (auBldgIds[n.id]) return false; // graph-created t1 where node id IS building id
+          // Also try label match
+          var label = (n.label || '').trim().toLowerCase();
+          if (label && auBuildings.some(function(b) { return (b.name || '').trim().toLowerCase() === label; })) return false;
+          return true;
+        });
+        // 3. Stale t1.pctComplete with wired children
+        var staleT1 = auNodes.filter(function(n) {
+          if (n.type !== 't1') return false;
+          if (!Number(n.pctComplete)) return false;
+          var hasWired = auWires.some(function(w) {
+            if (w.toNode !== n.id) return false;
+            var src = auNodes.find(function(s) { return s.id === w.fromNode; });
+            return src && (src.type === 't2' || src.type === 'co');
+          });
+          return hasWired;
+        });
+        // 4. Wires with allocPct = 0
+        var zeroAlloc = auWires.filter(function(w) {
+          if (w.allocPct == null) return false;
+          if (Number(w.allocPct) !== 0) return false;
+          var src = auNodes.find(function(n) { return n.id === w.fromNode; });
+          var tgt = auNodes.find(function(n) { return n.id === w.toNode; });
+          return src && tgt && tgt.type === 't1' && (src.type === 't2' || src.type === 'co');
+        });
+        // 5. Buildings with no phases
+        var emptyBldgs = auBuildings.filter(function(b) {
+          return !auPhases.some(function(p) { return p.buildingId === b.id; });
+        });
+        // 6. Phases with no budget
+        var noBudget = auPhases.filter(function(p) { return !Number(p.phaseBudget); });
+
+        var ao = [];
+        ao.push('Job audit (' + auJobId + ') — ' + auBuildings.length + ' buildings, ' + auPhases.length + ' phases, ' + auNodes.length + ' nodes, ' + auWires.length + ' wires.');
+        ao.push('');
+        function fmtList(label, items, fmtFn) {
+          if (!items.length) {
+            ao.push('✓ ' + label + ': none');
+            return;
+          }
+          ao.push('⚠ ' + label + ' (' + items.length + '):');
+          items.slice(0, 10).forEach(function(it) {
+            ao.push('  • ' + fmtFn(it));
+          });
+          if (items.length > 10) ao.push('  …and ' + (items.length - 10) + ' more.');
+        }
+        fmtList('Orphan phases (no buildingId or dangling)', orphans, function(p) {
+          return '[' + p.id + '] ' + (p.phase || '(unnamed)') + ' — buildingId=' + (p.buildingId || '∅');
+        });
+        fmtList('Dangling t1 nodes (no matching building record)', dangling, function(n) {
+          return '[' + n.id + '] "' + (n.label || '(unnamed)') + '"' + (n.buildingId ? ' buildingId=' + n.buildingId + ' (deleted?)' : '');
+        });
+        fmtList('Stale t1.pctComplete (ignored when wires exist)', staleT1, function(n) {
+          return '[' + n.id + '] "' + (n.label || '(unnamed)') + '" pct=' + Math.round(n.pctComplete) + '%';
+        });
+        fmtList('Wires with allocPct=0 (contribute nothing)', zeroAlloc, function(w) {
+          return 'from=' + w.fromNode + ' to=' + w.toNode;
+        });
+        fmtList('Buildings with no phases (will read 0%)', emptyBldgs, function(b) {
+          return '[' + b.id + '] ' + (b.name || '(unnamed)');
+        });
+        fmtList('Phases with no budget (equal-weighted in rollup)', noBudget, function(p) {
+          return '[' + p.id + '] ' + (p.phase || '(unnamed)') + ' (buildingId=' + (p.buildingId || '∅') + ')';
+        });
+        return ao.join('\n');
+      }
+
+      case 'set_phase_buildingId': {
+        var spbPhaseId = String(input.phase_id || '').trim();
+        var spbBldgId = String(input.building_id == null ? '' : input.building_id).trim();
+        if (!spbPhaseId) throw new Error('set_phase_buildingId: phase_id is required.');
+        var spbPhase = (window.appData && (appData.phases || []).find(function(p) { return p.id === spbPhaseId; }));
+        if (!spbPhase) throw new Error('set_phase_buildingId: phase "' + spbPhaseId + '" not found.');
+        // Validate building exists if non-empty
+        if (spbBldgId) {
+          var spbBldg = (window.appData && (appData.buildings || []).find(function(b) { return b.id === spbBldgId; }));
+          if (!spbBldg) throw new Error('set_phase_buildingId: building "' + spbBldgId + '" not found.');
+        }
+        var spbOld = spbPhase.buildingId || '∅';
+        spbPhase.buildingId = spbBldgId || '';
+        if (typeof window.saveData === 'function') window.saveData();
+        if (typeof window.renderJobOverview === 'function' && window.appState && appState.currentJobId) {
+          try { window.renderJobOverview(appState.currentJobId); } catch (e) {}
+        }
+        if (typeof window.ngRender === 'function') { try { window.ngRender(); } catch (e) {} }
+        return 'Phase "' + (spbPhase.phase || spbPhaseId) + '" buildingId: ' + spbOld + ' → ' + (spbBldgId || '∅ (unlinked)');
+      }
+
+      case 'set_wire_pct_complete':
+      case 'set_wire_alloc_pct': {
+        var swJobId = (window.appState && appState.currentJobId) || null;
+        if (!swJobId) throw new Error(tu.name + ': no active job.');
+        var swGraphs = JSON.parse(localStorage.getItem('agx-nodegraphs') || '{}');
+        if (!swGraphs[swJobId]) throw new Error(tu.name + ': no graph for this job.');
+        var swWires = swGraphs[swJobId].wires || [];
+        var swFrom = String(input.from_node_id || '').trim();
+        var swTo = String(input.to_node_id || '').trim();
+        var swWire = swWires.find(function(w) { return w.fromNode === swFrom && w.toNode === swTo; });
+        if (!swWire) throw new Error(tu.name + ': no wire from "' + swFrom + '" to "' + swTo + '".');
+        var swField = (tu.name === 'set_wire_pct_complete') ? 'pctComplete' : 'allocPct';
+        var swPayloadKey = (tu.name === 'set_wire_pct_complete') ? 'pct_complete' : 'alloc_pct';
+        var swOld = swWire[swField];
+        var swNew;
+        if (input[swPayloadKey] == null) {
+          // Clearing the override
+          delete swWire[swField];
+          swNew = '∅ (cleared — falls back to source)';
+        } else {
+          swNew = Math.max(0, Math.min(100, Number(input[swPayloadKey]) || 0));
+          swWire[swField] = swNew;
+        }
+        try { localStorage.setItem('agx-nodegraphs', JSON.stringify(swGraphs)); } catch (e) {}
+        if (typeof NG !== 'undefined' && NG.saveGraph) NG.saveGraph();
+        if (typeof window.ngRender === 'function') { try { window.ngRender(); } catch (e) {} }
+        if (typeof window.renderJobOverview === 'function' && window.appState && appState.currentJobId) {
+          try { window.renderJobOverview(appState.currentJobId); } catch (e) {}
+        }
+        var swFmtOld = (swOld == null) ? '∅ (was source-fallback)' : Math.round(swOld) + '%';
+        var swFmtNew = (typeof swNew === 'number') ? Math.round(swNew) + '%' : swNew;
+        return 'Wire ' + swFrom + '→' + swTo + ' ' + swField + ': ' + swFmtOld + ' → ' + swFmtNew;
       }
 
       default:

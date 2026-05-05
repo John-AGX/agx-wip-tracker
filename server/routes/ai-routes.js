@@ -689,6 +689,90 @@ const JOB_TOOLS = [
       },
       required: ['reason', 'planned_actions']
     }
+  },
+  {
+    name: 'read_building_breakdown',
+    description:
+      'Read the complete phase composition + computed rollups for a single building. Auto-applies, no approval. ' +
+      'Returns every phase under the building (no truncation), each phase\'s pctComplete + budget + weight, the budget-weighted rollup, AND every graph wire (t2/co → t1) feeding the building with their wire-level pctComplete + allocPct overrides. ' +
+      'Use this when the truncated # Structure block in your context isn\'t enough — i.e. building has more phases than were shown, or you need wire-level allocation/pct values to diagnose why the WIP page and the graph view disagree on a building\'s number.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        building_id: { type: 'string', description: 'building record id (e.g. "b1") OR a t1 node id ("n3"). The applier resolves either.' }
+      },
+      required: ['building_id']
+    }
+  },
+  {
+    name: 'read_job_pct_audit',
+    description:
+      'Sweep the entire job for percent-complete inconsistencies. Auto-applies, no approval. Reports on:\n' +
+      '  • Orphan phases — phases with no buildingId or with a buildingId pointing at a deleted building. Invisible to the legacy WIP rollup.\n' +
+      '  • Dangling t1 nodes — t1 graph nodes with no underlying building record (node-only, can\'t cascade properly).\n' +
+      '  • Stale t1 pctComplete — t1 nodes that have their own pctComplete set AND have wired t2/co children. The t1 value is ignored by the rollup; this is usually leftover from old manual edits and worth flagging.\n' +
+      '  • Wires with allocPct=0 — incoming t2/co wires that contribute nothing to the rollup (likely a misconfiguration).\n' +
+      '  • Buildings with no phases — building records that have no phase children. Will always read 0%.\n' +
+      '  • Phases with no budget — phases whose phaseBudget is 0 or missing. They get equal weight in the rollup, which can over- or under-count vs. the intended weight.\n' +
+      'Use this as the FIRST thing you do when the PM says "something\'s off with the percentages on this job" or before a big cascade write so you know what state you\'re in.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {},
+      required: []
+    }
+  },
+  {
+    name: 'set_phase_buildingId',
+    description:
+      'Re-link an orphan phase to a building, or move a phase between buildings. Use after `read_job_pct_audit` flags orphans, or when the user dictates "move phase X under building Y." ' +
+      'phase_id is the phase record id (e.g. "ph_..."). building_id is the target building record id (e.g. "b1") OR the empty string to UNLINK (rare — usually you want to link, not unlink).',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        phase_id:    { type: 'string', description: 'phase record id from the # Structure block.' },
+        building_id: { type: 'string', description: 'target building record id (e.g. "b1"), or "" to unlink.' },
+        rationale:   { type: 'string', description: 'One short sentence — why this phase belongs (or doesn\'t belong) under this building.' }
+      },
+      required: ['phase_id', 'building_id', 'rationale']
+    }
+  },
+  {
+    name: 'set_wire_pct_complete',
+    description:
+      'Set the per-allocation pctComplete on a single graph wire. This is the SURGICAL way to mark "this building\'s slice of phase X is done" without touching the source phase\'s overall pct (which would propagate to every other building that phase wires to). ' +
+      'When a wire has its own pctComplete set, it overrides the source node\'s pctComplete in the budget-weighted rollup at the t1.\n' +
+      'Use when the PM says "B1 is done with COATINGS but B2 is only at 50%" — set the wire from COATINGS → B1 to 100 and the wire from COATINGS → B2 to 50. The COATINGS source node stays untouched.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        from_node_id: { type: 'string', description: 'Source t2 / co node id (e.g. "n12"). The wire originates here.' },
+        to_node_id:   { type: 'string', description: 'Target t1 (building) node id (e.g. "n3").' },
+        pct_complete: { type: 'number', minimum: 0, maximum: 100, description: 'New wire-level pctComplete (0–100). Pass null to clear the override and fall back to source.pctComplete.' },
+        rationale:    { type: 'string', description: 'One short sentence — why this wire-level override.' }
+      },
+      required: ['from_node_id', 'to_node_id', 'pct_complete', 'rationale']
+    }
+  },
+  {
+    name: 'set_wire_alloc_pct',
+    description:
+      'Set the allocation percent on a single graph wire — i.e. how much of the source\'s revenue/value flows along this wire. Used to fix the COATINGS-allocates-14.3%-to-each-of-7-buildings type setup when the PM wants a different split (e.g. COATINGS is mostly for B1 and only a sliver goes to B7).\n' +
+      'allocPct sums across all outgoing wires from a source should generally equal 100; the engine uses raw percentages but the rollup math gets weird if a source has 200% allocated. Confirm the sum after each change.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        from_node_id: { type: 'string', description: 'Source t2 / co node id.' },
+        to_node_id:   { type: 'string', description: 'Target node id (typically a t1 building).' },
+        alloc_pct:    { type: 'number', minimum: 0, maximum: 100, description: 'New allocation percent (0–100). 100 = 100% of source\'s value flows along this wire.' },
+        rationale:    { type: 'string', description: 'One short sentence — why this split.' }
+      },
+      required: ['from_node_id', 'to_node_id', 'alloc_pct', 'rationale']
+    }
   }
 ];
 
@@ -1140,6 +1224,8 @@ const PLAN_MODE_ALLOWED_JOB_TOOLS = new Set([
   'read_materials',
   'read_purchase_history',
   'read_subs',
+  'read_building_breakdown',
+  'read_job_pct_audit',
   'request_build_mode'
 ]);
 function filterToolsForJobPhase(tools, phase) {
