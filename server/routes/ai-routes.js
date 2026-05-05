@@ -1700,12 +1700,101 @@ async function buildJobContext(jobId, clientContext, aiPhase) {
   lines.push('- Backlog (total income − revenue earned): ' + fmtMoney(wip.backlog));
   lines.push('');
 
-  // Sub-job structure summary so the assistant can reason at the right
-  // grain (phase-level vs. building-level)
+  // Sub-job structure — full per-building phase composition with the
+  // computed budget-weighted rollup that drives the WIP page. Without
+  // this Elle has no way to verify her own cascade results before /
+  // after a write.
   if (buildings.length || phases.length) {
-    lines.push('# Structure');
-    lines.push('- Buildings: ' + buildings.length + (buildings.length ? ' (' + buildings.map(b => b.name || b.id).slice(0, 8).join(', ') + (buildings.length > 8 ? ', …' : '') + ')' : ''));
-    lines.push('- Phases: ' + phases.length);
+    lines.push('# Structure (buildings + phases with computed rollups)');
+    lines.push('Format per building: `<name> [<id>]` then 1 line per phase: `• [<phase_id>] <phase_name> · pct=N% · budget=$N · weight=N%`. The "Computed building pct" line at the bottom of each block is the budget-weighted average that drives the WIP page rollup. Use the bracketed phase ids when calling `set_phase_pct_complete` or `set_phase_field`.');
+    lines.push('');
+
+    // Cap so very large jobs (20+ buildings) don't blow the context.
+    var MAX_BLDGS_LISTED = 12;
+    var MAX_PHASES_PER_BLDG = 14;
+    var listed = buildings.slice(0, MAX_BLDGS_LISTED);
+    listed.forEach(function(b) {
+      var bldgPhases = phases.filter(function(p) { return p.buildingId === b.id; });
+      var totalBudget = bldgPhases.reduce(function(s, p) { return s + (Number(p.phaseBudget) || 0); }, 0);
+      var weightedPct = 0;
+      if (bldgPhases.length) {
+        if (totalBudget > 0) {
+          weightedPct = bldgPhases.reduce(function(s, p) {
+            return s + (Number(p.pctComplete) || 0) * (Number(p.phaseBudget) || 0);
+          }, 0) / totalBudget;
+        } else {
+          weightedPct = bldgPhases.reduce(function(s, p) { return s + (Number(p.pctComplete) || 0); }, 0) / bldgPhases.length;
+        }
+      }
+      lines.push('## ' + (b.name || b.id) + ' [' + b.id + ']' +
+        (b.budget ? ' · budget ' + fmtMoney(b.budget) : '') +
+        ' · ' + bldgPhases.length + ' phase' + (bldgPhases.length === 1 ? '' : 's'));
+      if (!bldgPhases.length) {
+        lines.push('  (no phases linked to this building — building % complete will read 0 from the legacy WIP rollup)');
+      } else {
+        var phasesShown = bldgPhases.slice(0, MAX_PHASES_PER_BLDG);
+        phasesShown.forEach(function(p) {
+          var weight = (totalBudget > 0)
+            ? '· weight ' + Math.round(((Number(p.phaseBudget) || 0) / totalBudget) * 100) + '%'
+            : '· weight equal';
+          lines.push('  • [' + p.id + '] ' + (p.phase || p.name || '(unnamed)') +
+            ' · pct=' + Math.round(Number(p.pctComplete) || 0) + '%' +
+            ' · budget=' + fmtMoney(p.phaseBudget) +
+            ' ' + weight);
+        });
+        if (bldgPhases.length > MAX_PHASES_PER_BLDG) {
+          lines.push('  • …and ' + (bldgPhases.length - MAX_PHASES_PER_BLDG) + ' more phases (truncated for context budget)');
+        }
+        lines.push('  Computed building pct (budget-weighted): ' + Math.round(weightedPct) + '%');
+      }
+      lines.push('');
+    });
+    if (buildings.length > MAX_BLDGS_LISTED) {
+      lines.push('…and ' + (buildings.length - MAX_BLDGS_LISTED) + ' more buildings (truncated; ask for them by name if needed).');
+      lines.push('');
+    }
+
+    // Orphan phases — phases not linked to any building. Common cause
+    // of WIP rollups being lower than expected.
+    var orphans = phases.filter(function(p) {
+      return !p.buildingId || !buildings.some(function(b) { return b.id === p.buildingId; });
+    });
+    if (orphans.length) {
+      lines.push('## Orphan phases (no buildingId — invisible to the building rollup)');
+      orphans.slice(0, 12).forEach(function(p) {
+        lines.push('  • [' + p.id + '] ' + (p.phase || '(unnamed)') +
+          ' · pct=' + Math.round(Number(p.pctComplete) || 0) + '%' +
+          ' · budget=' + fmtMoney(p.phaseBudget));
+      });
+      if (orphans.length > 12) {
+        lines.push('  • …and ' + (orphans.length - 12) + ' more.');
+      }
+      lines.push('  These phases need a buildingId set OR they need to be moved/deleted before the WIP rollup will reflect them.');
+      lines.push('');
+    }
+
+    // ── How building % complete actually works (mental model) ─────
+    // Elle has had trouble with this — two parallel cascade paths
+    // exist that compute the SAME conceptual number from DIFFERENT
+    // data, and they can diverge. Spell it out so she can diagnose.
+    lines.push('## How building % complete works (read this before answering rollup questions)');
+    lines.push('Building % complete is computed by TWO parallel paths that may show different numbers for the same building:');
+    lines.push('');
+    lines.push('  • **Legacy WIP rollup** (the WIP page tiles, the per-building cards): a *budget-weighted average* of every phase record where `phase.buildingId == building.id`. Each phase\'s contribution = `phase.pctComplete × phase.phaseBudget / sum(phase.phaseBudget)`. This is what the # Structure block above shows.');
+    lines.push('  • **Graph rollup** (the canvas, the t1 node\'s % display): a *revenue-weighted sum* over incoming t2 (phase) and co (change order) wires. Per-wire contribution = `wire.pctComplete × wire.allocPct × source.revenue`. The wire\'s `pctComplete` is a per-allocation override; if not set, it falls back to the source node\'s `pctComplete`.');
+    lines.push('');
+    lines.push('Key asymmetry: a phase RECORD has exactly one `buildingId`, but a phase NODE in the graph can wire to MANY buildings (COATINGS allocates 14% to each of 7 buildings). When that happens:');
+    lines.push('  – Setting `phase.pctComplete = 100` propagates to ALL wired buildings (via the wire-fallback path) AND to the legacy WIP rollup for the one buildingId on the record.');
+    lines.push('  – Setting `wire.pctComplete = 100` only affects ONE building\'s graph view (the wire\'s target).');
+    lines.push('  – Setting the t1 node\'s own `pctComplete` is a no-op when there are wires; the rollup ignores it.');
+    lines.push('');
+    lines.push('When the user says "set B1 to 100%": call `set_phase_pct_complete` with the BUILDING id (e.g. "b1") or t1 node id. The applier cascades to BOTH paths — every incoming t2/co wire gets its `pctComplete` set, AND every phase record with `buildingId=b1` gets its `pctComplete` set. The t1 node\'s own pct is left to the rollup. This is the only call that updates both the WIP page AND the graph in one shot.');
+    lines.push('');
+    lines.push('Diagnostic checklist when a building % won\'t move:');
+    lines.push('  1. Are there phase records linked to this building? If 0, the legacy rollup will show 0% no matter what you do at the t1 level. (Check the # Structure block.)');
+    lines.push('  2. Are there orphan phases that should be linked? (Check the "Orphan phases" subsection above.)');
+    lines.push('  3. Are wires set on the graph? If a t2 has a wire to a t1 with `allocPct=0`, that allocation contributes nothing.');
+    lines.push('  4. Did you write to `t1.pctComplete` directly? That field is ignored when wires/phases exist — write to phases or wires instead.');
     lines.push('');
   }
 
