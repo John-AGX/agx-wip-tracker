@@ -35,6 +35,12 @@ async function initSchema() {
     -- "users online now" metric on Admin → Metrics. NULL = never seen.
     ALTER TABLE users ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ;
     CREATE INDEX IF NOT EXISTS idx_users_last_seen_at ON users(last_seen_at) WHERE last_seen_at IS NOT NULL;
+    -- Phone number used by the SMS scheduling agent to identify the
+    -- texter. Stored in E.164 format (+15555551234) so the inbound
+    -- webhook can match it to a user by exact equality without
+    -- formatting heuristics. Nullable — most office users won't set it.
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_number TEXT;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_users_phone_number ON users(phone_number) WHERE phone_number IS NOT NULL;
 
     CREATE TABLE IF NOT EXISTS jobs (
       id TEXT PRIMARY KEY,
@@ -568,6 +574,30 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_schedule_entries_job ON schedule_entries(job_id);
     CREATE INDEX IF NOT EXISTS idx_schedule_entries_start ON schedule_entries(start_date);
     CREATE INDEX IF NOT EXISTS idx_schedule_entries_status ON schedule_entries(status);
+
+    -- SMS audit log — every inbound text from a worker and every
+    -- outbound reply we sent back. Used for debugging the intent
+    -- matcher and to give admins a paper trail of what the bot said.
+    -- direction: 'in' (worker → us) or 'out' (us → worker).
+    -- intent: matched keyword for inbound rows ('today', 'next', etc.)
+    -- or the trigger that produced an outbound row.
+    -- user_id may be NULL on inbound when the phone doesn't match a
+    -- known user (we still log unknown senders so admins can spot a
+    -- forgotten employee or a wrong number).
+    CREATE TABLE IF NOT EXISTS sms_log (
+      id BIGSERIAL PRIMARY KEY,
+      direction TEXT NOT NULL CHECK (direction IN ('in','out')),
+      from_number TEXT NOT NULL,
+      to_number TEXT NOT NULL,
+      body TEXT NOT NULL,
+      user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      intent TEXT,
+      twilio_sid TEXT,
+      error TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_sms_log_user ON sms_log(user_id) WHERE user_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_sms_log_created ON sms_log(created_at DESC);
 
     -- AI eval harness — curated fixtures we replay against the agents to
     -- catch regressions when prompts / models / skill packs change.

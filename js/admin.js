@@ -95,6 +95,8 @@
     var email = document.getElementById('newUser_email').value.trim();
     var password = document.getElementById('newUser_password').value;
     var role = document.getElementById('newUser_role').value;
+    var phoneEl = document.getElementById('newUser_phone');
+    var phone = phoneEl ? phoneEl.value.trim() : '';
 
     if (!name || !email || !password) {
       statusEl.style.color = '#fbbf24';
@@ -111,7 +113,9 @@
     statusEl.style.color = 'var(--text-dim,#888)';
     statusEl.textContent = 'Creating…';
 
-    window.agxApi.users.create({ name: name, email: email, password: password, role: role })
+    var payload = { name: name, email: email, password: password, role: role };
+    if (phone) payload.phone_number = phone;
+    window.agxApi.users.create(payload)
       .then(function() {
         statusEl.style.color = '#34d399';
         statusEl.textContent = 'Created. Tell ' + name + ' their password (' + password + ') out-of-band.';
@@ -136,6 +140,8 @@
     document.getElementById('editUser_id').value = u.id;
     document.getElementById('editUser_email').value = u.email;
     document.getElementById('editUser_name').value = u.name || '';
+    var phoneEl = document.getElementById('editUser_phone');
+    if (phoneEl) phoneEl.value = u.phone_number || '';
     document.getElementById('editUser_active').checked = !!u.active;
     document.getElementById('editUser_newPassword').value = '';
     document.getElementById('editUser_status').textContent = '';
@@ -156,12 +162,18 @@
     var role = document.getElementById('editUser_role').value;
     var active = document.getElementById('editUser_active').checked;
     var newPassword = document.getElementById('editUser_newPassword').value;
+    var phoneEl = document.getElementById('editUser_phone');
+    var phone = phoneEl ? phoneEl.value.trim() : '';
 
     btn.disabled = true;
     statusEl.style.color = 'var(--text-dim,#888)';
     statusEl.textContent = 'Saving…';
 
-    var updatePromise = window.agxApi.users.update(id, { name: name, role: role, active: active });
+    // phone_number always sent (empty string clears the field, anything
+    // else gets normalized server-side). Caller hasn't typed = stays empty
+    // but the server treats present-empty as "clear" — that's the desired
+    // behavior since the phone field on the form mirrors the user record.
+    var updatePromise = window.agxApi.users.update(id, { name: name, role: role, active: active, phone_number: phone });
     var passwordPromise = newPassword
       ? window.agxApi.users.resetPassword(id, newPassword)
       : Promise.resolve();

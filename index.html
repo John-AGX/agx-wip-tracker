@@ -2085,6 +2085,10 @@
             <label style="display:block;font-size:12px;color:var(--text-dim,#888);margin-bottom:4px;">Role</label>
             <select id="newUser_role" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);"></select>
           </div>
+          <div>
+            <label style="display:block;font-size:12px;color:var(--text-dim,#888);margin-bottom:4px;">Phone Number <span style="color:var(--text-dim,#666);font-weight:400;">(optional — for SMS scheduling agent)</span></label>
+            <input id="newUser_phone" type="tel" placeholder="(407) 555-1234" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);" />
+          </div>
           <div id="newUser_status" style="font-size:13px;"></div>
         </div>
         <div class="modal-footer">
@@ -2111,6 +2115,10 @@
           <div>
             <label style="display:block;font-size:12px;color:var(--text-dim,#888);margin-bottom:4px;">Role</label>
             <select id="editUser_role" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);"></select>
+          </div>
+          <div>
+            <label style="display:block;font-size:12px;color:var(--text-dim,#888);margin-bottom:4px;">Phone Number <span style="color:var(--text-dim,#666);font-weight:400;">(optional — for SMS scheduling agent)</span></label>
+            <input id="editUser_phone" type="tel" placeholder="(407) 555-1234" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);" />
           </div>
           <label class="agx-check-row">
             <input type="checkbox" id="editUser_active" />
@@ -2153,7 +2161,7 @@
     <script src="js/attachments.js?v=9"></script>
     <script src="js/markup-viewer.js?v=12"></script>
     <script src="js/pdf-viewer.js?v=3"></script>
-    <script src="js/admin.js?v=43"></script>
+    <script src="js/admin.js?v=44"></script>
     <script src="js/clients.js?v=13"></script>
     <script src="js/subs.js?v=5"></script>
     <script src="js/job-audit.js?v=3"></script>

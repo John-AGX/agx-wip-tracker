@@ -44,20 +44,32 @@ router.get('/me', requireAuth, (req, res) => {
 // POST /api/auth/register (admin only)
 router.post('/register', requireAuth, requireRole('admin'), async (req, res) => {
   try {
-    const { email, password, name, role } = req.body;
+    const { email, password, name, role, phone_number } = req.body;
     if (!email || !password || !name) {
       return res.status(400).json({ error: 'Email, password, and name required' });
     }
     const validRoles = ['admin', 'corporate', 'pm'];
     const userRole = validRoles.includes(role) ? role : 'pm';
 
+    // Phone is optional. When supplied, normalize to E.164 so the SMS
+    // webhook can match by exact equality. Reject if it's set but
+    // unparseable so admins notice typos at create time.
+    let normalizedPhone = null;
+    if (phone_number != null && String(phone_number).trim() !== '') {
+      const sms = require('../sms');
+      normalizedPhone = sms.normalizeUSPhone(phone_number);
+      if (!normalizedPhone) {
+        return res.status(400).json({ error: 'Phone number not recognized — use 10 digits or +1XXXXXXXXXX' });
+      }
+    }
+
     const existing = await pool.query('SELECT id FROM users WHERE email = $1', [email.toLowerCase().trim()]);
     if (existing.rows.length) return res.status(409).json({ error: 'Email already registered' });
 
     const hash = bcrypt.hashSync(password, 10);
     const result = await pool.query(
-      'INSERT INTO users (email, password_hash, name, role) VALUES ($1, $2, $3, $4) RETURNING id',
-      [email.toLowerCase().trim(), hash, name, userRole]
+      'INSERT INTO users (email, password_hash, name, role, phone_number) VALUES ($1, $2, $3, $4, $5) RETURNING id',
+      [email.toLowerCase().trim(), hash, name, userRole, normalizedPhone]
     );
 
     // Fire the invite email — fire-and-forget so a flaky email
@@ -99,7 +111,7 @@ router.post('/register', requireAuth, requireRole('admin'), async (req, res) => 
 router.get('/users', requireAuth, async (req, res) => {
   try {
     const { rows } = await pool.query(
-      'SELECT id, email, name, role, active, notification_prefs, created_at, last_seen_at FROM users'
+      'SELECT id, email, name, role, active, phone_number, notification_prefs, created_at, last_seen_at FROM users'
     );
     res.json({ users: rows });
   } catch (e) {
@@ -173,18 +185,39 @@ router.put('/users/:id/notification-prefs', requireAuth, requireRole('admin'), a
 // PUT /api/auth/users/:id (admin only)
 router.put('/users/:id', requireAuth, requireRole('admin'), async (req, res) => {
   try {
-    const { name, role, active } = req.body;
+    const { name, role, active, phone_number } = req.body;
     const { rows } = await pool.query('SELECT * FROM users WHERE id = $1', [req.params.id]);
     const user = rows[0];
     if (!user) return res.status(404).json({ error: 'User not found' });
 
+    // phone_number is optional. If present in the body:
+    //   - empty string clears it (sets NULL)
+    //   - any other value gets normalized to E.164
+    // Absent from the body = leave whatever was there.
+    let phoneUpdate = user.phone_number;
+    if (Object.prototype.hasOwnProperty.call(req.body, 'phone_number')) {
+      if (phone_number == null || String(phone_number).trim() === '') {
+        phoneUpdate = null;
+      } else {
+        const sms = require('../sms');
+        const normalized = sms.normalizeUSPhone(phone_number);
+        if (!normalized) {
+          return res.status(400).json({ error: 'Phone number not recognized — use 10 digits or +1XXXXXXXXXX' });
+        }
+        phoneUpdate = normalized;
+      }
+    }
+
     await pool.query(
-      'UPDATE users SET name = $1, role = $2, active = $3, updated_at = NOW() WHERE id = $4',
-      [name || user.name, role || user.role, active != null ? active : user.active, req.params.id]
+      'UPDATE users SET name = $1, role = $2, active = $3, phone_number = $4, updated_at = NOW() WHERE id = $5',
+      [name || user.name, role || user.role, active != null ? active : user.active, phoneUpdate, req.params.id]
     );
 
     res.json({ ok: true });
   } catch (e) {
+    if (e && e.code === '23505') {
+      return res.status(409).json({ error: 'That phone number is already used by another user' });
+    }
     res.status(500).json({ error: 'Server error' });
   }
 });
