@@ -314,11 +314,17 @@ const JOB_TOOLS = [
     description:
       'Update % complete. The id parameter accepts FOUR shapes and resolves them in this order:\n' +
       '  1. Phase record id ("ph_...") → updates that single phase.\n' +
-      '  2. Building record id ("b1") → CASCADES to every phase with buildingId=b1 (so the WIP rollup actually reflects the change).\n' +
-      '  3. Graph t1 (building) node id ("n3") → resolves to the underlying building record, then cascades as in (2).\n' +
-      '  4. Graph t2 (phase) node id ("n2") → updates that t2 node\'s pct (engine syncs to phase record on next compute).\n' +
-      'WHY THE CASCADE: building % complete is computed as a budget-weighted rollup over its phases — setting only the t1 node\'s pctComplete is a no-op for the WIP snapshot. Cascading to the underlying phases is what makes "this building is 100% done" actually show up. If the user wants ONLY a single phase changed, pass that phase\'s id, not the building.\n' +
-      'Always include rationale (1 short sentence) explaining why this number.',
+      '  2. Building record id ("b1") → cascades to every dependent under that building (see CASCADE RULE below).\n' +
+      '  3. Graph t1 (building) node id ("n3") → resolves to the underlying building record (by id, by buildingId field, or by case-insensitive label match), then cascades as in (2).\n' +
+      '  4. Graph t2 (phase) node id ("n2") → updates that t2 node\'s pct (engine syncs to the phase record on next compute).\n' +
+      '\n' +
+      'CASCADE RULE for building/t1 ids: a t1 node\'s OWN pctComplete is only written directly when there are NO t2 (phase) or t3/co (change order) nodes wired into it. When children ARE wired in, the t1\'s value is a budget-weighted rollup driven by (a) wire-level pctComplete on each incoming t2/co wire, or (b) the source node\'s pctComplete as a fallback. So the cascade sets:\n' +
+      '  • wire.pctComplete on every incoming t2/co wire → t1 (per-allocation override; lets a phase wired to many buildings show 100% for one and a different number for another)\n' +
+      '  • phase.pctComplete on every phase record with buildingId = building.id (drives the legacy WIP rollup in wip.js)\n' +
+      'The t1\'s own pctComplete is NEVER overwritten when wires/phases exist — let the rollup compute it.\n' +
+      'Only when neither wires nor phases are found do we write to t1.pctComplete directly (true leaf t1).\n' +
+      '\n' +
+      'If the user wants ONLY one specific phase changed, pass that phase\'s id, not the building. Always include rationale (1 short sentence) explaining why this number.',
     input_schema: {
       type: 'object',
       additionalProperties: false,

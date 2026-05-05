@@ -1826,35 +1826,98 @@
     return fuzzy || null;
   }
 
-  // Cascade a building-level % complete update to every phase record
-  // under that building. The WIP rollup reads from appData.phases
-  // (each phase's pctComplete weighted by phase budget), so changing
-  // the t1 node's pctComplete alone is a no-op — the underlying
-  // phases drive the visible building number. Cascading is the only
-  // way "set building B to 100%" actually shows up in the rollup.
+  // Cascade a building-level % complete update to its dependents.
+  //
+  // Per user's rule: t1's own pctComplete is only set when there are
+  // NO t2 (phase) or t3/co (change order) nodes wired into it. When
+  // there ARE wired-in children, the t1's value is a budget-weighted
+  // rollup driven by:
+  //   • each wire's pctComplete (wire-level allocation override), or
+  //   • the source node's pctComplete as a fallback.
+  // So "set building B to 100%" cascades to the WIRE-level pct on
+  // every incoming t2/co wire (one entry per source × this building),
+  // which lets a phase that's wired into multiple buildings show 100%
+  // for one and a different number for another.
+  //
+  // Also cascades to phase records linked by buildingId — that's what
+  // the legacy WIP rollup (wip.js) reads.
+  //
   // Returns a one-line summary string for the approval card.
   function applyBuildingPctCascade(building, newPct, optionalNode) {
     var jobId = building.jobId;
     var bldgId = building.id;
+
+    // (a) Phases linked by buildingId — for the legacy WIP rollup.
     var phases = (window.appData && (appData.phases || []).filter(function(p) {
       return p.jobId === jobId && p.buildingId === bldgId;
     })) || [];
-    if (!phases.length) {
-      throw new Error('Building "' + (building.name || bldgId) + '" has no phases — nothing to update.');
+
+    // (b) Graph wires INTO the t1 node from t2/co sources — for the
+    //     graph rollup. We need the t1 node id to filter wires;
+    //     prefer optionalNode if we already have it, else look it up
+    //     in the saved graph by buildingId or label.
+    var graphsAll = {};
+    try { graphsAll = JSON.parse(localStorage.getItem('agx-nodegraphs') || '{}'); } catch (e) {}
+    var graphData = graphsAll[jobId] || { nodes: [], wires: [] };
+    var graphNodes = graphData.nodes || [];
+    var graphWires = graphData.wires || [];
+    var t1Node = optionalNode;
+    if (!t1Node) {
+      t1Node = graphNodes.find(function(n) { return n.type === 't1' && n.buildingId === bldgId; });
+      if (!t1Node) {
+        var bldgName = (building.name || '').trim().toLowerCase();
+        t1Node = graphNodes.find(function(n) {
+          return n.type === 't1' && bldgName && (n.label || '').trim().toLowerCase() === bldgName;
+        });
+      }
     }
-    var oldAvg = phases.reduce(function(s, p) { return s + (Number(p.pctComplete) || 0); }, 0) / phases.length;
-    phases.forEach(function(p) { p.pctComplete = newPct; });
-    // Also reflect the change on the t1 node so the canvas matches.
-    if (optionalNode) optionalNode.pctComplete = newPct;
-    if (typeof window.saveData === 'function') window.saveData();
-    if (optionalNode && typeof NG !== 'undefined' && NG.saveGraph) NG.saveGraph();
+    var incomingWires = [];
+    if (t1Node) {
+      incomingWires = graphWires.filter(function(w) {
+        if (w.toNode !== t1Node.id) return false;
+        var src = graphNodes.find(function(n) { return n.id === w.fromNode; });
+        return src && (src.type === 't2' || src.type === 'co');
+      });
+    }
+
+    // No children at all — fall back to setting t1.pctComplete directly.
+    if (!phases.length && !incomingWires.length) {
+      if (t1Node) {
+        var oldT1 = Number(t1Node.pctComplete || 0);
+        t1Node.pctComplete = newPct;
+        graphsAll[jobId] = graphData;
+        try { localStorage.setItem('agx-nodegraphs', JSON.stringify(graphsAll)); } catch (e) {}
+        if (typeof NG !== 'undefined' && NG.saveGraph) NG.saveGraph();
+        if (typeof window.ngRender === 'function') { try { window.ngRender(); } catch (e) {} }
+        return 'No phases or wires under "' + (building.name || bldgId) + '" — set t1 directly: ' +
+          Math.round(oldT1) + '% → ' + Math.round(newPct) + '%.';
+      }
+      throw new Error('Building "' + (building.name || bldgId) + '" has no phases, no graph wires, and no t1 node — nothing to update.');
+    }
+
+    // Children exist — cascade to them, leave t1.pctComplete untouched.
+    if (phases.length) {
+      phases.forEach(function(p) { p.pctComplete = newPct; });
+      if (typeof window.saveData === 'function') window.saveData();
+    }
+    if (incomingWires.length) {
+      incomingWires.forEach(function(w) { w.pctComplete = newPct; });
+      // Persist graph changes back to localStorage so the engine
+      // re-reads them. NG.saveGraph also fires for an in-memory sync.
+      graphsAll[jobId] = graphData;
+      try { localStorage.setItem('agx-nodegraphs', JSON.stringify(graphsAll)); } catch (e) {}
+      if (typeof NG !== 'undefined' && NG.saveGraph) NG.saveGraph();
+    }
     if (typeof window.ngRender === 'function') { try { window.ngRender(); } catch (e) {} }
     if (typeof window.renderJobOverview === 'function' && window.appState && appState.currentJobId) {
       try { window.renderJobOverview(appState.currentJobId); } catch (e) {}
     }
-    return 'Set ' + phases.length + ' phase' + (phases.length === 1 ? '' : 's') +
-      ' under building "' + (building.name || bldgId) + '" to ' + Math.round(newPct) + '% ' +
-      '(was avg ' + Math.round(oldAvg) + '%)';
+
+    var parts = [];
+    if (phases.length) parts.push(phases.length + ' phase record' + (phases.length === 1 ? '' : 's') + ' (by buildingId)');
+    if (incomingWires.length) parts.push(incomingWires.length + ' incoming wire' + (incomingWires.length === 1 ? '' : 's') + ' from t2/co');
+    return 'Set ' + parts.join(' + ') + ' under "' + (building.name || bldgId) + '" to ' +
+      Math.round(newPct) + '% (t1 pctComplete left to its weighted rollup).';
   }
 
   // Job-side tool application. All writes go through appData + the
