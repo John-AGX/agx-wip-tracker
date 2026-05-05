@@ -743,25 +743,6 @@
 
   // ── Workspace state controls (driven by graph toolbar buttons) ──
 
-  // Focus Workspace — set zoom to 1.0 and pan so the workspace center
-  // is at the viewport center. Solves the "too small at low zoom" UX.
-  function focusOnWorkspace() {
-    if (typeof NG === 'undefined' || !NG.zm || !NG.pan) return;
-    var panel = document.getElementById('wsFloatingPanel');
-    var area = document.querySelector('#nodeGraphTab .ng-canvas-area');
-    if (!panel || !area || !panel.classList.contains('ws-floating-graph-mode')) return;
-    if (panel.classList.contains('ws-floating-folder')) restoreFromMinimized(); // unminimize first
-    var x = parseFloat(panel.style.left) || 0;
-    var y = parseFloat(panel.style.top) || 0;
-    var w = parseFloat(panel.style.width) || 720;
-    var h = parseFloat(panel.style.height) || 480;
-    var ar = area.getBoundingClientRect();
-    NG.zm(1.0);
-    NG.pan(ar.width / 2 - (x + w / 2), ar.height / 2 - (y + h / 2));
-    if (typeof window.ngApplyTx === 'function') window.ngApplyTx();
-    if (typeof window.ngRender === 'function') window.ngRender();
-  }
-
   // Fullscreen toggle — fills the visible canvas at zoom 1.0 so
   // content reads at "real" size regardless of where the user was
   // zoomed before. Restore returns the panel rect *and* the pan/zoom
@@ -898,11 +879,9 @@
   var _toolbarWired = false;
   function wireGraphToolbarWorkspaceButtons() {
     if (_toolbarWired) return;
-    var focusBtn = document.getElementById('ngWsFocusBtn');
     var fsBtn = document.getElementById('ngWsFullscreenBtn');
     var maxBtn = document.getElementById('ngFullscreenGraphBtn');
     var auditBtn = document.getElementById('ngAuditBtn');
-    if (focusBtn) focusBtn.addEventListener('click', focusOnWorkspace);
     if (fsBtn) fsBtn.addEventListener('click', toggleFullscreenWorkspace);
     // Toggle the AGX nav header. body class drives the CSS in
     // nodegraph.css (header { display: none } + #nodeGraphTab top: 0).
