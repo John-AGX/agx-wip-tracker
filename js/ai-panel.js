@@ -609,13 +609,13 @@
           // gives a sleek Claude-style feel without per-button bespoke
           // styling. Send is the only one that's accent-colored at rest.
           '<div style="display:flex;align-items:center;gap:2px;margin-top:6px;">' +
-            '<button id="ai-attach" type="button" title="Attach file (image or PDF)" aria-label="Attach file" class="ai-tool-btn" style="font-size:18px;">&#x002B;</button>' +
-            '<button id="ai-camera" type="button" title="Take a photo" aria-label="Take a photo" class="ai-tool-btn" style="font-size:13px;">&#x1F4F7;</button>' +
-            '<button id="ai-mic" type="button" title="Dictate (voice → text)" aria-label="Dictate" class="ai-tool-btn" style="font-size:14px;">&#x1F3A4;</button>' +
+            '<button id="ai-attach" type="button" title="Attach file (image or PDF)" aria-label="Attach file" class="ai-tool-btn" style="font-size:18px;">' + (typeof agxIcon === 'function' ? agxIcon('composer-attach') : '&#x002B;') + '</button>' +
+            '<button id="ai-camera" type="button" title="Take a photo" aria-label="Take a photo" class="ai-tool-btn" style="font-size:18px;">' + (typeof agxIcon === 'function' ? agxIcon('composer-camera') : '&#x1F4F7;') + '</button>' +
+            '<button id="ai-mic" type="button" title="Dictate (voice → text)" aria-label="Dictate" class="ai-tool-btn" style="font-size:18px;">' + (typeof agxIcon === 'function' ? agxIcon('composer-mic') : '&#x1F3A4;') + '</button>' +
             '<input id="ai-file-input" type="file" accept="image/*,application/pdf" multiple style="display:none;" />' +
             '<input id="ai-camera-input" type="file" accept="image/*" capture="environment" style="display:none;" />' +
             '<div style="flex:1;"></div>' +
-            '<button id="ai-send" type="button" title="Send (Enter)" aria-label="Send" style="background:linear-gradient(135deg,#4f8cff,#34d399);border:0;color:#fff;width:30px;height:30px;border-radius:50%;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;font-size:14px;padding:0;transition:transform 0.12s, opacity 0.12s;">&#x2191;</button>' +
+            '<button id="ai-send" type="button" title="Send (Enter)" aria-label="Send" style="background:linear-gradient(135deg,#4f8cff,#34d399);border:0;color:#fff;width:30px;height:30px;border-radius:50%;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;font-size:15px;padding:0;transition:transform 0.12s, opacity 0.12s;">' + (typeof agxIcon === 'function' ? agxIcon('composer-send') : '&#x2191;') + '</button>' +
           '</div>' +
         '</div>' +
       '</div>';

@@ -1582,4 +1582,15 @@
       opacity: 1;
       color: #34d399;
     }
-    
+
+    /* ── AGX inline icons (js/agx-icons.js) ──
+       SVGs use stroke="currentColor" so they pick up the parent's
+       text color. Default size = 1em × 1em, vertical-aligned to the
+       baseline so they sit cleanly inside text and buttons. */
+    .agx-icon {
+      display: inline-block;
+      width: 1em;
+      height: 1em;
+      vertical-align: -0.15em;
+      flex-shrink: 0;
+    }
