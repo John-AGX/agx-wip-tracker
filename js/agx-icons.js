@@ -65,6 +65,43 @@
     return svg.replace(/<svg /, '<svg' + attrs + ' ');
   }
 
+  /**
+   * Auto-decorate any element marked data-agx-icon="<name>" by
+   * prepending the icon's SVG. Idempotent — sets data-agx-icon-decorated
+   * once applied. A MutationObserver re-scans for new nodes so
+   * decoration survives dynamic re-renders (modals rebuilt via
+   * innerHTML, etc.).
+   */
+  function decorate(el) {
+    if (!el || el.dataset.agxIconDecorated === '1') return;
+    var name = el.dataset.agxIcon;
+    if (!name || !icons[name]) return;
+    el.dataset.agxIconDecorated = '1';
+    var slot = document.createElement('span');
+    slot.className = 'agx-icon-slot';
+    slot.innerHTML = agxIcon(name);
+    el.insertBefore(slot, el.firstChild);
+  }
+  function scan(root) {
+    if (!root || !root.querySelectorAll) return;
+    root.querySelectorAll('[data-agx-icon]:not([data-agx-icon-decorated])').forEach(decorate);
+  }
+  function boot() {
+    scan(document);
+    var mo = new MutationObserver(function (records) {
+      records.forEach(function (r) {
+        r.addedNodes.forEach(function (n) { if (n.nodeType === 1) scan(n); });
+      });
+    });
+    mo.observe(document.body, { childList: true, subtree: true });
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot);
+  } else {
+    boot();
+  }
+
   window.AGX_ICONS = icons;
   window.agxIcon = agxIcon;
+  window.agxIconDecorate = scan;
 })();

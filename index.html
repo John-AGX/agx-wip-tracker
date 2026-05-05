@@ -11,7 +11,7 @@
          parse. -->
     <base href="/">
     <title>AGX Central Florida &mdash; WIP Tracker</title>
-    <link rel="stylesheet" href="css/styles.css?v=33">
+    <link rel="stylesheet" href="css/styles.css?v=34">
     <link rel="stylesheet" href="css/workspace-layout.css?v=51">
     <link rel="stylesheet" href="css/workspace.css?v=36">
     <link rel="stylesheet" href="css/schedule.css?v=9">
@@ -44,11 +44,11 @@
                     <img src="images/logo-white.png" alt="AGX" class="header-logo" />
                 </a>
                 <nav class="tabs">
-                    <button class="tab-btn active" data-tab="wip" data-cap="JOBS_VIEW_ALL JOBS_VIEW_ASSIGNED JOBS_EDIT_ANY JOBS_EDIT_OWN">WIP</button>
-                    <button class="tab-btn" data-tab="schedule">Schedule</button>
-                    <button class="tab-btn" data-tab="insights" data-cap="INSIGHTS_VIEW">Insights</button>
-                    <button class="tab-btn" data-tab="estimates" data-cap="ESTIMATES_VIEW">Estimates</button>
-                    <button class="tab-btn" data-tab="admin" data-admin-only style="display:none;">Admin</button>
+                    <button class="tab-btn active" data-tab="wip" data-agx-icon="wip" data-cap="JOBS_VIEW_ALL JOBS_VIEW_ASSIGNED JOBS_EDIT_ANY JOBS_EDIT_OWN">WIP</button>
+                    <button class="tab-btn" data-tab="schedule" data-agx-icon="schedule">Schedule</button>
+                    <button class="tab-btn" data-tab="insights" data-agx-icon="insights" data-cap="INSIGHTS_VIEW">Insights</button>
+                    <button class="tab-btn" data-tab="estimates" data-agx-icon="estimates" data-cap="ESTIMATES_VIEW">Estimates</button>
+                    <button class="tab-btn" data-tab="admin" data-agx-icon="admin" data-admin-only style="display:none;">Admin</button>
                 </nav>
                 <div id="user-menu" class="header-user-menu">
                     <span id="user-name"></span>
@@ -2187,7 +2187,7 @@
     <!-- AGX inline-SVG icon helper. Provides window.agxIcon(name, opts)
          — 24 icons from Phosphor (MIT) + Heroicons (MIT). See
          scripts/build-agx-icons.js to regenerate. -->
-    <script src="js/agx-icons.js?v=1"></script>
+    <script src="js/agx-icons.js?v=2"></script>
 
     <!-- Node Graph (Beta) -->
     <link rel="stylesheet" href="nodegraph/nodegraph.css?v=89" />
