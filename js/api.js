@@ -104,6 +104,14 @@
     remove: function(id) { return del('/api/auth/users/' + encodeURIComponent(id)); }
   };
 
+  var adminSms = {
+    // Recent SMS log entries (newest first). Read-only audit view.
+    list: function(limit) {
+      var l = limit ? '?limit=' + encodeURIComponent(limit) : '';
+      return get('/api/admin/sms/log' + l);
+    }
+  };
+
   var roles = {
     list: function() { return get('/api/roles'); },
     capabilities: function() { return get('/api/roles/capabilities'); },
@@ -305,7 +313,7 @@
 
   window.agxApi = {
     get: get, put: put, post: post, del: del,
-    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai, materials: materials, qbCosts: qbCosts, subs: subsApi, schedule: schedule,
+    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai, materials: materials, qbCosts: qbCosts, subs: subsApi, schedule: schedule, adminSms: adminSms,
     isOffline: isOffline,
     isAuthenticated: function() { return !!getToken() && !isOffline(); }
   };

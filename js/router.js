@@ -48,7 +48,7 @@
   var KNOWN_EST_SUBS = ['list', 'leads', 'clients', 'subs'];
   var KNOWN_ADMIN_SUBS = [
     'users', 'roles', 'email', 'templates', 'agents',
-    'jobs', 'materials', 'metrics'
+    'jobs', 'materials', 'metrics', 'sms'
   ];
   var KNOWN_TOP_TABS = ['wip', 'estimates', 'schedule', 'insights', 'admin'];
 

@@ -31,6 +31,7 @@ const subRoutes = require('./routes/sub-routes');
 const scheduleRoutes = require('./routes/schedule-routes');
 const emailRoutes = require('./routes/email-routes');
 const adminAgentsRoutes = require('./routes/admin-agents-routes');
+const adminSmsRoutes = require('./routes/admin-sms-routes');
 const smsRoutes = require('./routes/sms-routes');
 const { storage } = require('./storage');
 
@@ -57,6 +58,7 @@ app.use('/api/subs', subRoutes);
 app.use('/api/schedule', scheduleRoutes);
 app.use('/api/email', emailRoutes);
 app.use('/api/admin/agents', adminAgentsRoutes);
+app.use('/api/admin/sms', adminSmsRoutes);
 app.use('/api/sms', smsRoutes);
 
 // Serve uploaded files when running with the local storage backend.

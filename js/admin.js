@@ -1041,6 +1041,7 @@
     else if (name === 'materials') renderAdminMaterials();
     else if (name === 'email') renderAdminEmail();
     else if (name === 'agents') renderAdminAgents();
+    else if (name === 'sms') renderAdminSms();
     // 'email-templates' moved into Templates → Email; if a saved nav state
     // points at the old top-level tab, reroute to templates.
     else if (name === 'email-templates') {
@@ -3616,6 +3617,93 @@
     getOpenEvalId: function() { return _agentsEvalId; },
     isNewEvalOpen: function() { return _agentsEvalNew; }
   };
+
+  // ==================== SMS LOG ADMIN ====================
+  // Read-only audit view for the SMS scheduling agent. Fetches the
+  // last N inbound + outbound texts from /api/admin/sms/log and
+  // renders them as a dense table — dir / who / body / intent / when.
+  // Refresh button re-fetches; no auto-poll (admins typically open
+  // this when debugging a worker complaint, not as a live dashboard).
+  function renderAdminSms() {
+    if (!isAdmin()) return;
+    var pane = document.getElementById('admin-subtab-sms');
+    if (!pane) return;
+    pane.innerHTML =
+      '<p style="margin:0 0 14px 0;color:var(--text-dim,#888);font-size:12px;">' +
+        'Audit log of every text the SMS scheduling agent sent or received. Use this to debug intent matches, spot unknown senders (likely an employee whose phone isn\'t on file), and confirm replies went out.' +
+      '</p>' +
+      '<div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;">' +
+        '<button class="ee-btn secondary" onclick="renderAdminSms()">&#x21BB; Refresh</button>' +
+        '<span style="font-size:11px;color:var(--text-dim,#888);">Newest first · last 100 events</span>' +
+      '</div>' +
+      '<div id="admin-sms-content" style="font-size:12px;color:var(--text-dim,#888);font-style:italic;">Loading…</div>';
+
+    if (!window.agxApi || !window.agxApi.adminSms || typeof window.agxApi.adminSms.list !== 'function') {
+      document.getElementById('admin-sms-content').innerHTML =
+        '<div style="color:#e74c3c;">SMS API helper missing — refresh the page.</div>';
+      return;
+    }
+
+    window.agxApi.adminSms.list(100).then(function(resp) {
+      var entries = (resp && resp.entries) || [];
+      var content = document.getElementById('admin-sms-content');
+      if (!content) return;
+      if (!entries.length) {
+        content.innerHTML = '<div style="color:var(--text-dim,#888);font-style:italic;padding:14px 0;">No SMS traffic yet. Once a worker texts the AGX number, log entries appear here.</div>';
+        return;
+      }
+
+      var rows = entries.map(renderSmsLogRow).join('');
+      content.innerHTML =
+        '<div class="table-container">' +
+          '<table style="width:100%;font-size:12px;">' +
+            '<thead><tr>' +
+              '<th style="width:60px;">Dir</th>' +
+              '<th style="width:140px;">From</th>' +
+              '<th style="width:140px;">To</th>' +
+              '<th style="width:140px;">User</th>' +
+              '<th>Body</th>' +
+              '<th style="width:100px;">Intent</th>' +
+              '<th style="width:140px;text-align:right;">When</th>' +
+            '</tr></thead>' +
+            '<tbody>' + rows + '</tbody>' +
+          '</table>' +
+        '</div>';
+    }).catch(function(err) {
+      var content = document.getElementById('admin-sms-content');
+      if (content) {
+        content.innerHTML = '<div style="color:#e74c3c;">Failed to load: ' + escapeHTML(err.message || 'unknown') + '</div>';
+      }
+    });
+  }
+
+  function renderSmsLogRow(e) {
+    var dirColor = e.direction === 'in' ? '#4f8cff' : '#a78bfa';
+    var dirLabel = e.direction === 'in' ? '← IN' : 'OUT →';
+    var when = '';
+    try { when = new Date(e.created_at).toLocaleString(); } catch (ex) {}
+    var user = e.user_name
+      ? escapeHTML(e.user_name)
+      : '<span style="color:var(--text-dim,#666);font-style:italic;">unknown</span>';
+    var intent = e.intent
+      ? '<span style="display:inline-block;background:rgba(79,140,255,0.12);color:#4f8cff;font-size:10px;padding:2px 8px;border-radius:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">' + escapeHTML(e.intent) + '</span>'
+      : '';
+    var body = '<pre style="white-space:pre-wrap;font-size:12px;color:var(--text,#ccc);margin:0;font-family:inherit;">' + escapeHTML(e.body || '') + '</pre>';
+    if (e.error) {
+      body += '<div style="color:#f87171;font-size:11px;margin-top:4px;">' + escapeHTML(e.error) + '</div>';
+    }
+    return '<tr>' +
+      '<td><span style="color:' + dirColor + ';font-weight:600;font-family:\'SF Mono\',monospace;font-size:11px;">' + dirLabel + '</span></td>' +
+      '<td style="font-family:\'SF Mono\',monospace;font-size:11px;color:var(--text-dim,#aaa);">' + escapeHTML(e.from_number || '') + '</td>' +
+      '<td style="font-family:\'SF Mono\',monospace;font-size:11px;color:var(--text-dim,#aaa);">' + escapeHTML(e.to_number || '') + '</td>' +
+      '<td>' + user + '</td>' +
+      '<td>' + body + '</td>' +
+      '<td>' + intent + '</td>' +
+      '<td style="text-align:right;font-size:11px;color:var(--text-dim,#888);">' + escapeHTML(when) + '</td>' +
+    '</tr>';
+  }
+
+  window.renderAdminSms = renderAdminSms;
 
   window.renderAdminAgents = renderAdminAgents;
   window.setAgentsRange = setAgentsRange;
