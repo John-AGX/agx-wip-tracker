@@ -13,6 +13,11 @@
 
   var _currentId = null;
   var _saveTimer = null;
+  // When the editor was opened from inside a lead detail (via
+  // openEstimateFromLead), this holds the lead id so close → "Back"
+  // returns the user to the lead instead of dumping them at the
+  // estimates list. Cleared on close.
+  var _returnToLeadId = null;
   // Save status tracker — drives the indicator + Save button in the
   // sticky header. 'idle' = nothing pending, 'pending' = local debounce
   // running, 'saving' = saveData has fired and the server push is in
@@ -320,6 +325,20 @@
       var mainTabs = document.getElementById('estimates-main-tabs');
       if (mainTabs) mainTabs.style.display = '';
       if (typeof renderEstimatesList === 'function') renderEstimatesList();
+
+      // If the editor was opened from a lead (openEstimateFromLead set
+      // _returnToLeadId before opening), bounce the user back into that
+      // lead so the "Back" path matches their entry path.
+      if (_returnToLeadId) {
+        var lid = _returnToLeadId;
+        _returnToLeadId = null;
+        if (typeof window.switchEstimatesSubTab === 'function') {
+          try { window.switchEstimatesSubTab('leads'); } catch (e) { /* defensive */ }
+        }
+        if (typeof window.openEditLeadModal === 'function') {
+          try { window.openEditLeadModal(lid); } catch (e) { /* defensive */ }
+        }
+      }
     };
     if (pending) {
       // Wait up to 3 seconds for the push to settle. Beyond that we
@@ -1947,6 +1966,9 @@
   window.estimateEditorAPI = {
     isOpenFor: function(estimateId) { return _currentId === estimateId; },
     getOpenId: function() { return _currentId; },
+    // Called by openEstimateFromLead so close → "Back" lands on the
+    // lead the user came from instead of the estimates list.
+    setReturnToLead: function(leadId) { _returnToLeadId = leadId || null; },
     activeAlternateName: function() { var a = getActiveAlternate(); return a ? a.name : null; },
     // Returns the client_id of the client linked to the open estimate,
     // or null if the estimate is unlinked. Used by propose_add_client_note

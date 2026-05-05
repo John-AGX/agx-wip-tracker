@@ -10,6 +10,7 @@
 // URL grammar:
 //   /                                 default landing (login routes here)
 //   /wip                              WIP list
+//   /wip/archived                     archived jobs view
 //   /wip/jobs/:jobId                  job detail (default sub-tab)
 //   /wip/jobs/:jobId/:jobSub          job detail at specific sub-tab
 //   /estimates                        estimates landing (current active sub)
@@ -57,12 +58,14 @@
     if (KNOWN_TOP_TABS.indexOf(top) === -1) return route;
     route.top = top;
     if (top === 'wip') {
-      // /wip/jobs/:id[/:sub]
+      // /wip/jobs/:id[/:sub]  OR  /wip/archived
       if (parts[1] === 'jobs' && parts[2]) {
         route.jobId = parts[2];
         if (parts[3] && KNOWN_JOB_SUBS.indexOf(parts[3]) !== -1) {
           route.jobSub = parts[3];
         }
+      } else if (parts[1] === 'archived') {
+        route.archived = true;
       }
     } else if (top === 'estimates') {
       // /estimates/edit/:id  OR  /estimates/leads/:id  OR  /estimates/:sub
@@ -89,6 +92,7 @@
         return '/wip/jobs/' + encodeURIComponent(route.jobId) +
           (route.jobSub ? '/' + route.jobSub : '');
       }
+      if (route.archived) return '/wip/archived';
       return '/wip';
     }
     if (route.top === 'estimates') {
@@ -120,6 +124,11 @@
         var subBtn = document.querySelector('.sub-tab-btn-job.active');
         var jobSub = subBtn ? subBtn.getAttribute('data-subtab') : null;
         if (jobSub && KNOWN_JOB_SUBS.indexOf(jobSub) !== -1) route.jobSub = jobSub;
+      } else {
+        var archiveView = document.getElementById('archived-jobs-list');
+        if (archiveView && archiveView.style.display !== 'none') {
+          route.archived = true;
+        }
       }
     } else if (top === 'estimates') {
       var subEl = document.querySelector('#estimates [data-estimates-subtab].active');
@@ -241,6 +250,16 @@
             var origJobSub = window.switchJobSubTab.__agxRouterOrig || window.switchJobSubTab;
             origJobSub(route.jobSub);
           }
+        } else if (route.top === 'wip' && route.archived &&
+                   typeof window.showArchivedJobs === 'function') {
+          // Open archive view if it isn't already showing. showArchivedJobs
+          // is a toggle, so check current state first to avoid closing it.
+          var archiveEl = document.getElementById('archived-jobs-list');
+          var alreadyOpen = archiveEl && archiveEl.style.display !== 'none';
+          if (!alreadyOpen) {
+            var origShowArchived = window.showArchivedJobs.__agxRouterOrig || window.showArchivedJobs;
+            origShowArchived();
+          }
         } else if (route.top === 'estimates' && route.estId && typeof window.editEstimate === 'function') {
           if (typeof window.switchEstimatesSubTab === 'function') {
             var origEstSub2 = window.switchEstimatesSubTab.__agxRouterOrig || window.switchEstimatesSubTab;
@@ -300,7 +319,8 @@
       'editJob',
       'editEstimate',
       'openEditLeadModal',
-      'closeLeadDetail'
+      'closeLeadDetail',
+      'showArchivedJobs'
     ].forEach(wrapNav);
 
     window.addEventListener('popstate', onPopState);

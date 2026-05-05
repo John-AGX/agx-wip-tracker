@@ -2945,6 +2945,27 @@ function flashSaveIndicator(state, label){
 }
 window.ngMarkSaved = function(state){ flashSaveIndicator(state || 'saved'); };
 
+// Exit the node graph overlay back to the job detail underneath. Saves
+// graph state first so the user doesn't lose unsaved edits, and clears
+// the maximize-graph body class if it was on (otherwise the AGX header
+// stays hidden after exit).
+window.closeNodeGraph=function(){
+  var tab=document.getElementById('nodeGraphTab'); if(!tab) return;
+  if(typeof window.E !== 'undefined' && window.E && typeof window.E.saveGraph === 'function'){
+    try { window.E.saveGraph(); } catch(e){ /* defensive */ }
+  } else if(typeof NG !== 'undefined' && NG.saveGraph){
+    try { NG.saveGraph(); } catch(e){ /* defensive */ }
+  }
+  tab.classList.remove('active');
+  // If the user maximized the graph (hid the AGX nav header), restore
+  // the header so they're not stuck in fullscreen on the job detail.
+  if(document.body.classList.contains('ng-graph-fullscreen')){
+    document.body.classList.remove('ng-graph-fullscreen');
+    var maxBtn=document.getElementById('ngFullscreenGraphBtn');
+    if(maxBtn) maxBtn.innerHTML='\u{1F5D6} Maximize';
+  }
+};
+
 window.openNodeGraph=function(jid){
   var tab=document.getElementById('nodeGraphTab'); if(!tab) return;
   // Position below the sticky header

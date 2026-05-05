@@ -788,12 +788,20 @@
   // its target view stayed hidden behind the sub-tab gate — clicking
   // Edit looked like a no-op.
   function openEstimateFromLead(estimateId, asPreview) {
+    // Capture the originating lead id BEFORE closeLeadEditorAny clears
+    // the module's _currentEditingLeadId — the editor uses it to wire
+    // up a "Back to lead" return path on close.
+    var leadId = _currentEditingLeadId;
     closeLeadEditorAny();
     if (typeof window.switchTab === 'function') {
       try { window.switchTab('estimates'); } catch (e) { /* defensive */ }
     }
     if (typeof window.switchEstimatesSubTab === 'function') {
       try { window.switchEstimatesSubTab('list'); } catch (e) { /* defensive */ }
+    }
+    if (leadId && window.estimateEditorAPI &&
+        typeof window.estimateEditorAPI.setReturnToLead === 'function') {
+      window.estimateEditorAPI.setReturnToLead(leadId);
     }
     if (asPreview) {
       if (typeof window.previewEstimate === 'function') window.previewEstimate(estimateId);
