@@ -91,6 +91,26 @@
   function isClientMode() { return _entityType === 'client'; }
   function isStaffMode() { return _entityType === 'staff'; }
 
+  // ── Elle (job-mode) Plan/Build phase ───────────────────────────────
+  // Per-job, per-user state stored in localStorage. Default = 'plan' so
+  // Elle starts as an analyst (no surprise mutations) — the PM grants
+  // write access by approving a request_build_mode card or flipping
+  // the phase pill manually.
+  function getJobPhaseKey(jobId) { return 'agx-elle-phase-' + (jobId || ''); }
+  function getJobAIPhase(jobId) {
+    if (!jobId) return 'plan';
+    try {
+      var v = localStorage.getItem(getJobPhaseKey(jobId));
+      return v === 'build' ? 'build' : 'plan';
+    } catch (e) { return 'plan'; }
+  }
+  function setJobAIPhase(jobId, phase) {
+    if (!jobId) return;
+    var p = phase === 'build' ? 'build' : 'plan';
+    try { localStorage.setItem(getJobPhaseKey(jobId), p); } catch (e) { /* private mode etc. */ }
+    refreshModeSpecificUI();
+  }
+
   // ────────────────────────────────────────────────────────────────────
   // Auto-render PDF pages for AG. PDFs without a text layer (scanned
   // RFPs, photo reports, drawing-only PDFs) are invisible to the
@@ -855,33 +875,44 @@
     // fires from the editor side.
     var pill = document.getElementById('agx-ai-phase-pill');
     if (pill) {
-      if (isEstimateMode()) {
+      // Phase pill is dual-purpose now — visible in BOTH estimate (AG)
+      // and job (Elle) mode. The visible icon and dropdown menu adapt
+      // based on which agent owns the phase. Estimate mode reads/writes
+      // the estimate's persisted aiPhase via estimateEditorAPI; job
+      // mode reads/writes Elle's per-job phase from localStorage.
+      var pillVisible = isEstimateMode() || isJobMode();
+      if (pillVisible) {
         pill.style.display = 'inline-block';
-        var phase = (window.estimateEditorAPI && window.estimateEditorAPI.getAIPhase)
-          ? window.estimateEditorAPI.getAIPhase() : 'build';
+        var phase, agentLabel, planDesc, buildDesc;
+        if (isEstimateMode()) {
+          phase = (window.estimateEditorAPI && window.estimateEditorAPI.getAIPhase)
+            ? window.estimateEditorAPI.getAIPhase() : 'build';
+          agentLabel = 'AG';
+          planDesc = 'AG discusses scope without proposing line items';
+          buildDesc = 'AG proposes line items + edits';
+        } else {
+          phase = getJobAIPhase(_entityId);
+          agentLabel = 'Elle';
+          planDesc = 'Elle analyzes WIP without writing changes';
+          buildDesc = 'Elle proposes edits to WIP, phases, and graph';
+        }
         var toggleBtn = document.getElementById('agx-ai-phase-toggle');
         var iconEl = pill.querySelector('[data-phase-icon]');
         if (toggleBtn && iconEl) {
-          // Inline SVG (line-art) for the active phase. Background
-          // stays transparent — the icon itself communicates the mode
-          // and the dropdown caret signals "click for options".
-          // Prefer the AGX icon set when loaded; fall back to the
-          // hand-crafted SVGs above if agx-icons.js hasn't loaded.
           iconEl.innerHTML = (typeof agxIcon === 'function')
             ? agxIcon(phase === 'plan' ? 'plan-mode' : 'build-mode')
             : (phase === 'plan' ? SVG_PLAN_ICON : SVG_BUILD_ICON);
           toggleBtn.title = phase === 'plan'
-            ? 'Plan mode — AG discusses scope without proposing line items. Click to switch to Build.'
-            : 'Build mode — AG proposes line items and edits. Click to switch to Plan.';
+            ? 'Plan mode — ' + planDesc + '. Click to switch to Build.'
+            : 'Build mode — ' + buildDesc + '. Click to switch to Plan.';
         }
-        // Populate the dropdown body with the *other* option only.
         var menu = document.getElementById('agx-ai-phase-menu');
         if (menu) {
           var planSvg  = (typeof agxIcon === 'function') ? agxIcon('plan-mode')  : SVG_PLAN_ICON;
           var buildSvg = (typeof agxIcon === 'function') ? agxIcon('build-mode') : SVG_BUILD_ICON;
           var alt = phase === 'plan'
-            ? { key: 'build', svg: buildSvg, label: 'Build', desc: 'AG proposes line items + edits' }
-            : { key: 'plan',  svg: planSvg,  label: 'Plan',  desc: 'Discuss scope, no proposals' };
+            ? { key: 'build', svg: buildSvg, label: 'Build', desc: buildDesc }
+            : { key: 'plan',  svg: planSvg,  label: 'Plan',  desc: planDesc };
           menu.innerHTML =
             '<button type="button" data-ai-phase-pick="' + alt.key + '" ' +
               'style="display:flex;align-items:center;gap:10px;width:100%;background:transparent;border:none;color:#fff;padding:8px 10px;border-radius:6px;cursor:pointer;text-align:left;font-family:inherit;font-size:12px;" ' +
@@ -897,7 +928,11 @@
           if (pickBtn) {
             pickBtn.onclick = function() {
               var key = pickBtn.getAttribute('data-ai-phase-pick');
-              if (window.setEstimateAIPhase) window.setEstimateAIPhase(key);
+              if (isEstimateMode() && window.setEstimateAIPhase) {
+                window.setEstimateAIPhase(key);
+              } else if (isJobMode()) {
+                setJobAIPhase(_entityId, key);
+              }
               closeAIPhaseMenu();
             };
           }
@@ -1158,6 +1193,9 @@
     if (isJobMode()) {
       var clientCtx = buildJobClientContext();
       if (clientCtx) body.clientContext = clientCtx;
+      // Elle's per-job phase (plan/build). Server filters JOB_TOOLS
+      // and adapts the system prompt based on this value.
+      body.aiPhase = getJobAIPhase(_entityId);
     }
     // Combine one-shot images: pre-existing handoff (PDF viewer) + composer.
     var bodyImages = [];
@@ -1739,6 +1777,20 @@
   function applyJobTool(tu) {
     var input = tu.input || {};
     switch (tu.name) {
+      case 'request_build_mode': {
+        // Special tool: not a write to job data, just a phase flip.
+        // Approval = the PM grants Elle Build mode for this job. The
+        // next chat turn (and the /chat/continue right after this
+        // approval) will send aiPhase='build', re-opening the full
+        // tool list. Returns a summary the model receives so it knows
+        // it can now run its planned actions.
+        var actions = Array.isArray(input.planned_actions) ? input.planned_actions : [];
+        setJobAIPhase(_entityId, 'build');
+        return 'Build mode granted by the PM. You may now run the ' +
+          (actions.length ? actions.length + ' planned action' + (actions.length === 1 ? '' : 's') : 'requested writes') +
+          '. Each one still goes through its own approval card.';
+      }
+
       case 'set_phase_pct_complete': {
         // Resolves four possible IDs in order:
         //   1. Phase record id  ("ph_...")  → set that one phase's pct
@@ -2358,6 +2410,9 @@
     if (isJobMode()) {
       var ctx = buildJobClientContext();
       if (ctx) body.clientContext = ctx;
+      // Reflect the current phase — picks up a phase flip caused by
+      // the user just approving a request_build_mode card.
+      body.aiPhase = getJobAIPhase(_entityId);
     }
     streamFromEndpoint(apiBase() + '/chat/continue', body);
   }

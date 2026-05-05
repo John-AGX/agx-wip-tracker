@@ -512,6 +512,34 @@ const JOB_TOOLS = [
       },
       required: []
     }
+  },
+  {
+    name: 'request_build_mode',
+    description:
+      'Ask the PM\'s permission to switch from Plan mode to Build mode so you can write changes ' +
+      '(set_phase_pct_complete, set_phase_field, set_node_value, assign_qb_line, etc.). Use this ' +
+      'in Plan mode whenever your analysis surfaces an action you\'d need to take but can\'t — ' +
+      'e.g. "B1 has cost data but pctComplete=0, want me to set it to 100%?" or "131 QB lines are ' +
+      'unlinked, want me to wire them to their nodes?". The PM gets an approval card listing your ' +
+      'planned actions; on approve, the panel flips to Build mode and your next turn opens with ' +
+      'full write access. Do NOT call this for trivial questions or when the PM hasn\'t asked for ' +
+      'a change — it\'s for moments where Plan mode is actively blocking productive work.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        reason: {
+          type: 'string',
+          description: '1–2 sentences summarizing why you need write access. Shown on the approval card. Be specific: "I want to update the % complete on 5 buildings to match what you just told me," not "I want to make changes."'
+        },
+        planned_actions: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Bullet list of the specific writes you intend to make if granted Build mode. Each line: action + target. Example: ["Set B1 pctComplete to 100%", "Set B2 pctComplete to 100%", "Assign 14 unlinked Home Depot lines to materials sub-node"]. The PM uses this to decide whether to grant access.'
+        }
+      },
+      required: ['reason', 'planned_actions']
+    }
   }
 ];
 
@@ -950,6 +978,24 @@ const PLAN_MODE_ALLOWED_AG_TOOLS = new Set([
 function filterToolsForPhase(tools, phase) {
   if (phase !== 'plan') return tools;
   return (tools || []).filter(t => PLAN_MODE_ALLOWED_AG_TOOLS.has(t.name));
+}
+
+// Plan-mode allowlist for Elle (job side). Read tools + the
+// request_build_mode tool stay; every write tool is removed so the
+// model literally cannot mutate WIP data while the PM is in analysis
+// mode. The PM grants write access by approving a request_build_mode
+// card or flipping the phase pill manually.
+const PLAN_MODE_ALLOWED_JOB_TOOLS = new Set([
+  'read_workspace_sheet_full',
+  'read_qb_cost_lines',
+  'read_materials',
+  'read_purchase_history',
+  'read_subs',
+  'request_build_mode'
+]);
+function filterToolsForJobPhase(tools, phase) {
+  if (phase !== 'plan') return tools;
+  return (tools || []).filter(t => PLAN_MODE_ALLOWED_JOB_TOOLS.has(t.name));
 }
 
 // Load skill packs from app_settings.agent_skills filtered by agent +
@@ -1437,7 +1483,14 @@ function computeJobWIP(job, jobBuildings, jobPhases, jobChangeOrders, jobSubs, j
 // localStorage; QB cost lines aren't in the DB until Phase 2).
 // Fields used: { nodeGraph: { nodes, wires }, qbCosts: { total,
 // byCategory, lineCount, mostRecentImport, samples[] } }
-async function buildJobContext(jobId, clientContext) {
+async function buildJobContext(jobId, clientContext, aiPhase) {
+  // aiPhase: 'plan' (read-only analysis, no writes) | 'build' (full
+  // tool access). Defaults to 'plan' for Elle — she's an analyst, so
+  // the safer default is no surprise mutations until the PM explicitly
+  // grants build access via the request_build_mode tool or the phase
+  // pill. The caller forwards this to filterToolsForJobPhase to drop
+  // every write tool from the request when phase==='plan'.
+  aiPhase = aiPhase === 'build' ? 'build' : 'plan';
   // Pull the job + the related data the bulk-save serializes alongside it.
   const jobRes = await pool.query('SELECT id, owner_id, data FROM jobs WHERE id = $1', [jobId]);
   if (!jobRes.rows.length) throw new Error('Job not found');
@@ -1722,9 +1775,27 @@ async function buildJobContext(jobId, clientContext) {
     });
   }
 
+  // ── Active mode block ──────────────────────────────────────────
+  // Mirrors AG's plan/build pattern. Server-side tool filtering is the
+  // hard guard; this prompt block is the soft guard so the model
+  // doesn't dangle "I would have done X" — it just adapts.
+  lines.push('');
+  if (aiPhase === 'plan') {
+    lines.push('# CURRENT MODE: PLAN');
+    lines.push('You are in **Plan mode** — read-only analysis. Every write tool (set_phase_pct_complete, set_phase_field, set_node_value, assign_qb_line, create_node, delete_node) has been removed from your tool list this turn, so you literally cannot call them.');
+    lines.push('In Plan mode you SHOULD:');
+    lines.push('  - Run reads, audit data, surface gaps and risks, propose what changes WOULD fix them.');
+    lines.push('  - When your analysis surfaces an action you\'d need to take but can\'t (e.g. "B1 has cost data but pctComplete=0"), call `request_build_mode` with a short rationale + the bullet list of writes you\'d make. The PM gets an approval card; on approve, the next turn opens with full write access.');
+    lines.push('  - Do NOT write the planned actions out as fake tool calls or as placeholder JSON. Just describe them in prose so the user can decide.');
+  } else {
+    lines.push('# CURRENT MODE: BUILD');
+    lines.push('You are in **Build mode** — full tool access. The PM has explicitly granted writes for this session (or has the panel pinned in Build). Make changes confidently when the data supports them, but every write still goes through the per-tool approval card so the PM can veto.');
+    lines.push('Reminder: prefer one focused edit per tool call (each becomes its own approval card). Building % complete cascades to every phase under that building — call that out in your rationale when you use it.');
+  }
+
   // Job side stays plain — single string. Lower volume than AG/HR so
   // the marginal caching benefit isn't worth the structural complexity.
-  return { system: lines.join('\n'), photoBlocks: [] };
+  return { system: lines.join('\n'), photoBlocks: [], aiPhase: aiPhase };
 }
 
 // History endpoints scoped by entity_type='job'
@@ -1774,6 +1845,7 @@ router.post('/jobs/:id/chat',
     if (!userMessage) return res.status(400).json({ error: 'message is required' });
     const jobId = req.params.id;
     const clientContext = (req.body && req.body.clientContext) || null;
+    const aiPhase = (req.body && req.body.aiPhase) === 'build' ? 'build' : 'plan';
 
     setSSEHeaders(res);
 
@@ -1788,7 +1860,7 @@ router.post('/jobs/:id/chat',
       const cap = MAX_HISTORY_PAIRS * 2;
       if (history.length > cap) history = history.slice(-cap);
 
-      const ctx = await buildJobContext(jobId, clientContext);
+      const ctx = await buildJobContext(jobId, clientContext, aiPhase);
 
       const messages = [
         ...history.map(m => ({ role: m.role, content: m.content })),
@@ -1806,11 +1878,12 @@ router.post('/jobs/:id/chat',
       // assistant can emit tool_use proposals. Approval flow is the
       // same as the estimate side — client renders cards, user
       // approves, /chat/continue resumes the turn with tool_results.
+      // Plan mode filters JOB_TOOLS down to read-only + request_build_mode.
       await runStream({
         anthropic, res,
         system: ctx.system,
         messages: messages,
-        tools: JOB_TOOLS,
+        tools: filterToolsForJobPhase(JOB_TOOLS, ctx.aiPhase),
         persistAssistantText: async (text, usage) => {
           if (!text) return;
           const aid = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
@@ -1842,6 +1915,7 @@ router.post('/jobs/:id/chat/continue',
     const pendingContent = req.body && req.body.pending_assistant_content;
     const toolResults = req.body && req.body.tool_results;
     const clientContext = (req.body && req.body.clientContext) || null;
+    const aiPhase = (req.body && req.body.aiPhase) === 'build' ? 'build' : 'plan';
     if (!Array.isArray(pendingContent) || !Array.isArray(toolResults) || !toolResults.length) {
       return res.status(400).json({ error: 'pending_assistant_content and tool_results are required' });
     }
@@ -1860,7 +1934,7 @@ router.post('/jobs/:id/chat/continue',
       const cap = MAX_HISTORY_PAIRS * 2;
       if (history.length > cap) history = history.slice(-cap);
 
-      const ctx = await buildJobContext(jobId, clientContext);
+      const ctx = await buildJobContext(jobId, clientContext, aiPhase);
 
       const toolResultBlocks = toolResults.map(r => ({
         type: 'tool_result',
@@ -1880,7 +1954,7 @@ router.post('/jobs/:id/chat/continue',
         anthropic, res,
         system: ctx.system,
         messages: messages,
-        tools: JOB_TOOLS,
+        tools: filterToolsForJobPhase(JOB_TOOLS, ctx.aiPhase),
         persistAssistantText: async (text, usage) => {
           if (!text) return;
           const aid = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
