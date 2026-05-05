@@ -255,14 +255,14 @@
                         </div>
 
                         <div class="sub-tabs">
-                            <button class="sub-tab-btn-job active" data-subtab="job-overview">Overview</button>
-                            <button class="sub-tab-btn-job" data-subtab="job-wip">WIP</button>
-                            <button class="sub-tab-btn-job" data-subtab="job-costs">Job Costs</button>
-                            <button class="sub-tab-btn-job" data-subtab="job-changeorders">Change Orders</button>
-                            <button class="sub-tab-btn-job" data-subtab="job-purchaseorders">Purchase Orders</button>
-                            <button class="sub-tab-btn-job" data-subtab="job-invoices">Invoices</button>
-                            <button class="sub-tab-btn-job" data-subtab="job-buildings">Buildings</button>
-                            <button class="sub-tab-btn-job" data-subtab="job-labor">Labor / Burden</button>
+                            <button class="sub-tab-btn-job active" data-subtab="job-overview" data-agx-icon="insights">Overview</button>
+                            <button class="sub-tab-btn-job" data-subtab="job-wip" data-agx-icon="wip">WIP</button>
+                            <button class="sub-tab-btn-job" data-subtab="job-costs" data-agx-icon="estimates">Job Costs</button>
+                            <button class="sub-tab-btn-job" data-subtab="job-changeorders" data-agx-icon="links">Change Orders</button>
+                            <button class="sub-tab-btn-job" data-subtab="job-purchaseorders" data-agx-icon="materials">Purchase Orders</button>
+                            <button class="sub-tab-btn-job" data-subtab="job-invoices" data-agx-icon="exports">Invoices</button>
+                            <button class="sub-tab-btn-job" data-subtab="job-buildings" data-agx-icon="buildings">Buildings</button>
+                            <button class="sub-tab-btn-job" data-subtab="job-labor" data-agx-icon="subs">Labor / Burden</button>
                         </div>
 
                         <!-- Job Overview -->
@@ -612,10 +612,10 @@
                 <!-- ESTIMATES TAB -->
                 <div id="estimates" class="tab-content">
                     <div id="estimates-main-tabs" class="ws-right-tabs">
-                        <button class="ws-right-tab active" data-estimates-subtab="leads" onclick="switchEstimatesSubTab('leads')" data-cap="LEADS_VIEW">Leads</button>
-                        <button class="ws-right-tab" data-estimates-subtab="list" onclick="switchEstimatesSubTab('list')">Estimates</button>
-                        <button class="ws-right-tab" data-estimates-subtab="clients" onclick="switchEstimatesSubTab('clients')">Clients</button>
-                        <button class="ws-right-tab" data-estimates-subtab="subs" onclick="switchEstimatesSubTab('subs')">Subs</button>
+                        <button class="ws-right-tab active" data-estimates-subtab="leads" data-agx-icon="leads" onclick="switchEstimatesSubTab('leads')" data-cap="LEADS_VIEW">Leads</button>
+                        <button class="ws-right-tab" data-estimates-subtab="list" data-agx-icon="estimates" onclick="switchEstimatesSubTab('list')">Estimates</button>
+                        <button class="ws-right-tab" data-estimates-subtab="clients" data-agx-icon="clients" onclick="switchEstimatesSubTab('clients')">Clients</button>
+                        <button class="ws-right-tab" data-estimates-subtab="subs" data-agx-icon="subs" onclick="switchEstimatesSubTab('subs')">Subs</button>
                     </div>
 
                     <!-- Leads sub-tab -->
@@ -847,13 +847,13 @@
                 <!-- ADMIN TAB (admin-only, populated by js/admin.js) -->
                 <div id="admin" class="tab-content" data-admin-only style="display:none;">
                     <div class="ws-right-tabs">
-                        <button class="ws-right-tab active" data-admin-subtab="users" onclick="switchAdminSubTab('users')">Users</button>
-                        <button class="ws-right-tab" data-admin-subtab="jobs" onclick="switchAdminSubTab('jobs')">Job Assignments</button>
-                        <button class="ws-right-tab" data-admin-subtab="metrics" onclick="switchAdminSubTab('metrics')">Metrics</button>
-                        <button class="ws-right-tab" data-admin-subtab="roles" onclick="switchAdminSubTab('roles')">Roles</button>
-                        <button class="ws-right-tab" data-admin-subtab="templates" onclick="switchAdminSubTab('templates')">Templates</button>
-                        <button class="ws-right-tab" data-admin-subtab="materials" onclick="switchAdminSubTab('materials')">Materials</button>
-                        <button class="ws-right-tab" data-admin-subtab="email" onclick="switchAdminSubTab('email')">Email</button>
+                        <button class="ws-right-tab active" data-admin-subtab="users" data-agx-icon="clients" onclick="switchAdminSubTab('users')">Users</button>
+                        <button class="ws-right-tab" data-admin-subtab="jobs" data-agx-icon="wip" onclick="switchAdminSubTab('jobs')">Job Assignments</button>
+                        <button class="ws-right-tab" data-admin-subtab="metrics" data-agx-icon="insights" onclick="switchAdminSubTab('metrics')">Metrics</button>
+                        <button class="ws-right-tab" data-admin-subtab="roles" data-agx-icon="admin" onclick="switchAdminSubTab('roles')">Roles</button>
+                        <button class="ws-right-tab" data-admin-subtab="templates" data-agx-icon="estimates" onclick="switchAdminSubTab('templates')">Templates</button>
+                        <button class="ws-right-tab" data-admin-subtab="materials" data-agx-icon="materials" onclick="switchAdminSubTab('materials')">Materials</button>
+                        <button class="ws-right-tab" data-admin-subtab="email" data-agx-icon="links" onclick="switchAdminSubTab('email')">Email</button>
                         <!-- Email Templates moved INTO the Templates sub-tab as a 3rd inner tab.
                              The pane div below stays for back-compat (no current callers) but
                              is unused — the inner Templates → Email tab renders into a fresh
