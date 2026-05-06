@@ -1432,7 +1432,7 @@
       if (bulkButtons) {
         var remaining = totalCount - responses.length;
         if (remaining <= 0) bulkButtons.remove();
-        else bulkButtons.querySelector('[data-bulk-info]').textContent = remaining + ' remaining';
+        else bulkButtons.querySelector('[data-bulk-info]').textContent = remaining + ' awaiting review';
       }
 
       if (responses.length === totalCount) {
@@ -1454,9 +1454,9 @@
       var bar = document.createElement('div');
       bar.style.cssText = 'display:flex;align-items:center;gap:8px;flex:1;font-size:11px;color:var(--text-dim,#aaa);';
       bar.innerHTML =
-        '<span style="color:#34d399;font-weight:700;">&#x2713; Trusted</span>' +
+        '<span style="display:inline-block;padding:2px 8px;border-radius:9px;background:rgba(52,211,153,0.12);color:#34d399;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;">&#x2713; Trusted</span>' +
         '<span data-countdown style="color:var(--text-dim,#888);">auto-applying in 5s…</span>' +
-        '<button data-cancel class="ghost small" style="padding:3px 10px;font-size:10px;margin-left:auto;">Cancel &amp; review</button>';
+        '<button data-cancel class="ghost small" style="padding:4px 10px;font-size:10px;margin-left:auto;">Cancel &amp; review</button>';
       actionsRow.appendChild(bar);
       var seconds = 5;
       var iv = setInterval(function() {
@@ -1470,10 +1470,11 @@
       }, 1000);
       bar.querySelector('[data-cancel]').onclick = function() {
         clearInterval(iv);
-        // Restore the manual buttons
+        // Restore the manual buttons in the same shape renderProposalCard
+        // emits, so the visual treatment stays consistent after cancel.
         actionsRow.innerHTML =
-          '<button data-card-approve class="success small" style="padding:4px 12px;font-size:11px;">&check; Approve</button>' +
-          '<button data-card-reject class="ghost small" style="padding:4px 12px;font-size:11px;">&times; Reject</button>';
+          '<button data-card-approve class="success small" style="padding:5px 14px;font-size:11px;font-weight:600;">&check; Approve</button>' +
+          '<button data-card-reject class="ghost small" style="padding:5px 14px;font-size:11px;">&times; Reject</button>';
         actionsRow.querySelector('[data-card-approve]').onclick = function() { answer(idx, true, card); };
         actionsRow.querySelector('[data-card-reject]').onclick = function() { answer(idx, false, card); };
       };
@@ -1482,11 +1483,12 @@
     // Bulk-action bar when there are 2+ proposals
     if (totalCount >= 2) {
       bulkButtons = document.createElement('div');
-      bulkButtons.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 10px;background:rgba(79,140,255,0.05);border:1px solid rgba(79,140,255,0.2);border-radius:6px;font-size:11px;color:var(--text-dim,#aaa);';
+      bulkButtons.style.cssText = 'display:flex;align-items:center;gap:10px;padding:10px 14px;background:rgba(79,140,255,0.06);border:1px solid rgba(79,140,255,0.25);border-radius:8px;font-size:12px;color:var(--text,#fff);';
       bulkButtons.innerHTML =
-        '<span data-bulk-info>' + totalCount + ' proposals</span>' +
-        '<button data-bulk-approve class="success small" style="padding:4px 10px;font-size:11px;margin-left:auto;">&check; Approve all</button>' +
-        '<button data-bulk-reject class="ghost small" style="padding:4px 10px;font-size:11px;">&times; Reject all</button>';
+        '<span style="font-size:14px;">&#x1F4DD;</span>' +
+        '<span data-bulk-info style="font-weight:600;">' + totalCount + ' proposals awaiting review</span>' +
+        '<button data-bulk-approve class="success small" style="padding:5px 12px;font-size:11px;font-weight:600;margin-left:auto;">&check; Approve all</button>' +
+        '<button data-bulk-reject class="ghost small" style="padding:5px 12px;font-size:11px;">&times; Reject all</button>';
       propContainer.appendChild(bulkButtons);
       bulkButtons.querySelector('[data-bulk-approve]').onclick = function() {
         cards.forEach(function(card, i) {
@@ -3030,13 +3032,34 @@
   }
 
   // Card rendering — one per tool_use block, formatted by tool type.
+  // Categorize a tool name into one of three action kinds so the card
+  // can color-shift accordingly: green-leaning for additions, blue
+  // for edits, red for destructive operations. Defaults to 'edit'.
+  function cardKindFor(toolName) {
+    var n = String(toolName || '');
+    if (/^(propose_add|create_|attach_|wire_)/i.test(n)) return 'add';
+    if (/^(propose_delete|delete_|merge_|split_|unsync)/i.test(n)) return 'remove';
+    if (/^(request_build_mode|propose_link|propose_toggle|propose_switch)/i.test(n)) return 'flow';
+    return 'edit';
+  }
+  function cardChromeFor(kind) {
+    if (kind === 'add')    return { accent: '#34d399', tint: 'rgba(52,211,153,0.06)',  border: 'rgba(52,211,153,0.25)' };
+    if (kind === 'remove') return { accent: '#f87171', tint: 'rgba(248,113,113,0.06)', border: 'rgba(248,113,113,0.25)' };
+    if (kind === 'flow')   return { accent: '#a78bfa', tint: 'rgba(167,139,250,0.06)', border: 'rgba(167,139,250,0.25)' };
+    return                       { accent: '#4f8cff', tint: 'rgba(79,140,255,0.06)',  border: 'rgba(79,140,255,0.25)' };
+  }
+
   function renderProposalCard(tu) {
     var card = document.createElement('div');
+    var chrome = cardChromeFor(cardKindFor(tu.name));
     // width:100% + box-sizing belt-and-suspenders so the card always
     // takes the column width even when the flex parent gets confused
     // (e.g. when the assistant text contains long unbroken strings or
     // a `<pre>` body that browsers shrink-wrap by default).
-    card.style.cssText = 'background:rgba(255,255,255,0.04);border:1px solid var(--border,#333);border-left:3px solid #4f8cff;border-radius:6px;padding:10px 12px;width:100%;box-sizing:border-box;min-width:0;';
+    // Restyled to match the newer admin look (Prompt Preview / Anthropic
+    // resources / Batch detail): tinted bg + matching thin border +
+    // accent left strip colored by action kind (add/edit/remove/flow).
+    card.style.cssText = 'background:' + chrome.tint + ';border:1px solid ' + chrome.border + ';border-left:3px solid ' + chrome.accent + ';border-radius:8px;padding:12px 14px;width:100%;box-sizing:border-box;min-width:0;';
 
     var heading = '';
     var detail = '';
@@ -3339,18 +3362,36 @@
     }
 
     var rationale = input.rationale
-      ? '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:6px;font-style:italic;border-top:1px dashed var(--border,#333);padding-top:6px;">' + escapeHTMLLocal(input.rationale) + '</div>'
+      ? '<div style="font-size:11px;color:var(--text-dim,#aaa);margin-top:10px;padding:8px 10px;background:rgba(0,0,0,0.18);border-radius:5px;line-height:1.45;">' +
+          '<span style="display:inline-block;font-size:9px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.6px;margin-right:6px;">Why</span>' +
+          escapeHTMLLocal(input.rationale) +
+        '</div>'
       : '';
 
+    // Header: action label + tool-name pill + status slot. Status starts
+    // empty; markCardDone fills it with an Approved/Rejected pill.
+    // Keeping `data-card-status` and `data-card-actions` so existing
+    // wiring + auto-apply countdown logic in the answer/timer flows
+    // continue to work without changes.
+    var toolPill =
+      '<span style="display:inline-block;padding:2px 7px;border-radius:9px;background:rgba(255,255,255,0.05);color:var(--text-dim,#888);font-family:\'SF Mono\',Menlo,monospace;font-size:10px;letter-spacing:0.2px;">' +
+        escapeHTMLLocal(tu.name || '') +
+      '</span>';
+    var proposedPill =
+      '<span style="display:inline-block;padding:2px 8px;border-radius:9px;background:' + chrome.tint + ';color:' + chrome.accent + ';font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;border:1px solid ' + chrome.border + ';">Proposed</span>';
+
     card.innerHTML =
-      '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">' +
-        '<div style="font-size:11px;font-weight:700;color:#4f8cff;flex:1;text-transform:none;letter-spacing:normal;">' + heading + '</div>' +
+      '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">' +
+        '<div style="font-size:13px;font-weight:600;color:var(--text,#fff);flex:1;line-height:1.3;">' + heading + '</div>' +
+        proposedPill +
         '<div data-card-status style="font-size:10px;font-weight:600;"></div>' +
       '</div>' +
-      detail + rationale +
-      '<div data-card-actions style="display:flex;gap:6px;margin-top:8px;">' +
-        '<button data-card-approve class="success small" style="padding:4px 12px;font-size:11px;">&check; Approve</button>' +
-        '<button data-card-reject class="ghost small" style="padding:4px 12px;font-size:11px;">&times; Reject</button>' +
+      '<div style="margin-bottom:6px;">' + toolPill + '</div>' +
+      '<div>' + detail + '</div>' +
+      rationale +
+      '<div data-card-actions style="display:flex;gap:8px;margin-top:12px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.06);">' +
+        '<button data-card-approve class="success small" style="padding:5px 14px;font-size:11px;font-weight:600;">&check; Approve</button>' +
+        '<button data-card-reject class="ghost small" style="padding:5px 14px;font-size:11px;">&times; Reject</button>' +
       '</div>';
 
     return card;
@@ -3364,7 +3405,8 @@
   // tighter render. One- or two-line summary + small ✓/× buttons.
   function renderProposalTile(tu) {
     var tile = document.createElement('div');
-    tile.style.cssText = 'background:rgba(255,255,255,0.04);border:1px solid var(--border,#333);border-left:3px solid #4f8cff;border-radius:5px;padding:6px 8px;display:flex;flex-direction:column;gap:4px;min-width:0;';
+    var tChrome = cardChromeFor(cardKindFor(tu.name));
+    tile.style.cssText = 'background:' + tChrome.tint + ';border:1px solid ' + tChrome.border + ';border-left:3px solid ' + tChrome.accent + ';border-radius:6px;padding:8px 10px;display:flex;flex-direction:column;gap:5px;min-width:0;';
 
     var input = tu.input || {};
     var summary = '';
