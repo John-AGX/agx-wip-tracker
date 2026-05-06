@@ -49,7 +49,12 @@ router.get('/me', requireAuth, (req, res) => {
     agent_mode_ag: (process.env.AGX_AGENT_MODE_AG || '').toLowerCase() === 'agents' ? 'agents' : 'legacy',
     // Phase 2 — same flip for Elle (jobs). Independent ramp so AG
     // telemetry can prove the Sessions path before Elle moves over.
-    agent_mode_job: (process.env.AGX_AGENT_MODE_JOB || '').toLowerCase() === 'agents' ? 'agents' : 'legacy'
+    agent_mode_job: (process.env.AGX_AGENT_MODE_JOB || '').toLowerCase() === 'agents' ? 'agents' : 'legacy',
+    // Phase 2 — same flip for HR (clients) and CoS (staff). All four
+    // ramp independently; production stays on v1 until each env var
+    // flips.
+    agent_mode_cra:   (process.env.AGX_AGENT_MODE_CRA   || '').toLowerCase() === 'agents' ? 'agents' : 'legacy',
+    agent_mode_staff: (process.env.AGX_AGENT_MODE_STAFF || '').toLowerCase() === 'agents' ? 'agents' : 'legacy'
   };
   res.json({ user: req.user, feature_flags: featureFlags });
 });

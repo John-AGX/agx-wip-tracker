@@ -89,19 +89,34 @@
     var u = (window.agxAuth && window.agxAuth.getUser) ? window.agxAuth.getUser() : null;
     return !!(u && u.feature_flags && u.feature_flags.agent_mode_ag === 'agents');
   }
-  // Phase 2 — same gating for Elle (jobs). Independent flag so we can
-  // ramp AG and Elle separately on telemetry.
+  // Phase 2 — same gating for Elle (jobs), HR (clients), and CoS
+  // (staff). Independent flags so each agent ramps separately on its
+  // own telemetry before flipping.
   function isJobAgentMode() {
     var u = (window.agxAuth && window.agxAuth.getUser) ? window.agxAuth.getUser() : null;
     return !!(u && u.feature_flags && u.feature_flags.agent_mode_job === 'agents');
+  }
+  function isCraAgentMode() {
+    var u = (window.agxAuth && window.agxAuth.getUser) ? window.agxAuth.getUser() : null;
+    return !!(u && u.feature_flags && u.feature_flags.agent_mode_cra === 'agents');
+  }
+  function isStaffAgentMode() {
+    var u = (window.agxAuth && window.agxAuth.getUser) ? window.agxAuth.getUser() : null;
+    return !!(u && u.feature_flags && u.feature_flags.agent_mode_staff === 'agents');
   }
   function apiBase() {
     if (_entityType === 'job') {
       var v2j = isJobAgentMode() ? '/v2' : '';
       return '/api/ai' + v2j + '/jobs/' + encodeURIComponent(_entityId);
     }
-    if (_entityType === 'client') return '/api/ai/clients';
-    if (_entityType === 'staff') return '/api/ai/staff';
+    if (_entityType === 'client') {
+      var v2c = isCraAgentMode() ? '/v2' : '';
+      return '/api/ai' + v2c + '/clients';
+    }
+    if (_entityType === 'staff') {
+      var v2s = isStaffAgentMode() ? '/v2' : '';
+      return '/api/ai' + v2s + '/staff';
+    }
     // estimate mode — flag-gated: v2 (Sessions) when agent mode is on,
     // v1 (messages.stream) by default.
     var v2 = isAgAgentMode() ? '/v2' : '';
@@ -1471,7 +1486,10 @@
           return;
         }
       }
-      responses.push({ tool_use_id: tu.id, approved: approved, applied_summary: summary });
+      // name + input are echoed back so the v2 (Sessions) /chat/continue
+      // path can execute the tool server-side without needing
+      // pending_assistant_content. v1 ignores these fields.
+      responses.push({ tool_use_id: tu.id, name: tu.name, input: tu.input, approved: approved, applied_summary: summary });
       markCardDone(card, approved, summary);
 
       // Refresh bulk-action button count
@@ -1631,7 +1649,7 @@
           });
 
         function finishAutoRead(tu, summary) {
-          responses.push({ tool_use_id: tu.id, approved: true, applied_summary: summary });
+          responses.push({ tool_use_id: tu.id, name: tu.name, input: tu.input, approved: true, applied_summary: summary });
           if (bulkButtons) {
             var remaining = totalCount - responses.length;
             if (remaining <= 0) bulkButtons.remove();

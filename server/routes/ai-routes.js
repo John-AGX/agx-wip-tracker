@@ -2204,7 +2204,21 @@ async function ensureAiSession({ agentKey, entityType, entityId, userId }) {
 // (user message and/or tool results), translate session events to the
 // existing v1 SSE shape, and persist the assistant text on terminal
 // idle. Stream-first then send — see managed-agents-events.md.
-async function runV2SessionStream({ anthropic, res, sessionId, eventsToSend, persistAssistantText }) {
+// `onCustomToolUse` is an optional callback for the HR / CoS auto-tier
+// pattern. It receives `{ id, name, input }` and returns one of:
+//   { tier: 'auto', summary: 'text' }    — auto-execute succeeded; we
+//                                            send the summary back to
+//                                            the agent and the session
+//                                            resumes
+//   { tier: 'auto', error: 'text' }      — auto-execute failed; we send
+//                                            an is_error result back
+//   { tier: 'approval' }                  — surface the tool use to the
+//                                            UI; collect it in
+//                                            pendingToolUses and end on
+//                                            the next idle
+// When the callback is omitted (AG / Elle path), every custom_tool_use
+// is treated as approval — matching today's behavior.
+async function runV2SessionStream({ anthropic, res, sessionId, eventsToSend, persistAssistantText, onCustomToolUse }) {
   function send(payload) { res.write('data: ' + JSON.stringify(payload) + '\n\n'); }
   function endWithDone() { res.write('data: [DONE]\n\n'); res.end(); }
 
@@ -2256,11 +2270,49 @@ async function runV2SessionStream({ anthropic, res, sessionId, eventsToSend, per
           // Per managed-agents docs, the id we send back as
           // custom_tool_use_id is event.id (e.g. sevt_…), not a
           // toolu_… id.
-          pendingToolUses.push({
+          const tu = {
             id: event.id,
             name: event.tool_name || event.name || 'unknown',
             input: event.input || {}
-          });
+          };
+          // HR / CoS auto-tier path: callback decides whether we
+          // execute server-side (and resume the session in-stream) or
+          // collect for user approval (default behavior).
+          if (typeof onCustomToolUse === 'function') {
+            let decision;
+            try {
+              decision = await onCustomToolUse(tu);
+            } catch (e) {
+              decision = { tier: 'auto', error: 'Tool execution failed: ' + (e.message || 'unknown') };
+            }
+            if (decision && decision.tier === 'auto') {
+              const isError = !!decision.error;
+              const summary = isError ? decision.error : (decision.summary || 'Done.');
+              if (isError) {
+                send({ tool_failed: { id: tu.id, name: tu.name, input: tu.input, error: summary } });
+              } else {
+                send({ tool_applied: { id: tu.id, name: tu.name, input: tu.input, summary: summary.slice(0, 500) } });
+              }
+              try {
+                await anthropic.beta.sessions.events.send(sessionId, {
+                  events: [{
+                    type: 'user.custom_tool_result',
+                    custom_tool_use_id: tu.id,
+                    content: [{ type: 'text', text: summary }],
+                    is_error: isError || undefined
+                  }]
+                });
+              } catch (e) {
+                console.error('Failed to send tool result back to session:', e);
+                send({ error: 'Failed to send tool result back to session: ' + (e.message || 'unknown') });
+                endWithDone();
+                return;
+              }
+              break; // continue iterating for the resumed agent events
+            }
+            // tier === 'approval' — surface to UI on next idle
+          }
+          pendingToolUses.push(tu);
           break;
         }
         case 'span.model_request_end': {
@@ -5694,6 +5746,333 @@ router.post('/staff/chat/continue',
       res.end();
     } catch (e) {
       console.error('AI staff chat/continue error:', e);
+      res.write('data: ' + JSON.stringify({ error: e.message || 'Server error' }) + '\n\n');
+      res.write('data: [DONE]\n\n');
+      res.end();
+    }
+  }
+);
+
+// ════════════════════════════════════════════════════════════════════
+// Phase 2 (HR + CoS) — v2 chat paths on the Anthropic Sessions API
+//
+// HR (clients) and CoS (staff) chat paths share an extra wrinkle vs.
+// AG/Elle: their tools split into auto-tier (executed server-side
+// inline) and approval-tier (surfaced to the user). The Sessions
+// migration handles this via the `onCustomToolUse` callback on
+// runV2SessionStream — auto-tier tools execute mid-stream and feed
+// their result back as a `user.custom_tool_result` so the session
+// resumes within the same HTTP request, while approval-tier tools
+// queue up and surface to the UI on the next idle.
+//
+// Each agent gets its own env-var flag so we can ramp them
+// independently:
+//   AGX_AGENT_MODE_CRA   = 'agents'   — HR on Sessions
+//   AGX_AGENT_MODE_STAFF = 'agents'   — CoS on Sessions
+// ════════════════════════════════════════════════════════════════════
+
+const FLAG_AGENT_MODE_CRA   = (process.env.AGX_AGENT_MODE_CRA || '').toLowerCase() === 'agents';
+const FLAG_AGENT_MODE_STAFF = (process.env.AGX_AGENT_MODE_STAFF || '').toLowerCase() === 'agents';
+
+// HR (clients) auto-execute hook — runs the same server-side code
+// path as v1's auto-tier branch (execClientToolWithCtx).
+function makeClientOnCustomToolUse(userId) {
+  return async function (tu) {
+    if (!isClientToolAutoTier(tu.name)) return { tier: 'approval' };
+    try {
+      const summary = await execClientToolWithCtx(tu.name, tu.input || {}, { userId });
+      return { tier: 'auto', summary };
+    } catch (e) {
+      return { tier: 'auto', error: 'Error: ' + (e.message || 'failed') };
+    }
+  };
+}
+
+// CoS (staff) auto-execute hook — read-only tools mostly; staff
+// approval-tier tools (skill-pack proposals) drop through to UI.
+function makeStaffOnCustomToolUse() {
+  return async function (tu) {
+    if (!isStaffToolAutoTier(tu.name)) return { tier: 'approval' };
+    try {
+      const summary = await execStaffTool(tu.name, tu.input || {});
+      return { tier: 'auto', summary };
+    } catch (e) {
+      return { tier: 'auto', error: 'Error: ' + (e.message || 'failed') };
+    }
+  };
+}
+
+// HR (clients) — POST /api/ai/v2/clients/chat
+router.post('/v2/clients/chat',
+  requireAuth, requireCapability('ESTIMATES_EDIT'),
+  async (req, res) => {
+    const anthropic = getAnthropic();
+    if (!anthropic) return res.status(503).json({ error: 'AI assistant is not configured.' });
+    if (!FLAG_AGENT_MODE_CRA) {
+      return res.status(503).json({ error: 'v2 chat path is disabled. Set AGX_AGENT_MODE_CRA=agents to enable.' });
+    }
+    const userMessage = (req.body && req.body.message || '').trim();
+    if (!userMessage) return res.status(400).json({ error: 'message is required' });
+    const additionalImages = Array.isArray(req.body && req.body.additional_images)
+      ? req.body.additional_images.slice(0, 12)
+      : [];
+    if (additionalImages.length) stashPendingClientImages(req.user.id, additionalImages);
+
+    setSSEHeaders(res);
+    try {
+      const ctx = await buildClientDirectoryContext();
+
+      // Per-turn directory snapshot wraps in <turn_context>; agent's
+      // stable system prompt holds identity. Inline images go before
+      // the text block.
+      const turnText = '<turn_context>\n' + ctx.system + '\n</turn_context>\n\n' + userMessage;
+      const imgBlocks = additionalImages.map(b64 => inlineImageBlock(b64)).filter(Boolean);
+      const userContent = imgBlocks.length
+        ? [...imgBlocks, { type: 'text', text: turnText }]
+        : [{ type: 'text', text: turnText }];
+
+      const session = await ensureAiSession({
+        agentKey: 'cra',
+        entityType: 'client',
+        entityId: null,
+        userId: req.user.id
+      });
+      await pool.query('UPDATE ai_sessions SET last_used_at = NOW() WHERE id = $1', [session.id]);
+
+      const userMsgId = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+      await pool.query(
+        `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content)
+         VALUES ($1, 'client', 'global', $2, 'user', $3)`,
+        [userMsgId, req.user.id, userMessage]
+      );
+
+      await runV2SessionStream({
+        anthropic, res,
+        sessionId: session.anthropic_session_id,
+        eventsToSend: [{ type: 'user.message', content: userContent }],
+        onCustomToolUse: makeClientOnCustomToolUse(req.user.id),
+        persistAssistantText: async (text, usage) => {
+          await saveClientAssistantMessage({ userId: req.user.id, text, usage });
+        }
+      });
+    } catch (e) {
+      console.error('AI v2 client chat error:', e);
+      res.write('data: ' + JSON.stringify({ error: e.message || 'Server error' }) + '\n\n');
+      res.write('data: [DONE]\n\n');
+      res.end();
+    }
+  }
+);
+
+// HR /chat/continue — translate the user's approve/reject decisions
+// into user.custom_tool_result events. Approved tools execute
+// server-side here; rejected tools just send a rejection message back
+// to the agent. The Session resumes from there and any subsequent
+// custom_tool_use events are routed through the auto-tier hook again.
+router.post('/v2/clients/chat/continue',
+  requireAuth, requireCapability('ESTIMATES_EDIT'),
+  async (req, res) => {
+    const anthropic = getAnthropic();
+    if (!anthropic) return res.status(503).json({ error: 'AI assistant is not configured.' });
+    if (!FLAG_AGENT_MODE_CRA) {
+      return res.status(503).json({ error: 'v2 chat path is disabled.' });
+    }
+    const decisions = req.body && req.body.tool_results;
+    if (!Array.isArray(decisions) || !decisions.length) {
+      return res.status(400).json({ error: 'tool_results is required' });
+    }
+
+    setSSEHeaders(res);
+    try {
+      const sessionRow = await pool.query(
+        `SELECT * FROM ai_sessions
+           WHERE agent_key = 'cra' AND entity_type = 'client'
+             AND entity_id IS NULL AND user_id = $1 AND archived_at IS NULL`,
+        [req.user.id]
+      );
+      if (!sessionRow.rows.length) {
+        res.write('data: ' + JSON.stringify({ error: 'No active session — start a new turn.' }) + '\n\n');
+        res.write('data: [DONE]\n\n');
+        return res.end();
+      }
+      const session = sessionRow.rows[0];
+
+      // Execute approved tools server-side; build the event list to
+      // feed back to the session.
+      const eventsToSend = [];
+      for (const d of decisions) {
+        let summary, isError = false;
+        if (!d.approved) {
+          summary = d.reject_reason || 'User rejected this proposal.';
+          res.write('data: ' + JSON.stringify({ tool_rejected: { id: d.tool_use_id, name: d.name } }) + '\n\n');
+        } else {
+          try {
+            // d.name + d.input are echoed by the client from the
+            // tool_use event the server sent on the prior turn.
+            summary = await execClientToolWithCtx(d.name, d.input || {}, { userId: req.user.id });
+            res.write('data: ' + JSON.stringify({ tool_applied: { id: d.tool_use_id, name: d.name, input: d.input, summary } }) + '\n\n');
+          } catch (e) {
+            summary = 'Error: ' + (e.message || 'failed');
+            isError = true;
+            res.write('data: ' + JSON.stringify({ tool_failed: { id: d.tool_use_id, name: d.name, input: d.input, error: summary } }) + '\n\n');
+          }
+        }
+        eventsToSend.push({
+          type: 'user.custom_tool_result',
+          custom_tool_use_id: d.tool_use_id,
+          content: [{ type: 'text', text: summary }],
+          is_error: isError || undefined
+        });
+      }
+
+      await pool.query('UPDATE ai_sessions SET last_used_at = NOW() WHERE id = $1', [session.id]);
+
+      await runV2SessionStream({
+        anthropic, res,
+        sessionId: session.anthropic_session_id,
+        eventsToSend,
+        onCustomToolUse: makeClientOnCustomToolUse(req.user.id),
+        persistAssistantText: async (text, usage) => {
+          await saveClientAssistantMessage({ userId: req.user.id, text, usage });
+        }
+      });
+    } catch (e) {
+      console.error('AI v2 client chat/continue error:', e);
+      res.write('data: ' + JSON.stringify({ error: e.message || 'Server error' }) + '\n\n');
+      res.write('data: [DONE]\n\n');
+      res.end();
+    }
+  }
+);
+
+// CoS (staff) — POST /api/ai/v2/staff/chat
+async function saveStaffAssistantMessage({ userId, text, usage }) {
+  const id = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+  await pool.query(
+    `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content, model,
+                              input_tokens, output_tokens,
+                              cache_creation_input_tokens, cache_read_input_tokens)
+     VALUES ($1, 'staff', 'global', $2, 'assistant', $3, $4, $5, $6, $7, $8)`,
+    [id, userId, text, MODEL,
+     usage.input_tokens, usage.output_tokens,
+     usage.cache_creation_input_tokens || null, usage.cache_read_input_tokens || null]
+  );
+}
+
+router.post('/v2/staff/chat',
+  requireAuth, requireCapability('ROLES_MANAGE'),
+  async (req, res) => {
+    const anthropic = getAnthropic();
+    if (!anthropic) return res.status(503).json({ error: 'AI assistant is not configured.' });
+    if (!FLAG_AGENT_MODE_STAFF) {
+      return res.status(503).json({ error: 'v2 chat path is disabled. Set AGX_AGENT_MODE_STAFF=agents to enable.' });
+    }
+    const userMessage = (req.body && req.body.message || '').trim();
+    if (!userMessage) return res.status(400).json({ error: 'message is required' });
+
+    setSSEHeaders(res);
+    try {
+      const ctx = await buildStaffContext();
+      const turnText = '<turn_context>\n' + ctx.system + '\n</turn_context>\n\n' + userMessage;
+
+      const session = await ensureAiSession({
+        agentKey: 'staff',
+        entityType: 'staff',
+        entityId: null,
+        userId: req.user.id
+      });
+      await pool.query('UPDATE ai_sessions SET last_used_at = NOW() WHERE id = $1', [session.id]);
+
+      const userMsgId = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+      await pool.query(
+        `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content)
+         VALUES ($1, 'staff', 'global', $2, 'user', $3)`,
+        [userMsgId, req.user.id, userMessage]
+      );
+
+      await runV2SessionStream({
+        anthropic, res,
+        sessionId: session.anthropic_session_id,
+        eventsToSend: [{ type: 'user.message', content: [{ type: 'text', text: turnText }] }],
+        onCustomToolUse: makeStaffOnCustomToolUse(),
+        persistAssistantText: async (text, usage) => {
+          await saveStaffAssistantMessage({ userId: req.user.id, text, usage });
+        }
+      });
+    } catch (e) {
+      console.error('AI v2 staff chat error:', e);
+      res.write('data: ' + JSON.stringify({ error: e.message || 'Server error' }) + '\n\n');
+      res.write('data: [DONE]\n\n');
+      res.end();
+    }
+  }
+);
+
+router.post('/v2/staff/chat/continue',
+  requireAuth, requireCapability('ROLES_MANAGE'),
+  async (req, res) => {
+    const anthropic = getAnthropic();
+    if (!anthropic) return res.status(503).json({ error: 'AI assistant is not configured.' });
+    if (!FLAG_AGENT_MODE_STAFF) {
+      return res.status(503).json({ error: 'v2 chat path is disabled.' });
+    }
+    const decisions = req.body && req.body.tool_results;
+    if (!Array.isArray(decisions) || !decisions.length) {
+      return res.status(400).json({ error: 'tool_results is required' });
+    }
+
+    setSSEHeaders(res);
+    try {
+      const sessionRow = await pool.query(
+        `SELECT * FROM ai_sessions
+           WHERE agent_key = 'staff' AND entity_type = 'staff'
+             AND entity_id IS NULL AND user_id = $1 AND archived_at IS NULL`,
+        [req.user.id]
+      );
+      if (!sessionRow.rows.length) {
+        res.write('data: ' + JSON.stringify({ error: 'No active session — start a new turn.' }) + '\n\n');
+        res.write('data: [DONE]\n\n');
+        return res.end();
+      }
+      const session = sessionRow.rows[0];
+
+      const eventsToSend = [];
+      for (const d of decisions) {
+        let summary, isError = false;
+        if (!d.approved) {
+          summary = d.reject_reason || 'User rejected this proposal.';
+          res.write('data: ' + JSON.stringify({ tool_rejected: { id: d.tool_use_id, name: d.name } }) + '\n\n');
+        } else {
+          try {
+            summary = await execStaffTool(d.name, d.input || {});
+            res.write('data: ' + JSON.stringify({ tool_applied: { id: d.tool_use_id, name: d.name, input: d.input, summary: summary.slice(0, 500) } }) + '\n\n');
+          } catch (e) {
+            summary = 'Error: ' + (e.message || 'failed');
+            isError = true;
+            res.write('data: ' + JSON.stringify({ tool_failed: { id: d.tool_use_id, name: d.name, input: d.input, error: summary } }) + '\n\n');
+          }
+        }
+        eventsToSend.push({
+          type: 'user.custom_tool_result',
+          custom_tool_use_id: d.tool_use_id,
+          content: [{ type: 'text', text: summary }],
+          is_error: isError || undefined
+        });
+      }
+
+      await pool.query('UPDATE ai_sessions SET last_used_at = NOW() WHERE id = $1', [session.id]);
+
+      await runV2SessionStream({
+        anthropic, res,
+        sessionId: session.anthropic_session_id,
+        eventsToSend,
+        onCustomToolUse: makeStaffOnCustomToolUse(),
+        persistAssistantText: async (text, usage) => {
+          await saveStaffAssistantMessage({ userId: req.user.id, text, usage });
+        }
+      });
+    } catch (e) {
+      console.error('AI v2 staff chat/continue error:', e);
       res.write('data: ' + JSON.stringify({ error: e.message || 'Server error' }) + '\n\n');
       res.write('data: [DONE]\n\n');
       res.end();
