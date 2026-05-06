@@ -248,6 +248,18 @@ async function initSchema() {
     ALTER TABLE attachments ADD COLUMN IF NOT EXISTS extracted_text TEXT;
     ALTER TABLE attachments ADD COLUMN IF NOT EXISTS extracted_text_at TIMESTAMPTZ;
 
+    -- Anthropic Files API caching — when an attachment's web variant
+    -- has been uploaded to Anthropic via beta.files.upload, the
+    -- returned file id lives here. The chat path can then reference
+    -- the photo by file_id instead of base64-encoding it on every
+    -- turn (cheaper, faster). Switching loadPhotoAsBlock to use
+    -- file_id requires migrating from messages.stream → beta.messages
+    -- .stream — that's a separate commit. For now this column is
+    -- populated by the admin /api/admin/files/upload-attachment/:id
+    -- endpoint and consumed by future chat changes.
+    ALTER TABLE attachments ADD COLUMN IF NOT EXISTS anthropic_file_id TEXT;
+    ALTER TABLE attachments ADD COLUMN IF NOT EXISTS anthropic_file_uploaded_at TIMESTAMPTZ;
+
     -- Markup linkage: when a user annotates a photo and saves it as a NEW
     -- attachment (rather than replacing the original), markup_of points
     -- back at the source attachment id. Lets the UI render a "Markups"

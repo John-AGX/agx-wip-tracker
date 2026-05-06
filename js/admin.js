@@ -3649,7 +3649,34 @@
         '<button class="ee-btn primary" onclick="submitElleAuditBatch()" title="Build one Elle audit per active job and submit as a single Anthropic batch.">&#x1F50D; Run Elle audit on every active job</button>' +
         '<button class="ee-btn secondary" onclick="renderBatchJobsList()">&#x21BB; Refresh</button>' +
       '</div>' +
-      '<div id="batch-jobs-list" style="font-size:12px;color:var(--text-dim,#888);font-style:italic;">Loading…</div>';
+      '<div id="batch-jobs-list" style="font-size:12px;color:var(--text-dim,#888);font-style:italic;">Loading…</div>' +
+      // Files API panel — sits below the batch list since both are
+      // "infrastructure" admin actions that don't fit the conversation
+      // log model.
+      '<div style="margin-top:24px;padding:14px;background:rgba(255,255,255,0.03);border:1px solid var(--border,#333);border-radius:8px;">' +
+        '<h3 style="margin:0 0 6px 0;font-size:13px;color:var(--text,#fff);">&#x1F4C2; Anthropic Files cache</h3>' +
+        '<p style="margin:0 0 10px 0;color:var(--text-dim,#888);font-size:11px;">' +
+          'When AG references a photo across multiple chat turns, currently the photo gets base64-encoded into the request every turn. Uploading once to Anthropic\'s Files API lets future turns reference the photo by id (cheaper, faster). Stats below; click to upload recent images.' +
+        '</p>' +
+        '<div id="files-stats-host" style="font-size:11px;color:var(--text-dim,#888);font-style:italic;">Loading…</div>' +
+        '<div style="margin-top:10px;">' +
+          '<button class="ee-btn secondary" onclick="uploadRecentPhotos(25)">Upload last 25 not-yet-uploaded images</button>' +
+        '</div>' +
+        '<p style="margin:8px 0 0 0;color:var(--text-dim,#666);font-size:10px;">' +
+          'Note: AG\'s chat path still uses base64 for now. Switching loadPhotoAsBlock to file_id references requires migrating chat from messages.stream() to beta.messages.stream() — that\'s a separate commit. The upload pipeline above sets up the cache in advance so the chat switch is a one-line change later.' +
+        '</p>' +
+      '</div>';
+
+    window.agxApi.get('/api/admin/files/stats').then(function(s) {
+      var host = document.getElementById('files-stats-host');
+      if (!host) return;
+      host.innerHTML =
+        '<span style="font-family:\'SF Mono\',monospace;color:var(--text,#fff);">' +
+          (s.uploaded || 0) + ' / ' + (s.total_images || 0) + ' images uploaded' +
+          (s.not_uploaded ? ' · <span style="color:#fbbf24;">' + s.not_uploaded + ' pending</span>' : ' · <span style="color:#34d399;">all cached</span>') +
+        '</span>';
+    }).catch(function() { /* stats are decorative; failures fine */ });
+
     window.agxApi.get('/api/admin/batch/jobs').then(function(resp) {
       var rows = (resp && resp.jobs) || [];
       var listHost = document.getElementById('batch-jobs-list');
@@ -3782,6 +3809,29 @@
   window.openBatchJobDetail = openBatchJobDetail;
   window.closeBatchJobDetail = closeBatchJobDetail;
   window.refreshBatchJob = refreshBatchJob;
+
+  // ─────────── Files API uploads ───────────
+  // One-click upload of recent unattached images to Anthropic's
+  // beta.files API. The chat path doesn't yet consume the cached
+  // file_ids — that's a follow-up commit (see admin-files-routes.js
+  // header). This call alone establishes the cache.
+  function uploadRecentPhotos(limit) {
+    var btn = document.activeElement;
+    if (btn && btn.tagName === 'BUTTON') { btn.disabled = true; btn.textContent = 'Uploading…'; }
+    window.agxApi.post('/api/admin/files/upload-recent', { limit: limit || 25 }).then(function(resp) {
+      var msg = '✓ Uploaded ' + resp.uploaded + ' / ' + resp.attempted + ' image' + (resp.attempted === 1 ? '' : 's');
+      var failed = (resp.results || []).filter(function(r) { return !r.ok; });
+      if (failed.length) {
+        msg += '\n\n' + failed.length + ' failed:\n' + failed.slice(0, 5).map(function(r) { return '- ' + r.attachment_id + ': ' + r.error; }).join('\n');
+      }
+      alert(msg);
+      renderBatchJobsList();
+    }).catch(function(err) {
+      alert('Upload failed: ' + (err.message || 'unknown'));
+      if (btn && btn.tagName === 'BUTTON') { btn.disabled = false; btn.textContent = 'Upload last 25 not-yet-uploaded images'; }
+    });
+  }
+  window.uploadRecentPhotos = uploadRecentPhotos;
 
   // ─────────── Run all evals (post-save verification) ───────────
   // Hits /api/admin/agents/skills/run-all-evals which runs every
