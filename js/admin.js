@@ -3026,6 +3026,7 @@
           '<button class="ws-right-tab' + (_agentsView === 'skills' ? ' active' : '') + '" onclick="switchAgentsView(\'skills\')">&#x1F9E0; Skills</button>' +
           '<button class="ws-right-tab' + (_agentsView === 'preview' ? ' active' : '') + '" onclick="switchAgentsView(\'preview\')">&#x1F50D; Prompt Preview</button>' +
           '<button class="ws-right-tab' + (_agentsView === 'batch' ? ' active' : '') + '" onclick="switchAgentsView(\'batch\')">&#x1F4E6; Batch</button>' +
+          '<button class="ws-right-tab' + (_agentsView === 'anthropic' ? ' active' : '') + '" onclick="switchAgentsView(\'anthropic\')">&#x1F310; Anthropic</button>' +
         '</div>' +
         '<div style="flex:1;"></div>' +
         '<button class="ee-btn" onclick="openChiefOfStaff()" title="Open the Chief of Staff agent — observes AG / Elle / HR, audits conversations, reviews skill packs" style="background:linear-gradient(135deg,#fbbf24,#f97316);color:#fff;border:none;font-weight:600;">&#x1F3A9; Ask Chief of Staff</button>' +
@@ -3047,6 +3048,7 @@
     else if (_agentsView === 'preview')              renderPromptPreview();
     else if (_agentsView === 'batch' && _batchJobId) renderBatchJobDetail(_batchJobId);
     else if (_agentsView === 'batch')                renderBatchJobsList();
+    else if (_agentsView === 'anthropic')            renderAnthropicResources();
     else if (_agentsConvKey)                         renderAgentsConversationDetail(_agentsConvKey);
     else                                             renderAgentsConversationList();
   }
@@ -3832,6 +3834,152 @@
     });
   }
   window.uploadRecentPhotos = uploadRecentPhotos;
+
+  // ─────────── Anthropic resources viewer ───────────
+  // Read-only browser for Skills / Files / Batches hosted on the
+  // Anthropic side. Each panel hits a corresponding /api/admin/
+  // anthropic/* endpoint that thinly wraps the SDK list methods.
+  // Lets the admin see the source-of-truth state of every resource
+  // we've created (and clean up orphans).
+  function renderAnthropicResources() {
+    var host = document.getElementById('agents-content');
+    if (!host) return;
+    host.innerHTML =
+      '<p style="margin:0 0 14px 0;color:var(--text-dim,#888);font-size:12px;">' +
+        'Live read-only view of every resource hosted in your Anthropic account from this app — Skills, Files, Batches. Source of truth: hits the Anthropic API directly each render. Console UI: <a href="https://console.anthropic.com/" target="_blank" style="color:#4f8cff;">console.anthropic.com</a> shows API keys + usage; this view shows the resource lists.' +
+      '</p>' +
+      '<div style="display:flex;gap:8px;align-items:center;margin-bottom:14px;">' +
+        '<button class="ee-btn secondary" onclick="renderAnthropicResources()">&#x21BB; Refresh all</button>' +
+      '</div>' +
+      '<div id="anthropic-skills-panel" style="margin-bottom:14px;"></div>' +
+      '<div id="anthropic-files-panel" style="margin-bottom:14px;"></div>' +
+      '<div id="anthropic-batches-panel" style="margin-bottom:14px;"></div>';
+
+    loadAnthropicSkills();
+    loadAnthropicFiles();
+    loadAnthropicBatches();
+  }
+
+  function panelHeader(label, icon) {
+    return '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">' +
+      '<span style="font-size:18px;">' + icon + '</span>' +
+      '<h3 style="margin:0;font-size:14px;font-weight:600;color:var(--text,#fff);">' + escapeHTML(label) + '</h3>' +
+      '</div>';
+  }
+
+  function loadAnthropicSkills() {
+    var host = document.getElementById('anthropic-skills-panel');
+    if (!host) return;
+    host.innerHTML = panelHeader('Native Skills', '🧠') + '<div style="font-size:12px;color:var(--text-dim,#888);font-style:italic;">Loading…</div>';
+    window.agxApi.get('/api/admin/anthropic/skills').then(function(resp) {
+      var rows = (resp && resp.skills) || [];
+      var note = resp && resp.note;
+      if (!rows.length) {
+        host.innerHTML = panelHeader('Native Skills', '🧠') +
+          '<div style="font-size:12px;color:var(--text-dim,#888);font-style:italic;padding:10px 0;">' +
+            (note ? escapeHTML(note) : 'No native Skills hosted yet.') +
+            ' AGX hasn\'t migrated to the native-Skills primitive — see Native Skills migration plan in chat for details.' +
+          '</div>';
+        return;
+      }
+      var html = panelHeader('Native Skills (' + rows.length + ')', '🧠') +
+        '<div class="table-container"><table style="width:100%;font-size:12px;">' +
+        '<thead><tr><th>Id</th><th>Name</th><th>Description</th><th>Created</th></tr></thead><tbody>';
+      rows.forEach(function(s) {
+        var when = '';
+        try { when = s.created_at ? new Date(s.created_at).toLocaleDateString() : ''; } catch (e) {}
+        html += '<tr>' +
+          '<td style="font-family:\'SF Mono\',monospace;font-size:11px;color:var(--text-dim,#aaa);">' + escapeHTML(s.id || '') + '</td>' +
+          '<td>' + escapeHTML(s.name || '') + '</td>' +
+          '<td style="font-size:11px;color:var(--text-dim,#aaa);">' + escapeHTML((s.description || '').slice(0, 120)) + '</td>' +
+          '<td style="font-size:11px;color:var(--text-dim,#aaa);">' + escapeHTML(when) + '</td>' +
+        '</tr>';
+      });
+      html += '</tbody></table></div>';
+      host.innerHTML = html;
+    }).catch(function(err) {
+      host.innerHTML = panelHeader('Native Skills', '🧠') +
+        '<div style="color:#e74c3c;font-size:12px;">Failed: ' + escapeHTML(err.message || 'unknown') + '</div>';
+    });
+  }
+
+  function loadAnthropicFiles() {
+    var host = document.getElementById('anthropic-files-panel');
+    if (!host) return;
+    host.innerHTML = panelHeader('Files', '📂') + '<div style="font-size:12px;color:var(--text-dim,#888);font-style:italic;">Loading…</div>';
+    window.agxApi.get('/api/admin/anthropic/files?limit=200').then(function(resp) {
+      var rows = (resp && resp.files) || [];
+      if (!rows.length) {
+        host.innerHTML = panelHeader('Files', '📂') +
+          '<div style="font-size:12px;color:var(--text-dim,#888);font-style:italic;padding:10px 0;">No files uploaded yet. Upload from Admin → Agents → 📦 Batch → Files cache panel.</div>';
+        return;
+      }
+      var totalBytes = rows.reduce(function(s, f) { return s + (Number(f.size_bytes) || 0); }, 0);
+      var totalMB = (totalBytes / 1048576).toFixed(2);
+      var html = panelHeader('Files (' + rows.length + ' · ' + totalMB + ' MB)', '📂') +
+        '<div class="table-container"><table style="width:100%;font-size:12px;">' +
+        '<thead><tr><th>Id</th><th>Filename</th><th style="text-align:right;">Size</th><th>Type</th><th>Created</th></tr></thead><tbody>';
+      rows.forEach(function(f) {
+        var when = '';
+        try { when = f.created_at ? new Date(f.created_at).toLocaleDateString() : ''; } catch (e) {}
+        var sizeKB = f.size_bytes ? Math.round(Number(f.size_bytes) / 1024).toLocaleString() + ' KB' : '—';
+        html += '<tr>' +
+          '<td style="font-family:\'SF Mono\',monospace;font-size:11px;color:var(--text-dim,#aaa);">' + escapeHTML(f.id || '') + '</td>' +
+          '<td>' + escapeHTML(f.filename || '') + '</td>' +
+          '<td style="text-align:right;font-family:\'SF Mono\',monospace;font-size:11px;color:var(--text-dim,#aaa);">' + sizeKB + '</td>' +
+          '<td style="font-size:11px;color:var(--text-dim,#aaa);">' + escapeHTML(f.mime_type || f.type || '') + '</td>' +
+          '<td style="font-size:11px;color:var(--text-dim,#aaa);">' + escapeHTML(when) + '</td>' +
+        '</tr>';
+      });
+      html += '</tbody></table></div>';
+      host.innerHTML = html;
+    }).catch(function(err) {
+      host.innerHTML = panelHeader('Files', '📂') +
+        '<div style="color:#e74c3c;font-size:12px;">Failed: ' + escapeHTML(err.message || 'unknown') + '</div>';
+    });
+  }
+
+  function loadAnthropicBatches() {
+    var host = document.getElementById('anthropic-batches-panel');
+    if (!host) return;
+    host.innerHTML = panelHeader('Batches', '📦') + '<div style="font-size:12px;color:var(--text-dim,#888);font-style:italic;">Loading…</div>';
+    window.agxApi.get('/api/admin/anthropic/batches?limit=100').then(function(resp) {
+      var rows = (resp && resp.batches) || [];
+      if (!rows.length) {
+        host.innerHTML = panelHeader('Batches', '📦') +
+          '<div style="font-size:12px;color:var(--text-dim,#888);font-style:italic;padding:10px 0;">No batches submitted yet.</div>';
+        return;
+      }
+      var html = panelHeader('Batches (' + rows.length + ')', '📦') +
+        '<p style="margin:0 0 8px 0;font-size:11px;color:var(--text-dim,#666);">Source-of-truth list from Anthropic. Our local <em>Batch</em> tab tracks the same batches with admin metadata; this list shows everything hosted by Anthropic regardless of local state.</p>' +
+        '<div class="table-container"><table style="width:100%;font-size:12px;">' +
+        '<thead><tr><th>Id</th><th>Status</th><th style="text-align:right;">Counts</th><th>Created</th><th>Ends</th></tr></thead><tbody>';
+      rows.forEach(function(b) {
+        var c = b.request_counts || {};
+        var when = '';
+        var ends = '';
+        try { when = b.created_at ? new Date(b.created_at).toLocaleString() : ''; } catch (e) {}
+        try { ends = b.ended_at ? new Date(b.ended_at).toLocaleString() : ''; } catch (e) {}
+        var statusColor = b.processing_status === 'ended' ? '#34d399' : (b.processing_status === 'in_progress' ? '#fbbf24' : '#888');
+        html += '<tr>' +
+          '<td style="font-family:\'SF Mono\',monospace;font-size:11px;color:var(--text-dim,#aaa);">' + escapeHTML(b.id || '') + '</td>' +
+          '<td><span style="color:' + statusColor + ';font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">' + escapeHTML(b.processing_status || '') + '</span></td>' +
+          '<td style="text-align:right;font-family:\'SF Mono\',monospace;font-size:11px;color:var(--text-dim,#aaa);">' +
+            (c.processing != null || c.succeeded != null || c.errored != null ? (c.processing || 0) + 'p / ' + (c.succeeded || 0) + 's / ' + (c.errored || 0) + 'e' : '—') +
+          '</td>' +
+          '<td style="font-size:11px;color:var(--text-dim,#aaa);">' + escapeHTML(when) + '</td>' +
+          '<td style="font-size:11px;color:var(--text-dim,#aaa);">' + escapeHTML(ends) + '</td>' +
+        '</tr>';
+      });
+      html += '</tbody></table></div>';
+      host.innerHTML = html;
+    }).catch(function(err) {
+      host.innerHTML = panelHeader('Batches', '📦') +
+        '<div style="color:#e74c3c;font-size:12px;">Failed: ' + escapeHTML(err.message || 'unknown') + '</div>';
+    });
+  }
+
+  window.renderAnthropicResources = renderAnthropicResources;
 
   // ─────────── Run all evals (post-save verification) ───────────
   // Hits /api/admin/agents/skills/run-all-evals which runs every

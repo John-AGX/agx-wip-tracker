@@ -33,6 +33,7 @@ const emailRoutes = require('./routes/email-routes');
 const adminAgentsRoutes = require('./routes/admin-agents-routes');
 const adminBatchRoutes = require('./routes/admin-batch-routes');
 const adminFilesRoutes = require('./routes/admin-files-routes');
+const adminAnthropicRoutes = require('./routes/admin-anthropic-routes');
 const adminSmsRoutes = require('./routes/admin-sms-routes');
 const smsRoutes = require('./routes/sms-routes');
 const { storage } = require('./storage');
@@ -62,6 +63,7 @@ app.use('/api/email', emailRoutes);
 app.use('/api/admin/agents', adminAgentsRoutes);
 app.use('/api/admin/batch', adminBatchRoutes);
 app.use('/api/admin/files', adminFilesRoutes);
+app.use('/api/admin/anthropic', adminAnthropicRoutes);
 app.use('/api/admin/sms', adminSmsRoutes);
 app.use('/api/sms', smsRoutes);
 
