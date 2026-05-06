@@ -89,8 +89,17 @@
     var u = (window.agxAuth && window.agxAuth.getUser) ? window.agxAuth.getUser() : null;
     return !!(u && u.feature_flags && u.feature_flags.agent_mode_ag === 'agents');
   }
+  // Phase 2 — same gating for Elle (jobs). Independent flag so we can
+  // ramp AG and Elle separately on telemetry.
+  function isJobAgentMode() {
+    var u = (window.agxAuth && window.agxAuth.getUser) ? window.agxAuth.getUser() : null;
+    return !!(u && u.feature_flags && u.feature_flags.agent_mode_job === 'agents');
+  }
   function apiBase() {
-    if (_entityType === 'job') return '/api/ai/jobs/' + encodeURIComponent(_entityId);
+    if (_entityType === 'job') {
+      var v2j = isJobAgentMode() ? '/v2' : '';
+      return '/api/ai' + v2j + '/jobs/' + encodeURIComponent(_entityId);
+    }
     if (_entityType === 'client') return '/api/ai/clients';
     if (_entityType === 'staff') return '/api/ai/staff';
     // estimate mode — flag-gated: v2 (Sessions) when agent mode is on,

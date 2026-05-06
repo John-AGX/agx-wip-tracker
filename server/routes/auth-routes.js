@@ -46,7 +46,10 @@ router.get('/me', requireAuth, (req, res) => {
     // Phase 1b — when 'agents', the AG estimating chat panel hits
     // /api/ai/v2/estimates/:id/chat (Sessions API) instead of the
     // legacy /api/ai/estimates/:id/chat (messages.stream).
-    agent_mode_ag: (process.env.AGX_AGENT_MODE_AG || '').toLowerCase() === 'agents' ? 'agents' : 'legacy'
+    agent_mode_ag: (process.env.AGX_AGENT_MODE_AG || '').toLowerCase() === 'agents' ? 'agents' : 'legacy',
+    // Phase 2 — same flip for Elle (jobs). Independent ramp so AG
+    // telemetry can prove the Sessions path before Elle moves over.
+    agent_mode_job: (process.env.AGX_AGENT_MODE_JOB || '').toLowerCase() === 'agents' ? 'agents' : 'legacy'
   };
   res.json({ user: req.user, feature_flags: featureFlags });
 });

@@ -3142,6 +3142,167 @@ router.post('/jobs/:id/chat/continue',
 );
 
 // ════════════════════════════════════════════════════════════════════
+// Phase 2 — v2 Elle (jobs) chat path on the Anthropic Sessions API
+//
+// Mirrors Phase 1b's v2 estimates path. Long-lived Anthropic Session
+// per (job, user) — agent.create for Elle was registered in Phase 1a,
+// so the session inherits Elle's system prompt, JOB_TOOLS, web_search.
+//
+// Per-turn dynamic context (job WIP snapshot, change orders, node
+// graph) goes into the user message wrapped in <turn_context> instead
+// of being re-shipped as a system prefix on every request.
+//
+// Gated behind AGX_AGENT_MODE_JOB=agents. Production stays on the v1
+// runStream path until the flag is flipped.
+// ════════════════════════════════════════════════════════════════════
+
+const FLAG_AGENT_MODE_JOB = (process.env.AGX_AGENT_MODE_JOB || '').toLowerCase() === 'agents';
+
+// Persist the assistant text response for an Elle turn into ai_messages
+// (entity_type='job'). Mirrors the v1 inline insert so the messages
+// table stays canonical regardless of which path produced the row.
+async function saveJobAssistantMessage({ jobId, userId, text, usage }) {
+  if (!text) return;
+  const aid = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+  await pool.query(
+    `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content, model,
+                              input_tokens, output_tokens,
+                              cache_creation_input_tokens, cache_read_input_tokens)
+     VALUES ($1, 'job', $2, $3, 'assistant', $4, $5, $6, $7, $8, $9)`,
+    [aid, jobId, userId, text, MODEL,
+     usage.input_tokens, usage.output_tokens,
+     usage.cache_creation_input_tokens || null, usage.cache_read_input_tokens || null]
+  );
+}
+
+// POST /api/ai/v2/jobs/:id/chat — Sessions-backed chat for Elle.
+// Body: { message, clientContext, aiPhase }
+router.post('/v2/jobs/:id/chat',
+  requireAuth, requireCapability('FINANCIALS_VIEW'),
+  async (req, res) => {
+    const anthropic = getAnthropic();
+    if (!anthropic) {
+      return res.status(503).json({ error: 'AI assistant is not configured.' });
+    }
+    if (!FLAG_AGENT_MODE_JOB) {
+      return res.status(503).json({ error: 'v2 chat path is disabled. Set AGX_AGENT_MODE_JOB=agents to enable.' });
+    }
+    const userMessage = (req.body && req.body.message || '').trim();
+    if (!userMessage) return res.status(400).json({ error: 'message is required' });
+    const jobId = req.params.id;
+    const clientContext = (req.body && req.body.clientContext) || null;
+    const aiPhase = (req.body && req.body.aiPhase) === 'build' ? 'build' : 'plan';
+
+    setSSEHeaders(res);
+
+    try {
+      const ctx = await buildJobContext(jobId, clientContext, aiPhase);
+
+      // Wrap per-turn dynamic context in <turn_context> tags so the
+      // agent's stable system prompt isn't polluted with churn-prone
+      // fields. Elle's WIP snapshots can run long; the Session's
+      // built-in compaction will shorten older turns automatically.
+      const turnText =
+        '<turn_context>\n' + ctx.system + '\n</turn_context>\n\n' + userMessage;
+      const userContent = [{ type: 'text', text: turnText }];
+
+      const session = await ensureAiSession({
+        agentKey: 'job',
+        entityType: 'job',
+        entityId: jobId,
+        userId: req.user.id
+      });
+      await pool.query('UPDATE ai_sessions SET last_used_at = NOW() WHERE id = $1', [session.id]);
+
+      const userMsgId = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+      await pool.query(
+        `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content)
+         VALUES ($1, 'job', $2, $3, 'user', $4)`,
+        [userMsgId, jobId, req.user.id, userMessage]
+      );
+
+      await runV2SessionStream({
+        anthropic, res,
+        sessionId: session.anthropic_session_id,
+        eventsToSend: [{ type: 'user.message', content: userContent }],
+        persistAssistantText: async (text, usage) => {
+          await saveJobAssistantMessage({ jobId, userId: req.user.id, text, usage });
+        }
+      });
+    } catch (e) {
+      console.error('AI v2 job chat error:', e);
+      res.write('data: ' + JSON.stringify({ error: e.message || 'Server error' }) + '\n\n');
+      res.write('data: [DONE]\n\n');
+      res.end();
+    }
+  }
+);
+
+// POST /api/ai/v2/jobs/:id/chat/continue
+// Body: { tool_results: [{ tool_use_id, approved, applied_summary?, reject_reason? }] }
+router.post('/v2/jobs/:id/chat/continue',
+  requireAuth, requireCapability('FINANCIALS_VIEW'),
+  async (req, res) => {
+    const anthropic = getAnthropic();
+    if (!anthropic) {
+      return res.status(503).json({ error: 'AI assistant is not configured.' });
+    }
+    if (!FLAG_AGENT_MODE_JOB) {
+      return res.status(503).json({ error: 'v2 chat path is disabled.' });
+    }
+    const toolResults = req.body && req.body.tool_results;
+    if (!Array.isArray(toolResults) || !toolResults.length) {
+      return res.status(400).json({ error: 'tool_results is required' });
+    }
+    const jobId = req.params.id;
+
+    setSSEHeaders(res);
+
+    try {
+      const sessionRow = await pool.query(
+        `SELECT * FROM ai_sessions
+           WHERE agent_key = 'job' AND entity_type = 'job'
+             AND entity_id = $1 AND user_id = $2 AND archived_at IS NULL`,
+        [jobId, req.user.id]
+      );
+      if (!sessionRow.rows.length) {
+        res.write('data: ' + JSON.stringify({ error: 'No active session — start a new turn.' }) + '\n\n');
+        res.write('data: [DONE]\n\n');
+        return res.end();
+      }
+      const session = sessionRow.rows[0];
+
+      const eventsToSend = toolResults.map(r => ({
+        type: 'user.custom_tool_result',
+        custom_tool_use_id: r.tool_use_id,
+        content: [{
+          type: 'text',
+          text: r.approved
+            ? (r.applied_summary || 'User approved. Change applied.')
+            : (r.reject_reason || 'User rejected this proposal.')
+        }]
+      }));
+
+      await pool.query('UPDATE ai_sessions SET last_used_at = NOW() WHERE id = $1', [session.id]);
+
+      await runV2SessionStream({
+        anthropic, res,
+        sessionId: session.anthropic_session_id,
+        eventsToSend,
+        persistAssistantText: async (text, usage) => {
+          await saveJobAssistantMessage({ jobId, userId: req.user.id, text, usage });
+        }
+      });
+    } catch (e) {
+      console.error('AI v2 job chat/continue error:', e);
+      res.write('data: ' + JSON.stringify({ error: e.message || 'Server error' }) + '\n\n');
+      res.write('data: [DONE]\n\n');
+      res.end();
+    }
+  }
+);
+
+// ════════════════════════════════════════════════════════════════════
 // LEAD EXTRACTION FROM PDF
 //
 // Takes rendered pages from a Buildertrend "Lead Print" PDF and returns
