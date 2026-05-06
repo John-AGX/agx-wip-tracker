@@ -2228,7 +2228,10 @@ async function runV2SessionStream({ anthropic, res, sessionId, eventsToSend, per
 
   let stream;
   try {
-    stream = await anthropic.beta.sessions.stream(sessionId);
+    // SDK exposes the SSE stream at sessions.events.stream, not
+    // sessions.stream — the latter is undefined and silently returns
+    // nothing (which surfaces as a "(no response)" empty turn).
+    stream = await anthropic.beta.sessions.events.stream(sessionId);
   } catch (e) {
     console.error('Session stream open failed:', e);
     send({ error: e.message || 'Failed to open session stream' });
