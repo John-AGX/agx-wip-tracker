@@ -2402,6 +2402,25 @@
           '</label>';
         });
         html += '</div>';
+        // "Replaces section" dropdown — when set, the pack body substitutes
+        // for a named block in the agent's stable prefix instead of being
+        // appended at the end. Options come from the agent(s) checked above.
+        // Show only sections whose .agent matches at least one selected agent.
+        var sectionOpts = '<option value="">(append at end — default)</option>';
+        var seenIds = {};
+        agents.forEach(function(a) {
+          var list = _overridableSections[a] || [];
+          list.forEach(function(s) {
+            if (seenIds[s.id]) return;
+            seenIds[s.id] = true;
+            var sel = (skill.replaces_section === s.id) ? ' selected' : '';
+            sectionOpts += '<option value="' + escapeAttr(s.id) + '"' + sel + '>' + escapeHTML(s.id) + ' — ' + escapeHTML(s.description) + '</option>';
+          });
+        });
+        html += '<div style="margin-bottom:8px;font-size:11px;color:var(--text-dim,#aaa);">' +
+          '<label style="display:block;margin-bottom:3px;text-transform:none !important;letter-spacing:normal !important;font-weight:400 !important;">Replaces section <span style="color:var(--text-dim,#666);">(optional — overrides a named block of the agent\'s stable prefix instead of appending)</span></label>' +
+          '<select data-skill-replaces="' + idx + '" style="width:100%;font-size:12px;padding:5px 8px;font-family:\'SF Mono\',monospace;">' + sectionOpts + '</select>' +
+        '</div>';
         html += '<textarea data-skill-body="' + idx + '" rows="8" style="width:100%;resize:vertical;font-family:\'SF Mono\',monospace;font-size:12px;line-height:1.5;" placeholder="Free-form prompt text. Markdown ok. Refer to subgroups, tools, common scopes, pricing rules.">' + escapeHTML(skill.body || '') + '</textarea>';
         html += '</div>';
       });
@@ -2418,9 +2437,16 @@
       var nameEl = document.querySelector('[data-skill-name="' + idx + '"]');
       var bodyEl = document.querySelector('[data-skill-body="' + idx + '"]');
       var alwaysOnEl = document.querySelector('[data-skill-alwayson="' + idx + '"]');
+      var replacesEl = document.querySelector('[data-skill-replaces="' + idx + '"]');
       if (nameEl) skill.name = nameEl.value;
       if (bodyEl) skill.body = bodyEl.value;
       if (alwaysOnEl) skill.alwaysOn = !!alwaysOnEl.checked;
+      if (replacesEl) {
+        // Empty option = append-at-end mode; clear the field.
+        var v = replacesEl.value || '';
+        if (v) skill.replaces_section = v;
+        else delete skill.replaces_section;
+      }
       var agents = [];
       document.querySelectorAll('[data-skill-agent="' + idx + '"]').forEach(function(el) {
         if (el.checked) agents.push(el.getAttribute('data-agent-key'));
@@ -3476,11 +3502,29 @@
   window.renderPromptPreview = renderPromptPreview;
   window.loadPromptPreview = loadPromptPreview;
 
+  // Cached per-agent overridable sections. Populated by
+  // fetchOverridableSections() before the skills editor renders so the
+  // "Replaces section" dropdown can show options + descriptions.
+  var _overridableSections = { ag: [], elle: [], cra: [], staff: [] };
+
+  function fetchOverridableSections() {
+    var agentKeys = ['ag', 'elle', 'cra', 'staff'];
+    return Promise.all(agentKeys.map(function(a) {
+      return window.agxApi.get('/api/admin/agents/sections?agent=' + a)
+        .then(function(r) { _overridableSections[a] = (r && r.sections) || []; })
+        .catch(function() { _overridableSections[a] = []; });
+    }));
+  }
+
   function renderAgentsSkillsView() {
     var host = document.getElementById('agents-content');
     if (!host) return;
     host.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;font-style:italic;padding:20px 0;">Loading skill packs…</div>';
-    window.agxApi.settings.get('agent_skills').then(function(res) {
+    Promise.all([
+      window.agxApi.settings.get('agent_skills'),
+      fetchOverridableSections()
+    ]).then(function(results) {
+      var res = results[0];
       _skillsDraft = (res && res.setting && res.setting.value) || { skills: [] };
       if (!Array.isArray(_skillsDraft.skills)) _skillsDraft.skills = [];
       // Reuse the same body markup the Templates → Skills tab renders,

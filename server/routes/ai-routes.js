@@ -1425,7 +1425,10 @@ async function buildEstimateContext(estimateId, includePhotos) {
 
   // Load admin-editable skill packs targeted at AG. Stable across the
   // 5-min cache window since admins rarely edit them mid-session.
+  // Section overrides are loaded separately and injected at named
+  // anchor points (see renderSection).
   const skillBlocks = await loadActiveSkillsFor('ag');
+  const sectionOverrides = await loadSectionOverridesFor('ag');
   if (skillBlocks.length) {
     stableLines.push('# Loaded skills');
     stableLines.push('Skill packs your admin has assigned. Treat each as binding additional guidance on top of the baseline rules above.');
@@ -1437,8 +1440,8 @@ async function buildEstimateContext(estimateId, includePhotos) {
     });
   }
 
-  stableLines.push('# Tone');
-  stableLines.push('- Concise. Trade vocabulary welcome. Mix prose with proposals — short lead-in, the cards, a one-line wrap-up. Don\'t emit proposals without any explanation. If you need one piece of info to answer well, ask one targeted question first.');
+  // Tone — overridable via section_id `ag_tone`. See SECTION_DEFAULTS.
+  renderSection(stableLines, 'ag_tone', sectionOverrides);
 
   // ─── ASSEMBLE ──────────────────────────────────────────────────────
   // System param goes out as an array of two text blocks. The first is
@@ -1536,13 +1539,73 @@ async function loadActiveSkillsFor(agentKey) {
     if (!rows.length) return [];
     const cfg = rows[0].value || {};
     const skills = Array.isArray(cfg.skills) ? cfg.skills : [];
+    // alwaysOn packs append AT THE END of the system prompt. Section
+    // overrides (replaces_section set) are loaded separately by
+    // loadSectionOverridesFor and inserted INLINE at named anchor
+    // points — exclude them from the always-on append list so we
+    // don't double-load.
     return skills
-      .filter(s => s && s.alwaysOn !== false && Array.isArray(s.agents) && s.agents.indexOf(agentKey) >= 0 && s.body)
+      .filter(s => s && s.alwaysOn !== false && Array.isArray(s.agents) && s.agents.indexOf(agentKey) >= 0 && s.body && !s.replaces_section)
       .map(s => ({ name: s.name || '(untitled skill)', body: s.body }));
   } catch (e) {
     console.error('loadActiveSkillsFor error:', e);
     return [];
   }
+}
+
+// ──────────────────────────────────────────────────────────────────
+// Section-override mechanism — admin can replace specific named blocks
+// of the stable prefix without touching code. Each replaceable block
+// has a stable section_id, a default body, and a description for the
+// admin UI. Skill packs with `replaces_section: <id>` substitute their
+// body for that block's default at render time. Falls back to default
+// when no override exists.
+//
+// To add a new replaceable block:
+//   1. Add an entry to SECTION_DEFAULTS below with default body text.
+//   2. In the relevant buildXContext function, replace the inline
+//      stableLines.push(...) calls with renderSection(stableLines,
+//      agentKey, sectionId, overrides).
+// ──────────────────────────────────────────────────────────────────
+const SECTION_DEFAULTS = {
+  ag_tone: {
+    agent: 'ag',
+    description: "AG's tone and style preferences. Edit when the agent feels too corporate, too terse, or too verbose.",
+    body: '# Tone\n- Concise. Trade vocabulary welcome. Mix prose with proposals — short lead-in, the cards, a one-line wrap-up. Don\'t emit proposals without any explanation. If you need one piece of info to answer well, ask one targeted question first.'
+  }
+};
+
+async function loadSectionOverridesFor(agentKey) {
+  try {
+    const { rows } = await pool.query(
+      `SELECT value FROM app_settings WHERE key = 'agent_skills'`
+    );
+    if (!rows.length) return {};
+    const cfg = rows[0].value || {};
+    const skills = Array.isArray(cfg.skills) ? cfg.skills : [];
+    const result = {};
+    skills.forEach(s => {
+      if (!s || !s.replaces_section || !s.body) return;
+      if (!Array.isArray(s.agents) || s.agents.indexOf(agentKey) < 0) return;
+      // Last write wins if two packs target the same section. Admin UI
+      // should warn before saving such a config.
+      result[s.replaces_section] = s.body;
+    });
+    return result;
+  } catch (e) {
+    console.error('loadSectionOverridesFor error:', e);
+    return {};
+  }
+}
+
+// Append a named section to the stable-prefix lines array. Uses an
+// override body if one exists, otherwise the default from SECTION_DEFAULTS.
+// No-op if neither exists (defensive).
+function renderSection(stableLines, sectionId, overrides) {
+  const override = overrides && overrides[sectionId];
+  if (override) { stableLines.push(override); return; }
+  const def = SECTION_DEFAULTS[sectionId];
+  if (def && def.body) stableLines.push(def.body);
 }
 
 // Load a photo's web variant from storage and return an Anthropic image
@@ -5118,12 +5181,27 @@ router.post('/exec-tool', requireAuth, requireCapability('ESTIMATES_VIEW'), asyn
 // Internals exposed for sibling modules (eval harness in
 // admin-agents-routes). NOT for general use — these bypass the
 // streaming + auth flow that production AG depends on.
+// List of admin-overridable named sections per agent. Returned by
+// /api/admin/agents/sections so the skill-pack editor can render a
+// "Replaces section" dropdown with descriptions + default bodies.
+function sectionsForAgent(agentKey) {
+  const out = [];
+  Object.keys(SECTION_DEFAULTS).forEach(id => {
+    const def = SECTION_DEFAULTS[id];
+    if (def && def.agent === agentKey) {
+      out.push({ id, description: def.description || '', body: def.body || '' });
+    }
+  });
+  return out;
+}
+
 module.exports = router;
 module.exports.internals = {
   buildEstimateContext,
   buildJobContext,
   buildClientDirectoryContext,
   buildStaffContext,
+  sectionsForAgent,
   estimateTools: () => [...WEB_TOOLS, ...ESTIMATE_TOOLS],
   jobTools:      () => [...WEB_TOOLS, ...JOB_TOOLS],
   clientTools:   () => [...WEB_TOOLS, ...CLIENT_TOOLS.map(({ tier, ...t }) => t)],

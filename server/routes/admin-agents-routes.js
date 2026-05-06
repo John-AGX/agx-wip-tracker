@@ -407,6 +407,28 @@ router.get('/config', requireAuth, requireCapability('ROLES_MANAGE'), async (req
   }
 });
 
+// GET /api/admin/agents/sections?agent=ag|elle|hr|cos
+//   Returns the list of admin-overridable named sections for the
+//   requested agent, with each section's stable id, description,
+//   and default body. The skill-pack editor uses this to populate
+//   the "Replaces section" dropdown — when an admin sets that field
+//   on a pack, the pack's body substitutes for the section default
+//   at render time.
+router.get('/sections', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+  try {
+    const aiInternals = require('./ai-routes-internals');
+    if (!aiInternals || typeof aiInternals.sectionsForAgent !== 'function') {
+      return res.json({ sections: [] });
+    }
+    const agent = String(req.query.agent || '').toLowerCase();
+    if (!agent) return res.status(400).json({ error: 'agent is required' });
+    res.json({ sections: aiInternals.sectionsForAgent(agent) });
+  } catch (e) {
+    console.error('GET /api/admin/agents/sections error:', e);
+    res.status(500).json({ error: 'Server error: ' + (e.message || 'unknown') });
+  }
+});
+
 // GET /api/admin/agents/preview-prompt
 //   ?agent=ag|elle|hr|cos     — required. Which agent's system prompt to assemble.
 //   ?estimate_id=<id>         — required when agent=ag
