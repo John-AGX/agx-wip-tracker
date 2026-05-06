@@ -663,6 +663,33 @@ async function initSchema() {
     -- so the history can show whether runs were on xhigh / high / etc.
     ALTER TABLE ai_eval_runs ADD COLUMN IF NOT EXISTS effort TEXT;
 
+    -- Batch jobs — wraps Anthropic's Batches API for proactive
+    -- analyses (currently nightly Elle audits across active jobs).
+    -- Each row tracks one submitted batch + its lifecycle.
+    -- anthropic_batch_id is the id returned by anthropic.beta.messages.
+    -- batches.create. status mirrors Anthropic's processing_status
+    -- ("in_progress"|"canceling"|"ended") with a few extra terminal
+    -- states ("failed", "submitted") for client display.
+    -- results stores per-request output (custom_id + assistant text +
+    -- usage) once the batch ends; null until then.
+    -- request_count lets the UI show "12 jobs in batch" without
+    -- decoding results.
+    CREATE TABLE IF NOT EXISTS batch_jobs (
+      id TEXT PRIMARY KEY,
+      agent TEXT NOT NULL,                                  -- 'job' (Elle), 'ag', 'cra', 'staff'
+      kind TEXT NOT NULL DEFAULT 'audit',                   -- 'audit' | 'extract' | future kinds
+      anthropic_batch_id TEXT,
+      status TEXT NOT NULL DEFAULT 'submitted',
+      request_count INTEGER NOT NULL DEFAULT 0,
+      submitted_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      submitted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      completed_at TIMESTAMPTZ,
+      results JSONB,
+      error TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_batch_jobs_submitted ON batch_jobs(submitted_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_batch_jobs_status ON batch_jobs(status);
+
     -- Skill-pack version history — every PUT /api/settings/agent_skills
     -- snapshots the prior value into this table before overwriting.
     -- Lets admins see who changed what and roll back via the

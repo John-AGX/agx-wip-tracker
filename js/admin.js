@@ -3005,6 +3005,7 @@
   var _agentsEvalNew = false;  // when the new-eval fixture form is showing
   var _previewAgent = 'ag';    // last-used agent in the prompt preview view
   var _previewEntityId = '';   // last-used entity id (estimate / job)
+  var _batchJobId = null;      // when drilled into a single batch's results
 
   function renderAdminAgents() {
     var pane = document.getElementById('admin-subtab-agents');
@@ -3024,6 +3025,7 @@
           '<button class="ws-right-tab' + (_agentsView === 'evals' ? ' active' : '') + '" onclick="switchAgentsView(\'evals\')">&#x1F9EA; Evals</button>' +
           '<button class="ws-right-tab' + (_agentsView === 'skills' ? ' active' : '') + '" onclick="switchAgentsView(\'skills\')">&#x1F9E0; Skills</button>' +
           '<button class="ws-right-tab' + (_agentsView === 'preview' ? ' active' : '') + '" onclick="switchAgentsView(\'preview\')">&#x1F50D; Prompt Preview</button>' +
+          '<button class="ws-right-tab' + (_agentsView === 'batch' ? ' active' : '') + '" onclick="switchAgentsView(\'batch\')">&#x1F4E6; Batch</button>' +
         '</div>' +
         '<div style="flex:1;"></div>' +
         '<button class="ee-btn" onclick="openChiefOfStaff()" title="Open the Chief of Staff agent — observes AG / Elle / HR, audits conversations, reviews skill packs" style="background:linear-gradient(135deg,#fbbf24,#f97316);color:#fff;border:none;font-weight:600;">&#x1F3A9; Ask Chief of Staff</button>' +
@@ -3043,6 +3045,8 @@
     else if (_agentsView === 'evals')                renderAgentEvalsList();
     else if (_agentsView === 'skills')               renderAgentsSkillsView();
     else if (_agentsView === 'preview')              renderPromptPreview();
+    else if (_agentsView === 'batch' && _batchJobId) renderBatchJobDetail(_batchJobId);
+    else if (_agentsView === 'batch')                renderBatchJobsList();
     else if (_agentsConvKey)                         renderAgentsConversationDetail(_agentsConvKey);
     else                                             renderAgentsConversationList();
   }
@@ -3082,6 +3086,7 @@
     _agentsConvKey = null;
     _agentsEvalId = null;
     _agentsEvalNew = false;
+    _batchJobId = null;
     renderAdminAgents();
   }
 
@@ -3628,6 +3633,155 @@
   window.openSkillsVersionHistory = openSkillsVersionHistory;
   window.viewSkillsVersion = viewSkillsVersion;
   window.restoreSkillsVersion = restoreSkillsVersion;
+
+  // ─────────── Batch audits view ───────────
+  // Lists submitted Anthropic batches (currently Elle nightly audits)
+  // with status pills + click-into-details. Auto-polls non-terminal
+  // batches on every render so the UI walks itself forward.
+  function renderBatchJobsList() {
+    var host = document.getElementById('agents-content');
+    if (!host) return;
+    host.innerHTML =
+      '<p style="margin:0 0 14px 0;color:var(--text-dim,#888);font-size:12px;">' +
+        'Anthropic Batch API jobs — proactive analyses that run async at half the synchronous cost. Currently supports Elle audits across every active job.' +
+      '</p>' +
+      '<div style="display:flex;gap:8px;align-items:center;margin-bottom:14px;">' +
+        '<button class="ee-btn primary" onclick="submitElleAuditBatch()" title="Build one Elle audit per active job and submit as a single Anthropic batch.">&#x1F50D; Run Elle audit on every active job</button>' +
+        '<button class="ee-btn secondary" onclick="renderBatchJobsList()">&#x21BB; Refresh</button>' +
+      '</div>' +
+      '<div id="batch-jobs-list" style="font-size:12px;color:var(--text-dim,#888);font-style:italic;">Loading…</div>';
+    window.agxApi.get('/api/admin/batch/jobs').then(function(resp) {
+      var rows = (resp && resp.jobs) || [];
+      var listHost = document.getElementById('batch-jobs-list');
+      if (!listHost) return;
+      if (!rows.length) {
+        listHost.innerHTML = '<div style="color:var(--text-dim,#888);font-style:italic;padding:14px 0;">No batches submitted yet. Click "Run Elle audit on every active job" to fire one.</div>';
+        return;
+      }
+      var html = '<div class="table-container"><table style="width:100%;font-size:12px;">' +
+        '<thead><tr>' +
+          '<th>Submitted</th><th>By</th><th>Agent / Kind</th><th>Status</th><th style="text-align:right;">Jobs</th><th></th>' +
+        '</tr></thead><tbody>';
+      rows.forEach(function(b) {
+        var when = '';
+        try { when = new Date(b.submitted_at).toLocaleString(); } catch (e) {}
+        var pill = batchStatusPill(b.status);
+        html += '<tr style="cursor:pointer;" onclick="openBatchJobDetail(\'' + escapeAttr(b.id) + '\')">' +
+          '<td style="font-size:11px;color:var(--text-dim,#aaa);">' + escapeHTML(when) + '</td>' +
+          '<td>' + (b.submitted_by_name ? escapeHTML(b.submitted_by_name) : '<span style="color:var(--text-dim,#666);font-style:italic;">—</span>') + '</td>' +
+          '<td><span style="font-family:\'SF Mono\',monospace;font-size:11px;color:var(--text-dim,#aaa);">' + escapeHTML(b.agent || '?') + ' / ' + escapeHTML(b.kind || '?') + '</span></td>' +
+          '<td>' + pill + '</td>' +
+          '<td style="text-align:right;font-family:\'SF Mono\',monospace;">' + (b.request_count || 0) + '</td>' +
+          '<td><button class="ee-btn secondary" type="button" onclick="event.stopPropagation();openBatchJobDetail(\'' + escapeAttr(b.id) + '\')">View</button></td>' +
+        '</tr>';
+      });
+      html += '</tbody></table></div>';
+      listHost.innerHTML = html;
+    }).catch(function(err) {
+      var listHost = document.getElementById('batch-jobs-list');
+      if (listHost) listHost.innerHTML = '<div style="color:#e74c3c;font-size:12px;">Failed: ' + escapeHTML(err.message || 'unknown') + '</div>';
+    });
+  }
+
+  function batchStatusPill(status) {
+    var s = String(status || '').toLowerCase();
+    var color, bg;
+    if (s === 'ended')      { color = '#34d399'; bg = 'rgba(52,211,153,0.15)'; }
+    else if (s === 'failed' || s === 'errored') { color = '#f87171'; bg = 'rgba(248,113,113,0.15)'; }
+    else                    { color = '#fbbf24'; bg = 'rgba(251,191,36,0.15)'; }
+    return '<span style="display:inline-block;padding:2px 8px;border-radius:10px;background:' + bg + ';color:' + color + ';font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">' + escapeHTML(s || 'unknown') + '</span>';
+  }
+
+  function submitElleAuditBatch() {
+    if (!confirm('Submit a new Elle audit batch?\n\nBuilds one audit prompt per active job (excluding Archived/Completed) and submits as a single Anthropic Batch API job. Costs roughly half a synchronous Elle turn per job. Results land here when the batch finishes (typically minutes, up to 24h).')) return;
+    var btn = document.activeElement;
+    if (btn && btn.tagName === 'BUTTON') { btn.disabled = true; btn.textContent = 'Submitting…'; }
+    window.agxApi.post('/api/admin/batch/elle-audit', {}).then(function(resp) {
+      alert('✓ Submitted batch ' + resp.batch_job_id + ' covering ' + resp.request_count + ' job' + (resp.request_count === 1 ? '' : 's') + (resp.skipped ? ' (' + resp.skipped + ' skipped on context-build error)' : '') + '. Refresh in a minute or two to see the status.');
+      renderBatchJobsList();
+    }).catch(function(err) {
+      alert('Failed to submit batch: ' + (err.message || 'unknown'));
+      if (btn && btn.tagName === 'BUTTON') { btn.disabled = false; btn.textContent = '🔍 Run Elle audit on every active job'; }
+    });
+  }
+
+  function openBatchJobDetail(id) {
+    _batchJobId = id;
+    _agentsView = 'batch';
+    renderAdminAgents();
+  }
+
+  function renderBatchJobDetail(id) {
+    var host = document.getElementById('agents-content');
+    if (!host) return;
+    host.innerHTML =
+      '<div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">' +
+        '<button class="ee-btn secondary" onclick="closeBatchJobDetail()">&larr; Back to batches</button>' +
+        '<div style="flex:1;font-size:13px;color:var(--text-dim,#888);">Loading batch ' + escapeHTML(id) + '…</div>' +
+      '</div>' +
+      '<div id="batch-detail-body" style="font-size:12px;color:var(--text-dim,#888);font-style:italic;">Loading…</div>';
+    window.agxApi.get('/api/admin/batch/jobs/' + encodeURIComponent(id)).then(function(resp) {
+      var b = resp && resp.job;
+      if (!b) { host.innerHTML = '<div style="color:#e74c3c;">Batch not found.</div>'; return; }
+      var pill = batchStatusPill(b.status);
+      var when = '';
+      try { when = new Date(b.submitted_at).toLocaleString(); } catch (e) {}
+      var done = b.completed_at ? (function() { try { return new Date(b.completed_at).toLocaleString(); } catch (e) { return ''; } })() : null;
+      var summary =
+        '<div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:14px;background:rgba(79,140,255,0.06);border:1px solid rgba(79,140,255,0.25);border-radius:8px;padding:12px 14px;">' +
+          '<div><div style="font-size:10px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;">Status</div><div>' + pill + '</div></div>' +
+          '<div><div style="font-size:10px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;">Submitted</div><div style="font-size:13px;color:var(--text,#fff);">' + escapeHTML(when) + '</div></div>' +
+          (done ? '<div><div style="font-size:10px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;">Completed</div><div style="font-size:13px;color:var(--text,#fff);">' + escapeHTML(done) + '</div></div>' : '') +
+          '<div style="margin-left:auto;text-align:right;"><div style="font-size:10px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;">Jobs in batch</div><div style="font-size:13px;color:var(--text,#fff);font-family:\'SF Mono\',monospace;">' + (b.request_count || 0) + '</div></div>' +
+        '</div>';
+      var resultsHtml = '';
+      if (Array.isArray(b.results) && b.results.length) {
+        resultsHtml = '<h3 style="font-size:13px;margin:14px 0 8px;color:var(--text,#fff);">Per-job results</h3>';
+        b.results.forEach(function(r) {
+          var status = r.result_type || 'unknown';
+          var statusBg = status === 'succeeded' ? 'rgba(52,211,153,0.10)' : 'rgba(248,113,113,0.10)';
+          var statusColor = status === 'succeeded' ? '#34d399' : '#f87171';
+          resultsHtml += '<details style="background:rgba(255,255,255,0.03);border:1px solid var(--border,#333);border-left:3px solid ' + statusColor + ';border-radius:6px;padding:10px 12px;margin-bottom:8px;">' +
+            '<summary style="cursor:pointer;display:flex;align-items:center;gap:8px;font-size:13px;">' +
+              '<span style="font-weight:600;color:var(--text,#fff);">' + escapeHTML(r.job_title || r.custom_id) + '</span>' +
+              '<span style="display:inline-block;padding:1px 6px;border-radius:8px;background:' + statusBg + ';color:' + statusColor + ';font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">' + escapeHTML(status) + '</span>' +
+              (r.usage ? '<span style="margin-left:auto;font-family:\'SF Mono\',monospace;font-size:10px;color:var(--text-dim,#888);">' + (r.usage.input_tokens || 0) + ' in / ' + (r.usage.output_tokens || 0) + ' out</span>' : '') +
+            '</summary>' +
+            (r.error ? '<div style="color:#f87171;font-size:12px;margin-top:8px;">' + escapeHTML(r.error) + '</div>' : '') +
+            (r.text ? '<pre style="white-space:pre-wrap;font-size:12px;color:var(--text-dim,#ccc);margin:8px 0 0;font-family:inherit;">' + escapeHTML(r.text) + '</pre>' : '') +
+          '</details>';
+        });
+      } else if (b.status === 'ended') {
+        resultsHtml = '<div style="color:var(--text-dim,#888);font-style:italic;padding:14px 0;">Batch ended but no results were captured. Click Refresh to retry.</div>';
+      } else {
+        resultsHtml = '<div style="color:var(--text-dim,#888);font-style:italic;padding:14px 0;">Results land here when the batch ends. <button class="ee-btn secondary" onclick="refreshBatchJob(\'' + escapeAttr(b.id) + '\')">Refresh now</button></div>';
+      }
+      document.getElementById('batch-detail-body').innerHTML = summary + resultsHtml;
+    }).catch(function(err) {
+      var bodyEl = document.getElementById('batch-detail-body');
+      if (bodyEl) bodyEl.innerHTML = '<div style="color:#e74c3c;">Failed: ' + escapeHTML(err.message || 'unknown') + '</div>';
+    });
+  }
+
+  function closeBatchJobDetail() {
+    _batchJobId = null;
+    renderAdminAgents();
+  }
+
+  function refreshBatchJob(id) {
+    window.agxApi.post('/api/admin/batch/jobs/' + encodeURIComponent(id) + '/refresh', {}).then(function() {
+      renderBatchJobDetail(id);
+    }).catch(function(err) {
+      alert('Refresh failed: ' + (err.message || 'unknown'));
+    });
+  }
+
+  window.renderBatchJobsList = renderBatchJobsList;
+  window.renderBatchJobDetail = renderBatchJobDetail;
+  window.submitElleAuditBatch = submitElleAuditBatch;
+  window.openBatchJobDetail = openBatchJobDetail;
+  window.closeBatchJobDetail = closeBatchJobDetail;
+  window.refreshBatchJob = refreshBatchJob;
 
   // ─────────── Run all evals (post-save verification) ───────────
   // Hits /api/admin/agents/skills/run-all-evals which runs every
