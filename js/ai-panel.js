@@ -3080,10 +3080,11 @@
     // resources / Batch detail): tinted bg + matching thin border +
     // accent left strip colored by action kind (add/edit/remove/flow).
     // Tightened from 12/14 padding to 8/10 + 6px radius so the card
-    // reads as compact admin chrome, not a hero panel. The detail
-    // block below caps at 220px with vertical scroll so a long
-    // rationale or scope_text doesn't blow out the chat lane.
-    card.style.cssText = 'background:' + chrome.tint + ';border:1px solid ' + chrome.border + ';border-left:3px solid ' + chrome.accent + ';border-radius:6px;padding:8px 10px;width:100%;box-sizing:border-box;min-width:0;';
+    // reads as compact admin chrome, not a hero panel. The card itself
+    // is a flex column with max-height; the middle detail row gets
+    // flex:1 + min-height:0 so it can shrink + scroll, while header
+    // and action footer stay pinned at top/bottom.
+    card.style.cssText = 'background:' + chrome.tint + ';border:1px solid ' + chrome.border + ';border-left:3px solid ' + chrome.accent + ';border-radius:6px;padding:8px 10px;width:100%;box-sizing:border-box;min-width:0;display:flex;flex-direction:column;max-height:340px;overflow:hidden;';
 
     var heading = '';
     var detail = '';
@@ -3407,17 +3408,23 @@
       '<span style="display:inline-block;padding:1px 7px;border-radius:8px;background:' + chrome.tint + ';color:' + chrome.accent + ';font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;border:1px solid ' + chrome.border + ';white-space:nowrap;">Proposed</span>';
 
     card.innerHTML =
-      '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;flex-wrap:wrap;">' +
+      // Header: flex-shrink:0 so it stays pinned even when middle scrolls.
+      '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;flex-wrap:wrap;flex-shrink:0;">' +
         '<div style="font-size:12px;font-weight:600;color:var(--text,#fff);flex:1;min-width:0;line-height:1.25;">' + heading + '</div>' +
         proposedPill +
         toolPill +
         '<div data-card-status style="font-size:10px;font-weight:600;"></div>' +
       '</div>' +
-      '<div style="max-height:220px;overflow-y:auto;overflow-x:hidden;padding-right:2px;">' +
+      // Middle: flex:1 + min-height:0 lets it shrink-and-scroll inside
+      // the bounded card. Without min-height:0 the flex algorithm
+      // refuses to size below content height and the card stretches.
+      '<div data-card-body style="flex:1 1 auto;min-height:0;overflow-y:auto;overflow-x:hidden;padding-right:4px;">' +
         detail +
         rationale +
       '</div>' +
-      '<div data-card-actions style="display:flex;gap:6px;margin-top:8px;padding-top:6px;border-top:1px solid rgba(255,255,255,0.06);">' +
+      // Footer: flex-shrink:0 so the buttons stay visible even with
+      // long content above.
+      '<div data-card-actions style="display:flex;gap:6px;margin-top:8px;padding-top:6px;border-top:1px solid rgba(255,255,255,0.06);flex-shrink:0;">' +
         '<button data-card-approve class="success small" style="padding:3px 12px;font-size:11px;font-weight:600;">&check; Approve</button>' +
         '<button data-card-reject class="ghost small" style="padding:3px 12px;font-size:11px;">&times; Reject</button>' +
       '</div>';
