@@ -3505,10 +3505,12 @@
   // Cached per-agent overridable sections. Populated by
   // fetchOverridableSections() before the skills editor renders so the
   // "Replaces section" dropdown can show options + descriptions.
-  var _overridableSections = { ag: [], elle: [], cra: [], staff: [] };
+  // Keys are the canonical agent ids used everywhere in the system:
+  // ag (estimate), job (Elle), cra (HR), staff (Chief of Staff).
+  var _overridableSections = { ag: [], job: [], cra: [], staff: [] };
 
   function fetchOverridableSections() {
-    var agentKeys = ['ag', 'elle', 'cra', 'staff'];
+    var agentKeys = ['ag', 'job', 'cra', 'staff'];
     return Promise.all(agentKeys.map(function(a) {
       return window.agxApi.get('/api/admin/agents/sections?agent=' + a)
         .then(function(r) { _overridableSections[a] = (r && r.sections) || []; })
