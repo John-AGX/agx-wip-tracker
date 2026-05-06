@@ -71,13 +71,31 @@ const MODEL = process.env.AI_MODEL || 'claude-sonnet-4-6';
 // passing it there would 400, so we only attach the param when the
 // model is in the supported set.
 const EFFORT = (process.env.AI_EFFORT || '').trim().toLowerCase();
+// Per-agent overrides — Elle's WIP audits benefit from higher
+// thinking budgets, AG's quick line-item turns don't. Each env var
+// is optional; missing → falls back to AI_EFFORT.
+//   AI_EFFORT_AG    AG (estimating)
+//   AI_EFFORT_JOB   Elle (WIP analyst)
+//   AI_EFFORT_CRA   HR (customer relations)
+//   AI_EFFORT_STAFF Chief of Staff
+const EFFORT_PER_AGENT = {
+  ag:    (process.env.AI_EFFORT_AG    || '').trim().toLowerCase(),
+  job:   (process.env.AI_EFFORT_JOB   || '').trim().toLowerCase(),
+  cra:   (process.env.AI_EFFORT_CRA   || '').trim().toLowerCase(),
+  staff: (process.env.AI_EFFORT_STAFF || '').trim().toLowerCase()
+};
 const EFFORT_SUPPORTED_MODELS = new Set([
   'claude-opus-4-5', 'claude-opus-4-6', 'claude-opus-4-7', 'claude-sonnet-4-6'
 ]);
-function effortClause() {
-  if (!EFFORT) return null;
+function effortClause(agentKey) {
+  // Per-agent override beats global default. Resolve in this order:
+  //   1. EFFORT_PER_AGENT[agentKey] (env-var per agent)
+  //   2. EFFORT (global env-var fallback)
+  //   3. null (no effort param sent)
+  const eff = (agentKey && EFFORT_PER_AGENT[agentKey]) || EFFORT;
+  if (!eff) return null;
   if (!EFFORT_SUPPORTED_MODELS.has(MODEL)) return null;
-  return { effort: EFFORT };
+  return { effort: eff };
 }
 
 // Bumped from 2000 → 8000 because multi-section audit/summary
@@ -1814,7 +1832,7 @@ function inlineImageBlock(b64) {
   };
 }
 
-async function runStream({ anthropic, res, system, messages, persistAssistantText, persistArgs, tools }) {
+async function runStream({ anthropic, res, system, messages, persistAssistantText, persistArgs, tools, agentKey }) {
   function send(payload) { res.write('data: ' + JSON.stringify(payload) + '\n\n'); }
   function endWithDone() { res.write('data: [DONE]\n\n'); res.end(); }
   function abort(message) {
@@ -1845,7 +1863,7 @@ async function runStream({ anthropic, res, system, messages, persistAssistantTex
         Object.assign({}, toolList[toolList.length - 1], { cache_control: { type: 'ephemeral' } })
       ]
     : toolList;
-  const _effort = effortClause();
+  const _effort = effortClause(agentKey);
   const stream = anthropic.messages.stream(Object.assign({
     model: MODEL,
     max_tokens: MAX_TOKENS,
@@ -2005,6 +2023,7 @@ router.post('/estimates/:id/chat',
         // passes through the full ESTIMATE_TOOLS list.
         tools: filterToolsForPhase(ESTIMATE_TOOLS, ctx.aiPhase),
         messages: messages,
+        agentKey: 'ag',
         persistAssistantText: async (text, usage) => {
           await saveAssistantMessage({ estimateId, userId: req.user.id, text, usage, packsLoaded: ctx.packsLoaded });
         }
@@ -2669,6 +2688,7 @@ router.post('/jobs/:id/chat',
         system: ctx.system,
         messages: messages,
         tools: filterToolsForJobPhase(JOB_TOOLS, ctx.aiPhase),
+        agentKey: 'job',
         persistAssistantText: async (text, usage) => {
           if (!text) return;
           const aid = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
@@ -2744,6 +2764,7 @@ router.post('/jobs/:id/chat/continue',
         system: ctx.system,
         messages: messages,
         tools: filterToolsForJobPhase(JOB_TOOLS, ctx.aiPhase),
+        agentKey: 'job',
         persistAssistantText: async (text, usage) => {
           if (!text) return;
           const aid = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
@@ -3560,7 +3581,7 @@ async function streamClientTurn({ anthropic, res, system, messages }) {
         Object.assign({}, allClientTools[allClientTools.length - 1], { cache_control: { type: 'ephemeral' } })
       ]
     : allClientTools;
-  const _effortC = effortClause();
+  const _effortC = effortClause('cra');
   const stream = anthropic.messages.stream(Object.assign({
     model: MODEL,
     max_tokens: MAX_TOKENS,
@@ -4812,7 +4833,7 @@ async function streamStaffTurn({ anthropic, res, system, messages }) {
   let assistantText = '';
   let finalContent = null;
   let usage = { input_tokens: null, output_tokens: null };
-  const _effortS = effortClause();
+  const _effortS = effortClause('staff');
   const stream = anthropic.messages.stream(Object.assign({
     model: MODEL,
     max_tokens: MAX_TOKENS,
