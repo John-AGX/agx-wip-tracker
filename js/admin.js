@@ -2932,10 +2932,12 @@
   //      that admin surface stays where it is).
 
   var _agentsRange = '7d';
-  var _agentsView = 'metrics'; // 'metrics' | 'conversations' | 'evals' | 'skills'
+  var _agentsView = 'metrics'; // 'metrics' | 'conversations' | 'evals' | 'skills' | 'preview'
   var _agentsConvKey = null;   // when drilled into one conversation
   var _agentsEvalId = null;    // when drilled into one eval's run history
   var _agentsEvalNew = false;  // when the new-eval fixture form is showing
+  var _previewAgent = 'ag';    // last-used agent in the prompt preview view
+  var _previewEntityId = '';   // last-used entity id (estimate / job)
 
   function renderAdminAgents() {
     var pane = document.getElementById('admin-subtab-agents');
@@ -2954,6 +2956,7 @@
           '<button class="ws-right-tab' + (_agentsView === 'conversations' ? ' active' : '') + '" onclick="switchAgentsView(\'conversations\')">&#x1F4AC; Conversations</button>' +
           '<button class="ws-right-tab' + (_agentsView === 'evals' ? ' active' : '') + '" onclick="switchAgentsView(\'evals\')">&#x1F9EA; Evals</button>' +
           '<button class="ws-right-tab' + (_agentsView === 'skills' ? ' active' : '') + '" onclick="switchAgentsView(\'skills\')">&#x1F9E0; Skills</button>' +
+          '<button class="ws-right-tab' + (_agentsView === 'preview' ? ' active' : '') + '" onclick="switchAgentsView(\'preview\')">&#x1F50D; Prompt Preview</button>' +
         '</div>' +
         '<div style="flex:1;"></div>' +
         '<button class="ee-btn" onclick="openChiefOfStaff()" title="Open the Chief of Staff agent — observes AG / Elle / HR, audits conversations, reviews skill packs" style="background:linear-gradient(135deg,#fbbf24,#f97316);color:#fff;border:none;font-weight:600;">&#x1F3A9; Ask Chief of Staff</button>' +
@@ -2972,6 +2975,7 @@
     else if (_agentsView === 'evals' && _agentsEvalId) renderAgentEvalDetail(_agentsEvalId);
     else if (_agentsView === 'evals')                renderAgentEvalsList();
     else if (_agentsView === 'skills')               renderAgentsSkillsView();
+    else if (_agentsView === 'preview')              renderPromptPreview();
     else if (_agentsConvKey)                         renderAgentsConversationDetail(_agentsConvKey);
     else                                             renderAgentsConversationList();
   }
@@ -3281,6 +3285,186 @@
   // between the two surfaces, and saving from either persists to the
   // same app_settings.agent_skills row. We sync inputs into the draft
   // before any view switch so unsaved edits don't get clobbered.
+  // ─────────── Prompt Preview view ───────────
+  // Shows the EXACT system prompt an agent (AG / Elle / HR / Chief of Staff)
+  // would see right now if a chat turn fired against the supplied entity.
+  // Three blocks: stable prefix (cached), dynamic context (refreshed each
+  // turn), and skill packs (always-on packs that auto-append). Gives the
+  // admin the visibility this used to require code-spelunking for.
+  function renderPromptPreview() {
+    var host = document.getElementById('agents-content');
+    if (!host) return;
+    host.innerHTML =
+      '<p style="margin:0 0 14px 0;color:var(--text-dim,#888);font-size:12px;">' +
+        'Assemble the live system prompt an agent would see for a given entity. Lets you spot wasted tokens, confirm a skill pack is loading, and verify which tools the agent has access to in plan vs. build mode.' +
+      '</p>' +
+      '<div style="display:flex;gap:10px;align-items:end;margin-bottom:14px;flex-wrap:wrap;">' +
+        '<div><label style="display:block;font-size:11px;color:var(--text-dim,#888);margin-bottom:4px;">Agent</label>' +
+          '<select id="preview-agent" style="font-size:13px;padding:6px 10px;min-width:160px;">' +
+            '<option value="ag"' + (_previewAgent === 'ag' ? ' selected' : '') + '>AG (estimating)</option>' +
+            '<option value="elle"' + (_previewAgent === 'elle' ? ' selected' : '') + '>Elle (WIP)</option>' +
+            '<option value="hr"' + (_previewAgent === 'hr' ? ' selected' : '') + '>HR (clients)</option>' +
+            '<option value="cos"' + (_previewAgent === 'cos' ? ' selected' : '') + '>Chief of Staff</option>' +
+          '</select></div>' +
+        '<div style="flex:1;min-width:240px;"><label id="preview-entity-label" style="display:block;font-size:11px;color:var(--text-dim,#888);margin-bottom:4px;">Entity (estimate / job)</label>' +
+          '<select id="preview-entity-id" style="font-size:13px;padding:6px 10px;width:100%;">' +
+            '<option value="">— Pick one —</option>' +
+          '</select></div>' +
+        '<button class="ee-btn primary" onclick="loadPromptPreview()">Assemble Prompt</button>' +
+      '</div>' +
+      '<div id="preview-result" style="font-size:12px;color:var(--text-dim,#888);font-style:italic;">Pick an agent + entity and click Assemble Prompt.</div>';
+
+    // Wire the agent select so the entity dropdown re-populates with
+    // estimates or jobs depending on the agent. HR + COS have no entity
+    // (system-wide) so the dropdown disables itself.
+    var agentSel = document.getElementById('preview-agent');
+    var entitySel = document.getElementById('preview-entity-id');
+    var entityLabel = document.getElementById('preview-entity-label');
+    function populateEntityList(agent) {
+      _previewAgent = agent;
+      if (agent === 'hr' || agent === 'cos') {
+        entitySel.innerHTML = '<option value="">(system-wide — no entity)</option>';
+        entitySel.disabled = true;
+        entityLabel.textContent = 'Entity (n/a — assembles system-wide prompt)';
+        return;
+      }
+      entitySel.disabled = false;
+      if (agent === 'ag') {
+        entityLabel.textContent = 'Entity — recent estimates';
+        if (window.agxApi && window.agxApi.estimates && typeof window.agxApi.estimates.list === 'function') {
+          window.agxApi.estimates.list().then(function(resp) {
+            var rows = (resp && resp.estimates) || [];
+            rows.sort(function(a, b) { return (b.updated_at || '').localeCompare(a.updated_at || ''); });
+            rows = rows.slice(0, 80);
+            entitySel.innerHTML = '<option value="">— Pick an estimate —</option>' +
+              rows.map(function(e) {
+                var label = (e.title || '(untitled)') + ' · ' + (e.id ? e.id.slice(-8) : '');
+                return '<option value="' + escapeAttr(e.id) + '">' + escapeHTML(label) + '</option>';
+              }).join('');
+          }).catch(function() { entitySel.innerHTML = '<option value="">(failed to load estimates)</option>'; });
+        }
+      } else if (agent === 'elle') {
+        entityLabel.textContent = 'Entity — recent jobs';
+        if (window.agxApi && window.agxApi.jobs && typeof window.agxApi.jobs.list === 'function') {
+          window.agxApi.jobs.list().then(function(resp) {
+            var rows = (resp && resp.jobs) || [];
+            rows.sort(function(a, b) { return (b.updated_at || '').localeCompare(a.updated_at || ''); });
+            rows = rows.slice(0, 80);
+            entitySel.innerHTML = '<option value="">— Pick a job —</option>' +
+              rows.map(function(j) {
+                var label = (j.title || j.id || '(untitled)') + ' · ' + (j.id || '').slice(-8);
+                return '<option value="' + escapeAttr(j.id) + '">' + escapeHTML(label) + '</option>';
+              }).join('');
+          }).catch(function() { entitySel.innerHTML = '<option value="">(failed to load jobs)</option>'; });
+        }
+      }
+    }
+    if (agentSel) {
+      agentSel.addEventListener('change', function() { populateEntityList(agentSel.value); });
+      populateEntityList(_previewAgent);
+    }
+  }
+
+  function loadPromptPreview() {
+    var agent = document.getElementById('preview-agent').value;
+    var entityId = document.getElementById('preview-entity-id').value;
+    var resultHost = document.getElementById('preview-result');
+    if (!agent) return;
+    if ((agent === 'ag' || agent === 'elle') && !entityId) {
+      resultHost.innerHTML = '<div style="color:#fbbf24;font-size:12px;">Pick an entity first.</div>';
+      return;
+    }
+    _previewEntityId = entityId;
+    resultHost.innerHTML = '<div style="color:var(--text-dim,#888);font-style:italic;font-size:12px;padding:14px 0;">Assembling…</div>';
+
+    var qs = '?agent=' + encodeURIComponent(agent);
+    if (agent === 'ag')   qs += '&estimate_id=' + encodeURIComponent(entityId);
+    if (agent === 'elle') qs += '&job_id=' + encodeURIComponent(entityId);
+
+    window.agxApi.get('/api/admin/agents/preview-prompt' + qs).then(function(data) {
+      resultHost.innerHTML = renderPreviewPayload(data);
+    }).catch(function(err) {
+      resultHost.innerHTML = '<div style="color:#e74c3c;font-size:12px;">Failed: ' + escapeHTML(err.message || 'unknown') + '</div>';
+    });
+  }
+
+  function renderPreviewPayload(d) {
+    if (!d) return '<div style="color:#e74c3c;">Empty response.</div>';
+    var phasePill = d.ai_phase
+      ? '<span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;background:' +
+          (d.ai_phase === 'plan' ? 'rgba(251,191,36,0.15);color:#fbbf24;' : 'rgba(52,211,153,0.15);color:#34d399;') +
+        '">' + escapeHTML(d.ai_phase) + ' mode</span>'
+      : '';
+    var stableTokens = (d.stable_prefix && d.stable_prefix.tokens) || 0;
+    var dynamicTokens = (d.dynamic_context && d.dynamic_context.tokens) || 0;
+    var totalTokens = d.total_approx_tokens || (stableTokens + dynamicTokens);
+    var cachedPct = totalTokens > 0 ? Math.round((stableTokens / totalTokens) * 100) : 0;
+
+    var summary =
+      '<div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:14px;background:rgba(79,140,255,0.06);border:1px solid rgba(79,140,255,0.25);border-radius:8px;padding:12px 14px;">' +
+        '<div><div style="font-size:10px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;">Agent</div>' +
+          '<div style="font-size:14px;font-weight:600;color:var(--text,#fff);text-transform:capitalize;">' + escapeHTML(d.agent || '') + '</div></div>' +
+        '<div><div style="font-size:10px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;">Entity</div>' +
+          '<div style="font-size:13px;color:var(--text,#fff);">' + escapeHTML((d.entity && d.entity.label) || '—') + '</div></div>' +
+        (d.ai_phase ? '<div><div style="font-size:10px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;">Phase</div><div>' + phasePill + '</div></div>' : '') +
+        '<div style="margin-left:auto;text-align:right;"><div style="font-size:10px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;">~Tokens (cached / total)</div>' +
+          '<div style="font-size:13px;color:var(--text,#fff);font-family:\'SF Mono\',monospace;">' +
+          stableTokens.toLocaleString() + ' / ' + totalTokens.toLocaleString() + ' (' + cachedPct + '% cacheable)</div></div>' +
+      '</div>';
+
+    var toolsBlock =
+      '<details open style="margin-bottom:10px;background:rgba(255,255,255,0.03);border:1px solid var(--border,#333);border-radius:6px;padding:10px 12px;">' +
+        '<summary style="cursor:pointer;font-size:13px;font-weight:600;color:var(--text,#fff);">' +
+          '&#x1F527; Tools (' + (d.tool_count || 0) + ')' +
+        '</summary>' +
+        '<div style="margin-top:8px;font-size:11px;font-family:\'SF Mono\',monospace;color:var(--text-dim,#aaa);line-height:1.6;">' +
+          (Array.isArray(d.tools) && d.tools.length
+            ? d.tools.map(function(t) { return escapeHTML(t); }).join(', ')
+            : '(no tools)') +
+        '</div>' +
+      '</details>';
+
+    var packsBlock =
+      '<details open style="margin-bottom:10px;background:rgba(255,255,255,0.03);border:1px solid var(--border,#333);border-radius:6px;padding:10px 12px;">' +
+        '<summary style="cursor:pointer;font-size:13px;font-weight:600;color:var(--text,#fff);">' +
+          '&#x1F9E0; Active skill packs (' + ((d.skill_packs || []).length) + ')' +
+        '</summary>' +
+        '<div style="margin-top:8px;font-size:12px;color:var(--text-dim,#aaa);">' +
+          (Array.isArray(d.skill_packs) && d.skill_packs.length
+            ? d.skill_packs.map(function(p) { return '<div>• ' + escapeHTML(p.name) + ' <span style="color:var(--text-dim,#666);font-family:\'SF Mono\',monospace;">~' + p.tokens + ' tokens</span></div>'; }).join('')
+            : '<i>(no packs loaded)</i>') +
+        '</div>' +
+      '</details>';
+
+    var stableBlock =
+      '<details style="margin-bottom:10px;background:rgba(255,255,255,0.03);border:1px solid var(--border,#333);border-radius:6px;padding:10px 12px;">' +
+        '<summary style="cursor:pointer;font-size:13px;font-weight:600;color:var(--text,#fff);">' +
+          '&#x1F4C0; Stable prefix (cached, ~' + stableTokens.toLocaleString() + ' tokens)' +
+        '</summary>' +
+        '<pre style="margin-top:8px;font-size:11px;color:var(--text-dim,#aaa);white-space:pre-wrap;background:rgba(0,0,0,0.2);padding:10px;border-radius:4px;max-height:500px;overflow:auto;">' +
+          escapeHTML((d.stable_prefix && d.stable_prefix.text) || '') +
+        '</pre>' +
+      '</details>';
+
+    var dynamicBlock =
+      '<details style="margin-bottom:10px;background:rgba(255,255,255,0.03);border:1px solid var(--border,#333);border-radius:6px;padding:10px 12px;">' +
+        '<summary style="cursor:pointer;font-size:13px;font-weight:600;color:var(--text,#fff);">' +
+          '&#x267B;&#xFE0F; Dynamic context (refreshed every turn, ~' + dynamicTokens.toLocaleString() + ' tokens)' +
+        '</summary>' +
+        '<pre style="margin-top:8px;font-size:11px;color:var(--text-dim,#aaa);white-space:pre-wrap;background:rgba(0,0,0,0.2);padding:10px;border-radius:4px;max-height:500px;overflow:auto;">' +
+          escapeHTML((d.dynamic_context && d.dynamic_context.text) || '') +
+        '</pre>' +
+      '</details>';
+
+    var cacheNote = '<div style="margin-top:6px;font-size:11px;color:var(--text-dim,#666);">' +
+      '<strong>Cache strategy:</strong> ' + escapeHTML(d.cache_strategy || '') + '</div>';
+
+    return summary + toolsBlock + packsBlock + stableBlock + dynamicBlock + cacheNote;
+  }
+
+  window.renderPromptPreview = renderPromptPreview;
+  window.loadPromptPreview = loadPromptPreview;
+
   function renderAgentsSkillsView() {
     var host = document.getElementById('agents-content');
     if (!host) return;

@@ -404,6 +404,143 @@ router.get('/config', requireAuth, requireCapability('ROLES_MANAGE'), async (req
   }
 });
 
+// GET /api/admin/agents/preview-prompt
+//   ?agent=ag|elle|hr|cos     — required. Which agent's system prompt to assemble.
+//   ?estimate_id=<id>         — required when agent=ag
+//   ?job_id=<id>              — required when agent=elle
+//
+// Returns the EXACT system-prompt blocks the agent would see right
+// now if a chat turn were initiated against the supplied entity:
+//   - stable_prefix: cached playbook (identity / structure / tools /
+//     slotting / etc.) — token-counted so admin can see what % of the
+//     turn is cacheable.
+//   - dynamic_context: per-turn estimate / job / client data (refreshed
+//     each turn — never cached).
+//   - tools: list of tool names available to this agent in this phase.
+//   - skill_packs: which always-on packs from app_settings.agent_skills
+//     are loaded for this agent.
+//   - ai_phase: 'plan' | 'build' (when applicable).
+//
+// Read-only, no side effects on conversation history. Used by
+// Admin → Agents → Prompt Preview to show "what does AG actually see?"
+router.get('/preview-prompt', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+  try {
+    const aiInternals = require('./ai-routes-internals');
+    if (!aiInternals) throw new Error('ai-routes internals not available.');
+    const agent = String(req.query.agent || '').toLowerCase();
+    let systemBlocks = null;
+    let toolNames = [];
+    let aiPhase = null;
+    let entityLabel = null;
+    let skillPackNames = [];
+
+    // Helpers to count approximate tokens so the admin sees the cost
+    // breakdown. Crude (chars / 4) — accurate enough for "is this
+    // 5K or 50K".
+    function approxTokens(s) {
+      if (!s) return 0;
+      return Math.round(String(s).length / 4);
+    }
+
+    // Look up which always-on packs would load for this agent so the
+    // admin can see them as their own block. Mirrors loadActiveSkillsFor
+    // but returns names + bodies for display.
+    async function loadPackNamesFor(agentKey) {
+      const r = await pool.query(`SELECT value FROM app_settings WHERE key = 'agent_skills'`);
+      if (!r.rows.length) return [];
+      const cfg = r.rows[0].value || {};
+      const skills = Array.isArray(cfg.skills) ? cfg.skills : [];
+      return skills
+        .filter(s => s && s.alwaysOn !== false && Array.isArray(s.agents) && s.agents.indexOf(agentKey) >= 0 && s.body)
+        .map(s => ({ name: s.name || '(untitled)', tokens: approxTokens(s.body) }));
+    }
+
+    if (agent === 'ag') {
+      const estimateId = req.query.estimate_id;
+      if (!estimateId) return res.status(400).json({ error: 'estimate_id is required for agent=ag' });
+      const ctx = await aiInternals.buildEstimateContext(estimateId, false);
+      systemBlocks = ctx.system;
+      aiPhase = ctx.aiPhase;
+      const toolList = aiInternals.estimateTools();
+      // Plan-mode filter mirrors what the chat handler does so the
+      // preview shows the actual tool subset the agent would have.
+      const filtered = (aiPhase === 'plan')
+        ? toolList.filter(t => [
+            'web_search', 'propose_update_scope', 'propose_add_client_note',
+            'read_materials', 'read_purchase_history', 'read_subs', 'read_lead_pipeline',
+            'read_clients', 'read_leads', 'read_past_estimate_lines', 'read_past_estimates'
+          ].indexOf(t.name) !== -1)
+        : toolList;
+      toolNames = filtered.map(t => t.name);
+      const eRow = await pool.query("SELECT data->>'title' AS title FROM estimates WHERE id = $1", [estimateId]);
+      entityLabel = eRow.rows.length ? (eRow.rows[0].title || estimateId) : estimateId;
+      skillPackNames = await loadPackNamesFor('ag');
+    } else if (agent === 'elle' || agent === 'job') {
+      const jobId = req.query.job_id;
+      if (!jobId) return res.status(400).json({ error: 'job_id is required for agent=elle' });
+      const ctx = await aiInternals.buildJobContext(jobId, '', null);
+      systemBlocks = ctx.system;
+      aiPhase = ctx.aiPhase;
+      const toolList = aiInternals.jobTools();
+      const filtered = (aiPhase === 'plan')
+        ? toolList.filter(t => [
+            'web_search', 'read_workspace_sheet_full', 'read_qb_cost_lines',
+            'read_materials', 'read_purchase_history', 'read_subs',
+            'read_building_breakdown', 'read_job_pct_audit', 'request_build_mode'
+          ].indexOf(t.name) !== -1)
+        : toolList;
+      toolNames = filtered.map(t => t.name);
+      const jRow = await pool.query('SELECT data FROM jobs WHERE id = $1', [jobId]);
+      entityLabel = jRow.rows.length ? ((jRow.rows[0].data && jRow.rows[0].data.title) || jobId) : jobId;
+      skillPackNames = await loadPackNamesFor('job');
+    } else if (agent === 'hr' || agent === 'cra') {
+      const ctx = await aiInternals.buildClientDirectoryContext();
+      systemBlocks = ctx.system;
+      toolNames = aiInternals.clientTools().map(t => t.name);
+      entityLabel = 'Client directory (system-wide)';
+      skillPackNames = await loadPackNamesFor('cra');
+    } else if (agent === 'cos' || agent === 'staff') {
+      const ctx = await aiInternals.buildStaffContext();
+      systemBlocks = ctx.system;
+      toolNames = aiInternals.staffTools().map(t => t.name);
+      entityLabel = 'Chief of Staff (system-wide)';
+      skillPackNames = await loadPackNamesFor('staff');
+    } else {
+      return res.status(400).json({ error: 'agent must be one of: ag, elle, hr, cos' });
+    }
+
+    // System blocks come back as an array — first is stable (cached),
+    // second is dynamic (refreshed each turn). Some agents may not split
+    // them (single block); handle both shapes.
+    let stable = '';
+    let dynamic = '';
+    if (Array.isArray(systemBlocks)) {
+      const stableBlock = systemBlocks.find(b => b.cache_control);
+      const dynamicBlocks = systemBlocks.filter(b => b !== stableBlock);
+      stable = stableBlock ? stableBlock.text : '';
+      dynamic = dynamicBlocks.map(b => b.text || '').join('\n\n');
+    } else if (typeof systemBlocks === 'string') {
+      stable = systemBlocks;
+    }
+
+    res.json({
+      agent: agent,
+      entity: { label: entityLabel },
+      ai_phase: aiPhase,
+      stable_prefix: { text: stable, tokens: approxTokens(stable) },
+      dynamic_context: { text: dynamic, tokens: approxTokens(dynamic) },
+      tools: toolNames,
+      tool_count: toolNames.length,
+      skill_packs: skillPackNames,
+      total_approx_tokens: approxTokens(stable) + approxTokens(dynamic),
+      cache_strategy: 'Stable prefix is wrapped in cache_control:ephemeral. Dynamic context is fresh every turn.'
+    });
+  } catch (e) {
+    console.error('GET /api/admin/agents/preview-prompt error:', e);
+    res.status(500).json({ error: 'Server error: ' + (e.message || 'unknown') });
+  }
+});
+
 router.get('/evals', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
   try {
     const r = await pool.query(
