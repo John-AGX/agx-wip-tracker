@@ -1963,6 +1963,260 @@
     return 'Section: ' + changed.join(', ');
   }
 
+  // ──── Group / alternate appliers ────────────────────────────────────
+  // Resolve a group identifier (id OR case-insensitive name substring)
+  // against the currently-open estimate. Returns the alternate object
+  // or null. Used by every group-management applier.
+  function resolveGroup(input_id) {
+    var est = getEstimate();
+    if (!est || !Array.isArray(est.alternates)) return null;
+    var raw = String(input_id || '').trim();
+    if (!raw) return null;
+    var byId = est.alternates.find(function(a) { return a.id === raw; });
+    if (byId) return byId;
+    var needle = raw.toLowerCase();
+    var byNameExact = est.alternates.find(function(a) { return (a.name || '').toLowerCase() === needle; });
+    if (byNameExact) return byNameExact;
+    return est.alternates.find(function(a) { return (a.name || '').toLowerCase().indexOf(needle) >= 0; }) || null;
+  }
+
+  function applySwitchActiveGroup(input) {
+    var alt = resolveGroup(input.group_id);
+    if (!alt) throw new Error('Group not found: "' + input.group_id + '". Use propose_add_group to create it first.');
+    if (typeof switchAlternate === 'function') switchAlternate(alt.id);
+    return 'Active group → "' + alt.name + '"';
+  }
+
+  function applyAddGroup(input) {
+    var est = getEstimate();
+    if (!est) throw new Error('No estimate open.');
+    if (!Array.isArray(est.alternates)) est.alternates = [];
+    var name = String(input.name || '').trim();
+    if (!name) throw new Error('Group name is required.');
+    if (est.alternates.some(function(a) { return (a.name || '').toLowerCase() === name.toLowerCase(); })) {
+      throw new Error('A group named "' + name + '" already exists.');
+    }
+    var copyFromActive = !!input.copy_from_active;
+    var sourceAlt = copyFromActive ? getActiveAlternate() : null;
+    var newAlt = { id: 'alt_' + Date.now(), name: name, isDefault: false, scope: (sourceAlt && sourceAlt.scope) || '' };
+    est.alternates.push(newAlt);
+    if (copyFromActive && sourceAlt) {
+      var sourceLines = (appData.estimateLines || []).filter(function(l) {
+        return l.estimateId === est.id && l.alternateId === sourceAlt.id;
+      });
+      sourceLines.forEach(function(l, idx) {
+        var copy = Object.assign({}, l);
+        copy.id = (l.section === '__section_header__' ? 's' : 'l') + Date.now() + '_' + idx;
+        copy.alternateId = newAlt.id;
+        appData.estimateLines.push(copy);
+      });
+    } else {
+      // Empty group — seed the four standard subgroups so the next
+      // propose_add_line_item has somewhere to slot.
+      STANDARD_SECTIONS_PRESET.forEach(function(s, idx) {
+        appData.estimateLines.push({
+          id: 's' + Date.now() + '_' + idx,
+          estimateId: est.id,
+          alternateId: newAlt.id,
+          section: '__section_header__',
+          description: s.name,
+          btCategory: s.btCategory,
+          markup: s.markup
+        });
+      });
+    }
+    est.activeAlternateId = newAlt.id;
+    debouncedSave();
+    renderAlternateTabs();
+    renderLineItems();
+    renderTotals();
+    renderScopePanel();
+    return 'Created group "' + name + '" (' + (copyFromActive ? 'cloned from active' : 'seeded with 4 standard subgroups') + ') and switched focus to it.';
+  }
+
+  function applyRenameGroup(input) {
+    var alt = resolveGroup(input.group_id);
+    if (!alt) throw new Error('Group not found: "' + input.group_id + '".');
+    var newName = String(input.new_name || '').trim();
+    if (!newName) throw new Error('new_name is required.');
+    var prev = alt.name;
+    alt.name = newName;
+    debouncedSave();
+    renderAlternateTabs();
+    return 'Renamed group "' + prev + '" → "' + newName + '"';
+  }
+
+  function applyDeleteGroup(input) {
+    var est = getEstimate();
+    if (!est) throw new Error('No estimate open.');
+    var alt = resolveGroup(input.group_id);
+    if (!alt) throw new Error('Group not found: "' + input.group_id + '".');
+    if ((est.alternates || []).length <= 1) {
+      throw new Error('Cannot delete the only group on an estimate. Estimates require at least one group.');
+    }
+    var name = alt.name;
+    var lineCount = (appData.estimateLines || []).filter(function(l) {
+      return l.estimateId === est.id && l.alternateId === alt.id;
+    }).length;
+    appData.estimateLines = (appData.estimateLines || []).filter(function(l) {
+      return !(l.estimateId === est.id && l.alternateId === alt.id);
+    });
+    est.alternates = est.alternates.filter(function(a) { return a.id !== alt.id; });
+    if (est.activeAlternateId === alt.id) {
+      est.activeAlternateId = est.alternates[0].id;
+    }
+    debouncedSave();
+    renderAlternateTabs();
+    renderLineItems();
+    renderTotals();
+    renderScopePanel();
+    return 'Deleted group "' + name + '" and ' + lineCount + ' line' + (lineCount === 1 ? '' : 's') + ' under it.';
+  }
+
+  function applyToggleGroupInclude(input) {
+    var alt = resolveGroup(input.group_id);
+    if (!alt) throw new Error('Group not found: "' + input.group_id + '".');
+    var included = !!input.included;
+    alt.excludeFromTotal = !included;
+    debouncedSave();
+    renderAlternateTabs();
+    renderTotals();
+    renderLineItems();
+    return 'Group "' + alt.name + '" ' + (included ? 'included in' : 'excluded from') + ' grand total.';
+  }
+
+  // ──── Linking + estimate-metadata appliers ───────────────────────────
+  function applyLinkToClient(input) {
+    var est = getEstimate();
+    if (!est) throw new Error('No estimate open.');
+    var clientId = String(input.client_id || '').trim();
+    if (!clientId) throw new Error('client_id is required.');
+    var client = (appData.clients || []).find(function(c) { return c.id === clientId; });
+    if (!client) throw new Error('Client not found in cache: ' + clientId + '. Reload the client list and try again.');
+    est.client_id = clientId;
+    debouncedSave();
+    renderDetailsForm();
+    renderLineItems();
+    return 'Linked estimate to client "' + (client.name || clientId) + '".';
+  }
+
+  function applyLinkToLead(input) {
+    var est = getEstimate();
+    if (!est) throw new Error('No estimate open.');
+    var leadId = String(input.lead_id || '').trim();
+    if (!leadId) throw new Error('lead_id is required.');
+    est.lead_id = leadId;
+    debouncedSave();
+    renderDetailsForm();
+    renderLineItems();
+    return 'Linked estimate to lead ' + leadId + '.';
+  }
+
+  function applyUpdateEstimateField(input) {
+    var est = getEstimate();
+    if (!est) throw new Error('No estimate open.');
+    var field = String(input.field || '').trim();
+    var value = input.value;
+    var fieldMap = {
+      title: 'title',
+      salutation: 'salutation',
+      markup_default: 'markupDefault',
+      bt_export_status: 'btExportStatus',
+      notes: 'notes'
+    };
+    var key = fieldMap[field];
+    if (!key) throw new Error('Unsupported field: ' + field);
+    var prev = est[key];
+    if (field === 'markup_default') {
+      var n = Number(value);
+      if (!isFinite(n) || n < 0) throw new Error('markup_default must be a non-negative number.');
+      est[key] = n;
+    } else {
+      est[key] = (value == null) ? '' : String(value);
+    }
+    debouncedSave();
+    renderDetailsForm();
+    renderLineItems();
+    renderTotals();
+    return 'Estimate ' + field + ': ' + (prev == null ? '(empty)' : prev) + ' → ' + est[key];
+  }
+
+  // ──── Bulk line operations ───────────────────────────────────────────
+  function applyBulkUpdateLines(input) {
+    var ids = Array.isArray(input.line_ids) ? input.line_ids : [];
+    if (!ids.length) throw new Error('line_ids is required and must not be empty.');
+    var changes = input.changes || {};
+    var est = getEstimate();
+    if (!est) throw new Error('No estimate open.');
+    var alt = getActiveAlternate();
+
+    // Resolve target section once if section_name is in changes — same
+    // substring rule as applyAddLineItem so behavior is consistent.
+    var targetSectionId = null;
+    if (changes.section_name) {
+      var needle = String(changes.section_name).toLowerCase();
+      var match = (appData.estimateLines || []).find(function(l) {
+        return l.estimateId === est.id
+          && (alt ? l.alternateId === alt.id : true)
+          && l.section === '__section_header__'
+          && (l.description || '').toLowerCase().indexOf(needle) >= 0;
+      });
+      if (!match) throw new Error('Section "' + changes.section_name + '" not found on the active group.');
+      targetSectionId = match.id;
+    }
+
+    var updated = 0;
+    ids.forEach(function(lineId) {
+      var line = (appData.estimateLines || []).find(function(l) { return l.id === lineId; });
+      if (!line || line.section === '__section_header__') return;
+      if (changes.description != null)             line.description = String(changes.description);
+      if (changes.qty != null)                     line.qty         = Number(changes.qty);
+      if (changes.unit != null)                    line.unit        = String(changes.unit);
+      if (changes.unit_cost != null)               line.unitCost    = Number(changes.unit_cost);
+      if (changes.markup_pct != null)              line.markup      = Number(changes.markup_pct);
+      // section_name move = re-anchor under the resolved section header
+      // by reordering the array so the line ends up just after the
+      // target header (or before the next header). Same insertion
+      // logic as applyAddLineItem.
+      if (targetSectionId) {
+        var arr = appData.estimateLines;
+        var fromIdx = arr.findIndex(function(l) { return l.id === lineId; });
+        if (fromIdx >= 0) {
+          var moved = arr.splice(fromIdx, 1)[0];
+          var headIdx = arr.findIndex(function(l) { return l.id === targetSectionId; });
+          var insertAt = arr.length;
+          for (var j = headIdx + 1; j < arr.length; j++) {
+            if (arr[j].section === '__section_header__') { insertAt = j; break; }
+          }
+          arr.splice(insertAt, 0, moved);
+        }
+      }
+      updated++;
+    });
+    if (!updated) throw new Error('No matching lines found for ids: ' + ids.join(', '));
+    debouncedSave();
+    renderLineItems();
+    renderTotals();
+    return 'Updated ' + updated + ' line' + (updated === 1 ? '' : 's') + '.';
+  }
+
+  function applyBulkDeleteLines(input) {
+    var ids = Array.isArray(input.line_ids) ? input.line_ids : [];
+    if (!ids.length) throw new Error('line_ids is required and must not be empty.');
+    var idSet = {};
+    ids.forEach(function(id) { idSet[id] = true; });
+    var before = (appData.estimateLines || []).length;
+    appData.estimateLines = (appData.estimateLines || []).filter(function(l) {
+      return !(idSet[l.id] && l.section !== '__section_header__');
+    });
+    var removed = before - appData.estimateLines.length;
+    if (!removed) throw new Error('No matching lines found for ids: ' + ids.join(', '));
+    debouncedSave();
+    renderLineItems();
+    renderTotals();
+    return 'Deleted ' + removed + ' line' + (removed === 1 ? '' : 's') + '.';
+  }
+
   window.estimateEditorAPI = {
     isOpenFor: function(estimateId) { return _currentId === estimateId; },
     getOpenId: function() { return _currentId; },
@@ -1988,7 +2242,20 @@
     applyDeleteLine: applyDeleteLine,
     applyUpdateLine: applyUpdateLine,
     applyDeleteSection: applyDeleteSection,
-    applyUpdateSection: applyUpdateSection
+    applyUpdateSection: applyUpdateSection,
+    // Group / alternate management
+    applySwitchActiveGroup: applySwitchActiveGroup,
+    applyAddGroup: applyAddGroup,
+    applyRenameGroup: applyRenameGroup,
+    applyDeleteGroup: applyDeleteGroup,
+    applyToggleGroupInclude: applyToggleGroupInclude,
+    // Linking + estimate metadata
+    applyLinkToClient: applyLinkToClient,
+    applyLinkToLead: applyLinkToLead,
+    applyUpdateEstimateField: applyUpdateEstimateField,
+    // Bulk line operations
+    applyBulkUpdateLines: applyBulkUpdateLines,
+    applyBulkDeleteLines: applyBulkDeleteLines
   };
   window.addAlternateFromEditor = addAlternateFromEditor;
   window.renameActiveAlternate = renameActiveAlternate;

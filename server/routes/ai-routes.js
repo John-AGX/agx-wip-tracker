@@ -295,6 +295,243 @@ const ESTIMATE_TOOLS = [
       },
       required: []
     }
+  },
+  // ──── Group / alternate management ────────────────────────────────
+  // Each estimate has one or more "groups" (a.k.a. alternates) — Group 1,
+  // Group 2, etc. — each with its own scope, line items, and a
+  // `excludeFromTotal` flag for Good/Better/Best style scenarios. AG can
+  // now switch which group is active (subsequent line edits target the
+  // active group), add/rename/delete groups, and toggle inclusion.
+  {
+    name: 'propose_switch_active_group',
+    description:
+      'Switch the active group on the estimate. Subsequent propose_add_line_item / propose_update_scope calls target the new active group. ' +
+      'Use when the user pivots focus mid-conversation ("now let\'s work on the roof") and you need to slot lines under a different group than the one currently active. ' +
+      'Resolves by group id OR case-insensitive group name (substring match).',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        group_id: { type: 'string', description: 'Group id (e.g., "alt_…") OR exact/substring case-insensitive group name (e.g., "Group 2", "roof").' },
+        rationale: { type: 'string', description: 'One short sentence — why we\'re switching.' }
+      },
+      required: ['group_id', 'rationale']
+    }
+  },
+  {
+    name: 'propose_add_group',
+    description:
+      'Create a new group on the estimate and switch focus to it. Auto-seeds the four standard subgroups (Materials & Supplies, Direct Labor, General Conditions, Subcontractors) so the next propose_add_line_item call has somewhere to slot. ' +
+      'When `copy_from_active` is true, every line + section header in the currently-active group is cloned into the new group (the duplicate-group flow); otherwise the new group is empty except for the seeded subgroup headers.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        name: { type: 'string', description: 'Group name (e.g., "Roof", "Phase 2", "Optional Adds").' },
+        copy_from_active: { type: 'boolean', description: 'If true, clone all lines + section headers from the currently-active group. Default false (empty new group).' },
+        rationale: { type: 'string', description: 'One short sentence — what this group is for.' }
+      },
+      required: ['name', 'rationale']
+    }
+  },
+  {
+    name: 'propose_rename_group',
+    description: 'Rename an existing group. Resolves by id or case-insensitive name match.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        group_id: { type: 'string', description: 'Group id or current name.' },
+        new_name: { type: 'string', description: 'New name for the group.' },
+        rationale: { type: 'string' }
+      },
+      required: ['group_id', 'new_name', 'rationale']
+    }
+  },
+  {
+    name: 'propose_delete_group',
+    description:
+      'Delete a group and all its line items. Refuses if it\'s the only group remaining (estimates require at least one group). ' +
+      'If the deleted group was active, focus auto-shifts to the first remaining group.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        group_id: { type: 'string' },
+        rationale: { type: 'string' }
+      },
+      required: ['group_id', 'rationale']
+    }
+  },
+  {
+    name: 'propose_toggle_group_include',
+    description:
+      'Set whether a group is included in the estimate\'s grand total. Use for Good/Better/Best scenarios where the user wants to present multiple scopes but only one rolls into the headline number, or for "optional adds" groups that price separately.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        group_id: { type: 'string' },
+        included: { type: 'boolean', description: 'true = group counts toward the grand total; false = group is presented separately, doesn\'t add to the headline.' },
+        rationale: { type: 'string' }
+      },
+      required: ['group_id', 'included', 'rationale']
+    }
+  },
+  // ──── Linking + estimate metadata ─────────────────────────────────
+  {
+    name: 'propose_link_to_client',
+    description:
+      'Link this estimate to a client record. Use when the user mentions a client name and the estimate doesn\'t yet have linked_client_id, or when read_clients returns a high-confidence match. After linking, the client\'s notes auto-inject into AG\'s context every turn (see propose_add_client_note for the writeback flow).',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        client_id: { type: 'string', description: 'Client id from read_clients results.' },
+        rationale: { type: 'string', description: 'One short sentence — how you identified this client.' }
+      },
+      required: ['client_id', 'rationale']
+    }
+  },
+  {
+    name: 'propose_link_to_lead',
+    description:
+      'Link this estimate to a lead record so the lead\'s pipeline status, projected revenue, and projected sale date stay in sync. Use after read_lead_pipeline returns a confident match.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        lead_id: { type: 'string' },
+        rationale: { type: 'string' }
+      },
+      required: ['lead_id', 'rationale']
+    }
+  },
+  {
+    name: 'propose_update_estimate_field',
+    description:
+      'Update one estimate-level metadata field. Use for the title (rename), salutation (proposal "Dear ___,"), markup_default (estimate-wide default markup % for sections that don\'t set their own), bt_export_status (BT pipeline status), or notes. One field per call.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        field: {
+          type: 'string',
+          enum: ['title', 'salutation', 'markup_default', 'bt_export_status', 'notes'],
+          description: 'Which estimate-level field to update.'
+        },
+        value: {
+          type: ['string', 'number'],
+          description: 'New value. Number for markup_default; string for everything else.'
+        },
+        rationale: { type: 'string' }
+      },
+      required: ['field', 'value', 'rationale']
+    }
+  },
+  // ──── Bulk line operations ────────────────────────────────────────
+  {
+    name: 'propose_bulk_update_lines',
+    description:
+      'Update the same fields on multiple lines in one approval card — instead of N separate propose_update_line_item calls. Use for "move every line in Materials that mentions paint over to Subcontractors" or "set markup to 30% on these 12 lines." ' +
+      'Only changes the fields you supply (description / qty / unit / unit_cost / markup_pct / section_name); each line keeps every other field. ' +
+      'For a homogeneous bulk delete use propose_bulk_delete_lines instead.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        line_ids: { type: 'array', items: { type: 'string' }, minItems: 1, description: 'Ids of every line being updated.' },
+        changes: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            description: { type: 'string' },
+            qty: { type: 'number' },
+            unit: { type: 'string' },
+            unit_cost: { type: 'number' },
+            markup_pct: { type: 'number' },
+            section_name: { type: 'string', description: 'Move every line under this subgroup. Case-insensitive substring match.' }
+          },
+          description: 'The fields to apply to every line in line_ids. Omit fields you don\'t want to touch.'
+        },
+        rationale: { type: 'string' }
+      },
+      required: ['line_ids', 'changes', 'rationale']
+    }
+  },
+  {
+    name: 'propose_bulk_delete_lines',
+    description: 'Delete multiple lines in one approval card. Use after audit findings list 5+ duplicate / dead lines.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        line_ids: { type: 'array', items: { type: 'string' }, minItems: 1 },
+        rationale: { type: 'string' }
+      },
+      required: ['line_ids', 'rationale']
+    }
+  },
+  // ──── New read tools — auto-apply, no approval ─────────────────────
+  {
+    name: 'read_clients',
+    description:
+      'Search the AGX clients directory. Returns id, name, parent client (if any), city, primary contact, and any agent-readable notes. Use this before propose_link_to_client when the estimate isn\'t linked yet and the user mentions a client name. Substring match on name and contact.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        q: { type: 'string', description: 'Free-text search on name / contact / city.' },
+        limit: { type: 'integer', minimum: 1, maximum: 100, description: 'Cap rows returned. Default 20.' }
+      },
+      required: []
+    }
+  },
+  {
+    name: 'read_leads',
+    description:
+      'Search the AGX leads pipeline by free text + filters. Lighter-weight than read_lead_pipeline (this one targets a specific lead lookup for linking; read_lead_pipeline is for pipeline analytics). Returns id, title, status, projected_revenue, salesperson, market.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        q: { type: 'string', description: 'Free-text on title / property name.' },
+        status: { type: 'string', enum: ['new', 'in_progress', 'sent', 'sold', 'lost', 'no_opportunity'] },
+        limit: { type: 'integer', minimum: 1, maximum: 50, description: 'Cap rows returned. Default 15.' }
+      },
+      required: []
+    }
+  },
+  {
+    name: 'read_past_estimate_lines',
+    description:
+      'Search line items across ALL past AGX estimates for pricing benchmark. Returns up to N matching lines with description, qty, unit, unit_cost, markup, section name, parent estimate id + title, and last-modified date. Use BEFORE quoting a non-materials line (labor or sub) so you anchor to AGX history instead of guessing — for materials use read_materials (real receipts).',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        q: { type: 'string', description: 'Free-text on line description (e.g., "fascia replacement", "hang and finish drywall").' },
+        days: { type: 'integer', minimum: 30, maximum: 1825, description: 'Only show lines from estimates updated in the last N days. Default 730 (2 years).' },
+        limit: { type: 'integer', minimum: 1, maximum: 100, description: 'Cap rows returned. Default 25.' }
+      },
+      required: ['q']
+    }
+  },
+  {
+    name: 'read_past_estimates',
+    description:
+      'Search past AGX estimates by title + client + total. Returns estimate id, title, client name, total, status, sold/lost outcome, last-modified. Use to answer "have we done a porch repaint at PAC before?" or to find a recent comparable estimate to model the new one on.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        q: { type: 'string', description: 'Free-text on estimate title or linked client name.' },
+        status: { type: 'string', enum: ['draft', 'sent', 'sold', 'lost'], description: 'Filter to one outcome. Omit for all statuses.' },
+        days: { type: 'integer', minimum: 30, maximum: 1825, description: 'Only show estimates updated in the last N days. Default 730.' },
+        limit: { type: 'integer', minimum: 1, maximum: 50, description: 'Cap rows returned. Default 15.' }
+      },
+      required: []
+    }
   }
 ];
 
@@ -942,13 +1179,49 @@ async function buildEstimateContext(estimateId, includePhotos) {
 
   if (alternates.length > 1) {
     lines.push('# Groups on this estimate');
-    lines.push('AGX organizes a multi-scope estimate into Groups (e.g., Deck 1, Deck 2, Roof, Optional Adds). Each group carries its own scope and its own line items. The proposal total = sum of every INCLUDED group; groups marked `excluded` are not priced or shown to the client.');
+    lines.push('AGX organizes a multi-scope estimate into Groups (e.g., Deck 1, Deck 2, Roof, Optional Adds). Each group carries its own scope and its own line items. The proposal total = sum of every INCLUDED group; groups marked `excluded` are not priced or shown to the client. Use propose_switch_active_group / propose_add_group to operate on a different group.');
     alternates.forEach(a => {
       const isActive = a.id === blob.activeAlternateId;
       const isExcluded = !!a.excludeFromTotal;
+      // Per-group cost-side subtotal so AG can see what's already in
+      // each group without having to switch into it. This is the cost
+      // side (qty * unitCost * (1 + markup/100)) — the same math
+      // the editor uses for the headline number.
+      const groupLines = allLines.filter(l => l.alternateId === a.id);
+      const itemLines = groupLines.filter(l => l.section !== '__section_header__');
+      let subtotal = 0;
+      // Build a markup map from the section headers in this group.
+      const sectionMarkupById = {};
+      groupLines.forEach(l => {
+        if (l.section === '__section_header__') {
+          sectionMarkupById[l.id] = (l.markup === '' || l.markup == null)
+            ? ((blob.defaultMarkup != null && blob.defaultMarkup !== '') ? parseFloat(blob.defaultMarkup) : 0)
+            : parseFloat(l.markup);
+        }
+      });
+      // Walk lines in order; track which section we're under so each
+      // line can fall back to its section's markup if it doesn't override.
+      let curSectionMarkup = (blob.defaultMarkup != null && blob.defaultMarkup !== '') ? parseFloat(blob.defaultMarkup) : 0;
+      groupLines.forEach(l => {
+        if (l.section === '__section_header__') {
+          curSectionMarkup = sectionMarkupById[l.id];
+          return;
+        }
+        const qty = parseFloat(l.qty) || 0;
+        const cost = parseFloat(l.unitCost) || 0;
+        const m = (l.markup === '' || l.markup == null) ? curSectionMarkup : parseFloat(l.markup);
+        subtotal += qty * cost * (1 + (m / 100));
+      });
+      const subtotalStr = '$' + Math.round(subtotal).toLocaleString();
+      const sectionNames = groupLines
+        .filter(l => l.section === '__section_header__')
+        .map(l => l.description || 'subgroup');
       lines.push('- ' + a.name +
         (isActive ? ' (active in editor)' : '') +
-        (isExcluded ? ' [EXCLUDED from proposal]' : ''));
+        (isExcluded ? ' [EXCLUDED from proposal]' : '') +
+        ' · ' + itemLines.length + ' line' + (itemLines.length === 1 ? '' : 's') +
+        ' · ' + subtotalStr +
+        (sectionNames.length ? ' · subgroups: ' + sectionNames.join(', ') : ''));
     });
     lines.push('');
   }
@@ -1108,7 +1381,12 @@ async function buildEstimateContext(estimateId, includePhotos) {
   stableLines.push('  • propose_update_section — rename a subgroup, change BT category, change subgroup markup');
   stableLines.push('  • propose_delete_section — remove a subgroup header (lines under it stay; they fall under the previous subgroup)');
   stableLines.push('  • propose_update_scope — set or append the ACTIVE GROUP\'s scope of work (each group has its own scope)');
-  stableLines.push('Every line and subgroup has an id shown in the estimate context below; use those exact ids when calling update/delete tools. Today you only edit the ACTIVE group — if the user wants you to work in a different group, ask them to switch first. Make multiple parallel proposals when batching — one approval card per call, with a bulk Approve-all.');
+  stableLines.push('  • propose_switch_active_group — switch which group is active. Subsequent line/scope edits target the new active group. Use this when the user pivots ("now let\'s work on the roof") instead of quietly slotting under the wrong group.');
+  stableLines.push('  • propose_add_group — create a new group (auto-seeds the four standard subgroups; copy_from_active=true clones the active group\'s lines).');
+  stableLines.push('  • propose_rename_group / propose_delete_group / propose_toggle_group_include — rename, drop, or toggle a group\'s contribution to the grand total (Good/Better/Best support).');
+  stableLines.push('  • propose_link_to_client / propose_link_to_lead / propose_update_estimate_field — link an unlinked estimate (use read_clients / read_leads first) and update top-level metadata (title, salutation, markup_default, bt_export_status, notes).');
+  stableLines.push('  • propose_bulk_update_lines / propose_bulk_delete_lines — change or remove the same fields on N lines in one approval card. Use for "move every paint-related line to Subcontractors" or 5+ duplicate cleanups.');
+  stableLines.push('Every line and subgroup has an id shown in the estimate context below; use those exact ids when calling update/delete tools. The ACTIVE group is where new lines and scope edits land — switch first via propose_switch_active_group when the user pivots scope. Make multiple parallel proposals when batching — one approval card per call, with a bulk Approve-all.');
   stableLines.push('');
   stableLines.push('# Slotting rules — STRICT');
   stableLines.push('Every line item belongs in exactly one of the four standard subgroups. Choose by what the line IS, not who pays for it:');
@@ -1129,6 +1407,10 @@ async function buildEstimateContext(estimateId, includePhotos) {
   stableLines.push('  • `read_purchase_history(material_id?, q?, days?, job_name?, limit?)` — receipt-level rows for a SKU. Use to spot trends ("is this getting more expensive?"), find which jobs used a SKU, or answer "what did we pay last time?".');
   stableLines.push('  • `read_subs(q?, trade?, status?, with_expiring_certs?, limit?)` — subcontractor directory with cert (GL / WC / W9 / Bank) expiry. Use when scoping to a sub: confirm they\'re active and paperwork-current. with_expiring_certs=true for pre-bid audit.');
   stableLines.push('  • `read_lead_pipeline(q?, status?, market?, salesperson_email?, limit?)` — leads list + status rollup. Use for sibling context ("what other deck jobs are in pipeline?") or pipeline-shape questions.');
+  stableLines.push('  • `read_clients(q?, limit?)` — client directory lookup keyed for linking. Use BEFORE propose_link_to_client when an estimate is unlinked and the user mentions a client name.');
+  stableLines.push('  • `read_leads(q?, status?, limit?)` — direct lead lookup. Use BEFORE propose_link_to_lead.');
+  stableLines.push('  • `read_past_estimate_lines(q, days?, limit?)` — pricing benchmark across past AGX estimates. Returns matching line descriptions with unit_cost + median/range across all matches. Use BEFORE quoting a labor or sub line so the unit_cost is anchored to AGX history. (Materials still come from read_materials — those are real receipts.) If 0 matches, mark "first-time line — no AGX history yet" and quote a defensible Central-FL number.');
+  stableLines.push('  • `read_past_estimates(q?, status?, days?, limit?)` — past estimate lookup by title + linked client. Use to find a recent comparable estimate to model the new one on.');
   stableLines.push('Cap auto-tier reads at ~4 per turn for normal estimates; only chain more for big batched line-item drafts. Each chip costs no approval but does cost API tokens.');
   stableLines.push('**Hard rule — no read loops.** If a `read_materials` query comes back empty or sparse, DO NOT keep retrying narrower queries. Quote the line with a defensible Central-FL estimate, mark the rationale "estimated — SKU not in catalog yet (catalog miss)", and move on. The catalog is small; missing SKUs are normal. After ~3 read_materials calls in a row without producing a propose_*, the panel will hard-stop the loop on you.');
   stableLines.push('');
@@ -1206,7 +1488,16 @@ async function buildEstimateContext(estimateId, includePhotos) {
 // AG chat + continue handlers; web tools are added back by runStream.
 const PLAN_MODE_ALLOWED_AG_TOOLS = new Set([
   'propose_update_scope',
-  'propose_add_client_note'
+  'propose_add_client_note',
+  // Reads stay available so AG can research before proposing.
+  'read_materials',
+  'read_purchase_history',
+  'read_subs',
+  'read_lead_pipeline',
+  'read_clients',
+  'read_leads',
+  'read_past_estimate_lines',
+  'read_past_estimates'
 ]);
 function filterToolsForPhase(tools, phase) {
   if (phase !== 'plan') return tools;
@@ -4139,6 +4430,173 @@ async function execStaffTool(name, input) {
       return out.join('\n');
     }
 
+    case 'read_clients': {
+      const q = (input && input.q || '').trim();
+      const limit = Math.max(1, Math.min(100, Number(input && input.limit) || 20));
+      const where = [];
+      const params = [];
+      let p = 1;
+      if (q) {
+        where.push('(c.name ILIKE $' + p + ' OR c.contact_name ILIKE $' + p + ' OR c.city ILIKE $' + p + ')');
+        params.push('%' + q + '%');
+        p++;
+      }
+      params.push(limit);
+      const r = await pool.query(
+        `SELECT c.id, c.name, c.parent_client_id, c.city, c.state, c.contact_name, c.phone,
+                p.name AS parent_name,
+                (SELECT COUNT(*)::int FROM client_notes n WHERE n.client_id = c.id) AS note_count
+           FROM clients c
+           LEFT JOIN clients p ON p.id = c.parent_client_id
+          ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+          ORDER BY lower(c.name)
+          LIMIT $${p}`,
+        params
+      );
+      if (!r.rows.length) return q ? 'No clients matched "' + q + '".' : 'No clients in directory.';
+      const out = ['Found ' + r.rows.length + ' client' + (r.rows.length === 1 ? '' : 's') + ':'];
+      for (const c of r.rows) {
+        out.push('- ' + c.name + ' [id=' + c.id + ']' +
+          (c.parent_name ? ' (under ' + c.parent_name + ')' : '') +
+          (c.city ? ' · ' + c.city + (c.state ? ', ' + c.state : '') : '') +
+          (c.contact_name ? ' · ' + c.contact_name : '') +
+          (c.note_count ? ' · ' + c.note_count + ' note' + (c.note_count === 1 ? '' : 's') : ''));
+      }
+      return out.join('\n');
+    }
+
+    case 'read_leads': {
+      const q = (input && input.q || '').trim();
+      const limit = Math.max(1, Math.min(50, Number(input && input.limit) || 15));
+      const where = [];
+      const params = [];
+      let p = 1;
+      if (q) {
+        where.push('(l.title ILIKE $' + p + ' OR l.property_name ILIKE $' + p + ')');
+        params.push('%' + q + '%');
+        p++;
+      }
+      if (input && input.status) { where.push('l.status = $' + p++); params.push(input.status); }
+      params.push(limit);
+      const r = await pool.query(
+        `SELECT l.id, l.title, l.status, l.market,
+                l.estimated_revenue_low, l.estimated_revenue_high,
+                c.name AS client_name,
+                u.email AS salesperson_email
+           FROM leads l
+           LEFT JOIN clients c ON c.id = l.client_id
+           LEFT JOIN users u ON u.id = l.salesperson_id
+          ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+          ORDER BY l.updated_at DESC
+          LIMIT $${p}`,
+        params
+      );
+      if (!r.rows.length) return q ? 'No leads matched "' + q + '".' : 'No leads in pipeline.';
+      const out = ['Found ' + r.rows.length + ' lead' + (r.rows.length === 1 ? '' : 's') + ':'];
+      for (const x of r.rows) {
+        const lo = Number(x.estimated_revenue_low || 0);
+        const hi = Number(x.estimated_revenue_high || 0);
+        const rev = lo && hi ? '$' + Math.round(lo / 1000) + 'K-$' + Math.round(hi / 1000) + 'K'
+                  : lo || hi ? '$' + Math.round((lo || hi) / 1000) + 'K' : '?';
+        out.push('- ' + x.title + ' [id=' + x.id + ']' +
+          (x.client_name ? ' · ' + x.client_name : '') +
+          ' · ' + x.status +
+          ' · ' + rev +
+          (x.market ? ' · ' + x.market : '') +
+          (x.salesperson_email ? ' · ' + x.salesperson_email : ''));
+      }
+      return out.join('\n');
+    }
+
+    case 'read_past_estimate_lines': {
+      const q = (input && input.q || '').trim();
+      if (!q) return 'q is required — search keyword across line descriptions.';
+      const days = Math.max(30, Math.min(1825, Number(input && input.days) || 730));
+      const limit = Math.max(1, Math.min(100, Number(input && input.limit) || 25));
+      // Estimates store lines inside the JSONB blob (data->>'lines'). Walk
+      // the blob server-side via jsonb_array_elements so we can ILIKE on
+      // descriptions without pulling every estimate to Node first.
+      const r = await pool.query(
+        `SELECT e.id AS estimate_id, e.data->>'title' AS title, e.updated_at,
+                line->>'description' AS description,
+                (line->>'qty')::numeric  AS qty,
+                line->>'unit'            AS unit,
+                (line->>'unitCost')::numeric AS unit_cost,
+                (line->>'markup')::numeric   AS markup,
+                line->>'section'         AS section
+           FROM estimates e,
+                jsonb_array_elements(COALESCE(e.data->'lines', '[]'::jsonb)) AS line
+          WHERE e.updated_at >= NOW() - ($1 || ' days')::interval
+            AND COALESCE(line->>'section', '') <> '__section_header__'
+            AND line->>'description' ILIKE $2
+          ORDER BY e.updated_at DESC
+          LIMIT $3`,
+        [String(days), '%' + q + '%', limit]
+      );
+      if (!r.rows.length) return 'No past estimate lines matched "' + q + '" in the last ' + days + ' days. Quote a defensible Central-FL estimate and mark "first-time line — no AGX history yet."';
+      // Median + range across the matching lines for a quick anchor.
+      const costs = r.rows.map(x => Number(x.unit_cost || 0)).filter(v => v > 0).sort((a, b) => a - b);
+      const median = costs.length ? costs[Math.floor(costs.length / 2)] : null;
+      const out = ['Found ' + r.rows.length + ' past line' + (r.rows.length === 1 ? '' : 's') + ' matching "' + q + '" (last ' + days + ' days).'];
+      if (median != null) {
+        out.push('Unit-cost anchor: median $' + median.toFixed(2) + ', range $' + costs[0].toFixed(2) + '-$' + costs[costs.length - 1].toFixed(2) + ' across ' + costs.length + ' priced line' + (costs.length === 1 ? '' : 's') + '.');
+      }
+      out.push('');
+      for (const x of r.rows) {
+        const updated = x.updated_at ? String(x.updated_at).slice(0, 10) : '?';
+        out.push('- ' + (x.description || '(no description)') +
+          ' · qty ' + (x.qty == null ? '?' : Number(x.qty)) +
+          ' ' + (x.unit || '') +
+          ' @ $' + (x.unit_cost == null ? '?' : Number(x.unit_cost).toFixed(2)) +
+          (x.markup != null ? ' · markup ' + Number(x.markup) + '%' : '') +
+          ' · ' + (x.section || '(no section)') +
+          ' · est "' + (x.title || x.estimate_id) + '" · ' + updated);
+      }
+      return out.join('\n');
+    }
+
+    case 'read_past_estimates': {
+      const q = (input && input.q || '').trim();
+      const days = Math.max(30, Math.min(1825, Number(input && input.days) || 730));
+      const limit = Math.max(1, Math.min(50, Number(input && input.limit) || 15));
+      const where = ['e.updated_at >= NOW() - ($1 || \' days\')::interval'];
+      const params = [String(days)];
+      let p = 2;
+      if (q) {
+        where.push("(e.data->>'title' ILIKE $" + p + " OR c.name ILIKE $" + p + ')');
+        params.push('%' + q + '%');
+        p++;
+      }
+      if (input && input.status) {
+        where.push("COALESCE(e.data->>'btExportStatus', e.data->>'status', 'draft') = $" + p++);
+        params.push(input.status);
+      }
+      params.push(limit);
+      const r = await pool.query(
+        `SELECT e.id, e.data->>'title' AS title, e.updated_at,
+                COALESCE(e.data->>'btExportStatus', e.data->>'status', 'draft') AS status,
+                c.name AS client_name,
+                COALESCE((e.data->>'totalProposal')::numeric, 0) AS total
+           FROM estimates e
+           LEFT JOIN clients c ON c.id = (e.data->>'clientId')
+          WHERE ${where.join(' AND ')}
+          ORDER BY e.updated_at DESC
+          LIMIT $${p}`,
+        params
+      );
+      if (!r.rows.length) return q ? 'No past estimates matched "' + q + '" in the last ' + days + ' days.' : 'No estimates in the last ' + days + ' days.';
+      const out = ['Found ' + r.rows.length + ' past estimate' + (r.rows.length === 1 ? '' : 's') + ' (last ' + days + ' days):'];
+      for (const x of r.rows) {
+        const updated = x.updated_at ? String(x.updated_at).slice(0, 10) : '?';
+        out.push('- "' + (x.title || '(untitled)') + '" [id=' + x.id + ']' +
+          (x.client_name ? ' · ' + x.client_name : '') +
+          ' · ' + x.status +
+          ' · $' + Math.round(Number(x.total || 0)).toLocaleString() +
+          ' · ' + updated);
+      }
+      return out.join('\n');
+    }
+
     default:
       throw new Error('Unknown staff tool: ' + name);
   }
@@ -4605,7 +5063,11 @@ const ALLOWED_AG_AUTO_TOOLS = new Set([
   'read_materials',
   'read_purchase_history',
   'read_subs',
-  'read_lead_pipeline'
+  'read_lead_pipeline',
+  'read_clients',
+  'read_leads',
+  'read_past_estimate_lines',
+  'read_past_estimates'
 ]);
 router.post('/exec-tool', requireAuth, requireCapability('ESTIMATES_VIEW'), async (req, res) => {
   try {

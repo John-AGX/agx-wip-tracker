@@ -1755,6 +1755,19 @@
       case 'propose_delete_section':   return window.estimateEditorAPI.applyDeleteSection(tu.input);
       case 'propose_update_section':   return window.estimateEditorAPI.applyUpdateSection(tu.input);
       case 'propose_add_client_note':  return applyAddClientNote(tu.input);
+      // Group / alternate management
+      case 'propose_switch_active_group': return window.estimateEditorAPI.applySwitchActiveGroup(tu.input);
+      case 'propose_add_group':           return window.estimateEditorAPI.applyAddGroup(tu.input);
+      case 'propose_rename_group':        return window.estimateEditorAPI.applyRenameGroup(tu.input);
+      case 'propose_delete_group':        return window.estimateEditorAPI.applyDeleteGroup(tu.input);
+      case 'propose_toggle_group_include':return window.estimateEditorAPI.applyToggleGroupInclude(tu.input);
+      // Linking + metadata
+      case 'propose_link_to_client':      return window.estimateEditorAPI.applyLinkToClient(tu.input);
+      case 'propose_link_to_lead':        return window.estimateEditorAPI.applyLinkToLead(tu.input);
+      case 'propose_update_estimate_field': return window.estimateEditorAPI.applyUpdateEstimateField(tu.input);
+      // Bulk line operations
+      case 'propose_bulk_update_lines':   return window.estimateEditorAPI.applyBulkUpdateLines(tu.input);
+      case 'propose_bulk_delete_lines':   return window.estimateEditorAPI.applyBulkDeleteLines(tu.input);
       default: throw new Error('Unknown tool: ' + tu.name);
     }
   }
@@ -1768,7 +1781,11 @@
     read_materials: true,
     read_purchase_history: true,
     read_subs: true,
-    read_lead_pipeline: true
+    read_lead_pipeline: true,
+    read_clients: true,
+    read_leads: true,
+    read_past_estimate_lines: true,
+    read_past_estimates: true
   };
   function execAGAutoTool(name, input) {
     return window.agxApi.post('/api/ai/exec-tool', { name: name, input: input || {} })

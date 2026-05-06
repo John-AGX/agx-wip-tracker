@@ -862,6 +862,92 @@ async function initSchema() {
     [JSON.stringify(DEFAULT_AGENT_SKILLS)]
   );
 
+  // Idempotent additive merge — packs we want every deployment to have
+  // even after the initial agent_skills row has been written. Each
+  // pack is identified by id; if the id already exists in the row,
+  // we leave it alone (admins may have edited the body). New packs
+  // get appended.
+  const ADDITIVE_AGENT_SKILLS = [
+    {
+      id: 'sk_ag_group_discipline',
+      name: 'AGX Group Discipline',
+      agents: ['ag'],
+      alwaysOn: true,
+      body: [
+        'Estimates can have multiple Groups. Discipline:',
+        '- Before adding lines or scope, confirm which group the user is talking about. The "Groups on this estimate" block in your context shows every group with line count + subtotal + subgroup names.',
+        '- When the user pivots ("now let\'s work on the roof", "let\'s look at the optional adds") and the active group is not the one they\'re talking about: call propose_switch_active_group FIRST. Don\'t silently slot lines into the wrong group.',
+        '- When the user describes a NEW scope that doesn\'t belong in any existing group ("add a separate scope for the back deck"), call propose_add_group with a clear name. The four standard subgroups auto-seed.',
+        '- When the user says "same as Deck 1 but for Deck 2," call propose_add_group with copy_from_active=true, then walk through delta edits.',
+        '- For Good/Better/Best style estimates, use propose_toggle_group_include to mark the alternate options as excluded so only one rolls into the headline.'
+      ].join('\n')
+    },
+    {
+      id: 'sk_ag_lead_client_linking',
+      name: 'AGX Lead/Client Linking',
+      agents: ['ag'],
+      alwaysOn: true,
+      body: [
+        'When an estimate is unlinked (no client_id / lead_id in context) and the user mentions a client or lead name:',
+        '- For client name → call read_clients(q="...") first. If you find a confident match (single result OR exact name match in top 3), call propose_link_to_client. If the match is ambiguous, ask the user to confirm before linking.',
+        '- For lead → call read_leads(q="...") then propose_link_to_lead the same way.',
+        '- After linking a client, the client\'s notes start auto-injecting into your context every turn. propose_add_client_note becomes available for durable facts the user shares.',
+        '- Do NOT link based on weak matches (substring of a common word, fuzzy partial). Better to ask "is this PAC at Wimbledon Greens, or PAC at another property?" than to mis-link.',
+        'Other top-level metadata: title, salutation, markup_default, bt_export_status, notes — use propose_update_estimate_field. Don\'t use it for fields the user can edit faster themselves (most metadata); reserve it for moments where you\'re confident from conversation context (e.g., user says "rename this to Wimbledon Greens — Building 4 deck rebuild").'
+      ].join('\n')
+    },
+    {
+      id: 'sk_ag_pricing_benchmark',
+      name: 'AGX Pricing Benchmark Loop',
+      agents: ['ag'],
+      alwaysOn: true,
+      body: [
+        'Before quoting a NON-MATERIALS line (Direct Labor, Subcontractors, GC):',
+        '- Call read_past_estimate_lines(q="<trade keyword>") to anchor the unit_cost to AGX history.',
+        '- If the median + range output shows 3+ priced matches in the last 2 years, anchor your quote to the median (or the high end if recent inflation is visible in the range).',
+        '- If 0 matches, mark the rationale "first-time line — no AGX history yet" and quote a defensible Central-FL number from your trade knowledge.',
+        '- 1-2 matches: cite both — "$X based on [estimate title], $Y based on [other estimate title], proposing $Z."',
+        'For MATERIALS still use read_materials (real receipts) — past_estimate_lines doesn\'t differentiate retail vs AGX cost the way the receipt log does.',
+        'Don\'t loop. ONE read_past_estimate_lines call per trade keyword. If empty, move on — don\'t keep retrying narrower queries.'
+      ].join('\n')
+    },
+    {
+      id: 'sk_ag_cross_group_awareness',
+      name: 'AGX Cross-Group Awareness',
+      agents: ['ag'],
+      alwaysOn: true,
+      body: [
+        'The "Groups on this estimate" block in your context shows every group\'s line count, subtotal, and subgroup names. Before proposing a line, scan it.',
+        '- If the user describes a scope that already exists in a different (inactive) group, surface that BEFORE proposing duplicates: "Looks like Deck 1 already has the deck-board work — did you want me to add it to Deck 2 (this one), or move it from Deck 1?"',
+        '- For multi-deck or multi-building scopes, prefer one group per scope (Deck 1, Deck 2, Roof) over jamming everything into one group with subgroup gymnastics.',
+        '- When the user says "do the same for the other decks too," consider propose_add_group(copy_from_active=true) per additional deck instead of duplicating lines manually.'
+      ].join('\n')
+    }
+  ];
+  // Read the current row, merge any missing packs, write back.
+  const existingSkills = await pool.query(
+    `SELECT value FROM app_settings WHERE key = 'agent_skills'`
+  );
+  if (existingSkills.rows.length) {
+    const cur = existingSkills.rows[0].value || {};
+    const skills = Array.isArray(cur.skills) ? cur.skills.slice() : [];
+    let added = 0;
+    for (const pack of ADDITIVE_AGENT_SKILLS) {
+      if (!skills.some(s => s && (s.id === pack.id || s.name === pack.name))) {
+        skills.push(pack);
+        added++;
+      }
+    }
+    if (added > 0) {
+      const merged = Object.assign({}, cur, { skills });
+      await pool.query(
+        `UPDATE app_settings SET value = $1::jsonb, updated_at = NOW() WHERE key = 'agent_skills'`,
+        [JSON.stringify(merged)]
+      );
+      console.log('[db] seeded ' + added + ' new agent skill pack' + (added === 1 ? '' : 's'));
+    }
+  }
+
   // Sync the admin user from env vars on every boot.
   // ADMIN_EMAIL + ADMIN_PASSWORD are set in Railway/production env. Treated as a
   // system-managed account, not user-facing — change the env var to rotate the password.
