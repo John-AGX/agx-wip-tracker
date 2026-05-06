@@ -1388,14 +1388,35 @@ const AGENT_SYSTEM_BASELINE = {
 
 // Convert one of our local tool definitions (the ESTIMATE_TOOLS /
 // JOB_TOOLS / CLIENT_TOOLS / STAFF_TOOLS shape) into Anthropic's
-// BetaManagedAgentsCustomToolParams shape. The two are very close —
-// just need to drop properties Anthropic's schema doesn't accept.
+// BetaManagedAgentsCustomToolParams shape.
+//
+// Constraints the managed-agents schema enforces (vs the looser
+// messages.create tool schema we use today on the v1 path):
+//   - description max length 1024 chars
+//   - input_schema must NOT contain `additionalProperties` at any
+//     level (Anthropic's managed-agents schema validator rejects it
+//     even though the messages.create path tolerates it)
+function sanitizeInputSchemaForAgents(node) {
+  if (!node || typeof node !== 'object') return node;
+  if (Array.isArray(node)) return node.map(sanitizeInputSchemaForAgents);
+  const out = {};
+  for (const k of Object.keys(node)) {
+    if (k === 'additionalProperties') continue; // strip
+    out[k] = sanitizeInputSchemaForAgents(node[k]);
+  }
+  return out;
+}
+
 function toCustomToolParam(tool) {
+  const desc = (tool.description || '').toString();
   return {
     type: 'custom',
     name: tool.name,
-    description: tool.description,
-    input_schema: tool.input_schema || { type: 'object', properties: {} }
+    // Hard cap at the Anthropic managed-agents 1024-char limit.
+    // Truncating beats failing the whole bootstrap; the agent still
+    // sees the first 1024 chars which is plenty to disambiguate.
+    description: desc.length > 1024 ? desc.slice(0, 1021) + '...' : desc,
+    input_schema: sanitizeInputSchemaForAgents(tool.input_schema || { type: 'object', properties: {} })
   };
 }
 
