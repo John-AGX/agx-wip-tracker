@@ -2146,6 +2146,20 @@ router.post('/estimates/:id/chat/continue',
 
 const FLAG_AGENT_MODE_AG = (process.env.AGX_AGENT_MODE_AG || '').toLowerCase() === 'agents';
 
+// Three of our four context builders return `system` as an array of
+// TextBlockParam objects (with cache_control on the first block);
+// buildJobContext returns it as a plain string. The v2 path embeds
+// it in a `<turn_context>` wrapper inside the user message, so we
+// need a single string. Coerce here — string passes through, array
+// gets its text blocks concatenated.
+function ctxSystemToText(systemArr) {
+  if (typeof systemArr === 'string') return systemArr;
+  if (!Array.isArray(systemArr)) return '';
+  return systemArr
+    .map(b => (b && b.type === 'text' && typeof b.text === 'string') ? b.text : '')
+    .join('');
+}
+
 // Look up or create the long-lived Session for one (agent, entity,
 // user) tuple. Race-safe via the unique partial index on ai_sessions.
 async function ensureAiSession({ agentKey, entityType, entityId, userId }) {
@@ -2424,7 +2438,7 @@ router.post('/v2/estimates/:id/chat',
       // <turn_context>. Images precede the text block per Anthropic
       // guidance.
       const turnText =
-        '<turn_context>\n' + ctx.system + '\n</turn_context>\n\n' + userMessage;
+        '<turn_context>\n' + ctxSystemToText(ctx.system) + '\n</turn_context>\n\n' + userMessage;
       const userContent = cappedImages.length
         ? [...cappedImages, { type: 'text', text: turnText }]
         : [{ type: 'text', text: turnText }];
@@ -3258,7 +3272,7 @@ router.post('/v2/jobs/:id/chat',
       // fields. Elle's WIP snapshots can run long; the Session's
       // built-in compaction will shorten older turns automatically.
       const turnText =
-        '<turn_context>\n' + ctx.system + '\n</turn_context>\n\n' + userMessage;
+        '<turn_context>\n' + ctxSystemToText(ctx.system) + '\n</turn_context>\n\n' + userMessage;
       const userContent = [{ type: 'text', text: turnText }];
 
       const session = await ensureAiSession({
@@ -5828,7 +5842,7 @@ router.post('/v2/clients/chat',
       // Per-turn directory snapshot wraps in <turn_context>; agent's
       // stable system prompt holds identity. Inline images go before
       // the text block.
-      const turnText = '<turn_context>\n' + ctx.system + '\n</turn_context>\n\n' + userMessage;
+      const turnText = '<turn_context>\n' + ctxSystemToText(ctx.system) + '\n</turn_context>\n\n' + userMessage;
       const imgBlocks = additionalImages.map(b64 => inlineImageBlock(b64)).filter(Boolean);
       const userContent = imgBlocks.length
         ? [...imgBlocks, { type: 'text', text: turnText }]
@@ -5976,7 +5990,7 @@ router.post('/v2/staff/chat',
     setSSEHeaders(res);
     try {
       const ctx = await buildStaffContext();
-      const turnText = '<turn_context>\n' + ctx.system + '\n</turn_context>\n\n' + userMessage;
+      const turnText = '<turn_context>\n' + ctxSystemToText(ctx.system) + '\n</turn_context>\n\n' + userMessage;
 
       const session = await ensureAiSession({
         agentKey: 'staff',
