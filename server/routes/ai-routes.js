@@ -2174,6 +2174,14 @@ async function ensureAiSession({ agentKey, entityType, entityId, userId }) {
   );
   if (found.rows.length) return found.rows[0];
 
+  return createFreshAiSession({ agentKey, entityType, entityId, userId });
+}
+
+// Create a brand-new Anthropic session row + DB row for the given tuple.
+// Extracted so we can recover from stuck sessions (e.g. requires_action
+// state inherited from a prior broken bootstrap) by archiving the
+// previous row and creating a fresh one in its place.
+async function createFreshAiSession({ agentKey, entityType, entityId, userId }) {
   // Lazy require avoids the ai-routes ↔ admin-agents-routes cycle at
   // module-load time (admin-agents pulls ai-routes-internals).
   const adminAgents = require('./admin-agents-routes');
@@ -2232,7 +2240,35 @@ async function ensureAiSession({ agentKey, entityType, entityId, userId }) {
 //                                            the next idle
 // When the callback is omitted (AG / Elle path), every custom_tool_use
 // is treated as approval — matching today's behavior.
-async function runV2SessionStream({ anthropic, res, sessionId, eventsToSend, persistAssistantText, onCustomToolUse }) {
+// Match the API's "session is stuck waiting for tool responses" error.
+// Happens when a prior turn emitted agent.custom_tool_use events but
+// the session never received the matching user.custom_tool_result —
+// e.g., the request was aborted mid-stream, an exception killed the
+// loop, or an earlier broken bootstrap left orphaned tool calls.
+function isStuckSessionError(e) {
+  return e && e.status === 400 &&
+    /waiting on responses to events/.test(String(e.message || ''));
+}
+
+// Recovery: archive the stuck Anthropic-side session, mark the local
+// row archived, and create a fresh session for the same (agent_key,
+// entity_type, entity_id, user_id) tuple. Caller swaps the active
+// session id and retries. Conversation history is lost (sessions are
+// per-conversation server-side state) but ai_messages stays intact.
+async function recoverStuckSession({ anthropic, sessionRow }) {
+  console.warn('[v2-stream] recovering stuck session', sessionRow.anthropic_session_id);
+  try { await anthropic.beta.sessions.archive(sessionRow.anthropic_session_id); }
+  catch (e) { console.warn('Archive of stuck session failed (non-fatal):', e && e.message); }
+  await pool.query('UPDATE ai_sessions SET archived_at = NOW() WHERE id = $1', [sessionRow.id]);
+  return createFreshAiSession({
+    agentKey: sessionRow.agent_key,
+    entityType: sessionRow.entity_type,
+    entityId: sessionRow.entity_id,
+    userId: sessionRow.user_id
+  });
+}
+
+async function runV2SessionStream({ anthropic, res, session, eventsToSend, persistAssistantText, onCustomToolUse }) {
   function send(payload) { res.write('data: ' + JSON.stringify(payload) + '\n\n'); }
   function endWithDone() { res.write('data: [DONE]\n\n'); res.end(); }
 
@@ -2244,33 +2280,60 @@ async function runV2SessionStream({ anthropic, res, sessionId, eventsToSend, per
   // request stack traces. Logged once at end-of-stream.
   const eventCounts = {};
 
-  let stream;
-  try {
-    // SDK exposes the SSE stream at sessions.events.stream, not
-    // sessions.stream — the latter is undefined and silently returns
-    // nothing (which surfaces as a "(no response)" empty turn).
-    stream = await anthropic.beta.sessions.events.stream(sessionId);
-    console.log('[v2-stream] opened', sessionId);
-  } catch (e) {
-    console.error('Session stream open failed:', e);
-    send({ error: e.message || 'Failed to open session stream' });
-    endWithDone();
-    return;
+  // Resolve the session id, recovering once if the prior session is
+  // stuck waiting on tool responses. We have to attempt the events.send
+  // before opening the stream when we recover, because the original
+  // session id is now archived.
+  let activeSession = session;
+  let sessionId = session.anthropic_session_id;
+
+  // Helper to (re)open stream + send events with stuck-state recovery.
+  async function openStreamAndSend() {
+    let stream;
+    try {
+      stream = await anthropic.beta.sessions.events.stream(sessionId);
+      console.log('[v2-stream] opened', sessionId);
+    } catch (e) {
+      console.error('Session stream open failed:', e);
+      send({ error: e.message || 'Failed to open session stream' });
+      endWithDone();
+      return null;
+    }
+
+    if (Array.isArray(eventsToSend) && eventsToSend.length) {
+      try {
+        await anthropic.beta.sessions.events.send(sessionId, { events: eventsToSend });
+        console.log('[v2-stream] sent', eventsToSend.length, 'event(s) to', sessionId);
+      } catch (e) {
+        if (isStuckSessionError(e)) {
+          // Stuck session: archive + recreate, then retry once.
+          try {
+            activeSession = await recoverStuckSession({ anthropic, sessionRow: activeSession });
+            sessionId = activeSession.anthropic_session_id;
+            // Re-open the stream against the new session id; the
+            // previous stream is bound to the archived session.
+            try {
+              await stream.controller.abort();
+            } catch (_) { /* best-effort */ }
+            return openStreamAndSend();
+          } catch (e2) {
+            console.error('Stuck-session recovery failed:', e2);
+            send({ error: 'Could not recover session: ' + (e2.message || 'unknown') });
+            endWithDone();
+            return null;
+          }
+        }
+        console.error('Session events.send failed:', e);
+        send({ error: e.message || 'Failed to send session events' });
+        endWithDone();
+        return null;
+      }
+    }
+    return stream;
   }
 
-  // Stream-first guarantee: we've opened the stream above, now send
-  // the events. Anything emitted from here lands on our open stream.
-  if (Array.isArray(eventsToSend) && eventsToSend.length) {
-    try {
-      await anthropic.beta.sessions.events.send(sessionId, { events: eventsToSend });
-      console.log('[v2-stream] sent', eventsToSend.length, 'event(s) to', sessionId);
-    } catch (e) {
-      console.error('Session events.send failed:', e);
-      send({ error: e.message || 'Failed to send session events' });
-      endWithDone();
-      return;
-    }
-  }
+  const stream = await openStreamAndSend();
+  if (!stream) return;
 
   try {
     for await (const event of stream) {
@@ -2471,7 +2534,7 @@ router.post('/v2/estimates/:id/chat',
 
       await runV2SessionStream({
         anthropic, res,
-        sessionId: session.anthropic_session_id,
+        session: session,
         eventsToSend: [{ type: 'user.message', content: userContent }],
         persistAssistantText: async (text, usage) => {
           await saveAssistantMessage({ estimateId, userId: req.user.id, text, usage, packsLoaded: ctx.packsLoaded });
@@ -2540,7 +2603,7 @@ router.post('/v2/estimates/:id/chat/continue',
 
       await runV2SessionStream({
         anthropic, res,
-        sessionId: session.anthropic_session_id,
+        session: session,
         eventsToSend,
         persistAssistantText: async (text, usage) => {
           await saveAssistantMessage({ estimateId, userId: req.user.id, text, usage, packsLoaded: ctx.packsLoaded });
@@ -3303,7 +3366,7 @@ router.post('/v2/jobs/:id/chat',
 
       await runV2SessionStream({
         anthropic, res,
-        sessionId: session.anthropic_session_id,
+        session: session,
         eventsToSend: [{ type: 'user.message', content: userContent }],
         persistAssistantText: async (text, usage) => {
           await saveJobAssistantMessage({ jobId, userId: req.user.id, text, usage });
@@ -3367,7 +3430,7 @@ router.post('/v2/jobs/:id/chat/continue',
 
       await runV2SessionStream({
         anthropic, res,
-        sessionId: session.anthropic_session_id,
+        session: session,
         eventsToSend,
         persistAssistantText: async (text, usage) => {
           await saveJobAssistantMessage({ jobId, userId: req.user.id, text, usage });
@@ -5876,7 +5939,7 @@ router.post('/v2/clients/chat',
 
       await runV2SessionStream({
         anthropic, res,
-        sessionId: session.anthropic_session_id,
+        session: session,
         eventsToSend: [{ type: 'user.message', content: userContent }],
         onCustomToolUse: makeClientOnCustomToolUse(req.user.id),
         persistAssistantText: async (text, usage) => {
@@ -5957,7 +6020,7 @@ router.post('/v2/clients/chat/continue',
 
       await runV2SessionStream({
         anthropic, res,
-        sessionId: session.anthropic_session_id,
+        session: session,
         eventsToSend,
         onCustomToolUse: makeClientOnCustomToolUse(req.user.id),
         persistAssistantText: async (text, usage) => {
@@ -6020,7 +6083,7 @@ router.post('/v2/staff/chat',
 
       await runV2SessionStream({
         anthropic, res,
-        sessionId: session.anthropic_session_id,
+        session: session,
         eventsToSend: [{ type: 'user.message', content: [{ type: 'text', text: turnText }] }],
         onCustomToolUse: makeStaffOnCustomToolUse(),
         persistAssistantText: async (text, usage) => {
@@ -6092,7 +6155,7 @@ router.post('/v2/staff/chat/continue',
 
       await runV2SessionStream({
         anthropic, res,
-        sessionId: session.anthropic_session_id,
+        session: session,
         eventsToSend,
         onCustomToolUse: makeStaffOnCustomToolUse(),
         persistAssistantText: async (text, usage) => {
