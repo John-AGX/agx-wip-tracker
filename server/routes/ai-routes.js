@@ -567,19 +567,13 @@ const JOB_TOOLS = [
   {
     name: 'set_phase_pct_complete',
     description:
-      'Update % complete. The id parameter accepts FOUR shapes and resolves them in this order:\n' +
-      '  1. Phase record id ("ph_...") → updates that single phase.\n' +
-      '  2. Building record id ("b1") → cascades to every dependent under that building (see CASCADE RULE below).\n' +
-      '  3. Graph t1 (building) node id ("n3") → resolves to the underlying building record (by id, by buildingId field, or by case-insensitive label match), then cascades as in (2).\n' +
-      '  4. Graph t2 (phase) node id ("n2") → updates that t2 node\'s pct (engine syncs to the phase record on next compute).\n' +
-      '\n' +
-      'CASCADE RULE for building/t1 ids: a t1 node\'s OWN pctComplete is only written directly when there are NO t2 (phase) or t3/co (change order) nodes wired into it. When children ARE wired in, the t1\'s value is a budget-weighted rollup driven by (a) wire-level pctComplete on each incoming t2/co wire, or (b) the source node\'s pctComplete as a fallback. So the cascade sets:\n' +
-      '  • wire.pctComplete on every incoming t2/co wire → t1 (per-allocation override; lets a phase wired to many buildings show 100% for one and a different number for another)\n' +
-      '  • phase.pctComplete on every phase record with buildingId = building.id (drives the legacy WIP rollup in wip.js)\n' +
-      'The t1\'s own pctComplete is NEVER overwritten when wires/phases exist — let the rollup compute it.\n' +
-      'Only when neither wires nor phases are found do we write to t1.pctComplete directly (true leaf t1).\n' +
-      '\n' +
-      'If the user wants ONLY one specific phase changed, pass that phase\'s id, not the building. Always include rationale (1 short sentence) explaining why this number.',
+      'Update % complete. The id parameter accepts FOUR shapes:\n' +
+      '  1. Phase record id ("ph_...") — updates that one phase.\n' +
+      '  2. Building record id ("b1") — cascades to every dependent under that building.\n' +
+      '  3. Graph t1 node id ("n3") — resolves to the building record, then cascades as in (2).\n' +
+      '  4. Graph t2 node id ("n2") — updates that one t2 node\'s pct.\n' +
+      'For building/t1 cascades, the applier writes wire.pctComplete on every incoming t2/co wire AND phase.pctComplete on every phase record with that buildingId. The t1\'s own pctComplete is left to the rollup. Only when no wires or phases exist do we write directly to t1.pctComplete.\n' +
+      'If the user wants ONE specific phase changed, pass that phase\'s id, not the building. Always include a rationale (one short sentence).',
     input_schema: {
       type: 'object',
       additionalProperties: false,
@@ -963,14 +957,14 @@ const JOB_TOOLS = [
   {
     name: 'read_job_pct_audit',
     description:
-      'Sweep the entire job for percent-complete inconsistencies. Auto-applies, no approval. Reports on:\n' +
-      '  • Orphan phases — phases with no buildingId or with a buildingId pointing at a deleted building. Invisible to the legacy WIP rollup.\n' +
-      '  • Dangling t1 nodes — t1 graph nodes with no underlying building record (node-only, can\'t cascade properly).\n' +
-      '  • Stale t1 pctComplete — t1 nodes that have their own pctComplete set AND have wired t2/co children. The t1 value is ignored by the rollup; this is usually leftover from old manual edits and worth flagging.\n' +
-      '  • Wires with allocPct=0 — incoming t2/co wires that contribute nothing to the rollup (likely a misconfiguration).\n' +
-      '  • Buildings with no phases — building records that have no phase children. Will always read 0%.\n' +
-      '  • Phases with no budget — phases whose phaseBudget is 0 or missing. They get equal weight in the rollup, which can over- or under-count vs. the intended weight.\n' +
-      'Use this as the FIRST thing you do when the PM says "something\'s off with the percentages on this job" or before a big cascade write so you know what state you\'re in.',
+      'Sweep the job for percent-complete inconsistencies. Auto-applies, no approval. Reports:\n' +
+      '  • Orphan phases (no buildingId or pointing at a deleted building — invisible to the rollup).\n' +
+      '  • Dangling t1 nodes (graph t1 with no underlying building record).\n' +
+      '  • Stale t1 pctComplete (t1 with its own pctComplete set AND wired t2/co children — value is ignored, usually leftover).\n' +
+      '  • Wires with allocPct=0 (contribute nothing to the rollup).\n' +
+      '  • Buildings with no phases (always read 0%).\n' +
+      '  • Phases with no budget (equal-weighted in the rollup; can over/under-count vs. intent).\n' +
+      'Run this FIRST when the PM says "something\'s off with the percentages" or before a big cascade write.',
     input_schema: {
       type: 'object',
       additionalProperties: false,

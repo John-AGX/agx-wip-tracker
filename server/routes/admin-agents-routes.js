@@ -1534,6 +1534,69 @@ async function ensureManagedAgent(agentKey) {
   };
 }
 
+// POST /api/admin/agents/managed/reregister?key=ag|job|cra|staff
+//   Force a fresh agents.create + replace the local registry row.
+//   Use this when the local tool definitions or system prompt have
+//   drifted from what the registered Anthropic-side agent has — e.g.
+//   after a description rewrite that needed to fit under the
+//   1024-char limit, or when adding a new tool. Sessions bound to
+//   the OLD agent id keep working but won't see the new tool/prompt;
+//   start a fresh chat to pick up the new agent.
+router.post('/managed/reregister', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+  try {
+    const key = String(req.query.key || '').toLowerCase();
+    if (!['ag', 'job', 'cra', 'staff'].includes(key)) {
+      return res.status(400).json({ error: 'key must be ag | job | cra | staff' });
+    }
+    const anthropic = getAnthropic();
+    if (!anthropic) throw new Error('ANTHROPIC_API_KEY not set on this deployment.');
+    const baseline = AGENT_SYSTEM_BASELINE[key];
+
+    const aiInternals = require('./ai-routes-internals');
+    const model = aiInternals && aiInternals.defaultModel ? aiInternals.defaultModel() : 'claude-sonnet-4-6';
+    const skills = await collectSkillsFor(key);
+    const customTools = customToolsFor(key);
+    const builtinTools = builtinToolsetFor(key);
+
+    const created = await anthropic.beta.agents.create({
+      model: model,
+      name: 'AGX ' + key.toUpperCase(),
+      description: baseline.slice(0, 200),
+      system: baseline,
+      skills: skills,
+      tools: [...builtinTools, ...customTools]
+    });
+
+    // Replace the registry row in place. The OLD anthropic_agent_id
+    // is left active on Anthropic's side (sessions bound to it keep
+    // working) but new sessions point at the new agent id.
+    await pool.query(
+      `INSERT INTO managed_agent_registry
+         (agent_key, anthropic_agent_id, model, tool_count, skill_count, updated_at)
+       VALUES ($1, $2, $3, $4, $5, NOW())
+       ON CONFLICT (agent_key) DO UPDATE SET
+         anthropic_agent_id = EXCLUDED.anthropic_agent_id,
+         model = EXCLUDED.model,
+         tool_count = EXCLUDED.tool_count,
+         skill_count = EXCLUDED.skill_count,
+         updated_at = NOW()`,
+      [key, created.id, model, customTools.length + builtinTools.length, skills.length]
+    );
+
+    res.json({
+      ok: true,
+      agent_key: key,
+      anthropic_agent_id: created.id,
+      tool_count: customTools.length + builtinTools.length,
+      skill_count: skills.length,
+      note: 'Existing v2 sessions bound to the old agent id keep working but will not see the new tools/prompt. Start a fresh chat to pick up the new agent.'
+    });
+  } catch (e) {
+    console.error('POST /api/admin/agents/managed/reregister error:', e);
+    res.status(500).json({ error: 'Server error: ' + (e.message || 'unknown') });
+  }
+});
+
 // POST /api/admin/agents/managed/bootstrap?key=ag|job|cra|staff|all
 //   Registers the requested AGX agent (or all four) as Anthropic-side
 //   managed Agents. Idempotent — agents already in
