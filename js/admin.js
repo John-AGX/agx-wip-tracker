@@ -3629,6 +3629,59 @@
   window.viewSkillsVersion = viewSkillsVersion;
   window.restoreSkillsVersion = restoreSkillsVersion;
 
+  // ─────────── Run all evals (post-save verification) ───────────
+  // Hits /api/admin/agents/skills/run-all-evals which runs every
+  // defined eval against the current SAVED skill-pack config.
+  // Sequential, ~10-30s per eval; UI shows a per-row pass/fail
+  // summary as the response lands. If an eval fails, the admin can
+  // restore an earlier version via History.
+  function runAllEvals() {
+    var host = document.getElementById('agents-skills-eval-results');
+    if (!host) return;
+    if (!confirm('Run every defined eval against the currently saved skill packs?\n\nEach eval makes a real Anthropic API call (no caching across evals). With 5 evals this typically costs $0.10-$0.50 and takes 30-90 seconds.')) return;
+    host.innerHTML = '<div style="color:var(--text-dim,#888);font-style:italic;font-size:12px;padding:14px 0;">Running all evals (this may take a minute)…</div>';
+    window.agxApi.post('/api/admin/agents/skills/run-all-evals', {}).then(function(resp) {
+      var summary = (resp && resp.summary) || [];
+      if (resp && resp.note) {
+        host.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;padding:14px 0;">' + escapeHTML(resp.note) + '</div>';
+        return;
+      }
+      if (!summary.length) {
+        host.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;padding:14px 0;">No evals configured.</div>';
+        return;
+      }
+      var passCount = summary.filter(function(s) { return s.passed; }).length;
+      var failCount = summary.length - passCount;
+      var headerColor = failCount === 0 ? '#34d399' : '#f87171';
+      var html =
+        '<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;padding:10px 12px;background:rgba(' + (failCount === 0 ? '52,211,153' : '248,113,113') + ',0.08);border:1px solid rgba(' + (failCount === 0 ? '52,211,153' : '248,113,113') + ',0.25);border-radius:6px;">' +
+          '<span style="font-size:18px;color:' + headerColor + ';">' + (failCount === 0 ? '✓' : '✗') + '</span>' +
+          '<div style="font-size:13px;font-weight:600;color:var(--text,#fff);">' +
+            passCount + ' / ' + summary.length + ' eval' + (summary.length === 1 ? '' : 's') + ' passed' +
+            (failCount > 0 ? ' — review failures below; restore an earlier version via History if a recent edit caused the regression.' : '') +
+          '</div>' +
+        '</div>' +
+        '<div class="table-container"><table style="width:100%;font-size:12px;">' +
+          '<thead><tr><th>Eval</th><th>Result</th><th style="text-align:right;">Duration</th><th></th></tr></thead><tbody>';
+      summary.forEach(function(s) {
+        var pill = s.passed
+          ? '<span style="display:inline-block;background:rgba(52,211,153,0.15);color:#34d399;font-size:11px;padding:2px 8px;border-radius:10px;font-weight:600;">PASS</span>'
+          : '<span style="display:inline-block;background:rgba(248,113,113,0.15);color:#f87171;font-size:11px;padding:2px 8px;border-radius:10px;font-weight:600;">FAIL</span>';
+        html += '<tr>' +
+          '<td>' + escapeHTML(s.name || s.eval_id) + (s.error ? '<div style="font-size:11px;color:#f87171;margin-top:2px;">' + escapeHTML(s.error) + '</div>' : '') + '</td>' +
+          '<td>' + pill + '</td>' +
+          '<td style="text-align:right;font-family:\'SF Mono\',monospace;font-size:11px;color:var(--text-dim,#aaa);">' + (s.duration_ms ? Math.round(s.duration_ms / 100) / 10 + 's' : '—') + '</td>' +
+          '<td><button class="ee-btn secondary" onclick="openEvalDetail(\'' + escapeAttr(s.eval_id) + '\')">View</button></td>' +
+        '</tr>';
+      });
+      html += '</tbody></table></div>';
+      host.innerHTML = html;
+    }).catch(function(err) {
+      host.innerHTML = '<div style="color:#e74c3c;font-size:12px;padding:14px 0;">Failed: ' + escapeHTML(err.message || 'unknown') + '</div>';
+    });
+  }
+  window.runAllEvals = runAllEvals;
+
   // Cached per-agent overridable sections. Populated by
   // fetchOverridableSections() before the skills editor renders so the
   // "Replaces section" dropdown can show options + descriptions.
@@ -3667,9 +3720,11 @@
         '<div style="display:flex;gap:8px;align-items:center;margin-top:14px;padding:10px 12px;background:rgba(255,255,255,0.03);border:1px solid var(--border,#333);border-radius:6px;">' +
           '<span id="agents-skills-status" style="flex:1;font-size:12px;color:var(--text-dim,#888);"></span>' +
           '<button class="ee-btn secondary" onclick="openSkillsVersionHistory()">&#x23F1; History</button>' +
+          '<button class="ee-btn secondary" onclick="runAllEvals()" title="Run every defined eval against the current saved skill packs. Use after Save to verify nothing regressed.">&#x1F9EA; Run all evals</button>' +
           '<button class="ee-btn secondary" onclick="renderAgentsSkillsView()">Discard changes</button>' +
           '<button class="ee-btn primary" onclick="saveAgentsSkills()">&#x1F4BE; Save skills</button>' +
-        '</div>';
+        '</div>' +
+        '<div id="agents-skills-eval-results" style="margin-top:12px;"></div>';
     }).catch(function(err) {
       host.innerHTML = '<div style="color:#e74c3c;font-size:12px;padding:20px 0;">Failed: ' + escapeHTML(err.message || 'unknown') + '</div>';
     });

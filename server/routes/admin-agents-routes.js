@@ -503,6 +503,107 @@ router.post('/skills/versions/:id/restore', requireAuth, requireCapability('ROLE
   }
 });
 
+// POST /api/admin/agents/skills/run-all-evals
+//   Runs every saved AI eval against the current live config and
+//   returns a summary { eval_id, name, passed, duration_ms, error? }.
+//   Used as a post-save validation step in the Skills editor — the
+//   admin saves their edits then clicks "Run all evals" to verify
+//   nothing regressed. Each eval costs a real Anthropic API call so
+//   this is manual-trigger, not automatic on every save.
+//
+// Sequential execution (not Promise.all) — keeps the cost predictable
+// and lets the admin see partial progress as the response chunks
+// (future enhancement: SSE-style streaming summary).
+router.post('/skills/run-all-evals', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+  try {
+    const evalsRes = await pool.query(
+      `SELECT id, name, kind FROM ai_evals ORDER BY name`
+    );
+    if (!evalsRes.rows.length) {
+      return res.json({ summary: [], note: 'No evals defined yet — add at least one fixture in Admin → Agents → Evals.' });
+    }
+
+    // Reuse the existing per-eval run logic by hitting the local
+    // /evals/:id/run handler in-process. To stay decoupled from
+    // route internals we pull the runner out here as a small helper.
+    // Keeps the sequential semantics: one Anthropic call at a time so
+    // burst cost is predictable.
+    const summary = [];
+    for (const ev of evalsRes.rows) {
+      const t0 = Date.now();
+      try {
+        // Lazy-require + reuse the eval-run path. Easier than HTTP-loop.
+        // We rebuild the request shape the run handler expects, capture
+        // the response body via a fake res-like sink, then unpack.
+        const fakeRes = makeJsonSink();
+        await runOneEvalById(req, fakeRes, ev.id);
+        const body = fakeRes._body || {};
+        summary.push({
+          eval_id: ev.id,
+          name: ev.name,
+          passed: !!body.passed,
+          duration_ms: Date.now() - t0,
+          score: body.score || null,
+          run_id: body.run_id || null
+        });
+      } catch (e) {
+        summary.push({
+          eval_id: ev.id,
+          name: ev.name,
+          passed: false,
+          duration_ms: Date.now() - t0,
+          error: e.message || 'unknown'
+        });
+      }
+    }
+    res.json({ summary });
+  } catch (e) {
+    console.error('POST /api/admin/agents/skills/run-all-evals error:', e);
+    res.status(500).json({ error: 'Server error: ' + (e.message || 'unknown') });
+  }
+});
+
+// In-memory JSON sink that mimics the subset of express.Response the
+// per-eval run handler uses (status() + json()). Lets the batch runner
+// invoke the same handler in-process without HTTP-looping.
+function makeJsonSink() {
+  return {
+    statusCode: 200,
+    _body: null,
+    status: function(code) { this.statusCode = code; return this; },
+    json: function(body) { this._body = body; return this; }
+  };
+}
+
+// Local helper used by run-all-evals — calls the existing per-eval
+// run handler with a synthetic params shape. The handler is registered
+// later in this file so we bind to it through the router stack at
+// invocation time rather than hoisting the logic.
+async function runOneEvalById(req, fakeRes, evalId) {
+  // Build a synthetic Express req for the per-eval handler. Everything
+  // the handler reads off req.* must be present here.
+  const synthReq = {
+    user: req.user,
+    params: { id: evalId },
+    body: req.body || {},
+    headers: req.headers || {},
+    query: {}
+  };
+  // The per-eval handler is the second item registered for the path.
+  // Find it by route lookup. Express stores handlers in router.stack.
+  const layer = router.stack.find(l =>
+    l.route && l.route.path === '/evals/:id/run' && l.route.methods && l.route.methods.post
+  );
+  if (!layer) throw new Error('Per-eval run handler not registered yet.');
+  // The handler is the LAST middleware in the route stack (the actual
+  // async function we wrote earlier). requireAuth + requireCapability
+  // are earlier; skip them — caller already passed those for the batch
+  // request. Run the actual handler directly.
+  const stack = layer.route.stack;
+  const handler = stack[stack.length - 1].handle;
+  await handler(synthReq, fakeRes, () => {});
+}
+
 // GET /api/admin/agents/sections?agent=ag|elle|hr|cos
 //   Returns the list of admin-overridable named sections for the
 //   requested agent, with each section's stable id, description,
