@@ -2385,9 +2385,21 @@
     } else {
       _skillsDraft.skills.forEach(function(skill, idx) {
         var agents = Array.isArray(skill.agents) ? skill.agents : [];
-        html += '<div data-skill-idx="' + idx + '" style="border:1px solid var(--border,#333);border-radius:6px;padding:10px 12px;margin-bottom:10px;">';
+        html += '<div data-skill-idx="' + idx + '" style="border:1px solid var(--border,#333);border-radius:6px;padding:10px 12px;margin-bottom:10px;background:rgba(255,255,255,0.015);opacity:0.92;">';
+        // Anthropic-side sync badge / button. When the pack has a
+        // mirrored skill, show the id + an Unsync option. Otherwise
+        // show a Sync button. Idx is the pack's array position;
+        // server treats it as the addressable handle.
+        var syncBadge;
+        if (skill.anthropic_skill_id) {
+          syncBadge = '<span title="Mirrored to Anthropic native Skills (' + escapeAttr(skill.anthropic_skill_id) + ')" style="display:inline-flex;align-items:center;gap:4px;background:rgba(52,211,153,0.12);color:#34d399;font-size:10px;padding:2px 8px;border-radius:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">&#x1F310; Synced</span>' +
+            ' <button class="ee-btn ee-icon-btn ghost" onclick="unsyncSkillFromAnthropic(' + idx + ')" title="Delete the Anthropic-side mirror so the next sync uploads a fresh copy" style="font-size:11px;padding:2px 6px;">&#x21BA;</button>';
+        } else {
+          syncBadge = '<button class="ee-btn secondary" onclick="syncSkillToAnthropic(' + idx + ')" title="Mirror this pack to Anthropic native Skills" style="font-size:11px;padding:2px 8px;">&#x1F310; Mirror</button>';
+        }
         html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">' +
           '<input type="text" data-skill-name="' + idx + '" value="' + escapeHTML(skill.name || '') + '" placeholder="Skill name (e.g., AGX Estimating Playbook)" style="flex:1;font-weight:600;" />' +
+          syncBadge +
           '<label style="display:inline-flex;align-items:center;gap:4px;font-size:11px;color:var(--text-dim,#aaa);text-transform:none !important;letter-spacing:normal !important;font-weight:400 !important;cursor:pointer;">' +
             '<input type="checkbox" data-skill-alwayson="' + idx + '" ' + (skill.alwaysOn === false ? '' : 'checked') + ' style="margin:0;" /> always on' +
           '</label>' +
@@ -3981,6 +3993,60 @@
 
   window.renderAnthropicResources = renderAnthropicResources;
 
+  // ─────────── Native Skills sync (homegrown → Anthropic) ───────────
+  // Uploads each local pack as a SKILL.md to Anthropic's native
+  // beta.skills API. Mirrors the body so it's visible on the
+  // Anthropic side; runtime cutover (chat actually loading skills
+  // on-demand) is a separate workstream and stays unchanged for now.
+  function syncAllSkillsToAnthropic() {
+    if (!confirm('Mirror every local pack to Anthropic Skills?\n\nUploads each pack as a SKILL.md via beta.skills.create. Already-mirrored packs are skipped. The chat path is unchanged — this just makes the packs visible in Anthropic\'s native Skills system.\n\nNeeds ANTHROPIC_API_KEY set on the server.')) return;
+    var statusEl = document.getElementById('agents-skills-status');
+    if (statusEl) { statusEl.textContent = 'Syncing all packs to Anthropic…'; statusEl.style.color = 'var(--text-dim,#888)'; }
+    window.agxApi.post('/api/admin/agents/skills/sync-all-to-anthropic', {}).then(function(resp) {
+      var msg = '✓ Synced ' + (resp.synced || 0) + ' new pack' + ((resp.synced || 0) === 1 ? '' : 's') + ' to Anthropic.';
+      var failed = (resp.summary || []).filter(function(s) { return s.status === 'failed'; });
+      if (failed.length) msg += '\n\n' + failed.length + ' failed:\n' + failed.map(function(f) { return '- ' + f.name + ': ' + f.error; }).join('\n');
+      alert(msg);
+      renderAgentsSkillsView();
+    }).catch(function(err) {
+      if (statusEl) { statusEl.textContent = 'Sync failed: ' + (err.message || ''); statusEl.style.color = '#f87171'; }
+    });
+  }
+
+  function syncSkillToAnthropic(idx) {
+    syncSkillsFromInputs(); // capture any in-flight edits before sync
+    saveAgentsSkillsThen(function() {
+      window.agxApi.post('/api/admin/agents/skills/' + encodeURIComponent(idx) + '/sync-to-anthropic', {}).then(function(resp) {
+        alert('✓ Mirrored to Anthropic — skill_id ' + (resp.anthropic_skill_id || ''));
+        renderAgentsSkillsView();
+      }).catch(function(err) { alert('Sync failed: ' + (err.message || 'unknown')); });
+    });
+  }
+
+  function unsyncSkillFromAnthropic(idx) {
+    if (!confirm('Delete the Anthropic-side mirror for this pack?\n\nThe local pack stays. The next time you click Mirror, a fresh copy goes up — useful when the body has changed and you want to refresh the mirror.')) return;
+    window.agxApi.post('/api/admin/agents/skills/' + encodeURIComponent(idx) + '/unsync-from-anthropic', {}).then(function(resp) {
+      if (resp.delete_error) {
+        alert('Local link cleared.\n\nNote: Anthropic-side delete also reported: ' + resp.delete_error);
+      }
+      renderAgentsSkillsView();
+    }).catch(function(err) { alert('Unsync failed: ' + (err.message || 'unknown')); });
+  }
+
+  // Save the current Skills draft, then run a callback. The sync
+  // endpoints read from the persisted row (not the in-memory draft),
+  // so we must save first to avoid uploading a stale body.
+  function saveAgentsSkillsThen(cb) {
+    syncSkillsFromInputs();
+    window.agxApi.settings.put('agent_skills', _skillsDraft).then(function() { if (cb) cb(); }).catch(function(err) {
+      alert('Save before sync failed: ' + (err.message || 'unknown'));
+    });
+  }
+
+  window.syncAllSkillsToAnthropic = syncAllSkillsToAnthropic;
+  window.syncSkillToAnthropic = syncSkillToAnthropic;
+  window.unsyncSkillFromAnthropic = unsyncSkillFromAnthropic;
+
   // ─────────── Run all evals (post-save verification) ───────────
   // Hits /api/admin/agents/skills/run-all-evals which runs every
   // defined eval against the current SAVED skill-pack config.
@@ -4064,8 +4130,20 @@
       // Reuse the same body markup the Templates → Skills tab renders,
       // wrap with a save bar tailored for the agents page (lighter than
       // saveAdminTemplate's "save all settings" action).
+      // Native Skills migration banner — packs sit in this homegrown
+      // system today, but each one can be MIRRORED to Anthropic Skills
+      // via the per-pack Sync button. Runtime cutover (model loading
+      // skills on demand instead of always-on append) requires migrating
+      // chat to beta.agents — that's a separate workstream.
       host.innerHTML =
-        '<p style="margin:0 0 14px 0;color:var(--text-dim,#888);font-size:12px;">' +
+        '<div style="margin:0 0 14px 0;padding:12px 14px;background:rgba(251,191,36,0.06);border:1px solid rgba(251,191,36,0.25);border-radius:8px;font-size:12px;line-height:1.5;color:var(--text-dim,#aaa);">' +
+          '<div style="font-weight:600;color:#fbbf24;margin-bottom:4px;">&#x1F6A7; Native Skills migration in progress</div>' +
+          'Packs below are AGX\'s homegrown skill system — still <strong>active in production</strong>; AG/Elle/HR load them every turn. ' +
+          'Use <button class="ee-btn secondary" onclick="syncAllSkillsToAnthropic()" style="margin:0 4px;font-size:11px;padding:2px 8px;">&#x1F310; Sync all to Anthropic</button> to mirror them as native Skills. ' +
+          'Mirrored skills appear in <a href="#" onclick="switchAgentsView(\'anthropic\');return false;" style="color:#4f8cff;">Anthropic &rarr; Skills</a>. ' +
+          'Runtime cutover (model loading skills on-demand via beta.agents) is a separate workstream — until then this surface remains source-of-truth.' +
+        '</div>' +
+        '<p style="margin:0 0 14px 0;color:var(--text-dim,#888);font-size:12px;opacity:0.6;">' +
           'Reusable instruction blocks loaded into the in-app AI agents at chat time. The Chief of Staff can also propose skill-pack edits — those land here on approval. Edits made here are also visible from <a href="#" onclick="switchAdminSubTab(\'templates\');return false;" style="color:#4f8cff;">Templates &rarr; Skills</a>.' +
         '</p>' +
         '<div id="agents-skills-body">' + renderAgentSkillsHTML() + '</div>' +

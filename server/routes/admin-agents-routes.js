@@ -503,6 +503,194 @@ router.post('/skills/versions/:id/restore', requireAuth, requireCapability('ROLE
   }
 });
 
+// ──── Native Skills migration (sync local packs → Anthropic) ─────
+//
+// Anthropic's native Skills primitive expects directory bundles with a
+// SKILL.md file at the root. We package each local pack body as a
+// single-file SKILL.md and upload via beta.skills.create. The
+// returned skill_id is persisted onto the local pack so the admin
+// UI can show a "synced" badge and avoid re-uploading.
+//
+// IMPORTANT: this only mirrors packs to Anthropic. The chat path
+// (messages.stream) doesn't load Skills at runtime — that requires
+// migrating to beta.agents which is a separate workstream. For now
+// local packs remain the source of truth.
+
+// Reuses the Anthropic client + getAnthropic() defined earlier in this
+// file for the eval runner. toFile is the SDK's helper for wrapping a
+// Buffer as an Uploadable for beta.skills.create.
+const { toFile } = require('@anthropic-ai/sdk');
+
+// Build the SKILL.md content for one pack. Anthropic Skills typically
+// open with YAML frontmatter declaring name + description so the
+// loading runtime can decide when to fetch the skill body. We include
+// both even though our current pack model doesn't separate them — the
+// pack name doubles as the description for now.
+function buildSkillMarkdown(pack) {
+  const name = (pack.name || 'AGX skill').replace(/[\r\n]/g, ' ');
+  const desc = (pack.replaces_section
+    ? 'Section override for ' + pack.replaces_section
+    : (pack.category ? 'Category: ' + pack.category : name)
+  ).replace(/[\r\n]/g, ' ');
+  const lines = [
+    '---',
+    'name: ' + name,
+    'description: ' + desc,
+    '---',
+    '',
+    pack.body || ''
+  ];
+  return lines.join('\n');
+}
+
+// POST /api/admin/agents/skills/sync-all-to-anthropic
+//   For each local pack without anthropic_skill_id, packages SKILL.md,
+//   uploads via beta.skills.create, persists the returned id back into
+//   the agent_skills row. Returns per-pack summary.
+router.post('/skills/sync-all-to-anthropic', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+  try {
+    const anthropic = getAnthropic();
+    if (!anthropic) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not set on this deployment.' });
+
+    const r = await pool.query(`SELECT value FROM app_settings WHERE key = 'agent_skills'`);
+    if (!r.rows.length) return res.json({ summary: [], note: 'No skill packs to sync.' });
+    const cfg = r.rows[0].value || {};
+    const skills = Array.isArray(cfg.skills) ? cfg.skills.slice() : [];
+    if (!skills.length) return res.json({ summary: [], note: 'No skill packs to sync.' });
+
+    const summary = [];
+    for (let i = 0; i < skills.length; i++) {
+      const pack = skills[i];
+      if (pack.anthropic_skill_id) {
+        summary.push({ idx: i, name: pack.name, status: 'already_synced', anthropic_skill_id: pack.anthropic_skill_id });
+        continue;
+      }
+      try {
+        const md = buildSkillMarkdown(pack);
+        const file = await toFile(Buffer.from(md, 'utf8'), 'SKILL.md', { type: 'text/markdown' });
+        const created = await anthropic.beta.skills.create({
+          display_title: (pack.name || 'AGX skill').slice(0, 200),
+          files: [file]
+        });
+        // Persist the returned id back onto the local pack. Mutating
+        // skills[i] then writing the whole row preserves admin edits
+        // on other packs (no race because admin is single-user).
+        skills[i] = Object.assign({}, pack, { anthropic_skill_id: created.id });
+        summary.push({ idx: i, name: pack.name, status: 'synced', anthropic_skill_id: created.id });
+      } catch (e) {
+        summary.push({ idx: i, name: pack.name, status: 'failed', error: e.message });
+      }
+    }
+
+    // Single write at the end — only persist if at least one pack
+    // changed. Avoids generating a snapshot version when no syncs
+    // landed.
+    const newSyncs = summary.filter(s => s.status === 'synced').length;
+    if (newSyncs > 0) {
+      await pool.query(
+        `INSERT INTO app_settings (key, value, updated_at)
+         VALUES ('agent_skills', $1::jsonb, NOW())
+         ON CONFLICT (key) DO UPDATE
+           SET value = EXCLUDED.value, updated_at = NOW()`,
+        [JSON.stringify(Object.assign({}, cfg, { skills }))]
+      );
+    }
+
+    res.json({ summary, synced: newSyncs });
+  } catch (e) {
+    console.error('POST /api/admin/agents/skills/sync-all-to-anthropic error:', e);
+    res.status(500).json({ error: 'Server error: ' + (e.message || 'unknown') });
+  }
+});
+
+// POST /api/admin/agents/skills/:idx/sync-to-anthropic
+//   Sync one specific pack by its array index. Useful for debugging
+//   a sync failure or refreshing a single pack after an edit.
+router.post('/skills/:idx/sync-to-anthropic', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+  try {
+    const anthropic = getAnthropic();
+    if (!anthropic) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not set on this deployment.' });
+
+    const idx = parseInt(req.params.idx, 10);
+    if (!Number.isFinite(idx) || idx < 0) return res.status(400).json({ error: 'idx must be a non-negative integer.' });
+
+    const r = await pool.query(`SELECT value FROM app_settings WHERE key = 'agent_skills'`);
+    if (!r.rows.length) return res.status(404).json({ error: 'No skill packs row exists.' });
+    const cfg = r.rows[0].value || {};
+    const skills = Array.isArray(cfg.skills) ? cfg.skills.slice() : [];
+    if (idx >= skills.length) return res.status(404).json({ error: 'idx out of range.' });
+
+    const pack = skills[idx];
+    const md = buildSkillMarkdown(pack);
+    const file = await toFile(Buffer.from(md, 'utf8'), 'SKILL.md', { type: 'text/markdown' });
+    const created = await anthropic.beta.skills.create({
+      display_title: (pack.name || 'AGX skill').slice(0, 200),
+      files: [file]
+    });
+    skills[idx] = Object.assign({}, pack, { anthropic_skill_id: created.id });
+    await pool.query(
+      `INSERT INTO app_settings (key, value, updated_at)
+       VALUES ('agent_skills', $1::jsonb, NOW())
+       ON CONFLICT (key) DO UPDATE
+         SET value = EXCLUDED.value, updated_at = NOW()`,
+      [JSON.stringify(Object.assign({}, cfg, { skills }))]
+    );
+    res.json({ ok: true, anthropic_skill_id: created.id });
+  } catch (e) {
+    console.error('POST /api/admin/agents/skills/:idx/sync-to-anthropic error:', e);
+    res.status(500).json({ error: 'Server error: ' + (e.message || 'unknown') });
+  }
+});
+
+// POST /api/admin/agents/skills/:idx/unsync-from-anthropic
+//   Delete the Anthropic-side skill and clear the local id. Useful
+//   when re-syncing after a body edit (delete + sync = fresh upload
+//   with the new content). Future enhancement: use beta.skills
+//   .versions to push a new version instead of full delete-recreate.
+router.post('/skills/:idx/unsync-from-anthropic', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+  try {
+    const anthropic = getAnthropic();
+    if (!anthropic) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not set on this deployment.' });
+
+    const idx = parseInt(req.params.idx, 10);
+    if (!Number.isFinite(idx) || idx < 0) return res.status(400).json({ error: 'idx must be a non-negative integer.' });
+
+    const r = await pool.query(`SELECT value FROM app_settings WHERE key = 'agent_skills'`);
+    if (!r.rows.length) return res.status(404).json({ error: 'No skill packs row exists.' });
+    const cfg = r.rows[0].value || {};
+    const skills = Array.isArray(cfg.skills) ? cfg.skills.slice() : [];
+    if (idx >= skills.length) return res.status(404).json({ error: 'idx out of range.' });
+
+    const pack = skills[idx];
+    if (!pack.anthropic_skill_id) return res.status(400).json({ error: 'Pack is not currently synced.' });
+
+    // Delete on the Anthropic side. If that fails (e.g. already
+    // deleted out-of-band), still clear the local id so the next
+    // sync makes a fresh one.
+    let deleteError = null;
+    try {
+      await anthropic.beta.skills.delete(pack.anthropic_skill_id);
+    } catch (e) {
+      deleteError = e.message;
+    }
+
+    const updated = Object.assign({}, pack);
+    delete updated.anthropic_skill_id;
+    skills[idx] = updated;
+    await pool.query(
+      `INSERT INTO app_settings (key, value, updated_at)
+       VALUES ('agent_skills', $1::jsonb, NOW())
+       ON CONFLICT (key) DO UPDATE
+         SET value = EXCLUDED.value, updated_at = NOW()`,
+      [JSON.stringify(Object.assign({}, cfg, { skills }))]
+    );
+    res.json({ ok: true, delete_error: deleteError });
+  } catch (e) {
+    console.error('POST /api/admin/agents/skills/:idx/unsync-from-anthropic error:', e);
+    res.status(500).json({ error: 'Server error: ' + (e.message || 'unknown') });
+  }
+});
+
 // POST /api/admin/agents/skills/run-all-evals
 //   Runs every saved AI eval against the current live config and
 //   returns a summary { eval_id, name, passed, duration_ms, error? }.
