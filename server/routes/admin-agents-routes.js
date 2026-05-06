@@ -1366,4 +1366,192 @@ router.post('/conversations/:key/replay', requireAuth, requireCapability('ROLES_
   }
 });
 
+// ──── Managed Agents bootstrap (Phase 1a of Agents API migration) ──
+//
+// Anthropic's Agents API requires a registered Agent record (with
+// attached skills + tools + system prompt) before we can create
+// Sessions against it. This file's bootstrap endpoints handle the
+// one-time registration. Production chat paths still use
+// anthropic.messages.stream — the v2 chat path that uses Sessions
+// lives in a follow-up commit (Phase 1b).
+
+// Slim per-agent system prompt for the registered Agent. The detailed
+// per-turn dynamic context (estimate state, photos, etc.) gets passed
+// via the Session's first user message in Phase 1b — this is just the
+// identity + capabilities baseline that survives across sessions.
+const AGENT_SYSTEM_BASELINE = {
+  ag:    'You are AG, AGX Central Florida\'s estimating teammate. AGX = AG Exteriors, a Central-Florida construction-services company (painting, deck repair, roofing). You estimate like a senior PM: specific, trade-fluent, opinionated about scope completeness, calibrated on Central-FL pricing. The user message will carry per-turn estimate context.',
+  job:   'You are Elle, AGX\'s WIP analyst. AGX = AG Exteriors. The user message will carry per-turn job WIP snapshot, change orders, QB cost data, and node graph. Spot margin issues, missing COs, billing gaps, % complete sanity.',
+  cra:   'You are HR, AGX\'s customer relations agent. AGX = AG Exteriors. The user message will carry per-turn directory snapshot. Keep the directory clean, hierarchical, dedupe-clean.',
+  staff: 'You are Chief of Staff for AGX\'s in-app AI agents (AG / Elle / HR). The user message will carry per-turn live snapshot. Observe usage trends, audit specific conversations, propose skill-pack improvements.'
+};
+
+// Convert one of our local tool definitions (the ESTIMATE_TOOLS /
+// JOB_TOOLS / CLIENT_TOOLS / STAFF_TOOLS shape) into Anthropic's
+// BetaManagedAgentsCustomToolParams shape. The two are very close —
+// just need to drop properties Anthropic's schema doesn't accept.
+function toCustomToolParam(tool) {
+  return {
+    type: 'custom',
+    name: tool.name,
+    description: tool.description,
+    input_schema: tool.input_schema || { type: 'object', properties: {} }
+  };
+}
+
+// Pull every always-on skill pack with anthropic_skill_id set for the
+// given agent key. Returns BetaManagedAgentsSkillParams entries
+// referencing the synced Anthropic Skill ids.
+async function collectSkillsFor(agentKey) {
+  const r = await pool.query(`SELECT value FROM app_settings WHERE key = 'agent_skills'`);
+  if (!r.rows.length) return [];
+  const cfg = r.rows[0].value || {};
+  const skills = Array.isArray(cfg.skills) ? cfg.skills : [];
+  return skills
+    .filter(s => s && s.anthropic_skill_id && Array.isArray(s.agents) && s.agents.indexOf(agentKey) >= 0)
+    .slice(0, 20) // Anthropic caps at 20 skills per agent
+    .map(s => ({ type: 'custom', skill_id: s.anthropic_skill_id }));
+}
+
+// Built-in toolset configuration per agent key. Conservative defaults —
+// only enable what's clearly useful for that role. Phase 3 of the
+// migration expands these (e.g. enabling bash/read on Elle for QB
+// cost line analysis).
+function builtinToolsetFor(agentKey) {
+  // Each toolset_id has a set of tool names. Defaults shape:
+  //   - default_config.enabled: master switch (false unless we say so)
+  //   - tools: per-tool override list
+  // For now, AG/Elle/HR/CoS all get web_search enabled (matches today's
+  // baseline). AG additionally gets web_fetch — that's the headline
+  // capability gain in Phase 3.
+  const base = {
+    type: 'agent_toolset_20260401',
+    default_config: { enabled: false }
+  };
+  const toolEnabled = function(name) { return { name: name, config: { enabled: true } }; };
+  if (agentKey === 'ag') {
+    return [Object.assign({}, base, { tools: [toolEnabled('web_search'), toolEnabled('web_fetch')] })];
+  }
+  if (agentKey === 'job') {
+    return [Object.assign({}, base, { tools: [toolEnabled('web_search')] })];
+  }
+  if (agentKey === 'cra') {
+    return [Object.assign({}, base, { tools: [toolEnabled('web_search'), toolEnabled('web_fetch')] })];
+  }
+  if (agentKey === 'staff') {
+    return [Object.assign({}, base, { tools: [toolEnabled('web_search')] })];
+  }
+  return [];
+}
+
+// Resolve the AGX-side custom tools for an agent. Goes through the
+// internals export from ai-routes so we don't duplicate definitions.
+function customToolsFor(agentKey) {
+  const aiInternals = require('./ai-routes-internals');
+  if (!aiInternals) return [];
+  // estimateTools / jobTools / clientTools / staffTools each include
+  // the WEB_TOOLS prefix; strip those because we configure web_search
+  // / web_fetch through the built-in toolset above instead.
+  let tools = [];
+  if (agentKey === 'ag')         tools = aiInternals.estimateTools();
+  else if (agentKey === 'job')   tools = aiInternals.jobTools();
+  else if (agentKey === 'cra')   tools = aiInternals.clientTools();
+  else if (agentKey === 'staff') tools = aiInternals.staffTools();
+  return tools
+    .filter(t => t.name !== 'web_search')              // built-in toolset owns this
+    .map(toCustomToolParam)
+    .slice(0, 128);                                     // Anthropic caps tools at 128
+}
+
+// Idempotent register-or-update for one AGX agent. Creates the
+// Anthropic-side Agent if no row exists in managed_agent_registry,
+// otherwise leaves the existing record (no update path yet — Phase 2
+// adds drift detection + agent.update calls).
+async function ensureManagedAgent(agentKey) {
+  const anthropic = getAnthropic();
+  if (!anthropic) throw new Error('ANTHROPIC_API_KEY not set on this deployment.');
+  const baseline = AGENT_SYSTEM_BASELINE[agentKey];
+  if (!baseline) throw new Error('Unknown agent key: ' + agentKey);
+
+  const existing = await pool.query(
+    'SELECT * FROM managed_agent_registry WHERE agent_key = $1',
+    [agentKey]
+  );
+  if (existing.rows.length) {
+    return existing.rows[0]; // already registered — Phase 2 adds update path
+  }
+
+  const aiInternals = require('./ai-routes-internals');
+  const model = aiInternals && aiInternals.defaultModel ? aiInternals.defaultModel() : 'claude-sonnet-4-6';
+  const skills = await collectSkillsFor(agentKey);
+  const customTools = customToolsFor(agentKey);
+  const builtinTools = builtinToolsetFor(agentKey);
+
+  const created = await anthropic.beta.agents.create({
+    model: model,
+    name: 'AGX ' + agentKey.toUpperCase(),
+    description: baseline.slice(0, 200),
+    system: baseline,
+    skills: skills,
+    tools: [...builtinTools, ...customTools]
+  });
+
+  await pool.query(
+    `INSERT INTO managed_agent_registry
+       (agent_key, anthropic_agent_id, model, tool_count, skill_count, updated_at)
+     VALUES ($1, $2, $3, $4, $5, NOW())`,
+    [agentKey, created.id, model, customTools.length + builtinTools.length, skills.length]
+  );
+
+  return {
+    agent_key: agentKey,
+    anthropic_agent_id: created.id,
+    model: model,
+    tool_count: customTools.length + builtinTools.length,
+    skill_count: skills.length
+  };
+}
+
+// POST /api/admin/agents/managed/bootstrap?key=ag|job|cra|staff|all
+//   Registers the requested AGX agent (or all four) as Anthropic-side
+//   managed Agents. Idempotent — agents already in
+//   managed_agent_registry are left alone.
+router.post('/managed/bootstrap', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+  try {
+    const key = String(req.query.key || 'all').toLowerCase();
+    const agents = (key === 'all') ? ['ag', 'job', 'cra', 'staff'] : [key];
+    const summary = [];
+    for (const agentKey of agents) {
+      try {
+        const row = await ensureManagedAgent(agentKey);
+        summary.push({ agent_key: agentKey, ok: true, anthropic_agent_id: row.anthropic_agent_id, tool_count: row.tool_count, skill_count: row.skill_count });
+      } catch (e) {
+        summary.push({ agent_key: agentKey, ok: false, error: e.message });
+      }
+    }
+    res.json({ summary });
+  } catch (e) {
+    console.error('POST /api/admin/agents/managed/bootstrap error:', e);
+    res.status(500).json({ error: 'Server error: ' + (e.message || 'unknown') });
+  }
+});
+
+// GET /api/admin/agents/managed
+//   Returns the current registry — agent_key + anthropic_agent_id +
+//   counts. Drives the admin "Managed agents" panel.
+router.get('/managed', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT agent_key, anthropic_agent_id, model, tool_count, skill_count,
+              registered_at, updated_at
+         FROM managed_agent_registry
+        ORDER BY agent_key`
+    );
+    res.json({ agents: r.rows });
+  } catch (e) {
+    console.error('GET /api/admin/agents/managed error:', e);
+    res.status(500).json({ error: 'Server error: ' + (e.message || 'unknown') });
+  }
+});
+
 module.exports = router;

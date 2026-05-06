@@ -3858,19 +3858,90 @@
     if (!host) return;
     host.innerHTML =
       '<p style="margin:0 0 14px 0;color:var(--text-dim,#888);font-size:12px;">' +
-        'Live read-only view of every resource hosted in your Anthropic account from this app — Skills, Files, Batches. Source of truth: hits the Anthropic API directly each render. Console UI: <a href="https://console.anthropic.com/" target="_blank" style="color:#4f8cff;">console.anthropic.com</a> shows API keys + usage; this view shows the resource lists.' +
+        'Live read-only view of every resource hosted in your Anthropic account from this app — Managed Agents, Skills, Files, Batches. Source of truth: hits the Anthropic API directly each render. Console UI: <a href="https://console.anthropic.com/" target="_blank" style="color:#4f8cff;">console.anthropic.com</a> shows API keys + usage; this view shows the resource lists.' +
       '</p>' +
       '<div style="display:flex;gap:8px;align-items:center;margin-bottom:14px;">' +
         '<button class="ee-btn secondary" onclick="renderAnthropicResources()">&#x21BB; Refresh all</button>' +
       '</div>' +
+      '<div id="managed-agents-panel" style="margin-bottom:14px;"></div>' +
       '<div id="anthropic-skills-panel" style="margin-bottom:14px;"></div>' +
       '<div id="anthropic-files-panel" style="margin-bottom:14px;"></div>' +
       '<div id="anthropic-batches-panel" style="margin-bottom:14px;"></div>';
 
+    loadManagedAgents();
     loadAnthropicSkills();
     loadAnthropicFiles();
     loadAnthropicBatches();
   }
+
+  function loadManagedAgents() {
+    var host = document.getElementById('managed-agents-panel');
+    if (!host) return;
+    host.innerHTML = panelHeader('Managed Agents (Phase 1a)', '🤖') + '<div style="font-size:12px;color:var(--text-dim,#888);font-style:italic;">Loading…</div>';
+    window.agxApi.get('/api/admin/agents/managed').then(function(resp) {
+      var rows = (resp && resp.agents) || [];
+      var labels = { ag: 'AG (estimating)', job: 'Elle (WIP)', cra: 'HR (clients)', staff: 'Chief of Staff' };
+      var allKeys = ['ag', 'job', 'cra', 'staff'];
+      var registered = {};
+      rows.forEach(function(r) { registered[r.agent_key] = r; });
+
+      var bootstrapBar =
+        '<p style="margin:0 0 10px 0;font-size:12px;color:var(--text-dim,#888);">' +
+          'One-time registration of each AGX agent as an Anthropic-side managed Agent. Bootstraps the migration from <code>messages.stream</code> to <code>beta.sessions.events.stream</code>. The chat path is still on <code>messages.stream</code> — registering here just creates the Agent records that the v2 chat endpoint will reference once it ships.' +
+        '</p>' +
+        '<div style="margin-bottom:10px;">' +
+          '<button class="ee-btn primary" onclick="bootstrapManagedAgents(\'all\')" title="Register every AGX agent that isn\'t yet registered.">&#x1F680; Register all unregistered</button>' +
+        '</div>';
+
+      var rowsHtml = '<div class="table-container"><table style="width:100%;font-size:12px;">' +
+        '<thead><tr><th>AGX Agent</th><th>Anthropic Agent ID</th><th>Model</th><th style="text-align:right;">Tools</th><th style="text-align:right;">Skills</th><th>Registered</th><th></th></tr></thead><tbody>';
+      allKeys.forEach(function(k) {
+        var r = registered[k];
+        if (r) {
+          var when = '';
+          try { when = new Date(r.registered_at).toLocaleDateString(); } catch (e) {}
+          rowsHtml += '<tr>' +
+            '<td>' + escapeHTML(labels[k] || k) + '</td>' +
+            '<td style="font-family:\'SF Mono\',monospace;font-size:11px;color:var(--text-dim,#aaa);">' + escapeHTML(r.anthropic_agent_id) + '</td>' +
+            '<td style="font-size:11px;color:var(--text-dim,#aaa);">' + escapeHTML(r.model || '') + '</td>' +
+            '<td style="text-align:right;font-family:\'SF Mono\',monospace;">' + (r.tool_count || 0) + '</td>' +
+            '<td style="text-align:right;font-family:\'SF Mono\',monospace;">' + (r.skill_count || 0) + '</td>' +
+            '<td style="font-size:11px;color:var(--text-dim,#aaa);">' + escapeHTML(when) + '</td>' +
+            '<td><span style="color:#34d399;font-size:11px;font-weight:600;">REGISTERED</span></td>' +
+          '</tr>';
+        } else {
+          rowsHtml += '<tr style="opacity:0.7;">' +
+            '<td>' + escapeHTML(labels[k] || k) + '</td>' +
+            '<td colspan="5" style="font-style:italic;color:var(--text-dim,#888);font-size:11px;">not yet registered</td>' +
+            '<td><button class="ee-btn secondary" onclick="bootstrapManagedAgents(\'' + escapeAttr(k) + '\')">Register</button></td>' +
+          '</tr>';
+        }
+      });
+      rowsHtml += '</tbody></table></div>';
+
+      host.innerHTML = panelHeader('Managed Agents (Phase 1a — registration)', '🤖') + bootstrapBar + rowsHtml;
+    }).catch(function(err) {
+      host.innerHTML = panelHeader('Managed Agents', '🤖') +
+        '<div style="color:#e74c3c;font-size:12px;">Failed: ' + escapeHTML(err.message || 'unknown') + '</div>';
+    });
+  }
+
+  function bootstrapManagedAgents(key) {
+    var label = (key === 'all') ? 'every unregistered AGX agent' : key;
+    if (!confirm('Register ' + label + ' as Anthropic-side managed Agent(s)?\n\nIdempotent — agents already in the registry stay as-is. Each registration consumes a beta.agents.create call. The chat path is unaffected; this just creates the Agent records that a future v2 chat endpoint will reference.\n\nNeeds ANTHROPIC_API_KEY set on the server.')) return;
+    window.agxApi.post('/api/admin/agents/managed/bootstrap?key=' + encodeURIComponent(key), {}).then(function(resp) {
+      var summary = (resp && resp.summary) || [];
+      var msg = summary.map(function(s) {
+        if (s.ok) return '✓ ' + s.agent_key + ' → ' + s.anthropic_agent_id + ' (' + s.tool_count + ' tools, ' + s.skill_count + ' skills)';
+        return '✗ ' + s.agent_key + ': ' + s.error;
+      }).join('\n');
+      alert(msg || 'No agents processed.');
+      loadManagedAgents();
+    }).catch(function(err) {
+      alert('Bootstrap failed: ' + (err.message || 'unknown'));
+    });
+  }
+  window.bootstrapManagedAgents = bootstrapManagedAgents;
 
   function panelHeader(label, icon) {
     return '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">' +

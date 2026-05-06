@@ -675,6 +675,25 @@ async function initSchema() {
     -- so the history can show whether runs were on xhigh / high / etc.
     ALTER TABLE ai_eval_runs ADD COLUMN IF NOT EXISTS effort TEXT;
 
+    -- Managed-agents registry — Phase 1a of the Anthropic Agents API
+    -- migration. Each row maps an AGX agent key (ag/job/cra/staff) to
+    -- the Anthropic-side Agent record id. Bootstrapped via the admin
+    -- "Register managed agents" button. The chat path hasn't migrated
+    -- yet (still on messages.stream); this row is what the v2 chat
+    -- endpoint will reference once we cut over.
+    -- system_hash + tools_hash + skills_hash let us detect drift —
+    -- if the local definition diverges from what was registered, the
+    -- bootstrap can update the agent instead of leaving stale config.
+    CREATE TABLE IF NOT EXISTS managed_agent_registry (
+      agent_key TEXT PRIMARY KEY,                          -- 'ag' | 'job' | 'cra' | 'staff'
+      anthropic_agent_id TEXT NOT NULL,
+      model TEXT,
+      tool_count INTEGER NOT NULL DEFAULT 0,
+      skill_count INTEGER NOT NULL DEFAULT 0,
+      registered_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
     -- Batch jobs — wraps Anthropic's Batches API for proactive
     -- analyses (currently nightly Elle audits across active jobs).
     -- Each row tracks one submitted batch + its lifecycle.
