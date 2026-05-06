@@ -2366,6 +2366,12 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
           // execute server-side (and resume the session in-stream) or
           // collect for user approval (default behavior).
           if (typeof onCustomToolUse === 'function') {
+            // Signal to the client that an auto-tool is starting NOW —
+            // the read might take several seconds (read_metrics scans a
+            // week of ai_messages, read_recent_conversations does a
+            // grouped rollup, etc.) and without this the streaming
+            // bubble sits silent the whole time.
+            send({ tool_started: { id: tu.id, name: tu.name } });
             let decision;
             try {
               decision = await onCustomToolUse(tu);

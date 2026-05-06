@@ -1210,6 +1210,52 @@
     '</div>';
   }
 
+  // Brain-yoga rotation — cycle the streaming bubble's caption every
+  // few seconds so the user has continuous proof-of-life during long
+  // turns (server-side compaction, auto-tier tool reads, model
+  // thinking). Mix of generic playful phrases + a few that nod at the
+  // agent's likely activities so it feels less like a screensaver.
+  var BRAIN_YOGA_PHRASES = [
+    'Doing brain yoga…',
+    'Sharpening pencils…',
+    'Reticulating splines…',
+    'Consulting the manual…',
+    'Sniffing around…',
+    'Crunching numbers…',
+    'Reading the room…',
+    'Squinting at receipts…',
+    'Poking the WIP…',
+    'Triangulating…',
+    'Asking the catalog…',
+    'Cross-referencing…',
+    'Counting twice, cutting once…',
+    'Cracking knuckles…',
+    'Re-reading the brief…',
+    'Untangling wires…',
+    'Whiteboarding…',
+    'Rummaging in the toolbox…',
+    'Doing the math…',
+    'Stretching neurons…',
+    'Lining things up…',
+    'Tying loose ends…'
+  ];
+  // Tool name → friendlier verb fragment for the caption when an auto-
+  // tier tool is mid-execution. Falls back to the raw tool name.
+  var TOOL_VERBS = {
+    read_metrics:                 'Pulling metrics…',
+    read_recent_conversations:    'Scanning conversations…',
+    read_conversation_detail:     'Reading conversation…',
+    read_skill_packs:             'Loading skill packs…',
+    read_materials:               'Searching the catalog…',
+    read_purchase_history:        'Checking purchase history…',
+    read_subs:                    'Looking up subs…',
+    read_lead_pipeline:           'Pulling the pipeline…',
+    read_clients:                 'Reading the directory…',
+    read_leads:                   'Reading leads…',
+    read_past_estimates:          'Reading past estimates…',
+    read_past_estimate_lines:     'Reading past line items…'
+  };
+
   function appendStreamingBubble() {
     var box = document.getElementById('ai-messages');
     if (!box) return null;
@@ -1222,10 +1268,11 @@
     // wraps, sibling-bubble overlaps) regardless of flex / grid choice
     // on the row. Block layout sidesteps all of that.
     div.style.cssText = 'width:100%;display:block;';
+    var startPhrase = BRAIN_YOGA_PHRASES[Math.floor(Math.random() * BRAIN_YOGA_PHRASES.length)];
     div.innerHTML =
       '<div style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-dim,#888);margin-bottom:4px;">' +
-        '<span style="font-size:14px;line-height:1;">☁️</span>' +
-        '<span style="font-style:italic;">Doing brain yoga…</span>' +
+        '<span class="agx-cloud-anim" data-stream-cloud style="font-size:14px;line-height:1;">☁️</span>' +
+        '<span data-stream-phrase class="agx-phrase" style="font-style:italic;">' + startPhrase + '</span>' +
       '</div>' +
       // Content lives in its own block at full panel width. overflow
       // safety pins remain so a long unbreakable string can\'t push
@@ -1234,6 +1281,43 @@
     box.appendChild(div);
     box.scrollTop = box.scrollHeight;
     return div;
+  }
+
+  // Set / restore the brain-yoga rotation interval on a streaming
+  // bubble. Returns a stop() handle the caller invokes on done/error.
+  // override(text, sticky=false) lets callers set a tool-specific
+  // caption (e.g. "Pulling metrics…") that pauses the rotation; when
+  // sticky=false the rotation auto-resumes after one cycle.
+  function startBrainYoga(streamDiv) {
+    if (!streamDiv) return { stop: function() {}, override: function() {} };
+    var phraseEl = streamDiv.querySelector('[data-stream-phrase]');
+    if (!phraseEl) return { stop: function() {}, override: function() {} };
+    var idx = Math.floor(Math.random() * BRAIN_YOGA_PHRASES.length);
+    var paused = false;
+    var iv = setInterval(function() {
+      if (paused) return;
+      idx = (idx + 1) % BRAIN_YOGA_PHRASES.length;
+      // Re-trigger the fade animation by toggling the class.
+      phraseEl.classList.remove('agx-phrase');
+      // Force reflow so the animation can replay.
+      void phraseEl.offsetWidth;
+      phraseEl.textContent = BRAIN_YOGA_PHRASES[idx];
+      phraseEl.classList.add('agx-phrase');
+    }, 3500);
+    return {
+      stop: function() { clearInterval(iv); },
+      override: function(text, sticky) {
+        paused = !!sticky;
+        phraseEl.classList.remove('agx-phrase');
+        void phraseEl.offsetWidth;
+        phraseEl.textContent = text;
+        phraseEl.classList.add('agx-phrase');
+        if (!sticky) {
+          // Resume rotation after a short hold so the user can read it.
+          setTimeout(function() { paused = false; }, 1500);
+        }
+      }
+    };
   }
 
   // ──────────────────────────────────────────────────────────────────
@@ -1346,6 +1430,7 @@
     var assistantText = '';
     var pendingToolUses = [];     // tool_use blocks captured this turn
     var pendingAssistantContent = null; // full content array for echo-back
+    var brainYoga = startBrainYoga(streamDiv);
     _streaming = true;
     setSendDisabled(true);
 
@@ -1367,16 +1452,25 @@
           scrollToBottom();
         } else if (payload.tool_use) {
           pendingToolUses.push(payload.tool_use);
+        } else if (payload.tool_started) {
+          // v2 auto-tier tool kicked off server-side. Override the
+          // brain-yoga caption with a tool-specific verb until the
+          // matching tool_applied / tool_failed lands.
+          var label = TOOL_VERBS[payload.tool_started.name] || (payload.tool_started.name + '…');
+          brainYoga.override(label, true);
         } else if (payload.tool_applied) {
           // Server-side auto-tier tool already executed. Show an inline
           // confirmation chip in the streaming bubble.
           appendToolChip(streamDiv, '✓', payload.tool_applied.summary || (payload.tool_applied.name + ' applied'), '#34d399');
+          // Resume rotation once the tool lands.
+          brainYoga.override('Got it. Thinking…', false);
           if (isClientMode() && typeof window.refreshClientsAfterAI === 'function') {
             window.refreshClientsAfterAI();
           }
           scrollToBottom();
         } else if (payload.tool_failed) {
           appendToolChip(streamDiv, '✗', payload.tool_failed.error || (payload.tool_failed.name + ' failed'), '#f87171');
+          brainYoga.override('Hit a snag. Recovering…', false);
           scrollToBottom();
         } else if (payload.tool_rejected) {
           appendToolChip(streamDiv, '⊘', (payload.tool_rejected.name || 'tool') + ' rejected', '#a3a3a3');
@@ -1392,6 +1486,7 @@
         }
       });
     }).then(function() {
+      brainYoga.stop();
       _streaming = false;
       setSendDisabled(false);
       _abortController = null;
@@ -1411,6 +1506,7 @@
         renderMessages();
       }
     }).catch(function(err) {
+      brainYoga.stop();
       _streaming = false;
       setSendDisabled(false);
       _abortController = null;
@@ -3995,6 +4091,14 @@
     style.textContent =
       '@keyframes agx-blink { from, to { opacity: 1; } 50% { opacity: 0; } } ' +
       '@keyframes agx-mic-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.12); } } ' +
+      // Cloud emoji bobs gently up + down while the agent is thinking,
+      // and the phrase caption fades when it rotates so the user has
+      // continuous proof-of-life even when an auto-tier tool is taking
+      // a few seconds. Pure CSS — no GIF, no extra asset, dark-mode safe.
+      '@keyframes agx-cloud-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-3px); } } ' +
+      '@keyframes agx-phrase-fade { 0% { opacity: 0; transform: translateY(2px); } 20%, 100% { opacity: 1; transform: translateY(0); } } ' +
+      '.agx-cloud-anim { display: inline-block; animation: agx-cloud-bob 2.4s ease-in-out infinite; } ' +
+      '.agx-phrase { display: inline-block; animation: agx-phrase-fade 0.45s ease-out; } ' +
       '.ai-content p:first-child { margin-top: 0; } ' +
       '.ai-content p:last-child { margin-bottom: 0; } ' +
       // Hide scrollbar entirely on the input textarea — it grows up to its
