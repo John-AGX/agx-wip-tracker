@@ -1217,6 +1217,11 @@
     var text = (input && input.value || '').trim();
     if (!text) return;
     if (!_entityId) { alert('No ' + _entityType + ' is open.'); return; }
+    // Stop dictation if the user clicked send mid-utterance. Without
+    // this the recognition keeps running with a stale `baseValue`
+    // pointing at the pre-send text, so the next interim result
+    // echoes the just-sent message back into the input.
+    _stopDictation();
     input.value = '';
     // Reset auto-grow height after clearing the value, so the textarea
     // collapses back to one row on submit instead of staying tall.
@@ -3826,8 +3831,26 @@
   // final transcript chunk to the textarea so the user can see what the
   // browser heard before sending. Hides the mic button on browsers that
   // don't support SpeechRecognition (Firefox without flags).
+  //
+  // Three operational rules (matching Claude.ai's mic UX):
+  //   1. Auto-stop after a brief silence so the mic doesn't keep
+  //      listening forever after the user finishes.
+  //   2. Stop on send — clicking ▲ Send (or hitting Enter) ends
+  //      dictation so the next utterance starts fresh, not appended.
+  //   3. Reset transcript baseline on each fresh start. Without this,
+  //      a partial transcript from the prior dictation can echo back
+  //      because baseValue still references the pre-send input text.
   var _recognition = null;
   var _isListening = false;
+  // Module-level handle so onSend can stop dictation without poking
+  // into setupVoiceInput's closure. Defaults to a no-op so callers
+  // don't have to null-check.
+  var _stopDictation = function() {};
+  // Auto-stop on silence — Web Speech API's `continuous: true` keeps
+  // listening across pauses, but UX-wise we want the mic to stop
+  // after ~3s of no new transcripts so the user doesn't have to
+  // remember to toggle it off.
+  var SILENCE_TIMEOUT_MS = 3000;
   function setupVoiceInput(panel) {
     var micBtn = panel.querySelector('#ai-mic');
     if (!micBtn) return;
@@ -3840,6 +3863,8 @@
       if (_isListening) { stopListening(); return; }
       startListening();
     };
+    var silenceTimer = null;
+    var lastResultTs = 0;
     function startListening() {
       try {
         _recognition = new SR();
@@ -3850,13 +3875,29 @@
         _recognition.onstart = function() {
           _isListening = true;
           var input = document.getElementById('ai-input');
+          // Capture FRESH baseline on each start. If the input was
+          // cleared by send between dictations, baseValue is empty —
+          // fixing the "old transcript echoes back" bug.
           baseValue = input ? input.value : '';
           if (baseValue && !/\s$/.test(baseValue)) baseValue += ' ';
           micBtn.style.background = 'rgba(248,113,113,0.18)';
           micBtn.style.color = '#f87171';
           micBtn.title = 'Stop dictation';
+          // Start the silence watchdog. Polls every 500ms; if no new
+          // result events have landed in SILENCE_TIMEOUT_MS, we stop.
+          lastResultTs = Date.now();
+          if (silenceTimer) clearInterval(silenceTimer);
+          silenceTimer = setInterval(function() {
+            if (!_isListening) return;
+            if (Date.now() - lastResultTs > SILENCE_TIMEOUT_MS) {
+              stopListening();
+            }
+          }, 500);
         };
         _recognition.onresult = function(e) {
+          // Reset the silence countdown on every result (interim too)
+          // so as long as the user is mid-sentence the mic stays open.
+          lastResultTs = Date.now();
           var final = '';
           var interim = '';
           for (var i = e.resultIndex; i < e.results.length; i++) {
@@ -3885,6 +3926,7 @@
       }
     }
     function stopListening() {
+      if (silenceTimer) { clearInterval(silenceTimer); silenceTimer = null; }
       if (_recognition) {
         try { _recognition.stop(); } catch (e) { /* ignore */ }
         _recognition = null;
@@ -3894,6 +3936,10 @@
       micBtn.style.color = 'var(--text-dim,#888)';
       micBtn.title = 'Dictate (voice → text)';
     }
+    // Expose the stop function so onSend can shut dictation off when
+    // the user submits — prevents the next utterance from echoing the
+    // pre-send transcript via stale baseValue.
+    _stopDictation = stopListening;
   }
 
   function countCurrentPhotos() {
