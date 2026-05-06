@@ -409,6 +409,100 @@ router.get('/config', requireAuth, requireCapability('ROLES_MANAGE'), async (req
   }
 });
 
+// ──── Skill-pack version history ─────────────────────────────────
+//
+// Every PUT /api/settings/agent_skills snapshots the PRIOR value into
+// agent_skills_versions before overwriting. These endpoints let the
+// admin see the snapshot list, view a specific version's full body,
+// and restore (= re-save) a prior version.
+
+// GET /api/admin/agents/skills/versions
+//   Returns most recent N versions (default 50). Each row carries
+//   saved_at + saved_by name + comment + skill count summary.
+router.get('/skills/versions', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+  try {
+    const limit = Math.max(1, Math.min(200, parseInt(req.query.limit, 10) || 50));
+    const r = await pool.query(
+      `SELECT v.id, v.saved_at, v.comment,
+              v.value->'skills' AS skills,
+              u.name AS saved_by_name, u.email AS saved_by_email
+         FROM agent_skills_versions v
+         LEFT JOIN users u ON u.id = v.saved_by
+        ORDER BY v.saved_at DESC
+        LIMIT $1`,
+      [limit]
+    );
+    const rows = r.rows.map(x => ({
+      id: x.id,
+      saved_at: x.saved_at,
+      saved_by_name: x.saved_by_name,
+      saved_by_email: x.saved_by_email,
+      comment: x.comment,
+      skill_count: Array.isArray(x.skills) ? x.skills.length : 0
+    }));
+    res.json({ versions: rows });
+  } catch (e) {
+    console.error('GET /api/admin/agents/skills/versions error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// GET /api/admin/agents/skills/versions/:id
+//   Returns the full snapshot for one version.
+router.get('/skills/versions/:id', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT v.id, v.saved_at, v.comment, v.value,
+              u.name AS saved_by_name, u.email AS saved_by_email
+         FROM agent_skills_versions v
+         LEFT JOIN users u ON u.id = v.saved_by
+        WHERE v.id = $1`,
+      [req.params.id]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'Version not found' });
+    res.json({ version: r.rows[0] });
+  } catch (e) {
+    console.error('GET /api/admin/agents/skills/versions/:id error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /api/admin/agents/skills/versions/:id/restore
+//   Re-applies the snapshot's value as the current agent_skills config.
+//   The current value gets snapshotted first (via the PUT path's
+//   snapshot side-effect — restore round-trips through PUT).
+router.post('/skills/versions/:id/restore', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT value FROM agent_skills_versions WHERE id = $1`,
+      [req.params.id]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'Version not found' });
+    // Snapshot the current value first so the restore is itself
+    // reversible. Mirrors the PUT path's snapshot logic so we don't
+    // depend on cross-route side effects.
+    const prior = await pool.query(`SELECT value FROM app_settings WHERE key = 'agent_skills'`);
+    if (prior.rows.length) {
+      await pool.query(
+        `INSERT INTO agent_skills_versions (saved_by, value, comment)
+         VALUES ($1, $2::jsonb, $3)`,
+        [req.user.id, JSON.stringify(prior.rows[0].value), 'Auto-snapshot before restore of v' + req.params.id]
+      );
+    }
+    await pool.query(
+      `INSERT INTO app_settings (key, value, updated_at)
+       VALUES ('agent_skills', $1::jsonb, NOW())
+       ON CONFLICT (key) DO UPDATE
+         SET value = EXCLUDED.value, updated_at = NOW()`,
+      [JSON.stringify(r.rows[0].value)]
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('POST /api/admin/agents/skills/versions/:id/restore error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // GET /api/admin/agents/sections?agent=ag|elle|hr|cos
 //   Returns the list of admin-overridable named sections for the
 //   requested agent, with each section's stable id, description,

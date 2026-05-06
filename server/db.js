@@ -663,6 +663,22 @@ async function initSchema() {
     -- so the history can show whether runs were on xhigh / high / etc.
     ALTER TABLE ai_eval_runs ADD COLUMN IF NOT EXISTS effort TEXT;
 
+    -- Skill-pack version history — every PUT /api/settings/agent_skills
+    -- snapshots the prior value into this table before overwriting.
+    -- Lets admins see who changed what and roll back via the
+    -- /api/admin/agents/skills/versions endpoints. value carries the
+    -- full agent_skills blob (skills array). saved_at is when the
+    -- snapshot was taken (= when the user clicked Save). comment is
+    -- optional; admins can label major edits.
+    CREATE TABLE IF NOT EXISTS agent_skills_versions (
+      id BIGSERIAL PRIMARY KEY,
+      saved_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      saved_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      value JSONB NOT NULL,
+      comment TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_skills_versions_saved ON agent_skills_versions(saved_at DESC);
+
     -- Conversation replays — sandboxed re-runs of an existing
     -- conversation (or a prefix of it) under different model / effort /
     -- system-prefix params. Stored separately from ai_messages so a

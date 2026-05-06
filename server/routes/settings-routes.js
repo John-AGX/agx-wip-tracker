@@ -27,6 +27,29 @@ router.put('/:key', requireAuth, requireCapability('ROLES_MANAGE'), async (req, 
   try {
     const value = req.body && req.body.value;
     if (value == null) return res.status(400).json({ error: 'value is required' });
+
+    // Snapshot the prior agent_skills blob before overwriting so
+    // admins have a rollback path. Only for the agent_skills key —
+    // other settings (proposal template, BT mapping, etc.) have
+    // their own change-history surfaces or don't need one.
+    if (req.params.key === 'agent_skills') {
+      try {
+        const prior = await pool.query(
+          `SELECT value FROM app_settings WHERE key = 'agent_skills'`
+        );
+        if (prior.rows.length) {
+          await pool.query(
+            `INSERT INTO agent_skills_versions (saved_by, value, comment)
+             VALUES ($1, $2::jsonb, $3)`,
+            [req.user.id, JSON.stringify(prior.rows[0].value), (req.body.comment || null)]
+          );
+        }
+      } catch (snapErr) {
+        // Snapshot failure shouldn't block the save — log and continue.
+        console.warn('agent_skills snapshot failed:', snapErr.message);
+      }
+    }
+
     await pool.query(
       `INSERT INTO app_settings (key, value, updated_at)
        VALUES ($1, $2::jsonb, NOW())

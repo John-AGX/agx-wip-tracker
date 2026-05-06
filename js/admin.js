@@ -3548,6 +3548,87 @@
   window.renderPromptPreview = renderPromptPreview;
   window.loadPromptPreview = loadPromptPreview;
 
+  // ─────────── Skill-pack version history ───────────
+  // Renders a simple list overlay inside the agents-content host. Each
+  // row shows when the snapshot was taken, who saved it, an optional
+  // comment, and a Restore button. Restore round-trips through the
+  // server which itself snapshots the current value before applying —
+  // every restore is itself reversible.
+  function openSkillsVersionHistory() {
+    var host = document.getElementById('agents-content');
+    if (!host) return;
+    host.innerHTML =
+      '<div style="margin-bottom:10px;display:flex;align-items:center;gap:10px;">' +
+        '<button class="ee-btn secondary" onclick="renderAgentsSkillsView()">&larr; Back to Skills</button>' +
+        '<h3 style="margin:0;font-size:14px;font-weight:600;color:var(--text,#fff);">Skill-pack version history</h3>' +
+      '</div>' +
+      '<p style="margin:0 0 14px;color:var(--text-dim,#888);font-size:12px;">' +
+        'Every save snapshots the prior agent_skills blob. Click Restore to roll back — that itself snapshots the current state first, so every restore is reversible.' +
+      '</p>' +
+      '<div id="skills-versions-list" style="font-size:12px;color:var(--text-dim,#888);font-style:italic;">Loading…</div>';
+
+    window.agxApi.get('/api/admin/agents/skills/versions').then(function(resp) {
+      var rows = (resp && resp.versions) || [];
+      var listHost = document.getElementById('skills-versions-list');
+      if (!listHost) return;
+      if (!rows.length) {
+        listHost.innerHTML = '<div style="color:var(--text-dim,#888);font-style:italic;padding:14px 0;">No saved versions yet. Save a skill-pack edit and the prior state lands here.</div>';
+        return;
+      }
+      var html = '<div class="table-container"><table style="width:100%;font-size:12px;">' +
+        '<thead><tr>' +
+          '<th>Saved at</th><th>Saved by</th><th>Comment</th><th style="text-align:right;">Packs</th><th></th>' +
+        '</tr></thead><tbody>';
+      rows.forEach(function(v) {
+        var when = '';
+        try { when = new Date(v.saved_at).toLocaleString(); } catch (e) {}
+        var who = v.saved_by_name ? escapeHTML(v.saved_by_name) : '<span style="color:var(--text-dim,#666);font-style:italic;">unknown</span>';
+        html += '<tr>' +
+          '<td style="font-size:11px;color:var(--text-dim,#aaa);">' + escapeHTML(when) + '</td>' +
+          '<td>' + who + '</td>' +
+          '<td style="font-size:11px;color:var(--text-dim,#aaa);">' + (v.comment ? escapeHTML(v.comment) : '<span style="color:var(--text-dim,#666);">—</span>') + '</td>' +
+          '<td style="text-align:right;font-family:\'SF Mono\',monospace;">' + (v.skill_count || 0) + '</td>' +
+          '<td style="text-align:right;">' +
+            '<button class="ee-btn secondary" onclick="viewSkillsVersion(' + v.id + ')">View</button>' +
+            ' <button class="ee-btn primary" onclick="restoreSkillsVersion(' + v.id + ')">Restore</button>' +
+          '</td>' +
+        '</tr>';
+      });
+      html += '</tbody></table></div>';
+      listHost.innerHTML = html;
+    }).catch(function(err) {
+      var listHost = document.getElementById('skills-versions-list');
+      if (listHost) listHost.innerHTML = '<div style="color:#e74c3c;font-size:12px;">Failed: ' + escapeHTML(err.message || 'unknown') + '</div>';
+    });
+  }
+
+  function viewSkillsVersion(id) {
+    window.agxApi.get('/api/admin/agents/skills/versions/' + encodeURIComponent(id)).then(function(resp) {
+      var v = resp && resp.version;
+      if (!v) { alert('Version not found.'); return; }
+      var pretty = '';
+      try { pretty = JSON.stringify(v.value, null, 2); } catch (e) { pretty = String(v.value); }
+      // Open in a new window so the user can compare side-by-side with
+      // the live editor without leaving the admin tab.
+      var w = window.open('', '_blank', 'width=800,height=900');
+      if (!w) { alert('Popup blocked. Allow popups for this domain to view version contents.'); return; }
+      w.document.write('<!doctype html><html><head><title>agent_skills version ' + id + '</title></head><body style="font-family:\'SF Mono\',Menlo,monospace;font-size:12px;background:#0f1117;color:#e4e6f0;padding:20px;"><h2>Version ' + id + '</h2><pre style="white-space:pre-wrap;">' + escapeHTML(pretty) + '</pre></body></html>');
+      w.document.close();
+    }).catch(function(err) { alert('Failed: ' + (err.message || 'unknown')); });
+  }
+
+  function restoreSkillsVersion(id) {
+    if (!confirm('Restore version ' + id + '? Current state will be auto-snapshotted before applying.')) return;
+    window.agxApi.post('/api/admin/agents/skills/versions/' + encodeURIComponent(id) + '/restore', {}).then(function() {
+      alert('Restored. Reloading skills view.');
+      switchAgentsView('skills');
+    }).catch(function(err) { alert('Restore failed: ' + (err.message || 'unknown')); });
+  }
+
+  window.openSkillsVersionHistory = openSkillsVersionHistory;
+  window.viewSkillsVersion = viewSkillsVersion;
+  window.restoreSkillsVersion = restoreSkillsVersion;
+
   // Cached per-agent overridable sections. Populated by
   // fetchOverridableSections() before the skills editor renders so the
   // "Replaces section" dropdown can show options + descriptions.
@@ -3585,6 +3666,7 @@
         '<div id="agents-skills-body">' + renderAgentSkillsHTML() + '</div>' +
         '<div style="display:flex;gap:8px;align-items:center;margin-top:14px;padding:10px 12px;background:rgba(255,255,255,0.03);border:1px solid var(--border,#333);border-radius:6px;">' +
           '<span id="agents-skills-status" style="flex:1;font-size:12px;color:var(--text-dim,#888);"></span>' +
+          '<button class="ee-btn secondary" onclick="openSkillsVersionHistory()">&#x23F1; History</button>' +
           '<button class="ee-btn secondary" onclick="renderAgentsSkillsView()">Discard changes</button>' +
           '<button class="ee-btn primary" onclick="saveAgentsSkills()">&#x1F4BE; Save skills</button>' +
         '</div>';
