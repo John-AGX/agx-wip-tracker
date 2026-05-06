@@ -694,6 +694,49 @@ async function initSchema() {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
+    -- Phase 1b — single shared Anthropic-side Environment that all our
+    -- managed agents' Sessions provision containers from. We only ever
+    -- need one row here ('default'); the env_key column lets us add more
+    -- later (e.g. a restricted-network env) without a schema migration.
+    CREATE TABLE IF NOT EXISTS managed_environment_registry (
+      env_key TEXT PRIMARY KEY,                            -- 'default'
+      anthropic_environment_id TEXT NOT NULL,
+      networking TEXT NOT NULL DEFAULT 'unrestricted',
+      registered_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    -- Phase 1b — durable mapping from (agent_key, entity, user) to
+    -- the long-lived Anthropic Session that backs that conversation.
+    -- We reuse one Session per AGX conversation so we don't pay session-
+    -- creation latency on every turn AND so the Anthropic side gets the
+    -- benefit of accumulated session context (built-in compaction, prompt
+    -- caching, the works). entity_type lets one table cover estimates,
+    -- jobs, clients, and the staff (singleton) agent.
+    --
+    -- entity_id is nullable for staff (Chief of Staff has no entity).
+    -- archived_at lets us terminate a session (delete or archive on the
+    -- Anthropic side) and create a fresh one on the next turn — used
+    -- when context has gotten so stale that compaction can't save it,
+    -- or when an admin wants a clean-slate replay.
+    CREATE TABLE IF NOT EXISTS ai_sessions (
+      id BIGSERIAL PRIMARY KEY,
+      agent_key TEXT NOT NULL,                             -- 'ag' | 'job' | 'cra' | 'staff'
+      entity_type TEXT NOT NULL,                           -- 'estimate' | 'job' | 'client' | 'staff'
+      entity_id TEXT,                                      -- estimate id / job id / client id; NULL for staff
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      anthropic_session_id TEXT NOT NULL,
+      anthropic_agent_id TEXT NOT NULL,                    -- snapshot at create time
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      last_used_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      archived_at TIMESTAMPTZ
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_sessions_active
+      ON ai_sessions (agent_key, entity_type, COALESCE(entity_id, ''), user_id)
+      WHERE archived_at IS NULL;
+    CREATE INDEX IF NOT EXISTS idx_ai_sessions_last_used
+      ON ai_sessions(last_used_at DESC);
+
     -- Batch jobs — wraps Anthropic's Batches API for proactive
     -- analyses (currently nightly Elle audits across active jobs).
     -- Each row tracks one submitted batch + its lifecycle.

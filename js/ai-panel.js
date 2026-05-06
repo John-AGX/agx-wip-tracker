@@ -80,11 +80,23 @@
       '<line x1="15" y1="19.5" x2="15" y2="20.5"/>' +
     '</svg>';
 
+  // Phase 1b/1c — when the server flips AGX_AGENT_MODE_AG=agents, the AG
+  // estimating chat routes to the Sessions-backed /v2 endpoint. The
+  // server adapts the SSE shape to match v1 so this single switch is
+  // the entire client-side change. Falls back to legacy when the flag
+  // is missing (e.g. fresh login before /me hydrates feature_flags).
+  function isAgAgentMode() {
+    var u = (window.agxAuth && window.agxAuth.getUser) ? window.agxAuth.getUser() : null;
+    return !!(u && u.feature_flags && u.feature_flags.agent_mode_ag === 'agents');
+  }
   function apiBase() {
     if (_entityType === 'job') return '/api/ai/jobs/' + encodeURIComponent(_entityId);
     if (_entityType === 'client') return '/api/ai/clients';
     if (_entityType === 'staff') return '/api/ai/staff';
-    return '/api/ai/estimates/' + encodeURIComponent(_entityId);
+    // estimate mode — flag-gated: v2 (Sessions) when agent mode is on,
+    // v1 (messages.stream) by default.
+    var v2 = isAgAgentMode() ? '/v2' : '';
+    return '/api/ai' + v2 + '/estimates/' + encodeURIComponent(_entityId);
   }
   function isEstimateMode() { return _entityType === 'estimate'; }
   function isJobMode() { return _entityType === 'job'; }

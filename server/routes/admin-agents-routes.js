@@ -1554,4 +1554,72 @@ router.get('/managed', requireAuth, requireCapability('ROLES_MANAGE'), async (re
   }
 });
 
+// ──────────────────────────────────────────────────────────────────
+// Phase 1b — Managed Environment bootstrap
+//
+// Sessions need an environment_id; we use one shared 'default' env
+// across all four agents (cloud, unrestricted networking — matches
+// today's agent egress posture). Idempotent: if a row already exists
+// in managed_environment_registry, we return it untouched.
+// ──────────────────────────────────────────────────────────────────
+async function ensureManagedEnvironment() {
+  const anthropic = getAnthropic();
+  if (!anthropic) throw new Error('ANTHROPIC_API_KEY not set on this deployment.');
+
+  const existing = await pool.query(
+    `SELECT * FROM managed_environment_registry WHERE env_key = 'default'`
+  );
+  if (existing.rows.length) return existing.rows[0];
+
+  const created = await anthropic.beta.environments.create({
+    name: 'agx-default',
+    config: {
+      type: 'cloud',
+      networking: { type: 'unrestricted' }
+    }
+  });
+
+  await pool.query(
+    `INSERT INTO managed_environment_registry
+       (env_key, anthropic_environment_id, networking, updated_at)
+     VALUES ('default', $1, 'unrestricted', NOW())
+     ON CONFLICT (env_key) DO NOTHING`,
+    [created.id]
+  );
+
+  // Re-read in case of a race (two concurrent bootstraps); the unique
+  // constraint guarantees we end up with one row, and we want the
+  // canonical one (whichever insert won).
+  const after = await pool.query(
+    `SELECT * FROM managed_environment_registry WHERE env_key = 'default'`
+  );
+  return after.rows[0];
+}
+
+// POST /api/admin/agents/managed/bootstrap-environment
+router.post('/managed/bootstrap-environment', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+  try {
+    const row = await ensureManagedEnvironment();
+    res.json({ ok: true, env: row });
+  } catch (e) {
+    console.error('POST /api/admin/agents/managed/bootstrap-environment error:', e);
+    res.status(500).json({ error: 'Server error: ' + (e.message || 'unknown') });
+  }
+});
+
+// GET /api/admin/agents/managed/environment
+router.get('/managed/environment', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+  try {
+    const r = await pool.query(`SELECT * FROM managed_environment_registry WHERE env_key = 'default'`);
+    res.json({ env: r.rows[0] || null });
+  } catch (e) {
+    console.error('GET /api/admin/agents/managed/environment error:', e);
+    res.status(500).json({ error: 'Server error: ' + (e.message || 'unknown') });
+  }
+});
+
+// Exported so ai-routes.js (Phase 1b chat path) can resolve the
+// environment + agent ids without duplicating the SQL.
 module.exports = router;
+module.exports.ensureManagedAgent = ensureManagedAgent;
+module.exports.ensureManagedEnvironment = ensureManagedEnvironment;

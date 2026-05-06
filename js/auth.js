@@ -209,6 +209,13 @@
     })
     .then(function(data) {
       currentUser = data.user;
+      // Stash server-side feature flags on the global user object so
+      // any module can read them via agxAuth.getUser().feature_flags.
+      // Phase 1b uses agent_mode_ag to switch AG chat to the
+      // Sessions-backed v2 endpoint.
+      if (currentUser && data.feature_flags) {
+        currentUser.feature_flags = data.feature_flags;
+      }
       isOffline = false;
       loadCapabilities().then(function() { showApp(); });
       if (window.agxData) window.agxData.reloadFromServer();

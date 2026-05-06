@@ -38,7 +38,17 @@ router.post('/logout', (req, res) => {
 
 // GET /api/auth/me
 router.get('/me', requireAuth, (req, res) => {
-  res.json({ user: req.user });
+  // Surface server-side feature flags to the client so the UI can flip
+  // experimental code paths without a redeploy. Read from env on every
+  // request so flipping a Railway env var takes effect immediately
+  // (matches the lazy-load pattern in ai-routes.getAnthropic).
+  const featureFlags = {
+    // Phase 1b — when 'agents', the AG estimating chat panel hits
+    // /api/ai/v2/estimates/:id/chat (Sessions API) instead of the
+    // legacy /api/ai/estimates/:id/chat (messages.stream).
+    agent_mode_ag: (process.env.AGX_AGENT_MODE_AG || '').toLowerCase() === 'agents' ? 'agents' : 'legacy'
+  };
+  res.json({ user: req.user, feature_flags: featureFlags });
 });
 
 // POST /api/auth/register (admin only)

@@ -2123,6 +2123,359 @@ router.post('/estimates/:id/chat/continue',
 );
 
 // ════════════════════════════════════════════════════════════════════
+// Phase 1b — v2 chat path (Anthropic Sessions API)
+//
+// Replaces anthropic.messages.stream with a long-lived Anthropic Session
+// per (agent, entity, user). The Session inherits the agent's
+// pre-registered system prompt + tools + skills, so we no longer ship
+// the stable prefix on every request — the API handles that internally
+// via prompt caching + automatic compaction.
+//
+// Per-turn dynamic context (estimate snapshot, photos) is wrapped in
+// <turn_context> tags inside the user message instead of being
+// injected as a system prefix.
+//
+// Gated behind the AGX_AGENT_MODE_AG=agents env var so the production
+// path (above) stays the default until the v2 path is verified.
+//
+// Output is adapted to the same SSE event shape the client already
+// consumes — { delta }, { tool_use }, { awaiting_approval, … },
+// { done, … }, [DONE] — so the only client change in Phase 1c is
+// switching the URL.
+// ════════════════════════════════════════════════════════════════════
+
+const FLAG_AGENT_MODE_AG = (process.env.AGX_AGENT_MODE_AG || '').toLowerCase() === 'agents';
+
+// Look up or create the long-lived Session for one (agent, entity,
+// user) tuple. Race-safe via the unique partial index on ai_sessions.
+async function ensureAiSession({ agentKey, entityType, entityId, userId }) {
+  const found = await pool.query(
+    `SELECT * FROM ai_sessions
+       WHERE agent_key = $1
+         AND entity_type = $2
+         AND COALESCE(entity_id, '') = COALESCE($3, '')
+         AND user_id = $4
+         AND archived_at IS NULL`,
+    [agentKey, entityType, entityId, userId]
+  );
+  if (found.rows.length) return found.rows[0];
+
+  // Lazy require avoids the ai-routes ↔ admin-agents-routes cycle at
+  // module-load time (admin-agents pulls ai-routes-internals).
+  const adminAgents = require('./admin-agents-routes');
+  const env = await adminAgents.ensureManagedEnvironment();
+  const agent = await adminAgents.ensureManagedAgent(agentKey);
+  const anthropic = getAnthropic();
+
+  const created = await anthropic.beta.sessions.create({
+    agent: agent.anthropic_agent_id,
+    environment_id: env.anthropic_environment_id,
+    title: 'AGX ' + agentKey + ' / ' + entityType + '/' + (entityId || 'staff') + ' (user ' + userId + ')'
+  });
+
+  try {
+    const inserted = await pool.query(
+      `INSERT INTO ai_sessions
+         (agent_key, entity_type, entity_id, user_id, anthropic_session_id, anthropic_agent_id)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING *`,
+      [agentKey, entityType, entityId, userId, created.id, agent.anthropic_agent_id]
+    );
+    return inserted.rows[0];
+  } catch (e) {
+    // Race: a parallel request inserted first. Archive the orphan
+    // session we created and use the canonical row.
+    try { await anthropic.beta.sessions.archive(created.id); } catch (_) {}
+    const reread = await pool.query(
+      `SELECT * FROM ai_sessions
+         WHERE agent_key = $1
+           AND entity_type = $2
+           AND COALESCE(entity_id, '') = COALESCE($3, '')
+           AND user_id = $4
+           AND archived_at IS NULL`,
+      [agentKey, entityType, entityId, userId]
+    );
+    if (reread.rows.length) return reread.rows[0];
+    throw e;
+  }
+}
+
+// Drive one Session turn: open the SSE stream, send the queued events
+// (user message and/or tool results), translate session events to the
+// existing v1 SSE shape, and persist the assistant text on terminal
+// idle. Stream-first then send — see managed-agents-events.md.
+async function runV2SessionStream({ anthropic, res, sessionId, eventsToSend, persistAssistantText }) {
+  function send(payload) { res.write('data: ' + JSON.stringify(payload) + '\n\n'); }
+  function endWithDone() { res.write('data: [DONE]\n\n'); res.end(); }
+
+  let assistantText = '';
+  const pendingToolUses = [];
+  let usage = { input_tokens: null, output_tokens: null };
+
+  let stream;
+  try {
+    stream = await anthropic.beta.sessions.stream(sessionId);
+  } catch (e) {
+    console.error('Session stream open failed:', e);
+    send({ error: e.message || 'Failed to open session stream' });
+    endWithDone();
+    return;
+  }
+
+  // Stream-first guarantee: we've opened the stream above, now send
+  // the events. Anything emitted from here lands on our open stream.
+  if (Array.isArray(eventsToSend) && eventsToSend.length) {
+    try {
+      await anthropic.beta.sessions.events.send(sessionId, { events: eventsToSend });
+    } catch (e) {
+      console.error('Session events.send failed:', e);
+      send({ error: e.message || 'Failed to send session events' });
+      endWithDone();
+      return;
+    }
+  }
+
+  try {
+    for await (const event of stream) {
+      switch (event.type) {
+        case 'agent.message': {
+          // The session's agent.message arrives as a list of content
+          // blocks (text, etc.). We forward each text block as a single
+          // delta — coarser than the per-token v1 stream, but this is
+          // the granularity the Sessions API exposes today.
+          const blocks = Array.isArray(event.content) ? event.content : [];
+          for (const b of blocks) {
+            if (b && b.type === 'text' && typeof b.text === 'string') {
+              assistantText += b.text;
+              send({ delta: b.text });
+            }
+          }
+          break;
+        }
+        case 'agent.custom_tool_use': {
+          // Per managed-agents docs, the id we send back as
+          // custom_tool_use_id is event.id (e.g. sevt_…), not a
+          // toolu_… id.
+          pendingToolUses.push({
+            id: event.id,
+            name: event.tool_name || event.name || 'unknown',
+            input: event.input || {}
+          });
+          break;
+        }
+        case 'span.model_request_end': {
+          if (event.model_usage) {
+            usage = {
+              input_tokens: event.model_usage.input_tokens,
+              output_tokens: event.model_usage.output_tokens,
+              cache_creation_input_tokens: event.model_usage.cache_creation_input_tokens,
+              cache_read_input_tokens: event.model_usage.cache_read_input_tokens
+            };
+          }
+          break;
+        }
+        case 'session.error': {
+          const msg = (event.error && event.error.message) || 'Session error';
+          send({ error: msg });
+          endWithDone();
+          return;
+        }
+        case 'session.status_terminated': {
+          send({ error: 'Session terminated' });
+          endWithDone();
+          return;
+        }
+        case 'session.status_idle': {
+          // Per managed-agents-client-patterns.md Pattern 5, only break
+          // on idle when the stop_reason is terminal — `requires_action`
+          // means the session is waiting on us. Our flow ends the HTTP
+          // response either way (the client picks up the conversation
+          // again on /chat/continue), but we use the stop_reason to
+          // pick the SSE shape: tool-use awaiting vs. final done.
+          const stopType = event.stop_reason && event.stop_reason.type;
+          if (pendingToolUses.length || stopType === 'requires_action') {
+            for (const tu of pendingToolUses) {
+              send({ tool_use: tu });
+            }
+            send({
+              awaiting_approval: true,
+              // Session is server-managed; client doesn't need to echo
+              // the assistant content back on /chat/continue.
+              pending_assistant_content: null,
+              tool_use_count: pendingToolUses.length,
+              usage: usage,
+              session_id: sessionId
+            });
+          } else {
+            if (assistantText && persistAssistantText) {
+              try { await persistAssistantText(assistantText, usage); }
+              catch (e) { console.error('persistAssistantText failed:', e); }
+            }
+            send({ done: true, usage: usage });
+          }
+          endWithDone();
+          return;
+        }
+        default:
+          // Ignore agent.thinking / span.* / agent.tool_use (built-in
+          // tools; web_search is auto-handled). Add explicit cases here
+          // when we need to surface them to the client.
+          break;
+      }
+    }
+  } catch (e) {
+    console.error('Session stream iteration error:', e);
+    send({ error: e.message || 'Stream failed' });
+    endWithDone();
+  }
+}
+
+// POST /api/ai/v2/estimates/:id/chat — Sessions-backed chat for AG.
+// Body: { message, includePhotos, additional_images }
+router.post('/v2/estimates/:id/chat',
+  requireAuth, requireCapability('ESTIMATES_VIEW'),
+  async (req, res) => {
+    const anthropic = getAnthropic();
+    if (!anthropic) {
+      return res.status(503).json({ error: 'AI assistant is not configured.' });
+    }
+    if (!FLAG_AGENT_MODE_AG) {
+      return res.status(503).json({ error: 'v2 chat path is disabled. Set AGX_AGENT_MODE_AG=agents to enable.' });
+    }
+    const userMessage = (req.body && req.body.message || '').trim();
+    if (!userMessage) return res.status(400).json({ error: 'message is required' });
+    const includePhotos = req.body && req.body.includePhotos !== false;
+    const additionalImages = Array.isArray(req.body && req.body.additional_images)
+      ? req.body.additional_images.slice(0, 12)
+      : [];
+    const estimateId = req.params.id;
+
+    setSSEHeaders(res);
+
+    try {
+      const ctx = await buildEstimateContext(estimateId, includePhotos);
+
+      // Inline images for this turn (estimate photos + per-turn additionals).
+      const inlineImageBlocks = [...ctx.photoBlocks];
+      additionalImages.forEach(b64 => {
+        const block = inlineImageBlock(b64);
+        if (block) inlineImageBlocks.push(block);
+      });
+      const cappedImages = inlineImageBlocks.slice(0, 18);
+
+      // The agent's stable system prompt holds identity. Per-turn
+      // dynamic context (estimate snapshot, lines, scope, photos
+      // metadata) goes inside the user message wrapped in
+      // <turn_context>. Images precede the text block per Anthropic
+      // guidance.
+      const turnText =
+        '<turn_context>\n' + ctx.system + '\n</turn_context>\n\n' + userMessage;
+      const userContent = cappedImages.length
+        ? [...cappedImages, { type: 'text', text: turnText }]
+        : [{ type: 'text', text: turnText }];
+
+      const session = await ensureAiSession({
+        agentKey: 'ag',
+        entityType: 'estimate',
+        entityId: estimateId,
+        userId: req.user.id
+      });
+      await pool.query('UPDATE ai_sessions SET last_used_at = NOW() WHERE id = $1', [session.id]);
+
+      const userMsgId = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+      await pool.query(
+        `INSERT INTO ai_messages (id, estimate_id, user_id, role, content, photos_included)
+         VALUES ($1, $2, $3, 'user', $4, $5)`,
+        [userMsgId, estimateId, req.user.id, userMessage, ctx.photoBlocks.length]
+      );
+
+      await runV2SessionStream({
+        anthropic, res,
+        sessionId: session.anthropic_session_id,
+        eventsToSend: [{ type: 'user.message', content: userContent }],
+        persistAssistantText: async (text, usage) => {
+          await saveAssistantMessage({ estimateId, userId: req.user.id, text, usage, packsLoaded: ctx.packsLoaded });
+        }
+      });
+    } catch (e) {
+      console.error('AI v2 chat error:', e);
+      res.write('data: ' + JSON.stringify({ error: e.message || 'Server error' }) + '\n\n');
+      res.write('data: [DONE]\n\n');
+      res.end();
+    }
+  }
+);
+
+// POST /api/ai/v2/estimates/:id/chat/continue
+// Body: { tool_results: [{ tool_use_id, approved, applied_summary?, reject_reason? }] }
+// pending_assistant_content is NOT required — the session holds it.
+router.post('/v2/estimates/:id/chat/continue',
+  requireAuth, requireCapability('ESTIMATES_VIEW'),
+  async (req, res) => {
+    const anthropic = getAnthropic();
+    if (!anthropic) {
+      return res.status(503).json({ error: 'AI assistant is not configured.' });
+    }
+    if (!FLAG_AGENT_MODE_AG) {
+      return res.status(503).json({ error: 'v2 chat path is disabled.' });
+    }
+    const toolResults = req.body && req.body.tool_results;
+    if (!Array.isArray(toolResults) || !toolResults.length) {
+      return res.status(400).json({ error: 'tool_results is required' });
+    }
+    const estimateId = req.params.id;
+
+    setSSEHeaders(res);
+
+    try {
+      const sessionRow = await pool.query(
+        `SELECT * FROM ai_sessions
+           WHERE agent_key = 'ag' AND entity_type = 'estimate'
+             AND entity_id = $1 AND user_id = $2 AND archived_at IS NULL`,
+        [estimateId, req.user.id]
+      );
+      if (!sessionRow.rows.length) {
+        res.write('data: ' + JSON.stringify({ error: 'No active session — start a new turn.' }) + '\n\n');
+        res.write('data: [DONE]\n\n');
+        return res.end();
+      }
+      const session = sessionRow.rows[0];
+
+      // Translate v1-shape tool_results into Sessions
+      // user.custom_tool_result events. tool_use_id should match the
+      // sevt_… id we sent down on the prior turn.
+      const eventsToSend = toolResults.map(r => ({
+        type: 'user.custom_tool_result',
+        custom_tool_use_id: r.tool_use_id,
+        content: [{
+          type: 'text',
+          text: r.approved
+            ? (r.applied_summary || 'User approved. Change applied to the estimate.')
+            : (r.reject_reason || 'User rejected this proposal.')
+        }]
+      }));
+
+      const ctx = await buildEstimateContext(estimateId, false);
+      await pool.query('UPDATE ai_sessions SET last_used_at = NOW() WHERE id = $1', [session.id]);
+
+      await runV2SessionStream({
+        anthropic, res,
+        sessionId: session.anthropic_session_id,
+        eventsToSend,
+        persistAssistantText: async (text, usage) => {
+          await saveAssistantMessage({ estimateId, userId: req.user.id, text, usage, packsLoaded: ctx.packsLoaded });
+        }
+      });
+    } catch (e) {
+      console.error('AI v2 chat/continue error:', e);
+      res.write('data: ' + JSON.stringify({ error: e.message || 'Server error' }) + '\n\n');
+      res.write('data: [DONE]\n\n');
+      res.end();
+    }
+  }
+);
+
+// ════════════════════════════════════════════════════════════════════
 // JOB / WIP CHAT — Phase 2B
 //
 // Same chat infrastructure, different context. Reads the job's WIP
