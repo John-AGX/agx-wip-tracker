@@ -87,10 +87,20 @@
         // /admin/agents/evals/:id  OR  /admin/agents/evals/new
         if (parts[1] === 'agents') {
           if (parts[2] === 'conversations' && parts[3]) {
-            route.adAgentConvKey = parts[3];
+            // The conversation key is `entity_type|entity_id|user_id`,
+            // URL-encoded in the path (`staff%7Cglobal%7C2`). Decode
+            // here so downstream code sees `staff|global|2`. Without
+            // this, encodeURIComponent on the API call double-encodes
+            // and the server's split('|') sees one long string and
+            // 400s with "Bad key — expected entity_type|entity_id|user_id".
+            try { route.adAgentConvKey = decodeURIComponent(parts[3]); }
+            catch (e) { route.adAgentConvKey = parts[3]; }
           } else if (parts[2] === 'evals' && parts[3]) {
             if (parts[3] === 'new') route.adAgentEvalNew = true;
-            else route.adAgentEvalId = parts[3];
+            else {
+              try { route.adAgentEvalId = decodeURIComponent(parts[3]); }
+              catch (e) { route.adAgentEvalId = parts[3]; }
+            }
           }
         }
       }
