@@ -1418,28 +1418,29 @@ async function collectSkillsFor(agentKey) {
 // migration expands these (e.g. enabling bash/read on Elle for QB
 // cost line analysis).
 function builtinToolsetFor(agentKey) {
-  // Each toolset_id has a set of tool names. Defaults shape:
-  //   - default_config.enabled: master switch (false unless we say so)
-  //   - tools: per-tool override list
-  // For now, AG/Elle/HR/CoS all get web_search enabled (matches today's
-  // baseline). AG additionally gets web_fetch — that's the headline
-  // capability gain in Phase 3.
+  // Per managed-agents-tools.md, the agent_toolset config takes
+  // `configs:` (not `tools:`) and each entry is { name, enabled }
+  // flat — no nested `config` wrapper. Master switch is
+  // default_config.enabled = false; we opt-in tools by name.
+  // AG/Elle/HR/CoS all get web_search; AG/HR additionally get
+  // web_fetch (headline Phase 3 capability gain for the agents that
+  // most need to read external pages — vendor pricing, etc.).
   const base = {
     type: 'agent_toolset_20260401',
     default_config: { enabled: false }
   };
-  const toolEnabled = function(name) { return { name: name, config: { enabled: true } }; };
+  const enable = function(name) { return { name: name, enabled: true }; };
   if (agentKey === 'ag') {
-    return [Object.assign({}, base, { tools: [toolEnabled('web_search'), toolEnabled('web_fetch')] })];
+    return [Object.assign({}, base, { configs: [enable('web_search'), enable('web_fetch')] })];
   }
   if (agentKey === 'job') {
-    return [Object.assign({}, base, { tools: [toolEnabled('web_search')] })];
+    return [Object.assign({}, base, { configs: [enable('web_search')] })];
   }
   if (agentKey === 'cra') {
-    return [Object.assign({}, base, { tools: [toolEnabled('web_search'), toolEnabled('web_fetch')] })];
+    return [Object.assign({}, base, { configs: [enable('web_search'), enable('web_fetch')] })];
   }
   if (agentKey === 'staff') {
-    return [Object.assign({}, base, { tools: [toolEnabled('web_search')] })];
+    return [Object.assign({}, base, { configs: [enable('web_search')] })];
   }
   return [];
 }
