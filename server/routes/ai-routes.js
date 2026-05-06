@@ -1379,7 +1379,14 @@ async function buildEstimateContext(estimateId, includePhotos) {
 
   // Load admin-editable skill packs targeted at AG. Stable across the
   // 5-min cache window since admins rarely edit them mid-session.
-  const skillBlocks = await loadActiveSkillsFor('ag');
+  // Pass turn context so packs with triggers (e.g. min_groups, has_lead)
+  // can load conditionally instead of always.
+  const triggerCtx = {
+    group_count: alternates.length,
+    has_lead: !!blob.lead_id,
+    has_client: !!blob.client_id
+  };
+  const skillBlocks = await loadActiveSkillsFor('ag', triggerCtx);
   if (skillBlocks.length) {
     stableLines.push('# Loaded skills');
     stableLines.push('Skill packs your admin has assigned. Treat each as binding additional guidance on top of the baseline rules above.');
@@ -1482,7 +1489,14 @@ function filterToolsForJobPhase(tools, phase) {
 // alwaysOn. Returns an array of {name, body} blocks ready to append to
 // the system prompt. Failures (no setting yet, malformed JSON) return
 // an empty array — the agent still works, just without the playbooks.
-async function loadActiveSkillsFor(agentKey) {
+//
+// `triggerCtx` is an optional object providing facts about the current
+// turn (e.g., { has_groups_min: 2, is_linked: true }). When a pack
+// declares triggers (currently supports `min_groups` for AG — load
+// only when the estimate has at least N groups), this context is
+// matched against them. Packs without triggers always load
+// (alwaysOn baseline).
+async function loadActiveSkillsFor(agentKey, triggerCtx) {
   try {
     const { rows } = await pool.query(
       `SELECT value FROM app_settings WHERE key = 'agent_skills'`
@@ -1497,11 +1511,29 @@ async function loadActiveSkillsFor(agentKey) {
     // don't double-load.
     return skills
       .filter(s => s && s.alwaysOn !== false && Array.isArray(s.agents) && s.agents.indexOf(agentKey) >= 0 && s.body && !s.replaces_section)
-      .map(s => ({ name: s.name || '(untitled skill)', body: s.body }));
+      .filter(s => packTriggersPass(s.triggers, triggerCtx))
+      .map(s => ({ name: s.name || '(untitled skill)', body: s.body, category: s.category || null }));
   } catch (e) {
     console.error('loadActiveSkillsFor error:', e);
     return [];
   }
+}
+
+// Evaluate a pack's triggers object against the current turn's context.
+// Returns true when the pack should load. Empty/missing triggers always
+// pass (preserves alwaysOn semantics for packs without conditions).
+//
+// Supported triggers (extend here as needs surface):
+//   min_groups   number  — load only when ctx.group_count >= min_groups
+//   has_lead     bool    — load only when the estimate is linked to a lead
+//   has_client   bool    — load only when the estimate is linked to a client
+function packTriggersPass(triggers, ctx) {
+  if (!triggers || typeof triggers !== 'object') return true;
+  ctx = ctx || {};
+  if (typeof triggers.min_groups === 'number' && (ctx.group_count || 0) < triggers.min_groups) return false;
+  if (triggers.has_lead === true && !ctx.has_lead) return false;
+  if (triggers.has_client === true && !ctx.has_client) return false;
+  return true;
 }
 
 // ──────────────────────────────────────────────────────────────────

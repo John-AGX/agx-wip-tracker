@@ -2421,6 +2421,27 @@
           '<label style="display:block;margin-bottom:3px;text-transform:none !important;letter-spacing:normal !important;font-weight:400 !important;">Replaces section <span style="color:var(--text-dim,#666);">(optional — overrides a named block of the agent\'s stable prefix instead of appending)</span></label>' +
           '<select data-skill-replaces="' + idx + '" style="width:100%;font-size:12px;padding:5px 8px;font-family:\'SF Mono\',monospace;">' + sectionOpts + '</select>' +
         '</div>';
+
+        // Category + Triggers row — categorize packs (purely metadata
+        // for organization) and conditionally load via simple triggers.
+        var catOpts = '<option value="">(uncategorized)</option>';
+        var cats = ['identity', 'tone', 'slotting', 'pricing', 'tool-guidance', 'domain-knowledge', 'workflow', 'playbook', 'other'];
+        cats.forEach(function(c) {
+          catOpts += '<option value="' + c + '"' + (skill.category === c ? ' selected' : '') + '>' + c + '</option>';
+        });
+        var trigs = (skill.triggers && typeof skill.triggers === 'object') ? skill.triggers : {};
+        html += '<div style="display:flex;gap:8px;margin-bottom:8px;font-size:11px;color:var(--text-dim,#aaa);">' +
+          '<div style="flex:1;"><label style="display:block;margin-bottom:3px;text-transform:none !important;letter-spacing:normal !important;font-weight:400 !important;">Category</label>' +
+            '<select data-skill-category="' + idx + '" style="width:100%;font-size:12px;padding:5px 8px;">' + catOpts + '</select></div>' +
+          '<div style="width:140px;"><label style="display:block;margin-bottom:3px;text-transform:none !important;letter-spacing:normal !important;font-weight:400 !important;" title="Load only when the estimate has at least N groups. Saves tokens on simple turns.">Min groups</label>' +
+            '<input type="number" min="0" max="20" data-skill-trig-min-groups="' + idx + '" value="' + (trigs.min_groups != null ? trigs.min_groups : '') + '" placeholder="—" style="width:100%;font-size:12px;padding:5px 8px;" /></div>' +
+          '<div style="width:120px;align-self:end;display:flex;gap:8px;padding-bottom:6px;">' +
+            '<label style="display:inline-flex;align-items:center;gap:4px;text-transform:none !important;letter-spacing:normal !important;font-weight:400 !important;cursor:pointer;" title="Load only when the estimate is linked to a lead.">' +
+              '<input type="checkbox" data-skill-trig-has-lead="' + idx + '"' + (trigs.has_lead ? ' checked' : '') + ' style="margin:0;" /> has lead</label>' +
+            '<label style="display:inline-flex;align-items:center;gap:4px;text-transform:none !important;letter-spacing:normal !important;font-weight:400 !important;cursor:pointer;" title="Load only when the estimate is linked to a client.">' +
+              '<input type="checkbox" data-skill-trig-has-client="' + idx + '"' + (trigs.has_client ? ' checked' : '') + ' style="margin:0;" /> has client</label>' +
+          '</div>' +
+        '</div>';
         html += '<textarea data-skill-body="' + idx + '" rows="8" style="width:100%;resize:vertical;font-family:\'SF Mono\',monospace;font-size:12px;line-height:1.5;" placeholder="Free-form prompt text. Markdown ok. Refer to subgroups, tools, common scopes, pricing rules.">' + escapeHTML(skill.body || '') + '</textarea>';
         html += '</div>';
       });
@@ -2447,6 +2468,26 @@
         if (v) skill.replaces_section = v;
         else delete skill.replaces_section;
       }
+      var catEl = document.querySelector('[data-skill-category="' + idx + '"]');
+      if (catEl) {
+        var c = catEl.value || '';
+        if (c) skill.category = c;
+        else delete skill.category;
+      }
+      // Triggers — only persist non-empty values so packs without
+      // triggers stay clean in the JSONB blob.
+      var trig = {};
+      var minGroupsEl = document.querySelector('[data-skill-trig-min-groups="' + idx + '"]');
+      if (minGroupsEl && minGroupsEl.value !== '') {
+        var n = Number(minGroupsEl.value);
+        if (isFinite(n) && n >= 0) trig.min_groups = n;
+      }
+      var hasLeadEl = document.querySelector('[data-skill-trig-has-lead="' + idx + '"]');
+      if (hasLeadEl && hasLeadEl.checked) trig.has_lead = true;
+      var hasClientEl = document.querySelector('[data-skill-trig-has-client="' + idx + '"]');
+      if (hasClientEl && hasClientEl.checked) trig.has_client = true;
+      if (Object.keys(trig).length) skill.triggers = trig;
+      else delete skill.triggers;
       var agents = [];
       document.querySelectorAll('[data-skill-agent="' + idx + '"]').forEach(function(el) {
         if (el.checked) agents.push(el.getAttribute('data-agent-key'));
