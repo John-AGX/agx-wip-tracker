@@ -1770,6 +1770,14 @@ router.delete('/estimates/:id/messages',
         'DELETE FROM ai_messages WHERE estimate_id = $1 AND user_id = $2',
         [req.params.id, req.user.id]
       );
+      // Also archive any active v2 session so the next chat turn
+      // starts on a fresh Anthropic-side session — otherwise "Clear
+      // conversation" only wipes our local history while the agent
+      // still has the prior turns in its session context.
+      await archiveActiveAiSession({
+        agentKey: 'ag', entityType: 'estimate',
+        entityId: req.params.id, userId: req.user.id
+      });
       res.json({ ok: true });
     } catch (e) {
       console.error('DELETE history error:', e);
@@ -2249,6 +2257,32 @@ function isStuckSessionError(e) {
 // entity_type, entity_id, user_id) tuple. Caller swaps the active
 // session id and retries. Conversation history is lost (sessions are
 // per-conversation server-side state) but ai_messages stays intact.
+// Archive the active v2 ai_sessions row for one (agent, entity, user)
+// tuple AND archive the Anthropic-side session so the next chat turn
+// creates a fresh session. Called from the DELETE /messages handlers
+// so "Clear conversation" actually starts over instead of leaving the
+// agent with full server-side context the user thought they wiped.
+// Idempotent — no-op if there's no active row.
+async function archiveActiveAiSession({ agentKey, entityType, entityId, userId }) {
+  const row = await pool.query(
+    `SELECT * FROM ai_sessions
+       WHERE agent_key = $1
+         AND entity_type = $2
+         AND COALESCE(entity_id, '') = COALESCE($3, '')
+         AND user_id = $4
+         AND archived_at IS NULL`,
+    [agentKey, entityType, entityId, userId]
+  );
+  if (!row.rows.length) return;
+  const session = row.rows[0];
+  const anthropic = getAnthropic();
+  if (anthropic) {
+    try { await anthropic.beta.sessions.archive(session.anthropic_session_id); }
+    catch (e) { console.warn('Archive of cleared session failed (non-fatal):', e && e.message); }
+  }
+  await pool.query('UPDATE ai_sessions SET archived_at = NOW() WHERE id = $1', [session.id]);
+}
+
 async function recoverStuckSession({ anthropic, sessionRow }) {
   console.warn('[v2-stream] recovering stuck session', sessionRow.anthropic_session_id);
   try { await anthropic.beta.sessions.archive(sessionRow.anthropic_session_id); }
@@ -3134,6 +3168,11 @@ router.delete('/jobs/:id/messages',
         `DELETE FROM ai_messages WHERE entity_type='job' AND estimate_id=$1 AND user_id=$2`,
         [req.params.id, req.user.id]
       );
+      // Also archive Elle's active v2 session so a fresh chat starts.
+      await archiveActiveAiSession({
+        agentKey: 'job', entityType: 'job',
+        entityId: req.params.id, userId: req.user.id
+      });
       res.json({ ok: true });
     } catch (e) {
       console.error('DELETE job history error:', e);
@@ -4289,6 +4328,11 @@ router.delete('/clients/messages',
   async (req, res) => {
     try {
       await pool.query(`DELETE FROM ai_messages WHERE entity_type='client' AND user_id=$1`, [req.user.id]);
+      // Also archive HR's active v2 session.
+      await archiveActiveAiSession({
+        agentKey: 'cra', entityType: 'client',
+        entityId: null, userId: req.user.id
+      });
       res.json({ ok: true });
     } catch (e) {
       res.status(500).json({ error: e.message });
@@ -5546,6 +5590,11 @@ router.delete('/staff/messages',
         `DELETE FROM ai_messages WHERE entity_type='staff' AND user_id=$1`,
         [req.user.id]
       );
+      // Also archive CoS's active v2 session.
+      await archiveActiveAiSession({
+        agentKey: 'staff', entityType: 'staff',
+        entityId: null, userId: req.user.id
+      });
       res.json({ ok: true });
     } catch (e) {
       console.error('DELETE /staff/messages error:', e);

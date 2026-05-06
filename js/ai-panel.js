@@ -127,6 +127,19 @@
   function isClientMode() { return _entityType === 'client'; }
   function isStaffMode() { return _entityType === 'staff'; }
 
+  // History reads + clear always hit the v1 messages paths regardless
+  // of which chat version is active. ai_messages is shared (same DB
+  // rows whether v1 or v2 produced them), so there's no /v2/.../messages
+  // route — re-using v1 avoids a duplicate route per agent and means
+  // closing + reopening a job's chat panel always loads the prior
+  // conversation, even when AGX_AGENT_MODE_JOB=agents.
+  function messagesApiBase() {
+    if (_entityType === 'job') return '/api/ai/jobs/' + encodeURIComponent(_entityId);
+    if (_entityType === 'client') return '/api/ai/clients';
+    if (_entityType === 'staff') return '/api/ai/staff';
+    return '/api/ai/estimates/' + encodeURIComponent(_entityId);
+  }
+
   // ── Elle (job-mode) Plan/Build phase ───────────────────────────────
   // Per-job, per-user state stored in localStorage. Default = 'plan' so
   // Elle starts as an analyst (no surprise mutations) — the PM grants
@@ -1121,7 +1134,7 @@
     if (!_entityId || !window.agxApi) return;
     var box = document.getElementById('ai-messages');
     if (box) box.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;">Loading…</div>';
-    fetch(apiBase() + '/messages', {
+    fetch(messagesApiBase() + '/messages', {
       headers: authHeaders()
     }).then(function(r) { return r.json(); }).then(function(res) {
       _messages = res.messages || [];
@@ -1144,7 +1157,7 @@
       : Promise.resolve(window.confirm('Clear this conversation?'));
     go.then(function(ok) {
       if (!ok) return;
-      fetch(apiBase() + '/messages', {
+      fetch(messagesApiBase() + '/messages', {
         method: 'DELETE',
         headers: authHeaders()
       }).then(function() {
