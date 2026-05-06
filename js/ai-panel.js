@@ -522,7 +522,27 @@
       }
     });
     if (inList) out.push(inList === 'ul' ? '</ul>' : '</ol>');
-    return out.join('');
+    var rendered = out.join('');
+    // Auto-linkify bare URLs. Runs LAST so it doesn't re-wrap URLs the
+    // model emitted as markdown links (which we don't currently parse
+    // — future enhancement). Conservative regex: requires http(s)://
+    // and stops at whitespace, closing punctuation, or angle bracket.
+    // The negative lookbehind avoids re-wrapping anything already
+    // inside an href= attribute (defensive — at this point our html
+    // doesn't contain anchors yet, but cheap insurance).
+    rendered = rendered.replace(
+      /(^|[\s>("])((?:https?:\/\/)[^\s<>")]+)/g,
+      function(_, prefix, url) {
+        // Strip a single trailing punctuation char so "see https://x.com." renders cleanly.
+        var trail = '';
+        var m = url.match(/^(.*?)([.,;:!?)\]]+)$/);
+        if (m) { url = m[1]; trail = m[2]; }
+        return prefix +
+          '<a href="' + url + '" target="_blank" rel="noopener" style="color:#4f8cff;text-decoration:underline;">' +
+          url + '</a>' + trail;
+      }
+    );
+    return rendered;
   }
 
   // ──────────────────────────────────────────────────────────────────
@@ -1473,8 +1493,8 @@
         // Restore the manual buttons in the same shape renderProposalCard
         // emits, so the visual treatment stays consistent after cancel.
         actionsRow.innerHTML =
-          '<button data-card-approve class="success small" style="padding:5px 14px;font-size:11px;font-weight:600;">&check; Approve</button>' +
-          '<button data-card-reject class="ghost small" style="padding:5px 14px;font-size:11px;">&times; Reject</button>';
+          '<button data-card-approve class="success small" style="padding:3px 12px;font-size:11px;font-weight:600;">&check; Approve</button>' +
+          '<button data-card-reject class="ghost small" style="padding:3px 12px;font-size:11px;">&times; Reject</button>';
         actionsRow.querySelector('[data-card-approve]').onclick = function() { answer(idx, true, card); };
         actionsRow.querySelector('[data-card-reject]').onclick = function() { answer(idx, false, card); };
       };
@@ -3059,7 +3079,11 @@
     // Restyled to match the newer admin look (Prompt Preview / Anthropic
     // resources / Batch detail): tinted bg + matching thin border +
     // accent left strip colored by action kind (add/edit/remove/flow).
-    card.style.cssText = 'background:' + chrome.tint + ';border:1px solid ' + chrome.border + ';border-left:3px solid ' + chrome.accent + ';border-radius:8px;padding:12px 14px;width:100%;box-sizing:border-box;min-width:0;';
+    // Tightened from 12/14 padding to 8/10 + 6px radius so the card
+    // reads as compact admin chrome, not a hero panel. The detail
+    // block below caps at 220px with vertical scroll so a long
+    // rationale or scope_text doesn't blow out the chat lane.
+    card.style.cssText = 'background:' + chrome.tint + ';border:1px solid ' + chrome.border + ';border-left:3px solid ' + chrome.accent + ';border-radius:6px;padding:8px 10px;width:100%;box-sizing:border-box;min-width:0;';
 
     var heading = '';
     var detail = '';
@@ -3362,36 +3386,40 @@
     }
 
     var rationale = input.rationale
-      ? '<div style="font-size:11px;color:var(--text-dim,#aaa);margin-top:10px;padding:8px 10px;background:rgba(0,0,0,0.18);border-radius:5px;line-height:1.45;">' +
+      ? '<div style="font-size:11px;color:var(--text-dim,#aaa);margin-top:6px;padding:6px 8px;background:rgba(0,0,0,0.18);border-radius:4px;line-height:1.4;">' +
           '<span style="display:inline-block;font-size:9px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.6px;margin-right:6px;">Why</span>' +
           escapeHTMLLocal(input.rationale) +
         '</div>'
       : '';
 
-    // Header: action label + tool-name pill + status slot. Status starts
-    // empty; markCardDone fills it with an Approved/Rejected pill.
+    // Single-row header: action label + tool name + status pill, all in
+    // one flex line so cards stay tight. The detail block below caps
+    // at 220px with overflow-y so a long scope / rationale scrolls
+    // inside the card instead of stretching it.
     // Keeping `data-card-status` and `data-card-actions` so existing
     // wiring + auto-apply countdown logic in the answer/timer flows
     // continue to work without changes.
     var toolPill =
-      '<span style="display:inline-block;padding:2px 7px;border-radius:9px;background:rgba(255,255,255,0.05);color:var(--text-dim,#888);font-family:\'SF Mono\',Menlo,monospace;font-size:10px;letter-spacing:0.2px;">' +
+      '<span style="display:inline-block;padding:1px 6px;border-radius:8px;background:rgba(255,255,255,0.05);color:var(--text-dim,#888);font-family:\'SF Mono\',Menlo,monospace;font-size:9px;letter-spacing:0.2px;white-space:nowrap;">' +
         escapeHTMLLocal(tu.name || '') +
       '</span>';
     var proposedPill =
-      '<span style="display:inline-block;padding:2px 8px;border-radius:9px;background:' + chrome.tint + ';color:' + chrome.accent + ';font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;border:1px solid ' + chrome.border + ';">Proposed</span>';
+      '<span style="display:inline-block;padding:1px 7px;border-radius:8px;background:' + chrome.tint + ';color:' + chrome.accent + ';font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;border:1px solid ' + chrome.border + ';white-space:nowrap;">Proposed</span>';
 
     card.innerHTML =
-      '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">' +
-        '<div style="font-size:13px;font-weight:600;color:var(--text,#fff);flex:1;line-height:1.3;">' + heading + '</div>' +
+      '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;flex-wrap:wrap;">' +
+        '<div style="font-size:12px;font-weight:600;color:var(--text,#fff);flex:1;min-width:0;line-height:1.25;">' + heading + '</div>' +
         proposedPill +
+        toolPill +
         '<div data-card-status style="font-size:10px;font-weight:600;"></div>' +
       '</div>' +
-      '<div style="margin-bottom:6px;">' + toolPill + '</div>' +
-      '<div>' + detail + '</div>' +
-      rationale +
-      '<div data-card-actions style="display:flex;gap:8px;margin-top:12px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.06);">' +
-        '<button data-card-approve class="success small" style="padding:5px 14px;font-size:11px;font-weight:600;">&check; Approve</button>' +
-        '<button data-card-reject class="ghost small" style="padding:5px 14px;font-size:11px;">&times; Reject</button>' +
+      '<div style="max-height:220px;overflow-y:auto;overflow-x:hidden;padding-right:2px;">' +
+        detail +
+        rationale +
+      '</div>' +
+      '<div data-card-actions style="display:flex;gap:6px;margin-top:8px;padding-top:6px;border-top:1px solid rgba(255,255,255,0.06);">' +
+        '<button data-card-approve class="success small" style="padding:3px 12px;font-size:11px;font-weight:600;">&check; Approve</button>' +
+        '<button data-card-reject class="ghost small" style="padding:3px 12px;font-size:11px;">&times; Reject</button>' +
       '</div>';
 
     return card;
