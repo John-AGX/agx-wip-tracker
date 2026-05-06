@@ -318,6 +318,16 @@ async function initSchema() {
     -- populate from the streamed turn.
     ALTER TABLE ai_messages ADD COLUMN IF NOT EXISTS tool_use_count INTEGER DEFAULT 0;
 
+    -- Prompt-cache breakdown from Anthropic's streaming usage object.
+    -- cache_creation_input_tokens = tokens that were *added* to the cache
+    -- this turn (5-min ephemeral TTL). cache_read_input_tokens = tokens
+    -- that were served *from* the cache (10% of normal input cost).
+    -- input_tokens already excludes the cache_read amount, so the full
+    -- input footprint is input_tokens + cache_read_input_tokens. Lets
+    -- the Admin Agents page show cache hit % per turn / per agent.
+    ALTER TABLE ai_messages ADD COLUMN IF NOT EXISTS cache_creation_input_tokens INTEGER;
+    ALTER TABLE ai_messages ADD COLUMN IF NOT EXISTS cache_read_input_tokens INTEGER;
+
     -- Materials catalog — AGX's purchase history (Home Depot to start;
     -- vendor column makes Lowe's / Sherwin Williams / etc. a config
     -- addition later, not a schema change). One row per unique

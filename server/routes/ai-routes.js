@@ -1749,9 +1749,13 @@ async function runStream({ anthropic, res, system, messages, persistAssistantTex
 async function saveAssistantMessage({ estimateId, userId, text, usage }) {
   const id = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
   await pool.query(
-    `INSERT INTO ai_messages (id, estimate_id, user_id, role, content, model, input_tokens, output_tokens)
-     VALUES ($1, $2, $3, 'assistant', $4, $5, $6, $7)`,
-    [id, estimateId, userId, text, MODEL, usage.input_tokens, usage.output_tokens]
+    `INSERT INTO ai_messages (id, estimate_id, user_id, role, content, model,
+                              input_tokens, output_tokens,
+                              cache_creation_input_tokens, cache_read_input_tokens)
+     VALUES ($1, $2, $3, 'assistant', $4, $5, $6, $7, $8, $9)`,
+    [id, estimateId, userId, text, MODEL,
+     usage.input_tokens, usage.output_tokens,
+     usage.cache_creation_input_tokens || null, usage.cache_read_input_tokens || null]
   );
 }
 
@@ -2511,9 +2515,13 @@ router.post('/jobs/:id/chat',
           if (!text) return;
           const aid = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
           await pool.query(
-            `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content, model, input_tokens, output_tokens)
-             VALUES ($1, 'job', $2, $3, 'assistant', $4, $5, $6, $7)`,
-            [aid, jobId, req.user.id, text, MODEL, usage.input_tokens, usage.output_tokens]
+            `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content, model,
+                                      input_tokens, output_tokens,
+                                      cache_creation_input_tokens, cache_read_input_tokens)
+             VALUES ($1, 'job', $2, $3, 'assistant', $4, $5, $6, $7, $8, $9)`,
+            [aid, jobId, req.user.id, text, MODEL,
+             usage.input_tokens, usage.output_tokens,
+             usage.cache_creation_input_tokens || null, usage.cache_read_input_tokens || null]
           );
         }
       });
@@ -2582,9 +2590,13 @@ router.post('/jobs/:id/chat/continue',
           if (!text) return;
           const aid = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
           await pool.query(
-            `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content, model, input_tokens, output_tokens)
-             VALUES ($1, 'job', $2, $3, 'assistant', $4, $5, $6, $7)`,
-            [aid, jobId, req.user.id, text, MODEL, usage.input_tokens, usage.output_tokens]
+            `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content, model,
+                                      input_tokens, output_tokens,
+                                      cache_creation_input_tokens, cache_read_input_tokens)
+             VALUES ($1, 'job', $2, $3, 'assistant', $4, $5, $6, $7, $8, $9)`,
+            [aid, jobId, req.user.id, text, MODEL,
+             usage.input_tokens, usage.output_tokens,
+             usage.cache_creation_input_tokens || null, usage.cache_read_input_tokens || null]
           );
         }
       });
@@ -3422,9 +3434,13 @@ async function buildClientDirectoryContext() {
 async function saveClientAssistantMessage({ userId, text, usage }) {
   const id = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
   await pool.query(
-    `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content, model, input_tokens, output_tokens)
-     VALUES ($1, 'client', 'global', $2, 'assistant', $3, $4, $5, $6)`,
-    [id, userId, text, MODEL, usage.input_tokens, usage.output_tokens]
+    `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content, model,
+                              input_tokens, output_tokens,
+                              cache_creation_input_tokens, cache_read_input_tokens)
+     VALUES ($1, 'client', 'global', $2, 'assistant', $3, $4, $5, $6, $7, $8)`,
+    [id, userId, text, MODEL,
+     usage.input_tokens, usage.output_tokens,
+     usage.cache_creation_input_tokens || null, usage.cache_read_input_tokens || null]
   );
 }
 
@@ -3557,7 +3573,7 @@ router.post('/clients/chat',
         { role: 'user', content: userContent }
       ];
 
-      let totalUsage = { input_tokens: 0, output_tokens: 0 };
+      let totalUsage = { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 };
       let finalAssistantText = '';
 
       for (let loop = 0; loop < MAX_CLIENT_TOOL_LOOPS; loop++) {
@@ -3572,6 +3588,8 @@ router.post('/clients/chat',
         finalAssistantText = turn.assistantText;
         if (turn.usage.input_tokens) totalUsage.input_tokens += turn.usage.input_tokens;
         if (turn.usage.output_tokens) totalUsage.output_tokens += turn.usage.output_tokens;
+        if (turn.usage.cache_creation_input_tokens) totalUsage.cache_creation_input_tokens += turn.usage.cache_creation_input_tokens;
+        if (turn.usage.cache_read_input_tokens) totalUsage.cache_read_input_tokens += turn.usage.cache_read_input_tokens;
 
         if (!turn.toolUseBlocks.length) {
           // No more tool use — done.
@@ -3698,7 +3716,7 @@ router.post('/clients/chat/continue',
         { role: 'user', content: toolResultBlocks }
       ];
 
-      let totalUsage = { input_tokens: 0, output_tokens: 0 };
+      let totalUsage = { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 };
       let finalAssistantText = '';
       for (let loop = 0; loop < MAX_CLIENT_TOOL_LOOPS; loop++) {
         const ctx = await buildClientDirectoryContext();
@@ -3706,6 +3724,8 @@ router.post('/clients/chat/continue',
         finalAssistantText = turn.assistantText;
         if (turn.usage.input_tokens) totalUsage.input_tokens += turn.usage.input_tokens;
         if (turn.usage.output_tokens) totalUsage.output_tokens += turn.usage.output_tokens;
+        if (turn.usage.cache_creation_input_tokens) totalUsage.cache_creation_input_tokens += turn.usage.cache_creation_input_tokens;
+        if (turn.usage.cache_read_input_tokens) totalUsage.cache_read_input_tokens += turn.usage.cache_read_input_tokens;
 
         if (!turn.toolUseBlocks.length) {
           if (finalAssistantText) {
@@ -4795,7 +4815,7 @@ router.post('/staff/chat',
         { role: 'user', content: userMessage }
       ];
 
-      let totalUsage = { input_tokens: 0, output_tokens: 0 };
+      let totalUsage = { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 };
       let finalAssistantText = '';
 
       for (let loop = 0; loop < MAX_STAFF_TOOL_LOOPS; loop++) {
@@ -4804,14 +4824,20 @@ router.post('/staff/chat',
         finalAssistantText = turn.assistantText;
         if (turn.usage.input_tokens) totalUsage.input_tokens += turn.usage.input_tokens;
         if (turn.usage.output_tokens) totalUsage.output_tokens += turn.usage.output_tokens;
+        if (turn.usage.cache_creation_input_tokens) totalUsage.cache_creation_input_tokens += turn.usage.cache_creation_input_tokens;
+        if (turn.usage.cache_read_input_tokens) totalUsage.cache_read_input_tokens += turn.usage.cache_read_input_tokens;
 
         if (!turn.toolUseBlocks.length) {
           if (finalAssistantText) {
             const aMsgId = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
             await pool.query(
-              `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content, model, input_tokens, output_tokens)
-               VALUES ($1, 'staff', 'global', $2, 'assistant', $3, $4, $5, $6)`,
-              [aMsgId, req.user.id, finalAssistantText, MODEL, totalUsage.input_tokens, totalUsage.output_tokens]
+              `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content, model,
+                                        input_tokens, output_tokens,
+                                        cache_creation_input_tokens, cache_read_input_tokens)
+               VALUES ($1, 'staff', 'global', $2, 'assistant', $3, $4, $5, $6, $7, $8)`,
+              [aMsgId, req.user.id, finalAssistantText, MODEL,
+               totalUsage.input_tokens, totalUsage.output_tokens,
+               totalUsage.cache_creation_input_tokens || null, totalUsage.cache_read_input_tokens || null]
             );
           }
           res.write('data: ' + JSON.stringify({ done: true, usage: totalUsage }) + '\n\n');
@@ -4965,7 +4991,7 @@ router.post('/staff/chat/continue',
 
       // Resume the same loop the initial /staff/chat handler runs so
       // the model can chain follow-up reads after a successful edit.
-      let totalUsage = { input_tokens: 0, output_tokens: 0 };
+      let totalUsage = { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 };
       let finalAssistantText = '';
       for (let loop = 0; loop < MAX_STAFF_TOOL_LOOPS; loop++) {
         const ctx = await buildStaffContext();
@@ -4973,6 +4999,8 @@ router.post('/staff/chat/continue',
         finalAssistantText = turn.assistantText;
         if (turn.usage.input_tokens) totalUsage.input_tokens += turn.usage.input_tokens;
         if (turn.usage.output_tokens) totalUsage.output_tokens += turn.usage.output_tokens;
+        if (turn.usage.cache_creation_input_tokens) totalUsage.cache_creation_input_tokens += turn.usage.cache_creation_input_tokens;
+        if (turn.usage.cache_read_input_tokens) totalUsage.cache_read_input_tokens += turn.usage.cache_read_input_tokens;
 
         if (!turn.toolUseBlocks.length) {
           // Fallback synthesis: if the model returned no text after a
@@ -4986,9 +5014,13 @@ router.post('/staff/chat/continue',
           if (finalAssistantText) {
             const aMsgId = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
             await pool.query(
-              `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content, model, input_tokens, output_tokens)
-               VALUES ($1, 'staff', 'global', $2, 'assistant', $3, $4, $5, $6)`,
-              [aMsgId, req.user.id, finalAssistantText, MODEL, totalUsage.input_tokens, totalUsage.output_tokens]
+              `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content, model,
+                                        input_tokens, output_tokens,
+                                        cache_creation_input_tokens, cache_read_input_tokens)
+               VALUES ($1, 'staff', 'global', $2, 'assistant', $3, $4, $5, $6, $7, $8)`,
+              [aMsgId, req.user.id, finalAssistantText, MODEL,
+               totalUsage.input_tokens, totalUsage.output_tokens,
+               totalUsage.cache_creation_input_tokens || null, totalUsage.cache_read_input_tokens || null]
             );
             // Stream the synthesized fallback as a delta so the panel
             // displays it instead of the empty turn.

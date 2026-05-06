@@ -291,6 +291,7 @@ router.get('/conversations/:key', requireAuth, requireCapability('ROLES_MANAGE')
 
     const r = await pool.query(
       `SELECT id, role, content, model, input_tokens, output_tokens,
+              cache_creation_input_tokens, cache_read_input_tokens,
               tool_use_count, photos_included, created_at
          FROM ai_messages
         WHERE entity_type = $1 AND estimate_id = $2 AND user_id = $3
@@ -310,6 +311,8 @@ router.get('/conversations/:key', requireAuth, requireCapability('ROLES_MANAGE')
         model: m.model,
         input_tokens: m.input_tokens,
         output_tokens: m.output_tokens,
+        cache_creation_input_tokens: m.cache_creation_input_tokens,
+        cache_read_input_tokens: m.cache_read_input_tokens,
         tool_use_count: m.tool_use_count,
         photos_included: m.photos_included,
         created_at: m.created_at

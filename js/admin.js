@@ -3245,6 +3245,17 @@
     if (m.model)            meta.push(m.model);
     if (m.input_tokens)     meta.push('in ' + tokFmt(m.input_tokens));
     if (m.output_tokens)    meta.push('out ' + tokFmt(m.output_tokens));
+    // Cache breakdown — surface hit % so admins see whether the
+    // ephemeral cache is paying off. Anthropic returns input_tokens
+    // EXCLUSIVE of cache_read, so the full input footprint is
+    // input_tokens + cache_read_input_tokens. Hit % = read / total input.
+    if (m.cache_read_input_tokens || m.cache_creation_input_tokens) {
+      var read = Number(m.cache_read_input_tokens || 0);
+      var write = Number(m.cache_creation_input_tokens || 0);
+      var fullInput = Number(m.input_tokens || 0) + read;
+      var hitPct = fullInput > 0 ? Math.round((read / fullInput) * 100) : 0;
+      meta.push('cache ' + hitPct + '% hit (' + tokFmt(read) + ' read' + (write ? ', ' + tokFmt(write) + ' written' : '') + ')');
+    }
     if (m.tool_use_count)   meta.push(m.tool_use_count + ' tools');
     if (m.photos_included)  meta.push(m.photos_included + ' photos');
     var content = m.content || '';
