@@ -2239,6 +2239,10 @@ async function runV2SessionStream({ anthropic, res, sessionId, eventsToSend, per
   let assistantText = '';
   const pendingToolUses = [];
   let usage = { input_tokens: null, output_tokens: null };
+  // Diagnostic — counts each event type we see in this turn so a
+  // failed/empty turn is debuggable from Railway logs without per-
+  // request stack traces. Logged once at end-of-stream.
+  const eventCounts = {};
 
   let stream;
   try {
@@ -2246,6 +2250,7 @@ async function runV2SessionStream({ anthropic, res, sessionId, eventsToSend, per
     // sessions.stream — the latter is undefined and silently returns
     // nothing (which surfaces as a "(no response)" empty turn).
     stream = await anthropic.beta.sessions.events.stream(sessionId);
+    console.log('[v2-stream] opened', sessionId);
   } catch (e) {
     console.error('Session stream open failed:', e);
     send({ error: e.message || 'Failed to open session stream' });
@@ -2258,6 +2263,7 @@ async function runV2SessionStream({ anthropic, res, sessionId, eventsToSend, per
   if (Array.isArray(eventsToSend) && eventsToSend.length) {
     try {
       await anthropic.beta.sessions.events.send(sessionId, { events: eventsToSend });
+      console.log('[v2-stream] sent', eventsToSend.length, 'event(s) to', sessionId);
     } catch (e) {
       console.error('Session events.send failed:', e);
       send({ error: e.message || 'Failed to send session events' });
@@ -2268,6 +2274,7 @@ async function runV2SessionStream({ anthropic, res, sessionId, eventsToSend, per
 
   try {
     for await (const event of stream) {
+      eventCounts[event.type] = (eventCounts[event.type] || 0) + 1;
       switch (event.type) {
         case 'agent.message': {
           // The session's agent.message arrives as a list of content
@@ -2362,6 +2369,10 @@ async function runV2SessionStream({ anthropic, res, sessionId, eventsToSend, per
           // again on /chat/continue), but we use the stop_reason to
           // pick the SSE shape: tool-use awaiting vs. final done.
           const stopType = event.stop_reason && event.stop_reason.type;
+          console.log('[v2-stream] idle', sessionId, 'stop_reason:', stopType,
+            'pendingTools:', pendingToolUses.length,
+            'assistantTextLen:', assistantText.length,
+            'events seen:', JSON.stringify(eventCounts));
           if (pendingToolUses.length || stopType === 'requires_action') {
             for (const tu of pendingToolUses) {
               send({ tool_use: tu });
