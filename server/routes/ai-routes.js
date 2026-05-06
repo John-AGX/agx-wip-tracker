@@ -2516,9 +2516,15 @@ router.post('/v2/estimates/:id/chat',
       // dynamic context (estimate snapshot, lines, scope, photos
       // metadata) goes inside the user message wrapped in
       // <turn_context>. Images precede the text block per Anthropic
-      // guidance.
+      // guidance. Plan/build phase is also surfaced here as a soft
+      // guard — v1 hard-filters edit tools out of the request, but
+      // v2 registers all tools at agent-create time, so we steer with
+      // a strict instruction instead.
+      const phaseGuard = ctx.aiPhase === 'plan'
+        ? '<turn_phase>plan</turn_phase>\n[STRICT] You are in PLAN mode. Do NOT call any propose_* tool that mutates the estimate (line items, scope, sections, groups, links). You may only call read_* tools and answer in text. If the user asks for a change, describe what you would propose and tell them to switch to Build mode first.\n\n'
+        : '<turn_phase>build</turn_phase>\n';
       const turnText =
-        '<turn_context>\n' + ctxSystemToText(ctx.system) + '\n</turn_context>\n\n' + userMessage;
+        '<turn_context>\n' + ctxSystemToText(ctx.system) + '\n</turn_context>\n\n' + phaseGuard + userMessage;
       const userContent = cappedImages.length
         ? [...cappedImages, { type: 'text', text: turnText }]
         : [{ type: 'text', text: turnText }];
@@ -2542,6 +2548,7 @@ router.post('/v2/estimates/:id/chat',
         anthropic, res,
         session: session,
         eventsToSend: [{ type: 'user.message', content: userContent }],
+        onCustomToolUse: makeAgOnCustomToolUse(),
         persistAssistantText: async (text, usage) => {
           await saveAssistantMessage({ estimateId, userId: req.user.id, text, usage, packsLoaded: ctx.packsLoaded });
         }
@@ -2611,6 +2618,7 @@ router.post('/v2/estimates/:id/chat/continue',
         anthropic, res,
         session: session,
         eventsToSend,
+        onCustomToolUse: makeAgOnCustomToolUse(),
         persistAssistantText: async (text, usage) => {
           await saveAssistantMessage({ estimateId, userId: req.user.id, text, usage, packsLoaded: ctx.packsLoaded });
         }
@@ -5890,6 +5898,28 @@ function makeClientOnCustomToolUse(userId) {
 function makeStaffOnCustomToolUse() {
   return async function (tu) {
     if (!isStaffToolAutoTier(tu.name)) return { tier: 'approval' };
+    try {
+      const summary = await execStaffTool(tu.name, tu.input || {});
+      return { tier: 'auto', summary };
+    } catch (e) {
+      return { tier: 'auto', error: 'Error: ' + (e.message || 'failed') };
+    }
+  };
+}
+
+// AG auto-execute hook — runs the same read tools the v1 client
+// auto-fires through /api/ai/exec-tool, but server-side here so the
+// session resumes mid-stream without an extra client round-trip
+// (was the source of "AG isn't actually performing the task" — every
+// read paused for an approval-card flash + extra HTTP turn).
+//
+// AG's allowed auto-tier set (ALLOWED_AG_AUTO_TOOLS) is a strict
+// subset of execStaffTool's switch cases, so we reuse the same
+// executor instead of duplicating the read logic. Approval-tier
+// tools (propose_*) drop through to the UI exactly like before.
+function makeAgOnCustomToolUse() {
+  return async function (tu) {
+    if (!ALLOWED_AG_AUTO_TOOLS.has(tu.name)) return { tier: 'approval' };
     try {
       const summary = await execStaffTool(tu.name, tu.input || {});
       return { tier: 'auto', summary };
