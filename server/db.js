@@ -328,6 +328,15 @@ async function initSchema() {
     ALTER TABLE ai_messages ADD COLUMN IF NOT EXISTS cache_creation_input_tokens INTEGER;
     ALTER TABLE ai_messages ADD COLUMN IF NOT EXISTS cache_read_input_tokens INTEGER;
 
+    -- Names of skill packs that loaded into the agent's system prompt
+    -- this turn. Stored as JSONB array of strings (e.g. ["AGX Group
+    -- Discipline", "AGX Pricing Benchmark Loop"]). Lets admins see
+    -- which packs are actually firing per turn (some packs are
+    -- conditionally loaded via triggers, so the count varies).
+    -- Section overrides (replaces_section packs) NOT counted here —
+    -- they substitute for hardcoded blocks rather than appending.
+    ALTER TABLE ai_messages ADD COLUMN IF NOT EXISTS packs_loaded JSONB;
+
     -- Materials catalog — AGX's purchase history (Home Depot to start;
     -- vendor column makes Lowe's / Sherwin Williams / etc. a config
     -- addition later, not a schema change). One row per unique

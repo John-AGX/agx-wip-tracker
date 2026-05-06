@@ -3325,6 +3325,11 @@
     }
     if (m.tool_use_count)   meta.push(m.tool_use_count + ' tools');
     if (m.photos_included)  meta.push(m.photos_included + ' photos');
+    // Loaded skill packs — surfaces conditional/triggered loading and
+    // helps spot packs that never fire.
+    if (Array.isArray(m.packs_loaded) && m.packs_loaded.length) {
+      meta.push(m.packs_loaded.length + ' pack' + (m.packs_loaded.length === 1 ? '' : 's') + ': ' + m.packs_loaded.join(', '));
+    }
     var content = m.content || '';
     // Detect the JSON-array form used by tool-use turns. Render those
     // as an indented block so the structure is visible.

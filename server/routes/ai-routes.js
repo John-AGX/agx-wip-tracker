@@ -1439,7 +1439,8 @@ async function buildEstimateContext(estimateId, includePhotos) {
       { type: 'text', text: '\n\n# Current estimate context (refreshed each turn)\n\n' + lines.join('\n') }
     ],
     photoBlocks: photoBlocks,
-    aiPhase: aiPhase
+    aiPhase: aiPhase,
+    packsLoaded: skillBlocks.map(s => s.name)
   };
 }
 
@@ -1905,16 +1906,19 @@ async function runStream({ anthropic, res, system, messages, persistAssistantTex
 
 // Persist a final assistant text response. Used as the callback on the
 // run helper so persistence stays inside this module.
-async function saveAssistantMessage({ estimateId, userId, text, usage }) {
+async function saveAssistantMessage({ estimateId, userId, text, usage, packsLoaded }) {
   const id = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+  const packsJson = (Array.isArray(packsLoaded) && packsLoaded.length) ? JSON.stringify(packsLoaded) : null;
   await pool.query(
     `INSERT INTO ai_messages (id, estimate_id, user_id, role, content, model,
                               input_tokens, output_tokens,
-                              cache_creation_input_tokens, cache_read_input_tokens)
-     VALUES ($1, $2, $3, 'assistant', $4, $5, $6, $7, $8, $9)`,
+                              cache_creation_input_tokens, cache_read_input_tokens,
+                              packs_loaded)
+     VALUES ($1, $2, $3, 'assistant', $4, $5, $6, $7, $8, $9, $10::jsonb)`,
     [id, estimateId, userId, text, MODEL,
      usage.input_tokens, usage.output_tokens,
-     usage.cache_creation_input_tokens || null, usage.cache_read_input_tokens || null]
+     usage.cache_creation_input_tokens || null, usage.cache_read_input_tokens || null,
+     packsJson]
   );
 }
 
@@ -2002,7 +2006,7 @@ router.post('/estimates/:id/chat',
         tools: filterToolsForPhase(ESTIMATE_TOOLS, ctx.aiPhase),
         messages: messages,
         persistAssistantText: async (text, usage) => {
-          await saveAssistantMessage({ estimateId, userId: req.user.id, text, usage });
+          await saveAssistantMessage({ estimateId, userId: req.user.id, text, usage, packsLoaded: ctx.packsLoaded });
         }
       });
     } catch (e) {
@@ -2087,7 +2091,7 @@ router.post('/estimates/:id/chat/continue',
         tools: filterToolsForPhase(ESTIMATE_TOOLS, ctx.aiPhase),
         messages: messages,
         persistAssistantText: async (text, usage) => {
-          await saveAssistantMessage({ estimateId, userId: req.user.id, text, usage });
+          await saveAssistantMessage({ estimateId, userId: req.user.id, text, usage, packsLoaded: ctx.packsLoaded });
         }
       });
     } catch (e) {
@@ -2571,7 +2575,12 @@ async function buildJobContext(jobId, clientContext, aiPhase) {
 
   // Job side stays plain — single string. Lower volume than AG/HR so
   // the marginal caching benefit isn't worth the structural complexity.
-  return { system: lines.join('\n'), photoBlocks: [], aiPhase: aiPhase };
+  return {
+    system: lines.join('\n'),
+    photoBlocks: [],
+    aiPhase: aiPhase,
+    packsLoaded: elleSkills.map(s => s.name)
+  };
 }
 
 // History endpoints scoped by entity_type='job'
@@ -3512,7 +3521,8 @@ async function buildClientDirectoryContext() {
       { type: 'text', text: stable.join('\n'), cache_control: { type: 'ephemeral' } },
       { type: 'text', text: '\n\n' + out.join('\n') }
     ],
-    totalClients: rows.length
+    totalClients: rows.length,
+    packsLoaded: craSkills.map(s => s.name)
   };
 }
 
