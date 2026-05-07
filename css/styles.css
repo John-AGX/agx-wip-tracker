@@ -235,13 +235,26 @@
         .header-brand {
             display: flex;
             align-items: center;
+            gap: 10px;
             text-decoration: none;
             flex: 0 0 auto;
         }
         .header-logo {
-            height: 26px;
+            height: 34px;
             width: auto;
             display: block;
+        }
+        /* Wordmark next to the hex icon. Matches the lockup's
+           Inter ultra-light + tracked-out caps so the header reads
+           as the same brand surface as the login page. */
+        .header-wordmark {
+            font-family: Inter, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+            font-weight: 200;
+            font-size: 16px;
+            letter-spacing: 2.5px;
+            color: #F8FAFC;
+            white-space: nowrap;
+            user-select: none;
         }
 
         /* Right cluster — pushes to the far right via flex auto-margin. */
