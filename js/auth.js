@@ -85,21 +85,50 @@
     return 'wip';
   }
 
+  // First letter of the first word + first letter of the last word
+  // of a person's name, uppercased. Single-word names → first two
+  // letters. Falls back to '?' on empty input.
+  function computeInitials(name) {
+    var s = String(name || '').trim();
+    if (!s) return '?';
+    var parts = s.split(/\s+/);
+    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+  }
+
   function updateUserMenu() {
+    // Hidden span / role-pill kept around for downstream code that
+    // still reads them; they live in the DOM with [hidden] but
+    // textContent updates so any consumer query still works.
     var nameEl = document.getElementById('user-name');
     var roleEl = document.getElementById('user-role-badge');
+    var avatar = document.getElementById('user-avatar');
+    var avatarName = document.getElementById('avatar-menu-name');
+    var avatarRole = document.getElementById('avatar-menu-role');
+
+    var name, role, roleLabel;
     if (isOffline) {
-      nameEl.textContent = 'Offline Mode';
-      roleEl.textContent = 'local';
-      roleEl.style.background = 'rgba(251,191,36,0.2)';
-      roleEl.style.color = '#fbbf24';
+      name = 'Offline Mode';
+      role = 'local';
+      roleLabel = 'LOCAL';
     } else if (currentUser) {
-      nameEl.textContent = currentUser.name;
-      roleEl.textContent = currentUser.role;
-      var colors = { admin: '#34d399', corporate: '#4f8cff', pm: '#fbbf24' };
-      roleEl.style.color = colors[currentUser.role] || '#8b90a5';
-      roleEl.style.background = 'rgba(255,255,255,0.1)';
+      name = currentUser.name;
+      role = currentUser.role;
+      roleLabel = (role || '').toUpperCase();
+    } else {
+      name = '';
+      role = '';
+      roleLabel = '';
     }
+
+    if (nameEl) nameEl.textContent = name;
+    if (roleEl) roleEl.textContent = role;
+    if (avatar) {
+      avatar.textContent = computeInitials(name);
+      avatar.setAttribute('title', name + (roleLabel ? ' · ' + roleLabel : ''));
+    }
+    if (avatarName) avatarName.textContent = name || '—';
+    if (avatarRole) avatarRole.textContent = roleLabel || '—';
     applyRoleVisibility();
   }
 

@@ -284,6 +284,193 @@
             border-color: rgba(255, 255, 255, 0.25);
         }
 
+        /* Right-cluster icon buttons (bell, theme toggle) — circular,
+           transparent at rest, subtle fill on hover. Sized to match
+           the avatar so all three sit on the same baseline. */
+        .header-icon-btn {
+            position: relative;
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: transparent;
+            border: 1px solid transparent;
+            color: rgba(255, 255, 255, 0.85);
+            font-size: 16px;
+            line-height: 1;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0;
+            transition: background 0.12s, border-color 0.12s;
+        }
+        .header-icon-btn:hover {
+            background: rgba(255, 255, 255, 0.12);
+            border-color: rgba(255, 255, 255, 0.18);
+        }
+        /* Red dot on the bell — only visible when count > 0. JS sets
+           data-count and toggles the .has-notifs flag on the parent
+           button. CSS shows the dot accordingly. */
+        .header-notif-dot {
+            position: absolute;
+            top: 4px;
+            right: 4px;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #ef4444;
+            box-shadow: 0 0 0 2px var(--header-bg, #1a1a2e);
+            display: none;
+        }
+        .header-icon-btn.has-notifs .header-notif-dot { display: block; }
+
+        /* Initials avatar — the new identity surface. Two letters,
+           accent fill, fixed size. Click toggles #user-avatar-menu. */
+        .header-avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            border: 1px solid rgba(255, 255, 255, 0.18);
+            background: linear-gradient(135deg, #f4a261 0%, #e76f51 100%);
+            color: #fff;
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 0.3px;
+            cursor: pointer;
+            text-transform: uppercase;
+            line-height: 1;
+            padding: 0;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            transition: filter 0.12s, transform 0.12s;
+        }
+        .header-avatar:hover { filter: brightness(1.08); }
+        .header-avatar:active { transform: scale(0.96); }
+
+        /* Popovers — used for both the avatar menu and the
+           notifications panel. Anchored bottom-right to the header
+           cluster via fixed offsets (the cluster itself is flex so
+           we can't use position:absolute on the panel relative to
+           a specific button without DOM gymnastics; fixed-to-viewport
+           with right/top measured from the header gives a consistent
+           anchor). */
+        .header-popover {
+            position: absolute;
+            top: calc(100% + 6px);
+            right: 12px;
+            min-width: 220px;
+            max-width: 320px;
+            background: #1d1d28;
+            border: 1px solid #353545;
+            border-radius: 8px;
+            box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+            z-index: 9000;
+            color: #ddd;
+            overflow: hidden;
+            font-size: 12px;
+        }
+        .header-popover-wide { min-width: 300px; max-width: 380px; }
+        .header-popover-section {
+            padding: 10px 12px;
+            border-bottom: 1px solid #2c2c38;
+        }
+        .header-popover-title {
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #aaa;
+        }
+        .header-popover-name {
+            font-size: 13px;
+            font-weight: 700;
+            color: #fff;
+            margin-bottom: 2px;
+        }
+        .header-popover-role {
+            font-size: 10px;
+            color: #9aa;
+            text-transform: uppercase;
+            letter-spacing: 0.6px;
+            font-weight: 600;
+        }
+        .header-popover-item {
+            display: block;
+            width: 100%;
+            text-align: left;
+            background: transparent;
+            border: 0;
+            color: #ddd;
+            font-size: 12px;
+            padding: 9px 12px;
+            cursor: pointer;
+            font-weight: 500;
+        }
+        .header-popover-item:hover {
+            background: rgba(255, 255, 255, 0.06);
+            color: #fff;
+        }
+        .header-popover-body { max-height: 360px; overflow-y: auto; }
+        .header-popover-empty {
+            padding: 20px 12px;
+            text-align: center;
+            color: #888;
+            font-size: 12px;
+            font-style: italic;
+        }
+
+        /* Header tab dropdown (Buildertrend-style "Directory ▾").
+           Button looks like a tab-btn; menu pops below on click. */
+        .tab-dropdown {
+            position: relative;
+            display: inline-flex;
+            align-items: stretch;
+        }
+        .tab-dropdown .directory-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .tab-dropdown .directory-chev {
+            font-size: 10px;
+            opacity: 0.7;
+            transition: transform 0.12s;
+        }
+        .tab-dropdown.open .directory-chev { transform: rotate(180deg); }
+        .tab-dropdown-menu {
+            display: none;
+            position: absolute;
+            top: 100%;
+            left: 0;
+            min-width: 180px;
+            background: #1d1d28;
+            border: 1px solid #353545;
+            border-radius: 8px;
+            box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+            z-index: 9000;
+            padding: 4px 0;
+            margin-top: 2px;
+        }
+        .tab-dropdown.open .tab-dropdown-menu { display: block; }
+        .tab-dropdown-menu button {
+            display: block;
+            width: 100%;
+            text-align: left;
+            background: transparent;
+            border: 0;
+            color: #ddd;
+            font-size: 12px;
+            padding: 9px 14px;
+            cursor: pointer;
+            font-weight: 500;
+            white-space: nowrap;
+        }
+        .tab-dropdown-menu button:hover {
+            background: rgba(255, 255, 255, 0.06);
+            color: #fff;
+        }
+
         /* NAVIGATION — inline with logo, height-filling so the active
            underline sits flush with the header's bottom edge for that
            "tab is part of the chrome" feel. */

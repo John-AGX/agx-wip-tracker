@@ -11,7 +11,7 @@
          parse. -->
     <base href="/">
     <title>AGX Central Florida &mdash; WIP Tracker</title>
-    <link rel="stylesheet" href="css/styles.css?v=37">
+    <link rel="stylesheet" href="css/styles.css?v=38">
     <link rel="stylesheet" href="css/workspace-layout.css?v=52">
     <link rel="stylesheet" href="css/workspace.css?v=36">
     <link rel="stylesheet" href="css/schedule.css?v=9">
@@ -47,15 +47,64 @@
                     <button class="tab-btn active" data-tab="wip" data-agx-icon="wip" data-cap="JOBS_VIEW_ALL JOBS_VIEW_ASSIGNED JOBS_EDIT_ANY JOBS_EDIT_OWN">WIP</button>
                     <button class="tab-btn" data-tab="schedule" data-agx-icon="schedule">Schedule</button>
                     <button class="tab-btn" data-tab="insights" data-agx-icon="insights" data-cap="INSIGHTS_VIEW">Insights</button>
-                    <button class="tab-btn" data-tab="estimates" data-agx-icon="estimates" data-cap="ESTIMATES_VIEW">Estimates</button>
+                    <!-- Leads is its own top-level destination now (was a
+                         sub-tab inside Estimates). Click routes to the
+                         existing Estimates → Leads sub-tab DOM but the
+                         active highlight stays on this button so Leads
+                         reads as a first-class page. -->
+                    <button class="tab-btn" data-tab="estimates" data-est-subtab="leads" data-virtual-tab="leads" data-cap="LEADS_VIEW">Leads</button>
+                    <button class="tab-btn" data-tab="estimates" data-est-subtab="list" data-virtual-tab="estimates" data-agx-icon="estimates" data-cap="ESTIMATES_VIEW">Estimates</button>
+                    <!-- Buildertrend-style Directory dropdown holding the
+                         contact directories (Clients, Subs). Click the
+                         button toggles the menu; menu items route to
+                         Estimates + the relevant sub-tab. -->
+                    <div class="tab-dropdown" id="directory-dropdown">
+                        <button class="tab-btn directory-btn" type="button" id="directory-btn">
+                            Directory <span class="directory-chev" aria-hidden="true">&#x25BE;</span>
+                        </button>
+                        <div class="tab-dropdown-menu" id="directory-menu" role="menu">
+                            <button type="button" data-tab="estimates" data-est-subtab="clients" data-virtual-tab="clients" role="menuitem">Clients</button>
+                            <button type="button" data-tab="estimates" data-est-subtab="subs"    data-virtual-tab="subs"    role="menuitem">Subs</button>
+                        </div>
+                    </div>
                     <button class="tab-btn" data-tab="admin" data-agx-icon="admin" data-admin-only style="display:none;">Admin</button>
                 </nav>
                 <div id="user-menu" class="header-user-menu">
-                    <span id="user-name"></span>
-                    <span id="user-role-badge"></span>
-                    <button id="account-btn" title="My Account &amp; Notifications">&#x2699; Account</button>
-                    <button id="logout-btn">Logout</button>
-                    <button id="theme-toggle" class="theme-toggle" title="Toggle light/dark mode"></button>
+                    <!-- Notifications bell. Red dot toggles via the
+                         data-count attribute set by JS; when count is 0
+                         the dot is hidden via CSS. Clicking opens
+                         #notifications-panel. -->
+                    <button id="header-notif-btn" class="header-icon-btn" type="button" title="Notifications" aria-haspopup="true" aria-expanded="false">
+                        <span aria-hidden="true">&#x1F514;</span>
+                        <span class="header-notif-dot" data-count="0"></span>
+                    </button>
+                    <button id="theme-toggle" class="theme-toggle header-icon-btn" type="button" title="Toggle light/dark mode"></button>
+                    <!-- Initials avatar replaces the previous full-name +
+                         role pill + Account / Logout buttons. Clicking
+                         opens #user-avatar-menu which holds the actual
+                         actions. -->
+                    <button id="user-avatar" class="header-avatar" type="button" title="Account" aria-haspopup="true" aria-expanded="false">JT</button>
+                    <span id="user-name" hidden></span>
+                    <span id="user-role-badge" hidden></span>
+                    <!-- Avatar dropdown — anchored to the button via CSS. -->
+                    <div id="user-avatar-menu" class="header-popover" hidden>
+                        <div class="header-popover-section">
+                            <div class="header-popover-name" id="avatar-menu-name">&mdash;</div>
+                            <div class="header-popover-role" id="avatar-menu-role">&mdash;</div>
+                        </div>
+                        <button type="button" id="account-btn" class="header-popover-item">&#x2699; My Account &amp; Notifications</button>
+                        <button type="button" id="logout-btn"  class="header-popover-item">&#x21AA; Logout</button>
+                    </div>
+                    <!-- Notifications panel — anchored to the bell. Body
+                         is empty for now (no unified notifications source
+                         yet); future hook will populate from email_log /
+                         sms_log / schedule alerts / agent activity. -->
+                    <div id="notifications-panel" class="header-popover header-popover-wide" hidden>
+                        <div class="header-popover-section header-popover-title">Notifications</div>
+                        <div id="notif-panel-body" class="header-popover-body">
+                            <div class="header-popover-empty">No notifications yet.</div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </header>
@@ -609,9 +658,16 @@
                     <div id="insights-dashboard"></div>
                 </div>
 
-                <!-- ESTIMATES TAB -->
+                <!-- ESTIMATES TAB
+                     The internal sub-tab nav (Leads / Estimates / Clients
+                     / Subs) is hidden — those pages now live in the top-
+                     level header (Leads is its own tab; Clients/Subs sit
+                     in the Directory dropdown). The sub-tab DIVS below
+                     remain in place because switchEstimatesSubTab still
+                     toggles them on virtual-tab clicks; only the visual
+                     nav row is suppressed. -->
                 <div id="estimates" class="tab-content">
-                    <div id="estimates-main-tabs" class="ws-right-tabs">
+                    <div id="estimates-main-tabs" class="ws-right-tabs" style="display:none;">
                         <button class="ws-right-tab active" data-estimates-subtab="leads" data-agx-icon="leads" onclick="switchEstimatesSubTab('leads')" data-cap="LEADS_VIEW">Leads</button>
                         <button class="ws-right-tab" data-estimates-subtab="list" data-agx-icon="estimates" onclick="switchEstimatesSubTab('list')">Estimates</button>
                         <button class="ws-right-tab" data-estimates-subtab="clients" data-agx-icon="clients" onclick="switchEstimatesSubTab('clients')">Clients</button>
@@ -2159,7 +2215,7 @@
     </script>
 
     <script src="js/modal-drag.js?v=1"></script>
-    <script src="js/auth.js?v=9"></script>
+    <script src="js/auth.js?v=10"></script>
     <script src="js/dialogs.js?v=1"></script>
     <script src="js/api.js?v=18"></script>
     <script src="js/account.js?v=2"></script>
@@ -2175,7 +2231,7 @@
     <script src="js/qb-costs-view.js?v=8"></script>
     <script src="js/insights.js?v=5"></script>
     <script src="js/schedule.js?v=15"></script>
-    <script src="js/app.js?v=46"></script>
+    <script src="js/app.js?v=47"></script>
     <script src="js/wip.js?v=61"></script>
     <script src="js/estimates.js?v=35"></script>
     <script src="js/proposal.js?v=20"></script>

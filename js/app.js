@@ -288,12 +288,89 @@
         }
 
         function setupEventListeners() {
-            // Top-level tabs
+            // Top-level tabs. Some tab-btns are "virtual" — they share
+            // data-tab="estimates" (so the underlying DOM is one
+            // tab-content) but each represents a different sub-page
+            // (Leads / Estimates / Clients / Subs). The data-est-subtab
+            // attribute tells us which sub-tab to switch to, and
+            // data-virtual-tab is the visual identity used for the
+            // .active highlight (so e.g. clicking "Leads" highlights
+            // the Leads button, not the Estimates one).
             document.querySelectorAll('.tab-btn').forEach(btn => {
                 btn.addEventListener('click', () => {
                     const tabName = btn.getAttribute('data-tab');
+                    const estSub = btn.getAttribute('data-est-subtab');
+                    const virtual = btn.getAttribute('data-virtual-tab');
                     switchTab(tabName);
+                    if (estSub && typeof window.switchEstimatesSubTab === 'function') {
+                        window.switchEstimatesSubTab(estSub);
+                    }
+                    if (virtual) markVirtualTabActive(virtual);
                 });
+            });
+
+            // Buildertrend-style "Directory ▾" dropdown — toggled by
+            // its own button, items routed through the same handler
+            // as a top-level tab-btn click.
+            const dirDropdown = document.getElementById('directory-dropdown');
+            const dirBtn = document.getElementById('directory-btn');
+            const dirMenu = document.getElementById('directory-menu');
+            if (dirDropdown && dirBtn && dirMenu) {
+                dirBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    closeAllPopovers({ except: 'directory' });
+                    dirDropdown.classList.toggle('open');
+                });
+                dirMenu.querySelectorAll('button[data-tab]').forEach(item => {
+                    item.addEventListener('click', () => {
+                        const tabName = item.getAttribute('data-tab');
+                        const estSub = item.getAttribute('data-est-subtab');
+                        const virtual = item.getAttribute('data-virtual-tab');
+                        switchTab(tabName);
+                        if (estSub && typeof window.switchEstimatesSubTab === 'function') {
+                            window.switchEstimatesSubTab(estSub);
+                        }
+                        if (virtual) markVirtualTabActive(virtual);
+                        dirDropdown.classList.remove('open');
+                    });
+                });
+            }
+
+            // Avatar dropdown (Account / Logout). The actual click
+            // handlers on Account and Logout are wired elsewhere
+            // (auth.js wires #logout-btn; admin code wires #account-btn).
+            const avatarBtn = document.getElementById('user-avatar');
+            const avatarMenu = document.getElementById('user-avatar-menu');
+            if (avatarBtn && avatarMenu) {
+                avatarBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const open = !avatarMenu.hasAttribute('hidden');
+                    closeAllPopovers({ except: 'avatar' });
+                    if (open) avatarMenu.setAttribute('hidden', '');
+                    else avatarMenu.removeAttribute('hidden');
+                });
+                avatarMenu.addEventListener('click', (e) => e.stopPropagation());
+            }
+
+            // Notifications bell. Panel is empty by default; future
+            // hook will populate from server-side notifications source.
+            const notifBtn = document.getElementById('header-notif-btn');
+            const notifPanel = document.getElementById('notifications-panel');
+            if (notifBtn && notifPanel) {
+                notifBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const open = !notifPanel.hasAttribute('hidden');
+                    closeAllPopovers({ except: 'notif' });
+                    if (open) notifPanel.setAttribute('hidden', '');
+                    else notifPanel.removeAttribute('hidden');
+                });
+                notifPanel.addEventListener('click', (e) => e.stopPropagation());
+            }
+
+            // Click anywhere outside any open popover dismisses all.
+            document.addEventListener('click', () => closeAllPopovers());
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') closeAllPopovers();
             });
 
             // Job detail sub-tabs
@@ -314,11 +391,45 @@
             });
         }
 
+        // Several tab-btns share data-tab="estimates" but each shows a
+        // different sub-page (Leads / Estimates / Clients / Subs). The
+        // CSS .active class drives the visual highlight, but we can't
+        // rely on a single `[data-tab="estimates"]` selector — that
+        // would highlight the FIRST one (Leads) every time. Use
+        // data-virtual-tab as the per-button identity instead.
+        function markVirtualTabActive(virtual) {
+            document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+            const target = document.querySelector('[data-virtual-tab="' + virtual + '"]');
+            if (target) target.classList.add('active');
+        }
+
+        // Dismiss any open header popover. `except` keeps one open
+        // (used when toggling so the click that just opened it isn't
+        // immediately closed by the document-level click handler).
+        function closeAllPopovers(opts) {
+            opts = opts || {};
+            if (opts.except !== 'directory') {
+                const dd = document.getElementById('directory-dropdown');
+                if (dd) dd.classList.remove('open');
+            }
+            if (opts.except !== 'avatar') {
+                const am = document.getElementById('user-avatar-menu');
+                if (am) am.setAttribute('hidden', '');
+            }
+            if (opts.except !== 'notif') {
+                const np = document.getElementById('notifications-panel');
+                if (np) np.setAttribute('hidden', '');
+            }
+        }
+
         function switchTab(tabName) {
             document.querySelectorAll('.tab-content').forEach(tc => tc.classList.remove('active'));
             document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
 
             document.getElementById(tabName)?.classList.add('active');
+            // Highlight the FIRST tab-btn matching this data-tab — the
+            // virtual-tab system overwrites this when a more specific
+            // identity (Leads / Clients / Subs) was clicked.
             document.querySelector(`[data-tab="${tabName}"]`)?.classList.add('active');
 
             // Tear down the node graph if it's open. #nodeGraphTab is a
@@ -485,6 +596,15 @@
                         if (st.estSub && typeof window.switchEstimatesSubTab === 'function') {
                             window.switchEstimatesSubTab(st.estSub);
                         }
+                        // Restore the visual identity of the active
+                        // top-level virtual tab. Saved estSub maps to:
+                        //   leads   → Leads virtual tab
+                        //   list    → Estimates virtual tab
+                        //   clients → Clients virtual tab
+                        //   subs    → Subs virtual tab
+                        var virtualMap = { leads: 'leads', list: 'estimates', clients: 'clients', subs: 'subs' };
+                        var vTab = virtualMap[st.estSub] || 'estimates';
+                        if (typeof markVirtualTabActive === 'function') markVirtualTabActive(vTab);
                     } else if (st.top === 'admin' && st.adSub && typeof window.switchAdminSubTab === 'function') {
                         window.switchAdminSubTab(st.adSub);
                     }
