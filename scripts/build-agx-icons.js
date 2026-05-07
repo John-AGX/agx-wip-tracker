@@ -75,7 +75,12 @@ const MAP = {
   'bell':            'heroicons/bell',
   'bell-alert':      'heroicons/bell-alert',
   'sun':             'heroicons/sun',
-  'moon':            'heroicons/moon'
+  'moon':            'heroicons/moon',
+  // Admin sub-tab icons added in the icon-audit pass:
+  //  - cpu-chip → "Agents" (AI / processors); replaces 🤖
+  //  - envelope → "Email" (was using `links` as a placeholder)
+  'cpu-chip':        'heroicons/cpu-chip',
+  'envelope':        'heroicons/envelope'
 };
 
 const HEADER = `// AGX Icon Helper — inline SVG icons (auto-generated).
@@ -188,7 +193,11 @@ const FOOTER = `
     '🍡': 'academic-cap',      // 1F361 dango — UI alias for Skills
     '🔍': 'magnifying-glass',  // 1F50D magnifier (Prompt Preview)
     '📦': 'cube',              // 1F4E6 package (Batch jobs)
-    '🌐': 'globe'              // 1F310 globe with meridians (Anthropic)
+    '🌐': 'globe',             // 1F310 globe with meridians (Anthropic)
+    '🤖': 'cpu-chip',          // 1F916 robot face — admin Agents tab
+    '✉':       'envelope',     // 2709  envelope (light variant)
+    '📧': 'envelope',          // 1F4E7 e-mail symbol
+    '📨': 'envelope'           // 1F4E8 incoming envelope
   };
   // Match an emoji at start of string with optional U+FE0F + whitespace.
   function matchLeadingEmoji(text) {
