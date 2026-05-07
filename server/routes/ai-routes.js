@@ -2504,7 +2504,15 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
             // again on /chat/continue), but we use the stop_reason to
             // pick the SSE shape: tool-use awaiting vs. final done.
             const stopType = event.stop_reason && event.stop_reason.type;
+            // Outstanding tool_use event ids the session is blocked on.
+            // For requires_action-with-tools, this is the canonical list
+            // of ids we still owe user.custom_tool_result events for.
+            const blockedEventIds =
+              (event.stop_reason && Array.isArray(event.stop_reason.event_ids))
+                ? event.stop_reason.event_ids
+                : [];
             console.log('[v2-stream] idle', sessionId, 'stop_reason:', stopType,
+              'blocked_event_ids:', JSON.stringify(blockedEventIds),
               'pendingTools:', pendingToolUses.length,
               'assistantTextLen:', assistantText.length,
               'nudgeAttempts:', nudgeAttempts,
@@ -2526,13 +2534,28 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
             if (stalled && nudgeAttempts < MAX_NUDGES) {
               nudgeAttempts++;
               console.warn('[v2-stream] stall detected on', sessionId,
-                '— interrupt + nudge retry (attempt',
+                '— attempting recovery (attempt',
                 nudgeAttempts, 'of', MAX_NUDGES + ')');
               try {
-                // Step 1: clear requires_action.
+                // Step 1: clear blockers. If the API listed outstanding
+                // tool_use event_ids in stop_reason, our auto-tier
+                // results raced with idle and didn't register — we re-
+                // respond to each with a no-op result so the session
+                // unblocks. If event_ids is empty (model just stopped
+                // without emitting tool calls), `user.interrupt` is the
+                // right primitive.
+                const clearEvents = blockedEventIds.length
+                  ? blockedEventIds.map(id => ({
+                      type: 'user.custom_tool_result',
+                      custom_tool_use_id: id,
+                      content: [{ type: 'text', text: 'Continue.' }]
+                    }))
+                  : [{ type: 'user.interrupt' }];
                 await anthropic.beta.sessions.events.send(sessionId, {
-                  events: [{ type: 'user.interrupt' }]
+                  events: clearEvents
                 });
+                console.warn('[v2-stream] cleared', clearEvents.length,
+                  blockedEventIds.length ? 'tool_result(s)' : 'interrupt');
                 // Step 2: queue a fresh user.message for the outer
                 // while loop's next pass — openStreamAndSend will
                 // open a new stream and dispatch this event.
@@ -2545,7 +2568,7 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
                 // for-await so the outer while reopens the stream.
                 break;
               } catch (e) {
-                console.warn('Stall-recovery interrupt failed:', e && e.message);
+                console.warn('Stall-recovery clear failed:', e && e.message);
                 // Fall through to the standard awaiting_approval
                 // fallback so the user sees a clean message.
               }
@@ -2554,13 +2577,20 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
               // the next /chat from the client starts on a clean
               // session instead of bouncing off a stuck state.
               console.warn('[v2-stream] stall retries exhausted on', sessionId,
-                '— sending interrupt to clear state for next turn');
+                '— clearing state for next turn');
               try {
+                const clearEvents = blockedEventIds.length
+                  ? blockedEventIds.map(id => ({
+                      type: 'user.custom_tool_result',
+                      custom_tool_use_id: id,
+                      content: [{ type: 'text', text: 'Continue.' }]
+                    }))
+                  : [{ type: 'user.interrupt' }];
                 await anthropic.beta.sessions.events.send(sessionId, {
-                  events: [{ type: 'user.interrupt' }]
+                  events: clearEvents
                 });
               } catch (e) {
-                console.warn('Final interrupt failed (non-fatal):', e && e.message);
+                console.warn('Final clear failed (non-fatal):', e && e.message);
               }
             }
 
