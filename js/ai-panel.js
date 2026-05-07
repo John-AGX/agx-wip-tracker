@@ -2036,9 +2036,11 @@
   window._agxAiPanelOpenTrust = openTrustPopover;
 
   function applyTool(tu) {
-    if (isClientMode() || isStaffMode()) {
+    if (isClientMode() || isStaffMode() || isIntakeMode()) {
       // Server applies these tools on /chat/continue. Just signal
       // approval — there's no client-side mutation to perform.
+      // Intake's propose_create_lead is executed by execProposeCreateLead
+      // on /api/ai/v2/intake/chat/continue.
       return '';
     }
     if (isJobMode()) {
@@ -3690,6 +3692,24 @@
       heading = '&#x2611; Toggle group include';
       var inc = input.include === false ? 'EXCLUDE' : 'INCLUDE';
       detail = '<div style="font-size:12px;color:var(--text,#ccc);"><strong>' + inc + '</strong> <code>' + escapeHTMLLocal(input.group_id || '') + '</code> in totals.</div>';
+    } else if (tu.name === 'propose_create_lead') {
+      heading = '&#x2728; Create lead';
+      var titleStr = input.title || '(no title)';
+      var clientStr = input.existing_client_id
+        ? 'existing client <code>' + escapeHTMLLocal(input.existing_client_id) + '</code>'
+        : (input.new_client && input.new_client.name
+            ? 'new client <strong>' + escapeHTMLLocal(input.new_client.name) + '</strong>'
+            : 'no client');
+      var locStr = [input.city, input.state].filter(Boolean).join(', ');
+      var notesStr = input.notes || '';
+      detail =
+        '<div style="font-size:13px;color:var(--text,#fff);font-weight:600;">' + escapeHTMLLocal(titleStr) + '</div>' +
+        '<div style="font-size:11px;color:var(--text-dim,#aaa);margin-top:3px;">' +
+          escapeHTMLLocal(input.project_type || 'Service & Repair') +
+          (locStr ? ' &middot; ' + escapeHTMLLocal(locStr) : '') +
+          ' &middot; ' + clientStr +
+        '</div>' +
+        (notesStr ? '<div style="font-size:11px;color:var(--text,#ccc);margin-top:6px;padding:6px 8px;background:rgba(0,0,0,0.15);border-radius:4px;line-height:1.4;white-space:pre-wrap;max-height:120px;overflow-y:auto;">' + escapeHTMLLocal(notesStr) + '</div>' : '');
     } else {
       heading = '? Unknown tool: ' + tu.name;
       detail = '<pre style="font-size:11px;">' + escapeHTMLLocal(JSON.stringify(input, null, 2)) + '</pre>';
