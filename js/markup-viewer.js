@@ -899,12 +899,14 @@
     var len = Math.sqrt(dx * dx + dy * dy);
     if (len < 1) return;
     // Auto-scale: text height proportional to line length, clamped
-    // so it stays readable on short lines and doesn't dominate on
-    // very long ones. Tick length follows the same proportion so
-    // the whole annotation reads as a single composition.
-    var fontPx = Math.round(Math.max(10, Math.min(72, len * 0.10)));
+    // so short lines still read and long ones don't dominate the
+    // photo. 6% of line length keeps the label subtle (a 1000px
+    // wall measurement caps at 36px text instead of the previous
+    // 72px which read as a billboard). Tick length and stroke
+    // ratio follow the same proportion for a unified composition.
+    var fontPx = Math.round(Math.max(12, Math.min(36, len * 0.06)));
     var tickHalf = Math.max(4, fontPx * 0.45);
-    var stroke = Math.max(1.5, Math.min(s.lineWidth || 4, fontPx / 8));
+    var stroke = Math.max(1.5, Math.min(s.lineWidth || 4, fontPx / 10));
     var cosA = dx / len, sinA = dy / len;
     // Perpendicular unit vector (rotated 90° CCW).
     var px = -sinA, py = cosA;
@@ -940,7 +942,9 @@
     // dimension stroke. Black outline + colored fill so it reads on
     // any background.
     var midX = (x1 + x2) / 2, midY = (y1 + y2) / 2;
-    var labelOffset = fontPx * 0.55;
+    // Tighter offset (was 0.55 → 0.7 of cap-height) so the label
+    // sits closer to the line without descenders touching it.
+    var labelOffset = fontPx * 0.7;
     var lx = midX + px * labelOffset;
     var ly = midY + py * labelOffset;
 
@@ -952,10 +956,18 @@
 
     ctx.translate(lx, ly);
     ctx.rotate(angle);
-    ctx.font = 'bold ' + fontPx + 'px Arial,sans-serif';
+    // Use a system "ui-sans-serif" stack so we get the platform's
+    // hinted UI font (San Francisco / Segoe / Roboto) instead of
+    // Arial — sharper and better antialiased at small sizes.
+    ctx.font = '600 ' + fontPx + 'px ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.lineWidth = Math.max(2, fontPx / 8);
+    // Slimmer outline (was fontPx/8 → fontPx/14, min 1.25) keeps the
+    // text crisp without the chunky black halo that was making the
+    // big "6'-9"" label look heavy.
+    ctx.lineWidth = Math.max(1.25, fontPx / 14);
+    ctx.lineJoin = 'round';
+    ctx.miterLimit = 2;
     ctx.strokeStyle = '#000';
     ctx.strokeText(label, 0, 0);
     ctx.fillStyle = s.color;
