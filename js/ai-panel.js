@@ -1496,6 +1496,7 @@
     var pendingToolUses = [];     // tool_use blocks captured this turn
     var pendingAssistantContent = null; // full content array for echo-back
     var brainYoga = startBrainYoga(streamDiv);
+    var chipsAppended = 0; // tracks tool_applied/tool_failed/tool_rejected count
     _streaming = true;
     setSendDisabled(true);
 
@@ -1527,6 +1528,7 @@
           // Server-side auto-tier tool already executed. Show an inline
           // confirmation chip in the streaming bubble.
           appendToolChip(streamDiv, '✓', payload.tool_applied.summary || (payload.tool_applied.name + ' applied'), '#34d399');
+          chipsAppended++;
           // Resume rotation once the tool lands.
           brainYoga.override('Got it. Thinking…', false);
           if (isClientMode() && typeof window.refreshClientsAfterAI === 'function') {
@@ -1535,10 +1537,12 @@
           scrollToBottom();
         } else if (payload.tool_failed) {
           appendToolChip(streamDiv, '✗', payload.tool_failed.error || (payload.tool_failed.name + ' failed'), '#f87171');
+          chipsAppended++;
           brainYoga.override('Hit a snag. Recovering…', false);
           scrollToBottom();
         } else if (payload.tool_rejected) {
           appendToolChip(streamDiv, '⊘', (payload.tool_rejected.name || 'tool') + ' rejected', '#a3a3a3');
+          chipsAppended++;
           scrollToBottom();
         } else if (payload.awaiting_approval) {
           pendingAssistantContent = payload.pending_assistant_content;
@@ -1571,11 +1575,33 @@
         // required pendingAssistantContent which silently dropped v2
         // tool turns to "(no response)".
         finalizeProposalBubble(streamDiv, assistantText, pendingToolUses, pendingAssistantContent);
-      } else {
+      } else if (assistantText) {
         // Plain text response — drop the streaming placeholder and add
         // a permanent bubble (history already persisted server-side).
         if (streamDiv && streamDiv.parentNode) streamDiv.parentNode.removeChild(streamDiv);
-        _messages.push({ role: 'assistant', content: assistantText || '(no response)' });
+        _messages.push({ role: 'assistant', content: assistantText });
+        renderMessages();
+      } else if (chipsAppended > 0) {
+        // No final narration but built-in tools (web_search /
+        // web_fetch / etc.) DID fire — keep the streaming bubble in
+        // place so the user can see the chips that already rendered.
+        // Replace the rotating "Doing brain yoga…" caption with a
+        // hint about what just happened. Don't push to _messages
+        // history (no text to record); a follow-up turn will
+        // continue from the session context naturally.
+        var phraseEl = streamDiv && streamDiv.querySelector('[data-stream-phrase]');
+        if (phraseEl) {
+          phraseEl.textContent = 'Used ' + chipsAppended + ' tool' + (chipsAppended === 1 ? '' : 's') +
+            ' but didn\'t produce a summary — ask again or rephrase.';
+          phraseEl.style.fontStyle = 'normal';
+          phraseEl.style.color = 'var(--text-dim,#888)';
+        }
+        var cloudEl = streamDiv && streamDiv.querySelector('[data-stream-cloud]');
+        if (cloudEl) cloudEl.classList.remove('agx-cloud-anim');
+      } else {
+        // No text and no chips — true "(no response)" empty turn.
+        if (streamDiv && streamDiv.parentNode) streamDiv.parentNode.removeChild(streamDiv);
+        _messages.push({ role: 'assistant', content: '(no response)' });
         renderMessages();
       }
     }).catch(function(err) {
