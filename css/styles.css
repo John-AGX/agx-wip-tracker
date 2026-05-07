@@ -490,15 +490,15 @@
             flex: 0 0 auto;
         }
 
-        /* Inactive tabs share the Project 86 logo color (full white).
-           Differentiation between active and inactive comes from
-           font-weight + the white .agx-tab-slider underline + glow,
-           NOT a brightness drop. Read: "all tabs lit at logo
-           intensity, the active one wears a slider crown." */
+        /* Inactive tabs render at near-logo brightness (0.85 white) so
+           they read as "lit, just not the chosen one." Hover boosts
+           to full #fff for clear cursor feedback. The active tab
+           also sits at full white plus the bold weight + the white
+           .agx-tab-slider underline + glow. */
         nav.tabs button {
             background: transparent;
             border: none;
-            color: #ffffff;
+            color: rgba(255, 255, 255, 0.85);
             padding: 0 16px;
             height: 100%;
             cursor: pointer;

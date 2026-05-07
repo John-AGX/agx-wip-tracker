@@ -243,7 +243,13 @@ function renderNodes(){
       } else {
         pct=n.pctComplete||0;
       }
-      var progColor = pct>=100?'#34d399':pct>=50?'#fbbf24':'#4f8cff';
+      // Project 86 progress bars: uniform blue→indigo gradient
+      // matching the WIP table's % Complete column (which uses
+      // linear-gradient(90deg, var(--accent), var(--purple))). The
+      // tri-color tier (green=100%, amber=50%+, blue=<50%) was
+      // semantic but visually clashed with the new chrome — the
+      // bar fill width plus the % label still convey progress.
+      var progColor = 'linear-gradient(90deg, #4f8cff, #a78bfa)';
       var progTitle = _computed?'Averaged from phase % complete':'Click to edit %';
       var progAttr = _computed?'':' data-prog-edit="'+n.id+'"';
       h+='<div class="ng-progress-wrap"'+progAttr+' title="'+progTitle+'">';
@@ -1650,7 +1656,7 @@ function initEvents(){
           var fill=nodeEl.querySelector('.ng-progress-fill');
           var lbl=nodeEl.querySelector('.ng-pct-val');
           var pc=n.pctComplete;
-          if(fill){fill.style.width=Math.min(pc,100)+'%';fill.style.background=pc>=100?'#34d399':pc>=50?'#fbbf24':'#4f8cff';}
+          if(fill){fill.style.width=Math.min(pc,100)+'%';fill.style.background='linear-gradient(90deg, #4f8cff, #a78bfa)';}
           if(lbl)lbl.textContent=pc.toFixed(0)+'%';
         }
         E.drawWires(wireCtx,wrap,wiringFrom,wireMouse);
