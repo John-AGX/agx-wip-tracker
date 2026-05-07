@@ -38,6 +38,12 @@
   var _autoPdfCache = {};
   var _autoPdfPromises = {};
   var _autoPdfBudget = 12;
+  // Lead-intake: set true every time the panel opens in intake mode;
+  // cleared after the first /chat call. Triggers server-side
+  // archive of the prior intake session so each panel-open is a
+  // fresh conversation. Subsequent turns within the same open keep
+  // full session context.
+  var _intakeFreshPending = false;
 
   // AG phase icons. No Unicode emoji exists for the elaborate blueprint
   // / drafting-tools look — the closest emoji is 📐 (just a triangular
@@ -911,6 +917,11 @@
       // load their conversation from ai_messages so close + reopen
       // keeps the thread.
       if (entityType === 'intake') {
+        // Arm the start_new flag — first /chat after this open will
+        // tell the server to archive the prior intake session and
+        // create a brand-new one. Cleared after that first send so
+        // subsequent turns reuse the session.
+        _intakeFreshPending = true;
         renderMessages();
       } else {
         loadHistory();
@@ -1464,6 +1475,15 @@
     var body = isEstimateMode()
       ? { message: text, includePhotos: _includePhotos }
       : { message: text };
+    // Lead-intake: tell the server to archive the prior session ONLY
+    // on the first message of this panel-open. Subsequent turns reuse
+    // the session so the agent keeps full conversation context. The
+    // flag lives on _intakeFreshPending which open() sets every time
+    // the panel opens against entity_type='intake'.
+    if (isIntakeMode() && _intakeFreshPending) {
+      body.start_new = true;
+      _intakeFreshPending = false;
+    }
     // Job mode: send a snapshot of the node graph + an aggregated
     // QB cost summary so the assistant can reason about wiring and
     // uncategorized expenses. Both currently live client-side

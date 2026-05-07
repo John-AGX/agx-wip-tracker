@@ -6579,12 +6579,19 @@ router.post('/v2/intake/chat',
 
     setSSEHeaders(res);
     try {
-      // Fresh-session semantics: archive any prior active intake
-      // session before creating the new one. ensureAiSession will
-      // see no active row and create.
-      await archiveActiveAiSession({
-        agentKey: 'intake', entityType: 'intake', entityId: null, userId: req.user.id
-      });
+      // Fresh-session semantics: archive the prior intake session ONLY
+      // when the client signals a panel-open via start_new=true. Every
+      // turn within the same panel-open reuses the session so the
+      // agent keeps full conversation context. Without this gate the
+      // server was archiving on every message — the agent saw each
+      // new turn as the first message of a fresh session, lost all
+      // prior context, and asked the user to start over.
+      if (req.body && req.body.start_new) {
+        await archiveActiveAiSession({
+          agentKey: 'intake', entityType: 'intake', entityId: null, userId: req.user.id
+        });
+        clearPendingIntakeImages(req.user.id);
+      }
 
       const ctx = await buildIntakeContext(req.user.id);
       const turnText =
