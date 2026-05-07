@@ -2310,12 +2310,22 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
   // Stall recovery: when the model emits agent.thinking but produces
   // neither a text reply nor a follow-up tool_use before the session
   // idles in `requires_action`, the API rejects free-form user.message
-  // events (it's specifically waiting on tool results). Sending
-  // `user.interrupt` clears the requires_action state so a follow-up
-  // /chat call can start clean. Capped at MAX_NUDGES so a permanently
-  // broken conversation can't loop forever.
+  // events (it's specifically waiting on tool results). Recovery is a
+  // two-step server-side dance:
+  //   1. Send `user.interrupt` to clear requires_action so the session
+  //      will accept a fresh user.message.
+  //   2. Reopen the stream and send a nudge user.message that asks the
+  //      agent to either reply or call its next tool now.
+  // Capped at MAX_NUDGES so a permanently broken conversation can't
+  // loop forever — when retries are exhausted, we still send a final
+  // `user.interrupt` so the NEXT /chat call from the client starts
+  // clean instead of failing on a still-stuck session.
   const MAX_NUDGES = 1;
   let nudgeAttempts = 0;
+  const NUDGE_TEXT =
+    'Continue. The previous tool calls completed — please respond now ' +
+    'by calling your next tool (e.g. propose_create_lead) or by replying ' +
+    'to the user. Do not re-run the prior reads with the same arguments.';
 
   // Helper to (re)open stream + send events. Stuck-state recovery is
   // skipped for sessions we know are brand-new (Fix 2): /chat handlers
@@ -2506,8 +2516,9 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
             // until either a tool_result lands for any outstanding
             // custom_tool_use OR a user.interrupt clears state — a
             // free-form user.message would 400 with "waiting on
-            // responses to events". Fire user.interrupt then surface
-            // the fallback so the next /chat call starts clean.
+            // responses to events". Two-step recovery: send interrupt,
+            // then queue a fresh nudge user.message for the next pass
+            // of the outer while loop, which reopens the stream.
             const stalled =
               stopType === 'requires_action' &&
               pendingToolUses.length === 0 &&
@@ -2515,18 +2526,42 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
             if (stalled && nudgeAttempts < MAX_NUDGES) {
               nudgeAttempts++;
               console.warn('[v2-stream] stall detected on', sessionId,
-                '— sending user.interrupt to clear requires_action (attempt',
+                '— interrupt + nudge retry (attempt',
                 nudgeAttempts, 'of', MAX_NUDGES + ')');
+              try {
+                // Step 1: clear requires_action.
+                await anthropic.beta.sessions.events.send(sessionId, {
+                  events: [{ type: 'user.interrupt' }]
+                });
+                // Step 2: queue a fresh user.message for the outer
+                // while loop's next pass — openStreamAndSend will
+                // open a new stream and dispatch this event.
+                nextEventsToSend = [{
+                  type: 'user.message',
+                  content: [{ type: 'text', text: NUDGE_TEXT }]
+                }];
+                stallNudgeQueued = true;
+                // Break the switch; the post-switch check exits the
+                // for-await so the outer while reopens the stream.
+                break;
+              } catch (e) {
+                console.warn('Stall-recovery interrupt failed:', e && e.message);
+                // Fall through to the standard awaiting_approval
+                // fallback so the user sees a clean message.
+              }
+            } else if (stalled) {
+              // Retries exhausted — still clear requires_action so
+              // the next /chat from the client starts on a clean
+              // session instead of bouncing off a stuck state.
+              console.warn('[v2-stream] stall retries exhausted on', sessionId,
+                '— sending interrupt to clear state for next turn');
               try {
                 await anthropic.beta.sessions.events.send(sessionId, {
                   events: [{ type: 'user.interrupt' }]
                 });
               } catch (e) {
-                console.warn('user.interrupt send failed (non-fatal):', e && e.message);
+                console.warn('Final interrupt failed (non-fatal):', e && e.message);
               }
-              // Don't loop — the interrupt clears state for the NEXT
-              // turn; this turn surfaces the standard fallback so the
-              // user sees a clean message instead of a hang.
             }
 
             if (pendingToolUses.length || stopType === 'requires_action') {
