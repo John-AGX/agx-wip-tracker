@@ -21,6 +21,7 @@
     { key: 'select',   glyph: '\u{1F446}', label: 'Select / move' },
     { key: 'arrow',    glyph: '↗',     label: 'Arrow' },
     { key: 'line',     glyph: '─',     label: 'Line' },
+    { key: 'measure',  glyph: '\u{1F4CF}', label: 'Measurement (pick two points, enter distance — e.g. 84", 1.5\', 10 feet, 5\'6")' },
     { key: 'polyline', glyph: '⌇',     label: 'Polyline (click to add points; double-click / Esc to finish; snaps to existing endpoints)' },
     { key: 'rect',     glyph: '▭',     label: 'Rectangle' },
     { key: 'ellipse',  glyph: '◯',     label: 'Ellipse' },
@@ -28,6 +29,69 @@
     { key: 'text',     glyph: 'T',          label: 'Text' },
     { key: 'sticker',  glyph: '\u{1F3F7}',  label: 'Sticker / stamp' }
   ];
+
+  // Parse a free-form measurement string into { inches, label }.
+  // Accepted shapes (case-insensitive, whitespace-tolerant):
+  //   84  | 84"  | 84 in  | 84 inches             → inches
+  //   1.5' | 1.5 ft | 1.5 feet | 10 feet         → feet  (decimal OK)
+  //   5'6" | 5' 6" | 5 ft 6 in                   → mixed
+  //   bare number (no unit): defaults to inches
+  // Returns null if unparseable. label is the human-readable form
+  // we draw on the dimension line (e.g. "5'-6\"").
+  function parseMeasurement(raw) {
+    if (raw == null) return null;
+    var s = String(raw).trim().toLowerCase();
+    if (!s) return null;
+    // Mixed feet + inches: 5'6", 5' 6", 5 ft 6 in
+    var mMix = s.match(/^(\d+(?:\.\d+)?)\s*(?:'|ft|feet|f)\s*(\d+(?:\.\d+)?)\s*(?:"|in|inch|inches)?$/);
+    if (mMix) {
+      var ft1 = parseFloat(mMix[1]), in1 = parseFloat(mMix[2]);
+      if (!isFinite(ft1) || !isFinite(in1)) return null;
+      var totalIn = ft1 * 12 + in1;
+      return { inches: totalIn, label: formatFeetInches(totalIn) };
+    }
+    // Feet only (with unit)
+    var mFt = s.match(/^(\d+(?:\.\d+)?)\s*(?:'|ft|feet|f)$/);
+    if (mFt) {
+      var ft = parseFloat(mFt[1]);
+      if (!isFinite(ft)) return null;
+      return { inches: ft * 12, label: formatFeetInches(ft * 12) };
+    }
+    // Inches with unit
+    var mIn = s.match(/^(\d+(?:\.\d+)?)\s*(?:"|in|inch|inches)$/);
+    if (mIn) {
+      var inOnly = parseFloat(mIn[1]);
+      if (!isFinite(inOnly)) return null;
+      return { inches: inOnly, label: formatFeetInches(inOnly) };
+    }
+    // Bare number — default to inches.
+    var mNum = s.match(/^(\d+(?:\.\d+)?)$/);
+    if (mNum) {
+      var n = parseFloat(mNum[1]);
+      if (!isFinite(n)) return null;
+      return { inches: n, label: formatFeetInches(n) };
+    }
+    return null;
+  }
+
+  // Format a measurement in inches as architectural feet-inches:
+  //   < 12 inches      →  84"          (skip the 0' prefix)
+  //   exact feet       →  5'           (skip the trailing 0")
+  //   mixed            →  5'-6"        (Bluebeam/AutoCAD convention)
+  // Decimal inches preserved up to 2 places, trailing zeros trimmed.
+  function formatFeetInches(totalInches) {
+    if (!isFinite(totalInches)) return String(totalInches);
+    var sign = totalInches < 0 ? '-' : '';
+    var v = Math.abs(totalInches);
+    var ft = Math.floor(v / 12);
+    var rem = v - ft * 12;
+    var inStr = (Math.abs(rem - Math.round(rem)) < 0.005)
+      ? String(Math.round(rem))
+      : (Math.round(rem * 100) / 100).toString();
+    if (ft === 0) return sign + inStr + '"';
+    if (rem < 0.005) return sign + ft + "'";
+    return sign + ft + "'-" + inStr + '"';
+  }
 
   // Thickness presets — click the Thickness button to swap among them.
   // Sized so the visual difference is obvious at typical photo
@@ -527,8 +591,8 @@
       }
 
       // Drawing tools: start a new stroke. Single-segment shapes
-      // (line / arrow) get endpoint snap on the start point too.
-      var startP = (state.tool === 'line' || state.tool === 'arrow') ? snapToEndpoint(p) : p;
+      // (line / arrow / measure) get endpoint snap on the start point too.
+      var startP = (state.tool === 'line' || state.tool === 'arrow' || state.tool === 'measure') ? snapToEndpoint(p) : p;
       state.currentStroke = {
         tool: state.tool, color: state.color, lineWidth: state.lineWidth,
         startX: startP.x, startY: startP.y, endX: startP.x, endY: startP.y,
@@ -567,7 +631,7 @@
       }
       // Drawing in progress.
       if (!state.currentStroke) return;
-      var endP = (state.currentStroke.tool === 'line' || state.currentStroke.tool === 'arrow')
+      var endP = (state.currentStroke.tool === 'line' || state.currentStroke.tool === 'arrow' || state.currentStroke.tool === 'measure')
         ? snapToEndpoint(p, state.currentStroke)
         : p;
       if (state.currentStroke.tool === 'draw') {
@@ -582,7 +646,7 @@
     var endStroke = function() {
       if (state.tool === 'select') { state.dragLast = null; return; }
       if (!state.currentStroke) return;
-      // Drop zero-size shapes (just a click, no drag) for arrow/line/rect/ellipse.
+      // Drop zero-size shapes (just a click, no drag) for arrow/line/rect/ellipse/measure.
       var s = state.currentStroke;
       var minDist = (s.tool === 'draw') ? 0 : 4;
       if (minDist) {
@@ -592,6 +656,25 @@
           redraw();
           return;
         }
+      }
+      // Measurement tool: prompt for the distance value before
+      // committing. Cancel = drop the stroke (treat like a misclick).
+      if (s.tool === 'measure') {
+        var raw = window.prompt('Distance between the two points?\n\nFormats: 84"  ·  1.5\'  ·  10 feet  ·  5\'6"  ·  bare number = inches', '');
+        if (raw == null || !raw.trim()) {
+          state.currentStroke = null;
+          redraw();
+          return;
+        }
+        var parsed = parseMeasurement(raw);
+        if (!parsed) {
+          alert('Could not parse "' + raw + '" as a measurement. Try 84", 1.5\', 10 feet, or 5\'6".');
+          state.currentStroke = null;
+          redraw();
+          return;
+        }
+        s.measureInches = parsed.inches;
+        s.measureLabel = parsed.label;
       }
       state.strokes.push(s);
       state.currentStroke = null;
@@ -655,7 +738,7 @@
     var pts = [];
     state.strokes.forEach(function(s) {
       if (s === excludeStroke) return;
-      if (s.tool === 'line' || s.tool === 'arrow') {
+      if (s.tool === 'line' || s.tool === 'arrow' || s.tool === 'measure') {
         pts.push({ x: s.startX, y: s.startY });
         pts.push({ x: s.endX, y: s.endY });
       } else if (s.tool === 'polyline' && s.points && s.points.length) {
@@ -776,6 +859,8 @@
       ctx.stroke();
     } else if (s.tool === 'arrow') {
       drawArrow(ctx, s.startX, s.startY, s.endX, s.endY, s.lineWidth);
+    } else if (s.tool === 'measure') {
+      drawMeasurement(ctx, s);
     } else if (s.tool === 'text') {
       ctx.font = 'bold ' + (s.fontPx || 24) + 'px Arial,sans-serif';
       ctx.textBaseline = 'top';
@@ -799,6 +884,82 @@
     ctx.lineWidth = 2;
     ctx.setLineDash([6, 4]);
     ctx.strokeRect(bb.x - pad, bb.y - pad, bb.w + pad * 2, bb.h + pad * 2);
+    ctx.restore();
+  }
+
+  // Architectural-style dimension line — line between the two
+  // endpoints with perpendicular tick marks at each end and the
+  // measurement label centered above the line. Everything (tick
+  // length, tick gap, font size) auto-scales to the line length so
+  // a 60-pixel "bottom of window" measurement gets a small
+  // proportional label, not a giant number.
+  function drawMeasurement(ctx, s) {
+    var x1 = s.startX, y1 = s.startY, x2 = s.endX, y2 = s.endY;
+    var dx = x2 - x1, dy = y2 - y1;
+    var len = Math.sqrt(dx * dx + dy * dy);
+    if (len < 1) return;
+    // Auto-scale: text height proportional to line length, clamped
+    // so it stays readable on short lines and doesn't dominate on
+    // very long ones. Tick length follows the same proportion so
+    // the whole annotation reads as a single composition.
+    var fontPx = Math.round(Math.max(10, Math.min(72, len * 0.10)));
+    var tickHalf = Math.max(4, fontPx * 0.45);
+    var stroke = Math.max(1.5, Math.min(s.lineWidth || 4, fontPx / 8));
+    var cosA = dx / len, sinA = dy / len;
+    // Perpendicular unit vector (rotated 90° CCW).
+    var px = -sinA, py = cosA;
+    var label = s.measureLabel || formatFeetInches(s.measureInches || 0);
+
+    ctx.save();
+    ctx.strokeStyle = s.color;
+    ctx.fillStyle = s.color;
+    ctx.lineCap = 'butt';
+    ctx.lineJoin = 'miter';
+    ctx.lineWidth = stroke;
+
+    // Main dimension line.
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+
+    // End ticks — short perpendicular slashes at both endpoints, in
+    // the AutoCAD architectural style (not arrowheads). Each tick
+    // straddles its endpoint by `tickHalf` on each side.
+    function tick(cx, cy) {
+      ctx.beginPath();
+      ctx.moveTo(cx + px * tickHalf, cy + py * tickHalf);
+      ctx.lineTo(cx - px * tickHalf, cy - py * tickHalf);
+      ctx.stroke();
+    }
+    tick(x1, y1);
+    tick(x2, y2);
+
+    // Label centered on the line, offset slightly above (perpendicular
+    // to the line direction) so the text doesn't sit on top of the
+    // dimension stroke. Black outline + colored fill so it reads on
+    // any background.
+    var midX = (x1 + x2) / 2, midY = (y1 + y2) / 2;
+    var labelOffset = fontPx * 0.55;
+    var lx = midX + px * labelOffset;
+    var ly = midY + py * labelOffset;
+
+    // Rotate so text follows the line direction. If the line points
+    // "leftish", flip the rotation so the text isn't upside down —
+    // matches CAD convention.
+    var angle = Math.atan2(dy, dx);
+    if (angle > Math.PI / 2 || angle < -Math.PI / 2) angle += Math.PI;
+
+    ctx.translate(lx, ly);
+    ctx.rotate(angle);
+    ctx.font = 'bold ' + fontPx + 'px Arial,sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.lineWidth = Math.max(2, fontPx / 8);
+    ctx.strokeStyle = '#000';
+    ctx.strokeText(label, 0, 0);
+    ctx.fillStyle = s.color;
+    ctx.fillText(label, 0, 0);
     ctx.restore();
   }
 
