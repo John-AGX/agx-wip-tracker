@@ -2390,16 +2390,17 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
             name: event.tool_name || event.name || 'unknown',
             input: event.input || {}
           };
-          // HR / CoS auto-tier path: callback decides whether we
+          // Always signal "tool starting" to the client — drives the
+          // brain-yoga caption swap to a friendly tool-specific verb
+          // ("Drafting line item…" / "Pulling metrics…" / etc.) the
+          // moment the model emits the tool_use, before either the
+          // approval card or the tool_applied result lands. Fires for
+          // every agent regardless of whether onCustomToolUse is set.
+          send({ tool_started: { id: tu.id, name: tu.name } });
+          // HR / CoS / AG auto-tier path: callback decides whether we
           // execute server-side (and resume the session in-stream) or
           // collect for user approval (default behavior).
           if (typeof onCustomToolUse === 'function') {
-            // Signal to the client that an auto-tool is starting NOW —
-            // the read might take several seconds (read_metrics scans a
-            // week of ai_messages, read_recent_conversations does a
-            // grouped rollup, etc.) and without this the streaming
-            // bubble sits silent the whole time.
-            send({ tool_started: { id: tu.id, name: tu.name } });
             let decision;
             try {
               decision = await onCustomToolUse(tu);

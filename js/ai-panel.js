@@ -1252,9 +1252,14 @@
     'Lining things up…',
     'Tying loose ends…'
   ];
-  // Tool name → friendlier verb fragment for the caption when an auto-
-  // tier tool is mid-execution. Falls back to the raw tool name.
+  // Tool name → friendlier verb fragment for the caption when a tool
+  // is mid-flight. Used both for auto-tier (HR/CoS/AG read tools that
+  // execute server-side and resume the stream) and for approval-tier
+  // proposals (the moment the model emits the tool_use, before the
+  // approval card lands). Falls back to the raw tool name when no
+  // friendly verb is registered.
   var TOOL_VERBS = {
+    // Read tools (auto-execute server-side mid-stream)
     read_metrics:                 'Pulling metrics…',
     read_recent_conversations:    'Scanning conversations…',
     read_conversation_detail:     'Reading conversation…',
@@ -1266,7 +1271,44 @@
     read_clients:                 'Reading the directory…',
     read_leads:                   'Reading leads…',
     read_past_estimates:          'Reading past estimates…',
-    read_past_estimate_lines:     'Reading past line items…'
+    read_past_estimate_lines:     'Reading past line items…',
+    read_workspace_sheet_full:    'Opening the sheet…',
+    read_job_pct_audit:           'Auditing % complete…',
+    // Estimate proposals (line items / sections / groups / scope / pricing)
+    propose_add_line_item:        'Drafting line item…',
+    propose_update_line_item:     'Drafting line edit…',
+    propose_delete_line_item:     'Drafting line removal…',
+    propose_bulk_update_lines:    'Drafting bulk edit…',
+    propose_add_section:          'Drafting section…',
+    propose_update_section:       'Drafting section edit…',
+    propose_delete_section:       'Drafting section removal…',
+    propose_add_group:            'Drafting new group…',
+    propose_rename_group:         'Drafting group rename…',
+    propose_delete_group:         'Drafting group removal…',
+    propose_switch_active_group:  'Switching active group…',
+    propose_toggle_group_include: 'Drafting group toggle…',
+    propose_link_to_client:       'Drafting client link…',
+    propose_link_to_lead:         'Drafting lead link…',
+    propose_update_estimate_field:'Drafting estimate edit…',
+    propose_add_client_note:      'Drafting client note…',
+    // Job / Elle proposals
+    set_phase_pct_complete:       'Drafting % complete update…',
+    set_phase_field:              'Drafting phase edit…',
+    set_phase_buildingId:         'Drafting phase relink…',
+    request_build_mode:           'Requesting Build mode…',
+    // Client / HR proposals
+    create_parent_company:        'Drafting parent company…',
+    rename_client:                'Drafting client rename…',
+    change_property_parent:       'Drafting parent change…',
+    merge_clients:                'Drafting client merge…',
+    split_client_into_parent_and_property: 'Drafting client split…',
+    delete_client:                'Drafting client deletion…',
+    attach_business_card_to_client: 'Drafting business card attach…',
+    add_client_note:              'Drafting client note…',
+    // Staff / CoS proposals
+    propose_skill_pack_add:       'Drafting skill pack…',
+    propose_skill_pack_edit:      'Drafting skill pack edit…',
+    propose_skill_pack_delete:    'Drafting skill pack removal…'
   };
 
   function appendStreamingBubble() {
@@ -3542,6 +3584,26 @@
           '<div style="font-size:11px;color:var(--text-dim,#aaa);margin-top:2px;">' + escapeHTMLLocal(line.account || '') + (line.memo ? ' &middot; ' + escapeHTMLLocal(String(line.memo).slice(0, 60)) : '') + '</div>' +
           '<div style="font-size:12px;color:var(--text,#ccc);margin-top:6px;">&rarr; <strong>' + escapeHTMLLocal(nodeT ? (nodeT.label || nodeT.type) : input.node_id) + '</strong></div>'
         : '<div style="font-size:12px;color:#fbbf24;">QB line not found locally — server still has it.</div>';
+    } else if (tu.name === 'propose_delete_group') {
+      heading = '&#x1F5D1; Delete group';
+      detail = '<div style="font-size:13px;color:var(--text,#fff);font-weight:600;">' + escapeHTMLLocal(input.group_id || input.group_name || '') + '</div>' +
+        '<div style="font-size:11px;color:var(--text-dim,#aaa);margin-top:3px;">Group + every line under it is removed. The active group flips to the next remaining group automatically.</div>';
+    } else if (tu.name === 'propose_add_group') {
+      heading = '&#x271A; Add group';
+      detail = '<div style="font-size:13px;color:var(--text,#fff);font-weight:600;">' + escapeHTMLLocal(input.name || '') + '</div>' +
+        (input.copy_from_active ? '<div style="font-size:11px;color:var(--text-dim,#aaa);margin-top:3px;">Cloning sections + line items from the currently-active group.</div>' : '<div style="font-size:11px;color:var(--text-dim,#aaa);margin-top:3px;">Empty group — add line items after creation.</div>');
+    } else if (tu.name === 'propose_rename_group') {
+      heading = '&#x270F; Rename group';
+      detail = '<div style="font-size:12px;color:var(--text,#ccc);">' +
+          '<code>' + escapeHTMLLocal(input.group_id || '') + '</code> &rarr; <strong>' + escapeHTMLLocal(input.new_name || '') + '</strong>' +
+        '</div>';
+    } else if (tu.name === 'propose_switch_active_group') {
+      heading = '&#x21B7; Switch active group';
+      detail = '<div style="font-size:12px;color:var(--text,#ccc);">Make <strong>' + escapeHTMLLocal(input.group_id || '') + '</strong> the active group (the one shown in totals).</div>';
+    } else if (tu.name === 'propose_toggle_group_include') {
+      heading = '&#x2611; Toggle group include';
+      var inc = input.include === false ? 'EXCLUDE' : 'INCLUDE';
+      detail = '<div style="font-size:12px;color:var(--text,#ccc);"><strong>' + inc + '</strong> <code>' + escapeHTMLLocal(input.group_id || '') + '</code> in totals.</div>';
     } else {
       heading = '? Unknown tool: ' + tu.name;
       detail = '<pre style="font-size:11px;">' + escapeHTMLLocal(JSON.stringify(input, null, 2)) + '</pre>';
