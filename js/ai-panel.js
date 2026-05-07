@@ -1504,12 +1504,20 @@
       setSendDisabled(false);
       _abortController = null;
 
-      if (pendingToolUses.length && pendingAssistantContent) {
+      if (pendingToolUses.length) {
         // Tool-use turn — render approval cards inline. The streamDiv
         // stays as the assistant bubble; cards get appended below the
         // text. No history persistence on this turn — the conversation
         // gets persisted only after the final text response of the
         // multi-step exchange.
+        //
+        // pendingAssistantContent is non-null on v1 (the server echoes
+        // the assistant's full content array so /chat/continue can
+        // replay it) and null on v2 (the Anthropic Session holds it
+        // server-side; client doesn't need to echo). Either way, the
+        // tool cards still need to render — earlier this gate also
+        // required pendingAssistantContent which silently dropped v2
+        // tool turns to "(no response)".
         finalizeProposalBubble(streamDiv, assistantText, pendingToolUses, pendingAssistantContent);
       } else {
         // Plain text response — drop the streaming placeholder and add
