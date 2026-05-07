@@ -3839,6 +3839,144 @@
   // viewUrl?, base64Images:[]}
   var _pendingComposer = [];
 
+  // Live camera capture modal. On desktop with a webcam (or mobile
+  // through HTTPS with permission), opens a video preview overlay
+  // with Capture / Cancel buttons. The captured frame is wrapped in
+  // a File and routed through the existing handleSelectedFiles
+  // pipeline so the AI sees it the same as any other photo.
+  // Falls back to the native file input with capture="environment"
+  // on environments where getUserMedia is unavailable or denied —
+  // that path still launches the system camera UI on iOS / Android.
+  function openCameraCapture(cameraInput) {
+    var nav = (typeof navigator !== 'undefined') ? navigator : null;
+    var hasMediaDevices = nav && nav.mediaDevices && typeof nav.mediaDevices.getUserMedia === 'function';
+    if (!hasMediaDevices) {
+      // No getUserMedia at all — try the native input.
+      cameraInput.value = '';
+      cameraInput.click();
+      return;
+    }
+
+    // Build the modal up front so even a denied / errored stream
+    // gives the user something to dismiss instead of a flicker.
+    var overlay = document.createElement('div');
+    overlay.style.cssText =
+      'position:fixed;inset:0;z-index:10001;background:rgba(0,0,0,0.85);' +
+      'display:flex;flex-direction:column;align-items:center;justify-content:center;' +
+      'padding:20px;box-sizing:border-box;';
+
+    var frame = document.createElement('div');
+    frame.style.cssText =
+      'background:#0f0f12;border:1px solid #2a2a30;border-radius:8px;padding:14px;' +
+      'max-width:min(720px,calc(100vw - 40px));width:100%;display:flex;' +
+      'flex-direction:column;gap:12px;align-items:stretch;';
+
+    var heading = document.createElement('div');
+    heading.textContent = 'Take a photo';
+    heading.style.cssText =
+      'font-size:14px;font-weight:600;color:#fff;display:flex;align-items:center;gap:8px;';
+
+    var status = document.createElement('div');
+    status.textContent = 'Connecting to camera…';
+    status.style.cssText = 'font-size:12px;color:#9aa;';
+
+    var video = document.createElement('video');
+    video.autoplay = true;
+    video.playsInline = true;
+    video.muted = true;
+    video.style.cssText =
+      'width:100%;max-height:60vh;border-radius:6px;background:#000;display:none;';
+
+    var actions = document.createElement('div');
+    actions.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;';
+
+    var cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.className = 'ee-btn secondary';
+
+    var captureBtn = document.createElement('button');
+    captureBtn.type = 'button';
+    captureBtn.textContent = '● Capture';
+    captureBtn.className = 'ee-btn';
+    captureBtn.style.cssText = 'background:#34d399;color:#0a0a0a;font-weight:600;border:none;';
+    captureBtn.disabled = true;
+
+    actions.appendChild(cancelBtn);
+    actions.appendChild(captureBtn);
+    frame.appendChild(heading);
+    frame.appendChild(status);
+    frame.appendChild(video);
+    frame.appendChild(actions);
+    overlay.appendChild(frame);
+    document.body.appendChild(overlay);
+
+    var stream = null;
+    function teardown() {
+      if (stream) {
+        try { stream.getTracks().forEach(function(t) { t.stop(); }); }
+        catch (e) { /* ignore */ }
+        stream = null;
+      }
+      if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+    }
+
+    cancelBtn.onclick = teardown;
+
+    // Esc to dismiss — track and clean up so we don't leak listeners
+    // or fight other modals that bind global keys.
+    function onKey(e) {
+      if (e.key === 'Escape') { teardown(); document.removeEventListener('keydown', onKey, true); }
+    }
+    document.addEventListener('keydown', onKey, true);
+
+    captureBtn.onclick = function() {
+      if (!stream || !video.videoWidth || !video.videoHeight) return;
+      var canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      var ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      canvas.toBlob(function(blob) {
+        if (!blob) { teardown(); return; }
+        var d = new Date();
+        var pad = function(n) { return n < 10 ? '0' + n : '' + n; };
+        var stamp = d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) +
+          '_' + pad(d.getHours()) + '-' + pad(d.getMinutes()) + '-' + pad(d.getSeconds());
+        var name = 'photo-' + stamp + '.jpg';
+        var file;
+        try { file = new File([blob], name, { type: blob.type || 'image/jpeg' }); }
+        catch (err) { blob.name = name; file = blob; }
+        // Mimic FileList for handleSelectedFiles which iterates by index.
+        handleSelectedFiles([file]);
+        teardown();
+        document.removeEventListener('keydown', onKey, true);
+      }, 'image/jpeg', 0.92);
+    };
+
+    // Prefer the rear camera when one exists (most useful for AGX —
+    // PMs photographing buildings / SOWs / receipts in the field),
+    // but accept any camera the device offers.
+    var constraints = { video: { facingMode: { ideal: 'environment' } }, audio: false };
+    nav.mediaDevices.getUserMedia(constraints).then(function(s) {
+      stream = s;
+      video.srcObject = s;
+      video.style.display = 'block';
+      status.style.display = 'none';
+      captureBtn.disabled = false;
+    }).catch(function(err) {
+      // Common reasons: permission denied, no camera, insecure
+      // context. Fall back to the native input which on mobile still
+      // launches the system camera, and on desktop opens a file
+      // picker (better than nothing).
+      console.warn('Camera access denied or unavailable:', err && err.message);
+      teardown();
+      document.removeEventListener('keydown', onKey, true);
+      cameraInput.value = '';
+      cameraInput.click();
+    });
+  }
+
   function setupFileAttachments(panel) {
     var attachBtn = panel.querySelector('#ai-attach');
     var cameraBtn = panel.querySelector('#ai-camera');
@@ -3850,7 +3988,12 @@
 
     attachBtn.onclick = function() { fileInput.value = ''; fileInput.click(); };
     if (cameraBtn && cameraInput) {
-      cameraBtn.onclick = function() { cameraInput.value = ''; cameraInput.click(); };
+      // Camera button now opens a live camera preview via getUserMedia
+      // when available (desktop with webcam, modern mobile browsers
+      // through HTTPS). Fall back to the native file input with
+      // capture="environment" if getUserMedia fails — that path still
+      // launches the system camera UI on iOS / Android.
+      cameraBtn.onclick = function() { openCameraCapture(cameraInput); };
       cameraInput.onchange = function(e) { handleSelectedFiles(e.target.files); };
     }
     fileInput.onchange = function(e) { handleSelectedFiles(e.target.files); };
