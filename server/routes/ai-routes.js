@@ -6274,6 +6274,481 @@ router.post('/v2/staff/chat/continue',
   }
 );
 
+// ════════════════════════════════════════════════════════════════════
+// LEAD INTAKE — fifth agent, fresh session per panel open
+//
+// Distinct from HR/AG/Elle/CoS: each /v2/intake/chat call archives
+// any prior intake session for this user and starts a brand-new
+// Anthropic session. There's no persistent history surface — once
+// the user creates a lead (or closes the panel), the conversation is
+// done.
+//
+// Two read tools (auto-tier) for dedupe checks; one approval-tier
+// tool (propose_create_lead) that does the actual create. Photos
+// uploaded mid-chat sit in a per-user temp bucket and move to the
+// new lead's attachments on approval.
+// ════════════════════════════════════════════════════════════════════
+
+const FLAG_AGENT_MODE_INTAKE = (process.env.AGX_AGENT_MODE_INTAKE || '').toLowerCase() === 'agents';
+
+// Per-user pending image bucket scoped to intake. Separate from the
+// HR business-card bucket so a stale HR upload can't accidentally
+// land on a lead, and vice-versa.
+const _intakeImageBuckets = new Map();
+
+function stashPendingIntakeImages(userId, base64Array) {
+  if (!base64Array || !base64Array.length) return;
+  const existing = _intakeImageBuckets.get(userId) || { images: [], lastTouched: 0 };
+  const now = Date.now();
+  for (const raw of base64Array) {
+    const stripped = typeof raw === 'string' && raw.indexOf('base64,') >= 0
+      ? raw.slice(raw.indexOf('base64,') + 7)
+      : raw;
+    existing.images.push({ b64: stripped, mime: 'image/jpeg', addedAt: now });
+  }
+  // Cap at 12 images / 30 min — leads usually need 1-6 photos.
+  if (existing.images.length > 12) existing.images = existing.images.slice(-12);
+  existing.lastTouched = now;
+  _intakeImageBuckets.set(userId, existing);
+}
+function drainPendingIntakeImages(userId) {
+  const bucket = _intakeImageBuckets.get(userId);
+  if (!bucket) return [];
+  _intakeImageBuckets.delete(userId);
+  return bucket.images || [];
+}
+function clearPendingIntakeImages(userId) {
+  _intakeImageBuckets.delete(userId);
+}
+
+// Per-turn context for the intake agent. Light — just who the user
+// is, the date, and how many photos are staged. The agent's stable
+// system prompt carries the rest.
+async function buildIntakeContext(userId) {
+  const lines = [];
+  lines.push('# Intake session');
+  let userRow = null;
+  try {
+    const r = await pool.query('SELECT id, email, name, role FROM users WHERE id = $1', [userId]);
+    userRow = r.rows[0] || null;
+  } catch (e) { /* defensive */ }
+  if (userRow) {
+    lines.push('Intaking user: **' + userRow.name + '** (' + userRow.email + ', role=' + userRow.role + ')');
+    lines.push('  → If this user IS the salesperson on this lead, you can set salesperson_id to "' + userRow.id + '".');
+  }
+  const today = new Date();
+  lines.push('Date: ' + today.toISOString().slice(0, 10));
+  // Photo count from the intake bucket — agent already SEES the
+  // photos as inline content blocks; this is just a numeric hint.
+  const bucket = _intakeImageBuckets.get(userId);
+  const n = bucket && bucket.images ? bucket.images.length : 0;
+  lines.push('Photos staged this turn: ' + n + (n ? ' (in scope for attach_pending_photos:true on propose_create_lead)' : ''));
+  return { system: lines.join('\n') };
+}
+
+// Auto-tier intake reads — dedupe checks against existing clients
+// and recent leads.
+async function execIntakeRead(name, input) {
+  if (name === 'read_existing_clients') {
+    const q = String((input && input.query) || '').trim();
+    if (!q) return 'No query provided.';
+    const like = '%' + q.replace(/[\\%_]/g, m => '\\' + m) + '%';
+    const r = await pool.query(
+      `SELECT c.id, c.name, c.client_type, c.parent_client_id,
+              p.name AS parent_name, c.email, c.phone, c.market,
+              c.community_name, c.property_address, c.city, c.state
+         FROM clients c
+         LEFT JOIN clients p ON p.id = c.parent_client_id
+        WHERE c.name ILIKE $1 OR p.name ILIKE $1 OR c.community_name ILIKE $1
+        ORDER BY (c.name ILIKE $1) DESC, c.name
+        LIMIT 30`,
+      [like]
+    );
+    if (!r.rows.length) return 'No clients matched "' + q + '". Safe to propose a new client.';
+    const lines = ['Matched ' + r.rows.length + ' client(s):'];
+    r.rows.forEach(c => {
+      const parent = c.parent_name ? ' (under ' + c.parent_name + ')' : '';
+      const where  = [c.city, c.state].filter(Boolean).join(', ');
+      lines.push('- id=`' + c.id + '` · ' + c.name + parent +
+        ' · ' + (c.client_type || '?') +
+        (where ? ' · ' + where : '') +
+        (c.email ? ' · ' + c.email : '') +
+        (c.phone ? ' · ' + c.phone : ''));
+    });
+    return lines.join('\n');
+  }
+  if (name === 'read_existing_leads') {
+    const q = String((input && input.query) || '').trim();
+    if (!q) return 'No query provided.';
+    const like = '%' + q.replace(/[\\%_]/g, m => '\\' + m) + '%';
+    const r = await pool.query(
+      `SELECT l.id, l.title, l.status, l.city, l.state, l.created_at, l.updated_at,
+              c.name AS client_name
+         FROM leads l
+         LEFT JOIN clients c ON c.id = l.client_id
+        WHERE (l.title ILIKE $1 OR l.property_name ILIKE $1 OR l.city ILIKE $1
+               OR c.name ILIKE $1)
+          AND l.created_at >= NOW() - INTERVAL '180 days'
+        ORDER BY l.updated_at DESC
+        LIMIT 20`,
+      [like]
+    );
+    if (!r.rows.length) return 'No leads matched "' + q + '" in the last 180 days. Safe to create.';
+    const lines = ['Recent leads matching "' + q + '":'];
+    r.rows.forEach(l => {
+      lines.push('- id=`' + l.id + '` · ' + l.title +
+        (l.client_name ? ' · ' + l.client_name : '') +
+        ' · status=' + l.status +
+        ' · updated=' + (l.updated_at ? l.updated_at.toISOString().slice(0, 10) : '?'));
+    });
+    return lines.join('\n');
+  }
+  return 'Unknown intake read tool: ' + name;
+}
+
+// Move every staged photo onto the new lead's attachments via the
+// same R2 + sharp pipeline HR's business-card flow uses. Returns the
+// number of photos attached. Errors per-photo are logged but don't
+// abort the rest — the lead is already created so partial success
+// beats rolling everything back.
+async function attachPendingIntakePhotosToLead(userId, leadId) {
+  const photos = drainPendingIntakeImages(userId);
+  if (!photos.length) return 0;
+  let saved = 0;
+  for (let i = 0; i < photos.length; i++) {
+    const photo = photos[i];
+    try {
+      const buf = Buffer.from(photo.b64, 'base64');
+      const id = 'att_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+      const baseKey = 'lead/' + leadId + '/' + id;
+      let thumbKey = null, webKey = null, originalKey;
+      let thumbUrl = null, webUrl = null, originalUrl;
+      let width = null, height = null;
+      try {
+        const sharp = require('sharp');
+        const meta = await sharp(buf).metadata();
+        width = meta.width || null;
+        height = meta.height || null;
+        const thumbBuf = await sharp(buf).rotate().resize(200, 200, { fit: 'cover' }).jpeg({ quality: 80 }).toBuffer();
+        const webBuf   = await sharp(buf).rotate().resize(1600, 1600, { fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 85 }).toBuffer();
+        thumbKey    = baseKey + '_thumb.jpg';
+        webKey      = baseKey + '_web.jpg';
+        originalKey = baseKey + '_orig.jpg';
+        thumbUrl    = await storage.put(thumbKey, thumbBuf, 'image/jpeg');
+        webUrl      = await storage.put(webKey,   webBuf,   'image/jpeg');
+        originalUrl = await storage.put(originalKey, buf, photo.mime || 'image/jpeg');
+      } catch (e) {
+        originalKey = baseKey + '_orig.jpg';
+        originalUrl = await storage.put(originalKey, buf, photo.mime || 'image/jpeg');
+      }
+      await pool.query(
+        `INSERT INTO attachments
+           (id, entity_type, entity_id, filename, mime_type, size_bytes,
+            width, height, thumb_url, web_url, original_url,
+            thumb_key, web_key, original_key, position, uploaded_by)
+         VALUES ($1, 'lead', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+        [id, leadId, 'intake-photo-' + (i + 1) + '.jpg',
+         photo.mime || 'image/jpeg', buf.length,
+         width, height,
+         thumbUrl, webUrl, originalUrl,
+         thumbKey, webKey, originalKey,
+         i, userId]
+      );
+      saved++;
+    } catch (e) {
+      console.warn('[intake] photo attach failed for lead ' + leadId + ' (idx ' + i + '):', e && e.message);
+    }
+  }
+  return saved;
+}
+
+// Approval-tier handler: create the client (if inline), insert the
+// lead, attach the staged photos. Runs inside makeIntakeOnCustomToolUse
+// when the user approves propose_create_lead on /chat/continue.
+async function execProposeCreateLead(input, userId) {
+  const t = String(input.title || '').trim();
+  if (!t) throw new Error('title is required');
+
+  // Resolve client_id: existing wins over new_client; if neither, we
+  // create the lead with NULL client_id (allowed but flagged in the
+  // summary so the user knows to backfill).
+  let clientId = input.existing_client_id || null;
+  let createdClientNote = '';
+  if (!clientId && input.new_client && input.new_client.name) {
+    const nc = input.new_client;
+    const newClientId = 'client_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+    await pool.query(
+      `INSERT INTO clients
+         (id, name, parent_client_id, client_type, email, phone, property_address)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [newClientId, nc.name, nc.parent_client_id || null, nc.client_type || null,
+       nc.email || null, nc.phone || null, nc.address || null]
+    );
+    clientId = newClientId;
+    createdClientNote = ' (created new client "' + nc.name + '" id=' + newClientId + ')';
+  }
+
+  const leadId = 'lead_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+  const f = {
+    id: leadId,
+    created_by: userId,
+    client_id: clientId,
+    title: t.slice(0, 200),
+    street_address: input.street_address || null,
+    city: input.city || null,
+    state: input.state || null,
+    zip: input.zip || null,
+    status: 'new',
+    confidence: input.confidence != null ? Math.max(0, Math.min(100, parseInt(input.confidence, 10) || 0)) : null,
+    projected_sale_date: input.projected_sale_date || null,
+    estimated_revenue_low:  input.estimated_revenue_low  != null ? Number(input.estimated_revenue_low)  : null,
+    estimated_revenue_high: input.estimated_revenue_high != null ? Number(input.estimated_revenue_high) : null,
+    source: input.source || null,
+    project_type: input.project_type || null,
+    salesperson_id: input.salesperson_id || null,
+    property_name: input.property_name || null,
+    gate_code: input.gate_code || null,
+    market: input.market || null,
+    notes: input.notes || null
+  };
+  const cols = Object.keys(f);
+  const vals = cols.map(k => f[k]);
+  const placeholders = cols.map((_, i) => '$' + (i + 1)).join(', ');
+  await pool.query(
+    `INSERT INTO leads (${cols.join(', ')}) VALUES (${placeholders})`,
+    vals
+  );
+
+  let photoNote = '';
+  if (input.attach_pending_photos) {
+    const n = await attachPendingIntakePhotosToLead(userId, leadId);
+    photoNote = n ? ' · attached ' + n + ' photo' + (n === 1 ? '' : 's') : '';
+  } else {
+    // No photos requested but bucket may still have stale entries —
+    // drop them so the next intake starts clean.
+    clearPendingIntakeImages(userId);
+  }
+
+  return 'Created lead "' + t + '" id=' + leadId + createdClientNote + photoNote;
+}
+
+function makeIntakeOnCustomToolUse(userId) {
+  return async function (tu) {
+    if (tu.name === 'read_existing_clients' || tu.name === 'read_existing_leads') {
+      try {
+        const summary = await execIntakeRead(tu.name, tu.input || {});
+        return { tier: 'auto', summary };
+      } catch (e) {
+        return { tier: 'auto', error: 'Error: ' + (e.message || 'failed') };
+      }
+    }
+    if (tu.name === 'propose_create_lead') {
+      // Approval flow — surface the card. The actual exec happens in
+      // /chat/continue when the user clicks Approve. The Approve
+      // handler (existing v2 continue path) calls back into us with
+      // tu.name === 'propose_create_lead', tier === 'approval' will
+      // hit it as a custom_tool_use AGAIN through the same callback —
+      // we treat the second-pass call as the execute.
+      return { tier: 'approval' };
+    }
+    return { tier: 'approval' };
+  };
+}
+
+// POST /api/ai/v2/intake/chat — fresh session per call.
+router.post('/v2/intake/chat',
+  requireAuth, requireCapability('LEADS_EDIT'),
+  async (req, res) => {
+    const anthropic = getAnthropic();
+    if (!anthropic) return res.status(503).json({ error: 'AI assistant is not configured.' });
+    if (!FLAG_AGENT_MODE_INTAKE) {
+      return res.status(503).json({ error: 'Lead Intake AI is disabled. Set AGX_AGENT_MODE_INTAKE=agents to enable.' });
+    }
+    const userMessage = (req.body && req.body.message || '').trim();
+    if (!userMessage) return res.status(400).json({ error: 'message is required' });
+    const additionalImages = Array.isArray(req.body && req.body.additional_images)
+      ? req.body.additional_images.slice(0, 12)
+      : [];
+
+    // Stash any uploaded photos in the per-user intake bucket — they
+    // travel with the conversation as inline vision AND get attached
+    // to the lead at create time. fresh-session-on-open semantics
+    // mean we DON'T clear the bucket here (the old chat is gone but
+    // its photos may still be in flight from the same panel-open).
+    if (additionalImages.length) stashPendingIntakeImages(req.user.id, additionalImages);
+
+    setSSEHeaders(res);
+    try {
+      // Fresh-session semantics: archive any prior active intake
+      // session before creating the new one. ensureAiSession will
+      // see no active row and create.
+      await archiveActiveAiSession({
+        agentKey: 'intake', entityType: 'intake', entityId: null, userId: req.user.id
+      });
+
+      const ctx = await buildIntakeContext(req.user.id);
+      const turnText =
+        '<turn_context>\n' + ctx.system + '\n</turn_context>\n\n' + userMessage;
+
+      // Inline images precede the text block per Anthropic guidance.
+      const inlineImageBlocks = additionalImages
+        .map(b64 => inlineImageBlock(b64))
+        .filter(Boolean)
+        .slice(0, 12);
+      const userContent = inlineImageBlocks.length
+        ? [...inlineImageBlocks, { type: 'text', text: turnText }]
+        : [{ type: 'text', text: turnText }];
+
+      const session = await ensureAiSession({
+        agentKey: 'intake', entityType: 'intake', entityId: null, userId: req.user.id
+      });
+      await pool.query('UPDATE ai_sessions SET last_used_at = NOW() WHERE id = $1', [session.id]);
+
+      // Log the user's intake message for audit (separate
+      // entity_type='intake' so it doesn't pollute HR/AG history
+      // but is still queryable for replay/debug).
+      const userMsgId = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+      await pool.query(
+        `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content)
+         VALUES ($1, 'intake', $2, $3, 'user', $4)`,
+        [userMsgId, session.anthropic_session_id, req.user.id, userMessage]
+      );
+
+      await runV2SessionStream({
+        anthropic, res,
+        session: session,
+        eventsToSend: [{ type: 'user.message', content: userContent }],
+        onCustomToolUse: makeIntakeOnCustomToolUse(req.user.id),
+        persistAssistantText: async (text, usage) => {
+          if (!text) return;
+          const aid = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+          await pool.query(
+            `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content, model,
+                                      input_tokens, output_tokens,
+                                      cache_creation_input_tokens, cache_read_input_tokens)
+             VALUES ($1, 'intake', $2, $3, 'assistant', $4, $5, $6, $7, $8, $9)`,
+            [aid, session.anthropic_session_id, req.user.id, text, MODEL,
+             usage.input_tokens, usage.output_tokens,
+             usage.cache_creation_input_tokens || null, usage.cache_read_input_tokens || null]
+          );
+        }
+      });
+    } catch (e) {
+      console.error('AI v2 intake chat error:', e);
+      res.write('data: ' + JSON.stringify({ error: e.message || 'Server error' }) + '\n\n');
+      res.write('data: [DONE]\n\n');
+      res.end();
+    }
+  }
+);
+
+// POST /api/ai/v2/intake/chat/continue — resume after the user
+// approves/rejects propose_create_lead on the active intake session.
+router.post('/v2/intake/chat/continue',
+  requireAuth, requireCapability('LEADS_EDIT'),
+  async (req, res) => {
+    const anthropic = getAnthropic();
+    if (!anthropic) return res.status(503).json({ error: 'AI assistant is not configured.' });
+    if (!FLAG_AGENT_MODE_INTAKE) {
+      return res.status(503).json({ error: 'Lead Intake AI is disabled.' });
+    }
+    const decisions = req.body && req.body.tool_results;
+    if (!Array.isArray(decisions) || !decisions.length) {
+      return res.status(400).json({ error: 'tool_results is required' });
+    }
+
+    setSSEHeaders(res);
+    try {
+      const sessionRow = await pool.query(
+        `SELECT * FROM ai_sessions
+           WHERE agent_key = 'intake' AND entity_type = 'intake'
+             AND entity_id IS NULL AND user_id = $1 AND archived_at IS NULL`,
+        [req.user.id]
+      );
+      if (!sessionRow.rows.length) {
+        res.write('data: ' + JSON.stringify({ error: 'No active intake session — start a new turn.' }) + '\n\n');
+        res.write('data: [DONE]\n\n');
+        return res.end();
+      }
+      const session = sessionRow.rows[0];
+
+      // Execute approved propose_create_lead inline; everything else
+      // (rejects, future propose tools) just gets a text result back.
+      const eventsToSend = [];
+      let createdLeadId = null;
+      for (const d of decisions) {
+        let summary, isError = false;
+        if (!d.approved) {
+          summary = d.reject_reason || 'User rejected this proposal.';
+          res.write('data: ' + JSON.stringify({ tool_rejected: { id: d.tool_use_id, name: d.name } }) + '\n\n');
+        } else if (d.name === 'propose_create_lead') {
+          try {
+            summary = await execProposeCreateLead(d.input || {}, req.user.id);
+            // Pull the new lead id out of the summary so the client
+            // can navigate / refresh the leads list.
+            const m = /id=(lead_[a-z0-9_]+)/i.exec(summary || '');
+            if (m) createdLeadId = m[1];
+            res.write('data: ' + JSON.stringify({ tool_applied: { id: d.tool_use_id, name: d.name, input: d.input, summary } }) + '\n\n');
+          } catch (e) {
+            summary = 'Error: ' + (e.message || 'failed');
+            isError = true;
+            res.write('data: ' + JSON.stringify({ tool_failed: { id: d.tool_use_id, name: d.name, input: d.input, error: summary } }) + '\n\n');
+          }
+        } else {
+          summary = d.applied_summary || 'User approved.';
+          res.write('data: ' + JSON.stringify({ tool_applied: { id: d.tool_use_id, name: d.name, input: d.input, summary } }) + '\n\n');
+        }
+        eventsToSend.push({
+          type: 'user.custom_tool_result',
+          custom_tool_use_id: d.tool_use_id,
+          content: [{ type: 'text', text: summary }],
+          is_error: isError || undefined
+        });
+      }
+
+      await pool.query('UPDATE ai_sessions SET last_used_at = NOW() WHERE id = $1', [session.id]);
+
+      await runV2SessionStream({
+        anthropic, res,
+        session: session,
+        eventsToSend,
+        onCustomToolUse: makeIntakeOnCustomToolUse(req.user.id),
+        persistAssistantText: async (text, usage) => {
+          if (!text) return;
+          const aid = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+          await pool.query(
+            `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content, model,
+                                      input_tokens, output_tokens,
+                                      cache_creation_input_tokens, cache_read_input_tokens)
+             VALUES ($1, 'intake', $2, $3, 'assistant', $4, $5, $6, $7, $8, $9)`,
+            [aid, session.anthropic_session_id, req.user.id, text, MODEL,
+             usage.input_tokens, usage.output_tokens,
+             usage.cache_creation_input_tokens || null, usage.cache_read_input_tokens || null]
+          );
+        }
+      });
+
+      // Once the lead landed, the intake conversation is complete —
+      // archive the session so the next panel-open is guaranteed
+      // fresh. Done AFTER runV2SessionStream so the agent's
+      // post-create acknowledgment text still streams to the user
+      // before we close the session out.
+      if (createdLeadId) {
+        try {
+          await archiveActiveAiSession({
+            agentKey: 'intake', entityType: 'intake', entityId: null, userId: req.user.id
+          });
+        } catch (e) { /* best-effort */ }
+      }
+    } catch (e) {
+      console.error('AI v2 intake chat/continue error:', e);
+      res.write('data: ' + JSON.stringify({ error: e.message || 'Server error' }) + '\n\n');
+      res.write('data: [DONE]\n\n');
+      res.end();
+    }
+  }
+);
+
 // POST /api/ai/exec-tool — generic auto-tier read-tool executor.
 // AG\'s client-side AUTO_READ_TOOLS appliers POST { name, input }
 // here; the server runs execStaffTool inline (the same auto-tier
@@ -6326,6 +6801,96 @@ function sectionsForAgent(agentKey) {
   return out;
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// LEAD INTAKE TOOLS — fifth agent, lives on the Leads page
+//
+// Each intake conversation is a fresh session: the user describes a
+// new lead in natural language, optionally uploads photos, the agent
+// confirms client + project details and proposes propose_create_lead.
+// On approval, the lead is INSERTed into `leads` and any photos
+// staged in the per-session pending bucket move to leads attachments.
+//
+// The two read tools mirror HR's directory tools but are scoped to
+// what intake actually needs: dedupe checks against existing clients
+// + recent leads at the same property.
+// ══════════════════════════════════════════════════════════════════════
+
+const INTAKE_TOOLS = [
+  {
+    name: 'read_existing_clients',
+    tier: 'auto',
+    description:
+      'Search the AGX clients directory for matches on a query string. Returns up to 30 candidates with id, name, parent name (if it is a property), client_type, contact info, and counts of related leads/jobs. ALWAYS run this BEFORE proposing a new lead — if the client already exists (matched by company name OR property name), use its id in propose_create_lead\'s existing_client_id field. Search matches partial strings against client names and parent names case-insensitively.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Substring to match against client name / parent / company. E.g. "Solace Timacuan", "PAC", "Greystar".' }
+      },
+      required: ['query']
+    }
+  },
+  {
+    name: 'read_existing_leads',
+    tier: 'auto',
+    description:
+      'Search recent leads (last 180 days) by title / property / city. Use this BEFORE proposing a new lead to surface possible duplicates — if the user describes "door replacement at Solace" and there\'s already a lead at that property, the user probably wants to update the existing lead instead of creating a new one. Return summary with id, title, status, client name, last update.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Substring to match against lead title / property name / city.' }
+      },
+      required: ['query']
+    }
+  },
+  {
+    name: 'propose_create_lead',
+    tier: 'approval',
+    description:
+      'Create a new lead in the AGX leads table. Use either existing_client_id (preferred — found via read_existing_clients) or new_client to create a client first. Always include a thorough notes field summarizing what the user described AND your photo interpretation if photos were uploaded. set attach_pending_photos:true when photos are in the chat — they\'ll move from the temp bucket onto the new lead\'s attachments on approval.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        title:           { type: 'string', description: 'Lead title — what the project is. E.g. "Door replacement — Unit 12B", "Exterior soft-wash 5 surfaces". Required.' },
+        existing_client_id: { type: 'string', description: 'Existing clients.id matched via read_existing_clients. Use this when the property/company is already in the directory. Mutually exclusive with new_client.' },
+        new_client: {
+          type: 'object',
+          description: 'Inline client to create alongside the lead. Use ONLY when read_existing_clients returned no match. Mutually exclusive with existing_client_id.',
+          properties: {
+            name:           { type: 'string', description: 'Client name — for a property under a parent management firm, this is the property name (e.g. "Solace Timacuan"). For a standalone homeowner, their full name.' },
+            parent_client_id: { type: 'string', description: 'Optional. clients.id of an existing PARENT client (e.g. PAC, Greystar) when this is a managed property under that firm.' },
+            client_type:    { type: 'string', description: '"Property" / "Property Mgmt" / "Homeowner" / "Commercial". Match the existing directory conventions.' },
+            email:          { type: 'string' },
+            phone:          { type: 'string' },
+            address:        { type: 'string', description: 'Mailing or billing address (street + city + state if known).' }
+          }
+        },
+        // Property location (where the work is)
+        street_address:  { type: 'string', description: 'Property/job-site street address.' },
+        city:            { type: 'string' },
+        state:           { type: 'string', description: 'Two-letter state code.' },
+        zip:             { type: 'string' },
+        property_name:   { type: 'string', description: 'Property / community name when distinct from the client (e.g. "Solace Timacuan", "The Esplanade").' },
+        market:          { type: 'string', description: 'Market region — Tampa / Orlando / etc.' },
+        gate_code:       { type: 'string' },
+        // Project metadata
+        project_type:    { type: 'string', enum: ['Renovation', 'Service & Repair', 'Work Order'], description: 'Map to one of the three AGX values.' },
+        source:          { type: 'string', description: 'Where the lead came from (e.g. "Buildertrend", "PM referral", "PAC direct").' },
+        salesperson_id:  { type: 'string', description: 'Optional. users.id of the AGX salesperson on this lead.' },
+        // Estimated revenue
+        estimated_revenue_low:  { type: 'number', description: 'Low end of est. revenue range in $.' },
+        estimated_revenue_high: { type: 'number', description: 'High end. Set both equal for a single number.' },
+        confidence:      { type: 'integer', description: '0–100 confidence the lead will close.' },
+        projected_sale_date: { type: 'string', description: 'YYYY-MM-DD when the user expects to close.' },
+        // Notes — capture EVERYTHING the user said + photo summary
+        notes:           { type: 'string', description: 'Full free-form notes. Capture the user\'s description verbatim plus your photo interpretation ("uploaded 3 photos: 36-inch fiberglass entry door with 2 sidelights, weathered jamb, no visible rot on threshold"). Worth being thorough — these notes drive AG\'s estimate later.' },
+        attach_pending_photos: { type: 'boolean', description: 'Set true when photos were uploaded in this chat. The handler will move them from the per-session temp bucket onto leads.<new_id>.attachments on approval.' },
+        rationale:       { type: 'string', description: 'One short sentence — why you\'re proposing this lead now (mostly used for audit on review).' }
+      },
+      required: ['title', 'rationale']
+    }
+  }
+];
+
 module.exports = router;
 module.exports.internals = {
   buildEstimateContext,
@@ -6337,6 +6902,7 @@ module.exports.internals = {
   jobTools:      () => [...WEB_TOOLS, ...JOB_TOOLS],
   clientTools:   () => [...WEB_TOOLS, ...CLIENT_TOOLS.map(({ tier, ...t }) => t)],
   staffTools:    () => [...WEB_TOOLS, ...STAFF_TOOLS.map(({ tier, ...t }) => t)],
+  intakeTools:   () => [...WEB_TOOLS, ...INTAKE_TOOLS.map(({ tier, ...t }) => t)],
   defaultModel: () => MODEL,
   maxTokens: () => MAX_TOKENS,
   // Resolve the effort string for a given model. Caller passes the

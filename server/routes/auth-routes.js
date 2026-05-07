@@ -54,7 +54,11 @@ router.get('/me', requireAuth, (req, res) => {
     // ramp independently; production stays on v1 until each env var
     // flips.
     agent_mode_cra:   (process.env.AGX_AGENT_MODE_CRA   || '').toLowerCase() === 'agents' ? 'agents' : 'legacy',
-    agent_mode_staff: (process.env.AGX_AGENT_MODE_STAFF || '').toLowerCase() === 'agents' ? 'agents' : 'legacy'
+    agent_mode_staff: (process.env.AGX_AGENT_MODE_STAFF || '').toLowerCase() === 'agents' ? 'agents' : 'legacy',
+    // Lead Intake — the fifth agent. Click the "🧲 New Lead with AI"
+    // button on the Leads page to invoke. Independent flag so it
+    // ramps separately from the other agents.
+    agent_mode_intake: (process.env.AGX_AGENT_MODE_INTAKE || '').toLowerCase() === 'agents' ? 'agents' : 'legacy'
   };
   res.json({ user: req.user, feature_flags: featureFlags });
 });

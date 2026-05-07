@@ -1383,7 +1383,13 @@ const AGENT_SYSTEM_BASELINE = {
   ag:    'You are AG, AGX Central Florida\'s estimating teammate. AGX = AG Exteriors, a Central-Florida construction-services company (painting, deck repair, roofing). You estimate like a senior PM: specific, trade-fluent, opinionated about scope completeness, calibrated on Central-FL pricing. The user message will carry per-turn estimate context.',
   job:   'You are Elle, AGX\'s WIP analyst. AGX = AG Exteriors. The user message will carry per-turn job WIP snapshot, change orders, QB cost data, and node graph. Spot margin issues, missing COs, billing gaps, % complete sanity.',
   cra:   'You are HR, AGX\'s customer relations agent. AGX = AG Exteriors. The user message will carry per-turn directory snapshot. Keep the directory clean, hierarchical, dedupe-clean.',
-  staff: 'You are Chief of Staff for AGX\'s in-app AI agents (AG / Elle / HR). The user message will carry per-turn live snapshot. Observe usage trends, audit specific conversations, propose skill-pack improvements.'
+  staff: 'You are Chief of Staff for AGX\'s in-app AI agents (AG / Elle / HR). The user message will carry per-turn live snapshot. Observe usage trends, audit specific conversations, propose skill-pack improvements.',
+  // Lead intake — fresh session per invocation. Each intake conversation
+  // is a one-shot: capture details from the user + any uploaded photos,
+  // propose_create_lead, the user approves, the lead lands, the panel
+  // closes, the session is archived. Designed to feel more like a guided
+  // form than a persistent chat.
+  intake: 'You are AGX\'s Lead Intake assistant. AGX = AG Exteriors, a Central-Florida construction-services company (painting, deck repair, roofing). Every conversation is a fresh intake — capture the new lead from the user\'s description and any photos they upload, then propose_create_lead. Be efficient: ask 1–2 clarifying questions only when essential, never re-greet or recap unnecessarily. ALWAYS run read_existing_clients before deciding whether to reuse an existing client_id or create a new one (no duplicates). Cross-check with read_existing_leads for the same property to flag possible overlaps. When you propose, include every detail the user provided plus your photo interpretation in the notes field. The per-turn user message carries: which user is intaking, the date, and any photo metadata.'
 };
 
 // Convert one of our local tool definitions (the ESTIMATE_TOOLS /
@@ -1477,14 +1483,15 @@ function builtinToolsetFor(agentKey) {
 function customToolsFor(agentKey) {
   const aiInternals = require('./ai-routes-internals');
   if (!aiInternals) return [];
-  // estimateTools / jobTools / clientTools / staffTools each include
-  // the WEB_TOOLS prefix; strip those because we configure web_search
-  // / web_fetch through the built-in toolset above instead.
+  // estimateTools / jobTools / clientTools / staffTools / intakeTools
+  // each include the WEB_TOOLS prefix; strip those because we configure
+  // web_search / web_fetch through the built-in toolset above instead.
   let tools = [];
-  if (agentKey === 'ag')         tools = aiInternals.estimateTools();
-  else if (agentKey === 'job')   tools = aiInternals.jobTools();
-  else if (agentKey === 'cra')   tools = aiInternals.clientTools();
-  else if (agentKey === 'staff') tools = aiInternals.staffTools();
+  if (agentKey === 'ag')          tools = aiInternals.estimateTools();
+  else if (agentKey === 'job')    tools = aiInternals.jobTools();
+  else if (agentKey === 'cra')    tools = aiInternals.clientTools();
+  else if (agentKey === 'staff')  tools = aiInternals.staffTools();
+  else if (agentKey === 'intake') tools = aiInternals.intakeTools && aiInternals.intakeTools() || [];
   return tools
     .filter(t => t.name !== 'web_search')              // built-in toolset owns this
     .map(toCustomToolParam)
@@ -1551,8 +1558,8 @@ async function ensureManagedAgent(agentKey) {
 router.post('/managed/reregister', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
   try {
     const key = String(req.query.key || '').toLowerCase();
-    if (!['ag', 'job', 'cra', 'staff'].includes(key)) {
-      return res.status(400).json({ error: 'key must be ag | job | cra | staff' });
+    if (!['ag', 'job', 'cra', 'staff', 'intake'].includes(key)) {
+      return res.status(400).json({ error: 'key must be ag | job | cra | staff | intake' });
     }
     const anthropic = getAnthropic();
     if (!anthropic) throw new Error('ANTHROPIC_API_KEY not set on this deployment.');
@@ -1610,7 +1617,7 @@ router.post('/managed/reregister', requireAuth, requireCapability('ROLES_MANAGE'
 router.post('/managed/bootstrap', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
   try {
     const key = String(req.query.key || 'all').toLowerCase();
-    const agents = (key === 'all') ? ['ag', 'job', 'cra', 'staff'] : [key];
+    const agents = (key === 'all') ? ['ag', 'job', 'cra', 'staff', 'intake'] : [key];
     const summary = [];
     for (const agentKey of agents) {
       try {
