@@ -3880,8 +3880,8 @@
     host.innerHTML = panelHeader('Managed Agents (Phase 1a)', '🤖') + '<div style="font-size:12px;color:var(--text-dim,#888);font-style:italic;">Loading…</div>';
     window.agxApi.get('/api/admin/agents/managed').then(function(resp) {
       var rows = (resp && resp.agents) || [];
-      var labels = { ag: 'AG (estimating)', job: 'Elle (WIP)', cra: 'HR (clients)', staff: 'Chief of Staff' };
-      var allKeys = ['ag', 'job', 'cra', 'staff'];
+      var labels = { ag: 'AG (estimating)', job: 'Elle (WIP)', cra: 'HR (clients)', staff: 'Chief of Staff', intake: 'Intake (lead capture)' };
+      var allKeys = ['ag', 'job', 'cra', 'staff', 'intake'];
       var registered = {};
       rows.forEach(function(r) { registered[r.agent_key] = r; });
 
