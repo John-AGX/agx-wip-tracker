@@ -30,6 +30,28 @@
     { key: 'sticker',  glyph: '\u{1F3F7}',  label: 'Sticker / stamp' }
   ];
 
+  // Common measurement presets shown in the picker panel. Order
+  // ≈ by frequency in residential exterior estimating. Each entry
+  // resolves through parseMeasurement so the displayed label uses
+  // the same formatter as user-entered values.
+  var MEASURE_PRESETS = [
+    { in: 6,    label: '6"' },
+    { in: 12,   label: "1'" },
+    { in: 18,   label: '18"' },
+    { in: 24,   label: "2'" },
+    { in: 32,   label: '32"' },
+    { in: 36,   label: '36"' },
+    { in: 48,   label: "4'" },
+    { in: 72,   label: "6'" },
+    { in: 80,   label: '80"' },
+    { in: 84,   label: '84"' },
+    { in: 96,   label: "8'" },
+    { in: 120,  label: "10'" },
+    { in: 144,  label: "12'" },
+    { in: 192,  label: "16'" },
+    { in: 240,  label: "20'" }
+  ];
+
   // Parse a free-form measurement string into { inches, label }.
   // Accepted shapes (case-insensitive, whitespace-tolerant):
   //   84  | 84"  | 84 in  | 84 inches             → inches
@@ -148,6 +170,11 @@
       onDone: opts.onDone || function() {},
       tool: 'arrow',
       stickerKind: null,
+      // Currently-armed measurement preset. When the measure tool
+      // is active, every line drawn picks this value. Cleared by
+      // tool change. null = no preset (fall back to prompt() so
+      // the user can enter a one-off custom value).
+      measurePending: null,    // { inches, label } | null
       color: '#ef4444',
       lineWidth: 8,
       strokes: [],
@@ -213,6 +240,9 @@
         // narrow viewports / phones). Visible only when the Sticker tool
         // is active.
         '<div id="agx-mk-sticker-picker" style="display:none;position:absolute;left:88px;top:78px;background:rgba(15,15,30,0.97);border:1px solid #3a3a4a;border-radius:8px;padding:8px;box-shadow:0 6px 20px rgba(0,0,0,0.5);z-index:5050;max-height:70vh;overflow-y:auto;width:140px;"></div>' +
+        // Measurement picker — same anchor model as the sticker
+        // picker. Visible only when the measure tool is active.
+        '<div id="agx-mk-measure-picker" style="display:none;position:absolute;left:88px;top:78px;background:rgba(15,15,30,0.97);border:1px solid #3a3a4a;border-radius:8px;padding:8px;box-shadow:0 6px 20px rgba(0,0,0,0.5);z-index:5050;max-height:70vh;overflow-y:auto;width:160px;"></div>' +
         // Canvas area
         '<div style="flex:1;background:#000;border:1px solid #2a2a3a;border-radius:10px;overflow:hidden;display:flex;align-items:center;justify-content:center;min-height:0;">' +
           '<canvas id="agx-mk-canvas" style="display:block;max-width:100%;max-height:100%;"></canvas>' +
@@ -231,8 +261,10 @@
         state.tool = btn.dataset.mkTool;
         if (state.tool !== 'sticker') state.stickerKind = null;
         if (state.tool !== 'select') state.selectedIdx = null;
+        if (state.tool !== 'measure') state.measurePending = null;
         refreshToolbar(overlay);
         renderStickerPicker(overlay);
+        renderMeasurePicker(overlay);
         updateThicknessIndicator(overlay);
         updateHint(overlay);
         redraw();
@@ -278,6 +310,7 @@
 
     refreshToolbar(overlay);
     renderStickerPicker(overlay);
+    renderMeasurePicker(overlay);
     updateHint(overlay);
     wireCanvasInput(canvas);
 
@@ -452,6 +485,94 @@
     if (state) state.activePolyline = null;
   }
 
+  function renderMeasurePicker(overlay) {
+    var picker = overlay.querySelector('#agx-mk-measure-picker');
+    if (!picker) return;
+    if (state.tool !== 'measure') { picker.style.display = 'none'; return; }
+    // Anchor to the measure tool button (same pattern as the
+    // sticker picker), so the panel sits in line with whichever row
+    // the button occupies — no fixed top: that breaks if we ever
+    // reorder the toolbar.
+    var measureBtn = overlay.querySelector('[data-mk-tool="measure"]');
+    var sidebar = overlay.querySelector('#agx-mk-sidebar');
+    if (measureBtn && sidebar) {
+      var btnRect = measureBtn.getBoundingClientRect();
+      var sidebarRect = sidebar.getBoundingClientRect();
+      var ovRect = overlay.getBoundingClientRect();
+      picker.style.top = (btnRect.top - ovRect.top) + 'px';
+      picker.style.left = (sidebarRect.right - ovRect.left + 8) + 'px';
+    }
+    picker.style.display = '';
+
+    var pendingLabel = (state.measurePending && state.measurePending.label) || '';
+    picker.innerHTML =
+      '<div style="font-size:9px;color:#888;text-transform:uppercase;letter-spacing:0.5px;text-align:center;margin-bottom:6px;">Measurement</div>' +
+      '<input id="agx-mk-measure-input" type="text" placeholder="84&quot;  ·  1.5&apos;  ·  5&apos;6&quot;" value="' + escapeHTML(pendingLabel) + '" ' +
+        'style="width:100%;box-sizing:border-box;background:rgba(255,255,255,0.05);color:#fff;border:1px solid #444;border-radius:5px;padding:6px 8px;font-size:13px;font-weight:600;margin-bottom:6px;outline:none;" />' +
+      '<div style="font-size:9px;color:#666;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Presets</div>' +
+      '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:4px;">' +
+      MEASURE_PRESETS.map(function(m) {
+        var active = state.measurePending && state.measurePending.inches === m.in;
+        return '<button data-mk-measure="' + m.in + '" ' +
+          'style="height:30px;background:' + (active ? '#4f8cff' : 'rgba(255,255,255,0.05)') +
+          ';color:' + (active ? '#fff' : '#ddd') + ';border:1px solid ' + (active ? '#4f8cff' : '#444') +
+          ';border-radius:5px;font-size:11px;cursor:pointer;font-weight:600;padding:0;">' +
+          escapeHTML(m.label) + '</button>';
+      }).join('') +
+      '</div>' +
+      '<button id="agx-mk-measure-clear" style="margin-top:8px;width:100%;height:28px;background:rgba(255,255,255,0.04);color:#aaa;border:1px solid #333;border-radius:5px;font-size:11px;cursor:pointer;">Clear · prompt on draw</button>' +
+      (pendingLabel
+        ? '<div style="margin-top:8px;font-size:10px;color:#34d399;text-align:center;">Armed: <strong>' + escapeHTML(pendingLabel) + '</strong></div>'
+        : '<div style="margin-top:8px;font-size:10px;color:#888;text-align:center;font-style:italic;">No preset — will prompt</div>');
+
+    // Presets — single click arms the measurement.
+    picker.querySelectorAll('[data-mk-measure]').forEach(function(btn) {
+      btn.onclick = function() {
+        var inches = parseFloat(btn.dataset.mkMeasure);
+        state.measurePending = { inches: inches, label: formatFeetInches(inches) };
+        renderMeasurePicker(overlay);
+        updateHint(overlay);
+      };
+    });
+
+    // Free-text input — armed live as the user types/blurs. Hitting
+    // Enter commits and gives focus back to the canvas so the user
+    // can immediately draw.
+    var input = picker.querySelector('#agx-mk-measure-input');
+    if (input) {
+      var commit = function() {
+        var raw = (input.value || '').trim();
+        if (!raw) { state.measurePending = null; return; }
+        var parsed = parseMeasurement(raw);
+        if (parsed) state.measurePending = parsed;
+        else state.measurePending = null;
+      };
+      input.onchange = function() {
+        commit();
+        renderMeasurePicker(overlay);
+      };
+      input.onkeydown = function(e) {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          commit();
+          renderMeasurePicker(overlay);
+          // Bounce focus back so the user can draw immediately.
+          var canvas = overlay.querySelector('#agx-mk-canvas');
+          if (canvas) canvas.focus();
+        }
+      };
+    }
+
+    var clearBtn = picker.querySelector('#agx-mk-measure-clear');
+    if (clearBtn) {
+      clearBtn.onclick = function() {
+        state.measurePending = null;
+        renderMeasurePicker(overlay);
+        updateHint(overlay);
+      };
+    }
+  }
+
   function renderStickerPicker(overlay) {
     var picker = overlay.querySelector('#agx-mk-sticker-picker');
     if (!picker) return;
@@ -501,6 +622,10 @@
       hint.textContent = 'Click on the photo to place text';
     } else if (state.tool === 'polyline') {
       hint.textContent = 'Click to add points · double-click or Esc to finish · snaps to existing endpoints';
+    } else if (state.tool === 'measure') {
+      hint.textContent = state.measurePending
+        ? 'Click and drag — measurement armed: ' + state.measurePending.label
+        : 'Pick a preset or type a value, then click and drag · or just draw and you\'ll be prompted';
     } else {
       hint.textContent = 'Click and drag on the photo';
     }
@@ -657,24 +782,31 @@
           return;
         }
       }
-      // Measurement tool: prompt for the distance value before
-      // committing. Cancel = drop the stroke (treat like a misclick).
+      // Measurement tool: use the armed value from the picker
+      // panel if one is set; otherwise fall back to a prompt for
+      // a one-off custom value. Cancel = drop the stroke (treat
+      // like a misclick).
       if (s.tool === 'measure') {
-        var raw = window.prompt('Distance between the two points?\n\nFormats: 84"  ·  1.5\'  ·  10 feet  ·  5\'6"  ·  bare number = inches', '');
-        if (raw == null || !raw.trim()) {
-          state.currentStroke = null;
-          redraw();
-          return;
+        if (state.measurePending) {
+          s.measureInches = state.measurePending.inches;
+          s.measureLabel = state.measurePending.label;
+        } else {
+          var raw = window.prompt('Distance between the two points?\n\nFormats: 84"  ·  1.5\'  ·  10 feet  ·  5\'6"  ·  bare number = inches\n\nTip: pick a preset in the side panel to skip this prompt.', '');
+          if (raw == null || !raw.trim()) {
+            state.currentStroke = null;
+            redraw();
+            return;
+          }
+          var parsed = parseMeasurement(raw);
+          if (!parsed) {
+            alert('Could not parse "' + raw + '" as a measurement. Try 84", 1.5\', 10 feet, or 5\'6".');
+            state.currentStroke = null;
+            redraw();
+            return;
+          }
+          s.measureInches = parsed.inches;
+          s.measureLabel = parsed.label;
         }
-        var parsed = parseMeasurement(raw);
-        if (!parsed) {
-          alert('Could not parse "' + raw + '" as a measurement. Try 84", 1.5\', 10 feet, or 5\'6".');
-          state.currentStroke = null;
-          redraw();
-          return;
-        }
-        s.measureInches = parsed.inches;
-        s.measureLabel = parsed.label;
       }
       state.strokes.push(s);
       state.currentStroke = null;
