@@ -2494,10 +2494,33 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
           endWithDone();
           return;
         }
+        case 'agent.tool_use': {
+          // Built-in toolset (web_search / web_fetch / bash / read /
+          // write / edit / glob / grep). Anthropic runs them
+          // server-side in the session's container — we don't
+          // execute and we don't approve. Forward as both a
+          // tool_started (caption flash) and tool_applied (green
+          // chip) since these tools fire and complete fast — the
+          // pair gives the user visible proof a built-in tool ran
+          // even on a turn that produces no follow-up text.
+          const name = event.name || 'tool';
+          const i = event.input || {};
+          const summary =
+            name === 'web_search' ? 'web_search · ' + (i.query || '').slice(0, 80) :
+            name === 'web_fetch'  ? 'web_fetch · '  + (i.url   || '').slice(0, 80) :
+            name === 'bash'       ? 'bash · '       + (i.command || '').slice(0, 80) :
+            name === 'read'       ? 'read · '       + (i.path || i.file_path || '').slice(0, 80) :
+            name === 'write'      ? 'write · '      + (i.path || i.file_path || '').slice(0, 80) :
+            name === 'edit'       ? 'edit · '       + (i.path || i.file_path || '').slice(0, 80) :
+            name === 'glob'       ? 'glob · '       + (i.pattern || '').slice(0, 80) :
+            name === 'grep'       ? 'grep · '       + (i.pattern || '').slice(0, 80) :
+            name;
+          send({ tool_started: { id: event.id, name: name } });
+          send({ tool_applied: { id: event.id, name: name, summary: summary } });
+          break;
+        }
         default:
-          // Ignore agent.thinking / span.* / agent.tool_use (built-in
-          // tools; web_search is auto-handled). Add explicit cases here
-          // when we need to surface them to the client.
+          // Ignore agent.thinking / span.* / etc.
           break;
       }
     }

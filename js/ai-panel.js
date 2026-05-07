@@ -1259,6 +1259,16 @@
   // approval card lands). Falls back to the raw tool name when no
   // friendly verb is registered.
   var TOOL_VERBS = {
+    // Built-in agent_toolset_20260401 tools (Anthropic runs them
+    // server-side in the session container)
+    web_search:                   'Searching the web…',
+    web_fetch:                    'Fetching that page…',
+    bash:                         'Running a script…',
+    read:                         'Opening a file…',
+    write:                        'Writing a file…',
+    edit:                         'Editing a file…',
+    glob:                         'Searching for files…',
+    grep:                         'Searching file contents…',
     // Read tools (auto-execute server-side mid-stream)
     read_metrics:                 'Pulling metrics…',
     read_recent_conversations:    'Scanning conversations…',

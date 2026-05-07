@@ -1441,27 +1441,26 @@ async function collectSkillsFor(agentKey) {
 function builtinToolsetFor(agentKey) {
   // Phase 3 — built-in toolset is split by role:
   //
-  //   AG  / Elle / HR  → web_search, web_fetch, read, glob, grep
-  //                      Read-only filesystem + web research. NO
-  //                      bash / write / edit. The task agents should
-  //                      do their job (estimate / WIP audit / client
-  //                      directory) through the propose_* approval
-  //                      flow, not by scripting workarounds. If
-  //                      something is broken, the user escalates to
-  //                      CoS — that's the overseer's lane.
+  //   AG  / Elle / HR  → web_search, web_fetch
+  //                      Pure web research. No filesystem tools —
+  //                      read / glob / grep operate on the per-
+  //                      session container's filesystem, which is
+  //                      empty unless we mount files (we don't).
+  //                      Exposing dead tools just confuses the
+  //                      model into trying them and stalling.
+  //                      No bash / write / edit either; task agents
+  //                      mutate state through the propose_*
+  //                      approval flow, not by scripting around it.
   //
   //   CoS              → full toolkit (every built-in on)
-  //                      bash + write + edit lets CoS investigate
-  //                      issues, draft skill-pack edits in scratch
-  //                      files, run aggregate analyses across
-  //                      ai_messages, and generally act as the
-  //                      meta-fixer.
+  //                      The meta-overseer can write scratch files
+  //                      and then read them back, so the filesystem
+  //                      tools earn their keep. bash + write + edit
+  //                      let CoS investigate issues, draft skill-
+  //                      pack edits, and run aggregate analyses.
   //
-  // Tools execute in the per-session container Anthropic provisions
-  // — sandboxed, no path to our DB / API / R2 / user data. The
-  // task-agent restriction isn't a security measure (CoS is just as
-  // sandboxed); it's a behavioral guard that keeps the focused
-  // agents from inventing workflows around their approval gate.
+  // Tools run in a sandboxed per-session container — no path to our
+  // DB / API / R2 / user data regardless of which subset is on.
   if (agentKey === 'staff') {
     return [{ type: 'agent_toolset_20260401', default_config: { enabled: true } }];
   }
@@ -1469,7 +1468,7 @@ function builtinToolsetFor(agentKey) {
   return [{
     type: 'agent_toolset_20260401',
     default_config: { enabled: false },
-    configs: ['web_search', 'web_fetch', 'read', 'glob', 'grep'].map(opt)
+    configs: ['web_search', 'web_fetch'].map(opt)
   }];
 }
 
