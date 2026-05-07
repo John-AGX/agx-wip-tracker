@@ -8,9 +8,28 @@
             else if (!saved && window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) {
                 document.body.classList.add('light-mode');
             }
+            // Swap the SVG glyph based on current mode. Light mode \u2192
+            // moon (click to go dark). Dark mode \u2192 sun (click to go
+            // light). The agxIcon decorator only auto-fires once per
+            // element and bails if data-agx-icon-decorated is set, so
+            // we have to re-render the icon-slot manually each time.
             function updateIcon() {
                 var btn = document.getElementById('theme-toggle');
-                if (btn) btn.textContent = document.body.classList.contains('light-mode') ? '\u263E' : '\u2600';
+                if (!btn) return;
+                var iconName = document.body.classList.contains('light-mode') ? 'moon' : 'sun';
+                btn.dataset.agxIcon = iconName;
+                btn.dataset.agxIconDecorated = '0'; // invalidate so we can re-decorate
+                // Drop any previous slot, then ask the helper to
+                // re-prepend the new SVG.
+                var oldSlot = btn.querySelector('.agx-icon-slot');
+                if (oldSlot) oldSlot.remove();
+                if (typeof window.agxIcon === 'function') {
+                    var slot = document.createElement('span');
+                    slot.className = 'agx-icon-slot';
+                    slot.innerHTML = window.agxIcon(iconName);
+                    btn.insertBefore(slot, btn.firstChild);
+                    btn.dataset.agxIconDecorated = '1';
+                }
             }
             updateIcon();
             document.addEventListener('DOMContentLoaded', function() {
@@ -309,18 +328,24 @@
                 });
             });
 
-            // Buildertrend-style "Directory ▾" dropdown — toggled by
-            // its own button, items routed through the same handler
-            // as a top-level tab-btn click.
-            const dirDropdown = document.getElementById('directory-dropdown');
-            const dirBtn = document.getElementById('directory-btn');
+            // Directory dropdown — now a right-cluster icon button
+            // (people glyph) sitting next to the bell, NOT a tab in
+            // nav.tabs. Toggle uses the same hidden-attribute pattern
+            // as #user-avatar-menu and #notifications-panel; menu
+            // items still route through switchTab + switchEstimatesSubTab
+            // + markVirtualTabActive so the underlying Estimates →
+            // Clients/Subs sub-tabs render exactly as before.
+            const dirBtn = document.getElementById('header-directory-btn');
             const dirMenu = document.getElementById('directory-menu');
-            if (dirDropdown && dirBtn && dirMenu) {
+            if (dirBtn && dirMenu) {
                 dirBtn.addEventListener('click', (e) => {
                     e.stopPropagation();
+                    const open = !dirMenu.hasAttribute('hidden');
                     closeAllPopovers({ except: 'directory' });
-                    dirDropdown.classList.toggle('open');
+                    if (open) dirMenu.setAttribute('hidden', '');
+                    else dirMenu.removeAttribute('hidden');
                 });
+                dirMenu.addEventListener('click', (e) => e.stopPropagation());
                 dirMenu.querySelectorAll('button[data-tab]').forEach(item => {
                     item.addEventListener('click', () => {
                         const tabName = item.getAttribute('data-tab');
@@ -331,7 +356,7 @@
                             window.switchEstimatesSubTab(estSub);
                         }
                         if (virtual) markVirtualTabActive(virtual);
-                        dirDropdown.classList.remove('open');
+                        dirMenu.setAttribute('hidden', '');
                     });
                 });
             }
@@ -409,8 +434,8 @@
         function closeAllPopovers(opts) {
             opts = opts || {};
             if (opts.except !== 'directory') {
-                const dd = document.getElementById('directory-dropdown');
-                if (dd) dd.classList.remove('open');
+                const dm = document.getElementById('directory-menu');
+                if (dm) dm.setAttribute('hidden', '');
             }
             if (opts.except !== 'avatar') {
                 const am = document.getElementById('user-avatar-menu');

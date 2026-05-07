@@ -433,53 +433,21 @@
             font-style: italic;
         }
 
-        /* Header tab dropdown (Buildertrend-style "Directory ▾").
-           Button looks like a tab-btn; menu pops below on click. */
-        .tab-dropdown {
-            position: relative;
-            display: inline-flex;
-            align-items: stretch;
-        }
-        .tab-dropdown .directory-btn {
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-        }
-        .tab-dropdown .directory-chev {
-            font-size: 10px;
-            opacity: 0.7;
-            transition: transform 0.12s;
-        }
-        .tab-dropdown.open .directory-chev { transform: rotate(180deg); }
-        .tab-dropdown-menu {
-            display: none;
-            position: absolute;
-            top: 100%;
-            left: 0;
+        /* Directory popover — Buildertrend-style menu anchored to
+           the directory icon button in the right cluster. Items are
+           SVG icon + label rows with generous padding and a soft
+           accent hover. Reuses .header-popover positioning so the
+           panel hangs off the cluster like Notifications and the
+           avatar menu. */
+        .header-directory-menu {
             min-width: 220px;
-            background: #fff;
-            border: 1px solid #d6d6dd;
-            border-radius: 6px;
-            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
-            z-index: 9000;
             padding: 6px 0;
-            margin-top: 2px;
+            background: #fff;
             color: #1a1a2e;
+            border-color: #d6d6dd;
         }
-        .tab-dropdown.open .tab-dropdown-menu { display: block; }
-        /* Items follow the Buildertrend pattern: SVG icon left, label
-           right, generous padding, hover fills the full row. The icon
-           is injected by the agxIcon decorator (data-agx-icon attribute)
-           and styled via .agx-icon — sized to ~20px so the labels read
-           at a comfortable scan rate.
-
-           Note the selector specificity: `nav.tabs button` (0,0,1,2)
-           in the global tab styles sets a translucent white color
-           that would beat a plain `.tab-dropdown-menu button` rule.
-           Qualifying with `nav.tabs` puts us at 0,0,2,2 so the dark
-           color and full-width row layout actually win. */
-        nav.tabs .tab-dropdown-menu button {
-            display: flex;
+        .header-directory-menu button {
+            display: flex !important;
             align-items: center;
             justify-content: flex-start;
             gap: 12px;
@@ -495,20 +463,18 @@
             white-space: nowrap;
             height: auto;
         }
-        nav.tabs .tab-dropdown-menu button:hover {
+        .header-directory-menu button:hover {
             background: rgba(79, 140, 255, 0.08);
             color: #1a1a2e;
         }
-        nav.tabs .tab-dropdown-menu button .agx-icon-slot {
-            margin-right: 0;
-        }
-        nav.tabs .tab-dropdown-menu button .agx-icon {
+        .header-directory-menu button .agx-icon-slot { margin-right: 0; }
+        .header-directory-menu button .agx-icon {
             width: 22px;
             height: 22px;
             flex: 0 0 auto;
             color: #4b4b5a;
         }
-        nav.tabs .tab-dropdown-menu button:hover .agx-icon { color: #2c2c40; }
+        .header-directory-menu button:hover .agx-icon { color: #2c2c40; }
 
         /* NAVIGATION — inline with logo, height-filling so the active
            underline sits flush with the header's bottom edge for that

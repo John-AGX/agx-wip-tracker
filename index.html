@@ -11,7 +11,7 @@
          parse. -->
     <base href="/">
     <title>AGX Central Florida &mdash; WIP Tracker</title>
-    <link rel="stylesheet" href="css/styles.css?v=40">
+    <link rel="stylesheet" href="css/styles.css?v=41">
     <link rel="stylesheet" href="css/workspace-layout.css?v=52">
     <link rel="stylesheet" href="css/workspace.css?v=36">
     <link rel="stylesheet" href="css/schedule.css?v=9">
@@ -54,21 +54,6 @@
                          reads as a first-class page. -->
                     <button class="tab-btn" data-tab="estimates" data-est-subtab="leads" data-virtual-tab="leads" data-agx-icon="leads" data-cap="LEADS_VIEW">Leads</button>
                     <button class="tab-btn" data-tab="estimates" data-est-subtab="list" data-virtual-tab="estimates" data-agx-icon="estimates" data-cap="ESTIMATES_VIEW">Estimates</button>
-                    <!-- Buildertrend-style Directory dropdown holding the
-                         contact directories (Clients, Subs). Click the
-                         button toggles the menu; menu items route to
-                         Estimates + the relevant sub-tab. Each item
-                         carries its own data-agx-icon so the auto-icon
-                         decorator prepends the SVG glyph. -->
-                    <div class="tab-dropdown" id="directory-dropdown">
-                        <button class="tab-btn directory-btn" type="button" id="directory-btn">
-                            Directory <span class="directory-chev" aria-hidden="true">&#x25BE;</span>
-                        </button>
-                        <div class="tab-dropdown-menu" id="directory-menu" role="menu">
-                            <button type="button" data-tab="estimates" data-est-subtab="clients" data-virtual-tab="clients" data-agx-icon="clients" data-cap="ESTIMATES_VIEW" role="menuitem">Client Contacts</button>
-                            <button type="button" data-tab="estimates" data-est-subtab="subs"    data-virtual-tab="subs"    data-agx-icon="subs"                                 role="menuitem">Subs / Vendors</button>
-                        </div>
-                    </div>
                     <button class="tab-btn" data-tab="admin" data-agx-icon="admin" data-admin-only style="display:none;">Admin</button>
                 </nav>
                 <div id="user-menu" class="header-user-menu">
@@ -81,6 +66,13 @@
                     <button id="header-notif-btn" class="header-icon-btn" type="button" title="Notifications" aria-haspopup="true" aria-expanded="false" data-agx-icon="bell">
                         <span class="header-notif-dot" data-count="0"></span>
                     </button>
+                    <!-- Directory dropdown — sits in the right cluster
+                         like the bell + avatar. Icon-button toggle
+                         (people glyph) opens #directory-menu containing
+                         Client Contacts / Subs-Vendors. The Directory
+                         is a utility, not a page, so it doesn't appear
+                         in nav.tabs anymore. -->
+                    <button id="header-directory-btn" class="header-icon-btn" type="button" title="Directory" aria-haspopup="true" aria-expanded="false" data-agx-icon="clients"></button>
                     <button id="theme-toggle" class="theme-toggle header-icon-btn" type="button" title="Toggle light/dark mode"></button>
                     <!-- Initials avatar replaces the previous full-name +
                          role pill + Account / Logout buttons. Clicking
@@ -107,6 +99,14 @@
                         <div id="notif-panel-body" class="header-popover-body">
                             <div class="header-popover-empty">No notifications yet.</div>
                         </div>
+                    </div>
+                    <!-- Directory popover — items are routed via the
+                         existing tab-switching click handler so the
+                         underlying Estimates → Clients / Subs sub-tabs
+                         still drive the rendering. -->
+                    <div id="directory-menu" class="header-popover header-directory-menu" role="menu" hidden>
+                        <button type="button" data-tab="estimates" data-est-subtab="clients" data-virtual-tab="clients" data-agx-icon="clients" data-cap="ESTIMATES_VIEW" role="menuitem">Client Contacts</button>
+                        <button type="button" data-tab="estimates" data-est-subtab="subs"    data-virtual-tab="subs"    data-agx-icon="subs"                                 role="menuitem">Subs / Vendors</button>
                     </div>
                 </div>
             </div>
@@ -2234,7 +2234,7 @@
     <script src="js/qb-costs-view.js?v=8"></script>
     <script src="js/insights.js?v=5"></script>
     <script src="js/schedule.js?v=15"></script>
-    <script src="js/app.js?v=47"></script>
+    <script src="js/app.js?v=48"></script>
     <script src="js/wip.js?v=61"></script>
     <script src="js/estimates.js?v=35"></script>
     <script src="js/proposal.js?v=20"></script>
@@ -2259,7 +2259,7 @@
     <!-- AGX inline-SVG icon helper. Provides window.agxIcon(name, opts)
          — 24 icons from Phosphor (MIT) + Heroicons (MIT). See
          scripts/build-agx-icons.js to regenerate. -->
-    <script src="js/agx-icons.js?v=4"></script>
+    <script src="js/agx-icons.js?v=5"></script>
 
     <!-- Node Graph (Beta) -->
     <link rel="stylesheet" href="nodegraph/nodegraph.css?v=89" />
