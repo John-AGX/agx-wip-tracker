@@ -2390,6 +2390,18 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
   while (true) {
     let assistantText = '';
     const pendingToolUses = [];
+    // Auto-tier batch buffer (Phase B refactor): when the model emits
+    // parallel `agent.custom_tool_use` events, we run the auto-tier
+    // callback inline (so we can show tool_applied chips immediately)
+    // but we DEFER the user.custom_tool_result events.send to the
+    // next idle. Sending them sequentially while the stream is mid-
+    // flight raced with `session.status_idle` and left the session
+    // believing the tool_use ids were still blocked — the API would
+    // then 400 any subsequent user.message with "waiting on responses
+    // to events [sevt_…]". Batching all results in one events.send on
+    // idle is robust against the parallel-tool-call race and matches
+    // how /chat/continue already delivers approval-tier results.
+    const pendingAutoResults = [];
     let usage = { input_tokens: null, output_tokens: null };
     // Diagnostic — counts each event type we see in this turn so a
     // failed/empty turn is debuggable from Railway logs without per-
@@ -2452,22 +2464,16 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
                 } else {
                   send({ tool_applied: { id: tu.id, name: tu.name, input: tu.input, summary: summary.slice(0, 500) } });
                 }
-                try {
-                  await anthropic.beta.sessions.events.send(sessionId, {
-                    events: [{
-                      type: 'user.custom_tool_result',
-                      custom_tool_use_id: tu.id,
-                      content: [{ type: 'text', text: summary }],
-                      is_error: isError || undefined
-                    }]
-                  });
-                } catch (e) {
-                  console.error('Failed to send tool result back to session:', e);
-                  send({ error: 'Failed to send tool result back to session: ' + (e.message || 'unknown') });
-                  endWithDone();
-                  return;
-                }
-                break; // continue iterating for the resumed agent events
+                // QUEUE the result; flushed in batch at session.status_idle.
+                // See pendingAutoResults comment above for why we don't
+                // call events.send here.
+                pendingAutoResults.push({
+                  type: 'user.custom_tool_result',
+                  custom_tool_use_id: tu.id,
+                  content: [{ type: 'text', text: summary }],
+                  is_error: isError || undefined
+                });
+                break; // continue iterating; results flush on idle
               }
               // tier === 'approval' — surface to UI on next idle
             }
@@ -2514,9 +2520,25 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
             console.log('[v2-stream] idle', sessionId, 'stop_reason:', stopType,
               'blocked_event_ids:', JSON.stringify(blockedEventIds),
               'pendingTools:', pendingToolUses.length,
+              'pendingAutoResults:', pendingAutoResults.length,
               'assistantTextLen:', assistantText.length,
               'nudgeAttempts:', nudgeAttempts,
               'events seen:', JSON.stringify(eventCounts));
+
+            // Auto-tier batch flush (Phase B): if we collected
+            // user.custom_tool_result events during the stream, send
+            // them all at once now and reopen the stream so the model
+            // resumes with all tool responses received atomically. This
+            // is the parallel-tool-call race fix — sending results
+            // sequentially while the stream is mid-flight left the
+            // session believing the tool_use ids were still blocked.
+            if (pendingAutoResults.length && stopType === 'requires_action') {
+              console.log('[v2-stream] flushing', pendingAutoResults.length,
+                'auto-tier tool_result(s) for', sessionId);
+              nextEventsToSend = pendingAutoResults.slice();
+              stallNudgeQueued = true; // signals "reopen stream"
+              break; // exit switch; post-switch check exits for-await
+            }
 
             // Stall-recovery branch: the agent thought, ran no
             // tools, and produced no text before idling in
@@ -2536,42 +2558,30 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
               console.warn('[v2-stream] stall detected on', sessionId,
                 '— attempting recovery (attempt',
                 nudgeAttempts, 'of', MAX_NUDGES + ')');
-              try {
-                // Step 1: clear blockers. If the API listed outstanding
-                // tool_use event_ids in stop_reason, our auto-tier
-                // results raced with idle and didn't register — we re-
-                // respond to each with a no-op result so the session
-                // unblocks. If event_ids is empty (model just stopped
-                // without emitting tool calls), `user.interrupt` is the
-                // right primitive.
-                const clearEvents = blockedEventIds.length
-                  ? blockedEventIds.map(id => ({
-                      type: 'user.custom_tool_result',
-                      custom_tool_use_id: id,
-                      content: [{ type: 'text', text: 'Continue.' }]
-                    }))
-                  : [{ type: 'user.interrupt' }];
-                await anthropic.beta.sessions.events.send(sessionId, {
-                  events: clearEvents
-                });
-                console.warn('[v2-stream] cleared', clearEvents.length,
-                  blockedEventIds.length ? 'tool_result(s)' : 'interrupt');
-                // Step 2: queue a fresh user.message for the outer
-                // while loop's next pass — openStreamAndSend will
-                // open a new stream and dispatch this event.
-                nextEventsToSend = [{
-                  type: 'user.message',
-                  content: [{ type: 'text', text: NUDGE_TEXT }]
-                }];
-                stallNudgeQueued = true;
-                // Break the switch; the post-switch check exits the
-                // for-await so the outer while reopens the stream.
-                break;
-              } catch (e) {
-                console.warn('Stall-recovery clear failed:', e && e.message);
-                // Fall through to the standard awaiting_approval
-                // fallback so the user sees a clean message.
-              }
+              // Atomic recovery: queue tool_results for any outstanding
+              // event_ids AND the nudge user.message into a single
+              // openStreamAndSend call. The API processes them in
+              // order (clearing requires_action blockers first), so
+              // user.message lands on a session that's no longer
+              // waiting on tool responses. Sending these in two
+              // separate events.send calls used to race and 400 with
+              // "waiting on responses to events [sevt_…]".
+              const recoveryEvents = blockedEventIds.length
+                ? blockedEventIds.map(id => ({
+                    type: 'user.custom_tool_result',
+                    custom_tool_use_id: id,
+                    content: [{ type: 'text', text: 'Continue.' }]
+                  }))
+                : [{ type: 'user.interrupt' }];
+              recoveryEvents.push({
+                type: 'user.message',
+                content: [{ type: 'text', text: NUDGE_TEXT }]
+              });
+              nextEventsToSend = recoveryEvents;
+              stallNudgeQueued = true;
+              // Break the switch; the post-switch check exits the
+              // for-await so the outer while reopens the stream.
+              break;
             } else if (stalled) {
               // Retries exhausted — still clear requires_action so
               // the next /chat from the client starts on a clean
