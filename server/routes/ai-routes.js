@@ -2307,19 +2307,15 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
   let activeSession = session;
   let sessionId = session.anthropic_session_id;
 
-  // Stall recovery (Fix 1): when the model emits agent.thinking but
-  // produces neither a text reply nor a follow-up tool_use before the
-  // session idles in `requires_action`, send a nudge user.message and
-  // re-stream once. Capped at MAX_NUDGES so a permanently broken
-  // conversation can't loop forever — the second idle in this state
-  // surfaces the original "Used N tools but didn't produce a summary"
-  // fallback to the user instead of nudging again.
+  // Stall recovery: when the model emits agent.thinking but produces
+  // neither a text reply nor a follow-up tool_use before the session
+  // idles in `requires_action`, the API rejects free-form user.message
+  // events (it's specifically waiting on tool results). Sending
+  // `user.interrupt` clears the requires_action state so a follow-up
+  // /chat call can start clean. Capped at MAX_NUDGES so a permanently
+  // broken conversation can't loop forever.
   const MAX_NUDGES = 1;
   let nudgeAttempts = 0;
-  const NUDGE_TEXT =
-    'Continue. You have the data you needed from the prior tools — ' +
-    'either reply to the user with a final answer / clarifying question, ' +
-    'or call your next tool now.';
 
   // Helper to (re)open stream + send events. Stuck-state recovery is
   // skipped for sessions we know are brand-new (Fix 2): /chat handlers
@@ -2504,9 +2500,14 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
               'nudgeAttempts:', nudgeAttempts,
               'events seen:', JSON.stringify(eventCounts));
 
-            // Stall-recovery branch (Fix 1): the agent thought, ran no
+            // Stall-recovery branch: the agent thought, ran no
             // tools, and produced no text before idling in
-            // requires_action. Send a nudge user.message and re-stream.
+            // requires_action. Anthropic's API holds requires_action
+            // until either a tool_result lands for any outstanding
+            // custom_tool_use OR a user.interrupt clears state — a
+            // free-form user.message would 400 with "waiting on
+            // responses to events". Fire user.interrupt then surface
+            // the fallback so the next /chat call starts clean.
             const stalled =
               stopType === 'requires_action' &&
               pendingToolUses.length === 0 &&
@@ -2514,15 +2515,18 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
             if (stalled && nudgeAttempts < MAX_NUDGES) {
               nudgeAttempts++;
               console.warn('[v2-stream] stall detected on', sessionId,
-                '— nudging (attempt', nudgeAttempts, 'of', MAX_NUDGES + ')');
-              nextEventsToSend = [{
-                type: 'user.message',
-                content: [{ type: 'text', text: NUDGE_TEXT }]
-              }];
-              stallNudgeQueued = true;
-              // Don't endWithDone — break the for-await and let the
-              // outer while reopen the stream with the nudge event.
-              break;
+                '— sending user.interrupt to clear requires_action (attempt',
+                nudgeAttempts, 'of', MAX_NUDGES + ')');
+              try {
+                await anthropic.beta.sessions.events.send(sessionId, {
+                  events: [{ type: 'user.interrupt' }]
+                });
+              } catch (e) {
+                console.warn('user.interrupt send failed (non-fatal):', e && e.message);
+              }
+              // Don't loop — the interrupt clears state for the NEXT
+              // turn; this turn surfaces the standard fallback so the
+              // user sees a clean message instead of a hang.
             }
 
             if (pendingToolUses.length || stopType === 'requires_action') {
