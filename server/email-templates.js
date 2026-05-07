@@ -23,13 +23,15 @@ const { pool } = require('./db');
 // ─── Tiny utilities ────────────────────────────────────────────────
 
 // Public app URL used by every email's "Sign in" / "Open" button.
-// APP_URL env wins; default tracks the live AGX domain.
+// APP_URL env wins; the fallback tracks the live Project 86 domain.
+// Set APP_URL in Railway to override (e.g., during a domain swap or
+// when the trial-vs-prod hostnames diverge).
 function appUrl() {
   var u = process.env.APP_URL;
   if (typeof u === 'string' && /^https?:\/\//.test(u.trim())) {
     return u.trim().replace(/\/$/, '');
   }
-  return 'https://wip-agxco.com';
+  return 'https://project86.net';
 }
 
 function escapeHtml(s) {
