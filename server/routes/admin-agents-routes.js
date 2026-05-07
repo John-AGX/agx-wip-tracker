@@ -1441,29 +1441,39 @@ async function collectSkillsFor(agentKey) {
 function builtinToolsetFor(agentKey) {
   // Per managed-agents-tools.md, the agent_toolset config takes
   // `configs:` (not `tools:`) and each entry is { name, enabled }
-  // flat — no nested `config` wrapper. Master switch is
-  // default_config.enabled = false; we opt-in tools by name.
-  // AG/Elle/HR/CoS all get web_search; AG/HR additionally get
-  // web_fetch (headline Phase 3 capability gain for the agents that
-  // most need to read external pages — vendor pricing, etc.).
-  const base = {
-    type: 'agent_toolset_20260401',
-    default_config: { enabled: false }
-  };
-  const enable = function(name) { return { name: name, enabled: true }; };
-  if (agentKey === 'ag') {
-    return [Object.assign({}, base, { configs: [enable('web_search'), enable('web_fetch')] })];
-  }
-  if (agentKey === 'job') {
-    return [Object.assign({}, base, { configs: [enable('web_search')] })];
-  }
-  if (agentKey === 'cra') {
-    return [Object.assign({}, base, { configs: [enable('web_search'), enable('web_fetch')] })];
-  }
+  // flat — no nested `config` wrapper.
+  //
+  // Phase 3 — expanded built-in tool surface. Each agent gets the
+  // tools that fit its role:
+  //
+  //   AG  / Elle / HR : web_search, web_fetch, read, glob, grep
+  //                     — read-only filesystem + web; no bash/write/
+  //                       edit so the model can't run scripts when it
+  //                       should be calling propose_* tools.
+  //   CoS              : full toolkit (every built-in on)
+  //                     — meta-analyst can script aggregate stats and
+  //                       draft skill-pack edits in scratch files.
+  //
+  // Tools execute in the per-session container Anthropic provisions
+  // — they cannot reach our database, API, or user data. Safe to
+  // expose broadly for CoS without privilege escalation risk.
+  const opt = function(name) { return { name: name, enabled: true }; };
+
   if (agentKey === 'staff') {
-    return [Object.assign({}, base, { configs: [enable('web_search')] })];
+    // CoS — flip the master switch on; no per-tool overrides needed.
+    return [{ type: 'agent_toolset_20260401', default_config: { enabled: true } }];
   }
-  return [];
+
+  // AG / Elle / HR — opt-in list (web + read-only filesystem).
+  const allowed = (agentKey === 'job')
+    ? ['web_search',                'read', 'glob', 'grep']
+    : ['web_search', 'web_fetch',   'read', 'glob', 'grep'];
+
+  return [{
+    type: 'agent_toolset_20260401',
+    default_config: { enabled: false },
+    configs: allowed.map(opt)
+  }];
 }
 
 // Resolve the AGX-side custom tools for an agent. Goes through the
