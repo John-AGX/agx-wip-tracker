@@ -117,6 +117,8 @@
       var v2s = isStaffAgentMode() ? '/v2' : '';
       return '/api/ai' + v2s + '/staff';
     }
+    // Lead Intake — v2-only (no legacy path). Always /v2/intake.
+    if (_entityType === 'intake') return '/api/ai/v2/intake';
     // estimate mode — flag-gated: v2 (Sessions) when agent mode is on,
     // v1 (messages.stream) by default.
     var v2 = isAgAgentMode() ? '/v2' : '';
@@ -126,6 +128,7 @@
   function isJobMode() { return _entityType === 'job'; }
   function isClientMode() { return _entityType === 'client'; }
   function isStaffMode() { return _entityType === 'staff'; }
+  function isIntakeMode() { return _entityType === 'intake'; }
 
   // History reads + clear always hit the v1 messages paths regardless
   // of which chat version is active. ai_messages is shared (same DB
@@ -879,17 +882,23 @@
       entityType = arg.entityType || 'estimate';
       entityId = arg.entityId;
     }
-    // Client and staff modes are global to the user — no entity ID needed
-    // (the directory / agent observability surface IS the context). Other
-    // modes still require an entity.
-    var requiresEntity = entityType !== 'client' && entityType !== 'staff';
+    // Client / staff / intake modes are global to the user — no entity
+    // ID needed (the directory / agent observability surface / fresh
+    // intake conversation IS the context). Other modes still require
+    // an entity.
+    var requiresEntity = entityType !== 'client' && entityType !== 'staff' && entityType !== 'intake';
     if (requiresEntity && !entityId) {
       alert('Save the ' + (entityType || 'record') + ' first to enable the AI assistant.');
       return;
     }
     if (!requiresEntity) entityId = '__global__';
     var panel = ensurePanel();
-    if (_entityId !== entityId || _entityType !== entityType) {
+    // Lead-intake mode forces a fresh conversation EVERY open. The
+    // server-side already archives any prior intake session on the
+    // first /chat call; we mirror that on the client so any leftover
+    // bubbles from a previous lead don't carry over visually.
+    var forceReinit = entityType === 'intake';
+    if (forceReinit || _entityId !== entityId || _entityType !== entityType) {
       _entityType = entityType;
       _entityId = entityId;
       _estimateId = entityType === 'estimate' ? entityId : null;
@@ -898,7 +907,14 @@
       // accidentally surface another estimate's renders.
       _autoPdfCache = {};
       _autoPdfPromises = {};
-      loadHistory();
+      // Intake = no history (fresh session every open). Other modes
+      // load their conversation from ai_messages so close + reopen
+      // keeps the thread.
+      if (entityType === 'intake') {
+        renderMessages();
+      } else {
+        loadHistory();
+      }
       // Fire-and-forget: pre-render scanned PDFs in the background so
       // the cache is warm by the time the user hits send. No awaits — if
       // the user types fast we'll catch the in-flight promise on send.
@@ -939,6 +955,7 @@
       if (isJobMode())            headerEl.textContent = '📊 Elle · WIP Analyst';
       else if (isClientMode())    headerEl.textContent = '🤝 HR · Customer Relations';
       else if (isStaffMode())     headerEl.textContent = '🎩 Chief of Staff';
+      else if (isIntakeMode())    headerEl.textContent = '🧲 Lead Intake';
       else                        headerEl.textContent = '📐 AG · AGX Estimator';
     }
     // Plan/Build pill — visible only in estimate mode. Single-icon
@@ -1071,6 +1088,7 @@
       if (isJobMode()) noticeEl.textContent = 'I\'m Elle, your WIP analyst. I see WIP, costs, the node graph, and QB lines — and I can propose edits (e.g. set a phase\'s % complete) for you to approve before they apply.';
       else if (isClientMode()) noticeEl.textContent = 'I\'m HR, AGX\'s customer relations agent. I keep the parent-company / property hierarchy clean. Simple writes apply automatically; restructural changes (new parent, merges, splits, deletes) require approval.';
       else if (isStaffMode()) noticeEl.textContent = 'Chief of Staff — I observe AG / Elle / HR. I read metrics, audit conversations, and propose skill-pack edits for you to approve. Conversation replay still queued.';
+      else if (isIntakeMode()) noticeEl.textContent = 'New lead intake. Tell me what the lead is — property name, scope, salesperson — and drop in any photos. I\'ll dedupe against existing clients/leads, then propose creating the new lead for your approval.';
       else {
         // AG notice changes wording in Plan mode so the user sees a
         // clear cue that AG won't propose line items right now.
@@ -1533,6 +1551,18 @@
           brainYoga.override('Got it. Thinking…', false);
           if (isClientMode() && typeof window.refreshClientsAfterAI === 'function') {
             window.refreshClientsAfterAI();
+          }
+          // Lead-intake success: propose_create_lead came back applied.
+          // Refresh the leads list (so the new lead appears) and queue
+          // a panel auto-close — the conversation is one-shot, no need
+          // to keep it around once the lead is created.
+          if (isIntakeMode() && payload.tool_applied.name === 'propose_create_lead') {
+            if (typeof window.refreshLeadsAfterAI === 'function') {
+              try { window.refreshLeadsAfterAI(); } catch (e) {}
+            }
+            // 4-second hold so the user sees the success chip + any
+            // post-create text from the agent, then close.
+            setTimeout(function() { if (typeof close === 'function') close(); }, 4000);
           }
           scrollToBottom();
         } else if (payload.tool_failed) {
@@ -4458,5 +4488,19 @@
   // can register window.refreshClientsAfterAI.
   window.openClientAI = function() {
     open({ entityType: 'client' });
+  };
+
+  // Lead Intake entry point. Singleton (no entity id) but
+  // forceReinit'd on every open so each panel-open is a fresh
+  // conversation. Pages that want the leads list to refresh after a
+  // new lead lands can register window.refreshLeadsAfterAI.
+  window.openIntakeAI = function() {
+    var u = (window.agxAuth && window.agxAuth.getUser) ? window.agxAuth.getUser() : null;
+    var enabled = !!(u && u.feature_flags && u.feature_flags.agent_mode_intake === 'agents');
+    if (!enabled) {
+      alert('Lead Intake AI is disabled. Set AGX_AGENT_MODE_INTAKE=agents in the server env to enable.');
+      return;
+    }
+    open({ entityType: 'intake' });
   };
 })();

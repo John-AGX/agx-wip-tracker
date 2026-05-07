@@ -1440,6 +1440,12 @@
   window.renderLeadsList = renderLeadsList;
   window.sortLeadsBy = sortLeads;
   window.reloadLeadsCache = reloadLeadsCache;
+  // Hook used by the Lead Intake AI panel to refresh the list after
+  // propose_create_lead lands. Just calls reloadLeadsCache, which
+  // re-fetches from the server and re-renders.
+  window.refreshLeadsAfterAI = function() {
+    try { reloadLeadsCache(); } catch (e) { /* defensive */ }
+  };
   window.openNewLeadModal = openNewLeadModal;
   window.openEditLeadModal = openEditLeadModal;
   window.submitLeadEditor = submitLeadEditor;

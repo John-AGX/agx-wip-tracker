@@ -684,6 +684,14 @@
                         <div id="leads-list-view">
                             <div class="action-buttons">
                                 <button class="primary" onclick="openNewLeadModal()" data-cap="LEADS_EDIT">&#x1F465; New Lead</button>
+                                <!-- AI Intake — opens the chat panel with the
+                                     intake agent. Each open is a fresh session;
+                                     drop in a description + photos and approve
+                                     the propose_create_lead card to land the
+                                     lead in one shot. Hidden until the user has
+                                     LEADS_EDIT and the AGX_AGENT_MODE_INTAKE env
+                                     var is set; the JS guard double-checks. -->
+                                <button class="primary" onclick="window.openIntakeAI && window.openIntakeAI()" data-cap="LEADS_EDIT" title="Describe a new lead in chat — the AI captures details, dedupes against existing clients, and proposes the lead for one-click create." style="background:linear-gradient(135deg,#8b5cf6,#4f8cff);color:#fff;border:none;font-weight:600;">&#x1F9F2; New Lead with AI</button>
                                 <button class="success" onclick="document.getElementById('leads-import-file').click()" data-cap="LEADS_EDIT" title="Import a Buildertrend Leads xlsx export">&#x1F4E5; Import from Buildertrend</button>
                                 <input type="file" id="leads-import-file" accept=".xlsx" style="display:none;" onchange="handleLeadsImportFile(event)" />
                                 <button class="secondary" onclick="reloadLeadsCache()">Refresh</button>
@@ -2229,7 +2237,7 @@
     <script src="js/clients.js?v=13"></script>
     <script src="js/subs.js?v=5"></script>
     <script src="js/job-audit.js?v=3"></script>
-    <script src="js/leads.js?v=19"></script>
+    <script src="js/leads.js?v=20"></script>
     <script src="js/job-costs-import.js?v=3"></script>
     <script src="js/qb-costs-view.js?v=8"></script>
     <script src="js/insights.js?v=5"></script>
@@ -2241,7 +2249,7 @@
     <script src="js/estimate-editor.js?v=35"></script>
     <script src="js/estimate-preview.js?v=8"></script>
     <script src="js/bt-export.js?v=5"></script>
-    <script src="js/ai-panel.js?v=80"></script>
+    <script src="js/ai-panel.js?v=81"></script>
     <script src="js/tab-slider.js?v=1"></script>
 
     <script src="js/workspace.js?v=43"></script>
