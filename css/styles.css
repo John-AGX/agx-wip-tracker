@@ -443,33 +443,48 @@
             position: absolute;
             top: 100%;
             left: 0;
-            min-width: 180px;
-            background: #1d1d28;
-            border: 1px solid #353545;
-            border-radius: 8px;
-            box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+            min-width: 220px;
+            background: #fff;
+            border: 1px solid #d6d6dd;
+            border-radius: 6px;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
             z-index: 9000;
-            padding: 4px 0;
+            padding: 6px 0;
             margin-top: 2px;
+            color: #1a1a2e;
         }
         .tab-dropdown.open .tab-dropdown-menu { display: block; }
+        /* Items follow the Buildertrend pattern: SVG icon left, label
+           right, generous padding, hover fills the full row. The icon
+           is injected by the agxIcon decorator (data-agx-icon attribute)
+           and styled via .agx-icon — sized to ~20px so the labels read
+           at a comfortable scan rate. */
         .tab-dropdown-menu button {
-            display: block;
+            display: flex;
+            align-items: center;
+            gap: 12px;
             width: 100%;
             text-align: left;
             background: transparent;
             border: 0;
-            color: #ddd;
-            font-size: 12px;
-            padding: 9px 14px;
+            color: #1a1a2e;
+            font-size: 14px;
+            padding: 10px 16px;
             cursor: pointer;
             font-weight: 500;
             white-space: nowrap;
         }
-        .tab-dropdown-menu button:hover {
-            background: rgba(255, 255, 255, 0.06);
-            color: #fff;
+        .tab-dropdown-menu button .agx-icon {
+            width: 22px;
+            height: 22px;
+            flex: 0 0 auto;
+            color: #4b4b5a;
         }
+        .tab-dropdown-menu button:hover {
+            background: rgba(79, 140, 255, 0.08);
+            color: #1a1a2e;
+        }
+        .tab-dropdown-menu button:hover .agx-icon { color: #2c2c40; }
 
         /* NAVIGATION — inline with logo, height-filling so the active
            underline sits flush with the header's bottom edge for that

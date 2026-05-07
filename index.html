@@ -11,7 +11,7 @@
          parse. -->
     <base href="/">
     <title>AGX Central Florida &mdash; WIP Tracker</title>
-    <link rel="stylesheet" href="css/styles.css?v=38">
+    <link rel="stylesheet" href="css/styles.css?v=39">
     <link rel="stylesheet" href="css/workspace-layout.css?v=52">
     <link rel="stylesheet" href="css/workspace.css?v=36">
     <link rel="stylesheet" href="css/schedule.css?v=9">
@@ -52,19 +52,21 @@
                          existing Estimates → Leads sub-tab DOM but the
                          active highlight stays on this button so Leads
                          reads as a first-class page. -->
-                    <button class="tab-btn" data-tab="estimates" data-est-subtab="leads" data-virtual-tab="leads" data-cap="LEADS_VIEW">Leads</button>
+                    <button class="tab-btn" data-tab="estimates" data-est-subtab="leads" data-virtual-tab="leads" data-agx-icon="leads" data-cap="LEADS_VIEW">Leads</button>
                     <button class="tab-btn" data-tab="estimates" data-est-subtab="list" data-virtual-tab="estimates" data-agx-icon="estimates" data-cap="ESTIMATES_VIEW">Estimates</button>
                     <!-- Buildertrend-style Directory dropdown holding the
                          contact directories (Clients, Subs). Click the
                          button toggles the menu; menu items route to
-                         Estimates + the relevant sub-tab. -->
+                         Estimates + the relevant sub-tab. Each item
+                         carries its own data-agx-icon so the auto-icon
+                         decorator prepends the SVG glyph. -->
                     <div class="tab-dropdown" id="directory-dropdown">
                         <button class="tab-btn directory-btn" type="button" id="directory-btn">
                             Directory <span class="directory-chev" aria-hidden="true">&#x25BE;</span>
                         </button>
                         <div class="tab-dropdown-menu" id="directory-menu" role="menu">
-                            <button type="button" data-tab="estimates" data-est-subtab="clients" data-virtual-tab="clients" role="menuitem">Clients</button>
-                            <button type="button" data-tab="estimates" data-est-subtab="subs"    data-virtual-tab="subs"    role="menuitem">Subs</button>
+                            <button type="button" data-tab="estimates" data-est-subtab="clients" data-virtual-tab="clients" data-agx-icon="clients" data-cap="ESTIMATES_VIEW" role="menuitem">Client Contacts</button>
+                            <button type="button" data-tab="estimates" data-est-subtab="subs"    data-virtual-tab="subs"    data-agx-icon="subs"                                 role="menuitem">Subs / Vendors</button>
                         </div>
                     </div>
                     <button class="tab-btn" data-tab="admin" data-agx-icon="admin" data-admin-only style="display:none;">Admin</button>
