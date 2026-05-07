@@ -665,7 +665,8 @@ function renderNodes(){
           var _cthp=_ctw.some(function(w){ return w.pctComplete!=null; });
           cpct=(_ctw.length && _cthp) ? E.getT1WeightedPct(n) : (n.pctComplete||0);
         }
-        var cpColor = cpct>=100?'#34d399':cpct>=50?'#fbbf24':'#4f8cff';
+        // Project 86 uniform blue→indigo bar; see expanded-render comment.
+        var cpColor = 'linear-gradient(90deg, #4f8cff, #a78bfa)';
         E.resetComp(); var tAct=E.getActual(n);
         var tAcc=E.getAccrued(n);
         var tRev = (n.type==='t2') ? (n.revenue||0) : E.getBuildingAllocatedRevenue(n);
@@ -683,7 +684,7 @@ function renderNodes(){
         var _coAw2=E.getCOAllocWires(n.id);
         var _coHp=_coAw2.some(function(w){ return w.pctComplete!=null; });
         var coPct=(_coAw2.length && _coHp) ? E.getT2WeightedPct(n) : (n.pctComplete||0);
-        var coPColor = coPct>=100?'#34d399':coPct>=50?'#fbbf24':'#4f8cff';
+        var coPColor = 'linear-gradient(90deg, #4f8cff, #a78bfa)';
         E.resetComp(); var coInc=E.getOutput(n,0);
         E.resetComp(); var coAct2=E.getActual(n);
         var coAcc2=E.getAccrued(n);
@@ -699,7 +700,7 @@ function renderNodes(){
         h+='</div>';
       } else if(d.hasProg){
         var cpct2 = n.pctComplete||0;
-        var cpColor2 = cpct2>=100?'#34d399':cpct2>=50?'#fbbf24':'#4f8cff';
+        var cpColor2 = 'linear-gradient(90deg, #4f8cff, #a78bfa)';
         h+='<div class="ng-coll-prog"><div class="ng-coll-prog-fill" style="width:'+Math.min(cpct2,100)+'%;background:'+cpColor2+'"></div></div>';
         h+='<div class="ng-coll-inline">';
         if(n.budget) h+='<span class="ng-cv-bud">'+E.fmtC(n.budget)+'</span><span class="ng-coll-sep">|</span>';
