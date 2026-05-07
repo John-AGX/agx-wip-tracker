@@ -1222,8 +1222,8 @@
   color: #d6f0dd;
 }
 .ws-workbook-tab.active {
-  color: #5ddb7e;
-  border-color: rgba(27, 133, 65, 0.85);
+  color: #ffffff;
+  border-color: rgba(37, 99, 235, 0.55);
   background: var(--surface, #181820);
   border-bottom-color: var(--surface, #181820);
 }
@@ -1234,8 +1234,8 @@
   margin-left: 6px;
   padding: 0 6px;
   height: 16px;
-  background: rgba(27, 133, 65, 0.25);
-  color: #5ddb7e;
+  background: rgba(37, 99, 235, 0.22);
+  color: #93c5fd;
   border-radius: 8px;
   font-size: 9px;
   font-weight: 700;
@@ -1263,7 +1263,7 @@
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.5px;
-  color: #5ddb7e;
+  color: #93c5fd;
   margin-right: 8px;
   padding: 4px 8px;
   border-right: 1px solid var(--border, #2e3346);
@@ -1285,7 +1285,7 @@
   background: rgba(255, 255, 255, 0.04);
 }
 .ws-workbook-inner-tab.active {
-  color: #5ddb7e;
+  color: #ffffff;
   background: var(--surface, #1a1d27);
   border-color: var(--border, #2e3346);
   border-bottom-color: var(--surface, #1a1d27);

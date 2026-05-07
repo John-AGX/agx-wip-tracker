@@ -963,11 +963,11 @@
   function refreshModeSpecificUI() {
     var headerEl = document.querySelector('#agx-ai-panel .agx-ai-title');
     if (headerEl) {
-      if (isJobMode())            headerEl.textContent = '📊 Elle · WIP Analyst';
-      else if (isClientMode())    headerEl.textContent = '🤝 HR · Customer Relations';
+      if (isJobMode())            headerEl.textContent = '📊 86 · Analyst';
+      else if (isClientMode())    headerEl.textContent = '🤝 HR · Client + User Health';
       else if (isStaffMode())     headerEl.textContent = '🎩 Chief of Staff';
-      else if (isIntakeMode())    headerEl.textContent = '🧲 Lead Intake';
-      else                        headerEl.textContent = '📐 AG · AGX Estimator';
+      else if (isIntakeMode())    headerEl.textContent = '🧲 Intake · Lead Capture';
+      else                        headerEl.textContent = '🎯 Agent 47 · Estimating Hitman';
     }
     // Plan/Build pill — visible only in estimate mode. Single-icon
     // dropdown: visible icon shows active phase, click opens a popover
@@ -1096,9 +1096,9 @@
     if (trustBtn) trustBtn.style.display = 'none';
     var noticeEl = document.querySelector('#agx-ai-panel #ai-notice');
     if (noticeEl) {
-      if (isJobMode()) noticeEl.textContent = 'I\'m Elle, your WIP analyst. I see WIP, costs, the node graph, and QB lines — and I can propose edits (e.g. set a phase\'s % complete) for you to approve before they apply.';
-      else if (isClientMode()) noticeEl.textContent = 'I\'m HR, AGX\'s customer relations agent. I keep the parent-company / property hierarchy clean. Simple writes apply automatically; restructural changes (new parent, merges, splits, deletes) require approval.';
-      else if (isStaffMode()) noticeEl.textContent = 'Chief of Staff — I observe AG / Elle / HR. I read metrics, audit conversations, and propose skill-pack edits for you to approve. Conversation replay still queued.';
+      if (isJobMode()) noticeEl.textContent = 'I\'m 86, your analyst. I read WIP, costs, the node graph, QB lines, margins, and broader patterns across the business — and I can propose edits (e.g. set a phase\'s % complete) for you to approve before they apply.';
+      else if (isClientMode()) noticeEl.textContent = 'I\'m HR — I run client relations and user-health operations. I keep the parent-company / property hierarchy clean and watch your in-app accounts. Simple writes apply automatically; restructural changes (new parent, merges, splits, deletes) require approval.';
+      else if (isStaffMode()) noticeEl.textContent = 'Chief of Staff — I observe Agent 47 / 86 / HR / Intake. I read metrics, audit conversations, and propose skill-pack edits for you to approve. Conversation replay still queued.';
       else if (isIntakeMode()) noticeEl.textContent = 'New lead intake. Tell me what the lead is — property name, scope, salesperson — and drop in any photos. I\'ll dedupe against existing clients/leads, then propose creating the new lead for your approval.';
       else {
         // AG notice changes wording in Plan mode so the user sees a
@@ -1108,7 +1108,7 @@
         if (phaseN === 'plan') {
           noticeEl.textContent = '🗺️ Plan mode — I\'ll think through scope with you and ask questions, but I won\'t propose line items until you flip to 🔨 Build.';
         } else {
-          noticeEl.textContent = 'I\'m AG — your AGX estimator. I can draft scopes, add/edit/delete line items and sections, and tweak pricing. Every change is shown as a card with Approve / Reject before it lands.';
+          noticeEl.textContent = 'I\'m Agent 47 — AGX\'s estimating hitman. I can draft scopes, add/edit/delete line items and sections, and tweak pricing. Every change is shown as a card with Approve / Reject before it lands.';
         }
       }
     }

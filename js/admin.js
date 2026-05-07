@@ -2360,12 +2360,15 @@
   // to that agent's system prompt on every turn.
   // Note: agentKey 'cra' kept for backward compat with skill packs that
   // already reference it. Display label is HR; the underlying agent
-  // assignment value stays 'cra'. Elle's key is 'job' (matches her
-  // entity_type) — assignments target the job-side WIP analyst.
+  // assignment value stays 'cra'. 86's key is 'job' (matches its
+  // entity_type) — assignments target the job-side analyst.
+  // (Display rename: AG→Agent 47, Elle→86. Underlying agent_keys
+  // ag / job / cra / staff / intake stay the same to avoid a DB
+  // migration; only the user-facing labels change.)
   var AGENT_LABELS = {
-    ag:  '📐 AG (Estimator)',
-    job: '📊 Elle (WIP Analyst)',
-    cra: '🤝 HR (Customer Relations)'
+    ag:  '🎯 Agent 47 (Estimating Hitman)',
+    job: '📊 86 (Analyst)',
+    cra: '🤝 HR (Client + User Health)'
   };
 
   function renderAgentSkillsHTML() {
@@ -3041,7 +3044,7 @@
           '<button class="ws-right-tab' + (_agentsView === 'anthropic' ? ' active' : '') + '" onclick="switchAgentsView(\'anthropic\')">&#x1F310; Anthropic</button>' +
         '</div>' +
         '<div style="flex:1;"></div>' +
-        '<button class="ee-btn" onclick="openChiefOfStaff()" title="Open the Chief of Staff agent — observes AG / Elle / HR, audits conversations, reviews skill packs" style="background:linear-gradient(135deg,#fbbf24,#f97316);color:#fff;border:none;font-weight:600;">&#x1F3A9; Ask Chief of Staff</button>' +
+        '<button class="ee-btn" onclick="openChiefOfStaff()" title="Open the Chief of Staff agent — observes Agent 47 / 86 / HR / Intake, audits conversations, reviews skill packs" style="background:linear-gradient(135deg,#fbbf24,#f97316);color:#fff;border:none;font-weight:600;">&#x1F3A9; Ask Chief of Staff</button>' +
         (showRange
           ? ('<label style="font-size:11px;color:var(--text-dim,#888);">Window</label>' +
              '<select id="agents-range-select" onchange="setAgentsRange(this.value)" style="font-size:12px;padding:4px 8px;">' +
@@ -3182,9 +3185,10 @@
           '<th>Models</th>' +
         '</tr></thead><tbody>';
       rows.forEach(function(c) {
-        var agentLabel = c.entity_type === 'estimate' ? '📐 AG'
-                       : c.entity_type === 'job'      ? '📊 Elle'
+        var agentLabel = c.entity_type === 'estimate' ? '🎯 Agent 47'
+                       : c.entity_type === 'job'      ? '📊 86'
                        : c.entity_type === 'client'   ? '🤝 HR'
+                       : c.entity_type === 'intake'   ? '🧲 Intake'
                        : c.entity_type;
         var when = '';
         try { when = new Date(c.last_at).toLocaleString(); } catch (e) {}
@@ -3403,9 +3407,9 @@
       '<div style="display:flex;gap:10px;align-items:end;margin-bottom:14px;flex-wrap:wrap;">' +
         '<div><label style="display:block;font-size:11px;color:var(--text-dim,#888);margin-bottom:4px;">Agent</label>' +
           '<select id="preview-agent" style="font-size:13px;padding:6px 10px;min-width:160px;">' +
-            '<option value="ag"' + (_previewAgent === 'ag' ? ' selected' : '') + '>AG (estimating)</option>' +
-            '<option value="elle"' + (_previewAgent === 'elle' ? ' selected' : '') + '>Elle (WIP)</option>' +
-            '<option value="hr"' + (_previewAgent === 'hr' ? ' selected' : '') + '>HR (clients)</option>' +
+            '<option value="ag"' + (_previewAgent === 'ag' ? ' selected' : '') + '>Agent 47 (estimating)</option>' +
+            '<option value="elle"' + (_previewAgent === 'elle' ? ' selected' : '') + '>86 (analyst)</option>' +
+            '<option value="hr"' + (_previewAgent === 'hr' ? ' selected' : '') + '>HR (clients + user health)</option>' +
             '<option value="cos"' + (_previewAgent === 'cos' ? ' selected' : '') + '>Chief of Staff</option>' +
           '</select></div>' +
         '<div style="flex:1;min-width:240px;"><label id="preview-entity-label" style="display:block;font-size:11px;color:var(--text-dim,#888);margin-bottom:4px;">Entity (estimate / job)</label>' +
@@ -3657,10 +3661,10 @@
     if (!host) return;
     host.innerHTML =
       '<p style="margin:0 0 14px 0;color:var(--text-dim,#888);font-size:12px;">' +
-        'Anthropic Batch API jobs — proactive analyses that run async at half the synchronous cost. Currently supports Elle audits across every active job.' +
+        'Anthropic Batch API jobs — proactive analyses that run async at half the synchronous cost. Currently supports 86 audits across every active job.' +
       '</p>' +
       '<div style="display:flex;gap:8px;align-items:center;margin-bottom:14px;">' +
-        '<button class="ee-btn primary" onclick="submitElleAuditBatch()" title="Build one Elle audit per active job and submit as a single Anthropic batch.">&#x1F50D; Run Elle audit on every active job</button>' +
+        '<button class="ee-btn primary" onclick="submitElleAuditBatch()" title="Build one 86 audit per active job and submit as a single Anthropic batch.">&#x1F50D; Run 86 audit on every active job</button>' +
         '<button class="ee-btn secondary" onclick="renderBatchJobsList()">&#x21BB; Refresh</button>' +
       '</div>' +
       '<div id="batch-jobs-list" style="font-size:12px;color:var(--text-dim,#888);font-style:italic;">Loading…</div>' +
@@ -3670,14 +3674,14 @@
       '<div style="margin-top:24px;padding:14px;background:rgba(255,255,255,0.03);border:1px solid var(--border,#333);border-radius:8px;">' +
         '<h3 style="margin:0 0 6px 0;font-size:13px;color:var(--text,#fff);">&#x1F4C2; Anthropic Files cache</h3>' +
         '<p style="margin:0 0 10px 0;color:var(--text-dim,#888);font-size:11px;">' +
-          'When AG references a photo across multiple chat turns, currently the photo gets base64-encoded into the request every turn. Uploading once to Anthropic\'s Files API lets future turns reference the photo by id (cheaper, faster). Stats below; click to upload recent images.' +
+          'When Agent 47 references a photo across multiple chat turns, currently the photo gets base64-encoded into the request every turn. Uploading once to Anthropic\'s Files API lets future turns reference the photo by id (cheaper, faster). Stats below; click to upload recent images.' +
         '</p>' +
         '<div id="files-stats-host" style="font-size:11px;color:var(--text-dim,#888);font-style:italic;">Loading…</div>' +
         '<div style="margin-top:10px;">' +
           '<button class="ee-btn secondary" onclick="uploadRecentPhotos(25)">Upload last 25 not-yet-uploaded images</button>' +
         '</div>' +
         '<p style="margin:8px 0 0 0;color:var(--text-dim,#666);font-size:10px;">' +
-          'Note: AG\'s chat path still uses base64 for now. Switching loadPhotoAsBlock to file_id references requires migrating chat from messages.stream() to beta.messages.stream() — that\'s a separate commit. The upload pipeline above sets up the cache in advance so the chat switch is a one-line change later.' +
+          'Note: Agent 47\'s chat path still uses base64 for now. Switching loadPhotoAsBlock to file_id references requires migrating chat from messages.stream() to beta.messages.stream() — that\'s a separate commit. The upload pipeline above sets up the cache in advance so the chat switch is a one-line change later.' +
         '</p>' +
       '</div>';
 
@@ -3696,7 +3700,7 @@
       var listHost = document.getElementById('batch-jobs-list');
       if (!listHost) return;
       if (!rows.length) {
-        listHost.innerHTML = '<div style="color:var(--text-dim,#888);font-style:italic;padding:14px 0;">No batches submitted yet. Click "Run Elle audit on every active job" to fire one.</div>';
+        listHost.innerHTML = '<div style="color:var(--text-dim,#888);font-style:italic;padding:14px 0;">No batches submitted yet. Click "Run 86 audit on every active job" to fire one.</div>';
         return;
       }
       var html = '<div class="table-container"><table style="width:100%;font-size:12px;">' +
@@ -3734,7 +3738,7 @@
   }
 
   function submitElleAuditBatch() {
-    if (!confirm('Submit a new Elle audit batch?\n\nBuilds one audit prompt per active job (excluding Archived/Completed) and submits as a single Anthropic Batch API job. Costs roughly half a synchronous Elle turn per job. Results land here when the batch finishes (typically minutes, up to 24h).')) return;
+    if (!confirm('Submit a new 86 audit batch?\n\nBuilds one audit prompt per active job (excluding Archived/Completed) and submits as a single Anthropic Batch API job. Costs roughly half a synchronous 86 turn per job. Results land here when the batch finishes (typically minutes, up to 24h).')) return;
     var btn = document.activeElement;
     if (btn && btn.tagName === 'BUTTON') { btn.disabled = true; btn.textContent = 'Submitting…'; }
     window.agxApi.post('/api/admin/batch/elle-audit', {}).then(function(resp) {
@@ -3742,7 +3746,7 @@
       renderBatchJobsList();
     }).catch(function(err) {
       alert('Failed to submit batch: ' + (err.message || 'unknown'));
-      if (btn && btn.tagName === 'BUTTON') { btn.disabled = false; btn.textContent = '🔍 Run Elle audit on every active job'; }
+      if (btn && btn.tagName === 'BUTTON') { btn.disabled = false; btn.textContent = '🔍 Run 86 audit on every active job'; }
     });
   }
 
@@ -3880,7 +3884,7 @@
     host.innerHTML = panelHeader('Managed Agents (Phase 1a)', '🤖') + '<div style="font-size:12px;color:var(--text-dim,#888);font-style:italic;">Loading…</div>';
     window.agxApi.get('/api/admin/agents/managed').then(function(resp) {
       var rows = (resp && resp.agents) || [];
-      var labels = { ag: 'AG (estimating)', job: 'Elle (WIP)', cra: 'HR (clients)', staff: 'Chief of Staff', intake: 'Intake (lead capture)' };
+      var labels = { ag: 'Agent 47 (estimating)', job: '86 (analyst)', cra: 'HR (clients + user health)', staff: 'Chief of Staff', intake: 'Intake (lead capture)' };
       var allKeys = ['ag', 'job', 'cra', 'staff', 'intake'];
       var registered = {};
       rows.forEach(function(r) { registered[r.agent_key] = r; });
@@ -4209,7 +4213,7 @@
       host.innerHTML =
         '<div style="margin:0 0 14px 0;padding:12px 14px;background:rgba(251,191,36,0.06);border:1px solid rgba(251,191,36,0.25);border-radius:8px;font-size:12px;line-height:1.5;color:var(--text-dim,#aaa);">' +
           '<div style="font-weight:600;color:#fbbf24;margin-bottom:4px;">&#x1F6A7; Native Skills migration in progress</div>' +
-          'Packs below are AGX\'s homegrown skill system — still <strong>active in production</strong>; AG/Elle/HR load them every turn. ' +
+          'Packs below are AGX\'s homegrown skill system — still <strong>active in production</strong>; Agent 47 / 86 / HR load them every turn. ' +
           'Use <button class="ee-btn secondary" onclick="syncAllSkillsToAnthropic()" style="margin:0 4px;font-size:11px;padding:2px 8px;">&#x1F310; Sync all to Anthropic</button> to mirror them as native Skills. ' +
           'Mirrored skills appear in <a href="#" onclick="switchAgentsView(\'anthropic\');return false;" style="color:#4f8cff;">Anthropic &rarr; Skills</a>. ' +
           'Runtime cutover (model loading skills on-demand via beta.agents) is a separate workstream — until then this surface remains source-of-truth.' +

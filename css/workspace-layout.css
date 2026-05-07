@@ -142,7 +142,7 @@
    styling here is just the text-color change so the active tab reads
    as picked while the slider arrives. */
 .ws-right-tab.active {
-  color: #5ddb7e;
+  color: #ffffff;
   font-weight: 600;
 }
 
