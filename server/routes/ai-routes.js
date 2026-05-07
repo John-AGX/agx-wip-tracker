@@ -2549,7 +2549,7 @@ router.post('/v2/estimates/:id/chat',
       // v2 registers all tools at agent-create time, so we steer with
       // a strict instruction instead.
       const phaseGuard = ctx.aiPhase === 'plan'
-        ? '<turn_phase>plan</turn_phase>\n[STRICT] You are in PLAN mode. Do NOT call any propose_* tool that mutates the estimate (line items, scope, sections, groups, links). You may only call read_* tools and answer in text. If the user asks for a change, describe what you would propose and tell them to switch to Build mode first.\n\n'
+        ? '<turn_phase>plan</turn_phase>\nYou are in PLAN mode for this turn. Do not CALL propose_* tools — the user has not approved write access yet. You CAN reference what you would propose (including from earlier in this conversation) and you SHOULD remember the request the user asked you to do. If the user says "try now" / "go ahead" / similar, remind them you are still in plan mode and ask them to flip to Build mode — name the specific change you were about to make so they can confirm. Read-only tools (read_*) are fine.\n\n'
         : '<turn_phase>build</turn_phase>\n';
       const turnText =
         '<turn_context>\n' + ctxSystemToText(ctx.system) + '\n</turn_context>\n\n' + phaseGuard + userMessage;
