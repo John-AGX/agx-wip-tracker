@@ -919,11 +919,45 @@
     ctx.lineJoin = 'miter';
     ctx.lineWidth = stroke;
 
-    // Main dimension line.
-    ctx.beginPath();
-    ctx.moveTo(x1, y1);
-    ctx.lineTo(x2, y2);
-    ctx.stroke();
+    // Measure the label up front — we need its width to break the
+    // dimension line cleanly so the text sits IN the line instead of
+    // floating above it. Set the font on the context here so the
+    // measurement matches what we'll actually draw below.
+    var fontStack = '600 ' + fontPx + 'px ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif';
+    ctx.font = fontStack;
+    var labelWidth = ctx.measureText(label).width;
+    // Padding on each side of the label inside the gap.
+    var labelPad = fontPx * 0.45;
+    var halfGap = labelWidth / 2 + labelPad;
+
+    // Mid point of the dimension line — where the label lives.
+    var midX = (x1 + x2) / 2, midY = (y1 + y2) / 2;
+
+    // If the gap fits comfortably inside the line, draw two
+    // segments with a clean break in the middle. Threshold: gap
+    // can occupy up to ~80% of the line; below that we keep the
+    // line solid and just lift the label slightly off-line so it
+    // doesn't crash into the stroke. Keeps short measurements
+    // ("3"") readable even when the line is barely wider than the
+    // text.
+    var splitLine = halfGap * 2 < len * 0.8;
+    if (splitLine) {
+      var gapStartX = midX - cosA * halfGap;
+      var gapStartY = midY - sinA * halfGap;
+      var gapEndX   = midX + cosA * halfGap;
+      var gapEndY   = midY + sinA * halfGap;
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(gapStartX, gapStartY);
+      ctx.moveTo(gapEndX, gapEndY);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+    } else {
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+    }
 
     // End ticks — short perpendicular slashes at both endpoints, in
     // the AutoCAD architectural style (not arrowheads). Each tick
@@ -937,34 +971,26 @@
     tick(x1, y1);
     tick(x2, y2);
 
-    // Label centered on the line, offset slightly above (perpendicular
-    // to the line direction) so the text doesn't sit on top of the
-    // dimension stroke. Black outline + colored fill so it reads on
-    // any background.
-    var midX = (x1 + x2) / 2, midY = (y1 + y2) / 2;
-    // Tighter offset (was 0.55 → 0.7 of cap-height) so the label
-    // sits closer to the line without descenders touching it.
-    var labelOffset = fontPx * 0.7;
-    var lx = midX + px * labelOffset;
-    var ly = midY + py * labelOffset;
-
-    // Rotate so text follows the line direction. If the line points
-    // "leftish", flip the rotation so the text isn't upside down —
-    // matches CAD convention.
-    var angle = Math.atan2(dy, dx);
-    if (angle > Math.PI / 2 || angle < -Math.PI / 2) angle += Math.PI;
+    // Label sits at the line's midpoint, drawn UPRIGHT (no rotation
+    // to match the line angle). Bluebeam/AutoCAD calls this
+    // "horizontal" or "unidirectional" dimension text — it stays
+    // readable regardless of line direction. When the line is
+    // split, the label sits IN the gap on-line. When not split
+    // (short lines), nudge the label slightly perpendicular so it
+    // reads without crashing into the stroke.
+    var lx = midX, ly = midY;
+    if (!splitLine) {
+      var nudge = fontPx * 0.7;
+      lx = midX + px * nudge;
+      ly = midY + py * nudge;
+    }
 
     ctx.translate(lx, ly);
-    ctx.rotate(angle);
-    // Use a system "ui-sans-serif" stack so we get the platform's
-    // hinted UI font (San Francisco / Segoe / Roboto) instead of
-    // Arial — sharper and better antialiased at small sizes.
-    ctx.font = '600 ' + fontPx + 'px ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif';
+    // No rotate — text always upright.
+    ctx.font = fontStack;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    // Slimmer outline (was fontPx/8 → fontPx/14, min 1.25) keeps the
-    // text crisp without the chunky black halo that was making the
-    // big "6'-9"" label look heavy.
+    // Slimmer outline keeps the text crisp without a chunky halo.
     ctx.lineWidth = Math.max(1.25, fontPx / 14);
     ctx.lineJoin = 'round';
     ctx.miterLimit = 2;
