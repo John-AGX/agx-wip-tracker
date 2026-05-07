@@ -1438,42 +1438,20 @@ async function collectSkillsFor(agentKey) {
 // only enable what's clearly useful for that role. Phase 3 of the
 // migration expands these (e.g. enabling bash/read on Elle for QB
 // cost line analysis).
-function builtinToolsetFor(agentKey) {
-  // Per managed-agents-tools.md, the agent_toolset config takes
-  // `configs:` (not `tools:`) and each entry is { name, enabled }
-  // flat — no nested `config` wrapper.
+function builtinToolsetFor(_agentKey) {
+  // Phase 3 — full built-in agent_toolset_20260401 enabled for every
+  // agent (AG / Elle / HR / CoS). Master switch on, no per-tool
+  // overrides — gives each agent the complete kit:
+  //   web_search, web_fetch, bash, read, write, edit, glob, grep
   //
-  // Phase 3 — expanded built-in tool surface. Each agent gets the
-  // tools that fit its role:
-  //
-  //   AG  / Elle / HR : web_search, web_fetch, read, glob, grep
-  //                     — read-only filesystem + web; no bash/write/
-  //                       edit so the model can't run scripts when it
-  //                       should be calling propose_* tools.
-  //   CoS              : full toolkit (every built-in on)
-  //                     — meta-analyst can script aggregate stats and
-  //                       draft skill-pack edits in scratch files.
-  //
-  // Tools execute in the per-session container Anthropic provisions
-  // — they cannot reach our database, API, or user data. Safe to
-  // expose broadly for CoS without privilege escalation risk.
-  const opt = function(name) { return { name: name, enabled: true }; };
-
-  if (agentKey === 'staff') {
-    // CoS — flip the master switch on; no per-tool overrides needed.
-    return [{ type: 'agent_toolset_20260401', default_config: { enabled: true } }];
-  }
-
-  // AG / Elle / HR — opt-in list (web + read-only filesystem).
-  const allowed = (agentKey === 'job')
-    ? ['web_search',                'read', 'glob', 'grep']
-    : ['web_search', 'web_fetch',   'read', 'glob', 'grep'];
-
-  return [{
-    type: 'agent_toolset_20260401',
-    default_config: { enabled: false },
-    configs: allowed.map(opt)
-  }];
+  // Tools run in the per-session container Anthropic provisions — a
+  // sandboxed workspace with no path back to our database, API, R2
+  // storage, or user data. The agents can read/write files inside
+  // the container (great for ad-hoc analysis, scratch drafts, script
+  // execution), browse the web, and run shell commands locally to
+  // the container. None of that touches AGX state — that still goes
+  // through the propose_* / approval-tier custom tools.
+  return [{ type: 'agent_toolset_20260401', default_config: { enabled: true } }];
 }
 
 // Resolve the AGX-side custom tools for an agent. Goes through the
