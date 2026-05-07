@@ -30,27 +30,65 @@
     { key: 'sticker',  glyph: '\u{1F3F7}',  label: 'Sticker / stamp' }
   ];
 
-  // Common measurement presets shown in the picker panel. Order
-  // ≈ by frequency in residential exterior estimating. Each entry
-  // resolves through parseMeasurement so the displayed label uses
-  // the same formatter as user-entered values.
-  var MEASURE_PRESETS = [
-    { in: 6,    label: '6"' },
-    { in: 12,   label: "1'" },
-    { in: 18,   label: '18"' },
-    { in: 24,   label: "2'" },
-    { in: 32,   label: '32"' },
-    { in: 36,   label: '36"' },
-    { in: 48,   label: "4'" },
-    { in: 72,   label: "6'" },
-    { in: 80,   label: '80"' },
-    { in: 84,   label: '84"' },
-    { in: 96,   label: "8'" },
-    { in: 120,  label: "10'" },
-    { in: 144,  label: "12'" },
-    { in: 192,  label: "16'" },
-    { in: 240,  label: "20'" }
-  ];
+  // AGX-styled measurement prompt modal. Replaces the browser's
+  // window.prompt() with a dialog that matches the rest of the app
+  // (dark surface, AGX-blue confirm). Calls back with a parsed
+  // { inches, label } on success, or null on cancel/empty/parse
+  // failure. Honors the unit toggle from the picker side panel:
+  // a bare "5" entered while the toggle is "ft" parses as 5 feet,
+  // not 5 inches. Quoted units always win regardless of toggle.
+  function promptMeasurement(defaultUnit, callback) {
+    var unitLabel = (defaultUnit === 'ft') ? 'feet' : 'inches';
+    var overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:10500;background:rgba(0,0,0,0.65);display:flex;align-items:center;justify-content:center;padding:20px;backdrop-filter:blur(2px);';
+
+    var box = document.createElement('div');
+    box.style.cssText = 'background:#0f0f1e;border:1px solid #353545;border-radius:12px;padding:20px 22px;max-width:400px;width:100%;box-shadow:0 16px 48px rgba(0,0,0,0.6);color:#e6e6e6;';
+    box.innerHTML =
+      '<div style="font-size:15px;font-weight:700;color:#fff;margin-bottom:6px;">Measurement</div>' +
+      '<div style="font-size:12px;color:#9aa;margin-bottom:14px;">Distance between the two points. ' +
+        'A bare number is read as <strong>' + unitLabel + '</strong> (toggle in the side panel). ' +
+        'Quoted units like <code>84"</code>, <code>1.5\'</code>, or <code>5\'6"</code> always win.</div>' +
+      '<input id="agx-mk-prompt-input" type="text" autocomplete="off" placeholder="e.g. 84&quot;, 1.5&apos;, 5&apos;6&quot;, or just a number" ' +
+        'style="width:100%;box-sizing:border-box;background:#1a1a2e;color:#fff;border:1px solid #444;border-radius:6px;padding:10px 12px;font-size:14px;font-weight:600;outline:none;" />' +
+      '<div id="agx-mk-prompt-error" style="font-size:11px;color:#f87171;min-height:14px;margin-top:6px;"></div>' +
+      '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;">' +
+        '<button data-mk-prompt-cancel style="padding:8px 16px;background:rgba(255,255,255,0.06);color:#ddd;border:1px solid #444;border-radius:6px;cursor:pointer;font-weight:600;">Cancel</button>' +
+        '<button data-mk-prompt-ok style="padding:8px 16px;background:#4f8cff;color:#fff;border:1px solid #4f8cff;border-radius:6px;cursor:pointer;font-weight:600;">Set Measurement</button>' +
+      '</div>';
+
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+
+    var input  = box.querySelector('#agx-mk-prompt-input');
+    var errEl  = box.querySelector('#agx-mk-prompt-error');
+    var okBtn  = box.querySelector('[data-mk-prompt-ok]');
+    var cancelBtn = box.querySelector('[data-mk-prompt-cancel]');
+
+    function cleanup(result) {
+      document.removeEventListener('keydown', onKey, true);
+      if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+      callback(result);
+    }
+    function tryCommit() {
+      var raw = (input.value || '').trim();
+      if (!raw) { errEl.textContent = 'Enter a measurement (or click Cancel).'; return; }
+      var parsed = parseMeasurement(raw, defaultUnit);
+      if (!parsed) { errEl.textContent = 'Could not parse "' + raw + '" — try 84", 1.5\', 10 feet, or 5\'6".'; return; }
+      cleanup(parsed);
+    }
+    function onKey(e) {
+      if (e.key === 'Escape') { e.preventDefault(); cleanup(null); }
+      else if (e.key === 'Enter' && document.activeElement === input) { e.preventDefault(); tryCommit(); }
+    }
+
+    okBtn.onclick = tryCommit;
+    cancelBtn.onclick = function() { cleanup(null); };
+    overlay.addEventListener('click', function(e) { if (e.target === overlay) cleanup(null); });
+    document.addEventListener('keydown', onKey, true);
+
+    setTimeout(function() { input.focus(); }, 0);
+  }
 
   // Parse a free-form measurement string into { inches, label }.
   // Accepted shapes (case-insensitive, whitespace-tolerant):
@@ -60,7 +98,7 @@
   //   bare number (no unit): defaults to inches
   // Returns null if unparseable. label is the human-readable form
   // we draw on the dimension line (e.g. "5'-6\"").
-  function parseMeasurement(raw) {
+  function parseMeasurement(raw, defaultUnit) {
     if (raw == null) return null;
     var s = String(raw).trim().toLowerCase();
     if (!s) return null;
@@ -86,12 +124,16 @@
       if (!isFinite(inOnly)) return null;
       return { inches: inOnly, label: formatFeetInches(inOnly) };
     }
-    // Bare number — default to inches.
+    // Bare number — interpret using the supplied default unit. The
+    // caller passes the picker's current ft/in toggle so the same
+    // typed "5" can mean either 5 inches OR 5 feet depending on
+    // intent. Falls back to inches when no default is given (legacy).
     var mNum = s.match(/^(\d+(?:\.\d+)?)$/);
     if (mNum) {
       var n = parseFloat(mNum[1]);
       if (!isFinite(n)) return null;
-      return { inches: n, label: formatFeetInches(n) };
+      var inches = (defaultUnit === 'ft') ? n * 12 : n;
+      return { inches: inches, label: formatFeetInches(inches) };
     }
     return null;
   }
@@ -170,11 +212,23 @@
       onDone: opts.onDone || function() {},
       tool: 'arrow',
       stickerKind: null,
-      // Currently-armed measurement preset. When the measure tool
-      // is active, every line drawn picks this value. Cleared by
-      // tool change. null = no preset (fall back to prompt() so
-      // the user can enter a one-off custom value).
-      measurePending: null,    // { inches, label } | null
+      // Measurement options (set in the picker side panel, applied
+      // after the user draws the line). Cleared on tool switch.
+      //   measureUnit: how to interpret a bare number in the post-
+      //                draw modal — 'in' (84 → 84") or 'ft' (5 → 5')
+      //   measureLineColor: null → use the global state.color picker
+      //                     string → measurement-only color override
+      //                     (so e.g. arrows stay red while
+      //                     dimensions are drawn in blue)
+      //   measureLineWidth: null | number — same idea, override the
+      //                     global thickness only for measurements
+      //   measureNumberColor: null → match the line color
+      //                       string → label-only color override
+      //                       (e.g. white text on red lines)
+      measureUnit: 'in',
+      measureLineColor: null,
+      measureLineWidth: null,
+      measureNumberColor: null,
       color: '#ef4444',
       lineWidth: 8,
       strokes: [],
@@ -261,7 +315,13 @@
         state.tool = btn.dataset.mkTool;
         if (state.tool !== 'sticker') state.stickerKind = null;
         if (state.tool !== 'select') state.selectedIdx = null;
-        if (state.tool !== 'measure') state.measurePending = null;
+        // Reset measurement-only overrides when leaving the tool so
+        // the next measure session starts from the global defaults.
+        if (state.tool !== 'measure') {
+          state.measureLineColor = null;
+          state.measureLineWidth = null;
+          state.measureNumberColor = null;
+        }
         refreshToolbar(overlay);
         renderStickerPicker(overlay);
         renderMeasurePicker(overlay);
@@ -504,73 +564,109 @@
     }
     picker.style.display = '';
 
-    var pendingLabel = (state.measurePending && state.measurePending.label) || '';
-    picker.innerHTML =
-      '<div style="font-size:9px;color:#888;text-transform:uppercase;letter-spacing:0.5px;text-align:center;margin-bottom:6px;">Measurement</div>' +
-      '<input id="agx-mk-measure-input" type="text" placeholder="84&quot;  ·  1.5&apos;  ·  5&apos;6&quot;" value="' + escapeHTML(pendingLabel) + '" ' +
-        'style="width:100%;box-sizing:border-box;background:rgba(255,255,255,0.05);color:#fff;border:1px solid #444;border-radius:5px;padding:6px 8px;font-size:13px;font-weight:600;margin-bottom:6px;outline:none;" />' +
-      '<div style="font-size:9px;color:#666;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Presets</div>' +
-      '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:4px;">' +
-      MEASURE_PRESETS.map(function(m) {
-        var active = state.measurePending && state.measurePending.inches === m.in;
-        return '<button data-mk-measure="' + m.in + '" ' +
-          'style="height:30px;background:' + (active ? '#4f8cff' : 'rgba(255,255,255,0.05)') +
-          ';color:' + (active ? '#fff' : '#ddd') + ';border:1px solid ' + (active ? '#4f8cff' : '#444') +
-          ';border-radius:5px;font-size:11px;cursor:pointer;font-weight:600;padding:0;">' +
-          escapeHTML(m.label) + '</button>';
-      }).join('') +
-      '</div>' +
-      '<button id="agx-mk-measure-clear" style="margin-top:8px;width:100%;height:28px;background:rgba(255,255,255,0.04);color:#aaa;border:1px solid #333;border-radius:5px;font-size:11px;cursor:pointer;">Clear · prompt on draw</button>' +
-      (pendingLabel
-        ? '<div style="margin-top:8px;font-size:10px;color:#34d399;text-align:center;">Armed: <strong>' + escapeHTML(pendingLabel) + '</strong></div>'
-        : '<div style="margin-top:8px;font-size:10px;color:#888;text-align:center;font-style:italic;">No preset — will prompt</div>');
+    // Currently-armed values (with global fallbacks) — used to
+    // highlight the active chip in each row. The picker doesn't
+    // store the value to attach to the line; that's prompted in
+    // an AGX modal AFTER the user draws (see promptMeasurement).
+    var unit = state.measureUnit || 'in';
+    var lineColor = state.measureLineColor || state.color;
+    var lineWidth = state.measureLineWidth || state.lineWidth;
+    var numberColor = state.measureNumberColor; // null = match line
 
-    // Presets — single click arms the measurement.
-    picker.querySelectorAll('[data-mk-measure]').forEach(function(btn) {
+    function chip(label, isActive, attrs) {
+      return '<button ' + attrs +
+        ' style="height:28px;flex:1;background:' + (isActive ? '#4f8cff' : 'rgba(255,255,255,0.05)') +
+        ';color:' + (isActive ? '#fff' : '#ddd') +
+        ';border:1px solid ' + (isActive ? '#4f8cff' : '#444') +
+        ';border-radius:5px;font-size:11px;cursor:pointer;font-weight:600;padding:0;">' +
+        label + '</button>';
+    }
+
+    function colorSwatch(color, isActive, attrs) {
+      return '<button ' + attrs +
+        ' title="' + escapeHTML(color) + '"' +
+        ' style="width:24px;height:24px;flex:0 0 auto;background:' + color +
+        ';border:2px solid ' + (isActive ? '#fff' : '#444') +
+        ';border-radius:50%;cursor:pointer;padding:0;box-shadow:' +
+        (isActive ? '0 0 0 1px #4f8cff' : 'none') + ';"></button>';
+    }
+
+    picker.innerHTML =
+      '<div style="font-size:9px;color:#888;text-transform:uppercase;letter-spacing:0.5px;text-align:center;margin-bottom:8px;">Measurement</div>' +
+
+      // Unit toggle — controls how a bare number entered after the
+      // line is drawn ("5") is interpreted in the modal: inches or
+      // feet. Quoted units ("5'", "5\"") always win regardless.
+      '<div style="font-size:9px;color:#666;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Unit (for bare numbers)</div>' +
+      '<div style="display:flex;gap:4px;margin-bottom:10px;">' +
+        chip('in', unit === 'in', 'data-mk-unit="in"') +
+        chip('ft', unit === 'ft', 'data-mk-unit="ft"') +
+      '</div>' +
+
+      // Line weight — three thickness presets specific to the
+      // measure tool. Doesn't touch the global state.lineWidth so
+      // the user's other tools keep their own thickness setting.
+      '<div style="font-size:9px;color:#666;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Line weight</div>' +
+      '<div style="display:flex;gap:4px;margin-bottom:10px;">' +
+        THICKNESS_PRESETS.map(function(t) {
+          var isActive = lineWidth === t.value;
+          var glyph = '<span style="display:inline-block;width:16px;height:' +
+            Math.max(2, Math.round(t.value / 4)) + 'px;background:#ddd;border-radius:1px;vertical-align:middle;"></span>';
+          return chip(glyph, isActive, 'data-mk-mlw="' + t.value + '"');
+        }).join('') +
+      '</div>' +
+
+      // Line color — measurement-specific override. Defaults to the
+      // global color so users who don't change it just inherit.
+      '<div style="font-size:9px;color:#666;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Line color</div>' +
+      '<div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:10px;align-items:center;">' +
+        DEFAULT_COLORS.map(function(c) {
+          return colorSwatch(c, lineColor === c, 'data-mk-mlc="' + c + '"');
+        }).join('') +
+      '</div>' +
+
+      // Number color — separate so the user can have e.g. red lines
+      // with white numbers on a busy photo background. Default chip
+      // is "Match" (uses the line color); other chips override.
+      '<div style="font-size:9px;color:#666;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Number color</div>' +
+      '<div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px;align-items:center;">' +
+        chip('Match', numberColor == null, 'data-mk-mnc="match" style-extra') +
+        DEFAULT_COLORS.map(function(c) {
+          return colorSwatch(c, numberColor === c, 'data-mk-mnc="' + c + '"');
+        }).join('') +
+      '</div>' +
+
+      '<div style="margin-top:6px;font-size:10px;color:#888;text-align:center;font-style:italic;">Draw a line — you\'ll be prompted for the distance.</div>';
+
+    // Unit toggle.
+    picker.querySelectorAll('[data-mk-unit]').forEach(function(btn) {
       btn.onclick = function() {
-        var inches = parseFloat(btn.dataset.mkMeasure);
-        state.measurePending = { inches: inches, label: formatFeetInches(inches) };
+        state.measureUnit = btn.dataset.mkUnit;
         renderMeasurePicker(overlay);
-        updateHint(overlay);
       };
     });
-
-    // Free-text input — armed live as the user types/blurs. Hitting
-    // Enter commits and gives focus back to the canvas so the user
-    // can immediately draw.
-    var input = picker.querySelector('#agx-mk-measure-input');
-    if (input) {
-      var commit = function() {
-        var raw = (input.value || '').trim();
-        if (!raw) { state.measurePending = null; return; }
-        var parsed = parseMeasurement(raw);
-        if (parsed) state.measurePending = parsed;
-        else state.measurePending = null;
-      };
-      input.onchange = function() {
-        commit();
+    // Measurement-specific line weight.
+    picker.querySelectorAll('[data-mk-mlw]').forEach(function(btn) {
+      btn.onclick = function() {
+        state.measureLineWidth = parseInt(btn.dataset.mkMlw, 10);
         renderMeasurePicker(overlay);
       };
-      input.onkeydown = function(e) {
-        if (e.key === 'Enter') {
-          e.preventDefault();
-          commit();
-          renderMeasurePicker(overlay);
-          // Bounce focus back so the user can draw immediately.
-          var canvas = overlay.querySelector('#agx-mk-canvas');
-          if (canvas) canvas.focus();
-        }
-      };
-    }
-
-    var clearBtn = picker.querySelector('#agx-mk-measure-clear');
-    if (clearBtn) {
-      clearBtn.onclick = function() {
-        state.measurePending = null;
+    });
+    // Measurement-specific line color.
+    picker.querySelectorAll('[data-mk-mlc]').forEach(function(btn) {
+      btn.onclick = function() {
+        state.measureLineColor = btn.dataset.mkMlc;
         renderMeasurePicker(overlay);
-        updateHint(overlay);
       };
-    }
+    });
+    // Number color override (or "match" the line).
+    picker.querySelectorAll('[data-mk-mnc]').forEach(function(btn) {
+      btn.onclick = function() {
+        var v = btn.dataset.mkMnc;
+        state.measureNumberColor = (v === 'match') ? null : v;
+        renderMeasurePicker(overlay);
+      };
+    });
   }
 
   function renderStickerPicker(overlay) {
@@ -623,9 +719,7 @@
     } else if (state.tool === 'polyline') {
       hint.textContent = 'Click to add points · double-click or Esc to finish · snaps to existing endpoints';
     } else if (state.tool === 'measure') {
-      hint.textContent = state.measurePending
-        ? 'Click and drag — measurement armed: ' + state.measurePending.label
-        : 'Pick a preset or type a value, then click and drag · or just draw and you\'ll be prompted';
+      hint.textContent = 'Click and drag two points · enter the distance when prompted';
     } else {
       hint.textContent = 'Click and drag on the photo';
     }
@@ -782,31 +876,36 @@
           return;
         }
       }
-      // Measurement tool: use the armed value from the picker
-      // panel if one is set; otherwise fall back to a prompt for
-      // a one-off custom value. Cancel = drop the stroke (treat
-      // like a misclick).
+      // Measurement tool: ask for the distance via an AGX-styled
+      // modal (not the native window.prompt — feels foreign and
+      // can't honor the unit toggle visually). Apply the picker's
+      // line-weight / line-color / number-color overrides BEFORE
+      // committing the stroke so the new measurement renders with
+      // the user's chosen styling. Cancelling drops the stroke.
       if (s.tool === 'measure') {
-        if (state.measurePending) {
-          s.measureInches = state.measurePending.inches;
-          s.measureLabel = state.measurePending.label;
-        } else {
-          var raw = window.prompt('Distance between the two points?\n\nFormats: 84"  ·  1.5\'  ·  10 feet  ·  5\'6"  ·  bare number = inches\n\nTip: pick a preset in the side panel to skip this prompt.', '');
-          if (raw == null || !raw.trim()) {
-            state.currentStroke = null;
-            redraw();
-            return;
-          }
-          var parsed = parseMeasurement(raw);
+        // Apply overrides first so the live preview while the modal
+        // is open already reflects the chosen styling.
+        if (state.measureLineColor)  s.color       = state.measureLineColor;
+        if (state.measureLineWidth)  s.lineWidth   = state.measureLineWidth;
+        s.numberColor = state.measureNumberColor;  // null = match line
+
+        promptMeasurement(state.measureUnit || 'in', function(parsed) {
           if (!parsed) {
-            alert('Could not parse "' + raw + '" as a measurement. Try 84", 1.5\', 10 feet, or 5\'6".');
+            // Cancel / empty / unparseable — drop the stroke.
             state.currentStroke = null;
             redraw();
             return;
           }
           s.measureInches = parsed.inches;
-          s.measureLabel = parsed.label;
-        }
+          s.measureLabel  = parsed.label;
+          state.strokes.push(s);
+          state.currentStroke = null;
+          redraw();
+        });
+        // Don't commit the stroke synchronously — the modal callback
+        // owns that. Return early so the catch-all push below
+        // doesn't add an unmeasured copy.
+        return;
       }
       state.strokes.push(s);
       state.currentStroke = null;
@@ -1044,9 +1143,12 @@
     var px = -sinA, py = cosA;
     var label = s.measureLabel || formatFeetInches(s.measureInches || 0);
 
+    var lineColor = s.color;
+    var numberColor = s.numberColor || s.color;
+
     ctx.save();
-    ctx.strokeStyle = s.color;
-    ctx.fillStyle = s.color;
+    ctx.strokeStyle = lineColor;
+    ctx.fillStyle = lineColor;
     ctx.lineCap = 'butt';
     ctx.lineJoin = 'miter';
     ctx.lineWidth = stroke;
@@ -1128,7 +1230,7 @@
     ctx.miterLimit = 2;
     ctx.strokeStyle = '#000';
     ctx.strokeText(label, 0, 0);
-    ctx.fillStyle = s.color;
+    ctx.fillStyle = numberColor;
     ctx.fillText(label, 0, 0);
     ctx.restore();
   }
