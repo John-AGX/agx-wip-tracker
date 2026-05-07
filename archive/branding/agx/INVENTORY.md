@@ -21,6 +21,22 @@ include code-only references to AGX such as:
 - Asset directory naming (`assets/icons/agx/`, `js/agx-icons.js`) —
   filesystem paths, not user-visible.
 
+### Intentionally **not** rebranded (visible AGX-the-business strings)
+
+These appear in user-visible places but reference **AGX as the
+underlying business** rather than the site's brand. They were
+deliberately left alone during the Project 86 rebrand:
+
+| File | Line | String | Why kept |
+|---|---|---|---|
+| `js/ai-panel.js` | 970 | `'📐 AG · AGX Estimator'` | Labels the AI agent's expertise (AGX-trained estimator); identity, not site brand |
+| `js/estimates.js` | 417 | `<h1>AGX Central Florida</h1>` | Estimate-report header on the printed/exported document — that document IS from AGX |
+| `js/proposal.js` | 88 | `wb.creator = 'AGX Central Florida'` | XLSX metadata on the generated proposal workbook |
+| `js/proposal.js` | 527 | `'AGX Central Florida is pleased to provide…'` | Contractual proposal letter body — AGX is the contracting entity |
+
+If the goal ever shifts to "fully rebrand even AGX-the-business
+references," these are the additional touchpoints to handle.
+
 Restoration of AGX = restore the items below + restore the snapshot
 files in `./snapshot/` and the logo PNGs in `./images/`.
 
