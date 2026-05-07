@@ -11,7 +11,7 @@
          parse. -->
     <base href="/">
     <title>AGX Central Florida &mdash; WIP Tracker</title>
-    <link rel="stylesheet" href="css/styles.css?v=39">
+    <link rel="stylesheet" href="css/styles.css?v=40">
     <link rel="stylesheet" href="css/workspace-layout.css?v=52">
     <link rel="stylesheet" href="css/workspace.css?v=36">
     <link rel="stylesheet" href="css/schedule.css?v=9">
@@ -72,12 +72,13 @@
                     <button class="tab-btn" data-tab="admin" data-agx-icon="admin" data-admin-only style="display:none;">Admin</button>
                 </nav>
                 <div id="user-menu" class="header-user-menu">
-                    <!-- Notifications bell. Red dot toggles via the
-                         data-count attribute set by JS; when count is 0
-                         the dot is hidden via CSS. Clicking opens
+                    <!-- Notifications bell. Renders the agx 'bell' SVG
+                         (Heroicons outline) instead of the previous 🔔
+                         emoji. Red dot toggles via the data-count
+                         attribute set by JS; when count is 0 the dot
+                         is hidden via CSS. Clicking opens
                          #notifications-panel. -->
-                    <button id="header-notif-btn" class="header-icon-btn" type="button" title="Notifications" aria-haspopup="true" aria-expanded="false">
-                        <span aria-hidden="true">&#x1F514;</span>
+                    <button id="header-notif-btn" class="header-icon-btn" type="button" title="Notifications" aria-haspopup="true" aria-expanded="false" data-agx-icon="bell">
                         <span class="header-notif-dot" data-count="0"></span>
                     </button>
                     <button id="theme-toggle" class="theme-toggle header-icon-btn" type="button" title="Toggle light/dark mode"></button>
@@ -2258,7 +2259,7 @@
     <!-- AGX inline-SVG icon helper. Provides window.agxIcon(name, opts)
          — 24 icons from Phosphor (MIT) + Heroicons (MIT). See
          scripts/build-agx-icons.js to regenerate. -->
-    <script src="js/agx-icons.js?v=3"></script>
+    <script src="js/agx-icons.js?v=4"></script>
 
     <!-- Node Graph (Beta) -->
     <link rel="stylesheet" href="nodegraph/nodegraph.css?v=89" />

@@ -308,6 +308,19 @@
             background: rgba(255, 255, 255, 0.12);
             border-color: rgba(255, 255, 255, 0.18);
         }
+        /* Icon decorator slot inside the header buttons — overrides
+           the default tab-btn 1.4em sizing (which applies via the
+           global rule even though we don't have .tab-btn here, but
+           keeping the override defensive). 18px reads cleanly inside
+           a 32px circular button without crowding. */
+        .header-icon-btn .agx-icon-slot {
+            margin-right: 0;
+            display: inline-flex;
+        }
+        .header-icon-btn .agx-icon {
+            width: 18px;
+            height: 18px;
+        }
         /* Red dot on the bell — only visible when count > 0. JS sets
            data-count and toggles the .has-notifs flag on the parent
            button. CSS shows the dot accordingly. */
@@ -458,10 +471,17 @@
            right, generous padding, hover fills the full row. The icon
            is injected by the agxIcon decorator (data-agx-icon attribute)
            and styled via .agx-icon — sized to ~20px so the labels read
-           at a comfortable scan rate. */
-        .tab-dropdown-menu button {
+           at a comfortable scan rate.
+
+           Note the selector specificity: `nav.tabs button` (0,0,1,2)
+           in the global tab styles sets a translucent white color
+           that would beat a plain `.tab-dropdown-menu button` rule.
+           Qualifying with `nav.tabs` puts us at 0,0,2,2 so the dark
+           color and full-width row layout actually win. */
+        nav.tabs .tab-dropdown-menu button {
             display: flex;
             align-items: center;
+            justify-content: flex-start;
             gap: 12px;
             width: 100%;
             text-align: left;
@@ -473,18 +493,22 @@
             cursor: pointer;
             font-weight: 500;
             white-space: nowrap;
+            height: auto;
         }
-        .tab-dropdown-menu button .agx-icon {
+        nav.tabs .tab-dropdown-menu button:hover {
+            background: rgba(79, 140, 255, 0.08);
+            color: #1a1a2e;
+        }
+        nav.tabs .tab-dropdown-menu button .agx-icon-slot {
+            margin-right: 0;
+        }
+        nav.tabs .tab-dropdown-menu button .agx-icon {
             width: 22px;
             height: 22px;
             flex: 0 0 auto;
             color: #4b4b5a;
         }
-        .tab-dropdown-menu button:hover {
-            background: rgba(79, 140, 255, 0.08);
-            color: #1a1a2e;
-        }
-        .tab-dropdown-menu button:hover .agx-icon { color: #2c2c40; }
+        nav.tabs .tab-dropdown-menu button:hover .agx-icon { color: #2c2c40; }
 
         /* NAVIGATION — inline with logo, height-filling so the active
            underline sits flush with the header's bottom edge for that
