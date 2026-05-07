@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="100" height="100" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" role="img">
+  <title>Project 86</title>
+  <desc>Project 86 logo mark - layered hexagonal icon with code bracket ghosting and 86 numeral.</desc>
+  <g transform="translate(50, 50)">
+    <polygon points="44,6 26,-25.18 -10,-25.18 -28,6 -10,37.18 26,37.18" fill="none" stroke="#22D3EE" stroke-width="0.8" opacity="0.3"/>
+    <polygon points="41,4 23,-27.18 -13,-27.18 -31,4 -13,35.18 23,35.18" fill="none" stroke="#22D3EE" stroke-width="0.8" opacity="0.55"/>
+    <polygon points="36,0 18,-31.18 -18,-31.18 -36,0 -18,31.18 18,31.18" fill="#0F172A" stroke="#22D3EE" stroke-width="2"/>
+    <polygon points="29,0 14.5,-25.11 -14.5,-25.11 -29,0 -14.5,25.11 14.5,25.11" fill="none" stroke="#22D3EE" stroke-width="0.4" opacity="0.4"/>
+    <text y="-14" font-family="ui-monospace, 'SF Mono', Menlo, monospace" font-size="10" fill="#22D3EE" text-anchor="middle" letter-spacing="1.5" opacity="0.6">&lt;/&gt;</text>
+    <text y="13" font-family="Inter, system-ui, -apple-system, sans-serif" font-weight="200" font-size="28" fill="#F8FAFC" text-anchor="middle" letter-spacing="-0.5">86</text>
+  </g>
+</svg>

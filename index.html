@@ -18,17 +18,20 @@
 
 </head>
 <body>
-    <!-- Login Screen -->
-    <div id="login-screen" style="position:fixed;inset:0;z-index:99999;background:var(--bg);display:flex;align-items:center;justify-content:center;">
-        <div style="width:340px;text-align:center;">
-            <img src="images/logo-p86.svg" alt="Project 86" style="height:48px;margin-bottom:24px;opacity:0.9;color:var(--text);" />
-            <h2 style="font-size:18px;margin:0 0 4px;color:var(--text);">Project 86</h2>
-            <p style="font-size:12px;color:var(--text-dim);margin:0 0 24px;">Estimating & Project Tracking</p>
-            <div id="login-error" style="display:none;background:rgba(248,113,113,0.1);border:1px solid var(--red);color:var(--red);padding:8px 12px;border-radius:6px;font-size:12px;margin-bottom:12px;"></div>
-            <input type="email" id="login-email" placeholder="Email" style="width:100%;padding:10px 14px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:14px;margin-bottom:10px;box-sizing:border-box;" />
-            <input type="password" id="login-password" placeholder="Password" style="width:100%;padding:10px 14px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:14px;margin-bottom:16px;box-sizing:border-box;" />
-            <button id="login-btn" style="width:100%;padding:10px;border-radius:8px;background:var(--accent);border:none;color:#fff;font-size:14px;font-weight:600;cursor:pointer;">Sign In</button>
-            <p style="font-size:10px;color:var(--text-dim);margin-top:16px;">Not connected to server? <a href="#" id="login-offline" style="color:var(--accent);">Continue Offline</a></p>
+    <!-- Login Screen — always rendered in dark mode regardless of the
+         user's theme preference. The full Project 86 lockup
+         (hex + wordmark + tagline on navy bg) is its own background;
+         we just stack the form over it with hardcoded dark surface
+         colors so a user who's set light mode still sees a coherent
+         brand surface here. -->
+    <div id="login-screen" style="position:fixed;inset:0;z-index:99999;background:#0F172A;color:#F8FAFC;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:36px;">
+        <img src="images/project-86-lockup-dark.svg" alt="Project 86" style="width:min(520px,82vw);height:auto;display:block;" />
+        <div style="width:340px;max-width:88vw;text-align:center;">
+            <div id="login-error" style="display:none;background:rgba(248,113,113,0.1);border:1px solid #f87171;color:#f87171;padding:8px 12px;border-radius:6px;font-size:12px;margin-bottom:12px;"></div>
+            <input type="email" id="login-email" placeholder="Email" style="width:100%;padding:10px 14px;border-radius:8px;border:1px solid rgba(34,211,238,0.25);background:rgba(255,255,255,0.04);color:#F8FAFC;font-size:14px;margin-bottom:10px;box-sizing:border-box;" />
+            <input type="password" id="login-password" placeholder="Password" style="width:100%;padding:10px 14px;border-radius:8px;border:1px solid rgba(34,211,238,0.25);background:rgba(255,255,255,0.04);color:#F8FAFC;font-size:14px;margin-bottom:16px;box-sizing:border-box;" />
+            <button id="login-btn" style="width:100%;padding:10px;border-radius:8px;background:#22D3EE;border:none;color:#0F172A;font-size:14px;font-weight:600;cursor:pointer;letter-spacing:0.4px;">Sign In</button>
+            <p style="font-size:10px;color:rgba(248,250,252,0.55);margin-top:16px;">Not connected to server? <a href="#" id="login-offline" style="color:#22D3EE;">Continue Offline</a></p>
         </div>
     </div>
 
@@ -41,7 +44,7 @@
         <header>
             <div class="header-content">
                 <a class="header-brand" title="Project 86 — Estimating &amp; Project Tracking">
-                    <img src="images/logo-p86.svg" alt="Project 86" class="header-logo" />
+                    <img src="images/project-86-icon.svg" alt="Project 86" class="header-logo" />
                 </a>
                 <nav class="tabs">
                     <!-- Leads is its own top-level destination now (was a
@@ -2253,7 +2256,7 @@
     <script src="js/tab-slider.js?v=1"></script>
 
     <script src="js/workspace.js?v=43"></script>
-    <script src="js/workspace-layout.js?v=51"></script>
+    <script src="js/workspace-layout.js?v=52"></script>
 
     <!-- URL router — pathname-based navigation. Loads last so all
          top-level nav functions (switchTab, editJob, etc.) exist

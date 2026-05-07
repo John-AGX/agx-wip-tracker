@@ -384,8 +384,8 @@
     fp.innerHTML =
       '<div class="ws-floating-header" id="wsFloatingHeader">' +
         '<span class="ws-floating-titlewrap">' +
-          '<img src="images/logo-color.png" alt="AGX" class="ws-floating-logo ws-logo-color" />' +
-          '<img src="images/logo-white.png" alt="AGX" class="ws-floating-logo ws-logo-white" />' +
+          '<img src="images/project-86-icon.svg" alt="Project 86" class="ws-floating-logo ws-logo-color" />' +
+          '<img src="images/project-86-icon.svg" alt="Project 86" class="ws-floating-logo ws-logo-white" />' +
           '<span class="ws-floating-title">Workspace</span>' +
         '</span>' +
         '<div class="ws-floating-actions">' +
