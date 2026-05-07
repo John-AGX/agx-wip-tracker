@@ -2296,17 +2296,9 @@ async function recoverStuckSession({ anthropic, sessionRow }) {
   });
 }
 
-async function runV2SessionStream({ anthropic, res, session, eventsToSend, persistAssistantText, onCustomToolUse }) {
+async function runV2SessionStream({ anthropic, res, session, eventsToSend, persistAssistantText, onCustomToolUse, freshlyCreated }) {
   function send(payload) { res.write('data: ' + JSON.stringify(payload) + '\n\n'); }
   function endWithDone() { res.write('data: [DONE]\n\n'); res.end(); }
-
-  let assistantText = '';
-  const pendingToolUses = [];
-  let usage = { input_tokens: null, output_tokens: null };
-  // Diagnostic — counts each event type we see in this turn so a
-  // failed/empty turn is debuggable from Railway logs without per-
-  // request stack traces. Logged once at end-of-stream.
-  const eventCounts = {};
 
   // Resolve the session id, recovering once if the prior session is
   // stuck waiting on tool responses. We have to attempt the events.send
@@ -2315,8 +2307,27 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
   let activeSession = session;
   let sessionId = session.anthropic_session_id;
 
-  // Helper to (re)open stream + send events with stuck-state recovery.
-  async function openStreamAndSend() {
+  // Stall recovery (Fix 1): when the model emits agent.thinking but
+  // produces neither a text reply nor a follow-up tool_use before the
+  // session idles in `requires_action`, send a nudge user.message and
+  // re-stream once. Capped at MAX_NUDGES so a permanently broken
+  // conversation can't loop forever — the second idle in this state
+  // surfaces the original "Used N tools but didn't produce a summary"
+  // fallback to the user instead of nudging again.
+  const MAX_NUDGES = 1;
+  let nudgeAttempts = 0;
+  const NUDGE_TEXT =
+    'Continue. You have the data you needed from the prior tools — ' +
+    'either reply to the user with a final answer / clarifying question, ' +
+    'or call your next tool now.';
+
+  // Helper to (re)open stream + send events. Stuck-state recovery is
+  // skipped for sessions we know are brand-new (Fix 2): /chat handlers
+  // that just ran archiveActiveAiSession + createFreshAiSession pass
+  // freshlyCreated=true; if events.send to a brand-new session reports
+  // "stuck", recovery would only loop archive→create→archive forever.
+  // For freshly-created sessions we surface the error to the user.
+  async function openStreamAndSend(eventsForThisOpen) {
     let stream;
     try {
       stream = await anthropic.beta.sessions.events.stream(sessionId);
@@ -2328,13 +2339,14 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
       return null;
     }
 
-    if (Array.isArray(eventsToSend) && eventsToSend.length) {
+    if (Array.isArray(eventsForThisOpen) && eventsForThisOpen.length) {
       try {
-        await anthropic.beta.sessions.events.send(sessionId, { events: eventsToSend });
-        console.log('[v2-stream] sent', eventsToSend.length, 'event(s) to', sessionId);
+        await anthropic.beta.sessions.events.send(sessionId, { events: eventsForThisOpen });
+        console.log('[v2-stream] sent', eventsForThisOpen.length, 'event(s) to', sessionId);
       } catch (e) {
-        if (isStuckSessionError(e)) {
-          // Stuck session: archive + recreate, then retry once.
+        if (isStuckSessionError(e) && !freshlyCreated) {
+          // Stuck session on a reused id: archive + recreate, then retry
+          // once. Skipped when freshlyCreated — see comment above.
           try {
             activeSession = await recoverStuckSession({ anthropic, sessionRow: activeSession });
             sessionId = activeSession.anthropic_session_id;
@@ -2343,13 +2355,16 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
             try {
               await stream.controller.abort();
             } catch (_) { /* best-effort */ }
-            return openStreamAndSend();
+            return openStreamAndSend(eventsForThisOpen);
           } catch (e2) {
             console.error('Stuck-session recovery failed:', e2);
             send({ error: 'Could not recover session: ' + (e2.message || 'unknown') });
             endWithDone();
             return null;
           }
+        }
+        if (isStuckSessionError(e) && freshlyCreated) {
+          console.error('[v2-stream] freshly-created session reported stuck — refusing to recover (would loop):', sessionId);
         }
         console.error('Session events.send failed:', e);
         send({ error: e.message || 'Failed to send session events' });
@@ -2360,174 +2375,227 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
     return stream;
   }
 
-  const stream = await openStreamAndSend();
-  if (!stream) return;
+  // Stall-aware run loop. Each pass opens a stream, iterates events
+  // until idle, and either finalizes the SSE response or — on a
+  // thinking-then-stop stall — sends a nudge user.message and runs
+  // again. Per-pass state (text accumulation, pending tools, usage,
+  // event counts) resets each iteration; nudge counter persists.
+  let nextEventsToSend = eventsToSend;
+  while (true) {
+    let assistantText = '';
+    const pendingToolUses = [];
+    let usage = { input_tokens: null, output_tokens: null };
+    // Diagnostic — counts each event type we see in this turn so a
+    // failed/empty turn is debuggable from Railway logs without per-
+    // request stack traces. Logged once at end-of-stream.
+    const eventCounts = {};
+    let stallNudgeQueued = false;
 
-  try {
-    for await (const event of stream) {
-      eventCounts[event.type] = (eventCounts[event.type] || 0) + 1;
-      switch (event.type) {
-        case 'agent.message': {
-          // The session's agent.message arrives as a list of content
-          // blocks (text, etc.). We forward each text block as a single
-          // delta — coarser than the per-token v1 stream, but this is
-          // the granularity the Sessions API exposes today.
-          const blocks = Array.isArray(event.content) ? event.content : [];
-          for (const b of blocks) {
-            if (b && b.type === 'text' && typeof b.text === 'string') {
-              assistantText += b.text;
-              send({ delta: b.text });
-            }
-          }
-          break;
-        }
-        case 'agent.custom_tool_use': {
-          // Per managed-agents docs, the id we send back as
-          // custom_tool_use_id is event.id (e.g. sevt_…), not a
-          // toolu_… id.
-          const tu = {
-            id: event.id,
-            name: event.tool_name || event.name || 'unknown',
-            input: event.input || {}
-          };
-          // Always signal "tool starting" to the client — drives the
-          // brain-yoga caption swap to a friendly tool-specific verb
-          // ("Drafting line item…" / "Pulling metrics…" / etc.) the
-          // moment the model emits the tool_use, before either the
-          // approval card or the tool_applied result lands. Fires for
-          // every agent regardless of whether onCustomToolUse is set.
-          send({ tool_started: { id: tu.id, name: tu.name } });
-          // HR / CoS / AG auto-tier path: callback decides whether we
-          // execute server-side (and resume the session in-stream) or
-          // collect for user approval (default behavior).
-          if (typeof onCustomToolUse === 'function') {
-            let decision;
-            try {
-              decision = await onCustomToolUse(tu);
-            } catch (e) {
-              decision = { tier: 'auto', error: 'Tool execution failed: ' + (e.message || 'unknown') };
-            }
-            if (decision && decision.tier === 'auto') {
-              const isError = !!decision.error;
-              const summary = isError ? decision.error : (decision.summary || 'Done.');
-              if (isError) {
-                send({ tool_failed: { id: tu.id, name: tu.name, input: tu.input, error: summary } });
-              } else {
-                send({ tool_applied: { id: tu.id, name: tu.name, input: tu.input, summary: summary.slice(0, 500) } });
+    const stream = await openStreamAndSend(nextEventsToSend);
+    if (!stream) return;
+
+    try {
+      for await (const event of stream) {
+        eventCounts[event.type] = (eventCounts[event.type] || 0) + 1;
+        switch (event.type) {
+          case 'agent.message': {
+            // The session's agent.message arrives as a list of content
+            // blocks (text, etc.). We forward each text block as a single
+            // delta — coarser than the per-token v1 stream, but this is
+            // the granularity the Sessions API exposes today.
+            const blocks = Array.isArray(event.content) ? event.content : [];
+            for (const b of blocks) {
+              if (b && b.type === 'text' && typeof b.text === 'string') {
+                assistantText += b.text;
+                send({ delta: b.text });
               }
-              try {
-                await anthropic.beta.sessions.events.send(sessionId, {
-                  events: [{
-                    type: 'user.custom_tool_result',
-                    custom_tool_use_id: tu.id,
-                    content: [{ type: 'text', text: summary }],
-                    is_error: isError || undefined
-                  }]
-                });
-              } catch (e) {
-                console.error('Failed to send tool result back to session:', e);
-                send({ error: 'Failed to send tool result back to session: ' + (e.message || 'unknown') });
-                endWithDone();
-                return;
-              }
-              break; // continue iterating for the resumed agent events
             }
-            // tier === 'approval' — surface to UI on next idle
+            break;
           }
-          pendingToolUses.push(tu);
-          break;
-        }
-        case 'span.model_request_end': {
-          if (event.model_usage) {
-            usage = {
-              input_tokens: event.model_usage.input_tokens,
-              output_tokens: event.model_usage.output_tokens,
-              cache_creation_input_tokens: event.model_usage.cache_creation_input_tokens,
-              cache_read_input_tokens: event.model_usage.cache_read_input_tokens
+          case 'agent.custom_tool_use': {
+            // Per managed-agents docs, the id we send back as
+            // custom_tool_use_id is event.id (e.g. sevt_…), not a
+            // toolu_… id.
+            const tu = {
+              id: event.id,
+              name: event.tool_name || event.name || 'unknown',
+              input: event.input || {}
             };
-          }
-          break;
-        }
-        case 'session.error': {
-          const msg = (event.error && event.error.message) || 'Session error';
-          send({ error: msg });
-          endWithDone();
-          return;
-        }
-        case 'session.status_terminated': {
-          send({ error: 'Session terminated' });
-          endWithDone();
-          return;
-        }
-        case 'session.status_idle': {
-          // Per managed-agents-client-patterns.md Pattern 5, only break
-          // on idle when the stop_reason is terminal — `requires_action`
-          // means the session is waiting on us. Our flow ends the HTTP
-          // response either way (the client picks up the conversation
-          // again on /chat/continue), but we use the stop_reason to
-          // pick the SSE shape: tool-use awaiting vs. final done.
-          const stopType = event.stop_reason && event.stop_reason.type;
-          console.log('[v2-stream] idle', sessionId, 'stop_reason:', stopType,
-            'pendingTools:', pendingToolUses.length,
-            'assistantTextLen:', assistantText.length,
-            'events seen:', JSON.stringify(eventCounts));
-          if (pendingToolUses.length || stopType === 'requires_action') {
-            for (const tu of pendingToolUses) {
-              send({ tool_use: tu });
+            // Always signal "tool starting" to the client — drives the
+            // brain-yoga caption swap to a friendly tool-specific verb
+            // ("Drafting line item…" / "Pulling metrics…" / etc.) the
+            // moment the model emits the tool_use, before either the
+            // approval card or the tool_applied result lands. Fires for
+            // every agent regardless of whether onCustomToolUse is set.
+            send({ tool_started: { id: tu.id, name: tu.name } });
+            // HR / CoS / AG auto-tier path: callback decides whether we
+            // execute server-side (and resume the session in-stream) or
+            // collect for user approval (default behavior).
+            if (typeof onCustomToolUse === 'function') {
+              let decision;
+              try {
+                decision = await onCustomToolUse(tu);
+              } catch (e) {
+                decision = { tier: 'auto', error: 'Tool execution failed: ' + (e.message || 'unknown') };
+              }
+              if (decision && decision.tier === 'auto') {
+                const isError = !!decision.error;
+                const summary = isError ? decision.error : (decision.summary || 'Done.');
+                if (isError) {
+                  send({ tool_failed: { id: tu.id, name: tu.name, input: tu.input, error: summary } });
+                } else {
+                  send({ tool_applied: { id: tu.id, name: tu.name, input: tu.input, summary: summary.slice(0, 500) } });
+                }
+                try {
+                  await anthropic.beta.sessions.events.send(sessionId, {
+                    events: [{
+                      type: 'user.custom_tool_result',
+                      custom_tool_use_id: tu.id,
+                      content: [{ type: 'text', text: summary }],
+                      is_error: isError || undefined
+                    }]
+                  });
+                } catch (e) {
+                  console.error('Failed to send tool result back to session:', e);
+                  send({ error: 'Failed to send tool result back to session: ' + (e.message || 'unknown') });
+                  endWithDone();
+                  return;
+                }
+                break; // continue iterating for the resumed agent events
+              }
+              // tier === 'approval' — surface to UI on next idle
             }
-            send({
-              awaiting_approval: true,
-              // Session is server-managed; client doesn't need to echo
-              // the assistant content back on /chat/continue.
-              pending_assistant_content: null,
-              tool_use_count: pendingToolUses.length,
-              usage: usage,
-              session_id: sessionId
-            });
-          } else {
-            if (assistantText && persistAssistantText) {
-              try { await persistAssistantText(assistantText, usage); }
-              catch (e) { console.error('persistAssistantText failed:', e); }
-            }
-            send({ done: true, usage: usage });
+            pendingToolUses.push(tu);
+            break;
           }
-          endWithDone();
-          return;
+          case 'span.model_request_end': {
+            if (event.model_usage) {
+              usage = {
+                input_tokens: event.model_usage.input_tokens,
+                output_tokens: event.model_usage.output_tokens,
+                cache_creation_input_tokens: event.model_usage.cache_creation_input_tokens,
+                cache_read_input_tokens: event.model_usage.cache_read_input_tokens
+              };
+            }
+            break;
+          }
+          case 'session.error': {
+            const msg = (event.error && event.error.message) || 'Session error';
+            send({ error: msg });
+            endWithDone();
+            return;
+          }
+          case 'session.status_terminated': {
+            send({ error: 'Session terminated' });
+            endWithDone();
+            return;
+          }
+          case 'session.status_idle': {
+            // Per managed-agents-client-patterns.md Pattern 5, only break
+            // on idle when the stop_reason is terminal — `requires_action`
+            // means the session is waiting on us. Our flow ends the HTTP
+            // response either way (the client picks up the conversation
+            // again on /chat/continue), but we use the stop_reason to
+            // pick the SSE shape: tool-use awaiting vs. final done.
+            const stopType = event.stop_reason && event.stop_reason.type;
+            console.log('[v2-stream] idle', sessionId, 'stop_reason:', stopType,
+              'pendingTools:', pendingToolUses.length,
+              'assistantTextLen:', assistantText.length,
+              'nudgeAttempts:', nudgeAttempts,
+              'events seen:', JSON.stringify(eventCounts));
+
+            // Stall-recovery branch (Fix 1): the agent thought, ran no
+            // tools, and produced no text before idling in
+            // requires_action. Send a nudge user.message and re-stream.
+            const stalled =
+              stopType === 'requires_action' &&
+              pendingToolUses.length === 0 &&
+              assistantText.length === 0;
+            if (stalled && nudgeAttempts < MAX_NUDGES) {
+              nudgeAttempts++;
+              console.warn('[v2-stream] stall detected on', sessionId,
+                '— nudging (attempt', nudgeAttempts, 'of', MAX_NUDGES + ')');
+              nextEventsToSend = [{
+                type: 'user.message',
+                content: [{ type: 'text', text: NUDGE_TEXT }]
+              }];
+              stallNudgeQueued = true;
+              // Don't endWithDone — break the for-await and let the
+              // outer while reopen the stream with the nudge event.
+              break;
+            }
+
+            if (pendingToolUses.length || stopType === 'requires_action') {
+              for (const tu of pendingToolUses) {
+                send({ tool_use: tu });
+              }
+              send({
+                awaiting_approval: true,
+                // Session is server-managed; client doesn't need to echo
+                // the assistant content back on /chat/continue.
+                pending_assistant_content: null,
+                tool_use_count: pendingToolUses.length,
+                usage: usage,
+                session_id: sessionId
+              });
+            } else {
+              if (assistantText && persistAssistantText) {
+                try { await persistAssistantText(assistantText, usage); }
+                catch (e) { console.error('persistAssistantText failed:', e); }
+              }
+              send({ done: true, usage: usage });
+            }
+            endWithDone();
+            return;
+          }
+          case 'agent.tool_use': {
+            // Built-in toolset (web_search / web_fetch / bash / read /
+            // write / edit / glob / grep). Anthropic runs them
+            // server-side in the session's container — we don't
+            // execute and we don't approve. Forward as both a
+            // tool_started (caption flash) and tool_applied (green
+            // chip) since these tools fire and complete fast — the
+            // pair gives the user visible proof a built-in tool ran
+            // even on a turn that produces no follow-up text.
+            const name = event.name || 'tool';
+            const i = event.input || {};
+            const summary =
+              name === 'web_search' ? 'web_search · ' + (i.query || '').slice(0, 80) :
+              name === 'web_fetch'  ? 'web_fetch · '  + (i.url   || '').slice(0, 80) :
+              name === 'bash'       ? 'bash · '       + (i.command || '').slice(0, 80) :
+              name === 'read'       ? 'read · '       + (i.path || i.file_path || '').slice(0, 80) :
+              name === 'write'      ? 'write · '      + (i.path || i.file_path || '').slice(0, 80) :
+              name === 'edit'       ? 'edit · '       + (i.path || i.file_path || '').slice(0, 80) :
+              name === 'glob'       ? 'glob · '       + (i.pattern || '').slice(0, 80) :
+              name === 'grep'       ? 'grep · '       + (i.pattern || '').slice(0, 80) :
+              name;
+            send({ tool_started: { id: event.id, name: name } });
+            send({ tool_applied: { id: event.id, name: name, summary: summary } });
+            break;
+          }
+          default:
+            // Ignore agent.thinking / span.* / etc.
+            break;
         }
-        case 'agent.tool_use': {
-          // Built-in toolset (web_search / web_fetch / bash / read /
-          // write / edit / glob / grep). Anthropic runs them
-          // server-side in the session's container — we don't
-          // execute and we don't approve. Forward as both a
-          // tool_started (caption flash) and tool_applied (green
-          // chip) since these tools fire and complete fast — the
-          // pair gives the user visible proof a built-in tool ran
-          // even on a turn that produces no follow-up text.
-          const name = event.name || 'tool';
-          const i = event.input || {};
-          const summary =
-            name === 'web_search' ? 'web_search · ' + (i.query || '').slice(0, 80) :
-            name === 'web_fetch'  ? 'web_fetch · '  + (i.url   || '').slice(0, 80) :
-            name === 'bash'       ? 'bash · '       + (i.command || '').slice(0, 80) :
-            name === 'read'       ? 'read · '       + (i.path || i.file_path || '').slice(0, 80) :
-            name === 'write'      ? 'write · '      + (i.path || i.file_path || '').slice(0, 80) :
-            name === 'edit'       ? 'edit · '       + (i.path || i.file_path || '').slice(0, 80) :
-            name === 'glob'       ? 'glob · '       + (i.pattern || '').slice(0, 80) :
-            name === 'grep'       ? 'grep · '       + (i.pattern || '').slice(0, 80) :
-            name;
-          send({ tool_started: { id: event.id, name: name } });
-          send({ tool_applied: { id: event.id, name: name, summary: summary } });
-          break;
-        }
-        default:
-          // Ignore agent.thinking / span.* / etc.
-          break;
+        // After handling each event, check if the idle case queued a
+        // stall-nudge — if so, exit the for-await so the outer while
+        // can reopen the stream with the nudge user.message.
+        if (stallNudgeQueued) break;
       }
+    } catch (e) {
+      console.error('Session stream iteration error:', e);
+      send({ error: e.message || 'Stream failed' });
+      endWithDone();
+      return;
     }
-  } catch (e) {
-    console.error('Session stream iteration error:', e);
-    send({ error: e.message || 'Stream failed' });
-    endWithDone();
+
+    if (!stallNudgeQueued) {
+      // Stream ended without idle (rare — abort, network drop). Close
+      // out so the client gets [DONE] instead of a hung response.
+      endWithDone();
+      return;
+    }
+    // else loop back, reopen stream with nextEventsToSend = nudge.
   }
 }
 
@@ -6586,7 +6654,8 @@ router.post('/v2/intake/chat',
       // server was archiving on every message — the agent saw each
       // new turn as the first message of a fresh session, lost all
       // prior context, and asked the user to start over.
-      if (req.body && req.body.start_new) {
+      const startNew = !!(req.body && req.body.start_new);
+      if (startNew) {
         await archiveActiveAiSession({
           agentKey: 'intake', entityType: 'intake', entityId: null, userId: req.user.id
         });
@@ -6611,6 +6680,13 @@ router.post('/v2/intake/chat',
       });
       await pool.query('UPDATE ai_sessions SET last_used_at = NOW() WHERE id = $1', [session.id]);
 
+      // When start_new fired, ensureAiSession just created a brand-new
+      // Anthropic session — pass freshlyCreated=true so the streamer
+      // refuses to "recover" it via archive+create on the first
+      // events.send (would loop archive→create→archive forever if the
+      // newly-created session also reports stuck state).
+      const freshlyCreated = startNew;
+
       // Log the user's intake message for audit (separate
       // entity_type='intake' so it doesn't pollute HR/AG history
       // but is still queryable for replay/debug).
@@ -6625,6 +6701,7 @@ router.post('/v2/intake/chat',
         anthropic, res,
         session: session,
         eventsToSend: [{ type: 'user.message', content: userContent }],
+        freshlyCreated: freshlyCreated,
         onCustomToolUse: makeIntakeOnCustomToolUse(req.user.id),
         persistAssistantText: async (text, usage) => {
           if (!text) return;
