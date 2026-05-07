@@ -51,7 +51,31 @@ const MAP = {
   'target':          'heroicons/viewfinder-circle',
   'fullscreen':      'heroicons/arrows-pointing-out',
   'collapse':        'heroicons/chevron-double-up',
-  'expand':          'heroicons/chevron-double-down'
+  'expand':          'heroicons/chevron-double-down',
+  // Project 86 — agent + admin sub-tab icons. Swapped in for the
+  // various emoji glyphs that were rendering in the AI panel headers
+  // and the Admin → Agents sub-tab strip. Phosphor + Heroicons mix
+  // matches the existing AGX line ratio.
+  'briefcase':       'heroicons/briefcase',           // Chief of Staff (executive)
+  'conversations':   'heroicons/chat-bubble-left-right', // admin Conversations tab
+  'beaker':          'heroicons/beaker',               // admin Evals tab
+  'academic-cap':    'heroicons/academic-cap',         // admin Skills tab
+  'magnifying-glass':'heroicons/magnifying-glass',     // admin Prompt Preview tab — uses existing source if present, else falls back to command-line below
+  'command-line':    'heroicons/command-line',         // alt for prompt preview / terminal
+  'globe':           'heroicons/globe-alt',            // admin Anthropic tab
+  'cube':            'heroicons/cube',                 // admin Batch tab
+  'chart-bar':       'heroicons/chart-bar',            // admin Metrics tab
+  'chart-pie':       'heroicons/chart-pie',
+  'funnel':          'heroicons/funnel',
+  'presentation-chart': 'heroicons/presentation-chart-line',
+  // Header right-cluster icons (notifications + light/dark toggle).
+  // These were added directly to the generated agx-icons.js earlier
+  // and got dropped on a rebuild. Now sourced through the MAP so a
+  // future rebuild keeps them.
+  'bell':            'heroicons/bell',
+  'bell-alert':      'heroicons/bell-alert',
+  'sun':             'heroicons/sun',
+  'moon':            'heroicons/moon'
 };
 
 const HEADER = `// AGX Icon Helper — inline SVG icons (auto-generated).
@@ -138,7 +162,7 @@ const FOOTER = `
     '✨':       'sparkle',     // 2728  sparkles
     '♻':       'reset',       // 267B  recycling
     '↺':       'restore',     // 21BA  anticlockwise open circle
-    '🎯': 'target',      // 1F3AF direct hit
+    '🎯': 'target',      // 1F3AF direct hit (Agent 47 estimating)
     '⛶':       'fullscreen',  // 26F6  square four corners
     '🗖': 'fullscreen',  // 1F5D6 maximize alt
     '📁': 'collapse',    // 1F4C1 file folder closed
@@ -148,7 +172,23 @@ const FOOTER = `
     '🏗': 'buildings',   // 1F3D7 building construction (t1)
     '📋': 'wip',         // 1F4CB clipboard (t2)
     '👷': 'subs',        // 1F477 construction worker
-    '📄': 'attachments'  // 1F4C4 page facing up (po)
+    '📄': 'attachments', // 1F4C4 page facing up (po)
+    // Project 86 — agent header + admin sub-tab swaps. Replaces the
+    // emoji glyphs in the AI panel title (Agent 47 / 86 / HR / Intake
+    // / CoS) and the Admin → Agents sub-tab strip (Metrics /
+    // Conversations / Evals / Skills / Prompt Preview / Batch /
+    // Anthropic).
+    '📊': 'chart-bar',         // 1F4CA bar chart (86 analyst, Metrics tab)
+    '🤝': 'clients',           // 1F91D handshake (HR — reuses two-people glyph)
+    '🧲': 'funnel',            // 1F9F2 magnet (Intake — funnel concept)
+    '🎩': 'briefcase',         // 1F3A9 top hat (CoS executive)
+    '💬': 'conversations',     // 1F4AC speech balloon
+    '🧪': 'beaker',            // 1F9EA test tube (Evals)
+    '🧠': 'academic-cap',      // 1F9E0 brain (Skills)
+    '🍡': 'academic-cap',      // 1F361 dango — UI alias for Skills
+    '🔍': 'magnifying-glass',  // 1F50D magnifier (Prompt Preview)
+    '📦': 'cube',              // 1F4E6 package (Batch jobs)
+    '🌐': 'globe'              // 1F310 globe with meridians (Anthropic)
   };
   // Match an emoji at start of string with optional U+FE0F + whitespace.
   function matchLeadingEmoji(text) {
