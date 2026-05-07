@@ -1,0 +1,2387 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- Pin every relative URL to the site root. Required because the SPA
+         router uses pathname routing (/wip/jobs/:id, /admin/roles); without
+         this, a hard refresh on a deep link would resolve `js/foo.js`
+         against the deep path (e.g., /admin/js/foo.js) which the Express
+         catch-all serves as index.html, causing every script to fail to
+         parse. -->
+    <base href="/">
+    <title>AGX Central Florida &mdash; WIP Tracker</title>
+    <link rel="stylesheet" href="css/styles.css?v=41">
+    <link rel="stylesheet" href="css/workspace-layout.css?v=52">
+    <link rel="stylesheet" href="css/workspace.css?v=36">
+    <link rel="stylesheet" href="css/schedule.css?v=9">
+
+</head>
+<body>
+    <!-- Login Screen -->
+    <div id="login-screen" style="position:fixed;inset:0;z-index:99999;background:var(--bg);display:flex;align-items:center;justify-content:center;">
+        <div style="width:340px;text-align:center;">
+            <img src="images/logo-white.png" alt="AGX" style="height:48px;margin-bottom:24px;opacity:0.9;" />
+            <h2 style="font-size:18px;margin:0 0 4px;color:var(--text);">AGX Central Florida</h2>
+            <p style="font-size:12px;color:var(--text-dim);margin:0 0 24px;">Estimating & Project Tracking</p>
+            <div id="login-error" style="display:none;background:rgba(248,113,113,0.1);border:1px solid var(--red);color:var(--red);padding:8px 12px;border-radius:6px;font-size:12px;margin-bottom:12px;"></div>
+            <input type="email" id="login-email" placeholder="Email" style="width:100%;padding:10px 14px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:14px;margin-bottom:10px;box-sizing:border-box;" />
+            <input type="password" id="login-password" placeholder="Password" style="width:100%;padding:10px 14px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:14px;margin-bottom:16px;box-sizing:border-box;" />
+            <button id="login-btn" style="width:100%;padding:10px;border-radius:8px;background:var(--accent);border:none;color:#fff;font-size:14px;font-weight:600;cursor:pointer;">Sign In</button>
+            <p style="font-size:10px;color:var(--text-dim);margin-top:16px;">Not connected to server? <a href="#" id="login-offline" style="color:var(--accent);">Continue Offline</a></p>
+        </div>
+    </div>
+
+    <div class="container" id="app-container" style="display:none;">
+        <!-- Single-row sleek header: logo · tabs · user cluster.
+             Was a two-row layout (logo + nav stacked) at ~130px tall;
+             this fits everything on one ~46px row to give the workspace
+             below more vertical real estate. Mobile breaks back to a
+             stacked fallback in the @media block. -->
+        <header>
+            <div class="header-content">
+                <a class="header-brand" title="AGX — Estimating &amp; Project Tracking">
+                    <img src="images/logo-white.png" alt="AGX" class="header-logo" />
+                </a>
+                <nav class="tabs">
+                    <button class="tab-btn active" data-tab="wip" data-agx-icon="wip" data-cap="JOBS_VIEW_ALL JOBS_VIEW_ASSIGNED JOBS_EDIT_ANY JOBS_EDIT_OWN">WIP</button>
+                    <button class="tab-btn" data-tab="schedule" data-agx-icon="schedule">Schedule</button>
+                    <button class="tab-btn" data-tab="insights" data-agx-icon="insights" data-cap="INSIGHTS_VIEW">Insights</button>
+                    <!-- Leads is its own top-level destination now (was a
+                         sub-tab inside Estimates). Click routes to the
+                         existing Estimates → Leads sub-tab DOM but the
+                         active highlight stays on this button so Leads
+                         reads as a first-class page. -->
+                    <button class="tab-btn" data-tab="estimates" data-est-subtab="leads" data-virtual-tab="leads" data-agx-icon="leads" data-cap="LEADS_VIEW">Leads</button>
+                    <button class="tab-btn" data-tab="estimates" data-est-subtab="list" data-virtual-tab="estimates" data-agx-icon="estimates" data-cap="ESTIMATES_VIEW">Estimates</button>
+                    <button class="tab-btn" data-tab="admin" data-agx-icon="admin" data-admin-only style="display:none;">Admin</button>
+                </nav>
+                <div id="user-menu" class="header-user-menu">
+                    <!-- Notifications bell. Renders the agx 'bell' SVG
+                         (Heroicons outline) instead of the previous 🔔
+                         emoji. Red dot toggles via the data-count
+                         attribute set by JS; when count is 0 the dot
+                         is hidden via CSS. Clicking opens
+                         #notifications-panel. -->
+                    <button id="header-notif-btn" class="header-icon-btn" type="button" title="Notifications" aria-haspopup="true" aria-expanded="false" data-agx-icon="bell">
+                        <span class="header-notif-dot" data-count="0"></span>
+                    </button>
+                    <!-- Directory dropdown — sits in the right cluster
+                         like the bell + avatar. Icon-button toggle
+                         (people glyph) opens #directory-menu containing
+                         Client Contacts / Subs-Vendors. The Directory
+                         is a utility, not a page, so it doesn't appear
+                         in nav.tabs anymore. -->
+                    <button id="header-directory-btn" class="header-icon-btn" type="button" title="Directory" aria-haspopup="true" aria-expanded="false" data-agx-icon="clients"></button>
+                    <button id="theme-toggle" class="theme-toggle header-icon-btn" type="button" title="Toggle light/dark mode"></button>
+                    <!-- Initials avatar replaces the previous full-name +
+                         role pill + Account / Logout buttons. Clicking
+                         opens #user-avatar-menu which holds the actual
+                         actions. -->
+                    <button id="user-avatar" class="header-avatar" type="button" title="Account" aria-haspopup="true" aria-expanded="false">JT</button>
+                    <span id="user-name" hidden></span>
+                    <span id="user-role-badge" hidden></span>
+                    <!-- Avatar dropdown — anchored to the button via CSS. -->
+                    <div id="user-avatar-menu" class="header-popover" hidden>
+                        <div class="header-popover-section">
+                            <div class="header-popover-name" id="avatar-menu-name">&mdash;</div>
+                            <div class="header-popover-role" id="avatar-menu-role">&mdash;</div>
+                        </div>
+                        <button type="button" id="account-btn" class="header-popover-item">&#x2699; My Account &amp; Notifications</button>
+                        <button type="button" id="logout-btn"  class="header-popover-item">&#x21AA; Logout</button>
+                    </div>
+                    <!-- Notifications panel — anchored to the bell. Body
+                         is empty for now (no unified notifications source
+                         yet); future hook will populate from email_log /
+                         sms_log / schedule alerts / agent activity. -->
+                    <div id="notifications-panel" class="header-popover header-popover-wide" hidden>
+                        <div class="header-popover-section header-popover-title">Notifications</div>
+                        <div id="notif-panel-body" class="header-popover-body">
+                            <div class="header-popover-empty">No notifications yet.</div>
+                        </div>
+                    </div>
+                    <!-- Directory popover — items are routed via the
+                         existing tab-switching click handler so the
+                         underlying Estimates → Clients / Subs sub-tabs
+                         still drive the rendering. -->
+                    <div id="directory-menu" class="header-popover header-directory-menu" role="menu" hidden>
+                        <button type="button" data-tab="estimates" data-est-subtab="clients" data-virtual-tab="clients" data-agx-icon="clients" data-cap="ESTIMATES_VIEW" role="menuitem">Client Contacts</button>
+                        <button type="button" data-tab="estimates" data-est-subtab="subs"    data-virtual-tab="subs"    data-agx-icon="subs"                                 role="menuitem">Subs / Vendors</button>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <main>
+            <div class="main-inner">
+                <!-- WIP TAB -->
+                <div id="wip" class="tab-content active">
+                    <div id="wip-main-view">
+                        <div class="wip-action-tabs">
+                            <button class="wip-action-tab" onclick="openAddJobModal()">+ Add Job</button>
+                            <button class="wip-action-tab" onclick="document.getElementById('qb-costs-import-file').click()" title="Import a QuickBooks weekly Detailed Job Costs xlsx">&#x1F4E5; Import QB Costs</button>
+                            <input type="file" id="qb-costs-import-file" accept=".xlsx" style="display:none;" onchange="handleQBCostsFile(event)" />
+                            <button class="wip-action-tab" onclick="exportWIPToCSV()">Export CSV</button>
+                            <button class="wip-action-tab" onclick="window.print()">Print Report</button>
+                            <button class="wip-action-tab" onclick="showArchivedJobs()">Archived</button>
+                        </div>
+
+                        <div class="summary-grid">
+                            <div class="summary-card">
+                                <div class="summary-card-label">Total Pipeline</div>
+                                <div class="summary-card-value" id="total-pipeline">$0.00</div>
+                            </div>
+                            <div class="summary-card">
+                                <div class="summary-card-label">Active Jobs</div>
+                                <div class="summary-card-value" id="active-jobs">0</div>
+                            </div>
+                            <div class="summary-card">
+                                <div class="summary-card-label">Total Cost</div>
+                                <div class="summary-card-value" id="total-cost">$0.00</div>
+                            </div>
+                            <div class="summary-card">
+                                <div class="summary-card-label">Total Profit</div>
+                                <div class="summary-card-value" id="total-profit">$0.00</div>
+                            </div>
+                        </div>
+
+                        <div class="action-buttons" style="margin-bottom: 20px; display: flex; gap: 20px; flex-wrap: wrap; align-items: center;">
+                            <label style="display: flex; align-items: center; gap: 8px; margin: 0;">
+                                Filter by Status:
+                                <select id="statusFilter" onchange="filterJobs()" style="width: 200px; margin: 0;">
+                                    <option value="">All Active</option>
+                                    <option value="New">New</option>
+                                    <option value="In Progress">In Progress</option>
+                                    <option value="On Hold">On Hold</option>
+                                    <option value="Completed">Completed</option>
+                                    <option value="Archived">Archived</option>
+                                </select>
+                            </label>
+                            <label style="display: flex; align-items: center; gap: 8px; margin: 0;">
+                                Filter by Type:
+                                <select id="typeFilter" onchange="filterJobs()" style="width: 200px; margin: 0;">
+                                    <option value="">All Types</option>
+                                    <option value="Service">Service</option>
+                                    <option value="Renovation">Renovation</option>
+                                    <option value="Work Order">Work Order</option>
+                                </select>
+                            </label>
+                        </div>
+
+                        <div class="table-container">
+                            <table id="jobs-table">
+                                <thead>
+                                    <tr>
+                                        <th style="width: 40px;">#</th>
+                                        <th class="sortable" data-sort="name" onclick="sortJobsTable('name')">Job # / Name</th>
+                                        <th class="sortable" data-sort="client" onclick="sortJobsTable('client')">Client</th>
+                                        <th class="sortable" data-sort="pm" onclick="sortJobsTable('pm')">PM</th>
+                                        <th class="sortable" data-sort="status" onclick="sortJobsTable('status')">Status</th>
+                                        <th class="sortable" data-sort="contract" onclick="sortJobsTable('contract')" style="text-align: right;">Total Income</th>
+                                        <th class="sortable" data-sort="pctcomplete" onclick="sortJobsTable('pctcomplete')" style="text-align: right;">% Complete</th>
+                                        <th class="sortable" data-sort="profit" onclick="sortJobsTable('profit')" style="text-align: right;">Gross Profit</th>
+                                        <th class="sortable" data-sort="margin" onclick="sortJobsTable('margin')" style="text-align: right;">Margin %</th>
+
+                                    </tr>
+                                </thead>
+                                <tbody></tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <div id="archived-jobs-list" style="display:none;"></div>
+
+                    <div id="wip-job-detail-view" style="display: none;">
+                        <div id="job-detail-readonly-banner" style="display:none;background:rgba(251,191,36,0.12);border:1px solid rgba(251,191,36,0.4);color:#fbbf24;padding:10px 14px;border-radius:8px;margin-bottom:14px;font-size:13px;">
+                            <strong>View only.</strong> <span id="job-detail-readonly-msg">This job is assigned to another PM. You can review the data but changes won&apos;t save.</span>
+                        </div>
+                        <div class="job-detail-header">
+                            <button class="secondary small" onclick="backToWIPMain()">&larr; Back to WIP</button>
+                            <div class="job-detail-info">
+                                <div class="job-detail-title" id="job-detail-title"></div>
+                                <div class="job-detail-meta">
+                                    <span id="job-detail-status"></span>
+                                    <span id="job-detail-contract"></span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="card" id="job-info-card">
+                            <div style="display: flex; justify-content: space-between; align-items: start; flex-wrap: wrap; gap: 10px; margin-bottom: 15px;">
+                                <h3 style="margin: 0;">Job Information</h3>
+                                <div style="display: flex; gap: 8px;">
+                                    <button class="ee-btn primary" onclick="toggleEditJobInfo()" id="edit-job-info-btn">&#x270F;&#xFE0F; Edit Job</button>
+                                    <button class="ee-btn secondary" onclick="archiveCurrentJob()" id="archive-job-btn">&#x1F4E6; Archive Job</button>
+                                    <button class="ee-btn danger" onclick="deleteCurrentJob()">&#x1F5D1; Delete Job</button>
+                                </div>
+                            </div>
+                            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 15px;">
+                                <div>
+                                    <label style="font-size: 12px; color: var(--text-dim);">Job Number</label>
+                                    <div style="font-size: 14px; color: var(--text);" id="job-info-number"></div>
+                                </div>
+                                <div>
+                                    <label style="font-size: 12px; color: var(--text-dim);">Job Name</label>
+                                    <div style="font-size: 14px; color: var(--text);" id="job-info-title"></div>
+                                </div>
+                                <div>
+                                    <label style="font-size: 12px; color: var(--text-dim);">Client</label>
+                                    <div style="font-size: 14px; color: var(--text);" id="job-info-client"></div>
+                                </div>
+                                <div>
+                                    <label style="font-size: 12px; color: var(--text-dim);">PM</label>
+                                    <div style="font-size: 14px; color: var(--text);" id="job-info-pm"></div>
+                                </div>
+                                <div>
+                                    <label style="font-size: 12px; color: var(--text-dim);">Type</label>
+                                    <div style="font-size: 14px; color: var(--text);" id="job-info-type"></div>
+                                </div>
+                                <div>
+                                    <label style="font-size: 12px; color: var(--text-dim);">Work Type</label>
+                                    <div style="font-size: 14px; color: var(--text);" id="job-info-worktype"></div>
+                                </div>
+                                <div>
+                                    <label style="font-size: 12px; color: var(--text-dim);">Market</label>
+                                    <div style="font-size: 14px; color: var(--text);" id="job-info-market"></div>
+                                </div>
+                                <div>
+                                    <label style="font-size: 12px; color: var(--text-dim);">Contract (As Sold)</label>
+                                    <div style="font-size: 14px; color: var(--accent); font-weight: 700;" id="job-info-contract"></div>
+                                </div>
+                                <div>
+                                    <label style="font-size: 12px; color: var(--text-dim);">Est. Costs (As Sold)</label>
+                                    <div style="font-size: 14px; color: var(--text);" id="job-info-estcosts"></div>
+                                </div>
+                                <div>
+                                    <label style="font-size: 12px; color: var(--text-dim);">Target Margin %</label>
+                                    <div style="font-size: 14px; color: var(--text);" id="job-info-margin"></div>
+                                </div>
+                                <div>
+                                    <label style="font-size: 12px; color: var(--text-dim);">Status</label>
+                                    <div style="font-size: 14px;" id="job-info-status"></div>
+                                </div>
+                                <div>
+                                    <label style="font-size: 12px; color: var(--text-dim);">Notes</label>
+                                    <div style="font-size: 14px; color: var(--text);" id="job-info-notes"></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="summary-grid">
+                            <div class="summary-card">
+                                <div class="summary-card-label">Total Income</div>
+                                <div class="summary-card-value" id="job-summary-totalincome">$0.00</div>
+                                <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;" id="job-summary-income-breakdown"></div>
+                            </div>
+                            <div class="summary-card">
+                                <div class="summary-card-label">Actual Costs</div>
+                                <div class="summary-card-value" id="job-summary-cost">$0.00</div>
+                            </div>
+                            <div class="summary-card">
+                                <div class="summary-card-label">Accrued Costs</div>
+                                <div class="summary-card-value" id="job-summary-accrued" style="color: #f0ad4e;">$0.00</div>
+                                <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;" id="job-summary-accrued-note"></div>
+                            </div>
+                            <div class="summary-card">
+                                <div class="summary-card-label">% Complete</div>
+                                <div class="summary-card-value" id="job-summary-pctcomplete">0%</div>
+                            </div>
+                            <div class="summary-card">
+                                <div class="summary-card-label">Revenue Earned</div>
+                                <div class="summary-card-value" id="job-summary-revenue">$0.00</div>
+                            </div>
+                            <div class="summary-card">
+                                <div class="summary-card-label">Gross Profit</div>
+                                <div class="summary-card-value" id="job-summary-profit">$0.00</div>
+                            </div>
+                            <div class="summary-card">
+                                <div class="summary-card-label">Margin %</div>
+                                <div class="summary-card-value" id="job-summary-margin">0%</div>
+                            </div>
+                        </div>
+
+                        <div class="action-buttons">
+                            <button onclick="openAddBuildingToJobModal()">&#x1F3D7; Add Building</button>
+                            <button onclick="openAddPhaseToJobModal()">&#x1F4CB; Add Phase</button>
+                            <button onclick="openAddSubToJobModal()">&#x1F477; Add Sub</button>
+                        </div>
+
+                        <div class="sub-tabs">
+                            <button class="sub-tab-btn-job active" data-subtab="job-overview" data-agx-icon="insights">Overview</button>
+                            <button class="sub-tab-btn-job" data-subtab="job-wip" data-agx-icon="wip">WIP</button>
+                            <button class="sub-tab-btn-job" data-subtab="job-costs" data-agx-icon="estimates">Job Costs</button>
+                            <button class="sub-tab-btn-job" data-subtab="job-changeorders" data-agx-icon="links">Change Orders</button>
+                            <button class="sub-tab-btn-job" data-subtab="job-purchaseorders" data-agx-icon="materials">Purchase Orders</button>
+                            <button class="sub-tab-btn-job" data-subtab="job-invoices" data-agx-icon="exports">Invoices</button>
+                            <button class="sub-tab-btn-job" data-subtab="job-buildings" data-agx-icon="buildings">Buildings</button>
+                            <button class="sub-tab-btn-job" data-subtab="job-labor" data-agx-icon="subs">Labor / Burden</button>
+                        </div>
+
+                        <!-- Job Overview -->
+                        <div id="job-overview" class="sub-tab-content-job active"></div>
+
+                        <!-- WIP Tab -->
+                        <div id="job-wip" class="sub-tab-content-job">
+                            <div class="card" style="margin-bottom: 10px;">
+                                <h3 style="margin-bottom: 6px; font-size: 14px;">WIP Inputs</h3>
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label style="display:flex;align-items:center;gap:6px;">
+                                            Job to Date % Complete
+                                            <label style="font-size:10px;color:var(--text-dim);display:flex;align-items:center;gap:3px;margin:0;cursor:pointer;">
+                                                <input type="checkbox" id="wipPctManual" style="width:14px;height:14px;">
+                                                Manual override
+                                            </label>
+                                        </label>
+                                        <input type="number" id="wipPctComplete" placeholder="0" step="0.1" min="0" max="100">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Invoiced to Date $</label>
+                                        <input type="number" id="wipInvoicedToDate" placeholder="0.00" step="0.01">
+                                    </div>
+                                </div>
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label>Revised Est. Cost Changes $</label>
+                                        <input type="number" id="wipRevisedCostChanges" placeholder="0.00" step="0.01">
+                                        <div style="font-size: 11px; color: var(--text-dim);">Positive = cost increase, Negative = savings</div>
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Notes</label>
+                                        <input type="text" id="wipNotes" placeholder="Weekly notes...">
+                                    </div>
+                                </div>
+                                <button onclick="saveWipInputs()" style="margin-top: 10px;">&#x1F4BE; Save WIP</button>
+                            </div>
+                            <div class="card">
+                                <h3 style="margin-bottom: 8px; font-size: 14px;">WIP Calculations</h3>
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                                    <div>
+                                        <h4 style="color: var(--accent); margin-bottom: 4px; font-size: 11px; text-transform: uppercase;">Income</h4>
+                                        <div style="display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid var(--border); font-size: 12px;">
+                                            <span style="color: var(--text-dim);">Contract (As Sold)</span>
+                                            <span id="wip-contract-income">$0.00</span>
+                                        </div>
+                                        <div style="display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid var(--border); font-size: 12px;">
+                                            <span style="color: var(--text-dim);">+ Change Orders</span>
+                                            <span id="wip-co-income">$0.00</span>
+                                        </div>
+                                        <div style="display: flex; justify-content: space-between; padding: 6px 0; font-weight: 700; border-bottom: 2px solid var(--accent);">
+                                            <span>Total Income</span>
+                                            <span id="wip-total-income" style="color: var(--accent);">$0.00</span>
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <h4 style="color: var(--accent); margin-bottom: 4px; font-size: 11px; text-transform: uppercase;">Estimated Costs</h4>
+                                        <div style="display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid var(--border); font-size: 12px;">
+                                            <span style="color: var(--text-dim);">Est. Costs (As Sold)</span>
+                                            <span id="wip-est-costs">$0.00</span>
+                                        </div>
+                                        <div style="display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid var(--border); font-size: 12px;">
+                                            <span style="color: var(--text-dim);">+ CO Est. Costs</span>
+                                            <span id="wip-co-costs">$0.00</span>
+                                        </div>
+                                        <div style="display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid var(--border); font-size: 12px;">
+                                            <span style="color: var(--text-dim);">+ Revised Changes</span>
+                                            <span id="wip-revised-changes">$0.00</span>
+                                        </div>
+                                        <div style="display: flex; justify-content: space-between; padding: 6px 0; font-weight: 700; border-bottom: 2px solid var(--accent);">
+                                            <span>Total Est. Costs (Revised)</span>
+                                            <span id="wip-total-est-costs" style="color: var(--accent);">$0.00</span>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div style="margin-top: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                                    <div>
+                                        <h4 style="color: var(--green); margin-bottom: 10px; font-size: 13px; text-transform: uppercase;">Profit & Margin</h4>
+                                        <div style="display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid var(--border); font-size: 12px;">
+                                            <span style="color: var(--text-dim);">As Sold Gross Profit</span>
+                                            <span id="wip-assold-profit">$0.00</span>
+                                        </div>
+                                        <div style="display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid var(--border); font-size: 12px;">
+                                            <span style="color: var(--text-dim);">As Sold Margin %</span>
+                                            <span id="wip-assold-margin">0%</span>
+                                        </div>
+                                        <div style="display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid var(--border); font-size: 12px;">
+                                            <span style="color: var(--text-dim);">Revised Gross Profit</span>
+                                            <span id="wip-revised-profit">$0.00</span>
+                                        </div>
+                                        <div style="display: flex; justify-content: space-between; padding: 6px 0; font-weight: 700;">
+                                            <span>Revised Margin %</span>
+                                            <span id="wip-revised-margin">0%</span>
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <h4 style="color: var(--yellow); margin-bottom: 10px; font-size: 13px; text-transform: uppercase;">Revenue & Billing</h4>
+                                        <div style="display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid var(--border); font-size: 12px;">
+                                            <span style="color: var(--text-dim);">% Complete</span>
+                                            <span id="wip-pct-complete">0%</span>
+                                        </div>
+                                        <div style="display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid var(--border); font-size: 12px;">
+                                            <span style="color: var(--text-dim);">Revenue Earned (Income &times; %)</span>
+                                            <span id="wip-revenue-earned">$0.00</span>
+                                        </div>
+                                        <div style="display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid var(--border); font-size: 12px;">
+                                            <span style="color: var(--text-dim);">JTD Gross Profit</span>
+                                            <span id="wip-jtd-profit">$0.00</span>
+                                        </div>
+                                        <div style="display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid var(--border); font-size: 12px;">
+                                            <span style="color: var(--text-dim);">JTD Margin %</span>
+                                            <span id="wip-jtd-margin">0%</span>
+                                        </div>
+                                        <div style="display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid var(--border); font-size: 12px;">
+                                            <span style="color: var(--text-dim);">Invoiced to Date</span>
+                                            <span id="wip-invoiced">$0.00</span>
+                                        </div>
+                                        <div style="display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid var(--border); font-size: 12px;">
+                                            <span style="color: var(--text-dim);">Unbilled (Revenue - Invoiced)</span>
+                                            <span id="wip-unbilled">$0.00</span>
+                                        </div>
+                                        <div style="display: flex; justify-content: space-between; padding: 6px 0; font-weight: 700;">
+                                            <span>Backlog (Income - Revenue)</span>
+                                            <span id="wip-backlog">$0.00</span>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div style="margin-top: 10px;">
+                                    <h4 style="color: var(--orange); margin-bottom: 10px; font-size: 13px; text-transform: uppercase;">Actual Costs vs Estimated</h4>
+                                    <div style="display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid var(--border); font-size: 12px;">
+                                        <span style="color: var(--text-dim);">Actual Costs (from tracker)</span>
+                                        <span id="wip-actual-costs">$0.00</span>
+                                    </div>
+                                    <div style="display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid var(--border); font-size: 12px;">
+                                        <span style="color: var(--text-dim);">Revised Est. Costs</span>
+                                        <span id="wip-revised-est-costs2">$0.00</span>
+                                    </div>
+                                    <div style="display: flex; justify-content: space-between; padding: 6px 0; font-weight: 700;">
+                                        <span>Remaining Est. Costs</span>
+                                        <span id="wip-remaining-costs">$0.00</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Change Orders -->
+                        <div id="job-changeorders" class="sub-tab-content-job">
+                            <div class="action-buttons" style="margin-bottom: 8px;">
+                                <button onclick="openAddChangeOrderModal()">&#x1F4DD; Add Change Order</button>
+                            </div>
+                            <div class="table-container">
+                                <table id="co-table">
+                                    <thead>
+                                        <tr>
+                                            <th>CO #</th>
+                                            <th>Description</th>
+                                            <th style="text-align: right;">Income</th>
+                                            <th style="text-align: right;">Est. Costs</th>
+                                            <th style="text-align: right;">Profit</th>
+                                            <th>Date</th>
+                                            <th>Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody></tbody>
+                                    <tfoot>
+                                        <tr style="font-weight: 700; border-top: 2px solid var(--accent);">
+                                            <td colspan="2">TOTALS</td>
+                                            <td style="text-align: right;" id="co-total-income">$0.00</td>
+                                            <td style="text-align: right;" id="co-total-costs">$0.00</td>
+                                            <td style="text-align: right;" id="co-total-profit">$0.00</td>
+                                            <td colspan="2"></td>
+                                        </tr>
+                                    </tfoot>
+                                </table>
+                            </div>
+                        </div>
+
+                        <!-- Purchase Orders -->
+                        <div id="job-purchaseorders" class="sub-tab-content-job">
+                            <div class="action-buttons" style="margin-bottom: 8px;">
+                                <button onclick="openAddPOModal()">&#x1F4C4; Add Purchase Order</button>
+                            </div>
+                            <div class="table-container">
+                                <table id="po-table">
+                                    <thead>
+                                        <tr>
+                                            <th>PO #</th>
+                                            <th>Vendor</th>
+                                            <th>Description</th>
+                                            <th style="text-align: right;">Amount</th>
+                                            <th style="text-align: right;">Billed</th>
+                                            <th style="text-align: right;">Remaining</th>
+                                            <th>Status</th>
+                                            <th>Date</th>
+                                            <th>Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody></tbody>
+                                    <tfoot>
+                                        <tr style="font-weight: 700; border-top: 2px solid var(--accent);">
+                                            <td colspan="3">TOTALS</td>
+                                            <td style="text-align: right;" id="po-total-amount">$0.00</td>
+                                            <td style="text-align: right;" id="po-total-billed">$0.00</td>
+                                            <td style="text-align: right;" id="po-total-remaining">$0.00</td>
+                                            <td colspan="3"></td>
+                                        </tr>
+                                    </tfoot>
+                                </table>
+                            </div>
+                        </div>
+
+                        <!-- Invoices -->
+                        <div id="job-invoices" class="sub-tab-content-job">
+                            <div class="action-buttons" style="margin-bottom: 8px;">
+                                <button onclick="openAddInvoiceModal()">&#x1F4B3; Add Invoice</button>
+                            </div>
+                            <div class="table-container">
+                                <table id="inv-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Inv #</th>
+                                            <th>Vendor</th>
+                                            <th>Description</th>
+                                            <th style="text-align: right;">Amount</th>
+                                            <th>Status</th>
+                                            <th>Date</th>
+                                            <th>Due Date</th>
+                                            <th>Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody></tbody>
+                                    <tfoot>
+                                        <tr style="font-weight: 700; border-top: 2px solid var(--accent);">
+                                            <td colspan="3">TOTALS</td>
+                                            <td style="text-align: right;" id="inv-total-amount">$0.00</td>
+                                            <td colspan="4"></td>
+                                        </tr>
+                                    </tfoot>
+                                </table>
+                            </div>
+                        </div>
+
+                        <!-- Job Costs (direct job-level) -->
+                        <div id="job-costs" class="sub-tab-content-job">
+                            <div class="card" style="margin-bottom: 10px;">
+                                <h3 style="margin-bottom: 4px; font-size: 14px;">Job-Level Costs</h3>
+                                <p style="font-size: 11px; color: var(--text-dim); margin-bottom: 10px;">Direct job costs added to building/phase costs in the total.</p>
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                                    <div class="form-group">
+                                        <label>Materials $</label>
+                                        <input type="number" id="jobCostMaterials" placeholder="0.00" step="0.01">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Labor $</label>
+                                        <input type="number" id="jobCostLabor" placeholder="0.00" step="0.01">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Subcontractor $ (auto from Subs tab)</label>
+                                        <input type="number" id="jobCostSub" placeholder="0.00" step="0.01" readonly style="opacity: 0.7; cursor: not-allowed;">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Equipment $</label>
+                                        <input type="number" id="jobCostEquipment" placeholder="0.00" step="0.01">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>General Conditions $</label>
+                                        <input type="number" id="jobCostGC" placeholder="0.00" step="0.01">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Labor Hours This Week</label>
+                                        <input type="number" id="jobCostHoursWeek" placeholder="0" step="0.5">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Total Hours to Date</label>
+                                        <input type="number" id="jobCostHoursTotal" placeholder="0" step="0.5">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Avg Hourly Rate</label>
+                                        <input type="number" id="jobCostRate" placeholder="40.00" step="0.01" value="40">
+                                    </div>
+                                </div>
+                                <div style="margin-top: 8px; display: flex; gap: 8px;">
+                                    <button class="primary" onclick="saveJobCosts()" style="flex: 0 0 auto;">&#x1F4BE; Save Costs</button>
+                                    <span id="jobCostSaveStatus" style="font-size: 11px; color: var(--green); align-self: center; opacity: 0; transition: opacity 0.3s;"></span>
+                                </div>
+                                <div style="margin-top: 8px; padding: 8px; background: var(--surface2); border-radius: 6px;">
+                                    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px;">
+                                        <div>
+                                            <div style="font-size: 10px; color: var(--text-dim);">Job-Level Total</div>
+                                            <div style="font-size: 15px; font-weight: 700; color: var(--accent);" id="jobCostTotal">$0.00</div>
+                                        </div>
+                                        <div>
+                                            <div style="font-size: 10px; color: var(--text-dim);">Computed Labor</div>
+                                            <div style="font-size: 15px; font-weight: 700; color: var(--accent);" id="jobCostLaborBurden">$0.00</div>
+                                        </div>
+                                        <div>
+                                            <div style="font-size: 10px; color: var(--text-dim);">Phase/Bldg Costs</div>
+                                            <div style="font-size: 15px; font-weight: 700; color: var(--text-dim);" id="jobCostFromPhases">$0.00</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Job Buildings -->
+                        <div id="job-buildings" class="sub-tab-content-job">
+                            <div id="job-buildings-content"></div>
+                        </div>
+
+
+                        <!-- Job Labor & Burden -->
+                        <div id="job-labor" class="sub-tab-content-job">
+                            <div class="table-container">
+                                <table id="job-labor-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Building</th>
+                                            <th>Phase</th>
+                                            <th style="text-align: right;">Hours This Week</th>
+                                            <th style="text-align: right;">Total Hours</th>
+                                            <th style="text-align: right;">Avg Rate</th>
+                                            <th style="text-align: right;">Labor Cost</th>
+                                            <th style="text-align: right;">Computed (Hrs &times; Rate)</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody></tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+
+                <!-- SCHEDULE TAB — production scheduling calendar.
+                     Phase 1 = local-only persistence; Phase 2 will swap
+                     to /api/schedule. -->
+                <div id="schedule" class="tab-content">
+                    <div id="schedule-root"></div>
+                </div>
+
+                <!-- INSIGHTS TAB -->
+                <div id="insights" class="tab-content">
+                    <div id="insights-dashboard"></div>
+                </div>
+
+                <!-- ESTIMATES TAB
+                     The internal sub-tab nav (Leads / Estimates / Clients
+                     / Subs) is hidden — those pages now live in the top-
+                     level header (Leads is its own tab; Clients/Subs sit
+                     in the Directory dropdown). The sub-tab DIVS below
+                     remain in place because switchEstimatesSubTab still
+                     toggles them on virtual-tab clicks; only the visual
+                     nav row is suppressed. -->
+                <div id="estimates" class="tab-content">
+                    <div id="estimates-main-tabs" class="ws-right-tabs" style="display:none;">
+                        <button class="ws-right-tab active" data-estimates-subtab="leads" data-agx-icon="leads" onclick="switchEstimatesSubTab('leads')" data-cap="LEADS_VIEW">Leads</button>
+                        <button class="ws-right-tab" data-estimates-subtab="list" data-agx-icon="estimates" onclick="switchEstimatesSubTab('list')">Estimates</button>
+                        <button class="ws-right-tab" data-estimates-subtab="clients" data-agx-icon="clients" onclick="switchEstimatesSubTab('clients')">Clients</button>
+                        <button class="ws-right-tab" data-estimates-subtab="subs" data-agx-icon="subs" onclick="switchEstimatesSubTab('subs')">Subs</button>
+                    </div>
+
+                    <!-- Leads sub-tab -->
+                    <div id="estimates-subtab-leads" class="estimates-subtab-content">
+                        <!-- List view (action bar + summary + list) — hidden when
+                             the lead detail page is open. -->
+                        <div id="leads-list-view">
+                            <div class="action-buttons">
+                                <button class="primary" onclick="openNewLeadModal()" data-cap="LEADS_EDIT">&#x1F465; New Lead</button>
+                                <!-- AI Intake — opens the chat panel with the
+                                     intake agent. Each open is a fresh session;
+                                     drop in a description + photos and approve
+                                     the propose_create_lead card to land the
+                                     lead in one shot. Hidden until the user has
+                                     LEADS_EDIT and the AGX_AGENT_MODE_INTAKE env
+                                     var is set; the JS guard double-checks. -->
+                                <button class="primary" onclick="window.openIntakeAI && window.openIntakeAI()" data-cap="LEADS_EDIT" title="Describe a new lead in chat — the AI captures details, dedupes against existing clients, and proposes the lead for one-click create." style="background:linear-gradient(135deg,#8b5cf6,#4f8cff);color:#fff;border:none;font-weight:600;">&#x1F9F2; New Lead with AI</button>
+                                <button class="success" onclick="document.getElementById('leads-import-file').click()" data-cap="LEADS_EDIT" title="Import a Buildertrend Leads xlsx export">&#x1F4E5; Import from Buildertrend</button>
+                                <input type="file" id="leads-import-file" accept=".xlsx" style="display:none;" onchange="handleLeadsImportFile(event)" />
+                                <button class="secondary" onclick="reloadLeadsCache()">Refresh</button>
+                                <select id="leads-filter-status" onchange="renderLeadsList()" style="width:auto;min-width:140px;margin-left:6px;">
+                                    <option value="">All statuses</option>
+                                    <option value="new">New</option>
+                                    <option value="in_progress">In Progress</option>
+                                    <option value="sent">Sent</option>
+                                    <option value="sold">Sold</option>
+                                    <option value="lost">Lost</option>
+                                    <option value="no_opportunity">No Opportunity</option>
+                                </select>
+                                <input type="text" id="leads-search" oninput="renderLeadsList()" placeholder="Search leads…" style="margin-left:auto;min-width:220px;" />
+                            </div>
+                            <p id="leads-summary" style="margin:12px 0;color:var(--text-dim,#888);font-size:12px;"></p>
+                            <div id="leads-list" style="display:flex;flex-direction:column;gap:8px;"></div>
+                        </div>
+                        <!-- Full-page lead detail view. Mirrors the estimate
+                             editor's layout: sticky header with Back button +
+                             title, internal sub-tabs (Overview / Estimates /
+                             Attachments), and a body host that receives the
+                             form contents (#leadEditor_formBody) on open. -->
+                        <div id="lead-detail-view" style="display:none;">
+                            <div id="ld-header" style="position:sticky;top:0;z-index:40;background:var(--bg,#0a0a0f);border-bottom:1px solid var(--border,#333);padding:14px 4px;margin-bottom:14px;box-shadow:0 4px 12px rgba(0,0,0,0.4);">
+                                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+                                    <button class="ee-btn secondary" onclick="closeLeadDetail()" title="Back to leads list">&larr; Back</button>
+                                    <h2 id="ld-title" style="flex:1;min-width:200px;margin:0;font-size:17px;font-weight:600;color:var(--text,#fff);"></h2>
+                                    <span id="ld-status-pill"></span>
+                                    <button class="ee-btn danger" id="ld-delete-btn" style="display:none;" onclick="deleteLeadFromEditor()" title="Delete this lead (cannot be undone)">&#x1F5D1; Delete</button>
+                                    <button class="ee-btn success" id="ld-convert-btn" style="display:none;" onclick="convertLeadToJob()" data-cap="JOBS_EDIT_ANY JOBS_EDIT_OWN" title="Create a WIP job from this lead">&#x1F3D7; Create Job</button>
+                                    <button class="ee-btn primary" onclick="submitLeadEditor()" title="Save lead">&#x1F4BE; Save</button>
+                                </div>
+                                <div id="ld-status-msg" style="font-size:12px;min-height:14px;color:var(--text-dim,#888);"></div>
+                            </div>
+                            <!-- The lead form body (#leadEditor_formBody) is moved
+                                 into this host when the page opens. Tabs inside the
+                                 form body (General/Estimates/Attachments) drive the
+                                 visible pane via switchLeadEditorTab(). -->
+                            <div id="lead-detail-body-host"></div>
+                        </div>
+                    </div>
+
+                    <!-- Estimates list sub-tab -->
+                    <div id="estimates-subtab-list" class="estimates-subtab-content" style="display:none;">
+                        <div id="estimates-list-view">
+                            <div class="action-buttons">
+                                <button class="primary" onclick="openNewEstimateForm()">&#x1F4C4; New Estimate</button>
+                                <input type="text" id="estimates-search" oninput="renderEstimatesList()" placeholder="Search estimates…" style="margin-left:auto;min-width:220px;" />
+                            </div>
+                            <p id="estimates-summary" style="margin:12px 0;color:var(--text-dim,#888);font-size:12px;"></p>
+                            <div id="estimates-list"></div>
+                        </div>
+
+                        <!-- Full-page estimate editor (Phase A). Sticky header
+                             with linked lead/client chips + live totals; body
+                             splits into Line Items, Details, Preview tabs. -->
+                        <div id="estimate-editor-view" style="display: none;">
+                            <!-- Sticky header -->
+                            <div id="ee-header" style="position:sticky;top:0;z-index:50;background:var(--bg,#0a0a0f);border-bottom:1px solid var(--border,#333);padding:14px 4px;margin-bottom:14px;box-shadow:0 4px 12px rgba(0,0,0,0.4);">
+                                <div class="ee-header-row" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:8px;">
+                                    <button class="ee-btn secondary" onclick="closeEstimateEditor()">&larr; Back</button>
+                                    <input id="ee-title" type="text" placeholder="Estimate title" style="flex:1;min-width:200px;font-size:17px;font-weight:600;padding:5px 10px;background:transparent;border:1px solid transparent;border-radius:6px;color:var(--text,#fff);" onfocus="this.style.borderColor='var(--border,#333)'" onblur="this.style.borderColor='transparent'" />
+                                    <button class="ee-btn success" onclick="exportEstimateToBuildertrend()" title="Download Buildertrend-format xlsx">&#x1F4E4; Export</button>
+                                    <button class="ee-btn ee-icon-btn danger" onclick="deleteEstimateFromEditor()" title="Delete this estimate (cannot be undone)" aria-label="Delete estimate">&#x1F5D1;</button>
+                                </div>
+                                <!-- Linked-lead chips on the left, save state + Ask AI right-aligned
+                                     so Ask AI lines up with the right edge of the totals strip below
+                                     (LINES bubble). Sits right above the totals so the chip + bubbles
+                                     read as one stack visually. -->
+                                <div class="ee-action-row" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+                                    <div id="ee-linked-chips" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
+                                    <div style="flex:1;"></div>
+                                    <span id="ee-save-indicator" style="font-size:11px;color:var(--text-dim,#888);padding:0 6px;display:flex;align-items:center;font-weight:500;cursor:pointer;" onclick="saveEstimateNow()" title="Click to save now"><span style="font-weight:700;margin-right:5px;">&#x25CB;</span>No changes</span>
+                                    <button class="ee-btn" onclick="saveEstimateNow()" title="Save the estimate now (also auto-saves on edit)">&#x1F4BE; Save</button>
+                                    <!-- Plan/Build phase pill lives inside the AI panel header now —
+                                         right next to "📐 AG · AGX Estimator" so the toggle is where
+                                         the user is already looking when deciding whether to plan or
+                                         build. setEstimateAIPhase / getAIPhase still live on the
+                                         estimate editor so the panel reads/writes the right estimate. -->
+                                    <button class="ee-btn" onclick="openEstimateAI()" title="AI estimating assistant" style="background:linear-gradient(135deg,#8b5cf6,#4f8cff);color:#fff;border:none;">&#x2728; Ask AI</button>
+                                </div>
+                                <!-- Live totals strip — also justify-end so the LINES bubble lines up
+                                     under the Ask AI button on the row above. -->
+                                <div id="ee-totals" style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;"></div>
+                                <!-- Sub-tab nav -->
+                                <div class="ws-right-tabs" style="margin-top:10px;margin-bottom:0;">
+                                    <button class="ws-right-tab active" data-ee-tab="lines" onclick="switchEstimateEditorTab('lines')">Line Items</button>
+                                    <button class="ws-right-tab" data-ee-tab="details" onclick="switchEstimateEditorTab('details')">Details</button>
+                                    <button class="ws-right-tab" data-ee-tab="scope" onclick="switchEstimateEditorTab('scope')">&#x1F4DD; Scope</button>
+                                    <button class="ws-right-tab" data-ee-tab="photos" onclick="switchEstimateEditorTab('photos')">&#x1F4CE; Attachments</button>
+                                    <button class="ws-right-tab" data-ee-tab="preview" onclick="switchEstimateEditorTab('preview')">Preview</button>
+                                </div>
+                            </div>
+
+                            <!-- Line Items tab — two-column grid: line items on the left,
+                                 per-alternate scope of work + pricing breakdown on the right. -->
+                            <div id="ee-tab-lines" class="ee-tab-content">
+                                <!-- Alternate tier strip — Good / Better / Best style. Each alternate
+                                     has its own line items + scope; tax/fees/round-up are estimate-wide. -->
+                                <div id="ee-alternate-strip" style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap;">
+                                    <div id="ee-alternate-tabs" style="display:flex;gap:6px;flex-wrap:wrap;flex:1;"></div>
+                                    <div style="display:flex;gap:6px;">
+                                        <button class="ee-btn secondary" onclick="addAlternateFromEditor()" title="Add a new group (e.g., another deck, optional adds, a phase). Auto-seeds the four standard subgroups.">&#x2795; Group</button>
+                                        <button class="ee-btn ghost" onclick="duplicateActiveAlternate()" title="Copy this group's lines into a new group" id="ee-altDuplicateBtn">&#x2398; Duplicate</button>
+                                        <button class="ee-btn ghost" onclick="renameActiveAlternate()" title="Rename this group" id="ee-altRenameBtn">&#x270F; Rename</button>
+                                        <button class="ee-btn ee-icon-btn danger" onclick="deleteActiveAlternate()" title="Delete this group (cannot delete the last one)" id="ee-altDeleteBtn">&#x1F5D1;</button>
+                                    </div>
+                                </div>
+
+                                <div style="display:flex;flex-direction:column;gap:16px;">
+                                    <div class="action-buttons" style="margin-bottom:0;">
+                                        <button class="primary" onclick="addEstimateLineFromEditor()">&#x2795; Line Item</button>
+                                        <button class="secondary" onclick="addEstimateSectionFromEditor()">&#x2795; Subgroup</button>
+                                        <button class="ghost" onclick="addStandardSectionsFromEditor()" title="Add the four BT-aligned subgroups (Materials / Labor / GC / Subs)">&#x2795; Standard Subgroups</button>
+                                        <button class="ghost" onclick="window.openScopeModal && window.openScopeModal()" title="Open the scope of work as a quick-edit popup" style="margin-left:auto;">&#x1F4DD; Scope</button>
+                                    </div>
+                                    <div id="ee-lines-container"></div>
+                                    <div style="font-size:11px;color:var(--text-dim,#888);">Edits autosave on blur. Drag the &#x2630; handle to reorder. Per-line markup overrides the default.</div>
+                                    <!-- Pricing breakdown — moved below the line items now that scope
+                                         lives in its own modal/tab. Lets line items take the full width. -->
+                                    <div style="background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:10px;padding:12px 14px;max-width:520px;">
+                                        <div style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">Pricing</div>
+                                        <div id="ee-pricing-breakdown"></div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Details tab -->
+                            <div id="ee-tab-details" class="ee-tab-content" style="display:none;">
+                                <div id="ee-details-form"></div>
+                            </div>
+
+                            <!-- Scope tab — full-page version of the scope of work for the
+                                 active alternate. Same edits as the popup modal; both
+                                 read/write the same per-alternate scope text. -->
+                            <div id="ee-tab-scope" class="ee-tab-content" style="display:none;">
+                                <div id="ee-scope-panel-page" style="background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:10px;padding:14px 16px;"></div>
+                            </div>
+
+                            <!-- Photos tab — drag-drop upload + thumbnail grid + lightbox.
+                                 Mounted on demand by switchEstimateEditorTab(). -->
+                            <div id="ee-tab-photos" class="ee-tab-content" style="display:none;">
+                                <div id="ee-photos-mount"></div>
+                            </div>
+
+                            <!-- Preview tab — populated on demand by js/estimate-preview.js -->
+                            <div id="ee-tab-preview" class="ee-tab-content" style="display:none;"></div>
+                        </div>
+                        <div id="estimate-preview-view" style="display: none;"></div>
+                    </div>
+
+                    <!-- Clients sub-tab -->
+                    <div id="estimates-subtab-clients" class="estimates-subtab-content" style="display:none;">
+                        <div class="action-buttons">
+                            <button class="primary" onclick="openNewClientModal()">&#x1F465; New Client</button>
+                            <button class="success" onclick="document.getElementById('clients-import-file').click()">&#x1F4E5; Import from Buildertrend</button>
+                            <input type="file" id="clients-import-file" accept=".xlsx" style="display:none;" onchange="handleClientsImportFile(event)" />
+                            <button class="secondary" onclick="reloadClientsCache()">Refresh</button>
+                            <button onclick="window.openClientAI && window.openClientAI()" title="HR — directory hygiene, dedupe, parent/property hierarchy" style="background:linear-gradient(135deg,#8b5cf6,#4f8cff);color:#fff;border-color:transparent;">&#x1F91D; Ask HR</button>
+                            <select id="clients-filter-role" onchange="renderClientsList()" style="width:auto;min-width:130px;margin-left:auto;">
+                                <option value="">All entries</option>
+                                <option value="parent">Parents (with kids)</option>
+                                <option value="flat">Unparented only</option>
+                                <option value="child">Properties only</option>
+                            </select>
+                            <select id="clients-filter-status" onchange="renderClientsList()" style="width:auto;min-width:120px;">
+                                <option value="active">Active</option>
+                                <option value="">All statuses</option>
+                                <option value="inactive">Inactive</option>
+                            </select>
+                            <select id="clients-filter-market" onchange="renderClientsList()" style="width:auto;min-width:130px;">
+                                <option value="">All markets</option>
+                            </select>
+                            <input type="text" id="clients-search" oninput="renderClientsList()" placeholder="Search clients…" style="min-width:200px;" />
+                        </div>
+                        <p id="clients-summary" style="margin:12px 0;color:var(--text-dim,#888);font-size:12px;"></p>
+                        <div id="clients-list" style="display:flex;flex-direction:column;gap:8px;"></div>
+                    </div>
+
+                    <!-- Subs sub-tab — first-class directory of subcontractors,
+                         persisted server-side. Cross-job financials roll up via
+                         the job_subs join table. -->
+                    <div id="estimates-subtab-subs" class="estimates-subtab-content" style="display:none;">
+                        <div class="action-buttons">
+                            <button class="primary" onclick="window.agxSubs && window.agxSubs.openNew && window.agxSubs.openNew()">&#x1F477; New Sub</button>
+                            <button class="secondary" onclick="window.agxSubs && window.agxSubs.refresh && window.agxSubs.refresh()">Refresh</button>
+                            <button class="secondary" onclick="window.agxSubs && window.agxSubs.startMigration && window.agxSubs.startMigration()" title="Roll the existing per-job sub records up into the global directory">&#x1F501; Migrate from job records</button>
+                            <select id="subs-filter-trade" onchange="window.agxSubs && window.agxSubs.setFilter && window.agxSubs.setFilter('trade', this.value)" style="width:auto;min-width:140px;margin-left:auto;">
+                                <option value="">All trades</option>
+                            </select>
+                            <select id="subs-filter-status" onchange="window.agxSubs && window.agxSubs.setFilter && window.agxSubs.setFilter('status', this.value)" style="width:auto;min-width:120px;">
+                                <option value="active">Active</option>
+                                <option value="">All statuses</option>
+                                <option value="paused">Paused</option>
+                                <option value="closed">Closed</option>
+                            </select>
+                            <input type="text" id="subs-search" oninput="window.agxSubs && window.agxSubs.setFilter && window.agxSubs.setFilter('search', this.value)" placeholder="Search subs…" style="min-width:200px;" />
+                        </div>
+                        <p id="subs-summary" style="margin:12px 0;color:var(--text-dim,#888);font-size:12px;"></p>
+                        <div id="subs-migration-banner" style="display:none;margin-bottom:12px;padding:10px 14px;background:rgba(251,191,36,0.1);border:1px solid rgba(251,191,36,0.35);border-radius:8px;font-size:12px;color:var(--text,#e6e6e6);">
+                            <span id="subs-migration-banner-text"></span>
+                            <button class="ee-btn primary" style="margin-left:auto;font-size:11px;padding:4px 10px;" onclick="window.agxSubs && window.agxSubs.startMigration()">Review &amp; migrate</button>
+                        </div>
+                        <div id="subs-list"></div>
+                    </div>
+
+                    <!-- Import result modal — populated after a Buildertrend
+                         xlsx upload. Shows counts + any per-row errors. -->
+                    <div id="clientImportResultModal" class="modal">
+                      <div class="modal-content" style="max-width:560px;">
+                        <div class="modal-header" id="clientImportResult_title">Import Result</div>
+                        <div id="clientImportResult_body" style="padding:18px 20px;"></div>
+                        <div class="modal-footer">
+                          <button class="primary" onclick="closeModal('clientImportResultModal')">Done</button>
+                        </div>
+                      </div>
+                    </div>
+                </div>
+
+                <!-- ADMIN TAB (admin-only, populated by js/admin.js) -->
+                <div id="admin" class="tab-content" data-admin-only style="display:none;">
+                    <div class="ws-right-tabs">
+                        <button class="ws-right-tab active" data-admin-subtab="users" data-agx-icon="clients" onclick="switchAdminSubTab('users')">Users</button>
+                        <button class="ws-right-tab" data-admin-subtab="jobs" data-agx-icon="wip" onclick="switchAdminSubTab('jobs')">Job Assignments</button>
+                        <button class="ws-right-tab" data-admin-subtab="metrics" data-agx-icon="insights" onclick="switchAdminSubTab('metrics')">Metrics</button>
+                        <button class="ws-right-tab" data-admin-subtab="roles" data-agx-icon="admin" onclick="switchAdminSubTab('roles')">Roles</button>
+                        <button class="ws-right-tab" data-admin-subtab="templates" data-agx-icon="estimates" onclick="switchAdminSubTab('templates')">Templates</button>
+                        <button class="ws-right-tab" data-admin-subtab="materials" data-agx-icon="materials" onclick="switchAdminSubTab('materials')">Materials</button>
+                        <button class="ws-right-tab" data-admin-subtab="email" data-agx-icon="links" onclick="switchAdminSubTab('email')">Email</button>
+                        <!-- Email Templates moved INTO the Templates sub-tab as a 3rd inner tab.
+                             The pane div below stays for back-compat (no current callers) but
+                             is unused — the inner Templates → Email tab renders into a fresh
+                             #admin-subtab-email-templates that lives inside the templates pane. -->
+
+                        <button class="ws-right-tab" data-admin-subtab="agents" onclick="switchAdminSubTab('agents')">&#x1F916; Agents</button>
+                        <button class="ws-right-tab" data-admin-subtab="sms" onclick="switchAdminSubTab('sms')">&#x1F4AC; SMS</button>
+                    </div>
+
+                    <!-- Users sub-tab -->
+                    <div id="admin-subtab-users" class="admin-subtab-content">
+                        <div class="action-buttons">
+                            <button class="ee-btn primary" onclick="openNewUserModal()">&#x1F464; New User</button>
+                            <button class="ee-btn secondary" onclick="renderAdminUsers()">Refresh</button>
+                        </div>
+                        <div class="table-container" style="margin-top:14px;">
+                            <table id="admin-users-table">
+                                <thead>
+                                    <tr>
+                                        <th>Name</th>
+                                        <th>Email</th>
+                                        <th>Role</th>
+                                        <th style="text-align:center;">Active</th>
+                                        <th>Created</th>
+                                        <th style="text-align:center;">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="admin-users-tbody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- Metrics sub-tab -->
+                    <div id="admin-subtab-metrics" class="admin-subtab-content" style="display:none;">
+                        <p style="margin:0 0 14px 0;color:var(--text-dim,#888);font-size:12px;">
+                            Site-wide totals, plus per-job <strong>Go Live</strong> toggles. A job stays in <em>Draft</em> until you've verified its data is complete &mdash; only Live jobs roll up into the Insights tickers.
+                        </p>
+                        <div id="admin-metrics-cards" style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:20px;"></div>
+                        <h3 style="margin:0 0 8px 0;color:var(--text,#fff);font-size:14px;">Job Status</h3>
+                        <div class="table-container">
+                            <table id="admin-metrics-jobs-table">
+                                <thead>
+                                    <tr>
+                                        <th>Job</th>
+                                        <th>Owner</th>
+                                        <th style="text-align:right;">Contract</th>
+                                        <th style="text-align:right;">% Complete</th>
+                                        <th style="text-align:center;">Status</th>
+                                        <th style="text-align:center;">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="admin-metrics-jobs-tbody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- Roles sub-tab -->
+                    <div id="admin-subtab-roles" class="admin-subtab-content" style="display:none;">
+                        <div class="action-buttons">
+                            <button onclick="openNewRoleModal()">&#x1F510; New Role</button>
+                            <button onclick="renderAdminRoles()" class="secondary">Refresh</button>
+                        </div>
+                        <p style="margin:12px 0;color:var(--text-dim,#888);font-size:12px;">
+                            Built-in roles can be edited but not renamed or deleted. Custom roles can be deleted only when no users are assigned to them. New users get the role you pick when creating them.
+                        </p>
+                        <div id="admin-roles-list" style="display:flex;flex-direction:column;gap:10px;"></div>
+                    </div>
+
+                    <!-- Templates sub-tab (proposal boilerplate) -->
+                    <div id="admin-subtab-templates" class="admin-subtab-content" style="display:none;"></div>
+
+                    <!-- Materials catalog sub-tab — built from vendor purchase
+                         history CSVs; AG queries this for line-item proposals -->
+                    <div id="admin-subtab-materials" class="admin-subtab-content" style="display:none;"></div>
+                    <div id="admin-subtab-email" class="admin-subtab-content" style="display:none;"></div>
+                    <!-- Email Templates moved into Admin → Templates → Email.
+                         The id "admin-subtab-email-templates" is now created on
+                         demand by the Templates tab dispatch and consumed by
+                         renderAdminEmailTemplates(). The legacy top-level pane
+                         was removed so the id is unique in the DOM. -->
+                    <div id="admin-subtab-agents" class="admin-subtab-content" style="display:none;"></div>
+
+                    <!-- SMS sub-tab — observability for the SMS scheduling agent.
+                         Rendered on demand by renderAdminSms() in js/admin.js. -->
+                    <div id="admin-subtab-sms" class="admin-subtab-content" style="display:none;"></div>
+
+                    <!-- Job Assignments sub-tab -->
+                    <div id="admin-subtab-jobs" class="admin-subtab-content" style="display:none;">
+                        <div class="action-buttons">
+                            <button onclick="renderAdminJobs()" class="secondary">Refresh</button>
+                        </div>
+                        <p style="margin:12px 0;color:var(--text-dim,#888);font-size:12px;">
+                            Reassign a job's owner from the dropdown. Click <strong>Manage Sharing</strong> to grant additional users edit or view access.
+                        </p>
+                        <div class="table-container">
+                            <table id="admin-jobs-table">
+                                <thead>
+                                    <tr>
+                                        <th>Job</th>
+                                        <th>Client</th>
+                                        <th>Status</th>
+                                        <th>Owner</th>
+                                        <th style="text-align:center;">Shared With</th>
+                                        <th style="text-align:center;">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="admin-jobs-tbody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </main>
+    </div>
+
+    <!-- MODALS -->
+    <!-- QuickBooks Detailed Job Costs import preview. Populated by
+         js/job-costs-import.js after parsing the dropped xlsx. Shows
+         matched jobs (with totals) and unmatched (with per-row "Create
+         stub job" buttons). Confirm writes a dated sheet to each
+         matched job's workspace. -->
+    <div id="qbCostsImportModal" class="modal">
+      <div class="modal-content" style="max-width:880px;max-height:88vh;display:flex;flex-direction:column;">
+        <div class="modal-header" id="qbCostsImport_title">Import QB Job Costs</div>
+        <div id="qbCostsImport_body" style="padding:18px 20px;overflow-y:auto;flex:1;"></div>
+        <div class="modal-footer" style="display:flex;gap:10px;justify-content:flex-end;">
+          <button class="secondary" onclick="closeModal('qbCostsImportModal')">Cancel</button>
+          <button class="primary" id="qbCostsImport_confirmBtn" onclick="commitQBCostsImport()">Import</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="addJobModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">Add Job</div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Job Number</label>
+                    <input type="text" id="jobNumber" placeholder="e.g., S2062">
+                </div>
+                <div class="form-group">
+                    <label>Job Name</label>
+                    <input type="text" id="jobTitle" placeholder="e.g., Commerce Park Phase 2">
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Client</label>
+                    <input type="text" id="jobClient" placeholder="e.g., RPM, PAC, Pensum">
+                </div>
+                <div class="form-group">
+                    <label>PM</label>
+                    <select id="jobPM">
+                        <option value="">-- Select PM --</option>
+                        <option value="John">John</option>
+                        <option value="Noah">Noah</option>
+                    </select>
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Type</label>
+                    <select id="jobType">
+                        <option value="">-- Select Type --</option>
+                        <option value="Service">Service</option>
+                        <option value="Renovation">Renovation</option>
+                        <option value="Work Order">Work Order</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Work Type</label>
+                    <select id="jobWorkType">
+                        <option value="">-- Select --</option>
+                        <option value="In-house">In-House</option>
+                        <option value="Sub">Sub</option>
+                        <option value="Both">Both</option>
+                    </select>
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Market</label>
+                    <select id="jobMarket">
+                        <option value="">-- Select Market --</option>
+                        <option value="Orlando">Orlando</option>
+                        <option value="Tampa">Tampa</option>
+                        <option value="Denver">Denver</option>
+                        <option value="Other">Other</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Contract Amount (As Sold)</label>
+                    <input type="number" id="jobContractAmount" placeholder="0.00" step="0.01">
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Estimated Costs (As Sold)</label>
+                    <input type="number" id="jobEstimatedCosts" placeholder="0.00" step="0.01">
+                </div>
+                <div class="form-group">
+                    <label>Target Margin %</label>
+                    <input type="number" id="jobTargetMargin" value="50" step="0.1">
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Total Production Days</label>
+                    <input type="number" id="jobTotalProductionDays" placeholder="e.g., 10" step="1" min="0" title="Used by the Schedule page to compute expected daily revenue (contract ÷ days).">
+                </div>
+                <div class="form-group">
+                    <!-- Empty placeholder so production days sits in the same row width as contract/margin. -->
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Status</label>
+                    <select id="jobStatus">
+                        <option value="New">New</option>
+                        <option value="In Progress">In Progress</option>
+                        <option value="On Hold">On Hold</option>
+                        <option value="Completed">Completed</option>
+                        <option value="Archived">Archived</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Notes</label>
+                    <input type="text" id="jobNotes" placeholder="Optional notes">
+                </div>
+            </div>
+            <!-- Notify-owner checkbox: defaults ON for new jobs since the new
+                 owner usually wants to know. The user can uncheck before
+                 saving (e.g., creating a placeholder for themselves). The
+                 server only emails when the owner ≠ the creator AND this is
+                 set, so admins-creating-their-own-jobs never spam themselves. -->
+            <div class="form-group" style="background:rgba(79,140,255,0.06);border:1px solid rgba(79,140,255,0.25);border-radius:6px;padding:10px 12px;">
+                <label class="agx-check-row">
+                    <input type="checkbox" id="jobNotifyOwner" checked />
+                    <span>&#x1F4E7; Email the assigned PM that they own this job</span>
+                </label>
+                <div style="font-size:11px;color:var(--text-dim,#888);margin-top:4px;line-height:1.3;">Skipped automatically when you assign the job to yourself.</div>
+            </div>
+            <div class="modal-footer">
+                <button class="secondary" onclick="closeModal('addJobModal')">&#x2716; Cancel</button>
+                <button onclick="saveJob()">&#x2795; Add Job</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="addBuildingModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header" id="buildingModalHeader">Add Building</div>
+            <div class="form-group">
+                <label>Building Name</label>
+                <input type="text" id="buildingName" placeholder="e.g., Main Office, Warehouse A">
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>As-Sold Budget $</label>
+                    <input type="number" id="buildingBudget" placeholder="0.00" step="0.01" oninput="syncBuildingBudgetFromDollar()">
+                </div>
+                <div class="form-group">
+                    <label>% of Job</label>
+                    <input type="text" id="buildingBudgetPct" readonly style="background:var(--surface);color:var(--text-dim);cursor:default;">
+                </div>
+            </div>
+            <div id="buildingBudgetHint" style="font-size: 12px; color: var(--text-dim); margin-top: -12px; margin-bottom: 16px;"></div>
+            <div id="buildingPhaseBreakdown" style="display:none; border:1px solid var(--border); border-radius:8px; padding:12px; margin-bottom:16px; background:var(--surface);">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                    <h4 style="font-size:13px; color:var(--text-dim); text-transform:uppercase; margin:0;">Phase Budget Breakdown</h4>
+                    <span id="bldgPhaseRemaining" style="font-size:12px; font-weight:600;"></span>
+                </div>
+                <div id="bldgPhaseRows"></div>
+                <div style="display:flex; gap:8px; margin-top:8px;">
+                    <button type="button" class="ee-btn secondary" id="bldgAddPhaseBtn" onclick="addPhaseFromBuildingModal()">+ Add Phase</button>
+                </div>
+            </div>
+            <div id="buildingCOBreakdown" style="display:none; border:1px solid var(--border); border-radius:8px; padding:12px; margin-bottom:16px; background:var(--surface);">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                    <h4 style="font-size:13px; color:var(--text-dim); text-transform:uppercase; margin:0;">Change Orders</h4>
+                    <span id="bldgCOTotals" style="font-size:12px; font-weight:600;"></span>
+                </div>
+                <div id="bldgCORows"></div>
+                <div style="display:flex; gap:8px; margin-top:8px;">
+                    <button type="button" class="ee-btn secondary" id="bldgAddCOBtn" onclick="addCOFromBuildingModal()">+ Add CO</button>
+                </div>
+            </div>
+            <div class="form-row" style="align-items: center; margin-bottom: 16px;">
+                <input type="hidden" id="buildingLocked" value="">
+                <label class="agx-check-row">
+                    <input type="checkbox" id="buildingExcludeSubDist">
+                    <span>Exclude from sub distribution</span>
+                </label>
+            </div>
+            <div class="form-group">
+                <label>Address</label>
+                <input type="text" id="buildingAddress" data-agx-copy placeholder="123 Main St, City, State ZIP">
+            </div>
+            <div class="form-group">
+                <label>Work Scope</label>
+                <select id="buildingWorkScope">
+                    <option value="in-house">In-House</option>
+                    <option value="sub">Sub</option>
+                    <option value="both">Both</option>
+                </select>
+            </div>
+            <div style="border-top: 1px solid var(--border); margin: 16px 0; padding-top: 16px;">
+                <h4 style="font-size: 13px; color: var(--text-dim); text-transform: uppercase; margin-bottom: 12px;">Building-Level Costs (optional)</h4>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Materials $</label>
+                        <input type="number" id="buildingMaterials" placeholder="0.00" step="0.01">
+                    </div>
+                    <div class="form-group">
+                        <label>Labor $ (auto: hours &times; rate)</label>
+                        <input type="number" id="buildingLabor" placeholder="0.00" step="0.01" readonly style="opacity: 0.7; cursor: not-allowed;">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Subcontractor $ (auto from Subs tab)</label>
+                        <input type="number" id="buildingSub" placeholder="0.00" step="0.01" readonly style="opacity: 0.7; cursor: not-allowed;">
+                    </div>
+                    <div class="form-group">
+                        <label>Equipment $</label>
+                        <input type="number" id="buildingEquipment" placeholder="0.00" step="0.01">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Labor Hours This Week</label>
+                        <input type="number" id="buildingHoursWeek" placeholder="0" step="0.5">
+                    </div>
+                    <div class="form-group">
+                        <label>Total Hours to Date</label>
+                        <input type="number" id="buildingHoursTotal" placeholder="0" step="0.5">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Avg Hourly Rate</label>
+                        <input type="number" id="buildingRate" placeholder="40.00" step="0.01" value="40">
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="danger small" id="deleteBuildingBtn" onclick="deleteBuilding()" style="margin-right: auto; display: none;">&#x1F5D1; Delete</button>
+                <button class="secondary" onclick="closeModal('addBuildingModal')">&#x2716; Cancel</button>
+                <button onclick="saveBuilding()" id="saveBuildingBtn">&#x1F4BE; Save</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="addPhaseModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header" id="phaseModalHeader">Add Phase Entry</div>
+            <!-- Single-building selector (hidden when phase is wired to multiple buildings) -->
+            <div class="form-group" id="phaseBuildingWrap">
+                <label>Building</label>
+                <select id="phaseBuilding" onchange="syncBudgetFromPct()"></select>
+            </div>
+            <!-- Connected buildings (shown when phase has graph wire connections) -->
+            <div class="form-group" id="phaseConnectedWrap" style="display:none;">
+                <label>Connected Buildings <span style="color:var(--text-dim);font-weight:400;font-size:11px;">(manage in node graph)</span></label>
+                <div id="phaseConnectedList" style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-size:12px;"></div>
+            </div>
+            <div class="form-group">
+                <label>Phase</label>
+                <select id="phaseType" onchange="handleCustomSelectChange('phaseType', DEFAULT_PHASE_TYPES, 'agx-wip-custom-phases', '-- Select Phase --')"></select>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>As-Sold Revenue $</label>
+                    <input type="number" id="phaseAsSoldRevenue" placeholder="0.00" step="0.01">
+                </div>
+                <div class="form-group">
+                    <label>% Complete</label>
+                    <input type="number" id="phasePercent" min="0" max="100" value="0" step="5">
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Work Scope</label>
+                <select id="phaseWorkScope">
+                    <option value="in-house">In-House</option>
+                    <option value="sub">Sub</option>
+                    <option value="both">Both</option>
+                </select>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Materials Cost</label>
+                    <input type="number" id="phaseMaterials" placeholder="0.00" step="0.01">
+                </div>
+                <div class="form-group">
+                    <label>Labor $ (auto: hours &times; rate)</label>
+                    <input type="number" id="phaseLabor" placeholder="0.00" step="0.01" readonly style="opacity: 0.7; cursor: not-allowed;">
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Subcontractor $ (auto from Subs tab)</label>
+                    <input type="number" id="phaseSub" placeholder="0.00" step="0.01" readonly style="opacity: 0.7; cursor: not-allowed;">
+                </div>
+                <div class="form-group">
+                    <label>Equipment Cost</label>
+                    <input type="number" id="phaseEquipment" placeholder="0.00" step="0.01">
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>As-Sold Phase Budget $</label>
+                    <input type="number" id="phaseBudget" placeholder="0.00" step="0.01" oninput="syncBudgetFromDollar()">
+                </div>
+                <div class="form-group">
+                    <label>% of Building</label>
+                    <input type="text" id="phaseBudgetPct" readonly style="background:var(--surface);color:var(--text-dim);cursor:default;">
+                </div>
+            </div>
+            <div class="form-row" style="align-items: center; margin-bottom: 16px;">
+                <label class="agx-check-row">
+                    <input type="checkbox" id="phaseLocked">
+                    <span>Lock this phase's % (exclude from auto-balance)</span>
+                </label>
+                <button type="button" class="ee-btn secondary" onclick="autoBalancePhasePcts()" style="margin-left: auto;">&#x2696; Auto-Balance %</button>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Labor Hours This Week</label>
+                    <input type="number" id="phaseHoursWeek" placeholder="0" step="0.5">
+                </div>
+                <div class="form-group">
+                    <label>Total Hours to Date</label>
+                    <input type="number" id="phaseHoursTotal" placeholder="0" step="0.5">
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Avg Hourly Rate</label>
+                    <input type="number" id="phaseRate" placeholder="40.00" step="0.01" value="40">
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Notes for WIP Meeting</label>
+                <textarea id="phaseNotes" placeholder="Any notes or issues to discuss..."></textarea>
+            </div>
+            <div class="modal-footer">
+                <button class="danger small" id="deletePhaseBtn" onclick="deletePhase()" style="margin-right: auto; display: none;">&#x1F5D1; Delete</button>
+                <button class="secondary" onclick="closeModal('addPhaseModal')">&#x2716; Cancel</button>
+                <button onclick="savePhase()" id="savePhaseBtn">&#x1F4BE; Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Manage Phases Modal -->
+    <div id="managePhasesModal" class="modal">
+        <div class="modal-content" style="max-width: 900px;">
+            <div class="modal-header">Manage Phases</div>
+            <div style="font-size: 12px; color: var(--text-dim); margin-bottom: 10px;">
+                Duplicate phase names are grouped below. Click <strong>Merge</strong> to consolidate a group into a single phase record (revenues summed, buildings combined). Edit name and revenue inline.
+            </div>
+            <div id="managePhasesList" style="max-height: 55vh; overflow-y: auto;"></div>
+            <div class="modal-footer">
+                <button class="secondary" onclick="closeModal('managePhasesModal')">&#x2716; Close</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="addSubModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header" id="subModalHeader">Add Subcontractor</div>
+            <div class="form-group">
+                <label>Subcontractor Name</label>
+                <input type="text" id="subName" list="subDirectoryList" autocomplete="off" placeholder="Pick from directory or type a new name">
+                <datalist id="subDirectoryList"></datalist>
+                <div id="subDirectoryHint" style="margin-top:4px;font-size:11px;color:var(--text-dim,#888);"></div>
+            </div>
+            <div class="form-group">
+                <label>Trade</label>
+                <select id="subTrade" onchange="handleCustomSelectChange('subTrade', DEFAULT_SUB_TRADES, 'agx-wip-custom-trades', '-- Select Trade --')"></select>
+            </div>
+            <div class="form-group">
+                <label>Assignment Level</label>
+                <select id="subLevel" onchange="subLevelChanged()">
+                    <option value="job">Job-Wide (costs split by building %)</option>
+                    <option value="building">Specific Buildings</option>
+                    <option value="phase">Specific Phases</option>
+                </select>
+            </div>
+            <div class="form-group" id="subBuildingGroup" style="display:none;">
+                <label>Select Buildings</label>
+                <div id="subBuildingChecks" style="display:flex;flex-wrap:wrap;gap:6px;padding:4px 0;"></div>
+            </div>
+            <div class="form-group" id="subPhaseGroup" style="display:none;">
+                <label>Select Phases</label>
+                <div id="subPhaseChecks" style="display:flex;flex-wrap:wrap;gap:6px;padding:4px 0;"></div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Contract Amount</label>
+                    <input type="number" id="subContract" placeholder="0.00" step="0.01">
+                </div>
+                <div class="form-group">
+                    <label>Billed to Date</label>
+                    <input type="number" id="subBilled" placeholder="0.00" step="0.01">
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Notes</label>
+                <input type="text" id="subNotes" placeholder="Optional notes">
+            </div>
+            <div class="modal-footer">
+                <button class="secondary" onclick="closeModal('addSubModal')">&#x2716; Cancel</button>
+                <button onclick="saveSub()" id="subSaveBtn">&#x1F4BE; Save</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="addCOModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header" id="coModalHeader">Add Change Order</div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>CO Number</label>
+                    <input type="text" id="coNumber" placeholder="e.g., CO-001">
+                </div>
+                <div class="form-group">
+                    <label>Date</label>
+                    <input type="date" id="coDate">
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Description</label>
+                <input type="text" id="coDescription" placeholder="Description of change order">
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Income (Revenue)</label>
+                    <input type="number" id="coIncome" placeholder="0.00" step="0.01">
+                </div>
+                <div class="form-group">
+                    <label>Estimated Costs</label>
+                    <input type="number" id="coCosts" placeholder="0.00" step="0.01">
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Notes</label>
+                <input type="text" id="coNotes" placeholder="Optional notes">
+            </div>
+                <div class="modal-footer">
+                <button class="secondary" onclick="closeModal('addCOModal')">&#x2716; Cancel</button>
+                <button onclick="saveCO()" id="coSaveBtn">&#x1F4BE; Save</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="addPOModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header" id="poModalHeader">Add Purchase Order</div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>PO Number</label>
+                    <input type="text" id="poNumber" placeholder="e.g., PO-001">
+                </div>
+                <div class="form-group">
+                    <label>Date</label>
+                    <input type="date" id="poDate">
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Vendor</label>
+                <input type="text" id="poVendor" list="poVendorSubsList" placeholder="Vendor / supplier name (start typing to pick from Subs directory)" autocomplete="off">
+                <!-- Populated by openAddPOModal() / editPO() from appData.subsDirectory.
+                     Lets the user autocomplete to a sub from the global directory; on
+                     save, savePO() resolves the matching directory id into po.subId. -->
+                <datalist id="poVendorSubsList"></datalist>
+            </div>
+            <div class="form-group">
+                <label>Description</label>
+                <input type="text" id="poDescription" placeholder="Description of purchase order">
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Amount</label>
+                    <input type="number" id="poAmount" placeholder="0.00" step="0.01">
+                </div>
+                <div class="form-group">
+                    <label>Billed to Date</label>
+                    <input type="number" id="poBilled" placeholder="0.00" step="0.01">
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Status</label>
+                    <select id="poStatus">
+                        <option value="Open">Open</option>
+                        <option value="Partial">Partial</option>
+                        <option value="Closed">Closed</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Notes</label>
+                    <input type="text" id="poNotes" placeholder="Optional notes">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="secondary" onclick="closeModal('addPOModal')">&#x2716; Cancel</button>
+                <button onclick="savePO()" id="poSaveBtn">&#x1F4BE; Save</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="addInvModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header" id="invModalHeader">Add Invoice</div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Invoice Number</label>
+                    <input type="text" id="invNumber" placeholder="e.g., INV-001">
+                </div>
+                <div class="form-group">
+                    <label>Date</label>
+                    <input type="date" id="invDate">
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Vendor</label>
+                <input type="text" id="invVendor" placeholder="Vendor / supplier name">
+            </div>
+            <div class="form-group">
+                <label>Description</label>
+                <input type="text" id="invDescription" placeholder="Description of invoice">
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Amount</label>
+                    <input type="number" id="invAmount" placeholder="0.00" step="0.01">
+                </div>
+                <div class="form-group">
+                    <label>Due Date</label>
+                    <input type="date" id="invDueDate">
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Status</label>
+                    <select id="invStatus">
+                        <option value="Draft">Draft</option>
+                        <option value="Sent">Sent</option>
+                        <option value="Paid">Paid</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Notes</label>
+                    <input type="text" id="invNotes" placeholder="Optional notes">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="secondary" onclick="closeModal('addInvModal')">&#x2716; Cancel</button>
+                <button onclick="saveInvoice()" id="invSaveBtn">&#x1F4BE; Save</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="newEstimateModal" class="modal">
+        <div class="modal-content" style="max-width:720px;">
+            <div class="modal-header">New Estimate</div>
+            <div style="padding:18px 22px;">
+                <input type="hidden" id="estClientId" />
+                <input type="hidden" id="estLeadId" />
+
+                <!-- Title — the most important field, full width -->
+                <div class="form-group">
+                    <label>Estimate Title *</label>
+                    <input type="text" id="estTitle" placeholder="e.g., Madeira Bay — Restoration Project RFP" autofocus />
+                </div>
+
+                <!-- Job Type — markup is per-section now, set inside the editor -->
+                <div class="form-group">
+                    <label>Job Type</label>
+                    <select id="estJobType">
+                        <option value="">— Select —</option>
+                        <option value="Renovation">Renovation</option>
+                        <option value="Service &amp; Repair">Service &amp; Repair</option>
+                        <option value="Work Order">Work Order</option>
+                    </select>
+                </div>
+
+                <!-- Lead-prefill banner — only visible when this estimate is
+                     being created from an existing lead. The "Copy from lead"
+                     button re-runs the prefill so the user can recover from
+                     accidentally clearing fields. -->
+                <div id="estLeadPrefillBanner" style="display:none;margin-bottom:14px;padding:10px 12px;background:rgba(52,211,153,0.08);border:1px solid rgba(52,211,153,0.25);border-radius:8px;align-items:center;gap:10px;">
+                    <span style="font-size:18px;">&#x1F4CB;</span>
+                    <div style="flex:1;font-size:12px;color:var(--text,#fff);">
+                        <strong>From lead:</strong> <span id="estLeadPrefillLabel" style="color:#34d399;"></span>
+                        <div style="font-size:11px;color:var(--text-dim,#aaa);margin-top:2px;">Client + property fields filled from the lead. Editing below is fine.</div>
+                    </div>
+                    <button type="button" class="ee-btn secondary" onclick="window.copyFromLeadAgain && window.copyFromLeadAgain()" title="Re-run the lead prefill (handy if you accidentally cleared a field)">&#x21BB; Copy from lead</button>
+                </div>
+
+                <!-- Client picker — auto-fills the rest -->
+                <div class="form-group">
+                    <label>Pick from Client Directory</label>
+                    <select id="estClientPicker" onchange="onEstimateClientPicked('new')">
+                        <option value="">— Select a client to auto-fill —</option>
+                    </select>
+                    <div style="font-size:11px;color:var(--text-dim,#888);margin-top:4px;">Auto-fills the fields below. Edit them after if needed.</div>
+                </div>
+
+                <!-- Client + Community paired -->
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+                    <div class="form-group">
+                        <label>Client Company</label>
+                        <input type="text" id="estClient" placeholder="Management firm or owner" />
+                    </div>
+                    <div class="form-group">
+                        <label>Community / Property</label>
+                        <input type="text" id="estCommunity" placeholder="Community name" />
+                    </div>
+                </div>
+
+                <!-- Addresses (full width each — avoid wrapping inside the input) -->
+                <div class="form-group">
+                    <label>Property Address</label>
+                    <input type="text" id="estPropertyAddr" placeholder="Street, City, State ZIP" />
+                </div>
+                <div class="form-group">
+                    <label>Billing Address</label>
+                    <input type="text" id="estBillingAddr" placeholder="Street, City, State ZIP" />
+                </div>
+
+                <!-- Manager: name + email + phone on one row -->
+                <div style="display:grid;grid-template-columns:1.2fr 1.5fr 1fr;gap:12px;">
+                    <div class="form-group">
+                        <label>Manager Name</label>
+                        <input type="text" id="estManagerName" placeholder="John Smith" />
+                    </div>
+                    <div class="form-group">
+                        <label>Manager Email</label>
+                        <input type="email" id="estManagerEmail" placeholder="john@example.com" />
+                    </div>
+                    <div class="form-group">
+                        <label>Manager Phone</label>
+                        <input type="tel" id="estManagerPhone" placeholder="(555) 123-4567" />
+                    </div>
+                </div>
+
+                <!-- Helper note replacing the old Scope textarea — scope now
+                     lives per-alternate on the right panel of the editor. -->
+                <div style="font-size:11px;color:var(--text-dim,#aaa);padding:9px 12px;background:rgba(79,140,255,0.06);border:1px solid rgba(79,140,255,0.2);border-radius:6px;line-height:1.5;">
+                    <strong style="color:#4f8cff;">Scope &amp; line items</strong> get added in the editor after you create the estimate — each alternate (Good / Better / Best) carries its own scope text and lines.
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="secondary" onclick="closeModal('newEstimateModal')">Cancel</button>
+                <button class="primary" onclick="createNewEstimate()">&#x1F4C4; Create Estimate</button>
+            </div>
+        </div>
+    </div>
+
+    
+    <div id="editEstimateModal" class="modal">
+      <div class="modal-content" style="max-width: 1000px; max-height: 90vh; overflow-y: auto;">
+        <div class="modal-header">Edit Estimate</div>
+        <div style="padding: 0 20px 20px;">
+          <div style="background: var(--surface2); padding: 10px 15px; border-radius: 4px; margin-bottom: 12px;">
+            <input type="hidden" id="editEst_clientId" />
+            <div class="form-row" style="gap:8px;margin-bottom:6px;">
+                <div class="form-group" style="flex:2;margin-bottom:4px;">
+                    <label style="font-size:11px;margin-bottom:2px;">Pick from Client Directory</label>
+                    <select id="editEstClientPicker" onchange="onEstimateClientPicked('edit')" style="padding:6px 8px;font-size:13px;">
+                        <option value="">— Select a client to auto-fill —</option>
+                    </select>
+                </div>
+            </div>
+            <div class="form-row" style="gap:8px;margin-bottom:6px;"><div class="form-group" style="flex:2;margin-bottom:4px;"><label style="font-size:11px;margin-bottom:2px;">Title</label><input type="text" id="editEst_title" style="padding:6px 8px;font-size:13px;"></div><div class="form-group" style="flex:1;margin-bottom:4px;"><label style="font-size:11px;margin-bottom:2px;">Job Type</label><input type="text" id="editEst_jobType" style="padding:6px 8px;font-size:13px;"></div><div class="form-group" style="flex:0.5;margin-bottom:4px;"><label style="font-size:11px;margin-bottom:2px;">Markup %</label><input type="number" id="editEst_defaultMarkup" step="0.1" style="padding:6px 8px;font-size:13px;"></div><div class="form-group" style="flex:1;margin-bottom:4px;"><label style="font-size:11px;margin-bottom:2px;">Client</label><input type="text" id="editEst_client" style="padding:6px 8px;font-size:13px;"></div><div class="form-group" style="flex:1;margin-bottom:4px;"><label style="font-size:11px;margin-bottom:2px;">Community</label><input type="text" id="editEst_community" style="padding:6px 8px;font-size:13px;"></div></div>
+            <div class="form-row" style="gap:8px;"><div class="form-group" style="flex:1.5;margin-bottom:4px;"><label style="font-size:11px;margin-bottom:2px;">Property Address</label><input type="text" id="editEst_propertyAddr" data-agx-copy style="padding:6px 8px;font-size:13px;"></div><div class="form-group" style="flex:1.5;margin-bottom:4px;"><label style="font-size:11px;margin-bottom:2px;">Billing Address</label><input type="text" id="editEst_billingAddr" data-agx-copy style="padding:6px 8px;font-size:13px;"></div><div class="form-group" style="flex:1;margin-bottom:4px;"><label style="font-size:11px;margin-bottom:2px;">Manager</label><input type="text" id="editEst_managerName" style="padding:6px 8px;font-size:13px;"></div><div class="form-group" style="flex:1;margin-bottom:4px;"><label style="font-size:11px;margin-bottom:2px;">Email</label><input type="email" id="editEst_managerEmail" style="padding:6px 8px;font-size:13px;"></div><div class="form-group" style="flex:0.7;margin-bottom:4px;"><label style="font-size:11px;margin-bottom:2px;">Phone</label><input type="tel" id="editEst_managerPhone" style="padding:6px 8px;font-size:13px;"></div></div>
+          </div>
+          <div style="background: var(--surface2); padding: 15px; border-radius: 4px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:15px;">
+            <div class="form-group" style="margin-top:12px;">
+              <label style="display:block;margin-bottom:4px;font-weight:600;color:var(--text);">Scope of Work</label>
+              <textarea id="editEst_scopeOfWork" rows="6" style="width:100%;font-family:Arial,sans-serif;font-size:13px;padding:8px;border:1px solid var(--border);border-radius:4px;resize:vertical;background:var(--surface);color:var(--text);" placeholder="Paste scope of work summary here..."></textarea>
+            </div>
+            <h3 style="margin:0;color:var(--text);">Line Items</h3><div><button onclick="addEstimateSection()" class="secondary small" style="margin-right:8px;">&#x2795; Section</button><button onclick="addEstimateLineRow(currentEditEstimateId)" class="secondary small">&#x2795; Line Item</button></div></div>
+            <div style="overflow-x:auto;">
+              <table id="editEstimate_lineItems" style="width:100%;border-collapse:collapse;font-size:13px;">
+                <thead><tr style="background:var(--surface);"><th style="padding:8px;text-align:left;color:var(--text-dim);">Description</th><th style="padding:8px;text-align:center;color:var(--text-dim);width:80px;">Qty</th><th style="padding:8px;text-align:center;color:var(--text-dim);width:80px;">Unit</th><th style="padding:8px;text-align:right;color:var(--text-dim);width:100px;">Unit Cost</th><th style="padding:8px;text-align:center;color:var(--text-dim);width:80px;">Markup %</th><th style="padding:8px;text-align:right;color:var(--text-dim);width:110px;">Line Total</th><th style="padding:8px;width:40px;"></th></tr></thead>
+                <tbody id="editEstimate_lineItemsBody"></tbody>
+              </table>
+            </div>
+            <div style="margin-top:20px;padding-top:15px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:40px;font-weight:bold;">
+              <div><span style="color:var(--text-dim);">Base Cost:</span> <span id="editEstimate_baseCost">$0.00</span></div>
+              <div><span style="color:var(--text-dim);">Client Price:</span> <span id="editEstimate_clientPrice" style="color:var(--green);">$0.00</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer"><button onclick="closeModal('editEstimateModal')" class="secondary">&#x2716; Cancel</button><button onclick="saveEstimateEdits()" class="primary">&#x1F4BE; Save Changes</button></div>
+      </div>
+    </div>
+    <div id="estimatePreviewModal" class="modal">
+      <div class="modal-content" style="max-width:900px;max-height:90vh;overflow-y:auto;background:white;color:black;">
+        <div class="modal-header" style="background:white;color:black;border-bottom:2px solid #ddd;">Estimate Preview</div>
+        <div id="estimatePreview_content" style="padding:40px;background:white;color:black;"></div>
+        <div class="modal-footer" style="background:white;border-top:2px solid #ddd;"><button onclick="window.print()" class="primary">&#x1F5A8; Print</button><button onclick="closeModal('estimatePreviewModal')" class="secondary">&#x2716; Close</button></div>
+      </div>
+    </div>
+
+    <!-- Lead editor modal — Phase 2. Mirrors BT's lead detail layout with
+         a General tab for the form fields + a Proposals tab listing the
+         estimates linked to this lead via estimate.lead_id. -->
+    <!-- Scope of Work modal — quick-access popup used while estimating
+         + working with the AI assistant. The same scope text is also
+         editable on the full Scope sub-tab; both paths bind to the
+         active alternate's scope. The AI assistant can open this
+         modal via window.openScopeModal() to surface the scope while
+         drafting changes. -->
+    <div id="ee-scope-modal" class="modal">
+      <div class="modal-content" style="max-width:920px;width:96%;max-height:88vh;overflow-y:auto;">
+        <div class="modal-header" style="display:flex;align-items:center;gap:10px;">
+          <span style="flex:1;">&#x1F4DD; Scope of Work</span>
+          <button class="ee-btn secondary" onclick="window.closeScopeModal && window.closeScopeModal()">Done</button>
+        </div>
+        <div id="ee-scope-panel-modal" style="padding:18px 20px;"></div>
+      </div>
+    </div>
+
+    <div id="leadEditorModal" class="modal">
+      <div class="modal-content" style="max-width:780px;max-height:88vh;overflow-y:auto;">
+        <div class="modal-header" style="display:flex;align-items:center;gap:10px;">
+          <span id="leadEditor_title" style="flex:1;">New Lead</span>
+        </div>
+
+        <!-- Form body — wrapped so it can be re-parented into the
+             #lead-detail-view container when an existing lead is opened
+             (full-page detail view). On close it moves back here. The
+             modal stays as the host only for the create flow. -->
+        <div id="leadEditor_formBody">
+        <!-- In-modal tabs (General | Proposals N) — only shown in edit mode.
+             Hidden on create since there's nothing to put on the Proposals
+             tab until the lead has an id. -->
+        <div id="leadEditor_tabs" class="ws-right-tabs" style="display:none;margin:12px 20px 0 20px;">
+          <button class="ws-right-tab active" data-leadeditor-tab="general" onclick="switchLeadEditorTab('general')">General</button>
+          <button class="ws-right-tab" data-leadeditor-tab="proposals" onclick="switchLeadEditorTab('proposals')">Estimates <span id="leadEditor_proposalsCount" style="opacity:0.6;font-weight:400;"></span></button>
+          <button class="ws-right-tab" data-leadeditor-tab="photos" onclick="switchLeadEditorTab('photos')">&#x1F4CE; Attachments</button>
+        </div>
+
+        <!-- General tab: original form fields -->
+        <div id="leadEditor_tab_general" style="padding:18px 20px;display:flex;flex-direction:column;gap:18px;">
+          <input type="hidden" id="leadEditor_id" />
+
+          <!-- Build-from-PDF drop zone. Hidden in edit mode (only shown when
+               creating a new lead). User drops a Buildertrend "Lead Print"
+               PDF; client renders pages via PDF.js, server runs Claude with
+               structured outputs to extract the fields. -->
+          <div id="leadEditor_pdfDrop" style="border:2px dashed rgba(139,92,246,0.4);border-radius:10px;padding:14px;background:rgba(139,92,246,0.05);text-align:center;cursor:pointer;transition:border-color 0.15s,background 0.15s;">
+            <div style="font-size:13px;color:#c4b5fd;margin-bottom:4px;">&#x2728; Drop a Buildertrend Lead Print PDF here <span style="color:var(--text-dim,#888);">or <strong style="color:#4f8cff;">click to pick</strong></span></div>
+            <div style="font-size:11px;color:var(--text-dim,#888);">AI reads the printed lead report and prefills the fields below. You review and save.</div>
+            <div id="leadEditor_pdfDropStatus" style="font-size:11px;margin-top:6px;display:none;"></div>
+            <input id="leadEditor_pdfFile" type="file" accept="application/pdf,.pdf" style="display:none;" />
+          </div>
+
+          <!-- Identity -->
+          <fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;">
+            <legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Lead</legend>
+            <div>
+              <label style="display:block;">Title *</label>
+              <input id="leadEditor_title_field" type="text" placeholder="e.g. Penthouse Groves — Building Repaint G-H" />
+            </div>
+            <div style="display:grid;grid-template-columns:2fr 1fr;gap:10px;margin-top:10px;">
+              <div>
+                <label style="display:block;">Client</label>
+                <select id="leadEditor_client_id" onchange="onLeadClientPicked()">
+                  <option value="">— Select a client —</option>
+                </select>
+                <div style="font-size:11px;color:var(--text-dim,#888);margin-top:3px;">Picking a client auto-fills the address below.</div>
+              </div>
+              <div>
+                <label style="display:block;">Status</label>
+                <select id="leadEditor_status">
+                  <option value="new">New</option>
+                  <option value="in_progress">In Progress</option>
+                  <option value="sent">Sent</option>
+                  <option value="sold">Sold</option>
+                  <option value="lost">Lost</option>
+                  <option value="no_opportunity">No Opportunity</option>
+                </select>
+              </div>
+            </div>
+          </fieldset>
+
+          <!-- Address -->
+          <fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;">
+            <legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Project Address</legend>
+            <div><label style="display:block;">Street</label><input id="leadEditor_street_address" type="text" data-agx-copy /></div>
+            <div style="display:grid;grid-template-columns:2fr 80px 110px;gap:10px;margin-top:10px;">
+              <div><label style="display:block;">City</label><input id="leadEditor_city" type="text" /></div>
+              <div><label style="display:block;">State</label><input id="leadEditor_state" type="text" maxlength="2" style="text-transform:uppercase;" /></div>
+              <div><label style="display:block;">Zip</label><input id="leadEditor_zip" type="text" maxlength="10" /></div>
+            </div>
+          </fieldset>
+
+          <!-- Sales pipeline -->
+          <fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;">
+            <legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Sales Pipeline</legend>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:end;">
+              <div>
+                <label style="display:block;">Confidence <span id="leadEditor_confidenceLabel" style="color:var(--text-dim,#888);font-weight:normal;">— 0%</span></label>
+                <input id="leadEditor_confidence" type="range" min="0" max="100" step="5" value="0"
+                       oninput="document.getElementById('leadEditor_confidenceLabel').textContent='— '+this.value+'%'" />
+              </div>
+              <div>
+                <label style="display:block;">Projected Sale Date</label>
+                <input id="leadEditor_projected_sale_date" type="date" />
+              </div>
+            </div>
+            <div style="margin-top:10px;">
+              <label style="display:block;">Estimated Revenue</label>
+              <input id="leadEditor_estimated_revenue_low" type="number" step="100" placeholder="0" />
+            </div>
+            <!-- estimated_revenue_high stays in the schema but is hidden on
+                 the AGX side — we only display/use the single min value. -->
+            <input id="leadEditor_estimated_revenue_high" type="hidden" />
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:10px;">
+              <div><label style="display:block;">Source</label><input id="leadEditor_source" type="text" placeholder="Referral, BT, …" /></div>
+              <div><label style="display:block;">Project Type</label><select id="leadEditor_project_type"><option value="">— Select —</option><option value="Renovation">Renovation</option><option value="Service &amp; Repair">Service &amp; Repair</option><option value="Work Order">Work Order</option></select></div>
+              <div>
+                <label style="display:block;">Salesperson</label>
+                <select id="leadEditor_salesperson_id">
+                  <option value="">— Unassigned —</option>
+                </select>
+              </div>
+            </div>
+          </fieldset>
+
+          <!-- Custom fields (BT parity) -->
+          <fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;">
+            <legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Site Details</legend>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">
+              <div><label style="display:block;">Property Name</label><input id="leadEditor_property_name" type="text" /></div>
+              <div><label style="display:block;">Gate Code</label><input id="leadEditor_gate_code" type="text" /></div>
+              <div><label style="display:block;">Market</label><input id="leadEditor_market" type="text" /></div>
+            </div>
+          </fieldset>
+
+          <!-- Notes -->
+          <fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;">
+            <legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Notes</legend>
+            <textarea id="leadEditor_notes" rows="4" style="resize:vertical;"></textarea>
+          </fieldset>
+
+          <!-- Linked-job chip — shown when lead.job_id is set so the user
+               can jump from a sold lead straight to its WIP job. -->
+          <div id="leadEditor_linkedJob" style="display:none;padding:10px 14px;background:rgba(52,211,153,0.08);border:1px solid rgba(52,211,153,0.3);border-radius:8px;display:none;align-items:center;justify-content:space-between;gap:10px;">
+            <div style="display:flex;align-items:center;gap:10px;">
+              <span style="color:#34d399;font-size:14px;">&#x2713;</span>
+              <div>
+                <div style="font-size:13px;font-weight:600;color:#34d399;">Sold &mdash; linked to a job</div>
+                <div id="leadEditor_linkedJobLabel" style="font-size:11px;color:var(--text-dim,#888);"></div>
+              </div>
+            </div>
+            <button class="ee-btn secondary" onclick="openLinkedJobFromLead()">Open Job &rarr;</button>
+          </div>
+
+          <div id="leadEditor_status_msg" style="font-size:13px;"></div>
+        </div>
+
+        <!-- Proposals tab: estimates linked to this lead via estimate.lead_id.
+             Hidden until edit mode (the lead needs an id before estimates
+             can hang off it). -->
+        <div id="leadEditor_tab_proposals" style="display:none;padding:18px 20px;">
+          <div class="action-buttons" style="margin-bottom:12px;">
+            <button class="primary" onclick="createEstimateFromLead()">&#x1F4C4; New Estimate from Lead</button>
+            <span style="font-size:12px;color:var(--text-dim,#888);align-self:center;">Pre-fills the form from this lead's client, address, and project info.</span>
+          </div>
+          <div id="leadEditor_proposalsList" style="display:flex;flex-direction:column;gap:8px;"></div>
+        </div>
+
+        <!-- Photos tab — drag-drop uploader + thumbnail grid + lightbox.
+             Hidden until the lead has been saved (no entity id to attach to). -->
+        <div id="leadEditor_tab_photos" style="display:none;padding:18px 20px;">
+          <div id="leadEditor_photosMount"></div>
+        </div>
+        </div><!-- /leadEditor_formBody -->
+
+        <div class="modal-footer" id="leadEditor_modalFooter">
+          <button id="leadEditor_deleteBtn" class="danger" style="margin-right:auto;display:none;" onclick="deleteLeadFromEditor()">Delete</button>
+          <button id="leadEditor_convertJobBtn" class="success" style="display:none;" onclick="convertLeadToJob()" data-cap="JOBS_EDIT_ANY JOBS_EDIT_OWN">&#x1F3D7; Create Job from Lead</button>
+          <button onclick="closeModal('leadEditorModal')" class="secondary">Cancel</button>
+          <button onclick="submitLeadEditor()" class="primary" id="leadEditor_submitBtn">Save Lead</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Client editor modal — used for both create and edit. Mirrors the
+         BT Client Contacts export columns one-to-one so the import pipeline
+         can round-trip cleanly. Sections collapse the field count visually. -->
+    <div id="clientEditorModal" class="modal">
+      <div class="modal-content" style="max-width:780px;max-height:88vh;overflow-y:auto;">
+        <div class="modal-header" id="clientEditor_title">New Client</div>
+        <div style="padding:18px 20px;display:flex;flex-direction:column;gap:18px;">
+          <input type="hidden" id="clientEditor_id" />
+
+          <!-- Identity -->
+          <fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;">
+            <legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Identity</legend>
+            <div style="display:grid;grid-template-columns:1fr 200px;gap:10px;">
+              <div>
+                <label style="display:block;">Name *</label>
+                <input id="clientEditor_name" type="text" placeholder="Display name (community / firm / owner)" />
+              </div>
+              <div>
+                <label style="display:block;">Activation</label>
+                <select id="clientEditor_activation_status">
+                  <option value="active">Active</option>
+                  <option value="inactive">Inactive</option>
+                </select>
+              </div>
+            </div>
+            <div style="display:grid;grid-template-columns:200px 1fr;gap:10px;margin-top:10px;">
+              <div>
+                <label style="display:block;">Type</label>
+                <input id="clientEditor_client_type" type="text" placeholder="HOA, Owner, Builder, …" />
+              </div>
+              <div>
+                <label style="display:block;">Parent Client</label>
+                <select id="clientEditor_parent_client_id">
+                  <option value="">— None (top-level) —</option>
+                </select>
+              </div>
+            </div>
+            <div style="margin-top:10px;">
+              <label style="display:block;">Proposal Salutation <span style="color:var(--text-dim,#888);font-weight:400;font-size:11px;">(used in "Dear ___,")</span></label>
+              <input id="clientEditor_salutation" type="text" placeholder="e.g. PAC Team, Jane, Wimbledon Greens HOA Board" />
+            </div>
+          </fieldset>
+
+          <!-- Primary contact -->
+          <fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;">
+            <legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Primary Contact</legend>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+              <div><label style="display:block;">First Name</label><input id="clientEditor_first_name" type="text" /></div>
+              <div><label style="display:block;">Last Name</label><input id="clientEditor_last_name" type="text" /></div>
+            </div>
+            <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:10px;margin-top:10px;">
+              <div><label style="display:block;">Email</label><input id="clientEditor_email" type="email" /></div>
+              <div><label style="display:block;">Phone</label><input id="clientEditor_phone" type="tel" /></div>
+              <div><label style="display:block;">Cell</label><input id="clientEditor_cell" type="tel" /></div>
+            </div>
+          </fieldset>
+
+          <!-- Mailing / billing address -->
+          <fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;">
+            <legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Mailing Address</legend>
+            <div><label style="display:block;">Street</label><input id="clientEditor_address" type="text" data-agx-copy /></div>
+            <div style="display:grid;grid-template-columns:2fr 80px 110px;gap:10px;margin-top:10px;">
+              <div><label style="display:block;">City</label><input id="clientEditor_city" type="text" /></div>
+              <div><label style="display:block;">State</label><input id="clientEditor_state" type="text" maxlength="2" style="text-transform:uppercase;" /></div>
+              <div><label style="display:block;">Zip</label><input id="clientEditor_zip" type="text" maxlength="10" /></div>
+            </div>
+          </fieldset>
+
+          <!-- Property / community details -->
+          <fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;">
+            <legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Property &amp; Community</legend>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+              <div><label style="display:block;">Company Name</label><input id="clientEditor_company_name" type="text" placeholder="Parent firm (e.g. Associa Gulf Coast)" /></div>
+              <div><label style="display:block;">Community Name</label><input id="clientEditor_community_name" type="text" placeholder="This property" /></div>
+            </div>
+            <div style="display:grid;grid-template-columns:160px 1fr 1fr;gap:10px;margin-top:10px;">
+              <div><label style="display:block;">Market</label><input id="clientEditor_market" type="text" /></div>
+              <div><label style="display:block;">Property Address</label><input id="clientEditor_property_address" type="text" data-agx-copy /></div>
+              <div><label style="display:block;">Property Phone</label><input id="clientEditor_property_phone" type="tel" /></div>
+            </div>
+            <div style="display:grid;grid-template-columns:2fr 1fr;gap:10px;margin-top:10px;">
+              <div><label style="display:block;">Website</label><input id="clientEditor_website" type="url" placeholder="https://" /></div>
+              <div><label style="display:block;">Gate Code / Notes</label><input id="clientEditor_gate_code" type="text" /></div>
+            </div>
+            <div style="margin-top:10px;">
+              <label style="display:block;">Additional Points of Contact</label>
+              <textarea id="clientEditor_additional_pocs" rows="2" style="resize:vertical;"></textarea>
+            </div>
+          </fieldset>
+
+          <!-- Community manager -->
+          <fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;">
+            <legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Community Manager / CAM</legend>
+            <div style="display:grid;grid-template-columns:1fr 1fr 160px;gap:10px;">
+              <div><label style="display:block;">Manager Name</label><input id="clientEditor_community_manager" type="text" /></div>
+              <div><label style="display:block;">Email</label><input id="clientEditor_cm_email" type="email" /></div>
+              <div><label style="display:block;">Phone</label><input id="clientEditor_cm_phone" type="tel" /></div>
+            </div>
+          </fieldset>
+
+          <!-- Maintenance manager -->
+          <fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;">
+            <legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Maintenance Manager</legend>
+            <div style="display:grid;grid-template-columns:1fr 1fr 160px;gap:10px;">
+              <div><label style="display:block;">Manager Name</label><input id="clientEditor_maintenance_manager" type="text" /></div>
+              <div><label style="display:block;">Email</label><input id="clientEditor_mm_email" type="email" /></div>
+              <div><label style="display:block;">Phone</label><input id="clientEditor_mm_phone" type="tel" /></div>
+            </div>
+          </fieldset>
+
+          <!-- Notes -->
+          <fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;">
+            <legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Notes</legend>
+            <textarea id="clientEditor_notes" rows="3" style="resize:vertical;"></textarea>
+          </fieldset>
+
+          <!-- Agent notes — durable bullets that auto-inject into AG and CRA
+               system prompts on every turn touching this client. Distinct
+               from the freeform Notes field above (which is human-only). -->
+          <fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;">
+            <legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">&#x1F916; Agent Notes <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--text-dim,#888);">— auto-injected into AI prompts</span></legend>
+            <div id="clientEditor_agentNotesList" style="display:flex;flex-direction:column;gap:6px;"></div>
+            <div id="clientEditor_agentNoteComposer" style="display:none;margin-top:10px;border-top:1px solid var(--border,#333);padding-top:10px;">
+              <textarea id="clientEditor_agentNoteInput" rows="2" placeholder="e.g., PAC always wants 15% materials markup, not 20%." maxlength="2000" style="resize:vertical;width:100%;"></textarea>
+              <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:6px;">
+                <button class="ee-btn secondary" type="button" onclick="cancelAddClientNote()">Cancel</button>
+                <button class="ee-btn primary" type="button" onclick="submitAddClientNote()">Save note</button>
+              </div>
+            </div>
+            <div style="margin-top:10px;">
+              <button class="ee-btn ghost" type="button" id="clientEditor_addNoteBtn" onclick="showAddClientNoteComposer()">&#x2795; Add note</button>
+            </div>
+          </fieldset>
+
+          <div id="clientEditor_status" style="font-size:13px;"></div>
+        </div>
+        <div class="modal-footer">
+          <button id="clientEditor_deleteBtn" class="danger" style="margin-right:auto;display:none;" onclick="deleteClientFromEditor()">Delete</button>
+          <button onclick="closeModal('clientEditorModal')" class="secondary">Cancel</button>
+          <button onclick="submitClientEditor()" class="primary" id="clientEditor_submitBtn">Save Client</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Admin: create or edit a role + its capabilities. Used for both flows;
+         in edit mode the name field is read-only. -->
+    <div id="roleEditorModal" class="modal">
+      <div class="modal-content" style="max-width:640px;max-height:85vh;overflow-y:auto;">
+        <div class="modal-header" id="roleEditor_title">New Role</div>
+        <div style="padding:20px;display:flex;flex-direction:column;gap:12px;">
+          <input type="hidden" id="roleEditor_origName" />
+          <div>
+            <label style="display:block;font-size:12px;color:var(--text-dim,#888);margin-bottom:4px;">Internal Name</label>
+            <input id="roleEditor_name" type="text" placeholder="lowercase_with_underscores" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);font-family:monospace;" />
+            <div style="font-size:11px;color:var(--text-dim,#888);margin-top:4px;">Lowercase letters, digits, and underscores only. Used internally and as the role on users.</div>
+          </div>
+          <div>
+            <label style="display:block;font-size:12px;color:var(--text-dim,#888);margin-bottom:4px;">Display Name</label>
+            <input id="roleEditor_label" type="text" placeholder="e.g. Field Crew" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);" />
+          </div>
+          <div>
+            <label style="display:block;font-size:12px;color:var(--text-dim,#888);margin-bottom:4px;">Description (optional)</label>
+            <textarea id="roleEditor_description" rows="2" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);resize:vertical;"></textarea>
+          </div>
+          <div>
+            <label style="display:block;font-size:12px;color:var(--text-dim,#888);margin-bottom:6px;">Capabilities</label>
+            <div id="roleEditor_caps" style="display:flex;flex-direction:column;gap:14px;border:1px solid var(--border,#333);border-radius:6px;padding:12px;max-height:340px;overflow-y:auto;"></div>
+          </div>
+          <div id="roleEditor_status" style="font-size:13px;"></div>
+        </div>
+        <div class="modal-footer">
+          <button onclick="closeModal('roleEditorModal')" class="secondary">Cancel</button>
+          <button onclick="submitRoleEditor()" class="primary" id="roleEditor_submitBtn">Save Role</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Admin: per-job share manager (used from the Job Assignments table) -->
+    <div id="manageJobSharingModal" class="modal">
+      <div class="modal-content" style="max-width:640px;max-height:85vh;overflow-y:auto;">
+        <div class="modal-header">Manage Sharing &mdash; <span id="manageSharing_jobLabel"></span></div>
+        <div style="padding:20px;">
+          <div id="manageSharing_ownerLine" style="margin-bottom:12px;padding:8px 10px;background:rgba(255,255,255,0.04);border-radius:6px;font-size:13px;color:var(--text,#fff);"></div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+            <strong style="font-size:13px;color:var(--text,#fff);">Additional Access</strong>
+            <button onclick="openGrantAccessFromAdmin()" class="primary small" style="font-size:11px;">+ Grant Access</button>
+          </div>
+          <div id="manageSharing_list" style="font-size:13px;color:var(--text,#fff);"></div>
+        </div>
+        <div class="modal-footer">
+          <button onclick="closeModal('manageJobSharingModal')" class="secondary">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Job sharing: grant a user access to the current job -->
+    <div id="grantAccessModal" class="modal">
+      <div class="modal-content" style="max-width:480px;">
+        <div class="modal-header">Grant Access</div>
+        <div style="padding:20px;display:flex;flex-direction:column;gap:12px;">
+          <div>
+            <label style="display:block;font-size:12px;color:var(--text-dim,#888);margin-bottom:4px;">User</label>
+            <select id="grantAccess_userSelect" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);"></select>
+          </div>
+          <div>
+            <label style="display:block;font-size:12px;color:var(--text-dim,#888);margin-bottom:4px;">Access Level</label>
+            <select id="grantAccess_level" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);">
+              <option value="edit">Edit &mdash; can change job data</option>
+              <option value="view">View &mdash; read-only</option>
+            </select>
+          </div>
+          <div id="grantAccess_status" style="font-size:13px;"></div>
+        </div>
+        <div class="modal-footer">
+          <button onclick="closeModal('grantAccessModal')" class="secondary">Cancel</button>
+          <button onclick="submitGrantAccess()" class="primary" id="grantAccess_submitBtn">Grant</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ADMIN: Create new user -->
+    <div id="newUserModal" class="modal">
+      <div class="modal-content" style="max-width:480px;">
+        <div class="modal-header">New User</div>
+        <div style="padding:20px;display:flex;flex-direction:column;gap:12px;">
+          <div>
+            <label style="display:block;font-size:12px;color:var(--text-dim,#888);margin-bottom:4px;">Full Name</label>
+            <input id="newUser_name" type="text" placeholder="Jane Doe" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);" />
+          </div>
+          <div>
+            <label style="display:block;font-size:12px;color:var(--text-dim,#888);margin-bottom:4px;">Email</label>
+            <input id="newUser_email" type="email" placeholder="jane@agxco.com" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);" />
+          </div>
+          <div>
+            <label style="display:block;font-size:12px;color:var(--text-dim,#888);margin-bottom:4px;">Initial Password</label>
+            <input id="newUser_password" type="text" placeholder="min 4 chars (tell the user out-of-band)" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);" />
+          </div>
+          <div>
+            <label style="display:block;font-size:12px;color:var(--text-dim,#888);margin-bottom:4px;">Role</label>
+            <select id="newUser_role" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);"></select>
+          </div>
+          <div>
+            <label style="display:block;font-size:12px;color:var(--text-dim,#888);margin-bottom:4px;">Phone Number <span style="color:var(--text-dim,#666);font-weight:400;">(optional — for SMS scheduling agent)</span></label>
+            <input id="newUser_phone" type="tel" placeholder="(407) 555-1234" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);" />
+          </div>
+          <div id="newUser_status" style="font-size:13px;"></div>
+        </div>
+        <div class="modal-footer">
+          <button onclick="closeModal('newUserModal')" class="secondary">Cancel</button>
+          <button onclick="submitNewUser()" class="primary" id="newUser_submitBtn">Create User</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ADMIN: Edit existing user -->
+    <div id="editUserModal" class="modal">
+      <div class="modal-content" style="max-width:480px;">
+        <div class="modal-header">Edit User</div>
+        <div style="padding:20px;display:flex;flex-direction:column;gap:12px;">
+          <input type="hidden" id="editUser_id" />
+          <div>
+            <label style="display:block;font-size:12px;color:var(--text-dim,#888);margin-bottom:4px;">Email (read-only)</label>
+            <input id="editUser_email" type="email" readonly style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text-dim,#888);" />
+          </div>
+          <div>
+            <label style="display:block;font-size:12px;color:var(--text-dim,#888);margin-bottom:4px;">Full Name</label>
+            <input id="editUser_name" type="text" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);" />
+          </div>
+          <div>
+            <label style="display:block;font-size:12px;color:var(--text-dim,#888);margin-bottom:4px;">Role</label>
+            <select id="editUser_role" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);"></select>
+          </div>
+          <div>
+            <label style="display:block;font-size:12px;color:var(--text-dim,#888);margin-bottom:4px;">Phone Number <span style="color:var(--text-dim,#666);font-weight:400;">(optional — for SMS scheduling agent)</span></label>
+            <input id="editUser_phone" type="tel" placeholder="(407) 555-1234" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);" />
+          </div>
+          <label class="agx-check-row">
+            <input type="checkbox" id="editUser_active" />
+            <span>Active <span class="agx-check-hint">(uncheck to disable login)</span></span>
+          </label>
+          <hr style="border:none;border-top:1px solid var(--border,#333);margin:8px 0;" />
+          <div>
+            <label style="display:block;font-size:12px;color:var(--text-dim,#888);margin-bottom:4px;">Reset Password (optional)</label>
+            <input id="editUser_newPassword" type="text" placeholder="Leave blank to keep current password" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);" />
+          </div>
+          <div id="editUser_status" style="font-size:13px;"></div>
+        </div>
+        <div class="modal-footer">
+          <button onclick="closeModal('editUserModal')" class="secondary">Cancel</button>
+          <button onclick="submitEditUser()" class="primary" id="editUser_submitBtn">Save Changes</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- PDF.js — used by the document viewer to render PDF pages to canvas
+         (and from there to base64 images for vision-based AI analysis).
+         Pinned to 3.11.174: v4+ dropped the classic UMD pdf.min.js build
+         in favor of ES modules, which means a plain <script> tag stops
+         exposing the pdfjsLib global. v3 is stable, well-supported, and
+         still receives security backports. -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script>
+      // Worker URL must be set before any pdfjsLib.getDocument() calls.
+      if (window.pdfjsLib) {
+        window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+          'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+      }
+    </script>
+
+    <script src="js/modal-drag.js?v=1"></script>
+    <script src="js/auth.js?v=10"></script>
+    <script src="js/dialogs.js?v=1"></script>
+    <script src="js/api.js?v=18"></script>
+    <script src="js/account.js?v=2"></script>
+    <script src="js/attachments.js?v=9"></script>
+    <script src="js/markup-viewer.js?v=17"></script>
+    <script src="js/pdf-viewer.js?v=3"></script>
+    <script src="js/admin.js?v=59"></script>
+    <script src="js/clients.js?v=13"></script>
+    <script src="js/subs.js?v=5"></script>
+    <script src="js/job-audit.js?v=3"></script>
+    <script src="js/leads.js?v=20"></script>
+    <script src="js/job-costs-import.js?v=3"></script>
+    <script src="js/qb-costs-view.js?v=8"></script>
+    <script src="js/insights.js?v=5"></script>
+    <script src="js/schedule.js?v=15"></script>
+    <script src="js/app.js?v=48"></script>
+    <script src="js/wip.js?v=61"></script>
+    <script src="js/estimates.js?v=35"></script>
+    <script src="js/proposal.js?v=20"></script>
+    <script src="js/estimate-editor.js?v=35"></script>
+    <script src="js/estimate-preview.js?v=8"></script>
+    <script src="js/bt-export.js?v=5"></script>
+    <script src="js/ai-panel.js?v=83"></script>
+    <script src="js/tab-slider.js?v=1"></script>
+
+    <script src="js/workspace.js?v=43"></script>
+    <script src="js/workspace-layout.js?v=51"></script>
+
+    <!-- URL router — pathname-based navigation. Loads last so all
+         top-level nav functions (switchTab, editJob, etc.) exist
+         before the router wraps them. -->
+    <script src="js/router.js?v=6"></script>
+
+    <!-- Copy-to-clipboard helper. Auto-attaches a 📋 button to every
+         <input type=email> and any element marked data-agx-copy. -->
+    <script src="js/copy-button.js?v=1"></script>
+
+    <!-- AGX inline-SVG icon helper. Provides window.agxIcon(name, opts)
+         — 24 icons from Phosphor (MIT) + Heroicons (MIT). See
+         scripts/build-agx-icons.js to regenerate. -->
+    <script src="js/agx-icons.js?v=5"></script>
+
+    <!-- Node Graph (Beta) -->
+    <link rel="stylesheet" href="nodegraph/nodegraph.css?v=89" />
+    <div id="nodeGraphTab">
+      <!-- Workspace canvas toolbar — Outlook ribbon style. Each
+           button is icon-on-top + label-below, buttons cluster into
+           named sections (View / Layout / Focus / AI) with vertical
+           dividers, and section captions sit underneath each group.
+           Class names on individual buttons preserved so existing
+           ng-graph wiring still finds them. -->
+      <div class="ng-topbar ng-ribbon">
+        <!-- Back button — exits the graph overlay back to the job detail
+             that opened it. Saves graph state before closing. -->
+        <button id="ngBackBtn" class="ng-tbtn ng-ribbon-btn ng-ribbon-back-btn" title="Back to job detail" onclick="closeNodeGraph()">
+          <span class="ng-ribbon-icon">&#x2190;</span>
+          <span class="ng-ribbon-label">Back</span>
+        </button>
+        <span class="ng-ribbon-sep"></span>
+        <div class="ng-ribbon-title">
+          <!-- Row 1: title + Save indicator side-by-side -->
+          <div class="ng-ribbon-title-row">
+            <span class="ng-topbar-title">&#x26A1; Node Graph</span>
+            <span id="ngSaveIndicator" class="ng-save-indicator" title="Auto-save status — every change persists immediately">
+              <span class="ng-save-dot">&#x25CB;</span><span class="ng-save-label">Saved</span>
+            </span>
+          </div>
+          <!-- Row 2: subtitle -->
+          <span class="ng-topbar-sub">Visual Cost Flow Editor</span>
+        </div>
+        <span class="ng-topbar-spacer"></span>
+        <!-- View group: collapse / expand / arrange / sync / reset -->
+        <div class="ng-ribbon-group">
+          <div class="ng-ribbon-group-buttons">
+            <button class="ng-tbtn ng-ribbon-btn ng-collapse-all-btn" title="Collapse all nodes">
+              <span class="ng-ribbon-icon">&#x1F4C1;</span>
+              <span class="ng-ribbon-label">Collapse</span>
+            </button>
+            <button class="ng-tbtn ng-ribbon-btn ng-expand-all-btn" title="Expand all nodes">
+              <span class="ng-ribbon-icon">&#x1F4C2;</span>
+              <span class="ng-ribbon-label">Expand</span>
+            </button>
+            <button class="ng-tbtn ng-ribbon-btn ng-arrange-btn" title="Arrange — auto-layout the full tree, or only the selected node's children if one is selected">
+              <span class="ng-ribbon-icon">&#x2728;</span>
+              <span class="ng-ribbon-label">Arrange</span>
+            </button>
+            <button class="ng-tbtn ng-ribbon-btn ng-sync-btn" title="Sync — add missing nodes from job data without moving existing ones">
+              <span class="ng-ribbon-icon">&#x1F504;</span>
+              <span class="ng-ribbon-label">Sync</span>
+            </button>
+            <button class="ng-tbtn ng-ribbon-btn ng-reset-btn" title="Reset — delete graph and rebuild from scratch">
+              <span class="ng-ribbon-icon">&#x267B;&#xFE0F;</span>
+              <span class="ng-ribbon-label">Reset</span>
+            </button>
+          </div>
+          <div class="ng-ribbon-group-name">View</div>
+        </div>
+        <span class="ng-ribbon-sep"></span>
+        <!-- Layout group: save / restore checkpoints -->
+        <div class="ng-ribbon-group">
+          <div class="ng-ribbon-group-buttons">
+            <button class="ng-tbtn ng-ribbon-btn ng-snapshot-save-btn" id="ngSnapshotSaveBtn" title="Save Layout — checkpoint the current layout so you can restore to it later">
+              <span class="ng-ribbon-icon">&#x1F4BE;</span>
+              <span class="ng-ribbon-label">Save layout</span>
+            </button>
+            <button class="ng-tbtn ng-ribbon-btn ng-snapshot-restore-btn" id="ngSnapshotRestoreBtn" title="Restore Layout — replace the current graph with the last saved layout">
+              <span class="ng-ribbon-icon">&#x21BA;</span>
+              <span class="ng-ribbon-label">Restore</span>
+            </button>
+          </div>
+          <div class="ng-ribbon-group-name">Layout</div>
+        </div>
+        <span class="ng-ribbon-sep"></span>
+        <!-- Focus group: focus workspace / fullscreen / audit -->
+        <div class="ng-ribbon-group">
+          <div class="ng-ribbon-group-buttons">
+            <button class="ng-tbtn ng-ribbon-btn ng-ws-fullscreen-btn" id="ngWsFullscreenBtn" title="Workspace Fullscreen — expand workspace to fill the canvas (toggle to restore)">
+              <span class="ng-ribbon-icon">&#x1F3AF;</span>
+              <span class="ng-ribbon-label">Workspace</span>
+            </button>
+            <button class="ng-tbtn ng-ribbon-btn ng-fullscreen-graph-btn" id="ngFullscreenGraphBtn" title="Maximize — hide the AGX nav header to give the graph the entire viewport (toggle)">
+              <span class="ng-ribbon-icon">&#x1F5D6;</span>
+              <span class="ng-ribbon-label">Maximize</span>
+            </button>
+            <button class="ng-tbtn ng-ribbon-btn ng-audit-btn" id="ngAuditBtn" title="Audit — connectivity + completeness check (orphan nodes, missing %complete, unlinked QB lines, margin drift)">
+              <span class="ng-ribbon-icon">&#x1F50D;</span>
+              <span class="ng-ribbon-label">Audit<span id="ngAuditBadge" style="display:none;margin-left:3px;font-size:9px;padding:1px 5px;border-radius:8px;background:rgba(248,113,113,0.25);color:#f87171;font-weight:700;"></span></span>
+            </button>
+          </div>
+          <div class="ng-ribbon-group-name">Display</div>
+        </div>
+        <span class="ng-ribbon-sep"></span>
+        <!-- AI group: Ask Elle (job/WIP analyst) -->
+        <div class="ng-ribbon-group ng-ribbon-group-ai">
+          <div class="ng-ribbon-group-buttons">
+            <button class="ng-tbtn ng-ribbon-btn ng-ribbon-btn-ai" onclick="openJobAI()" title="Ask Elle, AGX's WIP analyst">
+              <span class="ng-ribbon-icon">&#x2728;</span>
+              <span class="ng-ribbon-label">Ask Elle</span>
+            </button>
+          </div>
+          <div class="ng-ribbon-group-name">AI</div>
+        </div>
+      </div>
+      <div class="ng-main">
+        <div class="ng-sidebar"></div>
+        <div class="ng-canvas-area">
+          <canvas class="ng-grid-canvas"></canvas>
+          <div class="ng-canvas"></div>
+          <canvas class="ng-wire-canvas"></canvas>
+          <div class="ng-zoom">100%</div>
+          <div class="ng-help">Drag port &#x2192; port &nbsp;|&nbsp; Scroll zoom &nbsp;|&nbsp; Ctrl + right-click = fit all &nbsp;|&nbsp; Right-click wire = delete &nbsp;|&nbsp; Del = remove node</div>
+        </div>
+      </div>
+    </div>
+    <script src="nodegraph/engine.js?v=72"></script>
+    <script src="nodegraph/ui.js?v=141"></script>
+</body>
+</html>
