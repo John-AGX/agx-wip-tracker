@@ -1438,20 +1438,39 @@ async function collectSkillsFor(agentKey) {
 // only enable what's clearly useful for that role. Phase 3 of the
 // migration expands these (e.g. enabling bash/read on Elle for QB
 // cost line analysis).
-function builtinToolsetFor(_agentKey) {
-  // Phase 3 — full built-in agent_toolset_20260401 enabled for every
-  // agent (AG / Elle / HR / CoS). Master switch on, no per-tool
-  // overrides — gives each agent the complete kit:
-  //   web_search, web_fetch, bash, read, write, edit, glob, grep
+function builtinToolsetFor(agentKey) {
+  // Phase 3 — built-in toolset is split by role:
   //
-  // Tools run in the per-session container Anthropic provisions — a
-  // sandboxed workspace with no path back to our database, API, R2
-  // storage, or user data. The agents can read/write files inside
-  // the container (great for ad-hoc analysis, scratch drafts, script
-  // execution), browse the web, and run shell commands locally to
-  // the container. None of that touches AGX state — that still goes
-  // through the propose_* / approval-tier custom tools.
-  return [{ type: 'agent_toolset_20260401', default_config: { enabled: true } }];
+  //   AG  / Elle / HR  → web_search, web_fetch, read, glob, grep
+  //                      Read-only filesystem + web research. NO
+  //                      bash / write / edit. The task agents should
+  //                      do their job (estimate / WIP audit / client
+  //                      directory) through the propose_* approval
+  //                      flow, not by scripting workarounds. If
+  //                      something is broken, the user escalates to
+  //                      CoS — that's the overseer's lane.
+  //
+  //   CoS              → full toolkit (every built-in on)
+  //                      bash + write + edit lets CoS investigate
+  //                      issues, draft skill-pack edits in scratch
+  //                      files, run aggregate analyses across
+  //                      ai_messages, and generally act as the
+  //                      meta-fixer.
+  //
+  // Tools execute in the per-session container Anthropic provisions
+  // — sandboxed, no path to our DB / API / R2 / user data. The
+  // task-agent restriction isn't a security measure (CoS is just as
+  // sandboxed); it's a behavioral guard that keeps the focused
+  // agents from inventing workflows around their approval gate.
+  if (agentKey === 'staff') {
+    return [{ type: 'agent_toolset_20260401', default_config: { enabled: true } }];
+  }
+  const opt = function(name) { return { name: name, enabled: true }; };
+  return [{
+    type: 'agent_toolset_20260401',
+    default_config: { enabled: false },
+    configs: ['web_search', 'web_fetch', 'read', 'glob', 'grep'].map(opt)
+  }];
 }
 
 // Resolve the AGX-side custom tools for an agent. Goes through the
