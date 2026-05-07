@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Project 86 — header lockup.
+  Hexagon mark (regular, flat-top) with "86" centered inside, paired
+  with "PROJECT 86" wordmark to the right. Hardcoded white because
+  this SVG is loaded via <img src="…">; img-loaded SVGs don't inherit
+  parent CSS color. The AGX-original used a white PNG for the same
+  reason. Drop in a light-mode variant later if/when needed.
+
+  viewBox sized so the visible artwork sits inside ~188×32 with the
+  hex anchored to the left baseline. Set CSS height: 26px on the
+  <img> element — the rest scales proportionally.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 188 32" role="img" aria-label="Project 86">
+  <title>Project 86</title>
+  <!-- Hexagon, flat-top. 10px apothem, centered at (16, 16). -->
+  <polygon
+    points="6,16 11,7.34 21,7.34 26,16 21,24.66 11,24.66"
+    fill="none"
+    stroke="#ffffff"
+    stroke-width="1.6"
+    stroke-linejoin="round"
+  />
+  <!-- "86" centered inside the hex. Tight tracking so the two glyphs
+       feel locked-in rather than spaced. -->
+  <text
+    x="16" y="20"
+    text-anchor="middle"
+    font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif"
+    font-size="11"
+    font-weight="700"
+    letter-spacing="-0.3"
+    fill="#ffffff"
+  >86</text>
+  <!-- Wordmark. Uppercase + 1.2 letter-spacing, weight 600 for
+       confident-but-not-shouty presence at 13px. -->
+  <text
+    x="38" y="21"
+    font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif"
+    font-size="13"
+    font-weight="600"
+    letter-spacing="1.2"
+    fill="#ffffff"
+  >PROJECT 86</text>
+</svg>

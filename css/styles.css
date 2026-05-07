@@ -207,11 +207,13 @@
         /* HEADER */
         /* Sleek single-row header. Down from ~130px (two rows + 72px
            logo) to a hard 46px so the workspace below gets more
-           vertical room. Gradient + 1px green hairline preserved
-           because the user wanted that fade kept. */
+           vertical room. Project 86 palette — charcoal base fading
+           into a deep blue accent edge. The original AGX greens
+           (#0d1f12 / #14351d / #1B8541 / #3B8542) are archived in
+           archive/branding/agx/snapshot/styles.css for restore. */
         header {
-            background: linear-gradient(135deg, #0d1f12 0%, #14351d 40%, #1B8541 100%);
-            border-bottom: 1px solid #3B8542;
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 40%, #2563eb 100%);
+            border-bottom: 1px solid #3b82f6;
             padding: 0 24px;
             position: sticky;
             top: 0;
