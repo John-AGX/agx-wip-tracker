@@ -44,16 +44,16 @@
                     <img src="images/logo-p86.svg" alt="Project 86" class="header-logo" />
                 </a>
                 <nav class="tabs">
-                    <button class="tab-btn active" data-tab="wip" data-agx-icon="wip" data-cap="JOBS_VIEW_ALL JOBS_VIEW_ASSIGNED JOBS_EDIT_ANY JOBS_EDIT_OWN">WIP</button>
-                    <button class="tab-btn" data-tab="schedule" data-agx-icon="schedule">Schedule</button>
-                    <button class="tab-btn" data-tab="insights" data-agx-icon="insights" data-cap="INSIGHTS_VIEW">Insights</button>
                     <!-- Leads is its own top-level destination now (was a
                          sub-tab inside Estimates). Click routes to the
                          existing Estimates → Leads sub-tab DOM but the
                          active highlight stays on this button so Leads
                          reads as a first-class page. -->
-                    <button class="tab-btn" data-tab="estimates" data-est-subtab="leads" data-virtual-tab="leads" data-agx-icon="leads" data-cap="LEADS_VIEW">Leads</button>
+                    <button class="tab-btn active" data-tab="estimates" data-est-subtab="leads" data-virtual-tab="leads" data-agx-icon="leads" data-cap="LEADS_VIEW">Leads</button>
                     <button class="tab-btn" data-tab="estimates" data-est-subtab="list" data-virtual-tab="estimates" data-agx-icon="estimates" data-cap="ESTIMATES_VIEW">Estimates</button>
+                    <button class="tab-btn" data-tab="schedule" data-agx-icon="schedule">Schedule</button>
+                    <button class="tab-btn" data-tab="wip" data-agx-icon="wip" data-cap="JOBS_VIEW_ALL JOBS_VIEW_ASSIGNED JOBS_EDIT_ANY JOBS_EDIT_OWN">WIP</button>
+                    <button class="tab-btn" data-tab="insights" data-agx-icon="insights" data-cap="INSIGHTS_VIEW">Insights</button>
                     <button class="tab-btn" data-tab="admin" data-agx-icon="admin" data-admin-only style="display:none;">Admin</button>
                 </nav>
                 <div id="user-menu" class="header-user-menu">
@@ -2237,7 +2237,7 @@
     <script src="js/clients.js?v=13"></script>
     <script src="js/subs.js?v=5"></script>
     <script src="js/job-audit.js?v=3"></script>
-    <script src="js/leads.js?v=20"></script>
+    <script src="js/leads.js?v=21"></script>
     <script src="js/job-costs-import.js?v=3"></script>
     <script src="js/qb-costs-view.js?v=8"></script>
     <script src="js/insights.js?v=5"></script>
@@ -2246,7 +2246,7 @@
     <script src="js/wip.js?v=61"></script>
     <script src="js/estimates.js?v=35"></script>
     <script src="js/proposal.js?v=20"></script>
-    <script src="js/estimate-editor.js?v=35"></script>
+    <script src="js/estimate-editor.js?v=36"></script>
     <script src="js/estimate-preview.js?v=8"></script>
     <script src="js/bt-export.js?v=5"></script>
     <script src="js/ai-panel.js?v=83"></script>

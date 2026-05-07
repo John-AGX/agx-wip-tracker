@@ -467,7 +467,6 @@
     var bodyHost = document.getElementById('lead-detail-body-host');
     var formBody = document.getElementById('leadEditor_formBody');
     var listView = document.getElementById('leads-list-view');
-    var mainTabs = document.getElementById('estimates-main-tabs');
     if (!detailView || !bodyHost || !formBody) {
       // Build is missing the new markup — fall back to modal mode.
       openModal('leadEditorModal');
@@ -476,7 +475,10 @@
     if (formBody.parentNode !== bodyHost) bodyHost.appendChild(formBody);
     detailView.style.display = '';
     if (listView) listView.style.display = 'none';
-    if (mainTabs) mainTabs.style.display = 'none';
+    // The legacy #estimates-main-tabs sub-tab row is permanently
+    // hidden via inline display:none in index.html (Leads + Estimates
+    // are top-level tabs now; Clients + Subs live in the Directory
+    // dropdown). Don't toggle it here.
     // Refresh the sticky-header title + status pill from the loaded form.
     refreshLeadDetailHeader();
     // Scroll to top so the user lands at the form's start.
@@ -522,14 +524,13 @@
     var modalContent = document.querySelector('#leadEditorModal .modal-content');
     var modalFooter = document.getElementById('leadEditor_modalFooter');
     var listView = document.getElementById('leads-list-view');
-    var mainTabs = document.getElementById('estimates-main-tabs');
     // Move the form body back into the modal, just before the footer.
     if (formBody && modalContent && modalFooter && formBody.parentNode !== modalContent) {
       modalContent.insertBefore(formBody, modalFooter);
     }
     if (detailView) detailView.style.display = 'none';
     if (listView) listView.style.display = '';
-    if (mainTabs) mainTabs.style.display = '';
+    // (no #estimates-main-tabs restore — see openLeadDetailView comment)
     _currentEditingLeadId = null;
     reloadLeadsCache();
   }

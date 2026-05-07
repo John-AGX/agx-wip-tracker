@@ -201,11 +201,13 @@
     var editorView = document.getElementById('estimate-editor-view');
     if (listView) listView.style.display = 'none';
     if (editorView) editorView.style.display = '';
-    // Hide the parent Leads/Estimates/Clients/Subs nav while in the
-    // editor — the sticky header's Back button drives return. Restored
-    // on closeEstimateEditor.
-    var mainTabs = document.getElementById('estimates-main-tabs');
-    if (mainTabs) mainTabs.style.display = 'none';
+    // The legacy Leads/Estimates/Clients/Subs sub-tab row
+    // (#estimates-main-tabs) is permanently hidden now that Leads +
+    // Estimates are top-level header tabs and Clients + Subs sit in
+    // the Directory dropdown. The DOM nodes still exist (DIVs below
+    // toggle via switchEstimatesSubTab) but the visual nav row never
+    // shows — see the inline display:none on the wrapper in
+    // index.html. Don't re-toggle it here.
 
     // Title input — keystrokes update the estimate title live; debounced save
     var titleEl = document.getElementById('ee-title');
@@ -321,9 +323,7 @@
       var editorView = document.getElementById('estimate-editor-view');
       if (editorView) editorView.style.display = 'none';
       if (listView) listView.style.display = '';
-      // Restore the parent Leads/Estimates/Clients/Subs nav we hid on open.
-      var mainTabs = document.getElementById('estimates-main-tabs');
-      if (mainTabs) mainTabs.style.display = '';
+      // (no #estimates-main-tabs restore — see open-handler comment)
       if (typeof renderEstimatesList === 'function') renderEstimatesList();
 
       // If the editor was opened from a lead (openEstimateFromLead set
