@@ -90,7 +90,12 @@ const MAP = {
   'wrench':          'heroicons/wrench',
   'banknotes':       'heroicons/banknotes',
   'scale':           'heroicons/scale',
-  'bookmark':        'heroicons/bookmark'
+  'bookmark':        'heroicons/bookmark',
+  // Agent identity icons (AI panel header). 47 → detective bowtie,
+  // 86 → DNA helix. Phosphor bold weight to read at small sizes
+  // against the dark cyan-tinted panel header background.
+  'detective':       'phosphor/detective-bold',
+  'dna':             'phosphor/dna-bold'
 };
 
 const HEADER = `// AGX Icon Helper — inline SVG icons (auto-generated).

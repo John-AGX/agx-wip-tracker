@@ -35,11 +35,15 @@ const MODEL_COSTS = {
   'claude-haiku-4-5':  { in: 1,    out: 5   }
 };
 
-// Friendly labels mirror the front-end AGENT_LABELS.
+// Friendly labels mirror the front-end AGENT_LABELS. Emojis stay
+// here because these are server-rendered strings used in admin
+// summaries / log lines — the page-wide icon swapper doesn't reach
+// them. Front-end UIs that want SVG icons render them inline via
+// agxIcon() at the call site.
 const AGENT_LABELS = {
-  estimate: '📐 AG (Estimator)',
-  job:      '📊 86 (WIP Analyst)',
-  client:   '🤝 HR (Customer Relations)'
+  estimate: '47 (Estimator)',
+  job:      '86 (Lead Agent)',
+  client:   'HR (Customer Relations)'
 };
 
 function costFor(model, inputTokens, outputTokens) {

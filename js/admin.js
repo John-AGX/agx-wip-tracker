@@ -2368,9 +2368,9 @@
   // retired — 86 owns lead-intake now; intake sessions still use
   // entity_type='intake' as a label, but agent_key='job'.)
   var AGENT_LABELS = {
-    ag:  '🎯 47 (Estimating Hitman)',
-    job: '📊 86 (Lead Agent)',
-    cra: '🤝 HR (86\'s Assistant)'
+    ag:  '47 (Estimator)',
+    job: '86 (Lead Agent)',
+    cra: 'HR (86\'s Assistant)'
   };
 
   function renderAgentSkillsHTML() {
@@ -3888,7 +3888,7 @@
       var rows = (resp && resp.agents) || [];
       // Intake is no longer a separate managed agent — 86 owns the
       // lead-intake flow. Only four agents register on the Anthropic side.
-      var labels = { ag: '47 (estimating)', job: '86 (lead agent — incl. intake)', cra: 'HR (clients + user health)', staff: 'Chief of Staff' };
+      var labels = { ag: '47 (Estimator)', job: '86 (Lead Agent — incl. intake)', cra: 'HR (clients + user health)', staff: 'Chief of Staff' };
       var allKeys = ['ag', 'job', 'cra', 'staff'];
       var registered = {};
       rows.forEach(function(r) { registered[r.agent_key] = r; });

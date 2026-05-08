@@ -967,11 +967,21 @@
   function refreshModeSpecificUI() {
     var headerEl = document.querySelector('#agx-ai-panel .agx-ai-title');
     if (headerEl) {
-      if (isJobMode())            headerEl.textContent = '📊 86 · Lead Agent';
-      else if (isClientMode())    headerEl.textContent = '🤝 HR · 86\'s Assistant';
-      else if (isStaffMode())     headerEl.textContent = '🎩 Chief of Staff · Handler';
-      else if (isIntakeMode())    headerEl.textContent = '📊 86 · Intake';
-      else                        headerEl.textContent = '🎯 47 · Estimating Hitman';
+      // Build title with an inline SVG icon when agxIcon is loaded;
+      // gracefully fall back to the legacy emoji if not. The icon
+      // span gets a small right-margin so the text reads cleanly.
+      var hasIcons = typeof agxIcon === 'function';
+      function withIcon(iconName, emojiFallback, text) {
+        var ic = hasIcons
+          ? '<span class="agx-icon" style="display:inline-flex;width:1em;height:1em;vertical-align:-0.15em;margin-right:6px;">' + agxIcon(iconName) + '</span>'
+          : (emojiFallback + ' ');
+        return ic + text;
+      }
+      if (isJobMode())            headerEl.innerHTML = withIcon('dna',       '📊', '86 · Lead Agent');
+      else if (isClientMode())    headerEl.innerHTML = withIcon('chart-pie', '🤝', 'HR · 86\'s Assistant');
+      else if (isStaffMode())     headerEl.innerHTML = withIcon('briefcase', '🎩', 'Chief of Staff · Handler');
+      else if (isIntakeMode())    headerEl.innerHTML = withIcon('dna',       '📊', '86 · Intake');
+      else                        headerEl.innerHTML = withIcon('detective', '🎯', '47 · Estimator');
     }
     // Plan/Build pill — visible only in estimate mode. Single-icon
     // dropdown: visible icon shows active phase, click opens a popover
@@ -1211,10 +1221,19 @@
     if (!box) return;
     if (!_messages.length) {
       var hint;
-      if (isJobMode()) hint = '<strong style="color:var(--text,#fff);">📊 86 · WIP Analyst</strong><br>Pick a preset below or ask anything about this job.<br><span style="font-size:11px;opacity:0.7;">I see contract, costs, COs, %complete, billing — plus the node graph wiring and QuickBooks cost lines.</span>';
-      else if (isClientMode()) hint = '<strong style="color:var(--text,#fff);">🤝 HR · Customer Relations</strong><br>Tap <strong>Run full audit</strong> to clean up the directory in one pass — I\'ll split parent+property compounds, link unparented entries, merge dupes, and surface anything ambiguous for you.<br><span style="font-size:11px;opacity:0.7;">I know the P86 hierarchy: parent management company → property/community → CAM contact.</span>';
-      else if (isStaffMode()) hint = '<strong style="color:var(--text,#fff);">🎩 Chief of Staff</strong><br>I observe 47 / 86 / HR — usage, cost, conversations, skill packs — and I can propose skill-pack edits for you to approve.<br><span style="font-size:11px;opacity:0.7;">Conversation replay is still queued.</span>';
-      else hint = '<strong style="color:var(--text,#fff);">📐 AG — your P86 estimator</strong><br>Pick a preset or describe what you need. I can read the estimate, scope, client, and photos — and propose adds, edits, deletes, and pricing changes for you to approve.<br><span style="font-size:11px;opacity:0.7;">Try "tighten this estimate" or "build my line items".</span>';
+      // Inline-icon helper so the hint text matches the new agent
+      // identities (detective for 47, dna for 86) without falling
+      // back to emoji glyphs that the page-wide swapper would
+      // otherwise replace anyway.
+      var hintIcon = function(name) {
+        return (typeof agxIcon === 'function')
+          ? '<span class="agx-icon" style="display:inline-flex;width:1em;height:1em;vertical-align:-0.15em;margin-right:6px;">' + agxIcon(name) + '</span>'
+          : '';
+      };
+      if (isJobMode()) hint = '<strong style="color:var(--text,#fff);">' + hintIcon('dna') + '86 · Lead Agent</strong><br>Pick a preset below or ask anything about this job.<br><span style="font-size:11px;opacity:0.7;">I see contract, costs, COs, %complete, billing — plus the node graph wiring and QuickBooks cost lines.</span>';
+      else if (isClientMode()) hint = '<strong style="color:var(--text,#fff);">' + hintIcon('chart-pie') + 'HR · Customer Relations</strong><br>Tap <strong>Run full audit</strong> to clean up the directory in one pass — I\'ll split parent+property compounds, link unparented entries, merge dupes, and surface anything ambiguous for you.<br><span style="font-size:11px;opacity:0.7;">I know the P86 hierarchy: parent management company → property/community → CAM contact.</span>';
+      else if (isStaffMode()) hint = '<strong style="color:var(--text,#fff);">' + hintIcon('briefcase') + 'Chief of Staff</strong><br>I observe 47 / 86 / HR — usage, cost, conversations, skill packs — and I can propose skill-pack edits for you to approve.<br><span style="font-size:11px;opacity:0.7;">Conversation replay is still queued.</span>';
+      else hint = '<strong style="color:var(--text,#fff);">' + hintIcon('detective') + '47 · Estimator</strong><br>Pick a preset or describe what you need. I can read the estimate, scope, client, and photos — and propose adds, edits, deletes, and pricing changes for you to approve.<br><span style="font-size:11px;opacity:0.7;">Try "tighten this estimate" or "build my line items".</span>';
       box.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;padding:20px 0;text-align:center;line-height:1.6;">' + hint + '</div>';
       return;
     }
