@@ -20,7 +20,10 @@
   // floating, draggable, resizable panel on top.
   const RIGHT_TABS = [
     { id: 'job-overview',      label: 'Overview' },
-    { id: 'job-workspace',     label: '\u{1F4CA} Workspace' },
+    // Workspace gets the bold-network-graph icon since the tab swaps
+    // in a node-graph canvas. Icon decorated via data-agx-icon by the
+    // agx-icons auto-decorator; the label stays plain text.
+    { id: 'job-workspace',     label: 'Workspace', icon: 'graph' },
     { id: 'job-wip',           label: 'WIP' },
     { id: 'job-costs',         label: 'Costs' },
     { id: 'job-qb-costs',      label: '\u{1F4CB} Detailed' },
@@ -349,7 +352,7 @@
 
     var tabsHtml = '<div class="ws-right-tabs">';
     RIGHT_TABS.forEach(function(tab, i) {
-      tabsHtml += '<button class="ws-right-tab' + (i === 0 ? ' active' : '') + '" data-panel="' + tab.id + '">' + tab.label + '</button>';
+      tabsHtml += '<button class="ws-right-tab' + (i === 0 ? ' active' : '') + '" data-panel="' + tab.id + '"' + (tab.icon ? ' data-agx-icon="' + tab.icon + '"' : '') + '>' + tab.label + '</button>';
     });
     tabsHtml += '<div class="ws-right-tabs-actions">' +
       '<button class="ee-btn" onclick="openJobAI()" title="Ask 86, AGX\'s WIP analyst" style="background:linear-gradient(135deg,#8b5cf6,#4f8cff);color:#fff;border-color:transparent;">✨ Ask 86</button>' +

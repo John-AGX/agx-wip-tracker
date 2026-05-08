@@ -81,6 +81,7 @@ const MAP = {
   //  - envelope → "Email" (was using `links` as a placeholder)
   'cpu-chip':        'heroicons/cpu-chip',
   'discord':         'phosphor/discord-fill',
+  'graph':           'phosphor/graph-bold',           // Workspace tab — Phosphor bold network graph
   'envelope':        'heroicons/envelope',
   // Node-library specific icons (sidebar inside the Job → Workspace
   // node graph). Maps the emoji glyphs in nodegraph/engine.js DEFS to
