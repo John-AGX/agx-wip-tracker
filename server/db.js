@@ -492,6 +492,25 @@ async function initSchema() {
             FROM job_subs
            GROUP BY job_id, sub_id;
 
+        -- Drop the old composite unique index BEFORE mutating data.
+        -- The UPDATE below nulls out building_id/phase_id on the
+        -- survivor row, which under the old index collapses its
+        -- key to (job_id, sub_id, '', '') — that collides with any
+        -- pre-existing (job, sub, NULL, NULL) row in the same
+        -- family, so we'd get a duplicate-key violation if the
+        -- index is still active. Drop first, mutate freely, then
+        -- create the new (job_id, sub_id) unique index at the end.
+        DROP INDEX IF EXISTS idx_job_subs_unique;
+
+        -- Delete non-survivors BEFORE updating the survivor. This
+        -- leaves exactly one row per (job, sub), so the UPDATE
+        -- can't conflict with the new unique index either.
+        DELETE FROM job_subs js
+          USING _js_survivor s
+         WHERE js.job_id = s.job_id
+           AND js.sub_id = s.sub_id
+           AND js.id <> s.id;
+
         UPDATE job_subs js
            SET contract_amt   = t.contract_amt,
                billed_to_date = t.billed_to_date,
@@ -504,15 +523,6 @@ async function initSchema() {
            AND t.job_id = s.job_id
            AND t.sub_id = s.sub_id;
 
-        DELETE FROM job_subs js
-          USING _js_survivor s
-         WHERE js.job_id = s.job_id
-           AND js.sub_id = s.sub_id
-           AND js.id <> s.id;
-
-        -- Swap indexes. Drop the old name if it exists; the new
-        -- name is suffixed _v2 so future runs detect completion.
-        DROP INDEX IF EXISTS idx_job_subs_unique;
         CREATE UNIQUE INDEX idx_job_subs_unique_v2 ON job_subs(job_id, sub_id);
       END IF;
     END $$;
