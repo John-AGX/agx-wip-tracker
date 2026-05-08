@@ -651,7 +651,11 @@
       '</div>' +
       // Header — close button is the most prominent control on the left
       // (mirrors a typical drawer/sidebar UX) so it's never missed.
-      '<div style="padding:12px 14px;border-bottom:1px solid var(--border,#333);background:linear-gradient(135deg,#0d1f12 0%,#14351d 100%);display:flex;align-items:center;gap:10px;">' +
+      // P86-themed header — was old AGX dark green
+      // (#0d1f12 → #14351d). Charcoal gradient with a thin cyan
+       // hairline matches the main site header. Trimmed vertical
+       // padding 12px → 7px so the header sits ~10px shorter.
+      '<div style="padding:7px 14px;border-bottom:1px solid rgba(34,211,238,0.35);background:linear-gradient(135deg,#0f172a 0%,#1e293b 100%);display:flex;align-items:center;gap:10px;">' +
         '<button id="ai-close" title="Close (Esc)" style="background:rgba(255,255,255,0.12);color:#fff;border:1px solid rgba(255,255,255,0.2);border-radius:6px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:6px;">&rarr; Close</button>' +
         '<div class="agx-ai-title" style="font-size:14px;font-weight:700;color:#fff;flex:1;text-align:right;">&#x2728; AI Assistant</div>' +
         // AG phase pill — single-icon dropdown. Visible only in estimate
