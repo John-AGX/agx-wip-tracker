@@ -2367,8 +2367,8 @@
   // migration; only the user-facing labels change.)
   var AGENT_LABELS = {
     ag:  '🎯 47 (Estimating Hitman)',
-    job: '📊 86 (Analyst)',
-    cra: '🤝 HR (Client + User Health)'
+    job: '📊 86 (Lead Agent)',
+    cra: '🤝 HR (86\'s Assistant)'
   };
 
   function renderAgentSkillsHTML() {

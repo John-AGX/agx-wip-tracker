@@ -967,10 +967,10 @@
   function refreshModeSpecificUI() {
     var headerEl = document.querySelector('#agx-ai-panel .agx-ai-title');
     if (headerEl) {
-      if (isJobMode())            headerEl.textContent = '📊 86 · Analyst';
-      else if (isClientMode())    headerEl.textContent = '🤝 HR · Client + User Health';
-      else if (isStaffMode())     headerEl.textContent = '🎩 Chief of Staff';
-      else if (isIntakeMode())    headerEl.textContent = '🧲 Intake · Lead Capture';
+      if (isJobMode())            headerEl.textContent = '📊 86 · Lead Agent';
+      else if (isClientMode())    headerEl.textContent = '🤝 HR · 86\'s Assistant';
+      else if (isStaffMode())     headerEl.textContent = '🎩 Chief of Staff · Handler';
+      else if (isIntakeMode())    headerEl.textContent = '📊 86 · Intake';
       else                        headerEl.textContent = '🎯 47 · Estimating Hitman';
     }
     // Plan/Build pill — visible only in estimate mode. Single-icon
@@ -1100,10 +1100,10 @@
     if (trustBtn) trustBtn.style.display = 'none';
     var noticeEl = document.querySelector('#agx-ai-panel #ai-notice');
     if (noticeEl) {
-      if (isJobMode()) noticeEl.textContent = 'I\'m 86, your analyst. I read WIP, costs, the node graph, QB lines, margins, and broader patterns across the business — and I can propose edits (e.g. set a phase\'s % complete) for you to approve before they apply.';
-      else if (isClientMode()) noticeEl.textContent = 'I\'m HR — I run client relations and user-health operations. I keep the parent-company / property hierarchy clean and watch your in-app accounts. Simple writes apply automatically; restructural changes (new parent, merges, splits, deletes) require approval.';
-      else if (isStaffMode()) noticeEl.textContent = 'Chief of Staff — I observe 47 / 86 / HR / Intake. I read metrics, audit conversations, and propose skill-pack edits for you to approve. Conversation replay still queued.';
-      else if (isIntakeMode()) noticeEl.textContent = 'New lead intake. Tell me what the lead is — property name, scope, salesperson — and drop in any photos. I\'ll dedupe against existing clients/leads, then propose creating the new lead for your approval.';
+      if (isJobMode()) noticeEl.textContent = 'I\'m 86, P86\'s lead agent. I have range over the whole company — revenue, cost, production, WIP, margin, schedule, the node graph. I delegate to 47 (estimating) and HR (client + research). I can propose edits for you to approve before they apply.';
+      else if (isClientMode()) noticeEl.textContent = 'I\'m HR — 86\'s research + client-relations assistant. I validate addresses, gather property photos via web search, and capture context that helps 86 and 47 do their jobs. Simple writes apply automatically; restructural changes require approval.';
+      else if (isStaffMode()) noticeEl.textContent = 'Chief of Staff — I\'m 86\'s handler. I observe 86 / 47 / HR, audit conversations, and propose skill-pack edits when the playbook needs to evolve. I tune the team rather than do their work.';
+      else if (isIntakeMode()) noticeEl.textContent = 'New lead intake — I\'m 86. Tell me what the lead is (property name, scope, salesperson) and drop any photos. I\'ll dedupe against existing clients/leads, propose the new lead for your approval, and pre-load 47 with everything 47 needs to estimate.';
       else {
         // AG notice changes wording in Plan mode so the user sees a
         // clear cue that AG won't propose line items right now.
