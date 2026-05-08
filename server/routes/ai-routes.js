@@ -1722,9 +1722,14 @@ function renderSection(stableLines, sectionId, overrides) {
 // single broken file doesn't kill the chat.
 async function loadPhotoAsBlock(photoRow) {
   try {
-    if (!storage.localRoot || !photoRow.web_key) return null;
-    const fullPath = path.join(storage.localRoot, photoRow.web_key);
-    const buf = await fs.promises.readFile(fullPath);
+    if (!photoRow.web_key) return null;
+    // Use the storage adapter's getBuffer so this works for BOTH the
+    // local-disk dev backend AND the R2 production backend. The old
+    // path-only branch silently returned null on Railway, which is
+    // why 47 stopped seeing photos in production despite them being
+    // attached correctly. (LocalDiskStorage.getBuffer reads from
+    // disk; R2Storage.getBuffer streams from the bucket.)
+    const buf = await storage.getBuffer(photoRow.web_key);
     return {
       type: 'image',
       source: {
