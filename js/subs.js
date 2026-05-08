@@ -620,11 +620,13 @@
                 alert('Failed to grant access: ' + (err.message || String(err)));
               });
           } else {
-            // Revoke — delete the job-level assignment row(s) for this sub on this job.
-            var rows = (assignedByJob[jobId] || []).filter(function(a) { return a.level === 'job'; });
+            // Revoke — delete every assignment row for this sub on
+            // this job. (Sub assignments are job-level only now;
+            // legacy building/phase-level rows still get cleaned up
+            // here so the toggle stays consistent.)
+            var rows = assignedByJob[jobId] || [];
             if (!rows.length) {
-              alert('No job-level assignment to remove. This sub may have building/phase-level access — manage from the job page.');
-              cb.checked = true;
+              cb.checked = false;
               return;
             }
             Promise.all(rows.map(function(a) {

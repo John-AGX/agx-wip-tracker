@@ -2386,8 +2386,10 @@ function populate(){
       if(gn){ gn.value=job.generalConditions; E.wires().push({fromNode:gn.id,fromPort:0,toNode:wipNode.id,toPort:0}); }
       jcIdx++;
     }
-    // Job-level sub costs — create a Sub node + PO for each job-level sub
-    var jobSubs=appData.subs.filter(function(s){return s.jobId===jid && s.level==='job';});
+    // Sub costs — create a Sub node + PO for each sub on this job.
+    // Sub assignments are job-level only; the node graph itself
+    // distributes sub spend across buildings/phases via wires.
+    var jobSubs=appData.subs.filter(function(s){return s.jobId===jid;});
     jobSubs.forEach(function(s,i){
       var existingSub=E.nodes().find(function(nd){return nd.type==='sub'&&nd.data&&nd.data.id===s.id;});
       if(existingSub) return; // already added in the subs section above

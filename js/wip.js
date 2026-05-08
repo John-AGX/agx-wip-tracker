@@ -24,90 +24,52 @@ function renderWIPMain() {
             return Promise.resolve(window.confirm(msg));
         }
 
-        // Calculate sub costs from the Subcontractors tab entries
-        function getSubCostForPhase(phaseId) {
-            // Sum billedToDate of all subs assigned to this phase (supports multi-phase assignment)
-            let total = 0;
-            appData.subs.filter(s => s.level === 'phase').forEach(s => {
-                var pIds = s.phaseIds || (s.phaseId ? [s.phaseId] : []);
-                if (pIds.includes(phaseId)) {
-                    total += (s.billedToDate || 0) / pIds.length; // split equally among assigned phases
-                }
-            });
-            return total;
+        // Sub assignments are job-level only — building/phase
+        // distribution is driven by the node graph. The two
+        // ForBuilding helpers still distribute job-level totals
+        // pro-rata by building budget so the legacy WIP rollup
+        // surfaces a building number; phase-level rollups go to
+        // zero (the graph drives those numbers now).
+
+        function getSubCostForPhase(_phaseId) {
+            return 0;
+        }
+
+        function distributeJobTotalAcrossBuildings(jobId, total, thisBldgId) {
+            if (total <= 0) return 0;
+            const thisBldg = appData.buildings.find(b => b.id === thisBldgId);
+            if (thisBldg && thisBldg.excludeFromSubDist) return 0;
+            const buildings = appData.buildings.filter(b => b.jobId === jobId && !b.excludeFromSubDist);
+            if (buildings.length === 0) return 0;
+            const totalBudget = buildings.reduce((sum, b) => sum + (b.budget || 0), 0);
+            if (totalBudget > 0) {
+                const bldgPct = (thisBldg?.budget || 0) / totalBudget;
+                return total * bldgPct;
+            }
+            return total / buildings.length;
         }
 
         function getSubCostForBuilding(buildingId, jobId) {
-            // 1. Subs assigned directly to this building (supports multi-building assignment)
-            let total = 0;
-            appData.subs.filter(s => s.level === 'building').forEach(s => {
-                var bIds = s.buildingIds || (s.buildingId ? [s.buildingId] : []);
-                if (bIds.includes(buildingId)) {
-                    total += (s.billedToDate || 0) / bIds.length;
-                }
-            });
-            // 2. Job-level subs distributed by building budget %
-            const jobSubs = appData.subs.filter(s => s.level === 'job' && s.jobId === jobId);
-            if (jobSubs.length > 0) {
-                const thisBldg = appData.buildings.find(b => b.id === buildingId);
-                // Skip if building is excluded from distribution
-                if (thisBldg && thisBldg.excludeFromSubDist) return total;
-                const buildings = appData.buildings.filter(b => b.jobId === jobId && !b.excludeFromSubDist);
-                if (buildings.length === 0) return total;
-                const totalBudget = buildings.reduce((sum, b) => sum + (b.budget || 0), 0);
-                const jobSubTotal = jobSubs.reduce((sum, s) => sum + (s.billedToDate || 0), 0);
-                if (totalBudget > 0) {
-                    const bldgPct = (thisBldg?.budget || 0) / totalBudget;
-                    total += jobSubTotal * bldgPct;
-                } else {
-                    // Equal distribution when no budgets set
-                    total += jobSubTotal / buildings.length;
-                }
-            }
-            return total;
+            const jobSubTotal = appData.subs
+                .filter(s => s.jobId === jobId)
+                .reduce((sum, s) => sum + (s.billedToDate || 0), 0);
+            return distributeJobTotalAcrossBuildings(jobId, jobSubTotal, buildingId);
         }
 
         function getSubCostForJob(jobId) {
-            // All subs for this job, summed by billedToDate
             return appData.subs.filter(s => s.jobId === jobId)
                 .reduce((sum, s) => sum + (s.billedToDate || 0), 0);
         }
 
-        function getSubContractForPhase(phaseId) {
-            let total = 0;
-            appData.subs.filter(s => s.level === 'phase').forEach(s => {
-                var pIds = s.phaseIds || (s.phaseId ? [s.phaseId] : []);
-                if (pIds.includes(phaseId)) {
-                    total += (s.contractAmt || 0) / pIds.length;
-                }
-            });
-            return total;
+        function getSubContractForPhase(_phaseId) {
+            return 0;
         }
 
         function getSubContractForBuilding(buildingId, jobId) {
-            let total = 0;
-            appData.subs.filter(s => s.level === 'building').forEach(s => {
-                var bIds = s.buildingIds || (s.buildingId ? [s.buildingId] : []);
-                if (bIds.includes(buildingId)) {
-                    total += (s.contractAmt || 0) / bIds.length;
-                }
-            });
-            const jobSubs = appData.subs.filter(s => s.level === 'job' && s.jobId === jobId);
-            if (jobSubs.length > 0) {
-                const thisBldg = appData.buildings.find(b => b.id === buildingId);
-                if (thisBldg && thisBldg.excludeFromSubDist) return total;
-                const buildings = appData.buildings.filter(b => b.jobId === jobId && !b.excludeFromSubDist);
-                if (buildings.length === 0) return total;
-                const totalBudget = buildings.reduce((sum, b) => sum + (b.budget || 0), 0);
-                const jobSubTotal = jobSubs.reduce((sum, s) => sum + (s.contractAmt || 0), 0);
-                if (totalBudget > 0) {
-                    const bldgPct = (thisBldg?.budget || 0) / totalBudget;
-                    total += jobSubTotal * bldgPct;
-                } else {
-                    total += jobSubTotal / buildings.length;
-                }
-            }
-            return total;
+            const jobSubTotal = appData.subs
+                .filter(s => s.jobId === jobId)
+                .reduce((sum, s) => sum + (s.contractAmt || 0), 0);
+            return distributeJobTotalAcrossBuildings(jobId, jobSubTotal, buildingId);
         }
 
         // Auto-calculate building % complete from its phases (weighted by phaseBudget)
@@ -173,8 +135,8 @@ function renderWIPMain() {
             // Update job-level sub cost
             const job = appData.jobs.find(j => j.id === jobId);
             if (job) {
-                // Job-level sub = sum of all job-level subs' billedToDate
-                job.sub = appData.subs.filter(s => s.level === 'job' && s.jobId === jobId)
+                // Sub assignments are job-level only — sum every sub's billed-to-date.
+                job.sub = appData.subs.filter(s => s.jobId === jobId)
                     .reduce((sum, s) => sum + (s.billedToDate || 0), 0);
             }
         }
@@ -183,33 +145,16 @@ function renderWIPMain() {
             const job = appData.jobs.find(j => j.id === jobId);
             if (job && job.ngAccruedCosts != null) return job.ngAccruedCosts;
 
-            // Fallback: % complete-weighted accrual from subs tab
+            // Fallback: job-level pct-complete-weighted accrual.
+            // Sub assignments are job-level only (the node graph drives
+            // per-phase/building distribution), so we just use the
+            // job's overall % complete to estimate earned-vs-billed.
             let totalAccrued = 0;
             const jobSubs = appData.subs.filter(s => s.jobId === jobId);
+            const jobPct = job ? (job.pctComplete || 0) : 0;
 
             jobSubs.forEach(sub => {
-                let pctComplete = 0;
-                var phaseIds = sub.phaseIds || (sub.phaseId ? [sub.phaseId] : []);
-                var buildingIds = sub.buildingIds || (sub.buildingId ? [sub.buildingId] : []);
-
-                if (sub.level === 'phase' && phaseIds.length > 0) {
-                    let totalPct = 0;
-                    phaseIds.forEach(pid => {
-                        const phase = appData.phases.find(p => p.id === pid);
-                        totalPct += phase ? (phase.pctComplete || 0) : 0;
-                    });
-                    pctComplete = totalPct / phaseIds.length;
-                } else if (sub.level === 'building' && buildingIds.length > 0) {
-                    let totalPct = 0;
-                    buildingIds.forEach(bid => {
-                        totalPct += calcBuildingPctComplete(bid, jobId);
-                    });
-                    pctComplete = totalPct / buildingIds.length;
-                } else {
-                    pctComplete = job ? (job.pctComplete || 0) : 0;
-                }
-
-                const earned = (sub.contractAmt || 0) * (pctComplete / 100);
+                const earned = (sub.contractAmt || 0) * (jobPct / 100);
                 const accrued = Math.max(0, earned - (sub.billedToDate || 0));
                 totalAccrued += accrued;
             });
@@ -3345,17 +3290,14 @@ function renderWIPMain() {
             appState.editSubId = null;
             document.getElementById('subModalHeader').textContent = 'Add Subcontractor';
             document.getElementById('subSaveBtn').innerHTML = '&#x1F477; Add Subcontractor';
-            populateSubBuildingChecks();
             document.getElementById('subName').value = '';
             populateSubTradeSelect();
             document.getElementById('subTrade').value = '';
-            document.getElementById('subLevel').value = 'job';
             document.getElementById('subContract').value = '';
             document.getElementById('subBilled').value = '';
             document.getElementById('subNotes').value = '';
             populateSubDirectoryList();
             updateSubDirectoryHint();
-            subLevelChanged();
             openModal('addSubModal');
         }
 
@@ -3414,61 +3356,12 @@ function renderWIPMain() {
             if (el) el.addEventListener('input', updateSubDirectoryHint);
         });
 
-        function populateSubBuildingChecks(selectedIds) {
-            const buildings = appData.buildings.filter(b => b.jobId === appState.currentJobId);
-            const container = document.getElementById('subBuildingChecks');
-            if (!container) return;
-            container.innerHTML = '';
-            buildings.forEach(b => {
-                var checked = selectedIds && selectedIds.includes(b.id) ? ' checked' : '';
-                container.innerHTML += '<label style="display:flex;align-items:center;gap:3px;font-size:11px;cursor:pointer;padding:2px 6px;border:1px solid var(--border);border-radius:4px;background:var(--surface2);">' +
-                    '<input type="checkbox" class="sub-bldg-chk" value="' + b.id + '"' + checked + ' style="width:13px;height:13px;" onchange="subBuildingCheckChanged()">' + escapeHTML(b.name) + '</label>';
-            });
-        }
-
-        function subLevelChanged() {
-            const level = document.getElementById('subLevel').value;
-            document.getElementById('subBuildingGroup').style.display = (level === 'building' || level === 'phase') ? '' : 'none';
-            document.getElementById('subPhaseGroup').style.display = level === 'phase' ? '' : 'none';
-            if (level === 'building' || level === 'phase') {
-                populateSubBuildingChecks();
-                if (level === 'phase') subBuildingCheckChanged();
-            }
-        }
-
-        function subBuildingCheckChanged() {
-            const level = document.getElementById('subLevel').value;
-            if (level !== 'phase') return;
-            const checkedBldgs = Array.from(document.querySelectorAll('.sub-bldg-chk:checked')).map(c => c.value);
-            const container = document.getElementById('subPhaseChecks');
-            if (!container) return;
-            container.innerHTML = '';
-            checkedBldgs.forEach(bId => {
-                const bldg = appData.buildings.find(b => b.id === bId);
-                const phases = appData.phases.filter(p => p.jobId === appState.currentJobId && p.buildingId === bId);
-                phases.forEach(p => {
-                    container.innerHTML += '<label style="display:flex;align-items:center;gap:3px;font-size:11px;cursor:pointer;padding:2px 6px;border:1px solid var(--border);border-radius:4px;background:var(--surface2);">' +
-                        '<input type="checkbox" class="sub-phase-chk" value="' + p.id + '" style="width:13px;height:13px;">' +
-                        (bldg ? escapeHTML(bldg.name) + ' \u203A ' : '') + escapeHTML(p.phase) + '</label>';
-                });
-            });
-        }
-
         function saveSub() {
-            const level = document.getElementById('subLevel').value;
-            const buildingIds = (level === 'building' || level === 'phase')
-                ? Array.from(document.querySelectorAll('.sub-bldg-chk:checked')).map(c => c.value) : [];
-            const phaseIds = level === 'phase'
-                ? Array.from(document.querySelectorAll('.sub-phase-chk:checked')).map(c => c.value) : [];
             const subData = {
                 jobId: appState.currentJobId,
                 name: document.getElementById('subName').value,
                 trade: document.getElementById('subTrade').value,
-                level: level,
-                buildingId: buildingIds[0] || '',
-                buildingIds: buildingIds,
-                phaseId: phaseIds[0] || '',
-                phaseIds: phaseIds,
+                level: 'job',
                 contractAmt: parseFloat(document.getElementById('subContract').value) || 0,
                 billedToDate: parseFloat(document.getElementById('subBilled').value) || 0,
                 notes: document.getElementById('subNotes').value
@@ -3504,31 +3397,9 @@ function renderWIPMain() {
                 if (!c.includes(sub.trade)) { c.push(sub.trade); saveCustomItems('agx-wip-custom-trades', c); populateSubTradeSelect(); }
             }
             document.getElementById('subTrade').value = sub.trade || '';
-            document.getElementById('subLevel').value = sub.level || 'building';
             document.getElementById('subContract').value = sub.contractAmt || '';
             document.getElementById('subBilled').value = sub.billedToDate || '';
             document.getElementById('subNotes').value = sub.notes || '';
-            // Restore building/phase checkboxes
-            var bldgIds = sub.buildingIds || (sub.buildingId ? [sub.buildingId] : []);
-            var phaseIds = sub.phaseIds || (sub.phaseId ? [sub.phaseId] : []);
-            populateSubBuildingChecks(bldgIds);
-            subLevelChanged();
-            // Re-check the buildings after subLevelChanged rebuilt them
-            setTimeout(function () {
-                bldgIds.forEach(function (id) {
-                    var chk = document.querySelector('.sub-bldg-chk[value="' + id + '"]');
-                    if (chk) chk.checked = true;
-                });
-                if (sub.level === 'phase') {
-                    subBuildingCheckChanged();
-                    setTimeout(function () {
-                        phaseIds.forEach(function (id) {
-                            var chk = document.querySelector('.sub-phase-chk[value="' + id + '"]');
-                            if (chk) chk.checked = true;
-                        });
-                    }, 30);
-                }
-            }, 30);
             openModal('addSubModal');
         }
 

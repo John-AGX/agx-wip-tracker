@@ -491,16 +491,17 @@ router.post('/jobs/:jobId',
       if (!b.subId && !b.sub_id) return res.status(400).json({ error: 'subId is required' });
       const subId = b.subId || b.sub_id;
       const id = b.id || genId('jsub');
+      // Sub assignments are job-level only — building/phase
+      // distribution is driven by the node graph, so we hard-code
+      // level='job' and ignore any building_id/phase_id from the body.
+      // Legacy callers passing those fields silently no-op.
       const result = await pool.query(`
         INSERT INTO job_subs (id, job_id, sub_id, level, building_id, phase_id,
                               contract_amt, billed_to_date, status, notes)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+        VALUES ($1,$2,$3,'job',NULL,NULL,$4,$5,$6,$7)
         RETURNING *
       `, [
         id, req.params.jobId, subId,
-        b.level || 'job',
-        b.building_id || b.buildingId || null,
-        b.phase_id || b.phaseId || null,
         Number(b.contract_amt || b.contractAmt || 0),
         Number(b.billed_to_date || b.billedToDate || 0),
         b.status || 'active',
@@ -510,20 +511,16 @@ router.post('/jobs/:jobId',
 
       // Fire sub_assigned notification (gated by isEventEnabled in
       // sendForEvent). Fire-and-forget — failures land in email_log
-      // but don't block the response. Only fires for the top-level
-      // 'job' assignment row, not building/phase children, to avoid
-      // re-notifying when an admin is just refining the assignment level.
-      if ((b.level || 'job') === 'job') {
-        notifySubAssigned({
-          subId: subId,
-          jobId: req.params.jobId,
-          contractAmt: Number(b.contract_amt || b.contractAmt || 0),
-          assignedByName: (req.user && req.user.name) || (req.user && req.user.email) || 'AGX'
-        }).catch(function(e) { console.warn('[sub_assigned] notify failed:', e && e.message); });
-      }
+      // but don't block the response.
+      notifySubAssigned({
+        subId: subId,
+        jobId: req.params.jobId,
+        contractAmt: Number(b.contract_amt || b.contractAmt || 0),
+        assignedByName: (req.user && req.user.name) || (req.user && req.user.email) || 'AGX'
+      }).catch(function(e) { console.warn('[sub_assigned] notify failed:', e && e.message); });
     } catch (e) {
       if (e.code === '23505') {
-        return res.status(409).json({ error: 'Sub is already assigned to this job at that level. Edit the existing assignment.' });
+        return res.status(409).json({ error: 'Sub is already assigned to this job. Edit the existing assignment.' });
       }
       console.error('POST /api/subs/jobs/:jobId error:', e);
       res.status(500).json({ error: 'Server error' });
@@ -540,10 +537,9 @@ router.patch('/jobs/:jobId/:assignmentId',
       const sets = [];
       const vals = [];
       let i = 1;
+      // Sub assignments are job-level only — level/building_id/phase_id
+      // are silently ignored if a legacy client sends them.
       const map = {
-        level: 'level',
-        building_id: 'building_id', buildingId: 'building_id',
-        phase_id: 'phase_id', phaseId: 'phase_id',
         contract_amt: 'contract_amt', contractAmt: 'contract_amt',
         billed_to_date: 'billed_to_date', billedToDate: 'billed_to_date',
         status: 'status', notes: 'notes'
@@ -703,23 +699,22 @@ router.post('/migrate-apply',
           const jobCheck = await client.query('SELECT 1 FROM jobs WHERE id = $1', [r.jobId]);
           if (!jobCheck.rows.length) { stats.assignmentsSkipped++; continue; }
           try {
+            // Sub assignments are job-level only — building/phase
+            // distribution is driven by the node graph, so we
+            // ignore r.level / r.buildingId / r.phaseId from legacy
+            // inline records and collapse to one (job, sub) row.
             await client.query(
               `INSERT INTO job_subs (id, job_id, sub_id, level, building_id, phase_id, contract_amt, billed_to_date, status, notes)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-               ON CONFLICT (job_id, sub_id, COALESCE(building_id, ''), COALESCE(phase_id, '')) DO UPDATE
-                 SET contract_amt = EXCLUDED.contract_amt,
-                     billed_to_date = EXCLUDED.billed_to_date,
-                     status = EXCLUDED.status,
+               VALUES ($1,$2,$3,'job',NULL,NULL,$4,$5,'active',$6)
+               ON CONFLICT (job_id, sub_id) DO UPDATE
+                 SET contract_amt = job_subs.contract_amt + EXCLUDED.contract_amt,
+                     billed_to_date = job_subs.billed_to_date + EXCLUDED.billed_to_date,
                      updated_at = NOW()`,
               [
                 genId('jsub'),
                 r.jobId, subRow.id,
-                r.level || 'job',
-                r.buildingId || null,
-                r.phaseId || null,
                 Number(r.contractAmt || r.amount || 0),
                 Number(r.billedToDate || 0),
-                'active',
                 r.notes || null
               ]
             );

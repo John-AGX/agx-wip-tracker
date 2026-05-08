@@ -3191,9 +3191,8 @@ async function buildJobContext(jobId, clientContext, aiPhase) {
     lines.push('# Top cost lines (' + top.length + ' of ' + subs.length + ' shown)');
     top.forEach(s => {
       const amt = fmtMoney(s.amount || 0);
-      const where = s.level === 'phase' ? '[phase]' : s.level === 'building' ? '[building]' : '[job]';
       const label = s.vendor || s.description || s.name || '(unlabeled)';
-      lines.push('- ' + amt + ' ' + where + ' ' + label);
+      lines.push('- ' + amt + ' ' + label);
     });
     lines.push('');
   }

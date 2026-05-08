@@ -1406,22 +1406,6 @@
                 <label>Trade</label>
                 <select id="subTrade" onchange="handleCustomSelectChange('subTrade', DEFAULT_SUB_TRADES, 'agx-wip-custom-trades', '-- Select Trade --')"></select>
             </div>
-            <div class="form-group">
-                <label>Assignment Level</label>
-                <select id="subLevel" onchange="subLevelChanged()">
-                    <option value="job">Job-Wide (costs split by building %)</option>
-                    <option value="building">Specific Buildings</option>
-                    <option value="phase">Specific Phases</option>
-                </select>
-            </div>
-            <div class="form-group" id="subBuildingGroup" style="display:none;">
-                <label>Select Buildings</label>
-                <div id="subBuildingChecks" style="display:flex;flex-wrap:wrap;gap:6px;padding:4px 0;"></div>
-            </div>
-            <div class="form-group" id="subPhaseGroup" style="display:none;">
-                <label>Select Phases</label>
-                <div id="subPhaseChecks" style="display:flex;flex-wrap:wrap;gap:6px;padding:4px 0;"></div>
-            </div>
             <div class="form-row">
                 <div class="form-group">
                     <label>Contract Amount</label>
@@ -2247,7 +2231,7 @@
     <script src="js/insights.js?v=5"></script>
     <script src="js/schedule.js?v=15"></script>
     <script src="js/app.js?v=48"></script>
-    <script src="js/wip.js?v=61"></script>
+    <script src="js/wip.js?v=62"></script>
     <script src="js/estimates.js?v=35"></script>
     <script src="js/proposal.js?v=21"></script>
     <script src="js/estimate-editor.js?v=36"></script>
@@ -2383,6 +2367,6 @@
       </div>
     </div>
     <script src="nodegraph/engine.js?v=72"></script>
-    <script src="nodegraph/ui.js?v=146"></script>
+    <script src="nodegraph/ui.js?v=147"></script>
 </body>
 </html>

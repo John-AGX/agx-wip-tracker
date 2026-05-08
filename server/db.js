@@ -461,7 +461,58 @@ async function initSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_job_subs_job ON job_subs(job_id);
     CREATE INDEX IF NOT EXISTS idx_job_subs_sub ON job_subs(sub_id);
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_job_subs_unique ON job_subs(job_id, sub_id, COALESCE(building_id, ''), COALESCE(phase_id, ''));
+
+    -- Sub assignments are job-level only — building/phase distribution
+    -- is driven by the node graph. Collapse any legacy multi-level
+    -- rows into one (job, sub) row by summing dollar amounts and
+    -- nulling level/building_id/phase_id, then swap the old composite
+    -- unique index for a (job_id, sub_id) one. Idempotent: the DO
+    -- block bails out if the new index already exists.
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_indexes
+         WHERE schemaname = 'public'
+           AND indexname  = 'idx_job_subs_unique_v2'
+      ) THEN
+        -- Collapse: pick the oldest row per (job, sub) as the survivor,
+        -- sum contract_amt + billed_to_date into it, delete the rest.
+        WITH survivor AS (
+          SELECT DISTINCT ON (job_id, sub_id) id, job_id, sub_id
+            FROM job_subs
+           ORDER BY job_id, sub_id, created_at ASC
+        ),
+        totals AS (
+          SELECT job_id, sub_id,
+                 SUM(COALESCE(contract_amt, 0))   AS contract_amt,
+                 SUM(COALESCE(billed_to_date, 0)) AS billed_to_date
+            FROM job_subs
+           GROUP BY job_id, sub_id
+        )
+        UPDATE job_subs js
+           SET contract_amt   = t.contract_amt,
+               billed_to_date = t.billed_to_date,
+               level          = 'job',
+               building_id    = NULL,
+               phase_id       = NULL,
+               updated_at     = NOW()
+          FROM survivor s, totals t
+         WHERE js.id = s.id
+           AND t.job_id = s.job_id
+           AND t.sub_id = s.sub_id;
+
+        DELETE FROM job_subs js
+          USING survivor s
+         WHERE js.job_id = s.job_id
+           AND js.sub_id = s.sub_id
+           AND js.id <> s.id;
+
+        -- Swap indexes. Keep the old name only if it exists; the new
+        -- name is suffixed _v2 so future runs detect completion.
+        DROP INDEX IF EXISTS idx_job_subs_unique;
+        CREATE UNIQUE INDEX idx_job_subs_unique_v2 ON job_subs(job_id, sub_id);
+      END IF;
+    END $$;
 
     -- Per-folder sub access (Phase 4). A grant says "sub X can see
     -- folder F on entity (T,I)". One sub may have many grants;
