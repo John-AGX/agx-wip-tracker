@@ -585,20 +585,22 @@ function renderNodes(){
           h+='</div>';
           t1Conns.forEach(function(c){
             var cost=c.actual+c.accrued;
-            // %complete styling — green + bold once it hits 100%, dim
-            // grey + normal weight for any other value (including 0).
-            // Always shown so the user sees that work HAS started even
-            // before any phase finishes; the green "100%" jumps off the
-            // page only when a source is actually done.
+            // %complete styling — bright green + bold once a source
+            // hits 100%, otherwise rendered as quiet italic note text
+            // (one px smaller than the row body, weight 300, ~28%
+            // alpha white). Always shown so the user sees ANY in-flight
+            // source has a value; the bold green jumps off the page
+            // only when a source is actually done.
             var pctDone = c.pct >= 100;
-            var pColor = pctDone ? '#34d399' : 'rgba(255,255,255,0.32)';
-            var pWeight = pctDone ? '600' : '500';
+            var pctStyle = pctDone
+              ? 'color:#34d399;font-weight:600;'
+              : 'color:rgba(255,255,255,0.28);font-weight:300;font-size:8px;font-style:italic;';
             // Income share — protected against division-by-zero when no
             // source has revenue yet (e.g. just-attached phase before
             // the user enters revenue). Falls back to 0% rather than NaN.
             var incomeShare = (totRev > 0) ? (c.rev / totRev * 100) : 0;
             h+='<div style="display:flex;align-items:center;padding:2px 0;color:#6a7090;font-size:9px;gap:4px;">';
-            h+='<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+c.icon+' '+c.name+' <span style="color:'+pColor+';font-weight:'+pWeight+';">'+c.pct.toFixed(0)+'%</span></span>';
+            h+='<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+c.icon+' '+c.name+' <span style="'+pctStyle+'">'+c.pct.toFixed(0)+'%</span></span>';
             h+='<span style="color:#4f8cff;font-family:\'Courier New\',monospace;min-width:58px;text-align:right;">'+E.fmtC(c.rev)+'</span>';
             h+='<span style="color:#f87171;font-family:\'Courier New\',monospace;min-width:58px;text-align:right;">'+E.fmtC(cost)+'</span>';
             h+='<span title="Share of building total revenue ('+E.fmtC(c.rev)+' of '+E.fmtC(totRev)+')" style="color:#fbbf24;font-family:\'Courier New\',monospace;min-width:36px;text-align:right;">'+incomeShare.toFixed(1)+'%</span>';

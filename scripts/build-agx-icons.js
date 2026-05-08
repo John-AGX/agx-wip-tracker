@@ -271,8 +271,13 @@ const FOOTER = `
   }
   function scanEmoji(root) {
     if (!root || !root.querySelectorAll) return;
-    // Buttons + node-graph icon spans + ribbon icons cover the main hit list.
-    var sel = 'button, .ng-ribbon-icon, .ng-tbtn, .ee-btn, .ee-icon-btn';
+    // Buttons + node-graph icon spans + ribbon icons + node-library
+    // sidebar items. The node-library renders each item as
+    // div.ng-cat-item > span (bare emoji) > " Label" — the inner
+    // unnamed span holds the bare emoji as textContent, so we
+    // explicitly target .ng-cat-item > span:first-child to hit Case 1
+    // of emojiSwap (icon-only-element swap).
+    var sel = 'button, .ng-ribbon-icon, .ng-tbtn, .ee-btn, .ee-icon-btn, .ng-cat-item > span:first-child';
     root.querySelectorAll(sel).forEach(emojiSwap);
   }
 
