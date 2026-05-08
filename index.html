@@ -1287,7 +1287,7 @@
             <!-- Single-building selector (hidden when phase is wired to multiple buildings) -->
             <div class="form-group" id="phaseBuildingWrap">
                 <label>Building</label>
-                <select id="phaseBuilding" onchange="syncBudgetFromPct()"></select>
+                <select id="phaseBuilding"></select>
             </div>
             <!-- Connected buildings (shown when phase has graph wire connections) -->
             <div class="form-group" id="phaseConnectedWrap" style="display:none;">
@@ -1316,59 +1316,16 @@
                     <option value="both">Both</option>
                 </select>
             </div>
-            <div class="form-row">
-                <div class="form-group">
-                    <label>Materials Cost</label>
-                    <input type="number" id="phaseMaterials" placeholder="0.00" step="0.01">
-                </div>
-                <div class="form-group">
-                    <label>Labor $ (auto: hours &times; rate)</label>
-                    <input type="number" id="phaseLabor" placeholder="0.00" step="0.01" readonly style="opacity: 0.7; cursor: not-allowed;">
-                </div>
-            </div>
-            <div class="form-row">
-                <div class="form-group">
-                    <label>Subcontractor $ (auto from Subs tab)</label>
-                    <input type="number" id="phaseSub" placeholder="0.00" step="0.01" readonly style="opacity: 0.7; cursor: not-allowed;">
-                </div>
-                <div class="form-group">
-                    <label>Equipment Cost</label>
-                    <input type="number" id="phaseEquipment" placeholder="0.00" step="0.01">
-                </div>
-            </div>
-            <div class="form-row">
-                <div class="form-group">
-                    <label>As-Sold Phase Budget $</label>
-                    <input type="number" id="phaseBudget" placeholder="0.00" step="0.01" oninput="syncBudgetFromDollar()">
-                </div>
-                <div class="form-group">
-                    <label>% of Building</label>
-                    <input type="text" id="phaseBudgetPct" readonly style="background:var(--surface);color:var(--text-dim);cursor:default;">
-                </div>
-            </div>
-            <div class="form-row" style="align-items: center; margin-bottom: 16px;">
-                <label class="agx-check-row">
-                    <input type="checkbox" id="phaseLocked">
-                    <span>Lock this phase's % (exclude from auto-balance)</span>
-                </label>
-                <button type="button" class="ee-btn secondary" onclick="autoBalancePhasePcts()" style="margin-left: auto;">&#x2696; Auto-Balance %</button>
-            </div>
-            <div class="form-row">
-                <div class="form-group">
-                    <label>Labor Hours This Week</label>
-                    <input type="number" id="phaseHoursWeek" placeholder="0" step="0.5">
-                </div>
-                <div class="form-group">
-                    <label>Total Hours to Date</label>
-                    <input type="number" id="phaseHoursTotal" placeholder="0" step="0.5">
-                </div>
-            </div>
-            <div class="form-row">
-                <div class="form-group">
-                    <label>Avg Hourly Rate</label>
-                    <input type="number" id="phaseRate" placeholder="40.00" step="0.01" value="40">
-                </div>
-            </div>
+            <!-- Cost-side fields (materials / labor $ / sub $ / equipment),
+                 the phase budget + % of building row, the lock checkbox +
+                 auto-balance button, and the labor-hours / hourly-rate
+                 rows were removed in the phase-modal declutter pass. The
+                 node graph drives all per-phase cost numbers now; the
+                 phase entry just captures revenue, % complete, scope,
+                 and meeting notes. The underlying phase.phaseBudget /
+                 phase.asSoldPhaseBudget are still persisted (the WIP
+                 rollup reads them) but mirror As-Sold Revenue at save
+                 time — see savePhase() in wip.js. -->
             <div class="form-group">
                 <label>Notes for WIP Meeting</label>
                 <textarea id="phaseNotes" placeholder="Any notes or issues to discuss..."></textarea>
@@ -2233,7 +2190,7 @@
     <script src="js/insights.js?v=5"></script>
     <script src="js/schedule.js?v=15"></script>
     <script src="js/app.js?v=48"></script>
-    <script src="js/wip.js?v=62"></script>
+    <script src="js/wip.js?v=63"></script>
     <script src="js/estimates.js?v=35"></script>
     <script src="js/proposal.js?v=21"></script>
     <script src="js/estimate-editor.js?v=36"></script>

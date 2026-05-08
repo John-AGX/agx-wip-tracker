@@ -2871,16 +2871,12 @@ function renderWIPMain() {
             return building ? (building.budget || 0) : 0;
         }
 
-        function syncBudgetFromPct() {
-            syncBudgetFromDollar();
-        }
-
-        function syncBudgetFromDollar() {
-            const dollars = parseFloat(document.getElementById('phaseBudget').value) || 0;
-            const bldgBudget = getSelectedBuildingBudget();
-            const pct = bldgBudget > 0 ? (dollars / bldgBudget * 100) : 0;
-            document.getElementById('phaseBudgetPct').value = pct.toFixed(1);
-        }
+        // Phase budget % helpers — dead since the phase modal lost its
+        // budget + %-of-building inputs. Kept as safe no-ops because
+        // legacy onchange/oninput attributes may still reference them
+        // until older deployed pages flush from cache.
+        function syncBudgetFromPct() { /* no-op */ }
+        function syncBudgetFromDollar() { /* no-op */ }
 
         function openAddPhaseToJobModal(preselectedBuildingId) {
             appState.editPhaseId = null;
@@ -2903,18 +2899,8 @@ function renderWIPMain() {
             document.getElementById('phaseType').value = '';
             document.getElementById('phaseAsSoldRevenue').value = '';
             document.getElementById('phasePercent').value = '0';
-            document.getElementById('phaseMaterials').value = '';
-            document.getElementById('phaseLabor').value = '';
-            document.getElementById('phaseSub').value = '0.00';
-            document.getElementById('phaseEquipment').value = '';
-            document.getElementById('phaseBudgetPct').value = '';
-            document.getElementById('phaseBudget').value = '';
-            document.getElementById('phaseHoursWeek').value = '';
-            document.getElementById('phaseHoursTotal').value = '';
-            document.getElementById('phaseRate').value = '40';
             document.getElementById('phaseNotes').value = '';
             document.getElementById('phaseWorkScope').value = 'in-house';
-            document.getElementById('phaseLocked').checked = false;
             document.getElementById('phaseBuildingWrap').style.display = '';
             document.getElementById('phaseConnectedWrap').style.display = 'none';
             openModal('addPhaseModal');
@@ -2989,20 +2975,15 @@ function renderWIPMain() {
                 if (!c.includes(phase.phase)) { c.push(phase.phase); saveCustomItems('agx-wip-custom-phases', c); populatePhaseTypeSelect(); }
             }
             document.getElementById('phaseType').value = phase.phase || '';
-            document.getElementById('phaseAsSoldRevenue').value = phase.asSoldRevenue || '';
+            // As-Sold Revenue is the only dollar field on the phase
+            // entry now. Fall back to phaseBudget for legacy rows
+            // that were saved before the rename so existing phases
+            // don't read as $0 on first re-edit.
+            document.getElementById('phaseAsSoldRevenue').value =
+                phase.asSoldRevenue || phase.asSoldPhaseBudget || phase.phaseBudget || '';
             document.getElementById('phasePercent').value = phase.pctComplete || 0;
-            document.getElementById('phaseMaterials').value = phase.materials || '';
-            document.getElementById('phaseLabor').value = phase.labor || '';
-            document.getElementById('phaseSub').value = getSubCostForPhase(phase.id).toFixed(2);
-            document.getElementById('phaseEquipment').value = phase.equipment || '';
-            document.getElementById('phaseBudget').value = phase.asSoldPhaseBudget || phase.phaseBudget || '';
-            syncBudgetFromDollar();
-            document.getElementById('phaseHoursWeek').value = '';
-            document.getElementById('phaseHoursTotal').value = phase.hoursTotal || '';
-            document.getElementById('phaseRate').value = phase.rate || 40;
             document.getElementById('phaseNotes').value = phase.notes || '';
             document.getElementById('phaseWorkScope').value = phase.workScope || 'in-house';
-            document.getElementById('phaseLocked').checked = phase.locked || false;
             openModal('addPhaseModal');
         }
 
@@ -3203,32 +3184,38 @@ function renderWIPMain() {
         }
 
         function savePhase() {
-            // Validate phase budget doesn't exceed building budget
+            // Phase entry was decluttered: only Building, Phase,
+            // As-Sold Revenue, % Complete, Work Scope, and Notes are
+            // user inputs. Cost-side fields (materials/labor/sub/
+            // equipment) and labor-hour fields are now driven by the
+            // node graph and the Subs tab; we don't surface them here
+            // anymore. asSoldPhaseBudget + phaseBudget mirror revenue
+            // so the existing WIP rollup math (which still reads
+            // phaseBudget) keeps working unchanged.
+            const asSoldRevenue = parseFloat(document.getElementById('phaseAsSoldRevenue').value) || 0;
+            const existingCO = appState.editPhaseId
+                ? (appData.phases.find(p => p.id === appState.editPhaseId)?.coPhaseBudget || 0) : 0;
+
+            // Validate phase revenue doesn't exceed the parent
+            // building's budget across all its phases.
             const selectedBuildingId = document.getElementById('phaseBuilding').value;
             if (selectedBuildingId) {
                 const bldg = appData.buildings.find(b => b.id === selectedBuildingId);
                 if (bldg && bldg.budget > 0) {
-                    const newPhaseBudget = parseFloat(document.getElementById('phaseBudget').value) || 0;
                     const bldgPhases = appData.phases.filter(p => p.jobId === appState.currentJobId && p.buildingId === selectedBuildingId);
                     let existingBudgetTotal = bldgPhases.reduce((sum, p) => sum + (p.phaseBudget || 0), 0);
                     if (appState.editPhaseId) {
                         const editP = bldgPhases.find(p => p.id === appState.editPhaseId);
                         if (editP) existingBudgetTotal -= (editP.phaseBudget || 0);
                     }
-                    if (existingBudgetTotal + newPhaseBudget > bldg.budget * 1.001) {
+                    if (existingBudgetTotal + asSoldRevenue > bldg.budget * 1.001) {
                         const remaining = bldg.budget - existingBudgetTotal;
-                        alert('Phase budgets cannot exceed building budget (' + formatCurrency(bldg.budget) + '). Currently ' + formatCurrency(existingBudgetTotal) + ' allocated. Remaining: ' + formatCurrency(remaining));
+                        alert('Phase revenue cannot exceed building budget (' + formatCurrency(bldg.budget) + '). Currently ' + formatCurrency(existingBudgetTotal) + ' allocated. Remaining: ' + formatCurrency(remaining));
                         return;
                     }
                 }
             }
-            const hoursWeek = parseFloat(document.getElementById('phaseHoursWeek').value) || 0;
-            const hoursTotal = (parseFloat(document.getElementById('phaseHoursTotal').value) || 0) + hoursWeek;
-            const rate = parseFloat(document.getElementById('phaseRate').value) || 40;
-            const asSoldVal = parseFloat(document.getElementById('phaseBudget').value) || 0;
-            const existingCO = appState.editPhaseId
-                ? (appData.phases.find(p => p.id === appState.editPhaseId)?.coPhaseBudget || 0) : 0;
-            const asSoldRevenue = parseFloat(document.getElementById('phaseAsSoldRevenue').value) || 0;
+
             // If phase is wired to multiple buildings in the graph, keep buildingId empty.
             const isMultiWired = document.getElementById('phaseConnectedWrap').style.display !== 'none'
                 && document.getElementById('phaseBuildingWrap').style.display === 'none';
@@ -3236,19 +3223,11 @@ function renderWIPMain() {
                 buildingId: isMultiWired ? '' : document.getElementById('phaseBuilding').value,
                 phase: document.getElementById('phaseType').value,
                 workScope: document.getElementById('phaseWorkScope').value || 'in-house',
-                locked: document.getElementById('phaseLocked').checked,
                 pctComplete: parseFloat(document.getElementById('phasePercent').value) || 0,
-                materials: parseFloat(document.getElementById('phaseMaterials').value) || 0,
-                labor: hoursTotal * rate,
-                sub: 0,
-                equipment: parseFloat(document.getElementById('phaseEquipment').value) || 0,
                 asSoldRevenue: asSoldRevenue,
-                asSoldPhaseBudget: asSoldVal,
+                asSoldPhaseBudget: asSoldRevenue,
                 coPhaseBudget: existingCO,
-                phaseBudget: asSoldVal + existingCO,
-                hoursWeek: hoursWeek,
-                hoursTotal: hoursTotal,
-                rate: rate,
+                phaseBudget: asSoldRevenue + existingCO,
                 notes: document.getElementById('phaseNotes').value
             };
 
