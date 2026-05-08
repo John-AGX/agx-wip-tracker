@@ -3586,6 +3586,14 @@ router.post('/v2/jobs/:id/chat',
         anthropic, res,
         session: session,
         eventsToSend: [{ type: 'user.message', content: userContent }],
+        // Reuse the intake auto-tier handler so 86 can run
+        // read_existing_clients / read_existing_leads inline (no
+        // approval card) when capturing a new lead from a job
+        // context. The handler returns { tier: 'approval' } for any
+        // unknown tool name, which is the correct fallback for the
+        // approval-tier JOB_TOOLS (propose_*) — they get pushed to
+        // pendingToolUses and surface as cards as before.
+        onCustomToolUse: makeIntakeOnCustomToolUse(req.user.id),
         persistAssistantText: async (text, usage) => {
           await saveJobAssistantMessage({ jobId, userId: req.user.id, text, usage });
         }
@@ -3633,16 +3641,37 @@ router.post('/v2/jobs/:id/chat/continue',
       }
       const session = sessionRow.rows[0];
 
-      const eventsToSend = toolResults.map(r => ({
-        type: 'user.custom_tool_result',
-        custom_tool_use_id: r.tool_use_id,
-        content: [{
-          type: 'text',
-          text: r.approved
-            ? (r.applied_summary || 'User approved. Change applied.')
-            : (r.reject_reason || 'User rejected this proposal.')
-        }]
-      }));
+      // 86 in job context can also call propose_create_lead (intake
+      // tool merged into JOB_TOOLS). Detect it here and run the
+      // server-side execProposeCreateLead the same way the intake
+      // /chat/continue endpoint does — every other tool result just
+      // echoes the client-supplied applied_summary.
+      const eventsToSend = [];
+      for (const r of toolResults) {
+        let summary;
+        let isError = false;
+        if (!r.approved) {
+          summary = r.reject_reason || 'User rejected this proposal.';
+          res.write('data: ' + JSON.stringify({ tool_rejected: { id: r.tool_use_id, name: r.name } }) + '\n\n');
+        } else if (r.name === 'propose_create_lead') {
+          try {
+            summary = await execProposeCreateLead(r.input || {}, req.user.id);
+            res.write('data: ' + JSON.stringify({ tool_applied: { id: r.tool_use_id, name: r.name, input: r.input, summary } }) + '\n\n');
+          } catch (e) {
+            summary = 'Error: ' + (e.message || 'failed');
+            isError = true;
+            res.write('data: ' + JSON.stringify({ tool_failed: { id: r.tool_use_id, name: r.name, input: r.input, error: summary } }) + '\n\n');
+          }
+        } else {
+          summary = r.applied_summary || 'User approved. Change applied.';
+        }
+        eventsToSend.push({
+          type: 'user.custom_tool_result',
+          custom_tool_use_id: r.tool_use_id,
+          content: [{ type: 'text', text: summary }],
+          is_error: isError || undefined
+        });
+      }
 
       await pool.query('UPDATE ai_sessions SET last_used_at = NOW() WHERE id = $1', [session.id]);
 
@@ -3650,6 +3679,11 @@ router.post('/v2/jobs/:id/chat/continue',
         anthropic, res,
         session: session,
         eventsToSend,
+        // Same auto-tier handler as the initial chat — if 86 runs
+        // more read_existing_clients / read_existing_leads after
+        // the user approves a propose_create_lead, those still
+        // execute inline.
+        onCustomToolUse: makeIntakeOnCustomToolUse(req.user.id),
         persistAssistantText: async (text, usage) => {
           await saveJobAssistantMessage({ jobId, userId: req.user.id, text, usage });
         }
@@ -7062,7 +7096,11 @@ module.exports.internals = {
   buildStaffContext,
   sectionsForAgent,
   estimateTools: () => [...WEB_TOOLS, ...ESTIMATE_TOOLS],
-  jobTools:      () => [...WEB_TOOLS, ...JOB_TOOLS],
+  // 86 (job-side) inherits the intake tools too so 86 can capture
+  // a new lead from any context — not just the dedicated intake
+  // panel. Tier markers are stripped (the runtime onCustomToolUse
+  // callback decides auto vs approval at call time).
+  jobTools:      () => [...WEB_TOOLS, ...JOB_TOOLS, ...INTAKE_TOOLS.map(({ tier, ...t }) => t)],
   clientTools:   () => [...WEB_TOOLS, ...CLIENT_TOOLS.map(({ tier, ...t }) => t)],
   staffTools:    () => [...WEB_TOOLS, ...STAFF_TOOLS.map(({ tier, ...t }) => t)],
   intakeTools:   () => [...WEB_TOOLS, ...INTAKE_TOOLS.map(({ tier, ...t }) => t)],

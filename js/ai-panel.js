@@ -2261,6 +2261,12 @@
   // the standard saveData() persistence path.
   function applyJobTool(tu) {
     var input = tu.input || {};
+    // 86 in job context can call propose_create_lead (intake tool
+    // merged into JOB_TOOLS). Server-side execProposeCreateLead runs
+    // on /chat/continue, mirroring intake — return '' here so the
+    // approve flow signals success without attempting a client-side
+    // mutation.
+    if (tu.name === 'propose_create_lead') return '';
     switch (tu.name) {
       case 'request_build_mode': {
         // Special tool: not a write to job data, just a phase flip.
