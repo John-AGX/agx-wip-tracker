@@ -348,8 +348,12 @@
         keys.forEach(function(k) {
           var pct = totalAll > 0 ? Math.round(bucket[k] / totalAll * 100) : 0;
           var isActive = activeKey === k;
+          // String arg passed via single-quoted JS literal inside the
+          // double-quoted onclick attr. JSON.stringify gave us literal
+          // double-quotes that terminated the attribute early — the
+          // chip click did nothing.
           html += '<button class="ee-btn ' + (isActive ? '' : 'secondary') + '" ' +
-            'onclick="window.qbCostsView.' + setterName + '(' + JSON.stringify(k) + ')" ' +
+            'onclick="window.qbCostsView.' + setterName + '(\'' + escapeAttr(k) + '\')" ' +
             'style="font-size:11px;padding:3px 9px;">' +
             escapeHTML(k) + ' &middot; ' + fmtMoney(bucket[k]) + ' (' + pct + '%)' +
           '</button>';
@@ -370,8 +374,10 @@
     if (allLines.length) {
       var activeFilterChips = '';
       function chipReset(label, setter, val) {
+        // Single-quoted JS literal inside double-quoted attr —
+        // matches the chip palette pattern above.
         return '<button class="ee-btn secondary" style="font-size:11px;" ' +
-          'onclick="window.qbCostsView.' + setter + '(' + JSON.stringify(val || '') + ')">&times; ' +
+          'onclick="window.qbCostsView.' + setter + '(\'' + escapeAttr(val || '') + '\')">&times; ' +
           escapeHTML(label) + '</button>';
       }
       if (_state.filterCategory) activeFilterChips += chipReset(_state.filterCategory, 'filterByCategory');
@@ -495,7 +501,7 @@
     return '<th style="padding:8px 10px;text-align:' + (align || 'left') + ';font-size:10px;color:' +
       (active ? 'var(--accent,#22d3ee)' : 'var(--text-dim,#888)') +
       ';text-transform:uppercase;letter-spacing:0.5px;font-weight:700;cursor:pointer;user-select:none;" ' +
-      'onclick="window.qbCostsView.toggleSort(' + JSON.stringify(key) + ')">' + label + arrow + '</th>';
+      'onclick="window.qbCostsView.toggleSort(\'' + escapeAttr(key) + '\')">' + label + arrow + '</th>';
   }
 
   function statCard(label, value, color) {
@@ -541,7 +547,7 @@
       '<td style="padding:6px 8px;width:28px;">' +
         '<input type="checkbox" ' + (checked ? 'checked' : '') + ' ' +
           'data-qbc-select="' + escapeAttr(l.id) + '" ' +
-          'onchange="window.qbCostsView.toggleSelect(' + JSON.stringify(l.id) + ')" ' +
+          'onchange="window.qbCostsView.toggleSelect(\'' + escapeAttr(l.id) + '\')" ' +
           'style="cursor:pointer;width:14px;height:14px;" />' +
       '</td>' +
       td(fmtDate(l.date), { fontFamily: 'mono', size: 11, dim: true }) +
