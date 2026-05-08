@@ -3553,6 +3553,15 @@ router.post('/v2/jobs/:id/chat',
     const jobId = req.params.id;
     const clientContext = (req.body && req.body.clientContext) || null;
     const aiPhase = (req.body && req.body.aiPhase) === 'build' ? 'build' : 'plan';
+    // 86 in job context can capture leads (intake tools merged into
+    // JOB_TOOLS) and accept inline photos like the intake panel does.
+    // Photos stash into the per-user intake bucket so a subsequent
+    // propose_create_lead picks them up; they're also rendered inline
+    // for 86 to see visually on this turn.
+    const additionalImages = Array.isArray(req.body && req.body.additional_images)
+      ? req.body.additional_images.slice(0, 12)
+      : [];
+    if (additionalImages.length) stashPendingIntakeImages(req.user.id, additionalImages);
 
     setSSEHeaders(res);
 
@@ -3565,7 +3574,14 @@ router.post('/v2/jobs/:id/chat',
       // built-in compaction will shorten older turns automatically.
       const turnText =
         '<turn_context>\n' + ctxSystemToText(ctx.system) + '\n</turn_context>\n\n' + userMessage;
-      const userContent = [{ type: 'text', text: turnText }];
+      // Inline photos precede the text block per Anthropic guidance.
+      const inlineImageBlocks = additionalImages
+        .map(b64 => inlineImageBlock(b64))
+        .filter(Boolean)
+        .slice(0, 12);
+      const userContent = inlineImageBlocks.length
+        ? [...inlineImageBlocks, { type: 'text', text: turnText }]
+        : [{ type: 'text', text: turnText }];
 
       const session = await ensureAiSession({
         agentKey: 'job',
