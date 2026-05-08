@@ -67,6 +67,15 @@
     }).then(handleResponse);
   }
 
+  function patch(path, body) {
+    return fetch(path, {
+      method: 'PATCH',
+      headers: buildHeaders(),
+      credentials: 'same-origin',
+      body: JSON.stringify(body || {})
+    }).then(handleResponse);
+  }
+
   // Domain-specific helpers built on top of the verbs above.
   var jobs = {
     list: function() { return get('/api/jobs'); },
@@ -232,7 +241,20 @@
       return get('/api/qb-costs' + (jobId ? '?jobId=' + encodeURIComponent(jobId) : ''));
     },
     importBatch: function(payload) { return post('/api/qb-costs/import', payload); },
-    update: function(id, payload) { return put('/api/qb-costs/' + encodeURIComponent(id), payload); },
+    // Single-line link patch. Server route is PATCH /api/qb-costs/:id;
+    // this used to call put() which silently 404'd, so per-line link
+    // updates only landed in the optimistic local cache and got lost
+    // on the next reload. Now goes through patch() correctly.
+    update: function(id, payload) { return patch('/api/qb-costs/' + encodeURIComponent(id), payload); },
+    // Atomic bulk link. ids = array of qb_cost_lines.id; nodeId can
+    // be null to clear the link.
+    bulkLink: function(ids, nodeId) { return post('/api/qb-costs/bulk-link', { ids: ids, linkedNodeId: nodeId || null }); },
+    // Null out linked_node_id for any line on this job that points
+    // at a node not in the current valid set. Driven from the QB
+    // Costs view "Clean orphans" button.
+    cleanupOrphans: function(jobId, validNodeIds) {
+      return post('/api/qb-costs/cleanup-orphans', { jobId: jobId, validNodeIds: validNodeIds || [] });
+    },
     remove: function(id) { return del('/api/qb-costs/' + encodeURIComponent(id)); }
   };
 

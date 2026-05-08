@@ -242,6 +242,80 @@ router.patch('/:id',
 );
 
 // ──────────────────────────────────────────────────────────────────
+// POST /api/qb-costs/bulk-link
+// Body: { ids: [...], linkedNodeId: 'n38' | null }
+// Atomically applies one linked_node_id (or nulls it) to every line
+// in `ids` that the user can edit. Returns the updated count.
+// ──────────────────────────────────────────────────────────────────
+router.post('/bulk-link',
+  requireAuth, requireCapability('JOBS_EDIT_ANY'),
+  async (req, res) => {
+    try {
+      const { ids, linkedNodeId } = req.body || {};
+      if (!Array.isArray(ids) || !ids.length) {
+        return res.status(400).json({ error: 'ids array is required' });
+      }
+      // Cap to a reasonable batch — 1000 is generous for a weekly
+      // QB import (~500-800 lines is typical).
+      if (ids.length > 1000) {
+        return res.status(400).json({ error: 'bulk-link cap is 1000 lines per call' });
+      }
+      const target = linkedNodeId || null;
+      const result = await pool.query(
+        `UPDATE qb_cost_lines
+            SET linked_node_id = $1, updated_at = NOW()
+          WHERE id = ANY($2::text[])
+          RETURNING id`,
+        [target, ids]
+      );
+      res.json({ ok: true, updated: result.rowCount });
+    } catch (e) {
+      console.error('POST /api/qb-costs/bulk-link error:', e);
+      res.status(500).json({ error: 'Server error' });
+    }
+  }
+);
+
+// ──────────────────────────────────────────────────────────────────
+// POST /api/qb-costs/cleanup-orphans
+// Body: { jobId, validNodeIds: [...] }
+// Nulls out linked_node_id on any qb_cost_lines row for this job
+// whose target node is no longer in the graph. Returns the count of
+// fixed-up rows. Run-on-demand from the QB Costs view; can also be
+// auto-fired after node deletion if we want to keep the data clean.
+// ──────────────────────────────────────────────────────────────────
+router.post('/cleanup-orphans',
+  requireAuth, requireCapability('JOBS_EDIT_ANY'),
+  async (req, res) => {
+    try {
+      const { jobId, validNodeIds } = req.body || {};
+      if (!jobId) return res.status(400).json({ error: 'jobId is required' });
+      if (!Array.isArray(validNodeIds)) {
+        return res.status(400).json({ error: 'validNodeIds array is required' });
+      }
+      // Empty validNodeIds is legal — means "clear every link on
+      // this job" (e.g. graph was deleted). pg array literal needs
+      // at least one element; pass a sentinel that won't match real
+      // node ids.
+      const validList = validNodeIds.length ? validNodeIds : ['__no_nodes__'];
+      const result = await pool.query(
+        `UPDATE qb_cost_lines
+            SET linked_node_id = NULL, updated_at = NOW()
+          WHERE job_id = $1
+            AND linked_node_id IS NOT NULL
+            AND NOT (linked_node_id = ANY($2::text[]))
+          RETURNING id`,
+        [jobId, validList]
+      );
+      res.json({ ok: true, cleared: result.rowCount });
+    } catch (e) {
+      console.error('POST /api/qb-costs/cleanup-orphans error:', e);
+      res.status(500).json({ error: 'Server error' });
+    }
+  }
+);
+
+// ──────────────────────────────────────────────────────────────────
 // DELETE /api/qb-costs/:id   — manual cleanup
 // ──────────────────────────────────────────────────────────────────
 router.delete('/:id',
