@@ -202,7 +202,12 @@
     modal.innerHTML = buildSubModalHTML(sub);
     document.body.appendChild(modal);
 
-    modal.querySelector('[data-close]')?.addEventListener('click', function() { modal.remove(); });
+    // The modal has both a header × and a footer Cancel button — both
+    // tagged data-close. querySelectorAll catches both; the original
+    // single-querySelector only wired the header X.
+    modal.querySelectorAll('[data-close]').forEach(function(b) {
+      b.addEventListener('click', function() { modal.remove(); });
+    });
     modal.querySelector('[data-save]')?.addEventListener('click', function() { saveFromModal(modal); });
     if (_editingId) {
       modal.querySelector('[data-delete]')?.addEventListener('click', function() { deleteFromModal(modal); });
@@ -1312,7 +1317,9 @@
     modal.innerHTML = buildMigrationModalHTML(preview);
     document.body.appendChild(modal);
 
-    modal.querySelector('[data-close]')?.addEventListener('click', function() { modal.remove(); });
+    modal.querySelectorAll('[data-close]').forEach(function(b) {
+      b.addEventListener('click', function() { modal.remove(); });
+    });
     modal.querySelector('[data-apply]')?.addEventListener('click', function() {
       var btn = modal.querySelector('[data-apply]');
       btn.disabled = true;
