@@ -1400,11 +1400,11 @@ const AGENT_SYSTEM_BASELINE = {
   // whole agent team and tunes their playbooks via skill packs.
   staff: 'You are Chief of Staff, P86\'s lead-agent handler. Range over the entire scope of the company, but specifically you\'re 86\'s handler — 86 is the lead agent, you keep 86 sharp.\n\nYour job is meta:\n- Observe usage patterns across 86 / 47 / HR.\n- Audit specific conversations when something looks off.\n- Propose skill-pack improvements when the playbook needs to evolve. Skill packs are reusable instruction blocks loaded into 86 / 47 / HR every turn — when you spot a pattern (a recurring blind spot, a new pricing rule, a workflow that should be standardized), propose an edit to the relevant pack.\n- Surface drift between agents. If 47 starts under-pricing labor relative to 86\'s analysis flagging margin compression, you catch it.\n\nThink of yourself as the meta-agent who makes the rest of the team better. You don\'t do the work; you tune the people doing the work. The user message will carry per-turn live snapshot.',
 
-  // Intake — repurposed to be 86 in lead-intake mode. The intake
-  // panel still uses fresh-session-per-open semantics (no persistent
-  // history) because each intake is a one-shot, but the agent
-  // identity is 86, not a separate Intake agent.
-  intake: 'You are 86 in lead-intake mode. P86 — a Central-Florida construction-services platform. Each intake conversation is one-shot: capture the lead from the user\'s description + uploaded photos, propose_create_lead within 1-2 turns, then hand off to 47 with everything 47 needs to estimate fast and tight.\n\nMANDATORY FLOW:\n1. Run read_existing_clients ONCE with a short substring of the property/company name (e.g. "Solace Timacuan", not the full address). If 1+ match returned, USE the first match\'s id as existing_client_id — do NOT re-run the search.\n2. Optionally run read_existing_leads ONCE to flag duplicates.\n3. CALL propose_create_lead IMMEDIATELY after step 1 (or 1+2). The approval card IS the confirmation step — do not pause to ask the user to "confirm" first.\n\nDO NOT:\n- Re-run the same read tool with the same arg.\n- Stall after read tools return — ALWAYS follow with either propose_create_lead OR a single sharp clarifying question (only when truly essential).\n- Recap the conversation. Just propose.\n- Ask "shall I proceed?" or "ready to create?" — the Approve button does that.\n\nNotes field on propose_create_lead: capture the user\'s description verbatim PLUS your photo interpretation ("uploaded 3 photos: 36-inch fiberglass entry door, weathered jamb, no rot on threshold"). Be thorough — these notes drive 47\'s later estimate.\n\nAfter the lead lands, your responsibility doesn\'t end — you (as 86) pre-load 47 with the necessary scope/context to estimate, and ping HR if the property is missing client info that 47 will need (correct address for material takeoffs, missing on-site contact, missing market designation).\n\nIf you typed an explanation when you should have proposed, recover by calling propose_create_lead in the next turn even before the user replies.\n\nThe per-turn user message carries: which user is intaking, the date, and photo count.'
+  // Intake is no longer a separate agent — 86 owns the lead-intake
+  // flow directly. The /v2/intake/* routes still exist for the
+  // "🧲 New Lead with AI" entry point but they call into 86's
+  // managed agent. Nothing to register on the Anthropic side for an
+  // intake-only agent.
 };
 
 // Convert one of our local tool definitions (the ESTIMATE_TOOLS /
@@ -1498,15 +1498,16 @@ function builtinToolsetFor(agentKey) {
 function customToolsFor(agentKey) {
   const aiInternals = require('./ai-routes-internals');
   if (!aiInternals) return [];
-  // estimateTools / jobTools / clientTools / staffTools / intakeTools
-  // each include the WEB_TOOLS prefix; strip those because we configure
-  // web_search / web_fetch through the built-in toolset above instead.
+  // estimateTools / jobTools / clientTools / staffTools each include
+  // the WEB_TOOLS prefix; strip those because we configure web_search
+  // / web_fetch through the built-in toolset above instead. Intake
+  // is no longer a separate agent — 86's jobTools already spread
+  // INTAKE_TOOLS, so the lead-intake flow runs as 86.
   let tools = [];
   if (agentKey === 'ag')          tools = aiInternals.estimateTools();
   else if (agentKey === 'job')    tools = aiInternals.jobTools();
   else if (agentKey === 'cra')    tools = aiInternals.clientTools();
   else if (agentKey === 'staff')  tools = aiInternals.staffTools();
-  else if (agentKey === 'intake') tools = aiInternals.intakeTools && aiInternals.intakeTools() || [];
   return tools
     .filter(t => t.name !== 'web_search')              // built-in toolset owns this
     .map(toCustomToolParam)
@@ -1573,8 +1574,8 @@ async function ensureManagedAgent(agentKey) {
 router.post('/managed/reregister', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
   try {
     const key = String(req.query.key || '').toLowerCase();
-    if (!['ag', 'job', 'cra', 'staff', 'intake'].includes(key)) {
-      return res.status(400).json({ error: 'key must be ag | job | cra | staff | intake' });
+    if (!['ag', 'job', 'cra', 'staff'].includes(key)) {
+      return res.status(400).json({ error: 'key must be ag | job | cra | staff' });
     }
     const anthropic = getAnthropic();
     if (!anthropic) throw new Error('ANTHROPIC_API_KEY not set on this deployment.');
@@ -1632,7 +1633,7 @@ router.post('/managed/reregister', requireAuth, requireCapability('ROLES_MANAGE'
 router.post('/managed/bootstrap', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
   try {
     const key = String(req.query.key || 'all').toLowerCase();
-    const agents = (key === 'all') ? ['ag', 'job', 'cra', 'staff', 'intake'] : [key];
+    const agents = (key === 'all') ? ['ag', 'job', 'cra', 'staff'] : [key];
     const summary = [];
     for (const agentKey of agents) {
       try {

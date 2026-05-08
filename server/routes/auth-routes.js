@@ -54,11 +54,10 @@ router.get('/me', requireAuth, (req, res) => {
     // ramp independently; production stays on v1 until each env var
     // flips.
     agent_mode_cra:   (process.env.AGENT_MODE_HR   || '').toLowerCase() === 'agents' ? 'agents' : 'legacy',
-    agent_mode_staff: (process.env.AGENT_MODE_STAFF || '').toLowerCase() === 'agents' ? 'agents' : 'legacy',
-    // Lead Intake — the fifth agent. Click the "🧲 New Lead with AI"
-    // button on the Leads page to invoke. Independent flag so it
-    // ramps separately from the other agents.
-    agent_mode_intake: (process.env.AGENT_MODE_INTAKE || '').toLowerCase() === 'agents' ? 'agents' : 'legacy'
+    agent_mode_staff: (process.env.AGENT_MODE_STAFF || '').toLowerCase() === 'agents' ? 'agents' : 'legacy'
+    // Note: there is no agent_mode_intake. 86 owns the lead-intake
+    // flow now, so the "🧲 New Lead with AI" entry point gates on
+    // agent_mode_job (= AGENT_MODE_86) rather than a separate flag.
   };
   res.json({ user: req.user, feature_flags: featureFlags });
 });

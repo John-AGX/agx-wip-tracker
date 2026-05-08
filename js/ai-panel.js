@@ -4545,10 +4545,13 @@
   // conversation. Pages that want the leads list to refresh after a
   // new lead lands can register window.refreshLeadsAfterAI.
   window.openIntakeAI = function() {
+    // Intake runs through 86 now — gate on agent_mode_job, not
+    // a separate intake flag. The /v2/intake/* routes still exist
+    // for this entry point but they call into 86's managed agent.
     var u = (window.agxAuth && window.agxAuth.getUser) ? window.agxAuth.getUser() : null;
-    var enabled = !!(u && u.feature_flags && u.feature_flags.agent_mode_intake === 'agents');
+    var enabled = !!(u && u.feature_flags && u.feature_flags.agent_mode_job === 'agents');
     if (!enabled) {
-      alert('Lead Intake AI is disabled. Set AGENT_MODE_INTAKE=agents in the server env to enable.');
+      alert('Lead Intake AI is disabled. Set AGENT_MODE_86=agents in the server env to enable (intake runs through 86).');
       return;
     }
     open({ entityType: 'intake' });

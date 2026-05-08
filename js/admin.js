@@ -2363,8 +2363,10 @@
   // assignment value stays 'cra'. 86's key is 'job' (matches its
   // entity_type) — assignments target the job-side analyst.
   // (Display rename: AG→47, Elle→86. Underlying agent_keys
-  // ag / job / cra / staff / intake stay the same to avoid a DB
-  // migration; only the user-facing labels change.)
+  // ag / job / cra / staff stay the same to avoid a DB migration;
+  // only the user-facing labels change. The 'intake' key was
+  // retired — 86 owns lead-intake now; intake sessions still use
+  // entity_type='intake' as a label, but agent_key='job'.)
   var AGENT_LABELS = {
     ag:  '🎯 47 (Estimating Hitman)',
     job: '📊 86 (Lead Agent)',
@@ -3884,8 +3886,10 @@
     host.innerHTML = panelHeader('Managed Agents (Phase 1a)', '🤖') + '<div style="font-size:12px;color:var(--text-dim,#888);font-style:italic;">Loading…</div>';
     window.agxApi.get('/api/admin/agents/managed').then(function(resp) {
       var rows = (resp && resp.agents) || [];
-      var labels = { ag: '47 (estimating)', job: '86 (analyst)', cra: 'HR (clients + user health)', staff: 'Chief of Staff', intake: 'Intake (lead capture)' };
-      var allKeys = ['ag', 'job', 'cra', 'staff', 'intake'];
+      // Intake is no longer a separate managed agent — 86 owns the
+      // lead-intake flow. Only four agents register on the Anthropic side.
+      var labels = { ag: '47 (estimating)', job: '86 (lead agent — incl. intake)', cra: 'HR (clients + user health)', staff: 'Chief of Staff' };
+      var allKeys = ['ag', 'job', 'cra', 'staff'];
       var registered = {};
       rows.forEach(function(r) { registered[r.agent_key] = r; });
 

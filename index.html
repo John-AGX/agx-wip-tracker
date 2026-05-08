@@ -693,8 +693,10 @@
                                      drop in a description + photos and approve
                                      the propose_create_lead card to land the
                                      lead in one shot. Hidden until the user has
-                                     LEADS_EDIT and the AGENT_MODE_INTAKE env
-                                     var is set; the JS guard double-checks. -->
+                                     LEADS_EDIT and the AGENT_MODE_86 env
+                                     var is set; the JS guard double-checks.
+                                     Intake now runs through 86 (no separate
+                                     intake agent). -->
                                 <button class="primary" onclick="window.openIntakeAI && window.openIntakeAI()" data-cap="LEADS_EDIT" title="Describe a new lead in chat — the AI captures details, dedupes against existing clients, and proposes the lead for one-click create." style="background:linear-gradient(135deg,#8b5cf6,#4f8cff);color:#fff;border:none;font-weight:600;">&#x1F9F2; New Lead with AI</button>
                                 <button class="success" onclick="document.getElementById('leads-import-file').click()" data-cap="LEADS_EDIT" title="Import a Buildertrend Leads xlsx export">&#x1F4E5; Import from Buildertrend</button>
                                 <input type="file" id="leads-import-file" accept=".xlsx" style="display:none;" onchange="handleLeadsImportFile(event)" />
@@ -2221,7 +2223,7 @@
     <script src="js/attachments.js?v=10"></script>
     <script src="js/markup-viewer.js?v=17"></script>
     <script src="js/pdf-viewer.js?v=3"></script>
-    <script src="js/admin.js?v=62"></script>
+    <script src="js/admin.js?v=63"></script>
     <script src="js/clients.js?v=13"></script>
     <script src="js/subs.js?v=8"></script>
     <script src="js/job-audit.js?v=3"></script>
@@ -2237,7 +2239,7 @@
     <script src="js/estimate-editor.js?v=36"></script>
     <script src="js/estimate-preview.js?v=8"></script>
     <script src="js/bt-export.js?v=6"></script>
-    <script src="js/ai-panel.js?v=88"></script>
+    <script src="js/ai-panel.js?v=89"></script>
     <script src="js/tab-slider.js?v=1"></script>
 
     <script src="js/workspace.js?v=43"></script>

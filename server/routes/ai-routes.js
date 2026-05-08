@@ -6597,8 +6597,6 @@ router.post('/v2/staff/chat/continue',
 // new lead's attachments on approval.
 // ════════════════════════════════════════════════════════════════════
 
-const FLAG_AGENT_MODE_INTAKE = (process.env.AGENT_MODE_INTAKE || '').toLowerCase() === 'agents';
-
 // Per-user pending image bucket scoped to intake. Separate from the
 // HR business-card bucket so a stale HR upload can't accidentally
 // land on a lead, and vice-versa.
@@ -6900,8 +6898,8 @@ router.post('/v2/intake/chat',
   async (req, res) => {
     const anthropic = getAnthropic();
     if (!anthropic) return res.status(503).json({ error: 'AI assistant is not configured.' });
-    if (!FLAG_AGENT_MODE_INTAKE) {
-      return res.status(503).json({ error: 'Lead Intake AI is disabled. Set AGENT_MODE_INTAKE=agents to enable.' });
+    if (!FLAG_AGENT_MODE_86) {
+      return res.status(503).json({ error: 'Lead Intake AI is disabled. Set AGENT_MODE_86=agents to enable (intake now runs through 86).' });
     }
     const userMessage = (req.body && req.body.message || '').trim();
     if (!userMessage) return res.status(400).json({ error: 'message is required' });
@@ -6928,7 +6926,7 @@ router.post('/v2/intake/chat',
       const startNew = !!(req.body && req.body.start_new);
       if (startNew) {
         await archiveActiveAiSession({
-          agentKey: 'intake', entityType: 'intake', entityId: null, userId: req.user.id
+          agentKey: 'job', entityType: 'intake', entityId: null, userId: req.user.id
         });
         clearPendingIntakeImages(req.user.id);
       }
@@ -6946,8 +6944,12 @@ router.post('/v2/intake/chat',
         ? [...inlineImageBlocks, { type: 'text', text: turnText }]
         : [{ type: 'text', text: turnText }];
 
+      // Intake panel runs as 86 (intake is one of 86's responsibilities,
+      // not a separate agent). entity_type='intake' keeps these
+      // sessions distinct from job-scoped 86 chats so panel-open
+      // semantics stay one-shot.
       const session = await ensureAiSession({
-        agentKey: 'intake', entityType: 'intake', entityId: null, userId: req.user.id
+        agentKey: 'job', entityType: 'intake', entityId: null, userId: req.user.id
       });
       await pool.query('UPDATE ai_sessions SET last_used_at = NOW() WHERE id = $1', [session.id]);
 
@@ -7004,8 +7006,8 @@ router.post('/v2/intake/chat/continue',
   async (req, res) => {
     const anthropic = getAnthropic();
     if (!anthropic) return res.status(503).json({ error: 'AI assistant is not configured.' });
-    if (!FLAG_AGENT_MODE_INTAKE) {
-      return res.status(503).json({ error: 'Lead Intake AI is disabled.' });
+    if (!FLAG_AGENT_MODE_86) {
+      return res.status(503).json({ error: 'Lead Intake AI is disabled. Set AGENT_MODE_86=agents to enable.' });
     }
     const decisions = req.body && req.body.tool_results;
     if (!Array.isArray(decisions) || !decisions.length) {
@@ -7014,9 +7016,11 @@ router.post('/v2/intake/chat/continue',
 
     setSSEHeaders(res);
     try {
+      // Look up the active intake session — runs as 86 with
+      // entity_type='intake' since the rewire to 86's identity.
       const sessionRow = await pool.query(
         `SELECT * FROM ai_sessions
-           WHERE agent_key = 'intake' AND entity_type = 'intake'
+           WHERE agent_key = 'job' AND entity_type = 'intake'
              AND entity_id IS NULL AND user_id = $1 AND archived_at IS NULL`,
         [req.user.id]
       );
@@ -7091,7 +7095,7 @@ router.post('/v2/intake/chat/continue',
       if (createdLeadId) {
         try {
           await archiveActiveAiSession({
-            agentKey: 'intake', entityType: 'intake', entityId: null, userId: req.user.id
+            agentKey: 'job', entityType: 'intake', entityId: null, userId: req.user.id
           });
         } catch (e) { /* best-effort */ }
       }
@@ -7261,7 +7265,6 @@ module.exports.internals = {
   jobTools:      () => [...WEB_TOOLS, ...JOB_TOOLS, ...INTAKE_TOOLS.map(({ tier, ...t }) => t)],
   clientTools:   () => [...WEB_TOOLS, ...CLIENT_TOOLS.map(({ tier, ...t }) => t)],
   staffTools:    () => [...WEB_TOOLS, ...STAFF_TOOLS.map(({ tier, ...t }) => t)],
-  intakeTools:   () => [...WEB_TOOLS, ...INTAKE_TOOLS.map(({ tier, ...t }) => t)],
   defaultModel: () => MODEL,
   maxTokens: () => MAX_TOKENS,
   // Resolve the effort string for a given model. Caller passes the
