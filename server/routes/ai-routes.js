@@ -2697,6 +2697,13 @@ router.post('/v2/estimates/:id/chat',
       ? req.body.additional_images.slice(0, 12)
       : [];
     const estimateId = req.params.id;
+    // Photos uploaded mid-chat auto-attach to THIS estimate. The
+    // entity already exists, so we persist immediately. Photos still
+    // pass inline this turn so 47 sees them on the same call.
+    if (additionalImages.length) {
+      try { await attachBase64PhotosToEntity('estimate', estimateId, additionalImages, req.user.id, 'chat-photo'); }
+      catch (e) { console.warn('[v2/estimates/chat] photo attach failed:', e && e.message); }
+    }
 
     setSSEHeaders(res);
 
@@ -2917,6 +2924,69 @@ async function buildJobContext(jobId, clientContext, aiPhase) {
   if (!jobRes.rows.length) throw new Error('Job not found');
   const job = { id: jobRes.rows[0].id, owner_id: jobRes.rows[0].owner_id, ...jobRes.rows[0].data };
 
+  // Phase 2 — Job context inherits attachments from the originating
+  // lead and any estimate(s) that hung off that lead. Mirrors the
+  // estimate→lead inheritance buildEstimateContext already does.
+  // Lookup chain:
+  //   leads.job_id = jobId  → lead.id
+  //   estimates.data->>'lead_id' = lead.id  → estimate.id(s)
+  // All three (job + lead + estimates) attachments rolled up so the
+  // PM working in the job sees every photo/doc captured during the
+  // pre-job lifecycle.
+  const linkedAtts = [];
+  try {
+    const jobAtts = await pool.query(
+      `SELECT * FROM attachments WHERE entity_type='job' AND entity_id=$1
+         ORDER BY position, uploaded_at`,
+      [jobId]
+    );
+    linkedAtts.push(...jobAtts.rows.map(r => ({ ...r, source: 'job' })));
+    const leadR = await pool.query(`SELECT id FROM leads WHERE job_id=$1 LIMIT 1`, [jobId]);
+    if (leadR.rows.length) {
+      const leadId = leadR.rows[0].id;
+      const leadAtts = await pool.query(
+        `SELECT * FROM attachments WHERE entity_type='lead' AND entity_id=$1
+           ORDER BY position, uploaded_at`,
+        [leadId]
+      );
+      linkedAtts.push(...leadAtts.rows.map(r => ({ ...r, source: 'lead' })));
+      const estR = await pool.query(`SELECT id FROM estimates WHERE data->>'lead_id'=$1`, [leadId]);
+      if (estR.rows.length) {
+        const estIds = estR.rows.map(r => r.id);
+        const estAtts = await pool.query(
+          `SELECT * FROM attachments WHERE entity_type='estimate' AND entity_id = ANY($1::text[])
+             ORDER BY position, uploaded_at`,
+          [estIds]
+        );
+        linkedAtts.push(...estAtts.rows.map(r => ({ ...r, source: 'estimate' })));
+      }
+    }
+  } catch (e) {
+    console.warn('[buildJobContext] attachment cascade failed (non-fatal):', e && e.message);
+  }
+  const cascadePhotoBlocks = [];
+  const cascadeDocs = [];
+  for (const a of linkedAtts) {
+    if (a.mime_type && a.mime_type.startsWith('image/') && a.thumb_key) {
+      // Cap at 12 cascade photos so we don't blow the per-turn vision
+      // budget — newer first since linkedAtts is ordered job → lead →
+      // estimate (job's own photos are most relevant).
+      if (cascadePhotoBlocks.length < 12) {
+        try {
+          const blk = await loadPhotoAsBlock(a);
+          if (blk) cascadePhotoBlocks.push(blk);
+        } catch (e) { /* skip a single bad photo */ }
+      }
+    } else {
+      cascadeDocs.push({
+        source: a.source,
+        filename: a.filename,
+        mime: a.mime_type,
+        size: a.size_bytes
+      });
+    }
+  }
+
   // Joined data sits alongside the jobs JSONB blob — the bulk save splits
   // them into separate appData arrays on the client. Read all of them
   // here and filter to this job.
@@ -2947,6 +3017,32 @@ async function buildJobContext(jobId, clientContext, aiPhase) {
   if (job.status) lines.push('- Status: ' + job.status);
   if (job.targetMarginPct != null) lines.push('- Target margin: ' + job.targetMarginPct + '%');
   lines.push('');
+
+  // Phase 2 — Surface inherited attachments so 86 knows what photos
+  // and docs are visible on this turn. Photo blocks are pushed into
+  // userContent on the way out; this section is a roll-up summary.
+  if (linkedAtts.length) {
+    const bySrc = { job: 0, lead: 0, estimate: 0 };
+    linkedAtts.forEach(a => { bySrc[a.source] = (bySrc[a.source] || 0) + 1; });
+    const srcParts = [];
+    if (bySrc.job)      srcParts.push(bySrc.job      + ' on job');
+    if (bySrc.estimate) srcParts.push(bySrc.estimate + ' from estimate');
+    if (bySrc.lead)     srcParts.push(bySrc.lead     + ' from lead');
+    lines.push('# Attachments');
+    lines.push('- Total: ' + linkedAtts.length + ' (' + srcParts.join(' · ') + ').');
+    if (cascadeDocs.length) {
+      lines.push('## Docs');
+      cascadeDocs.slice(0, 12).forEach(d => {
+        lines.push('- [' + d.source + '] ' + d.filename + ' (' + (d.mime || '') + (d.size ? ', ' + Math.round(d.size / 1024) + ' KB' : '') + ')');
+      });
+      if (cascadeDocs.length > 12) lines.push('- … and ' + (cascadeDocs.length - 12) + ' more');
+    }
+    if (cascadePhotoBlocks.length) {
+      lines.push('## Photos');
+      lines.push('- ' + cascadePhotoBlocks.length + ' photo' + (cascadePhotoBlocks.length === 1 ? '' : 's') + ' visible inline this turn (most-recent first by job → lead → estimate priority).');
+    }
+    lines.push('');
+  }
 
   lines.push('# WIP snapshot');
   lines.push('## Income');
@@ -3303,9 +3399,12 @@ async function buildJobContext(jobId, clientContext, aiPhase) {
 
   // Job side stays plain — single string. Lower volume than AG/HR so
   // the marginal caching benefit isn't worth the structural complexity.
+  // photoBlocks now includes the cascade-rolled-up images from
+  // job + lead + estimate (Phase 2). The /v2/jobs/:id/chat handler
+  // spreads these into userContent so 86 sees the photos inline.
   return {
     system: lines.join('\n'),
-    photoBlocks: [],
+    photoBlocks: cascadePhotoBlocks,
     aiPhase: aiPhase,
     packsLoaded: elleSkills.map(s => s.name)
   };
@@ -3553,15 +3652,18 @@ router.post('/v2/jobs/:id/chat',
     const jobId = req.params.id;
     const clientContext = (req.body && req.body.clientContext) || null;
     const aiPhase = (req.body && req.body.aiPhase) === 'build' ? 'build' : 'plan';
-    // 86 in job context can capture leads (intake tools merged into
-    // JOB_TOOLS) and accept inline photos like the intake panel does.
-    // Photos stash into the per-user intake bucket so a subsequent
-    // propose_create_lead picks them up; they're also rendered inline
-    // for 86 to see visually on this turn.
+    // Photos uploaded via the chat composer auto-attach to THIS
+    // job's attachments. Mirrors the estimate-chat behavior — the
+    // entity already exists, so there's no need for a bucket; we
+    // persist immediately and pass the same photos inline so 86
+    // can describe what it sees on this turn.
     const additionalImages = Array.isArray(req.body && req.body.additional_images)
       ? req.body.additional_images.slice(0, 12)
       : [];
-    if (additionalImages.length) stashPendingIntakeImages(req.user.id, additionalImages);
+    if (additionalImages.length) {
+      try { await attachBase64PhotosToEntity('job', jobId, additionalImages, req.user.id, 'chat-photo'); }
+      catch (e) { console.warn('[v2/jobs/chat] photo attach failed:', e && e.message); }
+    }
 
     setSSEHeaders(res);
 
@@ -3574,13 +3676,18 @@ router.post('/v2/jobs/:id/chat',
       // built-in compaction will shorten older turns automatically.
       const turnText =
         '<turn_context>\n' + ctxSystemToText(ctx.system) + '\n</turn_context>\n\n' + userMessage;
-      // Inline photos precede the text block per Anthropic guidance.
-      const inlineImageBlocks = additionalImages
-        .map(b64 => inlineImageBlock(b64))
-        .filter(Boolean)
-        .slice(0, 12);
-      const userContent = inlineImageBlocks.length
-        ? [...inlineImageBlocks, { type: 'text', text: turnText }]
+      // Inline images: cascade photos from job + lead + estimate
+      // (already loaded into ctx.photoBlocks by buildJobContext) plus
+      // any photos uploaded with this turn. Cap at 18 total to stay
+      // within the per-turn vision budget.
+      const inlineImageBlocks = [...(ctx.photoBlocks || [])];
+      additionalImages.forEach(b64 => {
+        const block = inlineImageBlock(b64);
+        if (block) inlineImageBlocks.push(block);
+      });
+      const cappedImages = inlineImageBlocks.slice(0, 18);
+      const userContent = cappedImages.length
+        ? [...cappedImages, { type: 'text', text: turnText }]
         : [{ type: 'text', text: turnText }];
 
       const session = await ensureAiSession({
@@ -6603,21 +6710,43 @@ async function execIntakeRead(name, input) {
   return 'Unknown intake read tool: ' + name;
 }
 
-// Move every staged photo onto the new lead's attachments via the
-// same R2 + sharp pipeline HR's business-card flow uses. Returns the
-// number of photos attached. Errors per-photo are logged but don't
-// abort the rest — the lead is already created so partial success
-// beats rolling everything back.
-async function attachPendingIntakePhotosToLead(userId, leadId) {
-  const photos = drainPendingIntakeImages(userId);
-  if (!photos.length) return 0;
+// Generic R2 + sharp + attachments-insert pipeline. Used by intake
+// (drains the per-user bucket onto the new lead) AND by job/estimate
+// chat (each upload lands directly on the entity that owns the chat
+// — no bucket since the entity already exists). Returns the number
+// of photos attached. Errors per-photo are logged but don't abort
+// the rest — partial success beats rolling everything back.
+//
+// `photos` shape: array of either { b64, mime } objects (from intake
+// bucket) OR plain base64 strings (from req.body.additional_images).
+// Both shapes are normalized internally.
+//
+// `filenamePrefix` becomes `<prefix>-<idx>.jpg` in the attachments
+// table — useful for showing where the file came from in lists
+// ("intake-photo-1", "chat-photo-3", etc.).
+async function attachBase64PhotosToEntity(entityType, entityId, photos, userId, filenamePrefix) {
+  if (!photos || !photos.length) return 0;
+  // Append at the end of the existing attachment order so newly
+  // uploaded photos don't shuffle positions.
+  const posR = await pool.query(
+    'SELECT COALESCE(MAX(position), -1) AS max_pos FROM attachments WHERE entity_type = $1 AND entity_id = $2',
+    [entityType, entityId]
+  );
+  const startPos = (posR.rows[0] && posR.rows[0].max_pos != null) ? Number(posR.rows[0].max_pos) + 1 : 0;
   let saved = 0;
   for (let i = 0; i < photos.length; i++) {
-    const photo = photos[i];
+    const raw = photos[i];
+    // Normalize: { b64, mime } → unwrap; bare string → wrap.
+    const b64 = (raw && typeof raw === 'object' && 'b64' in raw)
+      ? raw.b64
+      : (typeof raw === 'string' && raw.indexOf('base64,') >= 0
+          ? raw.slice(raw.indexOf('base64,') + 7)
+          : raw);
+    const mime = (raw && typeof raw === 'object' && raw.mime) ? raw.mime : 'image/jpeg';
     try {
-      const buf = Buffer.from(photo.b64, 'base64');
+      const buf = Buffer.from(b64, 'base64');
       const id = 'att_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
-      const baseKey = 'lead/' + leadId + '/' + id;
+      const baseKey = entityType + '/' + entityId + '/' + id;
       let thumbKey = null, webKey = null, originalKey;
       let thumbUrl = null, webUrl = null, originalUrl;
       let width = null, height = null;
@@ -6633,30 +6762,39 @@ async function attachPendingIntakePhotosToLead(userId, leadId) {
         originalKey = baseKey + '_orig.jpg';
         thumbUrl    = await storage.put(thumbKey, thumbBuf, 'image/jpeg');
         webUrl      = await storage.put(webKey,   webBuf,   'image/jpeg');
-        originalUrl = await storage.put(originalKey, buf, photo.mime || 'image/jpeg');
+        originalUrl = await storage.put(originalKey, buf, mime);
       } catch (e) {
         originalKey = baseKey + '_orig.jpg';
-        originalUrl = await storage.put(originalKey, buf, photo.mime || 'image/jpeg');
+        originalUrl = await storage.put(originalKey, buf, mime);
       }
       await pool.query(
         `INSERT INTO attachments
            (id, entity_type, entity_id, filename, mime_type, size_bytes,
             width, height, thumb_url, web_url, original_url,
             thumb_key, web_key, original_key, position, uploaded_by)
-         VALUES ($1, 'lead', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
-        [id, leadId, 'intake-photo-' + (i + 1) + '.jpg',
-         photo.mime || 'image/jpeg', buf.length,
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
+        [id, entityType, entityId,
+         (filenamePrefix || 'photo') + '-' + (i + 1) + '.jpg',
+         mime, buf.length,
          width, height,
          thumbUrl, webUrl, originalUrl,
          thumbKey, webKey, originalKey,
-         i, userId]
+         startPos + i, userId]
       );
       saved++;
     } catch (e) {
-      console.warn('[intake] photo attach failed for lead ' + leadId + ' (idx ' + i + '):', e && e.message);
+      console.warn('[attach] photo attach failed for ' + entityType + ' ' + entityId + ' (idx ' + i + '):', e && e.message);
     }
   }
   return saved;
+}
+
+// Intake-specific wrapper — drains the per-user bucket onto the new
+// lead. Kept as a thin shim so the intake propose_create_lead handler
+// reads cleanly.
+async function attachPendingIntakePhotosToLead(userId, leadId) {
+  const photos = drainPendingIntakeImages(userId);
+  return await attachBase64PhotosToEntity('lead', leadId, photos, userId, 'intake-photo');
 }
 
 // Approval-tier handler: create the client (if inline), insert the
