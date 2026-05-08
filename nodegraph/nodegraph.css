@@ -104,8 +104,12 @@ body.light-mode .ng-del-cancel:hover{background:#e5e7eb}
 .ng-cat.ng-open .ng-cat-arrow{transform:rotate(90deg)}
 .ng-cat-items{display:none;padding:0 0 6px}
 .ng-cat.ng-open .ng-cat-items{display:block}
-.ng-cat-item{padding:5px 12px 5px 24px;font-size:12px;color:var(--ng-dim);cursor:grab;display:flex;align-items:center;gap:6px;border-radius:4px;margin:0 6px}
+.ng-cat-item{padding:5px 12px 5px 24px;font-size:12px;color:var(--ng-dim);cursor:grab;display:flex;align-items:center;gap:8px;border-radius:4px;margin:0 6px}
 .ng-cat-item:hover{background:var(--ng-surface);color:var(--ng-text)}
+/* Library icons render ~2× the row text size for visual weight in
+   the sidebar. The auto-swapped emoji span holds an .agx-icon SVG
+   that defaults to 1em × 1em; bump it specifically here. */
+.ng-cat-item .agx-icon{width:2em;height:2em;vertical-align:-0.35em}
 /* Canvas */
 .ng-canvas-area{flex:1;position:relative;overflow:hidden;cursor:grab}
 .ng-canvas-area.ng-panning{cursor:grabbing}
