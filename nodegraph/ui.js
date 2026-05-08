@@ -3012,6 +3012,18 @@ window.openNodeGraph=function(jid){
   // paint; cloud sync runs underneath and re-renders if it returns
   // newer data. Avoids the dead-air pause of awaiting a network call
   // before showing anything.
+  //
+  // CRITICAL: gate cloud writes during the initial-open window. The
+  // bootstrap render() at the bottom of this branch unconditionally
+  // calls saveGraph() (engine.js render does so on every render).
+  // Without the gate, that first save races ahead of syncFromCloud
+  // and overwrites the canonical cloud state with the current user's
+  // stale localStorage — meaning every viewer's first paint clobbers
+  // whatever their teammates last saved. Flipping it back in
+  // syncFromCloud's settle handler restores normal save behavior.
+  if (E && typeof E.setInitialCloudSyncInFlight === 'function') {
+    E.setInitialCloudSyncInFlight(true);
+  }
   if(jid && jid!==E.job()){
     E.job(jid);
     E.setNodes([]); E.setWires([]); E.setNid(1);
@@ -3045,6 +3057,22 @@ function syncFromCloud(){
       applyTx();
       render();
     }
+    // Initial-open cloud write gate is released only AFTER cloud
+    // sync settles. From here on, saveGraph() can write to cloud
+    // normally — at this point the engine's in-memory state matches
+    // whatever cloud had (or local cache, if cloud was empty), so
+    // any subsequent user edit is on top of the canonical state.
+    if (E && typeof E.setInitialCloudSyncInFlight === 'function') {
+      E.setInitialCloudSyncInFlight(false);
+    }
+    // If cloud applied (state changed under us), persist the now-
+    // current state up to localStorage so the next session boots
+    // off the freshest cache. saveGraph also pushes to cloud, but
+    // since it's already what cloud has, that PUT is a no-op
+    // overwrite — cheap and idempotent.
+    if (applied && typeof E.saveGraph === 'function') {
+      try { E.saveGraph(); } catch (e) {}
+    }
     // Always refresh the audit badge after we've settled on the
     // graph state (whether cloud or local cache won) — the user
     // may have edited things on other tabs (WIP %, QB lines) that
@@ -3053,6 +3081,13 @@ function syncFromCloud(){
     // the cloud-no-op case too.
     if (typeof window._wsRefreshAuditBadge === 'function') {
       try { window._wsRefreshAuditBadge(); } catch (e) {}
+    }
+  }).catch(function() {
+    // Network/parse failure — release the gate so the user isn't
+    // stuck in a state where their saves never reach cloud. They'll
+    // just continue with their local cache as the source of truth.
+    if (E && typeof E.setInitialCloudSyncInFlight === 'function') {
+      E.setInitialCloudSyncInFlight(false);
     }
   });
 }

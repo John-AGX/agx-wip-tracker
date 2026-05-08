@@ -888,6 +888,16 @@ function loadGraphFromCloudAndApply(){
   });
 }
 
+// Set to true while the initial cloud sync is in flight on a fresh
+// job-open. Suppresses cloud writes (and ngMarkSaved chrome) during
+// that window so the very first render's reflexive saveGraph() call
+// can't race ahead of syncFromCloud and overwrite the canonical
+// cloud state with the local user's stale localStorage. ui.js flips
+// this back to false once syncFromCloud settles. Local-cache writes
+// still happen — only the cloud PUT is gated.
+var _initialCloudSyncInFlight = false;
+function setInitialCloudSyncInFlight(v){ _initialCloudSyncInFlight = !!v; }
+
 function saveGraph(){
   if(!jobId) return;
   try {
@@ -902,7 +912,12 @@ function saveGraph(){
     } catch (lsErr) {
       console.warn('[nodegraph] localStorage save failed (likely quota exceeded):', lsErr && lsErr.message);
     }
-    // Cloud write — authoritative, fires async.
+    // Cloud write — authoritative, fires async. Gated during the
+    // initial-open window so the bootstrap render (which fires
+    // saveGraph() reflexively at the bottom of render()) doesn't
+    // clobber the cloud before syncFromCloud has a chance to load
+    // a co-worker's newer layout.
+    if (_initialCloudSyncInFlight) return;
     saveGraphToCloud(state);
     if (typeof window.ngMarkSaved === 'function') window.ngMarkSaved();
   } catch (e) {
@@ -1227,6 +1242,7 @@ return {
   fmtC:fmtC, fmtP:fmtP, fmtV:fmtV,
   saveGraph:saveGraph, loadGraph:loadGraph,
   loadGraphFromCloudAndApply:loadGraphFromCloudAndApply,
+  setInitialCloudSyncInFlight:setInitialCloudSyncInFlight,
   saveSnapshot:saveSnapshot, restoreSnapshot:restoreSnapshot, getSnapshot:getSnapshot,
   drawWires:drawWires, drawGrid:drawGrid,
   portPos:portPos, setCanvasEl:setCanvasEl,
