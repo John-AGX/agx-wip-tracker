@@ -477,18 +477,21 @@ async function initSchema() {
       ) THEN
         -- Collapse: pick the oldest row per (job, sub) as the survivor,
         -- sum contract_amt + billed_to_date into it, delete the rest.
-        WITH survivor AS (
+        -- Use temp tables (not CTEs) because each statement in a
+        -- DO block is its own scope — CTEs from one UPDATE don't
+        -- carry into the next DELETE.
+        CREATE TEMP TABLE _js_survivor ON COMMIT DROP AS
           SELECT DISTINCT ON (job_id, sub_id) id, job_id, sub_id
             FROM job_subs
-           ORDER BY job_id, sub_id, created_at ASC
-        ),
-        totals AS (
+           ORDER BY job_id, sub_id, created_at ASC;
+
+        CREATE TEMP TABLE _js_totals ON COMMIT DROP AS
           SELECT job_id, sub_id,
                  SUM(COALESCE(contract_amt, 0))   AS contract_amt,
                  SUM(COALESCE(billed_to_date, 0)) AS billed_to_date
             FROM job_subs
-           GROUP BY job_id, sub_id
-        )
+           GROUP BY job_id, sub_id;
+
         UPDATE job_subs js
            SET contract_amt   = t.contract_amt,
                billed_to_date = t.billed_to_date,
@@ -496,18 +499,18 @@ async function initSchema() {
                building_id    = NULL,
                phase_id       = NULL,
                updated_at     = NOW()
-          FROM survivor s, totals t
+          FROM _js_survivor s, _js_totals t
          WHERE js.id = s.id
            AND t.job_id = s.job_id
            AND t.sub_id = s.sub_id;
 
         DELETE FROM job_subs js
-          USING survivor s
+          USING _js_survivor s
          WHERE js.job_id = s.job_id
            AND js.sub_id = s.sub_id
            AND js.id <> s.id;
 
-        -- Swap indexes. Keep the old name only if it exists; the new
+        -- Swap indexes. Drop the old name if it exists; the new
         -- name is suffixed _v2 so future runs detect completion.
         DROP INDEX IF EXISTS idx_job_subs_unique;
         CREATE UNIQUE INDEX idx_job_subs_unique_v2 ON job_subs(job_id, sub_id);
