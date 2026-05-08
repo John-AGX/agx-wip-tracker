@@ -80,6 +80,7 @@ const MAP = {
   //  - cpu-chip → "Agents" (AI / processors); replaces 🤖
   //  - envelope → "Email" (was using `links` as a placeholder)
   'cpu-chip':        'heroicons/cpu-chip',
+  'discord':         'phosphor/discord-fill',
   'envelope':        'heroicons/envelope',
   // Node-library specific icons (sidebar inside the Job → Workspace
   // node graph). Maps the emoji glyphs in nodegraph/engine.js DEFS to
@@ -202,7 +203,7 @@ const FOOTER = `
     '🔍': 'magnifying-glass',  // 1F50D magnifier (Prompt Preview)
     '📦': 'cube',              // 1F4E6 package (Batch jobs)
     '🌐': 'globe',             // 1F310 globe with meridians (Anthropic)
-    '🤖': 'cpu-chip',          // 1F916 robot face — admin Agents tab
+    '🤖': 'discord',           // 1F916 robot face — admin Agents tab
     '✉':       'envelope',     // 2709  envelope (light variant)
     '📧': 'envelope',          // 1F4E7 e-mail symbol
     '📨': 'envelope',          // 1F4E8 incoming envelope
