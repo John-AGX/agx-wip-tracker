@@ -86,7 +86,7 @@
       '<line x1="15" y1="19.5" x2="15" y2="20.5"/>' +
     '</svg>';
 
-  // Phase 1b/1c — when the server flips AGX_AGENT_MODE_AG=agents, the AG
+  // Phase 1b/1c — when the server flips AGENT_MODE_47=agents, the AG
   // estimating chat routes to the Sessions-backed /v2 endpoint. The
   // server adapts the SSE shape to match v1 so this single switch is
   // the entire client-side change. Falls back to legacy when the flag
@@ -141,7 +141,7 @@
   // rows whether v1 or v2 produced them), so there's no /v2/.../messages
   // route — re-using v1 avoids a duplicate route per agent and means
   // closing + reopening a job's chat panel always loads the prior
-  // conversation, even when AGX_AGENT_MODE_JOB=agents.
+  // conversation, even when AGENT_MODE_86=agents.
   function messagesApiBase() {
     if (_entityType === 'job') return '/api/ai/jobs/' + encodeURIComponent(_entityId);
     if (_entityType === 'client') return '/api/ai/clients';
@@ -257,9 +257,9 @@
   // Preset prompts surfaced as quick-tap buttons. Different presets per
   // entity — estimates focus on scope/materials, jobs on margin/billing.
   var ESTIMATE_PRESETS = [
-    { label: 'Draft scope from photos', prompt: 'Look at the photos attached and draft a tight, bulleted scope of work for this estimate. Focus on the work AGX would actually be doing.' },
+    { label: 'Draft scope from photos', prompt: 'Look at the photos attached and draft a tight, bulleted scope of work for this estimate. Focus on the work P86 would actually be doing.' },
     { label: "What am I missing?",      prompt: 'Review the estimate as it stands. What line items, prep work, or costs am I likely missing? Propose the additions as line items so I can approve them in batch.' },
-    { label: 'Build my line items',     prompt: 'Propose the cost-side line items I should add for this scope. Use realistic AGX prices for Central Florida and slot each one under the right standard section. Make multiple parallel proposals so I can approve them in batch.' },
+    { label: 'Build my line items',     prompt: 'Propose the cost-side line items I should add for this scope. Use realistic P86 prices for Central Florida and slot each one under the right standard section. Make multiple parallel proposals so I can approve them in batch.' },
     { label: 'Tighten this estimate',   prompt: 'Audit my line items for duplicates, overlapping descriptions, lines that should be split into materials + labor, and lines under the wrong section. Propose updates / deletes / moves where you\'re confident.' },
     { label: 'Adjust margin',           prompt: 'I want this estimate at roughly 28% blended GP. Walk through each section and propose new section markup percentages to get there, calling out which lines drove the change.' }
   ];
@@ -471,7 +471,7 @@
           ctx.workspaceSheetIndex = nonQB.map(function(s) { return s.name || '(unnamed)'; });
           ctx.workspaceSheets = nonQB.slice(0, 5).map(function(s) {
             // Default preview: first 100 rows × 26 cols (A–Z). Covers
-            // virtually every real-world AGX sheet. If something deeper
+            // virtually every real-world P86 sheet. If something deeper
             // is needed, the assistant calls read_workspace_sheet_full
             // (an auto-applying read tool) to fetch the entire sheet
             // on demand without burning tokens preemptively.
@@ -967,7 +967,7 @@
       else if (isClientMode())    headerEl.textContent = '🤝 HR · Client + User Health';
       else if (isStaffMode())     headerEl.textContent = '🎩 Chief of Staff';
       else if (isIntakeMode())    headerEl.textContent = '🧲 Intake · Lead Capture';
-      else                        headerEl.textContent = '🎯 Agent 47 · Estimating Hitman';
+      else                        headerEl.textContent = '🎯 47 · Estimating Hitman';
     }
     // Plan/Build pill — visible only in estimate mode. Single-icon
     // dropdown: visible icon shows active phase, click opens a popover
@@ -1098,7 +1098,7 @@
     if (noticeEl) {
       if (isJobMode()) noticeEl.textContent = 'I\'m 86, your analyst. I read WIP, costs, the node graph, QB lines, margins, and broader patterns across the business — and I can propose edits (e.g. set a phase\'s % complete) for you to approve before they apply.';
       else if (isClientMode()) noticeEl.textContent = 'I\'m HR — I run client relations and user-health operations. I keep the parent-company / property hierarchy clean and watch your in-app accounts. Simple writes apply automatically; restructural changes (new parent, merges, splits, deletes) require approval.';
-      else if (isStaffMode()) noticeEl.textContent = 'Chief of Staff — I observe Agent 47 / 86 / HR / Intake. I read metrics, audit conversations, and propose skill-pack edits for you to approve. Conversation replay still queued.';
+      else if (isStaffMode()) noticeEl.textContent = 'Chief of Staff — I observe 47 / 86 / HR / Intake. I read metrics, audit conversations, and propose skill-pack edits for you to approve. Conversation replay still queued.';
       else if (isIntakeMode()) noticeEl.textContent = 'New lead intake. Tell me what the lead is — property name, scope, salesperson — and drop in any photos. I\'ll dedupe against existing clients/leads, then propose creating the new lead for your approval.';
       else {
         // AG notice changes wording in Plan mode so the user sees a
@@ -1108,7 +1108,7 @@
         if (phaseN === 'plan') {
           noticeEl.textContent = '🗺️ Plan mode — I\'ll think through scope with you and ask questions, but I won\'t propose line items until you flip to 🔨 Build.';
         } else {
-          noticeEl.textContent = 'I\'m Agent 47 — AGX\'s estimating hitman. I can draft scopes, add/edit/delete line items and sections, and tweak pricing. Every change is shown as a card with Approve / Reject before it lands.';
+          noticeEl.textContent = 'I\'m 47 — P86\'s estimating hitman. I can draft scopes, add/edit/delete line items and sections, and tweak pricing. Every change is shown as a card with Approve / Reject before it lands.';
         }
       }
     }
@@ -1208,9 +1208,9 @@
     if (!_messages.length) {
       var hint;
       if (isJobMode()) hint = '<strong style="color:var(--text,#fff);">📊 Elle · WIP Analyst</strong><br>Pick a preset below or ask anything about this job.<br><span style="font-size:11px;opacity:0.7;">I see contract, costs, COs, %complete, billing — plus the node graph wiring and QuickBooks cost lines.</span>';
-      else if (isClientMode()) hint = '<strong style="color:var(--text,#fff);">🤝 HR · Customer Relations</strong><br>Tap <strong>Run full audit</strong> to clean up the directory in one pass — I\'ll split parent+property compounds, link unparented entries, merge dupes, and surface anything ambiguous for you.<br><span style="font-size:11px;opacity:0.7;">I know the AGX hierarchy: parent management company → property/community → CAM contact.</span>';
+      else if (isClientMode()) hint = '<strong style="color:var(--text,#fff);">🤝 HR · Customer Relations</strong><br>Tap <strong>Run full audit</strong> to clean up the directory in one pass — I\'ll split parent+property compounds, link unparented entries, merge dupes, and surface anything ambiguous for you.<br><span style="font-size:11px;opacity:0.7;">I know the P86 hierarchy: parent management company → property/community → CAM contact.</span>';
       else if (isStaffMode()) hint = '<strong style="color:var(--text,#fff);">🎩 Chief of Staff</strong><br>I observe AG / Elle / HR — usage, cost, conversations, skill packs — and I can propose skill-pack edits for you to approve.<br><span style="font-size:11px;opacity:0.7;">Conversation replay is still queued.</span>';
-      else hint = '<strong style="color:var(--text,#fff);">📐 AG — your AGX estimator</strong><br>Pick a preset or describe what you need. I can read the estimate, scope, client, and photos — and propose adds, edits, deletes, and pricing changes for you to approve.<br><span style="font-size:11px;opacity:0.7;">Try "tighten this estimate" or "build my line items".</span>';
+      else hint = '<strong style="color:var(--text,#fff);">📐 AG — your P86 estimator</strong><br>Pick a preset or describe what you need. I can read the estimate, scope, client, and photos — and propose adds, edits, deletes, and pricing changes for you to approve.<br><span style="font-size:11px;opacity:0.7;">Try "tighten this estimate" or "build my line items".</span>';
       box.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;padding:20px 0;text-align:center;line-height:1.6;">' + hint + '</div>';
       return;
     }
@@ -2048,7 +2048,7 @@
     }
     // Auto-tier read tools that hit the server-side /api/ai/exec-tool
     // endpoint. None of these need the estimate editor open — they\'re
-    // pure data lookups against the AGX database. Handled before the
+    // pure data lookups against the P86 database. Handled before the
     // editor checks so AG can run them from any context.
     if (AG_SERVER_AUTO_TOOLS[tu.name]) {
       return execAGAutoTool(tu.name, tu.input || {});
@@ -4050,7 +4050,7 @@
       }, 'image/jpeg', 0.92);
     };
 
-    // Prefer the rear camera when one exists (most useful for AGX —
+    // Prefer the rear camera when one exists (most useful for P86 —
     // PMs photographing buildings / SOWs / receipts in the field),
     // but accept any camera the device offers.
     var constraints = { video: { facingMode: { ideal: 'environment' } }, audio: false };
@@ -4538,7 +4538,7 @@
     var u = (window.agxAuth && window.agxAuth.getUser) ? window.agxAuth.getUser() : null;
     var enabled = !!(u && u.feature_flags && u.feature_flags.agent_mode_intake === 'agents');
     if (!enabled) {
-      alert('Lead Intake AI is disabled. Set AGX_AGENT_MODE_INTAKE=agents in the server env to enable.');
+      alert('Lead Intake AI is disabled. Set AGENT_MODE_INTAKE=agents in the server env to enable.');
       return;
     }
     open({ entityType: 'intake' });

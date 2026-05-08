@@ -41,7 +41,7 @@ function notConfigured() {
 //   Lists native Skills attached to the API key's account. Returns
 //   id, name, description (snippet), version count, created_at —
 //   whatever the list endpoint surfaces. We haven't migrated to
-//   native Skills yet so this likely returns empty for AGX today;
+//   native Skills yet so this likely returns empty for P86 today;
 //   the endpoint is here for when we do.
 router.get('/skills', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
   try {

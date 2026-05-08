@@ -1,4 +1,4 @@
-// AGX Clients module — directory rendered on the Estimates tab.
+// P86 Clients module — directory rendered on the Estimates tab.
 //
 // First pass: read-only list with parent/child grouping (HOA-style hierarchies
 // where one property-management firm has many managed properties). Create /

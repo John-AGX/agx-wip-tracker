@@ -1,4 +1,4 @@
-// AGX Auth Client — handles login, session, and API token
+// P86 Auth Client — handles login, session, and API token
 (function() {
   'use strict';
 

@@ -1,4 +1,4 @@
-// AGX API client — thin fetch wrapper with JWT auth, used by data-layer code.
+// P86 API client — thin fetch wrapper with JWT auth, used by data-layer code.
 // Depends on window.agxAuth from js/auth.js for the token.
 (function() {
   'use strict';

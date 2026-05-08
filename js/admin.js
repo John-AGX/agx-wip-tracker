@@ -1,4 +1,4 @@
-// AGX Admin module — users management UI.
+// P86 Admin module — users management UI.
 // Backed by /api/auth/users (list/create/update) and the password-reset endpoint.
 (function() {
   'use strict';
@@ -602,12 +602,12 @@
   // Admin tab. Renders the section's data on first reveal so we don't fire
   // API calls for tabs the admin never opens.
   // ==================== MATERIALS CATALOG ====================
-  // Browse + edit AGX's vendor purchase catalog. Backed by /api/materials,
+  // Browse + edit P86's vendor purchase catalog. Backed by /api/materials,
   // populated by uploading vendor CSVs (Home Depot today; Lowe's / etc.
   // later via the same endpoint with a different vendor name).
   //
   // Catalog drives the AG `search_materials` tool — when the estimator is
-  // proposing line items, it queries this list for real AGX descriptions
+  // proposing line items, it queries this list for real P86 descriptions
   // and prices instead of guessing. Admins can fix descriptions, change
   // subgroup assignments, or hide noise rows.
   var _materialsCache = [];
@@ -1374,7 +1374,7 @@
     });
   }
 
-  // AGX-styled two-card chooser. Returns a Promise resolving to
+  // P86-styled two-card chooser. Returns a Promise resolving to
   // 'new' | 'existing' | null. Mirrors agxConfirm\'s overlay styling
   // (modal, blur backdrop, escape-to-cancel) but renders two large
   // action cards instead of an OK/Cancel pair, since both options are
@@ -2311,7 +2311,7 @@
     html += '<fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;margin-bottom:14px;">';
     html += '<legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Buildertrend Export Mapping</legend>';
     html += '<p style="margin:0 0 10px 0;color:var(--text-dim,#888);font-size:12px;">' +
-      'Drives the <strong>Export to Buildertrend</strong> xlsx. Each AGX cost category maps to one BT <strong>Cost Code</strong>. ' +
+      'Drives the <strong>Export to Buildertrend</strong> xlsx. Each P86 cost category maps to one BT <strong>Cost Code</strong>. ' +
       'Section flat-$ markups, estimate fees, and tax are pro-rata distributed onto each line\'s markup so the export total matches the proposal exactly — no more auto-injected income line or -100% workaround.' +
       '</p>';
 
@@ -2362,11 +2362,11 @@
   // already reference it. Display label is HR; the underlying agent
   // assignment value stays 'cra'. 86's key is 'job' (matches its
   // entity_type) — assignments target the job-side analyst.
-  // (Display rename: AG→Agent 47, Elle→86. Underlying agent_keys
+  // (Display rename: AG→47, Elle→86. Underlying agent_keys
   // ag / job / cra / staff / intake stay the same to avoid a DB
   // migration; only the user-facing labels change.)
   var AGENT_LABELS = {
-    ag:  '🎯 Agent 47 (Estimating Hitman)',
+    ag:  '🎯 47 (Estimating Hitman)',
     job: '📊 86 (Analyst)',
     cra: '🤝 HR (Client + User Health)'
   };
@@ -2377,7 +2377,7 @@
     html += '<fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;margin-bottom:14px;">';
     html += '<legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Agent Skill Packs</legend>';
     html += '<p style="margin:0 0 10px 0;color:var(--text-dim,#888);font-size:12px;">' +
-      'Reusable instruction blocks loaded into the in-app AI agents at chat time. Use these to teach AGX-specific workflows, pricing rules, slotting preferences, and common-scope playbooks. ' +
+      'Reusable instruction blocks loaded into the in-app AI agents at chat time. Use these to teach P86-specific workflows, pricing rules, slotting preferences, and common-scope playbooks. ' +
       '<strong>Always-on</strong> skills get appended to the agent\'s system prompt on every turn (token cost: a few hundred each).' +
       '</p>';
 
@@ -2401,7 +2401,7 @@
           syncBadge = '<button class="ee-btn secondary" onclick="syncSkillToAnthropic(' + idx + ')" title="Mirror this pack to Anthropic native Skills" style="font-size:11px;padding:2px 8px;">&#x1F310; Mirror</button>';
         }
         html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">' +
-          '<input type="text" data-skill-name="' + idx + '" value="' + escapeHTML(skill.name || '') + '" placeholder="Skill name (e.g., AGX Estimating Playbook)" style="flex:1;font-weight:600;" />' +
+          '<input type="text" data-skill-name="' + idx + '" value="' + escapeHTML(skill.name || '') + '" placeholder="Skill name (e.g., P86 Estimating Playbook)" style="flex:1;font-weight:600;" />' +
           syncBadge +
           '<label style="display:inline-flex;align-items:center;gap:4px;font-size:11px;color:var(--text-dim,#aaa);text-transform:none !important;letter-spacing:normal !important;font-weight:400 !important;cursor:pointer;">' +
             '<input type="checkbox" data-skill-alwayson="' + idx + '" ' + (skill.alwaysOn === false ? '' : 'checked') + ' style="margin:0;" /> always on' +
@@ -3044,7 +3044,7 @@
           '<button class="ws-right-tab' + (_agentsView === 'anthropic' ? ' active' : '') + '" onclick="switchAgentsView(\'anthropic\')">&#x1F310; Anthropic</button>' +
         '</div>' +
         '<div style="flex:1;"></div>' +
-        '<button class="ee-btn" onclick="openChiefOfStaff()" title="Open the Chief of Staff agent — observes Agent 47 / 86 / HR / Intake, audits conversations, reviews skill packs" style="background:linear-gradient(135deg,#fbbf24,#f97316);color:#fff;border:none;font-weight:600;">&#x1F3A9; Ask Chief of Staff</button>' +
+        '<button class="ee-btn" onclick="openChiefOfStaff()" title="Open the Chief of Staff agent — observes 47 / 86 / HR / Intake, audits conversations, reviews skill packs" style="background:linear-gradient(135deg,#fbbf24,#f97316);color:#fff;border:none;font-weight:600;">&#x1F3A9; Ask Chief of Staff</button>' +
         (showRange
           ? ('<label style="font-size:11px;color:var(--text-dim,#888);">Window</label>' +
              '<select id="agents-range-select" onchange="setAgentsRange(this.value)" style="font-size:12px;padding:4px 8px;">' +
@@ -3185,7 +3185,7 @@
           '<th>Models</th>' +
         '</tr></thead><tbody>';
       rows.forEach(function(c) {
-        var agentLabel = c.entity_type === 'estimate' ? '🎯 Agent 47'
+        var agentLabel = c.entity_type === 'estimate' ? '🎯 47'
                        : c.entity_type === 'job'      ? '📊 86'
                        : c.entity_type === 'client'   ? '🤝 HR'
                        : c.entity_type === 'intake'   ? '🧲 Intake'
@@ -3407,7 +3407,7 @@
       '<div style="display:flex;gap:10px;align-items:end;margin-bottom:14px;flex-wrap:wrap;">' +
         '<div><label style="display:block;font-size:11px;color:var(--text-dim,#888);margin-bottom:4px;">Agent</label>' +
           '<select id="preview-agent" style="font-size:13px;padding:6px 10px;min-width:160px;">' +
-            '<option value="ag"' + (_previewAgent === 'ag' ? ' selected' : '') + '>Agent 47 (estimating)</option>' +
+            '<option value="ag"' + (_previewAgent === 'ag' ? ' selected' : '') + '>47 (estimating)</option>' +
             '<option value="elle"' + (_previewAgent === 'elle' ? ' selected' : '') + '>86 (analyst)</option>' +
             '<option value="hr"' + (_previewAgent === 'hr' ? ' selected' : '') + '>HR (clients + user health)</option>' +
             '<option value="cos"' + (_previewAgent === 'cos' ? ' selected' : '') + '>Chief of Staff</option>' +
@@ -3674,14 +3674,14 @@
       '<div style="margin-top:24px;padding:14px;background:rgba(255,255,255,0.03);border:1px solid var(--border,#333);border-radius:8px;">' +
         '<h3 style="margin:0 0 6px 0;font-size:13px;color:var(--text,#fff);">&#x1F4C2; Anthropic Files cache</h3>' +
         '<p style="margin:0 0 10px 0;color:var(--text-dim,#888);font-size:11px;">' +
-          'When Agent 47 references a photo across multiple chat turns, currently the photo gets base64-encoded into the request every turn. Uploading once to Anthropic\'s Files API lets future turns reference the photo by id (cheaper, faster). Stats below; click to upload recent images.' +
+          'When 47 references a photo across multiple chat turns, currently the photo gets base64-encoded into the request every turn. Uploading once to Anthropic\'s Files API lets future turns reference the photo by id (cheaper, faster). Stats below; click to upload recent images.' +
         '</p>' +
         '<div id="files-stats-host" style="font-size:11px;color:var(--text-dim,#888);font-style:italic;">Loading…</div>' +
         '<div style="margin-top:10px;">' +
           '<button class="ee-btn secondary" onclick="uploadRecentPhotos(25)">Upload last 25 not-yet-uploaded images</button>' +
         '</div>' +
         '<p style="margin:8px 0 0 0;color:var(--text-dim,#666);font-size:10px;">' +
-          'Note: Agent 47\'s chat path still uses base64 for now. Switching loadPhotoAsBlock to file_id references requires migrating chat from messages.stream() to beta.messages.stream() — that\'s a separate commit. The upload pipeline above sets up the cache in advance so the chat switch is a one-line change later.' +
+          'Note: 47\'s chat path still uses base64 for now. Switching loadPhotoAsBlock to file_id references requires migrating chat from messages.stream() to beta.messages.stream() — that\'s a separate commit. The upload pipeline above sets up the cache in advance so the chat switch is a one-line change later.' +
         '</p>' +
       '</div>';
 
@@ -3884,21 +3884,21 @@
     host.innerHTML = panelHeader('Managed Agents (Phase 1a)', '🤖') + '<div style="font-size:12px;color:var(--text-dim,#888);font-style:italic;">Loading…</div>';
     window.agxApi.get('/api/admin/agents/managed').then(function(resp) {
       var rows = (resp && resp.agents) || [];
-      var labels = { ag: 'Agent 47 (estimating)', job: '86 (analyst)', cra: 'HR (clients + user health)', staff: 'Chief of Staff', intake: 'Intake (lead capture)' };
+      var labels = { ag: '47 (estimating)', job: '86 (analyst)', cra: 'HR (clients + user health)', staff: 'Chief of Staff', intake: 'Intake (lead capture)' };
       var allKeys = ['ag', 'job', 'cra', 'staff', 'intake'];
       var registered = {};
       rows.forEach(function(r) { registered[r.agent_key] = r; });
 
       var bootstrapBar =
         '<p style="margin:0 0 10px 0;font-size:12px;color:var(--text-dim,#888);">' +
-          'One-time registration of each AGX agent as an Anthropic-side managed Agent. Bootstraps the migration from <code>messages.stream</code> to <code>beta.sessions.events.stream</code>. The chat path is still on <code>messages.stream</code> — registering here just creates the Agent records that the v2 chat endpoint will reference once it ships.' +
+          'One-time registration of each P86 agent as an Anthropic-side managed Agent. Bootstraps the migration from <code>messages.stream</code> to <code>beta.sessions.events.stream</code>. The chat path is still on <code>messages.stream</code> — registering here just creates the Agent records that the v2 chat endpoint will reference once it ships.' +
         '</p>' +
         '<div style="margin-bottom:10px;">' +
-          '<button class="ee-btn primary" onclick="bootstrapManagedAgents(\'all\')" title="Register every AGX agent that isn\'t yet registered.">&#x1F680; Register all unregistered</button>' +
+          '<button class="ee-btn primary" onclick="bootstrapManagedAgents(\'all\')" title="Register every P86 agent that isn\'t yet registered.">&#x1F680; Register all unregistered</button>' +
         '</div>';
 
       var rowsHtml = '<div class="table-container"><table style="width:100%;font-size:12px;">' +
-        '<thead><tr><th>AGX Agent</th><th>Anthropic Agent ID</th><th>Model</th><th style="text-align:right;">Tools</th><th style="text-align:right;">Skills</th><th>Registered</th><th></th></tr></thead><tbody>';
+        '<thead><tr><th>P86 Agent</th><th>Anthropic Agent ID</th><th>Model</th><th style="text-align:right;">Tools</th><th style="text-align:right;">Skills</th><th>Registered</th><th></th></tr></thead><tbody>';
       allKeys.forEach(function(k) {
         var r = registered[k];
         if (r) {
@@ -3931,7 +3931,7 @@
   }
 
   function bootstrapManagedAgents(key) {
-    var label = (key === 'all') ? 'every unregistered AGX agent' : key;
+    var label = (key === 'all') ? 'every unregistered P86 agent' : key;
     if (!confirm('Register ' + label + ' as Anthropic-side managed Agent(s)?\n\nIdempotent — agents already in the registry stay as-is. Each registration consumes a beta.agents.create call. The chat path is unaffected; this just creates the Agent records that a future v2 chat endpoint will reference.\n\nNeeds ANTHROPIC_API_KEY set on the server.')) return;
     window.agxApi.post('/api/admin/agents/managed/bootstrap?key=' + encodeURIComponent(key), {}).then(function(resp) {
       var summary = (resp && resp.summary) || [];
@@ -3965,7 +3965,7 @@
         host.innerHTML = panelHeader('Native Skills', '🧠') +
           '<div style="font-size:12px;color:var(--text-dim,#888);font-style:italic;padding:10px 0;">' +
             (note ? escapeHTML(note) : 'No native Skills hosted yet.') +
-            ' AGX hasn\'t migrated to the native-Skills primitive — see Native Skills migration plan in chat for details.' +
+            ' P86 hasn\'t migrated to the native-Skills primitive — see Native Skills migration plan in chat for details.' +
           '</div>';
         return;
       }
@@ -4213,7 +4213,7 @@
       host.innerHTML =
         '<div style="margin:0 0 14px 0;padding:12px 14px;background:rgba(251,191,36,0.06);border:1px solid rgba(251,191,36,0.25);border-radius:8px;font-size:12px;line-height:1.5;color:var(--text-dim,#aaa);">' +
           '<div style="font-weight:600;color:#fbbf24;margin-bottom:4px;">&#x1F6A7; Native Skills migration in progress</div>' +
-          'Packs below are AGX\'s homegrown skill system — still <strong>active in production</strong>; Agent 47 / 86 / HR load them every turn. ' +
+          'Packs below are P86\'s homegrown skill system — still <strong>active in production</strong>; 47 / 86 / HR load them every turn. ' +
           'Use <button class="ee-btn secondary" onclick="syncAllSkillsToAnthropic()" style="margin:0 4px;font-size:11px;padding:2px 8px;">&#x1F310; Sync all to Anthropic</button> to mirror them as native Skills. ' +
           'Mirrored skills appear in <a href="#" onclick="switchAgentsView(\'anthropic\');return false;" style="color:#4f8cff;">Anthropic &rarr; Skills</a>. ' +
           'Runtime cutover (model loading skills on-demand via beta.agents) is a separate workstream — until then this surface remains source-of-truth.' +
@@ -4578,7 +4578,7 @@
       var content = document.getElementById('admin-sms-content');
       if (!content) return;
       if (!entries.length) {
-        content.innerHTML = '<div style="color:var(--text-dim,#888);font-style:italic;padding:14px 0;">No SMS traffic yet. Once a worker texts the AGX number, log entries appear here.</div>';
+        content.innerHTML = '<div style="color:var(--text-dim,#888);font-style:italic;padding:14px 0;">No SMS traffic yet. Once a worker texts the P86 number, log entries appear here.</div>';
         return;
       }
 

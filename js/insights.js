@@ -1,4 +1,4 @@
-// AGX Insights dashboard — single source of truth.
+// P86 Insights dashboard — single source of truth.
 //
 // Replaces both an earlier minimal version of this file and a legacy copy
 // of renderInsightsDashboard() that lived in js/wip.js. Pulls Live-only

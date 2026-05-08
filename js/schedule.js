@@ -1,5 +1,5 @@
 // ============================================================
-// AGX Schedule — production-scheduling calendar (Phase 1)
+// P86 Schedule — production-scheduling calendar (Phase 1)
 //
 // Outlook-style monthly grid + sidebar of in-progress jobs the
 // PM drags onto days during the Friday production-scheduling

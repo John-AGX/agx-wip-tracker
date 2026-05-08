@@ -1,4 +1,4 @@
-// AGX WIP Tracker - Proposal & Export Module
+// P86 WIP Tracker - Proposal & Export Module
 // Handles export of estimates, proposal generation, and import of lead reports
 
 // ============================================================================
@@ -85,10 +85,10 @@ function exportEstimate(estId) {
   }
 
   const wb = new ExcelJS.Workbook();
-  wb.creator = 'AGX Central Florida';
+  wb.creator = 'P86 Central Florida';
   const ws = wb.addWorksheet('Lead Report');
 
-  // === AGX Brand Colors ===
+  // === P86 Brand Colors ===
   const GREEN = '1B8541';
   const DARK_TEAL = '1B3A5C';
   const LABEL_BG = 'E8F5E9';
@@ -146,8 +146,8 @@ function exportEstimate(estId) {
   ws.getColumn(6).width = 10;  // F - Markup %
   ws.getColumn(7).width = 16;  // G - Total
 
-  // === ROW 1: AGX CENTRAL FLORIDA ===
-  mergeAndStyle(1, 1, 7, 'AGX CENTRAL FLORIDA', whiteFont(16, true), greenFill, { horizontal: 'center', vertical: 'middle' });
+  // === ROW 1: P86 CENTRAL FLORIDA ===
+  mergeAndStyle(1, 1, 7, 'P86 CENTRAL FLORIDA', whiteFont(16, true), greenFill, { horizontal: 'center', vertical: 'middle' });
   ws.getRow(1).height = 30;
 
   // === ROW 2: Subtitle ===
@@ -425,7 +425,7 @@ function exportEstimate(estId) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = (estimate.title || 'AGX_Estimate') + ' - Lead Report.xlsx';
+    a.download = (estimate.title || 'P86_Estimate') + ' - Lead Report.xlsx';
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -441,7 +441,7 @@ function downloadBlankTemplate() {
       var blobUrl = URL.createObjectURL(blob);
       var a = document.createElement('a');
       a.href = blobUrl;
-      a.download = 'AGX_Blank_Template.xlsx';
+      a.download = 'P86_Blank_Template.xlsx';
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -517,14 +517,14 @@ function generateProposal(estId) {
       <button onclick="window.print()">Print Proposal</button>
     </div>
     <div class="header">
-      <h1>AGX CENTRAL FLORIDA</h1>
+      <h1>P86 CENTRAL FLORIDA</h1>
     </div>
     <div class="date-line">
       Date: ${formatDateShort(new Date())}
     </div>
     <div class="intro">
       <p>Dear <strong>${nickName}</strong>,</p>
-      <p>AGX Central Florida is pleased to provide the following proposal for <strong>${issue}</strong> at <strong>${community}</strong>.</p>
+      <p>P86 Central Florida is pleased to provide the following proposal for <strong>${issue}</strong> at <strong>${community}</strong>.</p>
     </div>
 
     ${Object.entries(grouped).map((entry, idx) => {
@@ -557,7 +557,7 @@ function generateProposal(estId) {
       <div class="assumption-item">Payment terms: 50% upon acceptance, 50% upon completion</div>
       <div class="assumption-item">Any additional work beyond the agreed scope will be quoted separately</div>
       <div class="assumption-item">Client to provide reasonable access to work areas</div>
-      <div class="assumption-item">AGX is not responsible for pre-existing conditions not included in scope</div>
+      <div class="assumption-item">P86 is not responsible for pre-existing conditions not included in scope</div>
       <div class="assumption-item">Permits, if required, are the responsibility of the client unless otherwise noted</div>
       <div class="assumption-item">Material colors and styles to match existing as closely as possible</div>
       <div class="assumption-item">Warranty: 1-year workmanship warranty from date of completion</div>
@@ -571,7 +571,7 @@ function generateProposal(estId) {
       </div>
       <div class="sig-column">
         <div style="height: 40px;"></div>
-        <div class="sig-label">AGX Representative</div>
+        <div class="sig-label">P86 Representative</div>
         <div class="date-line-sig">Date: _________________</div>
       </div>
     </div>
@@ -595,13 +595,15 @@ function parseReport(data) {
 
   let isAgxReport = false;
   for (let i = 0; i < Math.min(5, aoa.length); i++) {
-    if (aoa[i][0] && aoa[i][0].toString().toUpperCase().includes('AGX')) {
+    var cell = aoa[i][0] ? aoa[i][0].toString().toUpperCase() : '';
+    // Brand check accepts either old AGX reports or new P86/PROJECT 86 reports
+    if (cell.includes('AGX') || cell.includes('P86') || cell.includes('PROJECT 86')) {
       isAgxReport = true;
       break;
     }
   }
   if (!isAgxReport) {
-    alert('This does not appear to be an AGX Lead Report');
+    alert('This does not appear to be an P86 Lead Report');
     return null;
   }
 

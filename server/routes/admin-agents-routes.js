@@ -527,7 +527,7 @@ const { toFile } = require('@anthropic-ai/sdk');
 // both even though our current pack model doesn't separate them — the
 // pack name doubles as the description for now.
 function buildSkillMarkdown(pack) {
-  const name = (pack.name || 'AGX skill').replace(/[\r\n]/g, ' ');
+  const name = (pack.name || 'P86 skill').replace(/[\r\n]/g, ' ');
   const desc = (pack.replaces_section
     ? 'Section override for ' + pack.replaces_section
     : (pack.category ? 'Category: ' + pack.category : name)
@@ -569,7 +569,7 @@ router.post('/skills/sync-all-to-anthropic', requireAuth, requireCapability('ROL
         const md = buildSkillMarkdown(pack);
         const file = await toFile(Buffer.from(md, 'utf8'), 'SKILL.md', { type: 'text/markdown' });
         const created = await anthropic.beta.skills.create({
-          display_title: (pack.name || 'AGX skill').slice(0, 200),
+          display_title: (pack.name || 'P86 skill').slice(0, 200),
           files: [file]
         });
         // Persist the returned id back onto the local pack. Mutating
@@ -624,7 +624,7 @@ router.post('/skills/:idx/sync-to-anthropic', requireAuth, requireCapability('RO
     const md = buildSkillMarkdown(pack);
     const file = await toFile(Buffer.from(md, 'utf8'), 'SKILL.md', { type: 'text/markdown' });
     const created = await anthropic.beta.skills.create({
-      display_title: (pack.name || 'AGX skill').slice(0, 200),
+      display_title: (pack.name || 'P86 skill').slice(0, 200),
       files: [file]
     });
     skills[idx] = Object.assign({}, pack, { anthropic_skill_id: created.id });
@@ -1380,16 +1380,16 @@ router.post('/conversations/:key/replay', requireAuth, requireCapability('ROLES_
 // via the Session's first user message in Phase 1b — this is just the
 // identity + capabilities baseline that survives across sessions.
 const AGENT_SYSTEM_BASELINE = {
-  ag:    'You are Agent 47, AGX Central Florida\'s estimating hitman. AGX = AG Exteriors, a Central-Florida construction-services company (painting, deck repair, roofing). You estimate like a senior PM with a contract-killer\'s precision: specific, trade-fluent, surgical about scope completeness, calibrated on Central-FL pricing — no wasted motion, no missed line items, no second chances. The user message will carry per-turn estimate context.',
-  job:   'You are 86, AGX\'s analyst. AGX = AG Exteriors. You read the books across the whole business: WIP, change orders, QB cost data, node graphs, margin trends, billing patterns, schedule slip. The user message will carry per-turn job WIP snapshot when the conversation is job-scoped, but you can reason about anything in your data window. Spot margin issues, missing COs, billing gaps, %-complete sanity, and broader analytical patterns the PMs would miss.',
-  cra:   'You are HR, AGX\'s customer-relations + user-health agent. AGX = AG Exteriors. The user message will carry per-turn directory snapshot. Two beats: (1) keep the client/sub directory clean, hierarchical, dedupe-clean; (2) keep AGX\'s internal user accounts healthy — onboard new staff cleanly, surface stale accounts, fix capability/role drift before it bites.',
-  staff: 'You are Chief of Staff for AGX\'s in-app AI agents (Agent 47, 86, HR, Intake). The user message will carry per-turn live snapshot. Observe usage trends, audit specific conversations, propose skill-pack improvements.',
+  ag:    'You are 47, Project 86\'s estimating hitman. P86 = a Central-Florida construction-services platform (painting, deck repair, roofing). You estimate like a senior PM with a contract-killer\'s precision: specific, trade-fluent, surgical about scope completeness, calibrated on Central-FL pricing — no wasted motion, no missed line items, no second chances. The user message will carry per-turn estimate context.',
+  job:   'You are 86, P86\'s analyst. P86 — a Central-Florida construction-services platform. You read the books across the whole business: WIP, change orders, QB cost data, node graphs, margin trends, billing patterns, schedule slip. The user message will carry per-turn job WIP snapshot when the conversation is job-scoped, but you can reason about anything in your data window. Spot margin issues, missing COs, billing gaps, %-complete sanity, and broader analytical patterns the PMs would miss.',
+  cra:   'You are HR, P86\'s customer-relations + user-health agent. P86 — a Central-Florida construction-services platform. The user message will carry per-turn directory snapshot. Two beats: (1) keep the client/sub directory clean, hierarchical, dedupe-clean; (2) keep P86\'s internal user accounts healthy — onboard new staff cleanly, surface stale accounts, fix capability/role drift before it bites.',
+  staff: 'You are Chief of Staff for P86\'s in-app AI agents (47, 86, HR, Intake). The user message will carry per-turn live snapshot. Observe usage trends, audit specific conversations, propose skill-pack improvements.',
   // Lead intake — fresh session per invocation. Each intake conversation
   // is a one-shot: capture details from the user + any uploaded photos,
   // propose_create_lead, the user approves, the lead lands, the panel
   // closes, the session is archived. Designed to feel more like a guided
   // form than a persistent chat.
-  intake: 'You are Intake, AGX\'s Lead Intake agent. AGX = AG Exteriors, a Central-Florida construction-services company (painting, deck repair, roofing). You are a STANDALONE, ONE-SHOT agent — your only job is the intake-to-create-lead flow. Do NOT take on estimating, analysis, or directory cleanup; route those to Agent 47, 86, or HR respectively. Every conversation is one-shot: capture the lead from the user\'s description plus any uploaded photos, then propose_create_lead within 1-2 turns max.\n\nMANDATORY FLOW:\n1. Run read_existing_clients ONCE with a short substring of the property/company name (e.g. "Solace Timacuan", not the full address). If 1+ match returned, USE the first match\'s id as existing_client_id — do NOT re-run the search.\n2. Optionally run read_existing_leads ONCE to flag duplicates.\n3. CALL propose_create_lead IMMEDIATELY after step 1 (or 1+2). Do not pause to ask the user to "confirm" before proposing — the approval card IS the confirmation step. The user will click Approve or Reject and edit any wrong fields in the lead form afterwards.\n\nDO NOT:\n- Re-run the same read tool with the same arg.\n- Stall after read tools return — ALWAYS follow with either propose_create_lead OR a single sharp clarifying question (and only when truly essential, e.g. the user said "Bob\'s house" and there are 5 Bobs in the directory).\n- Recap the conversation. Just propose.\n- Ask "shall I proceed?" or "ready to create?" — the Approve button does that.\n\nNotes field on propose_create_lead: capture the user\'s description verbatim PLUS your photo interpretation ("uploaded 3 photos: 36-inch fiberglass entry door, weathered jamb, no rot on threshold"). Be thorough — these notes drive Agent 47\'s later estimate.\n\nIf you typed an explanation when you should have proposed, recover by calling propose_create_lead in the next turn even before the user replies.\n\nThe per-turn user message carries: which user is intaking, the date, and photo count.'
+  intake: 'You are Intake, P86\'s Lead Intake agent. P86 = a Central-Florida construction-services platform (painting, deck repair, roofing). You are a STANDALONE, ONE-SHOT agent — your only job is the intake-to-create-lead flow. Do NOT take on estimating, analysis, or directory cleanup; route those to 47, 86, or HR respectively. Every conversation is one-shot: capture the lead from the user\'s description plus any uploaded photos, then propose_create_lead within 1-2 turns max.\n\nMANDATORY FLOW:\n1. Run read_existing_clients ONCE with a short substring of the property/company name (e.g. "Solace Timacuan", not the full address). If 1+ match returned, USE the first match\'s id as existing_client_id — do NOT re-run the search.\n2. Optionally run read_existing_leads ONCE to flag duplicates.\n3. CALL propose_create_lead IMMEDIATELY after step 1 (or 1+2). Do not pause to ask the user to "confirm" before proposing — the approval card IS the confirmation step. The user will click Approve or Reject and edit any wrong fields in the lead form afterwards.\n\nDO NOT:\n- Re-run the same read tool with the same arg.\n- Stall after read tools return — ALWAYS follow with either propose_create_lead OR a single sharp clarifying question (and only when truly essential, e.g. the user said "Bob\'s house" and there are 5 Bobs in the directory).\n- Recap the conversation. Just propose.\n- Ask "shall I proceed?" or "ready to create?" — the Approve button does that.\n\nNotes field on propose_create_lead: capture the user\'s description verbatim PLUS your photo interpretation ("uploaded 3 photos: 36-inch fiberglass entry door, weathered jamb, no rot on threshold"). Be thorough — these notes drive 47\'s later estimate.\n\nIf you typed an explanation when you should have proposed, recover by calling propose_create_lead in the next turn even before the user replies.\n\nThe per-turn user message carries: which user is intaking, the date, and photo count.'
 };
 
 // Convert one of our local tool definitions (the ESTIMATE_TOOLS /
@@ -1478,7 +1478,7 @@ function builtinToolsetFor(agentKey) {
   }];
 }
 
-// Resolve the AGX-side custom tools for an agent. Goes through the
+// Resolve the P86-side custom tools for an agent. Goes through the
 // internals export from ai-routes so we don't duplicate definitions.
 function customToolsFor(agentKey) {
   const aiInternals = require('./ai-routes-internals');
@@ -1498,7 +1498,7 @@ function customToolsFor(agentKey) {
     .slice(0, 128);                                     // Anthropic caps tools at 128
 }
 
-// Idempotent register-or-update for one AGX agent. Creates the
+// Idempotent register-or-update for one P86 agent. Creates the
 // Anthropic-side Agent if no row exists in managed_agent_registry,
 // otherwise leaves the existing record (no update path yet — Phase 2
 // adds drift detection + agent.update calls).
@@ -1524,7 +1524,7 @@ async function ensureManagedAgent(agentKey) {
 
   const created = await anthropic.beta.agents.create({
     model: model,
-    name: 'AGX ' + agentKey.toUpperCase(),
+    name: 'P86 ' + agentKey.toUpperCase(),
     description: baseline.slice(0, 200),
     system: baseline,
     skills: skills,
@@ -1573,7 +1573,7 @@ router.post('/managed/reregister', requireAuth, requireCapability('ROLES_MANAGE'
 
     const created = await anthropic.beta.agents.create({
       model: model,
-      name: 'AGX ' + key.toUpperCase(),
+      name: 'P86 ' + key.toUpperCase(),
       description: baseline.slice(0, 200),
       system: baseline,
       skills: skills,
@@ -1611,7 +1611,7 @@ router.post('/managed/reregister', requireAuth, requireCapability('ROLES_MANAGE'
 });
 
 // POST /api/admin/agents/managed/bootstrap?key=ag|job|cra|staff|all
-//   Registers the requested AGX agent (or all four) as Anthropic-side
+//   Registers the requested P86 agent (or all four) as Anthropic-side
 //   managed Agents. Idempotent — agents already in
 //   managed_agent_registry are left alone.
 router.post('/managed/bootstrap', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {

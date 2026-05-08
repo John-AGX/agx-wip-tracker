@@ -1,4 +1,4 @@
-// AGX transactional email templates.
+// P86 transactional email templates.
 //
 // Each event has a single source-of-truth: TEMPLATE_SOURCES[eventKey].
 // The source is plain HTML / text with {{variable}} placeholders. The
@@ -111,8 +111,8 @@ function certTypeLabel(t) {
 
 var COMMON_FOOTER = (
   '<div style="margin-top:32px;padding-top:16px;border-top:1px solid #e5e7eb;font-size:12px;color:#6b7280;">' +
-    'AGX WIP Tracker &middot; <a href="{{appUrl}}" style="color:#4f8cff;text-decoration:none;">{{appUrlHost}}</a><br/>' +
-    'You\'re receiving this because of activity on your AGX account. ' +
+    'P86 WIP Tracker &middot; <a href="{{appUrl}}" style="color:#4f8cff;text-decoration:none;">{{appUrlHost}}</a><br/>' +
+    'You\'re receiving this because of activity on your P86 account. ' +
     'Toggle notifications in <strong>My Account &rarr; Notifications</strong>.' +
   '</div>'
 );
@@ -121,10 +121,10 @@ function shellWrap(title, bodyHtml) {
   return (
     '<!doctype html><html><body style="margin:0;padding:0;background:#f3f4f6;font-family:Arial,Helvetica,sans-serif;">' +
       '<div style="max-width:560px;margin:24px auto;padding:24px;background:#fff;border-radius:10px;color:#1f2937;line-height:1.5;">' +
-        // AGX logo. Email clients fetch this via absolute URL since the
+        // P86 logo. Email clients fetch this via absolute URL since the
         // email is rendered outside our domain. {{appUrl}} resolves at
         // render time so dev/staging/prod each load the right image.
-        '<div style="margin-bottom:12px;"><img src="{{appUrl}}/images/logo-color.png" alt="AGX" style="height:40px;display:block;" /></div>' +
+        '<div style="margin-bottom:12px;"><img src="{{appUrl}}/images/logo-color.png" alt="P86" style="height:40px;display:block;" /></div>' +
         '<h2 style="margin:0 0 16px 0;color:#111827;font-size:20px;">' + title + '</h2>' +
         bodyHtml +
         COMMON_FOOTER +
@@ -136,10 +136,10 @@ function shellWrap(title, bodyHtml) {
 var TEMPLATE_SOURCES = {
 
   user_invite: {
-    subject: 'You\'re invited to AGX WIP Tracker',
-    html_body: shellWrap('Welcome to AGX',
+    subject: 'You\'re invited to P86 WIP Tracker',
+    html_body: shellWrap('Welcome to P86',
       '<p>Hi {{name}},</p>' +
-      '<p>{{invitedBy}} just created an account for you on the AGX WIP Tracker. ' +
+      '<p>{{invitedBy}} just created an account for you on the P86 WIP Tracker. ' +
         'You can sign in with the credentials below:</p>' +
       '<table style="width:100%;background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:12px;margin:16px 0;font-family:monospace;font-size:13px;">' +
         '<tr><td style="padding:4px 8px;color:#6b7280;">Email</td><td style="padding:4px 8px;font-weight:600;">{{email}}</td></tr>' +
@@ -151,10 +151,10 @@ var TEMPLATE_SOURCES = {
   },
 
   password_reset: {
-    subject: 'Your AGX password was reset',
+    subject: 'Your P86 password was reset',
     html_body: shellWrap('Password reset',
       '<p>Hi {{name}},</p>' +
-      '<p>{{resetBy}} has reset your AGX password. Use the credentials below to sign in:</p>' +
+      '<p>{{resetBy}} has reset your P86 password. Use the credentials below to sign in:</p>' +
       '<table style="width:100%;background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:12px;margin:16px 0;font-family:monospace;font-size:13px;">' +
         '<tr><td style="padding:4px 8px;color:#6b7280;">Email</td><td style="padding:4px 8px;font-weight:600;">{{email}}</td></tr>' +
         '<tr><td style="padding:4px 8px;color:#6b7280;">New password</td><td style="padding:4px 8px;font-weight:600;">{{password}}</td></tr>' +
@@ -168,11 +168,11 @@ var TEMPLATE_SOURCES = {
     subject: '{{subjectAction}}: {{job.jobNumber}} — {{job.title}}',
     html_body: shellWrap('Job {{verb}}',
       '<p>Hi {{recipientName}},</p>' +
-      '<p>{{assignedBy}} just {{verb}} on AGX:</p>' +
+      '<p>{{assignedBy}} just {{verb}} on P86:</p>' +
       '<table style="width:100%;background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:12px;margin:16px 0;font-size:13px;">' +
         '{{{job.detailsRowsHtml}}}' +
       '</table>' +
-      '<p><a href="{{appUrl}}" style="display:inline-block;background:#4f8cff;color:#fff;text-decoration:none;padding:10px 20px;border-radius:6px;font-weight:600;">Open in AGX</a></p>'
+      '<p><a href="{{appUrl}}" style="display:inline-block;background:#4f8cff;color:#fff;text-decoration:none;padding:10px 20px;border-radius:6px;font-weight:600;">Open in P86</a></p>'
     )
   },
 
@@ -180,7 +180,7 @@ var TEMPLATE_SOURCES = {
     subject: 'Scheduled: {{job.jobLabel}} — {{entry.startDateFmt}}',
     html_body: shellWrap('You\'ve been scheduled',
       '<p>Hi {{recipientName}},</p>' +
-      '<p>{{assignedBy}} just added you to a production schedule entry on AGX:</p>' +
+      '<p>{{assignedBy}} just added you to a production schedule entry on P86:</p>' +
       '<table style="width:100%;background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:12px;margin:16px 0;font-size:13px;">' +
         '<tr><td style="padding:4px 8px;color:#6b7280;">Job</td><td style="padding:4px 8px;font-weight:600;">{{job.jobLabel}}</td></tr>' +
         '<tr><td style="padding:4px 8px;color:#6b7280;">Start date</td><td style="padding:4px 8px;font-weight:600;">{{entry.startDateFmt}}</td></tr>' +
@@ -195,7 +195,7 @@ var TEMPLATE_SOURCES = {
     subject: 'Assigned to {{job.jobLabel}}',
     html_body: shellWrap('You\'ve been assigned to a job',
       '<p>Hi {{sub.greetingName}},</p>' +
-      '<p>{{assignedBy.name}} just added <strong>{{sub.name}}</strong> as a subcontractor on this AGX job:</p>' +
+      '<p>{{assignedBy.name}} just added <strong>{{sub.name}}</strong> as a subcontractor on this P86 job:</p>' +
       '<table style="width:100%;background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:12px;margin:16px 0;font-size:13px;">' +
         '<tr><td style="padding:4px 8px;color:#6b7280;">Job number</td><td style="padding:4px 8px;font-weight:600;">{{job.jobNumber}}</td></tr>' +
         '<tr><td style="padding:4px 8px;color:#6b7280;">Job</td><td style="padding:4px 8px;font-weight:600;">{{job.title}}</td></tr>' +
@@ -217,7 +217,7 @@ var TEMPLATE_SOURCES = {
         '<tr><td style="padding:4px 8px;color:#6b7280;">Est. revenue</td><td style="padding:4px 8px;font-weight:600;color:#059669;">{{lead.estimatedRevenueFmt}}</td></tr>' +
         '<tr><td style="padding:4px 8px;color:#6b7280;">Marked by</td><td style="padding:4px 8px;">{{changedBy.name}}</td></tr>' +
       '</table>' +
-      '<p><a href="{{appUrl}}" style="display:inline-block;background:#4f8cff;color:#fff;text-decoration:none;padding:10px 20px;border-radius:6px;font-weight:600;">Open in AGX</a></p>'
+      '<p><a href="{{appUrl}}" style="display:inline-block;background:#4f8cff;color:#fff;text-decoration:none;padding:10px 20px;border-radius:6px;font-weight:600;">Open in P86</a></p>'
     )
   },
 
@@ -233,7 +233,7 @@ var TEMPLATE_SOURCES = {
         '<tr><td style="padding:4px 8px;color:#6b7280;">Marked by</td><td style="padding:4px 8px;">{{changedBy.name}}</td></tr>' +
         '{{{reasonRowHtml}}}' +
       '</table>' +
-      '<p><a href="{{appUrl}}" style="display:inline-block;background:#4f8cff;color:#fff;text-decoration:none;padding:10px 20px;border-radius:6px;font-weight:600;">Open in AGX</a></p>'
+      '<p><a href="{{appUrl}}" style="display:inline-block;background:#4f8cff;color:#fff;text-decoration:none;padding:10px 20px;border-radius:6px;font-weight:600;">Open in P86</a></p>'
     )
   },
 
@@ -241,7 +241,7 @@ var TEMPLATE_SOURCES = {
     subject: 'Cert expiring: {{cert.typeLabel}} ({{sub.name}})',
     html_body: shellWrap('{{cert.typeLabel}} certificate expiring',
       '<p>Hi {{sub.greetingName}},</p>' +
-      '<p>Your <strong>{{cert.typeLabel}}</strong> certificate on file with AGX is approaching expiration.</p>' +
+      '<p>Your <strong>{{cert.typeLabel}}</strong> certificate on file with P86 is approaching expiration.</p>' +
       '<table style="width:100%;background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:12px;margin:16px 0;font-size:13px;">' +
         '<tr><td style="padding:4px 8px;color:#6b7280;">Sub</td><td style="padding:4px 8px;font-weight:600;">{{sub.name}}</td></tr>' +
         '<tr><td style="padding:4px 8px;color:#6b7280;">Certificate</td><td style="padding:4px 8px;font-weight:600;">{{cert.typeLabel}}</td></tr>' +
@@ -249,7 +249,7 @@ var TEMPLATE_SOURCES = {
         '<tr><td style="padding:4px 8px;color:#6b7280;">Status</td><td style="padding:4px 8px;">{{{cert.urgencyHtml}}}</td></tr>' +
       '</table>' +
       '<p>Please send an updated copy at your earliest convenience &mdash; reply to this email or use the button below.</p>' +
-      '<p><a href="{{appUrl}}" style="display:inline-block;background:#4f8cff;color:#fff;text-decoration:none;padding:10px 20px;border-radius:6px;font-weight:600;">Open in AGX</a></p>'
+      '<p><a href="{{appUrl}}" style="display:inline-block;background:#4f8cff;color:#fff;text-decoration:none;padding:10px 20px;border-radius:6px;font-weight:600;">Open in P86</a></p>'
     )
   }
 
@@ -310,7 +310,7 @@ function enrichParams(eventKey, raw) {
     p.sub = Object.assign({}, s, { greetingName: s.primaryContactFirst || s.name || 'there' });
     var ja = p.job || {};
     p.job = Object.assign({}, ja, { jobLabel: (ja.jobNumber ? ja.jobNumber + ' — ' : '') + (ja.title || '(untitled)') });
-    if (!p.assignedBy) p.assignedBy = { name: 'AGX' };
+    if (!p.assignedBy) p.assignedBy = { name: 'P86' };
     if (p.contractAmt) {
       p.contractAmtFmt = fmtMoney(p.contractAmt);
       p.contractRowHtml = '<tr><td style="padding:4px 8px;color:#6b7280;">Contract</td><td style="padding:4px 8px;font-weight:600;color:#059669;">' + fmtMoney(p.contractAmt) + '</td></tr>';
@@ -426,19 +426,19 @@ function getDefaultSource(eventKey) {
 function sampleParams(eventKey) {
   switch (eventKey) {
     case 'user_invite':
-      return { name: 'Jane Smith', email: 'jane@example.com', password: 'temp-pass-123', invitedBy: 'John AGX' };
+      return { name: 'Jane Smith', email: 'jane@example.com', password: 'temp-pass-123', invitedBy: 'John P86' };
     case 'password_reset':
-      return { name: 'Jane Smith', email: 'jane@example.com', password: 'new-pass-123', resetBy: 'John AGX' };
+      return { name: 'Jane Smith', email: 'jane@example.com', password: 'new-pass-123', resetBy: 'John P86' };
     case 'job_assigned':
-      return { recipientName: 'Jane Smith', job: { title: 'Madeira Bay Restoration', jobNumber: 'S2245', client: 'Madeira Bay HOA', contractAmount: 125000, status: 'In Progress' }, assignedBy: 'John AGX', action: 'assigned' };
+      return { recipientName: 'Jane Smith', job: { title: 'Madeira Bay Restoration', jobNumber: 'S2245', client: 'Madeira Bay HOA', contractAmount: 125000, status: 'In Progress' }, assignedBy: 'John P86', action: 'assigned' };
     case 'schedule_entry':
-      return { recipientName: 'Mike Crew', entry: { startDate: '2026-05-10', days: 3, includesWeekends: false, notes: 'Bring scaffold' }, job: { title: 'Madeira Bay Restoration', jobNumber: 'S2245' }, assignedBy: 'John AGX' };
+      return { recipientName: 'Mike Crew', entry: { startDate: '2026-05-10', days: 3, includesWeekends: false, notes: 'Bring scaffold' }, job: { title: 'Madeira Bay Restoration', jobNumber: 'S2245' }, assignedBy: 'John P86' };
     case 'sub_assigned':
-      return { sub: { name: 'Summit Sealants', primaryContactFirst: 'Mike' }, job: { title: 'Madeira Bay Restoration', jobNumber: 'S2245' }, contractAmt: 12500, assignedBy: { name: 'John AGX' } };
+      return { sub: { name: 'Summit Sealants', primaryContactFirst: 'Mike' }, job: { title: 'Madeira Bay Restoration', jobNumber: 'S2245' }, contractAmt: 12500, assignedBy: { name: 'John P86' } };
     case 'lead_status_sold':
-      return { lead: { title: 'Solace Powerwash', client_company: 'Solace Communities', estimated_revenue_high: 18000 }, salesperson: { name: 'Jane Smith' }, changedBy: { name: 'John AGX' } };
+      return { lead: { title: 'Solace Powerwash', client_company: 'Solace Communities', estimated_revenue_high: 18000 }, salesperson: { name: 'Jane Smith' }, changedBy: { name: 'John P86' } };
     case 'lead_status_lost':
-      return { lead: { title: 'Solace Powerwash', client_company: 'Solace Communities' }, salesperson: { name: 'Jane Smith' }, changedBy: { name: 'John AGX' }, reason: 'Lost to competitor', status: 'lost' };
+      return { lead: { title: 'Solace Powerwash', client_company: 'Solace Communities' }, salesperson: { name: 'Jane Smith' }, changedBy: { name: 'John P86' }, reason: 'Lost to competitor', status: 'lost' };
     case 'cert_expiring':
       return { sub: { name: 'Summit Sealants', primaryContactFirst: 'Mike' }, cert: { type: 'gl', expirationDate: '2026-05-15', daysUntilExpiry: 12 } };
     default: return {};

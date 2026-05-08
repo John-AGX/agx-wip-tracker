@@ -1,5 +1,5 @@
 // ============================================================
-// AGX WIP Tracker — Layout Restructure v2 (Step 2)
+// P86 WIP Tracker — Layout Restructure v2 (Step 2)
 // Two-column layout:
 //   LEFT:  Workspace grid (portrait, always visible)
 //   RIGHT: Compact metrics strip + horizontal tab navigation

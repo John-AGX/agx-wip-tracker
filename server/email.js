@@ -1,4 +1,4 @@
-// AGX email service — Phase 1 (Resend transport).
+// P86 email service — Phase 1 (Resend transport).
 //
 // One public function: sendEmail({ to, subject, html, text, replyTo, tag }).
 // Wraps the Resend SDK so the rest of the app never imports the provider

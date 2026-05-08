@@ -1,7 +1,7 @@
-// Materials catalog — built from AGX's vendor purchase history
+// Materials catalog — built from P86's vendor purchase history
 // (Home Depot to start). Drives the AG `search_materials` tool so the
 // estimator can ground line-item proposals in actual descriptions and
-// AGX-side prices instead of guessing.
+// P86-side prices instead of guessing.
 //
 // Import flow: admin uploads a vendor CSV; the client (admin.js) parses
 // it browser-side via SheetJS and POSTs the row array here as JSON. We

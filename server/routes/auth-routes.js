@@ -46,19 +46,19 @@ router.get('/me', requireAuth, (req, res) => {
     // Phase 1b — when 'agents', the AG estimating chat panel hits
     // /api/ai/v2/estimates/:id/chat (Sessions API) instead of the
     // legacy /api/ai/estimates/:id/chat (messages.stream).
-    agent_mode_ag: (process.env.AGX_AGENT_MODE_AG || '').toLowerCase() === 'agents' ? 'agents' : 'legacy',
+    agent_mode_ag: (process.env.AGENT_MODE_47 || '').toLowerCase() === 'agents' ? 'agents' : 'legacy',
     // Phase 2 — same flip for Elle (jobs). Independent ramp so AG
     // telemetry can prove the Sessions path before Elle moves over.
-    agent_mode_job: (process.env.AGX_AGENT_MODE_JOB || '').toLowerCase() === 'agents' ? 'agents' : 'legacy',
+    agent_mode_job: (process.env.AGENT_MODE_86 || '').toLowerCase() === 'agents' ? 'agents' : 'legacy',
     // Phase 2 — same flip for HR (clients) and CoS (staff). All four
     // ramp independently; production stays on v1 until each env var
     // flips.
-    agent_mode_cra:   (process.env.AGX_AGENT_MODE_CRA   || '').toLowerCase() === 'agents' ? 'agents' : 'legacy',
-    agent_mode_staff: (process.env.AGX_AGENT_MODE_STAFF || '').toLowerCase() === 'agents' ? 'agents' : 'legacy',
+    agent_mode_cra:   (process.env.AGENT_MODE_HR   || '').toLowerCase() === 'agents' ? 'agents' : 'legacy',
+    agent_mode_staff: (process.env.AGENT_MODE_STAFF || '').toLowerCase() === 'agents' ? 'agents' : 'legacy',
     // Lead Intake — the fifth agent. Click the "🧲 New Lead with AI"
     // button on the Leads page to invoke. Independent flag so it
     // ramps separately from the other agents.
-    agent_mode_intake: (process.env.AGX_AGENT_MODE_INTAKE || '').toLowerCase() === 'agents' ? 'agents' : 'legacy'
+    agent_mode_intake: (process.env.AGENT_MODE_INTAKE || '').toLowerCase() === 'agents' ? 'agents' : 'legacy'
   };
   res.json({ user: req.user, feature_flags: featureFlags });
 });
@@ -260,7 +260,7 @@ router.put('/users/:id/password', requireAuth, requireRole('admin'), async (req,
     );
 
     // Email the user their new password — security tradeoff is
-    // deliberate: AGX is small + admin-driven. Auth flow is "admin
+    // deliberate: P86 is small + admin-driven. Auth flow is "admin
     // hands you credentials" not "you self-serve via reset link".
     // Future flow with token-based resets would replace this.
     try {

@@ -1,4 +1,4 @@
-// AGX Estimate Preview — Phase C.
+// P86 Estimate Preview — Phase C.
 //
 // Live, in-tab render of the active estimate as a finished proposal letter.
 // Matches the existing AGX PDF format: logo header, client/job/date block,

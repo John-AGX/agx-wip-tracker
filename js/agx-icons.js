@@ -1,4 +1,4 @@
-// AGX Icon Helper — inline SVG icons (auto-generated).
+// P86 Icon Helper — inline SVG icons (auto-generated).
 //
 // 24 icons sourced from Phosphor (MIT) and Heroicons (MIT). Each
 // retains stroke="currentColor" so CSS color rules tint them; CSS
@@ -134,7 +134,7 @@
     '✨':       'sparkle',     // 2728  sparkles
     '♻':       'reset',       // 267B  recycling
     '↺':       'restore',     // 21BA  anticlockwise open circle
-    '🎯': 'target',      // 1F3AF direct hit (Agent 47 estimating)
+    '🎯': 'target',      // 1F3AF direct hit (47 estimating)
     '⛶':       'fullscreen',  // 26F6  square four corners
     '🗖': 'fullscreen',  // 1F5D6 maximize alt
     '📁': 'collapse',    // 1F4C1 file folder closed
@@ -146,7 +146,7 @@
     '👷': 'subs',        // 1F477 construction worker
     '📄': 'attachments', // 1F4C4 page facing up (po)
     // Project 86 — agent header + admin sub-tab swaps. Replaces the
-    // emoji glyphs in the AI panel title (Agent 47 / 86 / HR / Intake
+    // emoji glyphs in the AI panel title (47 / 86 / HR / Intake
     // / CoS) and the Admin → Agents sub-tab strip (Metrics /
     // Conversations / Evals / Skills / Prompt Preview / Batch /
     // Anthropic).

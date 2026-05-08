@@ -341,15 +341,15 @@ async function initSchema() {
     ALTER TABLE ai_messages ADD COLUMN IF NOT EXISTS cache_read_input_tokens INTEGER;
 
     -- Names of skill packs that loaded into the agent's system prompt
-    -- this turn. Stored as JSONB array of strings (e.g. ["AGX Group
-    -- Discipline", "AGX Pricing Benchmark Loop"]). Lets admins see
+    -- this turn. Stored as JSONB array of strings (e.g. ["P86 Group
+    -- Discipline", "P86 Pricing Benchmark Loop"]). Lets admins see
     -- which packs are actually firing per turn (some packs are
     -- conditionally loaded via triggers, so the count varies).
     -- Section overrides (replaces_section packs) NOT counted here —
     -- they substitute for hardcoded blocks rather than appending.
     ALTER TABLE ai_messages ADD COLUMN IF NOT EXISTS packs_loaded JSONB;
 
-    -- Materials catalog — AGX's purchase history (Home Depot to start;
+    -- Materials catalog — P86's purchase history (Home Depot to start;
     -- vendor column makes Lowe's / Sherwin Williams / etc. a config
     -- addition later, not a schema change). One row per unique
     -- (vendor, cleaned-description); SKU is stored as metadata but is
@@ -498,7 +498,7 @@ async function initSchema() {
       hd_class TEXT,
       hd_subclass TEXT,
       agx_subgroup TEXT,                   -- 'materials' | 'labor' | 'gc' | 'sub'
-      category TEXT,                       -- AGX-natural category: 'Lumber & Decking', 'Paint', 'Fasteners', etc.
+      category TEXT,                       -- P86-natural category: 'Lumber & Decking', 'Paint', 'Fasteners', etc.
       unit TEXT,                           -- ea / qt / gal / lb / lf / sf / ...
       last_unit_price NUMERIC(10, 2),
       avg_unit_price NUMERIC(10, 2),
@@ -676,7 +676,7 @@ async function initSchema() {
     ALTER TABLE ai_eval_runs ADD COLUMN IF NOT EXISTS effort TEXT;
 
     -- Managed-agents registry — Phase 1a of the Anthropic Agents API
-    -- migration. Each row maps an AGX agent key (ag/job/cra/staff) to
+    -- migration. Each row maps an P86 agent key (ag/job/cra/staff) to
     -- the Anthropic-side Agent record id. Bootstrapped via the admin
     -- "Register managed agents" button. The chat path hasn't migrated
     -- yet (still on messages.stream); this row is what the v2 chat
@@ -708,7 +708,7 @@ async function initSchema() {
 
     -- Phase 1b — durable mapping from (agent_key, entity, user) to
     -- the long-lived Anthropic Session that backs that conversation.
-    -- We reuse one Session per AGX conversation so we don't pay session-
+    -- We reuse one Session per P86 conversation so we don't pay session-
     -- creation latency on every turn AND so the Anthropic side gets the
     -- benefit of accumulated session context (built-in compaction, prompt
     -- caching, the works). entity_type lets one table cover estimates,
@@ -914,7 +914,7 @@ async function initSchema() {
   );
 
   // BT export mapping — drives the Buildertrend xlsx exporter. As of
-  // the new BT proposal-import format (Phase D), each AGX btCategory
+  // the new BT proposal-import format (Phase D), each P86 btCategory
   // maps to a single BT Cost Code string. The old Parent Group /
   // Subgroup / Cost Type fields and the auto-injected Service &
   // Repair Income line are gone — the export emits pure cost lines at
@@ -944,26 +944,26 @@ async function initSchema() {
   // body just gets appended for every chat. v2 will support on-demand
   // loading via a tool call.
   //
-  // Default seed bundles AGX's house-style estimating playbook for AG.
+  // Default seed bundles P86's house-style estimating playbook for AG.
   // Admins edit these in Admin -> Templates -> Skills; nothing in code
   // needs to change to add a new playbook.
   const DEFAULT_AGENT_SKILLS = {
     skills: [
       {
         id: 'sk_agx_estimating_playbook',
-        name: 'AGX Estimating Playbook',
+        name: 'P86 Estimating Playbook',
         agents: ['ag'],
         alwaysOn: true,
         body: [
-          'AGX house style for estimating:',
+          'P86 house style for estimating:',
           '',
           '## Slotting (extra emphasis)',
-          'Always slot lines into the four standard subgroups. Materials = anything you can hold. Labor = AGX crew hours. GC = overhead/permits/dumpster/PM. Subs = work handed to another company.',
+          'Always slot lines into the four standard subgroups. Materials = anything you can hold. Labor = P86 crew hours. GC = overhead/permits/dumpster/PM. Subs = work handed to another company.',
           '',
           '## Quantity discipline',
           'Take quantities off photos when possible: count balusters, pickets, treads, doors, windows, panels. State your count in the rationale ("counted 38 balusters across 4 sections of railing"). When you can\'t count from the photo, ask for a measurement.',
           '',
-          '## Common AGX scopes — typical line bundles',
+          '## Common P86 scopes — typical line bundles',
           '- Deck repair: PT 5/4 deck boards (Materials), 8d hot-dip nails or trim screws (Materials), demo + install labor (Direct Labor), dump fees (GC), paint sub if separate (Subs).',
           '- Painting: primer (Materials), top-coat paint (Materials), masking + drop cloths (Materials), prep + paint labor (Direct Labor), color match samples (Materials small lot).',
           '- Stair tread replacement: oak/PT treads (Materials), risers if needed (Materials), construction adhesive (Materials), demo + install labor (Direct Labor), finish stain/sealer (Materials).',
@@ -1006,7 +1006,7 @@ async function initSchema() {
   const ADDITIVE_AGENT_SKILLS = [
     {
       id: 'sk_ag_group_discipline',
-      name: 'AGX Group Discipline',
+      name: 'P86 Group Discipline',
       agents: ['ag'],
       alwaysOn: true,
       body: [
@@ -1020,7 +1020,7 @@ async function initSchema() {
     },
     {
       id: 'sk_ag_lead_client_linking',
-      name: 'AGX Lead/Client Linking',
+      name: 'P86 Lead/Client Linking',
       agents: ['ag'],
       alwaysOn: true,
       body: [
@@ -1034,22 +1034,22 @@ async function initSchema() {
     },
     {
       id: 'sk_ag_pricing_benchmark',
-      name: 'AGX Pricing Benchmark Loop',
+      name: 'P86 Pricing Benchmark Loop',
       agents: ['ag'],
       alwaysOn: true,
       body: [
         'Before quoting a NON-MATERIALS line (Direct Labor, Subcontractors, GC):',
-        '- Call read_past_estimate_lines(q="<trade keyword>") to anchor the unit_cost to AGX history.',
+        '- Call read_past_estimate_lines(q="<trade keyword>") to anchor the unit_cost to P86 history.',
         '- If the median + range output shows 3+ priced matches in the last 2 years, anchor your quote to the median (or the high end if recent inflation is visible in the range).',
-        '- If 0 matches, mark the rationale "first-time line — no AGX history yet" and quote a defensible Central-FL number from your trade knowledge.',
+        '- If 0 matches, mark the rationale "first-time line — no P86 history yet" and quote a defensible Central-FL number from your trade knowledge.',
         '- 1-2 matches: cite both — "$X based on [estimate title], $Y based on [other estimate title], proposing $Z."',
-        'For MATERIALS still use read_materials (real receipts) — past_estimate_lines doesn\'t differentiate retail vs AGX cost the way the receipt log does.',
+        'For MATERIALS still use read_materials (real receipts) — past_estimate_lines doesn\'t differentiate retail vs P86 cost the way the receipt log does.',
         'Don\'t loop. ONE read_past_estimate_lines call per trade keyword. If empty, move on — don\'t keep retrying narrower queries.'
       ].join('\n')
     },
     {
       id: 'sk_ag_cross_group_awareness',
-      name: 'AGX Cross-Group Awareness',
+      name: 'P86 Cross-Group Awareness',
       agents: ['ag'],
       alwaysOn: true,
       body: [

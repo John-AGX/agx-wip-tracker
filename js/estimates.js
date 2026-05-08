@@ -266,7 +266,7 @@ function renderEstimatesList() {
         // BT cost row (Subs / Materials / GC / Labor) and the Service &
         // Repair Income row (= total client price) is injected by the
         // export, not stored as a section.
-        // Default per-section markup mirrors AGX's typical pricing — see
+        // Default per-section markup mirrors P86's typical pricing — see
         // estimate-editor.js for the rationale. Markup can be dialed per
         // job via the slider/number input on each section header.
         const ESTIMATE_STANDARD_SECTIONS = [
@@ -414,7 +414,7 @@ function renderEstimatesList() {
     });
     let h = '';
     h += '<div style="text-align:center;margin-bottom:30px;border-bottom:2px solid #ddd;padding-bottom:15px;">';
-    h += '<h1 style="margin:0 0 5px 0;font-size:24px;">AGX Central Florida</h1>';
+    h += '<h1 style="margin:0 0 5px 0;font-size:24px;">P86 Central Florida</h1>';
     h += '<p style="margin:0;color:#666;font-size:14px;">Estimating & Project Tracking</p></div>';
     h += '<div style="margin-bottom:20px;font-size:14px;">';
     h += '<div><strong>Estimate:</strong> ' + (estimate.title || '') + '</div>';

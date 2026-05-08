@@ -185,7 +185,7 @@
   }
 
   function safeFileName(s) {
-    return String(s || 'AGX_Estimate').replace(/[^\w \-]+/g, '').replace(/\s+/g, '_').slice(0, 60);
+    return String(s || 'P86_Estimate').replace(/[^\w \-]+/g, '').replace(/\s+/g, '_').slice(0, 60);
   }
 
   // Build the per-line export rows. Pro-rata distributes section

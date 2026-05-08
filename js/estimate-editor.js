@@ -1,4 +1,4 @@
-// AGX Estimate Editor — Phase A.
+// P86 Estimate Editor — Phase A.
 //
 // Full-page editor that replaces the modal. Sticky header with linked-lead
 // + linked-client chips and a live totals strip. Body splits into three

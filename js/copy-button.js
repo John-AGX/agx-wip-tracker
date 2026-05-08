@@ -1,4 +1,4 @@
-// AGX Copy-to-Clipboard helper.
+// P86 Copy-to-Clipboard helper.
 //
 // Auto-attaches a small clipboard button (📋) to:
 //   • <input type="email">
