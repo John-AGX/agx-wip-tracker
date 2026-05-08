@@ -47,8 +47,8 @@ router.get('/me', requireAuth, (req, res) => {
     // /api/ai/v2/estimates/:id/chat (Sessions API) instead of the
     // legacy /api/ai/estimates/:id/chat (messages.stream).
     agent_mode_ag: (process.env.AGENT_MODE_47 || '').toLowerCase() === 'agents' ? 'agents' : 'legacy',
-    // Phase 2 — same flip for Elle (jobs). Independent ramp so AG
-    // telemetry can prove the Sessions path before Elle moves over.
+    // Phase 2 — same flip for 86 (jobs). Independent ramp so AG
+    // telemetry can prove the Sessions path before 86 moves over.
     agent_mode_job: (process.env.AGENT_MODE_86 || '').toLowerCase() === 'agents' ? 'agents' : 'legacy',
     // Phase 2 — same flip for HR (clients) and CoS (staff). All four
     // ramp independently; production stays on v1 until each env var

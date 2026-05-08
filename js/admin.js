@@ -3392,7 +3392,7 @@
   // same app_settings.agent_skills row. We sync inputs into the draft
   // before any view switch so unsaved edits don't get clobbered.
   // ─────────── Prompt Preview view ───────────
-  // Shows the EXACT system prompt an agent (AG / Elle / HR / Chief of Staff)
+  // Shows the EXACT system prompt an agent (47 / 86 / HR / Chief of Staff)
   // would see right now if a chat turn fired against the supplied entity.
   // Three blocks: stable prefix (cached), dynamic context (refreshed each
   // turn), and skill packs (always-on packs that auto-append). Gives the
@@ -3653,7 +3653,7 @@
   window.restoreSkillsVersion = restoreSkillsVersion;
 
   // ─────────── Batch audits view ───────────
-  // Lists submitted Anthropic batches (currently Elle nightly audits)
+  // Lists submitted Anthropic batches (currently 86 nightly audits)
   // with status pills + click-into-details. Auto-polls non-terminal
   // batches on every render so the UI walks itself forward.
   function renderBatchJobsList() {

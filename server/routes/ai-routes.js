@@ -71,11 +71,11 @@ const MODEL = process.env.AI_MODEL || 'claude-sonnet-4-6';
 // passing it there would 400, so we only attach the param when the
 // model is in the supported set.
 const EFFORT = (process.env.AI_EFFORT || '').trim().toLowerCase();
-// Per-agent overrides — Elle's WIP audits benefit from higher
+// Per-agent overrides — 86's WIP audits benefit from higher
 // thinking budgets, AG's quick line-item turns don't. Each env var
 // is optional; missing → falls back to AI_EFFORT.
 //   AI_EFFORT_AG    AG (estimating)
-//   AI_EFFORT_JOB   Elle (WIP analyst)
+//   AI_EFFORT_JOB   86 (WIP analyst)
 //   AI_EFFORT_CRA   HR (customer relations)
 //   AI_EFFORT_STAFF Chief of Staff
 const EFFORT_PER_AGENT = {
@@ -554,7 +554,7 @@ const ESTIMATE_TOOLS = [
 ];
 
 // ──────────────────────────────────────────────────────────────────
-// Job-side tools — write capabilities for Elle (WIP analyst).
+// Job-side tools — write capabilities for 86 (WIP analyst).
 // All proposals route through the same approval-card flow as the
 // estimate side: assistant emits a tool_use block, client renders
 // a card, user approves, client applies the change locally and
@@ -1478,7 +1478,7 @@ function filterToolsForPhase(tools, phase) {
   return (tools || []).filter(t => PLAN_MODE_ALLOWED_AG_TOOLS.has(t.name));
 }
 
-// Plan-mode allowlist for Elle (job side). Read tools + the
+// Plan-mode allowlist for 86 (job side). Read tools + the
 // request_build_mode tool stay; every write tool is removed so the
 // model literally cannot mutate WIP data while the PM is in analysis
 // mode. The PM grants write access by approving a request_build_mode
@@ -1609,15 +1609,15 @@ const SECTION_DEFAULTS = {
     description: "AG's tone and style preferences. Edit when the agent feels too corporate, too terse, or too verbose.",
     body: '# Tone\n- Concise. Trade vocabulary welcome. Mix prose with proposals — short lead-in, the cards, a one-line wrap-up. Don\'t emit proposals without any explanation. If you need one piece of info to answer well, ask one targeted question first.'
   },
-  // ──── Elle (job-side WIP analyst) ────────────────────────────────
+  // ──── 86 (job-side WIP analyst) ────────────────────────────────
   elle_role: {
     agent: 'job',
-    description: "Elle's role and what tools she should use. Edit to change how aggressive Elle is at proposing changes vs analyzing only.",
+    description: "86's role and what tools 86 should use. Edit to change how aggressive 86 is at proposing changes vs analyzing only.",
     body: '# Your role\n- Read the WIP snapshot, change orders, cost lines, node graph, and QB cost data together — they tell a story about whether the job is healthy.\n- Spot mismatches: % complete way ahead of revenue earned (under-pulled progress), revenue earned way ahead of invoiced (under-billed), JTD margin diverging from revised margin (cost overruns), large recurring vendors that should have been a CO, QB lines unlinked to graph nodes.\n- When citing dollar figures, match the field name from the snapshot above so the PM can find them in the UI.\n- **You CAN make changes.** Available tools: `create_node` (add a new graph node — t1/t2/cost-bucket/sub/po/inv/co/watch/note), `delete_node` (remove a node + its wires — does NOT delete underlying job data), `set_phase_pct_complete`, `set_phase_field` (materials/labor/sub/equipment dollars on a PHASE record from # Structure), `set_node_value` (QB Total / value on a cost-bucket NODE from # Node graph — labor/mat/gc/other/sub/burden), `wire_nodes` (connect graph nodes), `assign_qb_line` (link a QB cost line to a graph node), `read_workspace_sheet_full` and `read_qb_cost_lines` (auto-apply, no approval). Each writer tool writes a proposal card the user approves; trusted tool types auto-apply after a 5s countdown.\n- **set_phase_field vs set_node_value — DO NOT MIX THEM UP.** `set_phase_field` writes to a phase record (phase_id from # Structure, e.g. "ph_..."). `set_node_value` writes the QB Total field to a graph node (node_id from # Node graph, e.g. "n38"). When the user says "load the QB Materials & Supplies total into the Materials node" or similar, that is `set_node_value` on a `mat` node — passing a node id like "n38" to `set_phase_field` will fail because n38 is not in appData.phases.\n- **Every block above is LIVE for this turn** — node graph, QB cost lines, workspace sheets all rebuild from the client on every user message and every tool_use continuation. If something was just created/edited, it\'s in the data above. NEVER say "I can\'t see new X" or "the snapshot is stale" or "you need to refresh the session" — those statements are factually wrong about how this assistant works.\n- When the user references a node/sheet/line by name and you can\'t find it, search the relevant block by case-insensitive partial match before asking — it\'s usually there.\n- Be concise and direct. Construction trade vocabulary is welcome. If you need one piece of info to answer well, ask one targeted question first.'
   },
   elle_web_research: {
     agent: 'job',
-    description: "When Elle should use web search. Tighter than AG since most answers are in the WIP / QB data already.",
+    description: "When 86 should use web search. Tighter than AG since most answers are in the WIP / QB data already.",
     body: '# Web research (web_search tool)\nYou have a web_search tool. Use it sparingly on the job side — most answers are already in the WIP snapshot, change orders, QB cost lines, and node graph above. Good reasons to search:\n  • Look up a recurring vendor name to figure out what trade/category they serve when the QB account label is ambiguous (e.g., "is ACME Supply Co a roofing supplier or a general lumberyard?").\n  • Confirm a sub\'s scope or licensing when categorizing their cost lines.\n  • Look up a product/material SKU charged to the job when the PM asks "what did we buy here?".\nDo NOT search for P86-internal financial questions, margin math, or anything answered by the data above. Cap at ~2 searches per turn.'
   },
   // ──── HR (customer relations / client directory) ─────────────────
@@ -1669,8 +1669,8 @@ const SECTION_DEFAULTS = {
   // ──── Chief of Staff (system-wide observability agent) ───────────
   cos_three_agents: {
     agent: 'staff',
-    description: "Description of the three in-app agents (AG / Elle / HR). Edit when adding a new agent or renaming one.",
-    body: '# Who the three agents are\n  • **AG (estimate-side)** — helps PMs draft scopes, propose line items with P86-typical Central-FL pricing, and edit the estimate via approval-gated tools. Heavy vision use (photos, PDFs of RFPs / takeoffs).\n  • **Elle (job-side)** — WIP analyst on live jobs. Reads WIP snapshot, change orders, QB cost lines, and the node graph; spots margin issues, missing COs, billing gaps.\n  • **HR (customer-side)** — owns the customer directory. Splits parent+property compounds, links unparented properties, merges duplicates, attaches business cards, and writes durable client notes. Internal entity_type is "client" and skill-pack agentKey is "cra" (both kept for back-compat); display name is HR.\nAll three log into the same ai_messages table (different entity_type values).'
+    description: "Description of the three in-app agents (47 / 86 / HR). Edit when adding a new agent or renaming one.",
+    body: '# Who the three agents are\n  • **47 (estimate-side)** — helps PMs draft scopes, propose line items with P86-typical Central-FL pricing, and edit the estimate via approval-gated tools. Heavy vision use (photos, PDFs of RFPs / takeoffs). Internal agent_key is "ag" (kept for back-compat); display name is 47.\n  • **86 (job-side)** — analyst on live jobs. Reads WIP snapshot, change orders, QB cost lines, and the node graph; spots margin issues, missing COs, billing gaps. Internal agent_key is "job"; display name is 86.\n  • **HR (customer-side)** — owns the customer directory + user-health operations. Splits parent+property compounds, links unparented properties, merges duplicates, attaches business cards, writes durable client notes, and watches in-app user accounts. Internal entity_type is "client" and skill-pack agentKey is "cra" (both kept for back-compat); display name is HR.\nAll three log into the same ai_messages table (different entity_type values).'
   },
   cos_how_to_work: {
     agent: 'staff',
@@ -2240,7 +2240,7 @@ async function createFreshAiSession({ agentKey, entityType, entityId, userId }) 
 //                                            UI; collect it in
 //                                            pendingToolUses and end on
 //                                            the next idle
-// When the callback is omitted (AG / Elle path), every custom_tool_use
+// When the callback is omitted (AG / 86 path), every custom_tool_use
 // is treated as approval — matching today's behavior.
 // Match the API's "session is stuck waiting for tool responses" error.
 // Happens when a prior turn emitted agent.custom_tool_use events but
@@ -2906,7 +2906,7 @@ function computeJobWIP(job, jobBuildings, jobPhases, jobChangeOrders, jobSubs, j
 // byCategory, lineCount, mostRecentImport, samples[] } }
 async function buildJobContext(jobId, clientContext, aiPhase) {
   // aiPhase: 'plan' (read-only analysis, no writes) | 'build' (full
-  // tool access). Defaults to 'plan' for Elle — she's an analyst, so
+  // tool access). Defaults to 'plan' for 86 — she's an analyst, so
   // the safer default is no surprise mutations until the PM explicitly
   // grants build access via the request_build_mode tool or the phase
   // pill. The caller forwards this to filterToolsForJobPhase to drop
@@ -2935,7 +2935,7 @@ async function buildJobContext(jobId, clientContext, aiPhase) {
   const wip = computeJobWIP(job, buildings, phases, changeOrders, subs, invoices);
 
   const lines = [];
-  lines.push('You are Elle, P86\'s WIP analyst. P86 = a Central-Florida construction-services platform, a Central Florida construction services company. The PM is working on the job below — help them spot margin issues, missing change orders, billing gaps, and progress risks. (Your name is a nod to Lisa.)');
+  lines.push('You are 86, P86\'s WIP analyst. P86 = a Central-Florida construction-services platform, a Central Florida construction services company. The PM is working on the job below — help them spot margin issues, missing change orders, billing gaps, and progress risks. (Your name is a nod to Lisa.)');
   lines.push('');
   lines.push('# Job');
   lines.push('- Title: ' + (job.title || job.jobName || '(untitled)'));
@@ -2974,7 +2974,7 @@ async function buildJobContext(jobId, clientContext, aiPhase) {
 
   // Sub-job structure — full per-building phase composition with the
   // computed budget-weighted rollup that drives the WIP page. Without
-  // this Elle has no way to verify her own cascade results before /
+  // this 86 has no way to verify her own cascade results before /
   // after a write.
   if (buildings.length || phases.length) {
     lines.push('# Structure (buildings + phases with computed rollups)');
@@ -3046,7 +3046,7 @@ async function buildJobContext(jobId, clientContext, aiPhase) {
     }
 
     // ── How building % complete actually works (mental model) ─────
-    // Elle has had trouble with this — two parallel cascade paths
+    // 86 has had trouble with this — two parallel cascade paths
     // exist that compute the SAME conceptual number from DIFFERENT
     // data, and they can diverge. Spell it out so she can diagnose.
     lines.push('## How building % complete works (read this before answering rollup questions)');
@@ -3253,21 +3253,21 @@ async function buildJobContext(jobId, clientContext, aiPhase) {
     lines.push('');
   }
 
-  // Section overrides for Elle. Loaded once and used at named anchor
+  // Section overrides for 86. Loaded once and used at named anchor
   // points so admins can edit instructions without code changes.
   const elleSectionOverrides = await loadSectionOverridesFor('job');
   renderSection(lines, 'elle_role', elleSectionOverrides);
   lines.push('');
   renderSection(lines, 'elle_web_research', elleSectionOverrides);
 
-  // Skill packs targeted at Elle. Same loader as AG / HR; agentKey
-  // for Elle is 'job' (matches entity_type for back-compat). Appended
+  // Skill packs targeted at 86. Same loader as AG / HR; agentKey
+  // for 86 is 'job' (matches entity_type for back-compat). Appended
   // as standalone sections so the model sees them as binding.
   const elleSkills = await loadActiveSkillsFor('job');
   if (elleSkills.length) {
     lines.push('');
     lines.push('# Loaded skills');
-    lines.push('Skill packs your admin has assigned to Elle. Treat each as binding additional guidance on top of the baseline rules above.');
+    lines.push('Skill packs your admin has assigned to 86. Treat each as binding additional guidance on top of the baseline rules above.');
     elleSkills.forEach(function(s) {
       lines.push('');
       lines.push('## ' + s.name);
@@ -3503,11 +3503,11 @@ router.post('/jobs/:id/chat/continue',
 );
 
 // ════════════════════════════════════════════════════════════════════
-// Phase 2 — v2 Elle (jobs) chat path on the Anthropic Sessions API
+// Phase 2 — v2 86 (jobs) chat path on the Anthropic Sessions API
 //
 // Mirrors Phase 1b's v2 estimates path. Long-lived Anthropic Session
-// per (job, user) — agent.create for Elle was registered in Phase 1a,
-// so the session inherits Elle's system prompt, JOB_TOOLS, web_search.
+// per (job, user) — agent.create for 86 was registered in Phase 1a,
+// so the session inherits 86's system prompt, JOB_TOOLS, web_search.
 //
 // Per-turn dynamic context (job WIP snapshot, change orders, node
 // graph) goes into the user message wrapped in <turn_context> instead
@@ -3519,7 +3519,7 @@ router.post('/jobs/:id/chat/continue',
 
 const FLAG_AGENT_MODE_86 = (process.env.AGENT_MODE_86 || '').toLowerCase() === 'agents';
 
-// Persist the assistant text response for an Elle turn into ai_messages
+// Persist the assistant text response for an 86 turn into ai_messages
 // (entity_type='job'). Mirrors the v1 inline insert so the messages
 // table stays canonical regardless of which path produced the row.
 async function saveJobAssistantMessage({ jobId, userId, text, usage }) {
@@ -3536,7 +3536,7 @@ async function saveJobAssistantMessage({ jobId, userId, text, usage }) {
   );
 }
 
-// POST /api/ai/v2/jobs/:id/chat — Sessions-backed chat for Elle.
+// POST /api/ai/v2/jobs/:id/chat — Sessions-backed chat for 86.
 // Body: { message, clientContext, aiPhase }
 router.post('/v2/jobs/:id/chat',
   requireAuth, requireCapability('FINANCIALS_VIEW'),
@@ -3561,7 +3561,7 @@ router.post('/v2/jobs/:id/chat',
 
       // Wrap per-turn dynamic context in <turn_context> tags so the
       // agent's stable system prompt isn't polluted with churn-prone
-      // fields. Elle's WIP snapshots can run long; the Session's
+      // fields. 86's WIP snapshots can run long; the Session's
       // built-in compaction will shorten older turns automatically.
       const turnText =
         '<turn_context>\n' + ctxSystemToText(ctx.system) + '\n</turn_context>\n\n' + userMessage;
@@ -4800,7 +4800,7 @@ const STAFF_TOOLS = [
     name: 'read_metrics',
     tier: 'auto',
     description:
-      'Read aggregate AI-agent usage metrics for the requested window. Returns per-agent (AG / Elle / HR) totals: turns, conversations, unique users, tool uses, photos attached, tokens in/out, model mix, and estimated cost in USD. Use this to answer "how much is AG being used?", "what does Elle cost us?", "is anyone using HR?" types of questions.',
+      'Read aggregate AI-agent usage metrics for the requested window. Returns per-agent (47 / 86 / HR) totals: turns, conversations, unique users, tool uses, photos attached, tokens in/out, model mix, and estimated cost in USD. Use this to answer "how much is AG being used?", "what does 86 cost us?", "is anyone using HR?" types of questions.',
     input_schema: {
       type: 'object',
       additionalProperties: false,
@@ -4931,7 +4931,7 @@ const STAFF_TOOLS = [
       properties: {
         name: { type: 'string', description: 'Short, unique title (e.g., "Trex decking spec reference"). Must not collide with an existing pack.' },
         body: { type: 'string', description: 'The skill content. Markdown allowed. Be tight — every always-on pack costs tokens on every turn.' },
-        agents: { type: 'array', items: { type: 'string', enum: ['ag', 'cra', 'job'] }, description: 'Which agents load this pack. Use "ag" for AG (estimator), "cra" for HR (customer relations — key is "cra" for back-compat), "job" for Elle (WIP analyst).' },
+        agents: { type: 'array', items: { type: 'string', enum: ['ag', 'cra', 'job'] }, description: 'Which agents load this pack. Use "ag" for AG (estimator), "cra" for HR (customer relations — key is "cra" for back-compat), "job" for 86 (WIP analyst).' },
         alwaysOn: { type: 'boolean', description: 'If true (default), pack is appended on every turn. If false, the pack is registered but inactive.' },
         rationale: { type: 'string', description: 'One short sentence shown on the approval card explaining why this pack is worth keeping.' }
       },
@@ -4950,7 +4950,7 @@ const STAFF_TOOLS = [
         name: { type: 'string', description: 'Existing pack name (must match exactly).' },
         new_name: { type: 'string', description: 'Optional rename.' },
         new_body: { type: 'string', description: 'Optional replacement body. Pass the full new content.' },
-        agents: { type: 'array', items: { type: 'string', enum: ['ag', 'cra', 'job'] }, description: 'Optional updated agent assignment. ag=AG, cra=HR (back-compat key), job=Elle.' },
+        agents: { type: 'array', items: { type: 'string', enum: ['ag', 'cra', 'job'] }, description: 'Optional updated agent assignment. ag=AG, cra=HR (back-compat key), job=86.' },
         alwaysOn: { type: 'boolean', description: 'Optional updated alwaysOn flag.' },
         rationale: { type: 'string', description: 'One short sentence shown on the approval card explaining the change.' }
       },
@@ -4984,7 +4984,7 @@ function isStaffToolAutoTier(name) {
 // current week as a second block (refreshed each turn).
 async function buildStaffContext() {
   const stable = [];
-  stable.push('You are the Chief of Staff for P86\'s in-app AI agents — AG (estimating), Elle (WIP analyst), and HR (customer relations). Your user is the P86 admin / owner. Your job is to observe how the three agents are being used, surface trends and anomalies, audit specific conversations on request, and propose skill-pack improvements based on what you see.');
+  stable.push('You are the Chief of Staff for P86\'s in-app AI agents — AG (estimating), 86 (WIP analyst), and HR (customer relations). Your user is the P86 admin / owner. Your job is to observe how the three agents are being used, surface trends and anomalies, audit specific conversations on request, and propose skill-pack improvements based on what you see.');
   stable.push('');
   // Section overrides — admin-editable named blocks for Chief of Staff.
   const cosSectionOverrides = await loadSectionOverridesFor('staff');
@@ -5001,7 +5001,7 @@ async function buildStaffContext() {
   stable.push('  • `read_subs(q?, trade?, status?, with_expiring_certs?, limit?)` — subcontractor directory with cert expiry. Use to surface paperwork-expiring subs, list subs by trade, or confirm a named sub is active. with_expiring_certs=true for compliance audits.');
   stable.push('  • `read_lead_pipeline(q?, status?, market?, salesperson_email?, limit?)` — leads list + always-included status rollup ($ counts per status). Use for "what does our pipeline look like?", spotting deal-source patterns, or seeing which markets are hot.');
   stable.push('Propose tools (approval-required — user clicks Approve/Reject on a card):');
-  stable.push('  • `propose_skill_pack_add(name, body, agents, alwaysOn?, rationale)` — add a new skill pack. agents accepts ["ag", "cra", "job"] (ag=AG, cra=HR, job=Elle). ALWAYS call read_skill_packs first to confirm no name collision.');
+  stable.push('  • `propose_skill_pack_add(name, body, agents, alwaysOn?, rationale)` — add a new skill pack. agents accepts ["ag", "cra", "job"] (ag=47, cra=HR, job=86). ALWAYS call read_skill_packs first to confirm no name collision.');
   stable.push('  • `propose_skill_pack_edit(name, new_name?, new_body?, agents?, alwaysOn?, rationale)` — change an existing pack. body edits replace the whole body.');
   stable.push('  • `propose_skill_pack_delete(name, rationale)` — remove a pack entirely. alwaysOn=false is usually a softer alternative.');
   stable.push('');
@@ -5022,7 +5022,7 @@ async function buildStaffContext() {
     `);
     if (r.rows.length) {
       liveLines.push('# Live snapshot (last 7 days, assistant turns)');
-      const labelMap = { estimate: 'AG', job: 'Elle', client: 'HR', staff: 'Chief of Staff (you)' };
+      const labelMap = { estimate: '47', job: '86', client: 'HR', staff: 'Chief of Staff (you)' };
       r.rows.forEach(row => {
         liveLines.push('  • ' + (labelMap[row.entity_type] || row.entity_type) + ': ' + Number(row.turns) + ' turns');
       });
@@ -5064,7 +5064,7 @@ async function execStaffTool(name, input) {
       `;
       const r = await pool.query(aggSql);
       const out = [];
-      const labels = { estimate: 'AG (estimate)', job: 'Elle (job/WIP)', client: 'HR (client)' };
+      const labels = { estimate: '47 (estimate)', job: '86 (job/WIP)', client: 'HR (client)' };
       const all = ['estimate', 'job', 'client'];
       const byType = new Map(r.rows.map(row => [row.entity_type, row]));
       out.push('Metrics for last ' + range + ':');
@@ -6076,7 +6076,7 @@ router.post('/staff/chat/continue',
 // Phase 2 (HR + CoS) — v2 chat paths on the Anthropic Sessions API
 //
 // HR (clients) and CoS (staff) chat paths share an extra wrinkle vs.
-// AG/Elle: their tools split into auto-tier (executed server-side
+// 47/86: their tools split into auto-tier (executed server-side
 // inline) and approval-tier (surfaced to the user). The Sessions
 // migration handles this via the `onCustomToolUse` callback on
 // runV2SessionStream — auto-tier tools execute mid-stream and feed

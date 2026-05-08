@@ -95,7 +95,7 @@
     var u = (window.agxAuth && window.agxAuth.getUser) ? window.agxAuth.getUser() : null;
     return !!(u && u.feature_flags && u.feature_flags.agent_mode_ag === 'agents');
   }
-  // Phase 2 — same gating for Elle (jobs), HR (clients), and CoS
+  // Phase 2 — same gating for 86 (jobs), HR (clients), and CoS
   // (staff). Independent flags so each agent ramps separately on its
   // own telemetry before flipping.
   function isJobAgentMode() {
@@ -149,9 +149,9 @@
     return '/api/ai/estimates/' + encodeURIComponent(_entityId);
   }
 
-  // ── Elle (job-mode) Plan/Build phase ───────────────────────────────
+  // ── 86 (job-mode) Plan/Build phase ───────────────────────────────
   // Per-job, per-user state stored in localStorage. Default = 'plan' so
-  // Elle starts as an analyst (no surprise mutations) — the PM grants
+  // 86 starts as an analyst (no surprise mutations) — the PM grants
   // write access by approving a request_build_mode card or flipping
   // the phase pill manually.
   function getJobPhaseKey(jobId) { return 'agx-elle-phase-' + (jobId || ''); }
@@ -279,7 +279,7 @@
     { label: 'Add a property',           prompt: 'Walk me through adding a new property. Ask which parent management company first (search existing parents in the directory). Then collect property name, property_address, on-site CAM name + email + phone, market, and gate code if any. Use create_property to apply.' }
   ];
   var STAFF_PRESETS = [
-    { label: 'How is AG doing this week?',  prompt: 'Pull last 7d metrics for all three agents and tell me what stands out. Then surface the 3 most active conversations across AG / Elle / HR so I can spot-check.' },
+    { label: 'How is AG doing this week?',  prompt: 'Pull last 7d metrics for all three agents and tell me what stands out. Then surface the 3 most active conversations across 47 / 86 / HR so I can spot-check.' },
     { label: 'Audit AG search usage',       prompt: 'Of AG\'s recent conversations, how often did web_search get invoked? Pull a few examples and summarize what AG was searching for. If a pattern emerges (e.g., the same product specs over and over), propose a new skill pack that bakes in the answer so AG stops searching.' },
     { label: 'Audit & clean skill packs',   prompt: 'Read all skill packs. For each, tell me whether the wording is tight, whether it overlaps with another, and whether it\'s being applied to the right agents. If anything is stale, propose a skill_pack_edit or skill_pack_delete with rationale.' },
     { label: 'Most expensive conversations', prompt: 'Show me the 5 most token-expensive conversations in the last 30 days across all agents. For the top one, drill in and summarize what happened. If you spot a recurring waste pattern (e.g., AG re-asking the same thing every turn), propose a skill pack that fixes it.' },
@@ -300,7 +300,7 @@
   // ── Client context for Job mode ──────────────────────────────
   // Bundles the node-graph snapshot (localStorage) plus an aggregated
   // QB cost summary (parsed from workspace sheets named
-  // "QB Costs YYYY-MM-DD") so Elle can reason about
+  // "QB Costs YYYY-MM-DD") so 86 can reason about
   // wiring + uncategorized costs. Returns null if no useful data is
   // available — the server tolerates a missing clientContext.
   function buildJobClientContext() {
@@ -635,7 +635,7 @@
     panel = document.createElement('div');
     panel.id = 'agx-ai-panel';
     // z-index 200 sits above the node graph (#nodeGraphTab z-index:99)
-    // so Elle slides in over the graph rather than being
+    // so 86 slides in over the graph rather than being
     // covered by it. Modals (.modal z:1000) still trump the panel.
     var initialWidth = clampAIPanelWidth(loadAIPanelWidth());
     panel.style.cssText = 'position:fixed;top:0;right:0;bottom:0;width:' + initialWidth + 'px;max-width:92vw;min-width:' + AI_PANEL_WIDTH_MIN + 'px;background:var(--surface,#0f0f1e);border-left:1px solid var(--border,#333);box-shadow:-4px 0 22px rgba(0,0,0,0.6);z-index:200;display:flex;flex-direction:column;transform:translateX(100%);transition:transform 0.22s ease;';
@@ -988,13 +988,13 @@
         if (isEstimateMode()) {
           phase = (window.estimateEditorAPI && window.estimateEditorAPI.getAIPhase)
             ? window.estimateEditorAPI.getAIPhase() : 'build';
-          agentLabel = 'AG';
+          agentLabel = '47';
           planDesc = 'AG discusses scope without proposing line items';
           buildDesc = 'AG proposes line items + edits';
         } else {
           phase = getJobAIPhase(_entityId);
-          agentLabel = 'Elle';
-          planDesc = 'Elle analyzes WIP without writing changes';
+          agentLabel = '86';
+          planDesc = '86 analyzes WIP without writing changes';
           buildDesc = 'Elle proposes edits to WIP, phases, and graph';
         }
         var toggleBtn = document.getElementById('agx-ai-phase-toggle');
@@ -1207,9 +1207,9 @@
     if (!box) return;
     if (!_messages.length) {
       var hint;
-      if (isJobMode()) hint = '<strong style="color:var(--text,#fff);">📊 Elle · WIP Analyst</strong><br>Pick a preset below or ask anything about this job.<br><span style="font-size:11px;opacity:0.7;">I see contract, costs, COs, %complete, billing — plus the node graph wiring and QuickBooks cost lines.</span>';
+      if (isJobMode()) hint = '<strong style="color:var(--text,#fff);">📊 86 · WIP Analyst</strong><br>Pick a preset below or ask anything about this job.<br><span style="font-size:11px;opacity:0.7;">I see contract, costs, COs, %complete, billing — plus the node graph wiring and QuickBooks cost lines.</span>';
       else if (isClientMode()) hint = '<strong style="color:var(--text,#fff);">🤝 HR · Customer Relations</strong><br>Tap <strong>Run full audit</strong> to clean up the directory in one pass — I\'ll split parent+property compounds, link unparented entries, merge dupes, and surface anything ambiguous for you.<br><span style="font-size:11px;opacity:0.7;">I know the P86 hierarchy: parent management company → property/community → CAM contact.</span>';
-      else if (isStaffMode()) hint = '<strong style="color:var(--text,#fff);">🎩 Chief of Staff</strong><br>I observe AG / Elle / HR — usage, cost, conversations, skill packs — and I can propose skill-pack edits for you to approve.<br><span style="font-size:11px;opacity:0.7;">Conversation replay is still queued.</span>';
+      else if (isStaffMode()) hint = '<strong style="color:var(--text,#fff);">🎩 Chief of Staff</strong><br>I observe 47 / 86 / HR — usage, cost, conversations, skill packs — and I can propose skill-pack edits for you to approve.<br><span style="font-size:11px;opacity:0.7;">Conversation replay is still queued.</span>';
       else hint = '<strong style="color:var(--text,#fff);">📐 AG — your P86 estimator</strong><br>Pick a preset or describe what you need. I can read the estimate, scope, client, and photos — and propose adds, edits, deletes, and pricing changes for you to approve.<br><span style="font-size:11px;opacity:0.7;">Try "tighten this estimate" or "build my line items".</span>';
       box.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;padding:20px 0;text-align:center;line-height:1.6;">' + hint + '</div>';
       return;
@@ -1330,7 +1330,7 @@
     propose_link_to_lead:         'Drafting lead link…',
     propose_update_estimate_field:'Drafting estimate edit…',
     propose_add_client_note:      'Drafting client note…',
-    // Job / Elle proposals
+    // Job / 86 proposals
     set_phase_pct_complete:       'Drafting % complete update…',
     set_phase_field:              'Drafting phase edit…',
     set_phase_buildingId:         'Drafting phase relink…',
@@ -2260,7 +2260,7 @@
     switch (tu.name) {
       case 'request_build_mode': {
         // Special tool: not a write to job data, just a phase flip.
-        // Approval = the PM grants Elle Build mode for this job. The
+        // Approval = the PM grants 86 Build mode for this job. The
         // next chat turn (and the /chat/continue right after this
         // approval) will send aiPhase='build', re-opening the full
         // tool list. Returns a summary the model receives so it knows

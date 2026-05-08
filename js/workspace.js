@@ -1524,7 +1524,7 @@
             '<strong style="font-size:14px;">Attachments</strong>' +
             '<span style="font-size:11px;color:var(--text-dim,#888);">' +
               'Photos, drawings, PDFs, contracts &mdash; anything tied to this job. Synced across devices. ' +
-              '<strong style="color:#a78bfa;">.xlsx / .xls / .csv files auto-import as workspace sheets</strong> so Elle can read them.' +
+              '<strong style="color:#a78bfa;">.xlsx / .xls / .csv files auto-import as workspace sheets</strong> so 86 can read them.' +
             '</span>' +
           '</div>';
         mount.appendChild(header);
@@ -1579,7 +1579,7 @@
                   '&#x1F4D1; Imported <strong>' + imported.length + '</strong> spreadsheet file' +
                   (imported.length === 1 ? '' : 's') +
                   ' as workspace sheet' + (imported.length === 1 ? '' : 's') +
-                  '. Elle can now read them via the Detailed Costs / sheet tabs above.' +
+                  '. 86 can now read them via the Detailed Costs / sheet tabs above.' +
                   ' Click any sheet tab at the bottom to view.';
                 setTimeout(function() {
                   if (noticeEl) noticeEl.style.display = 'none';

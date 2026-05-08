@@ -738,7 +738,7 @@ async function initSchema() {
       ON ai_sessions(last_used_at DESC);
 
     -- Batch jobs — wraps Anthropic's Batches API for proactive
-    -- analyses (currently nightly Elle audits across active jobs).
+    -- analyses (currently nightly 86 audits across active jobs).
     -- Each row tracks one submitted batch + its lifecycle.
     -- anthropic_batch_id is the id returned by anthropic.beta.messages.
     -- batches.create. status mirrors Anthropic's processing_status
@@ -750,7 +750,7 @@ async function initSchema() {
     -- decoding results.
     CREATE TABLE IF NOT EXISTS batch_jobs (
       id TEXT PRIMARY KEY,
-      agent TEXT NOT NULL,                                  -- 'job' (Elle), 'ag', 'cra', 'staff'
+      agent TEXT NOT NULL,                                  -- 'job' (86), 'ag', 'cra', 'staff'
       kind TEXT NOT NULL DEFAULT 'audit',                   -- 'audit' | 'extract' | future kinds
       anthropic_batch_id TEXT,
       status TEXT NOT NULL DEFAULT 'submitted',

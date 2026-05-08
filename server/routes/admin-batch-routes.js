@@ -1,14 +1,14 @@
 // Admin Batch — wraps Anthropic's Batches API for proactive analyses.
 //
 // Endpoints:
-//   POST /api/admin/batch/elle-audit     submit Elle audit across active jobs
+//   POST /api/admin/batch/elle-audit     submit 86 audit across active jobs
 //   GET  /api/admin/batch/jobs           list batches (auto-polls non-terminal ones)
 //   GET  /api/admin/batch/jobs/:id       single batch detail incl. results
 //   POST /api/admin/batch/jobs/:id/refresh  force-poll one batch's status
 //
 // Batch processing trades 50% of the cost for up-to-24h latency. Used
 // for things you'd want to look at in the morning, not mid-conversation:
-//   - Nightly Elle audit on every active job → "morning briefing"
+//   - Nightly 86 audit on every active job → "morning briefing"
 //   - Bulk re-run of past estimates against a new pricing pack
 //
 // Admin-gated by ROLES_MANAGE.
@@ -31,7 +31,7 @@ function getAnthropic() {
   return _anth;
 }
 
-// Default audit prompt fired against every active job in an Elle batch.
+// Default audit prompt fired against every active job in an 86 batch.
 // Kept small + structured so per-job outputs are easy to scan in the
 // morning. Not configurable yet (admin can edit here when needs differ).
 const ELLE_AUDIT_PROMPT =
@@ -77,7 +77,7 @@ router.post('/elle-audit', requireAuth, requireCapability('ROLES_MANAGE'), async
     const skipped = [];
     for (const j of jobsRes.rows) {
       try {
-        // aiPhase=plan keeps Elle in read-only mode in batches — we
+        // aiPhase=plan keeps 86 in read-only mode in batches — we
         // don't want a batch run mutating WIP data without a human
         // in the loop reviewing the proposed writes.
         const ctx = await aiInternals.buildJobContext(j.id, '', 'plan');

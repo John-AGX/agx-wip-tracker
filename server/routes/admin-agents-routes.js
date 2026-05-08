@@ -38,7 +38,7 @@ const MODEL_COSTS = {
 // Friendly labels mirror the front-end AGENT_LABELS.
 const AGENT_LABELS = {
   estimate: '📐 AG (Estimator)',
-  job:      '📊 Elle (WIP Analyst)',
+  job:      '📊 86 (WIP Analyst)',
   client:   '🤝 HR (Customer Relations)'
 };
 
@@ -382,7 +382,7 @@ function getAnthropic() {
 
 // GET /api/admin/agents/config — returns the live agent runtime config
 // (model + effort) the server is using. Read straight from the same
-// internals that production AG / Elle / HR consult on every chat turn,
+// internals that production 47 / 86 / HR consult on every chat turn,
 // so a non-null effort or non-default model here means the env vars
 // genuinely took effect on this deployment. Surfaced as a "Server
 // config" badge on the Agents page so the user can verify env flips
@@ -1253,7 +1253,7 @@ router.post('/conversations/:key/replay', requireAuth, requireCapability('ROLES_
     if (!aiInternals) throw new Error('ai-routes internals not available.');
 
     // Build the system context for whichever agent owned the original
-    // conversation. Replays an estimate against AG, a job against Elle,
+    // conversation. Replays an estimate against 47, a job against 86,
     // a client thread against HR, a staff thread against the chief
     // of staff.
     //
@@ -1442,12 +1442,12 @@ async function collectSkillsFor(agentKey) {
 
 // Built-in toolset configuration per agent key. Conservative defaults —
 // only enable what's clearly useful for that role. Phase 3 of the
-// migration expands these (e.g. enabling bash/read on Elle for QB
+// migration expands these (e.g. enabling bash/read on 86 for QB
 // cost line analysis).
 function builtinToolsetFor(agentKey) {
   // Phase 3 — built-in toolset is split by role:
   //
-  //   AG  / Elle / HR  → web_search, web_fetch
+  //   AG  / 86 / HR  → web_search, web_fetch
   //                      Pure web research. No filesystem tools —
   //                      read / glob / grep operate on the per-
   //                      session container's filesystem, which is
