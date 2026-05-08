@@ -766,7 +766,7 @@ router.get('/:subId/attachment-grants',
       const { rows } = await pool.query(
         `SELECT g.id, g.sub_id, g.entity_type, g.entity_id, g.folder,
                 g.granted_by, g.granted_at,
-                u.username AS granted_by_username
+                u.name AS granted_by_username
            FROM attachment_folder_grants g
            LEFT JOIN users u ON u.id = g.granted_by
           WHERE g.sub_id = $1
