@@ -562,6 +562,20 @@ function renderNodes(){
           }
         });
         if(t1Conns.length){
+          // Two-pass render: first pass tallies totRev / totCost so the
+          // second pass can derive each source's share of total revenue.
+          // ALLOC shifts from "manually-set allocPct on the wire" (which
+          // was confusing because phases set their OWN allocation %)
+          // to "this source's share of the building's total income"
+          // (rev_i / totRev × 100). The building's %complete still
+          // weights by income contribution under the hood — see
+          // engine.getT1WeightedPct, which uses ap × rev = the same
+          // dollar weight this column now displays. Recomputed every
+          // render, so attaching a new node or editing income flows
+          // through immediately.
+          var totRev=0, totCost=0;
+          t1Conns.forEach(function(c){ totRev += c.rev; totCost += (c.actual + c.accrued); });
+
           h+='<div style="margin-top:4px;padding-top:4px;border-top:1px solid var(--ng-border2);">';
           h+='<div style="display:flex;align-items:center;padding:1px 0 3px;color:#8b90a5;font-size:8px;text-transform:uppercase;letter-spacing:0.5px;gap:4px;">';
           h+='<span style="flex:1;">Connected</span>';
@@ -569,23 +583,25 @@ function renderNodes(){
           h+='<span style="min-width:58px;text-align:right;">Cost</span>';
           h+='<span style="min-width:36px;text-align:right;">Alloc</span>';
           h+='</div>';
-          var totRev=0, totCost=0;
           t1Conns.forEach(function(c){
             var cost=c.actual+c.accrued;
-            totRev+=c.rev; totCost+=cost;
             var pColor=c.pct>=100?'#34d399':c.pct>=50?'#fbbf24':'#4f8cff';
+            // Income share — protected against division-by-zero when no
+            // source has revenue yet (e.g. just-attached phase before
+            // the user enters revenue). Falls back to 0% rather than NaN.
+            var incomeShare = (totRev > 0) ? (c.rev / totRev * 100) : 0;
             h+='<div style="display:flex;align-items:center;padding:2px 0;color:#6a7090;font-size:9px;gap:4px;">';
             h+='<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+c.icon+' '+c.name+(c.pct?' <span style="color:'+pColor+';font-weight:600;">'+c.pct.toFixed(0)+'%</span>':'')+'</span>';
             h+='<span style="color:#4f8cff;font-family:\'Courier New\',monospace;min-width:58px;text-align:right;">'+E.fmtC(c.rev)+'</span>';
             h+='<span style="color:#f87171;font-family:\'Courier New\',monospace;min-width:58px;text-align:right;">'+E.fmtC(cost)+'</span>';
-            h+='<span style="color:#fbbf24;font-family:\'Courier New\',monospace;min-width:36px;text-align:right;">'+c.alloc.toFixed(0)+'%</span>';
+            h+='<span title="Share of building total revenue ('+E.fmtC(c.rev)+' of '+E.fmtC(totRev)+')" style="color:#fbbf24;font-family:\'Courier New\',monospace;min-width:36px;text-align:right;">'+incomeShare.toFixed(1)+'%</span>';
             h+='</div>';
           });
           h+='<div style="display:flex;align-items:center;padding:3px 0 1px;border-top:1px solid var(--ng-border2);margin-top:2px;color:#6a7090;font-size:9px;font-weight:600;gap:4px;">';
           h+='<span style="flex:1;">Total</span>';
           h+='<span style="color:#4f8cff;font-family:\'Courier New\',monospace;min-width:58px;text-align:right;">'+E.fmtC(totRev)+'</span>';
           h+='<span style="color:#f87171;font-family:\'Courier New\',monospace;min-width:58px;text-align:right;">'+E.fmtC(totCost)+'</span>';
-          h+='<span style="min-width:36px;"></span>';
+          h+='<span style="color:#fbbf24;font-family:\'Courier New\',monospace;min-width:36px;text-align:right;">'+(totRev > 0 ? '100%' : '—')+'</span>';
           h+='</div></div>';
         }
       }
