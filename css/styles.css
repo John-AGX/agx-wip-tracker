@@ -536,6 +536,18 @@
         nav.tabs button:hover {
             color: #ffffff;
         }
+        /* Header tab icons render larger than the text — same "icon-led"
+           treatment as the node-library sidebar but slightly tighter
+           since the header is height-constrained at 46px. 1.6em on the
+           13px row = ~21px icon, with the .agx-icon vertical-align
+           overridden so the larger icon sits optically centered against
+           the smaller label. */
+        nav.tabs button .agx-icon {
+            width: 1.6em;
+            height: 1.6em;
+            vertical-align: -0.4em;
+            margin-right: 4px;
+        }
 
         /* Active state — text color only. The visual indicator is a
            single .agx-tab-slider bar wired by tab-slider.js that
