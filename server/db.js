@@ -305,6 +305,35 @@ async function initSchema() {
     -- is defined AFTER the subs table further down so its FK resolves
     -- on the first run.)
 
+    -- Domain rebrand: rewrite attachment URLs from the old
+    -- wip-agxco.com host to attachments.project86.net. Existing rows
+    -- baked the host into thumb_url / web_url / original_url at
+    -- upload time; new uploads pick up the new host via the
+    -- R2_PUBLIC_BASE env var, but historical rows still point at the
+    -- old domain. Idempotent: the EXISTS guard short-circuits once
+    -- the rewrite is done, so subsequent boots skip it. If the
+    -- domain ever changes again, bump the OLD/NEW literals or add
+    -- a parallel block — REPLACE is a no-op when no match exists.
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM attachments
+         WHERE thumb_url LIKE '%attachments.wip-agxco.com%'
+            OR web_url LIKE '%attachments.wip-agxco.com%'
+            OR original_url LIKE '%attachments.wip-agxco.com%'
+         LIMIT 1
+      ) THEN
+        UPDATE attachments
+           SET thumb_url    = REPLACE(thumb_url,    'attachments.wip-agxco.com', 'attachments.project86.net'),
+               web_url      = REPLACE(web_url,      'attachments.wip-agxco.com', 'attachments.project86.net'),
+               original_url = REPLACE(original_url, 'attachments.wip-agxco.com', 'attachments.project86.net')
+         WHERE thumb_url LIKE '%attachments.wip-agxco.com%'
+            OR web_url LIKE '%attachments.wip-agxco.com%'
+            OR original_url LIKE '%attachments.wip-agxco.com%';
+        RAISE NOTICE 'Rewrote attachment URLs to attachments.project86.net';
+      END IF;
+    END $$;
+
     -- AI estimating-assistant chat. Per-user, per-estimate (so PMs each see
     -- their own conversation). Two messages per round (one user, one
     -- assistant) ordered by created_at; the route layer rebuilds the

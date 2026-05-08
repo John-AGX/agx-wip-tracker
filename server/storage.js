@@ -14,7 +14,7 @@
 //   R2_SECRET_ACCESS_KEY  — R2 API token's secret (set in Railway env, NOT in code)
 //   R2_BUCKET             — bucket name (e.g. 'agx-attachments')
 //   R2_PUBLIC_BASE        — public custom-domain URL prefix
-//                           (e.g. 'https://attachments.wip-agxco.com')
+//                           (e.g. 'https://attachments.project86.net')
 
 const fs = require('fs');
 const path = require('path');
@@ -84,7 +84,7 @@ class R2Storage extends StorageAdapter {
     this.bucket = opts.bucket;
     // Normalize publicBase: strip trailing slash, prepend https:// if
     // the env var was set without a scheme. A bare hostname like
-    // 'attachments.wip-agxco.com' would otherwise produce relative
+    // 'attachments.project86.net' would otherwise produce relative
     // URLs that the browser resolves under the AGX origin, 404ing.
     var pb = opts.publicBase.replace(/\/$/, '');
     if (!/^https?:\/\//i.test(pb)) pb = 'https://' + pb;
