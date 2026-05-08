@@ -80,7 +80,15 @@ const MAP = {
   //  - cpu-chip → "Agents" (AI / processors); replaces 🤖
   //  - envelope → "Email" (was using `links` as a placeholder)
   'cpu-chip':        'heroicons/cpu-chip',
-  'envelope':        'heroicons/envelope'
+  'envelope':        'heroicons/envelope',
+  // Node-library specific icons (sidebar inside the Job → Workspace
+  // node graph). Maps the emoji glyphs in nodegraph/engine.js DEFS to
+  // the corresponding Heroicons. The node-library auto-swapper picks
+  // these up via EMOJI_ICONS below.
+  'wrench':          'heroicons/wrench',
+  'banknotes':       'heroicons/banknotes',
+  'scale':           'heroicons/scale',
+  'bookmark':        'heroicons/bookmark'
 };
 
 const HEADER = `// AGX Icon Helper — inline SVG icons (auto-generated).
@@ -197,7 +205,27 @@ const FOOTER = `
     '🤖': 'cpu-chip',          // 1F916 robot face — admin Agents tab
     '✉':       'envelope',     // 2709  envelope (light variant)
     '📧': 'envelope',          // 1F4E7 e-mail symbol
-    '📨': 'envelope'           // 1F4E8 incoming envelope
+    '📨': 'envelope',          // 1F4E8 incoming envelope
+    // Node-library sidebar icons (Job → Workspace node graph). These
+    // pair with the icon strings in nodegraph/engine.js DEFS:
+    //   t1 🏗 → buildings (already mapped)
+    //   t2 📋 → wip       (already mapped)
+    //   labor 🛠 → wrench  (NEW — heavy stroke construction tools)
+    //   mat 🧱 → materials (already mapped — Phosphor package)
+    //   gc 🏢 → buildings  (NEW: office building emoji → buildings icon)
+    //   burden ⚖ → scale   (NEW — balance scales for Direct Burden)
+    //   other 📌 → bookmark (NEW — pin emoji aliased to bookmark)
+    //   sub 👷 → subs     (already mapped — wrench-screwdriver)
+    //   po 📄 → attachments (already mapped)
+    //   inv 💳 → banknotes (NEW — credit-card emoji → banknotes)
+    //   co 📝 → edit       (already mapped — pencil-square)
+    //   wip / watch 📊 → chart-bar (already mapped)
+    '🛠': 'wrench',            // 1F6E0 hammer-and-wrench (Labor)
+    '🧱': 'materials',         // 1F9F1 brick (Materials)
+    '🏢': 'buildings',         // 1F3E2 office building (Gen. Conditions)
+    '⚖': 'scale',              // 2696  balance scales (Direct Burden)
+    '📌': 'bookmark',          // 1F4CC pushpin (Other / Note)
+    '💳': 'banknotes'          // 1F4B3 credit card (Invoice)
   };
   // Match an emoji at start of string with optional U+FE0F + whitespace.
   function matchLeadingEmoji(text) {

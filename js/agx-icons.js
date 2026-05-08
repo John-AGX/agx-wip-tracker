@@ -1,4 +1,4 @@
-// P86 Icon Helper — inline SVG icons (auto-generated).
+// AGX Icon Helper — inline SVG icons (auto-generated).
 //
 // 24 icons sourced from Phosphor (MIT) and Heroicons (MIT). Each
 // retains stroke="currentColor" so CSS color rules tint them; CSS
@@ -74,6 +74,10 @@
   icons["moon"] = "<svg xmlns=\"http://www.w3.org/2000/svg\" fill=\"none\" viewBox=\"0 0 24 24\" stroke-width=\"1.2\" stroke=\"currentColor\" aria-hidden=\"true\" data-slot=\"icon\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" d=\"M21.752 15.002A9.72 9.72 0 0 1 18 15.75c-5.385 0-9.75-4.365-9.75-9.75 0-1.33.266-2.597.748-3.752A9.753 9.753 0 0 0 3 11.25C3 16.635 7.365 21 12.75 21a9.753 9.753 0 0 0 9.002-5.998Z\"/></svg>";
   icons["cpu-chip"] = "<svg xmlns=\"http://www.w3.org/2000/svg\" fill=\"none\" viewBox=\"0 0 24 24\" stroke-width=\"1.2\" stroke=\"currentColor\" aria-hidden=\"true\" data-slot=\"icon\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" d=\"M8.25 3v1.5M4.5 8.25H3m18 0h-1.5M4.5 12H3m18 0h-1.5m-15 3.75H3m18 0h-1.5M8.25 19.5V21M12 3v1.5m0 15V21m3.75-18v1.5m0 15V21m-9-1.5h10.5a2.25 2.25 0 0 0 2.25-2.25V6.75a2.25 2.25 0 0 0-2.25-2.25H6.75A2.25 2.25 0 0 0 4.5 6.75v10.5a2.25 2.25 0 0 0 2.25 2.25Zm.75-12h9v9h-9v-9Z\"/></svg>";
   icons["envelope"] = "<svg xmlns=\"http://www.w3.org/2000/svg\" fill=\"none\" viewBox=\"0 0 24 24\" stroke-width=\"1.2\" stroke=\"currentColor\" aria-hidden=\"true\" data-slot=\"icon\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" d=\"M21.75 6.75v10.5a2.25 2.25 0 0 1-2.25 2.25h-15a2.25 2.25 0 0 1-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0 0 19.5 4.5h-15a2.25 2.25 0 0 0-2.25 2.25m19.5 0v.243a2.25 2.25 0 0 1-1.07 1.916l-7.5 4.615a2.25 2.25 0 0 1-2.36 0L3.32 8.91a2.25 2.25 0 0 1-1.07-1.916V6.75\"/></svg>";
+  icons["wrench"] = "<svg xmlns=\"http://www.w3.org/2000/svg\" fill=\"none\" viewBox=\"0 0 24 24\" stroke-width=\"1.2\" stroke=\"currentColor\" aria-hidden=\"true\" data-slot=\"icon\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" d=\"M21.75 6.75a4.5 4.5 0 0 1-4.884 4.484c-1.076-.091-2.264.071-2.95.904l-7.152 8.684a2.548 2.548 0 1 1-3.586-3.586l8.684-7.152c.833-.686.995-1.874.904-2.95a4.5 4.5 0 0 1 6.336-4.486l-3.276 3.276a3.004 3.004 0 0 0 2.25 2.25l3.276-3.276c.256.565.398 1.192.398 1.852Z\"/><path stroke-linecap=\"round\" stroke-linejoin=\"round\" d=\"M4.867 19.125h.008v.008h-.008v-.008Z\"/></svg>";
+  icons["banknotes"] = "<svg xmlns=\"http://www.w3.org/2000/svg\" fill=\"none\" viewBox=\"0 0 24 24\" stroke-width=\"1.2\" stroke=\"currentColor\" aria-hidden=\"true\" data-slot=\"icon\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" d=\"M2.25 18.75a60.07 60.07 0 0 1 15.797 2.101c.727.198 1.453-.342 1.453-1.096V18.75M3.75 4.5v.75A.75.75 0 0 1 3 6h-.75m0 0v-.375c0-.621.504-1.125 1.125-1.125H20.25M2.25 6v9m18-10.5v.75c0 .414.336.75.75.75h.75m-1.5-1.5h.375c.621 0 1.125.504 1.125 1.125v9.75c0 .621-.504 1.125-1.125 1.125h-.375m1.5-1.5H21a.75.75 0 0 0-.75.75v.75m0 0H3.75m0 0h-.375a1.125 1.125 0 0 1-1.125-1.125V15m1.5 1.5v-.75A.75.75 0 0 0 3 15h-.75M15 10.5a3 3 0 1 1-6 0 3 3 0 0 1 6 0Zm3 0h.008v.008H18V10.5Zm-12 0h.008v.008H6V10.5Z\"/></svg>";
+  icons["scale"] = "<svg xmlns=\"http://www.w3.org/2000/svg\" fill=\"none\" viewBox=\"0 0 24 24\" stroke-width=\"1.2\" stroke=\"currentColor\" aria-hidden=\"true\" data-slot=\"icon\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" d=\"M12 3v17.25m0 0c-1.472 0-2.882.265-4.185.75M12 20.25c1.472 0 2.882.265 4.185.75M18.75 4.97A48.416 48.416 0 0 0 12 4.5c-2.291 0-4.545.16-6.75.47m13.5 0c1.01.143 2.01.317 3 .52m-3-.52 2.62 10.726c.122.499-.106 1.028-.589 1.202a5.988 5.988 0 0 1-2.031.352 5.988 5.988 0 0 1-2.031-.352c-.483-.174-.711-.703-.59-1.202L18.75 4.971Zm-16.5.52c.99-.203 1.99-.377 3-.52m0 0 2.62 10.726c.122.499-.106 1.028-.589 1.202a5.989 5.989 0 0 1-2.031.352 5.989 5.989 0 0 1-2.031-.352c-.483-.174-.711-.703-.59-1.202L5.25 4.971Z\"/></svg>";
+  icons["bookmark"] = "<svg xmlns=\"http://www.w3.org/2000/svg\" fill=\"none\" viewBox=\"0 0 24 24\" stroke-width=\"1.2\" stroke=\"currentColor\" aria-hidden=\"true\" data-slot=\"icon\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" d=\"M17.593 3.322c1.1.128 1.907 1.077 1.907 2.185V21L12 17.25 4.5 21V5.507c0-1.108.806-2.057 1.907-2.185a48.507 48.507 0 0 1 11.186 0Z\"/></svg>";
 
   /**
    * Returns an inline SVG markup string for the given AGX icon name.
@@ -164,7 +168,27 @@
     '🤖': 'cpu-chip',          // 1F916 robot face — admin Agents tab
     '✉':       'envelope',     // 2709  envelope (light variant)
     '📧': 'envelope',          // 1F4E7 e-mail symbol
-    '📨': 'envelope'           // 1F4E8 incoming envelope
+    '📨': 'envelope',          // 1F4E8 incoming envelope
+    // Node-library sidebar icons (Job → Workspace node graph). These
+    // pair with the icon strings in nodegraph/engine.js DEFS:
+    //   t1 🏗 → buildings (already mapped)
+    //   t2 📋 → wip       (already mapped)
+    //   labor 🛠 → wrench  (NEW — heavy stroke construction tools)
+    //   mat 🧱 → materials (already mapped — Phosphor package)
+    //   gc 🏢 → buildings  (NEW: office building emoji → buildings icon)
+    //   burden ⚖ → scale   (NEW — balance scales for Direct Burden)
+    //   other 📌 → bookmark (NEW — pin emoji aliased to bookmark)
+    //   sub 👷 → subs     (already mapped — wrench-screwdriver)
+    //   po 📄 → attachments (already mapped)
+    //   inv 💳 → banknotes (NEW — credit-card emoji → banknotes)
+    //   co 📝 → edit       (already mapped — pencil-square)
+    //   wip / watch 📊 → chart-bar (already mapped)
+    '🛠': 'wrench',            // 1F6E0 hammer-and-wrench (Labor)
+    '🧱': 'materials',         // 1F9F1 brick (Materials)
+    '🏢': 'buildings',         // 1F3E2 office building (Gen. Conditions)
+    '⚖': 'scale',              // 2696  balance scales (Direct Burden)
+    '📌': 'bookmark',          // 1F4CC pushpin (Other / Note)
+    '💳': 'banknotes'          // 1F4B3 credit card (Invoice)
   };
   // Match an emoji at start of string with optional U+FE0F + whitespace.
   function matchLeadingEmoji(text) {

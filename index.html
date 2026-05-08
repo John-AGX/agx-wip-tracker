@@ -11,7 +11,7 @@
          parse. -->
     <base href="/">
     <title>Project 86 &mdash; WIP Tracker</title>
-    <link rel="stylesheet" href="css/styles.css?v=47">
+    <link rel="stylesheet" href="css/styles.css?v=48">
     <link rel="stylesheet" href="css/workspace-layout.css?v=53">
     <link rel="stylesheet" href="css/workspace.css?v=37">
     <link rel="stylesheet" href="css/schedule.css?v=9">
@@ -2271,7 +2271,7 @@
     <!-- P86 inline-SVG icon helper. Provides window.agxIcon(name, opts)
          — 24 icons from Phosphor (MIT) + Heroicons (MIT). See
          scripts/build-agx-icons.js to regenerate. -->
-    <script src="js/agx-icons.js?v=7"></script>
+    <script src="js/agx-icons.js?v=8"></script>
 
     <!-- Node Graph (Beta) -->
     <link rel="stylesheet" href="nodegraph/nodegraph.css?v=89" />
@@ -2326,7 +2326,7 @@
               <span class="ng-ribbon-label">Reset</span>
             </button>
           </div>
-          <div class="ng-ribbon-group-name">View</div>
+          <!-- group-name dropped — saved a header row of vertical space -->
         </div>
         <span class="ng-ribbon-sep"></span>
         <!-- Layout group: save / restore checkpoints -->
@@ -2341,7 +2341,6 @@
               <span class="ng-ribbon-label">Restore</span>
             </button>
           </div>
-          <div class="ng-ribbon-group-name">Layout</div>
         </div>
         <span class="ng-ribbon-sep"></span>
         <!-- Focus group: focus workspace / fullscreen / audit -->
@@ -2360,7 +2359,6 @@
               <span class="ng-ribbon-label">Audit<span id="ngAuditBadge" style="display:none;margin-left:3px;font-size:9px;padding:1px 5px;border-radius:8px;background:rgba(248,113,113,0.25);color:#f87171;font-weight:700;"></span></span>
             </button>
           </div>
-          <div class="ng-ribbon-group-name">Display</div>
         </div>
         <span class="ng-ribbon-sep"></span>
         <!-- AI group: Ask 86 (analyst) -->
