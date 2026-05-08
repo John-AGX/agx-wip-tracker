@@ -28,6 +28,7 @@ const aiRoutes = require('./routes/ai-routes');
 const materialRoutes = require('./routes/material-routes');
 const qbCostRoutes = require('./routes/qb-cost-routes');
 const subRoutes = require('./routes/sub-routes');
+const subPortalRoutes = require('./routes/sub-portal-routes');
 const scheduleRoutes = require('./routes/schedule-routes');
 const emailRoutes = require('./routes/email-routes');
 const adminAgentsRoutes = require('./routes/admin-agents-routes');
@@ -58,6 +59,12 @@ app.use('/api/ai', aiRoutes);
 app.use('/api/materials', materialRoutes);
 app.use('/api/qb-costs', qbCostRoutes);
 app.use('/api/subs', subRoutes);
+// Sub portal routes — mounted at /api so the file can register both
+// PM-side paths (`/subs/:subId/invite`) and sub-facing paths
+// (`/sub-portal/...`). Order matters: this comes AFTER /api/subs so
+// the sub-routes router gets first crack at /subs/* paths and falls
+// through to here only for the invite endpoints it doesn't define.
+app.use('/api', subPortalRoutes);
 app.use('/api/schedule', scheduleRoutes);
 app.use('/api/email', emailRoutes);
 app.use('/api/admin/agents', adminAgentsRoutes);
@@ -86,6 +93,14 @@ if (storage.localRoot) {
 // Health check
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', version: '1.0.0' });
+});
+
+// Sub portal page — served before the SPA fallback so /portal lands
+// on a dedicated minimal page rather than the PM app shell. The
+// portal HTML lives at the repo root so the same static server can
+// serve its assets without extra wiring.
+app.get('/portal', (req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'portal.html'));
 });
 
 // Serve static frontend files

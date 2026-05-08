@@ -296,6 +296,20 @@
       sharedAttachments: function(subId) {
         return get('/api/subs/' + encodeURIComponent(subId) + '/shared-attachments');
       }
+    },
+    // Phase 5: portal invites. PMs generate magic-link invites that
+    // create a role='sub' user on first click. Listing surfaces
+    // outstanding (un-used, un-expired) invites for an audit view.
+    invites: {
+      list: function(subId) {
+        return get('/api/subs/' + encodeURIComponent(subId) + '/invites');
+      },
+      create: function(subId, payload) {
+        return post('/api/subs/' + encodeURIComponent(subId) + '/invite', payload || {});
+      },
+      remove: function(subId, inviteId) {
+        return del('/api/subs/' + encodeURIComponent(subId) + '/invites/' + encodeURIComponent(inviteId));
+      }
     }
   };
 

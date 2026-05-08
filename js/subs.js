@@ -283,6 +283,12 @@
     if (folderGrantsMount && _editingId) {
       mountFolderGrants(folderGrantsMount, _editingId);
     }
+
+    // Portal access (Phase 5) — magic-link invite UI.
+    var portalMount = modal.querySelector('#subDir_portalMount');
+    if (portalMount && _editingId) {
+      mountPortalAccess(portalMount, _editingId);
+    }
   }
 
   // ──────────────────────────────────────────────────────────────────
@@ -773,6 +779,111 @@
     reload();
   }
 
+  // ──────────────────────────────────────────────────────────────────
+  // Phase 5: Portal access (magic-link invites). PM clicks "Send
+  // invite" → server emails a one-time link → first click creates a
+  // role='sub' user tied to this sub record + signs them in. Listed
+  // invites show their lifecycle (Outstanding / Used / Expired /
+  // Revoked) for audit.
+  // ──────────────────────────────────────────────────────────────────
+
+  function mountPortalAccess(mountEl, subId) {
+    if (!window.agxApi || !window.agxApi.subs || !window.agxApi.subs.invites) {
+      mountEl.innerHTML = '<div style="padding:8px;color:#f87171;font-size:12px;">Portal invites API not available — refresh.</div>';
+      return;
+    }
+
+    function reload() {
+      mountEl.innerHTML = '<div style="padding:8px;color:var(--text-dim,#888);font-size:12px;">Loading invites…</div>';
+      window.agxApi.subs.invites.list(subId).then(function(res) {
+        render(res.invites || []);
+      }).catch(function(err) {
+        mountEl.innerHTML = '<div style="padding:8px;color:#f87171;font-size:12px;">Failed to load invites: ' + escapeHTML(err.message || String(err)) + '</div>';
+      });
+    }
+
+    function inviteStatus(inv) {
+      if (inv.used_at) return { label: 'Claimed', color: '#34d399', bg: 'rgba(52,211,153,0.15)' };
+      if (new Date(inv.expires_at) < new Date()) return { label: 'Expired', color: '#94a3b8', bg: 'rgba(148,163,184,0.15)' };
+      return { label: 'Outstanding', color: '#a5b4fc', bg: 'rgba(165,180,252,0.15)' };
+    }
+
+    function render(invites) {
+      var subRecord = (window.appData && (window.appData.subsDirectory || []).find(function(s) { return s.id === subId; })) || {};
+      var defaultEmail = subRecord.email || '';
+
+      var rows = invites.length
+        ? invites.map(function(inv) {
+            var st = inviteStatus(inv);
+            var canRevoke = !inv.used_at && new Date(inv.expires_at) >= new Date();
+            return '<div style="display:grid;grid-template-columns:2fr 1fr 1fr auto;gap:10px;align-items:center;padding:7px 4px;border-bottom:1px solid var(--border,#333);font-size:12px;">' +
+              '<div style="color:var(--text,#fff);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTML(inv.email) + '</div>' +
+              '<div><span style="background:' + st.bg + ';color:' + st.color + ';padding:2px 8px;border-radius:10px;font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:0.3px;">' + st.label + '</span></div>' +
+              '<div style="color:var(--text-dim,#888);font-size:10px;">sent ' + escapeHTML(String(inv.created_at).slice(0, 10)) +
+                (inv.used_at ? ' · claimed ' + escapeHTML(String(inv.used_at).slice(0, 10)) : '') + '</div>' +
+              (canRevoke
+                ? '<button type="button" data-revoke-invite="' + escapeAttr(inv.id) + '" style="background:rgba(248,113,113,0.10);color:#f87171;border:1px solid rgba(248,113,113,0.25);border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">Revoke</button>'
+                : '<div></div>') +
+            '</div>';
+          }).join('')
+        : '<div style="padding:14px;color:var(--text-dim,#888);font-size:12px;font-style:italic;border:1px dashed var(--border,#333);border-radius:8px;text-align:center;">No invites yet. Send one below to onboard this sub.</div>';
+
+      mountEl.innerHTML =
+        '<div style="display:grid;grid-template-columns:2fr 1fr 1fr auto;gap:10px;padding:6px 4px 4px;border-bottom:1px solid var(--border,#333);font-size:10px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.4px;">' +
+          '<div>Email</div><div>Status</div><div>Sent / Claimed</div><div></div>' +
+        '</div>' +
+        rows +
+        '<div style="margin-top:14px;padding:12px;border:1px solid var(--border,#333);border-radius:8px;background:rgba(34,211,238,0.04);">' +
+          '<div style="font-size:11px;font-weight:700;color:var(--text-dim,#aaa);text-transform:uppercase;letter-spacing:0.4px;margin-bottom:8px;">Send a portal invite</div>' +
+          '<div style="display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end;">' +
+            '<div>' +
+              '<label style="display:block;font-size:10px;color:var(--text-dim,#888);margin-bottom:3px;text-transform:uppercase;letter-spacing:0.4px;">Email</label>' +
+              '<input id="portal_invite_email" type="email" value="' + escapeAttr(defaultEmail) + '" placeholder="sub@example.com" style="width:100%;padding:6px 10px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);font-size:12px;" />' +
+            '</div>' +
+            '<button type="button" data-send-invite style="background:#22d3ee;color:#0f172a;border:none;border-radius:6px;padding:7px 16px;font-size:12px;font-weight:700;cursor:pointer;">Send invite</button>' +
+          '</div>' +
+          '<div id="portal_invite_result" style="margin-top:8px;font-size:11px;"></div>' +
+        '</div>';
+
+      // Send-invite handler. Optimistic feedback shows a "copy link"
+      // fallback when email isn't configured (or fails to send) so
+      // the PM can still hand-deliver the link via Slack/SMS.
+      mountEl.querySelector('[data-send-invite]').addEventListener('click', function() {
+        var email = mountEl.querySelector('#portal_invite_email').value.trim();
+        if (!email) { alert('Email is required.'); return; }
+        var resultEl = mountEl.querySelector('#portal_invite_result');
+        resultEl.innerHTML = '<span style="color:var(--text-dim,#888);">Sending…</span>';
+        window.agxApi.subs.invites.create(subId, { email: email }).then(function(res) {
+          if (res.email_sent) {
+            resultEl.innerHTML = '<span style="color:#34d399;">&#x2713; Invite emailed to ' + escapeHTML(email) + '.</span>';
+          } else {
+            resultEl.innerHTML =
+              '<span style="color:#fbbf24;">Email send not configured or failed' + (res.email_error ? ' (' + escapeHTML(res.email_error) + ')' : '') + '. Copy the link instead:</span>' +
+              '<div style="margin-top:6px;display:flex;gap:6px;align-items:center;">' +
+                '<input type="text" readonly value="' + escapeAttr(res.link) + '" style="flex:1;padding:5px 8px;font-size:10px;font-family:monospace;border:1px solid var(--border,#333);border-radius:4px;background:var(--card-bg,#0f0f1e);color:var(--text-dim,#aaa);" onclick="this.select()" />' +
+              '</div>';
+          }
+          setTimeout(reload, 600);
+        }).catch(function(err) {
+          resultEl.innerHTML = '<span style="color:#f87171;">Failed: ' + escapeHTML(err.message || String(err)) + '</span>';
+        });
+      });
+
+      // Revoke handlers.
+      mountEl.querySelectorAll('[data-revoke-invite]').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          var inviteId = btn.getAttribute('data-revoke-invite');
+          if (!window.confirm('Revoke this invite? The link will stop working.')) return;
+          window.agxApi.subs.invites.remove(subId, inviteId).then(reload).catch(function(err) {
+            alert('Revoke failed: ' + (err.message || String(err)));
+          });
+        });
+      });
+    }
+
+    reload();
+  }
+
   // Upload a cert file: POST attachment with entity_type='sub', then
   // upsert the cert row pointing at the new attachment id. Re-renders
   // the cert section on success so the filename + remove button
@@ -923,6 +1034,7 @@
         '<button type="button" data-sub-tab="notifications" class="sub-modal-tab">Notifications</button>' +
         '<button type="button" data-sub-tab="jobs"          class="sub-modal-tab">Job access</button>' +
         '<button type="button" data-sub-tab="folders"       class="sub-modal-tab">Folder access</button>' +
+        '<button type="button" data-sub-tab="portal"        class="sub-modal-tab">Portal access</button>' +
       '</div>' +
       // ── Tab: Additional information ──────────────────────────────
       '<div data-sub-tab-pane="additional" style="padding:18px 22px;">' +
@@ -982,6 +1094,18 @@
         (!_editingId
           ? '<div style="font-size:11px;color:var(--text-dim,#888);font-style:italic;">Save the sub first, then toggle which jobs they have access to.</div>'
           : '<div id="subDir_jobAccessMount" style="font-size:12px;color:var(--text-dim,#aaa);">Loading jobs…</div>') +
+      '</div>' +
+      // ── Tab: Portal access (Phase 5) ─────────────────────────────
+      // Sub-facing portal onboarding. The PM hits "Send invite" → the
+      // sub gets a magic-link email → first click creates a role='sub'
+      // user tied to this sub record. List below shows outstanding +
+      // claimed invites for audit.
+      '<div data-sub-tab-pane="portal" style="padding:18px 22px;display:none;">' +
+        '<div style="font-size:13px;font-weight:700;color:var(--text,#fff);margin-bottom:6px;">Portal access</div>' +
+        '<div style="font-size:11px;color:var(--text-dim,#888);margin-bottom:12px;">Send the sub a magic-link invite to access their portal. They will see only the folders you have granted them under <strong>Folder access</strong>.</div>' +
+        (!_editingId
+          ? '<div style="font-size:11px;color:var(--text-dim,#888);font-style:italic;">Save the sub first, then send their portal invite.</div>'
+          : '<div id="subDir_portalMount" style="font-size:12px;color:var(--text-dim,#aaa);">Loading…</div>') +
       '</div>' +
       // ── Tab: Folder access (Phase 4) ─────────────────────────────
       // Lists per-folder grants and lets a PM grant new ones. Each

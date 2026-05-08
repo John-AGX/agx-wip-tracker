@@ -28,7 +28,13 @@ const CAPABILITY_KEYS = [
   { key: 'USERS_MANAGE',    group: 'Admin',      label: 'Manage users' },
   { key: 'ROLES_MANAGE',    group: 'Admin',      label: 'Manage roles + capabilities' },
   { key: 'INSIGHTS_VIEW',   group: 'Admin',      label: 'View Insights dashboard' },
-  { key: 'ADMIN_METRICS',   group: 'Admin',      label: 'Access Admin Metrics tab + Go Live controls' }
+  { key: 'ADMIN_METRICS',   group: 'Admin',      label: 'Access Admin Metrics tab + Go Live controls' },
+  // Sub portal — exclusively held by the `sub` role; PMs/admins
+  // never need these because they have full access through the
+  // PM UI. Keeping them isolated means a misconfigured PM role
+  // can't accidentally see a sub-only screen.
+  { key: 'SUB_PORTAL_VIEW',   group: 'Sub Portal', label: 'View granted folders + assignments (sub portal only)' },
+  { key: 'SUB_PORTAL_UPLOAD', group: 'Sub Portal', label: 'Upload files into granted folders (sub portal only)' }
 ];
 
 // In-memory cache of role.name -> Set(capability). Routes call hasCapability()
@@ -68,7 +74,13 @@ function requireCapability(capKey) {
 
 function signToken(user) {
   return jwt.sign(
-    { id: user.id, email: user.email, role: user.role, name: user.name },
+    {
+      id: user.id, email: user.email, role: user.role, name: user.name,
+      // sub_id is only set for role='sub' users; carrying it in the
+      // JWT means the portal endpoints can scope queries without an
+      // extra users-table lookup on every request.
+      sub_id: user.sub_id || null
+    },
     JWT_SECRET,
     { expiresIn: TOKEN_EXPIRY }
   );

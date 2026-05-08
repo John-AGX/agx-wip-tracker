@@ -41,6 +41,8 @@ async function initSchema() {
     -- formatting heuristics. Nullable — most office users won't set it.
     ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_number TEXT;
     CREATE UNIQUE INDEX IF NOT EXISTS idx_users_phone_number ON users(phone_number) WHERE phone_number IS NOT NULL;
+    -- users.sub_id (sub portal) is added AFTER the subs table is
+    -- created further down so the FK resolves on first run.
 
     CREATE TABLE IF NOT EXISTS jobs (
       id TEXT PRIMARY KEY,
@@ -527,6 +529,35 @@ async function initSchema() {
       END IF;
     END $$;
 
+    -- Sub portal user link (Phase 5). Defined here, after the subs
+    -- table, so the FK resolves on the first run. Every non-sub user
+    -- has sub_id = NULL; sub-portal users have exactly one row in
+    -- the subs table they are tied to. ON DELETE CASCADE so removing
+    -- a sub automatically nukes their portal login too.
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS sub_id TEXT REFERENCES subs(id) ON DELETE CASCADE;
+    CREATE INDEX IF NOT EXISTS idx_users_sub_id ON users(sub_id) WHERE sub_id IS NOT NULL;
+
+    -- Sub portal magic-link invites. PM creates one from the sub
+    -- editor → server emails the sub a one-time URL → first click
+    -- creates / activates the sub-role user and signs them in.
+    -- token is a 32-byte random hex string (cryptographically
+    -- random); used_at is set on first claim so a leaked link can't
+    -- be re-used. Expired or used invites are kept around for audit
+    -- (no cron sweep yet — table will stay tiny).
+    CREATE TABLE IF NOT EXISTS sub_invites (
+      id TEXT PRIMARY KEY,
+      sub_id TEXT NOT NULL REFERENCES subs(id) ON DELETE CASCADE,
+      email TEXT NOT NULL,
+      token TEXT NOT NULL UNIQUE,
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      expires_at TIMESTAMPTZ NOT NULL,
+      used_at TIMESTAMPTZ,
+      used_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_sub_invites_sub ON sub_invites(sub_id);
+    CREATE INDEX IF NOT EXISTS idx_sub_invites_token ON sub_invites(token);
+
     -- Per-folder sub access (Phase 4). A grant says "sub X can see
     -- folder F on entity (T,I)". One sub may have many grants;
     -- revoking is a row delete. PMs grant/revoke from the attachment
@@ -921,6 +952,9 @@ async function initSchema() {
         'LEADS_VIEW', 'LEADS_EDIT',
         'USERS_MANAGE', 'ROLES_MANAGE',
         'INSIGHTS_VIEW', 'ADMIN_METRICS'
+        // Note: SUB_PORTAL_* are intentionally NOT on admin —
+        // they're exclusive to role='sub'. Admins manage subs
+        // through the PM UI, not the sub-facing portal.
       ]
     },
     {
@@ -946,6 +980,12 @@ async function initSchema() {
       label: 'Field Crew',
       description: 'Estimates and Cost Inbox only. No jobs, no financials.',
       capabilities: ['ESTIMATES_VIEW', 'ESTIMATES_EDIT']
+    },
+    {
+      name: 'sub',
+      label: 'Subcontractor (Portal)',
+      description: 'External user. Sees only folders granted to their sub record; uploads into those same folders. No PM-app access.',
+      capabilities: ['SUB_PORTAL_VIEW', 'SUB_PORTAL_UPLOAD']
     }
   ];
   for (const r of BUILTIN_ROLES) {

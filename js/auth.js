@@ -207,6 +207,13 @@
       currentUser = res.data.user;
       isOffline = false;
       localStorage.setItem('agx-auth-token', token);
+      // Sub-portal users (role='sub') don't get the PM app shell —
+      // hard-redirect them to the portal page. The token cookie is
+      // already set by the server so /portal will load authenticated.
+      if (currentUser && currentUser.role === 'sub') {
+        window.location.href = '/portal';
+        return;
+      }
       // Load capabilities BEFORE rendering the app so visibility (data-cap,
       // landing tab) is correct on first paint.
       loadCapabilities().then(function() { showApp(); });
@@ -238,6 +245,13 @@
     })
     .then(function(data) {
       currentUser = data.user;
+      // Sub-portal users land on /portal — never the PM app shell —
+      // even if their token cookie is still valid. checkSession runs
+      // on every reload of the main app, so this is the catch-all.
+      if (currentUser && currentUser.role === 'sub') {
+        window.location.href = '/portal';
+        return;
+      }
       // Stash server-side feature flags on the global user object so
       // any module can read them via agxAuth.getUser().feature_flags.
       // Phase 1b uses agent_mode_ag to switch AG chat to the

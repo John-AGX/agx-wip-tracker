@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Project 86 — Sub Portal</title>
+<style>
+  :root {
+    --bg: #0f172a;
+    --surface: #1e293b;
+    --surface2: #0f172a;
+    --border: rgba(34, 211, 238, 0.18);
+    --text: #f1f5f9;
+    --text-dim: #94a3b8;
+    --accent: #22d3ee;
+    --danger: #f87171;
+    --success: #34d399;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; min-height: 100vh;
+    background: linear-gradient(180deg, #0f172a 0%, #020617 100%);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-size: 14px;
+  }
+  header.portal-header {
+    padding: 16px 24px;
+    border-bottom: 1px solid var(--border);
+    background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  }
+  .portal-brand {
+    font-weight: 200; letter-spacing: 2.5px; font-size: 18px;
+    text-transform: uppercase; color: var(--text);
+  }
+  .portal-brand .accent { color: var(--accent); font-weight: 500; }
+  .portal-meta { font-size: 12px; color: var(--text-dim); text-align: right; }
+  .portal-meta .sub-name { font-size: 14px; color: var(--text); font-weight: 600; }
+  main.portal-main { max-width: 960px; margin: 0 auto; padding: 24px; }
+  .portal-empty {
+    text-align: center; padding: 48px 24px; color: var(--text-dim);
+    border: 1px dashed var(--border); border-radius: 10px; margin-top: 24px;
+  }
+  .portal-folder {
+    border: 1px solid var(--border); border-radius: 10px;
+    background: var(--surface); margin-bottom: 16px;
+    overflow: hidden;
+  }
+  .portal-folder-header {
+    padding: 12px 16px; background: rgba(34, 211, 238, 0.06);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    flex-wrap: wrap;
+  }
+  .portal-folder-title { font-weight: 600; font-size: 14px; }
+  .portal-folder-title .source {
+    font-size: 11px; color: var(--text-dim); text-transform: uppercase;
+    letter-spacing: 0.5px; margin-right: 6px;
+  }
+  .portal-folder-title .folder-pill {
+    display: inline-block; padding: 2px 8px; border-radius: 10px;
+    background: rgba(165, 180, 252, 0.15); color: #a5b4fc;
+    font-size: 10px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.4px; margin-left: 4px;
+  }
+  .portal-files {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 12px; padding: 14px;
+  }
+  .portal-file {
+    border: 1px solid var(--border); border-radius: 8px;
+    background: var(--surface2); aspect-ratio: 1/1;
+    position: relative; overflow: hidden;
+    display: flex; flex-direction: column; align-items: center;
+    justify-content: center; padding: 12px; gap: 8px;
+    text-align: center;
+  }
+  .portal-file img {
+    width: 100%; height: 100%; object-fit: cover;
+    position: absolute; inset: 0; cursor: zoom-in;
+  }
+  .portal-file .filename {
+    position: absolute; bottom: 0; left: 0; right: 0;
+    background: linear-gradient(transparent, rgba(0,0,0,0.7));
+    color: var(--text); font-size: 11px; padding: 14px 8px 6px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    pointer-events: none;
+  }
+  .portal-file .doc-icon { font-size: 36px; }
+  .portal-file .doc-name {
+    font-size: 11px; color: var(--text); word-break: break-word;
+    font-weight: 500;
+  }
+  .portal-file .doc-meta { font-size: 10px; color: var(--text-dim); }
+  .portal-file a.download {
+    background: rgba(34, 211, 238, 0.12);
+    color: var(--accent);
+    border: 1px solid rgba(34, 211, 238, 0.3);
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 11px; font-weight: 600;
+    text-decoration: none;
+  }
+  .portal-upload {
+    padding: 12px 14px; border-top: 1px dashed var(--border);
+    background: rgba(34, 211, 238, 0.04);
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  }
+  .portal-upload input[type=file] { font-size: 12px; color: var(--text-dim); }
+  .portal-upload button {
+    background: var(--accent); color: #0f172a; border: none;
+    border-radius: 6px; padding: 6px 14px; font-size: 12px;
+    font-weight: 700; cursor: pointer;
+  }
+  .portal-upload button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .portal-upload .status { font-size: 11px; color: var(--text-dim); }
+  .portal-upload .status.ok { color: var(--success); }
+  .portal-upload .status.err { color: var(--danger); }
+  .portal-error {
+    padding: 14px; background: rgba(248, 113, 113, 0.1);
+    border: 1px solid rgba(248, 113, 113, 0.3);
+    border-radius: 8px; color: var(--danger); font-size: 13px;
+    margin: 16px 0;
+  }
+  .portal-loading { text-align: center; padding: 48px; color: var(--text-dim); }
+  .portal-logout {
+    background: transparent; color: var(--text-dim);
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 6px 12px; font-size: 12px; cursor: pointer;
+  }
+  .portal-logout:hover { color: var(--text); border-color: var(--text-dim); }
+</style>
+</head>
+<body>
+<header class="portal-header">
+  <div class="portal-brand">PROJECT <span class="accent">86</span> · SUB PORTAL</div>
+  <div class="portal-meta">
+    <div class="sub-name" id="sub-name">Loading...</div>
+    <div id="sub-trade"></div>
+    <button class="portal-logout" id="btn-logout" style="margin-top:6px;">Sign out</button>
+  </div>
+</header>
+<main class="portal-main">
+  <div id="portal-content" class="portal-loading">Loading your files...</div>
+</main>
+
+<script>
+(function() {
+  'use strict';
+  var subInfo = null;
+
+  function escapeHTML(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+  function escapeAttr(s) {
+    return String(s == null ? '' : s).replace(/"/g, '&quot;').replace(/&/g, '&amp;');
+  }
+
+  function isImage(att) {
+    return att && att.mime_type && att.mime_type.indexOf('image/') === 0 && !!att.thumb_url;
+  }
+
+  function fileIcon(filename, mime) {
+    var ext = (filename || '').split('.').pop().toLowerCase();
+    if (mime && mime.indexOf('pdf') >= 0) return '\u{1F4D5}';
+    if (mime && mime.indexOf('spreadsheet') >= 0) return '\u{1F4CA}';
+    if (mime && mime.indexOf('word') >= 0) return '\u{1F4DD}';
+    if (ext === 'pdf') return '\u{1F4D5}';
+    if (ext === 'xlsx' || ext === 'xls' || ext === 'csv') return '\u{1F4CA}';
+    if (ext === 'docx' || ext === 'doc') return '\u{1F4DD}';
+    return '\u{1F4CE}';
+  }
+
+  function fmtBytes(n) {
+    if (n < 1024) return n + ' B';
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+    return (n / 1024 / 1024).toFixed(1) + ' MB';
+  }
+
+  // Group attachments by (entity_type, entity_id, folder) — that
+  // matches the grant granularity, so each card is one folder the
+  // sub has explicit access to.
+  function groupByGrant(atts) {
+    var bucket = {};
+    atts.forEach(function(a) {
+      var key = (a.grant_entity_type || a.entity_type) + '|' +
+                (a.grant_entity_id || a.entity_id) + '|' +
+                (a.grant_folder || a.folder || 'general');
+      if (!bucket[key]) {
+        bucket[key] = {
+          entity_type: a.grant_entity_type || a.entity_type,
+          entity_id: a.grant_entity_id || a.entity_id,
+          folder: a.grant_folder || a.folder || 'general',
+          items: []
+        };
+      }
+      bucket[key].items.push(a);
+    });
+    return Object.keys(bucket).map(function(k) { return bucket[k]; });
+  }
+
+  function prettyFolder(f) {
+    if (!f || f === 'general') return 'General';
+    return String(f).replace(/-/g, ' ').replace(/\b\w/g, function(c) { return c.toUpperCase(); });
+  }
+
+  function renderFolders(groups) {
+    var content = document.getElementById('portal-content');
+    if (!groups.length) {
+      content.innerHTML = '<div class="portal-empty">' +
+        '<div style="font-size:18px;margin-bottom:8px;">No files yet</div>' +
+        '<div>Your project manager hasn\'t shared any folders with you yet. ' +
+        'Once they do, your files will appear here.</div>' +
+        '</div>';
+      return;
+    }
+    content.innerHTML = groups.map(function(g) {
+      var fileTiles = g.items.map(function(a) {
+        if (isImage(a)) {
+          return '<div class="portal-file">' +
+            '<img src="' + escapeAttr(a.thumb_url) + '" data-full="' + escapeAttr(a.web_url || a.original_url) + '" alt="' + escapeAttr(a.filename) + '" />' +
+            '<div class="filename">' + escapeHTML(a.filename) + '</div>' +
+          '</div>';
+        }
+        return '<div class="portal-file">' +
+          '<div class="doc-icon">' + fileIcon(a.filename, a.mime_type) + '</div>' +
+          '<div class="doc-name">' + escapeHTML(a.filename) + '</div>' +
+          '<div class="doc-meta">' + fmtBytes(a.size_bytes || 0) + '</div>' +
+          '<a class="download" href="' + escapeAttr(a.original_url) + '" download="' + escapeAttr(a.filename) + '" target="_blank" rel="noopener">Download</a>' +
+        '</div>';
+      }).join('');
+
+      return '<section class="portal-folder">' +
+        '<div class="portal-folder-header">' +
+          '<div class="portal-folder-title">' +
+            '<span class="source">' + escapeHTML(g.entity_type) + '</span>' +
+            escapeHTML(prettyFolder(g.folder)) +
+            '<span class="folder-pill">' + g.items.length + ' file' + (g.items.length === 1 ? '' : 's') + '</span>' +
+          '</div>' +
+        '</div>' +
+        (g.items.length
+          ? '<div class="portal-files">' + fileTiles + '</div>'
+          : '<div style="padding:18px;text-align:center;color:var(--text-dim);font-size:12px;">No files in this folder yet.</div>') +
+        // Upload zone — sub can add into folders they have access to.
+        '<div class="portal-upload">' +
+          '<input type="file" data-upload-input data-entity-type="' + escapeAttr(g.entity_type) + '" data-entity-id="' + escapeAttr(g.entity_id) + '" data-folder="' + escapeAttr(g.folder) + '" />' +
+          '<button type="button" data-upload-btn>Upload</button>' +
+          '<span class="status"></span>' +
+        '</div>' +
+      '</section>';
+    }).join('');
+
+    // Wire image lightbox — naive, just open in a new tab.
+    document.querySelectorAll('.portal-file img[data-full]').forEach(function(img) {
+      img.onclick = function() { window.open(img.getAttribute('data-full'), '_blank'); };
+    });
+
+    // Wire upload buttons.
+    document.querySelectorAll('[data-upload-btn]').forEach(function(btn) {
+      btn.onclick = function() {
+        var section = btn.closest('section');
+        var input = section.querySelector('[data-upload-input]');
+        var status = section.querySelector('.status');
+        if (!input || !input.files || !input.files[0]) {
+          status.className = 'status err';
+          status.textContent = 'Pick a file first.';
+          return;
+        }
+        var file = input.files[0];
+        var fd = new FormData();
+        fd.append('file', file);
+        fd.append('entity_type', input.getAttribute('data-entity-type'));
+        fd.append('entity_id', input.getAttribute('data-entity-id'));
+        fd.append('folder', input.getAttribute('data-folder'));
+        btn.disabled = true;
+        status.className = 'status';
+        status.textContent = 'Uploading...';
+        fetch('/api/sub-portal/attachments', { method: 'POST', credentials: 'include', body: fd })
+          .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, data: d }; }); })
+          .then(function(res) {
+            btn.disabled = false;
+            if (!res.ok) {
+              status.className = 'status err';
+              status.textContent = (res.data && res.data.error) || 'Upload failed';
+              return;
+            }
+            status.className = 'status ok';
+            status.textContent = '✓ Uploaded';
+            input.value = '';
+            // Reload the listing so the new file appears.
+            setTimeout(loadAttachments, 600);
+          })
+          .catch(function(err) {
+            btn.disabled = false;
+            status.className = 'status err';
+            status.textContent = 'Upload error: ' + err.message;
+          });
+      };
+    });
+  }
+
+  function loadProfile() {
+    return fetch('/api/sub-portal/me', { credentials: 'include' })
+      .then(function(r) {
+        if (!r.ok) {
+          // 401 / 403 → not signed in or wrong role; bounce to login.
+          if (r.status === 401 || r.status === 403) {
+            window.location.href = '/';
+            return Promise.reject(new Error('not signed in'));
+          }
+          return r.json().then(function(d) { throw new Error(d.error || 'Failed'); });
+        }
+        return r.json();
+      })
+      .then(function(data) {
+        subInfo = data.sub;
+        document.getElementById('sub-name').textContent = data.sub.name || data.user.name || data.user.email;
+        document.getElementById('sub-trade').textContent = data.sub.trade || '';
+      });
+  }
+
+  function loadAttachments() {
+    return fetch('/api/sub-portal/attachments', { credentials: 'include' })
+      .then(function(r) {
+        if (!r.ok) return r.json().then(function(d) { throw new Error(d.error || 'Failed'); });
+        return r.json();
+      })
+      .then(function(data) {
+        var groups = groupByGrant(data.attachments || []);
+        renderFolders(groups);
+      })
+      .catch(function(err) {
+        document.getElementById('portal-content').innerHTML =
+          '<div class="portal-error">Failed to load files: ' + escapeHTML(err.message) + '</div>';
+      });
+  }
+
+  document.getElementById('btn-logout').onclick = function() {
+    fetch('/api/auth/logout', { method: 'POST', credentials: 'include' })
+      .finally(function() { window.location.href = '/'; });
+  };
+
+  loadProfile().then(loadAttachments);
+})();
+</script>
+</body>
+</html>
