@@ -295,6 +295,14 @@ async function initSchema() {
       ADD CONSTRAINT attachments_entity_type_check
       CHECK (entity_type IN ('lead', 'estimate', 'client', 'job', 'sub'));
 
+    -- Folder grouping (Phase 3). Free-text folder name per attachment;
+    -- 'general' is the default catch-all. Users can move files into
+    -- named folders (e.g. 'photos', 'rfp', 'contracts', 'inspection')
+    -- via the move endpoint. Phase 4 layers per-folder sub access on
+    -- top of this column.
+    ALTER TABLE attachments ADD COLUMN IF NOT EXISTS folder TEXT NOT NULL DEFAULT 'general';
+    CREATE INDEX IF NOT EXISTS idx_attachments_folder ON attachments(entity_type, entity_id, folder, position);
+
     -- AI estimating-assistant chat. Per-user, per-estimate (so PMs each see
     -- their own conversation). Two messages per round (one user, one
     -- assistant) ordered by created_at; the route layer rebuilds the

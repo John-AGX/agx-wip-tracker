@@ -449,12 +449,76 @@ router.put('/:id', requireAuth, async (req, res) => {
       sets.push('include_in_proposal = $' + p++);
       params.push(req.body.include_in_proposal);
     }
+    // Phase 3 — folder rename (within the same entity). Free-text up
+    // to 60 chars; sanitized to match what the UI displays. Empty
+    // string normalizes back to 'general'.
+    if (req.body && typeof req.body.folder === 'string') {
+      const folder = (req.body.folder || '').trim().slice(0, 60).toLowerCase()
+        .replace(/[^a-z0-9 _\-]/g, '').replace(/\s+/g, '-') || 'general';
+      sets.push('folder = $' + p++);
+      params.push(folder);
+    }
     if (!sets.length) return res.json({ ok: true, unchanged: true });
     params.push(req.params.id);
     await pool.query(`UPDATE attachments SET ${sets.join(', ')} WHERE id = $${p}`, params);
     res.json({ ok: true });
   } catch (e) {
     console.error('PUT /api/attachments/:id error:', e);
+    res.status(500).json({ error: 'Server error: ' + e.message });
+  }
+});
+
+// POST /api/attachments/:id/move — cross-entity move. Body:
+//   { entity_type: 'job'|'lead'|'estimate'|'client'|'sub',
+//     entity_id:   '<id>',
+//     folder?:     'photos' | 'rfp' | ... (optional; defaults to 'general') }
+// Permissions: requires write capability on BOTH source (current
+// owner) and destination entity types. The actual file bytes don't
+// move in storage — only the row's entity_type/entity_id/folder
+// change, so URLs stay stable. Position is appended at MAX+1 of the
+// destination so newly-moved attachments don't shuffle existing
+// order at the new home.
+router.post('/:id/move', requireAuth, async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM attachments WHERE id = $1', [req.params.id]);
+    if (!rows.length) return res.status(404).json({ error: 'Attachment not found' });
+    const att = rows[0];
+
+    const newType = String(req.body && req.body.entity_type || '').trim();
+    const newId   = String(req.body && req.body.entity_id   || '').trim();
+    if (!newType || !newId) return res.status(400).json({ error: 'entity_type and entity_id are required' });
+    const VALID = ['lead', 'estimate', 'client', 'job', 'sub'];
+    if (VALID.indexOf(newType) === -1) return res.status(400).json({ error: 'invalid entity_type' });
+
+    // Source-side capability gate (the user must be allowed to MOVE
+    // files away from the current home).
+    const srcOk = await hasCapability(req.user, writeCapForEntity(att.entity_type));
+    if (!srcOk) return res.status(403).json({ error: 'No write access on source entity' });
+    // Destination-side capability gate (the user must be allowed to
+    // ATTACH to the new home).
+    const dstOk = await hasCapability(req.user, writeCapForEntity(newType));
+    if (!dstOk) return res.status(403).json({ error: 'No write access on destination entity' });
+
+    // Append at the end of the destination's existing order.
+    const posR = await pool.query(
+      'SELECT COALESCE(MAX(position), -1) AS max_pos FROM attachments WHERE entity_type = $1 AND entity_id = $2',
+      [newType, newId]
+    );
+    const startPos = (posR.rows[0] && posR.rows[0].max_pos != null) ? Number(posR.rows[0].max_pos) + 1 : 0;
+
+    const folderRaw = (req.body && typeof req.body.folder === 'string') ? req.body.folder : 'general';
+    const folder = folderRaw.trim().slice(0, 60).toLowerCase()
+      .replace(/[^a-z0-9 _\-]/g, '').replace(/\s+/g, '-') || 'general';
+
+    await pool.query(
+      `UPDATE attachments
+         SET entity_type = $1, entity_id = $2, folder = $3, position = $4
+         WHERE id = $5`,
+      [newType, newId, folder, startPos, req.params.id]
+    );
+    res.json({ ok: true, entity_type: newType, entity_id: newId, folder, position: startPos });
+  } catch (e) {
+    console.error('POST /api/attachments/:id/move error:', e);
     res.status(500).json({ error: 'Server error: ' + e.message });
   }
 });

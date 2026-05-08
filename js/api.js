@@ -180,7 +180,9 @@
       return uploadFile('/api/attachments/' + encodeURIComponent(entityType) + '/' + encodeURIComponent(entityId), file, extra);
     },
     update: function(id, payload) { return put('/api/attachments/' + encodeURIComponent(id), payload); },
-    remove: function(id) { return del('/api/attachments/' + encodeURIComponent(id)); }
+    remove: function(id) { return del('/api/attachments/' + encodeURIComponent(id)); },
+    // Cross-entity move. payload = { entity_type, entity_id, folder? }.
+    move: function(id, payload) { return post('/api/attachments/' + encodeURIComponent(id) + '/move', payload); }
   };
 
   var leads = {

@@ -43,6 +43,39 @@
   }
 
   function escapeAttr(s) { return String(s == null ? '' : s).replace(/"/g, '&quot;').replace(/&/g, '&amp;'); }
+
+  // Sanitize a free-text folder name to the same shape the server
+  // applies on PUT/move: lowercased, kebab-cased, alnum + underscore +
+  // dash only, max 60 chars. Empty → 'general'.
+  function sanitizeFolder(s) {
+    return String(s == null ? '' : s)
+      .trim().slice(0, 60).toLowerCase()
+      .replace(/[^a-z0-9 _\-]/g, '').replace(/\s+/g, '-') || 'general';
+  }
+
+  // Bucket a list of attachments by their `folder` field. Returns an
+  // ordered array of { folder, items } so 'general' renders first and
+  // the rest follow in alpha order — predictable for the user, and
+  // doesn't shuffle when a single rename happens.
+  function groupByFolder(list) {
+    var bucket = {};
+    list.forEach(function(a) {
+      var f = (a && a.folder) ? String(a.folder) : 'general';
+      if (!bucket[f]) bucket[f] = [];
+      bucket[f].push(a);
+    });
+    var names = Object.keys(bucket).sort(function(a, b) {
+      if (a === 'general') return -1;
+      if (b === 'general') return 1;
+      return a.localeCompare(b);
+    });
+    return names.map(function(n) { return { folder: n, items: bucket[n] }; });
+  }
+
+  function prettyFolder(f) {
+    if (!f || f === 'general') return 'General';
+    return String(f).replace(/-/g, ' ').replace(/\b\w/g, function(c) { return c.toUpperCase(); });
+  }
   function escapeHTMLLocal(s) {
     if (typeof window.escapeHTML === 'function') return window.escapeHTML(s);
     return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
@@ -244,13 +277,26 @@
         html += '<div style="padding:18px;text-align:center;color:var(--text-dim,#888);font-size:12px;border:1px dashed var(--border,#333);border-radius:8px;">No attachments yet.</div>';
       } else {
         // ── Photos section ──────────────────────────────────────────────
+        // Photos render in a single flat index so the lightbox can step
+        // across the whole set; folder sub-headers slice the grid only
+        // visually. We REORDER `photos` to match render order so the
+        // lightbox handler can keep using the array index unchanged.
         if (photos.length) {
           html += sectionHeader('📷 Photos', photos.length);
-          html += '<div data-att-grid="1" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;margin-bottom:18px;">';
-          photos.forEach(function(att, i) {
-            html += renderPhotoTile(att, i, false);
+          var photoGroups = groupByFolder(photos);
+          var photosOrdered = [];
+          photoGroups.forEach(function(g) {
+            if (photoGroups.length > 1 || g.folder !== 'general') {
+              html += folderHeader(g.folder, g.items.length);
+            }
+            html += '<div data-att-grid="1" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;margin-bottom:18px;">';
+            g.items.forEach(function(att) {
+              html += renderPhotoTile(att, photosOrdered.length, false);
+              photosOrdered.push(att);
+            });
+            html += '</div>';
           });
-          html += '</div>';
+          photos = photosOrdered;
         }
 
         // ── Markups section ──────────────────────────────────────────
@@ -267,10 +313,18 @@
         }
 
         // ── Documents section ───────────────────────────────────────────
+        // Documents group by folder the same way photos do. Each folder
+        // gets its own bordered list so renames/moves are visually
+        // obvious. The renderDocRow inner closure stays the same.
         if (docs.length) {
           html += sectionHeader('📎 Documents', docs.length);
-          html += '<div style="display:flex;flex-direction:column;gap:6px;border:1px solid var(--border,#333);border-radius:8px;overflow:hidden;">';
-          docs.forEach(function(att) {
+          var docGroups = groupByFolder(docs);
+          docGroups.forEach(function(g) {
+            if (docGroups.length > 1 || g.folder !== 'general') {
+              html += folderHeader(g.folder, g.items.length);
+            }
+            html += '<div style="display:flex;flex-direction:column;gap:6px;border:1px solid var(--border,#333);border-radius:8px;overflow:hidden;margin-bottom:14px;">';
+            g.items.forEach(function(att) {
             var isPdf = (att.mime_type && att.mime_type.indexOf('pdf') >= 0) ||
                         (att.filename || '').toLowerCase().endsWith('.pdf');
             var pinActive = !!att.include_in_proposal;
@@ -286,14 +340,16 @@
                 '</div>' +
               '</div>' +
               (canEdit ? '<button data-att-pin="' + escapeAttr(att.id) + '" title="' + escapeAttr(pinTitle) + '" style="flex:0 0 auto;background:' + (pinActive ? 'rgba(52,211,153,0.10)' : 'transparent') + ';color:' + pinColor + ';border:' + pinBorder + ';border-radius:6px;width:30px;height:30px;font-size:13px;cursor:pointer;line-height:1;">&#x1F4CC;</button>' : '') +
+              (canEdit ? '<button data-att-move="' + escapeAttr(att.id) + '" title="Move to folder" style="flex:0 0 auto;background:transparent;color:var(--text-dim,#aaa);border:1px solid var(--border,#333);border-radius:6px;width:30px;height:30px;font-size:13px;cursor:pointer;line-height:1;">&#x1F4C1;</button>' : '') +
               (isPdf ? '<button data-att-view="' + escapeAttr(att.id) + '" title="Preview pages and send to the AI assistant" style="flex:0 0 auto;background:rgba(139,92,246,0.12);color:#c4b5fd;border:1px solid rgba(139,92,246,0.3);border-radius:6px;padding:6px 12px;font-size:11px;font-weight:600;cursor:pointer;">&#x1F441; View</button>' : '') +
               '<a href="' + escapeAttr(att.original_url) + '" download="' + escapeAttr(att.filename) + '" target="_blank" rel="noopener" title="Download" style="flex:0 0 auto;background:rgba(79,140,255,0.12);color:#4f8cff;border:1px solid rgba(79,140,255,0.3);border-radius:6px;padding:6px 12px;text-decoration:none;font-size:11px;font-weight:600;">&#x2B07; Download</a>' +
               (canEdit ? '<button data-att-del-doc="' + escapeAttr(att.id) + '" title="Delete" style="flex:0 0 auto;background:rgba(248,113,113,0.10);color:#f87171;border:1px solid rgba(248,113,113,0.25);border-radius:6px;width:30px;height:30px;font-size:14px;cursor:pointer;line-height:1;">&times;</button>' : '') +
             '</div>';
+            });
+            // last row inside this folder should not draw the trailing border
+            html = html.replace(/border-bottom:1px solid var\(--border,#2a2a3a\);(?![\s\S]*border-bottom:1px solid var\(--border,#2a2a3a\);)/, '');
+            html += '</div>';
           });
-          // last row should not draw the trailing border
-          html = html.replace(/border-bottom:1px solid var\(--border,#2a2a3a\);(?![\s\S]*border-bottom:1px solid var\(--border,#2a2a3a\);)/, '');
-          html += '</div>';
         }
 
         // ── Parent (read-only) sections ──────────────────────────────
@@ -435,6 +491,32 @@
           deleteAttachment(btn.getAttribute('data-att-del-doc'), 'document');
         };
       });
+      // Move-to-folder. Two flavors:
+      //   • Plain folder rename (within this entity) → server PUT /:id { folder }
+      //   • Cross-entity move (job ↔ estimate ↔ lead, etc.) → POST /:id/move
+      // Prompt is intentionally simple — a single text input with the
+      // existing folder pre-filled, plus a hint about syntax. Heavier
+      // pickers can layer in later if folks need them.
+      container.querySelectorAll('[data-att-move]').forEach(function(btn) {
+        btn.onclick = function(e) {
+          e.stopPropagation();
+          var attId = btn.getAttribute('data-att-move');
+          var att = state.attachments.find(function(a) { return a.id === attId; });
+          if (!att) return;
+          var current = att.folder || 'general';
+          var prompt = 'Move "' + (att.filename || 'file') + '" to folder:\n\n' +
+            'Folder name (e.g. photos, rfp, contracts) — letters, numbers, spaces, dashes.';
+          var next = window.prompt(prompt, current);
+          if (next == null) return; // cancel
+          var folder = sanitizeFolder(next);
+          if (folder === current) return; // no-op
+          window.agxApi.attachments.update(attId, { folder: folder })
+            .then(fetchList)
+            .catch(function(err) {
+              alert('Move failed: ' + (err.message || ''));
+            });
+        };
+      });
       // PDF view button — opens the inline viewer with an Ask AI handoff.
       container.querySelectorAll('[data-att-view]').forEach(function(btn) {
         btn.onclick = function(e) {
@@ -501,6 +583,19 @@
       '</div>';
     }
 
+    // Folder sub-header inside a section. Lighter weight than the
+    // section header so the visual hierarchy is: section ▸ folder ▸
+    // tiles. Only rendered when the section has more than one folder
+    // (or a single non-default folder), so the unfolded common case
+    // stays clean.
+    function folderHeader(folder, count) {
+      return '<div style="font-size:10px;font-weight:600;color:var(--text-dim,#666);text-transform:uppercase;letter-spacing:0.4px;margin:2px 2px 6px;display:flex;align-items:center;gap:6px;">' +
+        '<span style="font-size:12px;">&#x1F4C1;</span>' +
+        '<span>' + escapeHTMLLocal(prettyFolder(folder)) + '</span>' +
+        '<span style="font-weight:400;color:var(--text-dim,#555);">' + count + '</span>' +
+      '</div>';
+    }
+
     // Render a single photo thumbnail tile. `isMarkup` flips a small
     // accent so users can tell markup tiles apart from the originals
     // at a glance. The Mark-up button + Attach-to-proposal pin are
@@ -516,10 +611,11 @@
         '<img ' + indexAttr + ' src="' + escapeAttr(att.thumb_url) + '" alt="' + escapeAttr(att.filename) + '" onerror="this.parentNode.classList.add(\'att-thumb-broken\')" style="width:100%;height:100%;object-fit:cover;cursor:zoom-in;display:block;" />' +
         // Top-left: Mark-up button (only on photos, edit mode).
         (canEdit ? '<button data-att-markup="' + escapeAttr(att.id) + '" title="Mark up this photo" style="position:absolute;top:4px;left:4px;background:rgba(0,0,0,0.7);color:#fbbf24;border:none;border-radius:4px;padding:3px 6px;font-size:10px;font-weight:700;cursor:pointer;z-index:2;">&#x270F; MARK</button>' : '') +
-        // Top-right: Pin (proposal toggle) + Delete.
+        // Top-right: Pin (proposal toggle) + Move + Delete.
         (canEdit ?
           '<div style="position:absolute;top:4px;right:4px;display:flex;gap:3px;z-index:2;">' +
             '<button data-att-pin="' + escapeAttr(att.id) + '" title="' + escapeAttr(pinTitle) + '" style="background:' + pinBg + ';color:' + pinColor + ';border:none;border-radius:4px;width:24px;height:24px;font-size:12px;cursor:pointer;line-height:1;">&#x1F4CC;</button>' +
+            '<button data-att-move="' + escapeAttr(att.id) + '" title="Move to folder" style="background:rgba(0,0,0,0.7);color:#a5b4fc;border:none;border-radius:4px;width:24px;height:24px;font-size:12px;cursor:pointer;line-height:1;">&#x1F4C1;</button>' +
             '<button data-att-del-photo="' + escapeAttr(att.id) + '" title="Delete" style="background:rgba(0,0,0,0.7);color:#f87171;border:none;border-radius:4px;width:24px;height:24px;font-size:13px;cursor:pointer;line-height:1;">&times;</button>' +
           '</div>' : '') +
         // Bottom: filename + (if pinned) "In proposal" badge.
