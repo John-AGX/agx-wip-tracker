@@ -743,4 +743,136 @@ router.post('/migrate-apply',
   }
 );
 
+// ───────────────────────────────────────────────────────────────────
+// Phase 4: per-folder sub access. Grants live in
+// `attachment_folder_grants`; each row = "sub X can see folder F on
+// (entity_type, entity_id)". PMs grant/revoke from the attachment UI
+// or sub editor; the future sub-facing portal reads these to surface
+// only what each sub is allowed to see.
+// ───────────────────────────────────────────────────────────────────
+
+// Sanitize a free-text folder to match the rule used elsewhere
+// (PUT /api/attachments/:id, POST /api/attachments/:id/move). Empty
+// → 'general'.
+function sanitizeFolder(s) {
+  return String(s == null ? '' : s)
+    .trim().slice(0, 60).toLowerCase()
+    .replace(/[^a-z0-9 _\-]/g, '').replace(/\s+/g, '-') || 'general';
+}
+
+// GET /api/subs/:subId/attachment-grants — list every grant for one
+// sub. Joined with the underlying entity name for display purposes
+// (left-join so orphaned grants — entity deleted out from under us —
+// still surface so a PM can clean them up).
+router.get('/:subId/attachment-grants',
+  requireAuth, requireCapability('JOBS_VIEW_ALL'),
+  async (req, res) => {
+    try {
+      const { rows } = await pool.query(
+        `SELECT g.id, g.sub_id, g.entity_type, g.entity_id, g.folder,
+                g.granted_by, g.granted_at,
+                u.username AS granted_by_username
+           FROM attachment_folder_grants g
+           LEFT JOIN users u ON u.id = g.granted_by
+          WHERE g.sub_id = $1
+          ORDER BY g.granted_at DESC`,
+        [req.params.subId]
+      );
+      res.json({ grants: rows });
+    } catch (e) {
+      console.error('GET /api/subs/:subId/attachment-grants error:', e);
+      res.status(500).json({ error: 'Server error: ' + e.message });
+    }
+  }
+);
+
+// POST /api/subs/:subId/attachment-grants — grant access. Body:
+//   { entity_type: 'job'|'lead'|'estimate'|'client'|'sub',
+//     entity_id:  '<id>',
+//     folder?:    'photos' (default 'general') }
+// Idempotent — repeat grants no-op via the UNIQUE index.
+router.post('/:subId/attachment-grants',
+  requireAuth, requireCapability('JOBS_EDIT_ANY'),
+  async (req, res) => {
+    try {
+      const subR = await pool.query('SELECT id FROM subs WHERE id = $1', [req.params.subId]);
+      if (!subR.rows.length) return res.status(404).json({ error: 'Sub not found' });
+
+      const b = req.body || {};
+      const entity_type = String(b.entity_type || '').trim();
+      const entity_id   = String(b.entity_id   || '').trim();
+      if (!entity_type || !entity_id) return res.status(400).json({ error: 'entity_type and entity_id are required' });
+      const VALID = ['lead', 'estimate', 'client', 'job', 'sub'];
+      if (VALID.indexOf(entity_type) === -1) return res.status(400).json({ error: 'invalid entity_type' });
+
+      const folder = sanitizeFolder(b.folder);
+      const id = genId('afg');
+      const granted_by = (req.user && req.user.id) || null;
+
+      const { rows } = await pool.query(
+        `INSERT INTO attachment_folder_grants
+           (id, sub_id, entity_type, entity_id, folder, granted_by)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT (sub_id, entity_type, entity_id, folder) DO UPDATE
+           SET granted_at = NOW(), granted_by = EXCLUDED.granted_by
+         RETURNING *`,
+        [id, req.params.subId, entity_type, entity_id, folder, granted_by]
+      );
+      res.json({ grant: rows[0] });
+    } catch (e) {
+      console.error('POST /api/subs/:subId/attachment-grants error:', e);
+      res.status(500).json({ error: 'Server error: ' + e.message });
+    }
+  }
+);
+
+// DELETE /api/subs/:subId/attachment-grants/:grantId — revoke.
+router.delete('/:subId/attachment-grants/:grantId',
+  requireAuth, requireCapability('JOBS_EDIT_ANY'),
+  async (req, res) => {
+    try {
+      const result = await pool.query(
+        'DELETE FROM attachment_folder_grants WHERE id = $1 AND sub_id = $2',
+        [req.params.grantId, req.params.subId]
+      );
+      if (result.rowCount === 0) return res.status(404).json({ error: 'Grant not found' });
+      res.json({ ok: true });
+    } catch (e) {
+      console.error('DELETE /api/subs/:subId/attachment-grants/:grantId error:', e);
+      res.status(500).json({ error: 'Server error: ' + e.message });
+    }
+  }
+);
+
+// GET /api/subs/:subId/shared-attachments — list every attachment a
+// sub can see, scoped to their grants. Returns rows with the entity
+// they came from + folder so a PM can preview the sub's view (and the
+// future portal reads from this same shape). Orphan grants (entity
+// since deleted) drop out via the INNER JOIN on attachments.
+router.get('/:subId/shared-attachments',
+  requireAuth, requireCapability('JOBS_VIEW_ALL'),
+  async (req, res) => {
+    try {
+      const { rows } = await pool.query(
+        `SELECT a.*, g.folder AS grant_folder,
+                g.entity_type AS grant_entity_type,
+                g.entity_id AS grant_entity_id,
+                g.granted_at
+           FROM attachment_folder_grants g
+           JOIN attachments a
+             ON a.entity_type = g.entity_type
+            AND a.entity_id   = g.entity_id
+            AND a.folder      = g.folder
+          WHERE g.sub_id = $1
+          ORDER BY g.entity_type, g.entity_id, g.folder, a.position`,
+        [req.params.subId]
+      );
+      res.json({ attachments: rows });
+    } catch (e) {
+      console.error('GET /api/subs/:subId/shared-attachments error:', e);
+      res.status(500).json({ error: 'Server error: ' + e.message });
+    }
+  }
+);
+
 module.exports = router;

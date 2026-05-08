@@ -299,9 +299,9 @@ async function initSchema() {
     -- 'general' is the default catch-all. Users can move files into
     -- named folders (e.g. 'photos', 'rfp', 'contracts', 'inspection')
     -- via the move endpoint. Phase 4 layers per-folder sub access on
-    -- top of this column.
-    ALTER TABLE attachments ADD COLUMN IF NOT EXISTS folder TEXT NOT NULL DEFAULT 'general';
-    CREATE INDEX IF NOT EXISTS idx_attachments_folder ON attachments(entity_type, entity_id, folder, position);
+    -- top of this column. (Phase 4's attachment_folder_grants table
+    -- is defined AFTER the subs table further down so its FK resolves
+    -- on the first run.)
 
     -- AI estimating-assistant chat. Per-user, per-estimate (so PMs each see
     -- their own conversation). Two messages per round (one user, one
@@ -462,6 +462,32 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_job_subs_job ON job_subs(job_id);
     CREATE INDEX IF NOT EXISTS idx_job_subs_sub ON job_subs(sub_id);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_job_subs_unique ON job_subs(job_id, sub_id, COALESCE(building_id, ''), COALESCE(phase_id, ''));
+
+    -- Per-folder sub access (Phase 4). A grant says "sub X can see
+    -- folder F on entity (T,I)". One sub may have many grants;
+    -- revoking is a row delete. PMs grant/revoke from the attachment
+    -- list UI or the sub editor; the future sub-facing portal will
+    -- read this table to know which folders to surface.
+    --
+    -- Why a table and not a JSONB column on subs: grants need to be
+    -- queryable both directions — "what folders does this sub see"
+    -- AND "which subs see this folder" — so a normalized table is
+    -- cheaper than scanning JSONB. ON DELETE CASCADE on sub_id keeps
+    -- the table consistent when subs are removed; entity_id is
+    -- polymorphic (leads/jobs/estimates) so it isn't FK'd — orphan
+    -- grants are filtered out at read time.
+    CREATE TABLE IF NOT EXISTS attachment_folder_grants (
+      id TEXT PRIMARY KEY,
+      sub_id TEXT NOT NULL REFERENCES subs(id) ON DELETE CASCADE,
+      entity_type TEXT NOT NULL CHECK (entity_type IN ('lead','estimate','client','job','sub')),
+      entity_id TEXT NOT NULL,
+      folder TEXT NOT NULL DEFAULT 'general',
+      granted_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      granted_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE (sub_id, entity_type, entity_id, folder)
+    );
+    CREATE INDEX IF NOT EXISTS idx_afg_sub ON attachment_folder_grants(sub_id);
+    CREATE INDEX IF NOT EXISTS idx_afg_entity ON attachment_folder_grants(entity_type, entity_id, folder);
 
     -- QuickBooks Detailed Job Cost lines. Imported from the weekly
     -- "Project Costs" / "Detailed Job Costs" xlsx export. The id is a

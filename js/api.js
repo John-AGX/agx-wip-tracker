@@ -279,6 +279,23 @@
       remove: function(subId, certType) {
         return del('/api/subs/' + encodeURIComponent(subId) + '/certificates/' + encodeURIComponent(certType));
       }
+    },
+    // Phase 4: per-folder access grants. A grant lets one sub see
+    // attachments stored under a specific (entity_type, entity_id,
+    // folder) combo. PM-only writes; reads scoped by sub_id.
+    grants: {
+      list: function(subId) {
+        return get('/api/subs/' + encodeURIComponent(subId) + '/attachment-grants');
+      },
+      create: function(subId, payload) {
+        return post('/api/subs/' + encodeURIComponent(subId) + '/attachment-grants', payload);
+      },
+      remove: function(subId, grantId) {
+        return del('/api/subs/' + encodeURIComponent(subId) + '/attachment-grants/' + encodeURIComponent(grantId));
+      },
+      sharedAttachments: function(subId) {
+        return get('/api/subs/' + encodeURIComponent(subId) + '/shared-attachments');
+      }
     }
   };
 

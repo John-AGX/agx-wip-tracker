@@ -276,6 +276,13 @@
     if (jobAccessMount && _editingId) {
       mountJobAccess(jobAccessMount, _editingId);
     }
+
+    // Folder access (Phase 4) — same save-first gating; renders the
+    // grants list + a small form for adding new grants.
+    var folderGrantsMount = modal.querySelector('#subDir_folderGrantsMount');
+    if (folderGrantsMount && _editingId) {
+      mountFolderGrants(folderGrantsMount, _editingId);
+    }
   }
 
   // ──────────────────────────────────────────────────────────────────
@@ -636,6 +643,134 @@
     });
   }
 
+  // ──────────────────────────────────────────────────────────────────
+  // Phase 4: Folder access grants. PMs grant a sub access to a
+  // specific (entity_type, entity_id, folder) combo. The list view
+  // renders existing grants with a Revoke button per row; the form
+  // below it lets the PM add a new grant. We don't enumerate every
+  // possible folder — folder names are free-text, so the PM types
+  // the folder (autosuggest could come later if grants get heavy).
+  // ──────────────────────────────────────────────────────────────────
+
+  function mountFolderGrants(mountEl, subId) {
+    if (!window.agxApi || !window.agxApi.subs || !window.agxApi.subs.grants) {
+      mountEl.innerHTML = '<div style="padding:8px;color:#f87171;font-size:12px;">Folder grants API not available — refresh.</div>';
+      return;
+    }
+    function reload() {
+      mountEl.innerHTML = '<div style="padding:8px;color:var(--text-dim,#888);font-size:12px;">Loading grants…</div>';
+      window.agxApi.subs.grants.list(subId).then(function(res) {
+        render(res.grants || []);
+      }).catch(function(err) {
+        mountEl.innerHTML = '<div style="padding:8px;color:#f87171;font-size:12px;">Failed to load grants: ' + escapeHTML(err.message || String(err)) + '</div>';
+      });
+    }
+
+    function render(grants) {
+      var jobs = (window.appData && window.appData.jobs) || [];
+      var jobById = {};
+      jobs.forEach(function(j) { jobById[j.id] = j; });
+      function entityLabel(g) {
+        if (g.entity_type === 'job' && jobById[g.entity_id]) {
+          var j = jobById[g.entity_id];
+          return (j.jobNumber ? '[' + j.jobNumber + '] ' : '') + (j.title || j.name || j.id);
+        }
+        return g.entity_type + ' / ' + g.entity_id;
+      }
+
+      var rows = grants.length
+        ? grants.map(function(g) {
+            return '<div style="display:grid;grid-template-columns:1.2fr 2fr 1fr 1.5fr auto;gap:10px;align-items:center;padding:7px 4px;border-bottom:1px solid var(--border,#333);font-size:12px;">' +
+              '<div style="color:var(--text-dim,#aaa);text-transform:uppercase;letter-spacing:0.4px;font-size:10px;font-weight:600;">' + escapeHTML(g.entity_type) + '</div>' +
+              '<div style="color:var(--text,#fff);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTML(entityLabel(g)) + '</div>' +
+              '<div><span style="background:rgba(165,180,252,0.15);color:#a5b4fc;padding:2px 8px;border-radius:10px;font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:0.3px;">📁 ' + escapeHTML(g.folder) + '</span></div>' +
+              '<div style="color:var(--text-dim,#888);font-size:10px;">' + (g.granted_by_username ? escapeHTML(g.granted_by_username) + ' · ' : '') + (g.granted_at ? escapeHTML(String(g.granted_at).slice(0, 10)) : '') + '</div>' +
+              '<button type="button" data-revoke-grant="' + escapeAttr(g.id) + '" title="Revoke" style="background:rgba(248,113,113,0.10);color:#f87171;border:1px solid rgba(248,113,113,0.25);border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">Revoke</button>' +
+            '</div>';
+          }).join('')
+        : '<div style="padding:14px;color:var(--text-dim,#888);font-size:12px;font-style:italic;border:1px dashed var(--border,#333);border-radius:8px;text-align:center;">No folder grants yet. Add one below to give this sub access to a specific folder.</div>';
+
+      var jobOptions = jobs.filter(function(j) {
+        var s = (j.status || '').toLowerCase();
+        return s !== 'closed' && s !== 'archived';
+      }).map(function(j) {
+        var label = (j.jobNumber ? '[' + j.jobNumber + '] ' : '') + (j.title || j.name || j.id);
+        return '<option value="' + escapeAttr(j.id) + '">' + escapeHTML(label) + '</option>';
+      }).join('');
+
+      mountEl.innerHTML =
+        '<div style="display:grid;grid-template-columns:1.2fr 2fr 1fr 1.5fr auto;gap:10px;padding:6px 4px 4px;border-bottom:1px solid var(--border,#333);font-size:10px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.4px;">' +
+          '<div>Type</div><div>Entity</div><div>Folder</div><div>Granted</div><div></div>' +
+        '</div>' +
+        rows +
+        '<div style="margin-top:14px;padding:12px;border:1px solid var(--border,#333);border-radius:8px;background:rgba(79,140,255,0.04);">' +
+          '<div style="font-size:11px;font-weight:700;color:var(--text-dim,#aaa);text-transform:uppercase;letter-spacing:0.4px;margin-bottom:8px;">Add a grant</div>' +
+          '<div style="display:grid;grid-template-columns:1fr 2fr 1.2fr auto;gap:10px;align-items:end;">' +
+            '<div>' +
+              '<label style="display:block;font-size:10px;color:var(--text-dim,#888);margin-bottom:3px;text-transform:uppercase;letter-spacing:0.4px;">Entity</label>' +
+              '<select id="fg_entity_type" style="width:100%;padding:6px 10px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);font-size:12px;">' +
+                '<option value="job">Job</option>' +
+                '<option value="lead">Lead</option>' +
+                '<option value="estimate">Estimate</option>' +
+                '<option value="client">Client</option>' +
+              '</select>' +
+            '</div>' +
+            '<div>' +
+              '<label style="display:block;font-size:10px;color:var(--text-dim,#888);margin-bottom:3px;text-transform:uppercase;letter-spacing:0.4px;">Job</label>' +
+              '<select id="fg_entity_id" style="width:100%;padding:6px 10px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);font-size:12px;">' +
+                '<option value="">— select a job —</option>' + jobOptions +
+              '</select>' +
+              '<input id="fg_entity_id_text" type="text" placeholder="…or paste an entity id" style="width:100%;margin-top:4px;padding:5px 10px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);font-size:11px;display:none;" />' +
+            '</div>' +
+            '<div>' +
+              '<label style="display:block;font-size:10px;color:var(--text-dim,#888);margin-bottom:3px;text-transform:uppercase;letter-spacing:0.4px;">Folder</label>' +
+              '<input id="fg_folder" type="text" value="general" placeholder="general / photos / rfp / …" style="width:100%;padding:6px 10px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);font-size:12px;" />' +
+            '</div>' +
+            '<button type="button" data-add-grant style="background:#4f8cff;color:#fff;border:none;border-radius:6px;padding:7px 16px;font-size:12px;font-weight:600;cursor:pointer;">Grant</button>' +
+          '</div>' +
+        '</div>';
+
+      // Type switch — when the user picks a non-Job entity, the Job
+      // dropdown becomes useless and we surface a free-text id field.
+      var typeSel = mountEl.querySelector('#fg_entity_type');
+      var idSel = mountEl.querySelector('#fg_entity_id');
+      var idText = mountEl.querySelector('#fg_entity_id_text');
+      typeSel.addEventListener('change', function() {
+        var isJob = typeSel.value === 'job';
+        idSel.style.display = isJob ? '' : 'none';
+        idText.style.display = isJob ? 'none' : '';
+      });
+
+      // Revoke handlers.
+      mountEl.querySelectorAll('[data-revoke-grant]').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          var grantId = btn.getAttribute('data-revoke-grant');
+          if (!window.confirm('Revoke this folder grant?')) return;
+          window.agxApi.subs.grants.remove(subId, grantId).then(reload).catch(function(err) {
+            alert('Revoke failed: ' + (err.message || String(err)));
+          });
+        });
+      });
+
+      // Add handler.
+      mountEl.querySelector('[data-add-grant]').addEventListener('click', function() {
+        var entity_type = typeSel.value;
+        var entity_id = entity_type === 'job' ? idSel.value : idText.value.trim();
+        var folder = mountEl.querySelector('#fg_folder').value;
+        if (!entity_id) { alert('Pick a job or enter an entity id.'); return; }
+        window.agxApi.subs.grants.create(subId, {
+          entity_type: entity_type,
+          entity_id: entity_id,
+          folder: folder
+        }).then(reload).catch(function(err) {
+          alert('Grant failed: ' + (err.message || String(err)));
+        });
+      });
+    }
+
+    reload();
+  }
+
   // Upload a cert file: POST attachment with entity_type='sub', then
   // upsert the cert row pointing at the new attachment id. Re-renders
   // the cert section on success so the filename + remove button
@@ -785,6 +920,7 @@
         '<button type="button" data-sub-tab="additional"    class="sub-modal-tab active">Additional information</button>' +
         '<button type="button" data-sub-tab="notifications" class="sub-modal-tab">Notifications</button>' +
         '<button type="button" data-sub-tab="jobs"          class="sub-modal-tab">Job access</button>' +
+        '<button type="button" data-sub-tab="folders"       class="sub-modal-tab">Folder access</button>' +
       '</div>' +
       // ── Tab: Additional information ──────────────────────────────
       '<div data-sub-tab-pane="additional" style="padding:18px 22px;">' +
@@ -844,6 +980,18 @@
         (!_editingId
           ? '<div style="font-size:11px;color:var(--text-dim,#888);font-style:italic;">Save the sub first, then toggle which jobs they have access to.</div>'
           : '<div id="subDir_jobAccessMount" style="font-size:12px;color:var(--text-dim,#aaa);">Loading jobs…</div>') +
+      '</div>' +
+      // ── Tab: Folder access (Phase 4) ─────────────────────────────
+      // Lists per-folder grants and lets a PM grant new ones. Each
+      // grant = "this sub can see folder X on entity (T,I)". Read-only
+      // until the sub is saved. The future sub-facing portal reads
+      // the same grants table to surface only what each sub can see.
+      '<div data-sub-tab-pane="folders" style="padding:18px 22px;display:none;">' +
+        '<div style="font-size:13px;font-weight:700;color:var(--text,#fff);margin-bottom:6px;">Folder access</div>' +
+        '<div style="font-size:11px;color:var(--text-dim,#888);margin-bottom:12px;">Grant this sub access to specific attachment folders. Folders are the same names you see in the attachments view (e.g. <em>photos</em>, <em>rfp</em>, <em>contracts</em>).</div>' +
+        (!_editingId
+          ? '<div style="font-size:11px;color:var(--text-dim,#888);font-style:italic;">Save the sub first, then grant folder access.</div>'
+          : '<div id="subDir_folderGrantsMount" style="font-size:12px;color:var(--text-dim,#aaa);">Loading grants…</div>') +
       '</div>' +
       // ── Footer ───────────────────────────────────────────────────
       '<div style="padding:12px 22px;border-top:1px solid var(--border,#333);display:flex;align-items:center;gap:8px;">' +
