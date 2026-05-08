@@ -56,6 +56,19 @@ async function canEdit(userId, userRole, jobId) {
   return access.rows.length > 0 && access.rows[0].access_level === 'edit';
 }
 
+// Looser gate for the node-graph layout. The graph is a shared
+// visualization — position dragging, node creation, and wire edits
+// affect what the team sees on screen but are tracked separately
+// from the financial source-of-truth (jobs.data, phases, etc.). Any
+// PM-tier user who can VIEW the job should be able to contribute
+// layout changes; otherwise non-owner PMs silently dropped their
+// drags into localStorage and other users kept seeing the owner's
+// original layout. Corporate role stays read-only by company policy.
+async function canEditGraph(userId, userRole, jobId) {
+  if (userRole === 'corporate') return false;
+  return canAccess(userId, userRole, jobId);
+}
+
 // GET /api/jobs
 // Everyone authenticated sees every job. Edit rights are conveyed via _canEdit
 // on each row so the client can render read-only indicators and skip non-editable
@@ -379,7 +392,12 @@ router.get('/:id/graph', requireAuth, async (req, res) => {
 
 router.put('/:id/graph', requireAuth, async (req, res) => {
   try {
-    if (!(await canEdit(req.user.id, req.user.role, req.params.id))) {
+    // canEditGraph (vs canEdit) — graph layout is shared
+    // collaborative state. Any non-corporate user who can view the
+    // job can save it. Fixes the bug where non-owner PMs dragged
+    // nodes locally but their positions never reached the cloud
+    // because canEdit's job_access edit-tier check rejected them.
+    if (!(await canEditGraph(req.user.id, req.user.role, req.params.id))) {
       return res.status(403).json({ error: 'No edit access' });
     }
     await pool.query(
