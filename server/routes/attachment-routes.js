@@ -214,7 +214,7 @@ function entityTypeOk(t) { return VALID_ENTITY_TYPES.has(t); }
 // GET /api/attachments/raw/:id — stream the attachment bytes back through
 // the API so the browser fetches them same-origin. Used by the photo
 // markup viewer: <img crossOrigin="anonymous" src="https://attachments.
-// wip-agxco.com/...">  fails when R2's CORS isn't configured to allow our
+// project86.net/...">  fails when R2's CORS isn't configured to allow our
 // domain, and without crossOrigin the canvas becomes tainted on draw,
 // blocking toBlob(). Routing the bytes through here side-steps both
 // problems.

@@ -12,7 +12,7 @@
 //   R2_ACCOUNT_ID         — Cloudflare account id
 //   R2_ACCESS_KEY_ID      — R2 API token's access key id
 //   R2_SECRET_ACCESS_KEY  — R2 API token's secret (set in Railway env, NOT in code)
-//   R2_BUCKET             — bucket name (e.g. 'agx-attachments')
+//   R2_BUCKET             — bucket name (e.g. 'project86-attachments')
 //   R2_PUBLIC_BASE        — public custom-domain URL prefix
 //                           (e.g. 'https://attachments.project86.net')
 
