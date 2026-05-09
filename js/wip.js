@@ -1175,6 +1175,15 @@ function renderWIPMain() {
             const job = appData.jobs.find(j => j.id === jobId);
             if (!job) return;
 
+            // Browser tab title: "[12345] Job Title | Project 86" so a user
+            // with multiple browser tabs open across jobs can pick the right
+            // one without flipping each open.
+            if (typeof window.setPageTitle === 'function') {
+                var jobLabel = (job.jobNumber ? '[' + job.jobNumber + '] ' : '') +
+                               (job.title || job.name || 'Job');
+                window.setPageTitle(jobLabel);
+            }
+
             // Read-only enforcement: when the current user can't edit this job,
             // toggle a CSS class on the detail container that disables form
             // controls and edit-action buttons, and show the explanatory banner.

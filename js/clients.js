@@ -35,6 +35,12 @@
     // markup definitely loses (same fix as switchAdminSubTab,
     // switchEstimateEditorTab, switchLeadEditorTab).
     if (target) target.style.display = 'block';
+    // Browser tab title — refine the generic "Estimates | Project 86"
+    // set by switchTab to the active subtab's specific label.
+    if (typeof window.setPageTitle === 'function') {
+      var SUBTAB_TITLES = { leads: 'Leads', list: 'Estimates', clients: 'Clients', subs: 'Subs' };
+      window.setPageTitle(SUBTAB_TITLES[name] || 'Estimates');
+    }
     if (name === 'leads') {
       // Always re-fetch on tab open so changes from other tabs / users show up
       // immediately instead of requiring a manual Refresh click.

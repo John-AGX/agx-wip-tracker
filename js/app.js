@@ -447,6 +447,27 @@
             }
         }
 
+        // Browser-tab title format: "{Page name} | Project 86" (matches the
+        // Buildertrend convention the user pointed at). Falls back to bare
+        // "Project 86" when no specific page is loaded (login screen, etc.).
+        // Sub-modules (estimate editor, job detail, etc.) call this with
+        // their own labels when entities open; switchTab() calls it with
+        // tab-level labels.
+        function setPageTitle(pageName) {
+            document.title = (pageName && String(pageName).trim())
+                ? String(pageName).trim() + ' | Project 86'
+                : 'Project 86';
+        }
+        window.setPageTitle = setPageTitle;
+
+        var TAB_TITLES = {
+            estimates: 'Estimates',  // gets refined by switchEstimatesSubTab
+            schedule:  'Schedule',
+            wip:       'WIP',
+            insights:  'Insights',
+            admin:     'Admin'
+        };
+
         function switchTab(tabName) {
             document.querySelectorAll('.tab-content').forEach(tc => tc.classList.remove('active'));
             document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
@@ -456,6 +477,11 @@
             // virtual-tab system overwrites this when a more specific
             // identity (Leads / Clients / Subs) was clicked.
             document.querySelector(`[data-tab="${tabName}"]`)?.classList.add('active');
+
+            // Page title: defaults to the tab label. Sub-renderers (the
+            // estimates-subtab switch + the job detail + the estimate
+            // editor) refine it once the inner state is known.
+            setPageTitle(TAB_TITLES[tabName] || null);
 
             // Tear down the node graph if it's open. #nodeGraphTab is a
             // position:fixed overlay (z:99) that lives outside the
