@@ -626,40 +626,47 @@
                     attentionCard('Active Jobs',      activeJobs,  '#34d399', "window.switchTab('wip');",   'Open + in progress') +
                 '</div>' +
 
-                // Two-col main grid
-                '<div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,360px);gap:18px;">' +
-                    // Center: Recent Activity
+                // Two-col main grid:
+                //   Left  — Recent Activity (single tall column)
+                //   Right — Stacked rail with Agenda, Sales Pipeline,
+                //           Recent Files, Inbox. Each rail widget has
+                //           its own header + body card so they read
+                //           as discrete sections in the column.
+                '<div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(300px,380px);gap:18px;align-items:flex-start;">' +
+                    // Left column: Recent Activity
                     '<div>' +
                         '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">' +
                             '<div style="font-size:11px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;">Recent Activity</div>' +
                         '</div>' +
                         feedHtml +
                     '</div>' +
-                    // Right rail: This Week's Agenda
-                    '<div>' +
-                        '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">' +
-                            '<div style="font-size:11px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;">This Week’s Agenda</div>' +
-                            '<button class="ee-btn ghost small" onclick="window.switchTab(\'schedule\')" style="font-size:11px;padding:2px 8px;">View schedule &rarr;</button>' +
+                    // Right rail: stacked widgets
+                    '<div style="display:flex;flex-direction:column;gap:18px;">' +
+                        // Agenda
+                        '<div>' +
+                            '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">' +
+                                '<div style="font-size:11px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;">This Week’s Agenda</div>' +
+                                '<button class="ee-btn ghost small" onclick="window.switchTab(\'schedule\')" style="font-size:11px;padding:2px 8px;">View schedule &rarr;</button>' +
+                            '</div>' +
+                            '<div id="summary-agenda" style="border:1px solid var(--border,#333);border-radius:10px;background:var(--card-bg,#0f0f1e);padding:12px;color:var(--text-dim,#888);font-size:12px;text-align:center;">Loading agenda&hellip;</div>' +
                         '</div>' +
-                        '<div id="summary-agenda" style="border:1px solid var(--border,#333);border-radius:10px;background:var(--card-bg,#0f0f1e);padding:12px;color:var(--text-dim,#888);font-size:12px;text-align:center;">Loading agenda&hellip;</div>' +
-                    '</div>' +
-                '</div>' +
-
-                // Bottom row — Sales pipeline / Recent files / Inbox
-                '<div style="margin-top:24px;display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:18px;">' +
-                    '<div id="summary-sales-host">' + renderSalesPipelineHTML(d, leadsClick, estsClick) + '</div>' +
-                    '<div>' +
-                        '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">' +
-                            '<div style="font-size:11px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;">Recent Files</div>' +
+                        // Sales Pipeline
+                        '<div id="summary-sales-host">' + renderSalesPipelineHTML(d, leadsClick, estsClick) + '</div>' +
+                        // Recent Files
+                        '<div>' +
+                            '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">' +
+                                '<div style="font-size:11px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;">Recent Files</div>' +
+                            '</div>' +
+                            '<div id="summary-files" style="border:1px solid var(--border,#333);border-radius:10px;background:var(--card-bg,#0f0f1e);padding:12px;color:var(--text-dim,#888);font-size:12px;text-align:center;min-height:80px;">Loading recent files&hellip;</div>' +
                         '</div>' +
-                        '<div id="summary-files" style="border:1px solid var(--border,#333);border-radius:10px;background:var(--card-bg,#0f0f1e);padding:12px;color:var(--text-dim,#888);font-size:12px;text-align:center;min-height:80px;">Loading recent files&hellip;</div>' +
-                    '</div>' +
-                    '<div>' +
-                        '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">' +
-                            '<div style="font-size:11px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;">Inbox</div>' +
-                            '<button class="ee-btn ghost small" onclick="if (window.agxMessaging) window.agxMessaging.openInbox();" style="font-size:11px;padding:2px 8px;">Open inbox &rarr;</button>' +
+                        // Inbox
+                        '<div>' +
+                            '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">' +
+                                '<div style="font-size:11px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;">Inbox</div>' +
+                                '<button class="ee-btn ghost small" onclick="if (window.agxMessaging) window.agxMessaging.openInbox();" style="font-size:11px;padding:2px 8px;">Open inbox &rarr;</button>' +
+                            '</div>' +
+                            '<div id="summary-inbox" style="border:1px solid var(--border,#333);border-radius:10px;background:var(--card-bg,#0f0f1e);padding:18px;text-align:center;color:var(--text-dim,#888);font-size:12px;line-height:1.5;min-height:80px;">Loading inbox&hellip;</div>' +
                         '</div>' +
-                        '<div id="summary-inbox" style="border:1px solid var(--border,#333);border-radius:10px;background:var(--card-bg,#0f0f1e);padding:18px;text-align:center;color:var(--text-dim,#888);font-size:12px;line-height:1.5;min-height:80px;">Loading inbox&hellip;</div>' +
                     '</div>' +
                 '</div>';
 
