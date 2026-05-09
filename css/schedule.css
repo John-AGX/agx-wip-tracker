@@ -265,10 +265,17 @@
   flex: 1;
   display: grid;
   grid-template-columns: 0.5fr 1fr 1fr 1fr 1fr 1fr 0.5fr;
-  grid-auto-rows: auto;
+  /* Explicit row tracks: tight DOW header (auto) + 6 week rows each
+     getting an equal share of remaining vertical space (1fr) with a
+     78px floor so they don't crush. Replaces grid-auto-rows:auto
+     which left a tall empty strip below the grid on large viewports. */
+  grid-template-rows: auto repeat(6, minmax(78px, 1fr));
   gap: 1px;
   background: var(--border, #2e3346);
   min-height: 0;
+  /* If stacked entries push a week row past its 1fr share, scroll
+     instead of clipping or pushing other rows out of view. */
+  overflow-y: auto;
 }
 .sch-cal-grid.sch-no-weekends {
   grid-template-columns: 0fr 1fr 1fr 1fr 1fr 1fr 0fr;
