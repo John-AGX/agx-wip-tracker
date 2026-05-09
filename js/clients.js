@@ -1480,9 +1480,33 @@
 
   window.populateEstimateClientPicker = populateEstimateClientPicker;
   window.onEstimateClientPicked = onEstimateClientPicked;
+  // Promise wrapper around the cache hydration. Multiple callers can
+  // invoke ensureLoaded concurrently — they all share the same in-flight
+  // promise, so we only fire one /api/clients request even if the modal
+  // opens before the first response lands.
+  var _ensurePromise = null;
+  function ensureClientsLoaded() {
+    if (_clients && _clients.length) return Promise.resolve(_clients.slice());
+    if (_ensurePromise) return _ensurePromise;
+    if (!window.p86Api || !window.p86Api.isAuthenticated || !window.p86Api.isAuthenticated()) {
+      return Promise.resolve([]);
+    }
+    _ensurePromise = window.p86Api.clients.list().then(function(res) {
+      _clients = (res && res.clients) || [];
+      _ensurePromise = null;
+      return _clients.slice();
+    }).catch(function(err) {
+      _ensurePromise = null;
+      console.warn('[clients] ensureLoaded failed:', err && err.message);
+      return [];
+    });
+    return _ensurePromise;
+  }
+
   window.p86Clients = {
     getCached: function() { return _clients.slice(); },
     reload: reloadClientsCache,
+    ensureLoaded: ensureClientsLoaded,
     mountPicker: applyPickerToSelect
   };
 })();

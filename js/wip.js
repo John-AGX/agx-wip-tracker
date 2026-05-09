@@ -906,10 +906,14 @@ function renderWIPMain() {
         // picker hands back the client id which we stash in #jobClientId.
         // The free-text #jobClient input stays as a free-form fallback for
         // clients that aren't in the directory yet.
+        //
+        // Critical: the searchable widget reads from clients.js's internal
+        // _clients cache, NOT from the <select>'s options. We have to call
+        // p86Clients.ensureLoaded() first so the cache is populated; only
+        // then is mounting actually useful.
         function populateJobClientPicker(selectId, currentClientId) {
             var sel = document.getElementById(selectId);
             if (!sel) return;
-            var clients = (window.p86Clients && window.p86Clients.getCached) ? window.p86Clients.getCached() : [];
             var fill = function(list) {
                 var html = '<option value="">— Pick from directory (optional) —</option>';
                 list.slice().sort(function(a, b) {
@@ -922,15 +926,17 @@ function renderWIPMain() {
                 sel.innerHTML = html;
                 sel.value = currentClientId || '';
                 if (window.p86Clients && typeof window.p86Clients.mountPicker === 'function') {
-                    window.p86Clients.mountPicker(sel, function() {
-                        // mode arg: 'new' for the addJobModal, 'edit' for
-                        // the in-place job-info edit. The handler is wired
-                        // via the inline onchange attribute on the select.
+                    var handle = window.p86Clients.mountPicker(sel, function() {
+                        // The widget triggers a change event on the select
+                        // when a row is picked; the inline onchange attr
+                        // (onJobClientPicked) handles syncing the displayed
+                        // name + hidden id input.
                     });
+                    if (handle && typeof handle.refreshLabel === 'function') handle.refreshLabel();
                 }
             };
-            if (clients.length) {
-                fill(clients);
+            if (window.p86Clients && typeof window.p86Clients.ensureLoaded === 'function') {
+                window.p86Clients.ensureLoaded().then(fill);
             } else if (window.p86Api && window.p86Api.isAuthenticated && window.p86Api.isAuthenticated()) {
                 window.p86Api.clients.list().then(function(res) {
                     fill((res && res.clients) || []);
@@ -1070,10 +1076,13 @@ function renderWIPMain() {
                 });
             };
 
-            // Make sure clients are loaded before painting.
-            var cached = (window.p86Clients && window.p86Clients.getCached) ? window.p86Clients.getCached() : [];
-            if (cached.length) {
-                paint(cached);
+            // Make sure clients-directory cache is hydrated before painting.
+            // The searchable picker mounts on the select but reads its rows
+            // from clients.js's internal _clients cache — empty cache → empty
+            // popover. ensureLoaded() returns a promise that resolves once
+            // the cache is populated (or immediately if already cached).
+            if (window.p86Clients && typeof window.p86Clients.ensureLoaded === 'function') {
+                window.p86Clients.ensureLoaded().then(paint);
             } else if (window.p86Api && window.p86Api.isAuthenticated && window.p86Api.isAuthenticated()) {
                 window.p86Api.clients.list().then(function (res) {
                     paint((res && res.clients) || []);
