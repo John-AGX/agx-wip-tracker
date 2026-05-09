@@ -991,7 +991,16 @@
   }
 
   function wireTabSwitching() {
-    var tabs = document.querySelectorAll('.ws-right-tab');
+    // CRITICAL: scope to tabs that opt in via data-panel. Without
+    // this filter, the loop also overwrote the .onclick property of
+    // the estimate editor's tabs (Lines/Details/Scope/Attachments/
+    // Preview), which share the .ws-right-tab class but use
+    // data-ee-tab + their own inline onclick="switchEstimateEditorTab(
+    // '...')". The generic handler below reads data-panel — that
+    // attribute is null on estimate tabs, so the active class moved
+    // but the pane never swapped. Estimate tabs now keep their
+    // inline handler unmolested.
+    var tabs = document.querySelectorAll('.ws-right-tab[data-panel]');
     var rc = document.getElementById('wsRightContent');
     if (!rc) return;
     tabs.forEach(function(tab) {
