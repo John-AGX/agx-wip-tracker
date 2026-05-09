@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "agx-dev",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "port": 3000
+    },
+    {
+      "name": "ribbon-preview",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["preview/serve.js"],
+      "port": 8765
+    }
+  ]
+}

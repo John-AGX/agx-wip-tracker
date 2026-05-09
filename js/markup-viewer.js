@@ -1,4 +1,4 @@
-// P86 photo markup viewer.
+// Project 86 photo markup viewer.
 //
 // Bluebeam-style markup overlay: left vertical toolbar + canvas. Tools:
 // Select (move/delete), Arrow, Line, Rect, Ellipse, Draw, Text, Sticker.

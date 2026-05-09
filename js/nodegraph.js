@@ -1,5 +1,5 @@
 // ============================================================
-// P86 Node Graph v4 — Dynamo-Style with Category Browser
+// Project 86 Node Graph v4 — Dynamo-Style with Category Browser
 // Unit costs, sticky notes, custom costs, collapsible nodes
 // ============================================================
 (function(){

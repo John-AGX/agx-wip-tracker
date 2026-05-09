@@ -1,4 +1,4 @@
-// P86 in-house dialog helpers — replaces native confirm() / alert() /
+// Project 86 in-house dialog helpers — replaces native confirm() / alert() /
 // prompt() with styled modals that match the rest of the app.
 //
 // All three return Promises so callers can:

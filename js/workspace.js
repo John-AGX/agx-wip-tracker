@@ -1,5 +1,5 @@
 // ============================================================
-// P86 WIP Tracker — Workspace Spreadsheet Engine (v3)
+// Project 86 WIP Tracker — Workspace Spreadsheet Engine (v3)
 // v3 fix: click-to-select uses mousedown + preventDefault
 // so formula bar stays focused during reference mode
 // Enhanced with formula reference mode, grouped linkable fields,

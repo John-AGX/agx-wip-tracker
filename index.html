@@ -773,7 +773,7 @@
                                     <span id="ee-save-indicator" style="font-size:11px;color:var(--text-dim,#888);padding:0 6px;display:flex;align-items:center;font-weight:500;cursor:pointer;" onclick="saveEstimateNow()" title="Click to save now"><span style="font-weight:700;margin-right:5px;">&#x25CB;</span>No changes</span>
                                     <button class="ee-btn" onclick="saveEstimateNow()" title="Save the estimate now (also auto-saves on edit)">&#x1F4BE; Save</button>
                                     <!-- Plan/Build phase pill lives inside the AI panel header now —
-                                         right next to "📐 AG · P86 Estimator" so the toggle is where
+                                         right next to "📐 AG · Project 86 Estimator" so the toggle is where
                                          the user is already looking when deciding whether to plan or
                                          build. setEstimateAIPhase / getAIPhase still live on the
                                          estimate editor so the panel reads/writes the right estimate. -->
@@ -1790,7 +1790,7 @@
               <input id="leadEditor_estimated_revenue_low" type="number" step="100" placeholder="0" />
             </div>
             <!-- estimated_revenue_high stays in the schema but is hidden on
-                 the P86 side — we only display/use the single min value. -->
+                 the Project 86 side — we only display/use the single min value. -->
             <input id="leadEditor_estimated_revenue_high" type="hidden" />
             <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:10px;">
               <div><label style="display:block;">Source</label><input id="leadEditor_source" type="text" placeholder="Referral, BT, …" /></div>
@@ -2180,11 +2180,11 @@
     <script src="js/attachments.js?v=10"></script>
     <script src="js/markup-viewer.js?v=17"></script>
     <script src="js/pdf-viewer.js?v=3"></script>
-    <script src="js/admin.js?v=64"></script>
+    <script src="js/admin.js?v=65"></script>
     <script src="js/clients.js?v=13"></script>
     <script src="js/subs.js?v=8"></script>
     <script src="js/job-audit.js?v=3"></script>
-    <script src="js/leads.js?v=21"></script>
+    <script src="js/leads.js?v=22"></script>
     <script src="js/job-costs-import.js?v=3"></script>
     <script src="js/qb-costs-view.js?v=10"></script>
     <script src="js/insights.js?v=5"></script>
@@ -2192,11 +2192,11 @@
     <script src="js/app.js?v=48"></script>
     <script src="js/wip.js?v=63"></script>
     <script src="js/estimates.js?v=35"></script>
-    <script src="js/proposal.js?v=21"></script>
+    <script src="js/proposal.js?v=22"></script>
     <script src="js/estimate-editor.js?v=36"></script>
-    <script src="js/estimate-preview.js?v=9"></script>
+    <script src="js/estimate-preview.js?v=10"></script>
     <script src="js/bt-export.js?v=6"></script>
-    <script src="js/ai-panel.js?v=90"></script>
+    <script src="js/ai-panel.js?v=91"></script>
     <script src="js/tab-slider.js?v=1"></script>
 
     <script src="js/workspace.js?v=43"></script>
@@ -2211,7 +2211,7 @@
          <input type=email> and any element marked data-agx-copy. -->
     <script src="js/copy-button.js?v=1"></script>
 
-    <!-- P86 inline-SVG icon helper. Provides window.agxIcon(name, opts)
+    <!-- Project 86 inline-SVG icon helper. Provides window.agxIcon(name, opts)
          — 24 icons from Phosphor (MIT) + Heroicons (MIT). See
          scripts/build-agx-icons.js to regenerate. -->
     <script src="js/agx-icons.js?v=12"></script>
@@ -2293,7 +2293,7 @@
               <span class="ng-ribbon-icon">&#x1F3AF;</span>
               <span class="ng-ribbon-label">Workspace</span>
             </button>
-            <button class="ng-tbtn ng-ribbon-btn ng-fullscreen-graph-btn" id="ngFullscreenGraphBtn" title="Maximize — hide the P86 nav header to give the graph the entire viewport (toggle)">
+            <button class="ng-tbtn ng-ribbon-btn ng-fullscreen-graph-btn" id="ngFullscreenGraphBtn" title="Maximize — hide the Project 86 nav header to give the graph the entire viewport (toggle)">
               <span class="ng-ribbon-icon">&#x1F5D6;</span>
               <span class="ng-ribbon-label">Maximize</span>
             </button>
@@ -2307,7 +2307,7 @@
         <!-- AI group: Ask 86 (analyst) -->
         <div class="ng-ribbon-group ng-ribbon-group-ai">
           <div class="ng-ribbon-group-buttons">
-            <button class="ng-tbtn ng-ribbon-btn ng-ribbon-btn-ai" onclick="openJobAI()" title="Ask 86, P86's analyst">
+            <button class="ng-tbtn ng-ribbon-btn ng-ribbon-btn-ai" onclick="openJobAI()" title="Ask 86, Project 86's analyst">
               <span class="ng-ribbon-icon">&#x2728;</span>
               <span class="ng-ribbon-label">Ask 86</span>
             </button>

@@ -92,18 +92,18 @@ router.post('/test',
       const to = (req.body && req.body.to) || (req.user && req.user.email);
       if (!to) return res.status(400).json({ error: 'to required' });
       const subject = (req.body && req.body.subject) ||
-        'P86 email test — ' + new Date().toLocaleString();
+        'Project 86 email test — ' + new Date().toLocaleString();
       const html = (req.body && req.body.html) ||
         '<div style="font-family:Arial,sans-serif;color:#1f2937;">' +
-          '<h2 style="color:#4f8cff;margin:0 0 12px 0;">P86 notifications are working &#x2713;</h2>' +
-          '<p>This is a test email from the P86 WIP Tracker.</p>' +
+          '<h2 style="color:#4f8cff;margin:0 0 12px 0;">Project 86 notifications are working &#x2713;</h2>' +
+          '<p>This is a test email from the Project 86 WIP Tracker.</p>' +
           '<p style="color:#6b7280;font-size:13px;">' +
             'Sent by: ' + (req.user.name || req.user.email) + '<br/>' +
             'Server time: ' + new Date().toISOString() +
           '</p>' +
         '</div>';
       const text = (req.body && req.body.text) ||
-        'P86 notifications are working.\n\nSent by: ' + (req.user.name || req.user.email) +
+        'Project 86 notifications are working.\n\nSent by: ' + (req.user.name || req.user.email) +
         '\nServer time: ' + new Date().toISOString();
       const result = await sendEmail({
         to: to,

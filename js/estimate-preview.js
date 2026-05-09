@@ -1,4 +1,4 @@
-// P86 Estimate Preview — Phase C.
+// Project 86 Estimate Preview — Phase C.
 //
 // Live, in-tab render of the active estimate as a finished proposal letter.
 // Matches the existing AGX PDF format: logo header, client/job/date block,
@@ -753,7 +753,7 @@
       var ctx = buildContext(estimate);
       ctx.proposalAttachments = atts;
       var html = buildTakeoffHTML(estimate, template, ctx);
-      var title = 'Takeoff - ' + (estimate.title || 'P86').replace(/[^\w \-]+/g, '');
+      var title = 'Takeoff - ' + (estimate.title || 'Project 86').replace(/[^\w \-]+/g, '');
 
       var w = window.open('', '_blank');
       if (!w) { alert('Pop-up blocked. Allow pop-ups for this site to export the PDF.'); return; }

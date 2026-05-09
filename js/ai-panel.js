@@ -257,9 +257,9 @@
   // Preset prompts surfaced as quick-tap buttons. Different presets per
   // entity — estimates focus on scope/materials, jobs on margin/billing.
   var ESTIMATE_PRESETS = [
-    { label: 'Draft scope from photos', prompt: 'Look at the photos attached and draft a tight, bulleted scope of work for this estimate. Focus on the work P86 would actually be doing.' },
+    { label: 'Draft scope from photos', prompt: 'Look at the photos attached and draft a tight, bulleted scope of work for this estimate. Focus on the work Project 86 would actually be doing.' },
     { label: "What am I missing?",      prompt: 'Review the estimate as it stands. What line items, prep work, or costs am I likely missing? Propose the additions as line items so I can approve them in batch.' },
-    { label: 'Build my line items',     prompt: 'Propose the cost-side line items I should add for this scope. Use realistic P86 prices for Central Florida and slot each one under the right standard section. Make multiple parallel proposals so I can approve them in batch.' },
+    { label: 'Build my line items',     prompt: 'Propose the cost-side line items I should add for this scope. Use realistic Project 86 prices for Central Florida and slot each one under the right standard section. Make multiple parallel proposals so I can approve them in batch.' },
     { label: 'Tighten this estimate',   prompt: 'Audit my line items for duplicates, overlapping descriptions, lines that should be split into materials + labor, and lines under the wrong section. Propose updates / deletes / moves where you\'re confident.' },
     { label: 'Adjust margin',           prompt: 'I want this estimate at roughly 28% blended GP. Walk through each section and propose new section markup percentages to get there, calling out which lines drove the change.' }
   ];
@@ -471,7 +471,7 @@
           ctx.workspaceSheetIndex = nonQB.map(function(s) { return s.name || '(unnamed)'; });
           ctx.workspaceSheets = nonQB.slice(0, 5).map(function(s) {
             // Default preview: first 100 rows × 26 cols (A–Z). Covers
-            // virtually every real-world P86 sheet. If something deeper
+            // virtually every real-world Project 86 sheet. If something deeper
             // is needed, the assistant calls read_workspace_sheet_full
             // (an auto-applying read tool) to fetch the entire sheet
             // on demand without burning tokens preemptively.
@@ -651,7 +651,7 @@
       '</div>' +
       // Header — close button is the most prominent control on the left
       // (mirrors a typical drawer/sidebar UX) so it's never missed.
-      // P86-themed header — was old AGX dark green
+      // Project 86-themed header — was old AGX dark green
       // (#0d1f12 → #14351d). Charcoal gradient with a thin cyan
        // hairline matches the main site header. Trimmed vertical
        // padding 12px → 7px so the header sits ~10px shorter.
@@ -1110,7 +1110,7 @@
     if (trustBtn) trustBtn.style.display = 'none';
     var noticeEl = document.querySelector('#agx-ai-panel #ai-notice');
     if (noticeEl) {
-      if (isJobMode()) noticeEl.textContent = 'I\'m 86, P86\'s lead agent. I have range over the whole company — revenue, cost, production, WIP, margin, schedule, the node graph. I delegate to 47 (estimating) and HR (client + research). I can propose edits for you to approve before they apply.';
+      if (isJobMode()) noticeEl.textContent = 'I\'m 86, Project 86\'s lead agent. I have range over the whole company — revenue, cost, production, WIP, margin, schedule, the node graph. I delegate to 47 (estimating) and HR (client + research). I can propose edits for you to approve before they apply.';
       else if (isClientMode()) noticeEl.textContent = 'I\'m HR — 86\'s research + client-relations assistant. I validate addresses, gather property photos via web search, and capture context that helps 86 and 47 do their jobs. Simple writes apply automatically; restructural changes require approval.';
       else if (isStaffMode()) noticeEl.textContent = 'Chief of Staff — I\'m 86\'s handler. I observe 86 / 47 / HR, audit conversations, and propose skill-pack edits when the playbook needs to evolve. I tune the team rather than do their work.';
       else if (isIntakeMode()) noticeEl.textContent = 'New lead intake — I\'m 86. Tell me what the lead is (property name, scope, salesperson) and drop any photos. I\'ll dedupe against existing clients/leads, propose the new lead for your approval, and pre-load 47 with everything 47 needs to estimate.';
@@ -1122,7 +1122,7 @@
         if (phaseN === 'plan') {
           noticeEl.textContent = '🗺️ Plan mode — I\'ll think through scope with you and ask questions, but I won\'t propose line items until you flip to 🔨 Build.';
         } else {
-          noticeEl.textContent = 'I\'m 47 — P86\'s estimating hitman. I can draft scopes, add/edit/delete line items and sections, and tweak pricing. Every change is shown as a card with Approve / Reject before it lands.';
+          noticeEl.textContent = 'I\'m 47 — Project 86\'s estimating hitman. I can draft scopes, add/edit/delete line items and sections, and tweak pricing. Every change is shown as a card with Approve / Reject before it lands.';
         }
       }
     }
@@ -1231,7 +1231,7 @@
           : '';
       };
       if (isJobMode()) hint = '<strong style="color:var(--text,#fff);">' + hintIcon('dna') + '86 · Lead Agent</strong><br>Pick a preset below or ask anything about this job.<br><span style="font-size:11px;opacity:0.7;">I see contract, costs, COs, %complete, billing — plus the node graph wiring and QuickBooks cost lines.</span>';
-      else if (isClientMode()) hint = '<strong style="color:var(--text,#fff);">' + hintIcon('chart-pie') + 'HR · Customer Relations</strong><br>Tap <strong>Run full audit</strong> to clean up the directory in one pass — I\'ll split parent+property compounds, link unparented entries, merge dupes, and surface anything ambiguous for you.<br><span style="font-size:11px;opacity:0.7;">I know the P86 hierarchy: parent management company → property/community → CAM contact.</span>';
+      else if (isClientMode()) hint = '<strong style="color:var(--text,#fff);">' + hintIcon('chart-pie') + 'HR · Customer Relations</strong><br>Tap <strong>Run full audit</strong> to clean up the directory in one pass — I\'ll split parent+property compounds, link unparented entries, merge dupes, and surface anything ambiguous for you.<br><span style="font-size:11px;opacity:0.7;">I know the Project 86 hierarchy: parent management company → property/community → CAM contact.</span>';
       else if (isStaffMode()) hint = '<strong style="color:var(--text,#fff);">' + hintIcon('briefcase') + 'Chief of Staff</strong><br>I observe 47 / 86 / HR — usage, cost, conversations, skill packs — and I can propose skill-pack edits for you to approve.<br><span style="font-size:11px;opacity:0.7;">Conversation replay is still queued.</span>';
       else hint = '<strong style="color:var(--text,#fff);">' + hintIcon('detective') + '47 · Estimator</strong><br>Pick a preset or describe what you need. I can read the estimate, scope, client, and photos — and propose adds, edits, deletes, and pricing changes for you to approve.<br><span style="font-size:11px;opacity:0.7;">Try "tighten this estimate" or "build my line items".</span>';
       box.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;padding:20px 0;text-align:center;line-height:1.6;">' + hint + '</div>';
@@ -2071,7 +2071,7 @@
     }
     // Auto-tier read tools that hit the server-side /api/ai/exec-tool
     // endpoint. None of these need the estimate editor open — they\'re
-    // pure data lookups against the P86 database. Handled before the
+    // pure data lookups against the Project 86 database. Handled before the
     // editor checks so AG can run them from any context.
     if (AG_SERVER_AUTO_TOOLS[tu.name]) {
       return execAGAutoTool(tu.name, tu.input || {});
@@ -4079,7 +4079,7 @@
       }, 'image/jpeg', 0.92);
     };
 
-    // Prefer the rear camera when one exists (most useful for P86 —
+    // Prefer the rear camera when one exists (most useful for Project 86 —
     // PMs photographing buildings / SOWs / receipts in the field),
     // but accept any camera the device offers.
     var constraints = { video: { facingMode: { ideal: 'environment' } }, audio: false };

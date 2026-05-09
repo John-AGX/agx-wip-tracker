@@ -1,4 +1,4 @@
-// P86 Leads module — sales pipeline rendered on the Estimates tab.
+// Project 86 Leads module — sales pipeline rendered on the Estimates tab.
 //
 // Phase 1: list + create/edit/delete with the General fields. Status pipeline
 // is the spine: New -> In Progress -> Sent -> Sold | Lost | No Opportunity.
@@ -29,7 +29,7 @@
     if (Math.abs(n) >= 1e3) return '$' + (n / 1e3).toFixed(0) + 'k';
     return '$' + Math.round(n).toLocaleString();
   }
-  // P86-side only uses the single estimated revenue figure (the min).
+  // Project 86-side only uses the single estimated revenue figure (the min).
   // Kept the same function name and accepts (low, high) for back-compat
   // with existing call sites — the high arg is ignored.
   function fmtRevenueRange(low /*, high */) {
@@ -1344,7 +1344,7 @@
     if (!lead) return;
     if (lead.title) setField('title', lead.title);
     if (lead.status) setField('status', lead.status);
-    // Estimated revenue: P86-side only uses the min/low value — display
+    // Estimated revenue: Project 86-side only uses the min/low value — display
     // a single number on our forms. The schema asks for both, but we
     // ignore the high.
     if (lead.estimated_revenue_low) setField('estimated_revenue_low', lead.estimated_revenue_low);

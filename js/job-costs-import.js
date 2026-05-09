@@ -1,4 +1,4 @@
-// P86 QuickBooks weekly Detailed Job Costs importer.
+// Project 86 QuickBooks weekly Detailed Job Costs importer.
 //
 // Drops a QB "Project costs detail" xlsx into the WIP tracker, parses
 // the per-job cost lines, and writes a dated `QB Costs YYYY-MM-DD`

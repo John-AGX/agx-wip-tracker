@@ -1,4 +1,4 @@
-// P86 Copy-to-Clipboard helper.
+// Project 86 Copy-to-Clipboard helper.
 //
 // Auto-attaches a small clipboard button (📋) to:
 //   • <input type="email">

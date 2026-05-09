@@ -259,7 +259,7 @@ router.put('/users/:id/password', requireAuth, requireRole('admin'), async (req,
     );
 
     // Email the user their new password — security tradeoff is
-    // deliberate: P86 is small + admin-driven. Auth flow is "admin
+    // deliberate: Project 86 is small + admin-driven. Auth flow is "admin
     // hands you credentials" not "you self-serve via reset link".
     // Future flow with token-based resets would replace this.
     try {
