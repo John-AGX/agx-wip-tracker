@@ -9,14 +9,20 @@
 //
 // URL grammar:
 //   /                                 default landing (login routes here)
+//   /summary                          Summary landing page
+//   /files                            personal Files tab (per-user folder)
 //   /wip                              WIP list
 //   /wip/archived                     archived jobs view
 //   /wip/jobs/:jobId                  job detail (default sub-tab)
 //   /wip/jobs/:jobId/:jobSub          job detail at specific sub-tab
 //   /estimates                        estimates landing (current active sub)
-//   /estimates/:sub                   sub: list | leads | clients | subs
+//   /estimates/:sub                   sub: list | leads
 //   /estimates/leads/:leadId          lead detail view open
 //   /estimates/edit/:estId            estimate editor open
+//   /clients                          clients directory (renders inside Estimates pane)
+//   /clients/:clientId                client editor modal open
+//   /subs                             subs/vendors directory
+//   /subs/:subId                      sub editor modal open
 //   /schedule
 //   /insights
 //   /admin
@@ -50,7 +56,11 @@
     'users', 'roles', 'email', 'templates', 'agents',
     'jobs', 'materials', 'metrics', 'sms'
   ];
-  var KNOWN_TOP_TABS = ['wip', 'estimates', 'schedule', 'insights', 'admin'];
+  // 'my-files' is the internal tab id (matches the pane element id and
+  // TAB_TITLES key); the URL slug for it is '/files' — friendlier and
+  // matches the header icon's purpose. parsePath/serializeRoute do the
+  // translation.
+  var KNOWN_TOP_TABS = ['summary', 'my-files', 'wip', 'estimates', 'schedule', 'insights', 'admin'];
 
   // ── URL <-> route object ──────────────────────────────────────
   function parsePath(pathname) {
@@ -58,6 +68,23 @@
     var route = { top: null };
     if (!parts.length) return route;
     var top = parts[0];
+    // URL slug '/files' maps to internal tab id 'my-files'.
+    if (top === 'files') top = 'my-files';
+    // Pseudo-top-level: /clients[/:id] and /subs[/:id] route into the
+    // Estimates tab UI with the matching sub-tab open. The sub-tabs
+    // still live under #estimates internally — these URLs are an alias
+    // so callers see clients and subs as first-class destinations
+    // without a /estimates/ prefix.
+    if (top === 'clients') {
+      route.top = 'estimates'; route.estSub = 'clients';
+      if (parts[1]) route.clientId = parts[1];
+      return route;
+    }
+    if (top === 'subs') {
+      route.top = 'estimates'; route.estSub = 'subs';
+      if (parts[1]) route.subId = parts[1];
+      return route;
+    }
     if (KNOWN_TOP_TABS.indexOf(top) === -1) return route;
     route.top = top;
     if (top === 'wip') {
@@ -72,6 +99,9 @@
       }
     } else if (top === 'estimates') {
       // /estimates/edit/:id  OR  /estimates/leads/:id  OR  /estimates/:sub
+      // Note: clients and subs paths are handled above as pseudo-top-level
+      // routes (/clients[/:id], /subs[/:id]); they do NOT live under
+      // /estimates/ in the URL even though their UI does.
       if (parts[1] === 'edit' && parts[2]) {
         route.estId = parts[2];
       } else if (parts[1] === 'leads' && parts[2]) {
@@ -119,11 +149,25 @@
       return '/wip';
     }
     if (route.top === 'estimates') {
+      // Clients and subs surface as their own root paths even though
+      // the UI lives under #estimates — keeps URLs aligned with how
+      // users think about these entities.
+      if (route.estSub === 'clients') {
+        return route.clientId
+          ? '/clients/' + encodeURIComponent(route.clientId)
+          : '/clients';
+      }
+      if (route.estSub === 'subs') {
+        return route.subId
+          ? '/subs/' + encodeURIComponent(route.subId)
+          : '/subs';
+      }
       if (route.estId) return '/estimates/edit/' + encodeURIComponent(route.estId);
       if (route.leadId) return '/estimates/leads/' + encodeURIComponent(route.leadId);
       if (route.estSub) return '/estimates/' + route.estSub;
       return '/estimates';
     }
+    if (route.top === 'my-files') return '/files';
     if (route.top === 'admin') {
       if (route.adSub === 'agents') {
         if (route.adAgentConvKey) return '/admin/agents/conversations/' + encodeURIComponent(route.adAgentConvKey);
@@ -140,8 +184,16 @@
   // (active classes) so it stays in sync with whatever the nav
   // functions just did.
   function captureRouteFromDOM() {
+    // Primary signal: which tab-btn is active. Summary + My Files have
+    // no top-level .tab-btn (they're reached via the 86 logo + the
+    // header folder icon respectively), so fall back to the active
+    // .tab-content pane id when no tab-btn is highlighted.
     var topBtn = document.querySelector('.tab-btn.active');
     var top = topBtn ? topBtn.getAttribute('data-tab') : null;
+    if (!top) {
+      var activePane = document.querySelector('.tab-content.active');
+      if (activePane && activePane.id) top = activePane.id;
+    }
     if (!top || KNOWN_TOP_TABS.indexOf(top) === -1) return { top: null };
     var route = { top: top };
     if (top === 'wip') {
@@ -176,6 +228,22 @@
           var lid = window.agxLeads.getOpenId();
           if (lid) { route.estSub = 'leads'; route.leadId = lid; return route; }
         }
+      }
+      if (estSub === 'clients') {
+        // Client editor modal — openModal() adds .active to the modal
+        // shell, the open client's id is parked in the hidden input.
+        var clientModal = document.getElementById('clientEditorModal');
+        var clientOpen = clientModal && clientModal.classList.contains('active');
+        var clientIdInput = document.getElementById('clientEditor_id');
+        var cid = clientIdInput && clientIdInput.value ? clientIdInput.value : null;
+        if (clientOpen && cid) { route.estSub = 'clients'; route.clientId = cid; return route; }
+      }
+      if (estSub === 'subs') {
+        // Sub directory modal — built on the fly with id=subDirModal,
+        // we stash the open sub's id on the modal element via dataset.
+        var subModal = document.getElementById('subDirModal');
+        var subId = subModal && subModal.dataset ? subModal.dataset.subId : null;
+        if (subModal && subId) { route.estSub = 'subs'; route.subId = subId; return route; }
       }
       if (estSub && KNOWN_EST_SUBS.indexOf(estSub) !== -1) route.estSub = estSub;
     } else if (top === 'admin') {
@@ -320,6 +388,14 @@
             var origCloseLead = window.closeLeadDetail.__agxRouterOrig || window.closeLeadDetail;
             origCloseLead();
           }
+        } else if (route.top === 'estimates' && route.estSub === 'clients' && route.clientId &&
+                   typeof window.openEditClientModal === 'function') {
+          var origOpenClient = window.openEditClientModal.__agxRouterOrig || window.openEditClientModal;
+          origOpenClient(route.clientId);
+        } else if (route.top === 'estimates' && route.estSub === 'subs' && route.subId &&
+                   window.agxSubs && typeof window.agxSubs.openEdit === 'function') {
+          var origOpenSub = window.agxSubs.openEdit.__agxRouterOrig || window.agxSubs.openEdit;
+          origOpenSub(route.subId);
         } else if (route.top === 'admin' && route.adSub === 'agents') {
           // Three drill-downs share /admin/agents — pick the right one
           // by which route field is set, then call switchAgentsView for
@@ -386,6 +462,7 @@
       'editEstimate',
       'openEditLeadModal',
       'closeLeadDetail',
+      'openEditClientModal',
       'showArchivedJobs',
       'openAgentConversation',
       'closeAgentConversation',
@@ -395,6 +472,30 @@
       'cancelNewEval',
       'switchAgentsView'
     ].forEach(wrapNav);
+
+    // agxSubs.openEdit is namespaced (not on window directly), so wrap
+    // it manually with the same shape as wrapNav. agxSubs may not be
+    // initialized yet at boot; retry briefly until it shows up.
+    function wrapSubsOpenEdit() {
+      if (!window.agxSubs || typeof window.agxSubs.openEdit !== 'function') return false;
+      var orig = window.agxSubs.openEdit;
+      if (orig.__agxRouterWrapped) return true;
+      var wrapped = function () {
+        var r = orig.apply(this, arguments);
+        if (!replaying) scheduleSync();
+        return r;
+      };
+      wrapped.__agxRouterWrapped = true;
+      wrapped.__agxRouterOrig = orig;
+      window.agxSubs.openEdit = wrapped;
+      return true;
+    }
+    if (!wrapSubsOpenEdit()) {
+      var subsAttempts = 0;
+      var subsIv = setInterval(function () {
+        if (wrapSubsOpenEdit() || ++subsAttempts > 30) clearInterval(subsIv);
+      }, 200);
+    }
 
     window.addEventListener('popstate', onPopState);
 

@@ -199,6 +199,9 @@
     var modal = document.createElement('div');
     modal.id = 'subDirModal';
     modal.className = 'modal active';
+    // Stash the editing id on the modal so the URL router (router.js)
+    // can detect which sub is open without reaching into the closure.
+    if (sub && sub.id) modal.dataset.subId = sub.id;
     modal.innerHTML = buildSubModalHTML(sub);
     document.body.appendChild(modal);
 
