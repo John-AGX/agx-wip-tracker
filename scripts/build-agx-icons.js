@@ -95,7 +95,9 @@ const MAP = {
   // 86 → DNA helix. Phosphor bold weight to read at small sizes
   // against the dark cyan-tinted panel header background.
   'detective':       'phosphor/detective-bold',
-  'dna':             'phosphor/dna-bold'
+  'dna':             'phosphor/dna-bold',
+  // Folder glyph for the My Files header button.
+  'folder':          'heroicons/folder'
 };
 
 const HEADER = `// AGX Icon Helper — inline SVG icons (auto-generated).
