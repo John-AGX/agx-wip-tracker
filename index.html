@@ -63,7 +63,6 @@
                     <button class="tab-btn" data-tab="estimates" data-est-subtab="list" data-virtual-tab="estimates" data-agx-icon="estimates" data-cap="ESTIMATES_VIEW">Estimates</button>
                     <button class="tab-btn" data-tab="schedule" data-agx-icon="schedule">Schedule</button>
                     <button class="tab-btn" data-tab="wip" data-agx-icon="wip" data-cap="JOBS_VIEW_ALL JOBS_VIEW_ASSIGNED JOBS_EDIT_ANY JOBS_EDIT_OWN">WIP</button>
-                    <button class="tab-btn" data-tab="my-files" data-agx-icon="attachments">Files</button>
                     <button class="tab-btn" data-tab="insights" data-agx-icon="insights" data-cap="INSIGHTS_VIEW">Insights</button>
                     <button class="tab-btn" data-tab="admin" data-agx-icon="admin" data-admin-only style="display:none;">Admin</button>
                 </nav>
@@ -74,6 +73,14 @@
                          attribute set by JS; when count is 0 the dot
                          is hidden via CSS. Clicking opens
                          #notifications-panel. -->
+                    <!-- My Files icon button — replaces the former Files
+                         tab in the top nav. Click jumps straight into
+                         the my-files tab pane. Personal files are a
+                         per-user utility, not a team page, so they sit
+                         in the right cluster next to bell + directory. -->
+                    <button id="header-files-btn" class="header-icon-btn" type="button" title="My Files"
+                            data-agx-icon="attachments"
+                            onclick="if (typeof window.switchTab === 'function') window.switchTab('my-files');"></button>
                     <button id="header-notif-btn" class="header-icon-btn" type="button" title="Notifications" aria-haspopup="true" aria-expanded="false" data-agx-icon="bell">
                         <span class="header-notif-dot" data-count="0"></span>
                     </button>
