@@ -1896,9 +1896,115 @@
     return new Date();
   }
 
+  // ── Job-detail weather widget ──────────────────────────────
+  // Renders a 7-day forecast row into `mount` for a single job.
+  // Used by the WIP job-overview tab so PMs can see the week
+  // ahead at the job's address without bouncing to the schedule.
+  // Self-contained: handles its own fetch, doesn't read or mutate
+  // the schedule's _state.weather. (Schedule's cache is keyed by
+  // visible-grid jobs, which may not include this one.)
+  function renderJobWeatherWidget(mount, jobId, opts) {
+    if (!mount || !jobId) return;
+    opts = opts || {};
+    var title = opts.title || 'Weather at this job';
+    mount.innerHTML =
+      '<div class="sch-job-wx-widget">' +
+        '<div class="sch-job-wx-header">' +
+          '<span class="sch-job-wx-title">' + escapeHTML(title) + '</span>' +
+          '<span class="sch-job-wx-source">7-day · NWS</span>' +
+        '</div>' +
+        '<div class="sch-job-wx-body" id="schJobWxBody-' + escapeAttr(jobId) + '">' +
+          '<div class="sch-job-wx-loading">Loading forecast…</div>' +
+        '</div>' +
+      '</div>';
+    var body = mount.querySelector('#schJobWxBody-' + (CSS && CSS.escape ? CSS.escape(jobId) : jobId));
+    if (!body) body = mount.querySelector('.sch-job-wx-body'); // fallback for ids w/ unsafe chars
+
+    if (!window.agxApi || !window.agxApi.weather || !window.agxApi.isAuthenticated || !window.agxApi.isAuthenticated()) {
+      body.innerHTML = '<div class="sch-job-wx-empty">Sign in to see weather.</div>';
+      return;
+    }
+    window.agxApi.weather.jobs([jobId]).then(function(res) {
+      var w = res && res.weather && res.weather[jobId];
+      paintJobWeatherBody(body, w);
+    }).catch(function(err) {
+      body.innerHTML = '<div class="sch-job-wx-empty">Weather unavailable: ' +
+        escapeHTML((err && err.message) || 'unknown') + '</div>';
+    });
+  }
+
+  function paintJobWeatherBody(body, w) {
+    if (!body) return;
+    if (!w) {
+      body.innerHTML = '<div class="sch-job-wx-empty">No forecast data.</div>';
+      return;
+    }
+    if (w.status === 'no_address') {
+      body.innerHTML = '<div class="sch-job-wx-empty">' +
+        'Add a job address (or a building address) to see weather here.' +
+      '</div>';
+      return;
+    }
+    if (w.status === 'failed') {
+      body.innerHTML = '<div class="sch-job-wx-empty">' +
+        'Could not match this address: ' + escapeHTML(w.address || '') +
+      '</div>';
+      return;
+    }
+    if (w.status === 'error') {
+      body.innerHTML = '<div class="sch-job-wx-empty">' +
+        'Weather service unavailable.' +
+      '</div>';
+      return;
+    }
+    if (w.status !== 'ok' || !Array.isArray(w.days) || !w.days.length) {
+      body.innerHTML = '<div class="sch-job-wx-empty">No forecast data.</div>';
+      return;
+    }
+    // Day cards — rendered as a horizontal strip. Each card carries
+    // a risk-colored top border so red days pop visually. Hover for
+    // the full NWS summary text.
+    var cards = w.days.map(function(d) {
+      var iconClass = 'sch-job-wx-icon sch-wx-' + d.risk;
+      var icon = weatherIconForRisk(d.risk);
+      var dateLabel = (function() {
+        var dd = parseISODate(d.date);
+        if (!dd) return d.date;
+        return DOW_LABELS[dd.getDay()] + ' ' + (dd.getMonth() + 1) + '/' + dd.getDate();
+      })();
+      var temp = (d.tempHigh != null) ? d.tempHigh + '°' : '—';
+      var lo = (d.tempLow != null) ? d.tempLow + '°' : '';
+      var precip = d.precipPct ? d.precipPct + '% rain' : '';
+      var wind = d.windMph ? d.windMph + ' mph' : '';
+      var meta = [precip, wind].filter(Boolean).join(' · ');
+      return '<div class="sch-job-wx-card sch-wx-' + d.risk + '" title="' +
+              escapeAttr((d.summary || '') +
+                         (d.tempHigh != null ? ' · ' + d.tempHigh + '°' : '') +
+                         (d.tempLow != null ? ' / ' + d.tempLow + '°' : '')) + '">' +
+        '<div class="sch-job-wx-card-date">' + escapeHTML(dateLabel) + '</div>' +
+        '<div class="' + iconClass + '">' + icon + '</div>' +
+        '<div class="sch-job-wx-card-temp">' +
+          '<span class="sch-job-wx-card-hi">' + escapeHTML(temp) + '</span>' +
+          (lo ? ' <span class="sch-job-wx-card-lo">' + escapeHTML(lo) + '</span>' : '') +
+        '</div>' +
+        '<div class="sch-job-wx-card-summary">' + escapeHTML(d.summary || '') + '</div>' +
+        (meta ? '<div class="sch-job-wx-card-meta">' + escapeHTML(meta) + '</div>' : '') +
+      '</div>';
+    }).join('');
+    var addrNote = w.address
+      ? '<div class="sch-job-wx-addr">📍 ' + escapeHTML(w.address) + '</div>'
+      : '';
+    body.innerHTML = '<div class="sch-job-wx-strip">' + cards + '</div>' + addrNote;
+  }
+
   // ── Public API ─────────────────────────────────────────────
   window.renderSchedule = renderSchedule;
   window.scheduleAddEntry = function(jobId, dateISO) {
     openEntryEditor(null, dateISO, jobId);
+  };
+  // Surface the job-detail widget so wip.js (and any other module
+  // that wants a per-job forecast) can drop it into a container.
+  window.agxWeather = {
+    renderJobWidget: renderJobWeatherWidget
   };
 })();

@@ -1311,6 +1311,20 @@ function renderWIPMain() {
             }
             container.appendChild(btnRow);
 
+            // ── Weather widget ──
+            // 7-day NWS forecast for the job's address. Self-contained:
+            // schedule.js owns the fetch + render. We just give it a
+            // mount point. Renders muted placeholders if the job has no
+            // address yet so the widget never shouts "broken" — it just
+            // explains why the data isn't there.
+            if (window.agxWeather && typeof window.agxWeather.renderJobWidget === 'function') {
+                var wxMount = document.createElement('div');
+                wxMount.style.cssText = 'margin:0 0 14px 0;';
+                wxMount.id = 'job-overview-weather';
+                container.appendChild(wxMount);
+                window.agxWeather.renderJobWidget(wxMount, jobId);
+            }
+
             // ── Building cards ──
             const buildings = appData.buildings.filter(b => b.jobId === jobId);
             if (buildings.length > 0) {

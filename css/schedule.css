@@ -889,6 +889,108 @@ body.light-mode .sch-day-row-wx.sch-wx-red {
   text-overflow: ellipsis;
 }
 
+/* ─── Job-detail weather widget ─────────────────────────────
+   7-day NWS forecast row that mounts in the WIP job-overview
+   tab. One card per day; risk color drives a top border so red
+   days pop visually without needing the user to read every
+   tile. Cards scroll horizontally on narrow viewports rather
+   than crushing. */
+.sch-job-wx-widget {
+  background: var(--surface, #181820);
+  border: 1px solid var(--border, #2e3346);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.sch-job-wx-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.sch-job-wx-title {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-dim, #888);
+}
+.sch-job-wx-source {
+  font-size: 10px;
+  color: var(--text-dim, #888);
+  font-weight: 500;
+}
+.sch-job-wx-loading,
+.sch-job-wx-empty {
+  padding: 14px 4px;
+  font-size: 12px;
+  color: var(--text-dim, #888);
+  font-style: italic;
+}
+.sch-job-wx-strip {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+.sch-job-wx-card {
+  flex: 1 0 96px;
+  min-width: 96px;
+  padding: 8px 8px 6px;
+  border-radius: 6px;
+  background: var(--card-bg, #0f0f1e);
+  border: 1px solid var(--border, #2e3346);
+  border-top-width: 3px;
+  text-align: center;
+}
+.sch-job-wx-card.sch-wx-green  { border-top-color: #34d399; }
+.sch-job-wx-card.sch-wx-yellow { border-top-color: #fbbf24; }
+.sch-job-wx-card.sch-wx-red    { border-top-color: #f87171; }
+.sch-job-wx-card-date {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--text-dim, #888);
+  margin-bottom: 2px;
+}
+.sch-job-wx-icon {
+  font-size: 22px;
+  line-height: 1.1;
+  margin: 2px 0 4px;
+}
+.sch-job-wx-card-temp {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text, #e4e6f0);
+  font-family: 'SF Mono', Consolas, monospace;
+}
+.sch-job-wx-card-hi { color: var(--text, #e4e6f0); }
+.sch-job-wx-card-lo {
+  color: var(--text-dim, #888);
+  font-weight: 500;
+  font-size: 11px;
+}
+.sch-job-wx-card-summary {
+  font-size: 10px;
+  color: var(--text-dim, #aaa);
+  margin-top: 4px;
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sch-job-wx-card-meta {
+  font-size: 10px;
+  color: var(--text-dim, #888);
+  margin-top: 2px;
+}
+.sch-job-wx-addr {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--text-dim, #888);
+  font-style: italic;
+}
+
 /* Compact icon-style toggle for show/hide weekends. Replaces the
    old checkbox+label that was eating header space and rendering
    as block-level uppercase due to global label rules. */
