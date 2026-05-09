@@ -191,7 +191,13 @@
     update: function(id, payload) { return put('/api/attachments/' + encodeURIComponent(id), payload); },
     remove: function(id) { return del('/api/attachments/' + encodeURIComponent(id)); },
     // Cross-entity move. payload = { entity_type, entity_id, folder? }.
-    move: function(id, payload) { return post('/api/attachments/' + encodeURIComponent(id) + '/move', payload); }
+    move: function(id, payload) { return post('/api/attachments/' + encodeURIComponent(id) + '/move', payload); },
+    // Cross-entity most-recent uploads — drives the "Recent Files"
+    // summary widget. limit defaults to 10 server-side; cap at 24.
+    recent: function(limit) {
+      var q = limit ? '?limit=' + encodeURIComponent(limit) : '';
+      return get('/api/attachments/recent' + q);
+    }
   };
 
   var leads = {

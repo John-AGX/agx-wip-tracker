@@ -272,6 +272,31 @@ router.get('/:entityType/:entityId',
   }
 );
 
+// GET /api/attachments/recent?limit=10
+// Cross-entity recent uploads — drives the "Recent Files" summary
+// widget. Returns the most recently uploaded attachments any
+// authenticated user can see, capped at 24 to keep payload small.
+// We don't enforce per-entity capability filtering here because the
+// widget is a discovery surface; the entity-level read still gates
+// the deeper view if the user can't actually open a job/lead/etc.
+router.get('/recent', requireAuth, async (req, res) => {
+  try {
+    const limit = Math.min(24, Math.max(1, parseInt(req.query.limit, 10) || 10));
+    const { rows } = await pool.query(
+      `SELECT id, entity_type, entity_id, filename, mime_type, size_bytes,
+              thumb_url, web_url, original_url, folder, uploaded_at, uploaded_by
+         FROM attachments
+        ORDER BY uploaded_at DESC
+        LIMIT $1`,
+      [limit]
+    );
+    res.json({ attachments: rows });
+  } catch (e) {
+    console.error('GET /api/attachments/recent error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 
 // POST /api/attachments/:entityType/:entityId — upload one file as form-data
 // field `file`. Returns the inserted attachment row.

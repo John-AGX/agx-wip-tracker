@@ -643,14 +643,166 @@
                         '</div>' +
                         '<div id="summary-agenda" style="border:1px solid var(--border,#333);border-radius:10px;background:var(--card-bg,#0f0f1e);padding:12px;color:var(--text-dim,#888);font-size:12px;text-align:center;">Loading agenda&hellip;</div>' +
                     '</div>' +
+                '</div>' +
+
+                // Bottom row — Sales pipeline / Recent files / Inbox
+                '<div style="margin-top:24px;display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:18px;">' +
+                    '<div id="summary-sales-host">' + renderSalesPipelineHTML(d, leadsClick, estsClick) + '</div>' +
+                    '<div>' +
+                        '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">' +
+                            '<div style="font-size:11px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;">Recent Files</div>' +
+                        '</div>' +
+                        '<div id="summary-files" style="border:1px solid var(--border,#333);border-radius:10px;background:var(--card-bg,#0f0f1e);padding:12px;color:var(--text-dim,#888);font-size:12px;text-align:center;min-height:80px;">Loading recent files&hellip;</div>' +
+                    '</div>' +
+                    '<div>' +
+                        '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">' +
+                            '<div style="font-size:11px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;">Inbox</div>' +
+                        '</div>' +
+                        renderInboxStubHTML() +
+                    '</div>' +
                 '</div>';
 
             // Async-fetch + render the agenda. Failures degrade to a
             // "no schedule entries" empty state — the rest of the page
             // is already painted.
             renderSummaryAgenda();
+            renderSummaryRecentFiles();
         }
         window.renderSummaryDashboard = renderSummaryDashboard;
+
+        // ── Sales pipeline widget ─────────────────────────────────────
+        // Open leads + pending estimates rolled up into a small
+        // pipeline view. Uses appData entirely; no backend changes.
+        function renderSalesPipelineHTML(d, leadsClick, estsClick) {
+            var leads = (d.leads || []);
+            var openLeads = leads.filter(function(l) {
+                var s = (l && l.status || '').toLowerCase();
+                return s !== 'closed' && s !== 'lost' && s !== 'archived' && s !== 'won';
+            });
+            var pipelineValue = openLeads.reduce(function(sum, l) {
+                return sum + Number(l.estimatedValue || l.estimated_value || l.value || 0);
+            }, 0);
+            var proposalsOut = (d.estimates || []).filter(function(e) {
+                var s = (e && e.bt_export_status || '').toLowerCase();
+                return s === 'sent' || s === 'submitted' || s === 'pending';
+            }).length;
+            var thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
+            var wonRecent = leads.filter(function(l) {
+                if (!l) return false;
+                var s = (l.status || '').toLowerCase();
+                if (s !== 'won' && s !== 'sold') return false;
+                var ts = new Date(l.updatedAt || l.updated_at || l.dateAdded || 0).getTime();
+                return isFinite(ts) && ts >= thirtyDaysAgo;
+            }).length;
+
+            // Hot leads — recently-touched open leads, top 5.
+            var hotLeads = openLeads.slice().sort(function(a, b) {
+                var ta = new Date(a.updatedAt || a.updated_at || a.dateAdded || 0).getTime();
+                var tb = new Date(b.updatedAt || b.updated_at || b.dateAdded || 0).getTime();
+                return tb - ta;
+            }).slice(0, 5);
+
+            function fmtMoney(v) {
+                if (!v || !isFinite(v)) return '—';
+                if (v >= 1000) return '$' + (Math.round(v / 100) / 10).toLocaleString() + 'k';
+                return '$' + Math.round(v).toLocaleString();
+            }
+
+            var rows = '';
+            if (!hotLeads.length) {
+                rows = '<div style="padding:18px;text-align:center;color:var(--text-dim,#888);font-size:12px;">No open leads in the pipeline.</div>';
+            } else {
+                hotLeads.forEach(function(l) {
+                    var title = l.title || l.name || 'Lead';
+                    var sub = l.client || l.community || (l.status ? 'status: ' + l.status : '');
+                    var val = Number(l.estimatedValue || l.estimated_value || l.value || 0);
+                    rows += '<button class="ee-btn" onclick="' + leadsClick + '" style="text-align:left;padding:8px 12px;background:transparent;border:none;border-bottom:1px solid var(--border,#222);cursor:pointer;display:flex;align-items:center;gap:10px;width:100%;">' +
+                        '<div style="flex:1;min-width:0;">' +
+                            '<div style="font-size:12px;color:var(--text,#fff);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTML(title) + '</div>' +
+                            (sub ? '<div style="font-size:10px;color:var(--text-dim,#888);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTML(sub) + '</div>' : '') +
+                        '</div>' +
+                        '<span style="font-size:11px;color:var(--accent,#22d3ee);font-variant-numeric:tabular-nums;flex-shrink:0;">' + fmtMoney(val) + '</span>' +
+                    '</button>';
+                });
+            }
+
+            return '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">' +
+                    '<div style="font-size:11px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;">Sales Pipeline</div>' +
+                    '<button class="ee-btn ghost small" onclick="' + leadsClick + '" style="font-size:11px;padding:2px 8px;">All leads &rarr;</button>' +
+                '</div>' +
+                '<div style="border:1px solid var(--border,#333);border-radius:10px;background:var(--card-bg,#0f0f1e);overflow:hidden;">' +
+                    // Stat strip
+                    '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--border,#222);">' +
+                        salesStat('Pipeline',     fmtMoney(pipelineValue), '#22d3ee') +
+                        salesStat('Proposals out', proposalsOut,           '#fbbf24') +
+                        salesStat('Won 30d',       wonRecent,              '#34d399') +
+                    '</div>' +
+                    '<div style="padding-top:1px;background:var(--border,#222);"></div>' +
+                    rows +
+                '</div>';
+        }
+        function salesStat(label, value, color) {
+            return '<div style="background:var(--card-bg,#0f0f1e);padding:10px 12px;text-align:center;">' +
+                '<div style="font-size:9px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.4px;font-weight:600;margin-bottom:2px;">' + label + '</div>' +
+                '<div style="font-size:18px;font-weight:700;color:' + color + ';font-variant-numeric:tabular-nums;line-height:1;">' + value + '</div>' +
+            '</div>';
+        }
+
+        // ── Recent Files widget ───────────────────────────────────────
+        // Cross-entity recent uploads, fetched from /api/attachments/
+        // recent. Image attachments render with their thumb_url; non-
+        // image docs render with a colored kind chip + filename.
+        function renderSummaryRecentFiles() {
+            var host = document.getElementById('summary-files');
+            if (!host) return;
+            if (!window.agxApi || !window.agxApi.attachments || typeof window.agxApi.attachments.recent !== 'function') {
+                host.innerHTML = '<div style="padding:14px;text-align:center;color:var(--text-dim,#888);font-size:12px;">Files not available offline.</div>';
+                return;
+            }
+            window.agxApi.attachments.recent(8).then(function(res) {
+                var atts = (res && res.attachments) || [];
+                if (!atts.length) {
+                    host.innerHTML = '<div style="padding:18px;text-align:center;color:var(--text-dim,#888);font-size:12px;">No files uploaded yet.</div>';
+                    return;
+                }
+                var html = '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(72px,1fr));gap:6px;padding:8px;">';
+                atts.forEach(function(a) {
+                    var isImg = a.mime_type && /^image\//i.test(a.mime_type) && a.thumb_url;
+                    var fname = (a.filename || '').replace(/"/g, '&quot;');
+                    var entity = a.entity_type ? (a.entity_type.charAt(0).toUpperCase() + a.entity_type.slice(1)) : '';
+                    var title = entity ? (entity + ' · ' + fname) : fname;
+                    var inner;
+                    if (isImg) {
+                        inner = '<img src="' + a.thumb_url + '" alt="" style="width:100%;height:64px;object-fit:cover;display:block;" />';
+                    } else {
+                        var ext = (fname.split('.').pop() || '').slice(0, 4).toUpperCase() || 'DOC';
+                        inner = '<div style="height:64px;display:flex;align-items:center;justify-content:center;background:rgba(34,211,238,0.06);font-size:10px;font-weight:700;color:var(--accent,#22d3ee);letter-spacing:0.4px;">' + escapeHTML(ext) + '</div>';
+                    }
+                    html += '<a href="' + (a.original_url || a.web_url || '#') + '" target="_blank" rel="noopener" title="' + escapeHTML(title) + '" style="display:block;border:1px solid var(--border,#333);border-radius:6px;overflow:hidden;background:var(--card-bg,#0f0f1e);text-decoration:none;">' +
+                        inner +
+                        '<div style="padding:4px 6px;font-size:9px;color:var(--text-dim,#888);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTML(fname) + '</div>' +
+                    '</a>';
+                });
+                html += '</div>';
+                host.innerHTML = html;
+            }).catch(function() {
+                host.innerHTML = '<div style="padding:14px;text-align:center;color:var(--text-dim,#888);font-size:12px;">Could not load recent files.</div>';
+            });
+        }
+
+        // ── Inbox stub ────────────────────────────────────────────────
+        // Real messaging primitive (schema + endpoints + compose UI) is
+        // a separate workstream. This card holds the spot on the layout
+        // and gives us a known place to wire it in later. Any click
+        // opens an alert acknowledging the stub state.
+        function renderInboxStubHTML() {
+            return '<div style="border:1px solid var(--border,#333);border-radius:10px;background:var(--card-bg,#0f0f1e);padding:18px;text-align:center;color:var(--text-dim,#aaa);font-size:12px;line-height:1.5;">' +
+                '<div style="font-size:24px;margin-bottom:6px;">&#x2709;</div>' +
+                '<div style="font-weight:600;color:var(--text,#fff);margin-bottom:2px;">Team Messaging</div>' +
+                '<div style="font-size:11px;">Per-job comments + DMs land here. Coming next.</div>' +
+                '<button class="ee-btn ghost small" disabled style="margin-top:10px;font-size:11px;padding:4px 10px;opacity:0.6;cursor:not-allowed;">Open inbox</button>' +
+            '</div>';
+        }
 
         // Pull schedule entries for the next 7 days, group by date, and
         // paint into #summary-agenda. Side-effect-free with respect to
