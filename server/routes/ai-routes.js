@@ -16,6 +16,10 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const Anthropic = require('@anthropic-ai/sdk');
+// toFile wraps a Buffer as an Uploadable for beta.skills.create.
+// Used by the propose_skill_pack_mirror tool below so CoS can push
+// local packs to Anthropic native Skills via the approval flow.
+const { toFile } = require('@anthropic-ai/sdk');
 const { pool } = require('../db');
 const { requireAuth, requireCapability, hasCapability } = require('../auth');
 const { storage } = require('../storage');
@@ -5132,8 +5136,57 @@ const STAFF_TOOLS = [
       },
       required: ['name', 'rationale']
     }
+  },
+  {
+    name: 'propose_skill_pack_mirror',
+    tier: 'approval',
+    description:
+      'Propose mirroring a local skill pack to Anthropic native Skills. Packages the pack body as a SKILL.md, uploads via beta.skills.create, and persists the returned skill_id back onto the pack so the admin UI shows a "Synced" badge and the registered agents can reference it natively. Local-pack injection at chat time continues unchanged — mirroring is additive. Approval-required since uploads count against Anthropic-side skill quota.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        name:      { type: 'string', description: 'Existing pack name (must match exactly).' },
+        rationale: { type: 'string', description: 'One short sentence shown on the approval card explaining why mirroring this pack is worth the upload.' }
+      },
+      required: ['name', 'rationale']
+    }
+  },
+  {
+    name: 'propose_skill_pack_unmirror',
+    tier: 'approval',
+    description:
+      'Propose deleting the Anthropic-side mirror of a local skill pack. Drops the anthropic_skill_id from the local pack and DELETEs the skill on Anthropic. The local pack body is unaffected — pack still loads into the system prompt at chat time. Use when re-syncing a stale mirror or when a pack should no longer be a native skill.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        name:      { type: 'string', description: 'Existing pack name (must match exactly). The pack must currently be mirrored.' },
+        rationale: { type: 'string', description: 'One short sentence shown on the approval card explaining why removing the mirror is the right call.' }
+      },
+      required: ['name', 'rationale']
+    }
   }
 ];
+
+// Build the SKILL.md body for one local pack. Mirrors the helper of
+// the same name in admin-agents-routes.js so CoS-driven mirrors and
+// admin-button mirrors produce byte-identical uploads.
+function buildSkillMarkdownForMirror(pack) {
+  const name = (pack.name || 'P86 skill').replace(/[\r\n]/g, ' ');
+  const desc = (pack.replaces_section
+    ? 'Section override for ' + pack.replaces_section
+    : (pack.category ? 'Category: ' + pack.category : name)
+  ).replace(/[\r\n]/g, ' ');
+  return [
+    '---',
+    'name: ' + name,
+    'description: ' + desc,
+    '---',
+    '',
+    pack.body || ''
+  ].join('\n');
+}
 
 function isStaffToolAutoTier(name) {
   const t = STAFF_TOOLS.find(t => t.name === name);
@@ -5165,6 +5218,8 @@ async function buildStaffContext() {
   stable.push('  • `propose_skill_pack_add(name, body, agents, alwaysOn?, rationale)` — add a new skill pack. agents accepts ["ag", "cra", "job"] (ag=47, cra=HR, job=86). ALWAYS call read_skill_packs first to confirm no name collision.');
   stable.push('  • `propose_skill_pack_edit(name, new_name?, new_body?, agents?, alwaysOn?, rationale)` — change an existing pack. body edits replace the whole body.');
   stable.push('  • `propose_skill_pack_delete(name, rationale)` — remove a pack entirely. alwaysOn=false is usually a softer alternative.');
+  stable.push('  • `propose_skill_pack_mirror(name, rationale)` — mirror a pack to Anthropic native Skills (uploads SKILL.md via beta.skills.create). Local injection at chat time keeps running unchanged; mirroring is additive. After approval, the pack shows a Synced badge in the admin UI and registered agents can reference the skill_id natively. Re-register the affected agents (Admin → Agents → Bootstrap) so the new id flows into their Anthropic-side definition.');
+  stable.push('  • `propose_skill_pack_unmirror(name, rationale)` — delete the Anthropic-side mirror only. Local pack body is preserved and continues to load at chat time. Use to retire a mirror or before re-mirroring after a body edit.');
   stable.push('');
   renderSection(stable, 'cos_how_to_work', cosSectionOverrides);
   stable.push('');
@@ -5852,6 +5907,65 @@ async function execStaffApprovalTool(name, input) {
         [JSON.stringify(newCfg)]
       );
       return 'Deleted skill pack "' + input.name + '".';
+    }
+    case 'propose_skill_pack_mirror': {
+      if (!input || !input.name) throw new Error('name is required');
+      const anthropic = getAnthropic();
+      if (!anthropic) throw new Error('ANTHROPIC_API_KEY not set on this deployment.');
+      const r = await pool.query(`SELECT value FROM app_settings WHERE key = 'agent_skills'`);
+      const cfg = r.rows.length ? (r.rows[0].value || {}) : {};
+      const skills = Array.isArray(cfg.skills) ? cfg.skills.slice() : [];
+      const idx = skills.findIndex(s => s && s.name === input.name);
+      if (idx < 0) throw new Error('No skill pack named "' + input.name + '"');
+      const pack = skills[idx];
+      if (pack.anthropic_skill_id) {
+        return 'Skill pack "' + input.name + '" is already mirrored (' + pack.anthropic_skill_id + ').';
+      }
+      const md = buildSkillMarkdownForMirror(pack);
+      const file = await toFile(Buffer.from(md, 'utf8'), 'SKILL.md', { type: 'text/markdown' });
+      const created = await anthropic.beta.skills.create({
+        display_title: (pack.name || 'P86 skill').slice(0, 200),
+        files: [file]
+      });
+      skills[idx] = Object.assign({}, pack, { anthropic_skill_id: created.id });
+      const newCfg = Object.assign({}, cfg, { skills });
+      await pool.query(
+        `INSERT INTO app_settings (key, value, updated_at) VALUES ('agent_skills', $1, NOW())
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
+        [JSON.stringify(newCfg)]
+      );
+      return 'Mirrored skill pack "' + input.name + '" to Anthropic native Skills (' + created.id + '). Re-register the agents that load it so the new skill_id is referenced server-side.';
+    }
+    case 'propose_skill_pack_unmirror': {
+      if (!input || !input.name) throw new Error('name is required');
+      const anthropic = getAnthropic();
+      if (!anthropic) throw new Error('ANTHROPIC_API_KEY not set on this deployment.');
+      const r = await pool.query(`SELECT value FROM app_settings WHERE key = 'agent_skills'`);
+      const cfg = r.rows.length ? (r.rows[0].value || {}) : {};
+      const skills = Array.isArray(cfg.skills) ? cfg.skills.slice() : [];
+      const idx = skills.findIndex(s => s && s.name === input.name);
+      if (idx < 0) throw new Error('No skill pack named "' + input.name + '"');
+      const pack = skills[idx];
+      if (!pack.anthropic_skill_id) {
+        return 'Skill pack "' + input.name + '" is not currently mirrored.';
+      }
+      const priorId = pack.anthropic_skill_id;
+      // Best-effort delete on Anthropic. If they already 404 it (e.g.,
+      // skill manually deleted upstream), still scrub the local id so
+      // the admin UI shows the unsynced state and a future re-mirror
+      // generates a fresh upload.
+      try { await anthropic.beta.skills.delete(priorId); }
+      catch (e) { /* swallow — proceed to local scrub */ }
+      const updated = Object.assign({}, pack);
+      delete updated.anthropic_skill_id;
+      skills[idx] = updated;
+      const newCfg = Object.assign({}, cfg, { skills });
+      await pool.query(
+        `INSERT INTO app_settings (key, value, updated_at) VALUES ('agent_skills', $1, NOW())
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
+        [JSON.stringify(newCfg)]
+      );
+      return 'Removed Anthropic mirror for "' + input.name + '" (was ' + priorId + '). Local pack body is unchanged and still loads at chat time.';
     }
     default:
       throw new Error('Unknown approval-tier staff tool: ' + name);
