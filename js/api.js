@@ -385,9 +385,23 @@
     remove: function(id) { return del('/api/schedule/' + encodeURIComponent(id)); }
   };
 
+  // Per-job weather lookup for the schedule. Server geocodes the job's
+  // address (cached on the row), pulls the NWS 7-day forecast (cached
+  // in-memory by rounded coords), classifies risk, and returns one
+  // entry per job keyed by id. Pass ids as an array; an empty list
+  // resolves to {}.
+  var weather = {
+    jobs: function(jobIds) {
+      var ids = (jobIds || []).filter(Boolean);
+      if (!ids.length) return Promise.resolve({ weather: {} });
+      var qs = 'ids=' + encodeURIComponent(ids.join(','));
+      return get('/api/weather/jobs?' + qs);
+    }
+  };
+
   window.agxApi = {
     get: get, put: put, post: post, del: del,
-    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai, materials: materials, qbCosts: qbCosts, subs: subsApi, schedule: schedule, adminSms: adminSms, messages: messages,
+    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai, materials: materials, qbCosts: qbCosts, subs: subsApi, schedule: schedule, adminSms: adminSms, messages: messages, weather: weather,
     isOffline: isOffline,
     isAuthenticated: function() { return !!getToken() && !isOffline(); }
   };

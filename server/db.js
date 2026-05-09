@@ -79,6 +79,17 @@ async function initSchema() {
       created_at TIMESTAMPTZ DEFAULT NOW(),
       updated_at TIMESTAMPTZ DEFAULT NOW()
     );
+    -- Geocode cache for the schedule's per-job weather lookup. Filled
+    -- in lazily by the weather route the first time a job's address
+    -- is needed; status='ok'|'failed'|null lets us avoid retrying a
+    -- known-bad address on every render. Rounded address that was
+    -- geocoded is stored so we can detect stale cache when the user
+    -- edits the address and re-geocode.
+    ALTER TABLE jobs ADD COLUMN IF NOT EXISTS geocode_lat NUMERIC(8, 5);
+    ALTER TABLE jobs ADD COLUMN IF NOT EXISTS geocode_lng NUMERIC(8, 5);
+    ALTER TABLE jobs ADD COLUMN IF NOT EXISTS geocode_status TEXT;
+    ALTER TABLE jobs ADD COLUMN IF NOT EXISTS geocode_address TEXT;
+    ALTER TABLE jobs ADD COLUMN IF NOT EXISTS geocode_at TIMESTAMPTZ;
 
     CREATE TABLE IF NOT EXISTS job_access (
       job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,

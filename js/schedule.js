@@ -284,7 +284,14 @@
     // ISO YYYY-MM-DD for the first day (Sun) of the week the user
     // explicitly picked via the calendar's week-selector ring. null
     // = use the default reference date logic.
-    focusWeekStart: null
+    focusWeekStart: null,
+    // Weather forecast cache: { [jobId]: { status, days, address } }.
+    // Populated by /api/weather/jobs in the background after the grid
+    // paints. The grid re-renders once weather lands so chips show up
+    // without a flash of empty bars on first paint.
+    weather: {},
+    weatherLoading: false,
+    weatherFetchedAt: 0
   };
 
   // ── Job pool ───────────────────────────────────────────────
@@ -308,6 +315,121 @@
   function jobById(id) {
     var jobs = (window.appData && Array.isArray(window.appData.jobs)) ? window.appData.jobs : [];
     return jobs.find(function(j) { return j.id === id; }) || null;
+  }
+
+  // ── Weather fetch / lookup ─────────────────────────────────
+  // Pulls forecasts for every job that has at least one entry on the
+  // visible 6-week grid. Throttled to one fetch per 10 minutes for
+  // the same job-set, so navigating between months in quick succession
+  // doesn't hammer the API. The server caches NWS responses anyway,
+  // but skipping the round-trip when nothing's changed is cheaper.
+  var WEATHER_CLIENT_TTL_MS = 10 * 60 * 1000;
+  var _weatherLastIdsKey = '';
+  function refreshWeatherForVisibleJobs() {
+    if (!window.agxApi || !window.agxApi.weather || !window.agxApi.isAuthenticated || !window.agxApi.isAuthenticated()) {
+      return;
+    }
+    // Collect every jobId that has an entry in the visible 6-week
+    // window. For simplicity (and because the user can scroll
+    // months), we ask for all jobs that have ANY entry; the server
+    // de-dupes lookups and the in-memory NWS cache makes repeated
+    // lookups cheap.
+    var ids = {};
+    _state.entries.forEach(function(e) { if (e.jobId) ids[e.jobId] = true; });
+    var idList = Object.keys(ids);
+    if (!idList.length) {
+      _state.weather = {};
+      return;
+    }
+    var key = idList.slice().sort().join(',');
+    var fresh = (Date.now() - _state.weatherFetchedAt) < WEATHER_CLIENT_TTL_MS;
+    if (key === _weatherLastIdsKey && fresh && Object.keys(_state.weather).length) return;
+    if (_state.weatherLoading) return;
+    _state.weatherLoading = true;
+    window.agxApi.weather.jobs(idList).then(function(res) {
+      _state.weather = (res && res.weather) || {};
+      _state.weatherFetchedAt = Date.now();
+      _weatherLastIdsKey = key;
+      _state.weatherLoading = false;
+      // Repaint so chips show up.
+      renderGrid();
+    }).catch(function(err) {
+      console.warn('[schedule] weather fetch failed:', err && err.message);
+      _state.weatherLoading = false;
+    });
+  }
+
+  function weatherForJobOnDate(jobId, dateIso) {
+    var w = _state.weather && _state.weather[jobId];
+    if (!w || w.status !== 'ok' || !Array.isArray(w.days)) return null;
+    for (var i = 0; i < w.days.length; i++) {
+      if (w.days[i].date === dateIso) return w.days[i];
+    }
+    return null;
+  }
+
+  // Glyph + label helpers for the chip / forecast tile.
+  function weatherIconForRisk(risk) {
+    if (risk === 'red') return '⚠️';      // ⚠️
+    if (risk === 'yellow') return '☁️';   // ☁️
+    return '☀️';                           // ☀️
+  }
+
+  // Build the per-row weather strip for the day sheet. Handles the
+  // missing-data states explicitly so users know why a row has no
+  // weather (still loading / no address on file / geocode failed
+  // / NWS error) instead of just blank.
+  function renderDayRowWeather(jobWx, dateISO) {
+    if (!jobWx) {
+      // Fetch in flight or never started.
+      return '<div class="sch-day-row-wx sch-day-row-wx-pending" title="Weather still loading…">' +
+        '<span class="sch-wx-icon">…</span>' +
+        '<span class="sch-day-row-wx-msg">Weather loading…</span>' +
+      '</div>';
+    }
+    if (jobWx.status === 'no_address') {
+      return '<div class="sch-day-row-wx sch-day-row-wx-muted" ' +
+              'title="Add a job address (or a building address) to see weather here.">' +
+        '<span class="sch-wx-icon">📍</span>' +
+        '<span class="sch-day-row-wx-msg">No address on this job</span>' +
+      '</div>';
+    }
+    if (jobWx.status === 'failed') {
+      return '<div class="sch-day-row-wx sch-day-row-wx-muted" ' +
+              'title="Could not geocode address: ' + escapeAttr(jobWx.address || '') + '">' +
+        '<span class="sch-wx-icon">📍</span>' +
+        '<span class="sch-day-row-wx-msg">Address not recognized</span>' +
+      '</div>';
+    }
+    if (jobWx.status === 'error') {
+      return '<div class="sch-day-row-wx sch-day-row-wx-muted" title="Weather service unavailable.">' +
+        '<span class="sch-wx-icon">⚠</span>' +
+        '<span class="sch-day-row-wx-msg">Weather unavailable</span>' +
+      '</div>';
+    }
+    if (jobWx.status !== 'ok' || !Array.isArray(jobWx.days)) return '';
+    var day = null;
+    for (var i = 0; i < jobWx.days.length; i++) {
+      if (jobWx.days[i].date === dateISO) { day = jobWx.days[i]; break; }
+    }
+    if (!day) {
+      // Forecast doesn't cover this date (NWS gives ~7 days; rest are
+      // out of range — common when scheduling weeks ahead).
+      return '<div class="sch-day-row-wx sch-day-row-wx-muted" title="Outside the 7-day NWS forecast window.">' +
+        '<span class="sch-wx-icon">📅</span>' +
+        '<span class="sch-day-row-wx-msg">Beyond 7-day forecast</span>' +
+      '</div>';
+    }
+    var icon = weatherIconForRisk(day.risk);
+    var temp = (day.tempHigh != null) ? day.tempHigh + '°' +
+               (day.tempLow != null ? ' / ' + day.tempLow + '°' : '') : '';
+    var precip = day.precipPct ? day.precipPct + '% rain' : '';
+    var wind = day.windMph ? day.windMph + ' mph wind' : '';
+    var bits = [day.summary, temp, precip, wind].filter(Boolean);
+    return '<div class="sch-day-row-wx sch-wx-' + day.risk + '">' +
+      '<span class="sch-wx-icon">' + icon + '</span>' +
+      '<span class="sch-day-row-wx-msg">' + escapeHTML(bits.join(' · ')) + '</span>' +
+    '</div>';
   }
 
   function jobLabel(j) {
@@ -495,6 +617,11 @@
     fetchEntries().then(function() {
       renderGrid();
       refreshWeekSummary();
+      // Fire off the per-job weather fetch in the background. The
+      // grid will repaint when it lands so chips appear. Errors are
+      // logged and swallowed so a weather outage doesn't break the
+      // schedule view.
+      refreshWeatherForVisibleJobs();
     });
   }
 
@@ -872,10 +999,25 @@
       var handleHtml = seg.isLastSegment
         ? '<span class="sch-entry-bar-handle" data-entry-id="' + escapeAttr(e.id) + '" title="Drag to extend / shrink production days"></span>'
         : '';
+      // Weather risk dot — colored by NWS forecast for this job's
+      // address on the segment's first day. Tooltip carries the
+      // forecast summary so PMs can hover before opening the day
+      // sheet. Renders only when forecast data is loaded.
+      var firstDayKey = weekKeys[seg.startCol];
+      var dayWx = weatherForJobOnDate(e.jobId, firstDayKey);
+      var wxHtml = '';
+      if (dayWx) {
+        var wxTitle = (dayWx.summary || '') +
+          (dayWx.tempHigh != null ? ' · ' + dayWx.tempHigh + '°' : '') +
+          (dayWx.precipPct ? ' · ' + dayWx.precipPct + '% rain' : '');
+        wxHtml = '<span class="sch-entry-bar-wx sch-wx-' + dayWx.risk + '" ' +
+                 'title="' + escapeAttr(wxTitle) + '"></span>';
+      }
       html += '<div class="sch-entry-bar' + statusCls + '" ' +
         'data-entry-id="' + escapeAttr(e.id) + '" ' +
         'style="left:' + leftPct.toFixed(4) + '%;width:calc(' + widthPct.toFixed(4) + '% - 4px);top:' + topPx + 'px;background:' + color + ';" ' +
         'title="' + escapeAttr(jobLabel(job)) + (e.notes ? ' — ' + escapeAttr(e.notes) : '') + '">' +
+        wxHtml +
         '<span class="sch-entry-bar-label">' + escapeHTML(label) + hint + '</span>' +
         (meta ? '<span class="sch-entry-bar-meta">' + meta + '</span>' : '') +
         handleHtml +
@@ -1025,6 +1167,12 @@
         var dayIndex = span.indexOf(dateISO) + 1;
         var positionLabel = dayIndex > 0 ? 'Day ' + dayIndex + ' of ' + span.length : '';
         var notes = e.notes ? '<div class="sch-day-row-notes">' + escapeHTML(e.notes) + '</div>' : '';
+        // Weather panel — full forecast detail for this job/date,
+        // pulled from the same cache as the bar chips. Falls back
+        // to a "no address" / "loading" hint when applicable so the
+        // user understands why a row is missing weather.
+        var jobWx = _state.weather && _state.weather[e.jobId];
+        var wxHtml = renderDayRowWeather(jobWx, dateISO);
         return '<div class="sch-day-row' + statusCls + '" data-entry-id="' + escapeAttr(e.id) + '" ' +
                 'style="--job-color:' + color + ';">' +
           '<div class="sch-day-row-color"></div>' +
@@ -1035,6 +1183,7 @@
               (crewSize ? '<span>' + crewSize + ' on crew</span>' : '<span>No crew assigned</span>') +
               (e.status ? '<span class="sch-day-row-status">' + escapeHTML(e.status) + '</span>' : '') +
             '</div>' +
+            wxHtml +
             notes +
           '</div>' +
           '<div class="sch-day-row-actions">' +

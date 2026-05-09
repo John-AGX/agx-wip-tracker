@@ -810,6 +810,85 @@ body.light-mode .sch-day-row:hover {
   border-top: 1px solid var(--border, #2e3346);
 }
 
+/* ─── Weather chips + panels ───────────────────────────────
+   Per-job NWS forecasts surface in two places:
+   1. Tiny dot at the top-left of each entry bar — color = risk
+      (green/yellow/red). Hover shows the day's summary.
+   2. Strip inside each day-sheet row — full forecast detail
+      (high/low, precip %, wind, summary). Falls back to a muted
+      placeholder when address is missing or NWS is unreachable. */
+.sch-entry-bar-wx {
+  position: absolute;
+  top: 2px;
+  left: 4px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 0, 0, 0.35);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.5);
+  pointer-events: auto;
+  z-index: 2;
+}
+.sch-entry-bar-wx.sch-wx-green  { background: #34d399; }
+.sch-entry-bar-wx.sch-wx-yellow { background: #fbbf24; }
+.sch-entry-bar-wx.sch-wx-red    { background: #f87171; }
+
+.sch-day-row-wx {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  color: var(--text-dim, #aaa);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid transparent;
+}
+body.light-mode .sch-day-row-wx {
+  background: rgba(0, 0, 0, 0.03);
+}
+.sch-day-row-wx.sch-wx-green {
+  background: rgba(52, 211, 153, 0.10);
+  border-color: rgba(52, 211, 153, 0.30);
+  color: #d4fde9;
+}
+.sch-day-row-wx.sch-wx-yellow {
+  background: rgba(251, 191, 36, 0.12);
+  border-color: rgba(251, 191, 36, 0.35);
+  color: #fde9b6;
+}
+.sch-day-row-wx.sch-wx-red {
+  background: rgba(248, 113, 113, 0.14);
+  border-color: rgba(248, 113, 113, 0.40);
+  color: #fdd0d0;
+}
+body.light-mode .sch-day-row-wx.sch-wx-green {
+  color: #065f46;
+}
+body.light-mode .sch-day-row-wx.sch-wx-yellow {
+  color: #78350f;
+}
+body.light-mode .sch-day-row-wx.sch-wx-red {
+  color: #7f1d1d;
+}
+.sch-day-row-wx-pending,
+.sch-day-row-wx-muted {
+  font-style: italic;
+  opacity: 0.85;
+}
+.sch-wx-icon {
+  font-size: 13px;
+  line-height: 1;
+}
+.sch-day-row-wx-msg {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* Compact icon-style toggle for show/hide weekends. Replaces the
    old checkbox+label that was eating header space and rendering
    as block-level uppercase due to global label rules. */
