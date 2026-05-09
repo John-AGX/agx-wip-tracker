@@ -3,32 +3,32 @@
 
         // ==================== THEME TOGGLE ====================
         (function() {
-            var saved = localStorage.getItem('agx-theme');
+            var saved = localStorage.getItem('p86-theme');
             if (saved === 'light') document.body.classList.add('light-mode');
             else if (!saved && window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) {
                 document.body.classList.add('light-mode');
             }
             // Swap the SVG glyph based on current mode. Light mode \u2192
             // moon (click to go dark). Dark mode \u2192 sun (click to go
-            // light). The agxIcon decorator only auto-fires once per
-            // element and bails if data-agx-icon-decorated is set, so
+            // light). The p86Icon decorator only auto-fires once per
+            // element and bails if data-p86-icon-decorated is set, so
             // we have to re-render the icon-slot manually each time.
             function updateIcon() {
                 var btn = document.getElementById('theme-toggle');
                 if (!btn) return;
                 var iconName = document.body.classList.contains('light-mode') ? 'moon' : 'sun';
-                btn.dataset.agxIcon = iconName;
-                btn.dataset.agxIconDecorated = '0'; // invalidate so we can re-decorate
+                btn.dataset.p86Icon = iconName;
+                btn.dataset.p86IconDecorated = '0'; // invalidate so we can re-decorate
                 // Drop any previous slot, then ask the helper to
                 // re-prepend the new SVG.
-                var oldSlot = btn.querySelector('.agx-icon-slot');
+                var oldSlot = btn.querySelector('.p86-icon-slot');
                 if (oldSlot) oldSlot.remove();
-                if (typeof window.agxIcon === 'function') {
+                if (typeof window.p86Icon === 'function') {
                     var slot = document.createElement('span');
-                    slot.className = 'agx-icon-slot';
-                    slot.innerHTML = window.agxIcon(iconName);
+                    slot.className = 'p86-icon-slot';
+                    slot.innerHTML = window.p86Icon(iconName);
                     btn.insertBefore(slot, btn.firstChild);
-                    btn.dataset.agxIconDecorated = '1';
+                    btn.dataset.p86IconDecorated = '1';
                 }
             }
             updateIcon();
@@ -39,9 +39,9 @@
                 btn.addEventListener('click', function() {
                     document.body.classList.toggle('light-mode');
                     var isLight = document.body.classList.contains('light-mode');
-                    localStorage.setItem('agx-theme', isLight ? 'light' : 'dark');
+                    localStorage.setItem('p86-theme', isLight ? 'light' : 'dark');
                     updateIcon();
-                    document.dispatchEvent(new CustomEvent('agx-theme-change', { detail: { isLight: isLight } }));
+                    document.dispatchEvent(new CustomEvent('p86-theme-change', { detail: { isLight: isLight } }));
                 });
             });
         })();
@@ -220,10 +220,10 @@
         }
 
         function populatePhaseTypeSelect() {
-            populateCustomSelect('phaseType', DEFAULT_PHASE_TYPES, 'agx-wip-custom-phases', '-- Select Phase --');
+            populateCustomSelect('phaseType', DEFAULT_PHASE_TYPES, 'p86-wip-custom-phases', '-- Select Phase --');
         }
         function populateSubTradeSelect() {
-            populateCustomSelect('subTrade', DEFAULT_SUB_TRADES, 'agx-wip-custom-trades', '-- Select Trade --');
+            populateCustomSelect('subTrade', DEFAULT_SUB_TRADES, 'p86-wip-custom-trades', '-- Select Trade --');
         }
 
         function initializeApp() {
@@ -285,7 +285,7 @@
 
         function backfillSampleData() {
             // Server is source of truth when authenticated — never inject demo data
-            if (window.agxApi && window.agxApi.isAuthenticated()) return;
+            if (window.p86Api && window.p86Api.isAuthenticated()) return;
             var changed = false;
             if (appData.jobs.some(j => j.id === 'j1') && appData.purchaseOrders.length === 0) {
                 appData.purchaseOrders = [
@@ -463,14 +463,14 @@
         //   3. 2-col main grid: Recent Activity feed (left, 2/3) +
         //      This Week's Agenda rail (right, 1/3)
         // Counters + activity sourced synchronously from window.appData;
-        // schedule rail loads async via agxApi.schedule and replaces a
+        // schedule rail loads async via p86Api.schedule and replaces a
         // placeholder when ready so the page never blocks on the network.
         function renderSummaryDashboard() {
             var root = document.getElementById('summary-root');
             if (!root) return;
 
             var d = window.appData || {};
-            var name = (window.agxAuth && window.agxAuth.getUser && (window.agxAuth.getUser() || {}).name) || '';
+            var name = (window.p86Auth && window.p86Auth.getUser && (window.p86Auth.getUser() || {}).name) || '';
             var firstName = name ? String(name).split(/\s+/)[0] : '';
             var hour = new Date().getHours();
             var greet = hour < 12 ? 'Good morning' : (hour < 18 ? 'Good afternoon' : 'Good evening');
@@ -663,7 +663,7 @@
                         '<div>' +
                             '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">' +
                                 '<div style="font-size:11px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;">Inbox</div>' +
-                                '<button class="ee-btn ghost small" onclick="if (window.agxMessaging) window.agxMessaging.openInbox();" style="font-size:11px;padding:2px 8px;">Open inbox &rarr;</button>' +
+                                '<button class="ee-btn ghost small" onclick="if (window.p86Messaging) window.p86Messaging.openInbox();" style="font-size:11px;padding:2px 8px;">Open inbox &rarr;</button>' +
                             '</div>' +
                             '<div id="summary-inbox" style="border:1px solid var(--border,#333);border-radius:10px;background:var(--card-bg,#0f0f1e);padding:18px;text-align:center;color:var(--text-dim,#888);font-size:12px;line-height:1.5;min-height:80px;">Loading inbox&hellip;</div>' +
                         '</div>' +
@@ -764,11 +764,11 @@
         function renderSummaryRecentFiles() {
             var host = document.getElementById('summary-files');
             if (!host) return;
-            if (!window.agxApi || !window.agxApi.attachments || typeof window.agxApi.attachments.recent !== 'function') {
+            if (!window.p86Api || !window.p86Api.attachments || typeof window.p86Api.attachments.recent !== 'function') {
                 host.innerHTML = '<div style="padding:14px;text-align:center;color:var(--text-dim,#888);font-size:12px;">Files not available offline.</div>';
                 return;
             }
-            window.agxApi.attachments.recent(8).then(function(res) {
+            window.p86Api.attachments.recent(8).then(function(res) {
                 var atts = (res && res.attachments) || [];
                 if (!atts.length) {
                     host.innerHTML = '<div style="padding:18px;text-align:center;color:var(--text-dim,#888);font-size:12px;">No files uploaded yet.</div>';
@@ -808,11 +808,11 @@
         function renderSummaryInbox() {
             var host = document.getElementById('summary-inbox');
             if (!host) return;
-            if (!window.agxApi || !window.agxApi.messages) {
+            if (!window.p86Api || !window.p86Api.messages) {
                 host.innerHTML = '<div style="padding:14px;font-size:12px;color:var(--text-dim,#888);">Messaging not available.</div>';
                 return;
             }
-            window.agxApi.messages.recent().then(function(res) {
+            window.p86Api.messages.recent().then(function(res) {
                 var threads = (res && res.threads) || [];
                 var totalUnread = Number((res && res.total_unread) || 0);
                 if (!threads.length) {
@@ -834,7 +834,7 @@
                     var unread = Number(t.unread_count || 0);
                     var preview = (t.last_body || '').replace(/\s+/g, ' ').slice(0, 60);
                     var who = t.last_user_name || 'Someone';
-                    html += '<button class="ee-btn" onclick="if (window.agxMessaging) window.agxMessaging.openInbox();" style="text-align:left;padding:8px 10px;background:var(--card-bg,#0f0f1e);border:none;cursor:pointer;display:flex;flex-direction:column;gap:2px;">' +
+                    html += '<button class="ee-btn" onclick="if (window.p86Messaging) window.p86Messaging.openInbox();" style="text-align:left;padding:8px 10px;background:var(--card-bg,#0f0f1e);border:none;cursor:pointer;display:flex;flex-direction:column;gap:2px;">' +
                         '<div style="display:flex;align-items:center;gap:6px;">' +
                             '<span style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;color:var(--accent,#22d3ee);">' + escapeHTML(t.kind || 'thread') + '</span>' +
                             (unread ? '<span style="margin-left:auto;background:#f87171;color:#fff;font-size:10px;font-weight:700;padding:1px 6px;border-radius:10px;line-height:1.4;">' + unread + '</span>'
@@ -880,7 +880,7 @@
         function renderSummaryAgenda() {
             var host = document.getElementById('summary-agenda');
             if (!host) return;
-            if (!window.agxApi || !window.agxApi.schedule || typeof window.agxApi.schedule.list !== 'function') {
+            if (!window.p86Api || !window.p86Api.schedule || typeof window.p86Api.schedule.list !== 'function') {
                 host.innerHTML = '<div style="text-align:center;color:var(--text-dim,#888);font-size:12px;">Schedule not available offline.</div>';
                 return;
             }
@@ -892,7 +892,7 @@
                 var d = String(dt.getDate()).padStart(2, '0');
                 return dt.getFullYear() + '-' + m + '-' + d;
             }
-            window.agxApi.schedule.list({ from: ymd(today), to: ymd(weekAhead) })
+            window.p86Api.schedule.list({ from: ymd(today), to: ymd(weekAhead) })
                 .then(function(res) {
                     var entries = (res && res.entries) || [];
                     if (!entries.length) {
@@ -1112,13 +1112,13 @@
                 // Activity timestamp so restoreNavState can age out stale
                 // sessions and dump idle returners onto the Summary page.
                 st.at = Date.now();
-                localStorage.setItem('agx-nav-state', JSON.stringify(st));
+                localStorage.setItem('p86-nav-state', JSON.stringify(st));
             } catch (e) { /* localStorage may be unavailable — degrade silently */ }
         }
 
         function loadNavState() {
             try {
-                var raw = localStorage.getItem('agx-nav-state');
+                var raw = localStorage.getItem('p86-nav-state');
                 return raw ? JSON.parse(raw) : null;
             } catch (e) { return null; }
         }
@@ -1146,12 +1146,12 @@
             // Wait for the initial server data fetch to settle before
             // opening entity views — opening editEstimate / editJob
             // while data is still loading hits the "Still loading from
-            // server" alert path. Polls agxDataLoading every 200ms with
+            // server" alert path. Polls p86DataLoading every 200ms with
             // a hard ceiling so we don't loop forever if the fetch
             // hangs.
             function whenLoaded(cb, attempts) {
                 attempts = attempts || 0;
-                var stillLoading = (typeof window.agxDataLoading === 'function') && window.agxDataLoading();
+                var stillLoading = (typeof window.p86DataLoading === 'function') && window.p86DataLoading();
                 if (stillLoading && attempts < 30) {
                     setTimeout(function() { whenLoaded(cb, attempts + 1); }, 200);
                 } else {
@@ -1206,8 +1206,8 @@
         // Public hooks — called from auth.js (restore) and from other
         // navigation paths (job detail, estimate editor open) so the
         // saved state always reflects the latest position.
-        window.agxNavSave = saveNavState;
-        window.agxNavRestore = restoreNavState;
+        window.p86NavSave = saveNavState;
+        window.p86NavRestore = restoreNavState;
 
         // Refresh-during-nav safety net.
         window.addEventListener('beforeunload', function() {
@@ -1313,14 +1313,14 @@
         // jarring native dialog. Returns a Promise<boolean>.
         //
         // Usage:
-        //   await agxConfirm({
+        //   await p86Confirm({
         //     title: 'Delete this line?',
         //     message: 'This cannot be undone.',
         //     confirmText: 'Delete',
         //     destructive: true
         //   });
         // ──────────────────────────────────────────────────────────────
-        window.agxConfirm = function(opts) {
+        window.p86Confirm = function(opts) {
             opts = opts || {};
             var title = opts.title || 'Are you sure?';
             var message = opts.message || '';
@@ -1330,7 +1330,7 @@
 
             return new Promise(function(resolve) {
                 var overlay = document.createElement('div');
-                overlay.className = 'agx-confirm-overlay';
+                overlay.className = 'p86-confirm-overlay';
                 overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.65);z-index:10000;display:flex;align-items:center;justify-content:center;padding:20px;backdrop-filter:blur(2px);';
 
                 var box = document.createElement('div');
@@ -1380,15 +1380,15 @@
         // Read all appData sections from localStorage. Used as the offline path
         // and as the fast first-paint cache while the server fetch is in flight.
         function loadFromLocalStorage() {
-            appData.jobs = safeLoadJSON('agx-wip-jobs', []);
-            appData.buildings = safeLoadJSON('agx-wip-buildings', []);
-            appData.phases = safeLoadJSON('agx-wip-phases', []);
-            appData.subs = safeLoadJSON('agx-wip-subs', []);
-            appData.changeOrders = safeLoadJSON('agx-wip-changeorders', []);
-            appData.purchaseOrders = safeLoadJSON('agx-wip-purchaseorders', []);
-            appData.invoices = safeLoadJSON('agx-wip-invoices', []);
-            appData.estimates = safeLoadJSON('agx-estimates', []);
-            appData.estimateLines = safeLoadJSON('agx-estimate-lines', []);
+            appData.jobs = safeLoadJSON('p86-wip-jobs', []);
+            appData.buildings = safeLoadJSON('p86-wip-buildings', []);
+            appData.phases = safeLoadJSON('p86-wip-phases', []);
+            appData.subs = safeLoadJSON('p86-wip-subs', []);
+            appData.changeOrders = safeLoadJSON('p86-wip-changeorders', []);
+            appData.purchaseOrders = safeLoadJSON('p86-wip-purchaseorders', []);
+            appData.invoices = safeLoadJSON('p86-wip-invoices', []);
+            appData.estimates = safeLoadJSON('p86-estimates', []);
+            appData.estimateLines = safeLoadJSON('p86-estimate-lines', []);
             // estimateAlternates is no longer a flat top-level array — alternates
             // live INLINE on each estimate (est.alternates) since the full-page
             // editor reads/writes them there directly. Keeping a parallel flat
@@ -1399,19 +1399,19 @@
         }
 
         function writeToLocalStorage() {
-            localStorage.setItem('agx-wip-jobs', JSON.stringify(appData.jobs));
-            localStorage.setItem('agx-wip-buildings', JSON.stringify(appData.buildings));
-            localStorage.setItem('agx-wip-phases', JSON.stringify(appData.phases));
-            localStorage.setItem('agx-wip-subs', JSON.stringify(appData.subs));
-            localStorage.setItem('agx-wip-changeorders', JSON.stringify(appData.changeOrders));
-            localStorage.setItem('agx-wip-purchaseorders', JSON.stringify(appData.purchaseOrders));
-            localStorage.setItem('agx-wip-invoices', JSON.stringify(appData.invoices));
-            localStorage.setItem('agx-estimates', JSON.stringify(appData.estimates));
-            localStorage.setItem('agx-estimate-lines', JSON.stringify(appData.estimateLines));
+            localStorage.setItem('p86-wip-jobs', JSON.stringify(appData.jobs));
+            localStorage.setItem('p86-wip-buildings', JSON.stringify(appData.buildings));
+            localStorage.setItem('p86-wip-phases', JSON.stringify(appData.phases));
+            localStorage.setItem('p86-wip-subs', JSON.stringify(appData.subs));
+            localStorage.setItem('p86-wip-changeorders', JSON.stringify(appData.changeOrders));
+            localStorage.setItem('p86-wip-purchaseorders', JSON.stringify(appData.purchaseOrders));
+            localStorage.setItem('p86-wip-invoices', JSON.stringify(appData.invoices));
+            localStorage.setItem('p86-estimates', JSON.stringify(appData.estimates));
+            localStorage.setItem('p86-estimate-lines', JSON.stringify(appData.estimateLines));
             // estimateAlternates flat array dropped — see loadFromLocalStorage.
             // Clean up the legacy key so stale data can't reappear after a
             // future schema change.
-            try { localStorage.removeItem('agx-estimate-alternates'); } catch (e) {}
+            try { localStorage.removeItem('p86-estimate-alternates'); } catch (e) {}
         }
 
         // Reconstruct flat appData arrays from server response. The server stores
@@ -1477,33 +1477,33 @@
         // editor during the ~100ms server-load window.
         var _serverLoadInFlight = false;
         var _serverLoadComplete = false;
-        window.agxDataReady = function() { return _serverLoadComplete; };
-        window.agxDataLoading = function() { return _serverLoadInFlight; };
+        window.p86DataReady = function() { return _serverLoadComplete; };
+        window.p86DataLoading = function() { return _serverLoadInFlight; };
 
         // loadData is called once at startup. We paint the localStorage
         // cache immediately so first paint is instant, then fetch fresh
         // data from the server. The data-loss risk during the in-flight
         // window (user opens editor with stale data → server fetch
         // overwrites their unsaved edits) is now closed by gating
-        // editor opens on agxDataReady() — see openNewEstimateForm /
+        // editor opens on p86DataReady() — see openNewEstimateForm /
         // editEstimate / etc.
         function loadData() {
             loadFromLocalStorage(); // fast first paint
-            var authed = window.agxApi && window.agxApi.isAuthenticated();
+            var authed = window.p86Api && window.p86Api.isAuthenticated();
             if (!authed) {
                 _serverLoadComplete = true;
                 return;
             }
             _serverLoadInFlight = true;
             Promise.all([
-                window.agxApi.jobs.list(),
-                window.agxApi.estimates.list(),
+                window.p86Api.jobs.list(),
+                window.p86Api.estimates.list(),
                 // QB cost lines now persist server-side. Read all of
                 // them at boot so Job Costs / Audit / 86 (WIP analyst)
                 // can reason about them without per-tab fetches.
-                window.agxApi.qbCosts.list().catch(function() { return { lines: [] }; }),
+                window.p86Api.qbCosts.list().catch(function() { return { lines: [] }; }),
                 // Subs directory (Phase A) — global sub records.
-                window.agxApi.subs.list().catch(function() { return { subs: [], trades: [] }; })
+                window.p86Api.subs.list().catch(function() { return { subs: [], trades: [] }; })
             ]).then(function(results) {
                 hydrateFromServerJobs(results[0].jobs);
                 hydrateFromServerEstimates(results[1].estimates);
@@ -1534,7 +1534,7 @@
         //
         // Push pipeline: each saveData() coalesces into a single in-flight push.
         // On failure we retry with exponential backoff (1s, 2s, 4s) up to 3
-        // attempts, then surface the failure via the agxPushStatus listener so
+        // attempts, then surface the failure via the p86PushStatus listener so
         // the estimate editor (and anything else interested) can show an
         // "unsaved — retrying" badge instead of a silent dropped commit.
         var _serverPushTimer = null;
@@ -1546,7 +1546,7 @@
                 try { fn(status, err); } catch (e) { /* defensive */ }
             });
         }
-        window.agxPushStatus = {
+        window.p86PushStatus = {
             subscribe: function(fn) {
                 _pushStatusListeners.push(fn);
                 return function() {
@@ -1560,13 +1560,13 @@
 
         function saveData() {
             writeToLocalStorage();
-            if (!window.agxApi || !window.agxApi.isAuthenticated()) return;
+            if (!window.p86Api || !window.p86Api.isAuthenticated()) return;
             if (_serverPushTimer) clearTimeout(_serverPushTimer);
             _serverPushTimer = setTimeout(function() { pushToServer(); }, 600);
         }
 
         function pushToServer() {
-            if (!window.agxApi || !window.agxApi.isAuthenticated()) return Promise.resolve();
+            if (!window.p86Api || !window.p86Api.isAuthenticated()) return Promise.resolve();
             // Only push jobs the current user can edit. _canEdit comes from the
             // server on each GET. Read-only jobs (e.g. another PM's job that this
             // user can view but not modify) are filtered out so PMs scrolling the
@@ -1595,8 +1595,8 @@
 
             notifyPushStatus('saving');
             _activePush = Promise.all([
-                editableJobs.length ? window.agxApi.jobs.bulkSave(jobsPayload) : Promise.resolve(),
-                appData.estimates.length ? window.agxApi.estimates.bulkSave(estimatesPayload) : Promise.resolve()
+                editableJobs.length ? window.p86Api.jobs.bulkSave(jobsPayload) : Promise.resolve(),
+                appData.estimates.length ? window.p86Api.estimates.bulkSave(estimatesPayload) : Promise.resolve()
             ]).then(function(r) {
                 _pushRetryCount = 0;
                 _activePush = null;
@@ -1619,7 +1619,7 @@
         }
 
         // Expose for explicit triggers (e.g. the import-from-browser button)
-        window.agxData = {
+        window.p86Data = {
             pushToServer: pushToServer,
             reloadFromServer: loadData
         };
@@ -1627,7 +1627,7 @@
         // ==================== SEED DATA ====================
         function seedDataIfNeeded() {
             // Server is source of truth when authenticated — never seed demo data
-            if (window.agxApi && window.agxApi.isAuthenticated()) return;
+            if (window.p86Api && window.p86Api.isAuthenticated()) return;
             if (appData.jobs.length > 0) return;
 
             // Job 1: Commerce Park Phase 2

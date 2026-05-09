@@ -96,7 +96,7 @@
 
   function getLinesFromWorkspaceSheets(jobId) {
     try {
-      var allWs = JSON.parse(localStorage.getItem('agx-workspaces') || '{}');
+      var allWs = JSON.parse(localStorage.getItem('p86-workspaces') || '{}');
       var wb = allWs[jobId];
       if (!wb || !Array.isArray(wb.sheets)) return [];
       var qbSheets = wb.sheets.filter(function(s) { return /^QB Costs /.test(s.name || ''); });
@@ -578,7 +578,7 @@
 
   function getNodesForJob(jobId) {
     try {
-      var graphs = JSON.parse(localStorage.getItem('agx-nodegraphs') || '{}');
+      var graphs = JSON.parse(localStorage.getItem('p86-nodegraphs') || '{}');
       var g = graphs[jobId];
       return (g && Array.isArray(g.nodes)) ? g.nodes : [];
     } catch (e) {
@@ -790,8 +790,8 @@
     var line = lines.find(function(l) { return l.id === lineId; });
     if (line) line.linked_node_id = nodeId;
 
-    if (window.agxApi && window.agxApi.isAuthenticated && window.agxApi.isAuthenticated() && lineId.indexOf('sheet:') !== 0) {
-      window.agxApi.qbCosts.update(lineId, { linkedNodeId: nodeId }).catch(function(err) {
+    if (window.p86Api && window.p86Api.isAuthenticated && window.p86Api.isAuthenticated() && lineId.indexOf('sheet:') !== 0) {
+      window.p86Api.qbCosts.update(lineId, { linkedNodeId: nodeId }).catch(function(err) {
         console.warn('[qb-costs] link patch failed:', err && err.message);
       });
     }
@@ -890,8 +890,8 @@
     clearSelection();
     reRender();
 
-    if (window.agxApi && window.agxApi.isAuthenticated && window.agxApi.isAuthenticated()) {
-      window.agxApi.qbCosts.bulkLink(ids, nodeId).then(function() {
+    if (window.p86Api && window.p86Api.isAuthenticated && window.p86Api.isAuthenticated()) {
+      window.p86Api.qbCosts.bulkLink(ids, nodeId).then(function() {
         // Server confirms — local state already matches.
       }).catch(function(err) {
         console.warn('[qb-costs] bulk link failed, rolling back:', err && err.message);
@@ -912,10 +912,10 @@
     var nodes = getNodesForJob(_state.jobId);
     var validNodeIds = nodes.map(function(n) { return n.id; });
     if (!confirm('Clear linked_node_id on every line pointing at a deleted node? This is one-way (you\'ll need to reassign manually).')) return;
-    if (window.agxApi && window.agxApi.isAuthenticated && window.agxApi.isAuthenticated()) {
-      window.agxApi.qbCosts.cleanupOrphans(_state.jobId, validNodeIds).then(function(res) {
+    if (window.p86Api && window.p86Api.isAuthenticated && window.p86Api.isAuthenticated()) {
+      window.p86Api.qbCosts.cleanupOrphans(_state.jobId, validNodeIds).then(function(res) {
         // Refresh from server so the local cache reflects the cleared links.
-        return window.agxApi.qbCosts.list(_state.jobId).then(function(listRes) {
+        return window.p86Api.qbCosts.list(_state.jobId).then(function(listRes) {
           if (window.appData && Array.isArray(window.appData.qbCostLines) && listRes && listRes.lines) {
             window.appData.qbCostLines = listRes.lines.map(function(l) { return l; });
           }

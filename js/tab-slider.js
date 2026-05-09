@@ -6,7 +6,7 @@
 // CSS transition (Stripe / Vercel style). One indicator element is
 // appended per tab bar; its left + width are set inline to match the
 // currently-active tab's offset, and the CSS transition (defined in
-// styles.css under .agx-tab-slider) drives the slide.
+// styles.css under .p86-tab-slider) drives the slide.
 //
 // Wires every tab bar in the app:
 //   - nav.tabs            (top header tabs)
@@ -30,10 +30,10 @@
   var SELECTORS = ['nav.tabs', '.ws-right-tabs', '.sub-tabs', '.sub-modal-tabs'];
 
   function ensureSlider(bar) {
-    var slider = bar.querySelector(':scope > .agx-tab-slider');
+    var slider = bar.querySelector(':scope > .p86-tab-slider');
     if (!slider) {
       slider = document.createElement('div');
-      slider.className = 'agx-tab-slider';
+      slider.className = 'p86-tab-slider';
       bar.appendChild(slider);
     }
     return slider;
@@ -63,14 +63,14 @@
   }
 
   function wireBar(bar) {
-    if (bar.__agxSliderWired) {
+    if (bar.__p86SliderWired) {
       // Already wired — just nudge the slider in case the active
       // tab changed since last visit (e.g., the bar was hidden and
       // now reveals).
       positionSlider(bar);
       return;
     }
-    bar.__agxSliderWired = true;
+    bar.__p86SliderWired = true;
     ensureSlider(bar);
     // Bar must be a positioning context for the absolute slider.
     if (getComputedStyle(bar).position === 'static') {
@@ -138,5 +138,5 @@
 
   // Public hook — let other scripts force a reposition after they
   // do something we can't observe from here (rare).
-  window.agxTabSliderRefresh = repositionAll;
+  window.p86TabSliderRefresh = repositionAll;
 })();

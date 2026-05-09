@@ -2,15 +2,15 @@
 //
 // 24 icons sourced from Phosphor (MIT) and Heroicons (MIT). Each
 // retains stroke="currentColor" so CSS color rules tint them; CSS
-// sizing via .agx-icon { width: 1em; height: 1em } makes icons scale
+// sizing via .p86-icon { width: 1em; height: 1em } makes icons scale
 // to the parent's font-size automatically. Heroicons strokes are
 // slimmed from 1.5 → 1.2 to match Phosphor Light's lighter line ratio
 // per the locked AGX style.
 //
 // API:
-//   agxIcon(name)                  → SVG markup string
-//   agxIcon(name, { size: 18 })    → SVG with explicit width/height
-//   agxIcon(name, { class: 'x' })  → SVG with extra class
+//   p86Icon(name)                  → SVG markup string
+//   p86Icon(name, { size: 18 })    → SVG with explicit width/height
+//   p86Icon(name, { class: 'x' })  → SVG with extra class
 //
 // Phosphor:  https://phosphoricons.com (MIT, see assets/icons/agx/phosphor/PHOSPHOR-LICENSE.txt)
 // Heroicons: https://heroicons.com    (MIT, see assets/icons/agx/heroicons/HEROICONS-LICENSE.txt)
@@ -86,39 +86,39 @@
 
   /**
    * Returns an inline SVG markup string for the given AGX icon name.
-   * Adds class="agx-icon" by default; CSS sizes it to 1em × 1em.
+   * Adds class="p86-icon" by default; CSS sizes it to 1em × 1em.
    */
-  function agxIcon(name, opts) {
+  function p86Icon(name, opts) {
     opts = opts || {};
     var svg = icons[name];
     if (!svg) {
-      console.warn('[agxIcon] unknown icon:', name);
+      console.warn('[p86Icon] unknown icon:', name);
       return '';
     }
     var attrs = '';
     if (opts.size != null) {
       attrs += ' width="' + opts.size + '" height="' + opts.size + '"';
     }
-    var cls = 'agx-icon' + (opts.class ? ' ' + opts.class : '');
+    var cls = 'p86-icon' + (opts.class ? ' ' + opts.class : '');
     attrs += ' class="' + cls + '"';
     return svg.replace(/<svg /, '<svg' + attrs + ' ');
   }
 
   /**
-   * Auto-decorate any element marked data-agx-icon="<name>" by
-   * prepending the icon's SVG. Idempotent — sets data-agx-icon-decorated
+   * Auto-decorate any element marked data-p86-icon="<name>" by
+   * prepending the icon's SVG. Idempotent — sets data-p86-icon-decorated
    * once applied. A MutationObserver re-scans for new nodes so
    * decoration survives dynamic re-renders (modals rebuilt via
    * innerHTML, etc.).
    */
   function decorate(el) {
-    if (!el || el.dataset.agxIconDecorated === '1') return;
-    var name = el.dataset.agxIcon;
+    if (!el || el.dataset.p86IconDecorated === '1') return;
+    var name = el.dataset.p86Icon;
     if (!name || !icons[name]) return;
-    el.dataset.agxIconDecorated = '1';
+    el.dataset.p86IconDecorated = '1';
     var slot = document.createElement('span');
-    slot.className = 'agx-icon-slot';
-    slot.innerHTML = agxIcon(name);
+    slot.className = 'p86-icon-slot';
+    slot.innerHTML = p86Icon(name);
     el.insertBefore(slot, el.firstChild);
   }
 
@@ -128,9 +128,9 @@
   //   1. Icon-only elements (textContent is just the emoji, possibly
   //      with a U+FE0F variation selector) — swap innerHTML with SVG.
   //   2. Leading-emoji elements (innerHTML starts with emoji + space
-  //      + label) — set data-agx-icon and let decorate() prepend.
-  // Skipped on elements already swapped (data-agx-emoji-swapped=1) or
-  // already decorated (data-agx-icon-decorated=1). The MutationObserver
+  //      + label) — set data-p86-icon and let decorate() prepend.
+  // Skipped on elements already swapped (data-p86-emoji-swapped=1) or
+  // already decorated (data-p86-icon-decorated=1). The MutationObserver
   // re-runs the swap on dynamically rendered buttons (WIP list rows,
   // modal headers, node graph topbar, etc.).
   var EMOJI_ICONS = {
@@ -214,13 +214,13 @@
   }
   function emojiSwap(el) {
     if (!el || el.nodeType !== 1) return;
-    if (el.dataset.agxEmojiSwapped === '1' || el.dataset.agxIconDecorated === '1' || el.dataset.agxIcon) return;
+    if (el.dataset.p86EmojiSwapped === '1' || el.dataset.p86IconDecorated === '1' || el.dataset.p86Icon) return;
     if (!el.children) return;
     // Case 1: icon-only element (textContent is just one mapped emoji).
     var bare = strippedText(el);
     if (bare && EMOJI_ICONS[bare]) {
-      el.dataset.agxEmojiSwapped = '1';
-      el.innerHTML = agxIcon(EMOJI_ICONS[bare]);
+      el.dataset.p86EmojiSwapped = '1';
+      el.innerHTML = p86Icon(EMOJI_ICONS[bare]);
       return;
     }
     // Case 2: leading emoji + " Label" pattern. Only swap when the
@@ -230,9 +230,9 @@
     if (first && first.nodeType === 3 /* TEXT_NODE */) {
       var match = matchLeadingEmoji(first.nodeValue);
       if (match) {
-        el.dataset.agxEmojiSwapped = '1';
+        el.dataset.p86EmojiSwapped = '1';
         first.nodeValue = (match.rest ? ' ' + match.rest : '');
-        el.dataset.agxIcon = match.concept;
+        el.dataset.p86Icon = match.concept;
         decorate(el);
       }
     }
@@ -251,7 +251,7 @@
 
   function scan(root) {
     if (!root || !root.querySelectorAll) return;
-    root.querySelectorAll('[data-agx-icon]:not([data-agx-icon-decorated])').forEach(decorate);
+    root.querySelectorAll('[data-p86-icon]:not([data-p86-icon-decorated])').forEach(decorate);
     scanEmoji(root);
   }
   function boot() {
@@ -273,6 +273,6 @@
   }
 
   window.AGX_ICONS = icons;
-  window.agxIcon = agxIcon;
-  window.agxIconDecorate = scan;
+  window.p86Icon = p86Icon;
+  window.p86IconDecorate = scan;
 })();

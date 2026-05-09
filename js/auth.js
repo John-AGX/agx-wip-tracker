@@ -11,7 +11,7 @@
   var capabilities = new Set();
 
   function init() {
-    var stored = localStorage.getItem('agx-auth-token');
+    var stored = localStorage.getItem('p86-auth-token');
     if (stored) {
       token = stored;
       checkSession();
@@ -52,10 +52,10 @@
     // deep-linked or hit Back from a previous session, honor the URL.
     // The router's own boot will replay it; we only need to make sure
     // we don't ALSO call switchTab() here and stomp on it.
-    var urlHasRoute = !!(window.agxRouter && window.agxRouter.route().top);
+    var urlHasRoute = !!(window.p86Router && window.p86Router.route().top);
     var restored = false;
-    if (!urlHasRoute && typeof window.agxNavRestore === 'function') {
-      try { restored = window.agxNavRestore(); }
+    if (!urlHasRoute && typeof window.p86NavRestore === 'function') {
+      try { restored = window.p86NavRestore(); }
       catch (e) { console.warn('[nav] restore failed:', e); }
     }
     if (!urlHasRoute && !restored && typeof window.switchTab === 'function') {
@@ -148,12 +148,12 @@
   // Falls back to an empty cap set on failure (UI hides everything
   // capability-gated) — defensive but won't crash the app.
   function loadCapabilities() {
-    if (!currentUser || !window.agxApi) {
+    if (!currentUser || !window.p86Api) {
       capabilities = new Set();
       applyRoleVisibility();
       return Promise.resolve();
     }
-    return window.agxApi.roles.list().then(function(res) {
+    return window.p86Api.roles.list().then(function(res) {
       var role = (res.roles || []).find(function(r) { return r.name === currentUser.role; });
       var caps = (role && Array.isArray(role.capabilities)) ? role.capabilities : [];
       capabilities = new Set(caps);
@@ -197,7 +197,7 @@
       token = res.data.token;
       currentUser = res.data.user;
       isOffline = false;
-      localStorage.setItem('agx-auth-token', token);
+      localStorage.setItem('p86-auth-token', token);
       // Sub-portal users (role='sub') don't get the PM app shell —
       // hard-redirect them to the portal page. The token cookie is
       // already set by the server so /portal will load authenticated.
@@ -209,14 +209,14 @@
       // landing tab) is correct on first paint.
       loadCapabilities().then(function() { showApp(); });
       // Pull fresh data from the server now that we're authenticated.
-      if (window.agxData) window.agxData.reloadFromServer();
+      if (window.p86Data) window.p86Data.reloadFromServer();
       // Pre-load the users cache for admins so the PM dropdown is ready.
       // Load the users cache for everyone (admins get the rendered table from
       // refreshUsers; non-admins just need the cache populated so PM-by-id
       // lookups in the Job Information panel resolve names correctly).
-      if (window.agxAdmin) {
-        if (currentUser.role === 'admin') window.agxAdmin.refreshUsers();
-        else if (window.agxAdmin.loadUsersCache) window.agxAdmin.loadUsersCache();
+      if (window.p86Admin) {
+        if (currentUser.role === 'admin') window.p86Admin.refreshUsers();
+        else if (window.p86Admin.loadUsersCache) window.p86Admin.loadUsersCache();
       }
     })
     .catch(function() {
@@ -244,7 +244,7 @@
         return;
       }
       // Stash server-side feature flags on the global user object so
-      // any module can read them via agxAuth.getUser().feature_flags.
+      // any module can read them via p86Auth.getUser().feature_flags.
       // Phase 1b uses agent_mode_ag to switch AG chat to the
       // Sessions-backed v2 endpoint.
       if (currentUser && data.feature_flags) {
@@ -252,17 +252,17 @@
       }
       isOffline = false;
       loadCapabilities().then(function() { showApp(); });
-      if (window.agxData) window.agxData.reloadFromServer();
+      if (window.p86Data) window.p86Data.reloadFromServer();
       // Load the users cache for everyone (admins get the rendered table from
       // refreshUsers; non-admins just need the cache populated so PM-by-id
       // lookups in the Job Information panel resolve names correctly).
-      if (window.agxAdmin) {
-        if (currentUser.role === 'admin') window.agxAdmin.refreshUsers();
-        else if (window.agxAdmin.loadUsersCache) window.agxAdmin.loadUsersCache();
+      if (window.p86Admin) {
+        if (currentUser.role === 'admin') window.p86Admin.refreshUsers();
+        else if (window.p86Admin.loadUsersCache) window.p86Admin.loadUsersCache();
       }
     })
     .catch(function() {
-      localStorage.removeItem('agx-auth-token');
+      localStorage.removeItem('p86-auth-token');
       token = null;
       showLogin();
     });
@@ -270,7 +270,7 @@
 
   function doLogout() {
     fetch('/api/auth/logout', { method: 'POST' }).catch(function() {});
-    localStorage.removeItem('agx-auth-token');
+    localStorage.removeItem('p86-auth-token');
     token = null;
     currentUser = null;
     isOffline = false;
@@ -287,7 +287,7 @@
   }
 
   // Expose for other modules
-  window.agxAuth = {
+  window.p86Auth = {
     getUser: function() { return currentUser; },
     getToken: function() { return token; },
     isOffline: function() { return isOffline; },

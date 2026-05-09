@@ -35,9 +35,9 @@
   // app.js push status events into the editor's local state so the
   // save indicator reflects the actual server result instead of an
   // optimistic 700ms timer.
-  if (typeof window !== 'undefined' && window.agxPushStatus &&
-      typeof window.agxPushStatus.subscribe === 'function') {
-    window.agxPushStatus.subscribe(function(status, err) {
+  if (typeof window !== 'undefined' && window.p86PushStatus &&
+      typeof window.p86PushStatus.subscribe === 'function') {
+    window.p86PushStatus.subscribe(function(status, err) {
       if (status === 'saving')   setSaveState('saving');
       else if (status === 'saved') {
         setSaveState('saved');
@@ -71,7 +71,7 @@
       saveData();
       // If we're offline (no api / unauth), saveData wrote locally and
       // returned without scheduling a push — flip to "saved" once.
-      if (!window.agxApi || !window.agxApi.isAuthenticated()) {
+      if (!window.p86Api || !window.p86Api.isAuthenticated()) {
         setTimeout(function() {
           if (_saveState === 'saving') setSaveState('saved');
           setTimeout(function() {
@@ -185,7 +185,7 @@
     // Block editor while the initial server fetch is in-flight — opens
     // during the gap could let the user type edits against stale cache
     // that get silently overwritten when the fetch resolves.
-    if (typeof window.agxDataLoading === 'function' && window.agxDataLoading()) {
+    if (typeof window.p86DataLoading === 'function' && window.p86DataLoading()) {
       alert('Still loading from server — try again in a moment.');
       return;
     }
@@ -232,7 +232,7 @@
     setSaveState('idle');
     // Persist nav state so a refresh lands back inside this estimate
     // editor rather than the estimates list.
-    if (typeof window.agxNavSave === 'function') window.agxNavSave();
+    if (typeof window.p86NavSave === 'function') window.p86NavSave();
   }
 
   // Scope textarea — bound to the ACTIVE alternate's scope so Good /
@@ -313,8 +313,8 @@
     // could lose the last server commit attempt because the page
     // tab might unload before the network call resolves.
     var pending = (_saveState === 'saving' || _saveState === 'retrying' || _saveState === 'pending');
-    var inFlight = (window.agxPushStatus && typeof window.agxPushStatus.inFlight === 'function')
-      ? window.agxPushStatus.inFlight()
+    var inFlight = (window.p86PushStatus && typeof window.p86PushStatus.inFlight === 'function')
+      ? window.p86PushStatus.inFlight()
       : Promise.resolve();
     var actuallyClose = function() {
       _currentId = null;
@@ -392,7 +392,7 @@
           console.warn('[estimate-editor] photos mount point missing');
         } else if (!_currentId) {
           mountEl.innerHTML = '<div style="padding:18px;color:var(--text-dim,#888);font-size:12px;font-style:italic;">No estimate loaded.</div>';
-        } else if (window.agxAttachments && typeof window.agxAttachments.mount === 'function') {
+        } else if (window.p86Attachments && typeof window.p86Attachments.mount === 'function') {
           // If the estimate was created from a lead (has lead_id), surface
           // the lead's attachments alongside the estimate's own as a
           // read-only "From lead" section. Read-only is enforced in the
@@ -410,10 +410,10 @@
               label: 'From lead'
             };
           }
-          window.agxAttachments.mount(mountEl, mountOpts);
+          window.p86Attachments.mount(mountEl, mountOpts);
         } else {
           mountEl.innerHTML = '<div style="padding:18px;color:var(--yellow,#fbbf24);font-size:12px;">Attachments widget not loaded — refresh the page.</div>';
-          console.warn('[estimate-editor] window.agxAttachments not available; can not mount photos tab');
+          console.warn('[estimate-editor] window.p86Attachments not available; can not mount photos tab');
         }
       }
     } catch (e) {
@@ -456,8 +456,8 @@
     est.aiPhase = nextPhase;
     debouncedSave();
     // Tell the AI panel to re-render its pill + notice + header.
-    if (window.agxAI && typeof window.agxAI.refreshPhaseChip === 'function') {
-      try { window.agxAI.refreshPhaseChip(); } catch (e) { /* ignore */ }
+    if (window.p86AI && typeof window.p86AI.refreshPhaseChip === 'function') {
+      try { window.p86AI.refreshPhaseChip(); } catch (e) { /* ignore */ }
     }
   }
 
@@ -468,7 +468,7 @@
     var html = '';
 
     if (est.client_id) {
-      var clients = (window.agxClients && window.agxClients.getCached && window.agxClients.getCached()) || [];
+      var clients = (window.p86Clients && window.p86Clients.getCached && window.p86Clients.getCached()) || [];
       var c = clients.find(function(x) { return x.id === est.client_id; });
       if (c) {
         html += '<span style="display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:14px;background:rgba(79,140,255,0.12);color:#4f8cff;font-size:11px;font-weight:600;">' +
@@ -478,7 +478,7 @@
       }
     }
     if (est.lead_id) {
-      var leads = (window.agxLeads && window.agxLeads.getCached && window.agxLeads.getCached()) || [];
+      var leads = (window.p86Leads && window.p86Leads.getCached && window.p86Leads.getCached()) || [];
       var lead = leads.find(function(x) { return x.id === est.lead_id; });
       if (lead) {
         html += '<button class="ee-btn secondary" onclick="jumpToLeadFromEstimate(\'' + escapeHTML(lead.id) + '\')" style="display:inline-flex;align-items:center;gap:6px;">' +
@@ -492,12 +492,12 @@
         html += '<button class="ee-btn secondary" onclick="jumpToLeadFromEstimate(\'' + escapeHTML(est.lead_id) + '\')" style="display:inline-flex;align-items:center;gap:6px;background:rgba(251,191,36,0.10);color:var(--yellow,#fbbf24);">' +
           '<span>&#x1F4CB;</span>Linked to lead &rarr;' +
         '</button>';
-        if (window.agxApi && window.agxApi.leads && typeof window.agxApi.leads.get === 'function') {
-          window.agxApi.leads.get(est.lead_id).then(function(res) {
+        if (window.p86Api && window.p86Api.leads && typeof window.p86Api.leads.get === 'function') {
+          window.p86Api.leads.get(est.lead_id).then(function(res) {
             if (res && res.lead) {
               // Push into the cache so subsequent renders are instant.
-              if (window.agxLeads && typeof window.agxLeads.cacheLead === 'function') {
-                window.agxLeads.cacheLead(res.lead);
+              if (window.p86Leads && typeof window.p86Leads.cacheLead === 'function') {
+                window.p86Leads.cacheLead(res.lead);
               }
               renderHeaderChips();
             }
@@ -697,7 +697,7 @@
     var msg = lineCount
       ? 'This will also remove ' + lineCount + ' line item' + (lineCount === 1 ? '' : 's') + ' / subgroup header' + (lineCount === 1 ? '' : 's') + '. This cannot be undone.'
       : 'This cannot be undone.';
-    window.agxConfirm({
+    window.p86Confirm({
       title: 'Delete group "' + a.name + '"?',
       message: msg,
       confirmText: 'Delete',
@@ -1334,7 +1334,7 @@
   function deleteLineFromEditor(lineId) {
     var line = (appData.estimateLines || []).find(function(l) { return l.id === lineId; });
     var preview = line && line.description ? line.description : 'this line';
-    window.agxConfirm({
+    window.p86Confirm({
       title: 'Delete line item?',
       message: '"' + preview + '" will be removed from the active alternate. This cannot be undone.',
       confirmText: 'Delete',
@@ -1351,7 +1351,7 @@
   function deleteSectionFromEditor(sectionId) {
     var section = (appData.estimateLines || []).find(function(l) { return l.id === sectionId; });
     var name = section && section.description ? section.description : 'this section';
-    window.agxConfirm({
+    window.p86Confirm({
       title: 'Remove section header?',
       message: 'The header "' + name + '" will be removed. The line items underneath it stay where they are.',
       confirmText: 'Remove',
@@ -1640,7 +1640,7 @@
       var hidden = document.getElementById('editEst_clientId');
       if (hidden) hidden.value = sel.value || '';
       if (!sel.value) { renderHeaderChips(); return; }
-      var clients = (window.agxClients && window.agxClients.getCached && window.agxClients.getCached()) || [];
+      var clients = (window.p86Clients && window.p86Clients.getCached && window.p86Clients.getCached()) || [];
       var c = clients.find(function(x) { return x.id === sel.value; });
       if (!c) return;
       var setIf = function(elId, v) {
@@ -1711,7 +1711,7 @@
 
   // Tiny shim so the sticky-header "Ask AI" button can find the active
   // estimate id without the AI panel having to read the editor's private
-  // state. Just delegates to agxAI.open with the current id.
+  // state. Just delegates to p86AI.open with the current id.
   // Manual save invoked by the sticky-header Save button + the save
   // indicator (clicking the chip also triggers an immediate save).
   window.saveEstimateNow = function() {
@@ -1722,8 +1722,8 @@
 
   window.openEstimateAI = function() {
     if (!_currentId) { alert('Open an estimate first.'); return; }
-    if (window.agxAI && typeof window.agxAI.open === 'function') {
-      window.agxAI.open(_currentId);
+    if (window.p86AI && typeof window.p86AI.open === 'function') {
+      window.p86AI.open(_currentId);
     } else {
       alert('AI panel not loaded yet — refresh the page.');
     }

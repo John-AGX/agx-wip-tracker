@@ -46,11 +46,11 @@
   function loadMapping() {
     if (_mappingCache) return Promise.resolve(_mappingCache);
     if (_mappingPromise) return _mappingPromise;
-    if (!window.agxApi || !window.agxApi.isAuthenticated()) {
+    if (!window.p86Api || !window.p86Api.isAuthenticated()) {
       _mappingCache = DEFAULT_MAPPING;
       return Promise.resolve(_mappingCache);
     }
-    _mappingPromise = window.agxApi.settings.get('bt_export_mapping')
+    _mappingPromise = window.p86Api.settings.get('bt_export_mapping')
       .then(function (res) {
         var v = res && res.setting && res.setting.value;
         _mappingCache = normalizeMapping(v);

@@ -1487,7 +1487,7 @@
       // upload / list / lightbox / delete UI; we just hand it the
       // entity ids. Re-mounting on every activation is cheap (it
       // re-fetches the list anyway) and keeps state simple.
-      if (typeof window.agxAttachments === 'undefined' || !window.agxAttachments.mount) {
+      if (typeof window.p86Attachments === 'undefined' || !window.p86Attachments.mount) {
         host.innerHTML = '<div style="padding:24px;color:var(--text-dim,#888);font-size:13px;">' +
           'Attachments component is unavailable. Reload the page to retry.' +
         '</div>';
@@ -1543,7 +1543,7 @@
       var slot = mount.querySelector('.ws-attachments-component');
       var noticeEl = mount.querySelector('.ws-attachments-xlsx-notice');
       if (slot) {
-        window.agxAttachments.mount(slot, {
+        window.p86Attachments.mount(slot, {
           entityType: 'job',
           entityId: workbook.jobId,
           canEdit: true
@@ -1642,15 +1642,15 @@
       // workbook tab returns to the same sheet across reloads.
       workbookGroupActive: workbook.workbookGroupActive || {}
     };
-    const allWs = safeLoadJSON('agx-workspaces', {});
+    const allWs = safeLoadJSON('p86-workspaces', {});
     allWs[workbook.jobId] = data;
-    localStorage.setItem('agx-workspaces', JSON.stringify(allWs));
+    localStorage.setItem('p86-workspaces', JSON.stringify(allWs));
     workbook.dirty = false;
     grid.dirty = false;
   }
 
   function loadWorkspace(jobId) {
-    const allWs = safeLoadJSON('agx-workspaces', {});
+    const allWs = safeLoadJSON('p86-workspaces', {});
     const saved = allWs[jobId];
 
     workbook.jobId = jobId;

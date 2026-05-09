@@ -78,7 +78,7 @@
 
     // Build the modal
     var overlay = document.createElement('div');
-    overlay.className = 'agx-pdf-viewer';
+    overlay.className = 'p86-pdf-viewer';
     overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:9000;display:flex;flex-direction:column;';
 
     var header = document.createElement('div');
@@ -128,10 +128,10 @@
     statusEl.textContent = 'Loading PDF…';
     var proxyUrl = '/api/attachments/raw/' + encodeURIComponent(attachment.id) + '?variant=original';
     var headers = {};
-    var token = (window.agxAuth && typeof window.agxAuth.getToken === 'function')
-      ? window.agxAuth.getToken() : null;
+    var token = (window.p86Auth && typeof window.p86Auth.getToken === 'function')
+      ? window.p86Auth.getToken() : null;
     if (!token) {
-      try { token = localStorage.getItem('agx-auth-token'); } catch (e) { /* ignore */ }
+      try { token = localStorage.getItem('p86-auth-token'); } catch (e) { /* ignore */ }
     }
     if (token) headers['Authorization'] = 'Bearer ' + token;
     fetch(proxyUrl, { headers: headers, credentials: 'same-origin' })
@@ -171,7 +171,7 @@
       alert('Pages are still rendering — try again in a moment.');
       return;
     }
-    if (!window.agxAI || typeof window.agxAI.openWithImages !== 'function') {
+    if (!window.p86AI || typeof window.p86AI.openWithImages !== 'function') {
       alert('AI panel is not loaded — refresh the page.');
       return;
     }
@@ -190,7 +190,7 @@
       ? ' (first ' + MAX_AI_PAGES + ' of ' + canvasEntries.length + ' pages — Anthropic\'s per-request image cap)'
       : '';
     var prefill = 'I\'ve attached the document "' + attachment.filename + '"' + truncationNote + '. Read each page and tell me what stands out.';
-    window.agxAI.openWithImages({
+    window.p86AI.openWithImages({
       entityType: entityType,
       entityId: entityId,
       images: images,
@@ -216,10 +216,10 @@
     var s   = scale || 1.5;
     var proxyUrl = '/api/attachments/raw/' + encodeURIComponent(attachment.id) + '?variant=original';
     var headers = {};
-    var token = (window.agxAuth && typeof window.agxAuth.getToken === 'function')
-      ? window.agxAuth.getToken() : null;
+    var token = (window.p86Auth && typeof window.p86Auth.getToken === 'function')
+      ? window.p86Auth.getToken() : null;
     if (!token) {
-      try { token = localStorage.getItem('agx-auth-token'); } catch (e) { /* ignore */ }
+      try { token = localStorage.getItem('p86-auth-token'); } catch (e) { /* ignore */ }
     }
     if (token) headers['Authorization'] = 'Bearer ' + token;
     return fetch(proxyUrl, { headers: headers, credentials: 'same-origin' })
@@ -259,5 +259,5 @@
       });
   }
 
-  window.agxPdfRender = { renderForAI: renderForAI };
+  window.p86PdfRender = { renderForAI: renderForAI };
 })();

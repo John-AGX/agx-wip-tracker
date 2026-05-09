@@ -12,8 +12,8 @@ function renderWIPMain() {
             opts = opts || {};
             var msg = opts.message || ('Delete this ' + label + '?' +
                 (opts.note ? '\n\n' + opts.note : ''));
-            if (typeof window.agxConfirm === 'function') {
-                return window.agxConfirm({
+            if (typeof window.p86Confirm === 'function') {
+                return window.p86Confirm({
                     title: opts.title || ('Delete ' + label),
                     message: msg,
                     confirmLabel: opts.confirmLabel || 'Delete',
@@ -904,8 +904,8 @@ function renderWIPMain() {
         function populateJobPMSelect() {
             var sel = document.getElementById('jobPM');
             if (!sel) return;
-            var auth = window.agxAuth;
-            var admin = window.agxAdmin;
+            var auth = window.p86Auth;
+            var admin = window.p86Admin;
             if (!auth || auth.isOffline() || !admin) {
                 // Legacy / offline mode — keep the static dropdown as-is
                 sel.value = '';
@@ -986,7 +986,7 @@ function renderWIPMain() {
             document.getElementById('wip-job-detail-view').style.display = 'block';
             // Persist nav state so a refresh lands back on this job
             // detail rather than the WIP list root.
-            if (typeof window.agxNavSave === 'function') window.agxNavSave();
+            if (typeof window.p86NavSave === 'function') window.p86NavSave();
         }
 
         function backToWIPMain() {
@@ -1018,8 +1018,8 @@ function renderWIPMain() {
                 renderJobDetail(job.id);
                 return;
             }
-            var go = (typeof window.agxConfirm === 'function')
-              ? window.agxConfirm({
+            var go = (typeof window.p86Confirm === 'function')
+              ? window.p86Confirm({
                   title: 'Archive job',
                   message: 'Archive "' + (job.title || 'this job') + '"? It will be hidden from the active list.',
                   confirmLabel: 'Archive'
@@ -1039,8 +1039,8 @@ function renderWIPMain() {
             const jobId = appState.currentJobId;
             const job = appData.jobs.find(j => j.id === jobId);
             if (!job) return;
-            var go = (typeof window.agxConfirm === 'function')
-              ? window.agxConfirm({
+            var go = (typeof window.p86Confirm === 'function')
+              ? window.p86Confirm({
                   title: 'Delete job permanently',
                   message: 'Permanently delete "' + (job.title || 'this job') + '" and all its buildings, phases, subs, and change orders?\n\nThis cannot be undone.',
                   confirmLabel: 'Delete forever',
@@ -1062,16 +1062,16 @@ function renderWIPMain() {
             appData.invoices = (appData.invoices || []).filter(i => i.jobId !== jobId);
             appData.jobs = appData.jobs.filter(j => j.id !== jobId);
             // Remove workspace data
-            var allWs = safeLoadJSON('agx-workspaces', {});
+            var allWs = safeLoadJSON('p86-workspaces', {});
             delete allWs[jobId];
-            localStorage.setItem('agx-workspaces', JSON.stringify(allWs));
+            localStorage.setItem('p86-workspaces', JSON.stringify(allWs));
             // Persist locally + push to server. The bulk-save endpoint only
             // upserts present jobs, so we also need an explicit DELETE
             // /api/jobs/:id call — without this the server keeps the job
             // and it reappears on the next page reload.
             saveData();
-            if (window.agxApi && window.agxApi.isAuthenticated()) {
-                window.agxApi.jobs.remove(jobId).catch(function(err) {
+            if (window.p86Api && window.p86Api.isAuthenticated()) {
+                window.p86Api.jobs.remove(jobId).catch(function(err) {
                     console.warn('Server delete failed for ' + jobId + ':', err.message);
                 });
             }
@@ -1164,8 +1164,8 @@ function renderWIPMain() {
         // falling back to the legacy job.pm string for old jobs / offline mode.
         function getJobOwnerName(job) {
             if (!job) return '—';
-            if (window.agxAdmin && window.agxAdmin.findUserById) {
-                var u = window.agxAdmin.findUserById(job.owner_id);
+            if (window.p86Admin && window.p86Admin.findUserById) {
+                var u = window.p86Admin.findUserById(job.owner_id);
                 if (u && u.name) return u.name;
             }
             return job.pm || '—';
@@ -1292,18 +1292,18 @@ function renderWIPMain() {
             // Sharing button — visible only to admin or the job owner. Renders
             // a tiny inline indicator with the share count, and opens the
             // existing manage-sharing modal on click.
-            var auth = window.agxAuth;
+            var auth = window.p86Auth;
             var me = auth && auth.getUser && auth.getUser();
             var jobObj = appData.jobs.find(function(j) { return j.id === jobId; });
             var canManageSharing = me && jobObj && (me.role === 'admin' || me.id === jobObj.owner_id);
-            if (canManageSharing && window.agxApi && window.agxApi.isAuthenticated()) {
+            if (canManageSharing && window.p86Api && window.p86Api.isAuthenticated()) {
                 btnRow.insertAdjacentHTML('beforeend',
                     '<button class="ee-btn primary" onclick="openJobShareManager(\'' + escapeHTML(jobId) + '\')" ' +
                     'data-readonly-allowed ' +
                     'id="job-overview-share-btn">&#x1F517; Sharing <span id="job-overview-share-count" style="opacity:0.7;font-size:10px;"></span></button>'
                 );
                 // Async fetch the share count so the button shows '(n)' if any
-                window.agxApi.jobs.listAccess(jobId).then(function(res) {
+                window.p86Api.jobs.listAccess(jobId).then(function(res) {
                     var n = (res.shares || []).length;
                     var countEl = document.getElementById('job-overview-share-count');
                     if (countEl && n > 0) countEl.textContent = '(' + n + ')';
@@ -1317,12 +1317,12 @@ function renderWIPMain() {
             // mount point. Renders muted placeholders if the job has no
             // address yet so the widget never shouts "broken" — it just
             // explains why the data isn't there.
-            if (window.agxWeather && typeof window.agxWeather.renderJobWidget === 'function') {
+            if (window.p86Weather && typeof window.p86Weather.renderJobWidget === 'function') {
                 var wxMount = document.createElement('div');
                 wxMount.style.cssText = 'margin:0 0 14px 0;';
                 wxMount.id = 'job-overview-weather';
                 container.appendChild(wxMount);
-                window.agxWeather.renderJobWidget(wxMount, jobId);
+                window.p86Weather.renderJobWidget(wxMount, jobId);
             }
 
             // ── Building cards ──
@@ -2985,8 +2985,8 @@ function renderWIPMain() {
 
             populatePhaseTypeSelect();
             if (phase.phase && !Array.from(document.getElementById('phaseType').options).some(o => o.value === phase.phase)) {
-                const c = getCustomItems('agx-wip-custom-phases');
-                if (!c.includes(phase.phase)) { c.push(phase.phase); saveCustomItems('agx-wip-custom-phases', c); populatePhaseTypeSelect(); }
+                const c = getCustomItems('p86-wip-custom-phases');
+                if (!c.includes(phase.phase)) { c.push(phase.phase); saveCustomItems('p86-wip-custom-phases', c); populatePhaseTypeSelect(); }
             }
             document.getElementById('phaseType').value = phase.phase || '';
             // As-Sold Revenue is the only dollar field on the phase
@@ -3386,8 +3386,8 @@ function renderWIPMain() {
             updateSubDirectoryHint();
             populateSubTradeSelect();
             if (sub.trade && !Array.from(document.getElementById('subTrade').options).some(o => o.value === sub.trade)) {
-                const c = getCustomItems('agx-wip-custom-trades');
-                if (!c.includes(sub.trade)) { c.push(sub.trade); saveCustomItems('agx-wip-custom-trades', c); populateSubTradeSelect(); }
+                const c = getCustomItems('p86-wip-custom-trades');
+                if (!c.includes(sub.trade)) { c.push(sub.trade); saveCustomItems('p86-wip-custom-trades', c); populateSubTradeSelect(); }
             }
             document.getElementById('subTrade').value = sub.trade || '';
             document.getElementById('subContract').value = sub.contractAmt || '';
@@ -3557,15 +3557,15 @@ function renderWIPMain() {
             appData.invoices = (appData.invoices || []).filter(function(i) { return i.jobId !== jobId; });
             // Remove node graph
             try {
-                var all = JSON.parse(localStorage.getItem('agx-nodegraphs') || '{}');
+                var all = JSON.parse(localStorage.getItem('p86-nodegraphs') || '{}');
                 delete all[jobId];
-                localStorage.setItem('agx-nodegraphs', JSON.stringify(all));
+                localStorage.setItem('p86-nodegraphs', JSON.stringify(all));
             } catch (e) {}
             saveData();
             // Server-side delete (bulk-save only upserts; without this the
             // job comes back on next page reload).
-            if (window.agxApi && window.agxApi.isAuthenticated()) {
-                window.agxApi.jobs.remove(jobId).catch(function(err) {
+            if (window.p86Api && window.p86Api.isAuthenticated()) {
+                window.p86Api.jobs.remove(jobId).catch(function(err) {
                     console.warn('Server delete failed for ' + jobId + ':', err.message);
                 });
             }

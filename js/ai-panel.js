@@ -3,7 +3,7 @@
 // (server-side) but cannot modify the estimate. Per-user chat history.
 //
 // Wire-up:
-//   - Estimate editor calls window.agxAI.toggle() / .open(estimateId)
+//   - Estimate editor calls window.p86AI.toggle() / .open(estimateId)
 //   - On open, we GET /api/ai/estimates/:id/messages to load history
 //   - User submits → POST /api/ai/estimates/:id/chat (SSE), we stream the
 //     assistant's reply into a live message bubble
@@ -92,22 +92,22 @@
   // the entire client-side change. Falls back to legacy when the flag
   // is missing (e.g. fresh login before /me hydrates feature_flags).
   function isAgAgentMode() {
-    var u = (window.agxAuth && window.agxAuth.getUser) ? window.agxAuth.getUser() : null;
+    var u = (window.p86Auth && window.p86Auth.getUser) ? window.p86Auth.getUser() : null;
     return !!(u && u.feature_flags && u.feature_flags.agent_mode_ag === 'agents');
   }
   // Phase 2 — same gating for 86 (jobs), HR (clients), and CoS
   // (staff). Independent flags so each agent ramps separately on its
   // own telemetry before flipping.
   function isJobAgentMode() {
-    var u = (window.agxAuth && window.agxAuth.getUser) ? window.agxAuth.getUser() : null;
+    var u = (window.p86Auth && window.p86Auth.getUser) ? window.p86Auth.getUser() : null;
     return !!(u && u.feature_flags && u.feature_flags.agent_mode_job === 'agents');
   }
   function isCraAgentMode() {
-    var u = (window.agxAuth && window.agxAuth.getUser) ? window.agxAuth.getUser() : null;
+    var u = (window.p86Auth && window.p86Auth.getUser) ? window.p86Auth.getUser() : null;
     return !!(u && u.feature_flags && u.feature_flags.agent_mode_cra === 'agents');
   }
   function isStaffAgentMode() {
-    var u = (window.agxAuth && window.agxAuth.getUser) ? window.agxAuth.getUser() : null;
+    var u = (window.p86Auth && window.p86Auth.getUser) ? window.p86Auth.getUser() : null;
     return !!(u && u.feature_flags && u.feature_flags.agent_mode_staff === 'agents');
   }
   function apiBase() {
@@ -154,7 +154,7 @@
   // 86 starts as an analyst (no surprise mutations) — the PM grants
   // write access by approving a request_build_mode card or flipping
   // the phase pill manually.
-  function getJobPhaseKey(jobId) { return 'agx-elle-phase-' + (jobId || ''); }
+  function getJobPhaseKey(jobId) { return 'p86-elle-phase-' + (jobId || ''); }
   function getJobAIPhase(jobId) {
     if (!jobId) return 'plan';
     try {
@@ -187,9 +187,9 @@
   // id so a concurrent gather can await the same promise instead of
   // racing a second render.
   function kickoffAutoPdfRender(estimateId) {
-    if (!window.agxApi || !window.agxApi.attachments || !window.agxPdfRender) return;
+    if (!window.p86Api || !window.p86Api.attachments || !window.p86PdfRender) return;
     if (!estimateId) return;
-    window.agxApi.attachments.list('estimate', estimateId)
+    window.p86Api.attachments.list('estimate', estimateId)
       .then(function(resp) {
         var atts = (resp && resp.attachments) || [];
         atts.forEach(function(att) {
@@ -197,7 +197,7 @@
           if (att.mime_type !== 'application/pdf') return;
           if (att.extracted_text && att.extracted_text.length > 0) return; // text-layer PDF, server-side already covers it
           if (_autoPdfCache[att.id] || _autoPdfPromises[att.id]) return;
-          _autoPdfPromises[att.id] = window.agxPdfRender.renderForAI(att, 6, 1.5)
+          _autoPdfPromises[att.id] = window.p86PdfRender.renderForAI(att, 6, 1.5)
             .then(function(result) {
               _autoPdfCache[att.id] = {
                 images: result.images,
@@ -310,7 +310,7 @@
 
     // Node graph
     try {
-      var allGraphs = JSON.parse(localStorage.getItem('agx-nodegraphs') || '{}');
+      var allGraphs = JSON.parse(localStorage.getItem('p86-nodegraphs') || '{}');
       var g = allGraphs[jobId];
       if (g && Array.isArray(g.nodes)) {
         ctx.nodeGraph = {
@@ -374,7 +374,7 @@
         // Fallback: parse the workspace sheets the same way Phase 1
         // did. Marked source='sheets' so the prompt can warn the AI
         // that the data is localStorage-only and may be partial.
-        var allWs = JSON.parse(localStorage.getItem('agx-workspaces') || '{}');
+        var allWs = JSON.parse(localStorage.getItem('p86-workspaces') || '{}');
         var wb = allWs[jobId];
         if (wb && Array.isArray(wb.sheets)) {
           var qbSheets = wb.sheets.filter(function(s) { return /^QB Costs /.test(s.name || ''); });
@@ -458,7 +458,7 @@
     // "extract the line items from sheet 2." QB Costs sheets are
     // skipped (their data already rolls up via ctx.qbCosts).
     try {
-      var allWs2 = JSON.parse(localStorage.getItem('agx-workspaces') || '{}');
+      var allWs2 = JSON.parse(localStorage.getItem('p86-workspaces') || '{}');
       var wb2 = allWs2[jobId];
       if (wb2 && Array.isArray(wb2.sheets)) {
         var nonQB = wb2.sheets.filter(function(s) { return !/^QB Costs /.test(s.name || ''); });
@@ -611,7 +611,7 @@
   // Persist the user's preferred panel width across sessions. Min/max
   // protect against the user pulling it off-screen or shrinking past
   // a usable width — the chat UI breaks below ~320px.
-  var AI_PANEL_WIDTH_KEY = 'agx-ai-panel-width';
+  var AI_PANEL_WIDTH_KEY = 'p86-ai-panel-width';
   var AI_PANEL_WIDTH_MIN = 320;
   var AI_PANEL_WIDTH_MAX_FRAC = 0.92; // 92% of viewport width
   function loadAIPanelWidth() {
@@ -630,10 +630,10 @@
   }
 
   function ensurePanel() {
-    var panel = document.getElementById('agx-ai-panel');
+    var panel = document.getElementById('p86-ai-panel');
     if (panel) return panel;
     panel = document.createElement('div');
-    panel.id = 'agx-ai-panel';
+    panel.id = 'p86-ai-panel';
     // z-index 200 sits above the node graph (#nodeGraphTab z-index:99)
     // so 86 slides in over the graph rather than being
     // covered by it. Modals (.modal z:1000) still trump the panel.
@@ -657,25 +657,25 @@
        // padding 12px → 7px so the header sits ~10px shorter.
       '<div style="padding:7px 14px;border-bottom:1px solid rgba(34,211,238,0.35);background:linear-gradient(135deg,#0f172a 0%,#1e293b 100%);display:flex;align-items:center;gap:10px;">' +
         '<button id="ai-close" title="Close (Esc)" style="background:rgba(255,255,255,0.12);color:#fff;border:1px solid rgba(255,255,255,0.2);border-radius:6px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:6px;">&rarr; Close</button>' +
-        '<div class="agx-ai-title" style="font-size:14px;font-weight:700;color:#fff;flex:1;text-align:right;">&#x2728; AI Assistant</div>' +
+        '<div class="p86-ai-title" style="font-size:14px;font-weight:700;color:#fff;flex:1;text-align:right;">&#x2728; AI Assistant</div>' +
         // AG phase pill — single-icon dropdown. Visible only in estimate
         // mode. The visible icon reflects the active phase (📐 for Plan,
         // 🛠️ for Build); clicking opens a tiny popover with the *other*
         // option, so only one pill is on screen at any moment. Lives in
         // the panel header so the toggle is right next to AG\'s identity.
-        '<div id="agx-ai-phase-pill" role="group" aria-label="AG phase" style="display:none;position:relative;">' +
+        '<div id="p86-ai-phase-pill" role="group" aria-label="AG phase" style="display:none;position:relative;">' +
           // Transparent button — no fill, no border. Hover gives a faint
           // overlay so the user knows it\'s clickable. The SVG icon uses
           // currentColor so it inherits the surrounding header\'s white
           // text color, and "active" mode is conveyed by full opacity.
-          '<button id="agx-ai-phase-toggle" type="button" aria-haspopup="menu" aria-expanded="false" title="" ' +
+          '<button id="p86-ai-phase-toggle" type="button" aria-haspopup="menu" aria-expanded="false" title="" ' +
             'style="background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.15);color:#fff;padding:5px 9px;line-height:0;cursor:pointer;display:inline-flex;align-items:center;gap:5px;border-radius:6px;font-size:22px;transition:background 0.12s, border-color 0.12s;" ' +
             'onmouseenter="this.style.background=\'rgba(255,255,255,0.14)\'" ' +
             'onmouseleave="this.style.background=\'rgba(255,255,255,0.08)\'">' +
             '<span data-phase-icon style="display:inline-flex;align-items:center;"></span>' +
             '<span style="font-size:10px;opacity:0.7;line-height:1;">&#x25BE;</span>' +
           '</button>' +
-          '<div id="agx-ai-phase-menu" role="menu" style="display:none;position:absolute;top:100%;right:0;margin-top:4px;background:#1a2230;border:1px solid rgba(255,255,255,0.14);border-radius:8px;padding:4px;font-size:12px;white-space:nowrap;z-index:10;box-shadow:0 6px 16px rgba(0,0,0,0.4);min-width:160px;">' +
+          '<div id="p86-ai-phase-menu" role="menu" style="display:none;position:absolute;top:100%;right:0;margin-top:4px;background:#1a2230;border:1px solid rgba(255,255,255,0.14);border-radius:8px;padding:4px;font-size:12px;white-space:nowrap;z-index:10;box-shadow:0 6px 16px rgba(0,0,0,0.4);min-width:160px;">' +
             // Body filled in by refreshModeSpecificUI based on current phase.
           '</div>' +
         '</div>' +
@@ -715,13 +715,13 @@
           // gives a sleek Claude-style feel without per-button bespoke
           // styling. Send is the only one that's accent-colored at rest.
           '<div style="display:flex;align-items:center;gap:2px;margin-top:6px;">' +
-            '<button id="ai-attach" type="button" title="Attach file (image or PDF)" aria-label="Attach file" class="ai-tool-btn" style="font-size:18px;">' + (typeof agxIcon === 'function' ? agxIcon('composer-attach') : '&#x002B;') + '</button>' +
-            '<button id="ai-camera" type="button" title="Take a photo" aria-label="Take a photo" class="ai-tool-btn" style="font-size:18px;">' + (typeof agxIcon === 'function' ? agxIcon('composer-camera') : '&#x1F4F7;') + '</button>' +
-            '<button id="ai-mic" type="button" title="Dictate (voice → text)" aria-label="Dictate" class="ai-tool-btn" style="font-size:18px;">' + (typeof agxIcon === 'function' ? agxIcon('composer-mic') : '&#x1F3A4;') + '</button>' +
+            '<button id="ai-attach" type="button" title="Attach file (image or PDF)" aria-label="Attach file" class="ai-tool-btn" style="font-size:18px;">' + (typeof p86Icon === 'function' ? p86Icon('composer-attach') : '&#x002B;') + '</button>' +
+            '<button id="ai-camera" type="button" title="Take a photo" aria-label="Take a photo" class="ai-tool-btn" style="font-size:18px;">' + (typeof p86Icon === 'function' ? p86Icon('composer-camera') : '&#x1F4F7;') + '</button>' +
+            '<button id="ai-mic" type="button" title="Dictate (voice → text)" aria-label="Dictate" class="ai-tool-btn" style="font-size:18px;">' + (typeof p86Icon === 'function' ? p86Icon('composer-mic') : '&#x1F3A4;') + '</button>' +
             '<input id="ai-file-input" type="file" accept="image/*,application/pdf" multiple style="display:none;" />' +
             '<input id="ai-camera-input" type="file" accept="image/*" capture="environment" style="display:none;" />' +
             '<div style="flex:1;"></div>' +
-            '<button id="ai-send" type="button" title="Send (Enter)" aria-label="Send" style="background:linear-gradient(135deg,#4f8cff,#34d399);border:0;color:#fff;width:30px;height:30px;border-radius:50%;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;font-size:15px;padding:0;transition:transform 0.12s, opacity 0.12s;">' + (typeof agxIcon === 'function' ? agxIcon('composer-send') : '&#x2191;') + '</button>' +
+            '<button id="ai-send" type="button" title="Send (Enter)" aria-label="Send" style="background:linear-gradient(135deg,#4f8cff,#34d399);border:0;color:#fff;width:30px;height:30px;border-radius:50%;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;font-size:15px;padding:0;transition:transform 0.12s, opacity 0.12s;">' + (typeof p86Icon === 'function' ? p86Icon('composer-send') : '&#x2191;') + '</button>' +
           '</div>' +
         '</div>' +
       '</div>';
@@ -735,19 +735,19 @@
     var trustBtn = panel.querySelector('#ai-trust');
     if (trustBtn) trustBtn.onclick = function(e) {
       e.stopPropagation();
-      if (typeof window._agxAiPanelOpenTrust === 'function') {
-        window._agxAiPanelOpenTrust(trustBtn);
+      if (typeof window._p86AiPanelOpenTrust === 'function') {
+        window._p86AiPanelOpenTrust(trustBtn);
       }
     };
     // AG phase dropdown — toggle on click; outside click closes the
     // popover. The body of the menu (single alternate option) is
     // populated inside refreshModeSpecificUI so it always reflects
     // the current phase.
-    var phaseToggle = panel.querySelector('#agx-ai-phase-toggle');
+    var phaseToggle = panel.querySelector('#p86-ai-phase-toggle');
     if (phaseToggle) {
       phaseToggle.onclick = function(e) {
         e.stopPropagation();
-        var menu = panel.querySelector('#agx-ai-phase-menu');
+        var menu = panel.querySelector('#p86-ai-phase-menu');
         if (!menu) return;
         var isOpen = menu.style.display === 'block';
         if (isOpen) {
@@ -760,13 +760,13 @@
       };
     }
     document.addEventListener('click', function(e) {
-      var menu = panel.querySelector('#agx-ai-phase-menu');
-      var pillEl = panel.querySelector('#agx-ai-phase-pill');
+      var menu = panel.querySelector('#p86-ai-phase-menu');
+      var pillEl = panel.querySelector('#p86-ai-phase-pill');
       if (!menu || !pillEl) return;
       if (menu.style.display !== 'block') return;
       if (pillEl.contains(e.target)) return;
       menu.style.display = 'none';
-      var t = panel.querySelector('#agx-ai-phase-toggle');
+      var t = panel.querySelector('#p86-ai-phase-toggle');
       if (t) t.setAttribute('aria-expanded', 'false');
     });
     var input = panel.querySelector('#ai-input');
@@ -945,7 +945,7 @@
     void panel.offsetWidth; // force reflow on the off-screen state
     requestAnimationFrame(function() {
       panel.style.transform = 'translateX(0)';
-      document.body.classList.add('agx-ai-open');
+      document.body.classList.add('p86-ai-open');
     });
     _open = true;
     // Photos toggle and proposal cards only make sense on the estimate
@@ -958,22 +958,22 @@
   }
 
   function closeAIPhaseMenu() {
-    var menu = document.getElementById('agx-ai-phase-menu');
+    var menu = document.getElementById('p86-ai-phase-menu');
     if (menu) menu.style.display = 'none';
-    var toggle = document.getElementById('agx-ai-phase-toggle');
+    var toggle = document.getElementById('p86-ai-phase-toggle');
     if (toggle) toggle.setAttribute('aria-expanded', 'false');
   }
 
   function refreshModeSpecificUI() {
-    var headerEl = document.querySelector('#agx-ai-panel .agx-ai-title');
+    var headerEl = document.querySelector('#p86-ai-panel .p86-ai-title');
     if (headerEl) {
-      // Build title with an inline SVG icon when agxIcon is loaded;
+      // Build title with an inline SVG icon when p86Icon is loaded;
       // gracefully fall back to the legacy emoji if not. The icon
       // span gets a small right-margin so the text reads cleanly.
-      var hasIcons = typeof agxIcon === 'function';
+      var hasIcons = typeof p86Icon === 'function';
       function withIcon(iconName, emojiFallback, text) {
         var ic = hasIcons
-          ? '<span class="agx-icon" style="display:inline-flex;width:1em;height:1em;vertical-align:-0.15em;margin-right:6px;">' + agxIcon(iconName) + '</span>'
+          ? '<span class="p86-icon" style="display:inline-flex;width:1em;height:1em;vertical-align:-0.15em;margin-right:6px;">' + p86Icon(iconName) + '</span>'
           : (emojiFallback + ' ');
         return ic + text;
       }
@@ -988,7 +988,7 @@
     // with the *other* option. Pulled fresh from the editor API so
     // flips mid-conversation update immediately when refreshPhaseChip()
     // fires from the editor side.
-    var pill = document.getElementById('agx-ai-phase-pill');
+    var pill = document.getElementById('p86-ai-phase-pill');
     if (pill) {
       // Phase pill is dual-purpose now — visible in BOTH estimate (AG)
       // and job (Elle) mode. The visible icon and dropdown menu adapt
@@ -1011,20 +1011,20 @@
           planDesc = '86 analyzes WIP without writing changes';
           buildDesc = 'Elle proposes edits to WIP, phases, and graph';
         }
-        var toggleBtn = document.getElementById('agx-ai-phase-toggle');
+        var toggleBtn = document.getElementById('p86-ai-phase-toggle');
         var iconEl = pill.querySelector('[data-phase-icon]');
         if (toggleBtn && iconEl) {
-          iconEl.innerHTML = (typeof agxIcon === 'function')
-            ? agxIcon(phase === 'plan' ? 'plan-mode' : 'build-mode')
+          iconEl.innerHTML = (typeof p86Icon === 'function')
+            ? p86Icon(phase === 'plan' ? 'plan-mode' : 'build-mode')
             : (phase === 'plan' ? SVG_PLAN_ICON : SVG_BUILD_ICON);
           toggleBtn.title = phase === 'plan'
             ? 'Plan mode — ' + planDesc + '. Click to switch to Build.'
             : 'Build mode — ' + buildDesc + '. Click to switch to Plan.';
         }
-        var menu = document.getElementById('agx-ai-phase-menu');
+        var menu = document.getElementById('p86-ai-phase-menu');
         if (menu) {
-          var planSvg  = (typeof agxIcon === 'function') ? agxIcon('plan-mode')  : SVG_PLAN_ICON;
-          var buildSvg = (typeof agxIcon === 'function') ? agxIcon('build-mode') : SVG_BUILD_ICON;
+          var planSvg  = (typeof p86Icon === 'function') ? p86Icon('plan-mode')  : SVG_PLAN_ICON;
+          var buildSvg = (typeof p86Icon === 'function') ? p86Icon('build-mode') : SVG_BUILD_ICON;
           var alt = phase === 'plan'
             ? { key: 'build', svg: buildSvg, label: 'Build', desc: buildDesc }
             : { key: 'plan',  svg: planSvg,  label: 'Plan',  desc: planDesc };
@@ -1032,7 +1032,7 @@
           // phase. (Plan mode never auto-applies anything; estimate
           // mode has no trust toggles since AG only proposes
           // line-items, never silently mutates.) The trust map lives
-          // in localStorage under agx-ai-trust:job, so changes here
+          // in localStorage under p86-ai-trust:job, so changes here
           // persist across reloads.
           var trustSectionHtml = '';
           var showTrust = isJobMode() && phase === 'build';
@@ -1108,7 +1108,7 @@
     // a ref to #ai-trust keeps working) but is permanently hidden.
     var trustBtn = document.getElementById('ai-trust');
     if (trustBtn) trustBtn.style.display = 'none';
-    var noticeEl = document.querySelector('#agx-ai-panel #ai-notice');
+    var noticeEl = document.querySelector('#p86-ai-panel #ai-notice');
     if (noticeEl) {
       if (isJobMode()) noticeEl.textContent = 'I\'m 86, Project 86\'s lead agent. I have range over the whole company — revenue, cost, production, WIP, margin, schedule, the node graph. I delegate to 47 (estimating) and HR (client + research). I can propose edits for you to approve before they apply.';
       else if (isClientMode()) noticeEl.textContent = 'I\'m HR — 86\'s research + client-relations assistant. I validate addresses, gather property photos via web search, and capture context that helps 86 and 47 do their jobs. Simple writes apply automatically; restructural changes require approval.';
@@ -1154,9 +1154,9 @@
   }
 
   function close() {
-    var panel = document.getElementById('agx-ai-panel');
+    var panel = document.getElementById('p86-ai-panel');
     if (panel) panel.style.transform = 'translateX(100%)';
-    document.body.classList.remove('agx-ai-open');
+    document.body.classList.remove('p86-ai-open');
     _open = false;
     if (_abortController) {
       try { _abortController.abort(); } catch (e) { /* ignore */ }
@@ -1174,7 +1174,7 @@
   // ──────────────────────────────────────────────────────────────────
 
   function loadHistory() {
-    if (!_entityId || !window.agxApi) return;
+    if (!_entityId || !window.p86Api) return;
     var box = document.getElementById('ai-messages');
     if (box) box.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;">Loading…</div>';
     fetch(messagesApiBase() + '/messages', {
@@ -1190,8 +1190,8 @@
 
   function clearConversation() {
     if (!_entityId) return;
-    var go = (typeof window.agxConfirm === 'function')
-      ? window.agxConfirm({
+    var go = (typeof window.p86Confirm === 'function')
+      ? window.p86Confirm({
           title: 'Clear conversation',
           message: 'Clear this conversation? Your messages on this ' + _entityType + ' will be deleted.',
           confirmLabel: 'Clear',
@@ -1207,8 +1207,8 @@
         _messages = [];
         renderMessages();
       }).catch(function(err) {
-        if (typeof window.agxAlert === 'function') {
-          window.agxAlert({ title: 'Clear failed', message: err.message || String(err) });
+        if (typeof window.p86Alert === 'function') {
+          window.p86Alert({ title: 'Clear failed', message: err.message || String(err) });
         } else {
           alert('Clear failed: ' + (err.message || err));
         }
@@ -1226,8 +1226,8 @@
       // back to emoji glyphs that the page-wide swapper would
       // otherwise replace anyway.
       var hintIcon = function(name) {
-        return (typeof agxIcon === 'function')
-          ? '<span class="agx-icon" style="display:inline-flex;width:1em;height:1em;vertical-align:-0.15em;margin-right:6px;">' + agxIcon(name) + '</span>'
+        return (typeof p86Icon === 'function')
+          ? '<span class="p86-icon" style="display:inline-flex;width:1em;height:1em;vertical-align:-0.15em;margin-right:6px;">' + p86Icon(name) + '</span>'
           : '';
       };
       if (isJobMode()) hint = '<strong style="color:var(--text,#fff);">' + hintIcon('dna') + '86 · Lead Agent</strong><br>Pick a preset below or ask anything about this job.<br><span style="font-size:11px;opacity:0.7;">I see contract, costs, COs, %complete, billing — plus the node graph wiring and QuickBooks cost lines.</span>';
@@ -1388,8 +1388,8 @@
     var startPhrase = BRAIN_YOGA_PHRASES[Math.floor(Math.random() * BRAIN_YOGA_PHRASES.length)];
     div.innerHTML =
       '<div style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-dim,#888);margin-bottom:4px;">' +
-        '<span class="agx-cloud-anim" data-stream-cloud style="font-size:14px;line-height:1;">☁️</span>' +
-        '<span data-stream-phrase class="agx-phrase" style="font-style:italic;">' + startPhrase + '</span>' +
+        '<span class="p86-cloud-anim" data-stream-cloud style="font-size:14px;line-height:1;">☁️</span>' +
+        '<span data-stream-phrase class="p86-phrase" style="font-style:italic;">' + startPhrase + '</span>' +
       '</div>' +
       // Content lives in its own block at full panel width. overflow
       // safety pins remain so a long unbreakable string can\'t push
@@ -1415,20 +1415,20 @@
       if (paused) return;
       idx = (idx + 1) % BRAIN_YOGA_PHRASES.length;
       // Re-trigger the fade animation by toggling the class.
-      phraseEl.classList.remove('agx-phrase');
+      phraseEl.classList.remove('p86-phrase');
       // Force reflow so the animation can replay.
       void phraseEl.offsetWidth;
       phraseEl.textContent = BRAIN_YOGA_PHRASES[idx];
-      phraseEl.classList.add('agx-phrase');
+      phraseEl.classList.add('p86-phrase');
     }, 3500);
     return {
       stop: function() { clearInterval(iv); },
       override: function(text, sticky) {
         paused = !!sticky;
-        phraseEl.classList.remove('agx-phrase');
+        phraseEl.classList.remove('p86-phrase');
         void phraseEl.offsetWidth;
         phraseEl.textContent = text;
-        phraseEl.classList.add('agx-phrase');
+        phraseEl.classList.add('p86-phrase');
         if (!sticky) {
           // Resume rotation after a short hold so the user can read it.
           setTimeout(function() { paused = false; }, 1500);
@@ -1443,7 +1443,7 @@
 
   function authHeaders() {
     var headers = { 'Content-Type': 'application/json' };
-    var token = (window.agxAuth && window.agxAuth.getToken && window.agxAuth.getToken()) || localStorage.getItem('agx-auth-token');
+    var token = (window.p86Auth && window.p86Auth.getToken && window.p86Auth.getToken()) || localStorage.getItem('p86-auth-token');
     if (token) headers['Authorization'] = 'Bearer ' + token;
     return headers;
   }
@@ -1575,7 +1575,7 @@
         if (payload.delta) {
           assistantText += payload.delta;
           if (contentEl) contentEl.innerHTML = renderMarkdown(assistantText) +
-            '<span style="display:inline-block;width:7px;height:13px;background:#34d399;margin-left:2px;animation:agx-blink 0.9s step-end infinite;"></span>';
+            '<span style="display:inline-block;width:7px;height:13px;background:#34d399;margin-left:2px;animation:p86-blink 0.9s step-end infinite;"></span>';
           scrollToBottom();
         } else if (payload.tool_use) {
           pendingToolUses.push(payload.tool_use);
@@ -1670,7 +1670,7 @@
           phraseEl.style.color = 'var(--text-dim,#888)';
         }
         var cloudEl = streamDiv && streamDiv.querySelector('[data-stream-cloud]');
-        if (cloudEl) cloudEl.classList.remove('agx-cloud-anim');
+        if (cloudEl) cloudEl.classList.remove('p86-cloud-anim');
       } else {
         // No text and no chips — true "(no response)" empty turn.
         if (streamDiv && streamDiv.parentNode) streamDiv.parentNode.removeChild(streamDiv);
@@ -1746,8 +1746,8 @@
         try {
           summary = applyTool(tu);
         } catch (e) {
-          if (typeof window.agxAlert === 'function') {
-            window.agxAlert({ title: 'Could not apply', message: e.message || String(e) });
+          if (typeof window.p86Alert === 'function') {
+            window.p86Alert({ title: 'Could not apply', message: e.message || String(e) });
           } else {
             alert('Could not apply: ' + (e.message || e));
           }
@@ -1995,17 +1995,17 @@
   // false (always preview). Toggle via the gear in the panel header.
   function isTrusted(toolName) {
     try {
-      var raw = localStorage.getItem('agx-ai-trust:job') || '{}';
+      var raw = localStorage.getItem('p86-ai-trust:job') || '{}';
       var map = JSON.parse(raw);
       return !!map[toolName];
     } catch (e) { return false; }
   }
   function setTrusted(toolName, val) {
     try {
-      var raw = localStorage.getItem('agx-ai-trust:job') || '{}';
+      var raw = localStorage.getItem('p86-ai-trust:job') || '{}';
       var map = JSON.parse(raw);
       if (val) map[toolName] = true; else delete map[toolName];
-      localStorage.setItem('agx-ai-trust:job', JSON.stringify(map));
+      localStorage.setItem('p86-ai-trust:job', JSON.stringify(map));
     } catch (e) {}
   }
   // The four job-side tools available for trust toggling, with friendly
@@ -2021,10 +2021,10 @@
   ];
 
   function openTrustPopover(anchorBtn) {
-    var existing = document.getElementById('agx-ai-trust-popover');
+    var existing = document.getElementById('p86-ai-trust-popover');
     if (existing) { existing.remove(); return; }
     var pop = document.createElement('div');
-    pop.id = 'agx-ai-trust-popover';
+    pop.id = 'p86-ai-trust-popover';
     var rect = anchorBtn.getBoundingClientRect();
     pop.style.cssText =
       'position:fixed;top:' + (rect.bottom + 4) + 'px;right:' + Math.max(8, window.innerWidth - rect.right) + 'px;' +
@@ -2056,7 +2056,7 @@
     }, 0);
   }
   // Public for the panel header button
-  window._agxAiPanelOpenTrust = openTrustPopover;
+  window._p86AiPanelOpenTrust = openTrustPopover;
 
   function applyTool(tu) {
     if (isClientMode() || isStaffMode() || isIntakeMode()) {
@@ -2124,7 +2124,7 @@
     read_past_estimates: true
   };
   function execAGAutoTool(name, input) {
-    return window.agxApi.post('/api/ai/exec-tool', { name: name, input: input || {} })
+    return window.p86Api.post('/api/ai/exec-tool', { name: name, input: input || {} })
       .then(function(resp) {
         if (resp && typeof resp.summary === 'string') return resp.summary;
         return '(empty result)';
@@ -2143,7 +2143,7 @@
     if (!clientId) throw new Error('This estimate is not linked to a client — link a client first, then add the note.');
     var body = (input && input.body || '').trim();
     if (!body) throw new Error('Note body is empty.');
-    await window.agxApi.clients.addNote(clientId, body, 'ag');
+    await window.p86Api.clients.addNote(clientId, body, 'ag');
     return 'Saved note on linked client: "' + body.slice(0, 80) + (body.length > 80 ? '…' : '') + '"';
   }
 
@@ -2212,7 +2212,7 @@
     //     prefer optionalNode if we already have it, else look it up
     //     in the saved graph by buildingId or label.
     var graphsAll = {};
-    try { graphsAll = JSON.parse(localStorage.getItem('agx-nodegraphs') || '{}'); } catch (e) {}
+    try { graphsAll = JSON.parse(localStorage.getItem('p86-nodegraphs') || '{}'); } catch (e) {}
     var graphData = graphsAll[jobId] || { nodes: [], wires: [] };
     var graphNodes = graphData.nodes || [];
     var graphWires = graphData.wires || [];
@@ -2241,7 +2241,7 @@
         var oldT1 = Number(t1Node.pctComplete || 0);
         t1Node.pctComplete = newPct;
         graphsAll[jobId] = graphData;
-        try { localStorage.setItem('agx-nodegraphs', JSON.stringify(graphsAll)); } catch (e) {}
+        try { localStorage.setItem('p86-nodegraphs', JSON.stringify(graphsAll)); } catch (e) {}
         if (typeof NG !== 'undefined' && NG.saveGraph) NG.saveGraph();
         if (typeof window.ngRender === 'function') { try { window.ngRender(); } catch (e) {} }
         return 'No phases or wires under "' + (building.name || bldgId) + '" — set t1 directly: ' +
@@ -2260,7 +2260,7 @@
       // Persist graph changes back to localStorage so the engine
       // re-reads them. NG.saveGraph also fires for an in-memory sync.
       graphsAll[jobId] = graphData;
-      try { localStorage.setItem('agx-nodegraphs', JSON.stringify(graphsAll)); } catch (e) {}
+      try { localStorage.setItem('p86-nodegraphs', JSON.stringify(graphsAll)); } catch (e) {}
       if (typeof NG !== 'undefined' && NG.saveGraph) NG.saveGraph();
     }
     if (typeof window.ngRender === 'function') { try { window.ngRender(); } catch (e) {} }
@@ -2405,7 +2405,7 @@
           });
           // Count nodes recently created (no data.id yet, or just created
           // in this turn). We use a tiny per-call offset to space them.
-          var spawnOffset = (window._agxAiSpawnCounter = ((window._agxAiSpawnCounter || 0) + 1));
+          var spawnOffset = (window._p86AiSpawnCounter = ((window._p86AiSpawnCounter || 0) + 1));
           baseX = maxX + 220;
           baseY = 80 + ((spawnOffset - 1) % 6) * 140;
           if (spawnOffset > 6) baseX = baseX - 220 * Math.floor((spawnOffset - 1) / 6);
@@ -2578,7 +2578,7 @@
           // Engine hasn't loaded this job's graph yet — fall back to
           // the localStorage blob and persist directly.
           persistDirect = true;
-          graphsBlob = JSON.parse(localStorage.getItem('agx-nodegraphs') || '{}');
+          graphsBlob = JSON.parse(localStorage.getItem('p86-nodegraphs') || '{}');
           gBlob = graphsBlob[jid];
           if (!gBlob || !Array.isArray(gBlob.nodes)) throw new Error('Job has no node graph yet.');
           nodesArr = gBlob.nodes;
@@ -2614,7 +2614,7 @@
 
         if (persistDirect) {
           graphsBlob[jid] = gBlob;
-          localStorage.setItem('agx-nodegraphs', JSON.stringify(graphsBlob));
+          localStorage.setItem('p86-nodegraphs', JSON.stringify(graphsBlob));
         } else if (typeof NG !== 'undefined' && NG.saveGraph) {
           // Write the now-updated in-memory state through the engine.
           NG.saveGraph();
@@ -2640,7 +2640,7 @@
           nodesArrV = liveNodesV;
         } else {
           persistDirectV = true;
-          graphsBlobV = JSON.parse(localStorage.getItem('agx-nodegraphs') || '{}');
+          graphsBlobV = JSON.parse(localStorage.getItem('p86-nodegraphs') || '{}');
           gBlobV = graphsBlobV[jidNV];
           if (!gBlobV || !Array.isArray(gBlobV.nodes)) throw new Error('Job has no node graph yet.');
           nodesArrV = gBlobV.nodes;
@@ -2668,7 +2668,7 @@
 
         if (persistDirectV) {
           graphsBlobV[jidNV] = gBlobV;
-          localStorage.setItem('agx-nodegraphs', JSON.stringify(graphsBlobV));
+          localStorage.setItem('p86-nodegraphs', JSON.stringify(graphsBlobV));
         } else if (typeof NG !== 'undefined' && NG.saveGraph) {
           NG.saveGraph();
         }
@@ -2689,7 +2689,7 @@
         // can suggest alternatives instead of saying "0 rows."
         var jid = (window.appState && appState.currentJobId) || null;
         if (!jid) throw new Error('No job is open.');
-        var allWs = JSON.parse(localStorage.getItem('agx-workspaces') || '{}');
+        var allWs = JSON.parse(localStorage.getItem('p86-workspaces') || '{}');
         var wb = allWs[jid];
         if (!wb || !Array.isArray(wb.sheets)) throw new Error('No workspace for this job.');
         var requested = String(input.sheet_name || '');
@@ -2848,7 +2848,7 @@
         // /continue rebuild reflects the canonical state.
         // Same id-or-label fallback as wire_nodes for the node side.
         var jid2 = (window.appState && appState.currentJobId) || null;
-        var graphs2 = jid2 ? JSON.parse(localStorage.getItem('agx-nodegraphs') || '{}') : {};
+        var graphs2 = jid2 ? JSON.parse(localStorage.getItem('p86-nodegraphs') || '{}') : {};
         var nodes2 = (jid2 && graphs2[jid2] && graphs2[jid2].nodes) || [];
         var resolvedNodeId = input.node_id;
         var nMatch = nodes2.find(function(n) { return n.id === input.node_id; });
@@ -2860,8 +2860,8 @@
         var lines = (window.appData && appData.qbCostLines) || [];
         var line = lines.find(function(l) { return l.id === input.line_id; });
         if (line) line.linked_node_id = resolvedNodeId;
-        if (window.agxApi && window.agxApi.isAuthenticated && window.agxApi.isAuthenticated()) {
-          window.agxApi.qbCosts.update(input.line_id, { linkedNodeId: resolvedNodeId }).catch(function(err) {
+        if (window.p86Api && window.p86Api.isAuthenticated && window.p86Api.isAuthenticated()) {
+          window.p86Api.qbCosts.update(input.line_id, { linkedNodeId: resolvedNodeId }).catch(function(err) {
             console.warn('[ai] assign_qb_line server patch failed:', err && err.message);
           });
         }
@@ -3026,13 +3026,13 @@
         var pairs = Array.isArray(input.pairs) ? input.pairs : [];
         if (!pairs.length) throw new Error('assign_qb_lines_bulk: pairs array is empty');
         var jidB = (window.appState && appState.currentJobId) || null;
-        var graphsB = jidB ? JSON.parse(localStorage.getItem('agx-nodegraphs') || '{}') : {};
+        var graphsB = jidB ? JSON.parse(localStorage.getItem('p86-nodegraphs') || '{}') : {};
         var nodesB = (jidB && graphsB[jidB] && graphsB[jidB].nodes) || [];
         var qbLinesB = (window.appData && appData.qbCostLines) || [];
         var ok = 0, missingNode = 0, missingLine = 0;
         var perNode = {};
         var serverPatches = [];
-        var apiAvail = window.agxApi && window.agxApi.isAuthenticated && window.agxApi.isAuthenticated();
+        var apiAvail = window.p86Api && window.p86Api.isAuthenticated && window.p86Api.isAuthenticated();
         pairs.forEach(function(p) {
           var nMatchB = nodesB.find(function(n) { return n.id === p.node_id; });
           var resolvedB = nMatchB ? p.node_id : null;
@@ -3049,7 +3049,7 @@
           perNode[resolvedB] = (perNode[resolvedB] || 0) + 1;
           if (apiAvail) {
             serverPatches.push(
-              window.agxApi.qbCosts.update(p.line_id, { linkedNodeId: resolvedB }).catch(function(err) {
+              window.p86Api.qbCosts.update(p.line_id, { linkedNodeId: resolvedB }).catch(function(err) {
                 console.warn('[ai] assign_qb_lines_bulk patch failed for ' + p.line_id + ':', err && err.message);
               })
             );
@@ -3079,7 +3079,7 @@
         var rbBuildings = (window.appData && (appData.buildings || []).filter(function(b) { return b.jobId === rbJobId; })) || [];
         var rbBldg = rbBuildings.find(function(b) { return b.id === rbInput; });
         if (!rbBldg) {
-          var rbGraphsForId = JSON.parse(localStorage.getItem('agx-nodegraphs') || '{}');
+          var rbGraphsForId = JSON.parse(localStorage.getItem('p86-nodegraphs') || '{}');
           var rbNodesForId = (rbGraphsForId[rbJobId] && rbGraphsForId[rbJobId].nodes) || [];
           var rbT1ById = rbNodesForId.find(function(n) { return n.type === 't1' && n.id === rbInput; });
           if (rbT1ById) {
@@ -3109,7 +3109,7 @@
             rbWeightedPct = rbPhases.reduce(function(s, p) { return s + (Number(p.pctComplete) || 0); }, 0) / rbPhases.length;
           }
         }
-        var rbGraphs = JSON.parse(localStorage.getItem('agx-nodegraphs') || '{}');
+        var rbGraphs = JSON.parse(localStorage.getItem('p86-nodegraphs') || '{}');
         var rbNodes = (rbGraphs[rbJobId] && rbGraphs[rbJobId].nodes) || [];
         var rbWires = (rbGraphs[rbJobId] && rbGraphs[rbJobId].wires) || [];
         var rbT1 = rbNodes.find(function(n) { return n.type === 't1' && n.buildingId === rbBldg.id; })
@@ -3172,7 +3172,7 @@
         if (!auJobId) throw new Error('read_job_pct_audit: no active job.');
         var auBuildings = (window.appData && (appData.buildings || []).filter(function(b) { return b.jobId === auJobId; })) || [];
         var auPhases = (window.appData && (appData.phases || []).filter(function(p) { return p.jobId === auJobId; })) || [];
-        var auGraphs = JSON.parse(localStorage.getItem('agx-nodegraphs') || '{}');
+        var auGraphs = JSON.parse(localStorage.getItem('p86-nodegraphs') || '{}');
         var auNodes = (auGraphs[auJobId] && auGraphs[auJobId].nodes) || [];
         var auWires = (auGraphs[auJobId] && auGraphs[auJobId].wires) || [];
 
@@ -3277,7 +3277,7 @@
       case 'set_wire_alloc_pct': {
         var swJobId = (window.appState && appState.currentJobId) || null;
         if (!swJobId) throw new Error(tu.name + ': no active job.');
-        var swGraphs = JSON.parse(localStorage.getItem('agx-nodegraphs') || '{}');
+        var swGraphs = JSON.parse(localStorage.getItem('p86-nodegraphs') || '{}');
         if (!swGraphs[swJobId]) throw new Error(tu.name + ': no graph for this job.');
         var swWires = swGraphs[swJobId].wires || [];
         var swFrom = String(input.from_node_id || '').trim();
@@ -3296,7 +3296,7 @@
           swNew = Math.max(0, Math.min(100, Number(input[swPayloadKey]) || 0));
           swWire[swField] = swNew;
         }
-        try { localStorage.setItem('agx-nodegraphs', JSON.stringify(swGraphs)); } catch (e) {}
+        try { localStorage.setItem('p86-nodegraphs', JSON.stringify(swGraphs)); } catch (e) {}
         if (typeof NG !== 'undefined' && NG.saveGraph) NG.saveGraph();
         if (typeof window.ngRender === 'function') { try { window.ngRender(); } catch (e) {} }
         if (typeof window.renderJobOverview === 'function' && window.appState && appState.currentJobId) {
@@ -3587,7 +3587,7 @@
         ? liveNV
         : (function() {
             try {
-              var g = JSON.parse(localStorage.getItem('agx-nodegraphs') || '{}');
+              var g = JSON.parse(localStorage.getItem('p86-nodegraphs') || '{}');
               return (nvJid && g[nvJid] && g[nvJid].nodes) || [];
             } catch (e) { return []; }
           })();
@@ -3674,7 +3674,7 @@
         : '<div style="font-size:12px;color:#fbbf24;">Node "' + escapeHTMLLocal(idDel) + '" not found in current graph.</div>';
     } else if (tu.name === 'wire_nodes') {
       var graphs = {};
-      try { graphs = JSON.parse(localStorage.getItem('agx-nodegraphs') || '{}'); } catch (e) {}
+      try { graphs = JSON.parse(localStorage.getItem('p86-nodegraphs') || '{}'); } catch (e) {}
       var jid = (window.appState && appState.currentJobId) || null;
       var nodes = (jid && graphs[jid] && graphs[jid].nodes) || [];
       var fromN = nodes.find(function(n) { return n.id === input.from_node_id; });
@@ -3690,7 +3690,7 @@
       var lines = (window.appData && appData.qbCostLines) || [];
       var line = lines.find(function(l) { return l.id === input.line_id; });
       var graphs2 = {};
-      try { graphs2 = JSON.parse(localStorage.getItem('agx-nodegraphs') || '{}'); } catch (e) {}
+      try { graphs2 = JSON.parse(localStorage.getItem('p86-nodegraphs') || '{}'); } catch (e) {}
       var jid2 = (window.appState && appState.currentJobId) || null;
       var nodes2 = (jid2 && graphs2[jid2] && graphs2[jid2].nodes) || [];
       var nodeT = nodes2.find(function(n) { return n.id === input.node_id; });
@@ -3809,7 +3809,7 @@
       var lines = (window.appData && appData.qbCostLines) || [];
       var line = lines.find(function(l) { return l.id === input.line_id; });
       var graphsT = {};
-      try { graphsT = JSON.parse(localStorage.getItem('agx-nodegraphs') || '{}'); } catch (e) {}
+      try { graphsT = JSON.parse(localStorage.getItem('p86-nodegraphs') || '{}'); } catch (e) {}
       var jidT = (window.appState && appState.currentJobId) || null;
       var nodesT = (jidT && graphsT[jidT] && graphsT[jidT].nodes) || [];
       var nodeT = nodesT.find(function(n) { return n.id === input.node_id; });
@@ -3852,7 +3852,7 @@
         '</div>';
     } else if (tu.name === 'wire_nodes') {
       var graphsW = {};
-      try { graphsW = JSON.parse(localStorage.getItem('agx-nodegraphs') || '{}'); } catch (e) {}
+      try { graphsW = JSON.parse(localStorage.getItem('p86-nodegraphs') || '{}'); } catch (e) {}
       var jidW = (window.appState && appState.currentJobId) || null;
       var nodesW = (jidW && graphsW[jidW] && graphsW[jidW].nodes) || [];
       var fromW = nodesW.find(function(n) { return n.id === input.from_node_id; });
@@ -4215,9 +4215,9 @@
     var supportsAttach = (_entityType === 'estimate' || _entityType === 'job' || _entityType === 'lead') && _entityId && _entityId !== '__global__';
     var jobs = [];
     // 1. Persist to entity attachments where it makes sense.
-    if (supportsAttach && window.agxApi && window.agxApi.attachments) {
+    if (supportsAttach && window.p86Api && window.p86Api.attachments) {
       jobs.push(
-        window.agxApi.attachments.upload(_entityType, _entityId, file).then(function(res) {
+        window.p86Api.attachments.upload(_entityType, _entityId, file).then(function(res) {
           var att = res.attachment || res;
           entry.attachmentId = att.id;
           entry.viewUrl = att.web_url || att.original_url || null;
@@ -4446,20 +4446,20 @@
   }
 
   // CSS for the cursor blink + body shift — appended once
-  if (!document.getElementById('agx-ai-css')) {
+  if (!document.getElementById('p86-ai-css')) {
     var style = document.createElement('style');
-    style.id = 'agx-ai-css';
+    style.id = 'p86-ai-css';
     style.textContent =
-      '@keyframes agx-blink { from, to { opacity: 1; } 50% { opacity: 0; } } ' +
-      '@keyframes agx-mic-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.12); } } ' +
+      '@keyframes p86-blink { from, to { opacity: 1; } 50% { opacity: 0; } } ' +
+      '@keyframes p86-mic-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.12); } } ' +
       // Cloud emoji bobs gently up + down while the agent is thinking,
       // and the phrase caption fades when it rotates so the user has
       // continuous proof-of-life even when an auto-tier tool is taking
       // a few seconds. Pure CSS — no GIF, no extra asset, dark-mode safe.
-      '@keyframes agx-cloud-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-3px); } } ' +
-      '@keyframes agx-phrase-fade { 0% { opacity: 0; transform: translateY(2px); } 20%, 100% { opacity: 1; transform: translateY(0); } } ' +
-      '.agx-cloud-anim { display: inline-block; animation: agx-cloud-bob 2.4s ease-in-out infinite; } ' +
-      '.agx-phrase { display: inline-block; animation: agx-phrase-fade 0.45s ease-out; } ' +
+      '@keyframes p86-cloud-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-3px); } } ' +
+      '@keyframes p86-phrase-fade { 0% { opacity: 0; transform: translateY(2px); } 20%, 100% { opacity: 1; transform: translateY(0); } } ' +
+      '.p86-cloud-anim { display: inline-block; animation: p86-cloud-bob 2.4s ease-in-out infinite; } ' +
+      '.p86-phrase { display: inline-block; animation: p86-phrase-fade 0.45s ease-out; } ' +
       '.ai-content p:first-child { margin-top: 0; } ' +
       '.ai-content p:last-child { margin-bottom: 0; } ' +
       // Hide scrollbar entirely on the input textarea — it grows up to its
@@ -4468,11 +4468,11 @@
       '#ai-input::-webkit-scrollbar { display: none; width: 0; height: 0; } ' +
       // Ghost scrollbars on the messages area + presets — dark, narrow,
       // only visible while actively scrolling.
-      '#agx-ai-panel ::-webkit-scrollbar { width: 6px; height: 6px; } ' +
-      '#agx-ai-panel ::-webkit-scrollbar-track { background: transparent; } ' +
-      '#agx-ai-panel ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.06); border-radius: 3px; transition: background 0.2s; } ' +
-      '#agx-ai-panel ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.14); } ' +
-      '#agx-ai-panel { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.06) transparent; } ' +
+      '#p86-ai-panel ::-webkit-scrollbar { width: 6px; height: 6px; } ' +
+      '#p86-ai-panel ::-webkit-scrollbar-track { background: transparent; } ' +
+      '#p86-ai-panel ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.06); border-radius: 3px; transition: background 0.2s; } ' +
+      '#p86-ai-panel ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.14); } ' +
+      '#p86-ai-panel { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.06) transparent; } ' +
       // Shared style for the input toolbar action buttons (attach,
       // camera, mic). Compact + transparent at rest, subtle fill on
       // hover. Per-button font-size set inline since each glyph wants
@@ -4490,10 +4490,10 @@
       // (otherwise the rightmost totals chips get hidden behind the
       // 420px-wide overlay). Smooth transition keeps the shift from
       // feeling jarring.
-      'body.agx-ai-open { padding-right: 420px; transition: padding-right 0.22s ease; } ' +
+      'body.p86-ai-open { padding-right: 420px; transition: padding-right 0.22s ease; } ' +
       // On narrow screens fall back to the overlay behavior — no point
       // shoving a tablet's content into a 200px column.
-      '@media (max-width: 1100px) { body.agx-ai-open { padding-right: 0; } }';
+      '@media (max-width: 1100px) { body.p86-ai-open { padding-right: 0; } }';
     document.head.appendChild(style);
   }
 
@@ -4532,7 +4532,7 @@
     }
   }
 
-  window.agxAI = {
+  window.p86AI = {
     open: open,
     openWithImages: openWithImages,
     close: close,
@@ -4545,7 +4545,7 @@
 
   // Sticky-header shim mirroring openEstimateAI() — finds the active job id
   // from the workspace state and opens the panel against it. Lives here so
-  // wip.js doesn't need to know about agxAI's internals.
+  // wip.js doesn't need to know about p86AI's internals.
   window.openJobAI = function() {
     var jobId = (window.appState && window.appState.currentJobId) || null;
     if (!jobId) { alert('Open a job first.'); return; }
@@ -4567,7 +4567,7 @@
     // Intake runs through 86 now — gate on agent_mode_job, not
     // a separate intake flag. The /v2/intake/* routes still exist
     // for this entry point but they call into 86's managed agent.
-    var u = (window.agxAuth && window.agxAuth.getUser) ? window.agxAuth.getUser() : null;
+    var u = (window.p86Auth && window.p86Auth.getUser) ? window.p86Auth.getUser() : null;
     var enabled = !!(u && u.feature_flags && u.feature_flags.agent_mode_job === 'agents');
     if (!enabled) {
       alert('Lead Intake AI is disabled. Set AGENT_MODE_86=agents in the server env to enable (intake runs through 86).');

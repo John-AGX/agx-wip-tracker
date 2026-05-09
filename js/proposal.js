@@ -6,12 +6,12 @@
 // ============================================================================
 
 function getEstimateData(estId) {
-  const estimates = safeLoadJSON('agx-estimates', []);
+  const estimates = safeLoadJSON('p86-estimates', []);
   return estimates.find(e => e.id === estId);
 }
 
 function getEstimateLines(estId) {
-  const lines = safeLoadJSON('agx-estimate-lines', []);
+  const lines = safeLoadJSON('p86-estimate-lines', []);
   return lines.filter(l => l.estimateId === estId);
 }
 
@@ -52,8 +52,8 @@ function extractIssueFromTitle(title, community) {
 // ============================================================================
 
 const COLORS = {
-  agxGreen: '#1B8541',
-  agxDarkBlue: '#1B3A5C',
+  p86Green: '#1B8541',
+  p86DarkBlue: '#1B3A5C',
   lightGreen: '#D5E8D9',
   veryLightGreen: '#E8F5E9',
   white: '#FFFFFF',
@@ -697,13 +697,13 @@ function processImportFile(file) {
 
       const { estimate, lines } = parsed;
 
-      const estimates = safeLoadJSON('agx-estimates', []);
+      const estimates = safeLoadJSON('p86-estimates', []);
       estimates.push(estimate);
-      localStorage.setItem('agx-estimates', JSON.stringify(estimates));
+      localStorage.setItem('p86-estimates', JSON.stringify(estimates));
 
-      const estimateLines = safeLoadJSON('agx-estimate-lines', []);
+      const estimateLines = safeLoadJSON('p86-estimate-lines', []);
       estimateLines.push(...lines);
-      localStorage.setItem('agx-estimate-lines', JSON.stringify(estimateLines));
+      localStorage.setItem('p86-estimate-lines', JSON.stringify(estimateLines));
 
       alert(`Estimate "${estimate.title}" imported successfully`);
 
@@ -735,10 +735,10 @@ function injectImportBtn() {
     return;
   }
 
-  if (document.getElementById('agx-import-btn')) { return; }
+  if (document.getElementById('p86-import-btn')) { return; }
 
   const button = document.createElement('button');
-  button.id = 'agx-import-btn';
+  button.id = 'p86-import-btn';
   button.className = 'success';
   button.textContent = 'Import Lead Report';
 
@@ -746,7 +746,7 @@ function injectImportBtn() {
   fileInput.type = 'file';
   fileInput.accept = '.xlsx';
   fileInput.style.display = 'none';
-  fileInput.id = 'agx-import-input';
+  fileInput.id = 'p86-import-input';
 
   button.addEventListener('click', () => { fileInput.click(); });
   fileInput.addEventListener('change', (e) => {
@@ -766,10 +766,10 @@ function injectTemplateBtn() {
     return;
   }
 
-  if (document.getElementById('agx-template-btn')) { return; }
+  if (document.getElementById('p86-template-btn')) { return; }
 
   const button = document.createElement('button');
-  button.id = 'agx-template-btn';
+  button.id = 'p86-template-btn';
   button.className = 'secondary';
   button.textContent = 'Blank Template';
 
@@ -801,7 +801,7 @@ function injectExportBtns() {
 
   const rows = document.querySelectorAll('#estimates-table tbody tr');
   rows.forEach(row => {
-    if (row.querySelector('.agx-export-btn, .agx-proposal-btn')) { return; }
+    if (row.querySelector('.p86-export-btn, .p86-proposal-btn')) { return; }
 
     const editBtn = row.querySelector('button[onclick*="editEstimate"]');
     if (!editBtn) return;
@@ -814,7 +814,7 @@ function injectExportBtns() {
     if (!lastTd) return;
 
     const proposalBtn = document.createElement('button');
-    proposalBtn.className = 'agx-proposal-btn small';
+    proposalBtn.className = 'p86-proposal-btn small';
     proposalBtn.textContent = 'Generate Proposal';
     proposalBtn.style.cssText = `
       background-color: #1B8541;
@@ -829,7 +829,7 @@ function injectExportBtns() {
     proposalBtn.addEventListener('click', (e) => { e.stopPropagation(); generateProposal(estId); });
 
     const exportBtn = document.createElement('button');
-    exportBtn.className = 'agx-export-btn small';
+    exportBtn.className = 'p86-export-btn small';
     exportBtn.textContent = 'Export';
     exportBtn.style.cssText = `
       background-color: #1B3A5C;
@@ -887,7 +887,7 @@ function patchEditEstimate() {
     _origEditEstimate(estId);
     setTimeout(function() {
       injectNickNameField();
-      var estimates = safeLoadJSON('agx-estimates', []);
+      var estimates = safeLoadJSON('p86-estimates', []);
       var est = estimates.find(function(e) { return e.id === estId; });
       var nickInput = document.getElementById('editEst_nickName');
       if (est && nickInput) { nickInput.value = est.nickName || ''; }
@@ -904,13 +904,13 @@ function patchSaveEstimateEdits() {
     var nickInput = document.getElementById('editEst_nickName');
     var nickVal = nickInput ? nickInput.value.trim() : '';
     _origSaveEstimateEdits();
-    var estimates = safeLoadJSON('agx-estimates', []);
+    var estimates = safeLoadJSON('p86-estimates', []);
     var titleVal = document.getElementById('editEst_title')?.value;
     if (titleVal) {
       var est = estimates.find(function(e) { return e.title === titleVal; });
       if (est) {
         est.nickName = nickVal;
-        localStorage.setItem('agx-estimates', JSON.stringify(estimates));
+        localStorage.setItem('p86-estimates', JSON.stringify(estimates));
       }
     }
   };

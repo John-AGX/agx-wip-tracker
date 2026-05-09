@@ -9,7 +9,7 @@
 // the source. Optional "Attach to proposal" toggles include_in_proposal.
 //
 // Usage:
-//   window.agxMarkup.open({
+//   window.p86Markup.open({
 //     attachment: { id, original_url, web_url, filename, entity_type, entity_id },
 //     onDone: function() { /* refresh list */ }
 //   });
@@ -49,9 +49,9 @@
       '<div style="font-size:12px;color:#9aa;margin-bottom:14px;">Distance between the two points. ' +
         'A bare number is read as <strong>' + unitLabel + '</strong> (toggle in the side panel). ' +
         'Quoted units like <code>84"</code>, <code>1.5\'</code>, or <code>5\'6"</code> always win.</div>' +
-      '<input id="agx-mk-prompt-input" type="text" autocomplete="off" placeholder="e.g. 84&quot;, 1.5&apos;, 5&apos;6&quot;, or just a number" ' +
+      '<input id="p86-mk-prompt-input" type="text" autocomplete="off" placeholder="e.g. 84&quot;, 1.5&apos;, 5&apos;6&quot;, or just a number" ' +
         'style="width:100%;box-sizing:border-box;background:#1a1a2e;color:#fff;border:1px solid #444;border-radius:6px;padding:10px 12px;font-size:14px;font-weight:600;outline:none;" />' +
-      '<div id="agx-mk-prompt-error" style="font-size:11px;color:#f87171;min-height:14px;margin-top:6px;"></div>' +
+      '<div id="p86-mk-prompt-error" style="font-size:11px;color:#f87171;min-height:14px;margin-top:6px;"></div>' +
       '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;">' +
         '<button data-mk-prompt-cancel style="padding:8px 16px;background:rgba(255,255,255,0.06);color:#ddd;border:1px solid #444;border-radius:6px;cursor:pointer;font-weight:600;">Cancel</button>' +
         '<button data-mk-prompt-ok style="padding:8px 16px;background:#4f8cff;color:#fff;border:1px solid #4f8cff;border-radius:6px;cursor:pointer;font-weight:600;">Set Measurement</button>' +
@@ -60,8 +60,8 @@
     overlay.appendChild(box);
     document.body.appendChild(overlay);
 
-    var input  = box.querySelector('#agx-mk-prompt-input');
-    var errEl  = box.querySelector('#agx-mk-prompt-error');
+    var input  = box.querySelector('#p86-mk-prompt-input');
+    var errEl  = box.querySelector('#p86-mk-prompt-error');
     var okBtn  = box.querySelector('[data-mk-prompt-ok]');
     var cancelBtn = box.querySelector('[data-mk-prompt-cancel]');
 
@@ -246,7 +246,7 @@
   // ── Layout / overlay ───────────────────────────────────────────
   function buildOverlay() {
     var overlay = document.createElement('div');
-    overlay.id = 'agx-markup-overlay';
+    overlay.id = 'p86-markup-overlay';
     overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.88);z-index:5000;display:flex;flex-direction:column;padding:14px;';
     // The sticker popup positions itself relative to the overlay
     // bounding box. position:fixed creates its own containing block so
@@ -256,14 +256,14 @@
       // Top bar — filename + actions (Cancel / Save)
       '<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;background:rgba(15,15,30,0.95);border:1px solid #2a2a3a;border-radius:10px;padding:8px 14px;">' +
         '<strong style="color:#fff;font-size:13px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTML(state.attachment.filename || 'Photo') + '</strong>' +
-        '<span id="agx-mk-hint" style="color:#aaa;font-size:11px;margin-right:8px;"></span>' +
-        '<button id="agx-mk-cancel" style="background:rgba(255,255,255,0.06);color:#aaa;border:1px solid #444;border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;">Cancel</button>' +
-        '<button id="agx-mk-save" style="background:#4f8cff;color:#fff;border:0;border-radius:6px;padding:6px 16px;font-size:12px;font-weight:700;cursor:pointer;">Save…</button>' +
+        '<span id="p86-mk-hint" style="color:#aaa;font-size:11px;margin-right:8px;"></span>' +
+        '<button id="p86-mk-cancel" style="background:rgba(255,255,255,0.06);color:#aaa;border:1px solid #444;border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;">Cancel</button>' +
+        '<button id="p86-mk-save" style="background:#4f8cff;color:#fff;border:0;border-radius:6px;padding:6px 16px;font-size:12px;font-weight:700;cursor:pointer;">Save…</button>' +
       '</div>' +
       // Body — left sidebar + canvas area
       '<div style="display:flex;gap:10px;flex:1;min-height:0;">' +
         // Sidebar
-        '<div id="agx-mk-sidebar" style="width:64px;flex:0 0 64px;background:rgba(15,15,30,0.95);border:1px solid #2a2a3a;border-radius:10px;padding:8px 6px;display:flex;flex-direction:column;gap:6px;align-items:center;overflow-y:auto;">' +
+        '<div id="p86-mk-sidebar" style="width:64px;flex:0 0 64px;background:rgba(15,15,30,0.95);border:1px solid #2a2a3a;border-radius:10px;padding:8px 6px;display:flex;flex-direction:column;gap:6px;align-items:center;overflow-y:auto;">' +
           // Tools
           TOOLS.map(function(t) {
             return '<button data-mk-tool="' + t.key + '" title="' + escapeHTML(t.label) + '" style="width:48px;height:44px;background:rgba(255,255,255,0.05);color:#ddd;border:1px solid #444;border-radius:6px;font-size:18px;cursor:pointer;display:flex;align-items:center;justify-content:center;line-height:1;font-weight:600;">' + t.glyph + '</button>';
@@ -279,32 +279,32 @@
           // Divider
           '<div style="width:36px;height:1px;background:#3a3a4a;margin:6px 0;"></div>' +
           // Thickness button — opens a popup with preset thickness circles.
-          '<button id="agx-mk-thickness" title="Thickness" style="width:48px;height:44px;background:rgba(255,255,255,0.05);color:#ddd;border:1px solid #444;border-radius:6px;cursor:pointer;display:flex;align-items:center;justify-content:center;line-height:1;padding:0;">' +
-            '<span id="agx-mk-thickness-dot" style="display:block;width:14px;height:14px;border-radius:50%;background:#ddd;"></span>' +
+          '<button id="p86-mk-thickness" title="Thickness" style="width:48px;height:44px;background:rgba(255,255,255,0.05);color:#ddd;border:1px solid #444;border-radius:6px;cursor:pointer;display:flex;align-items:center;justify-content:center;line-height:1;padding:0;">' +
+            '<span id="p86-mk-thickness-dot" style="display:block;width:14px;height:14px;border-radius:50%;background:#ddd;"></span>' +
           '</button>' +
           // Divider
           '<div style="width:36px;height:1px;background:#3a3a4a;margin:6px 0;"></div>' +
           // Undo / Clear
-          '<button id="agx-mk-undo" title="Undo (Ctrl+Z)" style="width:48px;height:32px;background:rgba(255,255,255,0.05);color:#ddd;border:1px solid #444;border-radius:6px;font-size:14px;cursor:pointer;">↶</button>' +
-          '<button id="agx-mk-clear" title="Clear all" style="width:48px;height:32px;background:rgba(248,113,113,0.10);color:#f87171;border:1px solid rgba(248,113,113,0.35);border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;">CLR</button>' +
+          '<button id="p86-mk-undo" title="Undo (Ctrl+Z)" style="width:48px;height:32px;background:rgba(255,255,255,0.05);color:#ddd;border:1px solid #444;border-radius:6px;font-size:14px;cursor:pointer;">↶</button>' +
+          '<button id="p86-mk-clear" title="Clear all" style="width:48px;height:32px;background:rgba(248,113,113,0.10);color:#f87171;border:1px solid rgba(248,113,113,0.35);border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;">CLR</button>' +
         '</div>' +
         // Floating sticker picker — absolutely positioned to the right of the
         // sidebar so it overlays the canvas instead of pushing the sidebar
         // height taller (which used to squeeze the canvas off-screen on
         // narrow viewports / phones). Visible only when the Sticker tool
         // is active.
-        '<div id="agx-mk-sticker-picker" style="display:none;position:absolute;left:88px;top:78px;background:rgba(15,15,30,0.97);border:1px solid #3a3a4a;border-radius:8px;padding:8px;box-shadow:0 6px 20px rgba(0,0,0,0.5);z-index:5050;max-height:70vh;overflow-y:auto;width:140px;"></div>' +
+        '<div id="p86-mk-sticker-picker" style="display:none;position:absolute;left:88px;top:78px;background:rgba(15,15,30,0.97);border:1px solid #3a3a4a;border-radius:8px;padding:8px;box-shadow:0 6px 20px rgba(0,0,0,0.5);z-index:5050;max-height:70vh;overflow-y:auto;width:140px;"></div>' +
         // Measurement picker — same anchor model as the sticker
         // picker. Visible only when the measure tool is active.
-        '<div id="agx-mk-measure-picker" style="display:none;position:absolute;left:88px;top:78px;background:rgba(15,15,30,0.97);border:1px solid #3a3a4a;border-radius:8px;padding:8px;box-shadow:0 6px 20px rgba(0,0,0,0.5);z-index:5050;max-height:70vh;overflow-y:auto;width:160px;"></div>' +
+        '<div id="p86-mk-measure-picker" style="display:none;position:absolute;left:88px;top:78px;background:rgba(15,15,30,0.97);border:1px solid #3a3a4a;border-radius:8px;padding:8px;box-shadow:0 6px 20px rgba(0,0,0,0.5);z-index:5050;max-height:70vh;overflow-y:auto;width:160px;"></div>' +
         // Canvas area
         '<div style="flex:1;background:#000;border:1px solid #2a2a3a;border-radius:10px;overflow:hidden;display:flex;align-items:center;justify-content:center;min-height:0;">' +
-          '<canvas id="agx-mk-canvas" style="display:block;max-width:100%;max-height:100%;"></canvas>' +
+          '<canvas id="p86-mk-canvas" style="display:block;max-width:100%;max-height:100%;"></canvas>' +
         '</div>' +
       '</div>';
 
     document.body.appendChild(overlay);
-    var canvas = overlay.querySelector('#agx-mk-canvas');
+    var canvas = overlay.querySelector('#p86-mk-canvas');
     loadImageInto(canvas);
 
     // Tool buttons
@@ -340,16 +340,16 @@
         }
       };
     });
-    overlay.querySelector('#agx-mk-thickness').onclick = function(e) {
+    overlay.querySelector('#p86-mk-thickness').onclick = function(e) {
       e.stopPropagation();
       openThicknessPopup(overlay);
     };
-    overlay.querySelector('#agx-mk-undo').onclick = function() {
+    overlay.querySelector('#p86-mk-undo').onclick = function() {
       state.strokes.pop();
       state.selectedIdx = null;
       redraw();
     };
-    overlay.querySelector('#agx-mk-clear').onclick = function() {
+    overlay.querySelector('#p86-mk-clear').onclick = function() {
       var hasContent = state.strokes.length || state.activePolyline;
       if (!hasContent || confirm('Clear all markup?')) {
         state.strokes = [];
@@ -358,10 +358,10 @@
         redraw();
       }
     };
-    overlay.querySelector('#agx-mk-cancel').onclick = function() {
+    overlay.querySelector('#p86-mk-cancel').onclick = function() {
       if (!state.strokes.length || confirm('Discard your markup?')) closeOverlay();
     };
-    overlay.querySelector('#agx-mk-save').onclick = function() {
+    overlay.querySelector('#p86-mk-save').onclick = function() {
       // Commit any in-progress polyline before opening the save dialog.
       commitPolylineIfActive();
       redraw();
@@ -386,7 +386,7 @@
           redraw();
           return;
         }
-        overlay.querySelector('#agx-mk-cancel').click();
+        overlay.querySelector('#p86-mk-cancel').click();
         return;
       }
       if (e.key === 'z' && (e.ctrlKey || e.metaKey)) {
@@ -415,8 +415,8 @@
   function loadImageInto(canvas) {
     var proxyUrl = '/api/attachments/raw/' + encodeURIComponent(state.attachment.id) + '?variant=web';
     var headers = {};
-    var token = (window.agxAuth && typeof window.agxAuth.getToken === 'function') ? window.agxAuth.getToken() : null;
-    if (!token) { try { token = localStorage.getItem('agx-auth-token'); } catch (e) { /* ignore */ } }
+    var token = (window.p86Auth && typeof window.p86Auth.getToken === 'function') ? window.p86Auth.getToken() : null;
+    if (!token) { try { token = localStorage.getItem('p86-auth-token'); } catch (e) { /* ignore */ } }
     if (token) headers['Authorization'] = 'Bearer ' + token;
     fetch(proxyUrl, { headers: headers, credentials: 'same-origin' })
       .then(function(r) {
@@ -470,7 +470,7 @@
   // Refresh the thickness button's inner dot so it visually reflects
   // the currently-selected line width.
   function updateThicknessIndicator(overlay) {
-    var dot = overlay.querySelector('#agx-mk-thickness-dot');
+    var dot = overlay.querySelector('#p86-mk-thickness-dot');
     if (!dot) return;
     var w = state.lineWidth || 4;
     // Clamp display size 6..22px so the button stays compact.
@@ -483,13 +483,13 @@
   // Thickness popup — three preset circles + a close X. Click a preset
   // to apply, click outside or X to close.
   function openThicknessPopup(overlay) {
-    var existing = document.getElementById('agx-mk-thickness-popup');
+    var existing = document.getElementById('p86-mk-thickness-popup');
     if (existing) { existing.remove(); return; }
-    var anchor = overlay.querySelector('#agx-mk-thickness');
+    var anchor = overlay.querySelector('#p86-mk-thickness');
     var anchorRect = anchor ? anchor.getBoundingClientRect() : null;
     var ovRect = overlay.getBoundingClientRect();
     var popup = document.createElement('div');
-    popup.id = 'agx-mk-thickness-popup';
+    popup.id = 'p86-mk-thickness-popup';
     popup.style.cssText = 'position:absolute;background:#fff;color:#1f2937;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,0.4);padding:14px 18px;z-index:5060;min-width:240px;';
     if (anchorRect) {
       popup.style.top = (anchorRect.top - ovRect.top) + 'px';
@@ -498,7 +498,7 @@
     popup.innerHTML =
       '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">' +
         '<strong style="font-size:14px;">Thickness</strong>' +
-        '<button id="agx-mk-thickness-close" style="background:rgba(0,0,0,0.06);color:#1f2937;border:0;width:30px;height:30px;border-radius:50%;font-size:16px;cursor:pointer;">&times;</button>' +
+        '<button id="p86-mk-thickness-close" style="background:rgba(0,0,0,0.06);color:#1f2937;border:0;width:30px;height:30px;border-radius:50%;font-size:16px;cursor:pointer;">&times;</button>' +
       '</div>' +
       '<hr style="border:0;border-top:1px solid #e5e7eb;margin:6px 0 14px;" />' +
       '<div style="display:flex;align-items:center;justify-content:space-around;gap:18px;">' +
@@ -512,7 +512,7 @@
         }).join('') +
       '</div>';
     overlay.appendChild(popup);
-    popup.querySelector('#agx-mk-thickness-close').onclick = function(e) { e.stopPropagation(); popup.remove(); };
+    popup.querySelector('#p86-mk-thickness-close').onclick = function(e) { e.stopPropagation(); popup.remove(); };
     popup.querySelectorAll('[data-mk-thick]').forEach(function(btn) {
       btn.onclick = function(e) {
         e.stopPropagation();
@@ -546,7 +546,7 @@
   }
 
   function renderMeasurePicker(overlay) {
-    var picker = overlay.querySelector('#agx-mk-measure-picker');
+    var picker = overlay.querySelector('#p86-mk-measure-picker');
     if (!picker) return;
     if (state.tool !== 'measure') { picker.style.display = 'none'; return; }
     // Anchor to the measure tool button (same pattern as the
@@ -554,7 +554,7 @@
     // the button occupies — no fixed top: that breaks if we ever
     // reorder the toolbar.
     var measureBtn = overlay.querySelector('[data-mk-tool="measure"]');
-    var sidebar = overlay.querySelector('#agx-mk-sidebar');
+    var sidebar = overlay.querySelector('#p86-mk-sidebar');
     if (measureBtn && sidebar) {
       var btnRect = measureBtn.getBoundingClientRect();
       var sidebarRect = sidebar.getBoundingClientRect();
@@ -670,14 +670,14 @@
   }
 
   function renderStickerPicker(overlay) {
-    var picker = overlay.querySelector('#agx-mk-sticker-picker');
+    var picker = overlay.querySelector('#p86-mk-sticker-picker');
     if (!picker) return;
     if (state.tool !== 'sticker') { picker.style.display = 'none'; return; }
     // Anchor vertically to the Sticker button (so the popup sits at
     // the same row), and horizontally to the sidebar's right edge so
     // the popup never overlaps the sidebar regardless of width.
     var stickerBtn = overlay.querySelector('[data-mk-tool="sticker"]');
-    var sidebar = overlay.querySelector('#agx-mk-sidebar');
+    var sidebar = overlay.querySelector('#p86-mk-sidebar');
     if (stickerBtn && sidebar) {
       var btnRect = stickerBtn.getBoundingClientRect();
       var sidebarRect = sidebar.getBoundingClientRect();
@@ -708,7 +708,7 @@
   }
 
   function updateHint(overlay) {
-    var hint = overlay.querySelector('#agx-mk-hint');
+    var hint = overlay.querySelector('#p86-mk-hint');
     if (!hint) return;
     if (state.tool === 'select') {
       hint.textContent = state.selectedIdx != null ? 'Drag to move · Delete to remove' : 'Click an element to select';
@@ -760,7 +760,7 @@
           state.dragLast = null;
         }
         setCursor();
-        var overlay = document.getElementById('agx-markup-overlay');
+        var overlay = document.getElementById('p86-markup-overlay');
         if (overlay) updateHint(overlay);
         redraw();
         return;
@@ -1004,7 +1004,7 @@
 
   // ── Drawing ─────────────────────────────────────────────────────
   function redraw(extra) {
-    var canvas = document.getElementById('agx-mk-canvas');
+    var canvas = document.getElementById('p86-mk-canvas');
     if (!canvas || !state.img) return;
     var ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -1373,10 +1373,10 @@
       alert('No markup yet — draw something or Cancel.');
       return;
     }
-    var prevDialog = document.getElementById('agx-mk-savedlg');
+    var prevDialog = document.getElementById('p86-mk-savedlg');
     if (prevDialog) prevDialog.remove();
     var dlg = document.createElement('div');
-    dlg.id = 'agx-mk-savedlg';
+    dlg.id = 'p86-mk-savedlg';
     dlg.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:5100;display:flex;align-items:center;justify-content:center;';
     // Cross-entity markup (e.g. marking up a lead photo from the
     // estimate's Attachments tab): hide the "Replace original" option
@@ -1464,7 +1464,7 @@
   }
 
   function runSave(mode, includeInProposal) {
-    var canvas = document.getElementById('agx-mk-canvas');
+    var canvas = document.getElementById('p86-mk-canvas');
     if (!canvas) return Promise.reject(new Error('Canvas missing.'));
     var att = state.attachment;
     var target = state.saveTarget;
@@ -1472,7 +1472,7 @@
       var extra = {};
       if (mode === 'new' && att.id) extra.markup_of = att.id;
       if (includeInProposal) extra.include_in_proposal = true;
-      var uploadP = window.agxApi.attachments.upload(target.entityType, target.entityId, file, extra);
+      var uploadP = window.p86Api.attachments.upload(target.entityType, target.entityId, file, extra);
       if (mode === 'replace') {
         // Replace only deletes the source if the markup is uploading
         // back into the same entity that owns it — replacing a foreign
@@ -1483,7 +1483,7 @@
           return uploadP; // treat as save-as-new instead
         }
         return uploadP.then(function(r) {
-          return window.agxApi.attachments.remove(att.id).catch(function() {}).then(function() { return r; });
+          return window.p86Api.attachments.remove(att.id).catch(function() {}).then(function() { return r; });
         });
       }
       return uploadP;
@@ -1491,7 +1491,7 @@
   }
 
   function closeOverlay() {
-    var overlay = document.getElementById('agx-markup-overlay');
+    var overlay = document.getElementById('p86-markup-overlay');
     if (overlay) overlay.remove();
     state = null;
   }
@@ -1502,5 +1502,5 @@
       .replace(/"/g, '&quot;');
   }
 
-  window.agxMarkup = { open: open, close: closeOverlay };
+  window.p86Markup = { open: open, close: closeOverlay };
 })();

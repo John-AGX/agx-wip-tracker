@@ -367,7 +367,7 @@
   // preview, and to decide whether to confirm before commit.
   function sheetExistsForJob(jobId, reportDate) {
     try {
-      var allWs = JSON.parse(localStorage.getItem('agx-workspaces') || '{}');
+      var allWs = JSON.parse(localStorage.getItem('p86-workspaces') || '{}');
       var ws = allWs[jobId];
       if (!ws || !ws.sheets) return false;
       var name = 'QB Costs ' + reportDate;
@@ -514,7 +514,7 @@
 
     var allWs;
     try {
-      allWs = JSON.parse(localStorage.getItem('agx-workspaces') || '{}');
+      allWs = JSON.parse(localStorage.getItem('p86-workspaces') || '{}');
     } catch (e) {
       allWs = {};
     }
@@ -547,7 +547,7 @@
       x.job.updatedAt = new Date().toISOString();
     });
 
-    localStorage.setItem('agx-workspaces', JSON.stringify(allWs));
+    localStorage.setItem('p86-workspaces', JSON.stringify(allWs));
     if (typeof saveData === 'function') saveData();
 
     // ── Phase 2: Server persistence ─────────────────────────────
@@ -555,7 +555,7 @@
     // truth lives in Postgres so re-imports across devices stay
     // idempotent. Fire-and-forget — if the server is offline the
     // workspace sheets still render fine from localStorage.
-    if (window.agxApi && window.agxApi.isAuthenticated && window.agxApi.isAuthenticated()) {
+    if (window.p86Api && window.p86Api.isAuthenticated && window.p86Api.isAuthenticated()) {
       var payload = {
         reportDate: _lastParse.reportDate,
         sourceFile: _lastParse.fileName || null,

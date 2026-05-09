@@ -69,11 +69,11 @@
       // Subs directory — render then refresh so the user sees fresh
       // counts every time they reopen the tab.
       if (typeof renderSubsDirectory === 'function') renderSubsDirectory();
-      if (window.agxSubs && typeof window.agxSubs.refresh === 'function') window.agxSubs.refresh();
+      if (window.p86Subs && typeof window.p86Subs.refresh === 'function') window.p86Subs.refresh();
     }
     // Persist nav state so a refresh lands back on this sub-tab
     // rather than the Estimates page's default Leads sub-tab.
-    if (typeof window.agxNavSave === 'function') window.agxNavSave();
+    if (typeof window.p86NavSave === 'function') window.p86NavSave();
   }
 
   // Group clients by parent so the list renders top-level firms with their
@@ -269,7 +269,7 @@
 
     if (!_clients.length) {
       listEl.innerHTML = '<div style="padding:20px;color:var(--text-dim,#888);text-align:center;">Loading clients…</div>';
-      window.agxApi.clients.list().then(function(res) {
+      window.p86Api.clients.list().then(function(res) {
         _clients = res.clients || [];
         refreshMarketFilter();
         renderClientsList();
@@ -506,13 +506,13 @@
 
     var work = Promise.resolve();
     if (Object.keys(patch).length) {
-      work = work.then(function() { return window.agxApi.clients.update(targetId, patch); });
+      work = work.then(function() { return window.p86Api.clients.update(targetId, patch); });
     }
     children.forEach(function(child) {
-      work = work.then(function() { return window.agxApi.clients.update(child.id, { parent_client_id: targetId }); });
+      work = work.then(function() { return window.p86Api.clients.update(child.id, { parent_client_id: targetId }); });
     });
     work = work
-      .then(function() { return window.agxApi.clients.remove(sourceId); })
+      .then(function() { return window.p86Api.clients.remove(sourceId); })
       .then(function() {
         statusEl.style.color = '#34d399';
         statusEl.textContent = 'Merged.';
@@ -618,7 +618,7 @@
 
     var pickParent = existingParentId
       ? Promise.resolve(existingParentId)
-      : window.agxApi.clients.create({
+      : window.p86Api.clients.create({
           name: newParentName,
           company_name: newParentName,
           client_type: 'Property Mgmt'
@@ -626,7 +626,7 @@
 
     pickParent
       .then(function(parentId) {
-        return window.agxApi.clients.update(sourceId, {
+        return window.p86Api.clients.update(sourceId, {
           name: newPropertyName,
           client_type: 'Property',
           parent_client_id: parentId
@@ -724,7 +724,7 @@
   // parent dropdown isn't empty on first use.
   function ensureClientsCache() {
     if (_clients.length) return Promise.resolve(_clients);
-    return window.agxApi.clients.list().then(function(res) {
+    return window.p86Api.clients.list().then(function(res) {
       _clients = res.clients || [];
       return _clients;
     });
@@ -769,7 +769,7 @@
     var listEl = document.getElementById('clientEditor_agentNotesList');
     if (!listEl) return;
     listEl.innerHTML = '<div style="font-size:11px;color:var(--text-dim,#888);font-style:italic;">Loading…</div>';
-    window.agxApi.clients.get(clientId).then(function(resp) {
+    window.p86Api.clients.get(clientId).then(function(resp) {
       var notes = (resp && resp.client && Array.isArray(resp.client.agent_notes))
         ? resp.client.agent_notes
         : [];
@@ -830,7 +830,7 @@
       alert('Note is too long (' + body.length + ' chars). Keep under 2000.');
       return;
     }
-    window.agxApi.clients.addNote(clientId, body, null /* user-authored */).then(function() {
+    window.p86Api.clients.addNote(clientId, body, null /* user-authored */).then(function() {
       cancelAddClientNote();
       renderAgentNotesPanel(clientId);
     }).catch(function(err) {
@@ -841,7 +841,7 @@
   function deleteClientNote(clientId, noteId) {
     if (!clientId || !noteId) return;
     if (!confirm('Delete this note? Cannot be undone.')) return;
-    window.agxApi.clients.deleteNote(clientId, noteId).then(function() {
+    window.p86Api.clients.deleteNote(clientId, noteId).then(function() {
       renderAgentNotesPanel(clientId);
     }).catch(function(err) {
       alert('Delete failed: ' + (err.message || 'unknown'));
@@ -873,8 +873,8 @@
     statusEl.textContent = 'Saving…';
 
     var p = id
-      ? window.agxApi.clients.update(id, payload)
-      : window.agxApi.clients.create(payload);
+      ? window.p86Api.clients.update(id, payload)
+      : window.p86Api.clients.create(payload);
 
     p.then(function() {
       statusEl.style.color = '#34d399';
@@ -903,7 +903,7 @@
     }
     msg += '\n\nThis cannot be undone.';
     if (!confirm(msg)) return;
-    window.agxApi.clients.remove(id).then(function() {
+    window.p86Api.clients.remove(id).then(function() {
       closeModal('clientEditorModal');
       reloadClientsCache();
     }).catch(function(err) {
@@ -1031,7 +1031,7 @@
                    'New clients will be created. Parents are auto-created from Company Name when needed.')) {
         return;
       }
-      window.agxApi.clients.importBatch(rows).then(function(res) {
+      window.p86Api.clients.importBatch(rows).then(function(res) {
         renderImportResult(res);
         reloadClientsCache();
       }).catch(function(err) {
@@ -1154,13 +1154,13 @@
         var mode = modeAttr.indexOf('edit') >= 0 ? 'edit' : 'new';
         onEstimateClientPicked(mode);
       };
-      var handle = window.agxClients.mountPicker(sel, onPick);
+      var handle = window.p86Clients.mountPicker(sel, onPick);
       if (handle && handle.refreshLabel) handle.refreshLabel();
     };
     if (_clients.length) {
       fill();
-    } else if (window.agxApi && window.agxApi.isAuthenticated && window.agxApi.isAuthenticated()) {
-      window.agxApi.clients.list().then(function(res) {
+    } else if (window.p86Api && window.p86Api.isAuthenticated && window.p86Api.isAuthenticated()) {
+      window.p86Api.clients.list().then(function(res) {
         _clients = res.clients || [];
         fill();
       }).catch(function() { fill(); });
@@ -1332,15 +1332,15 @@
     selectEl.style.display = 'none';
 
     var wrap = document.createElement('div');
-    wrap.className = 'agx-cli-picker';
+    wrap.className = 'p86-cli-picker';
     wrap.style.cssText = 'position:relative;width:100%;';
 
     var trigger = document.createElement('button');
     trigger.type = 'button';
-    trigger.className = 'agx-cli-picker-trigger';
+    trigger.className = 'p86-cli-picker-trigger';
     trigger.style.cssText = 'width:100%;text-align:left;padding:8px 30px 8px 10px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);border:1px solid var(--border,#333);border-radius:6px;cursor:pointer;font-size:13px;font-family:inherit;position:relative;';
     var triggerLabel = document.createElement('span');
-    triggerLabel.className = 'agx-cli-picker-label';
+    triggerLabel.className = 'p86-cli-picker-label';
     triggerLabel.style.cssText = 'display:inline-block;max-width:calc(100% - 18px);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;vertical-align:middle;';
     triggerLabel.textContent = '— Select a client to auto-fill —';
     var triggerArrow = document.createElement('span');
@@ -1350,7 +1350,7 @@
     trigger.appendChild(triggerArrow);
 
     var pop = document.createElement('div');
-    pop.className = 'agx-cli-picker-pop';
+    pop.className = 'p86-cli-picker-pop';
     pop.style.cssText = 'display:none;position:absolute;top:calc(100% + 4px);left:0;right:0;z-index:1000;background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.5);max-height:380px;overflow:hidden;flex-direction:column;';
 
     var search = document.createElement('input');
@@ -1480,7 +1480,7 @@
 
   window.populateEstimateClientPicker = populateEstimateClientPicker;
   window.onEstimateClientPicked = onEstimateClientPicked;
-  window.agxClients = {
+  window.p86Clients = {
     getCached: function() { return _clients.slice(); },
     reload: reloadClientsCache,
     mountPicker: applyPickerToSelect

@@ -122,18 +122,18 @@
            rules so chips, presets, and the input pill stay legible.
            Inline-style precedence is matched by id-targeted rules
            with !important. */
-        body.light-mode #agx-ai-panel #ai-input-pill {
+        body.light-mode #p86-ai-panel #ai-input-pill {
             background: var(--surface2, #f1f5f9) !important;
             border-color: var(--border, #d1d5db) !important;
         }
-        body.light-mode #agx-ai-panel #ai-input-pill:focus-within {
+        body.light-mode #p86-ai-panel #ai-input-pill:focus-within {
             background: #fff !important;
             border-color: var(--accent, #2563eb) !important;
         }
-        body.light-mode #agx-ai-panel #ai-presets {
+        body.light-mode #p86-ai-panel #ai-presets {
             background: var(--surface2, #f1f5f9) !important;
         }
-        body.light-mode #agx-ai-panel #ai-clear {
+        body.light-mode #p86-ai-panel #ai-clear {
             background: var(--surface2, #f1f5f9) !important;
             border-color: var(--border, #d1d5db) !important;
             color: var(--text-dim, #4b5563) !important;
@@ -142,10 +142,10 @@
            applied-edit cards, citation pills. They share the
            rgba(255,255,255,0.04) hardcoded backdrop. Match by
            styled inline pattern via attribute starts-with. */
-        body.light-mode #agx-ai-panel [style*="background:rgba(255,255,255,0.04)"],
-        body.light-mode #agx-ai-panel [style*="background: rgba(255,255,255,0.04)"],
-        body.light-mode #agx-ai-panel [style*="background:rgba(255,255,255,0.06)"],
-        body.light-mode #agx-ai-panel [style*="background:rgba(255,255,255,0.08)"] {
+        body.light-mode #p86-ai-panel [style*="background:rgba(255,255,255,0.04)"],
+        body.light-mode #p86-ai-panel [style*="background: rgba(255,255,255,0.04)"],
+        body.light-mode #p86-ai-panel [style*="background:rgba(255,255,255,0.06)"],
+        body.light-mode #p86-ai-panel [style*="background:rgba(255,255,255,0.08)"] {
             background: var(--surface2, #f1f5f9) !important;
             color: var(--text, #111827) !important;
         }
@@ -328,11 +328,11 @@
            global rule even though we don't have .tab-btn here, but
            keeping the override defensive). 18px reads cleanly inside
            a 32px circular button without crowding. */
-        .header-icon-btn .agx-icon-slot {
+        .header-icon-btn .p86-icon-slot {
             margin-right: 0;
             display: inline-flex;
         }
-        .header-icon-btn .agx-icon {
+        .header-icon-btn .p86-icon {
             width: 18px;
             height: 18px;
         }
@@ -493,14 +493,14 @@
             background: rgba(79, 140, 255, 0.08);
             color: #1a1a2e;
         }
-        .header-directory-menu button .agx-icon-slot { margin-right: 0; }
-        .header-directory-menu button .agx-icon {
+        .header-directory-menu button .p86-icon-slot { margin-right: 0; }
+        .header-directory-menu button .p86-icon {
             width: 22px;
             height: 22px;
             flex: 0 0 auto;
             color: #4b4b5a;
         }
-        .header-directory-menu button:hover .agx-icon { color: #2c2c40; }
+        .header-directory-menu button:hover .p86-icon { color: #2c2c40; }
 
         /* NAVIGATION — inline with logo, height-filling so the active
            underline sits flush with the header's bottom edge for that
@@ -518,7 +518,7 @@
            they read as "lit, just not the chosen one." Hover boosts
            to full #fff for clear cursor feedback. The active tab
            also sits at full white plus the bold weight + the white
-           .agx-tab-slider underline + glow. */
+           .p86-tab-slider underline + glow. */
         nav.tabs button {
             background: transparent;
             border: none;
@@ -539,10 +539,10 @@
         /* Header tab icons render larger than the text — same "icon-led"
            treatment as the node-library sidebar but slightly tighter
            since the header is height-constrained at 46px. 1.6em on the
-           13px row = ~21px icon, with the .agx-icon vertical-align
+           13px row = ~21px icon, with the .p86-icon vertical-align
            overridden so the larger icon sits optically centered against
            the smaller label. */
-        nav.tabs button .agx-icon {
+        nav.tabs button .p86-icon {
             width: 1.6em;
             height: 1.6em;
             vertical-align: -0.4em;
@@ -550,7 +550,7 @@
         }
 
         /* Active state — text color only. The visual indicator is a
-           single .agx-tab-slider bar wired by tab-slider.js that
+           single .p86-tab-slider bar wired by tab-slider.js that
            floats across the whole bar to track the active tab. */
         nav.tabs button.active {
             color: #ffffff;
@@ -889,7 +889,7 @@
            (display:block + uppercase + 10px + bold + letter-spacing) and
            the global input{width:100%} rule wreck native checkbox layout
            — this class undoes both within its scope. */
-        label.agx-check-row {
+        label.p86-check-row {
             display: flex;
             align-items: flex-start;
             gap: 6px;
@@ -902,8 +902,8 @@
             cursor: pointer;
             margin: 0;
         }
-        label.agx-check-row input[type="checkbox"],
-        label.agx-check-row input[type="radio"] {
+        label.p86-check-row input[type="checkbox"],
+        label.p86-check-row input[type="radio"] {
             width: auto;
             flex: 0 0 auto;
             margin: 1px 0 0 0;
@@ -911,7 +911,7 @@
             background: transparent;
             border: none;
         }
-        label.agx-check-row .agx-check-hint {
+        label.p86-check-row .p86-check-hint {
             color: var(--text-dim, #888);
             font-weight: normal;
         }
@@ -1299,7 +1299,7 @@
         }
 
         /* Sub-edit modal tab bar — same plain text-color rule. The
-           sliding indicator is shared via .agx-tab-slider. */
+           sliding indicator is shared via .p86-tab-slider. */
         .sub-modal-tab {
             padding: 10px 14px;
             background: transparent;
@@ -1361,7 +1361,7 @@
            the active tab's offsetLeft / offsetWidth, with the
            transition driving a smooth slide whenever the active tab
            changes. Fades away if no active tab is found. */
-        .agx-tab-slider {
+        .p86-tab-slider {
             position: absolute;
             bottom: -1px;
             left: 0;
@@ -1793,21 +1793,21 @@
     }
 
     /* ── Copy-to-clipboard button (js/copy-button.js) ──
-       Wraps emails / addresses / any [data-agx-copy] field with a
+       Wraps emails / addresses / any [data-p86-copy] field with a
        small clipboard emoji at the right edge. Subtle by default,
        full opacity on hover, briefly flips to a green check on copy. */
-    .agx-copy-wrap {
+    .p86-copy-wrap {
       position: relative;
       display: block;
       width: 100%;
     }
-    .agx-copy-wrap > input,
-    .agx-copy-wrap > textarea {
+    .p86-copy-wrap > input,
+    .p86-copy-wrap > textarea {
       width: 100%;
       box-sizing: border-box;
       padding-right: 30px;
     }
-    .agx-copy-btn {
+    .p86-copy-btn {
       background: transparent;
       border: none;
       cursor: pointer;
@@ -1819,9 +1819,9 @@
       color: var(--text-dim, #888);
       user-select: none;
     }
-    .agx-copy-btn:hover { opacity: 1; transform: scale(1.1); }
-    .agx-copy-btn:focus { outline: none; opacity: 1; }
-    .agx-copy-wrap > .agx-copy-btn {
+    .p86-copy-btn:hover { opacity: 1; transform: scale(1.1); }
+    .p86-copy-btn:focus { outline: none; opacity: 1; }
+    .p86-copy-wrap > .p86-copy-btn {
       position: absolute;
       right: 4px;
       top: 50%;
@@ -1832,14 +1832,14 @@
       align-items: center;
       justify-content: center;
     }
-    .agx-copy-wrap > .agx-copy-btn:hover {
+    .p86-copy-wrap > .p86-copy-btn:hover {
       transform: translateY(-50%) scale(1.1);
     }
-    .agx-copy-btn-inline {
+    .p86-copy-btn-inline {
       margin-left: 4px;
       vertical-align: middle;
     }
-    .agx-copy-btn.agx-copy-flashed {
+    .p86-copy-btn.p86-copy-flashed {
       opacity: 1;
       color: #34d399;
     }
@@ -1848,18 +1848,18 @@
        SVGs use stroke="currentColor" so they pick up the parent's
        text color. Default size = 1em × 1em, vertical-aligned to the
        baseline so they sit cleanly inside text and buttons. */
-    .agx-icon {
+    .p86-icon {
       display: inline-block;
       width: 1em;
       height: 1em;
       vertical-align: -0.15em;
       flex-shrink: 0;
     }
-    /* Auto-decoration slot: when [data-agx-icon] is set, the helper
-       prepends <span class="agx-icon-slot"><svg .../></span> at the
+    /* Auto-decoration slot: when [data-p86-icon] is set, the helper
+       prepends <span class="p86-icon-slot"><svg .../></span> at the
        start of the element. Margin-right gives a small gap to the
        text label. Inline-flex centering keeps the SVG aligned. */
-    .agx-icon-slot {
+    .p86-icon-slot {
       display: inline-flex;
       align-items: center;
       margin-right: 6px;
@@ -1868,7 +1868,7 @@
        icon a touch more visual presence than the surrounding text.
        Bumped from 1.05em → 1.4em so the icons read clearly on the
        sticky header without needing to squint. */
-    .tab-btn .agx-icon-slot { margin-right: 8px; }
-    .tab-btn .agx-icon-slot .agx-icon {
+    .tab-btn .p86-icon-slot { margin-right: 8px; }
+    .tab-btn .p86-icon-slot .p86-icon {
       width: 1.4em; height: 1.4em; vertical-align: -0.32em;
     }

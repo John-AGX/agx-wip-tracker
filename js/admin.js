@@ -8,7 +8,7 @@
   var _users = [];
 
   function isAdmin() {
-    return window.agxAuth && window.agxAuth.isAdmin();
+    return window.p86Auth && window.p86Auth.isAdmin();
   }
 
   function fmtDate(iso) {
@@ -39,14 +39,14 @@
     if (!tbody) return;
     tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-dim,#888);padding:20px;">Loading…</td></tr>';
 
-    window.agxApi.users.list().then(function(res) {
+    window.p86Api.users.list().then(function(res) {
       _users = res.users || [];
       if (!_users.length) {
         tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-dim,#888);padding:20px;">No users.</td></tr>';
         return;
       }
       var html = '';
-      var me = window.agxAuth && window.agxAuth.getUser && window.agxAuth.getUser();
+      var me = window.p86Auth && window.p86Auth.getUser && window.p86Auth.getUser();
       var myId = me ? me.id : null;
       _users.forEach(function(u) {
         var activeBadge = u.active
@@ -115,7 +115,7 @@
 
     var payload = { name: name, email: email, password: password, role: role };
     if (phone) payload.phone_number = phone;
-    window.agxApi.users.create(payload)
+    window.p86Api.users.create(payload)
       .then(function() {
         statusEl.style.color = '#34d399';
         statusEl.textContent = 'Created. Tell ' + name + ' their password (' + password + ') out-of-band.';
@@ -173,9 +173,9 @@
     // else gets normalized server-side). Caller hasn't typed = stays empty
     // but the server treats present-empty as "clear" — that's the desired
     // behavior since the phone field on the form mirrors the user record.
-    var updatePromise = window.agxApi.users.update(id, { name: name, role: role, active: active, phone_number: phone });
+    var updatePromise = window.p86Api.users.update(id, { name: name, role: role, active: active, phone_number: phone });
     var passwordPromise = newPassword
-      ? window.agxApi.users.resetPassword(id, newPassword)
+      ? window.p86Api.users.resetPassword(id, newPassword)
       : Promise.resolve();
 
     Promise.all([updatePromise, passwordPromise])
@@ -200,8 +200,8 @@
   // UI. Used on login for all authenticated users so PM-by-owner_id lookups
   // (e.g. the Job Information PM field) can resolve user names everywhere.
   function loadUsersCache() {
-    if (!window.agxApi || !window.agxApi.isAuthenticated()) return Promise.resolve();
-    return window.agxApi.users.list().then(function(res) {
+    if (!window.p86Api || !window.p86Api.isAuthenticated()) return Promise.resolve();
+    return window.p86Api.users.list().then(function(res) {
       _users = res.users || [];
       // Re-render views that depend on user names so PM-by-owner_id lookups
       // resolve once the cache lands. Each renderer is a no-op if its DOM
@@ -219,7 +219,7 @@
 
   // Expose helpers for other modules. The PM dropdown in the Add Job modal
   // and the Job Information PM field both read from this cache.
-  window.agxAdmin = {
+  window.p86Admin = {
     getCachedUsers: function() { return _users.slice(); },
     findUserById: findUserById,
     getActivePMs: function() {
@@ -243,8 +243,8 @@
     var listEl = document.getElementById('job-sharing-list');
     if (!card || !listEl) return;
 
-    var auth = window.agxAuth;
-    if (!auth || auth.isOffline() || !window.agxApi || !window.agxApi.isAuthenticated()) {
+    var auth = window.p86Auth;
+    if (!auth || auth.isOffline() || !window.p86Api || !window.p86Api.isAuthenticated()) {
       card.style.display = 'none';
       return;
     }
@@ -253,7 +253,7 @@
     listEl.innerHTML = '<div style="color:var(--text-dim,#888);">Loading…</div>';
     card.style.display = '';
 
-    window.agxApi.jobs.listAccess(jobId).then(function(res) {
+    window.p86Api.jobs.listAccess(jobId).then(function(res) {
       _currentSharingShares = res.shares || [];
       var me = auth.getUser();
       var canManage = me && (me.role === 'admin' || me.id === res.owner_id);
@@ -262,7 +262,7 @@
         card.style.display = 'none';
         return;
       }
-      var users = (window.agxAdmin && window.agxAdmin.getCachedUsers && window.agxAdmin.getCachedUsers()) || [];
+      var users = (window.p86Admin && window.p86Admin.getCachedUsers && window.p86Admin.getCachedUsers()) || [];
       var ownerName = '';
       var owner = users.find(function(u) { return u.id === res.owner_id; });
       if (owner) ownerName = owner.name + ' (' + owner.email + ')';
@@ -306,10 +306,10 @@
   function openGrantAccessModal() {
     if (!_currentSharingJobId) return;
     var sel = document.getElementById('grantAccess_userSelect');
-    var users = (window.agxAdmin && window.agxAdmin.getCachedUsers && window.agxAdmin.getCachedUsers()) || [];
+    var users = (window.p86Admin && window.p86Admin.getCachedUsers && window.p86Admin.getCachedUsers()) || [];
     var alreadyShared = {};
     _currentSharingShares.forEach(function(s) { alreadyShared[s.user_id] = true; });
-    var me = window.agxAuth && window.agxAuth.getUser();
+    var me = window.p86Auth && window.p86Auth.getUser();
     var html = '<option value="">-- Select user --</option>';
     users.forEach(function(u) {
       if (!u.active) return;
@@ -338,7 +338,7 @@
     btn.disabled = true;
     statusEl.style.color = 'var(--text-dim,#888)';
     statusEl.textContent = 'Granting…';
-    window.agxApi.jobs.grantAccess(_currentSharingJobId, userId, level)
+    window.p86Api.jobs.grantAccess(_currentSharingJobId, userId, level)
       .then(function() {
         statusEl.style.color = '#34d399';
         statusEl.textContent = 'Granted.';
@@ -352,7 +352,7 @@
           } else {
             renderJobSharing(_currentSharingJobId);
           }
-          if (window.agxData) window.agxData.reloadFromServer();
+          if (window.p86Data) window.p86Data.reloadFromServer();
         }, 800);
       })
       .catch(function(err) {
@@ -367,10 +367,10 @@
     var u = _currentSharingShares.find(function(x) { return x.user_id === userId; });
     var name = u ? u.name : 'this user';
     if (!confirm('Revoke ' + name + "'s access to this job?")) return;
-    window.agxApi.jobs.revokeAccess(_currentSharingJobId, userId)
+    window.p86Api.jobs.revokeAccess(_currentSharingJobId, userId)
       .then(function() {
         renderJobSharing(_currentSharingJobId);
-        if (window.agxData) window.agxData.reloadFromServer();
+        if (window.p86Data) window.p86Data.reloadFromServer();
       })
       .catch(function(err) {
         alert('Revoke failed: ' + (err.message || 'unknown error'));
@@ -379,11 +379,11 @@
 
   function updateJobAccessLevel(userId, newLevel) {
     if (!_currentSharingJobId) return;
-    window.agxApi.jobs.grantAccess(_currentSharingJobId, userId, newLevel)
+    window.p86Api.jobs.grantAccess(_currentSharingJobId, userId, newLevel)
       .then(function() {
         // Refresh in background; no UI change needed
         renderJobSharing(_currentSharingJobId);
-        if (window.agxData) window.agxData.reloadFromServer();
+        if (window.p86Data) window.p86Data.reloadFromServer();
       })
       .catch(function(err) {
         alert('Update failed: ' + (err.message || 'unknown error'));
@@ -403,8 +403,8 @@
     tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-dim,#888);padding:20px;">Loading…</td></tr>';
 
     Promise.all([
-      window.agxApi.jobs.list(),
-      _users.length ? Promise.resolve({ users: _users }) : window.agxApi.users.list()
+      window.p86Api.jobs.list(),
+      _users.length ? Promise.resolve({ users: _users }) : window.p86Api.users.list()
     ]).then(function(results) {
       _jobsCache = results[0].jobs || [];
       _users = results[1].users || _users;
@@ -446,7 +446,7 @@
       // dataset for now, fine. Can be batched into a single endpoint later
       // if the job count grows large.
       _jobsCache.forEach(function(j) {
-        window.agxApi.jobs.listAccess(j.id).then(function(res) {
+        window.p86Api.jobs.listAccess(j.id).then(function(res) {
           var cell = document.getElementById('admin-shares-cell-' + j.id);
           if (!cell) return;
           var n = (res.shares || []).length;
@@ -465,7 +465,7 @@
     // Three-way confirm: send-with-email / send-silently / abort.
     // Native confirm() can only do binary; the in-house ternary
     // dialog gives the admin a real "reassign without spam" path.
-    window.agxConfirmTernary({
+    window.p86ConfirmTernary({
       title: 'Reassign job',
       message: 'Email the new owner about this assignment?',
       primaryLabel: 'Send email',
@@ -478,13 +478,13 @@
         return;
       }
       var notifyOk = (action === 'primary');
-      window.agxApi.jobs.reassignOwner(jobId, parseInt(newOwnerId, 10), notifyOk)
+      window.p86Api.jobs.reassignOwner(jobId, parseInt(newOwnerId, 10), notifyOk)
         .then(function() {
-          if (window.agxData) window.agxData.reloadFromServer();
+          if (window.p86Data) window.p86Data.reloadFromServer();
           renderAdminJobs();
         })
         .catch(function(err) {
-          window.agxAlert({ title: 'Reassign failed', message: err.message || 'unknown error' });
+          window.p86Alert({ title: 'Reassign failed', message: err.message || 'unknown error' });
           renderAdminJobs();
         });
     });
@@ -507,8 +507,8 @@
     var label = (job.jobNumber ? '[' + job.jobNumber + '] ' : '') + (job.title || jobId);
     document.getElementById('manageSharing_jobLabel').textContent = label;
     // Ensure the users cache exists so the owner display + grant dropdown work.
-    if (!_users.length && window.agxApi) {
-      window.agxApi.users.list().then(function(res) {
+    if (!_users.length && window.p86Api) {
+      window.p86Api.users.list().then(function(res) {
         _users = res.users || [];
         refreshShareManager(jobId);
       }).catch(function() {
@@ -524,7 +524,7 @@
     var listEl = document.getElementById('manageSharing_list');
     var ownerEl = document.getElementById('manageSharing_ownerLine');
     listEl.innerHTML = '<div style="color:var(--text-dim,#888);">Loading…</div>';
-    window.agxApi.jobs.listAccess(jobId).then(function(res) {
+    window.p86Api.jobs.listAccess(jobId).then(function(res) {
       _currentSharingShares = res.shares || [];
       var owner = _users.find(function(u) { return u.id === res.owner_id; });
       ownerEl.innerHTML = '<strong>Owner:</strong> ' +
@@ -577,10 +577,10 @@
 
   function updateAdminJobAccessLevel(userId, newLevel) {
     if (!_currentSharingJobId) return;
-    window.agxApi.jobs.grantAccess(_currentSharingJobId, userId, newLevel)
+    window.p86Api.jobs.grantAccess(_currentSharingJobId, userId, newLevel)
       .then(function() {
         refreshShareManager(_currentSharingJobId);
-        if (window.agxData) window.agxData.reloadFromServer();
+        if (window.p86Data) window.p86Data.reloadFromServer();
       })
       .catch(function(err) { alert('Update failed: ' + (err.message || '')); });
   }
@@ -589,11 +589,11 @@
     if (!_currentSharingJobId) return;
     var u = _currentSharingShares.find(function(x) { return x.user_id === userId; });
     if (!confirm('Revoke ' + (u ? u.name : 'this user') + "'s access?")) return;
-    window.agxApi.jobs.revokeAccess(_currentSharingJobId, userId)
+    window.p86Api.jobs.revokeAccess(_currentSharingJobId, userId)
       .then(function() {
         refreshShareManager(_currentSharingJobId);
         renderAdminJobs();
-        if (window.agxData) window.agxData.reloadFromServer();
+        if (window.p86Data) window.p86Data.reloadFromServer();
       })
       .catch(function(err) { alert('Revoke failed: ' + (err.message || '')); });
   }
@@ -652,8 +652,8 @@
   }
 
   function loadMaterialCategories() {
-    if (!window.agxApi || !window.agxApi.materials) return;
-    window.agxApi.materials.categories().then(function(res) {
+    if (!window.p86Api || !window.p86Api.materials) return;
+    window.p86Api.materials.categories().then(function(res) {
       _materialsCategories = res.categories || [];
       var sel = document.getElementById('mat-filter-category');
       if (!sel) return;
@@ -670,7 +670,7 @@
 
   function recategorizeMaterials() {
     if (!confirm('Re-run category mapping across all materials that haven\'t been manually edited? Curated rows are preserved.')) return;
-    window.agxApi.materials.recategorize().then(function(res) {
+    window.p86Api.materials.recategorize().then(function(res) {
       var statusEl = document.getElementById('mat-import-status');
       if (statusEl) {
         statusEl.style.display = 'block';
@@ -687,10 +687,10 @@
   }
 
   function loadMaterials() {
-    if (!window.agxApi) return;
+    if (!window.p86Api) return;
     var listEl = document.getElementById('mat-list');
     if (listEl) listEl.innerHTML = '<div style="padding:20px;color:var(--text-dim,#888);text-align:center;">Loading…</div>';
-    window.agxApi.materials.list({
+    window.p86Api.materials.list({
       q: _materialsFilters.q,
       subgroup: _materialsFilters.subgroup,
       category: _materialsFilters.category,
@@ -809,7 +809,7 @@
   function toggleMaterialHidden(id) {
     var m = _materialsCache.find(function(x) { return x.id === id; });
     if (!m) return;
-    window.agxApi.materials.update(id, { is_hidden: !m.is_hidden }).then(loadMaterials);
+    window.p86Api.materials.update(id, { is_hidden: !m.is_hidden }).then(loadMaterials);
   }
 
   // Inline editor — modal with description, subgroup, unit, hidden, notes.
@@ -875,9 +875,9 @@
             '</div>' +
           '</div>' +
           '<div class="form-group">' +
-            '<label class="agx-check-row">' +
+            '<label class="p86-check-row">' +
               '<input type="checkbox" id="matEd_hidden" />' +
-              '<span>Hide from AG suggestions <span class="agx-check-hint">(noise / one-off / wrong)</span></span>' +
+              '<span>Hide from AG suggestions <span class="p86-check-hint">(noise / one-off / wrong)</span></span>' +
             '</label>' +
           '</div>' +
           '<div class="form-group">' +
@@ -908,7 +908,7 @@
     var statusEl = document.getElementById('matEd_status');
     statusEl.style.color = 'var(--text-dim,#aaa)';
     statusEl.textContent = 'Saving…';
-    window.agxApi.materials.update(id, payload).then(function() {
+    window.p86Api.materials.update(id, payload).then(function() {
       statusEl.style.color = '#34d399';
       statusEl.textContent = 'Saved.';
       setTimeout(function() {
@@ -966,7 +966,7 @@
         // Detect vendor — for now Home Depot is the only format. Future:
         // dropdown on the import button.
         var vendor = 'home_depot';
-        window.agxApi.materials.importBatch({
+        window.p86Api.materials.importBatch({
           vendor: vendor,
           source_file: file.name,
           rows: rows
@@ -1051,7 +1051,7 @@
       return;
     }
     // Persist nav state so a refresh lands back on this admin sub-tab.
-    if (typeof window.agxNavSave === 'function') window.agxNavSave();
+    if (typeof window.p86NavSave === 'function') window.p86NavSave();
   }
 
   // ==================== EMAIL ADMIN ====================
@@ -1126,7 +1126,7 @@
         '</div>' +
       '</div>';
 
-    var me = (window.agxAuth && window.agxAuth.getUser && window.agxAuth.getUser()) || null;
+    var me = (window.p86Auth && window.p86Auth.getUser && window.p86Auth.getUser()) || null;
     var toEl = document.getElementById('email-test-to');
     if (me && me.email && toEl) toEl.value = me.email;
 
@@ -1135,7 +1135,7 @@
       if (!to) { alert('Enter a recipient email.'); return; }
       var resultEl = document.getElementById('email-test-result');
       resultEl.innerHTML = '<span style="color:#60a5fa;">Sending…</span>';
-      window.agxApi.post('/api/email/test', { to: to }).then(function(r) {
+      window.p86Api.post('/api/email/test', { to: to }).then(function(r) {
         if (r.ok) {
           resultEl.innerHTML =
             '<span style="color:#34d399;">&#x2713; Sent</span>' +
@@ -1167,8 +1167,8 @@
     var globBox = document.getElementById('email-globals');
     if (!evtBox || !globBox) return;
     Promise.all([
-      window.agxApi.get('/api/email/events'),
-      window.agxApi.get('/api/email/settings')
+      window.p86Api.get('/api/email/events'),
+      window.p86Api.get('/api/email/settings')
     ]).then(function(results) {
       _emailEvents = (results[0] && results[0].events) || [];
       _emailSettings = (results[1] && results[1].settings) || {
@@ -1237,7 +1237,7 @@
           '</td>' +
           '<td style="padding:8px;vertical-align:top;color:var(--text-dim,#aaa);">' + escapeHTML(e.audience || '') + '</td>' +
           '<td style="padding:8px;vertical-align:top;text-align:center;">' +
-            '<label class="agx-switch" style="display:inline-flex;align-items:center;cursor:pointer;">' +
+            '<label class="p86-switch" style="display:inline-flex;align-items:center;cursor:pointer;">' +
               '<input type="checkbox" data-email-event-toggle="' + escapeHTML(e.key) + '" ' + (e.enabled ? 'checked' : '') + ' style="cursor:pointer;width:18px;height:18px;" />' +
             '</label>' +
           '</td>' +
@@ -1315,7 +1315,7 @@
         // Fallback: render-with-sample-data preview send. as_test:false
         // strips the "[TEST]" subject prefix so the result looks like
         // a real send — useful for demoing template designs.
-        var me = (window.agxAuth && window.agxAuth.getUser && window.agxAuth.getUser()) || null;
+        var me = (window.p86Auth && window.p86Auth.getUser && window.p86Auth.getUser()) || null;
         var defaultTo = (me && me.email) || '';
         var to = window.prompt('Send sample "' + label + '" to:\n\n' +
           '(This event doesn\'t have a one-click real workflow on this admin page — it normally fires from a real action elsewhere in the app. ' +
@@ -1326,7 +1326,7 @@
         btn.disabled = true;
         var oldText = btn.innerHTML;
         btn.innerHTML = 'Sending…';
-        window.agxApi.post('/api/email/templates/' + encodeURIComponent(key) + '/test', { to: to, as_test: false })
+        window.p86Api.post('/api/email/templates/' + encodeURIComponent(key) + '/test', { to: to, as_test: false })
           .then(function(resp) {
             btn.innerHTML = oldText;
             btn.disabled = false;
@@ -1375,7 +1375,7 @@
   }
 
   // Project 86-styled two-card chooser. Returns a Promise resolving to
-  // 'new' | 'existing' | null. Mirrors agxConfirm\'s overlay styling
+  // 'new' | 'existing' | null. Mirrors p86Confirm\'s overlay styling
   // (modal, blur backdrop, escape-to-cancel) but renders two large
   // action cards instead of an OK/Cancel pair, since both options are
   // affirmative actions and the user picks WHICH, not whether.
@@ -1453,14 +1453,14 @@
   }
 
   // Generates a memorable but unguessable temp password — one short
-  // alpha word + a 4-digit suffix (e.g. "agx-bird-7384"). Easier to
+  // alpha word + a 4-digit suffix (e.g. "p86-bird-7384"). Easier to
   // type than a random string for the user\'s first login; admin
   // tells them to change it after.
   function genTempPassword() {
     var words = ['bird', 'oak', 'pine', 'lark', 'wren', 'finch', 'sage', 'fern', 'dawn', 'mist'];
     var w = words[Math.floor(Math.random() * words.length)];
     var n = String(Math.floor(1000 + Math.random() * 9000));
-    return 'agx-' + w + '-' + n;
+    return 'p86-' + w + '-' + n;
   }
 
   function fireExistingUserResend() {
@@ -1499,14 +1499,14 @@
         'A new temporary password will be generated and emailed to them:\n  ' + tempPwd + '\n\n' +
         '(They\'ll be told to change it after first login.)\n\nProceed?');
       if (!ok) return;
-      window.agxApi.users.resetPassword(target.id, tempPwd).then(function() {
+      window.p86Api.users.resetPassword(target.id, tempPwd).then(function() {
         alert('✓ Sent to ' + target.email + '.\n\nTemp password: ' + tempPwd + '\n\nThe email contents use the password_reset template so the wording is accurate for an existing account.');
       }).catch(function(err) {
         alert('Send failed: ' + (err.message || 'unknown'));
       });
     };
     if (!_users || !_users.length) {
-      window.agxApi.users.list().then(function(r) {
+      window.p86Api.users.list().then(function(r) {
         _users = (r && r.users) || [];
         go();
       }).catch(function(err) {
@@ -1561,7 +1561,7 @@
         alert('Password must be at least 4 characters.');
         return;
       }
-      window.agxApi.users.resetPassword(target.id, newPwd).then(function() {
+      window.p86Api.users.resetPassword(target.id, newPwd).then(function() {
         alert('✓ Reset and emailed to ' + target.email + '.\n\nNew password: ' + newPwd);
       }).catch(function(err) {
         alert('Reset failed: ' + (err.message || 'unknown'));
@@ -1569,7 +1569,7 @@
     };
     // Ensure the user list is loaded.
     if (!_users || !_users.length) {
-      window.agxApi.users.list().then(function(r) {
+      window.p86Api.users.list().then(function(r) {
         _users = (r && r.users) || [];
         go();
       }).catch(function(err) {
@@ -1641,7 +1641,7 @@
     if (statusEl) statusEl.textContent = 'Saving…';
     if (_emailSaveTimer) clearTimeout(_emailSaveTimer);
     _emailSaveTimer = setTimeout(function() {
-      window.agxApi.put('/api/email/settings', _emailSettings).then(function(r) {
+      window.p86Api.put('/api/email/settings', _emailSettings).then(function(r) {
         if (statusEl) {
           statusEl.innerHTML = '<span style="color:#34d399;">&#x2713; Saved ' + new Date().toLocaleTimeString() + '</span>';
           setTimeout(function() { if (statusEl) statusEl.textContent = ''; }, 3000);
@@ -1657,7 +1657,7 @@
     if (!tbl) return;
     var statusFilter = (document.getElementById('email-log-status-filter') || {}).value || '';
     var url = '/api/email/log' + (statusFilter ? '?status=' + encodeURIComponent(statusFilter) : '');
-    window.agxApi.get(url).then(function(r) {
+    window.p86Api.get(url).then(function(r) {
       var rows = r.rows || [];
       if (!rows.length) {
         tbl.innerHTML = '<div style="padding:14px;text-align:center;color:var(--text-dim,#888);">No emails sent yet.</div>';
@@ -1733,7 +1733,7 @@
   function loadTemplatesList() {
     var box = document.getElementById('email-templates-list');
     if (!box) return;
-    window.agxApi.get('/api/email/templates').then(function(r) {
+    window.p86Api.get('/api/email/templates').then(function(r) {
       _templatesList = r.templates || [];
       renderTemplatesList();
       // Auto-select previously active key, or the first wired template.
@@ -1796,7 +1796,7 @@
     var ed = document.getElementById('email-template-editor');
     if (!ed) return;
     ed.innerHTML = '<div style="padding:30px;text-align:center;color:var(--text-dim,#888);">Loading template…</div>';
-    window.agxApi.get('/api/email/templates/' + encodeURIComponent(eventKey)).then(function(r) {
+    window.p86Api.get('/api/email/templates/' + encodeURIComponent(eventKey)).then(function(r) {
       _templateDetail = r;
       renderTemplateEditor();
     }).catch(function(err) {
@@ -1936,7 +1936,7 @@
     var html_body = document.getElementById('email-tpl-body').value;
     var status = document.getElementById('email-tpl-status');
     if (status) status.innerHTML = '<span style="color:#60a5fa;">Saving…</span>';
-    window.agxApi.put('/api/email/templates/' + encodeURIComponent(_templateActiveKey), {
+    window.p86Api.put('/api/email/templates/' + encodeURIComponent(_templateActiveKey), {
       subject: subject, html_body: html_body
     }).then(function() {
       if (status) status.innerHTML = '<span style="color:#34d399;">&#x2713; Saved.</span>';
@@ -2019,13 +2019,13 @@
 
   function sendTemplateTest() {
     if (!_templateActiveKey) return;
-    var me = (window.agxAuth && window.agxAuth.getUser && window.agxAuth.getUser()) || null;
+    var me = (window.p86Auth && window.p86Auth.getUser && window.p86Auth.getUser()) || null;
     var defaultTo = me && me.email ? me.email : '';
     var to = prompt('Send test of "' + (_templateDetail && _templateDetail.event && _templateDetail.event.label || _templateActiveKey) + '" to:', defaultTo);
     if (!to) return;
     var status = document.getElementById('email-tpl-status');
     if (status) status.innerHTML = '<span style="color:#60a5fa;">Sending test to ' + escapeHTML(to) + '…</span>';
-    window.agxApi.post('/api/email/templates/' + encodeURIComponent(_templateActiveKey) + '/test', { to: to }).then(function(r) {
+    window.p86Api.post('/api/email/templates/' + encodeURIComponent(_templateActiveKey) + '/test', { to: to }).then(function(r) {
       if (status) {
         if (r.ok) {
           status.innerHTML = '<span style="color:#34d399;">&#x2713; Sent</span>' +
@@ -2045,7 +2045,7 @@
     if (!confirm('Revert this template to the baked-in default? Your override will be discarded.')) return;
     var status = document.getElementById('email-tpl-status');
     if (status) status.innerHTML = '<span style="color:#60a5fa;">Reverting…</span>';
-    window.agxApi.del('/api/email/templates/' + encodeURIComponent(_templateActiveKey)).then(function() {
+    window.p86Api.del('/api/email/templates/' + encodeURIComponent(_templateActiveKey)).then(function() {
       if (status) status.innerHTML = '<span style="color:#34d399;">&#x2713; Reverted to default.</span>';
       loadTemplatesList();
       loadTemplateDetail(_templateActiveKey);
@@ -2071,8 +2071,8 @@
     if (!pane) return;
     pane.innerHTML = '<div style="padding:15px;color:var(--text-dim,#888);">Loading…</div>';
     Promise.all([
-      window.agxApi.settings.get('proposal_template').catch(function() { return null; }),
-      window.agxApi.settings.get('bt_export_mapping').catch(function() { return null; })
+      window.p86Api.settings.get('proposal_template').catch(function() { return null; }),
+      window.p86Api.settings.get('bt_export_mapping').catch(function() { return null; })
       // agent_skills loads independently from Admin → Agents → Skills now.
     ]).then(function(results) {
       _templateDraft = (results[0] && results[0].setting && results[0].setting.value) || {};
@@ -2601,8 +2601,8 @@
     var statusEl = document.getElementById('tpl-status');
     if (statusEl) { statusEl.textContent = 'Saving…'; statusEl.style.color = 'var(--text-dim,#888)'; }
     Promise.all([
-      window.agxApi.settings.put('proposal_template', _templateDraft),
-      window.agxApi.settings.put('bt_export_mapping', _btMappingDraft)
+      window.p86Api.settings.put('proposal_template', _templateDraft),
+      window.p86Api.settings.put('bt_export_mapping', _btMappingDraft)
     ]).then(function() {
       if (statusEl) { statusEl.textContent = 'Saved.'; statusEl.style.color = '#34d399'; }
       // Bust the cached copies on the consumer modules so the next preview /
@@ -2628,14 +2628,14 @@
 
   function loadCapsMeta() {
     if (_capsMeta) return Promise.resolve(_capsMeta);
-    return window.agxApi.roles.capabilities().then(function(res) {
+    return window.p86Api.roles.capabilities().then(function(res) {
       _capsMeta = res.capabilities || [];
       return _capsMeta;
     });
   }
 
   function loadRolesCache() {
-    return window.agxApi.roles.list().then(function(res) {
+    return window.p86Api.roles.list().then(function(res) {
       _rolesCache = res.roles || [];
       return _rolesCache;
     });
@@ -2764,8 +2764,8 @@
     statusEl.textContent = 'Saving…';
 
     var p = origName
-      ? window.agxApi.roles.update(origName, { label: label, description: description, capabilities: caps })
-      : window.agxApi.roles.create({ name: name, label: label, description: description, capabilities: caps });
+      ? window.p86Api.roles.update(origName, { label: label, description: description, capabilities: caps })
+      : window.p86Api.roles.create({ name: name, label: label, description: description, capabilities: caps });
 
     p.then(function() {
       statusEl.style.color = '#34d399';
@@ -2773,7 +2773,7 @@
       // Refresh the current user's capability set in case they edited their
       // own role (e.g. admin removed their own ROLES_MANAGE — server lock-in
       // is the next safety, but reflect the new state in the UI now).
-      if (window.agxAuth && window.agxAuth.reloadCapabilities) window.agxAuth.reloadCapabilities();
+      if (window.p86Auth && window.p86Auth.reloadCapabilities) window.p86Auth.reloadCapabilities();
       setTimeout(function() {
         closeModal('roleEditorModal');
         renderAdminRoles();
@@ -2789,7 +2789,7 @@
     var role = _rolesCache.find(function(r) { return r.name === name; });
     if (!role) return;
     if (!confirm('Delete role "' + role.label + '"? Will fail if any user is still assigned to it.')) return;
-    window.agxApi.roles.remove(name).then(function() {
+    window.p86Api.roles.remove(name).then(function() {
       renderAdminRoles();
     }).catch(function(err) {
       alert('Delete failed: ' + (err.message || 'unknown error'));
@@ -2861,8 +2861,8 @@
     // 5-min threshold matches the API default. Self-clears the
     // placeholder if the request fails (e.g. offline mode) so the card
     // doesn't get stuck on "…".
-    if (window.agxApi && window.agxApi.isAuthenticated && window.agxApi.isAuthenticated()) {
-      window.agxApi.get('/api/auth/active-users').then(function(r) {
+    if (window.p86Api && window.p86Api.isAuthenticated && window.p86Api.isAuthenticated()) {
+      window.p86Api.get('/api/auth/active-users').then(function(r) {
         var countEl = document.getElementById('admin-metric-online-count');
         var asOfEl = document.getElementById('admin-metric-online-asof');
         if (countEl) {
@@ -2962,7 +2962,7 @@
               'If they own any jobs, the delete will fail and you should deactivate them ' +
               '(uncheck Active in Edit) instead, or reassign their jobs first.';
     if (!confirm(msg)) return;
-    window.agxApi.users.remove(userId)
+    window.p86Api.users.remove(userId)
       .then(function() {
         renderAdminUsers();
       })
@@ -3077,7 +3077,7 @@
   function loadAgentsServerConfig() {
     var el = document.getElementById('agents-server-config');
     if (!el) return;
-    window.agxApi.get('/api/admin/agents/config').then(function(cfg) {
+    window.p86Api.get('/api/admin/agents/config').then(function(cfg) {
       if (!cfg) { el.style.display = 'none'; return; }
       var modelLabel = cfg.model || '(none)';
       var effortLabel = cfg.effort ? ' · effort=' + cfg.effort : '';
@@ -3114,7 +3114,7 @@
     var host = document.getElementById('agents-content');
     if (!host) return;
     host.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;font-style:italic;padding:20px 0;">Loading metrics…</div>';
-    window.agxApi.get('/api/admin/agents/metrics?range=' + _agentsRange).then(function(resp) {
+    window.p86Api.get('/api/admin/agents/metrics?range=' + _agentsRange).then(function(resp) {
       var agents = (resp && resp.agents) || [];
       if (!agents.length) {
         host.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;font-style:italic;padding:20px 0;">No data.</div>';
@@ -3168,7 +3168,7 @@
     var host = document.getElementById('agents-content');
     if (!host) return;
     host.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;font-style:italic;padding:20px 0;">Loading conversations…</div>';
-    window.agxApi.get('/api/admin/agents/conversations?range=' + _agentsRange + '&limit=100').then(function(resp) {
+    window.p86Api.get('/api/admin/agents/conversations?range=' + _agentsRange + '&limit=100').then(function(resp) {
       var rows = (resp && resp.conversations) || [];
       if (!rows.length) {
         host.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;font-style:italic;padding:20px 0;">No conversations in this window.</div>';
@@ -3227,8 +3227,8 @@
     if (!host) return;
     host.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;font-style:italic;padding:20px 0;">Loading messages…</div>';
     Promise.all([
-      window.agxApi.get('/api/admin/agents/conversations/' + encodeURIComponent(key)),
-      window.agxApi.get('/api/admin/agents/conversations/' + encodeURIComponent(key) + '/replays').catch(function() { return { replays: [] }; })
+      window.p86Api.get('/api/admin/agents/conversations/' + encodeURIComponent(key)),
+      window.p86Api.get('/api/admin/agents/conversations/' + encodeURIComponent(key) + '/replays').catch(function() { return { replays: [] }; })
     ]).then(function(results) {
       var c = results[0];
       var replays = (results[1] && results[1].replays) || [];
@@ -3310,7 +3310,7 @@
       notice.textContent = '🔁 Running replay… (model: ' + (modelChoice || 'default') + (effortChoice ? ', effort: ' + effortChoice : '') + ')';
       hostNotice.insertBefore(notice, hostNotice.firstChild);
     }
-    window.agxApi.post('/api/admin/agents/conversations/' + encodeURIComponent(key) + '/replay', {
+    window.p86Api.post('/api/admin/agents/conversations/' + encodeURIComponent(key) + '/replay', {
       model_override: modelChoice.trim() || undefined,
       effort_override: effortChoice.trim() || undefined,
       system_prefix: systemPrefix.trim() || undefined
@@ -3380,11 +3380,11 @@
   }
 
   function openChiefOfStaff() {
-    if (!window.agxAI || typeof window.agxAI.open !== 'function') {
+    if (!window.p86AI || typeof window.p86AI.open !== 'function') {
       alert('AI panel not loaded — refresh the page.');
       return;
     }
-    window.agxAI.open({ entityType: 'staff' });
+    window.p86AI.open({ entityType: 'staff' });
   }
 
   // ─────────── Skills view (mounted on the Agents page) ───────────
@@ -3439,8 +3439,8 @@
       entitySel.disabled = false;
       if (agent === 'ag') {
         entityLabel.textContent = 'Entity — recent estimates';
-        if (window.agxApi && window.agxApi.estimates && typeof window.agxApi.estimates.list === 'function') {
-          window.agxApi.estimates.list().then(function(resp) {
+        if (window.p86Api && window.p86Api.estimates && typeof window.p86Api.estimates.list === 'function') {
+          window.p86Api.estimates.list().then(function(resp) {
             var rows = (resp && resp.estimates) || [];
             rows.sort(function(a, b) { return (b.updated_at || '').localeCompare(a.updated_at || ''); });
             rows = rows.slice(0, 80);
@@ -3453,8 +3453,8 @@
         }
       } else if (agent === 'elle') {
         entityLabel.textContent = 'Entity — recent jobs';
-        if (window.agxApi && window.agxApi.jobs && typeof window.agxApi.jobs.list === 'function') {
-          window.agxApi.jobs.list().then(function(resp) {
+        if (window.p86Api && window.p86Api.jobs && typeof window.p86Api.jobs.list === 'function') {
+          window.p86Api.jobs.list().then(function(resp) {
             var rows = (resp && resp.jobs) || [];
             rows.sort(function(a, b) { return (b.updated_at || '').localeCompare(a.updated_at || ''); });
             rows = rows.slice(0, 80);
@@ -3489,7 +3489,7 @@
     if (agent === 'ag')   qs += '&estimate_id=' + encodeURIComponent(entityId);
     if (agent === 'elle') qs += '&job_id=' + encodeURIComponent(entityId);
 
-    window.agxApi.get('/api/admin/agents/preview-prompt' + qs).then(function(data) {
+    window.p86Api.get('/api/admin/agents/preview-prompt' + qs).then(function(data) {
       resultHost.innerHTML = renderPreviewPayload(data);
     }).catch(function(err) {
       resultHost.innerHTML = '<div style="color:#e74c3c;font-size:12px;">Failed: ' + escapeHTML(err.message || 'unknown') + '</div>';
@@ -3592,7 +3592,7 @@
       '</p>' +
       '<div id="skills-versions-list" style="font-size:12px;color:var(--text-dim,#888);font-style:italic;">Loading…</div>';
 
-    window.agxApi.get('/api/admin/agents/skills/versions').then(function(resp) {
+    window.p86Api.get('/api/admin/agents/skills/versions').then(function(resp) {
       var rows = (resp && resp.versions) || [];
       var listHost = document.getElementById('skills-versions-list');
       if (!listHost) return;
@@ -3628,7 +3628,7 @@
   }
 
   function viewSkillsVersion(id) {
-    window.agxApi.get('/api/admin/agents/skills/versions/' + encodeURIComponent(id)).then(function(resp) {
+    window.p86Api.get('/api/admin/agents/skills/versions/' + encodeURIComponent(id)).then(function(resp) {
       var v = resp && resp.version;
       if (!v) { alert('Version not found.'); return; }
       var pretty = '';
@@ -3644,7 +3644,7 @@
 
   function restoreSkillsVersion(id) {
     if (!confirm('Restore version ' + id + '? Current state will be auto-snapshotted before applying.')) return;
-    window.agxApi.post('/api/admin/agents/skills/versions/' + encodeURIComponent(id) + '/restore', {}).then(function() {
+    window.p86Api.post('/api/admin/agents/skills/versions/' + encodeURIComponent(id) + '/restore', {}).then(function() {
       alert('Restored. Reloading skills view.');
       switchAgentsView('skills');
     }).catch(function(err) { alert('Restore failed: ' + (err.message || 'unknown')); });
@@ -3687,7 +3687,7 @@
         '</p>' +
       '</div>';
 
-    window.agxApi.get('/api/admin/files/stats').then(function(s) {
+    window.p86Api.get('/api/admin/files/stats').then(function(s) {
       var host = document.getElementById('files-stats-host');
       if (!host) return;
       host.innerHTML =
@@ -3697,7 +3697,7 @@
         '</span>';
     }).catch(function() { /* stats are decorative; failures fine */ });
 
-    window.agxApi.get('/api/admin/batch/jobs').then(function(resp) {
+    window.p86Api.get('/api/admin/batch/jobs').then(function(resp) {
       var rows = (resp && resp.jobs) || [];
       var listHost = document.getElementById('batch-jobs-list');
       if (!listHost) return;
@@ -3743,7 +3743,7 @@
     if (!confirm('Submit a new 86 audit batch?\n\nBuilds one audit prompt per active job (excluding Archived/Completed) and submits as a single Anthropic Batch API job. Costs roughly half a synchronous 86 turn per job. Results land here when the batch finishes (typically minutes, up to 24h).')) return;
     var btn = document.activeElement;
     if (btn && btn.tagName === 'BUTTON') { btn.disabled = true; btn.textContent = 'Submitting…'; }
-    window.agxApi.post('/api/admin/batch/elle-audit', {}).then(function(resp) {
+    window.p86Api.post('/api/admin/batch/elle-audit', {}).then(function(resp) {
       alert('✓ Submitted batch ' + resp.batch_job_id + ' covering ' + resp.request_count + ' job' + (resp.request_count === 1 ? '' : 's') + (resp.skipped ? ' (' + resp.skipped + ' skipped on context-build error)' : '') + '. Refresh in a minute or two to see the status.');
       renderBatchJobsList();
     }).catch(function(err) {
@@ -3767,7 +3767,7 @@
         '<div style="flex:1;font-size:13px;color:var(--text-dim,#888);">Loading batch ' + escapeHTML(id) + '…</div>' +
       '</div>' +
       '<div id="batch-detail-body" style="font-size:12px;color:var(--text-dim,#888);font-style:italic;">Loading…</div>';
-    window.agxApi.get('/api/admin/batch/jobs/' + encodeURIComponent(id)).then(function(resp) {
+    window.p86Api.get('/api/admin/batch/jobs/' + encodeURIComponent(id)).then(function(resp) {
       var b = resp && resp.job;
       if (!b) { host.innerHTML = '<div style="color:#e74c3c;">Batch not found.</div>'; return; }
       var pill = batchStatusPill(b.status);
@@ -3816,7 +3816,7 @@
   }
 
   function refreshBatchJob(id) {
-    window.agxApi.post('/api/admin/batch/jobs/' + encodeURIComponent(id) + '/refresh', {}).then(function() {
+    window.p86Api.post('/api/admin/batch/jobs/' + encodeURIComponent(id) + '/refresh', {}).then(function() {
       renderBatchJobDetail(id);
     }).catch(function(err) {
       alert('Refresh failed: ' + (err.message || 'unknown'));
@@ -3838,7 +3838,7 @@
   function uploadRecentPhotos(limit) {
     var btn = document.activeElement;
     if (btn && btn.tagName === 'BUTTON') { btn.disabled = true; btn.textContent = 'Uploading…'; }
-    window.agxApi.post('/api/admin/files/upload-recent', { limit: limit || 25 }).then(function(resp) {
+    window.p86Api.post('/api/admin/files/upload-recent', { limit: limit || 25 }).then(function(resp) {
       var msg = '✓ Uploaded ' + resp.uploaded + ' / ' + resp.attempted + ' image' + (resp.attempted === 1 ? '' : 's');
       var failed = (resp.results || []).filter(function(r) { return !r.ok; });
       if (failed.length) {
@@ -3884,7 +3884,7 @@
     var host = document.getElementById('managed-agents-panel');
     if (!host) return;
     host.innerHTML = panelHeader('Managed Agents (Phase 1a)', '🤖') + '<div style="font-size:12px;color:var(--text-dim,#888);font-style:italic;">Loading…</div>';
-    window.agxApi.get('/api/admin/agents/managed').then(function(resp) {
+    window.p86Api.get('/api/admin/agents/managed').then(function(resp) {
       var rows = (resp && resp.agents) || [];
       // Intake is no longer a separate managed agent — 86 owns the
       // lead-intake flow. Only four agents register on the Anthropic side.
@@ -3937,7 +3937,7 @@
   function bootstrapManagedAgents(key) {
     var label = (key === 'all') ? 'every unregistered Project 86 agent' : key;
     if (!confirm('Register ' + label + ' as Anthropic-side managed Agent(s)?\n\nIdempotent — agents already in the registry stay as-is. Each registration consumes a beta.agents.create call. The chat path is unaffected; this just creates the Agent records that a future v2 chat endpoint will reference.\n\nNeeds ANTHROPIC_API_KEY set on the server.')) return;
-    window.agxApi.post('/api/admin/agents/managed/bootstrap?key=' + encodeURIComponent(key), {}).then(function(resp) {
+    window.p86Api.post('/api/admin/agents/managed/bootstrap?key=' + encodeURIComponent(key), {}).then(function(resp) {
       var summary = (resp && resp.summary) || [];
       var msg = summary.map(function(s) {
         if (s.ok) return '✓ ' + s.agent_key + ' → ' + s.anthropic_agent_id + ' (' + s.tool_count + ' tools, ' + s.skill_count + ' skills)';
@@ -3962,7 +3962,7 @@
     var host = document.getElementById('anthropic-skills-panel');
     if (!host) return;
     host.innerHTML = panelHeader('Native Skills', '🧠') + '<div style="font-size:12px;color:var(--text-dim,#888);font-style:italic;">Loading…</div>';
-    window.agxApi.get('/api/admin/anthropic/skills').then(function(resp) {
+    window.p86Api.get('/api/admin/anthropic/skills').then(function(resp) {
       var rows = (resp && resp.skills) || [];
       var note = resp && resp.note;
       if (!rows.length) {
@@ -3998,7 +3998,7 @@
     var host = document.getElementById('anthropic-files-panel');
     if (!host) return;
     host.innerHTML = panelHeader('Files', '📂') + '<div style="font-size:12px;color:var(--text-dim,#888);font-style:italic;">Loading…</div>';
-    window.agxApi.get('/api/admin/anthropic/files?limit=200').then(function(resp) {
+    window.p86Api.get('/api/admin/anthropic/files?limit=200').then(function(resp) {
       var rows = (resp && resp.files) || [];
       if (!rows.length) {
         host.innerHTML = panelHeader('Files', '📂') +
@@ -4034,7 +4034,7 @@
     var host = document.getElementById('anthropic-batches-panel');
     if (!host) return;
     host.innerHTML = panelHeader('Batches', '📦') + '<div style="font-size:12px;color:var(--text-dim,#888);font-style:italic;">Loading…</div>';
-    window.agxApi.get('/api/admin/anthropic/batches?limit=100').then(function(resp) {
+    window.p86Api.get('/api/admin/anthropic/batches?limit=100').then(function(resp) {
       var rows = (resp && resp.batches) || [];
       if (!rows.length) {
         host.innerHTML = panelHeader('Batches', '📦') +
@@ -4081,7 +4081,7 @@
     if (!confirm('Mirror every local pack to Anthropic Skills?\n\nUploads each pack as a SKILL.md via beta.skills.create. Already-mirrored packs are skipped. The chat path is unchanged — this just makes the packs visible in Anthropic\'s native Skills system.\n\nNeeds ANTHROPIC_API_KEY set on the server.')) return;
     var statusEl = document.getElementById('agents-skills-status');
     if (statusEl) { statusEl.textContent = 'Syncing all packs to Anthropic…'; statusEl.style.color = 'var(--text-dim,#888)'; }
-    window.agxApi.post('/api/admin/agents/skills/sync-all-to-anthropic', {}).then(function(resp) {
+    window.p86Api.post('/api/admin/agents/skills/sync-all-to-anthropic', {}).then(function(resp) {
       var msg = '✓ Synced ' + (resp.synced || 0) + ' new pack' + ((resp.synced || 0) === 1 ? '' : 's') + ' to Anthropic.';
       var failed = (resp.summary || []).filter(function(s) { return s.status === 'failed'; });
       if (failed.length) msg += '\n\n' + failed.length + ' failed:\n' + failed.map(function(f) { return '- ' + f.name + ': ' + f.error; }).join('\n');
@@ -4095,7 +4095,7 @@
   function syncSkillToAnthropic(idx) {
     syncSkillsFromInputs(); // capture any in-flight edits before sync
     saveAgentsSkillsThen(function() {
-      window.agxApi.post('/api/admin/agents/skills/' + encodeURIComponent(idx) + '/sync-to-anthropic', {}).then(function(resp) {
+      window.p86Api.post('/api/admin/agents/skills/' + encodeURIComponent(idx) + '/sync-to-anthropic', {}).then(function(resp) {
         alert('✓ Mirrored to Anthropic — skill_id ' + (resp.anthropic_skill_id || ''));
         renderAgentsSkillsView();
       }).catch(function(err) { alert('Sync failed: ' + (err.message || 'unknown')); });
@@ -4104,7 +4104,7 @@
 
   function unsyncSkillFromAnthropic(idx) {
     if (!confirm('Delete the Anthropic-side mirror for this pack?\n\nThe local pack stays. The next time you click Mirror, a fresh copy goes up — useful when the body has changed and you want to refresh the mirror.')) return;
-    window.agxApi.post('/api/admin/agents/skills/' + encodeURIComponent(idx) + '/unsync-from-anthropic', {}).then(function(resp) {
+    window.p86Api.post('/api/admin/agents/skills/' + encodeURIComponent(idx) + '/unsync-from-anthropic', {}).then(function(resp) {
       if (resp.delete_error) {
         alert('Local link cleared.\n\nNote: Anthropic-side delete also reported: ' + resp.delete_error);
       }
@@ -4117,7 +4117,7 @@
   // so we must save first to avoid uploading a stale body.
   function saveAgentsSkillsThen(cb) {
     syncSkillsFromInputs();
-    window.agxApi.settings.put('agent_skills', _skillsDraft).then(function() { if (cb) cb(); }).catch(function(err) {
+    window.p86Api.settings.put('agent_skills', _skillsDraft).then(function() { if (cb) cb(); }).catch(function(err) {
       alert('Save before sync failed: ' + (err.message || 'unknown'));
     });
   }
@@ -4137,7 +4137,7 @@
     if (!host) return;
     if (!confirm('Run every defined eval against the currently saved skill packs?\n\nEach eval makes a real Anthropic API call (no caching across evals). With 5 evals this typically costs $0.10-$0.50 and takes 30-90 seconds.')) return;
     host.innerHTML = '<div style="color:var(--text-dim,#888);font-style:italic;font-size:12px;padding:14px 0;">Running all evals (this may take a minute)…</div>';
-    window.agxApi.post('/api/admin/agents/skills/run-all-evals', {}).then(function(resp) {
+    window.p86Api.post('/api/admin/agents/skills/run-all-evals', {}).then(function(resp) {
       var summary = (resp && resp.summary) || [];
       if (resp && resp.note) {
         host.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;padding:14px 0;">' + escapeHTML(resp.note) + '</div>';
@@ -4189,7 +4189,7 @@
   function fetchOverridableSections() {
     var agentKeys = ['ag', 'job', 'cra', 'staff'];
     return Promise.all(agentKeys.map(function(a) {
-      return window.agxApi.get('/api/admin/agents/sections?agent=' + a)
+      return window.p86Api.get('/api/admin/agents/sections?agent=' + a)
         .then(function(r) { _overridableSections[a] = (r && r.sections) || []; })
         .catch(function() { _overridableSections[a] = []; });
     }));
@@ -4200,7 +4200,7 @@
     if (!host) return;
     host.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;font-style:italic;padding:20px 0;">Loading skill packs…</div>';
     Promise.all([
-      window.agxApi.settings.get('agent_skills'),
+      window.p86Api.settings.get('agent_skills'),
       fetchOverridableSections()
     ]).then(function(results) {
       var res = results[0];
@@ -4243,7 +4243,7 @@
     syncSkillsFromInputs();
     var statusEl = document.getElementById('agents-skills-status');
     if (statusEl) { statusEl.textContent = 'Saving…'; statusEl.style.color = 'var(--text-dim,#888)'; }
-    window.agxApi.settings.put('agent_skills', _skillsDraft).then(function() {
+    window.p86Api.settings.put('agent_skills', _skillsDraft).then(function() {
       if (statusEl) { statusEl.textContent = 'Saved.'; statusEl.style.color = '#34d399'; }
       setTimeout(function() { if (statusEl) statusEl.textContent = ''; }, 2400);
     }).catch(function(err) {
@@ -4265,7 +4265,7 @@
     var host = document.getElementById('agents-content');
     if (!host) return;
     host.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;font-style:italic;padding:20px 0;">Loading evals…</div>';
-    window.agxApi.get('/api/admin/agents/evals').then(function(resp) {
+    window.p86Api.get('/api/admin/agents/evals').then(function(resp) {
       var rows = (resp && resp.evals) || [];
       var btn = '<button class="ee-btn primary" onclick="openNewEvalModal()" style="margin-bottom:14px;">+ Add fixture</button>';
       var help = '<p style="margin:0 0 10px;font-size:12px;color:var(--text-dim,#888);">' +
@@ -4313,7 +4313,7 @@
   function runEval(id) {
     var btn = document.activeElement;
     if (btn && btn.tagName === 'BUTTON') { btn.disabled = true; btn.textContent = 'Running…'; }
-    window.agxApi.post('/api/admin/agents/evals/' + encodeURIComponent(id) + '/run', {}).then(function(resp) {
+    window.p86Api.post('/api/admin/agents/evals/' + encodeURIComponent(id) + '/run', {}).then(function(resp) {
       var ok = resp && resp.passed;
       alert((ok ? '✓ PASSED' : '✗ FAILED') + '\n\nModel: ' + (resp.model || '—') + (resp.effort ? ' · effort=' + resp.effort : '') + '\nDuration: ' + (resp.duration_ms ? Math.round(resp.duration_ms / 100) / 10 + 's' : '—') + '\nTool calls: ' + (resp.tool_calls ? resp.tool_calls.length : 0) + '\nTokens in/out: ' + (resp.input_tokens || 0) + ' / ' + (resp.output_tokens || 0));
       if (_agentsEvalId === id) renderAgentEvalDetail(id);
@@ -4329,7 +4329,7 @@
     var host = document.getElementById('agents-content');
     if (!host) return;
     host.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;font-style:italic;padding:20px 0;">Loading eval…</div>';
-    window.agxApi.get('/api/admin/agents/evals/' + encodeURIComponent(id)).then(function(resp) {
+    window.p86Api.get('/api/admin/agents/evals/' + encodeURIComponent(id)).then(function(resp) {
       var ev = resp && resp.eval;
       var runs = (resp && resp.runs) || [];
       if (!ev) {
@@ -4404,7 +4404,7 @@
 
   function deleteEval(id) {
     if (!confirm('Delete this eval fixture? Its run history will also be removed.')) return;
-    window.agxApi.del('/api/admin/agents/evals/' + encodeURIComponent(id)).then(function() {
+    window.p86Api.del('/api/admin/agents/evals/' + encodeURIComponent(id)).then(function() {
       _agentsEvalId = null;
       renderAdminAgents();
     }).catch(function(err) {
@@ -4419,7 +4419,7 @@
     var host = document.getElementById('agents-content');
     if (!host) return;
     host.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;font-style:italic;padding:20px 0;">Loading recent estimates…</div>';
-    window.agxApi.estimates.list().then(function(resp) {
+    window.p86Api.estimates.list().then(function(resp) {
       var estimates = (resp && resp.estimates) || [];
       // Sort newest-first; cap at 200 so the dropdown stays usable.
       estimates.sort(function(a, b) { return (b.updated_at || '').localeCompare(a.updated_at || ''); });
@@ -4524,7 +4524,7 @@
 
     var btn = document.getElementById('evalNew_submitBtn');
     if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
-    window.agxApi.post('/api/admin/agents/evals', {
+    window.p86Api.post('/api/admin/agents/evals', {
       name: name,
       description: description || undefined,
       kind: 'estimate_draft',
@@ -4541,7 +4541,7 @@
 
   // Accessors used by the URL router to read which agents drill-down
   // (if any) is currently showing. Mirrors estimateEditorAPI.getOpenId
-  // and agxLeads.getOpenId — captureRouteFromDOM uses these to decide
+  // and p86Leads.getOpenId — captureRouteFromDOM uses these to decide
   // whether the path should include /conversations/:key, /evals/:id,
   // or /evals/new.
   window.adminAgentsAPI = {
@@ -4571,13 +4571,13 @@
       '</div>' +
       '<div id="admin-sms-content" style="font-size:12px;color:var(--text-dim,#888);font-style:italic;">Loading…</div>';
 
-    if (!window.agxApi || !window.agxApi.adminSms || typeof window.agxApi.adminSms.list !== 'function') {
+    if (!window.p86Api || !window.p86Api.adminSms || typeof window.p86Api.adminSms.list !== 'function') {
       document.getElementById('admin-sms-content').innerHTML =
         '<div style="color:#e74c3c;">SMS API helper missing — refresh the page.</div>';
       return;
     }
 
-    window.agxApi.adminSms.list(100).then(function(resp) {
+    window.p86Api.adminSms.list(100).then(function(resp) {
       var entries = (resp && resp.entries) || [];
       var content = document.getElementById('admin-sms-content');
       if (!content) return;

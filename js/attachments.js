@@ -3,10 +3,10 @@
 // that differs is the (entityType, entityId) the widget targets.
 //
 // Public API:
-//   window.agxAttachments.mount(containerEl, { entityType, entityId, canEdit })
+//   window.p86Attachments.mount(containerEl, { entityType, entityId, canEdit })
 //     - Renders the uploader + grid into containerEl.
 //     - Refetches the list and auto-rerenders after each upload/delete.
-//   window.agxAttachments.openLightbox(attachments, startIndex)
+//   window.p86Attachments.openLightbox(attachments, startIndex)
 //     - Used by the grid click handler; exposed for testing / reuse.
 (function() {
   'use strict';
@@ -91,7 +91,7 @@
     var idx = Math.max(0, Math.min(startIndex || 0, attachments.length - 1));
 
     var overlay = document.createElement('div');
-    overlay.className = 'agx-lightbox';
+    overlay.className = 'p86-lightbox';
     overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:9999;display:flex;align-items:center;justify-content:center;padding:30px;';
 
     function render() {
@@ -164,9 +164,9 @@
     function fetchList() {
       state.loading = true;
       render();
-      var ownP = window.agxApi.attachments.list(entityType, entityId);
+      var ownP = window.p86Api.attachments.list(entityType, entityId);
       var parentP = parentEntity
-        ? window.agxApi.attachments.list(parentEntity.entityType, parentEntity.entityId).catch(function() { return { attachments: [] }; })
+        ? window.p86Api.attachments.list(parentEntity.entityType, parentEntity.entityId).catch(function() { return { attachments: [] }; })
         : Promise.resolve({ attachments: [] });
       Promise.all([ownP, parentP]).then(function(results) {
         state.attachments = (results[0] && results[0].attachments) || [];
@@ -183,7 +183,7 @@
     function uploadOne(file) {
       state.uploading++;
       render();
-      return window.agxApi.attachments.upload(entityType, entityId, file)
+      return window.p86Api.attachments.upload(entityType, entityId, file)
         .then(function() {
           state.uploading--;
         })
@@ -219,8 +219,8 @@
     }
 
     function deleteAttachment(id, kind) {
-      var go = (typeof window.agxConfirm === 'function')
-        ? window.agxConfirm({
+      var go = (typeof window.p86Confirm === 'function')
+        ? window.p86Confirm({
             title: 'Delete ' + (kind || 'attachment'),
             message: 'Delete this ' + (kind || 'attachment') + '? This cannot be undone.',
             confirmLabel: 'Delete',
@@ -229,9 +229,9 @@
         : Promise.resolve(window.confirm('Delete this ' + (kind || 'attachment') + '?'));
       go.then(function(ok) {
         if (!ok) return;
-        window.agxApi.attachments.remove(id).then(fetchList).catch(function(err) {
-          if (typeof window.agxAlert === 'function') {
-            window.agxAlert({ title: 'Delete failed', message: err.message || '' });
+        window.p86Api.attachments.remove(id).then(fetchList).catch(function(err) {
+          if (typeof window.p86Alert === 'function') {
+            window.p86Alert({ title: 'Delete failed', message: err.message || '' });
           } else {
             alert('Delete failed: ' + (err.message || ''));
           }
@@ -452,14 +452,14 @@
       container.querySelectorAll('[data-att-markup]').forEach(function(btn) {
         btn.onclick = function(e) {
           e.stopPropagation();
-          if (!window.agxMarkup || typeof window.agxMarkup.open !== 'function') {
+          if (!window.p86Markup || typeof window.p86Markup.open !== 'function') {
             alert('Markup viewer not loaded — refresh the page.');
             return;
           }
           var attId = btn.getAttribute('data-att-markup');
           var att = state.attachments.find(function(a) { return a.id === attId; });
           if (!att) return;
-          window.agxMarkup.open({
+          window.p86Markup.open({
             attachment: att,
             onDone: fetchList
           });
@@ -477,7 +477,7 @@
           var next = !att.include_in_proposal;
           att.include_in_proposal = next;
           render();
-          window.agxApi.attachments.update(attId, { include_in_proposal: next })
+          window.p86Api.attachments.update(attId, { include_in_proposal: next })
             .catch(function(err) {
               att.include_in_proposal = !next; // rollback
               render();
@@ -510,7 +510,7 @@
           if (next == null) return; // cancel
           var folder = sanitizeFolder(next);
           if (folder === current) return; // no-op
-          window.agxApi.attachments.update(attId, { folder: folder })
+          window.p86Api.attachments.update(attId, { folder: folder })
             .then(fetchList)
             .catch(function(err) {
               alert('Move failed: ' + (err.message || ''));
@@ -546,14 +546,14 @@
       container.querySelectorAll('[data-att-markup-parent]').forEach(function(btn) {
         btn.onclick = function(e) {
           e.stopPropagation();
-          if (!window.agxMarkup || typeof window.agxMarkup.open !== 'function') {
+          if (!window.p86Markup || typeof window.p86Markup.open !== 'function') {
             alert('Markup viewer not loaded — refresh the page.');
             return;
           }
           var attId = btn.getAttribute('data-att-markup-parent');
           var att = state.parentAttachments.find(function(a) { return a.id === attId; });
           if (!att) return;
-          window.agxMarkup.open({
+          window.p86Markup.open({
             attachment: att,
             saveTarget: { entityType: entityType, entityId: entityId },
             onDone: fetchList
@@ -629,5 +629,5 @@
     fetchList();
   }
 
-  window.agxAttachments = { mount: mount, openLightbox: openLightbox };
+  window.p86Attachments = { mount: mount, openLightbox: openLightbox };
 })();

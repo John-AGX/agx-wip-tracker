@@ -224,8 +224,8 @@
       if (estSub === 'leads') {
         var leadDetail = document.getElementById('lead-detail-view');
         var leadOpen = leadDetail && leadDetail.style.display !== 'none';
-        if (leadOpen && window.agxLeads && typeof window.agxLeads.getOpenId === 'function') {
-          var lid = window.agxLeads.getOpenId();
+        if (leadOpen && window.p86Leads && typeof window.p86Leads.getOpenId === 'function') {
+          var lid = window.p86Leads.getOpenId();
           if (lid) { route.estSub = 'leads'; route.leadId = lid; return route; }
         }
       }
@@ -302,7 +302,7 @@
   function wrapNav(name) {
     var orig = window[name];
     if (typeof orig !== 'function') return false;
-    if (orig.__agxRouterWrapped) return true;
+    if (orig.__p86RouterWrapped) return true;
     var wrapped = function () {
       var r = orig.apply(this, arguments);
       // Skip the push when this call originated from our own replay
@@ -311,8 +311,8 @@
       if (!replaying) scheduleSync();
       return r;
     };
-    wrapped.__agxRouterWrapped = true;
-    wrapped.__agxRouterOrig = orig;
+    wrapped.__p86RouterWrapped = true;
+    wrapped.__p86RouterOrig = orig;
     window[name] = wrapped;
     return true;
   }
@@ -326,20 +326,20 @@
       // Empty route — leave whatever auth.js / nav-state already did.
       return;
     }
-    var dataReady = !(typeof window.agxDataLoading === 'function' && window.agxDataLoading());
+    var dataReady = !(typeof window.p86DataLoading === 'function' && window.p86DataLoading());
     replaying = true;
     try {
       if (typeof window.switchTab === 'function') {
-        var origSwitchTab = window.switchTab.__agxRouterOrig || window.switchTab;
+        var origSwitchTab = window.switchTab.__p86RouterOrig || window.switchTab;
         origSwitchTab(route.top);
       }
 
       if (route.top === 'estimates' && route.estSub && typeof window.switchEstimatesSubTab === 'function') {
-        var origEstSub = window.switchEstimatesSubTab.__agxRouterOrig || window.switchEstimatesSubTab;
+        var origEstSub = window.switchEstimatesSubTab.__p86RouterOrig || window.switchEstimatesSubTab;
         origEstSub(route.estSub);
       }
       if (route.top === 'admin' && route.adSub && typeof window.switchAdminSubTab === 'function') {
-        var origAdSub = window.switchAdminSubTab.__agxRouterOrig || window.switchAdminSubTab;
+        var origAdSub = window.switchAdminSubTab.__p86RouterOrig || window.switchAdminSubTab;
         origAdSub(route.adSub);
       }
     } finally {
@@ -347,15 +347,15 @@
     }
 
     // Entity-open steps that depend on data being loaded — defer
-    // until agxDataLoading clears, mirroring restoreNavState in app.js.
+    // until p86DataLoading clears, mirroring restoreNavState in app.js.
     function openEntities() {
       replaying = true;
       try {
         if (route.top === 'wip' && route.jobId && typeof window.editJob === 'function') {
-          var origEditJob = window.editJob.__agxRouterOrig || window.editJob;
+          var origEditJob = window.editJob.__p86RouterOrig || window.editJob;
           origEditJob(route.jobId);
           if (route.jobSub && typeof window.switchJobSubTab === 'function') {
-            var origJobSub = window.switchJobSubTab.__agxRouterOrig || window.switchJobSubTab;
+            var origJobSub = window.switchJobSubTab.__p86RouterOrig || window.switchJobSubTab;
             origJobSub(route.jobSub);
           }
         } else if (route.top === 'wip' && route.archived &&
@@ -365,19 +365,19 @@
           var archiveEl = document.getElementById('archived-jobs-list');
           var alreadyOpen = archiveEl && archiveEl.style.display !== 'none';
           if (!alreadyOpen) {
-            var origShowArchived = window.showArchivedJobs.__agxRouterOrig || window.showArchivedJobs;
+            var origShowArchived = window.showArchivedJobs.__p86RouterOrig || window.showArchivedJobs;
             origShowArchived();
           }
         } else if (route.top === 'estimates' && route.estId && typeof window.editEstimate === 'function') {
           if (typeof window.switchEstimatesSubTab === 'function') {
-            var origEstSub2 = window.switchEstimatesSubTab.__agxRouterOrig || window.switchEstimatesSubTab;
+            var origEstSub2 = window.switchEstimatesSubTab.__p86RouterOrig || window.switchEstimatesSubTab;
             origEstSub2('list');
           }
-          var origEditEst = window.editEstimate.__agxRouterOrig || window.editEstimate;
+          var origEditEst = window.editEstimate.__p86RouterOrig || window.editEstimate;
           origEditEst(route.estId);
         } else if (route.top === 'estimates' && route.estSub === 'leads' && route.leadId &&
                    typeof window.openEditLeadModal === 'function') {
-          var origOpenLead = window.openEditLeadModal.__agxRouterOrig || window.openEditLeadModal;
+          var origOpenLead = window.openEditLeadModal.__p86RouterOrig || window.openEditLeadModal;
           origOpenLead(route.leadId);
         } else if (route.top === 'estimates' && route.estSub === 'leads' && !route.leadId) {
           // Back-nav from /estimates/leads/:id to /estimates/leads — close
@@ -385,16 +385,16 @@
           var leadDetailEl = document.getElementById('lead-detail-view');
           if (leadDetailEl && leadDetailEl.style.display !== 'none' &&
               typeof window.closeLeadDetail === 'function') {
-            var origCloseLead = window.closeLeadDetail.__agxRouterOrig || window.closeLeadDetail;
+            var origCloseLead = window.closeLeadDetail.__p86RouterOrig || window.closeLeadDetail;
             origCloseLead();
           }
         } else if (route.top === 'estimates' && route.estSub === 'clients' && route.clientId &&
                    typeof window.openEditClientModal === 'function') {
-          var origOpenClient = window.openEditClientModal.__agxRouterOrig || window.openEditClientModal;
+          var origOpenClient = window.openEditClientModal.__p86RouterOrig || window.openEditClientModal;
           origOpenClient(route.clientId);
         } else if (route.top === 'estimates' && route.estSub === 'subs' && route.subId &&
-                   window.agxSubs && typeof window.agxSubs.openEdit === 'function') {
-          var origOpenSub = window.agxSubs.openEdit.__agxRouterOrig || window.agxSubs.openEdit;
+                   window.p86Subs && typeof window.p86Subs.openEdit === 'function') {
+          var origOpenSub = window.p86Subs.openEdit.__p86RouterOrig || window.p86Subs.openEdit;
           origOpenSub(route.subId);
         } else if (route.top === 'admin' && route.adSub === 'agents') {
           // Three drill-downs share /admin/agents — pick the right one
@@ -407,19 +407,19 @@
             if (typeof window.switchAgentsView === 'function') {
               try { window.switchAgentsView('conversations'); } catch (e) { /* defensive */ }
             }
-            var origOpenConv = window.openAgentConversation.__agxRouterOrig || window.openAgentConversation;
+            var origOpenConv = window.openAgentConversation.__p86RouterOrig || window.openAgentConversation;
             origOpenConv(route.adAgentConvKey);
           } else if (route.adAgentEvalNew && typeof window.openNewEvalModal === 'function') {
             if (typeof window.switchAgentsView === 'function') {
               try { window.switchAgentsView('evals'); } catch (e) { /* defensive */ }
             }
-            var origOpenNewEval = window.openNewEvalModal.__agxRouterOrig || window.openNewEvalModal;
+            var origOpenNewEval = window.openNewEvalModal.__p86RouterOrig || window.openNewEvalModal;
             origOpenNewEval();
           } else if (route.adAgentEvalId && typeof window.openEvalDetail === 'function') {
             if (typeof window.switchAgentsView === 'function') {
               try { window.switchAgentsView('evals'); } catch (e) { /* defensive */ }
             }
-            var origOpenEval = window.openEvalDetail.__agxRouterOrig || window.openEvalDetail;
+            var origOpenEval = window.openEvalDetail.__p86RouterOrig || window.openEvalDetail;
             origOpenEval(route.adAgentEvalId);
           }
         }
@@ -434,7 +434,7 @@
     else {
       var attempts = 0;
       var iv = setInterval(function () {
-        var stillLoading = (typeof window.agxDataLoading === 'function') && window.agxDataLoading();
+        var stillLoading = (typeof window.p86DataLoading === 'function') && window.p86DataLoading();
         if (!stillLoading || ++attempts > 30) {
           clearInterval(iv);
           openEntities();
@@ -473,21 +473,21 @@
       'switchAgentsView'
     ].forEach(wrapNav);
 
-    // agxSubs.openEdit is namespaced (not on window directly), so wrap
-    // it manually with the same shape as wrapNav. agxSubs may not be
+    // p86Subs.openEdit is namespaced (not on window directly), so wrap
+    // it manually with the same shape as wrapNav. p86Subs may not be
     // initialized yet at boot; retry briefly until it shows up.
     function wrapSubsOpenEdit() {
-      if (!window.agxSubs || typeof window.agxSubs.openEdit !== 'function') return false;
-      var orig = window.agxSubs.openEdit;
-      if (orig.__agxRouterWrapped) return true;
+      if (!window.p86Subs || typeof window.p86Subs.openEdit !== 'function') return false;
+      var orig = window.p86Subs.openEdit;
+      if (orig.__p86RouterWrapped) return true;
       var wrapped = function () {
         var r = orig.apply(this, arguments);
         if (!replaying) scheduleSync();
         return r;
       };
-      wrapped.__agxRouterWrapped = true;
-      wrapped.__agxRouterOrig = orig;
-      window.agxSubs.openEdit = wrapped;
+      wrapped.__p86RouterWrapped = true;
+      wrapped.__p86RouterOrig = orig;
+      window.p86Subs.openEdit = wrapped;
       return true;
     }
     if (!wrapSubsOpenEdit()) {
@@ -500,7 +500,7 @@
     window.addEventListener('popstate', onPopState);
 
     // Public hooks so other modules can opt in / inspect.
-    window.agxRouter = {
+    window.p86Router = {
       sync: scheduleSync,
       route: function () { return parsePath(location.pathname); },
       navigate: function (route) {

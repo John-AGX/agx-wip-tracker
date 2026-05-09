@@ -3,7 +3,7 @@
 //
 // Outlook-style monthly grid + sidebar of in-progress jobs the
 // PM drags onto days during the Friday production-scheduling
-// meeting. Phase 1 = localStorage-only (`agx-schedule-entries`);
+// meeting. Phase 1 = localStorage-only (`p86-schedule-entries`);
 // Phase 2 will swap in /api/schedule and the schedule_entries
 // table without touching this module's public shape.
 //
@@ -26,13 +26,13 @@
   'use strict';
 
   // ── Storage ────────────────────────────────────────────────
-  // Phase 2: server is the source of truth (window.agxApi.schedule).
+  // Phase 2: server is the source of truth (window.p86Api.schedule).
   // localStorage stays around as an offline cache + the seed for the
   // first paint while the network call resolves. Settings (view month
   // / weekend toggle) stay client-only since they're per-user UX state
   // not collaborative data.
-  var STORAGE_KEY = 'agx-schedule-entries';
-  var SETTINGS_KEY = 'agx-schedule-settings';
+  var STORAGE_KEY = 'p86-schedule-entries';
+  var SETTINGS_KEY = 'p86-schedule-settings';
 
   function loadCachedEntries() {
     try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]') || []; }
@@ -80,10 +80,10 @@
   }
 
   function isApiReady() {
-    return !!(window.agxApi &&
-              window.agxApi.schedule &&
-              window.agxApi.isAuthenticated &&
-              window.agxApi.isAuthenticated());
+    return !!(window.p86Api &&
+              window.p86Api.schedule &&
+              window.p86Api.isAuthenticated &&
+              window.p86Api.isAuthenticated());
   }
 
   // Pull entries from the server and refresh the cache. Returns a
@@ -105,7 +105,7 @@
       _state.entries = loadCachedEntries();
       return Promise.resolve(_state.entries);
     }
-    return window.agxApi.schedule.list().then(function(res) {
+    return window.p86Api.schedule.list().then(function(res) {
       var serverList = (res && res.entries) || [];
       var cached = loadCachedEntries();
       var serverIds = {};
@@ -168,7 +168,7 @@
         status: e.status || 'planned',
         notes: e.notes || ''
       };
-      return window.agxApi.schedule.create(payload)
+      return window.p86Api.schedule.create(payload)
         .then(function(res) { return res && res.entry ? res.entry : null; })
         .catch(function(err) {
           console.warn('[schedule] migrate orphan failed (' + e.id + '):', err && err.message);
@@ -326,7 +326,7 @@
   var WEATHER_CLIENT_TTL_MS = 10 * 60 * 1000;
   var _weatherLastIdsKey = '';
   function refreshWeatherForVisibleJobs() {
-    if (!window.agxApi || !window.agxApi.weather || !window.agxApi.isAuthenticated || !window.agxApi.isAuthenticated()) {
+    if (!window.p86Api || !window.p86Api.weather || !window.p86Api.isAuthenticated || !window.p86Api.isAuthenticated()) {
       return;
     }
     // Collect every jobId that has an entry in the visible 6-week
@@ -346,7 +346,7 @@
     if (key === _weatherLastIdsKey && fresh && Object.keys(_state.weather).length) return;
     if (_state.weatherLoading) return;
     _state.weatherLoading = true;
-    window.agxApi.weather.jobs(idList).then(function(res) {
+    window.p86Api.weather.jobs(idList).then(function(res) {
       _state.weather = (res && res.weather) || {};
       _state.weatherFetchedAt = Date.now();
       _weatherLastIdsKey = key;
@@ -442,11 +442,11 @@
   // role exists. Loaded once per page render and cached for the
   // entry-editor modal's crew picker.
   function loadUsers() {
-    if (!window.agxApi || !window.agxApi.users || !window.agxApi.isAuthenticated || !window.agxApi.isAuthenticated()) {
+    if (!window.p86Api || !window.p86Api.users || !window.p86Api.isAuthenticated || !window.p86Api.isAuthenticated()) {
       _state.users = [];
       return Promise.resolve([]);
     }
-    return window.agxApi.users.list().then(function(res) {
+    return window.p86Api.users.list().then(function(res) {
       var list = (res && res.users) || [];
       _state.users = list.filter(function(u) { return u && (u.active === undefined || u.active); });
       return _state.users;
@@ -729,7 +729,7 @@
       card.addEventListener('dragstart', function(e) {
         card.classList.add('dragging');
         var jobId = card.getAttribute('data-job-id');
-        e.dataTransfer.setData('text/x-agx-jobid', jobId);
+        e.dataTransfer.setData('text/x-p86-jobid', jobId);
         e.dataTransfer.setData('text/plain', jobId);
         e.dataTransfer.effectAllowed = 'copy';
       });
@@ -1043,7 +1043,7 @@
       cell.addEventListener('drop', function(e) {
         e.preventDefault();
         cell.classList.remove('sch-drop-target');
-        var jobId = e.dataTransfer.getData('text/x-agx-jobid') ||
+        var jobId = e.dataTransfer.getData('text/x-p86-jobid') ||
                     e.dataTransfer.getData('text/plain');
         if (!jobId) return;
         var date = cell.getAttribute('data-date');
@@ -1380,7 +1380,7 @@
       }
       var payload = { days: newDays };
       if (entry.updatedAt) payload.expectedUpdatedAt = entry.updatedAt;
-      window.agxApi.schedule.update(entry.id, payload).then(function(res) {
+      window.p86Api.schedule.update(entry.id, payload).then(function(res) {
         var saved = res && res.entry;
         if (!saved) return;
         var idx = _state.entries.findIndex(function(x) { return x.id === entry.id; });
@@ -1421,7 +1421,7 @@
       var days = (entry && entry.days) || 1;
       // Coerce every crew id to integer up-front. users.id is SERIAL
       // server-side; if we mix strings (from getAttribute on click)
-      // and ints (from agxApi.users.list), indexOf strict-equality
+      // and ints (from p86Api.users.list), indexOf strict-equality
       // checks fail and the picker can't tell what's already selected
       // when re-opening an entry. One canonical type fixes both ends.
       var crew = (entry && Array.isArray(entry.crew))
@@ -1491,9 +1491,9 @@
               '</div>' +
             '</div>' +
             '<div title="When ON: Sat/Sun count toward the entry\'s span (e.g. 5 days starting Friday → ends Tuesday). When OFF: weekends are skipped (5 days starting Friday → ends Thursday).">' +
-              '<label class="agx-check-row">' +
+              '<label class="p86-check-row">' +
                 '<input type="checkbox" id="schEditWeekends" ' + (includesWeekends ? 'checked' : '') + ' />' +
-                '<span>Count weekends as production days <span class="agx-check-hint">— affects how the production-days count expands across the calendar.</span></span>' +
+                '<span>Count weekends as production days <span class="p86-check-hint">— affects how the production-days count expands across the calendar.</span></span>' +
               '</label>' +
             '</div>' +
             '<div>' +
@@ -1523,9 +1523,9 @@
             // array (PATCH compares pre/post crew), so flipping this
             // ON during a routine edit only notifies *added* members.
             '<div title="Email crew about this assignment. Default ON for new entries, OFF for edits — server only emails newly-added crew members regardless.">' +
-              '<label class="agx-check-row">' +
+              '<label class="p86-check-row">' +
                 '<input type="checkbox" id="schEditNotify" ' + (!isEdit ? 'checked' : '') + ' />' +
-                '<span>&#x1F4E7; Notify ' + (isEdit ? 'newly-added' : 'assigned') + ' crew via email <span class="agx-check-hint">— only sent to newly-added members.</span></span>' +
+                '<span>&#x1F4E7; Notify ' + (isEdit ? 'newly-added' : 'assigned') + ' crew via email <span class="p86-check-hint">— only sent to newly-added members.</span></span>' +
               '</label>' +
             '</div>' +
           '</div>' +
@@ -1574,8 +1574,8 @@
       if (del) {
         del.addEventListener('click', function() {
           if (!entry) return;
-          var goDelete = (typeof window.agxConfirm === 'function')
-            ? window.agxConfirm({
+          var goDelete = (typeof window.p86Confirm === 'function')
+            ? window.p86Confirm({
                 title: 'Delete schedule entry',
                 message: 'Delete this schedule entry? This cannot be undone.',
                 confirmLabel: 'Delete',
@@ -1586,7 +1586,7 @@
             if (!ok) return;
             setBusy(true);
             var p = isApiReady() && entry.id && entry.id.indexOf('sch_local_') !== 0
-              ? window.agxApi.schedule.remove(entry.id)
+              ? window.p86Api.schedule.remove(entry.id)
               : Promise.resolve();
             p.then(function() {
               _state.entries = _state.entries.filter(function(x) { return x.id !== entry.id; });
@@ -1597,8 +1597,8 @@
               refreshWeekSummary();
             }).catch(function(err) {
               setBusy(false);
-              if (typeof window.agxAlert === 'function') {
-                window.agxAlert({ title: 'Delete failed', message: err.message || String(err) });
+              if (typeof window.p86Alert === 'function') {
+                window.p86Alert({ title: 'Delete failed', message: err.message || String(err) });
               } else {
                 alert('Delete failed: ' + (err.message || err));
               }
@@ -1663,8 +1663,8 @@
             payload.expectedUpdatedAt = entry.updatedAt;
           }
           var req = (isEdit && !isLocalOnly)
-            ? window.agxApi.schedule.update(entry.id, payload)
-            : window.agxApi.schedule.create(payload);
+            ? window.p86Api.schedule.update(entry.id, payload)
+            : window.p86Api.schedule.create(payload);
           req.then(function(res) {
             var saved = res && res.entry;
             if (isLocalOnly) {
@@ -1680,8 +1680,8 @@
             // elsewhere — refresh and try again." message.
             if (/changed elsewhere|409/i.test(msg)) {
               setBusy(false);
-              var goRefresh = (typeof window.agxConfirm === 'function')
-                ? window.agxConfirm({
+              var goRefresh = (typeof window.p86Confirm === 'function')
+                ? window.p86Confirm({
                     title: 'Entry changed elsewhere',
                     message: 'This entry was just updated by someone else.\n\nReload the latest version? Your unsaved changes will be lost.',
                     confirmLabel: 'Reload',
@@ -1920,11 +1920,11 @@
     var body = mount.querySelector('#schJobWxBody-' + (CSS && CSS.escape ? CSS.escape(jobId) : jobId));
     if (!body) body = mount.querySelector('.sch-job-wx-body'); // fallback for ids w/ unsafe chars
 
-    if (!window.agxApi || !window.agxApi.weather || !window.agxApi.isAuthenticated || !window.agxApi.isAuthenticated()) {
+    if (!window.p86Api || !window.p86Api.weather || !window.p86Api.isAuthenticated || !window.p86Api.isAuthenticated()) {
       body.innerHTML = '<div class="sch-job-wx-empty">Sign in to see weather.</div>';
       return;
     }
-    window.agxApi.weather.jobs([jobId]).then(function(res) {
+    window.p86Api.weather.jobs([jobId]).then(function(res) {
       var w = res && res.weather && res.weather[jobId];
       paintJobWeatherBody(body, w);
     }).catch(function(err) {
@@ -2004,7 +2004,7 @@
   };
   // Surface the job-detail widget so wip.js (and any other module
   // that wants a per-job forecast) can drop it into a container.
-  window.agxWeather = {
+  window.p86Weather = {
     renderJobWidget: renderJobWeatherWidget
   };
 })();

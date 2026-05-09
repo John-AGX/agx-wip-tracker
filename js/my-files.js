@@ -53,7 +53,7 @@
   };
 
   function currentUserId() {
-    var u = (window.agxAuth && window.agxAuth.getUser && window.agxAuth.getUser()) || null;
+    var u = (window.p86Auth && window.p86Auth.getUser && window.p86Auth.getUser()) || null;
     return u ? u.id : null;
   }
 
@@ -98,7 +98,7 @@
     var uid = currentUserId();
     if (!uid) return Promise.resolve();
     _state.loading = true;
-    return window.agxApi.attachments.list('user', String(uid))
+    return window.p86Api.attachments.list('user', String(uid))
       .then(function(res) {
         _state.files = (res && res.attachments) || [];
         _state.error = null;
@@ -257,7 +257,7 @@
         return;
       }
       chain = chain.then(function() {
-        return window.agxApi.attachments.upload('user', String(uid), f, { folder: _state.activeFolder })
+        return window.p86Api.attachments.upload('user', String(uid), f, { folder: _state.activeFolder })
           .catch(function(err) { alert('Upload failed for "' + f.name + '": ' + (err.message || err)); });
       });
     });
@@ -266,7 +266,7 @@
 
   function deleteFile(id) {
     if (!window.confirm('Delete this file? This cannot be undone.')) return;
-    window.agxApi.attachments.remove(id)
+    window.p86Api.attachments.remove(id)
       .then(fetchFiles)
       .then(function() { paint(document.getElementById('my-files')); })
       .catch(function(err) { alert('Delete failed: ' + (err.message || err)); });
@@ -359,7 +359,7 @@
       var entityType = parts[0];
       var entityId = parts[1];
       var folder = sanitizeFolder(modal.querySelector('#mfDestFolder').value);
-      var fn = mode === 'copy' ? window.agxApi.attachments.copy : window.agxApi.attachments.move;
+      var fn = mode === 'copy' ? window.p86Api.attachments.copy : window.p86Api.attachments.move;
       fn(attId, { entity_type: entityType, entity_id: entityId, folder: folder })
         .then(function() {
           modal.remove();

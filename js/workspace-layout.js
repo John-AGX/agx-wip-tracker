@@ -21,8 +21,8 @@
   const RIGHT_TABS = [
     { id: 'job-overview',      label: 'Overview' },
     // Workspace gets the bold-network-graph icon since the tab swaps
-    // in a node-graph canvas. Icon decorated via data-agx-icon by the
-    // agx-icons auto-decorator; the label stays plain text.
+    // in a node-graph canvas. Icon decorated via data-p86-icon by the
+    // p86-icons auto-decorator; the label stays plain text.
     { id: 'job-workspace',     label: 'Workspace', icon: 'graph' },
     { id: 'job-wip',           label: 'WIP' },
     { id: 'job-costs',         label: 'Costs' },
@@ -352,7 +352,7 @@
 
     var tabsHtml = '<div class="ws-right-tabs">';
     RIGHT_TABS.forEach(function(tab, i) {
-      tabsHtml += '<button class="ws-right-tab' + (i === 0 ? ' active' : '') + '" data-panel="' + tab.id + '"' + (tab.icon ? ' data-agx-icon="' + tab.icon + '"' : '') + '>' + tab.label + '</button>';
+      tabsHtml += '<button class="ws-right-tab' + (i === 0 ? ' active' : '') + '" data-panel="' + tab.id + '"' + (tab.icon ? ' data-p86-icon="' + tab.icon + '"' : '') + '>' + tab.label + '</button>';
     });
     tabsHtml += '<div class="ws-right-tabs-actions">' +
       '<button class="ee-btn" onclick="openJobAI()" title="Ask 86, AGX\'s WIP analyst" style="background:linear-gradient(135deg,#8b5cf6,#4f8cff);color:#fff;border-color:transparent;">✨ Ask 86</button>' +
@@ -529,7 +529,7 @@
         }
         if (isFolder) {
           try {
-            localStorage.setItem('agx-ws-min-pos', JSON.stringify({
+            localStorage.setItem('p86-ws-min-pos', JSON.stringify({
               x: parseInt(panel.style.left, 10) || 0,
               y: parseInt(panel.style.top, 10) || 0
             }));
@@ -619,7 +619,7 @@
   // on full reload; localStorage survives.
   function workspaceStateKey() {
     var jid = (window.appState && appState.currentJobId) || null;
-    return jid ? 'agx-ws-graphstate:' + jid : null;
+    return jid ? 'p86-ws-graphstate:' + jid : null;
   }
   function loadWorkspaceState() {
     var key = workspaceStateKey();
@@ -836,7 +836,7 @@
     // appears near where the expanded panel was.
     var savedMin = null;
     try {
-      var raw = localStorage.getItem('agx-ws-min-pos');
+      var raw = localStorage.getItem('p86-ws-min-pos');
       if (raw) savedMin = JSON.parse(raw);
     } catch (e) {}
     if (savedMin && isFinite(savedMin.x) && isFinite(savedMin.y)) {
@@ -903,7 +903,7 @@
     if (auditBtn) auditBtn.addEventListener('click', function() {
       var jid = (window.appState && appState.currentJobId) || null;
       if (!jid) return alert('Open a job first.');
-      if (window.agxJobAudit) window.agxJobAudit.open(jid);
+      if (window.p86JobAudit) window.p86JobAudit.open(jid);
     });
     _toolbarWired = true;
   }
@@ -916,12 +916,12 @@
     var badge = document.getElementById('ngAuditBadge');
     if (!btn || !badge) return;
     var jid = (window.appState && appState.currentJobId) || null;
-    if (!jid || !window.agxJobAudit) {
+    if (!jid || !window.p86JobAudit) {
       badge.style.display = 'none';
       return;
     }
     try {
-      var count = window.agxJobAudit.findingCount(jid, ['high', 'med']);
+      var count = window.p86JobAudit.findingCount(jid, ['high', 'med']);
       if (count > 0) {
         badge.textContent = count;
         badge.style.display = 'inline-block';

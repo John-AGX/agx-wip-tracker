@@ -2,17 +2,17 @@
 //
 // Auto-attaches a small clipboard button (📋) to:
 //   • <input type="email">
-//   • Any element with the data-agx-copy attribute (inputs, textareas)
-//   • Read-only display elements with data-agx-copy-display
+//   • Any element with the data-p86-copy attribute (inputs, textareas)
+//   • Read-only display elements with data-p86-copy-display
 //
-// Skipped on inputs that opt out with data-agx-no-copy.
+// Skipped on inputs that opt out with data-p86-no-copy.
 //
 // A MutationObserver re-scans whenever new nodes are added so modals
 // rebuilt via `innerHTML = '<form…>'` get redecorated automatically.
 
 (function () {
   'use strict';
-  if (window.agxCopyToClipboard) return;
+  if (window.p86CopyToClipboard) return;
 
   function copy(text, btn) {
     if (!text) return;
@@ -39,14 +39,14 @@
   }
 
   function flash(btn) {
-    var orig = btn.dataset.agxCopyOrig || btn.textContent;
-    btn.dataset.agxCopyOrig = orig;
+    var orig = btn.dataset.p86CopyOrig || btn.textContent;
+    btn.dataset.p86CopyOrig = orig;
     btn.textContent = '✓';
-    btn.classList.add('agx-copy-flashed');
-    clearTimeout(btn._agxCopyTimer);
-    btn._agxCopyTimer = setTimeout(function () {
+    btn.classList.add('p86-copy-flashed');
+    clearTimeout(btn._p86CopyTimer);
+    btn._p86CopyTimer = setTimeout(function () {
       btn.textContent = orig;
-      btn.classList.remove('agx-copy-flashed');
+      btn.classList.remove('p86-copy-flashed');
     }, 900);
   }
 
@@ -54,29 +54,29 @@
     if (!el || !el.tagName) return false;
     var tag = el.tagName;
     if (tag !== 'INPUT' && tag !== 'TEXTAREA') return false;
-    if (el.dataset.agxCopyDecorated === '1') return false;
-    if (el.hasAttribute('data-agx-no-copy')) return false;
-    if (el.hasAttribute('data-agx-copy')) return true;
+    if (el.dataset.p86CopyDecorated === '1') return false;
+    if (el.hasAttribute('data-p86-no-copy')) return false;
+    if (el.hasAttribute('data-p86-copy')) return true;
     return tag === 'INPUT' && (el.type === 'email');
   }
 
   function decorateInput(input) {
     if (!isEligibleInput(input)) return;
-    input.dataset.agxCopyDecorated = '1';
+    input.dataset.p86CopyDecorated = '1';
 
     var wrap;
-    if (input.parentNode && input.parentNode.classList && input.parentNode.classList.contains('agx-copy-wrap')) {
+    if (input.parentNode && input.parentNode.classList && input.parentNode.classList.contains('p86-copy-wrap')) {
       wrap = input.parentNode;
     } else {
       wrap = document.createElement('span');
-      wrap.className = 'agx-copy-wrap';
+      wrap.className = 'p86-copy-wrap';
       input.parentNode.insertBefore(wrap, input);
       wrap.appendChild(input);
     }
 
     var btn = document.createElement('button');
     btn.type = 'button';
-    btn.className = 'agx-copy-btn';
+    btn.className = 'p86-copy-btn';
     btn.title = 'Copy to clipboard';
     btn.textContent = '📋';
     btn.tabIndex = -1;
@@ -89,18 +89,18 @@
   }
 
   function decorateDisplay(el) {
-    if (!el || el.dataset.agxCopyDecorated === '1') return;
-    el.dataset.agxCopyDecorated = '1';
+    if (!el || el.dataset.p86CopyDecorated === '1') return;
+    el.dataset.p86CopyDecorated = '1';
     var btn = document.createElement('button');
     btn.type = 'button';
-    btn.className = 'agx-copy-btn agx-copy-btn-inline';
+    btn.className = 'p86-copy-btn p86-copy-btn-inline';
     btn.title = 'Copy to clipboard';
     btn.textContent = '📋';
     btn.addEventListener('click', function (e) {
       e.preventDefault();
       e.stopPropagation();
-      var text = el.dataset.agxCopyValue != null
-        ? el.dataset.agxCopyValue
+      var text = el.dataset.p86CopyValue != null
+        ? el.dataset.p86CopyValue
         : (el.textContent || '');
       copy(text, btn);
     });
@@ -111,12 +111,12 @@
   function scan(root) {
     if (!root || !root.querySelectorAll) return;
     var inputs = root.querySelectorAll(
-      'input[type="email"]:not([data-agx-no-copy]):not([data-agx-copy-decorated]),' +
-      ' input[data-agx-copy]:not([data-agx-copy-decorated]),' +
-      ' textarea[data-agx-copy]:not([data-agx-copy-decorated])'
+      'input[type="email"]:not([data-p86-no-copy]):not([data-p86-copy-decorated]),' +
+      ' input[data-p86-copy]:not([data-p86-copy-decorated]),' +
+      ' textarea[data-p86-copy]:not([data-p86-copy-decorated])'
     );
     for (var i = 0; i < inputs.length; i++) decorateInput(inputs[i]);
-    var displays = root.querySelectorAll('[data-agx-copy-display]:not([data-agx-copy-decorated])');
+    var displays = root.querySelectorAll('[data-p86-copy-display]:not([data-p86-copy-decorated])');
     for (var j = 0; j < displays.length; j++) decorateDisplay(displays[j]);
   }
 
@@ -140,6 +140,6 @@
     boot();
   }
 
-  window.agxCopyToClipboard = copy;
-  window.agxCopyDecorate = scan;
+  window.p86CopyToClipboard = copy;
+  window.p86CopyDecorate = scan;
 })();

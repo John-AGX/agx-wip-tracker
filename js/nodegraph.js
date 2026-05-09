@@ -77,14 +77,14 @@ function saveGraph(){
     wires:wires,
     panX:panX,panY:panY,zoom:zoom,nid:nid
   };
-  var all=JSON.parse(localStorage.getItem('agx-nodegraphs')||'{}');
+  var all=JSON.parse(localStorage.getItem('p86-nodegraphs')||'{}');
   all[jobId]=state;
-  localStorage.setItem('agx-nodegraphs',JSON.stringify(all));
+  localStorage.setItem('p86-nodegraphs',JSON.stringify(all));
 }
 
 function loadGraph(){
   if(!jobId) return false;
-  var all=JSON.parse(localStorage.getItem('agx-nodegraphs')||'{}');
+  var all=JSON.parse(localStorage.getItem('p86-nodegraphs')||'{}');
   var state=all[jobId];
   if(!state||!state.nodes||!state.nodes.length) return false;
   nodes=[];wires=state.wires||[];nid=state.nid||1;

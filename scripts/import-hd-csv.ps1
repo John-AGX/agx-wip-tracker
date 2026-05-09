@@ -11,7 +11,7 @@
 #   1. Get your auth token from the running app:
 #        - Log into agx-wip-tracker-production.up.railway.app
 #        - Open browser devtools (F12) -> Console
-#        - Paste:  copy(localStorage.getItem('agx-auth-token'))
+#        - Paste:  copy(localStorage.getItem('p86-auth-token'))
 #        - The token is now in your clipboard.
 #   2. From a PowerShell window in the repo root, run:
 #        .\scripts\import-hd-csv.ps1 `

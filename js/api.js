@@ -1,14 +1,14 @@
 // Project 86 API client — thin fetch wrapper with JWT auth, used by data-layer code.
-// Depends on window.agxAuth from js/auth.js for the token.
+// Depends on window.p86Auth from js/auth.js for the token.
 (function() {
   'use strict';
 
   function getToken() {
-    return (window.agxAuth && window.agxAuth.getToken()) || localStorage.getItem('agx-auth-token');
+    return (window.p86Auth && window.p86Auth.getToken()) || localStorage.getItem('p86-auth-token');
   }
 
   function isOffline() {
-    return window.agxAuth && window.agxAuth.isOffline();
+    return window.p86Auth && window.p86Auth.isOffline();
   }
 
   function buildHeaders(extra) {
@@ -22,7 +22,7 @@
   function handleResponse(r) {
     if (r.status === 401) {
       // Token expired or invalid — bounce to login
-      localStorage.removeItem('agx-auth-token');
+      localStorage.removeItem('p86-auth-token');
       if (typeof location !== 'undefined') location.reload();
       throw new Error('Session expired');
     }
@@ -399,7 +399,7 @@
     }
   };
 
-  window.agxApi = {
+  window.p86Api = {
     get: get, put: put, post: post, del: del,
     jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai, materials: materials, qbCosts: qbCosts, subs: subsApi, schedule: schedule, adminSms: adminSms, messages: messages, weather: weather,
     isOffline: isOffline,

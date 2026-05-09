@@ -146,7 +146,7 @@ async function sendEmail(opts) {
       payload.bcc = Array.isArray(bcc) ? bcc : [bcc];
     }
     if (replyTo) payload.reply_to = replyTo;
-    if (tag) payload.tags = [{ name: 'agx-tag', value: tag.slice(0, 100) }];
+    if (tag) payload.tags = [{ name: 'p86-tag', value: tag.slice(0, 100) }];
 
     const res = await client.emails.send(payload);
     // Resend returns { data: { id }, error: null } on success and

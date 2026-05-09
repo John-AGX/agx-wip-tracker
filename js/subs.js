@@ -159,7 +159,7 @@
       return '<span style="font-size:10px;padding:1px 8px;border-radius:8px;background:rgba(' + c[0] + ',0.12);color:' + c[1] + ';text-transform:uppercase;letter-spacing:0.4px;font-weight:600;">' + (st || 'active') + '</span>';
     };
 
-    return '<tr style="border-bottom:1px solid var(--border,#333);cursor:pointer;" onclick="window.agxSubs.openEdit(\'' + escapeAttr(s.id) + '\')">' +
+    return '<tr style="border-bottom:1px solid var(--border,#333);cursor:pointer;" onclick="window.p86Subs.openEdit(\'' + escapeAttr(s.id) + '\')">' +
       td('<strong>' + escapeHTML(s.name) + '</strong>' + (s.parent_sub_id ? ' <span style="font-size:10px;color:var(--text-dim,#888);">(child)</span>' : '')) +
       td(s.trade || '<span style="color:var(--text-dim,#666);">—</span>', { dim: !s.trade, size: 12 }) +
       td(
@@ -172,7 +172,7 @@
       td(compliance, { size: 11 }) +
       td(statusChip(s.status), { align: 'left' }) +
       td(
-        '<button class="ee-btn-icon ghost" style="font-size:11px;padding:2px 8px;" onclick="event.stopPropagation();window.agxSubs.openEdit(\'' + escapeAttr(s.id) + '\')" title="Edit">&#x270F;</button>',
+        '<button class="ee-btn-icon ghost" style="font-size:11px;padding:2px 8px;" onclick="event.stopPropagation();window.p86Subs.openEdit(\'' + escapeAttr(s.id) + '\')" title="Edit">&#x270F;</button>',
         { align: 'right' }
       ) +
     '</tr>';
@@ -313,11 +313,11 @@
 
   function mountCertificates(mountEl, subId) {
     mountEl.innerHTML = '<div style="padding:12px;color:var(--text-dim,#888);font-size:12px;">Loading certificates…</div>';
-    if (!window.agxApi || !window.agxApi.subs || !window.agxApi.subs.certs) {
+    if (!window.p86Api || !window.p86Api.subs || !window.p86Api.subs.certs) {
       mountEl.innerHTML = '<div style="padding:12px;color:#f87171;font-size:12px;">Cert API not available — refresh the page.</div>';
       return;
     }
-    window.agxApi.subs.certs.list(subId).then(function(res) {
+    window.p86Api.subs.certs.list(subId).then(function(res) {
       var byType = {};
       (res.certificates || []).forEach(function(c) { byType[c.cert_type] = c; });
       mountEl.innerHTML = CERT_TYPES.map(function(t) {
@@ -410,7 +410,7 @@
       btn.addEventListener('click', function() {
         var key = btn.getAttribute('data-cert-remove');
         if (!confirm('Remove this certificate?')) return;
-        window.agxApi.subs.certs.remove(subId, key).then(function() {
+        window.p86Api.subs.certs.remove(subId, key).then(function() {
           mountCertificates(rootEl, subId);
         }).catch(function(err) {
           alert('Remove failed: ' + (err.message || String(err)));
@@ -436,7 +436,7 @@
         debouncers[key + '|' + field] = setTimeout(function() {
           var payload = {};
           payload[field] = coerced;
-          window.agxApi.subs.certs.patch(subId, key, payload).catch(function(err) {
+          window.p86Api.subs.certs.patch(subId, key, payload).catch(function(err) {
             // Fallback: upsert with all fields if PATCH says the row
             // doesn't exist yet.
             if (err && /not found/i.test(err.message || '')) {
@@ -450,7 +450,7 @@
                   ? (v === '' ? null : Number(v))
                   : (v === '' ? null : v);
               });
-              window.agxApi.subs.certs.upsert(subId, full).catch(function(e2) {
+              window.p86Api.subs.certs.upsert(subId, full).catch(function(e2) {
                 console.warn('Cert upsert fallback failed:', e2.message);
               });
             } else {
@@ -574,11 +574,11 @@
   function mountJobAccess(mountEl, subId) {
     mountEl.innerHTML = '<div style="padding:8px;color:var(--text-dim,#888);font-size:12px;">Loading…</div>';
     var jobs = (window.appData && window.appData.jobs) || [];
-    if (!window.agxApi || !window.agxApi.subs || !window.agxApi.subs.listJobsForSub) {
+    if (!window.p86Api || !window.p86Api.subs || !window.p86Api.subs.listJobsForSub) {
       mountEl.innerHTML = '<div style="padding:8px;color:#f87171;font-size:12px;">Job access API not available — refresh.</div>';
       return;
     }
-    window.agxApi.subs.listJobsForSub(subId).then(function(res) {
+    window.p86Api.subs.listJobsForSub(subId).then(function(res) {
       var assignments = res.assignments || [];
       // Map job_id → assignment_id so the toggle handler can DELETE
       // by assignment id when the user unchecks. A sub can have
@@ -628,7 +628,7 @@
           var jobId = cb.getAttribute('data-job-access');
           if (cb.checked) {
             // Grant — assign at job level.
-            window.agxApi.subs.assignToJob(jobId, { sub_id: subId, level: 'job' })
+            window.p86Api.subs.assignToJob(jobId, { sub_id: subId, level: 'job' })
               .catch(function(err) {
                 cb.checked = false; // revert
                 alert('Failed to grant access: ' + (err.message || String(err)));
@@ -644,7 +644,7 @@
               return;
             }
             Promise.all(rows.map(function(a) {
-              return window.agxApi.subs.unassign(jobId, a.assignment_id);
+              return window.p86Api.subs.unassign(jobId, a.assignment_id);
             })).then(function() {
               delete assignedByJob[jobId];
             }).catch(function(err) {
@@ -669,13 +669,13 @@
   // ──────────────────────────────────────────────────────────────────
 
   function mountFolderGrants(mountEl, subId) {
-    if (!window.agxApi || !window.agxApi.subs || !window.agxApi.subs.grants) {
+    if (!window.p86Api || !window.p86Api.subs || !window.p86Api.subs.grants) {
       mountEl.innerHTML = '<div style="padding:8px;color:#f87171;font-size:12px;">Folder grants API not available — refresh.</div>';
       return;
     }
     function reload() {
       mountEl.innerHTML = '<div style="padding:8px;color:var(--text-dim,#888);font-size:12px;">Loading grants…</div>';
-      window.agxApi.subs.grants.list(subId).then(function(res) {
+      window.p86Api.subs.grants.list(subId).then(function(res) {
         render(res.grants || []);
       }).catch(function(err) {
         mountEl.innerHTML = '<div style="padding:8px;color:#f87171;font-size:12px;">Failed to load grants: ' + escapeHTML(err.message || String(err)) + '</div>';
@@ -762,7 +762,7 @@
         btn.addEventListener('click', function() {
           var grantId = btn.getAttribute('data-revoke-grant');
           if (!window.confirm('Revoke this folder grant?')) return;
-          window.agxApi.subs.grants.remove(subId, grantId).then(reload).catch(function(err) {
+          window.p86Api.subs.grants.remove(subId, grantId).then(reload).catch(function(err) {
             alert('Revoke failed: ' + (err.message || String(err)));
           });
         });
@@ -774,7 +774,7 @@
         var entity_id = entity_type === 'job' ? idSel.value : idText.value.trim();
         var folder = mountEl.querySelector('#fg_folder').value;
         if (!entity_id) { alert('Pick a job or enter an entity id.'); return; }
-        window.agxApi.subs.grants.create(subId, {
+        window.p86Api.subs.grants.create(subId, {
           entity_type: entity_type,
           entity_id: entity_id,
           folder: folder
@@ -796,14 +796,14 @@
   // ──────────────────────────────────────────────────────────────────
 
   function mountPortalAccess(mountEl, subId) {
-    if (!window.agxApi || !window.agxApi.subs || !window.agxApi.subs.invites) {
+    if (!window.p86Api || !window.p86Api.subs || !window.p86Api.subs.invites) {
       mountEl.innerHTML = '<div style="padding:8px;color:#f87171;font-size:12px;">Portal invites API not available — refresh.</div>';
       return;
     }
 
     function reload() {
       mountEl.innerHTML = '<div style="padding:8px;color:var(--text-dim,#888);font-size:12px;">Loading invites…</div>';
-      window.agxApi.subs.invites.list(subId).then(function(res) {
+      window.p86Api.subs.invites.list(subId).then(function(res) {
         render(res.invites || []);
       }).catch(function(err) {
         mountEl.innerHTML = '<div style="padding:8px;color:#f87171;font-size:12px;">Failed to load invites: ' + escapeHTML(err.message || String(err)) + '</div>';
@@ -861,7 +861,7 @@
         if (!email) { alert('Email is required.'); return; }
         var resultEl = mountEl.querySelector('#portal_invite_result');
         resultEl.innerHTML = '<span style="color:var(--text-dim,#888);">Sending…</span>';
-        window.agxApi.subs.invites.create(subId, { email: email }).then(function(res) {
+        window.p86Api.subs.invites.create(subId, { email: email }).then(function(res) {
           if (res.email_sent) {
             resultEl.innerHTML = '<span style="color:#34d399;">&#x2713; Invite emailed to ' + escapeHTML(email) + '.</span>';
           } else {
@@ -882,7 +882,7 @@
         btn.addEventListener('click', function() {
           var inviteId = btn.getAttribute('data-revoke-invite');
           if (!window.confirm('Revoke this invite? The link will stop working.')) return;
-          window.agxApi.subs.invites.remove(subId, inviteId).then(reload).catch(function(err) {
+          window.p86Api.subs.invites.remove(subId, inviteId).then(reload).catch(function(err) {
             alert('Revoke failed: ' + (err.message || String(err)));
           });
         });
@@ -899,7 +899,7 @@
   function uploadCert(rootEl, subId, certKey, file) {
     var statusSpan = rootEl.querySelector('[data-cert-status="' + certKey + '"]');
     if (statusSpan) statusSpan.innerHTML = '<span style="font-size:11px;color:var(--text-dim,#888);">Uploading…</span>';
-    window.agxApi.attachments.upload('sub', subId, file).then(function(res) {
+    window.p86Api.attachments.upload('sub', subId, file).then(function(res) {
       var att = res.attachment || res;
       // Pull current row's date/reminder values into the upsert so a
       // user who already set those fields before uploading doesn't
@@ -915,7 +915,7 @@
             : (v === '' ? null : v);
         });
       }
-      return window.agxApi.subs.certs.upsert(subId, payload);
+      return window.p86Api.subs.certs.upsert(subId, payload);
     }).then(function() {
       mountCertificates(rootEl, subId);
     }).catch(function(err) {
@@ -955,7 +955,7 @@
     var prefs = sub.preferences || {};
     var prefRow = function(key, label) {
       var checked = prefs[key] ? 'checked' : '';
-      return '<label class="agx-check-row" style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text,#e6e6e6);padding:6px 0;">' +
+      return '<label class="p86-check-row" style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text,#e6e6e6);padding:6px 0;">' +
         '<input type="checkbox" data-pref="' + key + '" ' + checked + ' style="margin:0;width:auto;flex:0 0 auto;" /> ' +
         escapeHTML(label) +
       '</label>';
@@ -1225,8 +1225,8 @@
     }
 
     var fn = _editingId
-      ? window.agxApi.subs.update(_editingId, payload)
-      : window.agxApi.subs.create(payload);
+      ? window.p86Api.subs.update(_editingId, payload)
+      : window.p86Api.subs.create(payload);
     fn.then(function() {
       modal.remove();
       return refresh();
@@ -1237,7 +1237,7 @@
 
   function deleteFromModal(modal) {
     if (!confirm('Delete this sub from the directory? Only allowed if it has no job assignments.')) return;
-    window.agxApi.subs.remove(_editingId).then(function() {
+    window.p86Api.subs.remove(_editingId).then(function() {
       modal.remove();
       return refresh();
     }).catch(function(err) {
@@ -1246,11 +1246,11 @@
   }
 
   function refresh() {
-    if (!window.agxApi || !window.agxApi.isAuthenticated()) {
+    if (!window.p86Api || !window.p86Api.isAuthenticated()) {
       renderDirectory();
       return Promise.resolve();
     }
-    return window.agxApi.subs.list().then(function(r) {
+    return window.p86Api.subs.list().then(function(r) {
       appData.subsDirectory = r.subs || [];
       appData.knownTrades = r.trades || appData.knownTrades || [];
       renderDirectory();
@@ -1294,7 +1294,7 @@
   }
 
   function startMigration() {
-    if (!window.agxApi || !window.agxApi.isAuthenticated()) {
+    if (!window.p86Api || !window.p86Api.isAuthenticated()) {
       alert('Sub migration requires server connection. Sign in and try again.');
       return;
     }
@@ -1303,7 +1303,7 @@
       alert('No inline sub records found to migrate.');
       return;
     }
-    window.agxApi.subs.migratePreview(inline).then(function(res) {
+    window.p86Api.subs.migratePreview(inline).then(function(res) {
       renderMigrationModal(res, inline);
     }).catch(function(err) {
       alert('Migration preview failed: ' + (err.message || err));
@@ -1327,7 +1327,7 @@
       var btn = modal.querySelector('[data-apply]');
       btn.disabled = true;
       btn.textContent = 'Migrating…';
-      window.agxApi.subs.migrateApply(inlinePayload).then(function(res) {
+      window.p86Api.subs.migrateApply(inlinePayload).then(function(res) {
         modal.remove();
         alert('Migration complete:\n\n' +
           '  • ' + (res.subsCreated || 0) + ' new sub' + (res.subsCreated === 1 ? '' : 's') + ' added to directory\n' +
@@ -1405,7 +1405,7 @@
   // ──────────────────────────────────────────────────────────────────
   // Public API
   // ──────────────────────────────────────────────────────────────────
-  window.agxSubs = {
+  window.p86Subs = {
     render: renderDirectory,
     refresh: refresh,
     openNew: openNew,

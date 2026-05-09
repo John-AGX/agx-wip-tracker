@@ -39,11 +39,11 @@
   function getTemplate() {
     if (_templateCache) return Promise.resolve(_templateCache);
     if (_templateLoadPromise) return _templateLoadPromise;
-    if (!window.agxApi || !window.agxApi.isAuthenticated()) {
+    if (!window.p86Api || !window.p86Api.isAuthenticated()) {
       _templateCache = FALLBACK_TEMPLATE;
       return Promise.resolve(_templateCache);
     }
-    _templateLoadPromise = window.agxApi.settings.get('proposal_template')
+    _templateLoadPromise = window.p86Api.settings.get('proposal_template')
       .then(function(res) {
         _templateCache = (res && res.setting && res.setting.value) || FALLBACK_TEMPLATE;
         return _templateCache;
@@ -191,7 +191,7 @@
   // community + issue have multiple potential sources (estimate field ->
   // linked client field -> sensible default). Total + date are derived.
   function buildContext(estimate) {
-    var clients = (window.agxClients && window.agxClients.getCached && window.agxClients.getCached()) || [];
+    var clients = (window.p86Clients && window.p86Clients.getCached && window.p86Clients.getCached()) || [];
     var client = estimate.client_id ? clients.find(function(x) { return x.id === estimate.client_id; }) : null;
 
     var salutation = estimate.salutation
@@ -343,7 +343,7 @@
     });
 
     var html =
-      '<div class="agx-proposal">' +
+      '<div class="p86-proposal">' +
         '<div class="proposal-header">' +
           '<img src="images/logo-color.png" alt="AG Exteriors" style="height:64px;display:block;margin:0 auto 8px;" />' +
           '<div class="company-line">' + escapeHTMLLocal(template.company_header || '') + '</div>' +
@@ -519,7 +519,7 @@
     }
 
     return (
-      '<div class="agx-proposal agx-takeoff">' +
+      '<div class="p86-proposal p86-takeoff">' +
         '<div class="proposal-header">' +
           '<img src="images/logo-color.png" alt="' + escapeAttrLocal(template.company_header || '') + '" style="height:64px;display:block;margin:0 auto 8px;" />' +
           '<div class="company-line">' + escapeHTMLLocal(template.company_header || '') + '</div>' +
@@ -558,53 +558,53 @@
   // the printed PDF rather than rendering everything ~30% larger.
   function getProposalCSS() {
     return (
-      '.agx-proposal { font-family: Arial, sans-serif; color: #222; font-size: 11pt; line-height: 1.45; max-width: 8.5in; margin: 0 auto; padding: 0.5in 0.6in; background: #fff; box-shadow: 0 2px 18px rgba(0,0,0,0.4); }' +
-      '.agx-proposal .proposal-header { text-align: center; margin-bottom: 18px; }' +
-      '.agx-proposal .company-line { font-size: 9pt; color: #444; letter-spacing: 0.2px; }' +
-      '.agx-proposal .proposal-meta { display: flex; justify-content: space-between; gap: 30px; margin-bottom: 18px; font-size: 10pt; }' +
-      '.agx-proposal .meta-left { flex: 1; }' +
-      '.agx-proposal .meta-right { text-align: right; flex: 0 0 auto; min-width: 220px; font-size: 10pt; }' +
-      '.agx-proposal .meta-label { font-weight: 700; color: #333; }' +
-      '.agx-proposal .meta-print-date { margin-top: 6px; }' +
-      '.agx-proposal .proposal-title { font-size: 17pt; font-weight: 700; color: #222; margin: 14px 0 14px; line-height: 1.25; }' +
-      '.agx-proposal .greeting { margin: 8px 0 14px; font-size: 11pt; }' +
-      '.agx-proposal .intro, .agx-proposal .about { margin: 10px 0; text-align: left; font-size: 11pt; }' +
-      '.agx-proposal .divider { border: none; border-top: 1px solid #ccc; margin: 18px 0; }' +
-      '.agx-proposal .section-heading { font-size: 13pt; font-weight: 700; color: #222; margin: 16px 0 8px; }' +
-      '.agx-proposal .italic-heading { font-style: italic; font-size: 11pt; }' +
-      '.agx-proposal .scope-text p { margin: 4px 0; font-size: 11pt; }' +
-      '.agx-proposal .total-block { text-align: right; font-size: 16pt; font-weight: 700; color: #222; margin: 22px 0 16px; padding-top: 10px; border-top: 1px solid #ddd; }' +
-      '.agx-proposal .total-block .total-label { color: #222; margin-right: 10px; }' +
-      '.agx-proposal .exclusions { padding-left: 26px; margin: 8px 0 18px; }' +
-      '.agx-proposal .exclusions li { margin: 6px 0; font-size: 10pt; text-align: left; line-height: 1.4; }' +
-      '.agx-proposal .sig-intro { margin-top: 22px; font-size: 10pt; }' +
-      '.agx-proposal .sig-block { margin-top: 14px; }' +
-      '.agx-proposal .sig-row { display: flex; align-items: center; gap: 10px; margin: 12px 0; font-size: 10pt; }' +
-      '.agx-proposal .sig-label { font-weight: 700; min-width: 80px; }' +
-      '.agx-proposal .sig-line { flex: 1; border-bottom: 1px solid #333; height: 0; }' +
-      '.agx-proposal .attached-photos { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin: 10px 0 18px; }' +
-      '.agx-proposal .attached-photo { margin: 0; border: 1px solid #ddd; border-radius: 4px; overflow: hidden; background: #fafafa; page-break-inside: avoid; }' +
-      '.agx-proposal .attached-photo img { width: 100%; height: auto; display: block; }' +
-      '.agx-proposal .attached-photo figcaption { padding: 4px 8px; font-size: 9pt; color: #555; background: #f3f4f6; border-top: 1px solid #e5e7eb; word-break: break-all; }' +
-      '.agx-proposal .attached-docs { padding-left: 22px; margin: 6px 0 18px; font-size: 10pt; }' +
-      '.agx-proposal .attached-docs li { margin: 4px 0; }' +
-      '.agx-proposal .attached-docs a { color: #0b5fff; text-decoration: underline; }' +
+      '.p86-proposal { font-family: Arial, sans-serif; color: #222; font-size: 11pt; line-height: 1.45; max-width: 8.5in; margin: 0 auto; padding: 0.5in 0.6in; background: #fff; box-shadow: 0 2px 18px rgba(0,0,0,0.4); }' +
+      '.p86-proposal .proposal-header { text-align: center; margin-bottom: 18px; }' +
+      '.p86-proposal .company-line { font-size: 9pt; color: #444; letter-spacing: 0.2px; }' +
+      '.p86-proposal .proposal-meta { display: flex; justify-content: space-between; gap: 30px; margin-bottom: 18px; font-size: 10pt; }' +
+      '.p86-proposal .meta-left { flex: 1; }' +
+      '.p86-proposal .meta-right { text-align: right; flex: 0 0 auto; min-width: 220px; font-size: 10pt; }' +
+      '.p86-proposal .meta-label { font-weight: 700; color: #333; }' +
+      '.p86-proposal .meta-print-date { margin-top: 6px; }' +
+      '.p86-proposal .proposal-title { font-size: 17pt; font-weight: 700; color: #222; margin: 14px 0 14px; line-height: 1.25; }' +
+      '.p86-proposal .greeting { margin: 8px 0 14px; font-size: 11pt; }' +
+      '.p86-proposal .intro, .p86-proposal .about { margin: 10px 0; text-align: left; font-size: 11pt; }' +
+      '.p86-proposal .divider { border: none; border-top: 1px solid #ccc; margin: 18px 0; }' +
+      '.p86-proposal .section-heading { font-size: 13pt; font-weight: 700; color: #222; margin: 16px 0 8px; }' +
+      '.p86-proposal .italic-heading { font-style: italic; font-size: 11pt; }' +
+      '.p86-proposal .scope-text p { margin: 4px 0; font-size: 11pt; }' +
+      '.p86-proposal .total-block { text-align: right; font-size: 16pt; font-weight: 700; color: #222; margin: 22px 0 16px; padding-top: 10px; border-top: 1px solid #ddd; }' +
+      '.p86-proposal .total-block .total-label { color: #222; margin-right: 10px; }' +
+      '.p86-proposal .exclusions { padding-left: 26px; margin: 8px 0 18px; }' +
+      '.p86-proposal .exclusions li { margin: 6px 0; font-size: 10pt; text-align: left; line-height: 1.4; }' +
+      '.p86-proposal .sig-intro { margin-top: 22px; font-size: 10pt; }' +
+      '.p86-proposal .sig-block { margin-top: 14px; }' +
+      '.p86-proposal .sig-row { display: flex; align-items: center; gap: 10px; margin: 12px 0; font-size: 10pt; }' +
+      '.p86-proposal .sig-label { font-weight: 700; min-width: 80px; }' +
+      '.p86-proposal .sig-line { flex: 1; border-bottom: 1px solid #333; height: 0; }' +
+      '.p86-proposal .attached-photos { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin: 10px 0 18px; }' +
+      '.p86-proposal .attached-photo { margin: 0; border: 1px solid #ddd; border-radius: 4px; overflow: hidden; background: #fafafa; page-break-inside: avoid; }' +
+      '.p86-proposal .attached-photo img { width: 100%; height: auto; display: block; }' +
+      '.p86-proposal .attached-photo figcaption { padding: 4px 8px; font-size: 9pt; color: #555; background: #f3f4f6; border-top: 1px solid #e5e7eb; word-break: break-all; }' +
+      '.p86-proposal .attached-docs { padding-left: 22px; margin: 6px 0 18px; font-size: 10pt; }' +
+      '.p86-proposal .attached-docs li { margin: 4px 0; }' +
+      '.p86-proposal .attached-docs a { color: #0b5fff; text-decoration: underline; }' +
       // ── Takeoff additions ────────────────────────────────────────────
-      // Reuses .agx-proposal as the wrapper so header / meta / scope
+      // Reuses .p86-proposal as the wrapper so header / meta / scope
       // styling carries over. Only the takeoff-specific bits — table,
       // section labels, disclaimer — get unique selectors.
-      '.agx-proposal.agx-takeoff .takeoff-disclaimer { background: #fff8e1; border-left: 3px solid #d97706; padding: 10px 12px; margin: 12px 0 14px; font-size: 10pt; line-height: 1.45; color: #4a3500; }' +
-      '.agx-proposal.agx-takeoff .takeoff-disclaimer strong { color: #b45309; letter-spacing: 0.3px; }' +
-      '.agx-proposal.agx-takeoff .takeoff-subheading { font-size: 11pt; font-weight: 700; color: #333; margin: 14px 0 6px; text-transform: uppercase; letter-spacing: 0.4px; }' +
-      '.agx-proposal.agx-takeoff .takeoff-section { margin: 8px 0 14px; page-break-inside: avoid; }' +
-      '.agx-proposal.agx-takeoff .takeoff-section-name { font-size: 10.5pt; font-weight: 700; color: #222; margin: 10px 0 4px; padding: 4px 8px; background: #f3f4f6; border-left: 3px solid #4f8cff; }' +
-      '.agx-proposal.agx-takeoff .takeoff-table { width: 100%; border-collapse: collapse; margin-bottom: 6px; font-size: 10pt; }' +
-      '.agx-proposal.agx-takeoff .takeoff-table th, .agx-proposal.agx-takeoff .takeoff-table td { padding: 5px 8px; border-bottom: 1px solid #e5e7eb; vertical-align: top; }' +
-      '.agx-proposal.agx-takeoff .takeoff-table th { text-align: left; font-size: 9pt; text-transform: uppercase; letter-spacing: 0.5px; color: #555; background: #fafafa; border-bottom: 1px solid #d1d5db; }' +
-      '.agx-proposal.agx-takeoff .takeoff-table .col-desc { width: auto; }' +
-      '.agx-proposal.agx-takeoff .takeoff-table .col-qty { width: 80px; text-align: right; font-family: "SF Mono", Consolas, monospace; }' +
-      '.agx-proposal.agx-takeoff .takeoff-table .col-unit { width: 80px; text-align: left; color: #555; }' +
-      '.agx-proposal.agx-takeoff .takeoff-group { margin-bottom: 18px; }' +
+      '.p86-proposal.p86-takeoff .takeoff-disclaimer { background: #fff8e1; border-left: 3px solid #d97706; padding: 10px 12px; margin: 12px 0 14px; font-size: 10pt; line-height: 1.45; color: #4a3500; }' +
+      '.p86-proposal.p86-takeoff .takeoff-disclaimer strong { color: #b45309; letter-spacing: 0.3px; }' +
+      '.p86-proposal.p86-takeoff .takeoff-subheading { font-size: 11pt; font-weight: 700; color: #333; margin: 14px 0 6px; text-transform: uppercase; letter-spacing: 0.4px; }' +
+      '.p86-proposal.p86-takeoff .takeoff-section { margin: 8px 0 14px; page-break-inside: avoid; }' +
+      '.p86-proposal.p86-takeoff .takeoff-section-name { font-size: 10.5pt; font-weight: 700; color: #222; margin: 10px 0 4px; padding: 4px 8px; background: #f3f4f6; border-left: 3px solid #4f8cff; }' +
+      '.p86-proposal.p86-takeoff .takeoff-table { width: 100%; border-collapse: collapse; margin-bottom: 6px; font-size: 10pt; }' +
+      '.p86-proposal.p86-takeoff .takeoff-table th, .p86-proposal.p86-takeoff .takeoff-table td { padding: 5px 8px; border-bottom: 1px solid #e5e7eb; vertical-align: top; }' +
+      '.p86-proposal.p86-takeoff .takeoff-table th { text-align: left; font-size: 9pt; text-transform: uppercase; letter-spacing: 0.5px; color: #555; background: #fafafa; border-bottom: 1px solid #d1d5db; }' +
+      '.p86-proposal.p86-takeoff .takeoff-table .col-desc { width: auto; }' +
+      '.p86-proposal.p86-takeoff .takeoff-table .col-qty { width: 80px; text-align: right; font-family: "SF Mono", Consolas, monospace; }' +
+      '.p86-proposal.p86-takeoff .takeoff-table .col-unit { width: 80px; text-align: left; color: #555; }' +
+      '.p86-proposal.p86-takeoff .takeoff-group { margin-bottom: 18px; }' +
       ''
     );
   }
@@ -614,7 +614,7 @@
     return (
       '@page { size: letter; margin: 0.6in; }' +
       'body { margin: 0; padding: 0; background: #fff; }' +
-      '.agx-proposal { box-shadow: none; padding: 0; max-width: 100%; }' +
+      '.p86-proposal { box-shadow: none; padding: 0; max-width: 100%; }' +
       '.no-print { display: none !important; }'
     );
   }
@@ -624,12 +624,12 @@
   // preview and the print window. Resolves with [] on any failure so
   // a missing attachment server doesn't break the preview itself.
   function fetchProposalAttachments(estimate) {
-    if (!estimate || !window.agxApi || !window.agxApi.attachments) return Promise.resolve([]);
+    if (!estimate || !window.p86Api || !window.p86Api.attachments) return Promise.resolve([]);
     var calls = [
-      window.agxApi.attachments.list('estimate', estimate.id).catch(function() { return { attachments: [] }; })
+      window.p86Api.attachments.list('estimate', estimate.id).catch(function() { return { attachments: [] }; })
     ];
     if (estimate.lead_id) {
-      calls.push(window.agxApi.attachments.list('lead', estimate.lead_id).catch(function() { return { attachments: [] }; }));
+      calls.push(window.p86Api.attachments.list('lead', estimate.lead_id).catch(function() { return { attachments: [] }; }));
     }
     return Promise.all(calls).then(function(results) {
       var all = [];

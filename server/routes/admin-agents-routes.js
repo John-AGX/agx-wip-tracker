@@ -39,7 +39,7 @@ const MODEL_COSTS = {
 // here because these are server-rendered strings used in admin
 // summaries / log lines — the page-wide icon swapper doesn't reach
 // them. Front-end UIs that want SVG icons render them inline via
-// agxIcon() at the call site.
+// p86Icon() at the call site.
 const AGENT_LABELS = {
   estimate: '47 (Estimator)',
   job:      '86 (Lead Agent)',
@@ -1690,7 +1690,7 @@ async function ensureManagedEnvironment() {
   if (existing.rows.length) return existing.rows[0];
 
   const created = await anthropic.beta.environments.create({
-    name: 'agx-default',
+    name: 'p86-default',
     config: {
       type: 'cloud',
       networking: { type: 'unrestricted' }

@@ -11,10 +11,43 @@
          parse. -->
     <base href="/">
     <title>Project 86</title>
-    <link rel="stylesheet" href="css/styles.css?v=49">
-    <link rel="stylesheet" href="css/workspace-layout.css?v=53">
-    <link rel="stylesheet" href="css/workspace.css?v=37">
-    <link rel="stylesheet" href="css/schedule.css?v=12">
+
+    <!-- Brand-rename localStorage migration. One-time copy of every
+         legacy-prefixed key (the old brand) to its p86- twin. Runs
+         synchronously before any other script reads localStorage so
+         the renamed code never sees a missing key. After migration
+         on a user's first post-rename load, the legacy keys are
+         gone and this becomes a no-op. The legacy prefix is built
+         from char codes so a future code-rename sweep can't
+         accidentally rewrite this shim into a self-cancelling
+         no-op (which is exactly what happened to its first
+         version). -->
+    <script>
+    (function() {
+      try {
+        // Char-code build of the legacy prefix, see comment above.
+        var legacyPrefix = String.fromCharCode(97, 103, 120, 45);
+        var newPrefix = 'p86-';
+        var keys = [];
+        for (var i = 0; i < localStorage.length; i++) {
+          var k = localStorage.key(i);
+          if (k && k.indexOf(legacyPrefix) === 0) keys.push(k);
+        }
+        keys.forEach(function(k) {
+          var newKey = newPrefix + k.slice(legacyPrefix.length);
+          if (localStorage.getItem(newKey) === null) {
+            localStorage.setItem(newKey, localStorage.getItem(k));
+          }
+          localStorage.removeItem(k);
+        });
+      } catch (e) { /* defensive — quota / private mode etc. */ }
+    })();
+    </script>
+
+    <link rel="stylesheet" href="css/styles.css?v=49b">
+    <link rel="stylesheet" href="css/workspace-layout.css?v=53b">
+    <link rel="stylesheet" href="css/workspace.css?v=37b">
+    <link rel="stylesheet" href="css/schedule.css?v=12b">
 
 </head>
 <body>
@@ -59,12 +92,12 @@
                          existing Estimates → Leads sub-tab DOM but the
                          active highlight stays on this button so Leads
                          reads as a first-class page. -->
-                    <button class="tab-btn active" data-tab="estimates" data-est-subtab="leads" data-virtual-tab="leads" data-agx-icon="leads" data-cap="LEADS_VIEW">Leads</button>
-                    <button class="tab-btn" data-tab="estimates" data-est-subtab="list" data-virtual-tab="estimates" data-agx-icon="estimates" data-cap="ESTIMATES_VIEW">Estimates</button>
-                    <button class="tab-btn" data-tab="schedule" data-agx-icon="schedule">Schedule</button>
-                    <button class="tab-btn" data-tab="wip" data-agx-icon="wip" data-cap="JOBS_VIEW_ALL JOBS_VIEW_ASSIGNED JOBS_EDIT_ANY JOBS_EDIT_OWN">WIP</button>
-                    <button class="tab-btn" data-tab="insights" data-agx-icon="insights" data-cap="INSIGHTS_VIEW">Insights</button>
-                    <button class="tab-btn" data-tab="admin" data-agx-icon="admin" data-admin-only style="display:none;">Admin</button>
+                    <button class="tab-btn active" data-tab="estimates" data-est-subtab="leads" data-virtual-tab="leads" data-p86-icon="leads" data-cap="LEADS_VIEW">Leads</button>
+                    <button class="tab-btn" data-tab="estimates" data-est-subtab="list" data-virtual-tab="estimates" data-p86-icon="estimates" data-cap="ESTIMATES_VIEW">Estimates</button>
+                    <button class="tab-btn" data-tab="schedule" data-p86-icon="schedule">Schedule</button>
+                    <button class="tab-btn" data-tab="wip" data-p86-icon="wip" data-cap="JOBS_VIEW_ALL JOBS_VIEW_ASSIGNED JOBS_EDIT_ANY JOBS_EDIT_OWN">WIP</button>
+                    <button class="tab-btn" data-tab="insights" data-p86-icon="insights" data-cap="INSIGHTS_VIEW">Insights</button>
+                    <button class="tab-btn" data-tab="admin" data-p86-icon="admin" data-admin-only style="display:none;">Admin</button>
                 </nav>
                 <div id="user-menu" class="header-user-menu">
                     <!-- Notifications bell. Renders the agx 'bell' SVG
@@ -79,9 +112,9 @@
                          per-user utility, not a team page, so they sit
                          in the right cluster next to bell + directory. -->
                     <button id="header-files-btn" class="header-icon-btn" type="button" title="My Files"
-                            data-agx-icon="folder"
+                            data-p86-icon="folder"
                             onclick="if (typeof window.switchTab === 'function') window.switchTab('my-files');"></button>
-                    <button id="header-notif-btn" class="header-icon-btn" type="button" title="Notifications" aria-haspopup="true" aria-expanded="false" data-agx-icon="bell">
+                    <button id="header-notif-btn" class="header-icon-btn" type="button" title="Notifications" aria-haspopup="true" aria-expanded="false" data-p86-icon="bell">
                         <span class="header-notif-dot" data-count="0"></span>
                     </button>
                     <!-- Directory dropdown — sits in the right cluster
@@ -90,7 +123,7 @@
                          Client Contacts / Subs-Vendors. The Directory
                          is a utility, not a page, so it doesn't appear
                          in nav.tabs anymore. -->
-                    <button id="header-directory-btn" class="header-icon-btn" type="button" title="Directory" aria-haspopup="true" aria-expanded="false" data-agx-icon="clients"></button>
+                    <button id="header-directory-btn" class="header-icon-btn" type="button" title="Directory" aria-haspopup="true" aria-expanded="false" data-p86-icon="clients"></button>
                     <button id="theme-toggle" class="theme-toggle header-icon-btn" type="button" title="Toggle light/dark mode"></button>
                     <!-- Initials avatar replaces the previous full-name +
                          role pill + Account / Logout buttons. Clicking
@@ -123,8 +156,8 @@
                          underlying Estimates → Clients / Subs sub-tabs
                          still drive the rendering. -->
                     <div id="directory-menu" class="header-popover header-directory-menu" role="menu" hidden>
-                        <button type="button" data-tab="estimates" data-est-subtab="clients" data-virtual-tab="clients" data-agx-icon="clients" data-cap="ESTIMATES_VIEW" role="menuitem">Client Contacts</button>
-                        <button type="button" data-tab="estimates" data-est-subtab="subs"    data-virtual-tab="subs"    data-agx-icon="subs"                                 role="menuitem">Subs / Vendors</button>
+                        <button type="button" data-tab="estimates" data-est-subtab="clients" data-virtual-tab="clients" data-p86-icon="clients" data-cap="ESTIMATES_VIEW" role="menuitem">Client Contacts</button>
+                        <button type="button" data-tab="estimates" data-est-subtab="subs"    data-virtual-tab="subs"    data-p86-icon="subs"                                 role="menuitem">Subs / Vendors</button>
                     </div>
                 </div>
             </div>
@@ -325,14 +358,14 @@
                         </div>
 
                         <div class="sub-tabs">
-                            <button class="sub-tab-btn-job active" data-subtab="job-overview" data-agx-icon="insights">Overview</button>
-                            <button class="sub-tab-btn-job" data-subtab="job-wip" data-agx-icon="wip">WIP</button>
-                            <button class="sub-tab-btn-job" data-subtab="job-costs" data-agx-icon="estimates">Job Costs</button>
-                            <button class="sub-tab-btn-job" data-subtab="job-changeorders" data-agx-icon="links">Change Orders</button>
-                            <button class="sub-tab-btn-job" data-subtab="job-purchaseorders" data-agx-icon="materials">Purchase Orders</button>
-                            <button class="sub-tab-btn-job" data-subtab="job-invoices" data-agx-icon="exports">Invoices</button>
-                            <button class="sub-tab-btn-job" data-subtab="job-buildings" data-agx-icon="buildings">Buildings</button>
-                            <button class="sub-tab-btn-job" data-subtab="job-labor" data-agx-icon="subs">Labor / Burden</button>
+                            <button class="sub-tab-btn-job active" data-subtab="job-overview" data-p86-icon="insights">Overview</button>
+                            <button class="sub-tab-btn-job" data-subtab="job-wip" data-p86-icon="wip">WIP</button>
+                            <button class="sub-tab-btn-job" data-subtab="job-costs" data-p86-icon="estimates">Job Costs</button>
+                            <button class="sub-tab-btn-job" data-subtab="job-changeorders" data-p86-icon="links">Change Orders</button>
+                            <button class="sub-tab-btn-job" data-subtab="job-purchaseorders" data-p86-icon="materials">Purchase Orders</button>
+                            <button class="sub-tab-btn-job" data-subtab="job-invoices" data-p86-icon="exports">Invoices</button>
+                            <button class="sub-tab-btn-job" data-subtab="job-buildings" data-p86-icon="buildings">Buildings</button>
+                            <button class="sub-tab-btn-job" data-subtab="job-labor" data-p86-icon="subs">Labor / Burden</button>
                         </div>
 
                         <!-- Job Overview -->
@@ -703,10 +736,10 @@
                      nav row is suppressed. -->
                 <div id="estimates" class="tab-content">
                     <div id="estimates-main-tabs" class="ws-right-tabs" style="display:none;">
-                        <button class="ws-right-tab active" data-estimates-subtab="leads" data-agx-icon="leads" onclick="switchEstimatesSubTab('leads')" data-cap="LEADS_VIEW">Leads</button>
-                        <button class="ws-right-tab" data-estimates-subtab="list" data-agx-icon="estimates" onclick="switchEstimatesSubTab('list')">Estimates</button>
-                        <button class="ws-right-tab" data-estimates-subtab="clients" data-agx-icon="clients" onclick="switchEstimatesSubTab('clients')">Clients</button>
-                        <button class="ws-right-tab" data-estimates-subtab="subs" data-agx-icon="subs" onclick="switchEstimatesSubTab('subs')">Subs</button>
+                        <button class="ws-right-tab active" data-estimates-subtab="leads" data-p86-icon="leads" onclick="switchEstimatesSubTab('leads')" data-cap="LEADS_VIEW">Leads</button>
+                        <button class="ws-right-tab" data-estimates-subtab="list" data-p86-icon="estimates" onclick="switchEstimatesSubTab('list')">Estimates</button>
+                        <button class="ws-right-tab" data-estimates-subtab="clients" data-p86-icon="clients" onclick="switchEstimatesSubTab('clients')">Clients</button>
+                        <button class="ws-right-tab" data-estimates-subtab="subs" data-p86-icon="subs" onclick="switchEstimatesSubTab('subs')">Subs</button>
                     </div>
 
                     <!-- Leads sub-tab -->
@@ -910,24 +943,24 @@
                          the job_subs join table. -->
                     <div id="estimates-subtab-subs" class="estimates-subtab-content" style="display:none;">
                         <div class="action-buttons">
-                            <button class="primary" onclick="window.agxSubs && window.agxSubs.openNew && window.agxSubs.openNew()">&#x1F477; New Sub</button>
-                            <button class="secondary" onclick="window.agxSubs && window.agxSubs.refresh && window.agxSubs.refresh()">Refresh</button>
-                            <button class="secondary" onclick="window.agxSubs && window.agxSubs.startMigration && window.agxSubs.startMigration()" title="Roll the existing per-job sub records up into the global directory">&#x1F501; Migrate from job records</button>
-                            <select id="subs-filter-trade" onchange="window.agxSubs && window.agxSubs.setFilter && window.agxSubs.setFilter('trade', this.value)" style="width:auto;min-width:140px;margin-left:auto;">
+                            <button class="primary" onclick="window.p86Subs && window.p86Subs.openNew && window.p86Subs.openNew()">&#x1F477; New Sub</button>
+                            <button class="secondary" onclick="window.p86Subs && window.p86Subs.refresh && window.p86Subs.refresh()">Refresh</button>
+                            <button class="secondary" onclick="window.p86Subs && window.p86Subs.startMigration && window.p86Subs.startMigration()" title="Roll the existing per-job sub records up into the global directory">&#x1F501; Migrate from job records</button>
+                            <select id="subs-filter-trade" onchange="window.p86Subs && window.p86Subs.setFilter && window.p86Subs.setFilter('trade', this.value)" style="width:auto;min-width:140px;margin-left:auto;">
                                 <option value="">All trades</option>
                             </select>
-                            <select id="subs-filter-status" onchange="window.agxSubs && window.agxSubs.setFilter && window.agxSubs.setFilter('status', this.value)" style="width:auto;min-width:120px;">
+                            <select id="subs-filter-status" onchange="window.p86Subs && window.p86Subs.setFilter && window.p86Subs.setFilter('status', this.value)" style="width:auto;min-width:120px;">
                                 <option value="active">Active</option>
                                 <option value="">All statuses</option>
                                 <option value="paused">Paused</option>
                                 <option value="closed">Closed</option>
                             </select>
-                            <input type="text" id="subs-search" oninput="window.agxSubs && window.agxSubs.setFilter && window.agxSubs.setFilter('search', this.value)" placeholder="Search subs…" style="min-width:200px;" />
+                            <input type="text" id="subs-search" oninput="window.p86Subs && window.p86Subs.setFilter && window.p86Subs.setFilter('search', this.value)" placeholder="Search subs…" style="min-width:200px;" />
                         </div>
                         <p id="subs-summary" style="margin:12px 0;color:var(--text-dim,#888);font-size:12px;"></p>
                         <div id="subs-migration-banner" style="display:none;margin-bottom:12px;padding:10px 14px;background:rgba(251,191,36,0.1);border:1px solid rgba(251,191,36,0.35);border-radius:8px;font-size:12px;color:var(--text,#e6e6e6);">
                             <span id="subs-migration-banner-text"></span>
-                            <button class="ee-btn primary" style="margin-left:auto;font-size:11px;padding:4px 10px;" onclick="window.agxSubs && window.agxSubs.startMigration()">Review &amp; migrate</button>
+                            <button class="ee-btn primary" style="margin-left:auto;font-size:11px;padding:4px 10px;" onclick="window.p86Subs && window.p86Subs.startMigration()">Review &amp; migrate</button>
                         </div>
                         <div id="subs-list"></div>
                     </div>
@@ -948,20 +981,20 @@
                 <!-- ADMIN TAB (admin-only, populated by js/admin.js) -->
                 <div id="admin" class="tab-content" data-admin-only style="display:none;">
                     <div class="ws-right-tabs">
-                        <button class="ws-right-tab active" data-admin-subtab="users" data-agx-icon="clients" onclick="switchAdminSubTab('users')">Users</button>
-                        <button class="ws-right-tab" data-admin-subtab="jobs" data-agx-icon="wip" onclick="switchAdminSubTab('jobs')">Job Assignments</button>
-                        <button class="ws-right-tab" data-admin-subtab="metrics" data-agx-icon="insights" onclick="switchAdminSubTab('metrics')">Metrics</button>
-                        <button class="ws-right-tab" data-admin-subtab="roles" data-agx-icon="admin" onclick="switchAdminSubTab('roles')">Roles</button>
-                        <button class="ws-right-tab" data-admin-subtab="templates" data-agx-icon="estimates" onclick="switchAdminSubTab('templates')">Templates</button>
-                        <button class="ws-right-tab" data-admin-subtab="materials" data-agx-icon="materials" onclick="switchAdminSubTab('materials')">Materials</button>
-                        <button class="ws-right-tab" data-admin-subtab="email" data-agx-icon="envelope" onclick="switchAdminSubTab('email')">Email</button>
+                        <button class="ws-right-tab active" data-admin-subtab="users" data-p86-icon="clients" onclick="switchAdminSubTab('users')">Users</button>
+                        <button class="ws-right-tab" data-admin-subtab="jobs" data-p86-icon="wip" onclick="switchAdminSubTab('jobs')">Job Assignments</button>
+                        <button class="ws-right-tab" data-admin-subtab="metrics" data-p86-icon="insights" onclick="switchAdminSubTab('metrics')">Metrics</button>
+                        <button class="ws-right-tab" data-admin-subtab="roles" data-p86-icon="admin" onclick="switchAdminSubTab('roles')">Roles</button>
+                        <button class="ws-right-tab" data-admin-subtab="templates" data-p86-icon="estimates" onclick="switchAdminSubTab('templates')">Templates</button>
+                        <button class="ws-right-tab" data-admin-subtab="materials" data-p86-icon="materials" onclick="switchAdminSubTab('materials')">Materials</button>
+                        <button class="ws-right-tab" data-admin-subtab="email" data-p86-icon="envelope" onclick="switchAdminSubTab('email')">Email</button>
                         <!-- Email Templates moved INTO the Templates sub-tab as a 3rd inner tab.
                              The pane div below stays for back-compat (no current callers) but
                              is unused — the inner Templates → Email tab renders into a fresh
                              #admin-subtab-email-templates that lives inside the templates pane. -->
 
-                        <button class="ws-right-tab" data-admin-subtab="agents" data-agx-icon="discord" onclick="switchAdminSubTab('agents')">Agents</button>
-                        <button class="ws-right-tab" data-admin-subtab="sms" data-agx-icon="conversations" onclick="switchAdminSubTab('sms')">SMS</button>
+                        <button class="ws-right-tab" data-admin-subtab="agents" data-p86-icon="discord" onclick="switchAdminSubTab('agents')">Agents</button>
+                        <button class="ws-right-tab" data-admin-subtab="sms" data-p86-icon="conversations" onclick="switchAdminSubTab('sms')">SMS</button>
                     </div>
 
                     <!-- Users sub-tab -->
@@ -1192,7 +1225,7 @@
                  server only emails when the owner ≠ the creator AND this is
                  set, so admins-creating-their-own-jobs never spam themselves. -->
             <div class="form-group" style="background:rgba(79,140,255,0.06);border:1px solid rgba(79,140,255,0.25);border-radius:6px;padding:10px 12px;">
-                <label class="agx-check-row">
+                <label class="p86-check-row">
                     <input type="checkbox" id="jobNotifyOwner" checked />
                     <span>&#x1F4E7; Email the assigned PM that they own this job</span>
                 </label>
@@ -1245,14 +1278,14 @@
             </div>
             <div class="form-row" style="align-items: center; margin-bottom: 16px;">
                 <input type="hidden" id="buildingLocked" value="">
-                <label class="agx-check-row">
+                <label class="p86-check-row">
                     <input type="checkbox" id="buildingExcludeSubDist">
                     <span>Exclude from sub distribution</span>
                 </label>
             </div>
             <div class="form-group">
                 <label>Address</label>
-                <input type="text" id="buildingAddress" data-agx-copy placeholder="123 Main St, City, State ZIP">
+                <input type="text" id="buildingAddress" data-p86-copy placeholder="123 Main St, City, State ZIP">
             </div>
             <div class="form-group">
                 <label>Work Scope</label>
@@ -1324,7 +1357,7 @@
             </div>
             <div class="form-group">
                 <label>Phase</label>
-                <select id="phaseType" onchange="handleCustomSelectChange('phaseType', DEFAULT_PHASE_TYPES, 'agx-wip-custom-phases', '-- Select Phase --')"></select>
+                <select id="phaseType" onchange="handleCustomSelectChange('phaseType', DEFAULT_PHASE_TYPES, 'p86-wip-custom-phases', '-- Select Phase --')"></select>
             </div>
             <div class="form-row">
                 <div class="form-group">
@@ -1391,7 +1424,7 @@
             </div>
             <div class="form-group">
                 <label>Trade</label>
-                <select id="subTrade" onchange="handleCustomSelectChange('subTrade', DEFAULT_SUB_TRADES, 'agx-wip-custom-trades', '-- Select Trade --')"></select>
+                <select id="subTrade" onchange="handleCustomSelectChange('subTrade', DEFAULT_SUB_TRADES, 'p86-wip-custom-trades', '-- Select Trade --')"></select>
             </div>
             <div class="form-row">
                 <div class="form-group">
@@ -1673,7 +1706,7 @@
                 </div>
             </div>
             <div class="form-row" style="gap:8px;margin-bottom:6px;"><div class="form-group" style="flex:2;margin-bottom:4px;"><label style="font-size:11px;margin-bottom:2px;">Title</label><input type="text" id="editEst_title" style="padding:6px 8px;font-size:13px;"></div><div class="form-group" style="flex:1;margin-bottom:4px;"><label style="font-size:11px;margin-bottom:2px;">Job Type</label><input type="text" id="editEst_jobType" style="padding:6px 8px;font-size:13px;"></div><div class="form-group" style="flex:0.5;margin-bottom:4px;"><label style="font-size:11px;margin-bottom:2px;">Markup %</label><input type="number" id="editEst_defaultMarkup" step="0.1" style="padding:6px 8px;font-size:13px;"></div><div class="form-group" style="flex:1;margin-bottom:4px;"><label style="font-size:11px;margin-bottom:2px;">Client</label><input type="text" id="editEst_client" style="padding:6px 8px;font-size:13px;"></div><div class="form-group" style="flex:1;margin-bottom:4px;"><label style="font-size:11px;margin-bottom:2px;">Community</label><input type="text" id="editEst_community" style="padding:6px 8px;font-size:13px;"></div></div>
-            <div class="form-row" style="gap:8px;"><div class="form-group" style="flex:1.5;margin-bottom:4px;"><label style="font-size:11px;margin-bottom:2px;">Property Address</label><input type="text" id="editEst_propertyAddr" data-agx-copy style="padding:6px 8px;font-size:13px;"></div><div class="form-group" style="flex:1.5;margin-bottom:4px;"><label style="font-size:11px;margin-bottom:2px;">Billing Address</label><input type="text" id="editEst_billingAddr" data-agx-copy style="padding:6px 8px;font-size:13px;"></div><div class="form-group" style="flex:1;margin-bottom:4px;"><label style="font-size:11px;margin-bottom:2px;">Manager</label><input type="text" id="editEst_managerName" style="padding:6px 8px;font-size:13px;"></div><div class="form-group" style="flex:1;margin-bottom:4px;"><label style="font-size:11px;margin-bottom:2px;">Email</label><input type="email" id="editEst_managerEmail" style="padding:6px 8px;font-size:13px;"></div><div class="form-group" style="flex:0.7;margin-bottom:4px;"><label style="font-size:11px;margin-bottom:2px;">Phone</label><input type="tel" id="editEst_managerPhone" style="padding:6px 8px;font-size:13px;"></div></div>
+            <div class="form-row" style="gap:8px;"><div class="form-group" style="flex:1.5;margin-bottom:4px;"><label style="font-size:11px;margin-bottom:2px;">Property Address</label><input type="text" id="editEst_propertyAddr" data-p86-copy style="padding:6px 8px;font-size:13px;"></div><div class="form-group" style="flex:1.5;margin-bottom:4px;"><label style="font-size:11px;margin-bottom:2px;">Billing Address</label><input type="text" id="editEst_billingAddr" data-p86-copy style="padding:6px 8px;font-size:13px;"></div><div class="form-group" style="flex:1;margin-bottom:4px;"><label style="font-size:11px;margin-bottom:2px;">Manager</label><input type="text" id="editEst_managerName" style="padding:6px 8px;font-size:13px;"></div><div class="form-group" style="flex:1;margin-bottom:4px;"><label style="font-size:11px;margin-bottom:2px;">Email</label><input type="email" id="editEst_managerEmail" style="padding:6px 8px;font-size:13px;"></div><div class="form-group" style="flex:0.7;margin-bottom:4px;"><label style="font-size:11px;margin-bottom:2px;">Phone</label><input type="tel" id="editEst_managerPhone" style="padding:6px 8px;font-size:13px;"></div></div>
           </div>
           <div style="background: var(--surface2); padding: 15px; border-radius: 4px;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:15px;">
@@ -1791,7 +1824,7 @@
           <!-- Address -->
           <fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;">
             <legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Project Address</legend>
-            <div><label style="display:block;">Street</label><input id="leadEditor_street_address" type="text" data-agx-copy /></div>
+            <div><label style="display:block;">Street</label><input id="leadEditor_street_address" type="text" data-p86-copy /></div>
             <div style="display:grid;grid-template-columns:2fr 80px 110px;gap:10px;margin-top:10px;">
               <div><label style="display:block;">City</label><input id="leadEditor_city" type="text" /></div>
               <div><label style="display:block;">State</label><input id="leadEditor_state" type="text" maxlength="2" style="text-transform:uppercase;" /></div>
@@ -1951,7 +1984,7 @@
           <!-- Mailing / billing address -->
           <fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;">
             <legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Mailing Address</legend>
-            <div><label style="display:block;">Street</label><input id="clientEditor_address" type="text" data-agx-copy /></div>
+            <div><label style="display:block;">Street</label><input id="clientEditor_address" type="text" data-p86-copy /></div>
             <div style="display:grid;grid-template-columns:2fr 80px 110px;gap:10px;margin-top:10px;">
               <div><label style="display:block;">City</label><input id="clientEditor_city" type="text" /></div>
               <div><label style="display:block;">State</label><input id="clientEditor_state" type="text" maxlength="2" style="text-transform:uppercase;" /></div>
@@ -1968,7 +2001,7 @@
             </div>
             <div style="display:grid;grid-template-columns:160px 1fr 1fr;gap:10px;margin-top:10px;">
               <div><label style="display:block;">Market</label><input id="clientEditor_market" type="text" /></div>
-              <div><label style="display:block;">Property Address</label><input id="clientEditor_property_address" type="text" data-agx-copy /></div>
+              <div><label style="display:block;">Property Address</label><input id="clientEditor_property_address" type="text" data-p86-copy /></div>
               <div><label style="display:block;">Property Phone</label><input id="clientEditor_property_phone" type="tel" /></div>
             </div>
             <div style="display:grid;grid-template-columns:2fr 1fr;gap:10px;margin-top:10px;">
@@ -2167,9 +2200,9 @@
             <label style="display:block;font-size:12px;color:var(--text-dim,#888);margin-bottom:4px;">Phone Number <span style="color:var(--text-dim,#666);font-weight:400;">(optional — for SMS scheduling agent)</span></label>
             <input id="editUser_phone" type="tel" placeholder="(407) 555-1234" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);" />
           </div>
-          <label class="agx-check-row">
+          <label class="p86-check-row">
             <input type="checkbox" id="editUser_active" />
-            <span>Active <span class="agx-check-hint">(uncheck to disable login)</span></span>
+            <span>Active <span class="p86-check-hint">(uncheck to disable login)</span></span>
           </label>
           <hr style="border:none;border-top:1px solid var(--border,#333);margin:8px 0;" />
           <div>
@@ -2200,54 +2233,54 @@
       }
     </script>
 
-    <script src="js/modal-drag.js?v=1"></script>
-    <script src="js/auth.js?v=12"></script>
-    <script src="js/dialogs.js?v=1"></script>
-    <script src="js/api.js?v=26"></script>
-    <script src="js/account.js?v=2"></script>
-    <script src="js/attachments.js?v=10"></script>
-    <script src="js/markup-viewer.js?v=17"></script>
-    <script src="js/pdf-viewer.js?v=3"></script>
-    <script src="js/admin.js?v=65"></script>
-    <script src="js/clients.js?v=14"></script>
-    <script src="js/subs.js?v=8"></script>
-    <script src="js/job-audit.js?v=3"></script>
-    <script src="js/leads.js?v=22"></script>
-    <script src="js/job-costs-import.js?v=3"></script>
-    <script src="js/qb-costs-view.js?v=10"></script>
-    <script src="js/insights.js?v=5"></script>
-    <script src="js/schedule.js?v=18"></script>
-    <script src="js/app.js?v=55"></script>
-    <script src="js/messaging.js?v=1"></script>
-    <script src="js/my-files.js?v=1"></script>
-    <script src="js/wip.js?v=66"></script>
-    <script src="js/estimates.js?v=35"></script>
-    <script src="js/proposal.js?v=22"></script>
-    <script src="js/estimate-editor.js?v=38"></script>
-    <script src="js/estimate-preview.js?v=10"></script>
-    <script src="js/bt-export.js?v=6"></script>
-    <script src="js/ai-panel.js?v=91"></script>
-    <script src="js/tab-slider.js?v=1"></script>
+    <script src="js/modal-drag.js?v=1b"></script>
+    <script src="js/auth.js?v=12b"></script>
+    <script src="js/dialogs.js?v=1b"></script>
+    <script src="js/api.js?v=26b"></script>
+    <script src="js/account.js?v=2b"></script>
+    <script src="js/attachments.js?v=10b"></script>
+    <script src="js/markup-viewer.js?v=17b"></script>
+    <script src="js/pdf-viewer.js?v=3b"></script>
+    <script src="js/admin.js?v=65b"></script>
+    <script src="js/clients.js?v=14b"></script>
+    <script src="js/subs.js?v=8b"></script>
+    <script src="js/job-audit.js?v=3b"></script>
+    <script src="js/leads.js?v=22b"></script>
+    <script src="js/job-costs-import.js?v=3b"></script>
+    <script src="js/qb-costs-view.js?v=10b"></script>
+    <script src="js/insights.js?v=5b"></script>
+    <script src="js/schedule.js?v=19b"></script>
+    <script src="js/app.js?v=55b"></script>
+    <script src="js/messaging.js?v=1b"></script>
+    <script src="js/my-files.js?v=1b"></script>
+    <script src="js/wip.js?v=67b"></script>
+    <script src="js/estimates.js?v=35b"></script>
+    <script src="js/proposal.js?v=22b"></script>
+    <script src="js/estimate-editor.js?v=38b"></script>
+    <script src="js/estimate-preview.js?v=10b"></script>
+    <script src="js/bt-export.js?v=6b"></script>
+    <script src="js/ai-panel.js?v=91b"></script>
+    <script src="js/tab-slider.js?v=1b"></script>
 
-    <script src="js/workspace.js?v=43"></script>
-    <script src="js/workspace-layout.js?v=54"></script>
+    <script src="js/workspace.js?v=43b"></script>
+    <script src="js/workspace-layout.js?v=54b"></script>
 
     <!-- URL router — pathname-based navigation. Loads last so all
          top-level nav functions (switchTab, editJob, etc.) exist
          before the router wraps them. -->
-    <script src="js/router.js?v=6"></script>
+    <script src="js/router.js?v=6b"></script>
 
     <!-- Copy-to-clipboard helper. Auto-attaches a 📋 button to every
-         <input type=email> and any element marked data-agx-copy. -->
-    <script src="js/copy-button.js?v=1"></script>
+         <input type=email> and any element marked data-p86-copy. -->
+    <script src="js/copy-button.js?v=1b"></script>
 
-    <!-- Project 86 inline-SVG icon helper. Provides window.agxIcon(name, opts)
+    <!-- Project 86 inline-SVG icon helper. Provides window.p86Icon(name, opts)
          — 24 icons from Phosphor (MIT) + Heroicons (MIT). See
          scripts/build-agx-icons.js to regenerate. -->
-    <script src="js/agx-icons.js?v=13"></script>
+    <script src="js/agx-icons.js?v=13b"></script>
 
     <!-- Node Graph (Beta) -->
-    <link rel="stylesheet" href="nodegraph/nodegraph.css?v=90" />
+    <link rel="stylesheet" href="nodegraph/nodegraph.css?v=90b" />
     <div id="nodeGraphTab">
       <!-- Workspace canvas toolbar — Outlook ribbon style. Each
            button is icon-on-top + label-below, buttons cluster into
@@ -2355,7 +2388,7 @@
         </div>
       </div>
     </div>
-    <script src="nodegraph/engine.js?v=73"></script>
-    <script src="nodegraph/ui.js?v=148"></script>
+    <script src="nodegraph/engine.js?v=73b"></script>
+    <script src="nodegraph/ui.js?v=148b"></script>
 </body>
 </html>

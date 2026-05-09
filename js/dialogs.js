@@ -2,10 +2,10 @@
 // prompt() with styled modals that match the rest of the app.
 //
 // All three return Promises so callers can:
-//   const ok = await agxConfirm({ title, message });
+//   const ok = await p86Confirm({ title, message });
 //   if (!ok) return;
 // or chain:
-//   agxConfirm({ ... }).then(ok => { if (!ok) return; ... });
+//   p86Confirm({ ... }).then(ok => { if (!ok) return; ... });
 //
 // Browser dialogs are bad: they're un-style-able (Chrome shows "wip.up.
 // railway.app says ..."), block all JS, and read as old-fashioned. The
@@ -17,7 +17,7 @@
 //   - Auto-focus the confirm button so Enter just works
 //   - Trap clicks on the backdrop as Cancel
 //   - Return a Promise so existing `if (!confirm(...)) return;`
-//     patterns translate to `if (!await agxConfirm({...})) return;`
+//     patterns translate to `if (!await p86Confirm({...})) return;`
 
 (function() {
   'use strict';
@@ -32,26 +32,26 @@
   // classes already defined globally so the dialog inherits the right
   // backdrop + content styling, then add a few tweaks for our use.
   function ensureStyles() {
-    if (document.getElementById('agx-dialogs-styles')) return;
+    if (document.getElementById('p86-dialogs-styles')) return;
     var s = document.createElement('style');
-    s.id = 'agx-dialogs-styles';
+    s.id = 'p86-dialogs-styles';
     s.textContent = [
-      '.agx-dialog { z-index: 1100 !important; }',
-      '.agx-dialog .modal-content { max-width: 460px; padding: 18px 20px; }',
-      '.agx-dialog .agx-dialog-title {',
+      '.p86-dialog { z-index: 1100 !important; }',
+      '.p86-dialog .modal-content { max-width: 460px; padding: 18px 20px; }',
+      '.p86-dialog .p86-dialog-title {',
       '  font-size: 15px;',
       '  font-weight: 700;',
       '  margin: 0 0 8px 0;',
       '  color: var(--text, #e4e6f0);',
       '}',
-      '.agx-dialog .agx-dialog-message {',
+      '.p86-dialog .p86-dialog-message {',
       '  font-size: 13px;',
       '  color: var(--text, #d1d5db);',
       '  line-height: 1.5;',
       '  margin: 0 0 16px 0;',
       '  white-space: pre-wrap;',
       '}',
-      '.agx-dialog .agx-dialog-input {',
+      '.p86-dialog .p86-dialog-input {',
       '  width: 100%;',
       '  background: var(--card-bg, #0f0f1e);',
       '  color: var(--text, #e4e6f0);',
@@ -62,16 +62,16 @@
       '  margin-bottom: 14px;',
       '  box-sizing: border-box;',
       '}',
-      '.agx-dialog .agx-dialog-input:focus {',
+      '.p86-dialog .p86-dialog-input:focus {',
       '  outline: none;',
       '  border-color: rgba(79, 140, 255, 0.6);',
       '}',
-      '.agx-dialog .agx-dialog-actions {',
+      '.p86-dialog .p86-dialog-actions {',
       '  display: flex;',
       '  justify-content: flex-end;',
       '  gap: 8px;',
       '}',
-      '.agx-dialog-btn {',
+      '.p86-dialog-btn {',
       '  background: var(--card-bg, #0f0f1e);',
       '  color: var(--text, #e4e6f0);',
       '  border: 1px solid var(--border, #333);',
@@ -81,24 +81,24 @@
       '  cursor: pointer;',
       '  transition: border-color 0.12s, background 0.12s;',
       '}',
-      '.agx-dialog-btn:hover {',
+      '.p86-dialog-btn:hover {',
       '  border-color: rgba(79, 140, 255, 0.5);',
       '  background: rgba(79, 140, 255, 0.08);',
       '}',
-      '.agx-dialog-btn-primary {',
+      '.p86-dialog-btn-primary {',
       '  background: linear-gradient(135deg, #4f8cff, #6a76d9);',
       '  border-color: transparent;',
       '  color: #fff;',
       '  font-weight: 600;',
       '}',
-      '.agx-dialog-btn-primary:hover { filter: brightness(1.1); }',
-      '.agx-dialog-btn-danger {',
+      '.p86-dialog-btn-primary:hover { filter: brightness(1.1); }',
+      '.p86-dialog-btn-danger {',
       '  background: linear-gradient(135deg, #ef4444, #dc2626);',
       '  border-color: transparent;',
       '  color: #fff;',
       '  font-weight: 600;',
       '}',
-      '.agx-dialog-btn-danger:hover { filter: brightness(1.12); }'
+      '.p86-dialog-btn-danger:hover { filter: brightness(1.12); }'
     ].join('\n');
     document.head.appendChild(s);
   }
@@ -109,7 +109,7 @@
     return new Promise(function(resolve) {
       ensureStyles();
       var modal = document.createElement('div');
-      modal.className = 'modal active agx-dialog';
+      modal.className = 'modal active p86-dialog';
       modal.setAttribute('role', 'dialog');
       modal.setAttribute('aria-modal', 'true');
 
@@ -138,7 +138,7 @@
         } else if (e.key === 'Enter' && !e.shiftKey) {
           var active = document.activeElement;
           if (active && active.tagName === 'TEXTAREA') return;
-          var primary = modal.querySelector('[data-agx-primary]');
+          var primary = modal.querySelector('[data-p86-primary]');
           if (primary) {
             e.preventDefault();
             primary.click();
@@ -150,7 +150,7 @@
   }
 
   /**
-   * agxConfirm — yes/no confirmation modal.
+   * p86Confirm — yes/no confirmation modal.
    * @param {object} opts
    * @param {string} [opts.title]            — modal heading. Default: "Confirm"
    * @param {string} opts.message            — body text (newlines allowed)
@@ -159,23 +159,23 @@
    * @param {boolean} [opts.danger]          — render confirm in red (delete-style)
    * @returns {Promise<boolean>} true = confirmed, false = canceled
    */
-  function agxConfirm(opts) {
+  function p86Confirm(opts) {
     opts = opts || {};
     return showDialog({ cancelValue: false }, function(done) {
       var content = document.createElement('div');
       content.className = 'modal-content';
       content.innerHTML =
-        '<div class="agx-dialog-title">' + escapeHTML(opts.title || 'Confirm') + '</div>' +
-        '<div class="agx-dialog-message">' + escapeHTML(opts.message || '') + '</div>' +
-        '<div class="agx-dialog-actions">' +
-          '<button class="agx-dialog-btn" data-agx-cancel>' + escapeHTML(opts.cancelLabel || 'Cancel') + '</button>' +
-          '<button class="agx-dialog-btn ' + (opts.danger ? 'agx-dialog-btn-danger' : 'agx-dialog-btn-primary') +
-            '" data-agx-primary data-agx-confirm>' + escapeHTML(opts.confirmLabel || 'OK') + '</button>' +
+        '<div class="p86-dialog-title">' + escapeHTML(opts.title || 'Confirm') + '</div>' +
+        '<div class="p86-dialog-message">' + escapeHTML(opts.message || '') + '</div>' +
+        '<div class="p86-dialog-actions">' +
+          '<button class="p86-dialog-btn" data-p86-cancel>' + escapeHTML(opts.cancelLabel || 'Cancel') + '</button>' +
+          '<button class="p86-dialog-btn ' + (opts.danger ? 'p86-dialog-btn-danger' : 'p86-dialog-btn-primary') +
+            '" data-p86-primary data-p86-confirm>' + escapeHTML(opts.confirmLabel || 'OK') + '</button>' +
         '</div>';
-      content.querySelector('[data-agx-cancel]').addEventListener('click', function() { done(false); });
-      content.querySelector('[data-agx-confirm]').addEventListener('click', function() { done(true); });
+      content.querySelector('[data-p86-cancel]').addEventListener('click', function() { done(false); });
+      content.querySelector('[data-p86-confirm]').addEventListener('click', function() { done(true); });
       setTimeout(function() {
-        var btn = content.querySelector('[data-agx-confirm]');
+        var btn = content.querySelector('[data-p86-confirm]');
         if (btn) btn.focus();
       }, 0);
       return content;
@@ -183,7 +183,7 @@
   }
 
   /**
-   * agxConfirmTernary — three-way OK / second-option / Cancel.
+   * p86ConfirmTernary — three-way OK / second-option / Cancel.
    * For "OK = send email · Cancel = skip · X = abort" patterns where
    * Cancel needs to be distinguished from "do the action without the
    * extra step." Returns 'primary' | 'secondary' | null.
@@ -195,28 +195,28 @@
    * @param {string} opts.secondaryLabel     — alternate (does X without extras)
    * @param {string} [opts.cancelLabel]      — full abort. Default: "Cancel"
    */
-  function agxConfirmTernary(opts) {
+  function p86ConfirmTernary(opts) {
     opts = opts || {};
     return showDialog({ cancelValue: null }, function(done) {
       var content = document.createElement('div');
       content.className = 'modal-content';
       content.style.maxWidth = '500px';
       content.innerHTML =
-        '<div class="agx-dialog-title">' + escapeHTML(opts.title || 'Confirm') + '</div>' +
-        '<div class="agx-dialog-message">' + escapeHTML(opts.message || '') + '</div>' +
-        '<div class="agx-dialog-actions">' +
-          '<button class="agx-dialog-btn" data-agx-action="cancel">' + escapeHTML(opts.cancelLabel || 'Cancel') + '</button>' +
-          '<button class="agx-dialog-btn" data-agx-action="secondary">' + escapeHTML(opts.secondaryLabel || 'Skip') + '</button>' +
-          '<button class="agx-dialog-btn agx-dialog-btn-primary" data-agx-primary data-agx-action="primary">' + escapeHTML(opts.primaryLabel || 'OK') + '</button>' +
+        '<div class="p86-dialog-title">' + escapeHTML(opts.title || 'Confirm') + '</div>' +
+        '<div class="p86-dialog-message">' + escapeHTML(opts.message || '') + '</div>' +
+        '<div class="p86-dialog-actions">' +
+          '<button class="p86-dialog-btn" data-p86-action="cancel">' + escapeHTML(opts.cancelLabel || 'Cancel') + '</button>' +
+          '<button class="p86-dialog-btn" data-p86-action="secondary">' + escapeHTML(opts.secondaryLabel || 'Skip') + '</button>' +
+          '<button class="p86-dialog-btn p86-dialog-btn-primary" data-p86-primary data-p86-action="primary">' + escapeHTML(opts.primaryLabel || 'OK') + '</button>' +
         '</div>';
-      content.querySelectorAll('[data-agx-action]').forEach(function(btn) {
+      content.querySelectorAll('[data-p86-action]').forEach(function(btn) {
         btn.addEventListener('click', function() {
-          var action = btn.getAttribute('data-agx-action');
+          var action = btn.getAttribute('data-p86-action');
           done(action === 'cancel' ? null : action);
         });
       });
       setTimeout(function() {
-        var btn = content.querySelector('[data-agx-action="primary"]');
+        var btn = content.querySelector('[data-p86-action="primary"]');
         if (btn) btn.focus();
       }, 0);
       return content;
@@ -224,25 +224,25 @@
   }
 
   /**
-   * agxAlert — single-button info modal.
+   * p86Alert — single-button info modal.
    * @param {object|string} opts             — string treated as message
    * @returns {Promise<void>}
    */
-  function agxAlert(opts) {
+  function p86Alert(opts) {
     if (typeof opts === 'string') opts = { message: opts };
     opts = opts || {};
     return showDialog({ cancelValue: undefined }, function(done) {
       var content = document.createElement('div');
       content.className = 'modal-content';
       content.innerHTML =
-        '<div class="agx-dialog-title">' + escapeHTML(opts.title || 'Notice') + '</div>' +
-        '<div class="agx-dialog-message">' + escapeHTML(opts.message || '') + '</div>' +
-        '<div class="agx-dialog-actions">' +
-          '<button class="agx-dialog-btn agx-dialog-btn-primary" data-agx-primary>OK</button>' +
+        '<div class="p86-dialog-title">' + escapeHTML(opts.title || 'Notice') + '</div>' +
+        '<div class="p86-dialog-message">' + escapeHTML(opts.message || '') + '</div>' +
+        '<div class="p86-dialog-actions">' +
+          '<button class="p86-dialog-btn p86-dialog-btn-primary" data-p86-primary>OK</button>' +
         '</div>';
-      content.querySelector('[data-agx-primary]').addEventListener('click', function() { done(); });
+      content.querySelector('[data-p86-primary]').addEventListener('click', function() { done(); });
       setTimeout(function() {
-        var btn = content.querySelector('[data-agx-primary]');
+        var btn = content.querySelector('[data-p86-primary]');
         if (btn) btn.focus();
       }, 0);
       return content;
@@ -250,7 +250,7 @@
   }
 
   /**
-   * agxPrompt — text input modal.
+   * p86Prompt — text input modal.
    * @param {object} opts
    * @param {string} [opts.title]
    * @param {string} [opts.message]
@@ -258,23 +258,23 @@
    * @param {string} [opts.placeholder]
    * @returns {Promise<string|null>} string entered, or null if canceled
    */
-  function agxPrompt(opts) {
+  function p86Prompt(opts) {
     opts = opts || {};
     return showDialog({ cancelValue: null }, function(done) {
       var content = document.createElement('div');
       content.className = 'modal-content';
       content.innerHTML =
-        '<div class="agx-dialog-title">' + escapeHTML(opts.title || 'Enter value') + '</div>' +
-        (opts.message ? '<div class="agx-dialog-message">' + escapeHTML(opts.message) + '</div>' : '') +
-        '<input class="agx-dialog-input" type="text" data-agx-input placeholder="' +
+        '<div class="p86-dialog-title">' + escapeHTML(opts.title || 'Enter value') + '</div>' +
+        (opts.message ? '<div class="p86-dialog-message">' + escapeHTML(opts.message) + '</div>' : '') +
+        '<input class="p86-dialog-input" type="text" data-p86-input placeholder="' +
           escapeHTML(opts.placeholder || '') + '" value="' + escapeHTML(opts.defaultValue || '') + '" />' +
-        '<div class="agx-dialog-actions">' +
-          '<button class="agx-dialog-btn" data-agx-cancel>Cancel</button>' +
-          '<button class="agx-dialog-btn agx-dialog-btn-primary" data-agx-primary>OK</button>' +
+        '<div class="p86-dialog-actions">' +
+          '<button class="p86-dialog-btn" data-p86-cancel>Cancel</button>' +
+          '<button class="p86-dialog-btn p86-dialog-btn-primary" data-p86-primary>OK</button>' +
         '</div>';
-      var input = content.querySelector('[data-agx-input]');
-      content.querySelector('[data-agx-cancel]').addEventListener('click', function() { done(null); });
-      content.querySelector('[data-agx-primary]').addEventListener('click', function() {
+      var input = content.querySelector('[data-p86-input]');
+      content.querySelector('[data-p86-cancel]').addEventListener('click', function() { done(null); });
+      content.querySelector('[data-p86-primary]').addEventListener('click', function() {
         done(input.value);
       });
       input.addEventListener('keydown', function(e) {
@@ -291,8 +291,8 @@
   }
 
   // Expose globally so non-module call sites can use directly.
-  window.agxConfirm = agxConfirm;
-  window.agxConfirmTernary = agxConfirmTernary;
-  window.agxAlert = agxAlert;
-  window.agxPrompt = agxPrompt;
+  window.p86Confirm = p86Confirm;
+  window.p86ConfirmTernary = p86ConfirmTernary;
+  window.p86Alert = p86Alert;
+  window.p86Prompt = p86Prompt;
 })();

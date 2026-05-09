@@ -39,7 +39,7 @@
 
     var graph = { nodes: [], wires: [] };
     try {
-      var graphs = JSON.parse(localStorage.getItem('agx-nodegraphs') || '{}');
+      var graphs = JSON.parse(localStorage.getItem('p86-nodegraphs') || '{}');
       var g = graphs[jobId];
       if (g) {
         graph.nodes = g.nodes || [];
@@ -431,7 +431,7 @@
   function jumpToNode(nodeId) {
     if (typeof NG === 'undefined' || !NG.zm || !NG.pan) return;
     try {
-      var graphs = JSON.parse(localStorage.getItem('agx-nodegraphs') || '{}');
+      var graphs = JSON.parse(localStorage.getItem('p86-nodegraphs') || '{}');
       var jobId = (window.appState && appState.currentJobId) || null;
       if (!jobId) return;
       var node = (graphs[jobId]?.nodes || []).find(function(n) { return n.id === nodeId; });
@@ -447,7 +447,7 @@
   }
 
   // ── Public API ───────────────────────────────────────────────
-  window.agxJobAudit = {
+  window.p86JobAudit = {
     run: runAudit,
     open: openAuditModal,
     findingCount: findingCount

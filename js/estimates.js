@@ -226,9 +226,9 @@ function renderEstimatesList() {
             // landing — otherwise a user clicking through during the
             // load gap could see stale localStorage data, type edits,
             // and have them silently overwritten when the fetch
-            // resolves. agxDataReady() returns true once loadData has
+            // resolves. p86DataReady() returns true once loadData has
             // settled (success or fail).
-            if (typeof window.agxDataLoading === 'function' && window.agxDataLoading()) {
+            if (typeof window.p86DataLoading === 'function' && window.p86DataLoading()) {
                 alert('Still loading from server — try again in a moment.');
                 return;
             }
@@ -326,7 +326,7 @@ function renderEstimatesList() {
         function editEstimate(estId) {
     // Block editor open while the initial server fetch is in-flight.
     // See openNewEstimateForm comment for rationale.
-    if (typeof window.agxDataLoading === 'function' && window.agxDataLoading()) {
+    if (typeof window.p86DataLoading === 'function' && window.p86DataLoading()) {
         alert('Still loading from server — try again in a moment.');
         return;
     }
@@ -357,8 +357,8 @@ function renderEstimatesList() {
     }
 
     function deleteEstimate(estId) {
-            var go = (typeof window.agxConfirm === 'function')
-              ? window.agxConfirm({
+            var go = (typeof window.p86Confirm === 'function')
+              ? window.p86Confirm({
                   title: 'Delete estimate',
                   message: 'Delete this estimate? This cannot be undone.',
                   confirmLabel: 'Delete',
@@ -377,14 +377,14 @@ function renderEstimatesList() {
                   saveData();
                   renderEstimatesList();
               }
-              if (window.agxApi && window.agxApi.isAuthenticated()) {
-                  window.agxApi.estimates.remove(estId)
+              if (window.p86Api && window.p86Api.isAuthenticated()) {
+                  window.p86Api.estimates.remove(estId)
                       .then(removeLocal)
                       .catch(function(err) {
                           if (err && err.status === 404) { removeLocal(); return; }
                           var msg = (err && err.message) ? err.message : 'unknown error';
-                          if (typeof window.agxAlert === 'function') {
-                            window.agxAlert({ title: 'Delete failed', message: msg });
+                          if (typeof window.p86Alert === 'function') {
+                            window.p86Alert({ title: 'Delete failed', message: msg });
                           } else {
                             alert('Delete failed: ' + msg);
                           }

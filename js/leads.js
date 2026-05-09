@@ -188,11 +188,11 @@
 
     if (!_leads.length) {
       listEl.innerHTML = '<div style="padding:20px;color:var(--text-dim,#888);text-align:center;">Loading leads…</div>';
-      if (!window.agxApi || !window.agxApi.isAuthenticated()) {
+      if (!window.p86Api || !window.p86Api.isAuthenticated()) {
         listEl.innerHTML = '<div style="padding:20px;color:var(--text-dim,#888);text-align:center;">Leads aren\'t available in offline mode.</div>';
         return;
       }
-      window.agxApi.leads.list().then(function(res) {
+      window.p86Api.leads.list().then(function(res) {
         _leads = res.leads || [];
         renderLeadsList();
       }).catch(function(err) {
@@ -322,18 +322,18 @@
       // Mount the searchable picker. The original <select> has an
       // onchange="onLeadClientPicked()" attribute — re-fire that after
       // a click-pick so the lead-side prefill (address, etc.) still runs.
-      if (window.agxClients && typeof window.agxClients.mountPicker === 'function') {
-        var handle = window.agxClients.mountPicker(sel, function() {
+      if (window.p86Clients && typeof window.p86Clients.mountPicker === 'function') {
+        var handle = window.p86Clients.mountPicker(sel, function() {
           if (typeof onLeadClientPicked === 'function') onLeadClientPicked();
         });
         if (handle && handle.refreshLabel) handle.refreshLabel();
       }
     };
-    var cached = (window.agxClients && window.agxClients.getCached && window.agxClients.getCached()) || [];
+    var cached = (window.p86Clients && window.p86Clients.getCached && window.p86Clients.getCached()) || [];
     if (cached.length) {
       fillFrom(cached);
-    } else if (window.agxApi && window.agxApi.isAuthenticated()) {
-      window.agxApi.clients.list().then(function(res) {
+    } else if (window.p86Api && window.p86Api.isAuthenticated()) {
+      window.p86Api.clients.list().then(function(res) {
         fillFrom(res.clients || []);
       }).catch(function() { fillFrom([]); });
     } else {
@@ -347,7 +347,7 @@
   function populateSalespersonSelect(currentId) {
     var sel = document.getElementById('leadEditor_salesperson_id');
     if (!sel) return;
-    var users = (window.agxAdmin && window.agxAdmin.getActivePMs && window.agxAdmin.getActivePMs()) || [];
+    var users = (window.p86Admin && window.p86Admin.getActivePMs && window.p86Admin.getActivePMs()) || [];
     var html = '<option value="">— Unassigned —</option>';
     users.forEach(function(u) {
       var sel = (String(u.id) === String(currentId)) ? ' selected' : '';
@@ -356,8 +356,8 @@
     });
     sel.innerHTML = html;
     // If users haven't loaded yet, refresh and retry once.
-    if (!users.length && window.agxAdmin && window.agxAdmin.loadUsersCache) {
-      window.agxAdmin.loadUsersCache().then(function() { populateSalespersonSelect(currentId); });
+    if (!users.length && window.p86Admin && window.p86Admin.loadUsersCache) {
+      window.p86Admin.loadUsersCache().then(function() { populateSalespersonSelect(currentId); });
     }
   }
 
@@ -367,7 +367,7 @@
   function onLeadClientPicked() {
     var sel = document.getElementById('leadEditor_client_id');
     if (!sel || !sel.value) return;
-    var cached = (window.agxClients && window.agxClients.getCached && window.agxClients.getCached()) || [];
+    var cached = (window.p86Clients && window.p86Clients.getCached && window.p86Clients.getCached()) || [];
     var c = cached.find(function(x) { return x.id === sel.value; });
     if (!c) return;
     // Only set fields the user hasn't already filled in
@@ -413,7 +413,7 @@
     var l = _leads.find(function(x) { return x.id === id; });
     if (!l) {
       // Fall back to fetching by id if not in cache (rare — list is fresh)
-      window.agxApi.leads.get(id).then(function(res) {
+      window.p86Api.leads.get(id).then(function(res) {
         _leads.push(res.lead);
         openEditLeadModal(id);
       }).catch(function() { alert('Lead not found.'); });
@@ -506,9 +506,9 @@
     // Delete + Convert buttons only meaningful in edit mode (we have an id).
     if (delBtn) delBtn.style.display = (l && l.id) ? '' : 'none';
     if (convertBtn && l) {
-      var canEditJobs = window.agxAuth && (
-        window.agxAuth.hasCapability('JOBS_EDIT_ANY') ||
-        window.agxAuth.hasCapability('JOBS_EDIT_OWN')
+      var canEditJobs = window.p86Auth && (
+        window.p86Auth.hasCapability('JOBS_EDIT_ANY') ||
+        window.p86Auth.hasCapability('JOBS_EDIT_OWN')
       );
       convertBtn.style.display = (canEditJobs && !l.job_id) ? '' : 'none';
     }
@@ -575,9 +575,9 @@
   function refreshConvertJobButton(l) {
     var btn = document.getElementById('leadEditor_convertJobBtn');
     if (!btn) return;
-    var canEditJobs = window.agxAuth && (
-      window.agxAuth.hasCapability('JOBS_EDIT_ANY') ||
-      window.agxAuth.hasCapability('JOBS_EDIT_OWN')
+    var canEditJobs = window.p86Auth && (
+      window.p86Auth.hasCapability('JOBS_EDIT_ANY') ||
+      window.p86Auth.hasCapability('JOBS_EDIT_OWN')
     );
     btn.style.display = (canEditJobs && (!l || !l.job_id)) ? '' : 'none';
   }
@@ -614,7 +614,7 @@
       return;
     }
 
-    var clientCache = (window.agxClients && window.agxClients.getCached && window.agxClients.getCached()) || [];
+    var clientCache = (window.p86Clients && window.p86Clients.getCached && window.p86Clients.getCached()) || [];
     var c = l.client_id ? clientCache.find(function(x) { return x.id === l.client_id; }) : null;
     var clientName = c ? (c.company_name || c.name) : '';
 
@@ -630,7 +630,7 @@
     // Lead-to-job conversion: use the single estimated revenue value as
     // the starter contract amount (we no longer track a low/high range).
     var contractAmt = Number(l.estimated_revenue_low || 0);
-    var me = window.agxAuth && window.agxAuth.getUser && window.agxAuth.getUser();
+    var me = window.p86Auth && window.p86Auth.getUser && window.p86Auth.getUser();
     var ownerId = l.salesperson_id || (me && me.id) || null;
 
     var jobId = 'j' + Date.now();
@@ -662,7 +662,7 @@
     // Update the lead record on the server: set job_id + flip status to sold.
     // Keep the local lead object in sync so the chip renders correctly when
     // the modal stays open.
-    window.agxApi.leads.update(leadId, { job_id: jobId, status: 'sold' }).then(function() {
+    window.p86Api.leads.update(leadId, { job_id: jobId, status: 'sold' }).then(function() {
       l.job_id = jobId;
       l.status = 'sold';
       closeLeadEditorAny();
@@ -703,11 +703,11 @@
     var footer = document.querySelector('#leadEditorModal .modal-footer');
     if (footer) footer.style.display = (name === 'general') ? '' : 'none';
     // Mount the photos widget on first switch — re-uses the same mount on
-    // re-entry since agxAttachments handles its own state internally.
+    // re-entry since p86Attachments handles its own state internally.
     if (name === 'photos' && _currentEditingLeadId) {
       var mountEl = document.getElementById('leadEditor_photosMount');
-      if (mountEl && window.agxAttachments) {
-        window.agxAttachments.mount(mountEl, {
+      if (mountEl && window.p86Attachments) {
+        window.p86Attachments.mount(mountEl, {
           entityType: 'lead',
           entityId: _currentEditingLeadId,
           canEdit: true
@@ -845,7 +845,7 @@
     }
     // Resolve client fresh on every call. cache may have been empty
     // the first time, or the link may have been added since.
-    var clientCache = (window.agxClients && window.agxClients.getCached && window.agxClients.getCached()) || [];
+    var clientCache = (window.p86Clients && window.p86Clients.getCached && window.p86Clients.getCached()) || [];
     var c = l.client_id ? clientCache.find(function(x) { return x.id === l.client_id; }) : null;
 
     set('estTitle', l.title || '');
@@ -961,8 +961,8 @@
     statusEl.textContent = 'Saving…';
 
     var p = id
-      ? window.agxApi.leads.update(id, payload)
-      : window.agxApi.leads.create(payload);
+      ? window.p86Api.leads.update(id, payload)
+      : window.p86Api.leads.create(payload);
 
     p.then(function() {
       statusEl.style.color = '#34d399';
@@ -1001,7 +1001,7 @@
     // lead delete so the cache stays consistent. 404s are treated as success
     // since the row is already gone server-side.
     var estimatePromises = linkedEstimates.map(function(e) {
-      return window.agxApi.estimates.remove(e.id).catch(function(err) {
+      return window.p86Api.estimates.remove(e.id).catch(function(err) {
         if (err && err.status === 404) return; // already gone, fine
         throw err;
       });
@@ -1017,7 +1017,7 @@
         if (typeof saveData === 'function') saveData();
         if (typeof renderEstimatesList === 'function') renderEstimatesList();
       }
-      return window.agxApi.leads.remove(id);
+      return window.p86Api.leads.remove(id);
     }).then(function() {
       closeLeadEditorAny();
       reloadLeadsCache();
@@ -1176,7 +1176,7 @@
                    'Clients are matched by name against the directory; unmatched leads import without a client link.')) {
         return;
       }
-      window.agxApi.leads.importBatch(rows).then(function(res) {
+      window.p86Api.leads.importBatch(rows).then(function(res) {
         renderLeadsImportResult(res);
         reloadLeadsCache();
       }).catch(function(err) {
@@ -1294,7 +1294,7 @@
         return renderPdfPagesToBase64(pdf);
       }).then(function(images) {
         setPdfStatus('Extracting fields with AI… (' + images.length + ' page' + (images.length === 1 ? '' : 's') + ')');
-        return window.agxApi.ai.extractLead(images);
+        return window.p86Api.ai.extractLead(images);
       }).then(function(res) {
         if (!res || !res.lead) throw new Error('Empty response from AI.');
         prefillFromExtractedLead(res.lead);
@@ -1373,7 +1373,7 @@
     //   3. Substring fallback ONLY if it produces a UNIQUE match.
     //      Multiple matches → leave unset; user picks manually.
     if (lead.client_company || lead.client_property) {
-      var clients = (window.agxClients && window.agxClients.getCached && window.agxClients.getCached()) || [];
+      var clients = (window.p86Clients && window.p86Clients.getCached && window.p86Clients.getCached()) || [];
       var company = String(lead.client_company || '').trim();
       var property = String(lead.client_property || '').trim();
       var lowerCompany = company.toLowerCase();
@@ -1457,7 +1457,7 @@
   window.convertLeadToJob = convertLeadToJob;
   window.openLinkedJobFromLead = openLinkedJobFromLead;
   window.handleLeadsImportFile = handleLeadsImportFile;
-  window.agxLeads = {
+  window.p86Leads = {
     getCached: function() { return _leads.slice(); },
     getOpenId: function() { return _currentEditingLeadId; },
     reload: reloadLeadsCache,

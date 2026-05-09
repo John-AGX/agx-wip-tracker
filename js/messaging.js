@@ -1,15 +1,15 @@
 // Project 86 messaging UI.
 //
 // Two surfaces:
-//   1. window.agxMessaging.openInbox() — modal showing recent threads
+//   1. window.p86Messaging.openInbox() — modal showing recent threads
 //      (left column) and the selected thread + compose (right column).
-//   2. window.agxMessaging.mountInline(containerEl, threadKey, opts)
+//   2. window.p86Messaging.mountInline(containerEl, threadKey, opts)
 //      — embeds a thread + compose into any container (used by the
 //      job detail page's Comments slot, future per-lead/estimate
 //      surfaces, etc.). Options:
 //        { title, autofocus, onPosted }
 //
-// Both surfaces talk to /api/messages via agxApi.messages.*.
+// Both surfaces talk to /api/messages via p86Api.messages.*.
 // Polling is intentionally not built in — the user re-opens or clicks
 // the thread to refresh; a background-fetch tick can land in v2.
 
@@ -36,7 +36,7 @@
   }
 
   function currentUserId() {
-    var u = (window.agxAuth && window.agxAuth.getUser && window.agxAuth.getUser()) || null;
+    var u = (window.p86Auth && window.p86Auth.getUser && window.p86Auth.getUser()) || null;
     return u ? u.id : null;
   }
 
@@ -83,11 +83,11 @@
   }
 
   function loadInboxList(listEl, threadEl) {
-    if (!window.agxApi || !window.agxApi.messages) {
+    if (!window.p86Api || !window.p86Api.messages) {
       listEl.innerHTML = '<div style="padding:18px;color:#f87171;font-size:12px;">Messaging API not available.</div>';
       return;
     }
-    window.agxApi.messages.recent().then(function(res) {
+    window.p86Api.messages.recent().then(function(res) {
       var threads = (res && res.threads) || [];
       if (!threads.length) {
         listEl.innerHTML =
@@ -164,7 +164,7 @@
     var sendBtn = panelEl.querySelector('[data-thread-send]');
 
     function loadAndPaint() {
-      window.agxApi.messages.thread(threadKey).then(function(res) {
+      window.p86Api.messages.thread(threadKey).then(function(res) {
         var msgs = (res && res.messages) || [];
         if (!msgs.length) {
           listEl.innerHTML = '<div style="text-align:center;color:var(--text-dim,#888);font-size:12px;padding:30px 12px;font-style:italic;">No messages yet. Start the thread.</div>';
@@ -187,7 +187,7 @@
           listEl.scrollTop = listEl.scrollHeight;
         }
         // mark thread as read on every paint
-        window.agxApi.messages.markRead(threadKey).catch(function() {});
+        window.p86Api.messages.markRead(threadKey).catch(function() {});
       }).catch(function(err) {
         listEl.innerHTML = '<div style="padding:14px;color:#f87171;font-size:12px;">Could not load: ' + escapeHTML(err.message || '') + '</div>';
       });
@@ -199,7 +199,7 @@
       sendBtn.disabled = true;
       var prevText = sendBtn.textContent;
       sendBtn.textContent = 'Sending&hellip;';
-      window.agxApi.messages.post(threadKey, body).then(function() {
+      window.p86Api.messages.post(threadKey, body).then(function() {
         inputEl.value = '';
         loadAndPaint();
         if (typeof opts.onPosted === 'function') opts.onPosted();
@@ -239,13 +239,13 @@
   // Just-the-unread-count fetch — used by the Summary inbox card so
   // the badge doesn't require a full thread list load.
   function getTotalUnread() {
-    if (!window.agxApi || !window.agxApi.messages) return Promise.resolve(0);
-    return window.agxApi.messages.recent()
+    if (!window.p86Api || !window.p86Api.messages) return Promise.resolve(0);
+    return window.p86Api.messages.recent()
       .then(function(res) { return Number((res && res.total_unread) || 0); })
       .catch(function() { return 0; });
   }
 
-  window.agxMessaging = {
+  window.p86Messaging = {
     openInbox: openInbox,
     mountInline: mountInline,
     getTotalUnread: getTotalUnread

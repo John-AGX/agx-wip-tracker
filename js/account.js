@@ -51,11 +51,11 @@
   // `label { display:block; text-transform:uppercase; font-size:10px }`)
   // squash the checkbox + description into an unreadable layout.
   function ensureAccountStyles() {
-    if (document.getElementById('agx-account-styles')) return;
+    if (document.getElementById('p86-account-styles')) return;
     var style = document.createElement('style');
-    style.id = 'agx-account-styles';
+    style.id = 'p86-account-styles';
     style.textContent = [
-      '#agxAccountModal .agx-pref-row {',
+      '#p86AccountModal .p86-pref-row {',
       '  display: flex;',
       '  align-items: flex-start;',
       '  gap: 10px;',
@@ -71,7 +71,7 @@
       '  margin-bottom: 0;',
       '  color: var(--text, #e4e6f0);',
       '}',
-      '#agxAccountModal .agx-pref-row input[type="checkbox"] {',
+      '#p86AccountModal .p86-pref-row input[type="checkbox"] {',
       '  width: auto;',
       '  margin: 2px 0 0 0;',
       '  padding: 0;',
@@ -79,15 +79,15 @@
       '  background: transparent;',
       '  border: none;',
       '}',
-      '#agxAccountModal .agx-pref-body { flex: 1 1 auto; min-width: 0; }',
-      '#agxAccountModal .agx-pref-title {',
+      '#p86AccountModal .p86-pref-body { flex: 1 1 auto; min-width: 0; }',
+      '#p86AccountModal .p86-pref-title {',
       '  font-weight: 600;',
       '  color: var(--text, #e4e6f0);',
       '  font-size: 13px;',
       '  text-transform: none;',
       '  letter-spacing: normal;',
       '}',
-      '#agxAccountModal .agx-pref-desc {',
+      '#p86AccountModal .p86-pref-desc {',
       '  font-size: 11px;',
       '  color: var(--text-dim, #888);',
       '  margin-top: 3px;',
@@ -104,21 +104,21 @@
   // /api/auth/users (already cached by admin module if available) and
   // saves on toggle.
   function openMyAccount() {
-    if (!window.agxApi || !window.agxApi.isAuthenticated || !window.agxApi.isAuthenticated()) {
+    if (!window.p86Api || !window.p86Api.isAuthenticated || !window.p86Api.isAuthenticated()) {
       alert('Sign in to manage your account.');
       return;
     }
-    var me = (window.agxAuth && window.agxAuth.getUser && window.agxAuth.getUser()) || null;
+    var me = (window.p86Auth && window.p86Auth.getUser && window.p86Auth.getUser()) || null;
     if (!me) {
       alert('Sign in to manage your account.');
       return;
     }
 
-    var prior = document.getElementById('agxAccountModal');
+    var prior = document.getElementById('p86AccountModal');
     if (prior) prior.remove();
     ensureAccountStyles();
     var modal = document.createElement('div');
-    modal.id = 'agxAccountModal';
+    modal.id = 'p86AccountModal';
     modal.className = 'modal active';
     modal.innerHTML =
       '<div class="modal-content" style="max-width:520px;">' +
@@ -129,24 +129,24 @@
         '</div>' +
         '<div style="border-top:1px solid var(--border,#333);padding-top:14px;">' +
           '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-dim,#aaa);margin-bottom:10px;">Email notifications</div>' +
-          '<div id="agx-acct-prefs" style="display:flex;flex-direction:column;gap:14px;">' +
+          '<div id="p86-acct-prefs" style="display:flex;flex-direction:column;gap:14px;">' +
             '<div style="font-size:11px;color:var(--text-dim,#888);">Loading…</div>' +
           '</div>' +
         '</div>' +
         '<div class="modal-footer" style="display:flex;justify-content:flex-end;gap:8px;margin-top:18px;">' +
-          '<button class="ee-btn" id="agxAccountClose">Close</button>' +
+          '<button class="ee-btn" id="p86AccountClose">Close</button>' +
         '</div>' +
       '</div>';
     document.body.appendChild(modal);
     modal.addEventListener('click', function(e) {
       if (e.target === modal) modal.remove();
     });
-    document.getElementById('agxAccountClose').addEventListener('click', function() { modal.remove(); });
+    document.getElementById('p86AccountClose').addEventListener('click', function() { modal.remove(); });
 
     // Load prefs from the server. We use the /users list because it's
     // already authoritatively populated by admin.js, but we filter to
     // self by email match.
-    window.agxApi.users.list().then(function(res) {
+    window.p86Api.users.list().then(function(res) {
       var users = (res && res.users) || [];
       var meRow = users.find(function(u) {
         return Number(u.id) === Number(me.id) ||
@@ -155,27 +155,27 @@
       var prefs = (meRow && meRow.notification_prefs) || {};
       paintPrefs(prefs);
     }).catch(function(err) {
-      var pane = document.getElementById('agx-acct-prefs');
+      var pane = document.getElementById('p86-acct-prefs');
       if (pane) pane.innerHTML = '<div style="color:#f87171;font-size:12px;">Failed to load: ' + escapeHTML(err.message || String(err)) + '</div>';
     });
   }
 
   function paintPrefs(prefs) {
-    var pane = document.getElementById('agx-acct-prefs');
+    var pane = document.getElementById('p86-acct-prefs');
     if (!pane) return;
     var html = '';
     EVENT_DEFS.forEach(function(ev) {
       // Default ON (send). false in the prefs blob = explicitly muted.
       var on = prefs[ev.key] !== false;
-      html += '<label class="agx-pref-row">' +
+      html += '<label class="p86-pref-row">' +
         '<input type="checkbox" data-pref-key="' + ev.key + '"' + (on ? ' checked' : '') + ' />' +
-        '<div class="agx-pref-body">' +
-          '<div class="agx-pref-title">' + escapeHTML(ev.label) + '</div>' +
-          '<div class="agx-pref-desc">' + escapeHTML(ev.desc) + '</div>' +
+        '<div class="p86-pref-body">' +
+          '<div class="p86-pref-title">' + escapeHTML(ev.label) + '</div>' +
+          '<div class="p86-pref-desc">' + escapeHTML(ev.desc) + '</div>' +
         '</div>' +
       '</label>';
     });
-    html += '<div id="agx-acct-status" style="font-size:11px;color:var(--text-dim,#888);min-height:16px;"></div>';
+    html += '<div id="p86-acct-status" style="font-size:11px;color:var(--text-dim,#888);min-height:16px;"></div>';
     pane.innerHTML = html;
 
     // Wire change handlers — autosave to server on every toggle so
@@ -190,7 +190,7 @@
   }
 
   function savePrefs(prefs) {
-    var status = document.getElementById('agx-acct-status');
+    var status = document.getElementById('p86-acct-status');
     if (status) {
       status.textContent = 'Saving…';
       status.style.color = '#60a5fa';
