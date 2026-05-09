@@ -29,6 +29,7 @@ const materialRoutes = require('./routes/material-routes');
 const qbCostRoutes = require('./routes/qb-cost-routes');
 const subRoutes = require('./routes/sub-routes');
 const subPortalRoutes = require('./routes/sub-portal-routes');
+const messageRoutes = require('./routes/message-routes');
 const scheduleRoutes = require('./routes/schedule-routes');
 const emailRoutes = require('./routes/email-routes');
 const adminAgentsRoutes = require('./routes/admin-agents-routes');
@@ -65,6 +66,7 @@ app.use('/api/subs', subRoutes);
 // the sub-routes router gets first crack at /subs/* paths and falls
 // through to here only for the invite endpoints it doesn't define.
 app.use('/api', subPortalRoutes);
+app.use('/api/messages', messageRoutes);
 app.use('/api/schedule', scheduleRoutes);
 app.use('/api/email', emailRoutes);
 app.use('/api/admin/agents', adminAgentsRoutes);

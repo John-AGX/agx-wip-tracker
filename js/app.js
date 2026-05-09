@@ -657,8 +657,9 @@
                     '<div>' +
                         '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">' +
                             '<div style="font-size:11px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;">Inbox</div>' +
+                            '<button class="ee-btn ghost small" onclick="if (window.agxMessaging) window.agxMessaging.openInbox();" style="font-size:11px;padding:2px 8px;">Open inbox &rarr;</button>' +
                         '</div>' +
-                        renderInboxStubHTML() +
+                        '<div id="summary-inbox" style="border:1px solid var(--border,#333);border-radius:10px;background:var(--card-bg,#0f0f1e);padding:18px;text-align:center;color:var(--text-dim,#888);font-size:12px;line-height:1.5;min-height:80px;">Loading inbox&hellip;</div>' +
                     '</div>' +
                 '</div>';
 
@@ -667,6 +668,7 @@
             // is already painted.
             renderSummaryAgenda();
             renderSummaryRecentFiles();
+            renderSummaryInbox();
         }
         window.renderSummaryDashboard = renderSummaryDashboard;
 
@@ -790,18 +792,79 @@
             });
         }
 
-        // ── Inbox stub ────────────────────────────────────────────────
-        // Real messaging primitive (schema + endpoints + compose UI) is
-        // a separate workstream. This card holds the spot on the layout
-        // and gives us a known place to wire it in later. Any click
-        // opens an alert acknowledging the stub state.
-        function renderInboxStubHTML() {
-            return '<div style="border:1px solid var(--border,#333);border-radius:10px;background:var(--card-bg,#0f0f1e);padding:18px;text-align:center;color:var(--text-dim,#aaa);font-size:12px;line-height:1.5;">' +
-                '<div style="font-size:24px;margin-bottom:6px;">&#x2709;</div>' +
-                '<div style="font-weight:600;color:var(--text,#fff);margin-bottom:2px;">Team Messaging</div>' +
-                '<div style="font-size:11px;">Per-job comments + DMs land here. Coming next.</div>' +
-                '<button class="ee-btn ghost small" disabled style="margin-top:10px;font-size:11px;padding:4px 10px;opacity:0.6;cursor:not-allowed;">Open inbox</button>' +
-            '</div>';
+        // ── Inbox widget ──────────────────────────────────────────────
+        // Pulls /api/messages/recent and surfaces top 4 threads with
+        // unread badges; clicking a row opens the inbox modal directly
+        // on that thread. Empty state guides the user to start a thread
+        // from a job/lead/estimate. Total unread roll-up is shown in
+        // the row header so the user has a single number to glance at.
+        function renderSummaryInbox() {
+            var host = document.getElementById('summary-inbox');
+            if (!host) return;
+            if (!window.agxApi || !window.agxApi.messages) {
+                host.innerHTML = '<div style="padding:14px;font-size:12px;color:var(--text-dim,#888);">Messaging not available.</div>';
+                return;
+            }
+            window.agxApi.messages.recent().then(function(res) {
+                var threads = (res && res.threads) || [];
+                var totalUnread = Number((res && res.total_unread) || 0);
+                if (!threads.length) {
+                    host.innerHTML =
+                        '<div style="font-size:24px;margin-bottom:6px;">\u{1F4ED}</div>' +
+                        '<div style="font-weight:600;color:var(--text,#fff);margin-bottom:2px;">No conversations yet</div>' +
+                        '<div style="font-size:11px;">Open a job, lead, or estimate and start a thread.</div>';
+                    return;
+                }
+                var top = threads.slice(0, 4);
+                var html = '';
+                if (totalUnread > 0) {
+                    html += '<div style="text-align:left;font-size:11px;color:var(--text-dim,#aaa);margin-bottom:8px;">' +
+                        '<strong style="color:#f87171;font-size:13px;">' + totalUnread + '</strong> unread across ' + threads.length + ' thread' + (threads.length === 1 ? '' : 's') +
+                    '</div>';
+                }
+                html += '<div style="display:flex;flex-direction:column;gap:1px;text-align:left;background:var(--border,#222);border-radius:8px;overflow:hidden;">';
+                top.forEach(function(t) {
+                    var unread = Number(t.unread_count || 0);
+                    var preview = (t.last_body || '').replace(/\s+/g, ' ').slice(0, 60);
+                    var who = t.last_user_name || 'Someone';
+                    html += '<button class="ee-btn" onclick="if (window.agxMessaging) window.agxMessaging.openInbox();" style="text-align:left;padding:8px 10px;background:var(--card-bg,#0f0f1e);border:none;cursor:pointer;display:flex;flex-direction:column;gap:2px;">' +
+                        '<div style="display:flex;align-items:center;gap:6px;">' +
+                            '<span style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;color:var(--accent,#22d3ee);">' + escapeHTML(t.kind || 'thread') + '</span>' +
+                            (unread ? '<span style="margin-left:auto;background:#f87171;color:#fff;font-size:10px;font-weight:700;padding:1px 6px;border-radius:10px;line-height:1.4;">' + unread + '</span>'
+                                    : '<span style="margin-left:auto;font-size:10px;color:var(--text-dim,#888);">' + escapeHTML(t.last_created_at ? timeAgoLocal(t.last_created_at) : '') + '</span>') +
+                        '</div>' +
+                        '<div style="font-size:12px;color:var(--text,#fff);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTML(t.label || t.thread_key) + '</div>' +
+                        '<div style="font-size:11px;color:var(--text-dim,#888);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTML(who) + ': ' + escapeHTML(preview) + '</div>' +
+                    '</button>';
+                });
+                html += '</div>';
+                host.innerHTML = html;
+            }).catch(function(err) {
+                host.innerHTML = '<div style="padding:14px;font-size:12px;color:var(--text-dim,#888);">Could not load: ' + escapeHTML(err.message || 'error') + '</div>';
+            });
+        }
+        // Public hook so the messaging module can ask the summary to
+        // refresh its unread badge after a post.
+        window.refreshSummaryUnreadBadge = function() {
+            // Only re-render if the user is currently looking at summary.
+            var summaryDiv = document.getElementById('summary');
+            if (summaryDiv && summaryDiv.classList.contains('active')) {
+                renderSummaryInbox();
+            }
+        };
+
+        // Local time-ago helper for the inbox card. Mirror of the one
+        // inside renderSummaryDashboard so this function isn't coupled
+        // to the closure scope of that one.
+        function timeAgoLocal(ts) {
+            var t = ts ? new Date(ts).getTime() : NaN;
+            if (!isFinite(t)) return '';
+            var diff = Math.max(0, Date.now() - t);
+            if (diff < 60 * 1000) return 'just now';
+            if (diff < 60 * 60 * 1000) return Math.floor(diff / (60 * 1000)) + 'm ago';
+            if (diff < 24 * 60 * 60 * 1000) return Math.floor(diff / (60 * 60 * 1000)) + 'h ago';
+            if (diff < 7 * 24 * 60 * 60 * 1000) return Math.floor(diff / (24 * 60 * 60 * 1000)) + 'd ago';
+            return new Date(ts).toLocaleDateString();
         }
 
         // Pull schedule entries for the next 7 days, group by date, and

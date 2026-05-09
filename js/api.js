@@ -181,6 +181,16 @@
     extractLead: function(images) { return post('/api/ai/extract-lead', { images: images }); }
   };
 
+  // Team messaging — per-entity comment threads.
+  // Thread keys: 'job:<id>' / 'lead:<id>' / 'estimate:<id>' / 'dm:<a>:<b>'.
+  var messages = {
+    recent: function() { return get('/api/messages/recent'); },
+    thread: function(key) { return get('/api/messages/' + encodeURIComponent(key)); },
+    post: function(key, body) { return post('/api/messages/' + encodeURIComponent(key), { body: body }); },
+    markRead: function(key) { return post('/api/messages/' + encodeURIComponent(key) + '/read', {}); },
+    remove: function(id) { return del('/api/messages/' + encodeURIComponent(id)); }
+  };
+
   var attachments = {
     list: function(entityType, entityId) {
       return get('/api/attachments/' + encodeURIComponent(entityType) + '/' + encodeURIComponent(entityId));
@@ -374,7 +384,7 @@
 
   window.agxApi = {
     get: get, put: put, post: post, del: del,
-    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai, materials: materials, qbCosts: qbCosts, subs: subsApi, schedule: schedule, adminSms: adminSms,
+    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai, materials: materials, qbCosts: qbCosts, subs: subsApi, schedule: schedule, adminSms: adminSms, messages: messages,
     isOffline: isOffline,
     isAuthenticated: function() { return !!getToken() && !isOffline(); }
   };

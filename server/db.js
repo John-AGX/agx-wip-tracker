@@ -44,6 +44,34 @@ async function initSchema() {
     -- users.sub_id (sub portal) is added AFTER the subs table is
     -- created further down so the FK resolves on first run.
 
+    -- Team messaging — per-entity comment threads + (future) DMs.
+    -- thread_key conventions:
+    --   'job:<id>'      one thread per job (per-job comments)
+    --   'lead:<id>'     one thread per lead
+    --   'estimate:<id>' one thread per estimate
+    --   'dm:<a>:<b>'    direct message (a < b lexicographically)
+    -- Single table because read patterns are the same regardless
+    -- of source — list-by-thread, post-to-thread, mark-read.
+    -- message_reads tracks the high-water mark of a user's last
+    -- view per thread so unread counts are cheap to compute.
+    CREATE TABLE IF NOT EXISTS messages (
+      id TEXT PRIMARY KEY,
+      thread_key TEXT NOT NULL,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      body TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      edited_at TIMESTAMPTZ
+    );
+    CREATE INDEX IF NOT EXISTS idx_messages_thread_created ON messages(thread_key, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_messages_user ON messages(user_id);
+
+    CREATE TABLE IF NOT EXISTS message_reads (
+      thread_key TEXT NOT NULL,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      last_read_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (thread_key, user_id)
+    );
+
     CREATE TABLE IF NOT EXISTS jobs (
       id TEXT PRIMARY KEY,
       owner_id INTEGER NOT NULL REFERENCES users(id),
