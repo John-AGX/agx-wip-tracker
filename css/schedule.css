@@ -550,102 +550,85 @@ body.sch-resizing * {
   user-select: none !important;
 }
 
-/* ─── Floating week summary widget ──────────────────────────
-   Production metrics live inside the calendar wrap as an
-   absolutely-positioned floater. Default position: top-right.
-   The user can drag it anywhere via the grip handle on the left
-   of its header, and pin it to a chosen week via the 📌 button
-   on the right. Unpinned mode follows the current real-life
-   week regardless of what month the calendar grid is showing. */
-.sch-week-floater {
-  position: absolute;
-  top: 56px;
-  right: 12px;
-  z-index: 6;
-  background: rgba(15, 15, 30, 0.96);
-  border: 1px solid var(--border, #2e3346);
-  border-radius: 8px;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
-  min-width: 220px;
-  user-select: none;
-  backdrop-filter: blur(6px);
-}
-body.light-mode .sch-week-floater {
-  background: rgba(255, 255, 255, 0.96);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
-}
-.sch-week-floater.sch-week-floater-pinned {
-  border-color: rgba(27, 133, 65, 0.55);
-  box-shadow: 0 6px 22px rgba(27, 133, 65, 0.25);
-}
-.sch-week-floater-header {
+/* ─── Inline week summary in calendar toolbar ──────────────
+   Lives between the month nav and the right-side toggle/add
+   buttons. Layout: pin button · "This week / Pinned · May 17–23"
+   · Expected Revenue · Jobs. Pinned variant gets a subtle AGX-
+   green tint so the link between focus rail (or pin button)
+   and the numbers reads at a glance. Wraps onto the next line
+   on narrow viewports rather than crushing. */
+.sch-week-summary {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 8px;
-  border-bottom: 1px solid var(--border, #2e3346);
-  background: linear-gradient(135deg, rgba(79, 140, 255, 0.08), rgba(139, 92, 246, 0.05));
-  border-radius: 8px 8px 0 0;
+  gap: 0;
+  margin: 0 6px 0 12px;
+  padding: 2px 6px 2px 4px;
+  border-radius: 6px;
+  flex-wrap: wrap;
 }
-.sch-week-floater-grip {
-  display: flex;
-  align-items: center;
-  justify-content: center;
+.sch-week-summary.sch-week-summary-pinned {
+  background: linear-gradient(90deg, rgba(27, 133, 65, 0.12) 0%, rgba(27, 133, 65, 0) 70%);
+  box-shadow: inset 3px 0 0 0 #1B8541;
+}
+.sch-week-summary-loading {
+  font-size: 11px;
+  color: var(--text-dim, #888);
+  font-style: italic;
+  padding: 2px 8px;
+}
+.sch-week-summary-pin {
   width: 22px;
   height: 22px;
-  border-radius: 4px;
-  color: var(--text-dim, #888);
-  cursor: grab;
-  font-size: 13px;
-  letter-spacing: -1px;
-  transition: background 0.12s, color 0.12s;
-}
-.sch-week-floater-grip:hover {
-  background: rgba(255, 255, 255, 0.06);
-  color: var(--text, #e4e6f0);
-}
-body.sch-floater-dragging,
-body.sch-floater-dragging .sch-week-floater-grip {
-  cursor: grabbing !important;
-}
-.sch-week-floater-title {
-  flex: 1;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text-dim, #aaa);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.sch-week-floater-pinned .sch-week-floater-title {
-  color: #1B8541;
-}
-.sch-week-floater-pin {
-  width: 24px;
-  height: 22px;
   padding: 0;
+  margin-right: 6px;
   border-radius: 4px;
   border: 1px solid transparent;
   background: transparent;
   color: var(--text-dim, #888);
   cursor: pointer;
-  font-size: 12px;
+  font-size: 11px;
   transition: background 0.12s, color 0.12s, border-color 0.12s;
 }
-.sch-week-floater-pin:hover {
+.sch-week-summary-pin:hover {
   background: rgba(255, 255, 255, 0.06);
   color: var(--text, #e4e6f0);
 }
-.sch-week-floater-pin.active {
+.sch-week-summary-pin.active {
   background: rgba(27, 133, 65, 0.18);
   color: #1B8541;
   border-color: rgba(27, 133, 65, 0.55);
 }
-.sch-week-floater-body {
+body.light-mode .sch-week-summary-pin:hover {
+  background: rgba(0, 0, 0, 0.06);
+}
+.sch-week-summary-label {
   display: flex;
-  gap: 0;
-  align-items: stretch;
-  padding: 6px 4px;
+  flex-direction: column;
+  justify-content: center;
+  margin-right: 14px;
+  padding-right: 14px;
+  border-right: 1px solid rgba(255, 255, 255, 0.06);
+  min-width: 0;
+}
+.sch-week-summary-prefix {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-dim, #888);
+  line-height: 1.2;
+}
+.sch-week-summary-pinned .sch-week-summary-prefix {
+  color: #1B8541;
+}
+.sch-week-summary-range {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text, #e4e6f0);
+  font-family: 'SF Mono', Consolas, monospace;
+  line-height: 1.2;
+  margin-top: 1px;
+  white-space: nowrap;
 }
 .sch-metric {
   display: flex;

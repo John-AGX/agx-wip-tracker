@@ -53,14 +53,12 @@
       statusFilter: {
         'New': true, 'In Progress': true, 'Backlog': true
       },
-      // Floating week-summary widget. Pinned=false means it tracks
-      // the current real-life week, no matter which month is being
-      // viewed. Pinned=true locks it to whichever week the user
-      // last selected (via the calendar's left-edge rail or the
-      // pin button). Position is relative to the calendar wrap;
-      // null = default top-right corner.
-      weekSummaryPinned: false,
-      weekSummaryPos: null
+      // Inline week-summary pin state. Pinned=false means the
+      // summary tracks the current real-life week, no matter which
+      // month is being viewed. Pinned=true locks it to whichever
+      // week the user last selected via the calendar's left-edge
+      // focus rail or the inline pin button.
+      weekSummaryPinned: false
     };
     try {
       var saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
@@ -747,16 +745,24 @@
     var showW = !!_state.settings.showWeekends;
 
     el.innerHTML =
-      // Toolbar — left: nav. Right: compact weekend toggle + add
-      // button. Production metrics moved out to a floating widget
-      // (renderWeekSummaryFloater) so the user can drag them away
-      // from the right-edge buttons and pin them to a chosen week.
+      // Toolbar layout: nav on the left, week summary inline in the
+      // middle (Expected Revenue + Jobs — the Days tile got dropped
+      // because "scheduled work-days summed across jobs" wasn't a
+      // useful PM metric), then the weekend toggle + Schedule entry
+      // button on the right. The summary used to live in a floating,
+      // draggable widget but it overlapped day cells — inline beats
+      // overlay here.
       '<div class="sch-cal-toolbar">' +
         '<div class="sch-cal-nav">' +
           '<button class="sch-btn sch-btn-icon" id="schPrev" title="Previous month">&lsaquo;</button>' +
           '<div class="sch-cal-month" id="schMonth">' + MONTH_NAMES[cur.getMonth()] + ' ' + cur.getFullYear() + '</div>' +
           '<button class="sch-btn sch-btn-icon" id="schNext" title="Next month">&rsaquo;</button>' +
           '<button class="sch-btn" id="schToday" style="margin-left:6px;">Today</button>' +
+        '</div>' +
+        '<div class="sch-week-summary" id="schWeekSummary">' +
+          // Body painted by refreshWeekSummary (kept as a single source
+          // of truth so subsequent updates don't have to know the markup).
+          '<div class="sch-week-summary-loading">…</div>' +
         '</div>' +
         '<div class="sch-toolbar-spacer"></div>' +
         // Weekend toggle compacted to an icon button — the bulky
@@ -769,10 +775,6 @@
         '<button class="sch-btn sch-btn-primary" id="schAddEntry">+ Schedule entry</button>' +
       '</div>' +
       '<div class="sch-cal-grid" id="schGrid"></div>';
-    // refreshWeekSummary populates the floating metrics widget —
-    // single source of truth so the label / numbers can't drift
-    // between initial render and post-edit refreshes.
-    renderWeekSummaryFloater();
     refreshWeekSummary();
 
     document.getElementById('schPrev').addEventListener('click', function() { stepMonth(-1); });
@@ -1746,108 +1748,20 @@
   // It also has its own pin button: pinned = stays on a chosen
   // week (driven by _state.focusWeekStart); unpinned = always
   // shows the current real-life week regardless of visible month.
-  function renderWeekSummaryFloater() {
-    var wrap = document.getElementById('schCalWrap');
-    if (!wrap) return;
-    var existing = document.getElementById('schWeekSummary');
-    if (existing) existing.remove();
-
-    var floater = document.createElement('div');
-    floater.id = 'schWeekSummary';
-    floater.className = 'sch-week-floater';
-    // Default position: top-right of the calendar wrap. User-picked
-    // positions persist in localStorage and override the default.
-    var pos = _state.settings.weekSummaryPos;
-    if (pos && typeof pos.left === 'number' && typeof pos.top === 'number') {
-      floater.style.left = pos.left + 'px';
-      floater.style.top = pos.top + 'px';
-      floater.style.right = 'auto';
-    }
-    // Header carries the drag handle on the left and the pin button
-    // on the right. The metric tiles render in the body below.
-    floater.innerHTML =
-      '<div class="sch-week-floater-header">' +
-        '<div class="sch-week-floater-grip" title="Drag to reposition">' +
-          '<span>&#x2630;</span>' +
-        '</div>' +
-        '<div class="sch-week-floater-title" id="schWeekFloaterTitle">Week summary</div>' +
-        '<button type="button" class="sch-week-floater-pin" id="schWeekFloaterPin" ' +
-          'title="Pin / unpin">&#x1F4CC;</button>' +
-      '</div>' +
-      '<div class="sch-week-floater-body" id="schWeekFloaterBody"></div>';
-    wrap.appendChild(floater);
-
-    // Drag — start on the grip, follow pointer, persist on release.
-    var grip = floater.querySelector('.sch-week-floater-grip');
-    grip.addEventListener('mousedown', function(ev) {
-      ev.preventDefault();
-      startFloaterDrag(floater, ev);
-    });
-
-    // Pin toggle — flips _state.settings.weekSummaryPinned. When
-    // turning ON without an active focus week, snap the focus to the
-    // current real-life week so the user has an obvious target;
-    // otherwise the pin appears to do nothing.
-    var pinBtn = floater.querySelector('#schWeekFloaterPin');
-    pinBtn.addEventListener('click', function() {
-      var nowPinned = !_state.settings.weekSummaryPinned;
-      _state.settings.weekSummaryPinned = nowPinned;
-      if (nowPinned && !_state.focusWeekStart) {
-        _state.focusWeekStart = toISODate(startOfWeek(new Date()));
-      }
-      saveSettings(_state.settings);
-      renderGrid();
-      refreshWeekSummary();
-    });
-  }
-
-  function startFloaterDrag(floater, downEv) {
-    var wrap = document.getElementById('schCalWrap');
-    if (!wrap) return;
-    var rect = floater.getBoundingClientRect();
-    var wrapRect = wrap.getBoundingClientRect();
-    var startMouseX = downEv.clientX;
-    var startMouseY = downEv.clientY;
-    var startLeft = rect.left - wrapRect.left;
-    var startTop = rect.top - wrapRect.top;
-
-    function onMove(ev) {
-      var nx = startLeft + (ev.clientX - startMouseX);
-      var ny = startTop + (ev.clientY - startMouseY);
-      // Clamp inside the calendar wrap so the floater can't be
-      // dragged off-screen. Leave a small margin so the grip stays
-      // grabbable even when pinned to an edge.
-      var maxLeft = wrap.clientWidth - floater.offsetWidth - 4;
-      var maxTop = wrap.clientHeight - floater.offsetHeight - 4;
-      nx = Math.max(4, Math.min(maxLeft, nx));
-      ny = Math.max(4, Math.min(maxTop, ny));
-      floater.style.left = nx + 'px';
-      floater.style.top = ny + 'px';
-      floater.style.right = 'auto';
-    }
-    function onUp() {
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
-      document.body.classList.remove('sch-floater-dragging');
-      var left = parseInt(floater.style.left, 10);
-      var top = parseInt(floater.style.top, 10);
-      if (Number.isFinite(left) && Number.isFinite(top)) {
-        _state.settings.weekSummaryPos = { left: left, top: top };
-        saveSettings(_state.settings);
-      }
-    }
-    document.body.classList.add('sch-floater-dragging');
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
-  }
-
+  // Paints the week summary into the inline toolbar slot rendered by
+  // renderCalendar (#schWeekSummary). Two visible tiles — Expected
+  // Revenue + Jobs — preceded by a label and a pin button. The Days
+  // tile (sum of scheduled work-days across jobs in the week) was
+  // dropped because it wasn't a useful PM metric.
+  //
+  // Pin behavior: clicking the pin toggles _state.settings.
+  // weekSummaryPinned. Pinned = stay on whatever week is selected
+  // (focusWeekStart, set by clicking a week's left-edge focus rail).
+  // Unpinned = always show the current real-life week regardless of
+  // which month the calendar is viewing.
   function refreshWeekSummary() {
-    var floater = document.getElementById('schWeekSummary');
-    if (!floater) return;
-    var body = floater.querySelector('#schWeekFloaterBody');
-    var title = floater.querySelector('#schWeekFloaterTitle');
-    var pinBtn = floater.querySelector('#schWeekFloaterPin');
-    if (!body) return;
+    var bar = document.getElementById('schWeekSummary');
+    if (!bar) return;
 
     var pinned = !!_state.settings.weekSummaryPinned;
     var ref = weekSummaryReferenceDate();
@@ -1861,22 +1775,22 @@
           : MONTH_NAMES[we.getMonth()].slice(0, 3) + ' ' + we.getDate())
       : 'This week';
 
-    floater.classList.toggle('sch-week-floater-pinned', pinned);
-    if (title) title.textContent = pinned ? 'Pinned: ' + label : 'This week · ' + label;
-    if (pinBtn) {
-      pinBtn.classList.toggle('active', pinned);
-      pinBtn.setAttribute('title', pinned
-        ? 'Pinned to ' + label + '. Click to unpin (will follow current week).'
-        : 'Pin to this week. While unpinned, the widget always shows the current real-life week.');
-    }
+    bar.classList.toggle('sch-week-summary-pinned', pinned);
+    var pinTitle = pinned
+      ? 'Pinned to ' + label + '. Click to unpin (will follow the current week).'
+      : 'Pin to this week. While unpinned, the summary always shows the current real-life week.';
+    var labelPrefix = pinned ? 'Pinned' : 'This week';
 
-    body.innerHTML =
-      '<div class="sch-metric">' +
-        '<div class="sch-metric-label">Days</div>' +
-        '<div class="sch-metric-val">' + summary.scheduledDays + '</div>' +
+    bar.innerHTML =
+      '<button type="button" class="sch-week-summary-pin' + (pinned ? ' active' : '') +
+        '" id="schWeekSummaryPin" title="' + escapeAttr(pinTitle) + '">&#x1F4CC;</button>' +
+      '<div class="sch-week-summary-label">' +
+        '<span class="sch-week-summary-prefix">' + labelPrefix + '</span>' +
+        '<span class="sch-week-summary-range">' + escapeHTML(label) + '</span>' +
       '</div>' +
-      '<div class="sch-metric" title="Each job\'s remaining backlog (Total Income − Revenue Earned) split evenly across every day it sits on the schedule. ' +
-        'A $100k-backlog job scheduled for 5 days = $20k/day. Sums those daily values for the days inside this week.">' +
+      '<div class="sch-metric" title="Each job\'s remaining backlog (Total Income − Revenue Earned) ' +
+        'split evenly across every day it sits on the schedule. A $100k-backlog job scheduled for ' +
+        '5 days = $20k/day. Sums those daily values for the days inside this week.">' +
         '<div class="sch-metric-label">Expected revenue</div>' +
         '<div class="sch-metric-val sch-metric-val-rev">' + fmtMoney(summary.expectedRevenue) + '</div>' +
       '</div>' +
@@ -1884,6 +1798,22 @@
         '<div class="sch-metric-label">Jobs</div>' +
         '<div class="sch-metric-val">' + summary.jobsCount + '</div>' +
       '</div>';
+
+    var pinBtn = bar.querySelector('#schWeekSummaryPin');
+    if (pinBtn) {
+      pinBtn.addEventListener('click', function() {
+        var nowPinned = !_state.settings.weekSummaryPinned;
+        _state.settings.weekSummaryPinned = nowPinned;
+        // Turning pin ON without a selected week → snap to the
+        // current real-life week so the pin has something to lock to.
+        if (nowPinned && !_state.focusWeekStart) {
+          _state.focusWeekStart = toISODate(startOfWeek(new Date()));
+        }
+        saveSettings(_state.settings);
+        renderGrid();
+        refreshWeekSummary();
+      });
+    }
   }
 
   // Pick the date the week summary reports on.
