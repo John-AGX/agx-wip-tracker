@@ -883,6 +883,8 @@ function renderWIPMain() {
             document.getElementById('jobNumber').value = '';
             document.getElementById('jobTitle').value = '';
             document.getElementById('jobClient').value = '';
+            var clientIdEl = document.getElementById('jobClientId');
+            if (clientIdEl) clientIdEl.value = '';
             document.getElementById('jobType').value = '';
             document.getElementById('jobWorkType').value = '';
             document.getElementById('jobMarket').value = '';
@@ -895,7 +897,235 @@ function renderWIPMain() {
             document.getElementById('jobStatus').value = 'New';
             document.getElementById('jobNotes').value = '';
             populateJobPMSelect();
+            populateJobClientPicker('jobClientPicker', '');
             openModal('addJobModal');
+        }
+
+        // Populate the client <select> (and mount the searchable widget over
+        // it) so users can attach jobs to a clients-directory record. The
+        // picker hands back the client id which we stash in #jobClientId.
+        // The free-text #jobClient input stays as a free-form fallback for
+        // clients that aren't in the directory yet.
+        function populateJobClientPicker(selectId, currentClientId) {
+            var sel = document.getElementById(selectId);
+            if (!sel) return;
+            var clients = (window.p86Clients && window.p86Clients.getCached) ? window.p86Clients.getCached() : [];
+            var fill = function(list) {
+                var html = '<option value="">— Pick from directory (optional) —</option>';
+                list.slice().sort(function(a, b) {
+                    return (a.name || '').localeCompare(b.name || '');
+                }).forEach(function(c) {
+                    var selAttr = c.id === currentClientId ? ' selected' : '';
+                    html += '<option value="' + escapeHTML(c.id) + '"' + selAttr + '>' +
+                            escapeHTML(c.name || '(unnamed)') + '</option>';
+                });
+                sel.innerHTML = html;
+                sel.value = currentClientId || '';
+                if (window.p86Clients && typeof window.p86Clients.mountPicker === 'function') {
+                    window.p86Clients.mountPicker(sel, function() {
+                        // mode arg: 'new' for the addJobModal, 'edit' for
+                        // the in-place job-info edit. The handler is wired
+                        // via the inline onchange attribute on the select.
+                    });
+                }
+            };
+            if (clients.length) {
+                fill(clients);
+            } else if (window.p86Api && window.p86Api.isAuthenticated && window.p86Api.isAuthenticated()) {
+                window.p86Api.clients.list().then(function(res) {
+                    fill((res && res.clients) || []);
+                }).catch(function() { fill([]); });
+            } else {
+                sel.innerHTML = '<option value="">— Client directory unavailable in offline mode —</option>';
+            }
+        }
+
+        // ──────────────────────────────────────────────────────────────────
+        // Link Client modal — suggests directory matches for the job's
+        // existing free-text client name and lets the user pick one (or
+        // pick from the full directory) to attach as the structured link.
+        // Also exposes "Unlink" when a link already exists. Persists
+        // through the same saveData() path so the change rides the
+        // existing bulk-save round-trip.
+        // ──────────────────────────────────────────────────────────────────
+        function openJobClientLinkModal(jobId) {
+            var job = appData.jobs.find(function (j) { return j.id === jobId; });
+            if (!job) return;
+            var prior = document.getElementById('jobClientLinkModal');
+            if (prior) prior.remove();
+
+            var paint = function (clients) {
+                var modal = document.createElement('div');
+                modal.id = 'jobClientLinkModal';
+                modal.className = 'modal active';
+
+                var current = job.clientId
+                    ? clients.find(function (c) { return c.id === job.clientId; })
+                    : null;
+                var suggestions = [];
+                if (!current && job.client) {
+                    var needle = String(job.client).trim().toLowerCase();
+                    suggestions = clients.map(function (c) {
+                        var hay = String(c.name || '').toLowerCase();
+                        // Score: 100 for an exact match, 70 if needle is contained
+                        // in hay (or vice versa), 0 otherwise. Substring on either
+                        // direction catches "RPM" → "RPM Property Mgmt" AND
+                        // "Wimbledon" → "Wimbledon Greens HOA".
+                        var score = 0;
+                        if (hay === needle) score = 100;
+                        else if (hay.indexOf(needle) !== -1 || needle.indexOf(hay) !== -1) score = 70;
+                        return { client: c, score: score };
+                    }).filter(function (x) { return x.score > 0; })
+                      .sort(function (a, b) { return b.score - a.score; })
+                      .slice(0, 5);
+                }
+
+                var suggestionHtml = '';
+                if (suggestions.length) {
+                    suggestionHtml = '<div style="margin-top:14px;">' +
+                      '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-dim,#888);margin-bottom:6px;">' +
+                        'Suggested matches for &ldquo;' + escapeHTML(job.client || '') + '&rdquo;' +
+                      '</div>';
+                    suggestionHtml += suggestions.map(function (s) {
+                        var c = s.client;
+                        var addr = c.property_address || c.address || '';
+                        var meta = [c.city, c.state].filter(Boolean).join(', ');
+                        return '<button type="button" class="ee-btn secondary" ' +
+                                'onclick="confirmLinkJobClient(\'' + escapeHTML(jobId) + '\', \'' + escapeHTML(c.id) + '\')" ' +
+                                'style="display:block;width:100%;text-align:left;margin-bottom:4px;padding:8px 10px;">' +
+                            '<div style="font-weight:600;">' + escapeHTML(c.name || '(unnamed)') +
+                              (s.score === 100 ? ' <span style="color:#34d399;font-size:10px;">EXACT MATCH</span>' : '') + '</div>' +
+                            (addr ? '<div style="font-size:11px;color:var(--text-dim,#888);">' +
+                                escapeHTML(addr) + (meta ? ' · ' + escapeHTML(meta) : '') + '</div>' : '') +
+                          '</button>';
+                    }).join('');
+                    suggestionHtml += '</div>';
+                }
+
+                var pickerHtml = '<div style="margin-top:14px;">' +
+                  '<label style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-dim,#888);">' +
+                    (suggestions.length ? 'Or pick from full directory' : 'Pick from directory') +
+                  '</label>' +
+                  '<select id="jobClientLinkPicker" style="width:100%;margin-top:6px;">' +
+                    '<option value="">— Select a client —</option>' +
+                  '</select>' +
+                '</div>';
+
+                var currentHtml = current
+                    ? '<div style="background:rgba(52,211,153,0.10);border:1px solid rgba(52,211,153,0.35);' +
+                      'border-radius:6px;padding:10px 12px;margin-bottom:14px;">' +
+                        '<div style="font-size:11px;color:var(--text-dim,#888);margin-bottom:2px;">CURRENTLY LINKED</div>' +
+                        '<div style="font-weight:600;">' + escapeHTML(current.name || '(unnamed)') + '</div>' +
+                        (current.property_address || current.address
+                          ? '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:4px;">' +
+                              escapeHTML(current.property_address || current.address) + '</div>'
+                          : '') +
+                    '</div>'
+                    : '';
+
+                modal.innerHTML =
+                  '<div class="modal-content" style="max-width:520px;">' +
+                    '<div class="modal-header">Link client record</div>' +
+                    currentHtml +
+                    suggestionHtml +
+                    pickerHtml +
+                    '<div class="modal-footer" style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;">' +
+                      (current
+                        ? '<button class="ee-btn" style="margin-right:auto;color:#f87171;border-color:rgba(248,113,113,0.4);" ' +
+                          'onclick="confirmLinkJobClient(\'' + escapeHTML(jobId) + '\', \'\')">Unlink</button>'
+                        : '') +
+                      '<button class="ee-btn secondary" onclick="closeJobClientLinkModal()">Cancel</button>' +
+                      '<button class="ee-btn primary" id="jobClientLinkConfirm" disabled>Link</button>' +
+                    '</div>' +
+                  '</div>';
+                document.body.appendChild(modal);
+
+                // Populate the directory picker.
+                var pickEl = modal.querySelector('#jobClientLinkPicker');
+                clients.slice().sort(function (a, b) { return (a.name || '').localeCompare(b.name || ''); })
+                    .forEach(function (c) {
+                        var opt = document.createElement('option');
+                        opt.value = c.id;
+                        opt.textContent = c.name || '(unnamed)';
+                        pickEl.appendChild(opt);
+                    });
+                if (window.p86Clients && typeof window.p86Clients.mountPicker === 'function') {
+                    window.p86Clients.mountPicker(pickEl, function () {
+                        var btn = modal.querySelector('#jobClientLinkConfirm');
+                        if (btn) btn.disabled = !pickEl.value;
+                    });
+                }
+                pickEl.addEventListener('change', function () {
+                    var btn = modal.querySelector('#jobClientLinkConfirm');
+                    if (btn) btn.disabled = !pickEl.value;
+                });
+
+                modal.querySelector('#jobClientLinkConfirm').onclick = function () {
+                    var id = pickEl.value;
+                    if (!id) return;
+                    confirmLinkJobClient(jobId, id);
+                };
+                modal.addEventListener('click', function (e) {
+                    if (e.target === modal) closeJobClientLinkModal();
+                });
+            };
+
+            // Make sure clients are loaded before painting.
+            var cached = (window.p86Clients && window.p86Clients.getCached) ? window.p86Clients.getCached() : [];
+            if (cached.length) {
+                paint(cached);
+            } else if (window.p86Api && window.p86Api.isAuthenticated && window.p86Api.isAuthenticated()) {
+                window.p86Api.clients.list().then(function (res) {
+                    paint((res && res.clients) || []);
+                }).catch(function () { paint([]); });
+            } else {
+                paint([]);
+            }
+        }
+
+        function closeJobClientLinkModal() {
+            var m = document.getElementById('jobClientLinkModal');
+            if (m) m.remove();
+        }
+
+        function confirmLinkJobClient(jobId, clientId) {
+            var job = appData.jobs.find(function (j) { return j.id === jobId; });
+            if (!job) return;
+            job.clientId = clientId || null;
+            // Sync the displayed client name to the linked record's name
+            // when linking; leave it untouched on unlink so users don't
+            // suddenly see a blank field where they typed a name.
+            if (clientId) {
+                var clients = (window.p86Clients && window.p86Clients.getCached) ? window.p86Clients.getCached() : [];
+                var c = clients.find(function (x) { return x.id === clientId; });
+                if (c && c.name) job.client = c.name;
+            }
+            job.updatedAt = new Date().toISOString();
+            saveData();
+            closeJobClientLinkModal();
+            // Re-render so the button label flips and the weather widget
+            // re-fetches against the newly available client address.
+            renderJobDetail(jobId);
+        }
+
+        // Wired to the picker's onchange attribute. When the user picks a
+        // client from the dropdown, copy its name into the free-text field
+        // and stash the id on the hidden input so saveJob persists it.
+        function onJobClientPicked(mode) {
+            var pickerId = mode === 'edit' ? 'edit-jobClientPicker' : 'jobClientPicker';
+            var nameId = mode === 'edit' ? 'edit-jobClient' : 'jobClient';
+            var hiddenId = mode === 'edit' ? 'edit-jobClientId' : 'jobClientId';
+            var picker = document.getElementById(pickerId);
+            if (!picker) return;
+            var id = picker.value;
+            var hidden = document.getElementById(hiddenId);
+            if (hidden) hidden.value = id || '';
+            if (!id) return;
+            var clients = (window.p86Clients && window.p86Clients.getCached) ? window.p86Clients.getCached() : [];
+            var c = clients.find(function(x) { return x.id === id; });
+            if (!c) return;
+            var nameEl = document.getElementById(nameId);
+            if (nameEl) nameEl.value = c.name || '';
         }
 
         // Populate the PM <select> from cached users when authenticated. For admins,
@@ -948,11 +1178,18 @@ function renderWIPMain() {
             // the user can uncheck before saving.
             var notifyEl = document.getElementById('jobNotifyOwner');
             var notify = notifyEl ? !!notifyEl.checked : true;
+            // clientId is the structured link to the clients-directory row
+            // (used by the weather geocoder + future client-driven workflow).
+            // Free-text client name stays as a back-compat display field;
+            // both can coexist when the user picks from the directory and
+            // the picker auto-fills the name. Empty string means unlinked.
+            var pickedClientId = (document.getElementById('jobClientId') || {}).value || '';
             const job = {
                 id: 'j' + Date.now(),
                 jobNumber: document.getElementById('jobNumber').value.trim(),
                 title: title,
                 client: document.getElementById('jobClient').value.trim(),
+                clientId: pickedClientId || null,
                 pm: pmName,
                 owner_id: isNaN(ownerIdRaw) ? null : ownerIdRaw,
                 jobType: document.getElementById('jobType').value,
@@ -1309,6 +1546,30 @@ function renderWIPMain() {
                     if (countEl && n > 0) countEl.textContent = '(' + n + ')';
                 }).catch(function() { /* ignore — button still works without count */ });
             }
+            // ── Link Client button ──
+            // Visible when the job either isn't linked to a clients-
+            // directory record yet, OR is already linked (so the user can
+            // re-pick / unlink). Backfills addresses for weather + future
+            // client-driven workflow without making the user re-enter
+            // anything. Suggests matches based on the free-text client
+            // name when no link exists.
+            (function () {
+                var btn = document.createElement('button');
+                btn.className = 'ee-btn secondary';
+                btn.id = 'job-overview-link-client-btn';
+                btn.style.cssText = 'margin-left:auto;';
+                if (jobObj && jobObj.clientId) {
+                    var clients = (window.p86Clients && window.p86Clients.getCached) ? window.p86Clients.getCached() : [];
+                    var c = clients.find(function(x) { return x.id === jobObj.clientId; });
+                    btn.innerHTML = '&#x1F517; Linked: ' + escapeHTML((c && c.name) || jobObj.client || jobObj.clientId);
+                    btn.title = 'Click to relink or unlink the client record.';
+                } else {
+                    btn.innerHTML = '&#x1F517; Link Client';
+                    btn.title = 'Match this job to a clients-directory record so weather + workflow can use the client address.';
+                }
+                btn.onclick = function() { openJobClientLinkModal(jobId); };
+                btnRow.appendChild(btn);
+            })();
             container.appendChild(btnRow);
 
             // ── Weather widget ──

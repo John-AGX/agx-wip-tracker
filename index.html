@@ -1137,7 +1137,18 @@
             <div class="form-row">
                 <div class="form-group">
                     <label>Client</label>
-                    <input type="text" id="jobClient" placeholder="e.g., RPM, PAC, Pensum">
+                    <!-- Two-field client input: searchable picker against the
+                         clients directory + free-text fallback. Picking from
+                         the directory stamps clientId on the job (used by
+                         weather geocoding + future workflow integration).
+                         Free-text remains supported for clients that aren't
+                         in the directory yet — the text becomes the display
+                         name with no clientId attached. -->
+                    <select id="jobClientPicker" onchange="onJobClientPicked('new')" style="width:100%;margin-bottom:6px;">
+                        <option value="">— Pick from directory (optional) —</option>
+                    </select>
+                    <input type="text" id="jobClient" placeholder="Or type a name (e.g., RPM, PAC)">
+                    <input type="hidden" id="jobClientId" value="" />
                 </div>
                 <div class="form-group">
                     <label>PM</label>
@@ -2253,7 +2264,7 @@
     <script src="js/app.js?v=55b"></script>
     <script src="js/messaging.js?v=1b"></script>
     <script src="js/my-files.js?v=1b"></script>
-    <script src="js/wip.js?v=67b"></script>
+    <script src="js/wip.js?v=68b"></script>
     <script src="js/estimates.js?v=35b"></script>
     <script src="js/proposal.js?v=22b"></script>
     <script src="js/estimate-editor.js?v=38b"></script>

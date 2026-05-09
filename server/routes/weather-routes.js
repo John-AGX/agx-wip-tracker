@@ -32,12 +32,34 @@ console.log('[weather-routes] mounted at /api/weather (NWS + Census)');
 
 router.use(requireAuth);
 
-function pickAddress(jobData) {
-  if (!jobData) return null;
-  if (jobData.address && String(jobData.address).trim()) {
+// Address priority for the weather lookup:
+//   1. job.data.address (explicitly set on the job)
+//   2. linked client's property_address (work-site address — preferred
+//      over the client's mailing address since that's where the crew goes)
+//   3. linked client's address (mailing/billing — useful when property
+//      and mailing are the same)
+//   4. job.data.buildings[0].address (legacy fallback for jobs that
+//      have buildings but never got a top-level address)
+// Returns the first non-empty address string, or null.
+function pickAddress(jobData, clientRow) {
+  if (jobData && jobData.address && String(jobData.address).trim()) {
     return String(jobData.address).trim();
   }
-  const buildings = Array.isArray(jobData.buildings) ? jobData.buildings : [];
+  if (clientRow) {
+    if (clientRow.property_address && String(clientRow.property_address).trim()) {
+      return String(clientRow.property_address).trim();
+    }
+    if (clientRow.address && String(clientRow.address).trim()) {
+      // Client mailing address — append city/state/zip if present so
+      // Census has enough to match (street alone often fails).
+      var bits = [String(clientRow.address).trim()];
+      if (clientRow.city) bits.push(String(clientRow.city).trim());
+      if (clientRow.state) bits.push(String(clientRow.state).trim());
+      if (clientRow.zip) bits.push(String(clientRow.zip).trim());
+      return bits.filter(Boolean).join(', ');
+    }
+  }
+  const buildings = jobData && Array.isArray(jobData.buildings) ? jobData.buildings : [];
   for (let i = 0; i < buildings.length; i++) {
     const b = buildings[i];
     if (b && b.address && String(b.address).trim()) return String(b.address).trim();
@@ -47,7 +69,20 @@ function pickAddress(jobData) {
 
 async function ensureGeocode(jobRow) {
   const data = jobRow.data || {};
-  const address = pickAddress(data);
+  // The SQL LEFT JOIN below stamps client_* columns onto the row
+  // when the job's data.clientId points at a real clients row.
+  // Build a synthetic clientRow object only when those columns are
+  // populated, so pickAddress can reach the property/mailing addr.
+  const clientRow = jobRow.client_id
+    ? {
+        property_address: jobRow.client_property_address,
+        address: jobRow.client_address,
+        city: jobRow.client_city,
+        state: jobRow.client_state,
+        zip: jobRow.client_zip
+      }
+    : null;
+  const address = pickAddress(data, clientRow);
   if (!address) return { status: 'no_address' };
 
   // Cached "ok" geocode for this exact address — reuse it.
@@ -94,9 +129,19 @@ router.get('/jobs', async function(req, res) {
 
   let rows;
   try {
+    // LEFT JOIN clients on the job's data.clientId (a JSONB field) so
+    // jobs with no address of their own can geocode against the
+    // linked client's property / mailing address. The join is safe
+    // when clientId is missing or stale — it just yields null
+    // client columns and pickAddress falls back to the legacy
+    // address resolution chain.
     const result = await pool.query(
-      'SELECT id, data, geocode_lat, geocode_lng, geocode_status, geocode_address ' +
-      'FROM jobs WHERE id = ANY($1::text[])',
+      'SELECT j.id, j.data, j.geocode_lat, j.geocode_lng, j.geocode_status, j.geocode_address, ' +
+      "       c.id AS client_id, c.address AS client_address, c.property_address AS client_property_address, " +
+      '       c.city AS client_city, c.state AS client_state, c.zip AS client_zip ' +
+      'FROM jobs j ' +
+      "LEFT JOIN clients c ON c.id = (j.data->>'clientId') " +
+      'WHERE j.id = ANY($1::text[])',
       [ids]
     );
     rows = result.rows;
