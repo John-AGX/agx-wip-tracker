@@ -453,6 +453,72 @@
         // Sub-modules (estimate editor, job detail, etc.) call this with
         // their own labels when entities open; switchTab() calls it with
         // tab-level labels.
+        // Summary landing page — minimal dashboard reachable via the 86
+        // brand icon and as the auto-fallback when nav state is stale.
+        // Renders a greeting + clickable cards to each major area so the
+        // user has one obvious next click after a long break. Stats stay
+        // light (counts only) so the render is synchronous and predictable;
+        // heavier rollups stay on Insights.
+        function renderSummaryDashboard() {
+            var root = document.getElementById('summary-root');
+            if (!root) return;
+            var name = (window.agxAuth && window.agxAuth.getUser && (window.agxAuth.getUser() || {}).name) || '';
+            var firstName = name ? String(name).split(/\s+/)[0] : '';
+
+            // Counts off appData if it's loaded; otherwise placeholders.
+            var d = window.appData || {};
+            var leadsCt = (d.leads || []).filter(function(l) {
+                var s = (l && l.status || '').toLowerCase();
+                return s !== 'closed' && s !== 'lost' && s !== 'archived';
+            }).length;
+            var estsCt = (d.estimates || []).length;
+            var jobsCt = (d.jobs || []).filter(function(j) {
+                var s = (j && j.status || '').toLowerCase();
+                return s !== 'closed' && s !== 'archived' && s !== 'completed';
+            }).length;
+            var subsCt = (d.subsDirectory || []).filter(function(s) {
+                return (s.status || 'active') !== 'closed';
+            }).length;
+
+            // Card factory — each one routes via switchTab so the click is
+            // identical to clicking the top-nav button.
+            function card(label, count, target, onClick, subtitle) {
+                var clickAttr = onClick
+                    ? 'onclick="' + onClick + '"'
+                    : 'onclick="window.switchTab(\'' + target + '\')"';
+                var sub = subtitle ? '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:4px;">' + subtitle + '</div>' : '';
+                return '<button class="ee-btn" ' + clickAttr +
+                    ' style="text-align:left;padding:18px 20px;background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:10px;cursor:pointer;display:flex;flex-direction:column;gap:6px;align-items:flex-start;min-height:96px;">' +
+                    '<div style="font-size:11px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;">' + label + '</div>' +
+                    '<div style="font-size:28px;font-weight:700;color:var(--text,#fff);font-variant-numeric:tabular-nums;">' + count + '</div>' +
+                    sub +
+                '</button>';
+            }
+
+            // Open-leads card routes through the Estimates → Leads sub-tab
+            // so the active highlight and content stay in sync.
+            var leadsClick = 'window.switchTab(\'estimates\'); if (typeof window.switchEstimatesSubTab === \'function\') window.switchEstimatesSubTab(\'leads\');';
+
+            root.innerHTML =
+                '<div style="margin-bottom:24px;">' +
+                    '<h1 style="font-size:24px;margin:0 0 4px 0;font-weight:700;color:var(--text,#fff);">' +
+                        (firstName ? 'Welcome back, ' + escapeHTML(firstName) + '.' : 'Welcome back.') +
+                    '</h1>' +
+                    '<p style="margin:0;color:var(--text-dim,#888);font-size:13px;">Pick up where the team is.</p>' +
+                '</div>' +
+                '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;">' +
+                    card('Open Leads',     leadsCt, 'estimates', leadsClick, 'New + working') +
+                    card('Estimates',      estsCt,  'estimates') +
+                    card('Active Jobs',    jobsCt,  'wip',       null, 'Open + in progress') +
+                    card('Subs Directory', subsCt,  'estimates', 'window.switchTab(\'estimates\'); if (typeof window.switchEstimatesSubTab === \'function\') window.switchEstimatesSubTab(\'subs\');') +
+                '</div>' +
+                '<div style="margin-top:32px;display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;">' +
+                    card('Schedule',  '\u{1F4C5}', 'schedule',  null, 'Production calendar') +
+                    card('Insights',  '\u{1F4CA}', 'insights',  null, 'Cross-job analytics') +
+                '</div>';
+        }
+        window.renderSummaryDashboard = renderSummaryDashboard;
+
         function setPageTitle(pageName) {
             document.title = (pageName && String(pageName).trim())
                 ? String(pageName).trim() + ' | Project 86'
@@ -461,12 +527,20 @@
         window.setPageTitle = setPageTitle;
 
         var TAB_TITLES = {
+            summary:   'Summary',
             estimates: 'Estimates',  // gets refined by switchEstimatesSubTab
             schedule:  'Schedule',
             wip:       'WIP',
             insights:  'Insights',
             admin:     'Admin'
         };
+
+        // Stale-nav threshold. After this long without activity, the
+        // saved nav state is treated as expired and the user lands on
+        // the Summary tab on next return (login or new browser tab)
+        // instead of being dumped back into whatever they were looking
+        // at last week. Activity = any switchTab/saveNavState call.
+        var STALE_NAV_MS = 60 * 60 * 1000; // 1 hour
 
         function switchTab(tabName) {
             document.querySelectorAll('.tab-content').forEach(tc => tc.classList.remove('active'));
@@ -512,7 +586,9 @@
                 }
             }
 
-            if (tabName === 'estimates') {
+            if (tabName === 'summary') {
+                renderSummaryDashboard();
+            } else if (tabName === 'estimates') {
                 // Pick the currently-active sub-tab and route through
                 // switchEstimatesSubTab so its render fires. Without
                 // this the user lands on the Leads sub-tab (active by
@@ -599,6 +675,9 @@
             try {
                 var st = captureNavState();
                 if (!st) return;
+                // Activity timestamp so restoreNavState can age out stale
+                // sessions and dump idle returners onto the Summary page.
+                st.at = Date.now();
                 localStorage.setItem('agx-nav-state', JSON.stringify(st));
             } catch (e) { /* localStorage may be unavailable — degrade silently */ }
         }
@@ -613,11 +692,20 @@
         function restoreNavState() {
             var st = loadNavState();
             if (!st || !st.top) return false;
+            // Stale-session guard. After STALE_NAV_MS without activity, fall
+            // through (returning false routes the caller to the summary
+            // landing). Saved state stays in localStorage so we can still
+            // surface "you were last on …" hints on the summary page if we
+            // ever want them.
+            if (st.at && (Date.now() - st.at > STALE_NAV_MS)) return false;
             // Validate the saved tab is still accessible. If the user lost
             // the role / capability that owned it, the tab button is
             // hidden via display:none — fall back to landing in that case.
-            var btn = document.querySelector('.tab-btn[data-tab="' + st.top + '"]');
-            if (!btn || btn.offsetParent === null) return false;
+            // Summary is universal — short-circuit the visibility check.
+            if (st.top !== 'summary') {
+                var btn = document.querySelector('.tab-btn[data-tab="' + st.top + '"]');
+                if (!btn || btn.offsetParent === null) return false;
+            }
 
             switchTab(st.top);
 

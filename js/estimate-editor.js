@@ -220,14 +220,6 @@
       };
     }
 
-    // Browser tab title — estimate name | Project 86. Re-applied here
-    // (after openEstimateEditor's data load) rather than at every
-    // estimate-tab switch so we don't churn the title on Lines/Details/
-    // Scope/Photos/Preview clicks within the same editor session.
-    if (typeof window.setPageTitle === 'function') {
-      window.setPageTitle(estimate.title || 'Estimate');
-    }
-
     renderHeaderChips();
     renderAlternateTabs();
     renderTotals();

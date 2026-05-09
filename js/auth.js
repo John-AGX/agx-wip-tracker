@@ -64,25 +64,16 @@
     }
   }
 
-  // Pick the user's default tab. Built-in roles get their familiar landing
-  // (admin -> Admin, corporate -> Insights, pm -> WIP, field_crew ->
-  // Estimates). Custom roles fall back to the first tab their capabilities
-  // unlock — so a "no-jobs" role still gets a sensible landing.
+  // Default landing tab. Summary is universal (every authenticated user
+  // can see it) and replaces the old role-based landings — when a user
+  // returns from a fresh tab or after an idle stretch, the summary page
+  // gives them a consistent jumping-off point with quick-link cards
+  // into Leads / Estimates / WIP / Schedule / Insights / Subs.
+  // Offline mode still drops straight onto WIP since the local-only
+  // path doesn't have the same data behind the summary cards.
   function getLandingTab() {
     if (isOffline) return 'wip';
-    if (!currentUser) return 'wip';
-    var byRole = {
-      admin: 'admin',
-      corporate: 'insights',
-      pm: 'wip',
-      field_crew: 'estimates'
-    };
-    if (byRole[currentUser.role]) return byRole[currentUser.role];
-    if (hasCapability('ADMIN_METRICS') || hasCapability('USERS_MANAGE') || hasCapability('ROLES_MANAGE')) return 'admin';
-    if (hasCapability('JOBS_VIEW_ALL') || hasCapability('JOBS_VIEW_ASSIGNED') || hasCapability('JOBS_EDIT_ANY') || hasCapability('JOBS_EDIT_OWN')) return 'wip';
-    if (hasCapability('INSIGHTS_VIEW')) return 'insights';
-    if (hasCapability('ESTIMATES_VIEW')) return 'estimates';
-    return 'wip';
+    return 'summary';
   }
 
   // First letter of the first word + first letter of the last word

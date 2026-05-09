@@ -43,7 +43,13 @@
              stacked fallback in the @media block. -->
         <header>
             <div class="header-content">
-                <a class="header-brand" title="Project 86 — Estimating &amp; Project Tracking">
+                <!-- Brand icon is now a click target — routes to the
+                     Summary landing page (the same fallback used after
+                     ~1 hour of idle). cursor:pointer + role=button so
+                     keyboard / screen readers recognize it. -->
+                <a class="header-brand" title="Project 86 — Home" role="button"
+                   style="cursor:pointer;"
+                   onclick="if (typeof window.switchTab === 'function') window.switchTab('summary');">
                     <img src="images/project-86-icon.svg" alt="" class="header-logo" />
                     <span class="header-wordmark">PROJECT 86</span>
                 </a>
@@ -651,6 +657,15 @@
                         </div>
 
                     </div>
+                </div>
+
+                <!-- SUMMARY TAB — landing page reachable via the 86 brand
+                     icon and the auto-fallback when nav state is stale
+                     (>1 hour since last activity). Renders a simple
+                     greeting + quick-link cards into the major tabs.
+                     Populated by renderSummaryDashboard() in app.js. -->
+                <div id="summary" class="tab-content">
+                    <div id="summary-root" style="padding:24px 16px;max-width:1200px;margin:0 auto;"></div>
                 </div>
 
                 <!-- SCHEDULE TAB — production scheduling calendar.
@@ -2173,7 +2188,7 @@
     </script>
 
     <script src="js/modal-drag.js?v=1"></script>
-    <script src="js/auth.js?v=11"></script>
+    <script src="js/auth.js?v=12"></script>
     <script src="js/dialogs.js?v=1"></script>
     <script src="js/api.js?v=22"></script>
     <script src="js/account.js?v=2"></script>
@@ -2189,11 +2204,11 @@
     <script src="js/qb-costs-view.js?v=10"></script>
     <script src="js/insights.js?v=5"></script>
     <script src="js/schedule.js?v=15"></script>
-    <script src="js/app.js?v=49"></script>
-    <script src="js/wip.js?v=64"></script>
+    <script src="js/app.js?v=50"></script>
+    <script src="js/wip.js?v=65"></script>
     <script src="js/estimates.js?v=35"></script>
     <script src="js/proposal.js?v=22"></script>
-    <script src="js/estimate-editor.js?v=37"></script>
+    <script src="js/estimate-editor.js?v=38"></script>
     <script src="js/estimate-preview.js?v=10"></script>
     <script src="js/bt-export.js?v=6"></script>
     <script src="js/ai-panel.js?v=91"></script>
