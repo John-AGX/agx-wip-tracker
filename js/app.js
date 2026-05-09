@@ -453,71 +453,280 @@
         // Sub-modules (estimate editor, job detail, etc.) call this with
         // their own labels when entities open; switchTab() calls it with
         // tab-level labels.
-        // Summary landing page — minimal dashboard reachable via the 86
-        // brand icon and as the auto-fallback when nav state is stale.
-        // Renders a greeting + clickable cards to each major area so the
-        // user has one obvious next click after a long break. Stats stay
-        // light (counts only) so the render is synchronous and predictable;
-        // heavier rollups stay on Insights.
+        // Summary landing page — Project 86's "what needs my attention
+        // today" page. Layout shape mirrors Buildertrend's Summary minus
+        // the bloat (no clock-in, no Files/Messaging/Reports mega-menus,
+        // no saved-filter chrome). Three zones:
+        //   1. Greeting + quick actions (top)
+        //   2. Needs-Attention counter row (overdue invoices, open leads,
+        //      pending estimates, schedule items this week)
+        //   3. 2-col main grid: Recent Activity feed (left, 2/3) +
+        //      This Week's Agenda rail (right, 1/3)
+        // Counters + activity sourced synchronously from window.appData;
+        // schedule rail loads async via agxApi.schedule and replaces a
+        // placeholder when ready so the page never blocks on the network.
         function renderSummaryDashboard() {
             var root = document.getElementById('summary-root');
             if (!root) return;
+
+            var d = window.appData || {};
             var name = (window.agxAuth && window.agxAuth.getUser && (window.agxAuth.getUser() || {}).name) || '';
             var firstName = name ? String(name).split(/\s+/)[0] : '';
+            var hour = new Date().getHours();
+            var greet = hour < 12 ? 'Good morning' : (hour < 18 ? 'Good afternoon' : 'Good evening');
 
-            // Counts off appData if it's loaded; otherwise placeholders.
-            var d = window.appData || {};
-            var leadsCt = (d.leads || []).filter(function(l) {
-                var s = (l && l.status || '').toLowerCase();
-                return s !== 'closed' && s !== 'lost' && s !== 'archived';
+            // ── Needs Attention counters ───────────────────────────────
+            // Pull live from appData. Each card has a click target that
+            // takes the user to the matching tab so the count is
+            // actionable — clicking it lands on the actual list.
+            var now = Date.now();
+            var DAY = 24 * 60 * 60 * 1000;
+
+            // Overdue invoices: invoices with a due date in the past and
+            // status that isn't paid/closed.
+            var overdueInv = (d.invoices || []).filter(function(i) {
+                if (!i || !i.dueDate) return false;
+                var s = (i.status || '').toLowerCase();
+                if (s === 'paid' || s === 'closed' || s === 'voided') return false;
+                var due = new Date(i.dueDate).getTime();
+                return isFinite(due) && due < now;
             }).length;
-            var estsCt = (d.estimates || []).length;
-            var jobsCt = (d.jobs || []).filter(function(j) {
+
+            // Open leads (new + working). Lost / closed / archived dropped.
+            var openLeads = (d.leads || []).filter(function(l) {
+                var s = (l && l.status || '').toLowerCase();
+                return s !== 'closed' && s !== 'lost' && s !== 'archived' && s !== 'won';
+            }).length;
+
+            // Pending estimates: estimates whose bt_export_status is unset
+            // or 'pending' (i.e., haven't been sent / accepted yet).
+            var pendingEsts = (d.estimates || []).filter(function(e) {
+                var s = (e && e.bt_export_status || '').toLowerCase();
+                return !s || s === 'pending' || s === 'draft';
+            }).length;
+
+            // Active jobs (open + in-progress, not closed/completed).
+            var activeJobs = (d.jobs || []).filter(function(j) {
                 var s = (j && j.status || '').toLowerCase();
                 return s !== 'closed' && s !== 'archived' && s !== 'completed';
             }).length;
-            var subsCt = (d.subsDirectory || []).filter(function(s) {
-                return (s.status || 'active') !== 'closed';
-            }).length;
 
-            // Card factory — each one routes via switchTab so the click is
-            // identical to clicking the top-nav button.
-            function card(label, count, target, onClick, subtitle) {
-                var clickAttr = onClick
-                    ? 'onclick="' + onClick + '"'
-                    : 'onclick="window.switchTab(\'' + target + '\')"';
-                var sub = subtitle ? '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:4px;">' + subtitle + '</div>' : '';
+            function attentionCard(label, count, color, onClick, subtitle) {
+                var clickAttr = onClick ? 'onclick="' + onClick + '"' : '';
+                var subHtml = subtitle ? '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:2px;">' + subtitle + '</div>' : '';
+                var countColor = (Number(count) > 0) ? color : 'var(--text-dim,#888)';
                 return '<button class="ee-btn" ' + clickAttr +
-                    ' style="text-align:left;padding:18px 20px;background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:10px;cursor:pointer;display:flex;flex-direction:column;gap:6px;align-items:flex-start;min-height:96px;">' +
-                    '<div style="font-size:11px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;">' + label + '</div>' +
-                    '<div style="font-size:28px;font-weight:700;color:var(--text,#fff);font-variant-numeric:tabular-nums;">' + count + '</div>' +
-                    sub +
+                    ' style="text-align:left;padding:14px 16px;background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:10px;cursor:pointer;display:flex;align-items:flex-start;justify-content:space-between;gap:10px;min-height:72px;transition:border-color 0.12s;">' +
+                    '<div style="display:flex;flex-direction:column;gap:2px;">' +
+                        '<div style="font-size:11px;color:var(--text-dim,#aaa);text-transform:uppercase;letter-spacing:0.4px;font-weight:600;">' + label + '</div>' +
+                        subHtml +
+                    '</div>' +
+                    '<div style="font-size:24px;font-weight:700;color:' + countColor + ';font-variant-numeric:tabular-nums;line-height:1;">' + count + '</div>' +
                 '</button>';
             }
 
-            // Open-leads card routes through the Estimates → Leads sub-tab
-            // so the active highlight and content stay in sync.
-            var leadsClick = 'window.switchTab(\'estimates\'); if (typeof window.switchEstimatesSubTab === \'function\') window.switchEstimatesSubTab(\'leads\');';
+            var leadsClick = "window.switchTab('estimates'); if (typeof window.switchEstimatesSubTab === 'function') window.switchEstimatesSubTab('leads');";
+            var estsClick  = "window.switchTab('estimates'); if (typeof window.switchEstimatesSubTab === 'function') window.switchEstimatesSubTab('list');";
 
-            root.innerHTML =
-                '<div style="margin-bottom:24px;">' +
-                    '<h1 style="font-size:24px;margin:0 0 4px 0;font-weight:700;color:var(--text,#fff);">' +
-                        (firstName ? 'Welcome back, ' + escapeHTML(firstName) + '.' : 'Welcome back.') +
-                    '</h1>' +
-                    '<p style="margin:0;color:var(--text-dim,#888);font-size:13px;">Pick up where the team is.</p>' +
-                '</div>' +
-                '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;">' +
-                    card('Open Leads',     leadsCt, 'estimates', leadsClick, 'New + working') +
-                    card('Estimates',      estsCt,  'estimates') +
-                    card('Active Jobs',    jobsCt,  'wip',       null, 'Open + in progress') +
-                    card('Subs Directory', subsCt,  'estimates', 'window.switchTab(\'estimates\'); if (typeof window.switchEstimatesSubTab === \'function\') window.switchEstimatesSubTab(\'subs\');') +
-                '</div>' +
-                '<div style="margin-top:32px;display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;">' +
-                    card('Schedule',  '\u{1F4C5}', 'schedule',  null, 'Production calendar') +
-                    card('Insights',  '\u{1F4CA}', 'insights',  null, 'Cross-job analytics') +
+            // ── Recent Activity feed ────────────────────────────────────
+            // Stream of the most recently touched entities — estimates,
+            // leads, change orders, COs, sub assignments — sorted by
+            // updated_at desc, capped at 12. Each row clickable so the
+            // user can land on the entity. Placeholder copy when there's
+            // nothing recent.
+            function timeAgo(ts) {
+                var t = ts ? new Date(ts).getTime() : NaN;
+                if (!isFinite(t)) return '';
+                var diff = Math.max(0, now - t);
+                if (diff < 60 * 1000) return 'just now';
+                if (diff < 60 * 60 * 1000) return Math.floor(diff / (60 * 1000)) + 'm ago';
+                if (diff < 24 * 60 * 60 * 1000) return Math.floor(diff / (60 * 60 * 1000)) + 'h ago';
+                if (diff < 7 * DAY) return Math.floor(diff / DAY) + 'd ago';
+                return new Date(ts).toLocaleDateString();
+            }
+
+            var feed = [];
+            (d.estimates || []).forEach(function(e) {
+                if (!e || !e.updatedAt && !e.updated_at && !e.dateAdded) return;
+                feed.push({
+                    ts: e.updatedAt || e.updated_at || e.dateAdded,
+                    kind: 'Estimate',
+                    title: e.title || 'Untitled estimate',
+                    sub: e.client || e.community || '',
+                    onClick: "window.switchTab('estimates'); if (typeof window.switchEstimatesSubTab === 'function') window.switchEstimatesSubTab('list');"
+                });
+            });
+            (d.leads || []).forEach(function(l) {
+                if (!l) return;
+                feed.push({
+                    ts: l.updatedAt || l.updated_at || l.dateAdded || l.created_at,
+                    kind: 'Lead',
+                    title: l.title || l.name || 'New lead',
+                    sub: l.client || l.community || (l.status ? ('status: ' + l.status) : ''),
+                    onClick: leadsClick
+                });
+            });
+            (d.changeOrders || []).forEach(function(co) {
+                if (!co) return;
+                feed.push({
+                    ts: co.updatedAt || co.updated_at || co.date,
+                    kind: 'Change Order',
+                    title: (co.coNumber ? co.coNumber + ' · ' : '') + (co.description || 'Change order'),
+                    sub: '',
+                    onClick: "window.switchTab('wip');"
+                });
+            });
+            feed.sort(function(a, b) { return new Date(b.ts).getTime() - new Date(a.ts).getTime(); });
+            feed = feed.slice(0, 12);
+
+            var feedHtml;
+            if (!feed.length) {
+                feedHtml = '<div style="padding:32px;text-align:center;color:var(--text-dim,#888);font-size:12px;border:1px dashed var(--border,#333);border-radius:8px;">' +
+                    'No recent activity yet. Add a lead or an estimate to get started.' +
                 '</div>';
+            } else {
+                feedHtml = '<div style="display:flex;flex-direction:column;gap:1px;border:1px solid var(--border,#333);border-radius:10px;overflow:hidden;background:var(--card-bg,#0f0f1e);">';
+                feed.forEach(function(f) {
+                    feedHtml += '<button class="ee-btn" onclick="' + f.onClick + '" style="text-align:left;padding:10px 14px;background:transparent;border:none;border-bottom:1px solid var(--border,#222);cursor:pointer;display:flex;align-items:center;gap:12px;">' +
+                        '<span style="font-size:9px;font-weight:700;color:var(--accent,#22d3ee);text-transform:uppercase;letter-spacing:0.4px;background:rgba(34,211,238,0.08);padding:2px 6px;border-radius:4px;flex-shrink:0;min-width:80px;text-align:center;">' + escapeHTML(f.kind) + '</span>' +
+                        '<div style="flex:1;min-width:0;">' +
+                            '<div style="font-size:13px;color:var(--text,#fff);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTML(f.title) + '</div>' +
+                            (f.sub ? '<div style="font-size:11px;color:var(--text-dim,#888);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTML(f.sub) + '</div>' : '') +
+                        '</div>' +
+                        '<span style="font-size:11px;color:var(--text-dim,#888);font-variant-numeric:tabular-nums;flex-shrink:0;">' + timeAgo(f.ts) + '</span>' +
+                    '</button>';
+                });
+                feedHtml += '</div>';
+            }
+
+            // ── Page composition ────────────────────────────────────────
+            // The agenda rail is a placeholder until the schedule fetch
+            // resolves below. Greeting + quick actions land synchronously.
+            root.innerHTML =
+                // Header zone
+                '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:20px;flex-wrap:wrap;">' +
+                    '<div>' +
+                        '<h1 style="font-size:26px;margin:0 0 4px 0;font-weight:700;color:var(--text,#fff);">' +
+                            greet + (firstName ? ', ' + escapeHTML(firstName) : '') + '.' +
+                        '</h1>' +
+                        '<p style="margin:0;color:var(--text-dim,#888);font-size:13px;">Pick up where the team is.</p>' +
+                    '</div>' +
+                    '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
+                        '<button class="primary" onclick="if (typeof window.openIntakeAI === \'function\') window.openIntakeAI();" style="font-size:13px;padding:7px 14px;">&#x1F9F2; New Lead with AI</button>' +
+                        '<button class="success" onclick="' + estsClick + '" style="font-size:13px;padding:7px 14px;">&#x2795; New Estimate</button>' +
+                    '</div>' +
+                '</div>' +
+
+                // Needs Attention row
+                '<div style="font-size:11px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;margin-bottom:8px;">Needs your attention</div>' +
+                '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-bottom:24px;">' +
+                    attentionCard('Overdue Invoices', overdueInv,  '#f87171', "window.switchTab('wip');",   'Past due, unpaid') +
+                    attentionCard('Open Leads',       openLeads,   '#22d3ee', leadsClick,                   'New + working') +
+                    attentionCard('Pending Estimates', pendingEsts,'#fbbf24', estsClick,                    'Draft / not sent') +
+                    attentionCard('Active Jobs',      activeJobs,  '#34d399', "window.switchTab('wip');",   'Open + in progress') +
+                '</div>' +
+
+                // Two-col main grid
+                '<div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,360px);gap:18px;">' +
+                    // Center: Recent Activity
+                    '<div>' +
+                        '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">' +
+                            '<div style="font-size:11px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;">Recent Activity</div>' +
+                        '</div>' +
+                        feedHtml +
+                    '</div>' +
+                    // Right rail: This Week's Agenda
+                    '<div>' +
+                        '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">' +
+                            '<div style="font-size:11px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;">This Week’s Agenda</div>' +
+                            '<button class="ee-btn ghost small" onclick="window.switchTab(\'schedule\')" style="font-size:11px;padding:2px 8px;">View schedule &rarr;</button>' +
+                        '</div>' +
+                        '<div id="summary-agenda" style="border:1px solid var(--border,#333);border-radius:10px;background:var(--card-bg,#0f0f1e);padding:12px;color:var(--text-dim,#888);font-size:12px;text-align:center;">Loading agenda&hellip;</div>' +
+                    '</div>' +
+                '</div>';
+
+            // Async-fetch + render the agenda. Failures degrade to a
+            // "no schedule entries" empty state — the rest of the page
+            // is already painted.
+            renderSummaryAgenda();
         }
         window.renderSummaryDashboard = renderSummaryDashboard;
+
+        // Pull schedule entries for the next 7 days, group by date, and
+        // paint into #summary-agenda. Side-effect-free with respect to
+        // the calendar view's own state.
+        function renderSummaryAgenda() {
+            var host = document.getElementById('summary-agenda');
+            if (!host) return;
+            if (!window.agxApi || !window.agxApi.schedule || typeof window.agxApi.schedule.list !== 'function') {
+                host.innerHTML = '<div style="text-align:center;color:var(--text-dim,#888);font-size:12px;">Schedule not available offline.</div>';
+                return;
+            }
+            var today = new Date();
+            today.setHours(0, 0, 0, 0);
+            var weekAhead = new Date(today.getTime() + 7 * 24 * 60 * 60 * 1000);
+            function ymd(dt) {
+                var m = String(dt.getMonth() + 1).padStart(2, '0');
+                var d = String(dt.getDate()).padStart(2, '0');
+                return dt.getFullYear() + '-' + m + '-' + d;
+            }
+            window.agxApi.schedule.list({ from: ymd(today), to: ymd(weekAhead) })
+                .then(function(res) {
+                    var entries = (res && res.entries) || [];
+                    if (!entries.length) {
+                        host.innerHTML = '<div style="padding:14px;text-align:center;color:var(--text-dim,#888);font-size:12px;">No schedule entries this week.</div>';
+                        return;
+                    }
+                    // Group by start_date.
+                    var byDay = {};
+                    entries.forEach(function(e) {
+                        var k = (e.start_date || e.startDate || '').slice(0, 10);
+                        if (!k) return;
+                        if (!byDay[k]) byDay[k] = [];
+                        byDay[k].push(e);
+                    });
+                    var html = '<div style="display:flex;flex-direction:column;gap:6px;">';
+                    var DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+                    for (var i = 0; i < 7; i++) {
+                        var dt = new Date(today.getTime() + i * 24 * 60 * 60 * 1000);
+                        var k = ymd(dt);
+                        var dayEntries = byDay[k] || [];
+                        var isWeekend = dt.getDay() === 0 || dt.getDay() === 6;
+                        var isToday = i === 0;
+                        var headerBg = isToday ? 'rgba(34,211,238,0.10)' : (isWeekend ? 'rgba(255,255,255,0.02)' : 'transparent');
+                        html += '<div style="border-bottom:1px solid var(--border,#222);padding:6px 8px;background:' + headerBg + ';border-radius:4px;">' +
+                            '<div style="display:flex;align-items:center;justify-content:space-between;font-size:10px;color:var(--text-dim,#aaa);text-transform:uppercase;letter-spacing:0.4px;font-weight:700;margin-bottom:' + (dayEntries.length ? '4' : '0') + 'px;">' +
+                                '<span>' + DOW[dt.getDay()] + ' ' + (dt.getMonth() + 1) + '/' + dt.getDate() + (isToday ? ' &middot; Today' : '') + '</span>' +
+                                (dayEntries.length ? '<span style="color:var(--accent,#22d3ee);">' + dayEntries.length + '</span>' : '') +
+                            '</div>';
+                        if (dayEntries.length) {
+                            dayEntries.forEach(function(e) {
+                                var jobLabel = '';
+                                if (e.job_id || e.jobId) {
+                                    var jid = e.job_id || e.jobId;
+                                    var job = (window.appData && window.appData.jobs || []).find(function(j) { return j.id === jid; });
+                                    if (job) jobLabel = (job.jobNumber ? '[' + job.jobNumber + '] ' : '') + (job.title || job.name || '');
+                                }
+                                html += '<div style="font-size:12px;color:var(--text,#fff);padding:3px 0;display:flex;align-items:flex-start;gap:6px;">' +
+                                    '<span style="color:var(--accent,#22d3ee);flex-shrink:0;">&#9679;</span>' +
+                                    '<div style="min-width:0;">' +
+                                        '<div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTML(e.title || e.label || 'Item') + '</div>' +
+                                        (jobLabel ? '<div style="font-size:10px;color:var(--text-dim,#888);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTML(jobLabel) + '</div>' : '') +
+                                    '</div>' +
+                                '</div>';
+                            });
+                        } else if (!isWeekend) {
+                            html += '<div style="font-size:11px;color:var(--text-dim,#666);font-style:italic;">No entries</div>';
+                        }
+                        html += '</div>';
+                    }
+                    html += '</div>';
+                    host.innerHTML = html;
+                })
+                .catch(function() {
+                    host.innerHTML = '<div style="padding:14px;text-align:center;color:var(--text-dim,#888);font-size:12px;">Could not load schedule.</div>';
+                });
+        }
 
         function setPageTitle(pageName) {
             document.title = (pageName && String(pageName).trim())
