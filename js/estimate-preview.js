@@ -398,6 +398,158 @@
     return html;
   }
 
+  // ──────────────────────────────────────────────────────────────────
+  // Material Takeoff & Scope Report
+  //
+  // Sibling document to the proposal. Lists every line item by section
+  // (subgroup) with description, qty, and unit — NO prices. Includes
+  // the scope of work for each included group and an explicit
+  // "ESTIMATED QUANTITIES" disclaimer at the top so the field crew /
+  // sub knows the numbers are planning estimates, not measured-cut
+  // quantities.
+  //
+  // Same CSS as the proposal so the takeoff reads as a matched
+  // sibling document when printed back-to-back. Only one extra
+  // class — .takeoff-table — defined in the takeoff-specific CSS
+  // additions below.
+  // ──────────────────────────────────────────────────────────────────
+  function buildTakeoffHTML(estimate, template, ctx) {
+    // Match the proposal's client / job-address header
+    var clientLineLeft = '';
+    if (estimate.client) clientLineLeft += '<div style="font-weight:700;">' + escapeHTMLLocal(estimate.client) + '</div>';
+    if (estimate.community && estimate.community !== estimate.client) {
+      clientLineLeft += '<div style="font-size:12px;color:#333;">' + escapeHTMLLocal(estimate.community) + '</div>';
+    }
+    if (estimate.billingAddr) {
+      String(estimate.billingAddr).split(/,\s*/).forEach(function(l) {
+        if (l) clientLineLeft += '<div style="font-size:11px;">' + escapeHTMLLocal(l) + '</div>';
+      });
+    }
+    var jobAddrRight = '';
+    if (estimate.propertyAddr) {
+      jobAddrRight = String(estimate.propertyAddr).split(/,\s*/).map(function(l) {
+        return '<div>' + escapeHTMLLocal(l) + '</div>';
+      }).join('');
+    }
+
+    // Per included group: scope (h2) → line table grouped by section.
+    // Section headers come from line.section === '__section_header__'
+    // rows; everything between two section headers belongs to the
+    // earlier section. We rebuild that grouping here instead of
+    // assuming the editor's render order survived the data model.
+    var includedIds = includedGroupIds(estimate);
+    var includedAlts = (estimate.alternates || []).filter(function(a) { return includedIds.indexOf(a.id) >= 0; });
+
+    var groupsHTML = '';
+    if (!includedAlts.length) {
+      groupsHTML = '<p style="color:#999;font-style:italic;">No groups included for this takeoff. Toggle at least one group on in the Line Items tab.</p>';
+    } else {
+      includedAlts.forEach(function(alt, gIdx) {
+        var altLines = (window.appData.estimateLines || []).filter(function(l) {
+          return l.estimateId === estimate.id && l.alternateId === alt.id;
+        });
+        // Group lines into { sectionName: [items] } in the order the
+        // editor showed them. A section header without follow-on
+        // lines still surfaces as an empty subsection so the field
+        // team knows the bucket exists but has nothing in it.
+        var sections = [];
+        var currentSection = null;
+        altLines.forEach(function(l) {
+          if (l.section === '__section_header__') {
+            currentSection = { name: l.description || 'Section', items: [] };
+            sections.push(currentSection);
+            return;
+          }
+          if (!currentSection) {
+            // Edge case: lines exist before any header — slot them
+            // into a synthetic "(uncategorized)" section.
+            currentSection = { name: '(uncategorized)', items: [] };
+            sections.push(currentSection);
+          }
+          currentSection.items.push(l);
+        });
+
+        // Per-group title + scope + line table
+        var scopeText = (alt.scope || '').trim();
+        groupsHTML += '<section class="takeoff-group" style="' + (gIdx === 0 ? '' : 'page-break-before:always;') + '">';
+        if (includedAlts.length > 1) {
+          groupsHTML += '<h2 class="section-heading" style="margin-top:18px;">' + escapeHTMLLocal(alt.name || ('Group ' + (gIdx + 1))) + '</h2>';
+        }
+        // Scope of work
+        groupsHTML += '<h3 class="takeoff-subheading">Scope of Work</h3>';
+        if (scopeText) {
+          groupsHTML += '<div class="scope-text">' +
+            scopeText.split(/\n+/).map(function(p) { return '<p>' + escapeHTMLLocal(p) + '</p>'; }).join('') +
+          '</div>';
+        } else {
+          groupsHTML += '<p style="color:#999;font-style:italic;">Scope not entered for this group.</p>';
+        }
+
+        // Line items grouped by section. Three columns: description,
+        // qty, unit. No prices on this document — that's the whole
+        // point of the takeoff vs the proposal.
+        groupsHTML += '<h3 class="takeoff-subheading">Line Items</h3>';
+        if (!sections.length || !sections.some(function(s) { return s.items.length > 0; })) {
+          groupsHTML += '<p style="color:#999;font-style:italic;">No line items entered for this group.</p>';
+        } else {
+          sections.forEach(function(sec) {
+            if (!sec.items.length) return;
+            groupsHTML += '<div class="takeoff-section">' +
+              '<div class="takeoff-section-name">' + escapeHTMLLocal(sec.name) + '</div>' +
+              '<table class="takeoff-table">' +
+                '<thead><tr>' +
+                  '<th class="col-desc">Description</th>' +
+                  '<th class="col-qty">Qty</th>' +
+                  '<th class="col-unit">Unit</th>' +
+                '</tr></thead>' +
+                '<tbody>';
+            sec.items.forEach(function(l) {
+              var qty = l.qty != null && l.qty !== '' ? l.qty : '';
+              groupsHTML += '<tr>' +
+                '<td class="col-desc">' + escapeHTMLLocal(l.description || '') + '</td>' +
+                '<td class="col-qty">' + escapeHTMLLocal(String(qty)) + '</td>' +
+                '<td class="col-unit">' + escapeHTMLLocal(l.unit || '') + '</td>' +
+              '</tr>';
+            });
+            groupsHTML += '</tbody></table></div>';
+          });
+        }
+        groupsHTML += '</section>';
+      });
+    }
+
+    return (
+      '<div class="agx-proposal agx-takeoff">' +
+        '<div class="proposal-header">' +
+          '<img src="images/logo-color.png" alt="' + escapeAttrLocal(template.company_header || '') + '" style="height:64px;display:block;margin:0 auto 8px;" />' +
+          '<div class="company-line">' + escapeHTMLLocal(template.company_header || '') + '</div>' +
+        '</div>' +
+        '<div class="proposal-meta">' +
+          '<div class="meta-left">' + clientLineLeft + '</div>' +
+          '<div class="meta-right">' +
+            (jobAddrRight ? '<div class="meta-label">Job Address:</div>' + jobAddrRight : '') +
+            '<div class="meta-print-date"><span class="meta-label">Print Date:</span> ' + escapeHTMLLocal(ctx.date) + '</div>' +
+          '</div>' +
+        '</div>' +
+        '<h1 class="proposal-title">Material Takeoff &amp; Scope Report' +
+          (estimate.title ? ' &mdash; ' + escapeHTMLLocal(estimate.title) : '') +
+        '</h1>' +
+        '<div class="takeoff-disclaimer">' +
+          '<strong>ESTIMATED QUANTITIES.</strong> The quantities listed on this report are planning estimates derived from scope review and reference photographs. Field-measured counts may vary based on actual site conditions, finish selections, waste factors, and code-driven attachment requirements. Verify each line at jobsite walkthrough before procurement.' +
+        '</div>' +
+        '<hr class="divider" />' +
+        groupsHTML +
+        '<hr class="divider" />' +
+        '<p class="sig-intro">Reviewed by:</p>' +
+        '<div class="sig-block">' +
+          '<div class="sig-row"><span class="sig-label">Signature:</span> <span class="sig-line"></span></div>' +
+          '<div class="sig-row"><span class="sig-label">Date:</span> <span class="sig-line"></span></div>' +
+          '<div class="sig-row"><span class="sig-label">Print Name:</span> <span class="sig-line"></span></div>' +
+        '</div>' +
+      '</div>'
+    );
+  }
+
   // Stylesheet shared between the in-tab preview and the print window. The
   // print window grabs its own copy via window-open + document.write.
   //
@@ -437,6 +589,22 @@
       '.agx-proposal .attached-docs { padding-left: 22px; margin: 6px 0 18px; font-size: 10pt; }' +
       '.agx-proposal .attached-docs li { margin: 4px 0; }' +
       '.agx-proposal .attached-docs a { color: #0b5fff; text-decoration: underline; }' +
+      // ── Takeoff additions ────────────────────────────────────────────
+      // Reuses .agx-proposal as the wrapper so header / meta / scope
+      // styling carries over. Only the takeoff-specific bits — table,
+      // section labels, disclaimer — get unique selectors.
+      '.agx-proposal.agx-takeoff .takeoff-disclaimer { background: #fff8e1; border-left: 3px solid #d97706; padding: 10px 12px; margin: 12px 0 14px; font-size: 10pt; line-height: 1.45; color: #4a3500; }' +
+      '.agx-proposal.agx-takeoff .takeoff-disclaimer strong { color: #b45309; letter-spacing: 0.3px; }' +
+      '.agx-proposal.agx-takeoff .takeoff-subheading { font-size: 11pt; font-weight: 700; color: #333; margin: 14px 0 6px; text-transform: uppercase; letter-spacing: 0.4px; }' +
+      '.agx-proposal.agx-takeoff .takeoff-section { margin: 8px 0 14px; page-break-inside: avoid; }' +
+      '.agx-proposal.agx-takeoff .takeoff-section-name { font-size: 10.5pt; font-weight: 700; color: #222; margin: 10px 0 4px; padding: 4px 8px; background: #f3f4f6; border-left: 3px solid #4f8cff; }' +
+      '.agx-proposal.agx-takeoff .takeoff-table { width: 100%; border-collapse: collapse; margin-bottom: 6px; font-size: 10pt; }' +
+      '.agx-proposal.agx-takeoff .takeoff-table th, .agx-proposal.agx-takeoff .takeoff-table td { padding: 5px 8px; border-bottom: 1px solid #e5e7eb; vertical-align: top; }' +
+      '.agx-proposal.agx-takeoff .takeoff-table th { text-align: left; font-size: 9pt; text-transform: uppercase; letter-spacing: 0.5px; color: #555; background: #fafafa; border-bottom: 1px solid #d1d5db; }' +
+      '.agx-proposal.agx-takeoff .takeoff-table .col-desc { width: auto; }' +
+      '.agx-proposal.agx-takeoff .takeoff-table .col-qty { width: 80px; text-align: right; font-family: "SF Mono", Consolas, monospace; }' +
+      '.agx-proposal.agx-takeoff .takeoff-table .col-unit { width: 80px; text-align: left; color: #555; }' +
+      '.agx-proposal.agx-takeoff .takeoff-group { margin-bottom: 18px; }' +
       ''
     );
   }
@@ -474,6 +642,11 @@
     });
   }
 
+  // Per-session preference for which document the Preview tab is
+  // showing. Survives tab toggles within a session; resets to
+  // 'proposal' on hard refresh.
+  var _previewMode = 'proposal'; // 'proposal' | 'takeoff'
+
   // Render into the Preview tab pane. Called by the editor when the user
   // switches to the Preview tab.
   function renderEstimatePreview() {
@@ -485,11 +658,27 @@
       return;
     }
 
+    var mode = _previewMode === 'takeoff' ? 'takeoff' : 'proposal';
+    var modeBtn = function(key, label) {
+      var active = mode === key;
+      return '<button class="' + (active ? 'primary' : 'ghost') + ' small" ' +
+        'onclick="window.setEstimatePreviewMode(\'' + key + '\')" ' +
+        'style="' + (active ? '' : 'opacity:0.85;') + '">' +
+        label + '</button>';
+    };
+    var printBtn = mode === 'takeoff'
+      ? '<button class="primary small" onclick="printEstimateTakeoff()">&#x1F5A8; Print Takeoff</button>'
+      : '<button class="primary small" onclick="printEstimateProposal()">&#x1F5A8; Print Proposal</button>';
+
     pane.innerHTML =
       '<style>' + getProposalCSS() + '</style>' +
-      '<div class="no-print" style="display:flex;justify-content:flex-end;gap:8px;padding:8px 16px;background:rgba(255,255,255,0.02);border-bottom:1px solid var(--border,#333);position:sticky;top:0;z-index:5;">' +
+      '<div class="no-print" style="display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:8px 16px;background:rgba(255,255,255,0.02);border-bottom:1px solid var(--border,#333);position:sticky;top:0;z-index:5;">' +
+        '<div style="margin-right:auto;display:flex;gap:4px;background:rgba(255,255,255,0.03);border:1px solid var(--border,#333);border-radius:6px;padding:3px;">' +
+          modeBtn('proposal', '📄 Proposal') +
+          modeBtn('takeoff',  '📋 Takeoff &amp; Scope') +
+        '</div>' +
         '<button class="ghost small" onclick="window.invalidateProposalTemplateCache(); renderEstimatePreview();" title="Re-fetch the latest template from the server">&#x21BB; Refresh Template</button>' +
-        '<button class="primary small" onclick="printEstimateProposal()">&#x1F5A8; Print to PDF</button>' +
+        printBtn +
       '</div>' +
       '<div id="ee-preview-render" style="padding:20px;background:#1a1a2e;min-height:600px;"><div style="text-align:center;color:#888;padding:40px;">Loading template…</div></div>';
 
@@ -498,10 +687,18 @@
       var atts = both[1];
       var ctx = buildContext(estimate);
       ctx.proposalAttachments = atts;
-      var html = buildProposalHTML(estimate, template, ctx);
+      var html = (mode === 'takeoff')
+        ? buildTakeoffHTML(estimate, template, ctx)
+        : buildProposalHTML(estimate, template, ctx);
       var target = document.getElementById('ee-preview-render');
       if (target) target.innerHTML = html;
     });
+  }
+
+  // Public toggle hook — flips the preview mode and re-renders.
+  function setEstimatePreviewMode(mode) {
+    _previewMode = (mode === 'takeoff') ? 'takeoff' : 'proposal';
+    renderEstimatePreview();
   }
 
   // Open the proposal in a new window styled for printing, then trigger the
@@ -542,7 +739,43 @@
     });
   }
 
+  // Sibling of printEstimateProposal — opens the takeoff & scope
+  // report in a new window for Print-to-PDF. Same window-bootstrap
+  // pattern (base href pinned to the main origin so logo + image
+  // assets resolve), same CSS, only the body builder differs.
+  function printEstimateTakeoff() {
+    var estimate = getCurrentEstimate();
+    if (!estimate) { alert('No estimate is currently open.'); return; }
+
+    Promise.all([getTemplate(), fetchProposalAttachments(estimate)]).then(function(both) {
+      var template = both[0];
+      var atts = both[1];
+      var ctx = buildContext(estimate);
+      ctx.proposalAttachments = atts;
+      var html = buildTakeoffHTML(estimate, template, ctx);
+      var title = 'Takeoff - ' + (estimate.title || 'P86').replace(/[^\w \-]+/g, '');
+
+      var w = window.open('', '_blank');
+      if (!w) { alert('Pop-up blocked. Allow pop-ups for this site to export the PDF.'); return; }
+
+      var baseHref = (window.location && window.location.origin) ? window.location.origin + '/' : '/';
+      w.document.write(
+        '<!DOCTYPE html><html><head><meta charset="UTF-8">' +
+        '<base href="' + escapeAttrLocal(baseHref) + '">' +
+        '<title>' + escapeHTMLLocal(title) + '</title>' +
+        '<style>' + getProposalCSS() + getPrintCSS() + '</style>' +
+        '</head><body>' +
+        html +
+        '<script>window.addEventListener("load", function() { setTimeout(function() { window.print(); }, 300); });</' + 'script>' +
+        '</body></html>'
+      );
+      w.document.close();
+    });
+  }
+
   window.renderEstimatePreview = renderEstimatePreview;
   window.printEstimateProposal = printEstimateProposal;
+  window.printEstimateTakeoff = printEstimateTakeoff;
+  window.setEstimatePreviewMode = setEstimatePreviewMode;
   window.invalidateProposalTemplateCache = invalidateTemplateCache;
 })();
