@@ -53,16 +53,10 @@
       statusFilter: {
         'New': true, 'In Progress': true, 'Backlog': true
       },
-      // Default Job Type / Work Type filters: all on. PMs typically
-      // narrow these manually (e.g., a renovations PM toggles off
-      // Service tickets); leaving them all on means the sidebar
-      // looks the same as before for users who don't touch the new
-      // filter rows.
+      // Default Job Type filter: all on. PMs typically narrow this
+      // manually (e.g., a renovations PM toggles off Service tickets).
       jobTypeFilter: {
         'Service': true, 'Renovation': true, 'Work Order': true
-      },
-      workTypeFilter: {
-        'In-house': true, 'Sub': true, 'Both': true
       },
       // Inline week-summary pin state. Pinned=false means the
       // summary tracks the current real-life week, no matter which
@@ -83,9 +77,6 @@
       }
       if (!merged.jobTypeFilter || typeof merged.jobTypeFilter !== 'object') {
         merged.jobTypeFilter = Object.assign({}, defaults.jobTypeFilter);
-      }
-      if (!merged.workTypeFilter || typeof merged.workTypeFilter !== 'object') {
-        merged.workTypeFilter = Object.assign({}, defaults.workTypeFilter);
       }
       return merged;
     } catch (e) { return defaults; }
@@ -278,25 +269,21 @@
   }
 
   // ── State ──────────────────────────────────────────────────
-  // Three independent multi-select filter bars on the sidebar:
+  // Two independent multi-select filter bars on the sidebar:
   //   - Status: lifecycle gate. Default = active set (the jobs a PM
   //     is actively scheduling production for).
   //   - Job Type: Service vs full Renovation vs Work Order — these
   //     run very differently and a PM scheduling renovations doesn't
   //     want service tickets in their list.
-  //   - Work Type: who does the work. In-house crew vs sub vs both.
-  // Default for a filter bar is "all on" (everything passes).
+  // Default for each bar is "all on" (everything passes).
   // Empty selection (user toggles every pill off) surfaces every
   // job — there's no useful "match nothing" state, so we treat
-  // empty as wildcard. Same convention for all three bars.
+  // empty as wildcard. Same convention for both bars.
   var STATUS_FILTERS = ['New', 'In Progress', 'Backlog', 'On Hold', 'Completed', 'Archived'];
   var DEFAULT_STATUS_SET = { 'New': true, 'In Progress': true, 'Backlog': true };
 
   var JOB_TYPE_FILTERS = ['Service', 'Renovation', 'Work Order'];
   var DEFAULT_JOB_TYPE_SET = { 'Service': true, 'Renovation': true, 'Work Order': true };
-
-  var WORK_TYPE_FILTERS = ['In-house', 'Sub', 'Both'];
-  var DEFAULT_WORK_TYPE_SET = { 'In-house': true, 'Sub': true, 'Both': true };
 
   var _state = {
     cursor: null,        // first day of the month being viewed
@@ -307,8 +294,7 @@
       // Persisted across sessions. Object keyed by string label,
       // value true/false. Missing key = false (filtered out).
       statusFilter: Object.assign({}, DEFAULT_STATUS_SET),
-      jobTypeFilter: Object.assign({}, DEFAULT_JOB_TYPE_SET),
-      workTypeFilter: Object.assign({}, DEFAULT_WORK_TYPE_SET)
+      jobTypeFilter: Object.assign({}, DEFAULT_JOB_TYPE_SET)
     },
     users: [],           // hydrated from /api/auth/users
     sidebarSearch: '',
@@ -326,20 +312,18 @@
   };
 
   // ── Job pool ───────────────────────────────────────────────
-  // Apply the three multi-select filter bars (status / jobType /
-  // workType) to the global jobs list. Empty selection on any bar
-  // is treated as wildcard for that dimension so the user is never
-  // stranded with no list. All comparisons are case- and whitespace-
-  // tolerant since job records sometimes carry slight variations
-  // ("In-House" vs "In-house", "Work order" vs "Work Order").
+  // Apply the two multi-select filter bars (status / jobType) to
+  // the global jobs list. Empty selection on either bar is treated
+  // as wildcard for that dimension so the user is never stranded
+  // with no list. All comparisons are case- and whitespace-tolerant
+  // since job records sometimes carry slight variations ("Work
+  // order" vs "Work Order", trailing whitespace, etc.).
   function filteredJobs() {
     var jobs = (window.appData && Array.isArray(window.appData.jobs)) ? window.appData.jobs : [];
-    var statusSel   = _state.settings.statusFilter   || {};
-    var jobTypeSel  = _state.settings.jobTypeFilter  || {};
-    var workTypeSel = _state.settings.workTypeFilter || {};
-    var anyStatus   = Object.keys(statusSel).some(function(k) { return statusSel[k]; });
-    var anyJobType  = Object.keys(jobTypeSel).some(function(k) { return jobTypeSel[k]; });
-    var anyWorkType = Object.keys(workTypeSel).some(function(k) { return workTypeSel[k]; });
+    var statusSel  = _state.settings.statusFilter  || {};
+    var jobTypeSel = _state.settings.jobTypeFilter || {};
+    var anyStatus  = Object.keys(statusSel).some(function(k) { return statusSel[k]; });
+    var anyJobType = Object.keys(jobTypeSel).some(function(k) { return jobTypeSel[k]; });
     return jobs.filter(function(j) {
       if (anyStatus) {
         var s = String(j.status || '').trim().toLowerCase();
@@ -350,11 +334,6 @@
         var t = String(j.jobType || '').trim().toLowerCase();
         var matchT = JOB_TYPE_FILTERS.some(function(opt) { return jobTypeSel[opt] && t === opt.toLowerCase(); });
         if (!matchT) return false;
-      }
-      if (anyWorkType) {
-        var w = String(j.workType || '').trim().toLowerCase();
-        var matchW = WORK_TYPE_FILTERS.some(function(opt) { return workTypeSel[opt] && w === opt.toLowerCase(); });
-        if (!matchW) return false;
       }
       return true;
     });
@@ -721,13 +700,12 @@
       '<div class="sch-sidebar-search">' +
         '<input type="text" id="schSidebarSearch" placeholder="Search jobs…" value="' + escapeAttr(_state.sidebarSearch) + '" />' +
       '</div>' +
-      // Three multi-select filter bars stacked. Each toggles
+      // Two multi-select filter bars stacked. Each toggles
       // independently and applies as an AND across dimensions
-      // (job must pass all three). Empty selection on any bar is
+      // (job must pass both). Empty selection on either bar is
       // treated as wildcard for that dimension.
-      buildFilterBar('statusFilter',   'Status',    STATUS_FILTERS) +
-      buildFilterBar('jobTypeFilter',  'Job Type',  JOB_TYPE_FILTERS) +
-      buildFilterBar('workTypeFilter', 'Work Type', WORK_TYPE_FILTERS) +
+      buildFilterBar('statusFilter',  'Status',   STATUS_FILTERS) +
+      buildFilterBar('jobTypeFilter', 'Job Type', JOB_TYPE_FILTERS) +
       '<div class="sch-sidebar-list" id="schSidebarList">';
 
     if (!jobs.length) {
@@ -768,11 +746,10 @@
       });
     }
 
-    // Wire pill toggles for all three filter bars. The data-filter
+    // Wire pill toggles for both filter bars. The data-filter
     // attribute identifies the settings key (statusFilter /
-    // jobTypeFilter / workTypeFilter); data-value is the option to
-    // flip. Persists immediately so the user's working set sticks
-    // across reloads.
+    // jobTypeFilter); data-value is the option to flip. Persists
+    // immediately so the user's working set sticks across reloads.
     el.querySelectorAll('.sch-status-pill').forEach(function(p) {
       p.addEventListener('click', function() {
         var filterKey = p.getAttribute('data-filter');
