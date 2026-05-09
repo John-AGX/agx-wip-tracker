@@ -63,6 +63,7 @@
                     <button class="tab-btn" data-tab="estimates" data-est-subtab="list" data-virtual-tab="estimates" data-agx-icon="estimates" data-cap="ESTIMATES_VIEW">Estimates</button>
                     <button class="tab-btn" data-tab="schedule" data-agx-icon="schedule">Schedule</button>
                     <button class="tab-btn" data-tab="wip" data-agx-icon="wip" data-cap="JOBS_VIEW_ALL JOBS_VIEW_ASSIGNED JOBS_EDIT_ANY JOBS_EDIT_OWN">WIP</button>
+                    <button class="tab-btn" data-tab="my-files" data-agx-icon="attachments">Files</button>
                     <button class="tab-btn" data-tab="insights" data-agx-icon="insights" data-cap="INSIGHTS_VIEW">Insights</button>
                     <button class="tab-btn" data-tab="admin" data-agx-icon="admin" data-admin-only style="display:none;">Admin</button>
                 </nav>
@@ -667,6 +668,11 @@
                 <div id="summary" class="tab-content">
                     <div id="summary-root" style="padding:24px 16px;max-width:1200px;margin:0 auto;"></div>
                 </div>
+
+                <!-- MY FILES TAB — per-user personal file folder. Folder
+                     structure + upload + send-to-job/estimate. Painted
+                     by renderMyFilesTab() in js/my-files.js. -->
+                <div id="my-files" class="tab-content"></div>
 
                 <!-- SCHEDULE TAB — production scheduling calendar.
                      Phase 1 = local-only persistence; Phase 2 will swap
@@ -2190,7 +2196,7 @@
     <script src="js/modal-drag.js?v=1"></script>
     <script src="js/auth.js?v=12"></script>
     <script src="js/dialogs.js?v=1"></script>
-    <script src="js/api.js?v=24"></script>
+    <script src="js/api.js?v=25"></script>
     <script src="js/account.js?v=2"></script>
     <script src="js/attachments.js?v=10"></script>
     <script src="js/markup-viewer.js?v=17"></script>
@@ -2204,8 +2210,9 @@
     <script src="js/qb-costs-view.js?v=10"></script>
     <script src="js/insights.js?v=5"></script>
     <script src="js/schedule.js?v=15"></script>
-    <script src="js/app.js?v=54"></script>
+    <script src="js/app.js?v=55"></script>
     <script src="js/messaging.js?v=1"></script>
+    <script src="js/my-files.js?v=1"></script>
     <script src="js/wip.js?v=65"></script>
     <script src="js/estimates.js?v=35"></script>
     <script src="js/proposal.js?v=22"></script>

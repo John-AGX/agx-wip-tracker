@@ -958,12 +958,13 @@
         window.setPageTitle = setPageTitle;
 
         var TAB_TITLES = {
-            summary:   'Summary',
-            estimates: 'Estimates',  // gets refined by switchEstimatesSubTab
-            schedule:  'Schedule',
-            wip:       'WIP',
-            insights:  'Insights',
-            admin:     'Admin'
+            summary:    'Summary',
+            estimates:  'Estimates',  // gets refined by switchEstimatesSubTab
+            schedule:   'Schedule',
+            wip:        'WIP',
+            'my-files': 'Files',
+            insights:   'Insights',
+            admin:      'Admin'
         };
 
         // Stale-nav threshold. After this long without activity, the
@@ -1019,6 +1020,8 @@
 
             if (tabName === 'summary') {
                 renderSummaryDashboard();
+            } else if (tabName === 'my-files') {
+                if (typeof window.renderMyFilesTab === 'function') window.renderMyFilesTab();
             } else if (tabName === 'estimates') {
                 // Pick the currently-active sub-tab and route through
                 // switchEstimatesSubTab so its render fires. Without

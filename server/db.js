@@ -323,7 +323,7 @@ async function initSchema() {
     END $$;
     ALTER TABLE attachments
       ADD CONSTRAINT attachments_entity_type_check
-      CHECK (entity_type IN ('lead', 'estimate', 'client', 'job', 'sub'));
+      CHECK (entity_type IN ('lead', 'estimate', 'client', 'job', 'sub', 'user'));
 
     -- Folder grouping (Phase 3). Free-text folder name per attachment;
     -- 'general' is the default catch-all. Users can move files into

@@ -155,7 +155,10 @@ const router = express.Router();
 // handler since it depends on the existing row count.
 const MAX_FILES_PER_ENTITY = 30;
 const MAX_FILE_BYTES = 50 * 1024 * 1024; // 50MB — fits most drawings, big PDFs
-const VALID_ENTITY_TYPES = new Set(['lead', 'estimate', 'client', 'job', 'sub']);
+// 'user' represents the personal-files folder per user. The entity_id
+// for a user-type attachment is the stringified users.id of the owner;
+// only that user (or an admin) can read/write rows in their bucket.
+const VALID_ENTITY_TYPES = new Set(['lead', 'estimate', 'client', 'job', 'sub', 'user']);
 
 // Lightweight MIME detection — sharp only handles raster images, so
 // anything outside this set bypasses the resize pipeline.
@@ -179,6 +182,10 @@ function readCapForEntity(entityType) {
   // Subs are part of the jobs/back-office surface — anyone with job-edit
   // rights can see the subcontractor directory + their certificates.
   if (entityType === 'sub')      return 'JOBS_VIEW';
+  // Personal-files bucket. Capability is universal so authenticated
+  // users can land on their own folder; the ownership check below
+  // (ensureUserAttachmentOwner) enforces "only you can see your own".
+  if (entityType === 'user')     return '__owner__';
   return 'LEADS_VIEW';
 }
 function writeCapForEntity(entityType) {
@@ -188,7 +195,18 @@ function writeCapForEntity(entityType) {
   // Sub uploads (cert PDFs) require the same job-edit capability that
   // sub-routes.js uses for create/update — keeps the perm story coherent.
   if (entityType === 'sub')      return 'JOBS_EDIT_ANY';
+  // Same owner-only model as the read side.
+  if (entityType === 'user')     return '__owner__';
   return 'LEADS_EDIT';
+}
+
+// Owner gate for user-type attachments. The user can only operate on
+// their own bucket; admins can operate on anyone's. Returns true if
+// allowed, false otherwise. Caller is responsible for the 403.
+function ensureUserAttachmentOwner(req, entityId) {
+  if (!req.user) return false;
+  if (req.user.role === 'admin') return true;
+  return String(entityId) === String(req.user.id);
 }
 
 // Hand-rolled cap check since the cap depends on a path param. Mirrors
@@ -199,6 +217,19 @@ function requireDynamicCapability(getCap) {
     const cap = getCap(req);
     if (!cap) return res.status(400).json({ error: 'Bad entity type' });
     try {
+      // Owner sentinel — used by the user-type bucket. Skips the
+      // role/cap check; the route body still has to do the per-row
+      // owner verification via ensureUserAttachmentOwner.
+      if (cap === '__owner__') {
+        const entityType = req.params.entityType;
+        const entityId = req.params.entityId;
+        if (entityType === 'user') {
+          if (!ensureUserAttachmentOwner(req, entityId)) {
+            return res.status(403).json({ error: 'Forbidden' });
+          }
+        }
+        return next();
+      }
       const ok = await hasCapability(req.user, cap);
       if (!ok) return res.status(403).json({ error: 'Forbidden' });
       next();
@@ -231,8 +262,14 @@ router.get('/raw/:id', requireAuth, async (req, res) => {
     const att = rows[0];
 
     const cap = readCapForEntity(att.entity_type);
-    const ok = await hasCapability(req.user, cap);
-    if (!ok) return res.status(403).json({ error: 'Forbidden' });
+    if (cap === '__owner__') {
+      if (!ensureUserAttachmentOwner(req, att.entity_id)) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+    } else {
+      const ok = await hasCapability(req.user, cap);
+      if (!ok) return res.status(403).json({ error: 'Forbidden' });
+    }
 
     const variant = (req.query.variant || 'web').toLowerCase();
     const key = (variant === 'original' || !att.web_key) ? att.original_key : att.web_key;
@@ -435,8 +472,14 @@ router.delete('/:id', requireAuth, async (req, res) => {
 
     // Capability check — same write rule as the parent entity.
     const cap = writeCapForEntity(att.entity_type);
-    const ok = await hasCapability(req.user, cap);
-    if (!ok) return res.status(403).json({ error: 'Forbidden' });
+    if (cap === '__owner__') {
+      if (!ensureUserAttachmentOwner(req, att.entity_id)) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+    } else {
+      const ok = await hasCapability(req.user, cap);
+      if (!ok) return res.status(403).json({ error: 'Forbidden' });
+    }
 
     // Documents have null thumb/web keys — only delete what's actually stored.
     const keysToDelete = [att.thumb_key, att.web_key, att.original_key].filter(Boolean);
@@ -456,8 +499,14 @@ router.put('/:id', requireAuth, async (req, res) => {
     if (!rows.length) return res.status(404).json({ error: 'Attachment not found' });
     const att = rows[0];
     const cap = writeCapForEntity(att.entity_type);
-    const ok = await hasCapability(req.user, cap);
-    if (!ok) return res.status(403).json({ error: 'Forbidden' });
+    if (cap === '__owner__') {
+      if (!ensureUserAttachmentOwner(req, att.entity_id)) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+    } else {
+      const ok = await hasCapability(req.user, cap);
+      if (!ok) return res.status(403).json({ error: 'Forbidden' });
+    }
 
     const sets = [];
     const params = [];
@@ -512,17 +561,19 @@ router.post('/:id/move', requireAuth, async (req, res) => {
     const newType = String(req.body && req.body.entity_type || '').trim();
     const newId   = String(req.body && req.body.entity_id   || '').trim();
     if (!newType || !newId) return res.status(400).json({ error: 'entity_type and entity_id are required' });
-    const VALID = ['lead', 'estimate', 'client', 'job', 'sub'];
+    const VALID = ['lead', 'estimate', 'client', 'job', 'sub', 'user'];
     if (VALID.indexOf(newType) === -1) return res.status(400).json({ error: 'invalid entity_type' });
 
-    // Source-side capability gate (the user must be allowed to MOVE
-    // files away from the current home).
-    const srcOk = await hasCapability(req.user, writeCapForEntity(att.entity_type));
-    if (!srcOk) return res.status(403).json({ error: 'No write access on source entity' });
-    // Destination-side capability gate (the user must be allowed to
-    // ATTACH to the new home).
-    const dstOk = await hasCapability(req.user, writeCapForEntity(newType));
-    if (!dstOk) return res.status(403).json({ error: 'No write access on destination entity' });
+    // Owner-or-cap gate on the SOURCE — must be allowed to move
+    // files away from the current home.
+    if (!(await canWriteAttachment(req, att))) {
+      return res.status(403).json({ error: 'No write access on source entity' });
+    }
+    // Owner-or-cap gate on the DESTINATION — must be allowed to
+    // attach to the new home.
+    if (!(await canWriteEntity(req, newType, newId))) {
+      return res.status(403).json({ error: 'No write access on destination entity' });
+    }
 
     // Append at the end of the destination's existing order.
     const posR = await pool.query(
@@ -547,6 +598,115 @@ router.post('/:id/move', requireAuth, async (req, res) => {
     res.status(500).json({ error: 'Server error: ' + e.message });
   }
 });
+
+// POST /api/attachments/:id/copy — cross-entity duplicate. Body:
+//   { entity_type, entity_id, folder? }
+// Source row + R2 bytes stay put; we duplicate the bytes into fresh
+// R2 keys under the destination prefix and INSERT a new attachments
+// row referencing them. That way deleting either the source or the
+// copy is independent — no shared-key bookkeeping needed. Driven by
+// the My Files "Copy to job/estimate" action.
+router.post('/:id/copy', requireAuth, async (req, res) => {
+  try {
+    const srcR = await pool.query('SELECT * FROM attachments WHERE id = $1', [req.params.id]);
+    if (!srcR.rows.length) return res.status(404).json({ error: 'Attachment not found' });
+    const src = srcR.rows[0];
+
+    const newType = String(req.body && req.body.entity_type || '').trim();
+    const newId   = String(req.body && req.body.entity_id   || '').trim();
+    if (!newType || !newId) return res.status(400).json({ error: 'entity_type and entity_id are required' });
+    const VALID = ['lead', 'estimate', 'client', 'job', 'sub', 'user'];
+    if (VALID.indexOf(newType) === -1) return res.status(400).json({ error: 'invalid entity_type' });
+
+    // Read on source + write on destination.
+    if (!(await canReadAttachment(req, src))) {
+      return res.status(403).json({ error: 'No read access on source attachment' });
+    }
+    if (!(await canWriteEntity(req, newType, newId))) {
+      return res.status(403).json({ error: 'No write access on destination entity' });
+    }
+
+    // New id + R2 key prefix at destination.
+    const newAttId = 'att_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+    const baseKey = newType + '/' + newId + '/' + newAttId;
+    const ext = (src.filename || '').match(/\.([a-z0-9]+)$/i);
+    const extStr = ext ? ext[1].toLowerCase() : 'bin';
+
+    // Copy bytes for each variant the source has. R2 / local both
+    // implement put + getBuffer; a server-side copy is cheap (few
+    // hundred KB per variant) and keeps semantics simple.
+    let newThumbKey = null, newWebKey = null, newOriginalKey = null;
+    let newThumbUrl = null, newWebUrl = null, newOriginalUrl;
+
+    if (src.thumb_key) {
+      const buf = await storage.getBuffer(src.thumb_key);
+      newThumbKey = baseKey + '_thumb.jpg';
+      newThumbUrl = await storage.put(newThumbKey, buf, 'image/jpeg');
+    }
+    if (src.web_key) {
+      const buf = await storage.getBuffer(src.web_key);
+      newWebKey = baseKey + '_web.jpg';
+      newWebUrl = await storage.put(newWebKey, buf, 'image/jpeg');
+    }
+    if (src.original_key) {
+      const buf = await storage.getBuffer(src.original_key);
+      newOriginalKey = baseKey + '_orig.' + extStr;
+      newOriginalUrl = await storage.put(newOriginalKey, buf, src.mime_type || 'application/octet-stream');
+    }
+
+    const folderRaw = (req.body && typeof req.body.folder === 'string') ? req.body.folder : 'general';
+    const folder = folderRaw.trim().slice(0, 60).toLowerCase()
+      .replace(/[^a-z0-9 _\-]/g, '').replace(/\s+/g, '-') || 'general';
+
+    const posR = await pool.query(
+      'SELECT COALESCE(MAX(position), -1) AS max_pos FROM attachments WHERE entity_type = $1 AND entity_id = $2',
+      [newType, newId]
+    );
+    const startPos = (posR.rows[0] && posR.rows[0].max_pos != null) ? Number(posR.rows[0].max_pos) + 1 : 0;
+
+    const ins = await pool.query(
+      `INSERT INTO attachments
+         (id, entity_type, entity_id, folder, filename, mime_type, size_bytes,
+          width, height,
+          thumb_url, web_url, original_url,
+          thumb_key, web_key, original_key,
+          position, uploaded_by, extracted_text, extracted_text_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+       RETURNING *`,
+      [
+        newAttId, newType, newId, folder,
+        src.filename, src.mime_type, src.size_bytes,
+        src.width, src.height,
+        newThumbUrl, newWebUrl, newOriginalUrl,
+        newThumbKey, newWebKey, newOriginalKey,
+        startPos, req.user.id,
+        src.extracted_text, src.extracted_text_at
+      ]
+    );
+    res.json({ ok: true, attachment: ins.rows[0] });
+  } catch (e) {
+    console.error('POST /api/attachments/:id/copy error:', e);
+    res.status(500).json({ error: 'Server error: ' + e.message });
+  }
+});
+
+// Owner-or-cap helpers. Centralized so move + copy + future row-keyed
+// routes stay consistent on the gating logic.
+async function canReadAttachment(req, att) {
+  const cap = readCapForEntity(att.entity_type);
+  if (cap === '__owner__') return ensureUserAttachmentOwner(req, att.entity_id);
+  return await hasCapability(req.user, cap);
+}
+async function canWriteAttachment(req, att) {
+  const cap = writeCapForEntity(att.entity_type);
+  if (cap === '__owner__') return ensureUserAttachmentOwner(req, att.entity_id);
+  return await hasCapability(req.user, cap);
+}
+async function canWriteEntity(req, entityType, entityId) {
+  const cap = writeCapForEntity(entityType);
+  if (cap === '__owner__') return ensureUserAttachmentOwner(req, entityId);
+  return await hasCapability(req.user, cap);
+}
 
 // POST /api/attachments/extract-text — backfill text extraction across
 // every supported attachment that doesn't already have extracted text.

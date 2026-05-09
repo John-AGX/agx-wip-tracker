@@ -202,6 +202,9 @@
     remove: function(id) { return del('/api/attachments/' + encodeURIComponent(id)); },
     // Cross-entity move. payload = { entity_type, entity_id, folder? }.
     move: function(id, payload) { return post('/api/attachments/' + encodeURIComponent(id) + '/move', payload); },
+    // Cross-entity duplicate. Same payload shape as move; bytes are
+    // copied server-side so source + copy are independent on delete.
+    copy: function(id, payload) { return post('/api/attachments/' + encodeURIComponent(id) + '/copy', payload); },
     // Cross-entity most-recent uploads — drives the "Recent Files"
     // summary widget. limit defaults to 10 server-side; cap at 24.
     recent: function(limit) {
