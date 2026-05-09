@@ -817,21 +817,36 @@ body.light-mode .sch-day-row:hover {
    2. Strip inside each day-sheet row — full forecast detail
       (high/low, precip %, wind, summary). Falls back to a muted
       placeholder when address is missing or NWS is unreachable. */
-.sch-entry-bar-wx {
-  position: absolute;
-  top: 2px;
-  left: 4px;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  border: 1px solid rgba(0, 0, 0, 0.35);
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.5);
-  pointer-events: auto;
-  z-index: 2;
+/* Inline weather glyph on the entry bar — sits to the LEFT of the
+   job number text. Risk-tinted background ring so red days are
+   visible at a glance even before reading the icon. Width is
+   capped so the glyph doesn't hog space on narrow segments. */
+.sch-entry-bar-wx-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 14px;
+  margin-right: 4px;
+  border-radius: 3px;
+  font-size: 11px;
+  line-height: 1;
+  flex-shrink: 0;
+  background: rgba(0, 0, 0, 0.18);
+  vertical-align: middle;
 }
-.sch-entry-bar-wx.sch-wx-green  { background: #34d399; }
-.sch-entry-bar-wx.sch-wx-yellow { background: #fbbf24; }
-.sch-entry-bar-wx.sch-wx-red    { background: #f87171; }
+.sch-entry-bar-wx-icon.sch-wx-green {
+  background: rgba(52, 211, 153, 0.35);
+  box-shadow: inset 0 0 0 1px rgba(52, 211, 153, 0.6);
+}
+.sch-entry-bar-wx-icon.sch-wx-yellow {
+  background: rgba(251, 191, 36, 0.40);
+  box-shadow: inset 0 0 0 1px rgba(251, 191, 36, 0.7);
+}
+.sch-entry-bar-wx-icon.sch-wx-red {
+  background: rgba(248, 113, 113, 0.45);
+  box-shadow: inset 0 0 0 1px rgba(248, 113, 113, 0.85);
+}
 
 .sch-day-row-wx {
   display: flex;

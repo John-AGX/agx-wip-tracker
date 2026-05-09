@@ -999,19 +999,25 @@
       var handleHtml = seg.isLastSegment
         ? '<span class="sch-entry-bar-handle" data-entry-id="' + escapeAttr(e.id) + '" title="Drag to extend / shrink production days"></span>'
         : '';
-      // Weather risk dot — colored by NWS forecast for this job's
-      // address on the segment's first day. Tooltip carries the
-      // forecast summary so PMs can hover before opening the day
-      // sheet. Renders only when forecast data is loaded.
+      // Weather glyph — inline emoji shown right before the job
+      // number on the bar. Sun for green, cloud for yellow, warning
+      // sign for red. Tooltip carries the full forecast summary so
+      // hovering reveals temp + precip without opening the day
+      // sheet. Painted only on the segment's first day; multi-day
+      // entries get the icon for the day each segment starts on,
+      // since weather can vary across days.
       var firstDayKey = weekKeys[seg.startCol];
       var dayWx = weatherForJobOnDate(e.jobId, firstDayKey);
       var wxHtml = '';
       if (dayWx) {
         var wxTitle = (dayWx.summary || '') +
           (dayWx.tempHigh != null ? ' · ' + dayWx.tempHigh + '°' : '') +
-          (dayWx.precipPct ? ' · ' + dayWx.precipPct + '% rain' : '');
-        wxHtml = '<span class="sch-entry-bar-wx sch-wx-' + dayWx.risk + '" ' +
-                 'title="' + escapeAttr(wxTitle) + '"></span>';
+          (dayWx.precipPct ? ' · ' + dayWx.precipPct + '% rain' : '') +
+          (dayWx.windMph ? ' · ' + dayWx.windMph + ' mph wind' : '');
+        wxHtml = '<span class="sch-entry-bar-wx-icon sch-wx-' + dayWx.risk + '" ' +
+                 'title="' + escapeAttr(wxTitle) + '">' +
+          weatherIconForRisk(dayWx.risk) +
+        '</span>';
       }
       html += '<div class="sch-entry-bar' + statusCls + '" ' +
         'data-entry-id="' + escapeAttr(e.id) + '" ' +
