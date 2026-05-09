@@ -9,8 +9,12 @@
   align-items: stretch;
   /* Fixed height (not min-height) so the sidebar list can actually
      scroll. min-height let the sidebar grow to fit all jobs, which
-     defeated the inner overflow-y:auto. */
-  height: calc(100vh - 200px);
+     defeated the inner overflow-y:auto. The 110px deduction covers
+     the top header (~60px) + outer page padding (~30px) + a small
+     buffer; the previous 200px was leaving a tall empty strip
+     below the calendar. If your shell adds more chrome, the inner
+     overflow-y:auto on .sch-cal-grid will pick up the slack. */
+  height: calc(100vh - 110px);
   min-height: 480px;
 }
 
