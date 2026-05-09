@@ -52,7 +52,15 @@
       // module scope so this is safe.
       statusFilter: {
         'New': true, 'In Progress': true, 'Backlog': true
-      }
+      },
+      // Floating week-summary widget. Pinned=false means it tracks
+      // the current real-life week, no matter which month is being
+      // viewed. Pinned=true locks it to whichever week the user
+      // last selected (via the calendar's left-edge rail or the
+      // pin button). Position is relative to the calendar wrap;
+      // null = default top-right corner.
+      weekSummaryPinned: false,
+      weekSummaryPos: null
     };
     try {
       var saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
@@ -612,10 +620,10 @@
     var showW = !!_state.settings.showWeekends;
 
     el.innerHTML =
-      // Toolbar — left: nav. Center: production metrics (was a
-      // bottom strip; promoted up so the user reads them at a glance
-      // while planning instead of scrolling to the footer). Right:
-      // compact weekend toggle + add button.
+      // Toolbar — left: nav. Right: compact weekend toggle + add
+      // button. Production metrics moved out to a floating widget
+      // (renderWeekSummaryFloater) so the user can drag them away
+      // from the right-edge buttons and pin them to a chosen week.
       '<div class="sch-cal-toolbar">' +
         '<div class="sch-cal-nav">' +
           '<button class="sch-btn sch-btn-icon" id="schPrev" title="Previous month">&lsaquo;</button>' +
@@ -623,10 +631,6 @@
           '<button class="sch-btn sch-btn-icon" id="schNext" title="Next month">&rsaquo;</button>' +
           '<button class="sch-btn" id="schToday" style="margin-left:6px;">Today</button>' +
         '</div>' +
-        // Production metrics live here now (single source of truth =
-        // refreshWeekSummary). Hidden layout-wise with flex so it
-        // collapses gracefully on narrow viewports.
-        '<div class="sch-week-metrics" id="schWeekSummary"></div>' +
         '<div class="sch-toolbar-spacer"></div>' +
         // Weekend toggle compacted to an icon button — the bulky
         // "Show Sat/Sun columns" label was eating header space.
@@ -638,9 +642,10 @@
         '<button class="sch-btn sch-btn-primary" id="schAddEntry">+ Schedule entry</button>' +
       '</div>' +
       '<div class="sch-cal-grid" id="schGrid"></div>';
-    // refreshWeekSummary populates the metrics — single source of
-    // truth so the label / numbers can't drift between initial render
-    // and post-edit refreshes.
+    // refreshWeekSummary populates the floating metrics widget —
+    // single source of truth so the label / numbers can't drift
+    // between initial render and post-edit refreshes.
+    renderWeekSummaryFloater();
     refreshWeekSummary();
 
     document.getElementById('schPrev').addEventListener('click', function() { stepMonth(-1); });
@@ -931,28 +936,177 @@
         if (e.target.closest('.sch-entry-bar')) return;
         if (e.target.closest('.sch-week-focus-rail')) return;
         var date = cell.getAttribute('data-date');
-        openEntryEditor(null, date);
+        // New behavior: clicking an empty day opens a "day at a
+        // glance" sheet listing every entry on that date with quick
+        // edit/add actions. Direct click-to-create-blank was easy
+        // to trigger by accident and skipped any context — the
+        // sheet gives users a moment to see what's already on the
+        // day before deciding to add or edit.
+        openDaySheet(date);
       });
     });
     // Week focus rails — click pins that week as the metrics target.
+    // Side effect: also flip the floater into "pinned" mode so the
+    // numbers actually stick. Clicking the already-focused rail
+    // unpins (back to current-week tracking).
     grid.querySelectorAll('.sch-week-focus-rail').forEach(function(rail) {
       rail.addEventListener('click', function(e) {
         e.stopPropagation();
         var weekStart = rail.getAttribute('data-week-start');
         if (!weekStart) return;
-        // Toggle: clicking the already-focused week clears the
-        // selection and falls back to default (this week / first
-        // week of visible month).
-        if (_state.focusWeekStart === weekStart) {
+        if (_state.focusWeekStart === weekStart && _state.settings.weekSummaryPinned) {
           _state.focusWeekStart = null;
+          _state.settings.weekSummaryPinned = false;
         } else {
           _state.focusWeekStart = weekStart;
+          _state.settings.weekSummaryPinned = true;
         }
+        saveSettings(_state.settings);
         renderGrid();
         refreshWeekSummary();
       });
     });
     wireResizeHandles(grid);
+  }
+
+  // ── Day sheet — "what's happening this day?" ────────────────
+  // Replaces the old click-to-create-blank-entry flow. Lists every
+  // entry that touches this date (including multi-day entries that
+  // started earlier or extend past) with quick links to edit each
+  // and a primary action to add a fresh entry on this date.
+  function openDaySheet(dateISO) {
+    var prior = document.getElementById('schDaySheet');
+    if (prior) prior.remove();
+
+    var d = parseISODate(dateISO);
+    if (!d) return;
+    var headerLabel = d.toLocaleDateString('en-US', {
+      weekday: 'long', month: 'long', day: 'numeric', year: 'numeric'
+    });
+
+    var entries = entriesOnDay(d).slice();
+    // Sort: earlier-starting entries first; ties broken by job number
+    // so the same-day order stays stable across renders.
+    entries.sort(function(a, b) {
+      var ca = (a.startDate || '').localeCompare(b.startDate || '');
+      if (ca !== 0) return ca;
+      var ja = jobById(a.jobId);
+      var jb = jobById(b.jobId);
+      return ((ja && ja.jobNumber) || '').localeCompare((jb && jb.jobNumber) || '');
+    });
+
+    // Aggregate metrics for this day so the sheet header has the
+    // same "at a glance" feel as the week-summary widget.
+    var scheduledDaysIndex = buildScheduledDaysIndex();
+    var totalRev = 0;
+    var crewIds = {};
+    entries.forEach(function(e) {
+      var job = jobById(e.jobId);
+      var rate = jobDailyRate(job, scheduledDaysIndex);
+      totalRev += rate; // 1 day on this date for each entry that touches it
+      (e.crew || []).forEach(function(id) { crewIds[id] = true; });
+    });
+    var crewCount = Object.keys(crewIds).length;
+
+    var rowsHtml;
+    if (!entries.length) {
+      rowsHtml = '<div class="sch-day-sheet-empty">No production scheduled for this day yet.</div>';
+    } else {
+      rowsHtml = entries.map(function(e) {
+        var job = jobById(e.jobId);
+        var color = colorForJob(e.jobId);
+        var label = jobLabel(job);
+        var crewSize = (e.crew || []).length;
+        var statusCls = e.status ? ' sch-day-row-status-' + e.status : '';
+        // Show this day's position within the entry's span (e.g.
+        // "Day 2 of 4") so PMs can see whether the crew is just
+        // starting, mid-stretch, or wrapping up.
+        var span = entrySpanDays(e);
+        var dayIndex = span.indexOf(dateISO) + 1;
+        var positionLabel = dayIndex > 0 ? 'Day ' + dayIndex + ' of ' + span.length : '';
+        var notes = e.notes ? '<div class="sch-day-row-notes">' + escapeHTML(e.notes) + '</div>' : '';
+        return '<div class="sch-day-row' + statusCls + '" data-entry-id="' + escapeAttr(e.id) + '" ' +
+                'style="--job-color:' + color + ';">' +
+          '<div class="sch-day-row-color"></div>' +
+          '<div class="sch-day-row-main">' +
+            '<div class="sch-day-row-title">' + escapeHTML(label) + '</div>' +
+            '<div class="sch-day-row-meta">' +
+              (positionLabel ? '<span>' + escapeHTML(positionLabel) + '</span>' : '') +
+              (crewSize ? '<span>' + crewSize + ' on crew</span>' : '<span>No crew assigned</span>') +
+              (e.status ? '<span class="sch-day-row-status">' + escapeHTML(e.status) + '</span>' : '') +
+            '</div>' +
+            notes +
+          '</div>' +
+          '<div class="sch-day-row-actions">' +
+            '<button type="button" class="sch-btn sch-day-edit" data-entry-id="' + escapeAttr(e.id) + '">Edit</button>' +
+          '</div>' +
+        '</div>';
+      }).join('');
+    }
+
+    var modal = document.createElement('div');
+    modal.id = 'schDaySheet';
+    modal.className = 'modal active';
+    modal.innerHTML =
+      '<div class="modal-content sch-day-sheet">' +
+        '<div class="sch-day-sheet-header">' +
+          '<div>' +
+            '<div class="sch-day-sheet-eyebrow">Day at a glance</div>' +
+            '<div class="sch-day-sheet-title">' + escapeHTML(headerLabel) + '</div>' +
+          '</div>' +
+          '<button class="sch-btn sch-day-sheet-close" id="schDaySheetClose" title="Close">&#x2715;</button>' +
+        '</div>' +
+        '<div class="sch-day-sheet-stats">' +
+          '<div class="sch-day-stat">' +
+            '<div class="sch-day-stat-label">Entries</div>' +
+            '<div class="sch-day-stat-val">' + entries.length + '</div>' +
+          '</div>' +
+          '<div class="sch-day-stat">' +
+            '<div class="sch-day-stat-label">Crew on site</div>' +
+            '<div class="sch-day-stat-val">' + crewCount + '</div>' +
+          '</div>' +
+          '<div class="sch-day-stat">' +
+            '<div class="sch-day-stat-label">Expected rev.</div>' +
+            '<div class="sch-day-stat-val sch-metric-val-rev">' + fmtMoney(totalRev) + '</div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="sch-day-sheet-rows">' + rowsHtml + '</div>' +
+        '<div class="sch-day-sheet-footer">' +
+          '<button class="sch-btn" id="schDaySheetCancel">Close</button>' +
+          '<button class="sch-btn sch-btn-primary" id="schDaySheetAdd">+ Add entry on this day</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(modal);
+
+    function close() { modal.remove(); }
+    modal.querySelector('#schDaySheetClose').addEventListener('click', close);
+    modal.querySelector('#schDaySheetCancel').addEventListener('click', close);
+    modal.addEventListener('click', function(e) { if (e.target === modal) close(); });
+
+    modal.querySelector('#schDaySheetAdd').addEventListener('click', function() {
+      close();
+      openEntryEditor(null, dateISO);
+    });
+    modal.querySelectorAll('.sch-day-edit').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        var id = btn.getAttribute('data-entry-id');
+        var entry = _state.entries.find(function(x) { return x.id === id; });
+        close();
+        if (entry) openEntryEditor(entry, entry.startDate, entry.jobId);
+      });
+    });
+    // Click anywhere on a row (not the Edit button) to also edit —
+    // Buildertrend-style affordance, mirrors how rows behave in
+    // most "list of records" surfaces in the rest of the app.
+    modal.querySelectorAll('.sch-day-row').forEach(function(row) {
+      row.addEventListener('click', function(e) {
+        if (e.target.closest('.sch-day-edit')) return;
+        var id = row.getAttribute('data-entry-id');
+        var entry = _state.entries.find(function(x) { return x.id === id; });
+        close();
+        if (entry) openEntryEditor(entry, entry.startDate, entry.jobId);
+      });
+    });
   }
 
   // ── Drag-resize: extend / shrink an entry by its right edge ─
@@ -1429,9 +1583,118 @@
     }
   }
 
+  // ── Floating week-summary widget ───────────────────────────
+  // Production metrics used to live inline in the calendar toolbar,
+  // wedged between nav and the +Schedule button — close enough to
+  // those buttons to make misclicks easy. The widget now floats
+  // inside the calendar wrap so the user can drag it anywhere.
+  // It also has its own pin button: pinned = stays on a chosen
+  // week (driven by _state.focusWeekStart); unpinned = always
+  // shows the current real-life week regardless of visible month.
+  function renderWeekSummaryFloater() {
+    var wrap = document.getElementById('schCalWrap');
+    if (!wrap) return;
+    var existing = document.getElementById('schWeekSummary');
+    if (existing) existing.remove();
+
+    var floater = document.createElement('div');
+    floater.id = 'schWeekSummary';
+    floater.className = 'sch-week-floater';
+    // Default position: top-right of the calendar wrap. User-picked
+    // positions persist in localStorage and override the default.
+    var pos = _state.settings.weekSummaryPos;
+    if (pos && typeof pos.left === 'number' && typeof pos.top === 'number') {
+      floater.style.left = pos.left + 'px';
+      floater.style.top = pos.top + 'px';
+      floater.style.right = 'auto';
+    }
+    // Header carries the drag handle on the left and the pin button
+    // on the right. The metric tiles render in the body below.
+    floater.innerHTML =
+      '<div class="sch-week-floater-header">' +
+        '<div class="sch-week-floater-grip" title="Drag to reposition">' +
+          '<span>&#x2630;</span>' +
+        '</div>' +
+        '<div class="sch-week-floater-title" id="schWeekFloaterTitle">Week summary</div>' +
+        '<button type="button" class="sch-week-floater-pin" id="schWeekFloaterPin" ' +
+          'title="Pin / unpin">&#x1F4CC;</button>' +
+      '</div>' +
+      '<div class="sch-week-floater-body" id="schWeekFloaterBody"></div>';
+    wrap.appendChild(floater);
+
+    // Drag — start on the grip, follow pointer, persist on release.
+    var grip = floater.querySelector('.sch-week-floater-grip');
+    grip.addEventListener('mousedown', function(ev) {
+      ev.preventDefault();
+      startFloaterDrag(floater, ev);
+    });
+
+    // Pin toggle — flips _state.settings.weekSummaryPinned. When
+    // turning ON without an active focus week, snap the focus to the
+    // current real-life week so the user has an obvious target;
+    // otherwise the pin appears to do nothing.
+    var pinBtn = floater.querySelector('#schWeekFloaterPin');
+    pinBtn.addEventListener('click', function() {
+      var nowPinned = !_state.settings.weekSummaryPinned;
+      _state.settings.weekSummaryPinned = nowPinned;
+      if (nowPinned && !_state.focusWeekStart) {
+        _state.focusWeekStart = toISODate(startOfWeek(new Date()));
+      }
+      saveSettings(_state.settings);
+      renderGrid();
+      refreshWeekSummary();
+    });
+  }
+
+  function startFloaterDrag(floater, downEv) {
+    var wrap = document.getElementById('schCalWrap');
+    if (!wrap) return;
+    var rect = floater.getBoundingClientRect();
+    var wrapRect = wrap.getBoundingClientRect();
+    var startMouseX = downEv.clientX;
+    var startMouseY = downEv.clientY;
+    var startLeft = rect.left - wrapRect.left;
+    var startTop = rect.top - wrapRect.top;
+
+    function onMove(ev) {
+      var nx = startLeft + (ev.clientX - startMouseX);
+      var ny = startTop + (ev.clientY - startMouseY);
+      // Clamp inside the calendar wrap so the floater can't be
+      // dragged off-screen. Leave a small margin so the grip stays
+      // grabbable even when pinned to an edge.
+      var maxLeft = wrap.clientWidth - floater.offsetWidth - 4;
+      var maxTop = wrap.clientHeight - floater.offsetHeight - 4;
+      nx = Math.max(4, Math.min(maxLeft, nx));
+      ny = Math.max(4, Math.min(maxTop, ny));
+      floater.style.left = nx + 'px';
+      floater.style.top = ny + 'px';
+      floater.style.right = 'auto';
+    }
+    function onUp() {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.body.classList.remove('sch-floater-dragging');
+      var left = parseInt(floater.style.left, 10);
+      var top = parseInt(floater.style.top, 10);
+      if (Number.isFinite(left) && Number.isFinite(top)) {
+        _state.settings.weekSummaryPos = { left: left, top: top };
+        saveSettings(_state.settings);
+      }
+    }
+    document.body.classList.add('sch-floater-dragging');
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  }
+
   function refreshWeekSummary() {
-    var bar = document.getElementById('schWeekSummary');
-    if (!bar) return;
+    var floater = document.getElementById('schWeekSummary');
+    if (!floater) return;
+    var body = floater.querySelector('#schWeekFloaterBody');
+    var title = floater.querySelector('#schWeekFloaterTitle');
+    var pinBtn = floater.querySelector('#schWeekFloaterPin');
+    if (!body) return;
+
+    var pinned = !!_state.settings.weekSummaryPinned;
     var ref = weekSummaryReferenceDate();
     var summary = weekSummaryForCursor(ref);
     var ws = parseISODate(summary.weekStart);
@@ -1442,18 +1705,17 @@
           ? we.getDate()
           : MONTH_NAMES[we.getMonth()].slice(0, 3) + ' ' + we.getDate())
       : 'This week';
-    // Class flag: when the user has explicitly focused a week via the
-    // calendar's left-edge rail, the toolbar metrics get a subtle
-    // pinned styling so the link between the picked row and the
-    // numbers reads immediately.
-    var pinned = !!_state.focusWeekStart;
-    bar.classList.toggle('sch-week-metrics-pinned', pinned);
-    var pinIcon = pinned ? '<span class="sch-metric-pin" title="Click the highlighted week\'s rail again to unpin">&#x1F4CC;</span> ' : '';
-    bar.innerHTML =
-      '<div class="sch-metric">' +
-        '<div class="sch-metric-label">' + pinIcon + 'Week of</div>' +
-        '<div class="sch-metric-val">' + escapeHTML(label) + '</div>' +
-      '</div>' +
+
+    floater.classList.toggle('sch-week-floater-pinned', pinned);
+    if (title) title.textContent = pinned ? 'Pinned: ' + label : 'This week · ' + label;
+    if (pinBtn) {
+      pinBtn.classList.toggle('active', pinned);
+      pinBtn.setAttribute('title', pinned
+        ? 'Pinned to ' + label + '. Click to unpin (will follow current week).'
+        : 'Pin to this week. While unpinned, the widget always shows the current real-life week.');
+    }
+
+    body.innerHTML =
       '<div class="sch-metric">' +
         '<div class="sch-metric-label">Days</div>' +
         '<div class="sch-metric-val">' + summary.scheduledDays + '</div>' +
@@ -1469,23 +1731,20 @@
       '</div>';
   }
 
-  // Pick the date the toolbar week summary reports on. Priority:
-  //   1. _state.focusWeekStart — explicit user pick from clicking
-  //      a week row in the calendar (highlighted with a selection
-  //      ring and remembered for the session).
-  //   2. Today, when viewing the current month.
-  //   3. First day of the visible month, when planning ahead.
+  // Pick the date the week summary reports on.
+  //   - Pinned mode: use the user's chosen week (focusWeekStart).
+  //     Falls back to today if focus is somehow blank.
+  //   - Unpinned mode: ALWAYS today's real-life week, regardless
+  //     of which month is being viewed. This is what users want
+  //     when scrolling through future months — the numbers stay
+  //     anchored to "now" instead of jumping to the first of
+  //     whatever month is on screen.
   function weekSummaryReferenceDate() {
-    if (_state.focusWeekStart) {
+    if (_state.settings.weekSummaryPinned && _state.focusWeekStart) {
       var picked = parseISODate(_state.focusWeekStart);
       if (picked) return picked;
     }
-    var today = new Date();
-    var cur = _state.cursor || startOfMonth(today);
-    if (cur.getFullYear() === today.getFullYear() && cur.getMonth() === today.getMonth()) {
-      return today;
-    }
-    return new Date(cur);
+    return new Date();
   }
 
   // ── Public API ─────────────────────────────────────────────

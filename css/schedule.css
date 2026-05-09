@@ -182,6 +182,8 @@
   flex-direction: column;
   background: var(--surface, #181820);
   border: 1px solid var(--border, #2e3346);
+  /* Anchor for the absolute-positioned week-summary floater. */
+  position: relative;
   border-radius: 10px;
   overflow: hidden;
   min-width: 0;
@@ -537,17 +539,102 @@ body.sch-resizing * {
   user-select: none !important;
 }
 
-/* ─── Toolbar metric tiles ──────────────────────────────────
-   Production metrics that used to live in a footer strip now sit
-   inline in the calendar toolbar. Each tile = a small uppercase
-   label over a value, separated by 1px dividers. Wraps onto a new
-   line on narrow viewports rather than crushing. */
-.sch-week-metrics {
+/* ─── Floating week summary widget ──────────────────────────
+   Production metrics live inside the calendar wrap as an
+   absolutely-positioned floater. Default position: top-right.
+   The user can drag it anywhere via the grip handle on the left
+   of its header, and pin it to a chosen week via the 📌 button
+   on the right. Unpinned mode follows the current real-life
+   week regardless of what month the calendar grid is showing. */
+.sch-week-floater {
+  position: absolute;
+  top: 56px;
+  right: 12px;
+  z-index: 6;
+  background: rgba(15, 15, 30, 0.96);
+  border: 1px solid var(--border, #2e3346);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+  min-width: 220px;
+  user-select: none;
+  backdrop-filter: blur(6px);
+}
+body.light-mode .sch-week-floater {
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+}
+.sch-week-floater.sch-week-floater-pinned {
+  border-color: rgba(27, 133, 65, 0.55);
+  box-shadow: 0 6px 22px rgba(27, 133, 65, 0.25);
+}
+.sch-week-floater-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border, #2e3346);
+  background: linear-gradient(135deg, rgba(79, 140, 255, 0.08), rgba(139, 92, 246, 0.05));
+  border-radius: 8px 8px 0 0;
+}
+.sch-week-floater-grip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  color: var(--text-dim, #888);
+  cursor: grab;
+  font-size: 13px;
+  letter-spacing: -1px;
+  transition: background 0.12s, color 0.12s;
+}
+.sch-week-floater-grip:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text, #e4e6f0);
+}
+body.sch-floater-dragging,
+body.sch-floater-dragging .sch-week-floater-grip {
+  cursor: grabbing !important;
+}
+.sch-week-floater-title {
+  flex: 1;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-dim, #aaa);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sch-week-floater-pinned .sch-week-floater-title {
+  color: #1B8541;
+}
+.sch-week-floater-pin {
+  width: 24px;
+  height: 22px;
+  padding: 0;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-dim, #888);
+  cursor: pointer;
+  font-size: 12px;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.sch-week-floater-pin:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text, #e4e6f0);
+}
+.sch-week-floater-pin.active {
+  background: rgba(27, 133, 65, 0.18);
+  color: #1B8541;
+  border-color: rgba(27, 133, 65, 0.55);
+}
+.sch-week-floater-body {
   display: flex;
   gap: 0;
   align-items: stretch;
-  margin: 0 8px 0 14px;
-  flex-wrap: wrap;
+  padding: 6px 4px;
 }
 .sch-metric {
   display: flex;
@@ -557,7 +644,7 @@ body.sch-resizing * {
   border-left: 1px solid rgba(255, 255, 255, 0.06);
   min-width: 0;
 }
-.sch-metric:first-child { border-left: none; padding-left: 0; }
+.sch-metric:first-child { border-left: none; padding-left: 8px; }
 .sch-metric-label {
   font-size: 9px;
   font-weight: 700;
@@ -577,31 +664,150 @@ body.sch-resizing * {
 }
 .sch-metric-val.sch-metric-val-rev { color: #34d399; }
 
-/* Pinned-week indicator. When the user picks a specific week via
-   the calendar's left-edge focus rail, the toolbar metrics get a
-   subtle AGX-green accent so the link between rail → metrics is
-   obvious. A thin green stripe on the left edge of the metric
-   cluster + a 📌 emoji prefix on the "Week of" label. */
-.sch-week-metrics.sch-week-metrics-pinned {
-  position: relative;
-  background: linear-gradient(90deg, rgba(27, 133, 65, 0.10) 0%, rgba(27, 133, 65, 0) 60%);
-  border-radius: 4px;
-  padding-left: 8px;
-  margin-left: 6px;
-  box-shadow: inset 3px 0 0 0 #1B8541;
+/* ─── Day-at-a-glance sheet ─────────────────────────────────
+   Modal opened by clicking an empty day cell. Lists every
+   entry that touches the date with quick edit / add actions.
+   Replaces the old click-to-create-blank-entry behavior. */
+.sch-day-sheet {
+  max-width: 640px;
+  width: 92vw;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
 }
-.sch-week-metrics.sch-week-metrics-pinned .sch-metric:first-child {
-  padding-left: 6px;
+.sch-day-sheet-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 18px 10px;
+  border-bottom: 1px solid var(--border, #2e3346);
 }
-.sch-metric-pin {
-  display: inline-block;
+.sch-day-sheet-eyebrow {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-dim, #888);
+  margin-bottom: 2px;
+}
+.sch-day-sheet-title {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--text, #e4e6f0);
+}
+.sch-day-sheet-close {
+  padding: 4px 10px !important;
+  font-size: 12px !important;
+}
+.sch-day-sheet-stats {
+  display: flex;
+  gap: 0;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--border, #2e3346);
+  background: linear-gradient(135deg, rgba(79, 140, 255, 0.04), rgba(139, 92, 246, 0.03));
+}
+.sch-day-stat {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid rgba(255, 255, 255, 0.06);
+  padding: 0 14px;
+}
+.sch-day-stat:first-child { border-left: none; padding-left: 0; }
+.sch-day-stat-label {
   font-size: 9px;
-  margin-right: 2px;
-  filter: drop-shadow(0 0 2px rgba(27, 133, 65, 0.6));
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-dim, #888);
 }
-body.light-mode .sch-week-metrics.sch-week-metrics-pinned {
-  background: linear-gradient(90deg, rgba(27, 133, 65, 0.10) 0%, rgba(27, 133, 65, 0) 60%);
-  box-shadow: inset 3px 0 0 0 #1B8541;
+.sch-day-stat-val {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text, #e4e6f0);
+  font-family: 'SF Mono', Consolas, monospace;
+  margin-top: 2px;
+}
+.sch-day-sheet-rows {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 12px;
+}
+.sch-day-sheet-empty {
+  text-align: center;
+  padding: 28px 16px;
+  color: var(--text-dim, #888);
+  font-size: 13px;
+  font-style: italic;
+}
+.sch-day-row {
+  display: grid;
+  grid-template-columns: 4px 1fr auto;
+  gap: 10px;
+  padding: 10px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.sch-day-row:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+body.light-mode .sch-day-row:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+.sch-day-row + .sch-day-row {
+  margin-top: 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
+  padding-top: 12px;
+}
+.sch-day-row-color {
+  background: var(--job-color, #4f8cff);
+  border-radius: 2px;
+}
+.sch-day-row-main { min-width: 0; }
+.sch-day-row-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text, #e4e6f0);
+  margin-bottom: 4px;
+}
+.sch-day-row-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  font-size: 11px;
+  color: var(--text-dim, #888);
+}
+.sch-day-row-status {
+  text-transform: capitalize;
+  font-weight: 600;
+}
+.sch-day-row-status-done .sch-day-row-status { color: #34d399; }
+.sch-day-row-status-in-progress .sch-day-row-status { color: #4f8cff; }
+.sch-day-row-status-rolled-over .sch-day-row-status { color: #fbbf24; }
+.sch-day-row-notes {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-dim, #aaa);
+  line-height: 1.4;
+}
+.sch-day-row-actions {
+  display: flex;
+  align-items: center;
+}
+.sch-day-edit {
+  font-size: 11px !important;
+  padding: 4px 10px !important;
+}
+.sch-day-sheet-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--border, #2e3346);
 }
 
 /* Compact icon-style toggle for show/hide weekends. Replaces the
