@@ -1117,6 +1117,37 @@ async function initSchema() {
          SELECT 1 FROM jsonb_array_elements(value->'skills') s
          WHERE s ? 'agents' AND s->'agents' ? 'ag'
        );
+
+    -- Brand cleanup (2026-05): seeded skill-pack names from the AGX
+    -- era still carry "AGX " prefixes and the legacy "Elle WIP Analyst
+    -- Playbook" name. Strip the prefix and rename Elle so the prompt
+    -- preview / skill-pack list don't surface stale brand artifacts.
+    -- Re-running this is a no-op once the names are clean (the WHERE
+    -- clauses self-gate).
+    UPDATE app_settings
+       SET value = jsonb_set(
+         value, '{skills}',
+         (
+           SELECT COALESCE(jsonb_agg(
+             CASE
+               WHEN s ? 'name' AND s->>'name' = 'Elle WIP Analyst Playbook' THEN
+                 jsonb_set(s, '{name}', '"WIP Analyst Playbook"'::jsonb)
+               WHEN s ? 'name' AND s->>'name' LIKE 'AGX %' THEN
+                 jsonb_set(s, '{name}',
+                   to_jsonb(REGEXP_REPLACE(s->>'name', '^AGX ', '')))
+               ELSE s
+             END
+           ), '[]'::jsonb)
+           FROM jsonb_array_elements(value->'skills') AS s
+         )
+       )
+     WHERE key = 'agent_skills'
+       AND value ? 'skills'
+       AND EXISTS (
+         SELECT 1 FROM jsonb_array_elements(value->'skills') s
+         WHERE s ? 'name'
+           AND (s->>'name' LIKE 'AGX %' OR s->>'name' = 'Elle WIP Analyst Playbook')
+       );
   `);
 
   // Seed built-in roles. ON CONFLICT lets us re-run safely without

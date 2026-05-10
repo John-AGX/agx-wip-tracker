@@ -3727,10 +3727,22 @@
     var totalTokens = d.total_approx_tokens || (stableTokens + dynamicTokens);
     var cachedPct = totalTokens > 0 ? Math.round((stableTokens / totalTokens) * 100) : 0;
 
+    // Map legacy agent_keys (kept around for backward compat in URLs
+    // and stored data) to the current product-facing display names.
+    var AGENT_DISPLAY = {
+      ag:    '86 (estimating)',
+      elle:  '86 (analyst)',
+      job:   '86 (analyst)',
+      hr:    'HR',
+      cra:   'HR',
+      cos:   'Chief of Staff',
+      staff: 'Chief of Staff'
+    };
+    var agentLabel = AGENT_DISPLAY[(d.agent || '').toLowerCase()] || d.agent || '';
     var summary =
       '<div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:14px;background:rgba(79,140,255,0.06);border:1px solid rgba(79,140,255,0.25);border-radius:8px;padding:12px 14px;">' +
         '<div><div style="font-size:10px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;">Agent</div>' +
-          '<div style="font-size:14px;font-weight:600;color:var(--text,#fff);text-transform:capitalize;">' + escapeHTML(d.agent || '') + '</div></div>' +
+          '<div style="font-size:14px;font-weight:600;color:var(--text,#fff);">' + escapeHTML(agentLabel) + '</div></div>' +
         '<div><div style="font-size:10px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;">Entity</div>' +
           '<div style="font-size:13px;color:var(--text,#fff);">' + escapeHTML((d.entity && d.entity.label) || '—') + '</div></div>' +
         (d.ai_phase ? '<div><div style="font-size:10px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;">Phase</div><div>' + phasePill + '</div></div>' : '') +
