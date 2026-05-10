@@ -41,9 +41,12 @@ const MODEL_COSTS = {
 // them. Front-end UIs that want SVG icons render them inline via
 // p86Icon() at the call site.
 const AGENT_LABELS = {
-  estimate: '47 (Estimator)',
-  job:      '86 (Lead Agent)',
-  client:   'HR (Customer Relations)'
+  // 47 was retired in 2026-05 — merged into 86. The estimate
+  // entity_type still reports as 86 (estimating context); the
+  // agent_key 'ag' lives on for back-compat in old conversations.
+  estimate: '86 (Estimator)',
+  job:      '86 (Operator)',
+  client:   'HR (data steward)'
 };
 
 function costFor(model, inputTokens, outputTokens) {

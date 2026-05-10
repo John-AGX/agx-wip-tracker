@@ -2367,10 +2367,15 @@
   // only the user-facing labels change. The 'intake' key was
   // retired — 86 owns lead-intake now; intake sessions still use
   // entity_type='intake' as a label, but agent_key='job'.)
+  // 47 was retired in 2026-05 — its role merged into 86. The agent_key
+  // 'ag' still exists for back-compat (old conversation history reads
+  // cleanly + the estimate AI panel hasn't been re-routed yet) but
+  // displays as 86 everywhere user-facing now. HR's scope expanded to
+  // cover jobs + users in addition to clients + subs.
   var AGENT_LABELS = {
-    ag:  '47 (Estimator)',
-    job: '86 (Lead Agent)',
-    cra: 'HR (86\'s Assistant)'
+    ag:  '86 (Estimator context)',
+    job: '86 (Operator)',
+    cra: 'HR (86\'s data steward)'
   };
 
   function renderAgentSkillsHTML() {
@@ -3047,7 +3052,7 @@
           '<button class="ws-right-tab' + (_agentsView === 'references' ? ' active' : '') + '" onclick="switchAgentsView(\'references\')">&#x1F4D2; References</button>' +
         '</div>' +
         '<div style="flex:1;"></div>' +
-        '<button class="ee-btn" onclick="openChiefOfStaff()" title="Open the Chief of Staff agent — observes 47 / 86 / HR / Intake, audits conversations, reviews skill packs" style="background:linear-gradient(135deg,#fbbf24,#f97316);color:#fff;border:none;font-weight:600;">&#x1F3A9; Ask Chief of Staff</button>' +
+        '<button class="ee-btn" onclick="openChiefOfStaff()" title="Open the Chief of Staff agent — observes 86 + HR, audits conversations, reviews skill packs" style="background:linear-gradient(135deg,#fbbf24,#f97316);color:#fff;border:none;font-weight:600;">&#x1F3A9; Ask Chief of Staff</button>' +
         (showRange
           ? ('<label style="font-size:11px;color:var(--text-dim,#888);">Window</label>' +
              '<select id="agents-range-select" onchange="setAgentsRange(this.value)" style="font-size:12px;padding:4px 8px;">' +
@@ -3404,7 +3409,7 @@
           '<th>Models</th>' +
         '</tr></thead><tbody>';
       rows.forEach(function(c) {
-        var agentLabel = c.entity_type === 'estimate' ? '🎯 47'
+        var agentLabel = c.entity_type === 'estimate' ? '🧬 86 (est.)'
                        : c.entity_type === 'job'      ? '📊 86'
                        : c.entity_type === 'client'   ? '🤝 HR'
                        : c.entity_type === 'intake'   ? '🧲 Intake'
@@ -3626,7 +3631,7 @@
       '<div style="display:flex;gap:10px;align-items:end;margin-bottom:14px;flex-wrap:wrap;">' +
         '<div><label style="display:block;font-size:11px;color:var(--text-dim,#888);margin-bottom:4px;">Agent</label>' +
           '<select id="preview-agent" style="font-size:13px;padding:6px 10px;min-width:160px;">' +
-            '<option value="ag"' + (_previewAgent === 'ag' ? ' selected' : '') + '>47 (estimating)</option>' +
+            '<option value="ag"' + (_previewAgent === 'ag' ? ' selected' : '') + '>86 (estimating context)</option>' +
             '<option value="elle"' + (_previewAgent === 'elle' ? ' selected' : '') + '>86 (analyst)</option>' +
             '<option value="hr"' + (_previewAgent === 'hr' ? ' selected' : '') + '>HR (clients + user health)</option>' +
             '<option value="cos"' + (_previewAgent === 'cos' ? ' selected' : '') + '>Chief of Staff</option>' +
@@ -4105,7 +4110,7 @@
       var rows = (resp && resp.agents) || [];
       // Intake is no longer a separate managed agent — 86 owns the
       // lead-intake flow. Only four agents register on the Anthropic side.
-      var labels = { ag: '47 (Estimator)', job: '86 (Lead Agent — incl. intake)', cra: 'HR (clients + user health)', staff: 'Chief of Staff' };
+      var labels = { ag: '86 (Estimator context — back-compat key)', job: '86 (Operator — incl. intake)', cra: 'HR (clients, jobs, subs, users)', staff: 'Chief of Staff' };
       var allKeys = ['ag', 'job', 'cra', 'staff'];
       var registered = {};
       rows.forEach(function(r) { registered[r.agent_key] = r; });
@@ -4434,7 +4439,7 @@
       host.innerHTML =
         '<div style="margin:0 0 14px 0;padding:12px 14px;background:rgba(251,191,36,0.06);border:1px solid rgba(251,191,36,0.25);border-radius:8px;font-size:12px;line-height:1.5;color:var(--text-dim,#aaa);">' +
           '<div style="font-weight:600;color:#fbbf24;margin-bottom:4px;">&#x1F6A7; Native Skills migration in progress</div>' +
-          'Packs below are Project 86\'s homegrown skill system — still <strong>active in production</strong>; 47 / 86 / HR load them every turn. ' +
+          'Packs below are Project 86\'s homegrown skill system — still <strong>active in production</strong>; 86 + HR load them every turn. ' +
           'Use <button class="ee-btn secondary" onclick="syncAllSkillsToAnthropic()" style="margin:0 4px;font-size:11px;padding:2px 8px;">&#x1F310; Sync all to Anthropic</button> to mirror them as native Skills. ' +
           'Mirrored skills appear in <a href="#" onclick="switchAgentsView(\'anthropic\');return false;" style="color:#4f8cff;">Anthropic &rarr; Skills</a>. ' +
           'Runtime cutover (model loading skills on-demand via beta.agents) is a separate workstream — until then this surface remains source-of-truth.' +

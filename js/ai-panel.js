@@ -279,11 +279,11 @@
     { label: 'Add a property',           prompt: 'Walk me through adding a new property. Ask which parent management company first (search existing parents in the directory). Then collect property name, property_address, on-site CAM name + email + phone, market, and gate code if any. Use create_property to apply.' }
   ];
   var STAFF_PRESETS = [
-    { label: 'How is AG doing this week?',  prompt: 'Pull last 7d metrics for all three agents and tell me what stands out. Then surface the 3 most active conversations across 47 / 86 / HR so I can spot-check.' },
-    { label: 'Audit AG search usage',       prompt: 'Of AG\'s recent conversations, how often did web_search get invoked? Pull a few examples and summarize what AG was searching for. If a pattern emerges (e.g., the same product specs over and over), propose a new skill pack that bakes in the answer so AG stops searching.' },
-    { label: 'Audit & clean skill packs',   prompt: 'Read all skill packs. For each, tell me whether the wording is tight, whether it overlaps with another, and whether it\'s being applied to the right agents. If anything is stale, propose a skill_pack_edit or skill_pack_delete with rationale.' },
-    { label: 'Most expensive conversations', prompt: 'Show me the 5 most token-expensive conversations in the last 30 days across all agents. For the top one, drill in and summarize what happened. If you spot a recurring waste pattern (e.g., AG re-asking the same thing every turn), propose a skill pack that fixes it.' },
-    { label: 'Where is HR being used?',     prompt: 'How is HR being used? Is it actually getting traction or is it sitting idle? Pull recent HR (entity_type=client) conversations and characterize the work. If a pattern emerges that could shift from per-turn instruction to a skill pack, propose it.' }
+    { label: 'How is 86 doing this week?',   prompt: 'Pull last 7d metrics for 86 and HR and tell me what stands out. Then surface the 3 most active conversations so I can spot-check.' },
+    { label: 'Audit 86 search usage',        prompt: 'Of 86\'s recent conversations, how often did web_search get invoked? Pull a few examples and summarize what 86 was searching for. If a pattern emerges (e.g., the same product specs over and over), propose a new skill pack that bakes in the answer so 86 stops searching.' },
+    { label: 'Audit & clean skill packs',    prompt: 'Read all skill packs. For each, tell me whether the wording is tight, whether it overlaps with another, and whether it\'s being applied to the right agents. If anything is stale, propose a skill_pack_edit or skill_pack_delete with rationale.' },
+    { label: 'Most expensive conversations', prompt: 'Show me the 5 most token-expensive conversations in the last 30 days across all agents. For the top one, drill in and summarize what happened. If you spot a recurring waste pattern (e.g., 86 re-asking the same thing every turn), propose a skill pack that fixes it.' },
+    { label: 'Where is HR being used?',      prompt: 'How is HR being used? Is it actually getting traction or is it sitting idle? Pull recent HR (entity_type=client) conversations and characterize the work. If a pattern emerges that could shift from per-turn instruction to a skill pack, propose it.' }
   ];
   function getActivePresets() {
     if (isJobMode())    return JOB_PRESETS;
@@ -981,7 +981,7 @@
       else if (isClientMode())    headerEl.innerHTML = withIcon('chart-pie', '🤝', 'HR · 86\'s Assistant');
       else if (isStaffMode())     headerEl.innerHTML = withIcon('briefcase', '🎩', 'Chief of Staff · Handler');
       else if (isIntakeMode())    headerEl.innerHTML = withIcon('dna',       '📊', '86 · Intake');
-      else                        headerEl.innerHTML = withIcon('detective', '🎯', '47 · Estimator');
+      else                        headerEl.innerHTML = withIcon('dna', '🎯', '86 · Estimator');
     }
     // Plan/Build pill — visible only in estimate mode. Single-icon
     // dropdown: visible icon shows active phase, click opens a popover
@@ -1002,9 +1002,9 @@
         if (isEstimateMode()) {
           phase = (window.estimateEditorAPI && window.estimateEditorAPI.getAIPhase)
             ? window.estimateEditorAPI.getAIPhase() : 'build';
-          agentLabel = '47';
-          planDesc = 'AG discusses scope without proposing line items';
-          buildDesc = 'AG proposes line items + edits';
+          agentLabel = '86';
+          planDesc = '86 discusses scope without proposing line items';
+          buildDesc = '86 proposes line items + edits';
         } else {
           phase = getJobAIPhase(_entityId);
           agentLabel = '86';
@@ -1110,19 +1110,19 @@
     if (trustBtn) trustBtn.style.display = 'none';
     var noticeEl = document.querySelector('#p86-ai-panel #ai-notice');
     if (noticeEl) {
-      if (isJobMode()) noticeEl.textContent = 'I\'m 86, Project 86\'s lead agent. I have range over the whole company — revenue, cost, production, WIP, margin, schedule, the node graph. I delegate to 47 (estimating) and HR (client + research). I can propose edits for you to approve before they apply.';
-      else if (isClientMode()) noticeEl.textContent = 'I\'m HR — 86\'s research + client-relations assistant. I validate addresses, gather property photos via web search, and capture context that helps 86 and 47 do their jobs. Simple writes apply automatically; restructural changes require approval.';
-      else if (isStaffMode()) noticeEl.textContent = 'Chief of Staff — I\'m 86\'s handler. I observe 86 / 47 / HR, audit conversations, and propose skill-pack edits when the playbook needs to evolve. I tune the team rather than do their work.';
-      else if (isIntakeMode()) noticeEl.textContent = 'New lead intake — I\'m 86. Tell me what the lead is (property name, scope, salesperson) and drop any photos. I\'ll dedupe against existing clients/leads, propose the new lead for your approval, and pre-load 47 with everything 47 needs to estimate.';
+      if (isJobMode()) noticeEl.textContent = 'I\'m 86 — Project 86\'s operator. Estimating, scope, line items, leads, WIP, margin, schedule, the node graph — I do all of it. HR keeps the rolodex (clients, jobs, subs, users) clean for me. I propose changes; you approve before they land.';
+      else if (isClientMode()) noticeEl.textContent = 'I\'m HR — 86\'s data steward. I keep the directory clean: clients, jobs, subs, users. Lookups, dedupes, name/short-name fixes, agent notes. I propose changes; 86 or you approve before they apply.';
+      else if (isStaffMode()) noticeEl.textContent = 'Chief of Staff — I\'m 86\'s handler. I observe 86 + HR, audit conversations, and propose skill-pack edits when the playbook needs to evolve. I tune the team rather than do their work.';
+      else if (isIntakeMode()) noticeEl.textContent = 'New lead intake — I\'m 86. Tell me what the lead is (property name, scope, salesperson) and drop any photos. I\'ll dedupe against existing clients/leads, propose the new lead for your approval, and tee up the estimate.';
       else {
-        // AG notice changes wording in Plan mode so the user sees a
-        // clear cue that AG won't propose line items right now.
+        // 86's notice changes wording in Plan mode so the user sees a
+        // clear cue that 86 won't propose line items right now.
         var phaseN = (window.estimateEditorAPI && window.estimateEditorAPI.getAIPhase)
           ? window.estimateEditorAPI.getAIPhase() : 'build';
         if (phaseN === 'plan') {
           noticeEl.textContent = '🗺️ Plan mode — I\'ll think through scope with you and ask questions, but I won\'t propose line items until you flip to 🔨 Build.';
         } else {
-          noticeEl.textContent = 'I\'m 47 — Project 86\'s estimating hitman. I can draft scopes, add/edit/delete line items and sections, and tweak pricing. Every change is shown as a card with Approve / Reject before it lands.';
+          noticeEl.textContent = 'I\'m 86 — your operator. I draft scopes, add/edit/delete line items and sections, run pricing math, and pull from photos / catalogs / web search as needed. Every change shows as a card with Approve / Reject before it lands.';
         }
       }
     }
@@ -1131,7 +1131,7 @@
       if (isClientMode()) inputEl.placeholder = 'Describe a change, ask a question, or tap "Run full audit" below…';
       else if (isJobMode()) inputEl.placeholder = 'Ask anything about this job…';
       else if (isStaffMode()) inputEl.placeholder = 'Ask about agent usage, audit a conversation, review skill packs…';
-      else inputEl.placeholder = 'Ask AG to draft, edit, or clean up the estimate…';
+      else inputEl.placeholder = 'Ask 86 to draft, edit, or clean up the estimate…';
     }
     renderPresets();
   }
@@ -1232,8 +1232,8 @@
       };
       if (isJobMode()) hint = '<strong style="color:var(--text,#fff);">' + hintIcon('dna') + '86 · Lead Agent</strong><br>Pick a preset below or ask anything about this job.<br><span style="font-size:11px;opacity:0.7;">I see contract, costs, COs, %complete, billing — plus the node graph wiring and QuickBooks cost lines.</span>';
       else if (isClientMode()) hint = '<strong style="color:var(--text,#fff);">' + hintIcon('chart-pie') + 'HR · Customer Relations</strong><br>Tap <strong>Run full audit</strong> to clean up the directory in one pass — I\'ll split parent+property compounds, link unparented entries, merge dupes, and surface anything ambiguous for you.<br><span style="font-size:11px;opacity:0.7;">I know the Project 86 hierarchy: parent management company → property/community → CAM contact.</span>';
-      else if (isStaffMode()) hint = '<strong style="color:var(--text,#fff);">' + hintIcon('briefcase') + 'Chief of Staff</strong><br>I observe 47 / 86 / HR — usage, cost, conversations, skill packs — and I can propose skill-pack edits for you to approve.<br><span style="font-size:11px;opacity:0.7;">Conversation replay is still queued.</span>';
-      else hint = '<strong style="color:var(--text,#fff);">' + hintIcon('detective') + '47 · Estimator</strong><br>Pick a preset or describe what you need. I can read the estimate, scope, client, and photos — and propose adds, edits, deletes, and pricing changes for you to approve.<br><span style="font-size:11px;opacity:0.7;">Try "tighten this estimate" or "build my line items".</span>';
+      else if (isStaffMode()) hint = '<strong style="color:var(--text,#fff);">' + hintIcon('briefcase') + 'Chief of Staff</strong><br>I observe 86 + HR — usage, cost, conversations, skill packs — and I can propose skill-pack edits for you to approve.<br><span style="font-size:11px;opacity:0.7;">Conversation replay is still queued.</span>';
+      else hint = '<strong style="color:var(--text,#fff);">' + hintIcon('dna') + '86 · Estimator</strong><br>Pick a preset or describe what you need. I can read the estimate, scope, client, and photos — and propose adds, edits, deletes, and pricing changes for you to approve.<br><span style="font-size:11px;opacity:0.7;">Try "tighten this estimate" or "build my line items".</span>';
       box.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;padding:20px 0;text-align:center;line-height:1.6;">' + hint + '</div>';
       return;
     }
