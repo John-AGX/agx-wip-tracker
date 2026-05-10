@@ -762,16 +762,8 @@
                         <div id="leads-list-view">
                             <div class="action-buttons">
                                 <button class="primary" onclick="openNewLeadModal()" data-cap="LEADS_EDIT">&#x1F465; New Lead</button>
-                                <!-- AI Intake — opens the chat panel with the
-                                     intake agent. Each open is a fresh session;
-                                     drop in a description + photos and approve
-                                     the propose_create_lead card to land the
-                                     lead in one shot. Hidden until the user has
-                                     LEADS_EDIT and the AGENT_MODE_86 env
-                                     var is set; the JS guard double-checks.
-                                     Intake now runs through 86 (no separate
-                                     intake agent). -->
-                                <button class="primary" onclick="window.openIntakeAI && window.openIntakeAI()" data-cap="LEADS_EDIT" title="Describe a new lead in chat — the AI captures details, dedupes against existing clients, and proposes the lead for one-click create." style="background:linear-gradient(135deg,#8b5cf6,#4f8cff);color:#fff;border:none;font-weight:600;">&#x1F9F2; New Lead with AI</button>
+                                <!-- AI intake is now handled by the global Ask 86
+                                     header button — no per-page entry needed. -->
                                 <button class="success" onclick="document.getElementById('leads-import-file').click()" data-cap="LEADS_EDIT" title="Import a Buildertrend Leads xlsx export">&#x1F4E5; Import from Buildertrend</button>
                                 <input type="file" id="leads-import-file" accept=".xlsx" style="display:none;" onchange="handleLeadsImportFile(event)" />
                                 <button class="secondary" onclick="reloadLeadsCache()">Refresh</button>
@@ -2281,7 +2273,7 @@
     <script src="js/qb-costs-view.js?v=10b"></script>
     <script src="js/insights.js?v=5b"></script>
     <script src="js/schedule.js?v=27b"></script>
-    <script src="js/app.js?v=56b"></script>
+    <script src="js/app.js?v=57b"></script>
     <script src="js/messaging.js?v=1b"></script>
     <script src="js/my-files.js?v=1b"></script>
     <script src="js/wip.js?v=69b"></script>

@@ -616,7 +616,8 @@
                         '<p style="margin:0;color:var(--text-dim,#888);font-size:13px;">Pick up where the team is.</p>' +
                     '</div>' +
                     '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
-                        '<button class="primary" onclick="if (typeof window.openIntakeAI === \'function\') window.openIntakeAI();" style="font-size:13px;padding:7px 14px;">&#x1F9F2; New Lead with AI</button>' +
+                        // "New Lead with AI" entry retired — intake now
+                        // runs through the global Ask 86 header button.
                         '<button class="success" onclick="' + estsClick + '" style="font-size:13px;padding:7px 14px;">&#x2795; New Estimate</button>' +
                     '</div>' +
                 '</div>' +
