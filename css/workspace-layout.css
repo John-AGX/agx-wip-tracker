@@ -701,42 +701,49 @@ body.light-mode .jh-strip-card[data-tone="amber"] .jh-strip-label { color: #b453
   padding-right: 6px;
 }
 
-/* Workspace toggle — a prominent icon-led button in the actions slot.
-   Larger than the tabs (the icon is the brand mark for the node-graph
-   workspace, so it earns the extra weight) and reads as a "go-to"
-   destination, not as a tab. .active state lights up so the user can
-   tell at a glance whether they're inside the workspace. */
+/* Workspace toggle — icon-only square button. Larger than the tab
+   strip so it reads as the "go-to-workspace" hero action, with a
+   hover glow + slight scale bump for tactile feedback. .active
+   state stays lit while the user is inside workspace mode so it's
+   obvious which mode they're in. The native title attribute
+   provides the tooltip; no inline label. */
 .ws-workspace-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 16px;
-  font-size: 14px;
-  font-weight: 600;
-  line-height: 1;
-  background: rgba(79, 140, 255, 0.10);
-  border: 1px solid rgba(79, 140, 255, 0.40);
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  background: rgba(79, 140, 255, 0.08);
+  border: 1px solid rgba(79, 140, 255, 0.35);
   color: #ffffff;
-  border-radius: 8px;
+  border-radius: 10px;
   cursor: pointer;
   font-family: inherit;
-  transition: background 0.12s ease, border-color 0.12s ease,
-              box-shadow 0.12s ease, transform 0.12s ease;
+  transition: background 0.15s ease, border-color 0.15s ease,
+              box-shadow 0.18s ease, transform 0.15s ease;
 }
 .ws-workspace-toggle:hover {
-  background: rgba(79, 140, 255, 0.18);
-  border-color: rgba(79, 140, 255, 0.65);
+  background: rgba(79, 140, 255, 0.20);
+  border-color: rgba(79, 140, 255, 0.80);
+  box-shadow: 0 0 18px rgba(79, 140, 255, 0.55),
+              0 0 4px rgba(79, 140, 255, 0.45) inset;
+  transform: translateY(-1px) scale(1.06);
 }
-.ws-workspace-toggle:active { transform: translateY(1px); }
+.ws-workspace-toggle:active { transform: translateY(0) scale(1.02); }
 .ws-workspace-toggle.active {
-  background: rgba(79, 140, 255, 0.28);
-  border-color: rgba(79, 140, 255, 0.85);
-  box-shadow: 0 0 0 2px rgba(79, 140, 255, 0.18);
+  background: rgba(79, 140, 255, 0.30);
+  border-color: rgba(79, 140, 255, 0.95);
+  box-shadow: 0 0 16px rgba(79, 140, 255, 0.60),
+              0 0 0 2px rgba(79, 140, 255, 0.25);
 }
-.ws-workspace-toggle .p86-icon-slot { margin-right: 0; }
+.ws-workspace-toggle .p86-icon-slot {
+  margin-right: 0;
+  display: inline-flex;
+}
 .ws-workspace-toggle .p86-icon {
-  width: 22px;
-  height: 22px;
+  width: 28px;
+  height: 28px;
   flex: 0 0 auto;
 }
 

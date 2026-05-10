@@ -359,12 +359,13 @@
     RIGHT_TABS.forEach(function(tab, i) {
       tabsHtml += '<button class="ws-right-tab' + (i === 0 ? ' active' : '') + '" data-panel="' + tab.id + '"' + (tab.icon ? ' data-p86-icon="' + tab.icon + '"' : '') + '>' + tab.label + '</button>';
     });
-    // Workspace is a prominent action button (not a tab). Clicking it
-    // toggles the node-graph canvas + floating workspace panel; clicking
-    // it again restores whichever tab was active before. Ask 86 is gone
-    // from this slot — the global Ask 86 header button covers it.
+    // Workspace is a prominent icon-only action button (not a tab).
+    // Clicking it toggles the node-graph canvas + floating workspace
+    // panel; clicking it again restores whichever tab was active before.
+    // Ask 86 is gone from this slot — the global Ask 86 header button
+    // covers it. The title attribute is the tooltip; no inline label.
     tabsHtml += '<div class="ws-right-tabs-actions">' +
-      '<button class="ws-workspace-toggle" id="wsWorkspaceToggle" type="button" data-p86-icon="graph" title="Open node-graph workspace (toggle)">Workspace</button>' +
+      '<button class="ws-workspace-toggle" id="wsWorkspaceToggle" type="button" data-p86-icon="graph" title="Open the node-graph workspace — click again to return to this tab" aria-label="Workspace"></button>' +
     '</div>';
     tabsHtml += '</div>';
 
