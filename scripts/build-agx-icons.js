@@ -97,7 +97,29 @@ const MAP = {
   'detective':       'phosphor/detective-bold',
   'dna':             'phosphor/dna-bold',
   // Folder glyph for the My Files header button.
-  'folder':          'heroicons/folder'
+  'folder':          'heroicons/folder',
+  // Weather glyph set for the schedule day-cell + entry-bar + header
+  // chips. Phosphor light line weight matches the rest of the AGX
+  // icon system; "wx-" prefix scopes them so weather lookups don't
+  // collide with future "cloud" / "sun" / "warning" usage in non-
+  // weather contexts. Mapped to the schedule's three risk levels +
+  // a few specific conditions:
+  //   wx-sun           sunny, clear
+  //   wx-cloud-sun     partly cloudy / mixed
+  //   wx-cloud         overcast / mostly cloudy
+  //   wx-cloud-rain    showers / rain
+  //   wx-cloud-lightning thunderstorms
+  //   wx-cloud-snow    snow / sleet
+  //   wx-cloud-fog     fog / mist / haze
+  //   wx-cloud-warning severe / advisory / "warning"-labeled forecasts
+  'wx-sun':            'phosphor/sun-light',
+  'wx-cloud-sun':      'phosphor/cloud-sun-light',
+  'wx-cloud':          'phosphor/cloud-light',
+  'wx-cloud-rain':     'phosphor/cloud-rain-light',
+  'wx-cloud-lightning':'phosphor/cloud-lightning-light',
+  'wx-cloud-snow':     'phosphor/cloud-snow-light',
+  'wx-cloud-fog':      'phosphor/cloud-fog-light',
+  'wx-cloud-warning':  'phosphor/cloud-warning-light'
 };
 
 const HEADER = `// AGX Icon Helper — inline SVG icons (auto-generated).

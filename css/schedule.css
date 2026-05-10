@@ -845,6 +845,13 @@ body.light-mode .sch-day-row:hover {
 .sch-cal-day-wx-icon {
   font-size: 11px;
   line-height: 1;
+  display: inline-flex;
+  align-items: center;
+}
+.sch-cal-day-wx-icon .p86-icon {
+  width: 13px;
+  height: 13px;
+  vertical-align: middle;
 }
 .sch-cal-day-wx-temp {
   font-family: 'SF Mono', Consolas, monospace;
@@ -890,6 +897,11 @@ body.light-mode .sch-cal-day-wx.sch-wx-red {
 .sch-entry-bar-wx-icon.sch-wx-red {
   background: rgba(248, 113, 113, 0.45);
   box-shadow: inset 0 0 0 1px rgba(248, 113, 113, 0.85);
+}
+.sch-entry-bar-wx-icon .p86-icon {
+  width: 11px;
+  height: 11px;
+  vertical-align: middle;
 }
 
 .sch-day-row-wx {
@@ -939,6 +951,13 @@ body.light-mode .sch-day-row-wx.sch-wx-red {
 .sch-wx-icon {
   font-size: 13px;
   line-height: 1;
+  display: inline-flex;
+  align-items: center;
+}
+.sch-wx-icon .p86-icon {
+  width: 14px;
+  height: 14px;
+  vertical-align: middle;
 }
 .sch-day-row-wx-msg {
   flex: 1;
@@ -1016,6 +1035,13 @@ body.light-mode .sch-day-row-wx.sch-wx-red {
   font-size: 22px;
   line-height: 1.1;
   margin: 2px 0 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.sch-job-wx-icon .p86-icon {
+  width: 24px;
+  height: 24px;
 }
 .sch-job-wx-card-temp {
   font-size: 14px;

@@ -463,10 +463,36 @@
   }
 
   // Glyph + label helpers for the chip / forecast tile.
-  function weatherIconForRisk(risk) {
-    if (risk === 'red') return '⚠️';      // ⚠️
-    if (risk === 'yellow') return '☁️';   // ☁️
-    return '☀️';                           // ☀️
+  // Picks an AGX phosphor icon (wx-* registry name) based on the
+  // forecast period's actual condition text — sunny gets a sun,
+  // thunderstorms get the lightning bolt, fog gets fog, etc. Falls
+  // back to a risk-driven default when the summary text doesn't
+  // match a known condition. Risk-tinted background on the chip
+  // (CSS) still carries the green/yellow/red signal alongside.
+  function weatherIconNameFor(day) {
+    if (!day) return 'wx-sun';
+    var text = String(day.summary || '').toLowerCase();
+    if (/thunder|lightning|t-?storm/.test(text)) return 'wx-cloud-lightning';
+    if (/snow|sleet|flurr|wintry/.test(text)) return 'wx-cloud-snow';
+    if (/fog|mist|haze/.test(text)) return 'wx-cloud-fog';
+    if (/rain|shower|drizzle|storm/.test(text)) return 'wx-cloud-rain';
+    if (/partly|mostly|few clouds|broken/.test(text)) return 'wx-cloud-sun';
+    if (/cloud|overcast/.test(text)) return 'wx-cloud';
+    if (/sunny|clear|fair/.test(text)) return 'wx-sun';
+    // Fallback by risk level when the summary doesn't match.
+    if (day.risk === 'red') return 'wx-cloud-warning';
+    if (day.risk === 'yellow') return 'wx-cloud';
+    return 'wx-sun';
+  }
+  // Renders the Phosphor SVG inline. Used by chip slots that don't
+  // get the data-p86-icon auto-decorator (because the chip element
+  // itself is the icon container — no separate child).
+  function weatherIconSVG(day) {
+    var name = weatherIconNameFor(day);
+    if (typeof window.p86Icon === 'function') {
+      return window.p86Icon(name);
+    }
+    return '';
   }
 
   // Build the per-row weather strip for the day sheet. Handles the
@@ -514,14 +540,14 @@
         '<span class="sch-day-row-wx-msg">Beyond 7-day forecast</span>' +
       '</div>';
     }
-    var icon = weatherIconForRisk(day.risk);
+    var iconSVG = weatherIconSVG(day);
     var temp = (day.tempHigh != null) ? day.tempHigh + '°' +
                (day.tempLow != null ? ' / ' + day.tempLow + '°' : '') : '';
     var precip = day.precipPct ? day.precipPct + '% rain' : '';
     var wind = day.windMph ? day.windMph + ' mph wind' : '';
     var bits = [day.summary, temp, precip, wind].filter(Boolean);
     return '<div class="sch-day-row-wx sch-wx-' + day.risk + '">' +
-      '<span class="sch-wx-icon">' + icon + '</span>' +
+      '<span class="sch-wx-icon">' + iconSVG + '</span>' +
       '<span class="sch-day-row-wx-msg">' + escapeHTML(bits.join(' · ')) + '</span>' +
     '</div>';
   }
@@ -1084,11 +1110,11 @@
         }
         if (dayWx.precipPct) wxBits.push(dayWx.precipPct + '% rain');
         if (dayWx.windMph) wxBits.push(dayWx.windMph + ' mph wind');
-        var wxIcon = weatherIconForRisk(dayWx.risk);
+        var wxIconSVG = weatherIconSVG(dayWx);
         var wxTemp = (dayWx.tempHigh != null) ? (dayWx.tempHigh + '°') : '';
         wxHtml = '<span class="sch-cal-day-wx sch-wx-' + dayWx.risk +
                  '" title="' + escapeAttr(wxBits.filter(Boolean).join(' · ')) + ' (your location)">' +
-          '<span class="sch-cal-day-wx-icon">' + wxIcon + '</span>' +
+          '<span class="sch-cal-day-wx-icon">' + wxIconSVG + '</span>' +
           (wxTemp ? '<span class="sch-cal-day-wx-temp">' + escapeHTML(wxTemp) + '</span>' : '') +
         '</span>';
       }
@@ -1153,7 +1179,7 @@
           (dayWx.windMph ? ' · ' + dayWx.windMph + ' mph wind' : '');
         wxHtml = '<span class="sch-entry-bar-wx-icon sch-wx-' + dayWx.risk + '" ' +
                  'title="' + escapeAttr(wxTitle) + '">' +
-          weatherIconForRisk(dayWx.risk) +
+          weatherIconSVG(dayWx) +
         '</span>';
       }
       html += '<div class="sch-entry-bar' + statusCls + '" ' +
@@ -2037,7 +2063,7 @@
     // the full NWS summary text.
     var cards = w.days.map(function(d) {
       var iconClass = 'sch-job-wx-icon sch-wx-' + d.risk;
-      var icon = weatherIconForRisk(d.risk);
+      var iconSVG = weatherIconSVG(d);
       var dateLabel = (function() {
         var dd = parseISODate(d.date);
         if (!dd) return d.date;
@@ -2053,7 +2079,7 @@
                          (d.tempHigh != null ? ' · ' + d.tempHigh + '°' : '') +
                          (d.tempLow != null ? ' / ' + d.tempLow + '°' : '')) + '">' +
         '<div class="sch-job-wx-card-date">' + escapeHTML(dateLabel) + '</div>' +
-        '<div class="' + iconClass + '">' + icon + '</div>' +
+        '<div class="' + iconClass + '">' + iconSVG + '</div>' +
         '<div class="sch-job-wx-card-temp">' +
           '<span class="sch-job-wx-card-hi">' + escapeHTML(temp) + '</span>' +
           (lo ? ' <span class="sch-job-wx-card-lo">' + escapeHTML(lo) + '</span>' : '') +

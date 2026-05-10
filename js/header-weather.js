@@ -95,10 +95,21 @@
     });
   }
 
-  function weatherIconForRisk(risk) {
-    if (risk === 'red') return '⚠️';
-    if (risk === 'yellow') return '☁️';
-    return '☀️';
+  // Picks the wx-* phosphor icon name based on actual conditions.
+  // Mirrors the picker in schedule.js so the header chip and the
+  // calendar chips stay visually consistent for the same forecast.
+  function weatherIconNameFor(state) {
+    var text = String(state.summary || '').toLowerCase();
+    if (/thunder|lightning|t-?storm/.test(text)) return 'wx-cloud-lightning';
+    if (/snow|sleet|flurr|wintry/.test(text)) return 'wx-cloud-snow';
+    if (/fog|mist|haze/.test(text)) return 'wx-cloud-fog';
+    if (/rain|shower|drizzle|storm/.test(text)) return 'wx-cloud-rain';
+    if (/partly|mostly|few clouds|broken/.test(text)) return 'wx-cloud-sun';
+    if (/cloud|overcast/.test(text)) return 'wx-cloud';
+    if (/sunny|clear|fair/.test(text)) return 'wx-sun';
+    if (state.risk === 'red') return 'wx-cloud-warning';
+    if (state.risk === 'yellow') return 'wx-cloud';
+    return 'wx-sun';
   }
 
   function paintChip() {
@@ -110,7 +121,8 @@
       return;
     }
     var risk = _state.risk || 'green';
-    var icon = weatherIconForRisk(risk);
+    var iconName = weatherIconNameFor(_state);
+    var iconSVG = (typeof window.p86Icon === 'function') ? window.p86Icon(iconName) : '';
     var temp = _state.tempHigh != null
       ? _state.tempHigh + '°'
       : (_state.tempLow != null ? _state.tempLow + '°' : '');
@@ -124,7 +136,7 @@
     el.className = 'header-weather header-weather-' + risk;
     el.hidden = false;
     el.innerHTML =
-      '<span class="header-weather-icon">' + icon + '</span>' +
+      '<span class="header-weather-icon">' + iconSVG + '</span>' +
       '<span class="header-weather-temp">' + escapeHTML(temp) + '</span>';
   }
 
