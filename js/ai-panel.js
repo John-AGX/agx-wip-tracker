@@ -1360,6 +1360,7 @@
     read_job_pct_audit:           'Auditing % complete…',
     read_jobs:                    'Looking up jobs…',
     read_users:                   'Looking up users…',
+    load_skill_pack:              'Loading skill pack…',
     // Estimate proposals (line items / sections / groups / scope / pricing)
     propose_add_line_item:        'Drafting line item…',
     propose_update_line_item:     'Drafting line edit…',
@@ -2155,7 +2156,8 @@
     read_conversation_detail: true,
     read_skill_packs: true,
     read_jobs: true,
-    read_users: true
+    read_users: true,
+    load_skill_pack: true
   };
   function execAGAutoTool(name, input) {
     return window.p86Api.post('/api/ai/exec-tool', { name: name, input: input || {} })

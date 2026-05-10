@@ -1078,12 +1078,27 @@ const JOB_TOOLS = [
   },
   {
     name: 'read_skill_packs',
-    description: 'List the admin-editable skill packs that the AI agents load at chat time. Each pack has name, body, agent assignments, alwaysOn flag. Use to recommend new skills, audit existing ones, or answer "what context do I always see?". Auto-tier.',
+    description: 'List the admin-editable skill packs that the AI agents load at chat time. Each pack has name, body, agent assignments, alwaysOn flag. Use to recommend new skills, audit existing ones, or answer "what context do I always see?". Auto-tier. NOTE: bodies are TRUNCATED to ~600 chars per pack — call load_skill_pack(name) to fetch the full body of a single pack you intend to actually follow.',
     input_schema: {
       type: 'object',
       additionalProperties: false,
       properties: {},
       required: []
+    }
+  },
+  {
+    name: 'load_skill_pack',
+    description:
+      'Pull the FULL body of a single named skill pack into your working context. ' +
+      'Use this from the global Ask 86 surface when the user asks about a topic that maps to one of the context-tagged packs (Estimating Playbook for line-item questions, WIP Analyst Playbook for margin/WIP questions, Workspace placement for node-graph questions, etc.) — read_skill_packs to see what is available, then load_skill_pack to pull the one you need. ' +
+      'Auto-tier (no approval). Returns the full body verbatim; treat the loaded pack as binding additional guidance for the rest of the turn.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        name: { type: 'string', description: 'Exact pack name (case-sensitive). Get this from read_skill_packs.' }
+      },
+      required: ['name']
     }
   },
   {
@@ -1486,6 +1501,7 @@ async function buildEstimateContext(estimateId, includePhotos) {
   // Pass turn context so packs with triggers (e.g. min_groups, has_lead)
   // can load conditionally instead of always.
   const triggerCtx = {
+    entity_type: 'estimate',
     group_count: alternates.length,
     has_lead: !!blob.lead_id,
     has_client: !!blob.client_id
@@ -1590,6 +1606,7 @@ const PLAN_MODE_ALLOWED_JOB_TOOLS = new Set([
   'read_recent_conversations',
   'read_conversation_detail',
   'read_skill_packs',
+  'load_skill_pack',
   'read_jobs',
   'read_users',
   'read_clients',
@@ -1626,12 +1643,28 @@ async function loadActiveSkillsFor(agentKey, triggerCtx) {
     // don't double-load.
     return skills
       .filter(s => s && s.alwaysOn !== false && Array.isArray(s.agents) && s.agents.indexOf(agentKey) >= 0 && s.body && !s.replaces_section)
+      .filter(s => packContextsPass(s.contexts, triggerCtx))
       .filter(s => packTriggersPass(s.triggers, triggerCtx))
       .map(s => ({ name: s.name || '(untitled skill)', body: s.body, category: s.category || null }));
   } catch (e) {
     console.error('loadActiveSkillsFor error:', e);
     return [];
   }
+}
+
+// Match a pack's `contexts` array against the current turn's entity_type.
+// A missing or empty contexts array means "load everywhere" (legacy /
+// global packs). Once set, the pack only loads when the current
+// entity_type is in the list. This is what makes 86 context-aware:
+// estimate-only packs don't burn tokens during a WIP turn, etc.
+//
+// Recognized entity_types for 86: 'estimate', 'job', 'intake', 'ask86'.
+// Recognized for HR: 'client'. CoS: 'staff'.
+function packContextsPass(contexts, ctx) {
+  if (!Array.isArray(contexts) || contexts.length === 0) return true;
+  const et = ctx && ctx.entity_type;
+  if (!et) return true; // caller didn't supply entity_type — be permissive
+  return contexts.indexOf(et) >= 0;
 }
 
 // Evaluate a pack's triggers object against the current turn's context.
@@ -3503,10 +3536,10 @@ async function buildJobContext(jobId, clientContext, aiPhase) {
   lines.push('');
   renderSection(lines, 'elle_web_research', elleSectionOverrides);
 
-  // Skill packs targeted at 86. Same loader as 86 / HR; agentKey
-  // for 86 is 'job' (matches entity_type for back-compat). Appended
-  // as standalone sections so the model sees them as binding.
-  const elleSkills = await loadActiveSkillsFor('job');
+  // Skill packs targeted at 86 in JOB context. Pass entity_type='job'
+  // so context-tagged packs (WIP analyst, QB cost mapping, workspace
+  // placement, etc.) load while estimate-only packs stay out.
+  const elleSkills = await loadActiveSkillsFor('job', { entity_type: 'job' });
   if (elleSkills.length) {
     lines.push('');
     lines.push('# Loaded skills');
@@ -4771,7 +4804,7 @@ async function buildClientDirectoryContext() {
   // Skill packs targeted at HR (customer relations). Same loader as
   // 86 — admin-editable additions to the baseline prompt. Stable across
   // the cache window since admins rarely edit them mid-session.
-  const craSkills = await loadActiveSkillsFor('cra');
+  const craSkills = await loadActiveSkillsFor('cra', { entity_type: 'client' });
   if (craSkills.length) {
     stable.push('# Loaded skills');
     stable.push('Skill packs your admin has assigned. Treat each as binding additional guidance.');
@@ -5677,16 +5710,38 @@ async function execStaffTool(name, input) {
       const lines = ['Skill packs (' + skills.length + '):'];
       for (const s of skills) {
         const agents = Array.isArray(s.agents) ? s.agents.join(',') : '(none)';
+        const ctxs = Array.isArray(s.contexts) && s.contexts.length ? s.contexts.join(',') : 'all';
         const onOff = s.alwaysOn === false ? 'inactive' : 'always-on';
-        lines.push('• "' + (s.name || '(untitled)') + '" → agents=' + agents + ', ' + onOff);
+        lines.push('• "' + (s.name || '(untitled)') + '" → agents=' + agents + ', contexts=' + ctxs + ', ' + onOff);
         const body = String(s.body || '');
         if (body) {
           lines.push('  ```');
-          lines.push('  ' + (body.length > 600 ? body.slice(0, 600) + ' [...truncated]' : body).split('\n').join('\n  '));
+          lines.push('  ' + (body.length > 600 ? body.slice(0, 600) + ' [...truncated — call load_skill_pack to fetch the full body]' : body).split('\n').join('\n  '));
           lines.push('  ```');
         }
       }
       return lines.join('\n');
+    }
+
+    case 'load_skill_pack': {
+      const wantName = String((input && input.name) || '').trim();
+      if (!wantName) return 'name parameter is required.';
+      const r = await pool.query(`SELECT value FROM app_settings WHERE key = 'agent_skills'`);
+      const cfg = r.rows.length ? (r.rows[0].value || {}) : {};
+      const skills = Array.isArray(cfg.skills) ? cfg.skills : [];
+      const pack = skills.find(s => s && s.name === wantName);
+      if (!pack) {
+        const known = skills.map(s => s && s.name).filter(Boolean).join(', ');
+        return 'No skill pack named "' + wantName + '". Known packs: ' + (known || '(none)');
+      }
+      const body = String(pack.body || '').trim();
+      if (!body) return 'Pack "' + wantName + '" has an empty body.';
+      const meta = [];
+      if (Array.isArray(pack.agents) && pack.agents.length) meta.push('agents=' + pack.agents.join(','));
+      if (Array.isArray(pack.contexts) && pack.contexts.length) meta.push('contexts=' + pack.contexts.join(','));
+      meta.push(pack.alwaysOn === false ? 'inactive' : 'always-on');
+      return '# ' + pack.name + ' (' + meta.join(', ') + ')\n\n' + body +
+        '\n\n— end of pack body. Treat the above as binding additional guidance for this turn.';
     }
 
     case 'read_materials': {
@@ -7040,6 +7095,25 @@ async function buildIntakeContext(userId) {
   const bucket = _intakeImageBuckets.get(userId);
   const n = bucket && bucket.images ? bucket.images.length : 0;
   lines.push('Photos staged this turn: ' + n + (n ? ' (in scope for attach_pending_photos:true on propose_create_lead)' : ''));
+
+  // Context-tagged skill packs for the intake mode (Lead/Client Linking,
+  // etc.). Appended to the turn-context block so they ride along with
+  // the per-turn payload. V2 sessions cache the agent definition; this
+  // is dynamic per-turn supplementary guidance.
+  try {
+    const intakePacks = await loadActiveSkillsFor('job', { entity_type: 'intake' });
+    if (intakePacks.length) {
+      lines.push('');
+      lines.push('# Loaded skills (intake context)');
+      lines.push('Skill packs your admin has tagged for the intake flow. Treat each as binding additional guidance.');
+      intakePacks.forEach(s => {
+        lines.push('## ' + s.name);
+        lines.push(s.body);
+        lines.push('');
+      });
+    }
+  } catch (e) { /* defensive — intake still works without packs */ }
+
   return { system: lines.join('\n') };
 }
 
@@ -7533,7 +7607,9 @@ const ALLOWED_AG_AUTO_TOOLS = new Set([
   'read_skill_packs',
   // HR directory reads — let 86 do who/where/what lookups inline
   'read_jobs',
-  'read_users'
+  'read_users',
+  // Dynamic skill loading — global Ask 86 pulls a pack on-demand
+  'load_skill_pack'
 ]);
 // Tools whose executor lives in execClientTool (HR's directory reads)
 // rather than execStaffTool. The dispatcher routes by name.
@@ -7677,25 +7753,67 @@ const INTAKE_TOOLS = [
 // ──────────────────────────────────────────────────────────────────
 async function buildAsk86Context() {
   const stable = [];
-  stable.push('You are 86, Project 86\'s operator agent. Project 86 is a Central-Florida construction-services platform (painting, deck repair, roofing, exterior services for HOAs and apartment communities). The user is talking to you from the global "Ask 86" surface — there is NO specific entity (estimate / job / client / lead) attached to this conversation.');
+  stable.push('You are 86, Project 86\'s lead operator agent. Project 86 is a Central-Florida construction-services platform (painting, deck repair, roofing, exterior services for HOAs and apartment communities). The user is talking to you from the global "Ask 86" surface — there is NO specific entity (estimate / job / client / lead) attached to this conversation.');
   stable.push('');
-  stable.push('# Capabilities here');
-  stable.push('  • Web search via the `web_search` tool — pricing lookups, code references, product specs, supplier research.');
-  stable.push('  • The live reference sheets (job-number lookup, WIP report, etc.) auto-injected below — use them for company-data answers.');
-  stable.push('  • General knowledge / reasoning.');
+  stable.push('# Your scope');
+  stable.push('  You are the company\'s primary AI surface. You take questions about anything — leads, estimates, jobs, WIP, margins, the team, costs — and either answer directly or point the user at the right entity panel for deeper work.');
+  stable.push('  HR (the data steward) and Chief of Staff (the auditor) are your sub-specialists; you can read across their domains via the tools below, and the user can open their dedicated panels when they want to talk to those agents directly.');
   stable.push('');
-  stable.push('# What you cannot do here');
-  stable.push('  • You have NO entity-mutating tools in this surface. No propose_add_line_item, propose_create_lead, set_phase_field, etc. If the user asks for a change to a specific estimate/job/lead, point them at the right surface — e.g., "Open the AI panel from inside that estimate to propose line items" — and offer to draft the language they should paste.');
-  stable.push('  • You can\'t see a specific job\'s WIP, a specific estimate\'s lines, etc. Those load from per-entity context the panel-AI panels build. If they want that detail, they should open the entity.');
+  stable.push('# Tools available here');
+  stable.push('  ## Read tools (auto-execute, no approval)');
+  stable.push('  • `read_jobs(q?, status?, limit?)` — job directory lookup (jobNumber, title, client, address, PM).');
+  stable.push('  • `read_users(q?, role?, active_only?, limit?)` — staff directory lookup.');
+  stable.push('  • `read_clients(q?, limit?)` — client directory lookup.');
+  stable.push('  • `read_subs(q?, trade?, status?, with_expiring_certs?, limit?)` — subcontractor directory.');
+  stable.push('  • `read_lead_pipeline(q?, status?, market?, salesperson_email?, limit?)` — leads + pipeline rollup.');
+  stable.push('  • `read_materials(q?, subgroup?, category?, limit?)` — material catalog (with last-paid pricing).');
+  stable.push('  • `read_purchase_history(material_id?, q?, days?, job_name?, limit?)` — receipt-level material rows.');
+  stable.push('  • `read_metrics(range)` — agent-usage metrics (turns, tokens, cost) for last 7d / 30d.');
+  stable.push('  • `read_recent_conversations(range, entity_type?, limit?)` — list recent agent conversations.');
+  stable.push('  • `read_conversation_detail(key)` — full message log of a specific conversation.');
+  stable.push('  • `read_skill_packs()` — list all skill packs (names + truncated bodies).');
+  stable.push('  • `load_skill_pack(name)` — pull the FULL body of a single named pack into your turn. Call this when the user\'s question maps to a context-tagged pack:');
+  stable.push('      - Estimating / line-item / pricing question → load "Estimating Playbook" (and "Pricing Benchmark Loop" / "Group Discipline" / "Cross-Group Awareness" as relevant).');
+  stable.push('      - WIP / margin / change-order / QB-mapping question → load "WIP Analyst Playbook" or "QB cost to node mapping".');
+  stable.push('      - Node-graph / workspace question → load "Workspace placement and wiring discipline".');
+  stable.push('      - Lead / client-link question → load "Lead/Client Linking".');
+  stable.push('  • `web_search` — pricing, code references, product specs, supplier research.');
+  stable.push('  Live reference sheets (job-number lookup, WIP report, etc.) are auto-injected below — use them for company-data answers without burning a tool call.');
+  stable.push('');
+  stable.push('# What you cannot do from THIS surface');
+  stable.push('  You have NO entity-mutating tools in the global Ask 86 surface — no propose_add_line_item, propose_create_lead, set_phase_field, set_node_value, etc. If the user asks for a change to a specific estimate / job / lead, point them at the right entity panel ("Open the AI panel from inside that estimate to propose line items") and offer to draft the language they should paste in.');
+  stable.push('  You also can\'t see a specific job\'s WIP detail, a specific estimate\'s line items, etc., unless the user supplies them. Those live in the per-entity context that the dedicated panel-AIs build. If they want that detail, they should open the entity.');
   stable.push('');
   stable.push('# Tone');
-  stable.push('  • Concise. Construction trade vocabulary welcome. If the user\'s question would be better answered inside a specific entity\'s AI panel, say so up front so they don\'t spin their wheels here.');
+  stable.push('  Concise. Construction trade vocabulary welcome. Lead with the answer, not the framing. If the user\'s question would be better answered inside a specific entity\'s AI panel, say so up front so they don\'t spin their wheels here.');
 
+  // Ask 86 doesn't auto-load any context-tagged skill packs by default
+  // — entity_type='ask86' won't match estimate/job/intake-tagged packs.
+  // That's intentional: in the global surface, 86 reads what packs are
+  // available via read_skill_packs and pulls them in via load_skill_pack
+  // only when relevant to the user's question. Saves tokens on every
+  // turn that doesn't need a specific playbook.
   return {
     system: [
       { type: 'text', text: stable.join('\n'), cache_control: { type: 'ephemeral' } }
     ]
   };
+}
+
+// Tools available on the global Ask 86 surface — all read-only, since
+// this surface is not entity-scoped. Mutation tools live on the per-
+// entity panels (estimate / job / intake / client). Built lazily so
+// JOB_TOOLS is fully defined before this captures references.
+function ask86Tools() {
+  const wanted = new Set([
+    'read_jobs', 'read_users', 'read_clients',
+    'read_subs', 'read_lead_pipeline',
+    'read_materials', 'read_purchase_history',
+    'read_metrics', 'read_recent_conversations', 'read_conversation_detail',
+    'read_skill_packs', 'load_skill_pack',
+    'read_past_estimates', 'read_past_estimate_lines', 'read_leads'
+  ]);
+  return JOB_TOOLS.filter(t => wanted.has(t.name));
 }
 
 router.get('/ask86/messages', requireAuth, async (req, res) => {
@@ -7765,7 +7883,12 @@ router.post('/ask86/chat', requireAuth, async (req, res) => {
       anthropic, res,
       system: ctx.system,
       messages,
-      tools: [],  // web_search is added back inside runStream via WEB_TOOLS
+      // Read-only tool set for global Ask 86 — directory lookups,
+      // metrics, conversation audits, skill-pack introspection, dynamic
+      // skill loading. NO entity-mutation tools (those live on the
+      // per-entity panels). web_search is added by runStream via
+      // WEB_TOOLS regardless of this list.
+      tools: ask86Tools(),
       agentKey: 'job',
       persistAssistantText: async (text, usage) => {
         if (!text) return;

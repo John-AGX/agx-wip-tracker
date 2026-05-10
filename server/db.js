@@ -1161,6 +1161,7 @@ async function initSchema() {
                jsonb_build_object(
                  'name', 'Workspace placement and wiring discipline',
                  'agents', jsonb_build_array('job'),
+                 'contexts', jsonb_build_array('job'),
                  'alwaysOn', true,
                  'body',
                  E'# Workspace node-graph placement and wiring\n' ||
@@ -1197,6 +1198,108 @@ async function initSchema() {
            NOW()
     WHERE NOT EXISTS (SELECT 1 FROM app_settings WHERE key = 'agent_skills');
 
+    -- Tag every existing 86 skill pack with the right `contexts` array
+    -- so the loader filters by entity_type. Idempotent: only sets
+    -- contexts when the field is missing (existing tags survive).
+    -- Pack-name-to-contexts mapping reflects what each playbook is for
+    -- (estimating-only, WIP-only, multi-context, etc.).
+    UPDATE app_settings
+       SET value = jsonb_set(
+         value, '{skills}',
+         (
+           SELECT COALESCE(jsonb_agg(
+             CASE
+               WHEN s ? 'contexts' THEN s
+               WHEN s->>'name' = 'Estimating Playbook'
+                 OR s->>'name' = 'Group Discipline'
+                 OR s->>'name' = 'Pricing Benchmark Loop'
+                 OR s->>'name' = 'Cross-Group Awareness'
+                 THEN jsonb_set(s, '{contexts}', '["estimate"]'::jsonb)
+               WHEN s->>'name' = 'Lead/Client Linking'
+                 THEN jsonb_set(s, '{contexts}', '["estimate","intake"]'::jsonb)
+               WHEN s->>'name' = 'WIP Analyst Playbook'
+                 OR s->>'name' = 'QB cost to node mapping'
+                 OR s->>'name' = 'Workspace placement and wiring discipline'
+                 THEN jsonb_set(s, '{contexts}', '["job"]'::jsonb)
+               -- Older packs that may still be named with the legacy
+               -- "QB cost → node mapping" arrow form (Unicode 2192
+               -- could've slipped through earlier rename migrations).
+               WHEN s->>'name' LIKE 'QB cost%node mapping%'
+                 THEN jsonb_set(s, '{contexts}', '["job"]'::jsonb)
+               ELSE s
+             END
+           ), '[]'::jsonb)
+           FROM jsonb_array_elements(value->'skills') AS s
+         )
+       )
+     WHERE key = 'agent_skills'
+       AND value ? 'skills'
+       AND EXISTS (
+         SELECT 1 FROM jsonb_array_elements(value->'skills') s
+         WHERE NOT (s ? 'contexts')
+           AND s->>'name' IN (
+             'Estimating Playbook',
+             'Group Discipline',
+             'Pricing Benchmark Loop',
+             'Cross-Group Awareness',
+             'Lead/Client Linking',
+             'WIP Analyst Playbook',
+             'QB cost to node mapping',
+             'Workspace placement and wiring discipline'
+           )
+       );
+
+    -- AG / Elle wording cleanup inside skill-pack BODIES. Rewrites
+    -- legacy agent names to the unified "86" branding. Conservative
+    -- regex: only matches whole-word occurrences with adjacent spaces
+    -- or punctuation so embedded SQL / code mentions stay intact. The
+    -- WHERE NOT EXISTS gate makes re-runs no-ops.
+    UPDATE app_settings
+       SET value = jsonb_set(
+         value, '{skills}',
+         (
+           SELECT COALESCE(jsonb_agg(
+             CASE
+               WHEN s ? 'body' AND (
+                 s->>'body' LIKE '%You are Elle%'
+                 OR s->>'body' LIKE '%Elle (%'
+                 OR s->>'body' LIKE '%Elle is%'
+                 OR s->>'body' LIKE '%Elle.%'
+                 OR s->>'body' LIKE '%You are AG%'
+                 OR s->>'body' LIKE '%AG ('
+                 OR s->>'body' LIKE '%AGX %'
+               ) THEN jsonb_set(s, '{body}',
+                 to_jsonb(
+                   REGEXP_REPLACE(
+                     REGEXP_REPLACE(
+                       REGEXP_REPLACE(
+                         REGEXP_REPLACE(s->>'body',
+                           E'\\\\bElle\\\\b', '86', 'g'),
+                         E'\\\\bAGX\\\\b', 'Project 86', 'g'),
+                       E'\\\\bAG\\\\b(?! )', '86', 'g'),
+                     E'\\\\bAG (estimating|estimator)\\\\b', '86 \\\\1', 'g')
+                 ))
+               ELSE s
+             END
+           ), '[]'::jsonb)
+           FROM jsonb_array_elements(value->'skills') AS s
+         )
+       )
+     WHERE key = 'agent_skills'
+       AND value ? 'skills'
+       AND EXISTS (
+         SELECT 1 FROM jsonb_array_elements(value->'skills') s
+         WHERE s ? 'body' AND (
+           s->>'body' LIKE '%You are Elle%'
+           OR s->>'body' LIKE '%Elle (%'
+           OR s->>'body' LIKE '%Elle is%'
+           OR s->>'body' LIKE '%Elle.%'
+           OR s->>'body' LIKE '%You are AG%'
+           OR s->>'body' LIKE '%AG ('
+           OR s->>'body' LIKE '%AGX %'
+         )
+       );
+
     -- If the row already existed, append the pack only if the name isn't
     -- already present (covers admins who edited skill packs via the UI
     -- before this migration shipped).
@@ -1209,6 +1312,7 @@ async function initSchema() {
                  jsonb_build_object(
                    'name', 'Workspace placement and wiring discipline',
                    'agents', jsonb_build_array('job'),
+                   'contexts', jsonb_build_array('job'),
                    'alwaysOn', true,
                    'body',
                    E'# Workspace node-graph placement and wiring\n' ||
