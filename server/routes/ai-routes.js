@@ -7388,12 +7388,145 @@ const INTAKE_TOOLS = [
   }
 ];
 
+// ──────────────────────────────────────────────────────────────────
+// Global "Ask 86" — entity-less chat surface backed by 86 (the
+// operator). Reachable from a header button anywhere in the app
+// so users can ask 86 anything without first navigating to a job
+// or estimate. Persisted per-user (entity_type='ask86', entity_id
+// is fixed at 'global'); only web_search + the auto-injected
+// reference sheets are available — no entity-mutating tools since
+// there's no entity to mutate.
+//
+// Tools surface intentionally narrow for v1: this is a "talk to 86
+// as a general-purpose helper" surface, not a place to propose
+// concrete edits. If a user asks 86 to make a change, 86 should
+// direct them to open the relevant entity's AI panel.
+// ──────────────────────────────────────────────────────────────────
+async function buildAsk86Context() {
+  const stable = [];
+  stable.push('You are 86, Project 86\'s operator agent. Project 86 is a Central-Florida construction-services platform (painting, deck repair, roofing, exterior services for HOAs and apartment communities). The user is talking to you from the global "Ask 86" surface — there is NO specific entity (estimate / job / client / lead) attached to this conversation.');
+  stable.push('');
+  stable.push('# Capabilities here');
+  stable.push('  • Web search via the `web_search` tool — pricing lookups, code references, product specs, supplier research.');
+  stable.push('  • The live reference sheets (job-number lookup, WIP report, etc.) auto-injected below — use them for company-data answers.');
+  stable.push('  • General knowledge / reasoning.');
+  stable.push('');
+  stable.push('# What you cannot do here');
+  stable.push('  • You have NO entity-mutating tools in this surface. No propose_add_line_item, propose_create_lead, set_phase_field, etc. If the user asks for a change to a specific estimate/job/lead, point them at the right surface — e.g., "Open the AI panel from inside that estimate to propose line items" — and offer to draft the language they should paste.');
+  stable.push('  • You can\'t see a specific job\'s WIP, a specific estimate\'s lines, etc. Those load from per-entity context the panel-AI panels build. If they want that detail, they should open the entity.');
+  stable.push('');
+  stable.push('# Tone');
+  stable.push('  • Concise. Construction trade vocabulary welcome. If the user\'s question would be better answered inside a specific entity\'s AI panel, say so up front so they don\'t spin their wheels here.');
+
+  return {
+    system: [
+      { type: 'text', text: stable.join('\n'), cache_control: { type: 'ephemeral' } }
+    ]
+  };
+}
+
+router.get('/ask86/messages', requireAuth, async (req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT id, role, content, created_at
+         FROM ai_messages
+        WHERE entity_type='ask86' AND user_id=$1
+        ORDER BY created_at ASC`,
+      [req.user.id]
+    );
+    res.json({ messages: r.rows });
+  } catch (e) {
+    console.error('GET /ask86/messages error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.delete('/ask86/messages', requireAuth, async (req, res) => {
+  try {
+    await pool.query(
+      `DELETE FROM ai_messages WHERE entity_type='ask86' AND user_id=$1`,
+      [req.user.id]
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('DELETE /ask86/messages error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.post('/ask86/chat', requireAuth, async (req, res) => {
+  const anthropic = getAnthropic();
+  if (!anthropic) return res.status(503).json({ error: 'AI assistant is not configured.' });
+  const userMessage = (req.body && req.body.message || '').trim();
+  if (!userMessage) return res.status(400).json({ error: 'message is required' });
+
+  setSSEHeaders(res);
+  try {
+    const histRes = await pool.query(
+      `SELECT role, content FROM ai_messages
+        WHERE entity_type='ask86' AND user_id=$1
+        ORDER BY created_at ASC`,
+      [req.user.id]
+    );
+    let history = histRes.rows;
+    const cap = MAX_HISTORY_PAIRS * 2;
+    if (history.length > cap) history = history.slice(-cap);
+
+    const userMsgId = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+    await pool.query(
+      `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content)
+       VALUES ($1, 'ask86', 'global', $2, 'user', $3)`,
+      [userMsgId, req.user.id, userMessage]
+    );
+
+    const messages = [
+      ...history.map(m => ({ role: m.role, content: m.content })),
+      { role: 'user', content: userMessage }
+    ];
+    const ctx = await buildAsk86Context();
+
+    // Persist the assistant's reply once the stream completes — passed
+    // as the persistAssistantText callback to runStream so we don't
+    // re-implement the streaming machinery.
+    await runStream({
+      anthropic, res,
+      system: ctx.system,
+      messages,
+      tools: [],  // web_search is added back inside runStream via WEB_TOOLS
+      agentKey: 'job',
+      persistAssistantText: async (text, usage) => {
+        if (!text) return;
+        const aMsgId = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+        await pool.query(
+          `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content, model,
+                                    input_tokens, output_tokens,
+                                    cache_creation_input_tokens, cache_read_input_tokens)
+           VALUES ($1, 'ask86', 'global', $2, 'assistant', $3, $4, $5, $6, $7, $8)`,
+          [aMsgId, req.user.id, text, MODEL,
+           (usage && usage.input_tokens) || null,
+           (usage && usage.output_tokens) || null,
+           (usage && usage.cache_creation_input_tokens) || null,
+           (usage && usage.cache_read_input_tokens) || null]
+        );
+      }
+    });
+  } catch (e) {
+    console.error('POST /ask86/chat error:', e);
+    try {
+      res.write('data: ' + JSON.stringify({ error: e.message || 'Server error' }) + '\n\n');
+      res.write('data: [DONE]\n\n');
+      res.end();
+    } catch (_) {}
+  }
+});
+
 module.exports = router;
 module.exports.internals = {
   buildEstimateContext,
   buildJobContext,
   buildClientDirectoryContext,
   buildStaffContext,
+  buildAsk86Context,
   sectionsForAgent,
   estimateTools: () => [...WEB_TOOLS, ...ESTIMATE_TOOLS],
   // 86 (job-side) inherits the intake tools too so 86 can capture

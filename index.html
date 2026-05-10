@@ -112,6 +112,14 @@
                          flash an empty placeholder. Uses the standard NWS
                          pipeline already powering the schedule + job widgets. -->
                     <div id="header-weather" class="header-weather" hidden></div>
+                    <!-- Global "Ask 86" — opens the AI panel anchored at no
+                         specific entity. 86 with web search + the live
+                         reference sheets, persisted per-user. For entity-
+                         specific work, the user opens the AI panel inside
+                         that entity instead. -->
+                    <button id="header-ask86-btn" class="header-icon-btn" type="button" title="Ask 86 (global)"
+                            data-p86-icon="dna"
+                            onclick="if (window.p86AI && typeof window.p86AI.open === 'function') window.p86AI.open({ entityType: 'ask86' });"></button>
                     <!-- My Files icon button — replaces the former Files
                          tab in the top nav. Click jumps straight into
                          the my-files tab pane. Personal files are a
@@ -2277,7 +2285,7 @@
     <script src="js/estimate-editor.js?v=38b"></script>
     <script src="js/estimate-preview.js?v=10b"></script>
     <script src="js/bt-export.js?v=6b"></script>
-    <script src="js/ai-panel.js?v=93b"></script>
+    <script src="js/ai-panel.js?v=94b"></script>
     <script src="js/tab-slider.js?v=1b"></script>
 
     <script src="js/workspace.js?v=43b"></script>
