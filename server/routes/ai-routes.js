@@ -1851,6 +1851,29 @@ async function runStream({ anthropic, res, system, messages, persistAssistantTex
     endWithDone();
   }
 
+  // Append the live reference-sheets block (job numbers, WIP report,
+  // etc. — pulled from SharePoint by admin-agents-routes' background
+  // refresher) onto the dynamic part of the system prompt. Lives
+  // AFTER any cache_control breakpoints so the cached prefix isn't
+  // invalidated when accounting updates a sheet. Best-effort: a DB
+  // failure here just means agents skip the block, no error to the
+  // user.
+  try {
+    const adminAgents = require('./admin-agents-routes');
+    if (typeof adminAgents.buildReferenceLinksBlock === 'function') {
+      const refBlock = await adminAgents.buildReferenceLinksBlock();
+      if (refBlock && refBlock.trim()) {
+        if (Array.isArray(system)) {
+          system = system.concat([{ type: 'text', text: refBlock }]);
+        } else if (typeof system === 'string') {
+          system = system + '\n\n' + refBlock;
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('[ai] reference-links injection skipped:', e.message);
+  }
+
   let assistantText = '';
   let finalContent = null;
   let usage = { input_tokens: null, output_tokens: null };

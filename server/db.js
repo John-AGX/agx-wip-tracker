@@ -903,6 +903,35 @@ async function initSchema() {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
+    -- Reference links the AI agents see in their system prompt.
+    -- Each row points at a SharePoint / OneDrive XLSX share URL that
+    -- the server fetches + parses + caches; the parsed rows are
+    -- injected into every agent turn so the agents have live access
+    -- to whatever accounting publishes there (job-number lookup, WIP
+    -- report, etc.). Cached XLSX content lives in last_fetched_text
+    -- so a render doesn't have to re-fetch on every turn — a 15-min
+    -- TTL refresh runs in the background.
+    --
+    -- last_fetch_status: 'ok' | 'failed' | 'never'.
+    -- last_fetched_text holds a CSV-ish preview of the parsed sheet
+    -- that's safe to embed in the system prompt directly.
+    CREATE TABLE IF NOT EXISTS agent_reference_links (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      url TEXT NOT NULL,
+      description TEXT,
+      enabled BOOLEAN NOT NULL DEFAULT TRUE,
+      max_rows INTEGER NOT NULL DEFAULT 200,
+      last_fetched_at TIMESTAMPTZ,
+      last_fetch_status TEXT NOT NULL DEFAULT 'never',
+      last_fetch_error TEXT,
+      last_fetched_text TEXT,
+      last_fetched_row_count INTEGER,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_reference_links_enabled ON agent_reference_links(enabled);
+
     -- Phase 1b — durable mapping from (agent_key, entity, user) to
     -- the long-lived Anthropic Session that backs that conversation.
     -- We reuse one Session per Project 86 conversation so we don't pay session-

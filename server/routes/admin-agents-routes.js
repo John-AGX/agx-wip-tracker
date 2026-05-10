@@ -1736,8 +1736,230 @@ router.get('/managed/environment', requireAuth, requireCapability('ROLES_MANAGE'
   }
 });
 
+// ──────────────────────────────────────────────────────────────────
+// Reference Links — agent-visible SharePoint / OneDrive XLSX links.
+// Admin-managed list of share URLs that the server fetches +
+// parses + caches; the parsed text gets injected into every agent
+// turn so models have live access to job-number lookups, the WIP
+// report, and any other accounting-published reference.
+// ──────────────────────────────────────────────────────────────────
+const sharepoint = require('../sharepoint');
+
+// In-memory background-refresh debouncer so concurrent /refresh
+// hits don't trigger overlapping fetches for the same row.
+const _refreshing = new Set();
+
+async function refreshLinkRow(row) {
+  if (_refreshing.has(row.id)) return;
+  _refreshing.add(row.id);
+  try {
+    const result = await sharepoint.fetchAndRender(row.url, {
+      title: row.title,
+      description: row.description,
+      maxRows: row.max_rows || 200
+    });
+    await pool.query(
+      'UPDATE agent_reference_links SET ' +
+      '  last_fetched_at = NOW(), last_fetch_status = $1, last_fetch_error = NULL, ' +
+      '  last_fetched_text = $2, last_fetched_row_count = $3, updated_at = NOW() ' +
+      'WHERE id = $4',
+      ['ok', result.text, result.rowCount, row.id]
+    );
+    return { status: 'ok', rowCount: result.rowCount };
+  } catch (e) {
+    await pool.query(
+      'UPDATE agent_reference_links SET ' +
+      '  last_fetched_at = NOW(), last_fetch_status = $1, last_fetch_error = $2, updated_at = NOW() ' +
+      'WHERE id = $3',
+      ['failed', String(e && e.message || e).slice(0, 1000), row.id]
+    );
+    return { status: 'failed', error: e.message };
+  } finally {
+    _refreshing.delete(row.id);
+  }
+}
+
+// GET /api/admin/agents/reference-links — list all
+router.get('/reference-links', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+  try {
+    const r = await pool.query(
+      'SELECT id, title, url, description, enabled, max_rows, last_fetched_at, ' +
+      '       last_fetch_status, last_fetch_error, last_fetched_row_count, created_at, updated_at ' +
+      'FROM agent_reference_links ORDER BY created_at ASC'
+    );
+    res.json({ links: r.rows });
+  } catch (e) {
+    console.error('GET /reference-links error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/admin/agents/reference-links — create (and trigger first fetch)
+router.post('/reference-links', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+  try {
+    const { title, url, description, enabled, maxRows } = req.body || {};
+    if (!title || !url) return res.status(400).json({ error: 'title and url are required' });
+    const id = 'rl_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+    const r = await pool.query(
+      'INSERT INTO agent_reference_links (id, title, url, description, enabled, max_rows) ' +
+      'VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
+      [id, title, url, description || null, enabled !== false, parseInt(maxRows, 10) || 200]
+    );
+    // Fire and forget the initial fetch — UI shows last_fetch_status
+    // and the user can hit /refresh manually if they want to wait for
+    // a fresh result.
+    refreshLinkRow(r.rows[0]).catch(function (err) {
+      console.warn('[reference-links] initial fetch failed for ' + id + ':', err.message);
+    });
+    res.json({ link: r.rows[0] });
+  } catch (e) {
+    console.error('POST /reference-links error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// PATCH /api/admin/agents/reference-links/:id — update fields
+router.patch('/reference-links/:id', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+  try {
+    const id = req.params.id;
+    const { title, url, description, enabled, maxRows } = req.body || {};
+    const fields = [];
+    const values = [];
+    let n = 1;
+    if (title       !== undefined) { fields.push('title = $' + (n++));        values.push(title); }
+    if (url         !== undefined) { fields.push('url = $' + (n++));          values.push(url); }
+    if (description !== undefined) { fields.push('description = $' + (n++));  values.push(description); }
+    if (enabled     !== undefined) { fields.push('enabled = $' + (n++));      values.push(!!enabled); }
+    if (maxRows     !== undefined) { fields.push('max_rows = $' + (n++));     values.push(parseInt(maxRows, 10) || 200); }
+    if (!fields.length) return res.status(400).json({ error: 'no fields to update' });
+    fields.push('updated_at = NOW()');
+    values.push(id);
+    const r = await pool.query(
+      'UPDATE agent_reference_links SET ' + fields.join(', ') +
+      ' WHERE id = $' + n + ' RETURNING *',
+      values
+    );
+    if (!r.rowCount) return res.status(404).json({ error: 'not found' });
+    // If the URL changed, re-fetch.
+    if (url !== undefined) {
+      refreshLinkRow(r.rows[0]).catch(function (err) {
+        console.warn('[reference-links] re-fetch after URL change failed for ' + id + ':', err.message);
+      });
+    }
+    res.json({ link: r.rows[0] });
+  } catch (e) {
+    console.error('PATCH /reference-links error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// DELETE /api/admin/agents/reference-links/:id
+router.delete('/reference-links/:id', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+  try {
+    const r = await pool.query('DELETE FROM agent_reference_links WHERE id = $1', [req.params.id]);
+    if (!r.rowCount) return res.status(404).json({ error: 'not found' });
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('DELETE /reference-links error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/admin/agents/reference-links/:id/refresh — force re-fetch
+// and wait for the result so the user sees the new status inline.
+router.post('/reference-links/:id/refresh', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+  try {
+    const r = await pool.query('SELECT * FROM agent_reference_links WHERE id = $1', [req.params.id]);
+    if (!r.rowCount) return res.status(404).json({ error: 'not found' });
+    const result = await refreshLinkRow(r.rows[0]);
+    const updated = await pool.query('SELECT * FROM agent_reference_links WHERE id = $1', [req.params.id]);
+    res.json({ link: updated.rows[0], result: result });
+  } catch (e) {
+    console.error('POST /reference-links/:id/refresh error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/admin/agents/reference-links/:id/preview — return the
+// rendered text + parsed sheets so the admin can verify column
+// matches before letting agents see it.
+router.get('/reference-links/:id/preview', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+  try {
+    const r = await pool.query(
+      'SELECT id, title, last_fetched_text, last_fetch_status, last_fetched_row_count, last_fetched_at ' +
+      'FROM agent_reference_links WHERE id = $1',
+      [req.params.id]
+    );
+    if (!r.rowCount) return res.status(404).json({ error: 'not found' });
+    res.json({ link: r.rows[0] });
+  } catch (e) {
+    console.error('GET /reference-links/:id/preview error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Helper exported for the agent prompt builder. Returns a single
+// concatenated text block of every enabled link's last_fetched_text,
+// or '' if there are none / all are stale failures. Trimmed to a
+// reasonable cap so a runaway sheet doesn't blow the model context.
+const REF_LINKS_PROMPT_CAP = 60000; // ~15k tokens of reference data
+async function buildReferenceLinksBlock() {
+  try {
+    const r = await pool.query(
+      "SELECT title, last_fetched_text, last_fetched_at, last_fetch_status " +
+      "FROM agent_reference_links " +
+      "WHERE enabled = TRUE AND last_fetch_status = 'ok' AND last_fetched_text IS NOT NULL " +
+      "ORDER BY created_at ASC"
+    );
+    if (!r.rowCount) return '';
+    let out = '\n\n# Live reference sheets\n\n' +
+      'These are live company data sheets, refreshed from SharePoint by the server. Use them when the user asks about job numbers, WIP, or anything else listed below.\n';
+    for (const row of r.rows) {
+      const block = row.last_fetched_text || '';
+      if (!block) continue;
+      const stamp = row.last_fetched_at ? ' (fetched ' + row.last_fetched_at.toISOString() + ')' : '';
+      const candidate = '\n\n[' + row.title + ']' + stamp + '\n' + block;
+      if (out.length + candidate.length > REF_LINKS_PROMPT_CAP) break;
+      out += candidate;
+    }
+    return out;
+  } catch (e) {
+    console.warn('[reference-links] buildReferenceLinksBlock failed:', e.message);
+    return '';
+  }
+}
+
+// Background refresh — every link gets a fresh fetch every 15
+// minutes if it's enabled. Runs only on the route's import (the
+// server's main module loads this once at boot).
+const REFRESH_INTERVAL_MS = 15 * 60 * 1000;
+async function backgroundRefreshAll() {
+  try {
+    const r = await pool.query(
+      'SELECT * FROM agent_reference_links WHERE enabled = TRUE'
+    );
+    for (const row of r.rows) {
+      // Skip rows we already refreshed within the window.
+      if (row.last_fetched_at) {
+        const age = Date.now() - new Date(row.last_fetched_at).getTime();
+        if (age < REFRESH_INTERVAL_MS) continue;
+      }
+      try { await refreshLinkRow(row); }
+      catch (e) { console.warn('[reference-links] bg refresh failed for ' + row.id + ':', e.message); }
+    }
+  } catch (e) {
+    console.warn('[reference-links] backgroundRefreshAll outer error:', e.message);
+  }
+}
+// Run at boot (after a small delay so DB init has time) and every
+// 15 minutes thereafter. setInterval reference is intentionally not
+// stored — process exit cleans up.
+setTimeout(backgroundRefreshAll, 30 * 1000);
+setInterval(backgroundRefreshAll, REFRESH_INTERVAL_MS);
+
 // Exported so ai-routes.js (Phase 1b chat path) can resolve the
 // environment + agent ids without duplicating the SQL.
 module.exports = router;
 module.exports.ensureManagedAgent = ensureManagedAgent;
 module.exports.ensureManagedEnvironment = ensureManagedEnvironment;
+module.exports.buildReferenceLinksBlock = buildReferenceLinksBlock;

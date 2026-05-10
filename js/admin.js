@@ -3044,6 +3044,7 @@
           '<button class="ws-right-tab' + (_agentsView === 'preview' ? ' active' : '') + '" onclick="switchAgentsView(\'preview\')">&#x1F50D; Prompt Preview</button>' +
           '<button class="ws-right-tab' + (_agentsView === 'batch' ? ' active' : '') + '" onclick="switchAgentsView(\'batch\')">&#x1F4E6; Batch</button>' +
           '<button class="ws-right-tab' + (_agentsView === 'anthropic' ? ' active' : '') + '" onclick="switchAgentsView(\'anthropic\')">&#x1F310; Anthropic</button>' +
+          '<button class="ws-right-tab' + (_agentsView === 'references' ? ' active' : '') + '" onclick="switchAgentsView(\'references\')">&#x1F4D2; References</button>' +
         '</div>' +
         '<div style="flex:1;"></div>' +
         '<button class="ee-btn" onclick="openChiefOfStaff()" title="Open the Chief of Staff agent — observes 47 / 86 / HR / Intake, audits conversations, reviews skill packs" style="background:linear-gradient(135deg,#fbbf24,#f97316);color:#fff;border:none;font-weight:600;">&#x1F3A9; Ask Chief of Staff</button>' +
@@ -3066,8 +3067,210 @@
     else if (_agentsView === 'batch' && _batchJobId) renderBatchJobDetail(_batchJobId);
     else if (_agentsView === 'batch')                renderBatchJobsList();
     else if (_agentsView === 'anthropic')            renderAnthropicResources();
+    else if (_agentsView === 'references')           renderReferenceLinksView();
     else if (_agentsConvKey)                         renderAgentsConversationDetail(_agentsConvKey);
     else                                             renderAgentsConversationList();
+  }
+
+  // ─────────── Reference Links view ───────────
+  // Admin-managed list of SharePoint / OneDrive XLSX share URLs that
+  // the agents see in their system prompt. Each row shows last-fetch
+  // status + row count + lets the admin refresh / preview / edit /
+  // delete. New rows kick off an immediate background fetch.
+  function renderReferenceLinksView() {
+    var host = document.getElementById('agents-content');
+    if (!host) return;
+    host.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;font-style:italic;padding:20px 0;">Loading reference links…</div>';
+    window.p86Api.get('/api/admin/agents/reference-links').then(function(resp) {
+      var links = (resp && resp.links) || [];
+      var rows = links.map(function(l) {
+        var statusBadge = '';
+        if (l.last_fetch_status === 'ok') {
+          statusBadge = '<span style="color:#34d399;">&#x2713; OK</span>';
+        } else if (l.last_fetch_status === 'failed') {
+          statusBadge = '<span style="color:#f87171;" title="' + escapeAttr(l.last_fetch_error || '') + '">&#x26A0; Failed</span>';
+        } else {
+          statusBadge = '<span style="color:var(--text-dim,#888);">never fetched</span>';
+        }
+        var when = l.last_fetched_at
+          ? new Date(l.last_fetched_at).toLocaleString()
+          : '—';
+        var rowCount = l.last_fetched_row_count != null ? l.last_fetched_row_count : '—';
+        var enabledChip = l.enabled
+          ? '<span style="color:#34d399;font-size:11px;">enabled</span>'
+          : '<span style="color:var(--text-dim,#888);font-size:11px;">disabled</span>';
+        return '<tr>' +
+          '<td style="padding:8px 10px;font-weight:600;">' + escapeHTML(l.title) +
+            (l.description ? '<div style="font-size:11px;color:var(--text-dim,#888);font-weight:400;margin-top:2px;">' + escapeHTML(l.description) + '</div>' : '') +
+          '</td>' +
+          '<td style="padding:8px 10px;font-family:monospace;font-size:11px;color:var(--text-dim,#aaa);max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escapeAttr(l.url) + '">' +
+            '<a href="' + escapeAttr(l.url) + '" target="_blank" rel="noopener">' + escapeHTML(l.url.slice(0, 60) + (l.url.length > 60 ? '…' : '')) + '</a>' +
+          '</td>' +
+          '<td style="padding:8px 10px;text-align:center;">' + enabledChip + '</td>' +
+          '<td style="padding:8px 10px;text-align:center;">' + statusBadge + '</td>' +
+          '<td style="padding:8px 10px;text-align:right;font-family:monospace;">' + rowCount + '</td>' +
+          '<td style="padding:8px 10px;color:var(--text-dim,#888);font-size:11px;white-space:nowrap;">' + escapeHTML(when) + '</td>' +
+          '<td style="padding:8px 10px;text-align:right;white-space:nowrap;">' +
+            '<button class="ee-btn ghost" onclick="refreshReferenceLink(\'' + escapeAttr(l.id) + '\')" style="font-size:11px;padding:3px 8px;">&#x21BB; Refresh</button> ' +
+            '<button class="ee-btn ghost" onclick="previewReferenceLink(\'' + escapeAttr(l.id) + '\')" style="font-size:11px;padding:3px 8px;">&#x1F441; Preview</button> ' +
+            '<button class="ee-btn ghost" onclick="editReferenceLink(\'' + escapeAttr(l.id) + '\')" style="font-size:11px;padding:3px 8px;">&#x270F; Edit</button> ' +
+            '<button class="ee-btn ghost" onclick="deleteReferenceLink(\'' + escapeAttr(l.id) + '\')" style="font-size:11px;padding:3px 8px;color:#f87171;">&#x1F5D1; Delete</button>' +
+          '</td>' +
+        '</tr>';
+      }).join('');
+      var empty = '<tr><td colspan="7" style="padding:30px;text-align:center;color:var(--text-dim,#888);font-style:italic;">' +
+        'No reference links yet. Add a SharePoint share URL to make a live sheet (job numbers, WIP report, etc.) visible to every agent.' +
+      '</td></tr>';
+      host.innerHTML =
+        '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">' +
+          '<div>' +
+            '<div style="font-size:13px;font-weight:600;color:var(--text);">Live reference sheets</div>' +
+            '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:2px;">SharePoint / OneDrive share URLs (set to &ldquo;Anyone with the link &rarr; Can view&rdquo;). The server fetches each every 15 min and injects the parsed rows into every agent\'s system prompt.</div>' +
+          '</div>' +
+          '<button class="ee-btn primary" onclick="openReferenceLinkEditor()">&#x2795; Add link</button>' +
+        '</div>' +
+        '<div style="border:1px solid var(--border,#333);border-radius:8px;overflow:hidden;">' +
+          '<table style="width:100%;border-collapse:collapse;font-size:13px;">' +
+            '<thead style="background:rgba(255,255,255,0.03);border-bottom:1px solid var(--border,#333);">' +
+              '<tr>' +
+                '<th style="padding:8px 10px;text-align:left;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-dim,#888);">Title</th>' +
+                '<th style="padding:8px 10px;text-align:left;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-dim,#888);">URL</th>' +
+                '<th style="padding:8px 10px;text-align:center;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-dim,#888);">Active</th>' +
+                '<th style="padding:8px 10px;text-align:center;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-dim,#888);">Status</th>' +
+                '<th style="padding:8px 10px;text-align:right;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-dim,#888);">Rows</th>' +
+                '<th style="padding:8px 10px;text-align:left;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-dim,#888);">Last fetched</th>' +
+                '<th style="padding:8px 10px;text-align:right;"></th>' +
+              '</tr>' +
+            '</thead>' +
+            '<tbody>' + (rows || empty) + '</tbody>' +
+          '</table>' +
+        '</div>';
+    }).catch(function(err) {
+      host.innerHTML = '<div style="color:#f87171;padding:20px 0;">Failed to load reference links: ' + escapeHTML(err.message || 'unknown') + '</div>';
+    });
+  }
+
+  function openReferenceLinkEditor(existing) {
+    var prior = document.getElementById('refLinkEditorModal');
+    if (prior) prior.remove();
+    var modal = document.createElement('div');
+    modal.id = 'refLinkEditorModal';
+    modal.className = 'modal active';
+    var l = existing || {};
+    modal.innerHTML =
+      '<div class="modal-content" style="max-width:560px;">' +
+        '<div class="modal-header">' + (existing ? 'Edit reference link' : 'Add reference link') + '</div>' +
+        '<div style="display:flex;flex-direction:column;gap:10px;">' +
+          '<div><label style="font-size:11px;font-weight:600;color:var(--text-dim,#888);">Title</label>' +
+            '<input type="text" id="refLink_title" value="' + escapeAttr(l.title || '') + '" placeholder="e.g., WIP Report" style="width:100%;padding:7px 10px;background:var(--input-bg);color:var(--text);border:1px solid var(--border);border-radius:6px;" /></div>' +
+          '<div><label style="font-size:11px;font-weight:600;color:var(--text-dim,#888);">SharePoint / OneDrive share URL</label>' +
+            '<input type="text" id="refLink_url" value="' + escapeAttr(l.url || '') + '" placeholder="https://tenant.sharepoint.com/:x:/g/personal/.../...?e=..." style="width:100%;padding:7px 10px;background:var(--input-bg);color:var(--text);border:1px solid var(--border);border-radius:6px;font-family:monospace;font-size:11px;" />' +
+            '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:4px;line-height:1.4;">Set the share to &ldquo;Anyone with the link &rarr; Can view&rdquo; in SharePoint. The server appends &amp;download=1 to fetch the XLSX directly.</div></div>' +
+          '<div><label style="font-size:11px;font-weight:600;color:var(--text-dim,#888);">Description (shown to agents)</label>' +
+            '<textarea id="refLink_description" rows="2" placeholder="What\'s in this sheet? When should agents look here?" style="width:100%;padding:7px 10px;background:var(--input-bg);color:var(--text);border:1px solid var(--border);border-radius:6px;">' + escapeHTML(l.description || '') + '</textarea></div>' +
+          '<div style="display:flex;gap:14px;">' +
+            '<div style="flex:1;"><label style="font-size:11px;font-weight:600;color:var(--text-dim,#888);">Max rows</label>' +
+              '<input type="number" id="refLink_maxRows" value="' + (l.max_rows || 200) + '" min="10" max="2000" style="width:100%;padding:7px 10px;background:var(--input-bg);color:var(--text);border:1px solid var(--border);border-radius:6px;" /></div>' +
+            '<div style="flex:1;"><label class="p86-check-row" style="margin-top:18px;">' +
+              '<input type="checkbox" id="refLink_enabled" ' + (l.enabled !== false ? 'checked' : '') + ' />' +
+              '<span style="font-size:12px;">Active (visible to agents)</span></label></div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="modal-footer" style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;">' +
+          '<button class="ee-btn secondary" onclick="closeReferenceLinkEditor()">Cancel</button>' +
+          '<button class="ee-btn primary" onclick="saveReferenceLink(' + (existing ? '\'' + escapeAttr(l.id) + '\'' : 'null') + ')">' + (existing ? 'Save' : 'Add') + '</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(modal);
+    modal.addEventListener('click', function(e) { if (e.target === modal) closeReferenceLinkEditor(); });
+  }
+  function closeReferenceLinkEditor() {
+    var m = document.getElementById('refLinkEditorModal');
+    if (m) m.remove();
+  }
+  function saveReferenceLink(existingId) {
+    var payload = {
+      title: document.getElementById('refLink_title').value.trim(),
+      url: document.getElementById('refLink_url').value.trim(),
+      description: document.getElementById('refLink_description').value.trim(),
+      enabled: document.getElementById('refLink_enabled').checked,
+      maxRows: parseInt(document.getElementById('refLink_maxRows').value, 10) || 200
+    };
+    if (!payload.title || !payload.url) {
+      alert('Title and URL are required.');
+      return;
+    }
+    var p = existingId
+      ? window.p86Api.put('/api/admin/agents/reference-links/' + encodeURIComponent(existingId), payload)
+      : window.p86Api.post('/api/admin/agents/reference-links', payload);
+    // p86Api doesn't have a generic patch helper, so fall back to fetch
+    // for the update branch.
+    if (existingId) {
+      p = fetch('/api/admin/agents/reference-links/' + encodeURIComponent(existingId), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (window.p86Auth && window.p86Auth.getToken && window.p86Auth.getToken()) },
+        body: JSON.stringify(payload)
+      }).then(function(r) { return r.json(); });
+    }
+    p.then(function() {
+      closeReferenceLinkEditor();
+      renderReferenceLinksView();
+    }).catch(function(err) {
+      alert('Save failed: ' + (err.message || err));
+    });
+  }
+  function editReferenceLink(id) {
+    window.p86Api.get('/api/admin/agents/reference-links').then(function(resp) {
+      var l = (resp.links || []).find(function(x) { return x.id === id; });
+      if (l) openReferenceLinkEditor(l);
+    });
+  }
+  function deleteReferenceLink(id) {
+    if (!confirm('Delete this reference link? Agents will stop seeing this sheet on the next turn.')) return;
+    window.p86Api.del('/api/admin/agents/reference-links/' + encodeURIComponent(id)).then(function() {
+      renderReferenceLinksView();
+    }).catch(function(err) {
+      alert('Delete failed: ' + (err.message || err));
+    });
+  }
+  function refreshReferenceLink(id) {
+    var btn = event && event.target;
+    if (btn) { btn.disabled = true; btn.textContent = '…'; }
+    window.p86Api.post('/api/admin/agents/reference-links/' + encodeURIComponent(id) + '/refresh', {}).then(function() {
+      renderReferenceLinksView();
+    }).catch(function(err) {
+      alert('Refresh failed: ' + (err.message || err));
+      renderReferenceLinksView();
+    });
+  }
+  function previewReferenceLink(id) {
+    window.p86Api.get('/api/admin/agents/reference-links/' + encodeURIComponent(id) + '/preview').then(function(resp) {
+      var l = resp.link;
+      var prior = document.getElementById('refLinkPreviewModal');
+      if (prior) prior.remove();
+      var modal = document.createElement('div');
+      modal.id = 'refLinkPreviewModal';
+      modal.className = 'modal active';
+      modal.innerHTML =
+        '<div class="modal-content" style="max-width:780px;max-height:80vh;display:flex;flex-direction:column;">' +
+          '<div class="modal-header">Preview: ' + escapeHTML(l.title || '') + '</div>' +
+          '<div style="font-size:11px;color:var(--text-dim,#888);margin-bottom:8px;">' +
+            (l.last_fetched_at ? 'Last fetched ' + new Date(l.last_fetched_at).toLocaleString() : 'never fetched') +
+            ' &middot; ' + (l.last_fetched_row_count != null ? l.last_fetched_row_count + ' rows' : '—') +
+            ' &middot; status: ' + escapeHTML(l.last_fetch_status || '?') +
+          '</div>' +
+          '<pre style="flex:1;overflow:auto;font-family:\'SF Mono\',monospace;font-size:11px;line-height:1.5;background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:6px;padding:12px;white-space:pre-wrap;">' +
+            escapeHTML(l.last_fetched_text || '(no parsed content yet — try Refresh)') +
+          '</pre>' +
+          '<div class="modal-footer" style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;">' +
+            '<button class="ee-btn secondary" onclick="document.getElementById(\'refLinkPreviewModal\').remove();">Close</button>' +
+          '</div>' +
+        '</div>';
+      document.body.appendChild(modal);
+      modal.addEventListener('click', function(e) { if (e.target === modal) modal.remove(); });
+    }).catch(function(err) {
+      alert('Preview failed: ' + (err.message || err));
+    });
   }
 
   // Loads the server's live agent runtime config (model + effort) and
@@ -4654,4 +4857,14 @@
   window.openNewEvalModal = openNewEvalModal;
   window.cancelNewEval = cancelNewEval;
   window.submitNewEval = submitNewEval;
+  // Reference Links view — expose for both inline onclick handlers
+  // and switchAgentsView dispatch.
+  window.renderReferenceLinksView = renderReferenceLinksView;
+  window.openReferenceLinkEditor = openReferenceLinkEditor;
+  window.closeReferenceLinkEditor = closeReferenceLinkEditor;
+  window.saveReferenceLink = saveReferenceLink;
+  window.editReferenceLink = editReferenceLink;
+  window.deleteReferenceLink = deleteReferenceLink;
+  window.refreshReferenceLink = refreshReferenceLink;
+  window.previewReferenceLink = previewReferenceLink;
 })();
