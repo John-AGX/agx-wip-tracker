@@ -8,19 +8,23 @@
             else if (!saved && window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) {
                 document.body.classList.add('light-mode');
             }
-            // Swap the SVG glyph based on current mode. Light mode \u2192
-            // moon (click to go dark). Dark mode \u2192 sun (click to go
-            // light). The p86Icon decorator only auto-fires once per
-            // element and bails if data-p86-icon-decorated is set, so
-            // we have to re-render the icon-slot manually each time.
+            // The toggle now lives inside the user-avatar dropdown as a
+            // menu item, so we update both the label text and prepend a
+            // small icon. Light mode -> moon glyph + "Switch to dark
+            // mode". Dark mode -> sun glyph + "Switch to light mode".
+            // The p86Icon decorator only auto-fires once per element,
+            // so we re-render the icon-slot manually each time.
             function updateIcon() {
                 var btn = document.getElementById('theme-toggle');
                 if (!btn) return;
-                var iconName = document.body.classList.contains('light-mode') ? 'moon' : 'sun';
+                var isLight = document.body.classList.contains('light-mode');
+                var iconName = isLight ? 'moon' : 'sun';
+                var labelText = isLight ? 'Switch to dark mode' : 'Switch to light mode';
                 btn.dataset.p86Icon = iconName;
                 btn.dataset.p86IconDecorated = '0'; // invalidate so we can re-decorate
-                // Drop any previous slot, then ask the helper to
-                // re-prepend the new SVG.
+                var labelSpan = btn.querySelector('#theme-toggle-label');
+                if (labelSpan) labelSpan.textContent = labelText;
+                // Drop any previous slot, then prepend the new SVG.
                 var oldSlot = btn.querySelector('.p86-icon-slot');
                 if (oldSlot) oldSlot.remove();
                 if (typeof window.p86Icon === 'function') {

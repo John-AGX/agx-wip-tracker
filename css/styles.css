@@ -182,26 +182,23 @@
             overflow: hidden;
         }
 
-        /* THEME TOGGLE */
-        .theme-toggle {
-            background: rgba(255,255,255,0.12);
-            border: 1px solid rgba(255,255,255,0.2);
-            color: #fff;
-            border-radius: 50%;
-            width: 22px;
-            height: 22px;
-            font-size: 12px;
-            cursor: pointer;
-            transition: background 0.15s;
-            line-height: 1;
-            padding: 0;
+        /* THEME TOGGLE — now lives as a menu item inside the
+           user-avatar dropdown. Inherits .header-popover-item layout
+           (block, left-aligned) and adds a small inline icon slot in
+           front of the label text. */
+        .theme-toggle.header-popover-item {
             display: flex;
             align-items: center;
-            justify-content: center;
-            flex-shrink: 0;
+            gap: 8px;
         }
-        .theme-toggle:hover {
-            background: rgba(255,255,255,0.25);
+        .theme-toggle .p86-icon-slot {
+            margin-right: 0;
+            display: inline-flex;
+            align-items: center;
+        }
+        .theme-toggle .p86-icon {
+            width: 14px;
+            height: 14px;
         }
 
         /* HEADER */
@@ -401,103 +398,66 @@
             border-color: rgba(248, 113, 113, 0.50);
         }
 
-        /* ── Global "Ask 86" floating button ──────────────────────
-           Lives bottom-right of every page (position: fixed) so 86
-           is one tap away from anywhere in the app. Brand badge:
-           the DNA glyph centered in a circular surface, with the
-           "86" wordmark in a smaller pill that overlaps the right
-           edge — reads as Project 86's signature, not a generic
-           AI button. Lifts on hover with a soft cyan glow. */
-        .ask86-fab {
-            position: fixed;
-            right: 24px;
-            bottom: 24px;
-            z-index: 1500;
-            width: 64px;
-            height: 64px;
-            /* Project 86 brand mark — circular, matching the
-               canonical logo: pure black ground, hairline ring,
-               luminous-white DNA strand crossing diagonally with a
-               glowing "86" overlapping the lower-right. */
+        /* ── Header "Ask 86" icon button ───────────────────────
+           32×32 circular icon button styled to match the brand
+           mark — black ground, hairline white ring, the DNA glyph
+           centered, and a thin "86" wordmark overlapping the
+           lower-right. Sized to drop into the header's right
+           cluster (same footprint as the bell / folder / directory
+           buttons). Glow is dialed down vs the previous FAB —
+           this is a UI affordance, not the brand mark hero. */
+        .header-ask86-btn {
+            position: relative;
+            width: 32px;
+            height: 32px;
+            padding: 0;
             border-radius: 50%;
-            border: 2px solid rgba(255, 255, 255, 0.22);
+            border: 1px solid rgba(255, 255, 255, 0.22);
             background: #000000;
             color: #ffffff;
             cursor: pointer;
-            padding: 0;
             display: inline-flex;
             align-items: center;
             justify-content: center;
             overflow: hidden;
-            box-shadow:
-                0 6px 20px rgba(0, 0, 0, 0.55),
-                0 0 0 0 rgba(255, 255, 255, 0.0);
-            transition: transform 0.18s ease, box-shadow 0.18s ease,
-                        border-color 0.18s ease;
+            transition: transform 0.12s ease, border-color 0.12s ease,
+                        box-shadow 0.12s ease;
         }
-        .ask86-fab:hover {
-            transform: translateY(-2px) scale(1.04);
-            border-color: rgba(255, 255, 255, 0.40);
-            box-shadow:
-                0 10px 26px rgba(0, 0, 0, 0.60),
-                0 0 18px rgba(255, 255, 255, 0.18);
+        .header-ask86-btn:hover {
+            border-color: rgba(255, 255, 255, 0.45);
+            box-shadow: 0 0 8px rgba(255, 255, 255, 0.20);
         }
-        .ask86-fab:active {
-            transform: translateY(0) scale(1.00);
-        }
-        /* DNA glyph — luminous-white strand running diagonally
-           through the circle (upper-right to lower-left, matching
-           the canonical brand mark's orientation). Layered drop-
-           shadow filter creates the white halo the strand sits
-           inside. Sized close to the surface diameter so the
-           strand reads as the dominant element. */
-        .ask86-fab-icon {
+        .header-ask86-btn:active { transform: scale(0.96); }
+        .header-ask86-icon {
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            width: 46px;
-            height: 46px;
-            margin-right: 8px;
-            margin-bottom: 4px;
+            width: 22px;
+            height: 22px;
+            margin-right: 4px;
+            margin-bottom: 2px;
             color: #ffffff;
-            filter:
-                drop-shadow(0 0 2px rgba(255, 255, 255, 0.95))
-                drop-shadow(0 0 5px rgba(255, 255, 255, 0.55))
-                drop-shadow(0 0 10px rgba(255, 255, 255, 0.25));
+            filter: drop-shadow(0 0 1.5px rgba(255, 255, 255, 0.55));
         }
-        .ask86-fab-icon .p86-icon {
-            width: 46px;
-            height: 46px;
+        .header-ask86-icon .p86-icon {
+            width: 22px;
+            height: 22px;
         }
-        /* "86" wordmark — luminous-white digits anchored to the
-           bottom-right of the surface, overlapping the lower
-           portion of the DNA strand. Same neon-glow as the strand
-           so the two read as one luminous brand mark. */
-        .ask86-fab-badge {
+        .header-ask86-label {
             position: absolute;
-            right: 6px;
-            bottom: 4px;
+            right: 4px;
+            bottom: 2px;
             color: #ffffff;
-            font-size: 22px;
-            font-weight: 800;
-            letter-spacing: -1px;
+            font-size: 10px;
+            font-weight: 500;
+            letter-spacing: -0.4px;
             line-height: 1;
             font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-            text-shadow:
-                0 0 3px rgba(255, 255, 255, 0.95),
-                0 0 7px rgba(255, 255, 255, 0.65),
-                0 0 14px rgba(255, 255, 255, 0.35);
+            text-shadow: 0 0 2px rgba(0, 0, 0, 0.85);
             pointer-events: none;
         }
-        /* Light mode: the brand mark stays always-on-black so it
-           reads the same regardless of which theme is active. */
-        /* Hide the FAB while the AI panel itself is open — the panel
-           covers the bottom-right area on most layouts and the user
-           is clearly already talking to 86. JS toggles .ask86-fab-hidden
-           on the button when p86AI.open / close fires. */
-        .ask86-fab.ask86-fab-hidden {
-            display: none;
-        }
+        /* Light mode: button surface stays black so the brand mark
+           reads the same regardless of theme. */
 
         /* Initials avatar — outline-only "badge" surface. Default state
            is transparent fill with a cyan ring; hover bumps the ring +
