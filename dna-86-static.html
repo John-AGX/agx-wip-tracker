@@ -1,43 +1,33 @@
 <!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>86Badge preview</title>
+<html><head><meta charset="utf-8"><title>Header preview</title>
 <style>
   body { background:#0e0f12; color:#e7e9ee; font-family:system-ui, sans-serif; margin:0; padding:32px; }
-  h1 { font-weight:500; font-size:16px; opacity:0.8; margin:0 0 24px; }
-  .row { display:flex; align-items:flex-end; gap:32px; flex-wrap:wrap; }
-  .item { display:flex; flex-direction:column; align-items:center; gap:8px; font-size:11px; opacity:0.65; }
-  .btn { width:32px; height:32px; border-radius:50%; background:#000; border:1px solid rgba(255,255,255,0.22); display:inline-flex; align-items:center; justify-content:center; }
-  .btn svg { width:22px; height:22px; color:#fff; filter:drop-shadow(0 0 1.5px rgba(255,255,255,0.55)); }
-  .lg svg { width:64px; height:64px; color:#fff; }
-  .xl svg { width:128px; height:128px; color:#fff; }
-  .light { background:#f5f5f5; padding:24px; border-radius:12px; }
-  .light .btn { background:#fff; border-color:rgba(0,0,0,0.15); }
-  .light .btn svg { color:#000; filter:none; }
-  .light .lg svg, .light .xl svg { color:#000; }
+  h1 { font-weight:500; font-size:14px; opacity:0.7; margin:0 0 18px; }
+  .header-mock { background:#1a1a2e; padding:8px 16px; display:flex; align-items:center; gap:6px; border-radius:8px; max-width:420px; }
+  .header-icon-btn {
+    position: relative;
+    width: 32px; height: 32px;
+    border-radius: 50%;
+    background: transparent;
+    border: 1px solid transparent;
+    color: rgba(255, 255, 255, 0.85);
+    font-size: 16px; line-height: 1;
+    cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center;
+    padding: 0;
+    transition: background 0.12s, border-color 0.12s;
+  }
+  .header-icon-btn:hover { background: rgba(255, 255, 255, 0.12); border-color: rgba(255, 255, 255, 0.18); }
+  .header-icon-btn .p86-icon { width: 18px; height: 18px; }
+  #header-ask86-btn .p86-icon { width: 24px; height: 24px; }
 </style></head>
 <body>
-<h1>86Badge — actual brand mark, on dark + light surfaces</h1>
-<div class="row" id="row"></div>
+<h1>Header cluster — Ask 86 sitting flush with bell / files / directory</h1>
+<div class="header-mock">
+  <button class="header-icon-btn" data-p86-icon="folder" title="Files"></button>
+  <button class="header-icon-btn" data-p86-icon="bell" title="Notifications"></button>
+  <button class="header-icon-btn" data-p86-icon="clients" title="Directory"></button>
+  <button id="header-ask86-btn" class="header-icon-btn" data-p86-icon="dna-86" title="Ask 86"></button>
+</div>
 <script src="js/agx-icons.js?v=19b"></script>
-<script>
-  function build(target, klass) {
-    var html =
-      '<div class="' + klass + '">' +
-      '<div class="row">' +
-        '<div class="item"><span class="btn"><span class="slot"></span></span><span>32 (button)</span></div>' +
-        '<div class="item lg"><span class="slot"></span><span>64</span></div>' +
-        '<div class="item xl"><span class="slot"></span><span>128</span></div>' +
-      '</div>' +
-      '</div>';
-    target.innerHTML = html;
-    target.querySelectorAll('.slot').forEach(function (s) {
-      s.innerHTML = window.p86Icon('dna-86');
-    });
-  }
-  var dark = document.createElement('div');
-  var light = document.createElement('div');
-  document.getElementById('row').appendChild(dark);
-  document.getElementById('row').appendChild(light);
-  build(dark, 'dark');
-  build(light, 'light');
-</script>
 </body></html>

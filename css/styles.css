@@ -399,57 +399,15 @@
         }
 
         /* ── Header "Ask 86" icon button ───────────────────────
-           32×32 circular icon button styled to match the brand
-           mark — black ground, hairline white ring, the DNA glyph
-           centered, and a thin "86" wordmark overlapping the
-           lower-right. Sized to drop into the header's right
-           cluster (same footprint as the bell / folder / directory
-           buttons). Glow is dialed down vs the previous FAB —
-           this is a UI affordance, not the brand mark hero. */
-        .header-ask86-btn {
-            position: relative;
-            width: 32px;
-            height: 32px;
-            padding: 0;
-            border-radius: 50%;
-            border: 1px solid rgba(255, 255, 255, 0.22);
-            background: #000000;
-            color: #ffffff;
-            cursor: pointer;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            overflow: hidden;
-            transition: transform 0.12s ease, border-color 0.12s ease,
-                        box-shadow 0.12s ease;
+           Inherits the standard .header-icon-btn shape (32×32
+           transparent, hover-fill) so it sits flush with the bell /
+           files / directory buttons. The single override is icon
+           size — the dna-86 brand mark reads better at 24px than
+           the 18px utility-icon default because of its detail. */
+        #header-ask86-btn .p86-icon {
+            width: 24px;
+            height: 24px;
         }
-        .header-ask86-btn:hover {
-            border-color: rgba(255, 255, 255, 0.45);
-            box-shadow: 0 0 8px rgba(255, 255, 255, 0.20);
-        }
-        .header-ask86-btn:active { transform: scale(0.96); }
-        /* Composite "dna-86" Phosphor icon fills the button. The
-           glyph carries both the DNA strand and "86" mark in a
-           single SVG so it scales/strokes consistently. */
-        .header-ask86-icon {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            width: 22px;
-            height: 22px;
-            color: #ffffff;
-            filter: drop-shadow(0 0 1.5px rgba(255, 255, 255, 0.55));
-        }
-        .header-ask86-icon .p86-icon-slot {
-            margin-right: 0;
-            display: inline-flex;
-        }
-        .header-ask86-icon .p86-icon {
-            width: 22px;
-            height: 22px;
-        }
-        /* Light mode: button surface stays black so the brand mark
-           reads the same regardless of theme. */
 
         /* Initials avatar — outline-only "badge" surface. Default state
            is transparent fill with a cyan ring; hover bumps the ring +
