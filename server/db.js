@@ -1198,7 +1198,7 @@ async function initSchema() {
            NOW()
     WHERE NOT EXISTS (SELECT 1 FROM app_settings WHERE key = 'agent_skills');
 
-    -- Tag every existing 86 skill pack with the right `contexts` array
+    -- Tag every existing 86 skill pack with the right contexts array
     -- so the loader filters by entity_type. Idempotent: only sets
     -- contexts when the field is missing (existing tags survive).
     -- Pack-name-to-contexts mapping reflects what each playbook is for
@@ -1249,56 +1249,10 @@ async function initSchema() {
            )
        );
 
-    -- AG / Elle wording cleanup inside skill-pack BODIES. Rewrites
-    -- legacy agent names to the unified "86" branding. Conservative
-    -- regex: only matches whole-word occurrences with adjacent spaces
-    -- or punctuation so embedded SQL / code mentions stay intact. The
-    -- WHERE NOT EXISTS gate makes re-runs no-ops.
-    UPDATE app_settings
-       SET value = jsonb_set(
-         value, '{skills}',
-         (
-           SELECT COALESCE(jsonb_agg(
-             CASE
-               WHEN s ? 'body' AND (
-                 s->>'body' LIKE '%You are Elle%'
-                 OR s->>'body' LIKE '%Elle (%'
-                 OR s->>'body' LIKE '%Elle is%'
-                 OR s->>'body' LIKE '%Elle.%'
-                 OR s->>'body' LIKE '%You are AG%'
-                 OR s->>'body' LIKE '%AG ('
-                 OR s->>'body' LIKE '%AGX %'
-               ) THEN jsonb_set(s, '{body}',
-                 to_jsonb(
-                   REGEXP_REPLACE(
-                     REGEXP_REPLACE(
-                       REGEXP_REPLACE(
-                         REGEXP_REPLACE(s->>'body',
-                           E'\\\\bElle\\\\b', '86', 'g'),
-                         E'\\\\bAGX\\\\b', 'Project 86', 'g'),
-                       E'\\\\bAG\\\\b(?! )', '86', 'g'),
-                     E'\\\\bAG (estimating|estimator)\\\\b', '86 \\\\1', 'g')
-                 ))
-               ELSE s
-             END
-           ), '[]'::jsonb)
-           FROM jsonb_array_elements(value->'skills') AS s
-         )
-       )
-     WHERE key = 'agent_skills'
-       AND value ? 'skills'
-       AND EXISTS (
-         SELECT 1 FROM jsonb_array_elements(value->'skills') s
-         WHERE s ? 'body' AND (
-           s->>'body' LIKE '%You are Elle%'
-           OR s->>'body' LIKE '%Elle (%'
-           OR s->>'body' LIKE '%Elle is%'
-           OR s->>'body' LIKE '%Elle.%'
-           OR s->>'body' LIKE '%You are AG%'
-           OR s->>'body' LIKE '%AG ('
-           OR s->>'body' LIKE '%AGX %'
-         )
-       );
+    -- (AG / Elle / AGX wording cleanup deferred to a follow-up commit
+    -- — earlier attempt with nested replace() blew up paren-balance in
+    -- the JS template literal. Admins can clean pack bodies via
+    -- Admin -> Agents -> Skills until that ships.)
 
     -- If the row already existed, append the pack only if the name isn't
     -- already present (covers admins who edited skill packs via the UI
