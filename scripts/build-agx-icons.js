@@ -356,10 +356,19 @@ const CUSTOM_ICONS = {
   // V5 = path-drawn 8 + 6 to match the user reference image exactly
   'dna-86-v5': '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="none" stroke="currentColor" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"><circle cx="128" cy="128" r="120"/><g><path d="M 56 24 C 56 58 140 58 140 92 C 140 126 56 126 56 160"/><path d="M 140 24 C 140 58 56 58 56 92 C 56 126 140 126 140 160"/><line x1="62" y1="40" x2="134" y2="40"/><line x1="62" y1="108" x2="134" y2="108"/></g><rect x="142" y="156" width="38" height="32" rx="14"/><rect x="138" y="190" width="42" height="36" rx="16"/><path d="M 230 154 Q 200 164 200 208"/><rect x="194" y="194" width="36" height="34" rx="16"/></svg>'
 };
+// dna-86-badge is the user-supplied 86Badge.svg, traced as filled paths.
+// Loaded from disk so the source SVG stays canonical and we don't double-
+// maintain it. fill="#000000" on the <g> is rewritten to currentColor in
+// the build below so the icon tints with the surrounding text color.
+CUSTOM_ICONS['dna-86-badge'] = fs.readFileSync(
+  path.join(ICONS_DIR, 'custom', '86-badge.svg'),
+  'utf8'
+);
+
 // Pick the active variant — the header button uses data-p86-icon="dna-86",
 // so this alias controls which design ships. Change the source key here
 // (or rerun the build) to switch designs.
-const ACTIVE_DNA_86_VARIANT = 'dna-86-v5';
+const ACTIVE_DNA_86_VARIANT = 'dna-86-badge';
 CUSTOM_ICONS['dna-86'] = CUSTOM_ICONS[ACTIVE_DNA_86_VARIANT];
 
 let out = HEADER;
@@ -377,7 +386,11 @@ for (const [name, rel] of Object.entries(MAP)) {
   out += '  icons[' + JSON.stringify(name) + '] = ' + JSON.stringify(svg) + ';\n';
 }
 for (const [name, svg] of Object.entries(CUSTOM_ICONS)) {
-  out += '  icons[' + JSON.stringify(name) + '] = ' + JSON.stringify(svg) + ';\n';
+  // Same whitespace collapse the MAP loop applies — keeps the generated
+  // file compact when a CUSTOM_ICONS entry is read from disk (e.g. the
+  // 86Badge.svg traced output ships with a lot of formatting whitespace).
+  const compact = svg.replace(/\s+/g, ' ').replace(/> </g, '><').trim();
+  out += '  icons[' + JSON.stringify(name) + '] = ' + JSON.stringify(compact) + ';\n';
 }
 out += FOOTER;
 
