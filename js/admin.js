@@ -3135,7 +3135,7 @@
         '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">' +
           '<div>' +
             '<div style="font-size:13px;font-weight:600;color:var(--text);">Live reference sheets</div>' +
-            '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:2px;">SharePoint / OneDrive share URLs (set to &ldquo;Anyone with the link &rarr; Can view&rdquo;). The server fetches each every 15 min and injects the parsed rows into every agent\'s system prompt.</div>' +
+            '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:2px;">Google Sheets / Google Drive / SharePoint / OneDrive share URLs (set to &ldquo;Anyone with the link &rarr; Viewer&rdquo;). The server fetches each every 15 min and injects the parsed rows into every agent\'s system prompt.</div>' +
           '</div>' +
           '<button class="ee-btn primary" onclick="openReferenceLinkEditor()">&#x2795; Add link</button>' +
         '</div>' +
@@ -3173,9 +3173,13 @@
         '<div style="display:flex;flex-direction:column;gap:10px;">' +
           '<div><label style="font-size:11px;font-weight:600;color:var(--text-dim,#888);">Title</label>' +
             '<input type="text" id="refLink_title" value="' + escapeAttr(l.title || '') + '" placeholder="e.g., WIP Report" style="width:100%;padding:7px 10px;background:var(--input-bg);color:var(--text);border:1px solid var(--border);border-radius:6px;" /></div>' +
-          '<div><label style="font-size:11px;font-weight:600;color:var(--text-dim,#888);">SharePoint / OneDrive share URL</label>' +
-            '<input type="text" id="refLink_url" value="' + escapeAttr(l.url || '') + '" placeholder="https://tenant.sharepoint.com/:x:/g/personal/.../...?e=..." style="width:100%;padding:7px 10px;background:var(--input-bg);color:var(--text);border:1px solid var(--border);border-radius:6px;font-family:monospace;font-size:11px;" />' +
-            '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:4px;line-height:1.4;">Set the share to &ldquo;Anyone with the link &rarr; Can view&rdquo; in SharePoint. The server appends &amp;download=1 to fetch the XLSX directly.</div></div>' +
+          '<div><label style="font-size:11px;font-weight:600;color:var(--text-dim,#888);">Share URL</label>' +
+            '<input type="text" id="refLink_url" value="' + escapeAttr(l.url || '') + '" placeholder="docs.google.com/spreadsheets/d/.../edit  OR  tenant.sharepoint.com/:x:/g/..." style="width:100%;padding:7px 10px;background:var(--input-bg);color:var(--text);border:1px solid var(--border);border-radius:6px;font-family:monospace;font-size:11px;" />' +
+            '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:4px;line-height:1.4;">' +
+              'Supported: <strong>Google Sheets</strong>, <strong>Google Drive</strong> (XLSX file), <strong>SharePoint</strong> / <strong>OneDrive</strong>. ' +
+              'Share must be set to &ldquo;Anyone with the link &rarr; Viewer&rdquo;. ' +
+              'Verify by opening the URL <em>on your phone with cellular data</em>: if it asks you to sign in, anonymous fetch won\'t work either.' +
+            '</div></div>' +
           '<div><label style="font-size:11px;font-weight:600;color:var(--text-dim,#888);">Description (shown to agents)</label>' +
             '<textarea id="refLink_description" rows="2" placeholder="What\'s in this sheet? When should agents look here?" style="width:100%;padding:7px 10px;background:var(--input-bg);color:var(--text);border:1px solid var(--border);border-radius:6px;">' + escapeHTML(l.description || '') + '</textarea></div>' +
           '<div style="display:flex;gap:14px;">' +

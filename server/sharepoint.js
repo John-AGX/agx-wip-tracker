@@ -1,19 +1,26 @@
-// SharePoint / OneDrive XLSX fetcher for the agent reference-links
-// feature. Given a "Anyone with the link → Can view" share URL, pulls
-// the workbook bytes, parses with exceljs, and renders a compact
-// CSV-ish preview that's safe to embed in an agent system prompt.
+// Workbook fetcher for the agent reference-links feature. Given an
+// anonymous share URL from any supported provider, pulls the bytes,
+// parses with exceljs, and renders a compact preview safe to embed
+// in an agent system prompt.
 //
-// The trick for anonymous downloads from a SharePoint share URL is to
-// flip the viewer link into a download link. The default share URL
-// looks like:
-//   https://tenant.sharepoint.com/:x:/g/personal/.../EXXX...?e=YYY
-// Appending &download=1 (or ?download=1 if no query) tells SharePoint
-// to return the binary instead of bouncing through the web viewer.
-// This works for anonymous shares; non-anonymous shares 401 / 403 and
-// we surface that in last_fetch_error.
+// Supported providers:
+//   - SharePoint / OneDrive for Business:
+//       https://tenant.sharepoint.com/:x:/g/personal/.../EXXX...?e=YYY
+//       Append &download=1 to the share URL to get the binary.
+//       REQUIRES "Anyone with the link" share + a tenant policy
+//       that allows anonymous external sharing.
+//   - Google Sheets:
+//       https://docs.google.com/spreadsheets/d/{FILE_ID}/edit?usp=sharing
+//       Convert to https://docs.google.com/spreadsheets/d/{FILE_ID}/export?format=xlsx
+//       Works server-side for "Anyone with the link → Viewer" sheets
+//       without any tenant config gymnastics.
+//   - Google Drive XLSX file:
+//       https://drive.google.com/file/d/{FILE_ID}/view?usp=sharing
+//       Convert to https://drive.google.com/uc?export=download&id={FILE_ID}
+//       Same anonymous-share semantics as Sheets.
 //
 // We don't bake any auth here — by design, only public-share links
-// work for v1. Tenant-OAuth integration is a separate, larger build.
+// work for v1. M365-OAuth integration is a separate, larger build.
 
 'use strict';
 
@@ -22,23 +29,55 @@ const ExcelJS = require('exceljs');
 const UA = 'AGX/Project86 reference-link fetcher (project86.net)';
 const MAX_BYTES = 25 * 1024 * 1024; // 25 MB cap per workbook
 
-// Convert a SharePoint / OneDrive viewer share URL into a direct
-// download URL. Idempotent — re-running on a download URL leaves
-// it alone. Tolerant of either ?param or &param shape.
+// Identify the provider so we can pick the right URL transform +
+// produce provider-specific error messages.
+function detectProvider(url) {
+  if (typeof url !== 'string' || !url) return 'unknown';
+  if (/docs\.google\.com\/spreadsheets/i.test(url)) return 'google_sheets';
+  if (/drive\.google\.com\/(file|open|uc)/i.test(url)) return 'google_drive';
+  if (/sharepoint\.com|onedrive\.live\.com|onedrive\.com|1drv\.ms/i.test(url)) return 'sharepoint';
+  return 'unknown';
+}
+
+// Convert a viewer share URL into a direct download URL. Idempotent
+// per-provider — re-running on a download URL leaves it alone.
 function toDownloadUrl(shareUrl) {
   if (typeof shareUrl !== 'string' || !shareUrl) return shareUrl;
-  // Already has download=1
+  const provider = detectProvider(shareUrl);
+
+  if (provider === 'google_sheets') {
+    // /spreadsheets/d/{ID}/...   →   /spreadsheets/d/{ID}/export?format=xlsx
+    const m = shareUrl.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
+    if (!m) return shareUrl;
+    return 'https://docs.google.com/spreadsheets/d/' + m[1] + '/export?format=xlsx';
+  }
+
+  if (provider === 'google_drive') {
+    // /file/d/{ID}/...   →   /uc?export=download&id={ID}
+    let id = null;
+    let m = shareUrl.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);
+    if (m) id = m[1];
+    if (!id) {
+      m = shareUrl.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+      if (m) id = m[1];
+    }
+    if (!id) return shareUrl;
+    return 'https://drive.google.com/uc?export=download&id=' + id;
+  }
+
+  // SharePoint / OneDrive: append &download=1 if not already there.
   if (/[?&]download=1\b/i.test(shareUrl)) return shareUrl;
   return shareUrl + (shareUrl.indexOf('?') >= 0 ? '&' : '?') + 'download=1';
 }
 
 async function fetchWorkbookBytes(shareUrl) {
+  const provider = detectProvider(shareUrl);
   const url = toDownloadUrl(shareUrl);
   const res = await fetch(url, {
     headers: {
       'User-Agent': UA,
-      // Hint XLSX-friendly types so SharePoint is more likely to
-      // return bytes vs the JS-driven viewer page.
+      // Hint XLSX-friendly types so providers are more likely to
+      // return binary bytes vs a JS-driven viewer page.
       'Accept': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/octet-stream, */*'
     },
     redirect: 'follow'
@@ -46,16 +85,7 @@ async function fetchWorkbookBytes(shareUrl) {
   const ct = (res.headers.get('content-type') || '').toLowerCase();
 
   if (!res.ok) {
-    // 401/403 means the share isn't anonymous. SharePoint usually
-    // returns 302 → 200 HTML login page rather than 401 directly,
-    // so the HTML check below is the more common path. Keep the
-    // status check for completeness.
-    throw new Error(
-      'HTTP ' + res.status + ' from SharePoint. ' +
-      (res.status === 401 || res.status === 403
-        ? 'The share probably isn\'t set to "Anyone with the link → Can view", or your tenant blocks anonymous shares.'
-        : 'Try re-copying the share URL.')
-    );
+    throw new Error(buildAuthFailureMsg(provider, res.status));
   }
   // Length-cap before slurping the whole body.
   const len = parseInt(res.headers.get('content-length') || '0', 10);
@@ -76,11 +106,7 @@ async function fetchWorkbookBytes(shareUrl) {
   // letting exceljs blow up later with an opaque parse error.
   if (buf[0] !== 0x50 || buf[1] !== 0x4B) {
     if (ct.indexOf('text/html') >= 0) {
-      throw new Error(
-        'SharePoint returned an HTML login page instead of the XLSX. ' +
-        'Most likely: the share isn\'t set to "Anyone with the link → Can view", OR your tenant admin has disabled anonymous link sharing. ' +
-        'Verify in SharePoint by opening the share URL in a private/incognito window — if it asks you to sign in, anonymous downloads won\'t work either.'
-      );
+      throw new Error(buildHtmlBlockMsg(provider));
     }
     throw new Error(
       'Response wasn\'t a valid XLSX (no ZIP signature). ' +
@@ -89,6 +115,40 @@ async function fetchWorkbookBytes(shareUrl) {
     );
   }
   return buf;
+}
+
+function buildAuthFailureMsg(provider, status) {
+  const head = 'HTTP ' + status + ' from the share URL. ';
+  if (status === 401 || status === 403) {
+    if (provider === 'sharepoint') {
+      return head +
+        'The share isn\'t actually anonymous. Microsoft 365 silently passes your Windows credentials to SharePoint even in InPrivate windows, so a link can feel "public" while still being org-restricted. ' +
+        'To verify: open the URL on a phone with cellular data — if it asks you to sign in, the share is locked down. ' +
+        'To fix: re-share with "Anyone with the link → Can view" (may need tenant admin to enable). ' +
+        'OR move the file to Google Sheets / Drive — those handle anonymous shares cleanly.';
+    }
+    if (provider === 'google_sheets' || provider === 'google_drive') {
+      return head +
+        'The Google share isn\'t set to anonymous viewing. Right-click the file in Drive → Share → ' +
+        'change "Restricted" to "Anyone with the link" → Viewer.';
+    }
+    return head + 'The share URL requires authentication.';
+  }
+  return head + 'Try re-copying the share URL.';
+}
+
+function buildHtmlBlockMsg(provider) {
+  if (provider === 'sharepoint') {
+    return 'SharePoint returned an HTML viewer page instead of the XLSX. ' +
+      'The share isn\'t actually anonymous — Microsoft 365 SSO often makes it FEEL public when it\'s really org-restricted. ' +
+      'Open the URL on your phone with cellular data: if it asks for a sign-in, anonymous downloads won\'t work. ' +
+      'Fix: re-share as "Anyone with the link → Can view" (admin may need to enable), or move the file to Google Sheets / Drive — those just work.';
+  }
+  if (provider === 'google_sheets' || provider === 'google_drive') {
+    return 'Google returned an HTML page instead of the XLSX. ' +
+      'The share is probably set to "Restricted" — change to "Anyone with the link → Viewer" in Drive\'s Share dialog.';
+  }
+  return 'Server returned an HTML page instead of the XLSX. The share URL appears to require authentication.';
 }
 
 // Parse an XLSX buffer into a flattened representation:
@@ -207,6 +267,7 @@ async function fetchAndRender(shareUrl, opts) {
 }
 
 module.exports = {
+  detectProvider: detectProvider,
   toDownloadUrl: toDownloadUrl,
   fetchWorkbookBytes: fetchWorkbookBytes,
   parseWorkbook: parseWorkbook,
