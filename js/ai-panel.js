@@ -2143,7 +2143,7 @@
     if (!clientId) throw new Error('This estimate is not linked to a client — link a client first, then add the note.');
     var body = (input && input.body || '').trim();
     if (!body) throw new Error('Note body is empty.');
-    await window.p86Api.clients.addNote(clientId, body, 'ag');
+    await window.p86Api.clients.addNote(clientId, body, 'job');
     return 'Saved note on linked client: "' + body.slice(0, 80) + (body.length > 80 ? '…' : '') + '"';
   }
 

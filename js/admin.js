@@ -2367,13 +2367,10 @@
   // only the user-facing labels change. The 'intake' key was
   // retired — 86 owns lead-intake now; intake sessions still use
   // entity_type='intake' as a label, but agent_key='job'.)
-  // 47 was retired in 2026-05 — its role merged into 86. The agent_key
-  // 'ag' still exists for back-compat (old conversation history reads
-  // cleanly + the estimate AI panel hasn't been re-routed yet) but
-  // displays as 86 everywhere user-facing now. HR's scope expanded to
-  // cover jobs + users in addition to clients + subs.
+  // 47 retired in 2026-05 — agent_key 'ag' migrated to 'job' on boot.
+  // 86 is now the single canonical operator key. HR's scope expanded
+  // to cover jobs + users in addition to clients + subs.
   var AGENT_LABELS = {
-    ag:  '86 (Estimator context)',
     job: '86 (Operator)',
     cra: 'HR (86\'s data steward)'
   };
@@ -2526,7 +2523,7 @@
     _skillsDraft.skills.push({
       id: 'sk_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
       name: '',
-      agents: ['ag'],
+      agents: ['job'],
       alwaysOn: true,
       body: ''
     });
@@ -4111,7 +4108,7 @@
       // Intake is no longer a separate managed agent — 86 owns the
       // lead-intake flow. Only four agents register on the Anthropic side.
       var labels = { ag: '86 (Estimator context — back-compat key)', job: '86 (Operator — incl. intake)', cra: 'HR (clients, jobs, subs, users)', staff: 'Chief of Staff' };
-      var allKeys = ['ag', 'job', 'cra', 'staff'];
+      var allKeys = ['job', 'cra', 'staff'];
       var registered = {};
       rows.forEach(function(r) { registered[r.agent_key] = r; });
 
@@ -4409,7 +4406,7 @@
   var _overridableSections = { ag: [], job: [], cra: [], staff: [] };
 
   function fetchOverridableSections() {
-    var agentKeys = ['ag', 'job', 'cra', 'staff'];
+    var agentKeys = ['job', 'cra', 'staff'];
     return Promise.all(agentKeys.map(function(a) {
       return window.p86Api.get('/api/admin/agents/sections?agent=' + a)
         .then(function(r) { _overridableSections[a] = (r && r.sections) || []; })

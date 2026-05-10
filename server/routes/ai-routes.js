@@ -75,16 +75,17 @@ const MODEL = process.env.AI_MODEL || 'claude-sonnet-4-6';
 // passing it there would 400, so we only attach the param when the
 // model is in the supported set.
 const EFFORT = (process.env.AI_EFFORT || '').trim().toLowerCase();
-// Per-agent overrides — 86's WIP audits benefit from higher
-// thinking budgets, AG's quick line-item turns don't. Each env var
-// is optional; missing → falls back to AI_EFFORT.
-//   AI_EFFORT_AG    AG (estimating)
-//   AI_EFFORT_JOB   86 (WIP analyst)
-//   AI_EFFORT_CRA   HR (customer relations)
+// Per-agent overrides — 86's WIP / margin audits benefit from
+// higher thinking budgets; line-item / intake turns don't. Each
+// env var is optional; missing → falls back to AI_EFFORT.
+//   AI_EFFORT_JOB   86 (operator — estimating + intake + WIP)
+//   AI_EFFORT_CRA   HR (data steward)
 //   AI_EFFORT_STAFF Chief of Staff
+// (Legacy AI_EFFORT_AG still honored as a fallback for AI_EFFORT_JOB
+//  in case anyone still has it set in their Railway env vars — drop
+//  this fallback after the next ops review.)
 const EFFORT_PER_AGENT = {
-  ag:    (process.env.AI_EFFORT_AG    || '').trim().toLowerCase(),
-  job:   (process.env.AI_EFFORT_JOB   || '').trim().toLowerCase(),
+  job:   (process.env.AI_EFFORT_JOB || process.env.AI_EFFORT_AG || '').trim().toLowerCase(),
   cra:   (process.env.AI_EFFORT_CRA   || '').trim().toLowerCase(),
   staff: (process.env.AI_EFFORT_STAFF || '').trim().toLowerCase()
 };
@@ -245,7 +246,7 @@ const ESTIMATE_TOOLS = [
   },
   {
     name: 'propose_add_client_note',
-    description: 'Propose appending a durable, agent-readable note to the linked client. Notes auto-inject into AG and HR system prompts on every future turn touching this client, so they compound knowledge across sessions. Only call when you\'ve learned something the user told you that should outlive this conversation — pricing preferences, billing quirks, gate codes, scope rules, contact preferences. NEVER call for facts already in the client record (name, address, salesperson) or for ephemeral state (current weather, today\'s schedule). Only available when the estimate is linked to a client (see context above); skipped otherwise.',
+    description: 'Propose appending a durable, agent-readable note to the linked client. Notes auto-inject into 86 and HR system prompts on every future turn touching this client, so they compound knowledge across sessions. Only call when you\'ve learned something the user told you that should outlive this conversation — pricing preferences, billing quirks, gate codes, scope rules, contact preferences. NEVER call for facts already in the client record (name, address, salesperson) or for ephemeral state (current weather, today\'s schedule). Only available when the estimate is linked to a client (see context above); skipped otherwise.',
     input_schema: {
       type: 'object',
       properties: {
@@ -321,7 +322,7 @@ const ESTIMATE_TOOLS = [
   // ──── Group / alternate management ────────────────────────────────
   // Each estimate has one or more "groups" (a.k.a. alternates) — Group 1,
   // Group 2, etc. — each with its own scope, line items, and a
-  // `excludeFromTotal` flag for Good/Better/Best style scenarios. AG can
+  // `excludeFromTotal` flag for Good/Better/Best style scenarios. 86 can
   // now switch which group is active (subsequent line edits target the
   // active group), add/rename/delete groups, and toggle inclusion.
   {
@@ -404,7 +405,7 @@ const ESTIMATE_TOOLS = [
   {
     name: 'propose_link_to_client',
     description:
-      'Link this estimate to a client record. Use when the user mentions a client name and the estimate doesn\'t yet have linked_client_id, or when read_clients returns a high-confidence match. After linking, the client\'s notes auto-inject into AG\'s context every turn (see propose_add_client_note for the writeback flow).',
+      'Link this estimate to a client record. Use when the user mentions a client name and the estimate doesn\'t yet have linked_client_id, or when read_clients returns a high-confidence match. After linking, the client\'s notes auto-inject into 86\'s context every turn (see propose_add_client_note for the writeback flow).',
     input_schema: {
       type: 'object',
       additionalProperties: false,
@@ -1124,7 +1125,7 @@ async function buildEstimateContext(estimateId, includePhotos) {
   // Build the system prompt as TWO blocks so we can cache the stable
   // prefix (identity, role, tools, slotting, skill packs, tone) and
   // only re-send the volatile estimate context each turn. Anthropic's
-  // ephemeral cache is 5 min; AG sessions usually fit inside that, so
+  // ephemeral cache is 5 min; 86 sessions usually fit inside that, so
   // most turns hit the cache and pay ~10% input-token cost.
   //
   //   stableLines  → playbook (cached)
@@ -1135,7 +1136,7 @@ async function buildEstimateContext(estimateId, includePhotos) {
   // ────────────────────────────────────────────────────────────────
   const stableLines = [];
   const lines = [];
-  lines.push('You are an estimating assistant for AG Exteriors, a Central Florida construction services company specializing in painting, deck repairs, roofing, and exterior services for HOAs and apartment communities.');
+  lines.push('You are an estimating assistant for Project 86, a Central Florida construction services company specializing in painting, deck repairs, roofing, and exterior services for HOAs and apartment communities.');
   lines.push('');
   lines.push('Here is the current estimate the user is working on:');
   lines.push('');
@@ -1199,7 +1200,7 @@ async function buildEstimateContext(estimateId, includePhotos) {
     alternates.forEach(a => {
       const isActive = a.id === blob.activeAlternateId;
       const isExcluded = !!a.excludeFromTotal;
-      // Per-group cost-side subtotal so AG can see what's already in
+      // Per-group cost-side subtotal so 86 can see what's already in
       // each group without having to switch into it. This is the cost
       // side (qty * unitCost * (1 + markup/100)) — the same math
       // the editor uses for the headline number.
@@ -1375,7 +1376,7 @@ async function buildEstimateContext(estimateId, includePhotos) {
   // Section overrides loaded first so each named block can be admin-
   // replaced via a skill pack with `replaces_section` set. See
   // SECTION_DEFAULTS for the registry.
-  const sectionOverrides = await loadSectionOverridesFor('ag');
+  const sectionOverrides = await loadSectionOverridesFor('job');
   renderSection(stableLines, 'ag_identity', sectionOverrides);
   stableLines.push('');
   renderSection(stableLines, 'ag_estimate_structure', sectionOverrides);
@@ -1393,7 +1394,7 @@ async function buildEstimateContext(estimateId, includePhotos) {
   renderSection(stableLines, 'ag_web_research', sectionOverrides);
   stableLines.push('');
 
-  // Load admin-editable skill packs targeted at AG. Stable across the
+  // Load admin-editable skill packs targeted at 86. Stable across the
   // 5-min cache window since admins rarely edit them mid-session.
   // Pass turn context so packs with triggers (e.g. min_groups, has_lead)
   // can load conditionally instead of always.
@@ -1402,7 +1403,7 @@ async function buildEstimateContext(estimateId, includePhotos) {
     has_lead: !!blob.lead_id,
     has_client: !!blob.client_id
   };
-  const skillBlocks = await loadActiveSkillsFor('ag', triggerCtx);
+  const skillBlocks = await loadActiveSkillsFor('job', triggerCtx);
   if (skillBlocks.length) {
     stableLines.push('# Loaded skills');
     stableLines.push('Skill packs your admin has assigned. Treat each as binding additional guidance on top of the baseline rules above.');
@@ -1423,7 +1424,7 @@ async function buildEstimateContext(estimateId, includePhotos) {
   // refreshed each turn. The cache_control marker on the stable block
   // tells Anthropic to cache everything from the start of the request
   // (including the tools array) up through that block.
-  // AG phase — controls whether the model can propose line-item /
+  // 86 phase — controls whether the model can propose line-item /
   // section edits this turn. Lives on the estimate JSONB blob; defaults
   // to 'build' when unset (back-compat with estimates created before
   // the toggle existed). Caller filters tools + injects mode block.
@@ -1460,14 +1461,14 @@ async function buildEstimateContext(estimateId, includePhotos) {
   };
 }
 
-// Filter the AG tool list for Plan mode — drops every editing-style
+// Filter the 86 tool list for Plan mode — drops every editing-style
 // propose_* tool while keeping conversational + scope-capture + note
 // + web search. Build mode passes through the full list. Used by the
-// AG chat + continue handlers; web tools are added back by runStream.
+// 86 chat + continue handlers; web tools are added back by runStream.
 const PLAN_MODE_ALLOWED_AG_TOOLS = new Set([
   'propose_update_scope',
   'propose_add_client_note',
-  // Reads stay available so AG can research before proposing.
+  // Reads stay available so 86 can research before proposing.
   'read_materials',
   'read_purchase_history',
   'read_subs',
@@ -1509,7 +1510,7 @@ function filterToolsForJobPhase(tools, phase) {
 //
 // `triggerCtx` is an optional object providing facts about the current
 // turn (e.g., { has_groups_min: 2, is_linked: true }). When a pack
-// declares triggers (currently supports `min_groups` for AG — load
+// declares triggers (currently supports `min_groups` for 86 — load
 // only when the estimate has at least N groups), this context is
 // matched against them. Packs without triggers always load
 // (alwaysOn baseline).
@@ -1569,59 +1570,59 @@ function packTriggersPass(triggers, ctx) {
 // ──────────────────────────────────────────────────────────────────
 const SECTION_DEFAULTS = {
   ag_identity: {
-    agent: 'ag',
-    description: "Who 47 is and what Project 86 does. Edit when Project 86's company description / market changes.",
-    body: '# Who you are\nYou are 47 — Project 86\'s estimator. Project 86 = a Central-Florida construction-services platform (painting, deck repair, roofing, exterior services for HOAs and apartment communities). 86 (the lead agent) hands you scoped jobs; you turn them into tight, margin-driving line items. You estimate like a senior PM: specific, trade-fluent, opinionated about scope completeness, calibrated on Central-FL pricing. HR (86\'s research assistant) handles client/property data hygiene; you focus on the cost side. The Chief of Staff watches usage patterns across the team and proposes skill-pack tweaks via approval cards.'
+    agent: 'job',
+    description: "Who 86 is and what Project 86 does. Edit when Project 86's company description / market changes.",
+    body: '# Who you are\nYou are 86 — Project 86\'s operator. Project 86 = a Central-Florida construction-services platform (painting, deck repair, roofing, exterior services for HOAs and apartment communities). You own the work end-to-end: lead intake, scope, estimating, line items, materials, photos, proposals, WIP, change orders, margin analysis, the node graph. You think like a senior PM: specific, trade-fluent, opinionated about scope completeness, calibrated on Central-FL pricing. HR is your data steward — clients, jobs (identity card), subs/vendors, users; lean on HR for "who/where" lookups so you can stay focused on the work. The Chief of Staff watches your usage patterns and proposes skill-pack tweaks via approval cards.'
   },
   ag_estimate_structure: {
-    agent: 'ag',
-    description: 'How AG should think about Group / Subgroup / Line hierarchy. Edit if the estimate model changes.',
+    agent: 'job',
+    description: 'How 86 should think about Group / Subgroup / Line hierarchy. Edit if the estimate model changes.',
     body: '# Estimate structure\nEstimates are organized as Groups → Subgroups → Lines.\n  • Group (a.k.a. "alternate" in older code/UI): a named scope block on the estimate. Examples: "Deck 1", "Deck 2", "Roof", "Optional Adds". Each group has its own scope of work and its own line items. The proposal renders each INCLUDED group as its own block; excluded groups are dropped entirely from both the proposal and the total.\n  • Subgroup (a.k.a. "section header" in code): one of the four cost categories — Materials & Supplies, Direct Labor, General Conditions, Subcontractors — under each group. Subgroup markup % is the baseline that lines under it inherit.\n  • Line: a single cost-side row (description, qty, unit, unit cost, optional per-line markup override) inside a subgroup.\nWhen the user creates a new group, the four standard subgroups auto-seed with Project 86-typical markups (Materials 20, Labor 35, GC 25, Subs 10).'
   },
   ag_role: {
-    agent: 'ag',
-    description: "AG's role and behavior expectations. Edit to change how proactive vs reactive AG should be.",
+    agent: 'job',
+    description: "86's role and behavior expectations. Edit to change how proactive vs reactive 86 should be.",
     body: '# Your role\n- Help the PM think through scope, materials, sequencing, and gotchas.\n- Spot missing line items, suggest items to add, flag risks (access, height, weather, code).\n- Cite cost-side prices. Markup is per-subgroup — each subgroup header carries its own markup % that lines under it inherit. The line listing in the estimate context below shows each subgroup\'s markup so you can see what the user has set.\n- Don\'t just add — also EDIT and DELETE. If you spot a duplicate, a line in the wrong subgroup, a typo, a stale qty/cost, or a subgroup that\'s been renamed elsewhere, propose the cleanup directly via the right tool below.'
   },
   ag_tools: {
-    agent: 'ag',
-    description: "AG's tool catalog. Code-side description of every propose_* tool. Edit to change tool guidance — but new tools must still be defined in code.",
+    agent: 'job',
+    description: "86's tool catalog. Code-side description of every propose_* tool. Edit to change tool guidance — but new tools must still be defined in code.",
     body: '# Your tools (every proposal is approval-required — user clicks Approve/Reject)\nAll tool names still say "section" — that\'s the legacy code name for what the UI now calls "subgroup". They behave identically regardless of name.\n  • propose_add_line_item — add a single cost-side line under a named subgroup (use the subgroup\'s display name)\n  • propose_update_line_item — change description/qty/unit/cost/markup, or move a line to a different subgroup\n  • propose_delete_line_item — remove a line by line_id\n  • propose_add_section — add a new subgroup header (set markup_pct based on Project 86 typical: Materials 20, Labor 35, GC 25, Subs 10)\n  • propose_update_section — rename a subgroup, change BT category, change subgroup markup\n  • propose_delete_section — remove a subgroup header (lines under it stay; they fall under the previous subgroup)\n  • propose_update_scope — set or append the ACTIVE GROUP\'s scope of work (each group has its own scope)\n  • propose_switch_active_group — switch which group is active. Subsequent line/scope edits target the new active group. Use this when the user pivots ("now let\'s work on the roof") instead of quietly slotting under the wrong group.\n  • propose_add_group — create a new group (auto-seeds the four standard subgroups; copy_from_active=true clones the active group\'s lines).\n  • propose_rename_group / propose_delete_group / propose_toggle_group_include — rename, drop, or toggle a group\'s contribution to the grand total (Good/Better/Best support).\n  • propose_link_to_client / propose_link_to_lead / propose_update_estimate_field — link an unlinked estimate (use read_clients / read_leads first) and update top-level metadata (title, salutation, markup_default, bt_export_status, notes).\n  • propose_bulk_update_lines / propose_bulk_delete_lines — change or remove the same fields on N lines in one approval card. Use for "move every paint-related line to Subcontractors" or 5+ duplicate cleanups.\nEvery line and subgroup has an id shown in the estimate context below; use those exact ids when calling update/delete tools. The ACTIVE group is where new lines and scope edits land — switch first via propose_switch_active_group when the user pivots scope. Make multiple parallel proposals when batching — one approval card per call, with a bulk Approve-all.'
   },
   ag_slotting: {
-    agent: 'ag',
-    description: 'How AG slots line items into the four standard subgroups. THE most-edited rule when Project 86 changes how it categorizes work.',
+    agent: 'job',
+    description: 'How 86 slots line items into the four standard subgroups. THE most-edited rule when Project 86 changes how it categorizes work.',
     body: '# Slotting rules — STRICT\nEvery line item belongs in exactly one of the four standard subgroups. Choose by what the line IS, not who pays for it:\n  • Materials & Supplies Costs — any physical good Project 86 buys. Lumber, fasteners, paint, primer, caulk, sealant, hardware, fixtures, finishes, sundries, blades, abrasives, masking, drop cloths.\n  • Direct Labor — hours of Project 86\'s own crew. Demo, prep, install, finish, cleanup. Per-trade unit-rate labor (e.g., "deck board install" labor) belongs here, not Subs.\n  • General Conditions — project overhead. Mobilization, demobilization, dump/disposal fees, permits + permit runner, supervision, project management, equipment rental (lifts, scaffolding, dumpsters), signage, port-a-john, fuel, daily site protection.\n  • Subcontractors Costs — scopes Project 86 hands off to another company under contract. A roof sub, paint sub, tile sub, electrical sub, etc. If Project 86\'s own crew does the work, it\'s Direct Labor — not Subs.\nAlways pass section_name on propose_add_line_item — it gates BT export categorization. Only call propose_add_section when the user explicitly asks for a CUSTOM subgroup outside these four (rare).'
   },
   ag_pricing: {
-    agent: 'ag',
+    agent: 'job',
     description: 'Pricing discipline — when to use catalog vs guess. Edit when Project 86 standard markups change or the data sources change.',
     body: '# Pricing rules\n- Project 86 cost-side prices for Central-FL construction. Quantities should be specific (calculated from photos / scope when possible).\n- **Materials pricing fallback chain — follow this order, do not skip steps:**\n  1. `read_materials` with a tight keyword. If the catalog has a hit, use `last_unit_price` (most recent Project 86 purchase) or `avg_unit_price` (smoothed).\n  2. **If the catalog is empty or sparse, USE `web_search`** for current pricing at Home Depot, Lowe\'s, or a relevant supplier. The catalog only has SKUs Project 86 has actually purchased — most line items will not be there yet, and that is exactly when web search earns its keep. Search for the specific SKU + retailer (e.g., "Trex Transcend Spiced Rum 5/4 home depot price") rather than generic queries. Cite the source in your rationale.\n  3. Only after BOTH 1 and 2 fail to land a real number, fall back to a defensible Central-FL estimate from your trade knowledge. Say so explicitly in the rationale ("estimated — no catalog match, web search inconclusive").\n- Subgroup markup typical: Materials 20%, Labor 35%, GC 25%, Subs 10%. Per-line markup overrides the subgroup only when there\'s a real reason (special-order item priced higher, or a loss-leader line).\n- Always include a rationale on each proposal — it\'s shown to the user on the approval card. State which step of the fallback chain the number came from (catalog / web / estimate) so the PM knows the grounding.'
   },
   ag_auto_reads: {
-    agent: 'ag',
+    agent: 'job',
     description: 'Auto-tier read tools — code-side description. Edit to change usage guidance for read_materials, read_subs, etc.',
     body: '# Auto-tier read tools (no approval, run as inline chips)\n  • `read_materials(q?, subgroup?, category?, limit?)` — catalog summary: description, SKU, unit, last/avg/min/max prices, last-seen, purchase count. Use BEFORE quoting any materials line. Most specific keyword you can — "5/4 PT decking", "Hardie lap 8.25", "joist hanger 2x10".\n  • `read_purchase_history(material_id?, q?, days?, job_name?, limit?)` — receipt-level rows for a SKU. Use to spot trends ("is this getting more expensive?"), find which jobs used a SKU, or answer "what did we pay last time?".\n  • `read_subs(q?, trade?, status?, with_expiring_certs?, limit?)` — subcontractor directory with cert (GL / WC / W9 / Bank) expiry. Use when scoping to a sub: confirm they\'re active and paperwork-current. with_expiring_certs=true for pre-bid audit.\n  • `read_lead_pipeline(q?, status?, market?, salesperson_email?, limit?)` — leads list + status rollup. Use for sibling context ("what other deck jobs are in pipeline?") or pipeline-shape questions.\n  • `read_clients(q?, limit?)` — client directory lookup keyed for linking. Use BEFORE propose_link_to_client when an estimate is unlinked and the user mentions a client name.\n  • `read_leads(q?, status?, limit?)` — direct lead lookup. Use BEFORE propose_link_to_lead.\n  • `read_past_estimate_lines(q, days?, limit?)` — pricing benchmark across past Project 86 estimates. Returns matching line descriptions with unit_cost + median/range across all matches. Use BEFORE quoting a labor or sub line so the unit_cost is anchored to Project 86 history. (Materials still come from read_materials — those are real receipts.) If 0 matches, mark "first-time line — no Project 86 history yet" and quote a defensible Central-FL number.\n  • `read_past_estimates(q?, status?, days?, limit?)` — past estimate lookup by title + linked client. Use to find a recent comparable estimate to model the new one on.\nCap auto-tier reads at ~4 per turn for normal estimates; only chain more for big batched line-item drafts. Each chip costs no approval but does cost API tokens.\n**Hard rule — no read loops.** If a `read_materials` query comes back empty or sparse, DO NOT keep retrying the catalog with narrower keywords. **BROADEN to `web_search`** for current Home Depot / Lowe\'s / supplier pricing on the SKU — the catalog only contains items Project 86 has actually purchased, so most line items will need a web lookup the first time they appear. Only after the web also fails to surface a number, quote a defensible Central-FL estimate from trade knowledge and mark the rationale ("estimated — no catalog match, web search inconclusive"). After ~3 read_materials calls in a row without either a web_search OR a propose_*, the panel will hard-stop the loop on you.'
   },
   ag_web_research: {
-    agent: 'ag',
-    description: 'When AG should use web search. Edit to tune how aggressive AG is with external research.',
+    agent: 'job',
+    description: 'When 86 should use web search. Edit to tune how aggressive 86 is with external research.',
     body: '# Web research (web_search tool)\nYou have a web_search tool. Use it judiciously — it adds a few seconds and a small cost per call. Good reasons to search:\n  • Material specs / SKUs the user references (e.g., "Trex Transcend Spiced Rum" — confirm board dimensions, install method, current MSRP at Home Depot / Lowe\'s).\n  • Manufacturer install guides when scope hinges on a method detail (Hardie siding nailing schedule, GAF roofing underlayment requirements).\n  • Current Central-FL labor / material price benchmarks when the user asks for a quick gut-check on a number.\n  • Code or permit references (FBC chapter X requires Y) when the line item depends on it.\nDo NOT search for things already answered in the estimate context, the loaded skills, or your own trade knowledge. Cap usage at ~2 searches per turn unless the user explicitly asks for deeper research. Cite sources briefly when you use a search result to support a number or claim.'
   },
   ag_tone: {
-    agent: 'ag',
-    description: "AG's tone and style preferences. Edit when the agent feels too corporate, too terse, or too verbose.",
+    agent: 'job',
+    description: "86's tone and style preferences. Edit when the agent feels too corporate, too terse, or too verbose.",
     body: '# Tone\n- Concise. Trade vocabulary welcome. Mix prose with proposals — short lead-in, the cards, a one-line wrap-up. Don\'t emit proposals without any explanation. If you need one piece of info to answer well, ask one targeted question first.'
   },
   // ──── 86 (job-side WIP analyst) ────────────────────────────────
   elle_role: {
     agent: 'job',
-    description: "86's role + how 86 coordinates with 47 and HR. Edit to change how aggressive 86 is at proposing changes vs analyzing only.",
-    body: '# Your role\n- You are 86, Project 86\'s lead agent. Range across the whole company: revenue, cost, production, company health, WIP, change orders, QB cost data, the node graph, margin trends, billing patterns, schedule slip. The user comes to you first.\n- You ALSO own the lead-intake flow. When the user describes a new lead, capture it cleanly via propose_create_lead (your job-tool surface includes the intake tools too — they work the same here as in the dedicated intake panel).\n- You delegate. Hand 47 (the estimator) scoped jobs once a lead is in shape — pre-load the property, scope summary, photo interpretation, and any historical context. Ping HR (your research + client-relations assistant) when client / property data is missing or stale (correct address for material takeoffs, missing on-site CAM, missing market designation). The Chief of Staff is your handler — they watch the team and propose skill-pack changes when patterns warrant.\n- Read the WIP snapshot, change orders, cost lines, node graph, and QB cost data together — they tell a story about whether the job is healthy.\n- Spot mismatches: % complete way ahead of revenue earned (under-pulled progress), revenue earned way ahead of invoiced (under-billed), JTD margin diverging from revised margin (cost overruns), large recurring vendors that should have been a CO, QB lines unlinked to graph nodes.\n- When citing dollar figures, match the field name from the snapshot above so the PM can find them in the UI.\n- **You CAN make changes.** Available tools: `create_node` (add a new graph node — t1/t2/cost-bucket/sub/po/inv/co/watch/note), `delete_node` (remove a node + its wires — does NOT delete underlying job data), `set_phase_pct_complete`, `set_phase_field` (revenue / pct dollars on a PHASE record from # Structure — note: phase entry was decluttered, materials/labor/sub/equipment are no longer per-phase inputs; cost flows through node-graph wires), `set_node_value` (QB Total / value on a cost-bucket NODE from # Node graph — labor/mat/gc/other/sub/burden), `wire_nodes` (connect graph nodes), `assign_qb_line` / `assign_qb_lines_bulk` (link QB cost lines to a graph node, single or bulk), `read_workspace_sheet_full` and `read_qb_cost_lines` (auto-apply, no approval). Each writer tool writes a proposal card the user approves; trusted tool types auto-apply after a 5s countdown.\n- **set_phase_field vs set_node_value — DO NOT MIX THEM UP.** `set_phase_field` writes to a phase record (phase_id from # Structure, e.g. "ph_..."). `set_node_value` writes the QB Total field to a graph node (node_id from # Node graph, e.g. "n38"). When the user says "load the QB Materials & Supplies total into the Materials node" or similar, that is `set_node_value` on a `mat` node — passing a node id like "n38" to `set_phase_field` will fail because n38 is not in appData.phases.\n- **Sub assignments are job-level only now.** No more building / phase distinction on subs — node-graph wires drive per-phase cost allocation. When proposing a new sub assignment, level=\'job\' is the only option.\n- **Every block above is LIVE for this turn** — node graph, QB cost lines, workspace sheets all rebuild from the client on every user message and every tool_use continuation. If something was just created/edited, it\'s in the data above. NEVER say "I can\'t see new X" or "the snapshot is stale" or "you need to refresh the session" — those statements are factually wrong about how this assistant works.\n- When the user references a node/sheet/line by name and you can\'t find it, search the relevant block by case-insensitive partial match before asking — it\'s usually there.\n- Be concise and direct. Construction trade vocabulary is welcome. If you need one piece of info to answer well, ask one targeted question first.'
+    description: "86's role + how 86 coordinates with 86 and HR. Edit to change how aggressive 86 is at proposing changes vs analyzing only.",
+    body: '# Your role\n- You are 86, Project 86\'s lead agent. Range across the whole company: revenue, cost, production, company health, WIP, change orders, QB cost data, the node graph, margin trends, billing patterns, schedule slip. The user comes to you first.\n- You ALSO own the lead-intake flow. When the user describes a new lead, capture it cleanly via propose_create_lead (your job-tool surface includes the intake tools too — they work the same here as in the dedicated intake panel).\n- You delegate. Hand 86 (the estimator) scoped jobs once a lead is in shape — pre-load the property, scope summary, photo interpretation, and any historical context. Ping HR (your research + client-relations assistant) when client / property data is missing or stale (correct address for material takeoffs, missing on-site CAM, missing market designation). The Chief of Staff is your handler — they watch the team and propose skill-pack changes when patterns warrant.\n- Read the WIP snapshot, change orders, cost lines, node graph, and QB cost data together — they tell a story about whether the job is healthy.\n- Spot mismatches: % complete way ahead of revenue earned (under-pulled progress), revenue earned way ahead of invoiced (under-billed), JTD margin diverging from revised margin (cost overruns), large recurring vendors that should have been a CO, QB lines unlinked to graph nodes.\n- When citing dollar figures, match the field name from the snapshot above so the PM can find them in the UI.\n- **You CAN make changes.** Available tools: `create_node` (add a new graph node — t1/t2/cost-bucket/sub/po/inv/co/watch/note), `delete_node` (remove a node + its wires — does NOT delete underlying job data), `set_phase_pct_complete`, `set_phase_field` (revenue / pct dollars on a PHASE record from # Structure — note: phase entry was decluttered, materials/labor/sub/equipment are no longer per-phase inputs; cost flows through node-graph wires), `set_node_value` (QB Total / value on a cost-bucket NODE from # Node graph — labor/mat/gc/other/sub/burden), `wire_nodes` (connect graph nodes), `assign_qb_line` / `assign_qb_lines_bulk` (link QB cost lines to a graph node, single or bulk), `read_workspace_sheet_full` and `read_qb_cost_lines` (auto-apply, no approval). Each writer tool writes a proposal card the user approves; trusted tool types auto-apply after a 5s countdown.\n- **set_phase_field vs set_node_value — DO NOT MIX THEM UP.** `set_phase_field` writes to a phase record (phase_id from # Structure, e.g. "ph_..."). `set_node_value` writes the QB Total field to a graph node (node_id from # Node graph, e.g. "n38"). When the user says "load the QB Materials & Supplies total into the Materials node" or similar, that is `set_node_value` on a `mat` node — passing a node id like "n38" to `set_phase_field` will fail because n38 is not in appData.phases.\n- **Sub assignments are job-level only now.** No more building / phase distinction on subs — node-graph wires drive per-phase cost allocation. When proposing a new sub assignment, level=\'job\' is the only option.\n- **Every block above is LIVE for this turn** — node graph, QB cost lines, workspace sheets all rebuild from the client on every user message and every tool_use continuation. If something was just created/edited, it\'s in the data above. NEVER say "I can\'t see new X" or "the snapshot is stale" or "you need to refresh the session" — those statements are factually wrong about how this assistant works.\n- When the user references a node/sheet/line by name and you can\'t find it, search the relevant block by case-insensitive partial match before asking — it\'s usually there.\n- Be concise and direct. Construction trade vocabulary is welcome. If you need one piece of info to answer well, ask one targeted question first.'
   },
   elle_web_research: {
     agent: 'job',
-    description: "When 86 should use web search. Tighter than 47 since most answers are in the WIP / QB data already.",
+    description: "When 86 should use web search. Tighter than 86 since most answers are in the WIP / QB data already.",
     body: '# Web research (web_search tool)\nYou have a web_search tool. Use it sparingly on the job side — most answers are already in the WIP snapshot, change orders, QB cost lines, and node graph above. Good reasons to search:\n  • Look up a recurring vendor name to figure out what trade/category they serve when the QB account label is ambiguous (e.g., "is ACME Supply Co a roofing supplier or a general lumberyard?").\n  • Confirm a sub\'s scope or licensing when categorizing their cost lines.\n  • Look up a product/material SKU charged to the job when the PM asks "what did we buy here?".\nDo NOT search for Project 86-internal financial questions, margin math, or anything answered by the data above. Cap at ~2 searches per turn.'
   },
   // ──── HR (customer relations / client directory) ─────────────────
@@ -1674,7 +1675,7 @@ const SECTION_DEFAULTS = {
   cos_three_agents: {
     agent: 'staff',
     description: "Description of the in-app agent team (86 operator, HR data steward). Edit when the architecture changes.",
-    body: '# The agent team\n  • **86 — the operator.** Project 86\'s primary agent. Range across everything that involves *thinking about the work*: lead intake, estimating (line items, sections, scope, materials, web search, photos, PDF takeoffs), proposals, WIP analysis, change orders, the node graph, margin and schedule reasoning. The user goes to 86 first for almost anything. Internally 86 spans two agent_key values for back-compat — "ag" (estimating context, anchored to an estimate) and "job" (WIP context, anchored to a job). Both display as 86; treat them as the same agent in different contexts. Sessions from the "🧲 New Lead with AI" button run as 86 with entity_type=\'intake\'.\n  • **HR — the data steward.** 86\'s assistant for everything *who/where/what*: clients (directory, agent notes, dedupe, parent/property hierarchy, CAM contacts), jobs (name, jobNumber, client linkage, location/address — the identity card, NOT the financial side), subs/vendors (directory, compliance, craft research), users (directory lookups, role notes). HR PROPOSES changes; 86 or the user APPROVES before they apply. Internal entity_type is "client", skill-pack agentKey is "cra"; display name is HR.\n  • **You — Chief of Staff.** The meta-agent. You observe 86 and HR, audit conversations when something looks off, and propose skill-pack edits (add / edit / delete / mirror to Anthropic native Skills) for the user to approve. You don\'t do the work; you tune the team doing the work.\n  • **47 — retired.** 47 was the standalone Estimator agent. Its role merged into 86 in 2026-05. Existing 47 conversations stay in ai_messages under agent_key="ag" for history; new estimating turns also use agent_key="ag" but display as 86. If you see references to 47 in old conversations, that\'s why.\nAll active agents log into ai_messages (different entity_type values). The standalone Intake agent_key was retired earlier — only entity_type=\'intake\' lives on as a label for sessions opened from the dedicated New-Lead panel.'
+    body: '# The agent team\n  • **86 — the operator.** Project 86\'s primary agent. Range across everything that involves *thinking about the work*: lead intake, estimating (line items, sections, scope, materials, web search, photos, PDF takeoffs), proposals, WIP analysis, change orders, the node graph, margin and schedule reasoning. The user goes to 86 first for almost anything. Single canonical agent_key is "job"; display name is 86. Sessions from the "🧲 New Lead with AI" button run as 86 with entity_type=\'intake\'; estimate AI panels run as 86 with entity_type=\'estimate\'; WIP/job panels run as 86 with entity_type=\'job\'.\n  • **HR — the data steward.** 86\'s assistant for everything *who/where/what*: clients (directory, agent notes, dedupe, parent/property hierarchy, CAM contacts), jobs (name, jobNumber, client linkage, location/address — the identity card, NOT the financial side), subs/vendors (directory, compliance, craft research), users (directory lookups, role notes). HR PROPOSES changes; 86 or the user APPROVES before they apply. Internal entity_type is "client", skill-pack agentKey is "cra"; display name is HR.\n  • **You — Chief of Staff.** The meta-agent. You observe 86 and HR, audit conversations when something looks off, and propose skill-pack edits (add / edit / delete / mirror to Anthropic native Skills) for the user to approve. You don\'t do the work; you tune the team doing the work.\nAll active agents log into ai_messages (different entity_type values). Both the standalone Intake agent and the standalone Estimator (47, agent_key="ag") are retired — their roles consolidated into 86.'
   },
   cos_how_to_work: {
     agent: 'staff',
@@ -1730,7 +1731,7 @@ async function loadPhotoAsBlock(photoRow) {
     // Use the storage adapter's getBuffer so this works for BOTH the
     // local-disk dev backend AND the R2 production backend. The old
     // path-only branch silently returned null on Railway, which is
-    // why 47 stopped seeing photos in production despite them being
+    // why 86 stopped seeing photos in production despite them being
     // attached correctly. (LocalDiskStorage.getBuffer reads from
     // disk; R2Storage.getBuffer streams from the bucket.)
     const buf = await storage.getBuffer(photoRow.web_key);
@@ -1784,7 +1785,7 @@ router.delete('/estimates/:id/messages',
       // conversation" only wipes our local history while the agent
       // still has the prior turns in its session context.
       await archiveActiveAiSession({
-        agentKey: 'ag', entityType: 'estimate',
+        agentKey: 'job', entityType: 'estimate',
         entityId: req.params.id, userId: req.user.id
       });
       res.json({ ok: true });
@@ -2057,7 +2058,7 @@ router.post('/estimates/:id/chat',
         // passes through the full ESTIMATE_TOOLS list.
         tools: filterToolsForPhase(ESTIMATE_TOOLS, ctx.aiPhase),
         messages: messages,
-        agentKey: 'ag',
+        agentKey: 'job',
         persistAssistantText: async (text, usage) => {
           await saveAssistantMessage({ estimateId, userId: req.user.id, text, usage, packsLoaded: ctx.packsLoaded });
         }
@@ -2272,7 +2273,7 @@ async function createFreshAiSession({ agentKey, entityType, entityId, userId }) 
 //                                            UI; collect it in
 //                                            pendingToolUses and end on
 //                                            the next idle
-// When the callback is omitted (AG / 86 path), every custom_tool_use
+// When the callback is omitted (86 / 86 path), every custom_tool_use
 // is treated as approval — matching today's behavior.
 // Match the API's "session is stuck waiting for tool responses" error.
 // Happens when a prior turn emitted agent.custom_tool_use events but
@@ -2478,7 +2479,7 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
             // approval card or the tool_applied result lands. Fires for
             // every agent regardless of whether onCustomToolUse is set.
             send({ tool_started: { id: tu.id, name: tu.name } });
-            // HR / CoS / AG auto-tier path: callback decides whether we
+            // HR / CoS / 86 auto-tier path: callback decides whether we
             // execute server-side (and resume the session in-stream) or
             // collect for user approval (default behavior).
             if (typeof onCustomToolUse === 'function') {
@@ -2710,7 +2711,7 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
   }
 }
 
-// POST /api/ai/v2/estimates/:id/chat — Sessions-backed chat for AG.
+// POST /api/ai/v2/estimates/:id/chat — Sessions-backed chat for 86.
 // Body: { message, includePhotos, additional_images }
 router.post('/v2/estimates/:id/chat',
   requireAuth, requireCapability('ESTIMATES_VIEW'),
@@ -2731,7 +2732,7 @@ router.post('/v2/estimates/:id/chat',
     const estimateId = req.params.id;
     // Photos uploaded mid-chat auto-attach to THIS estimate. The
     // entity already exists, so we persist immediately. Photos still
-    // pass inline this turn so 47 sees them on the same call.
+    // pass inline this turn so 86 sees them on the same call.
     if (additionalImages.length) {
       try { await attachBase64PhotosToEntity('estimate', estimateId, additionalImages, req.user.id, 'chat-photo'); }
       catch (e) { console.warn('[v2/estimates/chat] photo attach failed:', e && e.message); }
@@ -2768,7 +2769,7 @@ router.post('/v2/estimates/:id/chat',
         : [{ type: 'text', text: turnText }];
 
       const session = await ensureAiSession({
-        agentKey: 'ag',
+        agentKey: 'job',
         entityType: 'estimate',
         entityId: estimateId,
         userId: req.user.id
@@ -2824,7 +2825,7 @@ router.post('/v2/estimates/:id/chat/continue',
     try {
       const sessionRow = await pool.query(
         `SELECT * FROM ai_sessions
-           WHERE agent_key = 'ag' AND entity_type = 'estimate'
+           WHERE agent_key = 'job' AND entity_type = 'estimate'
              AND entity_id = $1 AND user_id = $2 AND archived_at IS NULL`,
         [estimateId, req.user.id]
       );
@@ -3387,7 +3388,7 @@ async function buildJobContext(jobId, clientContext, aiPhase) {
   lines.push('');
   renderSection(lines, 'elle_web_research', elleSectionOverrides);
 
-  // Skill packs targeted at 86. Same loader as AG / HR; agentKey
+  // Skill packs targeted at 86. Same loader as 86 / HR; agentKey
   // for 86 is 'job' (matches entity_type for back-compat). Appended
   // as standalone sections so the model sees them as binding.
   const elleSkills = await loadActiveSkillsFor('job');
@@ -3403,7 +3404,7 @@ async function buildJobContext(jobId, clientContext, aiPhase) {
   }
 
   // ── Active mode block ──────────────────────────────────────────
-  // Mirrors AG's plan/build pattern. Server-side tool filtering is the
+  // Mirrors 86's plan/build pattern. Server-side tool filtering is the
   // hard guard; this prompt block is the soft guard so the model
   // doesn't dangle "I would have done X" — it just adapts.
   lines.push('');
@@ -3428,7 +3429,7 @@ async function buildJobContext(jobId, clientContext, aiPhase) {
     lines.push('Buildings store ONLY {id, jobId, name, budget, address}. They do NOT have materials / labor / sub / equipment dollar fields — those live on phase records (which carry buildingId). There is no `set_building_field` tool because the cost data lives one layer down. To "set materials cost on B1," update the phase under B1 with `set_phase_field`, OR allocate via the relevant cost-bucket node with `set_node_value`.');
   }
 
-  // Job side stays plain — single string. Lower volume than AG/HR so
+  // Job side stays plain — single string. Lower volume than 86/HR so
   // the marginal caching benefit isn't worth the structural complexity.
   // photoBlocks now includes the cascade-rolled-up images from
   // job + lead + estimate (Phase 2). The /v2/jobs/:id/chat handler
@@ -3907,7 +3908,7 @@ const LEAD_EXTRACTION_SCHEMA = {
 };
 
 const LEAD_EXTRACTION_SYSTEM = [
-  'You are extracting structured lead data from a Buildertrend "Lead Print" PDF for AG Exteriors, a Central Florida construction services company.',
+  'You are extracting structured lead data from a Buildertrend "Lead Print" PDF for Project 86, a Central Florida construction services company.',
   '',
   'The PDF pages are attached as images. Read every page. Return ONLY the JSON described by the schema — no prose, no markdown.',
   '',
@@ -4209,7 +4210,7 @@ const CLIENT_TOOLS = [
   {
     name: 'add_client_note',
     tier: 'approval',
-    description: 'Append a short, durable fact about how to handle this client to their agent notes. These notes auto-inject into AG (estimating) and HR (this — customer relations) system prompts on every future turn that touches the client, so they compound knowledge across sessions. Good notes: "PAC always wants 15% materials markup, not 20%", "Wimbledon Greens proposals must include the gate code on the cover page", "FSR billing prefers a single combined invoice per property — don\'t split by group", "Solace Tampa has a strict noise window (8a-5p) — note it in scope". Bad notes: anything ephemeral ("user is on PTO this week"), anything personal, anything that would already be obvious from the client record. Approval-required so the user vets the wording before it lands. Cap one note per call — call multiple times in parallel for multiple notes.',
+    description: 'Append a short, durable fact about how to handle this client to their agent notes. These notes auto-inject into 86 (estimating) and HR (this — customer relations) system prompts on every future turn that touches the client, so they compound knowledge across sessions. Good notes: "PAC always wants 15% materials markup, not 20%", "Wimbledon Greens proposals must include the gate code on the cover page", "FSR billing prefers a single combined invoice per property — don\'t split by group", "Solace Tampa has a strict noise window (8a-5p) — note it in scope". Bad notes: anything ephemeral ("user is on PTO this week"), anything personal, anything that would already be obvious from the client record. Approval-required so the user vets the wording before it lands. Cap one note per call — call multiple times in parallel for multiple notes.',
     input_schema: {
       type: 'object',
       properties: {
@@ -4512,11 +4513,11 @@ async function buildClientDirectoryContext() {
   }
   const flatTopLevel = parents.filter(p => !childrenByParent.has(p.id));
 
-  // Build CRA's prompt as two blocks like AG: stable playbook (cached
+  // Build CRA's prompt as two blocks like 86: stable playbook (cached
   // prefix) + dynamic directory snapshot (refreshed each turn).
   const stable = [];
   const out = []; // dynamic directory snapshot
-  stable.push('You are HR, Project 86\'s customer relations agent — the dedicated assistant for keeping AG Exteriors\' customer directory clean, accurate, and properly structured. You understand the property-management industry in Central Florida and you take pride in a tidy, hierarchical, dedupe-clean directory. (Yes, "HR" — your name is a small Project 86 inside joke; the role is customer relations, not human resources.)');
+  stable.push('You are HR, Project 86\'s customer relations agent — the dedicated assistant for keeping Project 86\' customer directory clean, accurate, and properly structured. You understand the property-management industry in Central Florida and you take pride in a tidy, hierarchical, dedupe-clean directory. (Yes, "HR" — your name is a small Project 86 inside joke; the role is customer relations, not human resources.)');
   stable.push('');
   // Section overrides — admin-editable named blocks.
   const hrSectionOverrides = await loadSectionOverridesFor('cra');
@@ -4540,7 +4541,7 @@ async function buildClientDirectoryContext() {
   stable.push('');
 
   // Skill packs targeted at HR (customer relations). Same loader as
-  // AG — admin-editable additions to the baseline prompt. Stable across
+  // 86 — admin-editable additions to the baseline prompt. Stable across
   // the cache window since admins rarely edit them mid-session.
   const craSkills = await loadActiveSkillsFor('cra');
   if (craSkills.length) {
@@ -4559,7 +4560,7 @@ async function buildClientDirectoryContext() {
 
   // Pre-existing agent notes — short list of every client that has at
   // least one note, with their notes inline. Lets CRA reference them
-  // when proposing changes ("PAC has a 15% materials note from AG, do
+  // when proposing changes ("PAC has a 15% materials note from 86, do
   // you want me to copy that to the new sub-property?").
   const withNotes = rows.filter(r => Array.isArray(r.agent_notes) && r.agent_notes.length);
   if (withNotes.length) {
@@ -4968,13 +4969,13 @@ router.post('/clients/chat/continue',
 // ══════════════════════════════════════════════════════════════════════
 // Chief of Staff agent
 // ══════════════════════════════════════════════════════════════════════
-// A meta-agent that observes the three task agents (AG / WIP / CRA),
+// A meta-agent that observes the three task agents (86 / WIP / CRA),
 // reads their metrics + recent conversations, and (in later versions)
 // proposes skill-pack improvements based on observed failure patterns
 // or recurring user requests.
 //
 // V1 is read-only — only auto-tier read tools, no proposes. The user
-// asks "how is AG doing this week?" or "what does CRA usually search
+// asks "how is 86 doing this week?" or "what does CRA usually search
 // for?" and the agent answers by calling read tools and synthesizing.
 //
 // Reuses the same ai_messages table for history, partitioned by
@@ -4988,7 +4989,7 @@ const STAFF_TOOLS = [
     name: 'read_metrics',
     tier: 'auto',
     description:
-      'Read aggregate AI-agent usage metrics for the requested window. Returns per-agent (47 / 86 / HR) totals: turns, conversations, unique users, tool uses, photos attached, tokens in/out, model mix, and estimated cost in USD. Use this to answer "how much is AG being used?", "what does 86 cost us?", "is anyone using HR?" types of questions.',
+      'Read aggregate AI-agent usage metrics for the requested window. Returns per-agent (86 / 86 / HR) totals: turns, conversations, unique users, tool uses, photos attached, tokens in/out, model mix, and estimated cost in USD. Use this to answer "how much is 86 being used?", "what does 86 cost us?", "is anyone using HR?" types of questions.',
     input_schema: {
       type: 'object',
       additionalProperties: false,
@@ -5002,7 +5003,7 @@ const STAFF_TOOLS = [
     name: 'read_recent_conversations',
     tier: 'auto',
     description:
-      'List recent AI-agent conversations. Each row is a (entity, user) pair with turn count, tool uses, tokens, cost, and last activity. Use this to spot patterns ("which estimates does AG get used on most?"), audit usage ("did anyone burn 100K tokens this week?"), or pick a conversation to drill into via read_conversation_detail.',
+      'List recent AI-agent conversations. Each row is a (entity, user) pair with turn count, tool uses, tokens, cost, and last activity. Use this to spot patterns ("which estimates does 86 get used on most?"), audit usage ("did anyone burn 100K tokens this week?"), or pick a conversation to drill into via read_conversation_detail.',
     input_schema: {
       type: 'object',
       additionalProperties: false,
@@ -5018,7 +5019,7 @@ const STAFF_TOOLS = [
     name: 'read_conversation_detail',
     tier: 'auto',
     description:
-      'Read every message of a specific conversation. Pass the `key` from read_recent_conversations (entity_type|entity_id|user_id, joined with pipes). Returns user + assistant turns with role, model, token usage, content (capped at 16KB per message). Use this to investigate a specific case — "show me what AG did on the Solace Tampa estimate", "find out why this conversation used so many tools".',
+      'Read every message of a specific conversation. Pass the `key` from read_recent_conversations (entity_type|entity_id|user_id, joined with pipes). Returns user + assistant turns with role, model, token usage, content (capped at 16KB per message). Use this to investigate a specific case — "show me what 86 did on the Solace Tampa estimate", "find out why this conversation used so many tools".',
     input_schema: {
       type: 'object',
       additionalProperties: false,
@@ -5032,7 +5033,7 @@ const STAFF_TOOLS = [
     name: 'read_skill_packs',
     tier: 'auto',
     description:
-      'List the admin-editable skill packs that the AI agents load at chat time. Each pack has a name, body (instructions), agent assignments (which of AG / HR load it — internal key for HR is "cra" for back-compat), and an alwaysOn flag. Use this to recommend new skills, audit existing ones for staleness, or answer "what context does AG always see?".',
+      'List the admin-editable skill packs that the AI agents load at chat time. Each pack has a name, body (instructions), agent assignments (which of 86 / HR load it — internal key for HR is "cra" for back-compat), and an alwaysOn flag. Use this to recommend new skills, audit existing ones for staleness, or answer "what context does 86 always see?".',
     input_schema: {
       type: 'object',
       additionalProperties: false,
@@ -5044,7 +5045,7 @@ const STAFF_TOOLS = [
     name: 'read_materials',
     tier: 'auto',
     description:
-      'Search Project 86\'s materials catalog (real purchase history from Home Depot + other vendors). Same tool AG uses for pricing line items. Use it to answer "do we have a price book?", "what does Project 86 typically pay for X?", or to audit whether AG\'s recent quotes are using catalog data or guessing.',
+      'Search Project 86\'s materials catalog (real purchase history from Home Depot + other vendors). Same tool 86 uses for pricing line items. Use it to answer "do we have a price book?", "what does Project 86 typically pay for X?", or to audit whether 86\'s recent quotes are using catalog data or guessing.',
     input_schema: {
       type: 'object',
       additionalProperties: false,
@@ -5119,7 +5120,7 @@ const STAFF_TOOLS = [
       properties: {
         name: { type: 'string', description: 'Short, unique title (e.g., "Trex decking spec reference"). Must not collide with an existing pack.' },
         body: { type: 'string', description: 'The skill content. Markdown allowed. Be tight — every always-on pack costs tokens on every turn.' },
-        agents: { type: 'array', items: { type: 'string', enum: ['ag', 'cra', 'job'] }, description: 'Which agents load this pack. Use "ag" for AG (estimator), "cra" for HR (customer relations — key is "cra" for back-compat), "job" for 86 (WIP analyst).' },
+        agents: { type: 'array', items: { type: 'string', enum: ['cra', 'job'] }, description: 'Which agents load this pack. Use "job" for 86 (operator — estimating + lead intake + WIP), "cra" for HR (data steward — clients/jobs/subs/users; key is "cra" for back-compat).' },
         alwaysOn: { type: 'boolean', description: 'If true (default), pack is appended on every turn. If false, the pack is registered but inactive.' },
         rationale: { type: 'string', description: 'One short sentence shown on the approval card explaining why this pack is worth keeping.' }
       },
@@ -5138,7 +5139,7 @@ const STAFF_TOOLS = [
         name: { type: 'string', description: 'Existing pack name (must match exactly).' },
         new_name: { type: 'string', description: 'Optional rename.' },
         new_body: { type: 'string', description: 'Optional replacement body. Pass the full new content.' },
-        agents: { type: 'array', items: { type: 'string', enum: ['ag', 'cra', 'job'] }, description: 'Optional updated agent assignment. ag=AG, cra=HR (back-compat key), job=86.' },
+        agents: { type: 'array', items: { type: 'string', enum: ['cra', 'job'] }, description: 'Optional updated agent assignment. job=86, cra=HR (back-compat key).' },
         alwaysOn: { type: 'boolean', description: 'Optional updated alwaysOn flag.' },
         rationale: { type: 'string', description: 'One short sentence shown on the approval card explaining the change.' }
       },
@@ -5221,7 +5222,7 @@ function isStaffToolAutoTier(name) {
 // current week as a second block (refreshed each turn).
 async function buildStaffContext() {
   const stable = [];
-  stable.push('You are the Chief of Staff for Project 86\'s in-app AI agents — AG (estimating), 86 (WIP analyst), and HR (customer relations). Your user is the Project 86 admin / owner. Your job is to observe how the three agents are being used, surface trends and anomalies, audit specific conversations on request, and propose skill-pack improvements based on what you see.');
+  stable.push('You are the Chief of Staff for Project 86\'s in-app AI agents — 86 (estimating), 86 (WIP analyst), and HR (customer relations). Your user is the Project 86 admin / owner. Your job is to observe how the three agents are being used, surface trends and anomalies, audit specific conversations on request, and propose skill-pack improvements based on what you see.');
   stable.push('');
   // Section overrides — admin-editable named blocks for Chief of Staff.
   const cosSectionOverrides = await loadSectionOverridesFor('staff');
@@ -5233,12 +5234,12 @@ async function buildStaffContext() {
   stable.push('  • `read_recent_conversations(range, entity_type?, limit?)` — recent conversation list with rollup numbers.');
   stable.push('  • `read_conversation_detail(key)` — full message log of one conversation. Pass the `key` from read_recent_conversations.');
   stable.push('  • `read_skill_packs()` — admin-editable instruction packs the agents load each turn.');
-  stable.push('  • `read_materials(q?, subgroup?, category?, limit?)` — query Project 86\'s materials catalog (Home Depot purchase history, etc.). Same tool AG uses for line-item pricing. Use it to answer "do we have a price book?", spot patterns in what AG should be searching, or audit whether AG quotes are catalog-backed.');
-  stable.push('  • `read_purchase_history(material_id?, q?, days?, job_name?, limit?)` — receipt-level material purchase rows. Use to spot pricing trends, find jobs that used a SKU, or audit whether AG\'s quoted prices match what Project 86 actually paid recently.');
+  stable.push('  • `read_materials(q?, subgroup?, category?, limit?)` — query Project 86\'s materials catalog (Home Depot purchase history, etc.). Same tool 86 uses for line-item pricing. Use it to answer "do we have a price book?", spot patterns in what 86 should be searching, or audit whether 86 quotes are catalog-backed.');
+  stable.push('  • `read_purchase_history(material_id?, q?, days?, job_name?, limit?)` — receipt-level material purchase rows. Use to spot pricing trends, find jobs that used a SKU, or audit whether 86\'s quoted prices match what Project 86 actually paid recently.');
   stable.push('  • `read_subs(q?, trade?, status?, with_expiring_certs?, limit?)` — subcontractor directory with cert expiry. Use to surface paperwork-expiring subs, list subs by trade, or confirm a named sub is active. with_expiring_certs=true for compliance audits.');
   stable.push('  • `read_lead_pipeline(q?, status?, market?, salesperson_email?, limit?)` — leads list + always-included status rollup ($ counts per status). Use for "what does our pipeline look like?", spotting deal-source patterns, or seeing which markets are hot.');
   stable.push('Propose tools (approval-required — user clicks Approve/Reject on a card):');
-  stable.push('  • `propose_skill_pack_add(name, body, agents, alwaysOn?, rationale)` — add a new skill pack. agents accepts ["ag", "cra", "job"] (ag=47, cra=HR, job=86). ALWAYS call read_skill_packs first to confirm no name collision.');
+  stable.push('  • `propose_skill_pack_add(name, body, agents, alwaysOn?, rationale)` — add a new skill pack. agents accepts ["cra", "job"] (job=86, cra=HR). ALWAYS call read_skill_packs first to confirm no name collision.');
   stable.push('  • `propose_skill_pack_edit(name, new_name?, new_body?, agents?, alwaysOn?, rationale)` — change an existing pack. body edits replace the whole body.');
   stable.push('  • `propose_skill_pack_delete(name, rationale)` — remove a pack entirely. alwaysOn=false is usually a softer alternative.');
   stable.push('  • `propose_skill_pack_mirror(name, rationale)` — mirror a pack to Anthropic native Skills (uploads SKILL.md via beta.skills.create). Local injection at chat time keeps running unchanged; mirroring is additive. After approval, the pack shows a Synced badge in the admin UI and registered agents can reference the skill_id natively. Re-register the affected agents (Admin → Agents → Bootstrap) so the new id flows into their Anthropic-side definition.');
@@ -5261,7 +5262,7 @@ async function buildStaffContext() {
     `);
     if (r.rows.length) {
       liveLines.push('# Live snapshot (last 7 days, assistant turns)');
-      const labelMap = { estimate: '47', job: '86', client: 'HR', staff: 'Chief of Staff (you)' };
+      const labelMap = { estimate: '86', job: '86', client: 'HR', staff: 'Chief of Staff (you)' };
       r.rows.forEach(row => {
         liveLines.push('  • ' + (labelMap[row.entity_type] || row.entity_type) + ': ' + Number(row.turns) + ' turns');
       });
@@ -5303,7 +5304,7 @@ async function execStaffTool(name, input) {
       `;
       const r = await pool.query(aggSql);
       const out = [];
-      const labels = { estimate: '47 (estimate)', job: '86 (job/WIP)', client: 'HR (client)' };
+      const labels = { estimate: '86 (estimate)', job: '86 (job/WIP)', client: 'HR (client)' };
       const all = ['estimate', 'job', 'client'];
       const byType = new Map(r.rows.map(row => [row.entity_type, row]));
       out.push('Metrics for last ' + range + ':');
@@ -5436,7 +5437,7 @@ async function execStaffTool(name, input) {
     }
 
     case 'read_materials': {
-      // Same query shape as the GET /api/materials endpoint that AG\'s
+      // Same query shape as the GET /api/materials endpoint that 86\'s
       // client-side applier hits — kept inline rather than HTTP-loop
       // through self so the staff agent doesn\'t need to forge a
       // bearer token.
@@ -6374,7 +6375,7 @@ router.post('/staff/chat/continue',
 // Phase 2 (HR + CoS) — v2 chat paths on the Anthropic Sessions API
 //
 // HR (clients) and CoS (staff) chat paths share an extra wrinkle vs.
-// 47/86: their tools split into auto-tier (executed server-side
+// 86/86: their tools split into auto-tier (executed server-side
 // inline) and approval-tier (surfaced to the user). The Sessions
 // migration handles this via the `onCustomToolUse` callback on
 // runV2SessionStream — auto-tier tools execute mid-stream and feed
@@ -6419,13 +6420,13 @@ function makeStaffOnCustomToolUse() {
   };
 }
 
-// AG auto-execute hook — runs the same read tools the v1 client
+// 86 auto-execute hook — runs the same read tools the v1 client
 // auto-fires through /api/ai/exec-tool, but server-side here so the
 // session resumes mid-stream without an extra client round-trip
-// (was the source of "AG isn't actually performing the task" — every
+// (was the source of "86 isn't actually performing the task" — every
 // read paused for an approval-card flash + extra HTTP turn).
 //
-// AG's allowed auto-tier set (ALLOWED_AG_AUTO_TOOLS) is a strict
+// 86's allowed auto-tier set (ALLOWED_AG_AUTO_TOOLS) is a strict
 // subset of execStaffTool's switch cases, so we reuse the same
 // executor instead of duplicating the read logic. Approval-tier
 // tools (propose_*) drop through to the UI exactly like before.
@@ -6722,7 +6723,7 @@ router.post('/v2/staff/chat/continue',
 // ════════════════════════════════════════════════════════════════════
 // LEAD INTAKE — fifth agent, fresh session per panel open
 //
-// Distinct from HR/AG/Elle/CoS: each /v2/intake/chat call archives
+// Distinct from HR/86/Elle/CoS: each /v2/intake/chat call archives
 // any prior intake session for this user and starts a brand-new
 // Anthropic session. There's no persistent history surface — once
 // the user creates a lead (or closes the panel), the conversation is
@@ -7098,7 +7099,7 @@ router.post('/v2/intake/chat',
       const freshlyCreated = startNew;
 
       // Log the user's intake message for audit (separate
-      // entity_type='intake' so it doesn't pollute HR/AG history
+      // entity_type='intake' so it doesn't pollute HR/86 history
       // but is still queryable for replay/debug).
       const userMsgId = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
       await pool.query(
@@ -7246,7 +7247,7 @@ router.post('/v2/intake/chat/continue',
 );
 
 // POST /api/ai/exec-tool — generic auto-tier read-tool executor.
-// AG\'s client-side AUTO_READ_TOOLS appliers POST { name, input }
+// 86\'s client-side AUTO_READ_TOOLS appliers POST { name, input }
 // here; the server runs execStaffTool inline (the same auto-tier
 // read paths the chief of staff uses) and returns the formatted
 // result string. One endpoint covers read_materials,
@@ -7254,7 +7255,7 @@ router.post('/v2/intake/chat/continue',
 // new auto-tier read tool just needs a new case in execStaffTool,
 // no per-tool endpoint.
 //
-// Auth: ESTIMATES_VIEW (the cap PMs running AG sessions already have).
+// Auth: ESTIMATES_VIEW (the cap PMs running 86 sessions already have).
 // The tools themselves are read-only — no mutation paths here.
 const ALLOWED_AG_AUTO_TOOLS = new Set([
   'read_materials',
@@ -7282,7 +7283,7 @@ router.post('/exec-tool', requireAuth, requireCapability('ESTIMATES_VIEW'), asyn
 
 // Internals exposed for sibling modules (eval harness in
 // admin-agents-routes). NOT for general use — these bypass the
-// streaming + auth flow that production AG depends on.
+// streaming + auth flow that production 86 depends on.
 // List of admin-overridable named sections per agent. Returned by
 // /api/admin/agents/sections so the skill-pack editor can render a
 // "Replaces section" dropdown with descriptions + default bodies.
@@ -7378,7 +7379,7 @@ const INTAKE_TOOLS = [
         confidence:      { type: 'integer', description: '0–100 confidence the lead will close.' },
         projected_sale_date: { type: 'string', description: 'YYYY-MM-DD when the user expects to close.' },
         // Notes — capture EVERYTHING the user said + photo summary
-        notes:           { type: 'string', description: 'Full free-form notes. Capture the user\'s description verbatim plus your photo interpretation ("uploaded 3 photos: 36-inch fiberglass entry door with 2 sidelights, weathered jamb, no visible rot on threshold"). Worth being thorough — these notes drive AG\'s estimate later.' },
+        notes:           { type: 'string', description: 'Full free-form notes. Capture the user\'s description verbatim plus your photo interpretation ("uploaded 3 photos: 36-inch fiberglass entry door with 2 sidelights, weathered jamb, no visible rot on threshold"). Worth being thorough — these notes drive 86\'s estimate later.' },
         attach_pending_photos: { type: 'boolean', description: 'Set true when photos were uploaded in this chat. The handler will move them from the per-session temp bucket onto leads.<new_id>.attachments on approval.' },
         rationale:       { type: 'string', description: 'One short sentence — why you\'re proposing this lead now (mostly used for audit on review).' }
       },

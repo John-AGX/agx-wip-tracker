@@ -932,6 +932,46 @@ async function initSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_agent_reference_links_enabled ON agent_reference_links(enabled);
 
+    -- Migration: 47 retired in 2026-05. Its agent_key 'ag' is being
+    -- collapsed into 'job' so 86 owns a single canonical key. These
+    -- statements run on every boot but are idempotent — UPDATEs hit
+    -- zero rows once the migration has completed once.
+    UPDATE ai_messages           SET agent_key = 'job' WHERE agent_key = 'ag';
+    UPDATE ai_sessions           SET agent_key = 'job' WHERE agent_key = 'ag';
+    UPDATE managed_agent_registry SET agent_key = 'job' WHERE agent_key = 'ag';
+    -- agent_skills lives in app_settings as a JSONB blob; each pack
+    -- has an "agents" string array. Walk every pack, replace 'ag'
+    -- with 'job' (deduping if 'job' is already present), write back.
+    UPDATE app_settings
+       SET value = jsonb_set(
+         value, '{skills}',
+         (
+           SELECT COALESCE(jsonb_agg(
+             CASE
+               WHEN s ? 'agents' AND jsonb_typeof(s->'agents') = 'array' THEN
+                 jsonb_set(
+                   s, '{agents}',
+                   (
+                     SELECT COALESCE(jsonb_agg(DISTINCT v), '[]'::jsonb)
+                     FROM (
+                       SELECT CASE WHEN x = 'ag' THEN 'job' ELSE x END AS v
+                       FROM jsonb_array_elements_text(s->'agents') AS x
+                     ) sub
+                   )
+                 )
+               ELSE s
+             END
+           ), '[]'::jsonb)
+           FROM jsonb_array_elements(value->'skills') AS s
+         )
+       )
+     WHERE key = 'agent_skills'
+       AND value ? 'skills'
+       AND EXISTS (
+         SELECT 1 FROM jsonb_array_elements(value->'skills') s
+         WHERE s ? 'agents' AND s->'agents' ? 'ag'
+       );
+
     -- Phase 1b — durable mapping from (agent_key, entity, user) to
     -- the long-lived Anthropic Session that backs that conversation.
     -- We reuse one Session per Project 86 conversation so we don't pay session-

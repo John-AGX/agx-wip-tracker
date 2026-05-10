@@ -891,7 +891,9 @@ router.get('/preview-prompt', requireAuth, requireCapability('ROLES_MANAGE'), as
       toolNames = filtered.map(t => t.name);
       const eRow = await pool.query("SELECT data->>'title' AS title FROM estimates WHERE id = $1", [estimateId]);
       entityLabel = eRow.rows.length ? (eRow.rows[0].title || estimateId) : estimateId;
-      skillPackNames = await loadPackNamesFor('ag');
+      // 86 unified: 'ag' agent_key was retired and migrated to 'job',
+      // so the estimate-context preview pulls packs from 'job'.
+      skillPackNames = await loadPackNamesFor('job');
     } else if (agent === 'elle' || agent === 'job') {
       const jobId = req.query.job_id;
       if (!jobId) return res.status(400).json({ error: 'job_id is required for agent=elle' });
