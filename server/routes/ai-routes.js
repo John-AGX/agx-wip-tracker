@@ -2379,8 +2379,21 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
     }
 
     if (Array.isArray(eventsForThisOpen) && eventsForThisOpen.length) {
+      // Anthropic's events.send endpoint caps at 50 events per call.
+      // Auto-tier batches (HR running update_client_field across an
+      // entire client directory, etc.) routinely exceed that — chunk
+      // sequentially. The session processes chunks in order, so
+      // tool_result ordering is preserved.
+      const EVENTS_PER_SEND = 50;
       try {
-        await anthropic.beta.sessions.events.send(sessionId, { events: eventsForThisOpen });
+        for (let i = 0; i < eventsForThisOpen.length; i += EVENTS_PER_SEND) {
+          const chunk = eventsForThisOpen.slice(i, i + EVENTS_PER_SEND);
+          await anthropic.beta.sessions.events.send(sessionId, { events: chunk });
+          if (eventsForThisOpen.length > EVENTS_PER_SEND) {
+            console.log('[v2-stream] sent chunk', (i / EVENTS_PER_SEND) + 1,
+              '(' + chunk.length + ' event(s)) to', sessionId);
+          }
+        }
         console.log('[v2-stream] sent', eventsForThisOpen.length, 'event(s) to', sessionId);
       } catch (e) {
         if (isStuckSessionError(e) && !freshlyCreated) {
@@ -2629,9 +2642,14 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
                       content: [{ type: 'text', text: 'Continue.' }]
                     }))
                   : [{ type: 'user.interrupt' }];
-                await anthropic.beta.sessions.events.send(sessionId, {
-                  events: clearEvents
-                });
+                // Same 50-event cap applies here — chunk to be safe in
+                // case a stalled session was blocked on >50 tool_use ids.
+                const EVENTS_PER_SEND = 50;
+                for (let i = 0; i < clearEvents.length; i += EVENTS_PER_SEND) {
+                  await anthropic.beta.sessions.events.send(sessionId, {
+                    events: clearEvents.slice(i, i + EVENTS_PER_SEND)
+                  });
+                }
               } catch (e) {
                 console.warn('Final clear failed (non-fatal):', e && e.message);
               }
