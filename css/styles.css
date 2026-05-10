@@ -413,14 +413,14 @@
             right: 24px;
             bottom: 24px;
             z-index: 1500;
-            width: 56px;
-            height: 56px;
-            /* Project 86 brand mark: pure black ground with a
-               luminous-white DNA strand + glowing "86" overlapping
-               the lower-right. Matches the canonical brand asset
-               John approved — circular logo, square FAB form. */
-            border-radius: 14px;
-            border: 1.5px solid rgba(255, 255, 255, 0.16);
+            width: 64px;
+            height: 64px;
+            /* Project 86 brand mark — circular, matching the
+               canonical logo: pure black ground, hairline ring,
+               luminous-white DNA strand crossing diagonally with a
+               glowing "86" overlapping the lower-right. */
+            border-radius: 50%;
+            border: 2px solid rgba(255, 255, 255, 0.22);
             background: #000000;
             color: #ffffff;
             cursor: pointer;
@@ -428,8 +428,9 @@
             display: inline-flex;
             align-items: center;
             justify-content: center;
+            overflow: hidden;
             box-shadow:
-                0 6px 18px rgba(0, 0, 0, 0.55),
+                0 6px 20px rgba(0, 0, 0, 0.55),
                 0 0 0 0 rgba(255, 255, 255, 0.0);
             transition: transform 0.18s ease, box-shadow 0.18s ease,
                         border-color 0.18s ease;
@@ -444,27 +445,29 @@
         .ask86-fab:active {
             transform: translateY(0) scale(1.00);
         }
-        /* DNA glyph — luminous white with soft glow, mirrors the
-           Project 86 brand mark. Layered drop-shadow filter creates
-           the white halo the strand sits inside on the canonical
-           logo. Sized larger than the badge so the strand is the
-           dominant element, with "86" tucked into its lower right. */
+        /* DNA glyph — luminous-white strand running diagonally
+           through the circle (upper-right to lower-left, matching
+           the canonical brand mark's orientation). Layered drop-
+           shadow filter creates the white halo the strand sits
+           inside. Sized close to the surface diameter so the
+           strand reads as the dominant element. */
         .ask86-fab-icon {
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            width: 36px;
-            height: 36px;
-            margin-right: 10px;
-            margin-bottom: 6px;
+            width: 46px;
+            height: 46px;
+            margin-right: 8px;
+            margin-bottom: 4px;
             color: #ffffff;
             filter:
-                drop-shadow(0 0 3px rgba(255, 255, 255, 0.85))
-                drop-shadow(0 0 6px rgba(255, 255, 255, 0.45));
+                drop-shadow(0 0 2px rgba(255, 255, 255, 0.95))
+                drop-shadow(0 0 5px rgba(255, 255, 255, 0.55))
+                drop-shadow(0 0 10px rgba(255, 255, 255, 0.25));
         }
         .ask86-fab-icon .p86-icon {
-            width: 36px;
-            height: 36px;
+            width: 46px;
+            height: 46px;
         }
         /* "86" wordmark — luminous-white digits anchored to the
            bottom-right of the surface, overlapping the lower
@@ -481,9 +484,9 @@
             line-height: 1;
             font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
             text-shadow:
-                0 0 4px rgba(255, 255, 255, 0.90),
-                0 0 8px rgba(255, 255, 255, 0.55),
-                0 0 14px rgba(255, 255, 255, 0.30);
+                0 0 3px rgba(255, 255, 255, 0.95),
+                0 0 7px rgba(255, 255, 255, 0.65),
+                0 0 14px rgba(255, 255, 255, 0.35);
             pointer-events: none;
         }
         /* Light mode: the brand mark stays always-on-black so it
