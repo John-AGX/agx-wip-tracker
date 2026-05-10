@@ -415,71 +415,79 @@
             z-index: 1500;
             width: 56px;
             height: 56px;
-            /* Rounded-square brand mark (matches the Project 86
-               iconography style) — soft 14px corner radius keeps it
-               friendly without going full circle. */
+            /* Rounded-square brand mark in Project 86's signature
+               style: pure black ground with luminous-white DNA +
+               "86" glowing on top. Subtle dark-grey hairline ring
+               echoes the logo's outer circle without competing with
+               the glow. */
             border-radius: 14px;
-            border: 1.5px solid rgba(34, 211, 238, 0.55);
-            background: linear-gradient(135deg, #0F172A 0%, #1e293b 100%);
-            color: #e4e6f0;
+            border: 1.5px solid rgba(255, 255, 255, 0.16);
+            background: #000000;
+            color: #ffffff;
             cursor: pointer;
             padding: 0;
             display: inline-flex;
             align-items: center;
             justify-content: center;
             box-shadow:
-                0 6px 18px rgba(0, 0, 0, 0.40),
-                0 0 0 0 rgba(34, 211, 238, 0.0);
+                0 6px 18px rgba(0, 0, 0, 0.55),
+                0 0 0 0 rgba(255, 255, 255, 0.0);
             transition: transform 0.18s ease, box-shadow 0.18s ease,
                         border-color 0.18s ease;
         }
         .ask86-fab:hover {
             transform: translateY(-2px) scale(1.04);
-            border-color: rgba(34, 211, 238, 0.85);
+            border-color: rgba(255, 255, 255, 0.40);
             box-shadow:
-                0 10px 24px rgba(0, 0, 0, 0.45),
-                0 0 0 4px rgba(34, 211, 238, 0.18);
+                0 10px 26px rgba(0, 0, 0, 0.60),
+                0 0 18px rgba(255, 255, 255, 0.18);
         }
         .ask86-fab:active {
             transform: translateY(0) scale(1.00);
         }
+        /* DNA glyph — luminous white with soft glow, mirrors the
+           Project 86 brand mark. The drop-shadow filter creates
+           the white halo that the glyph sits inside on the logo. */
         .ask86-fab-icon {
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            width: 28px;
-            height: 28px;
-            color: rgba(34, 211, 238, 0.95);
+            width: 30px;
+            height: 30px;
+            color: #ffffff;
+            filter:
+                drop-shadow(0 0 3px rgba(255, 255, 255, 0.85))
+                drop-shadow(0 0 6px rgba(255, 255, 255, 0.45));
         }
         .ask86-fab-icon .p86-icon {
-            width: 28px;
-            height: 28px;
+            width: 30px;
+            height: 30px;
         }
-        /* "86" wordmark — plain typographic mark anchored to the
-           bottom-right of the circle, overlapping the edge slightly.
-           No pill / no fill: this is Project 86's mark, not a
-           notification badge. Tight tracking + bold weight so the
-           numbers read clearly against the slate body. Soft text-
-           shadow keeps legibility when the digits cross over the
-           DNA glyph behind. */
+        /* "86" wordmark — luminous white digits anchored to the
+           bottom-right of the surface, overlapping the edge slightly
+           and the lower portion of the DNA glyph. Same neon-glow
+           text-shadow as the DNA so the two read as one luminous
+           mark. No pill, no AGX accent — this is Project 86's
+           signature. */
         .ask86-fab-badge {
             position: absolute;
-            right: -2px;
-            bottom: -4px;
+            right: 4px;
+            bottom: 2px;
             color: #ffffff;
-            font-size: 17px;
+            font-size: 20px;
             font-weight: 800;
             letter-spacing: -0.5px;
             line-height: 1;
             font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
             text-shadow:
-                0 0 6px rgba(15, 23, 42, 0.95),
-                0 0 2px rgba(15, 23, 42, 1);
+                0 0 4px rgba(255, 255, 255, 0.85),
+                0 0 8px rgba(255, 255, 255, 0.45),
+                0 0 14px rgba(255, 255, 255, 0.25);
             pointer-events: none;
         }
-        body.light-mode .ask86-fab {
-            background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
-        }
+        /* Light mode: the brand mark is always-on-black so it stays
+           consistent across themes — the FAB is its own surface,
+           not blending into the page chrome. */
         /* Hide the FAB while the AI panel itself is open — the panel
            covers the bottom-right area on most layouts and the user
            is clearly already talking to 86. JS toggles .ask86-fab-hidden
