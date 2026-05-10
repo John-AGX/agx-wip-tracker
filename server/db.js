@@ -936,7 +936,10 @@ async function initSchema() {
     -- collapsed into 'job' so 86 owns a single canonical key. These
     -- statements run on every boot but are idempotent — UPDATEs hit
     -- zero rows once the migration has completed once.
-    UPDATE ai_messages           SET agent_key = 'job' WHERE agent_key = 'ag';
+    -- NOTE: ai_messages does NOT have an agent_key column — the
+    -- agent identity for messages is encoded via entity_type
+    -- ('estimate' / 'job' / 'client' / 'staff' / 'intake' / 'ask86').
+    -- Only ai_sessions and managed_agent_registry get migrated.
     UPDATE ai_sessions           SET agent_key = 'job' WHERE agent_key = 'ag';
     UPDATE managed_agent_registry SET agent_key = 'job' WHERE agent_key = 'ag';
     -- agent_skills lives in app_settings as a JSONB blob; each pack
