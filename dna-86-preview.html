@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <title>Project 86 — DNA+86 icon preview</title>
+  <style>
+    body { background: #0e0f12; color: #e7e9ee; font-family: 'Inter', system-ui, sans-serif; margin: 0; padding: 32px; }
+    h1 { font-weight: 500; font-size: 18px; margin: 0 0 24px; opacity: 0.8; }
+    .row { display: flex; gap: 32px; flex-wrap: wrap; }
+    .card { background: #181a20; border: 1px solid #262a33; border-radius: 12px; padding: 20px 24px; min-width: 200px; }
+    .card h2 { margin: 0 0 8px; font-size: 12px; font-weight: 600; letter-spacing: 0.6px; text-transform: uppercase; opacity: 0.7; }
+    .card p { margin: 0 0 18px; font-size: 12px; opacity: 0.6; line-height: 1.5; }
+    .sizes { display: flex; align-items: flex-end; gap: 18px; }
+    .sizes > div { display: flex; flex-direction: column; align-items: center; gap: 6px; font-size: 10px; opacity: 0.5; }
+    .icon { color: #fff; display: inline-flex; align-items: center; justify-content: center; }
+    .btn { width: 32px; height: 32px; border-radius: 50%; background: #000; border: 1px solid rgba(255,255,255,0.22); display: inline-flex; align-items: center; justify-content: center; }
+    .btn .icon { width: 22px; height: 22px; filter: drop-shadow(0 0 1.5px rgba(255,255,255,0.55)); }
+    .icon-48 .icon { width: 48px; height: 48px; }
+    .icon-96 .icon { width: 96px; height: 96px; }
+    svg { width: 100%; height: 100%; }
+  </style>
+</head>
+<body>
+  <h1>dna-86 — line-art variants (no fill, currentColor only)</h1>
+  <div class="row" id="row"></div>
+  <script src="js/agx-icons.js?v=17b"></script>
+  <script>
+    var variants = [
+      { key: 'dna-86-v1', title: 'V1', desc: 'Circle frame + vertical DNA + outlined 86 (closest to your reference).' },
+      { key: 'dna-86-v2', title: 'V2', desc: 'No frame. Big DNA + big 86 side by side. Boldest, most visible at small sizes.' },
+      { key: 'dna-86-v3', title: 'V3', desc: 'Rounded-square badge frame instead of a circle.' },
+      { key: 'dna-86-v4', title: 'V4', desc: 'Diagonal DNA across full canvas + 86 in lower-right. No frame.' }
+    ];
+    var row = document.getElementById('row');
+    variants.forEach(function (v) {
+      var card = document.createElement('div');
+      card.className = 'card';
+      card.innerHTML =
+        '<h2>' + v.title + '</h2>' +
+        '<p>' + v.desc + '</p>' +
+        '<div class="sizes">' +
+          '<div><span class="btn"><span class="icon"></span></span><span>32 (button)</span></div>' +
+          '<div class="icon-48"><span class="icon"></span><span>48</span></div>' +
+          '<div class="icon-96"><span class="icon"></span><span>96</span></div>' +
+        '</div>';
+      var slots = card.querySelectorAll('.icon');
+      slots.forEach(function (s) { s.innerHTML = window.p86Icon(v.key); });
+      row.appendChild(card);
+    });
+  </script>
+</body>
+</html>
