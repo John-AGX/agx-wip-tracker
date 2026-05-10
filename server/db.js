@@ -179,7 +179,17 @@ async function initSchema() {
     -- Salutation = the "Dear X," opening on a proposal letter (e.g. "PAC Team",
     -- "Jane", "Wimbledon Greens HOA Board"). Added after the initial schema so
     -- existing rows just get NULL — front-end falls back to the contact name.
+    -- DEPRECATED 2026-05: removed from the client editor UI (Project 86 dropped
+    -- the "Dear X," greeting from proposals). Column is intentionally kept so
+    -- existing data isn't lost; it's no longer surfaced or written by the app.
     ALTER TABLE clients ADD COLUMN IF NOT EXISTS salutation TEXT;
+
+    -- Short name = the QuickBooks short name / abbreviation HR uses to match
+    -- clients to AGX's bookkeeping records (e.g. "PAC" for "Preferred
+    -- Apartment Communities", "FSR" for "FirstService Residential"). Sourced
+    -- from the live job-numbers + short-names reference sheet HR consults,
+    -- and used downstream as the community label on proposal exports.
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS short_name TEXT;
 
     -- Agent notes — accumulated free-form facts about how to handle this
     -- client, written by either the user or one of the AI agents (CRA, AG)

@@ -1639,7 +1639,7 @@ const SECTION_DEFAULTS = {
   hr_field_semantics: {
     agent: 'cra',
     description: 'Field-by-field meaning for client records. Edit if columns are added or repurposed.',
-    body: '# Field semantics\n  • name              → display name (parent company name OR property name)\n  • company_name      → on properties: the parent\'s name (informational; parent_client_id is the real link)\n  • community_name    → formal community name (often same as name on properties; blank on parents)\n  • address/city/state/zip → mailing/billing address (parent\'s corporate office OR property\'s billing-to)\n  • property_address  → PHYSICAL site address — properties only, never parents\n  • community_manager (CAM) + cm_email + cm_phone → on-site site manager — properties only\n  • maintenance_manager + mm_email + mm_phone     → on-site maintenance lead — properties only\n  • market            → submarket label (Tampa, Orlando, Sarasota, Brevard, Lakeland)\n  • salutation        → how proposal letters greet them ("PAC Team", "Wimbledon Greens HOA Board", "Jane")\n  • client_type       → "Property Mgmt" for parents, "Property" for properties'
+    body: '# Field semantics\n  • name              → display name (parent company name OR property name)\n  • short_name        → the QuickBooks short name / abbreviation (e.g. "PAC" for Preferred Apartment Communities, "FSR" for FirstService Residential, "Wimbledon Greens" for the HOA). Source of truth is the live "Job numbers + short names" reference sheet at the bottom of this turn — match clients against that sheet and populate short_name when the row already has a documented abbreviation. Used downstream as the community label on proposal exports, so accuracy matters.\n  • company_name      → on properties: the parent\'s name (informational; parent_client_id is the real link)\n  • community_name    → formal community name (often same as name on properties; blank on parents)\n  • address/city/state/zip → mailing/billing address (parent\'s corporate office OR property\'s billing-to)\n  • property_address  → PHYSICAL site address — properties only, never parents\n  • community_manager (CAM) + cm_email + cm_phone → on-site site manager — properties only\n  • maintenance_manager + mm_email + mm_phone     → on-site maintenance lead — properties only\n  • market            → submarket label (Tampa, Orlando, Sarasota, Brevard, Lakeland)\n  • client_type       → "Property Mgmt" for parents, "Property" for properties'
   },
   hr_bt_patterns: {
     agent: 'cra',
@@ -4102,7 +4102,7 @@ const CLIENT_TOOLS = [
         client_id: { type: 'string' },
         fields: {
           type: 'object',
-          description: 'Object of field-name → new-value pairs. Allowed fields: salutation, first_name, last_name, email, phone, cell, address, city, state, zip, company_name, community_name, market, property_address, property_phone, website, gate_code, additional_pocs, community_manager, cm_email, cm_phone, maintenance_manager, mm_email, mm_phone, notes, client_type, activation_status.'
+          description: 'Object of field-name → new-value pairs. Allowed fields: short_name, first_name, last_name, email, phone, cell, address, city, state, zip, company_name, community_name, market, property_address, property_phone, website, gate_code, additional_pocs, community_manager, cm_email, cm_phone, maintenance_manager, mm_email, mm_phone, notes, client_type, activation_status.'
         }
       },
       required: ['client_id', 'fields']
@@ -4259,7 +4259,7 @@ const CLIENT_TOOLS = [
 ];
 
 const CLIENT_EDITABLE_FIELDS = new Set([
-  'salutation', 'first_name', 'last_name', 'email', 'phone', 'cell',
+  'short_name', 'first_name', 'last_name', 'email', 'phone', 'cell',
   'address', 'city', 'state', 'zip',
   'company_name', 'community_name', 'market',
   'property_address', 'property_phone', 'website', 'gate_code', 'additional_pocs',
@@ -4610,7 +4610,7 @@ function isClientToolAutoTier(name) {
 // parent so a huge directory doesn't blow the prompt window.
 async function buildClientDirectoryContext() {
   const { rows } = await pool.query(
-    `SELECT id, name, parent_client_id, client_type, company_name, community_name,
+    `SELECT id, name, short_name, parent_client_id, client_type, company_name, community_name,
             community_manager, cm_email, cm_phone, market, property_address,
             city, state, zip, email, phone, agent_notes
      FROM clients ORDER BY COALESCE(parent_client_id, id), name`
@@ -4693,9 +4693,13 @@ async function buildClientDirectoryContext() {
   for (const p of parents) {
     const kids = childrenByParent.get(p.id);
     if (!kids || !kids.length) continue;
-    out.push(`- **${p.name}** (id=${p.id})${p.market ? ' — ' + p.market : ''}`);
+    const parentBits = [];
+    if (p.short_name) parentBits.push('short=' + p.short_name);
+    if (p.market) parentBits.push(p.market);
+    out.push(`- **${p.name}** (id=${p.id})${parentBits.length ? ' — ' + parentBits.join(' · ') : ''}`);
     for (const k of kids) {
       const bits = [];
+      if (k.short_name) bits.push('short=' + k.short_name);
       if (k.community_manager) bits.push('CAM: ' + k.community_manager);
       if (k.market) bits.push(k.market);
       if (k.city) bits.push(k.city + (k.state ? ', ' + k.state : ''));
@@ -4707,6 +4711,7 @@ async function buildClientDirectoryContext() {
     out.push('## Flat / unparented entries (potential candidates to organize):');
     for (const f of flatTopLevel) {
       const bits = [];
+      if (f.short_name) bits.push('short=' + f.short_name);
       if (f.company_name && f.company_name !== f.name) bits.push('company_name=' + f.company_name);
       if (f.community_name && f.community_name !== f.name) bits.push('community=' + f.community_name);
       if (f.community_manager) bits.push('CAM: ' + f.community_manager);
