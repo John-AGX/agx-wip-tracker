@@ -35,15 +35,29 @@ function toDownloadUrl(shareUrl) {
 async function fetchWorkbookBytes(shareUrl) {
   const url = toDownloadUrl(shareUrl);
   const res = await fetch(url, {
-    headers: { 'User-Agent': UA, 'Accept': '*/*' },
+    headers: {
+      'User-Agent': UA,
+      // Hint XLSX-friendly types so SharePoint is more likely to
+      // return bytes vs the JS-driven viewer page.
+      'Accept': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/octet-stream, */*'
+    },
     redirect: 'follow'
   });
+  const ct = (res.headers.get('content-type') || '').toLowerCase();
+
   if (!res.ok) {
-    throw new Error('HTTP ' + res.status + ' fetching share URL');
+    // 401/403 means the share isn't anonymous. SharePoint usually
+    // returns 302 → 200 HTML login page rather than 401 directly,
+    // so the HTML check below is the more common path. Keep the
+    // status check for completeness.
+    throw new Error(
+      'HTTP ' + res.status + ' from SharePoint. ' +
+      (res.status === 401 || res.status === 403
+        ? 'The share probably isn\'t set to "Anyone with the link → Can view", or your tenant blocks anonymous shares.'
+        : 'Try re-copying the share URL.')
+    );
   }
-  // Length-cap before slurping the whole body — SharePoint streams
-  // the file, we don't want to OOM on a 500 MB workbook somebody
-  // shared by mistake.
+  // Length-cap before slurping the whole body.
   const len = parseInt(res.headers.get('content-length') || '0', 10);
   if (Number.isFinite(len) && len > MAX_BYTES) {
     throw new Error('Workbook too large: ' + len + ' bytes');
@@ -52,7 +66,29 @@ async function fetchWorkbookBytes(shareUrl) {
   if (ab.byteLength > MAX_BYTES) {
     throw new Error('Workbook too large: ' + ab.byteLength + ' bytes');
   }
-  return Buffer.from(ab);
+  if (ab.byteLength < 4) {
+    throw new Error('Empty response from share URL.');
+  }
+  const buf = Buffer.from(ab);
+  // XLSX files are ZIP archives — first 2 bytes are 'PK' (0x504B).
+  // Anything else is either an HTML login page, a redirect viewer,
+  // or some other auth wall. Surface a specific error instead of
+  // letting exceljs blow up later with an opaque parse error.
+  if (buf[0] !== 0x50 || buf[1] !== 0x4B) {
+    if (ct.indexOf('text/html') >= 0) {
+      throw new Error(
+        'SharePoint returned an HTML login page instead of the XLSX. ' +
+        'Most likely: the share isn\'t set to "Anyone with the link → Can view", OR your tenant admin has disabled anonymous link sharing. ' +
+        'Verify in SharePoint by opening the share URL in a private/incognito window — if it asks you to sign in, anonymous downloads won\'t work either.'
+      );
+    }
+    throw new Error(
+      'Response wasn\'t a valid XLSX (no ZIP signature). ' +
+      'Content-Type: ' + (ct || 'unknown') + ', size: ' + ab.byteLength + ' bytes. ' +
+      'The share URL may be returning a redirect or auth wall.'
+    );
+  }
+  return buf;
 }
 
 // Parse an XLSX buffer into a flattened representation:

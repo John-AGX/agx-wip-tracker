@@ -3092,6 +3092,15 @@
         } else {
           statusBadge = '<span style="color:var(--text-dim,#888);">never fetched</span>';
         }
+        // Surface the error text inline (under the title cell) so the
+        // user doesn't have to hover the Failed badge to read it.
+        // Multi-line, full text — these errors often carry actionable
+        // tenant-config info.
+        var errorBlock = (l.last_fetch_status === 'failed' && l.last_fetch_error)
+          ? '<div style="font-size:11px;color:#f87171;font-weight:400;margin-top:6px;line-height:1.4;background:rgba(248,113,113,0.08);border-left:2px solid #f87171;padding:4px 8px;border-radius:3px;">' +
+              escapeHTML(l.last_fetch_error) +
+            '</div>'
+          : '';
         var when = l.last_fetched_at
           ? new Date(l.last_fetched_at).toLocaleString()
           : '—';
@@ -3102,6 +3111,7 @@
         return '<tr>' +
           '<td style="padding:8px 10px;font-weight:600;">' + escapeHTML(l.title) +
             (l.description ? '<div style="font-size:11px;color:var(--text-dim,#888);font-weight:400;margin-top:2px;">' + escapeHTML(l.description) + '</div>' : '') +
+            errorBlock +
           '</td>' +
           '<td style="padding:8px 10px;font-family:monospace;font-size:11px;color:var(--text-dim,#aaa);max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escapeAttr(l.url) + '">' +
             '<a href="' + escapeAttr(l.url) + '" target="_blank" rel="noopener">' + escapeHTML(l.url.slice(0, 60) + (l.url.length > 60 ? '…' : '')) + '</a>' +
