@@ -341,6 +341,16 @@ const FOOTER = `
 })();
 `;
 
+// Custom composite icons that aren't sourced from a single Phosphor /
+// Heroicons SVG. Hand-authored to match the Phosphor 256x256 viewBox
+// + currentColor convention so they slot into the same registry.
+const CUSTOM_ICONS = {
+  // "dna-86" — Project 86 brand mark. Phosphor DNA strand on the
+  // left + "86" glyph on the right inside one viewBox so it scales
+  // and tints like a normal Phosphor icon.
+  'dna-86': '<svg xmlns="http://www.w3.org/2000/svg" fill="currentColor" viewBox="0 0 256 256"><g transform="translate(-30 0) scale(0.78)"><path d="M200,204.5V232a8,8,0,0,1-16,0V204.5a63.67,63.67,0,0,0-35.38-57.25l-48.4-24.19A79.58,79.58,0,0,1,56,51.5V24a8,8,0,0,1,16,0V51.5a63.67,63.67,0,0,0,35.38,57.25l48.4,24.19A79.58,79.58,0,0,1,200,204.5ZM160,200H72.17a63.59,63.59,0,0,1,3.23-16h72.71a8,8,0,0,0,0-16H83.46a63.71,63.71,0,0,1,14.65-15.08A8,8,0,1,0,88.64,140,80.27,80.27,0,0,0,56,204.5V232a8,8,0,0,0,16,0V216h88a8,8,0,0,0,0-16ZM192,16a8,8,0,0,0-8,8V40H96a8,8,0,0,0,0,16h87.83a63.59,63.59,0,0,1-3.23,16H107.89a8,8,0,1,0,0,16h64.65a63.71,63.71,0,0,1-14.65,15.08,8,8,0,0,0,9.47,12.9A80.27,80.27,0,0,0,200,51.5V24A8,8,0,0,0,192,16Z"></path></g><text x="196" y="170" font-family="Inter, -apple-system, BlinkMacSystemFont, \'Segoe UI\', system-ui, sans-serif" font-weight="600" font-size="104" text-anchor="middle" letter-spacing="-4">86</text></svg>'
+};
+
 let out = HEADER;
 for (const [name, rel] of Object.entries(MAP)) {
   const [lib, file] = rel.split('/');
@@ -353,6 +363,9 @@ for (const [name, rel] of Object.entries(MAP)) {
   // Collapse to a single line so the JS file stays compact.
   svg = svg.replace(/\s+/g, ' ').replace(/> </g, '><').trim();
   // JSON.stringify gives us a JS-safe quoted string with all escapes handled.
+  out += '  icons[' + JSON.stringify(name) + '] = ' + JSON.stringify(svg) + ';\n';
+}
+for (const [name, svg] of Object.entries(CUSTOM_ICONS)) {
   out += '  icons[' + JSON.stringify(name) + '] = ' + JSON.stringify(svg) + ';\n';
 }
 out += FOOTER;

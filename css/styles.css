@@ -428,33 +428,25 @@
             box-shadow: 0 0 8px rgba(255, 255, 255, 0.20);
         }
         .header-ask86-btn:active { transform: scale(0.96); }
+        /* Composite "dna-86" Phosphor icon fills the button. The
+           glyph carries both the DNA strand and "86" mark in a
+           single SVG so it scales/strokes consistently. */
         .header-ask86-icon {
             display: inline-flex;
             align-items: center;
             justify-content: center;
             width: 22px;
             height: 22px;
-            margin-right: 4px;
-            margin-bottom: 2px;
             color: #ffffff;
             filter: drop-shadow(0 0 1.5px rgba(255, 255, 255, 0.55));
+        }
+        .header-ask86-icon .p86-icon-slot {
+            margin-right: 0;
+            display: inline-flex;
         }
         .header-ask86-icon .p86-icon {
             width: 22px;
             height: 22px;
-        }
-        .header-ask86-label {
-            position: absolute;
-            right: 4px;
-            bottom: 2px;
-            color: #ffffff;
-            font-size: 10px;
-            font-weight: 500;
-            letter-spacing: -0.4px;
-            line-height: 1;
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-            text-shadow: 0 0 2px rgba(0, 0, 0, 0.85);
-            pointer-events: none;
         }
         /* Light mode: button surface stays black so the brand mark
            reads the same regardless of theme. */
