@@ -811,6 +811,56 @@ body.light-mode .sch-day-row:hover {
    2. Strip inside each day-sheet row — full forecast detail
       (high/low, precip %, wind, summary). Falls back to a muted
       placeholder when address is missing or NWS is unreachable. */
+/* Calendar day-cell weather chip — sits in the top-right corner
+   of each cell that the user-location 7-day forecast covers.
+   Risk-tinted background tile so red/yellow days catch the eye
+   in a sea of green ones, mirroring the entry-bar chip styling.
+   Day-of-month number anchors to the top-left so the two never
+   collide visually. */
+.sch-cal-day-wx {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 5px;
+  border-radius: 8px;
+  font-size: 10px;
+  line-height: 1;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text, #e4e6f0);
+  z-index: 1;
+  pointer-events: auto;
+}
+.sch-cal-day-wx.sch-wx-green {
+  background: rgba(52, 211, 153, 0.16);
+}
+.sch-cal-day-wx.sch-wx-yellow {
+  background: rgba(251, 191, 36, 0.20);
+}
+.sch-cal-day-wx.sch-wx-red {
+  background: rgba(248, 113, 113, 0.24);
+}
+.sch-cal-day-wx-icon {
+  font-size: 11px;
+  line-height: 1;
+}
+.sch-cal-day-wx-temp {
+  font-family: 'SF Mono', Consolas, monospace;
+  font-weight: 700;
+  font-size: 10px;
+}
+body.light-mode .sch-cal-day-wx {
+  background: rgba(0, 0, 0, 0.05);
+}
+body.light-mode .sch-cal-day-wx.sch-wx-yellow {
+  background: rgba(251, 191, 36, 0.30);
+}
+body.light-mode .sch-cal-day-wx.sch-wx-red {
+  background: rgba(248, 113, 113, 0.28);
+}
+
 /* Inline weather glyph on the entry bar — sits to the LEFT of the
    job number text. Risk-tinted background ring so red days are
    visible at a glance even before reading the icon. Width is

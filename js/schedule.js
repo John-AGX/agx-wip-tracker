@@ -327,7 +327,16 @@
     // without a flash of empty bars on first paint.
     weather: {},
     weatherLoading: false,
-    weatherFetchedAt: 0
+    weatherFetchedAt: 0,
+    // User-location forecast for the day-cell chips. Pulls coords
+    // from the same localStorage cache the header weather chip uses
+    // ('p86-user-coords') and asks /api/weather/coords for a 7-day
+    // forecast. Keyed by YYYY-MM-DD via userWeatherByDate so
+    // renderWeekRow can do a constant-time lookup per cell.
+    userWeather: null,
+    userWeatherByDate: null,
+    userWeatherLoading: false,
+    userWeatherFetchedAt: 0
   };
 
   // ── Job pool ───────────────────────────────────────────────
@@ -403,6 +412,45 @@
       console.warn('[schedule] weather fetch failed:', err && err.message);
       _state.weatherLoading = false;
     });
+  }
+
+  // ── User-location daily forecast (calendar day-cell chips) ─
+  // Reads cached coords from localStorage (planted by the header
+  // weather chip's geolocation flow) and pulls a 7-day forecast
+  // for them. Indexed by YYYY-MM-DD so renderWeekRow can paint
+  // each visible day cell with a tiny weather chip in constant
+  // time. Skipped silently when no coords are cached — the user
+  // either denied geolocation or hasn't granted yet.
+  function refreshUserWeatherForecast() {
+    if (!window.p86Api || !window.p86Api.weather || !window.p86Api.isAuthenticated || !window.p86Api.isAuthenticated()) {
+      return;
+    }
+    var raw;
+    try { raw = JSON.parse(localStorage.getItem('p86-user-coords') || 'null'); }
+    catch (e) { raw = null; }
+    if (!raw || typeof raw.lat !== 'number' || typeof raw.lng !== 'number') return;
+    if (_state.userWeatherLoading) return;
+    var fresh = (Date.now() - _state.userWeatherFetchedAt) < WEATHER_CLIENT_TTL_MS;
+    if (fresh && _state.userWeatherByDate) return;
+    _state.userWeatherLoading = true;
+    window.p86Api.weather.coords(raw.lat, raw.lng).then(function(res) {
+      _state.userWeatherLoading = false;
+      if (!res || res.status !== 'ok' || !Array.isArray(res.days)) return;
+      _state.userWeather = res.days;
+      _state.userWeatherFetchedAt = Date.now();
+      var idx = {};
+      res.days.forEach(function(d) { if (d.date) idx[d.date] = d; });
+      _state.userWeatherByDate = idx;
+      renderGrid();
+    }).catch(function(err) {
+      _state.userWeatherLoading = false;
+      console.warn('[schedule] user-location weather fetch failed:', err && err.message);
+    });
+  }
+
+  function userWeatherOnDate(dateIso) {
+    var idx = _state.userWeatherByDate;
+    return (idx && idx[dateIso]) || null;
   }
 
   function weatherForJobOnDate(jobId, dateIso) {
@@ -663,11 +711,16 @@
     fetchEntries().then(function() {
       renderGrid();
       refreshWeekSummary();
-      // Fire off the per-job weather fetch in the background. The
-      // grid will repaint when it lands so chips appear. Errors are
-      // logged and swallowed so a weather outage doesn't break the
-      // schedule view.
+      // Fire off two weather fetches in the background:
+      //   1. Per-job forecasts → drives the entry-bar weather glyphs.
+      //   2. User-location forecast → drives the day-cell chips that
+      //      let the PM see "is Tuesday going to rain at my location"
+      //      regardless of which jobs are scheduled. Pulls coords
+      //      from the same localStorage cache the header chip uses.
+      // Both repaint the grid when they land. Errors are logged
+      // and swallowed so a weather outage doesn't break the view.
       refreshWeatherForVisibleJobs();
+      refreshUserWeatherForecast();
     });
   }
 
@@ -1008,7 +1061,11 @@
             '<span class="sch-week-focus-rail-glow"></span>' +
             '</button>';
 
-    // Day-cell base layer (one cell per column).
+    // Day-cell base layer (one cell per column). Each cell may
+    // carry a per-day weather chip in the top-right corner when
+    // the user-location forecast is loaded and covers that date.
+    // The chip uses small inline styling + a risk class so red
+    // days catch the eye without crowding the day number.
     days.forEach(function(d) {
       if (d.isWeekend && hideWeekend) {
         html += '<div class="sch-cal-day sch-weekend sch-cal-day-hidden"></div>';
@@ -1018,8 +1075,26 @@
       if (!d.inMonth) cls += ' sch-other-month';
       if (d.isWeekend) cls += ' sch-weekend';
       if (d.isToday) cls += ' sch-today';
+      var dayWx = userWeatherOnDate(d.iso);
+      var wxHtml = '';
+      if (dayWx) {
+        var wxBits = [dayWx.summary || ''];
+        if (dayWx.tempHigh != null) {
+          wxBits.push(dayWx.tempHigh + '°' + (dayWx.tempLow != null ? ' / ' + dayWx.tempLow + '°' : ''));
+        }
+        if (dayWx.precipPct) wxBits.push(dayWx.precipPct + '% rain');
+        if (dayWx.windMph) wxBits.push(dayWx.windMph + ' mph wind');
+        var wxIcon = weatherIconForRisk(dayWx.risk);
+        var wxTemp = (dayWx.tempHigh != null) ? (dayWx.tempHigh + '°') : '';
+        wxHtml = '<span class="sch-cal-day-wx sch-wx-' + dayWx.risk +
+                 '" title="' + escapeAttr(wxBits.filter(Boolean).join(' · ')) + ' (your location)">' +
+          '<span class="sch-cal-day-wx-icon">' + wxIcon + '</span>' +
+          (wxTemp ? '<span class="sch-cal-day-wx-temp">' + escapeHTML(wxTemp) + '</span>' : '') +
+        '</span>';
+      }
       html += '<div class="' + cls + '" data-date="' + d.iso + '">' +
         '<span class="sch-cal-day-num">' + d.date.getDate() + '</span>' +
+        wxHtml +
       '</div>';
     });
 
