@@ -398,18 +398,17 @@
             border-color: rgba(248, 113, 113, 0.50);
         }
 
-        /* ── Global "Ask 86" — floating top-right of the viewport ──
-           Pulled out of the sticky header so the badge can be larger
-           and more readable without expanding the header strip. Sits
-           above (z-index) the header. Single entry point for
-           anything-in-the-system AI; per-page Ask AI / Ask 86 buttons
-           were retired alongside this. */
+        /* ── Global "Ask 86" — floating top-right, just below the
+           sticky header line. Sits in the page-content corner so it
+           never collides with the avatar / utility icons inside the
+           header strip. Position is fixed to the viewport, not the
+           page, so it stays put as the user scrolls. */
         .floating-ask86-btn {
             position: fixed;
-            top: 6px;
-            right: 12px;
-            width: 44px;
-            height: 44px;
+            top: 54px;
+            right: 14px;
+            width: 48px;
+            height: 48px;
             padding: 0;
             border-radius: 12px;
             background: transparent;
@@ -436,8 +435,8 @@
             display: inline-flex;
         }
         .floating-ask86-btn .p86-icon {
-            width: 32px;
-            height: 32px;
+            width: 36px;
+            height: 36px;
             flex: 0 0 auto;
             filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.55))
                     drop-shadow(0 0 4px rgba(255, 255, 255, 0.20));
