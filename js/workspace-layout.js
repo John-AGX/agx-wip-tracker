@@ -728,8 +728,9 @@
   }
 
   // Watch the node graph tab for class changes — when it loses .active
-  // (close button clicked), make sure the workspace panel detaches
-  // and the AGX nav header is restored if the user had hidden it.
+  // (close/back button clicked), detach the workspace panel, restore
+  // the AGX nav header if it was hidden, and switch back to whichever
+  // sub-tab the user was on before they opened the workspace.
   function watchGraphTabClose() {
     var tab = document.getElementById('nodeGraphTab');
     if (!tab || tab._wsLayoutWatched) return;
@@ -749,9 +750,56 @@
             maxBtn.title = 'Hide the AGX nav header to give the graph the entire viewport (toggle)';
           }
         }
+        // Restore the sub-tab the user was on before opening workspace.
+        // The graph's own close/back button is the trigger; we hook it
+        // via this MutationObserver so any path that clears .active
+        // (button click, programmatic close, etc.) lands in the right
+        // place. _inWorkspaceMode gates the restore so unrelated graph
+        // tab toggles elsewhere don't reshuffle sub-tabs.
+        if (_inWorkspaceMode) {
+          var restoreId = _savedActiveTabId || 'job-overview';
+          _savedActiveTabId = null;
+          // activateTab also flips _inWorkspaceMode back to false and
+          // syncs the button's .active class (defensive — even though
+          // the open button no longer toggles itself, any future
+          // .active drift gets cleared).
+          activateTabFromOutside(restoreId);
+        }
       }
     });
     obs.observe(tab, { attributes: true, attributeFilter: ['class'] });
+  }
+
+  // Re-entry helper used by watchGraphTabClose. wireTabSwitching
+  // closes over the per-job tab list and exposes activateTab only
+  // inside that scope, so we re-resolve the active tab + renderer here
+  // and call them directly. Keeps the public surface narrow.
+  function activateTabFromOutside(targetId) {
+    _inWorkspaceMode = false;
+    var rc = document.getElementById('wsRightContent');
+    if (!rc) return;
+    var tabs = document.querySelectorAll('.ws-right-tab[data-panel]');
+    tabs.forEach(function(t) {
+      t.classList.toggle('active', t.getAttribute('data-panel') === targetId);
+    });
+    var allPanels = Array.from(rc.children);
+    allPanels.forEach(function(p) { if (!p.classList.contains('ws-job-info-details')) p.style.display = 'none'; });
+    var target = document.getElementById(targetId);
+    if (target) target.style.display = 'block';
+    var jobId = (typeof appState !== 'undefined') ? appState.currentJobId : null;
+    if (!jobId) return;
+    var renderers = {
+      'job-overview': 'renderJobOverview',
+      'job-costs': 'renderJobCosts',
+      'job-qb-costs': 'renderJobQBCosts',
+      'job-subs': 'renderJobSubs',
+      'job-changeorders': 'renderChangeOrders',
+      'job-purchaseorders': 'renderPurchaseOrders',
+      'job-invoices': 'renderInvoices',
+      'job-wip': 'renderWipTab'
+    };
+    var fn = renderers[targetId];
+    if (fn && typeof window[fn] === 'function') window[fn](jobId);
   }
 
   // ── Workspace state controls (driven by graph toolbar buttons) ──
@@ -1057,27 +1105,21 @@
       tab.onclick = function() { activateTab(this.getAttribute('data-panel')); };
     });
 
-    // Workspace toggle — opens the node-graph canvas + floating panel,
-    // remembers the previously active tab, and restores that tab on the
-    // second click (i.e. when the user backs out of workspace mode).
-    var toggleBtn = document.getElementById('wsWorkspaceToggle');
-    if (toggleBtn) {
-      toggleBtn.onclick = function() {
+    // Workspace open — single-shot. Click opens the node-graph canvas
+    // and the floating workspace panel; from there the user backs out
+    // via the workspace's own close button. We remember the previously
+    // active tab so watchGraphTabClose() can restore it when the graph
+    // tab loses its .active class. No toggle, no .active state on the
+    // button itself.
+    var openBtn = document.getElementById('wsWorkspaceToggle');
+    if (openBtn) {
+      openBtn.onclick = function() {
         var jobId = (typeof appState !== 'undefined') ? appState.currentJobId : null;
-        if (_inWorkspaceMode) {
-          // Back out: restore the saved tab (default to Overview if
-          // none was tracked).
-          var restoreId = _savedActiveTabId || 'job-overview';
-          _savedActiveTabId = null;
-          activateTab(restoreId);
-          return;
-        }
-        // Enter workspace: remember which tab is currently active so we
-        // can return to it on toggle-off.
+        // Remember which tab is currently active so the workspace's
+        // close/back button restores it when the user exits.
         var activeTab = document.querySelector('.ws-right-tab[data-panel].active');
         _savedActiveTabId = activeTab ? activeTab.getAttribute('data-panel') : 'job-overview';
         _inWorkspaceMode = true;
-        toggleBtn.classList.add('active');
         // Clear any tab's active class while in workspace mode.
         tabs.forEach(function(t) { t.classList.remove('active'); });
         // Hide all panels; the graph canvas will mount on top.

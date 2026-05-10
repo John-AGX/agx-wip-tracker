@@ -701,12 +701,11 @@ body.light-mode .jh-strip-card[data-tone="amber"] .jh-strip-label { color: #b453
   padding-right: 6px;
 }
 
-/* Workspace toggle — icon-only square button. Larger than the tab
-   strip so it reads as the "go-to-workspace" hero action, with a
-   hover glow + slight scale bump for tactile feedback. .active
-   state stays lit while the user is inside workspace mode so it's
-   obvious which mode they're in. The native title attribute
-   provides the tooltip; no inline label. */
+/* Workspace open button — icon-only square. Larger than the tabs so
+   it reads as the "go-to-workspace" hero action. Single-shot: click
+   opens, the workspace's own close button takes you back. No active
+   state — the button doesn't toggle, so it shouldn't look like it
+   does. Native title attribute provides the tooltip. */
 .ws-workspace-toggle {
   display: inline-flex;
   align-items: center;
@@ -731,12 +730,6 @@ body.light-mode .jh-strip-card[data-tone="amber"] .jh-strip-label { color: #b453
   transform: translateY(-1px) scale(1.06);
 }
 .ws-workspace-toggle:active { transform: translateY(0) scale(1.02); }
-.ws-workspace-toggle.active {
-  background: rgba(79, 140, 255, 0.30);
-  border-color: rgba(79, 140, 255, 0.95);
-  box-shadow: 0 0 16px rgba(79, 140, 255, 0.60),
-              0 0 0 2px rgba(79, 140, 255, 0.25);
-}
 .ws-workspace-toggle .p86-icon-slot {
   margin-right: 0;
   display: inline-flex;
