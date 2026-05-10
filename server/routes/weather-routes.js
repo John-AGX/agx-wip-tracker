@@ -184,4 +184,31 @@ router.get('/jobs', async function(req, res) {
   res.json({ weather: out });
 });
 
+// GET /api/weather/coords?lat=X&lng=Y
+// Direct lat/lng forecast lookup — used by the header weather chip
+// (the user's actual location via browser geolocation), and any
+// other surface that already has coordinates and skips the
+// per-job geocode step. Validates inputs are real numbers within
+// US bounds (NWS API only covers US territory) so we don't burn
+// an API call on bad data.
+router.get('/coords', async function(req, res) {
+  const lat = parseFloat(req.query.lat);
+  const lng = parseFloat(req.query.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    return res.status(400).json({ status: 'bad_input', error: 'lat and lng must be numbers' });
+  }
+  // Loose US bounds (Alaska + Hawaii + continental + Puerto Rico).
+  // Anything outside isn't NWS-coverable so don't try.
+  if (lat < 17 || lat > 72 || lng < -180 || lng > -65) {
+    return res.json({ status: 'out_of_range', lat: lat, lng: lng });
+  }
+  try {
+    const days = await getDailyForecast(lat, lng);
+    res.json({ status: 'ok', lat: lat, lng: lng, days: days });
+  } catch (e) {
+    console.warn('[weather] /coords forecast failed for ' + lat + ',' + lng + ':', e.message);
+    res.json({ status: 'error', error: e.message });
+  }
+});
+
 module.exports = router;

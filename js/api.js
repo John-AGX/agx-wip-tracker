@@ -396,6 +396,13 @@
       if (!ids.length) return Promise.resolve({ weather: {} });
       var qs = 'ids=' + encodeURIComponent(ids.join(','));
       return get('/api/weather/jobs?' + qs);
+    },
+    // Direct lat/lng forecast — used by the header weather chip
+    // when the browser hands us geolocation coords. Skips the
+    // job-geocode round-trip the .jobs() endpoint goes through.
+    coords: function(lat, lng) {
+      var qs = 'lat=' + encodeURIComponent(lat) + '&lng=' + encodeURIComponent(lng);
+      return get('/api/weather/coords?' + qs);
     }
   };
 

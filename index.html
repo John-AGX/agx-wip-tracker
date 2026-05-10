@@ -44,7 +44,7 @@
     })();
     </script>
 
-    <link rel="stylesheet" href="css/styles.css?v=49b">
+    <link rel="stylesheet" href="css/styles.css?v=50b">
     <link rel="stylesheet" href="css/workspace-layout.css?v=53b">
     <link rel="stylesheet" href="css/workspace.css?v=37b">
     <link rel="stylesheet" href="css/schedule.css?v=16b">
@@ -106,6 +106,12 @@
                          attribute set by JS; when count is 0 the dot
                          is hidden via CSS. Clicking opens
                          #notifications-panel. -->
+                    <!-- Local-weather chip — populated by js/header-weather.js
+                         once the user grants browser geolocation permission.
+                         Hidden until forecast data lands so the header doesn't
+                         flash an empty placeholder. Uses the standard NWS
+                         pipeline already powering the schedule + job widgets. -->
+                    <div id="header-weather" class="header-weather" hidden></div>
                     <!-- My Files icon button — replaces the former Files
                          tab in the top nav. Click jumps straight into
                          the my-files tab pane. Personal files are a
@@ -2247,7 +2253,8 @@
     <script src="js/modal-drag.js?v=1b"></script>
     <script src="js/auth.js?v=12b"></script>
     <script src="js/dialogs.js?v=1b"></script>
-    <script src="js/api.js?v=26b"></script>
+    <script src="js/api.js?v=27b"></script>
+    <script src="js/header-weather.js?v=1"></script>
     <script src="js/account.js?v=2b"></script>
     <script src="js/attachments.js?v=10b"></script>
     <script src="js/markup-viewer.js?v=17b"></script>

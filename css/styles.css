@@ -352,6 +352,48 @@
         }
         .header-icon-btn.has-notifs .header-notif-dot { display: block; }
 
+        /* Local-weather chip in the header. Glyph + temp side-by-side
+           in a soft pill that slots between the right-edge icon
+           buttons. Risk variants tint the pill subtly so a red day
+           catches the eye in the header strip even before reading
+           the icon. Hidden until the forecast lands so we don't
+           flash an empty placeholder while geolocation resolves. */
+        .header-weather {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            padding: 4px 10px;
+            border-radius: 14px;
+            font-size: 12px;
+            font-weight: 600;
+            color: rgba(255, 255, 255, 0.92);
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            cursor: pointer;
+            transition: background 0.12s, border-color 0.12s;
+            user-select: none;
+        }
+        .header-weather:hover {
+            background: rgba(255, 255, 255, 0.14);
+            border-color: rgba(255, 255, 255, 0.20);
+        }
+        .header-weather-icon {
+            font-size: 13px;
+            line-height: 1;
+        }
+        .header-weather-temp {
+            font-family: 'SF Mono', Consolas, monospace;
+            line-height: 1;
+        }
+        .header-weather.header-weather-yellow {
+            background: rgba(251, 191, 36, 0.14);
+            border-color: rgba(251, 191, 36, 0.40);
+        }
+        .header-weather.header-weather-red {
+            background: rgba(248, 113, 113, 0.18);
+            border-color: rgba(248, 113, 113, 0.50);
+        }
+
         /* Initials avatar — outline-only "badge" surface. Default state
            is transparent fill with a cyan ring; hover bumps the ring +
            gentle scale + soft glow rather than dropping a color fill,
