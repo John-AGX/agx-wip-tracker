@@ -62,8 +62,13 @@
       // summary tracks the current real-life week, no matter which
       // month is being viewed. Pinned=true locks it to whichever
       // week the user last selected via the calendar's left-edge
-      // focus rail or the inline pin button.
-      weekSummaryPinned: false
+      // focus rail or the inline pin button. focusWeekStart is the
+      // Sunday-ISO of the locked week — kept in settings (not
+      // _state) so saveSettings persists it; otherwise reload
+      // would show "Pinned" in the toolbar but with no week-row
+      // glow because the focus key was lost.
+      weekSummaryPinned: false,
+      focusWeekStart: null
     };
     try {
       var saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
@@ -77,6 +82,22 @@
       }
       if (!merged.jobTypeFilter || typeof merged.jobTypeFilter !== 'object') {
         merged.jobTypeFilter = Object.assign({}, defaults.jobTypeFilter);
+      }
+      // Heal the legacy state where weekSummaryPinned was persisted
+      // but focusWeekStart was a top-level _state key that never
+      // round-tripped. Without this, reload shows "Pinned" in the
+      // toolbar but no green glow on the calendar week. Snap to
+      // the current real-life week so the affordances line up.
+      // toISODate + startOfWeek are function declarations later in
+      // this file; JS hoisting makes them safe to call here.
+      // Persist the heal too (write back to localStorage) so
+      // subsequent loads don't keep snapping the focus to wherever
+      // today falls — once healed, the value sticks across reloads
+      // until the user explicitly picks a different week or unpins.
+      if (merged.weekSummaryPinned && !merged.focusWeekStart) {
+        merged.focusWeekStart = toISODate(startOfWeek(new Date()));
+        try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(merged)); }
+        catch (e) { /* defensive — quota/private mode etc. */ }
       }
       return merged;
     } catch (e) { return defaults; }
@@ -298,10 +319,8 @@
     },
     users: [],           // hydrated from /api/auth/users
     sidebarSearch: '',
-    // ISO YYYY-MM-DD for the first day (Sun) of the week the user
-    // explicitly picked via the calendar's week-selector ring. null
-    // = use the default reference date logic.
-    focusWeekStart: null,
+    // (focusWeekStart now lives in _state.settings so saveSettings
+    // persists it across reloads — see the loadSettings defaults.)
     // Weather forecast cache: { [jobId]: { status, days, address } }.
     // Populated by /api/weather/jobs in the background after the grid
     // paints. The grid re-renders once weather lands so chips show up
@@ -976,7 +995,7 @@
     // visually anchors the toolbar week-summary numbers to the
     // calendar week they represent.
     var weekStartIso = toISODate(weekStart);
-    var isFocusedWeek = (_state.focusWeekStart === weekStartIso);
+    var isFocusedWeek = (_state.settings.focusWeekStart === weekStartIso);
     var html = '<div class="sch-cal-week-row' + (isFocusedWeek ? ' sch-week-focused' : '') +
                '" data-week-start="' + weekStartIso + '">';
 
@@ -1145,11 +1164,11 @@
         e.stopPropagation();
         var weekStart = rail.getAttribute('data-week-start');
         if (!weekStart) return;
-        if (_state.focusWeekStart === weekStart && _state.settings.weekSummaryPinned) {
-          _state.focusWeekStart = null;
+        if (_state.settings.focusWeekStart === weekStart && _state.settings.weekSummaryPinned) {
+          _state.settings.focusWeekStart = null;
           _state.settings.weekSummaryPinned = false;
         } else {
-          _state.focusWeekStart = weekStart;
+          _state.settings.focusWeekStart = weekStart;
           _state.settings.weekSummaryPinned = true;
         }
         saveSettings(_state.settings);
@@ -1787,7 +1806,7 @@
   // those buttons to make misclicks easy. The widget now floats
   // inside the calendar wrap so the user can drag it anywhere.
   // It also has its own pin button: pinned = stays on a chosen
-  // week (driven by _state.focusWeekStart); unpinned = always
+  // week (driven by _state.settings.focusWeekStart); unpinned = always
   // shows the current real-life week regardless of visible month.
   // Paints the week summary into the inline toolbar slot rendered by
   // renderCalendar (#schWeekSummary). Two visible tiles — Expected
@@ -1847,8 +1866,8 @@
         _state.settings.weekSummaryPinned = nowPinned;
         // Turning pin ON without a selected week → snap to the
         // current real-life week so the pin has something to lock to.
-        if (nowPinned && !_state.focusWeekStart) {
-          _state.focusWeekStart = toISODate(startOfWeek(new Date()));
+        if (nowPinned && !_state.settings.focusWeekStart) {
+          _state.settings.focusWeekStart = toISODate(startOfWeek(new Date()));
         }
         saveSettings(_state.settings);
         renderGrid();
@@ -1866,8 +1885,8 @@
   //     anchored to "now" instead of jumping to the first of
   //     whatever month is on screen.
   function weekSummaryReferenceDate() {
-    if (_state.settings.weekSummaryPinned && _state.focusWeekStart) {
-      var picked = parseISODate(_state.focusWeekStart);
+    if (_state.settings.weekSummaryPinned && _state.settings.focusWeekStart) {
+      var picked = parseISODate(_state.settings.focusWeekStart);
       if (picked) return picked;
     }
     return new Date();
