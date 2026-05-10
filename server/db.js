@@ -1041,14 +1041,40 @@ async function initSchema() {
 
   // ── Migration: 47 retired (agent_key 'ag' → 'job') ──
   // Runs in its own pool.query AFTER the main schema-init template
-  // so all referenced tables exist (ai_sessions in particular is
-  // declared mid-template). Idempotent — UPDATEs hit zero rows once
-  // the migration has completed once. ai_messages has no agent_key
-  // column (agent identity there is encoded via entity_type), so
-  // it's not migrated.
+  // so all referenced tables exist. Idempotent — re-running on a
+  // post-migration DB is a no-op. Both tables we touch have unique
+  // constraints that include agent_key, so the rename strategy is
+  // delete-then-update: drop any 'ag' row that would collide with
+  // an existing 'job' row, then rename whatever 'ag' rows are left.
+  // ai_messages has no agent_key column (agent identity there is
+  // encoded via entity_type), so it's not migrated.
   await pool.query(`
-    UPDATE ai_sessions            SET agent_key = 'job' WHERE agent_key = 'ag';
+    -- managed_agent_registry: agent_key is the PRIMARY KEY. If both
+    -- 'ag' and 'job' rows exist, the bootstrap registered both
+    -- agents independently — drop the 'ag' row, keep 'job'.
+    DELETE FROM managed_agent_registry
+     WHERE agent_key = 'ag'
+       AND EXISTS (SELECT 1 FROM managed_agent_registry WHERE agent_key = 'job');
     UPDATE managed_agent_registry SET agent_key = 'job' WHERE agent_key = 'ag';
+
+    -- ai_sessions: unique on (agent_key, entity_type, entity_id, user_id)
+    -- WHERE archived_at IS NULL. Archive any 'ag' session that would
+    -- collide with an active 'job' session for the same entity tuple,
+    -- then rename what remains.
+    UPDATE ai_sessions s
+       SET archived_at = NOW()
+     WHERE s.agent_key = 'ag'
+       AND s.archived_at IS NULL
+       AND EXISTS (
+         SELECT 1 FROM ai_sessions t
+          WHERE t.agent_key = 'job'
+            AND t.archived_at IS NULL
+            AND t.entity_type = s.entity_type
+            AND COALESCE(t.entity_id, '') = COALESCE(s.entity_id, '')
+            AND t.user_id = s.user_id
+       );
+    UPDATE ai_sessions SET agent_key = 'job' WHERE agent_key = 'ag';
+
     -- agent_skills lives in app_settings as a JSONB blob; each pack
     -- has an "agents" string array. Walk every pack, replace 'ag'
     -- with 'job' (deduping if 'job' is already present), write back.
