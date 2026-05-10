@@ -761,12 +761,16 @@
                              the lead detail page is open. -->
                         <div id="leads-list-view">
                             <div class="action-buttons">
-                                <button class="primary" onclick="openNewLeadModal()" data-cap="LEADS_EDIT">&#x1F465; New Lead</button>
+                                <!-- Phosphor icon + plain text on the base
+                                     button surface (transparent fill, white
+                                     text) so the row reads as a clean utility
+                                     bar, not a stack of color-coded CTAs. -->
+                                <button onclick="openNewLeadModal()" data-cap="LEADS_EDIT" data-p86-icon="plus">New Lead</button>
                                 <!-- AI intake is now handled by the global Ask 86
                                      header button — no per-page entry needed. -->
-                                <button class="success" onclick="document.getElementById('leads-import-file').click()" data-cap="LEADS_EDIT" title="Import a Buildertrend Leads xlsx export">&#x1F4E5; Import from Buildertrend</button>
+                                <button onclick="document.getElementById('leads-import-file').click()" data-cap="LEADS_EDIT" title="Import a Buildertrend Leads xlsx export" data-p86-icon="import">Import from BT</button>
                                 <input type="file" id="leads-import-file" accept=".xlsx" style="display:none;" onchange="handleLeadsImportFile(event)" />
-                                <button class="secondary" onclick="reloadLeadsCache()">Refresh</button>
+                                <button onclick="reloadLeadsCache()" data-p86-icon="refresh">Refresh</button>
                                 <select id="leads-filter-status" onchange="renderLeadsList()" style="width:auto;min-width:140px;margin-left:6px;">
                                     <option value="">All statuses</option>
                                     <option value="new">New</option>
@@ -918,10 +922,10 @@
                     <!-- Clients sub-tab -->
                     <div id="estimates-subtab-clients" class="estimates-subtab-content" style="display:none;">
                         <div class="action-buttons">
-                            <button class="primary" onclick="openNewClientModal()">&#x1F465; New Client</button>
-                            <button class="success" onclick="document.getElementById('clients-import-file').click()">&#x1F4E5; Import from Buildertrend</button>
+                            <button onclick="openNewClientModal()" data-p86-icon="plus">New Client</button>
+                            <button onclick="document.getElementById('clients-import-file').click()" data-p86-icon="import" title="Import a Buildertrend Clients xlsx export">Import from BT</button>
                             <input type="file" id="clients-import-file" accept=".xlsx" style="display:none;" onchange="handleClientsImportFile(event)" />
-                            <button class="secondary" onclick="reloadClientsCache()">Refresh</button>
+                            <button onclick="reloadClientsCache()" data-p86-icon="refresh">Refresh</button>
                             <button onclick="window.openClientAI && window.openClientAI()" title="HR — directory hygiene, dedupe, parent/property hierarchy" style="background:linear-gradient(135deg,#8b5cf6,#4f8cff);color:#fff;border-color:transparent;">&#x1F91D; Ask HR</button>
                             <select id="clients-filter-role" onchange="renderClientsList()" style="width:auto;min-width:130px;margin-left:auto;">
                                 <option value="">All entries</option>
@@ -2300,7 +2304,7 @@
     <!-- Project 86 inline-SVG icon helper. Provides window.p86Icon(name, opts)
          — 24 icons from Phosphor (MIT) + Heroicons (MIT). See
          scripts/build-agx-icons.js to regenerate. -->
-    <script src="js/agx-icons.js?v=19b"></script>
+    <script src="js/agx-icons.js?v=20b"></script>
 
     <!-- Node Graph (Beta) -->
     <link rel="stylesheet" href="nodegraph/nodegraph.css?v=90b" />

@@ -1,33 +1,23 @@
 <!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>Header preview</title>
-<style>
-  body { background:#0e0f12; color:#e7e9ee; font-family:system-ui, sans-serif; margin:0; padding:32px; }
-  h1 { font-weight:500; font-size:14px; opacity:0.7; margin:0 0 18px; }
-  .header-mock { background:#1a1a2e; padding:8px 16px; display:flex; align-items:center; gap:6px; border-radius:8px; max-width:420px; }
-  .header-icon-btn {
-    position: relative;
-    width: 32px; height: 32px;
-    border-radius: 50%;
-    background: transparent;
-    border: 1px solid transparent;
-    color: rgba(255, 255, 255, 0.85);
-    font-size: 16px; line-height: 1;
-    cursor: pointer;
-    display: inline-flex; align-items: center; justify-content: center;
-    padding: 0;
-    transition: background 0.12s, border-color 0.12s;
-  }
-  .header-icon-btn:hover { background: rgba(255, 255, 255, 0.12); border-color: rgba(255, 255, 255, 0.18); }
-  .header-icon-btn .p86-icon { width: 18px; height: 18px; }
-  #header-ask86-btn .p86-icon { width: 24px; height: 24px; }
-</style></head>
+<html><head><meta charset="utf-8"><title>Action bar preview</title>
+<link rel="stylesheet" href="css/styles.css?v=61b">
+<style>body { background:#0e0f12; color:#e7e9ee; padding:32px; }</style>
+</head>
 <body>
-<h1>Header cluster — Ask 86 sitting flush with bell / files / directory</h1>
-<div class="header-mock">
-  <button class="header-icon-btn" data-p86-icon="folder" title="Files"></button>
-  <button class="header-icon-btn" data-p86-icon="bell" title="Notifications"></button>
-  <button class="header-icon-btn" data-p86-icon="clients" title="Directory"></button>
-  <button id="header-ask86-btn" class="header-icon-btn" data-p86-icon="dna-86" title="Ask 86"></button>
+<h3 style="opacity:0.7;font-weight:500;">Leads action bar</h3>
+<div class="action-buttons" style="display:flex;gap:6px;align-items:center;">
+  <button data-p86-icon="plus">New Lead</button>
+  <button data-p86-icon="import">Import from BT</button>
+  <button data-p86-icon="refresh">Refresh</button>
+  <select style="width:auto;min-width:140px;margin-left:6px;">
+    <option>All statuses</option>
+  </select>
 </div>
-<script src="js/agx-icons.js?v=19b"></script>
+<h3 style="opacity:0.7;font-weight:500;margin-top:32px;">Clients action bar</h3>
+<div class="action-buttons" style="display:flex;gap:6px;align-items:center;">
+  <button data-p86-icon="plus">New Client</button>
+  <button data-p86-icon="import">Import from BT</button>
+  <button data-p86-icon="refresh">Refresh</button>
+</div>
+<script src="js/agx-icons.js?v=20b"></script>
 </body></html>

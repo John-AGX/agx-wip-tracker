@@ -44,6 +44,13 @@ const MAP = {
   'edit':            'heroicons/pencil-square',
   'save':            'phosphor/floppy-disk-light',
   'add':             'phosphor/plus-circle-light',
+  // Plain plus (no surrounding circle) for action-bar "New X" buttons
+  // where a circle-around-the-plus reads as too heavy.
+  'plus':            'phosphor/plus-light',
+  // Tray-with-down-arrow for import flows (xlsx import, file-pick, etc.).
+  // Distinct from `exports` (document-with-up-arrow) so direction reads
+  // at a glance.
+  'import':          'phosphor/download-simple-light',
   'refresh':         'heroicons/arrow-path',
   'sparkle':         'heroicons/sparkles',
   'reset':           'phosphor/arrow-counter-clockwise-light',
