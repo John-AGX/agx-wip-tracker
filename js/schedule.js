@@ -907,6 +907,10 @@
         // Weekend toggle compacted to an icon button — the bulky
         // "Show Sat/Sun columns" label was eating header space.
         // Tooltip carries the explanation.
+        // Global Ask 86 badge embeds right before the calendar
+        // controls so it sits in the month-header strip instead of
+        // floating in the corner.
+        '<span class="p86-ask86-mount"></span>' +
         '<button class="sch-btn sch-btn-toggle' + (showW ? ' active' : '') + '" id="schWeekendToggle" ' +
           'title="' + (showW ? 'Hide' : 'Show') + ' weekend columns. Display only — does not change how production days are counted on entries.">' +
           (showW ? '&#x1F441; 7-day' : '&#x1F441; 5-day') +

@@ -134,12 +134,17 @@
 
     var html = '';
 
-    // Header
+    // Header — title on the left, summary text + Ask 86 badge on
+    // the right. The summary text is shifted left from the corner so
+    // the badge can sit in the right edge.
     html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px;">' +
       '<h2 style="font-size:18px;margin:0;color:var(--text,#fff);">Company WIP Insights</h2>' +
-      '<span style="font-size:12px;color:var(--text-dim,#888);">' +
-        jobs.length + ' Live jobs &middot; ' + jobsWithSnaps.length + ' with snapshots &middot; ' + allDates.length + ' day' + (allDates.length === 1 ? '' : 's') + ' tracked' +
-      '</span></div>';
+      '<div style="display:flex;align-items:center;gap:14px;">' +
+        '<span style="font-size:12px;color:var(--text-dim,#888);">' +
+          jobs.length + ' Live jobs &middot; ' + jobsWithSnaps.length + ' with snapshots &middot; ' + allDates.length + ' day' + (allDates.length === 1 ? '' : 's') + ' tracked' +
+        '</span>' +
+        '<span class="p86-ask86-mount"></span>' +
+      '</div></div>';
 
     // KPI cards
     var kpis = [

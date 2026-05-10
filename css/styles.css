@@ -398,59 +398,55 @@
             border-color: rgba(248, 113, 113, 0.50);
         }
 
-        /* ── Global "Ask 86" — floating top-right, just below the
-           sticky header line. Sits in the page-content corner so it
-           never collides with the avatar / utility icons inside the
-           header strip. Position is fixed to the viewport, not the
-           page, so it stays put as the user scrolls. */
-        .floating-ask86-btn {
-            position: fixed;
-            top: 54px;
-            right: 14px;
-            width: 48px;
-            height: 48px;
+        /* Global "Ask 86" badge — embedded per page via the
+           .p86-ask86-mount slot pattern. Single source of truth for
+           the button shape; pages drop a span where they want it. */
+        .p86-ask86-mount {
+            display: inline-flex;
+            align-items: center;
+            vertical-align: middle;
+        }
+        .p86-ask86-badge {
+            width: 56px;
+            height: 56px;
             padding: 0;
-            border-radius: 12px;
+            border-radius: 14px;
             background: transparent;
             border: 1px solid transparent;
             color: #ffffff;
-            cursor: grab;
-            user-select: none;
-            -webkit-user-select: none;
+            cursor: pointer;
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            z-index: 1100;
+            flex: 0 0 auto;
             transition: background 0.15s ease, border-color 0.15s ease,
                         box-shadow 0.18s ease, transform 0.15s ease;
         }
-        .floating-ask86-btn:hover {
+        .p86-ask86-badge:hover {
             background: rgba(79, 140, 255, 0.18);
             border-color: rgba(79, 140, 255, 0.55);
-            box-shadow: 0 0 16px rgba(79, 140, 255, 0.45),
+            box-shadow: 0 0 18px rgba(79, 140, 255, 0.50),
                         0 0 4px rgba(79, 140, 255, 0.35) inset;
-            transform: scale(1.07);
+            transform: scale(1.06);
         }
-        .floating-ask86-btn:active { transform: scale(1.02); }
-        .floating-ask86-btn .p86-icon-slot {
+        .p86-ask86-badge:active { transform: scale(1.02); }
+        .p86-ask86-badge .p86-icon-slot {
             margin-right: 0;
             display: inline-flex;
         }
-        .floating-ask86-btn .p86-icon {
-            width: 36px;
-            height: 36px;
+        .p86-ask86-badge .p86-icon {
+            width: 42px;
+            height: 42px;
             flex: 0 0 auto;
             filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.55))
-                    drop-shadow(0 0 4px rgba(255, 255, 255, 0.20));
+                    drop-shadow(0 0 4px rgba(255, 255, 255, 0.18));
         }
-        /* Light-mode tweak: badge becomes dark on light surfaces so
-           it stays legible against the page content. */
-        body.light-mode .floating-ask86-btn { color: #0F172A; }
-        body.light-mode .floating-ask86-btn .p86-icon {
+        body.light-mode .p86-ask86-badge { color: #0F172A; }
+        body.light-mode .p86-ask86-badge .p86-icon {
             filter: drop-shadow(0 0 1px rgba(255, 255, 255, 0.85))
                     drop-shadow(0 0 4px rgba(15, 23, 42, 0.18));
         }
-        body.light-mode .floating-ask86-btn:hover {
+        body.light-mode .p86-ask86-badge:hover {
             background: rgba(79, 140, 255, 0.10);
             border-color: rgba(79, 140, 255, 0.45);
         }

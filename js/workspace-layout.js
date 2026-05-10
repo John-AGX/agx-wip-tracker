@@ -366,9 +366,9 @@
     // Workspace is a prominent icon-only action button (not a tab).
     // Clicking it toggles the node-graph canvas + floating workspace
     // panel; clicking it again restores whichever tab was active before.
-    // Ask 86 is gone from this slot — the global Ask 86 header button
-    // covers it. The title attribute is the tooltip; no inline label.
+    // Global Ask 86 badge embeds right next to it via the slot mount.
     tabsHtml += '<div class="ws-right-tabs-actions">' +
+      '<span class="p86-ask86-mount"></span>' +
       '<button class="ws-workspace-toggle" id="wsWorkspaceToggle" type="button" data-p86-icon="graph" title="Open the node-graph workspace — click again to return to this tab" aria-label="Workspace"></button>' +
     '</div>';
     tabsHtml += '</div>';

@@ -615,9 +615,9 @@
                         '</h1>' +
                         '<p style="margin:0;color:var(--text-dim,#888);font-size:13px;">Pick up where the team is.</p>' +
                     '</div>' +
-                    '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
-                        // "New Lead with AI" entry retired — intake now
-                        // runs through the global Ask 86 header button.
+                    '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">' +
+                        // Global Ask 86 badge in the dashboard header.
+                        '<span class="p86-ask86-mount"></span>' +
                         '<button class="success" onclick="' + estsClick + '" style="font-size:13px;padding:7px 14px;">&#x2795; New Estimate</button>' +
                     '</div>' +
                 '</div>' +
