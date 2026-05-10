@@ -44,7 +44,7 @@
     })();
     </script>
 
-    <link rel="stylesheet" href="css/styles.css?v=51b">
+    <link rel="stylesheet" href="css/styles.css?v=52b">
     <link rel="stylesheet" href="css/workspace-layout.css?v=53b">
     <link rel="stylesheet" href="css/workspace.css?v=37b">
     <link rel="stylesheet" href="css/schedule.css?v=18b">
@@ -112,14 +112,6 @@
                          flash an empty placeholder. Uses the standard NWS
                          pipeline already powering the schedule + job widgets. -->
                     <div id="header-weather" class="header-weather" hidden></div>
-                    <!-- Global "Ask 86" — opens the AI panel anchored at no
-                         specific entity. 86 with web search + the live
-                         reference sheets, persisted per-user. For entity-
-                         specific work, the user opens the AI panel inside
-                         that entity instead. -->
-                    <button id="header-ask86-btn" class="header-icon-btn" type="button" title="Ask 86 (global)"
-                            data-p86-icon="dna"
-                            onclick="if (window.p86AI && typeof window.p86AI.open === 'function') window.p86AI.open({ entityType: 'ask86' });"></button>
                     <!-- My Files icon button — replaces the former Files
                          tab in the top nav. Click jumps straight into
                          the my-files tab pane. Personal files are a
@@ -2242,6 +2234,19 @@
         </div>
       </div>
     </div>
+
+    <!-- Global "Ask 86" floating button. Lives outside the sticky
+         header so it stays accessible from the lower-right of every
+         page without crowding the header strip. Custom badge: the
+         DNA glyph anchors the circle, the "86" pill overlaps the
+         right edge to read as Project 86's mark. Clicks open the
+         AI panel anchored at no specific entity (entityType='ask86')
+         — 86 with web search + the live reference sheets. -->
+    <button id="ask86-fab" class="ask86-fab" type="button" title="Ask 86 (global)"
+            onclick="if (window.p86AI && typeof window.p86AI.open === 'function') window.p86AI.open({ entityType: 'ask86' });">
+      <span class="ask86-fab-icon" data-p86-icon="dna"></span>
+      <span class="ask86-fab-badge">86</span>
+    </button>
 
     <!-- PDF.js — used by the document viewer to render PDF pages to canvas
          (and from there to base64 images for vision-based AI analysis).

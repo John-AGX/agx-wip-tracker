@@ -401,6 +401,95 @@
             border-color: rgba(248, 113, 113, 0.50);
         }
 
+        /* ── Global "Ask 86" floating button ──────────────────────
+           Lives bottom-right of every page (position: fixed) so 86
+           is one tap away from anywhere in the app. Brand badge:
+           the DNA glyph centered in a circular surface, with the
+           "86" wordmark in a smaller pill that overlaps the right
+           edge — reads as Project 86's signature, not a generic
+           AI button. Lifts on hover with a soft cyan glow. */
+        .ask86-fab {
+            position: fixed;
+            right: 24px;
+            bottom: 24px;
+            z-index: 1500;
+            width: 56px;
+            height: 56px;
+            border-radius: 50%;
+            border: 1.5px solid rgba(34, 211, 238, 0.55);
+            background: linear-gradient(135deg, #0F172A 0%, #1e293b 100%);
+            color: #e4e6f0;
+            cursor: pointer;
+            padding: 0;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow:
+                0 6px 18px rgba(0, 0, 0, 0.40),
+                0 0 0 0 rgba(34, 211, 238, 0.0);
+            transition: transform 0.18s ease, box-shadow 0.18s ease,
+                        border-color 0.18s ease;
+        }
+        .ask86-fab:hover {
+            transform: translateY(-2px) scale(1.04);
+            border-color: rgba(34, 211, 238, 0.85);
+            box-shadow:
+                0 10px 24px rgba(0, 0, 0, 0.45),
+                0 0 0 4px rgba(34, 211, 238, 0.18);
+        }
+        .ask86-fab:active {
+            transform: translateY(0) scale(1.00);
+        }
+        .ask86-fab-icon {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 28px;
+            height: 28px;
+            color: rgba(34, 211, 238, 0.95);
+        }
+        .ask86-fab-icon .p86-icon {
+            width: 28px;
+            height: 28px;
+        }
+        /* "86" wordmark badge anchored to the bottom-right of the
+           circle, overlapping the edge slightly. AGX-green pill on a
+           dark surface so it pops against the cyan-tinted DNA glyph
+           without looking like a notification dot. */
+        .ask86-fab-badge {
+            position: absolute;
+            right: -4px;
+            bottom: -2px;
+            min-width: 28px;
+            height: 18px;
+            padding: 0 6px;
+            border-radius: 9px;
+            background: #1B8541;
+            color: #ffffff;
+            font-size: 11px;
+            font-weight: 800;
+            font-family: 'SF Mono', Consolas, monospace;
+            letter-spacing: 0.5px;
+            line-height: 18px;
+            text-align: center;
+            border: 2px solid #0F172A;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+            pointer-events: none;
+        }
+        body.light-mode .ask86-fab {
+            background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
+        }
+        body.light-mode .ask86-fab-badge {
+            border-color: #f1f5f9;
+        }
+        /* Hide the FAB while the AI panel itself is open — the panel
+           covers the bottom-right area on most layouts and the user
+           is clearly already talking to 86. JS toggles .ask86-fab-hidden
+           on the button when p86AI.open / close fires. */
+        .ask86-fab.ask86-fab-hidden {
+            display: none;
+        }
+
         /* Initials avatar — outline-only "badge" surface. Default state
            is transparent fill with a cyan ring; hover bumps the ring +
            gentle scale + soft glow rather than dropping a color fill,
