@@ -137,6 +137,17 @@
   color: var(--text, #e4e6f0);
 }
 
+/* Phosphor icon prefix on each tab — sized to read clearly without
+   crowding the label. The auto-decorator wraps the SVG in
+   .p86-icon-slot which already sets inline-flex + a 6px right margin. */
+.ws-right-tab .p86-icon-slot { margin-right: 6px; }
+.ws-right-tab .p86-icon {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  vertical-align: middle;
+}
+
 /* Sliding indicator — the visual is a single .p86-tab-slider element
    shared across the whole bar (positioned by tab-slider.js). Per-tab
    styling here is just the text-color change so the active tab reads
@@ -679,14 +690,54 @@ body.light-mode .jh-strip-card[data-tone="amber"] .jh-strip-label { color: #b453
   overflow-y: visible;
 }
 
-/* Tabs row gets an actions slot on the right edge for the Ask AI
-   button, so it lives with the tab strip instead of taking its own row. */
+/* Tabs row gets an actions slot on the right edge for the Workspace
+   toggle button (replaces the old Ask 86 button — global Ask 86 covers
+   that now). Lives with the tab strip instead of taking its own row. */
 .ws-right-tabs-actions {
   margin-left: auto;
   display: flex;
   align-items: center;
   gap: 8px;
   padding-right: 6px;
+}
+
+/* Workspace toggle — a prominent icon-led button in the actions slot.
+   Larger than the tabs (the icon is the brand mark for the node-graph
+   workspace, so it earns the extra weight) and reads as a "go-to"
+   destination, not as a tab. .active state lights up so the user can
+   tell at a glance whether they're inside the workspace. */
+.ws-workspace-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1;
+  background: rgba(79, 140, 255, 0.10);
+  border: 1px solid rgba(79, 140, 255, 0.40);
+  color: #ffffff;
+  border-radius: 8px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.12s ease, border-color 0.12s ease,
+              box-shadow 0.12s ease, transform 0.12s ease;
+}
+.ws-workspace-toggle:hover {
+  background: rgba(79, 140, 255, 0.18);
+  border-color: rgba(79, 140, 255, 0.65);
+}
+.ws-workspace-toggle:active { transform: translateY(1px); }
+.ws-workspace-toggle.active {
+  background: rgba(79, 140, 255, 0.28);
+  border-color: rgba(79, 140, 255, 0.85);
+  box-shadow: 0 0 0 2px rgba(79, 140, 255, 0.18);
+}
+.ws-workspace-toggle .p86-icon-slot { margin-right: 0; }
+.ws-workspace-toggle .p86-icon {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
 }
 
 /* ── Workspace canvas backdrop ──────────────────────────── */

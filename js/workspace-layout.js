@@ -15,23 +15,28 @@
   let _ngComputing = false;
 
   // ── Tab definitions ──────────────────────────────────────
-  // Overview is the landing tab (first). The new "Workspace" tab swaps
-  // in a node-graph-style canvas with the spreadsheet rendered as a
-  // floating, draggable, resizable panel on top.
+  // Overview is the landing tab (first). Workspace is no longer one of
+  // the tabs — it lives as a prominent action button in the tabs-actions
+  // slot to the right of the strip (see buildLayout). Each tab carries
+  // a Phosphor icon via `icon` so the strip is icon-led; the auto-
+  // decorator prepends the SVG via data-p86-icon.
   const RIGHT_TABS = [
-    { id: 'job-overview',      label: 'Overview' },
-    // Workspace gets the bold-network-graph icon since the tab swaps
-    // in a node-graph canvas. Icon decorated via data-p86-icon by the
-    // p86-icons auto-decorator; the label stays plain text.
-    { id: 'job-workspace',     label: 'Workspace', icon: 'graph' },
-    { id: 'job-wip',           label: 'WIP' },
-    { id: 'job-costs',         label: 'Costs' },
-    { id: 'job-qb-costs',      label: '\u{1F4CB} Detailed' },
-    { id: 'job-changeorders',  label: 'CO\'s' },
-    { id: 'job-purchaseorders',label: 'PO\'s' },
-    { id: 'job-invoices',      label: 'Invoices' },
-    { id: 'job-subs',          label: 'Subs' }
+    { id: 'job-overview',      label: 'Overview',  icon: 'insights' },
+    { id: 'job-wip',           label: 'WIP',       icon: 'wip' },
+    { id: 'job-costs',         label: 'Costs',     icon: 'estimates' },
+    { id: 'job-qb-costs',      label: 'Detailed',  icon: 'daily-logs' },
+    { id: 'job-changeorders',  label: 'CO\'s',     icon: 'links' },
+    { id: 'job-purchaseorders',label: 'PO\'s',     icon: 'materials' },
+    { id: 'job-invoices',      label: 'Invoices',  icon: 'exports' },
+    { id: 'job-subs',          label: 'Subs',      icon: 'subs' }
   ];
+
+  // Workspace toggle state. Tracked at module scope so the toggle can
+  // remember which tab was active before workspace mode opened, and
+  // restore that tab when the user clicks the Workspace button again
+  // to back out.
+  var _savedActiveTabId = null;
+  var _inWorkspaceMode = false;
 
   // ── CSS injection ─────────────────────────────────────────
   function injectCSS() {
@@ -354,8 +359,12 @@
     RIGHT_TABS.forEach(function(tab, i) {
       tabsHtml += '<button class="ws-right-tab' + (i === 0 ? ' active' : '') + '" data-panel="' + tab.id + '"' + (tab.icon ? ' data-p86-icon="' + tab.icon + '"' : '') + '>' + tab.label + '</button>';
     });
+    // Workspace is a prominent action button (not a tab). Clicking it
+    // toggles the node-graph canvas + floating workspace panel; clicking
+    // it again restores whichever tab was active before. Ask 86 is gone
+    // from this slot — the global Ask 86 header button covers it.
     tabsHtml += '<div class="ws-right-tabs-actions">' +
-      '<button class="ee-btn" onclick="openJobAI()" title="Ask 86, AGX\'s WIP analyst" style="background:linear-gradient(135deg,#8b5cf6,#4f8cff);color:#fff;border-color:transparent;">✨ Ask 86</button>' +
+      '<button class="ws-workspace-toggle" id="wsWorkspaceToggle" type="button" data-p86-icon="graph" title="Open node-graph workspace (toggle)">Workspace</button>' +
     '</div>';
     tabsHtml += '</div>';
 
@@ -1003,58 +1012,88 @@
     var tabs = document.querySelectorAll('.ws-right-tab[data-panel]');
     var rc = document.getElementById('wsRightContent');
     if (!rc) return;
-    tabs.forEach(function(tab) {
-      tab.onclick = function() {
-        tabs.forEach(function(t) { t.classList.remove('active'); });
-        this.classList.add('active');
-        var targetId = this.getAttribute('data-panel');
-        var jobId = (typeof appState !== 'undefined') ? appState.currentJobId : null;
 
-        // Workspace tab opens the node graph and injects the floating
-        // workspace panel into the graph's transformed canvas, so the
-        // workspace lives in graph coordinate space (pan/zoom with the
-        // graph, drag like a node). Every other tab tears that down.
-        if (targetId === 'job-workspace') {
-          var allPanels = Array.from(rc.children);
-          allPanels.forEach(function(p) { if (!p.classList.contains('ws-job-info-details')) p.style.display = 'none'; });
-          if (jobId && typeof window.openNodeGraph === 'function') {
-            window.openNodeGraph(jobId);
-            setTimeout(function() {
-              watchGraphTabClose();
-              attachWorkspaceToGraph();
-            }, 50);
-          }
-          return;
-        }
+    // Tab→renderer registry. Used by both the per-tab click handler and
+    // the workspace-toggle's restore path.
+    var TAB_RENDERERS = {
+      'job-overview': 'renderJobOverview',
+      'job-costs': 'renderJobCosts',
+      'job-qb-costs': 'renderJobQBCosts',
+      'job-subs': 'renderJobSubs',
+      'job-changeorders': 'renderChangeOrders',
+      'job-purchaseorders': 'renderPurchaseOrders',
+      'job-invoices': 'renderInvoices',
+      'job-wip': 'renderWipTab'
+    };
 
-        // Leaving Workspace tab: detach panel, close graph if open
+    function activateTab(targetId) {
+      var jobId = (typeof appState !== 'undefined') ? appState.currentJobId : null;
+      tabs.forEach(function(t) {
+        t.classList.toggle('active', t.getAttribute('data-panel') === targetId);
+      });
+      // If we're returning from workspace mode, tear down graph + panel.
+      if (_inWorkspaceMode) {
         var graphTab = document.getElementById('nodeGraphTab');
         if (graphTab && graphTab.classList.contains('active')) {
           detachWorkspaceFromGraph();
           graphTab.classList.remove('active');
           if (typeof NG !== 'undefined' && NG.saveGraph) NG.saveGraph();
         }
+        _inWorkspaceMode = false;
+        var toggleBtn = document.getElementById('wsWorkspaceToggle');
+        if (toggleBtn) toggleBtn.classList.remove('active');
+      }
+      var allPanels = Array.from(rc.children);
+      allPanels.forEach(function(p) { if (!p.classList.contains('ws-job-info-details')) p.style.display = 'none'; });
+      var target = document.getElementById(targetId);
+      if (target) target.style.display = 'block';
+      if (!jobId) return;
+      var fn = TAB_RENDERERS[targetId];
+      if (fn && typeof window[fn] === 'function') window[fn](jobId);
+    }
 
+    tabs.forEach(function(tab) {
+      tab.onclick = function() { activateTab(this.getAttribute('data-panel')); };
+    });
+
+    // Workspace toggle — opens the node-graph canvas + floating panel,
+    // remembers the previously active tab, and restores that tab on the
+    // second click (i.e. when the user backs out of workspace mode).
+    var toggleBtn = document.getElementById('wsWorkspaceToggle');
+    if (toggleBtn) {
+      toggleBtn.onclick = function() {
+        var jobId = (typeof appState !== 'undefined') ? appState.currentJobId : null;
+        if (_inWorkspaceMode) {
+          // Back out: restore the saved tab (default to Overview if
+          // none was tracked).
+          var restoreId = _savedActiveTabId || 'job-overview';
+          _savedActiveTabId = null;
+          activateTab(restoreId);
+          return;
+        }
+        // Enter workspace: remember which tab is currently active so we
+        // can return to it on toggle-off.
+        var activeTab = document.querySelector('.ws-right-tab[data-panel].active');
+        _savedActiveTabId = activeTab ? activeTab.getAttribute('data-panel') : 'job-overview';
+        _inWorkspaceMode = true;
+        toggleBtn.classList.add('active');
+        // Clear any tab's active class while in workspace mode.
+        tabs.forEach(function(t) { t.classList.remove('active'); });
+        // Hide all panels; the graph canvas will mount on top.
         var allPanels = Array.from(rc.children);
         allPanels.forEach(function(p) { if (!p.classList.contains('ws-job-info-details')) p.style.display = 'none'; });
-        var target = document.getElementById(targetId);
-        if (target) target.style.display = 'block';
-
-        if (!jobId) return;
-        var renderers = {
-          'job-overview': 'renderJobOverview',
-          'job-costs': 'renderJobCosts',
-          'job-qb-costs': 'renderJobQBCosts',
-          'job-subs': 'renderJobSubs',
-          'job-changeorders': 'renderChangeOrders',
-          'job-purchaseorders': 'renderPurchaseOrders',
-          'job-invoices': 'renderInvoices',
-          'job-wip': 'renderWipTab'
-        };
-        var fn = renderers[targetId];
-        if (fn && typeof window[fn] === 'function') window[fn](jobId);
+        ensureWorkspaceCanvas(rc);
+        var canvas = document.getElementById('job-workspace');
+        if (canvas) canvas.style.display = 'block';
+        if (jobId && typeof window.openNodeGraph === 'function') {
+          window.openNodeGraph(jobId);
+          setTimeout(function() {
+            watchGraphTabClose();
+            attachWorkspaceToGraph();
+          }, 50);
+        }
       };
-    });
+    }
   }
 
   function moveJobInfoToAccordion(detail, rightContent) {
