@@ -20,10 +20,14 @@
   // slot to the right of the strip (see buildLayout). Each tab carries
   // a Phosphor icon via `icon` so the strip is icon-led; the auto-
   // decorator prepends the SVG via data-p86-icon.
+  // Costs tab retired — the five cost-category boxes were duplicated by
+  // the node graph (set_node_value writes mat/labor/gc/sub/burden) and
+  // the hours/rate trio is now derived from QuickBooks costs through
+  // the hourly-burden node, not entered here. Detailed + WIP + the
+  // graph itself cover everything that tab used to display.
   const RIGHT_TABS = [
     { id: 'job-overview',      label: 'Overview',  icon: 'insights' },
     { id: 'job-wip',           label: 'WIP',       icon: 'wip' },
-    { id: 'job-costs',         label: 'Costs',     icon: 'estimates' },
     { id: 'job-qb-costs',      label: 'Detailed',  icon: 'daily-logs' },
     { id: 'job-changeorders',  label: 'CO\'s',     icon: 'links' },
     { id: 'job-purchaseorders',label: 'PO\'s',     icon: 'materials' },
@@ -790,7 +794,6 @@
     if (!jobId) return;
     var renderers = {
       'job-overview': 'renderJobOverview',
-      'job-costs': 'renderJobCosts',
       'job-qb-costs': 'renderJobQBCosts',
       'job-subs': 'renderJobSubs',
       'job-changeorders': 'renderChangeOrders',
@@ -1066,7 +1069,6 @@
     // the workspace-toggle's restore path.
     var TAB_RENDERERS = {
       'job-overview': 'renderJobOverview',
-      'job-costs': 'renderJobCosts',
       'job-qb-costs': 'renderJobQBCosts',
       'job-subs': 'renderJobSubs',
       'job-changeorders': 'renderChangeOrders',

@@ -2720,59 +2720,11 @@ function renderWIPMain() {
         // need for it. Per-phase weeklyMat/weeklyLabor/weeklySub/weeklyEquip
         // fields are no longer set on new phases.
 
-        function renderJobCosts(jobId) {
-            const job = appData.jobs.find(j => j.id === jobId);
-            if (!job) return;
-            document.getElementById('jobCostMaterials').value = job.materials || '';
-            document.getElementById('jobCostLabor').value = job.labor || '';
-            document.getElementById('jobCostSub').value = (job.sub || 0).toFixed(2);
-            document.getElementById('jobCostEquipment').value = job.equipment || '';
-            document.getElementById('jobCostGC').value = job.generalConditions || '';
-            document.getElementById('jobCostHoursWeek').value = job.hoursWeek || '';
-            document.getElementById('jobCostHoursTotal').value = job.hoursTotal || '';
-            document.getElementById('jobCostRate').value = job.rate || 40;
-            updateJobCostSummary(jobId);
-        }
-
-        function saveJobCosts() {
-            const job = appData.jobs.find(j => j.id === appState.currentJobId);
-            if (!job) return;
-            job.materials = parseFloat(document.getElementById('jobCostMaterials').value) || 0;
-            job.labor = parseFloat(document.getElementById('jobCostLabor').value) || 0;
-            // job.sub is auto-calculated from Subs tab by recalcSubCosts — don't overwrite
-            job.equipment = parseFloat(document.getElementById('jobCostEquipment').value) || 0;
-            job.generalConditions = parseFloat(document.getElementById('jobCostGC').value) || 0;
-            job.hoursWeek = parseFloat(document.getElementById('jobCostHoursWeek').value) || 0;
-            job.hoursTotal = (parseFloat(document.getElementById('jobCostHoursTotal').value) || 0) + job.hoursWeek;
-            job.rate = parseFloat(document.getElementById('jobCostRate').value) || 40;
-            // Update total hours display and reset weekly hours
-            document.getElementById('jobCostHoursTotal').value = job.hoursTotal;
-            document.getElementById('jobCostHoursWeek').value = '';
-            saveData();
-            updateJobCostSummary(appState.currentJobId);
-            // Update the summary cards using WIP
-            renderJobDetail(appState.currentJobId);
-            // Show save confirmation
-            const statusEl = document.getElementById('jobCostSaveStatus');
-            if (statusEl) {
-                statusEl.textContent = 'Saved!';
-                statusEl.style.opacity = '1';
-                clearTimeout(statusEl._timer);
-                statusEl._timer = setTimeout(() => { statusEl.style.opacity = '0'; }, 2000);
-            }
-        }
-
-        function updateJobCostSummary(jobId) {
-            const job = appData.jobs.find(j => j.id === jobId);
-            if (!job) return;
-            const jobLevelTotal = (job.materials || 0) + (job.labor || 0) + (job.sub || 0) + (job.equipment || 0);
-            const computedLabor = (job.hoursTotal || 0) * (job.rate || 40);
-            const costs = getJobTotalCost(jobId);
-            const phaseBuildingCost = costs.phaseCost + costs.buildingCost;
-            document.getElementById('jobCostTotal').textContent = formatCurrency(jobLevelTotal);
-            document.getElementById('jobCostLaborBurden').textContent = formatCurrency(computedLabor);
-            document.getElementById('jobCostFromPhases').textContent = formatCurrency(phaseBuildingCost);
-        }
+        // renderJobCosts / saveJobCosts / updateJobCostSummary retired
+        // along with the Costs sub-tab — labor cost flows from QuickBooks
+        // through the hourly-burden node and the five cost-category
+        // boxes are now driven by node-graph cost buckets via
+        // set_node_value, so the legacy direct-input UI was redundant.
 
         function getJobContractAmount() {
             const job = appData.jobs.find(j => j.id === appState.currentJobId);

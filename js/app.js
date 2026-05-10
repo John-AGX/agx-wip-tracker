@@ -1261,7 +1261,6 @@
 
             const currentJobId = appState.currentJobId;
             if (subtabName === 'job-overview') renderJobOverview(currentJobId);
-            else if (subtabName === 'job-costs') renderJobCosts(currentJobId);
             else if (subtabName === 'job-buildings') renderJobBuildings(currentJobId);
             else if (subtabName === 'job-phases') renderJobPhases(currentJobId);
             else if (subtabName === 'job-subs') renderJobSubs(currentJobId);

@@ -48,7 +48,7 @@
   // doesn't capture it). Keeps URLs from leaking ad-hoc sub-tabs the
   // user might add later without touching the router.
   var KNOWN_JOB_SUBS = [
-    'job-overview', 'job-costs', 'job-buildings', 'job-wip',
+    'job-overview', 'job-buildings', 'job-wip',
     'job-changeorders', 'job-invoices', 'job-labor', 'job-purchaseorders'
   ];
   var KNOWN_EST_SUBS = ['list', 'leads', 'clients', 'subs'];
