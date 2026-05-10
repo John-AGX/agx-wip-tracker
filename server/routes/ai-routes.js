@@ -4714,6 +4714,26 @@ async function buildClientDirectoryContext() {
       out.push(`- ${f.name} (id=${f.id})${bits.length ? ' — ' + bits.join(' · ') : ''}`);
     }
   }
+
+  // Reference sheets (job numbers, client short names, WIP report,
+  // etc. — pulled from SharePoint/Google Drive by admin-agents-routes'
+  // background refresher every 15 min). Job numbers + short names are
+  // critical for HR's dedup/match work, so this gets appended to the
+  // dynamic snapshot the same way runStream does it for 86. Best-effort:
+  // a DB failure here just means HR sees no reference block, no error
+  // surfaces to the user.
+  try {
+    const adminAgents = require('./admin-agents-routes');
+    if (typeof adminAgents.buildReferenceLinksBlock === 'function') {
+      const refBlock = await adminAgents.buildReferenceLinksBlock();
+      // refBlock already starts with its own \n\n header, so push it
+      // verbatim without extra blank-line padding.
+      if (refBlock && refBlock.trim()) out.push(refBlock);
+    }
+  } catch (e) {
+    console.warn('[ai] HR reference-links injection skipped:', e.message);
+  }
+
   return {
     system: [
       { type: 'text', text: stable.join('\n'), cache_control: { type: 'ephemeral' } },
