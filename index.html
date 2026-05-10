@@ -44,7 +44,7 @@
     })();
     </script>
 
-    <link rel="stylesheet" href="css/styles.css?v=63b">
+    <link rel="stylesheet" href="css/styles.css?v=64b">
     <link rel="stylesheet" href="css/workspace-layout.css?v=56b">
     <link rel="stylesheet" href="css/workspace.css?v=37b">
     <link rel="stylesheet" href="css/schedule.css?v=18b">
@@ -82,10 +82,91 @@
              at a higher z-index). Replaces the per-page Ask AI / Ask 86
              buttons across estimate, job, node-graph, and home views. -->
         <button id="floating-ask86-btn" class="floating-ask86-btn" type="button"
-                title="Ask 86 — global. Click to open the company-wide AI surface."
+                title="Ask 86 — global. Drag to reposition. Click to open the company-wide AI surface."
                 aria-label="Ask 86"
                 data-p86-icon="dna-86"
                 onclick="if (window.p86AI && typeof window.p86AI.open === 'function') window.p86AI.open({ entityType: 'ask86' });"></button>
+        <script>
+          // Make the floating Ask 86 badge drag-to-place. Position
+          // saved to localStorage so it survives reloads. Click vs.
+          // drag is decided by a small movement threshold — anything
+          // under 4px from mousedown counts as a click and opens the
+          // panel; anything over is treated as a drag and the click
+          // is suppressed when the user releases.
+          (function() {
+            var STORAGE_KEY = 'p86-ask86-position';
+            var DRAG_THRESHOLD = 4;
+            function init() {
+              var btn = document.getElementById('floating-ask86-btn');
+              if (!btn) return;
+              // Restore last-saved position.
+              try {
+                var saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
+                if (saved && typeof saved.top === 'string') {
+                  btn.style.top = saved.top;
+                  if (saved.left)  { btn.style.left  = saved.left;  btn.style.right = 'auto'; }
+                  if (saved.right) { btn.style.right = saved.right; btn.style.left  = 'auto'; }
+                }
+              } catch (e) {}
+              var dragging = false, moved = false;
+              var startX = 0, startY = 0, startLeft = 0, startTop = 0;
+              btn.addEventListener('mousedown', function(e) {
+                if (e.button !== 0) return; // left button only
+                dragging = true;
+                moved = false;
+                startX = e.clientX;
+                startY = e.clientY;
+                var rect = btn.getBoundingClientRect();
+                startLeft = rect.left;
+                startTop  = rect.top;
+                e.preventDefault();
+              });
+              document.addEventListener('mousemove', function(e) {
+                if (!dragging) return;
+                var dx = e.clientX - startX;
+                var dy = e.clientY - startY;
+                if (!moved && Math.abs(dx) + Math.abs(dy) > DRAG_THRESHOLD) {
+                  moved = true;
+                  btn.style.cursor = 'grabbing';
+                }
+                if (moved) {
+                  var newLeft = Math.max(0, Math.min(window.innerWidth  - btn.offsetWidth,  startLeft + dx));
+                  var newTop  = Math.max(0, Math.min(window.innerHeight - btn.offsetHeight, startTop  + dy));
+                  btn.style.left  = newLeft + 'px';
+                  btn.style.top   = newTop  + 'px';
+                  btn.style.right = 'auto';
+                }
+              });
+              document.addEventListener('mouseup', function() {
+                if (!dragging) return;
+                dragging = false;
+                btn.style.cursor = '';
+                if (moved) {
+                  // Persist + suppress the click that the browser will
+                  // dispatch right after this mouseup.
+                  try {
+                    localStorage.setItem(STORAGE_KEY, JSON.stringify({
+                      top:   btn.style.top,
+                      left:  btn.style.left,
+                      right: btn.style.right
+                    }));
+                  } catch (e) {}
+                  var suppress = function(ev) {
+                    ev.stopPropagation();
+                    ev.preventDefault();
+                    btn.removeEventListener('click', suppress, true);
+                  };
+                  btn.addEventListener('click', suppress, true);
+                }
+              });
+            }
+            if (document.readyState === 'loading') {
+              document.addEventListener('DOMContentLoaded', init);
+            } else {
+              init();
+            }
+          })();
+        </script>
         <header>
             <div class="header-content">
                 <!-- Brand icon is now a click target — routes to the
