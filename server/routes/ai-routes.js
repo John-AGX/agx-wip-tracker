@@ -1628,8 +1628,8 @@ const SECTION_DEFAULTS = {
   // ──── HR (customer relations / client directory) ─────────────────
   hr_about_agx: {
     agent: 'cra',
-    description: 'About Project 86 and its customer types. Edit if Project 86 expands into new customer segments or markets.',
-    body: '# About Project 86\nProject 86 is a Central-Florida construction-services platform (painting, deck repair, roofing, exterior services). Project 86\'s customers are overwhelmingly:\n  1. Property-management companies running multifamily/apartment portfolios\n  2. HOA / condo associations (often managed BY one of those property-management firms)\nGeographic markets: Tampa, Orlando, Sarasota/Bradenton, Brevard (Space Coast), Lakeland, The Villages.'
+    description: 'About Project 86 and your scope as data steward. Edit when the role boundary or customer segments change.',
+    body: '# About Project 86 + your scope\nProject 86 is a Central-Florida construction-services platform (painting, deck repair, roofing, exterior services). Customers are overwhelmingly:\n  1. Property-management companies running multifamily/apartment portfolios\n  2. HOA / condo associations (often managed BY one of those property-management firms)\nGeographic markets: Tampa, Orlando, Sarasota/Bradenton, Brevard (Space Coast), Lakeland, The Villages.\n\n## Your scope (Project 86\'s data steward)\nYou are 86\'s data steward. Your job is to keep the "who/where/what" identity data clean across four directories:\n  • **Clients** (your original beat) — parent management companies, properties/communities, CAM contacts, agent notes, dedup, hierarchy. Full CRUD via the propose tools below.\n  • **Jobs** (identity card only — name, jobNumber, client linkage, location/address, status). Use `read_jobs` to look these up. NOT financials / scope / WIP — those belong to 86.\n  • **Subs / Vendors** — directory, compliance, craft research.\n  • **Users** (Project 86 staff: PMs, admins, corporate). Use `read_users` to look up "who\'s the PM on RV2041", "is X still active", "who do I assign this to". Read-only for now.\n\nBoundary: 86 does the *work* (estimating, scope, WIP, margin, change orders). You keep the *rolodex* clean so 86 has accurate context. When 86 needs a client/property/sub/user lookup, that\'s you. When the user asks how a job is *performing*, that\'s 86 — point them at the entity\'s AI panel.'
   },
   hr_hierarchy: {
     agent: 'cra',
@@ -1664,7 +1664,7 @@ const SECTION_DEFAULTS = {
   hr_tool_tiers: {
     agent: 'cra',
     description: 'HR tool list with auto vs approval tier annotation. Edit only when adding/removing tools in code.',
-    body: '# Tool tiers — system handles the gating, you just call\n  AUTO (applies immediately, model continues in same turn):\n    create_property, update_client_field, link_property_to_parent\n  APPROVAL (user clicks Approve/Reject before applying):\n    create_parent_company, rename_client, change_property_parent,\n    merge_clients, split_client_into_parent_and_property, delete_client,\n    attach_business_card_to_client'
+    body: '# Tool tiers — system handles the gating, you just call\n  AUTO (applies immediately, model continues in same turn):\n    create_property, update_client_field, link_property_to_parent,\n    read_jobs, read_users\n  APPROVAL (user clicks Approve/Reject before applying):\n    create_parent_company, rename_client, change_property_parent,\n    merge_clients, split_client_into_parent_and_property, delete_client,\n    attach_business_card_to_client\n\n## Cross-directory reads (your data-steward scope)\n  • `read_jobs(q?, status?, limit?)` — fuzzy lookup against the jobs directory. Returns the identity card: jobNumber, title, client (linked or text), status, address, PM. Use for "who is [job number]" / "what address is [job]" / "what jobs is [client] running". NOT for financials.\n  • `read_users(q?, role?, active_only?, limit?)` — Project 86 staff directory. Returns name, email, role, active flag. Use for "who\'s the PM" / "is X still active" / "who can I assign this to".'
   },
   hr_photos: {
     agent: 'cra',
@@ -4220,6 +4220,41 @@ const CLIENT_TOOLS = [
       },
       required: ['client_id', 'body', 'rationale']
     }
+  },
+  // ── HR scope expansion (2026-05) ─────────────────────────────────
+  // HR is now Project 86's data steward — clients (existing role)
+  // PLUS jobs (identity card: name, jobNumber, client linkage,
+  // address) and users (directory lookups). These two read tools
+  // give HR enough awareness to answer "who's the PM on RV2041",
+  // "what's the address for Wimbledon Greens", "is Calvin still
+  // active". Job/user mutations are deferred to a future commit
+  // (HR proposes; 86 or the user approves).
+  {
+    name: 'read_jobs',
+    tier: 'auto',
+    description: 'List jobs in Project 86 with their identity-card fields (name, jobNumber, client linkage, status, location). Use this when the user asks about a specific job\'s identity (who, where, what client) — NOT for financial / WIP / scope detail. Pass q for fuzzy name/number match. Returns up to `limit` rows (default 30, max 100).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        q: { type: 'string', description: 'Optional fuzzy match against job number, title, or client name.' },
+        status: { type: 'string', description: 'Optional filter — "New", "In Progress", "Backlog", "On Hold", "Completed", "Archived".' },
+        limit: { type: 'integer', description: 'Max rows (default 30, max 100).' }
+      }
+    }
+  },
+  {
+    name: 'read_users',
+    tier: 'auto',
+    description: 'List Project 86 staff users (PMs, admins, corporate) with name, email, role, and active status. Use to answer "who\'s the PM on this job", "is X still on staff", "who do I assign this to". Returns the directory; does NOT include passwords or sensitive auth fields. Pass q for fuzzy name/email match.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        q: { type: 'string', description: 'Optional fuzzy match against name or email.' },
+        role: { type: 'string', description: 'Optional filter — "admin", "corporate", "pm", "sub".' },
+        active_only: { type: 'boolean', description: 'When true (default), excludes deactivated users.' },
+        limit: { type: 'integer', description: 'Max rows (default 30, max 100).' }
+      }
+    }
   }
 ];
 
@@ -4401,6 +4436,84 @@ async function execClientTool(name, input) {
       // Like the business-card tool, this needs userId for audit trail
       // (created_by_user_id). Routed through execClientToolWithCtx.
       throw new Error('add_client_note must be invoked via execClientToolWithCtx');
+    }
+    case 'read_jobs': {
+      const q = String(input.q || '').trim().toLowerCase();
+      const status = String(input.status || '').trim();
+      const limit = Math.max(1, Math.min(100, parseInt(input.limit, 10) || 30));
+      const r = await pool.query(
+        'SELECT j.id, j.data, c.name AS client_name ' +
+        'FROM jobs j ' +
+        "LEFT JOIN clients c ON c.id = (j.data->>'clientId') " +
+        'ORDER BY j.updated_at DESC NULLS LAST'
+      );
+      let rows = r.rows.map(row => {
+        const d = row.data || {};
+        const buildings = Array.isArray(d.buildings) ? d.buildings : [];
+        const firstBldg = buildings[0] || {};
+        const address = d.address || firstBldg.address || null;
+        return {
+          id: row.id,
+          jobNumber: d.jobNumber || null,
+          title: d.title || null,
+          client: row.client_name || d.client || null,
+          clientId: d.clientId || null,
+          status: d.status || null,
+          address: address,
+          pm: d.pm || null
+        };
+      });
+      if (status) rows = rows.filter(j => String(j.status || '').toLowerCase() === status.toLowerCase());
+      if (q) {
+        rows = rows.filter(j => {
+          const hay = (
+            (j.jobNumber || '') + ' ' + (j.title || '') + ' ' +
+            (j.client || '') + ' ' + (j.address || '')
+          ).toLowerCase();
+          return hay.indexOf(q) !== -1;
+        });
+      }
+      rows = rows.slice(0, limit);
+      if (!rows.length) return 'No jobs match the filters.';
+      return rows.map(j =>
+        '• ' + (j.jobNumber ? '[' + j.jobNumber + '] ' : '') + (j.title || '(untitled)') +
+        (j.client ? ' — ' + j.client : '') +
+        (j.status ? ' · ' + j.status : '') +
+        (j.pm ? ' · PM ' + j.pm : '') +
+        (j.address ? '\n    ' + j.address : '') +
+        (j.clientId ? ' · linked to client ' + j.clientId : ' · no client link')
+      ).join('\n');
+    }
+    case 'read_users': {
+      const q = String(input.q || '').trim().toLowerCase();
+      const role = String(input.role || '').trim();
+      const activeOnly = input.active_only !== false; // default true
+      const limit = Math.max(1, Math.min(100, parseInt(input.limit, 10) || 30));
+      const where = [];
+      const args = [];
+      let n = 1;
+      if (activeOnly) where.push('active = TRUE');
+      if (role) { where.push('role = $' + (n++)); args.push(role); }
+      const sql =
+        'SELECT id, name, email, role, active, last_seen_at FROM users ' +
+        (where.length ? 'WHERE ' + where.join(' AND ') + ' ' : '') +
+        'ORDER BY name ASC LIMIT 200';
+      const r = await pool.query(sql, args);
+      let rows = r.rows;
+      if (q) {
+        rows = rows.filter(u =>
+          (String(u.name || '').toLowerCase().indexOf(q) !== -1) ||
+          (String(u.email || '').toLowerCase().indexOf(q) !== -1)
+        );
+      }
+      rows = rows.slice(0, limit);
+      if (!rows.length) return 'No users match the filters.';
+      return rows.map(u =>
+        '• ' + (u.name || '(unnamed)') + ' (' + (u.email || 'no email') + ')' +
+        ' · role=' + (u.role || 'unknown') +
+        (u.active ? ' · active' : ' · INACTIVE') +
+        (u.last_seen_at ? ' · last seen ' + u.last_seen_at.toISOString().slice(0, 10) : '')
+      ).join('\n');
     }
     default:
       throw new Error('Unknown tool: ' + name);
