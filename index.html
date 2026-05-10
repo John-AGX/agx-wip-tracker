@@ -234,6 +234,7 @@
                             <button class="wip-action-tab" onclick="exportWIPToCSV()">Export CSV</button>
                             <button class="wip-action-tab" onclick="window.print()">Print Report</button>
                             <button class="wip-action-tab" onclick="showArchivedJobs()">Archived</button>
+                            <span class="p86-ask86-mount" style="margin-left:auto;"></span>
                         </div>
 
                         <div class="summary-grid">
@@ -785,6 +786,7 @@
                                     <button class="ee-btn danger" id="ld-delete-btn" style="display:none;" onclick="deleteLeadFromEditor()" title="Delete this lead (cannot be undone)">&#x1F5D1; Delete</button>
                                     <button class="ee-btn success" id="ld-convert-btn" style="display:none;" onclick="convertLeadToJob()" data-cap="JOBS_EDIT_ANY JOBS_EDIT_OWN" title="Create a WIP job from this lead">&#x1F3D7; Create Job</button>
                                     <button class="ee-btn primary" onclick="submitLeadEditor()" title="Save lead">&#x1F4BE; Save</button>
+                                    <span class="p86-ask86-mount"></span>
                                 </div>
                                 <div id="ld-status-msg" style="font-size:12px;min-height:14px;color:var(--text-dim,#888);"></div>
                             </div>
@@ -819,6 +821,7 @@
                                     <input id="ee-title" type="text" placeholder="Estimate title" style="flex:1;min-width:200px;font-size:17px;font-weight:600;padding:5px 10px;background:transparent;border:1px solid transparent;border-radius:6px;color:var(--text,#fff);" onfocus="this.style.borderColor='var(--border,#333)'" onblur="this.style.borderColor='transparent'" />
                                     <button class="ee-btn success" onclick="exportEstimateToBuildertrend()" title="Download Buildertrend-format xlsx">&#x1F4E4; Export</button>
                                     <button class="ee-btn ee-icon-btn danger" onclick="deleteEstimateFromEditor()" title="Delete this estimate (cannot be undone)" aria-label="Delete estimate">&#x1F5D1;</button>
+                                    <span class="p86-ask86-mount"></span>
                                 </div>
                                 <!-- Linked-lead chips on the left, save state right-aligned. The
                                      per-page Ask AI button was retired — the global 86 badge in
@@ -987,6 +990,7 @@
 
                         <button class="ws-right-tab" data-admin-subtab="agents" data-p86-icon="discord" onclick="switchAdminSubTab('agents')">Agents</button>
                         <button class="ws-right-tab" data-admin-subtab="sms" data-p86-icon="conversations" onclick="switchAdminSubTab('sms')">SMS</button>
+                        <span class="p86-ask86-mount" style="margin-left:auto;"></span>
                     </div>
 
                     <!-- Users sub-tab -->
@@ -2262,7 +2266,7 @@
     <script src="js/schedule.js?v=28b"></script>
     <script src="js/app.js?v=59b"></script>
     <script src="js/messaging.js?v=1b"></script>
-    <script src="js/my-files.js?v=1b"></script>
+    <script src="js/my-files.js?v=2b"></script>
     <script src="js/wip.js?v=70b"></script>
     <script src="js/estimates.js?v=35b"></script>
     <script src="js/proposal.js?v=22b"></script>
@@ -2379,6 +2383,7 @@
         <!-- AI group retired — global 86 badge in the page corner is
              the single entry point. window.openJobAI still exists in
              ai-panel.js for any future callers (job-audit etc.). -->
+        <span class="p86-ask86-mount" style="margin-left:auto;padding-right:8px;"></span>
       </div>
       <div class="ng-main">
         <div class="ng-sidebar"></div>

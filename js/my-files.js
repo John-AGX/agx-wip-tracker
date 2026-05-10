@@ -133,10 +133,11 @@
             '<h1 style="font-size:22px;margin:0 0 2px 0;font-weight:700;color:var(--text,#fff);">My Files</h1>' +
             '<p style="margin:0;color:var(--text-dim,#888);font-size:12px;">Your personal files. Drag any file into a job or estimate when needed.</p>' +
           '</div>' +
-          '<div style="display:flex;gap:8px;">' +
+          '<div style="display:flex;align-items:center;gap:8px;">' +
             '<button class="ee-btn secondary" onclick="window.myFiles.newFolder()" style="font-size:12px;padding:6px 12px;">&#x1F4C1; New Folder</button>' +
             '<button class="primary" onclick="document.getElementById(\'mfFileInput\').click();" style="font-size:13px;padding:7px 14px;">&#x2795; Upload</button>' +
             '<input type="file" id="mfFileInput" multiple style="display:none;" onchange="window.myFiles.handleUpload(this.files); this.value=\'\';" />' +
+            '<span class="p86-ask86-mount"></span>' +
           '</div>' +
         '</div>' +
 
