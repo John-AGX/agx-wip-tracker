@@ -44,7 +44,7 @@
     })();
     </script>
 
-    <link rel="stylesheet" href="css/styles.css?v=61b">
+    <link rel="stylesheet" href="css/styles.css?v=62b">
     <link rel="stylesheet" href="css/workspace-layout.css?v=56b">
     <link rel="stylesheet" href="css/workspace.css?v=37b">
     <link rel="stylesheet" href="css/schedule.css?v=18b">
@@ -74,6 +74,18 @@
              this fits everything on one ~46px row to give the workspace
              below more vertical real estate. Mobile breaks back to a
              stacked fallback in the @media block. -->
+        <!-- Global Ask 86 — floating top-right corner of the viewport,
+             above (z-index) the sticky header. Larger than a header
+             utility icon so the brand mark reads at a glance, with a
+             hover glow + scale bump. Hidden on the login screen by
+             virtue of being inside #app-content (login renders over it
+             at a higher z-index). Replaces the per-page Ask AI / Ask 86
+             buttons across estimate, job, node-graph, and home views. -->
+        <button id="floating-ask86-btn" class="floating-ask86-btn" type="button"
+                title="Ask 86 — global. Click to open the company-wide AI surface."
+                aria-label="Ask 86"
+                data-p86-icon="dna-86"
+                onclick="if (window.p86AI && typeof window.p86AI.open === 'function') window.p86AI.open({ entityType: 'ask86' });"></button>
         <header>
             <div class="header-content">
                 <!-- Brand icon is now a click target — routes to the
@@ -130,13 +142,10 @@
                          is a utility, not a page, so it doesn't appear
                          in nav.tabs anymore. -->
                     <button id="header-directory-btn" class="header-icon-btn" type="button" title="Directory" aria-haspopup="true" aria-expanded="false" data-p86-icon="clients"></button>
-                    <!-- Ask 86 — global "talk to 86 anywhere" button.
-                         Same shape as the bell / files / directory
-                         icon buttons: transparent at rest, subtle
-                         fill on hover, brand-mark icon centered. -->
-                    <button id="header-ask86-btn" class="header-icon-btn" type="button" title="Ask 86 (global)"
-                            data-p86-icon="dna-86"
-                            onclick="if (window.p86AI && typeof window.p86AI.open === 'function') window.p86AI.open({ entityType: 'ask86' });"></button>
+                    <!-- Ask 86 was here; moved to a floating top-right
+                         element (#floating-ask86-btn) above the sticky
+                         header so the badge can be larger and more
+                         readable without expanding the header strip. -->
                     <!-- Initials avatar replaces the previous full-name +
                          role pill + Account / Logout buttons. Clicking
                          opens #user-avatar-menu which holds the actual
@@ -771,21 +780,14 @@
                                     <button class="ee-btn success" onclick="exportEstimateToBuildertrend()" title="Download Buildertrend-format xlsx">&#x1F4E4; Export</button>
                                     <button class="ee-btn ee-icon-btn danger" onclick="deleteEstimateFromEditor()" title="Delete this estimate (cannot be undone)" aria-label="Delete estimate">&#x1F5D1;</button>
                                 </div>
-                                <!-- Linked-lead chips on the left, save state + Ask AI right-aligned
-                                     so Ask AI lines up with the right edge of the totals strip below
-                                     (LINES bubble). Sits right above the totals so the chip + bubbles
-                                     read as one stack visually. -->
+                                <!-- Linked-lead chips on the left, save state right-aligned. The
+                                     per-page Ask AI button was retired — the global 86 badge in
+                                     the page corner is the single entry point now. -->
                                 <div class="ee-action-row" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
                                     <div id="ee-linked-chips" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
                                     <div style="flex:1;"></div>
                                     <span id="ee-save-indicator" style="font-size:11px;color:var(--text-dim,#888);padding:0 6px;display:flex;align-items:center;font-weight:500;cursor:pointer;" onclick="saveEstimateNow()" title="Click to save now"><span style="font-weight:700;margin-right:5px;">&#x25CB;</span>No changes</span>
                                     <button class="ee-btn" onclick="saveEstimateNow()" title="Save the estimate now (also auto-saves on edit)">&#x1F4BE; Save</button>
-                                    <!-- Plan/Build phase pill lives inside the AI panel header now —
-                                         right next to "📐 AG · Project 86 Estimator" so the toggle is where
-                                         the user is already looking when deciding whether to plan or
-                                         build. setEstimateAIPhase / getAIPhase still live on the
-                                         estimate editor so the panel reads/writes the right estimate. -->
-                                    <button class="ee-btn" onclick="openEstimateAI()" title="AI estimating assistant" style="background:linear-gradient(135deg,#8b5cf6,#4f8cff);color:#fff;border:none;">&#x2728; Ask AI</button>
                                 </div>
                                 <!-- Live totals strip — also justify-end so the LINES bubble lines up
                                      under the Ask AI button on the row above. -->
@@ -2331,16 +2333,9 @@
             </button>
           </div>
         </div>
-        <span class="ng-ribbon-sep"></span>
-        <!-- AI group: Ask 86 (analyst) -->
-        <div class="ng-ribbon-group ng-ribbon-group-ai">
-          <div class="ng-ribbon-group-buttons">
-            <button class="ng-tbtn ng-ribbon-btn ng-ribbon-btn-ai" onclick="openJobAI()" title="Ask 86, Project 86's analyst">
-              <span class="ng-ribbon-icon">&#x2728;</span>
-              <span class="ng-ribbon-label">Ask 86</span>
-            </button>
-          </div>
-        </div>
+        <!-- AI group retired — global 86 badge in the page corner is
+             the single entry point. window.openJobAI still exists in
+             ai-panel.js for any future callers (job-audit etc.). -->
       </div>
       <div class="ng-main">
         <div class="ng-sidebar"></div>

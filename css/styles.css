@@ -398,15 +398,60 @@
             border-color: rgba(248, 113, 113, 0.50);
         }
 
-        /* ── Header "Ask 86" icon button ───────────────────────
-           Inherits the standard .header-icon-btn shape (32×32
-           transparent, hover-fill) so it sits flush with the bell /
-           files / directory buttons. The single override is icon
-           size — the dna-86 brand mark reads better at 24px than
-           the 18px utility-icon default because of its detail. */
-        #header-ask86-btn .p86-icon {
-            width: 24px;
-            height: 24px;
+        /* ── Global "Ask 86" — floating top-right of the viewport ──
+           Pulled out of the sticky header so the badge can be larger
+           and more readable without expanding the header strip. Sits
+           above (z-index) the header. Single entry point for
+           anything-in-the-system AI; per-page Ask AI / Ask 86 buttons
+           were retired alongside this. */
+        .floating-ask86-btn {
+            position: fixed;
+            top: 6px;
+            right: 12px;
+            width: 44px;
+            height: 44px;
+            padding: 0;
+            border-radius: 12px;
+            background: transparent;
+            border: 1px solid transparent;
+            color: #ffffff;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1100;
+            transition: background 0.15s ease, border-color 0.15s ease,
+                        box-shadow 0.18s ease, transform 0.15s ease;
+        }
+        .floating-ask86-btn:hover {
+            background: rgba(79, 140, 255, 0.18);
+            border-color: rgba(79, 140, 255, 0.55);
+            box-shadow: 0 0 16px rgba(79, 140, 255, 0.45),
+                        0 0 4px rgba(79, 140, 255, 0.35) inset;
+            transform: scale(1.07);
+        }
+        .floating-ask86-btn:active { transform: scale(1.02); }
+        .floating-ask86-btn .p86-icon-slot {
+            margin-right: 0;
+            display: inline-flex;
+        }
+        .floating-ask86-btn .p86-icon {
+            width: 32px;
+            height: 32px;
+            flex: 0 0 auto;
+            filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.55))
+                    drop-shadow(0 0 4px rgba(255, 255, 255, 0.20));
+        }
+        /* Light-mode tweak: badge becomes dark on light surfaces so
+           it stays legible against the page content. */
+        body.light-mode .floating-ask86-btn { color: #0F172A; }
+        body.light-mode .floating-ask86-btn .p86-icon {
+            filter: drop-shadow(0 0 1px rgba(255, 255, 255, 0.85))
+                    drop-shadow(0 0 4px rgba(15, 23, 42, 0.18));
+        }
+        body.light-mode .floating-ask86-btn:hover {
+            background: rgba(79, 140, 255, 0.10);
+            border-color: rgba(79, 140, 255, 0.45);
         }
 
         /* Initials avatar — outline-only "badge" surface. Default state
