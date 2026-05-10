@@ -1358,6 +1358,8 @@
     read_past_estimate_lines:     'Reading past line items…',
     read_workspace_sheet_full:    'Opening the sheet…',
     read_job_pct_audit:           'Auditing % complete…',
+    read_jobs:                    'Looking up jobs…',
+    read_users:                   'Looking up users…',
     // Estimate proposals (line items / sections / groups / scope / pricing)
     propose_add_line_item:        'Drafting line item…',
     propose_update_line_item:     'Drafting line edit…',
@@ -2145,7 +2147,15 @@
     read_clients: true,
     read_leads: true,
     read_past_estimate_lines: true,
-    read_past_estimates: true
+    read_past_estimates: true,
+    // Cross-agent reads (CoS introspection + HR directory lookups) —
+    // server routes them to execStaffTool / execClientTool as needed.
+    read_metrics: true,
+    read_recent_conversations: true,
+    read_conversation_detail: true,
+    read_skill_packs: true,
+    read_jobs: true,
+    read_users: true
   };
   function execAGAutoTool(name, input) {
     return window.p86Api.post('/api/ai/exec-tool', { name: name, input: input || {} })

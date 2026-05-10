@@ -1148,6 +1148,107 @@ async function initSchema() {
          WHERE s ? 'name'
            AND (s->>'name' LIKE 'AGX %' OR s->>'name' = 'Elle WIP Analyst Playbook')
        );
+
+    -- Seed the "Workspace placement & wiring discipline" always-on skill
+    -- pack for 86 so any time he adds nodes via create_node / wire_nodes
+    -- they follow the user's preferred LTR cost-flow layout. Idempotent:
+    -- the WHERE NOT EXISTS gate skips re-insert once the pack is in place.
+    INSERT INTO app_settings (key, value, updated_at)
+    SELECT 'agent_skills',
+           jsonb_build_object(
+             'skills',
+             jsonb_build_array(
+               jsonb_build_object(
+                 'name', 'Workspace placement and wiring discipline',
+                 'agents', jsonb_build_array('job'),
+                 'alwaysOn', true,
+                 'body',
+                 E'# Workspace node-graph placement and wiring\n' ||
+                 E'\n' ||
+                 E'When you add nodes via create_node or connect them via wire_nodes, follow the LTR cost-flow layout the user has standardized on. The graph reads like an org chart for money: sources on the left, accumulator (WIP) on the far right.\n' ||
+                 E'\n' ||
+                 E'## The 5-column layout (left to right)\n' ||
+                 E'1. **Subs** (cyan, person glyph). Subcontractor source nodes.\n' ||
+                 E'2. **Scope / Change Orders** — green (t2 / scope) on top, pink (CO) on bottom of the same column.\n' ||
+                 E'3. **Buildings** (cyan, lock glyph). t1 nodes representing the physical structures.\n' ||
+                 E'4. **Job-level cost buckets** (yellow). JOB LABOR / JOB MATERIALS / JOB GC / JOB EQUIPMENT.\n' ||
+                 E'5. **WIP master** (yellow border). The single accumulator on the far right.\n' ||
+                 E'\n' ||
+                 E'## Wiring rules\n' ||
+                 E'- Every wire flows LEFT to RIGHT. Never create a wire that closes a loop or runs right-to-left.\n' ||
+                 E'- Subs feed into the Scope or Building they serve, not directly into a cost bucket.\n' ||
+                 E'- Change Orders feed into the Building(s) they impact.\n' ||
+                 E'- Cost-bucket nodes (mat / labor / gc / sub / burden / other) sit BETWEEN buildings and the WIP master, not before buildings.\n' ||
+                 E'- Wire color is derived from the source node — let it be. Do not override.\n' ||
+                 E'\n' ||
+                 E'## Node-type discipline\n' ||
+                 E'- A new building -> t1.\n' ||
+                 E'- A scope item / phase -> t2.\n' ||
+                 E'- A subcontractor on the job -> sub.\n' ||
+                 E'- A change order -> co.\n' ||
+                 E'- A job-level rolled-up cost bucket -> labor / mat / gc / sub / burden / other (pick the right one).\n' ||
+                 E'- Use note nodes only for sticky annotations the user wants visible — never as a substitute for a real type.\n' ||
+                 E'\n' ||
+                 E'## After multi-node restructures\n' ||
+                 E'create_node does not accept x/y coordinates — the engine auto-positions. After a batch (3+ create_node + wire_nodes calls), end the turn with a one-line note suggesting the user click "Arrange" in the graph toolbar so the new nodes snap into the column scheme above. Do not call Arrange yourself; it is a UI action.\n'
+               )
+             )
+           ),
+           NOW()
+    WHERE NOT EXISTS (SELECT 1 FROM app_settings WHERE key = 'agent_skills');
+
+    -- If the row already existed, append the pack only if the name isn't
+    -- already present (covers admins who edited skill packs via the UI
+    -- before this migration shipped).
+    UPDATE app_settings
+       SET value = jsonb_set(
+             value,
+             '{skills}',
+             COALESCE(value->'skills', '[]'::jsonb) ||
+               jsonb_build_array(
+                 jsonb_build_object(
+                   'name', 'Workspace placement and wiring discipline',
+                   'agents', jsonb_build_array('job'),
+                   'alwaysOn', true,
+                   'body',
+                   E'# Workspace node-graph placement and wiring\n' ||
+                   E'\n' ||
+                   E'When you add nodes via create_node or connect them via wire_nodes, follow the LTR cost-flow layout the user has standardized on. The graph reads like an org chart for money: sources on the left, accumulator (WIP) on the far right.\n' ||
+                   E'\n' ||
+                   E'## The 5-column layout (left to right)\n' ||
+                   E'1. **Subs** (cyan, person glyph). Subcontractor source nodes.\n' ||
+                   E'2. **Scope / Change Orders** — green (t2 / scope) on top, pink (CO) on bottom of the same column.\n' ||
+                   E'3. **Buildings** (cyan, lock glyph). t1 nodes representing the physical structures.\n' ||
+                   E'4. **Job-level cost buckets** (yellow). JOB LABOR / JOB MATERIALS / JOB GC / JOB EQUIPMENT.\n' ||
+                   E'5. **WIP master** (yellow border). The single accumulator on the far right.\n' ||
+                   E'\n' ||
+                   E'## Wiring rules\n' ||
+                   E'- Every wire flows LEFT to RIGHT. Never create a wire that closes a loop or runs right-to-left.\n' ||
+                   E'- Subs feed into the Scope or Building they serve, not directly into a cost bucket.\n' ||
+                   E'- Change Orders feed into the Building(s) they impact.\n' ||
+                   E'- Cost-bucket nodes (mat / labor / gc / sub / burden / other) sit BETWEEN buildings and the WIP master, not before buildings.\n' ||
+                   E'- Wire color is derived from the source node — let it be. Do not override.\n' ||
+                   E'\n' ||
+                   E'## Node-type discipline\n' ||
+                   E'- A new building -> t1.\n' ||
+                   E'- A scope item / phase -> t2.\n' ||
+                   E'- A subcontractor on the job -> sub.\n' ||
+                   E'- A change order -> co.\n' ||
+                   E'- A job-level rolled-up cost bucket -> labor / mat / gc / sub / burden / other (pick the right one).\n' ||
+                   E'- Use note nodes only for sticky annotations the user wants visible — never as a substitute for a real type.\n' ||
+                   E'\n' ||
+                   E'## After multi-node restructures\n' ||
+                   E'create_node does not accept x/y coordinates — the engine auto-positions. After a batch (3+ create_node + wire_nodes calls), end the turn with a one-line note suggesting the user click "Arrange" in the graph toolbar so the new nodes snap into the column scheme above. Do not call Arrange yourself; it is a UI action.\n'
+                 )
+               )
+           ),
+           updated_at = NOW()
+     WHERE key = 'agent_skills'
+       AND value ? 'skills'
+       AND NOT EXISTS (
+         SELECT 1 FROM jsonb_array_elements(value->'skills') s
+         WHERE s->>'name' = 'Workspace placement and wiring discipline'
+       );
   `);
 
   // Seed built-in roles. ON CONFLICT lets us re-run safely without

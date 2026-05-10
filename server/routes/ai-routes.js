@@ -1027,6 +1027,93 @@ const JOB_TOOLS = [
       },
       required: ['from_node_id', 'to_node_id', 'alloc_pct', 'rationale']
     }
+  },
+
+  // ──────────────────────────────────────────────────────────────────
+  // Cross-agent read tools — added when 86 took on full team scope.
+  // CoS-side: introspection (metrics / conversations / skill packs).
+  // HR-side: directory lookups (jobs / users). Mutation tools from
+  // CoS (propose_skill_pack_*) and HR (create_property, etc.) are NOT
+  // in this list — those still flow through the dedicated CoS / HR
+  // panels via approval cards. This expansion gives 86 read scope
+  // across the team without bouncing the user to another panel.
+  // ──────────────────────────────────────────────────────────────────
+  {
+    name: 'read_metrics',
+    description: 'Aggregate AI-agent usage metrics for a window. Returns per-agent totals (turns, conversations, unique users, tool uses, photos, tokens, model mix). Use to answer "how am I doing this week?" / "what does each agent cost?" / "is anyone overusing tools?". Auto-tier — runs without approval.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        range: { type: 'string', enum: ['7d', '30d'], description: 'Time window. Default 7d.' }
+      },
+      required: []
+    }
+  },
+  {
+    name: 'read_recent_conversations',
+    description: 'List recent AI-agent conversations (one row per entity+user pair) with turn count, tool uses, tokens, last activity. Use to spot patterns or pick a conversation to drill into via read_conversation_detail. Auto-tier.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        range: { type: 'string', enum: ['7d', '30d'] },
+        entity_type: { type: 'string', enum: ['estimate', 'job', 'client'] },
+        limit: { type: 'integer', minimum: 1, maximum: 200 }
+      },
+      required: []
+    }
+  },
+  {
+    name: 'read_conversation_detail',
+    description: 'Read every message of a specific conversation. Pass the `key` from read_recent_conversations (entity_type|entity_id|user_id, joined with pipes). Returns user + assistant turns. Use to investigate a specific case. Auto-tier.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        key: { type: 'string', description: 'Conversation key from read_recent_conversations.' }
+      },
+      required: ['key']
+    }
+  },
+  {
+    name: 'read_skill_packs',
+    description: 'List the admin-editable skill packs that the AI agents load at chat time. Each pack has name, body, agent assignments, alwaysOn flag. Use to recommend new skills, audit existing ones, or answer "what context do I always see?". Auto-tier.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {},
+      required: []
+    }
+  },
+  {
+    name: 'read_jobs',
+    description: 'List jobs in Project 86 with their identity-card fields (jobNumber, title, client linkage, status, location, PM). Use to answer who/where/what for a specific job — NOT financial / WIP / scope detail. Pass q for fuzzy match. Auto-tier.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        q: { type: 'string' },
+        status: { type: 'string', description: 'Optional status filter ("New", "In Progress", "Backlog", "On Hold", "Completed", "Archived").' },
+        limit: { type: 'integer', minimum: 1, maximum: 100 }
+      },
+      required: []
+    }
+  },
+  {
+    name: 'read_users',
+    description: 'List Project 86 staff users (PMs, admins, corporate) with name, email, role, active status. Use to answer "who\'s the PM on this job", "is X still on staff", "who can I assign this to". Auto-tier.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        q: { type: 'string' },
+        role: { type: 'string', description: 'Filter — admin / corporate / pm / sub.' },
+        active_only: { type: 'boolean', description: 'Default true. Excludes deactivated users.' },
+        limit: { type: 'integer', minimum: 1, maximum: 100 }
+      },
+      required: []
+    }
   }
 ];
 
@@ -1496,7 +1583,17 @@ const PLAN_MODE_ALLOWED_JOB_TOOLS = new Set([
   'read_subs',
   'read_building_breakdown',
   'read_job_pct_audit',
-  'request_build_mode'
+  'request_build_mode',
+  // CoS + HR read tools surfaced on 86 — pure introspection / lookup,
+  // safe to keep available in plan mode.
+  'read_metrics',
+  'read_recent_conversations',
+  'read_conversation_detail',
+  'read_skill_packs',
+  'read_jobs',
+  'read_users',
+  'read_clients',
+  'read_lead_pipeline'
 ]);
 function filterToolsForJobPhase(tools, phase) {
   if (phase !== 'plan') return tools;
@@ -7413,7 +7510,14 @@ router.post('/v2/intake/chat/continue',
 //
 // Auth: ESTIMATES_VIEW (the cap PMs running 86 sessions already have).
 // The tools themselves are read-only — no mutation paths here.
+// 86 now inherits CoS-side introspection reads (metrics, conversations,
+// skill packs) and HR-side directory reads (jobs, users) so a single
+// chat with 86 can answer "how am I doing" / "who's on this job" / etc.
+// without bouncing the user to a different agent panel. Mutation tools
+// (propose_skill_pack_*, create_property, etc.) are kept off this auto-
+// tier endpoint — those still go through approval cards.
 const ALLOWED_AG_AUTO_TOOLS = new Set([
+  // 86's existing read tools (already routed to execStaffTool below)
   'read_materials',
   'read_purchase_history',
   'read_subs',
@@ -7421,15 +7525,28 @@ const ALLOWED_AG_AUTO_TOOLS = new Set([
   'read_clients',
   'read_leads',
   'read_past_estimate_lines',
-  'read_past_estimates'
+  'read_past_estimates',
+  // CoS introspection reads — let 86 audit himself + the team
+  'read_metrics',
+  'read_recent_conversations',
+  'read_conversation_detail',
+  'read_skill_packs',
+  // HR directory reads — let 86 do who/where/what lookups inline
+  'read_jobs',
+  'read_users'
 ]);
+// Tools whose executor lives in execClientTool (HR's directory reads)
+// rather than execStaffTool. The dispatcher routes by name.
+const CLIENT_EXECUTOR_TOOLS = new Set(['read_jobs', 'read_users']);
 router.post('/exec-tool', requireAuth, requireCapability('ESTIMATES_VIEW'), async (req, res) => {
   try {
     const name = req.body && req.body.name;
     const input = (req.body && req.body.input) || {};
     if (!name || typeof name !== 'string') return res.status(400).json({ error: 'name is required' });
     if (!ALLOWED_AG_AUTO_TOOLS.has(name)) return res.status(400).json({ error: 'tool not allowed via this endpoint' });
-    const summary = await execStaffTool(name, input);
+    const summary = CLIENT_EXECUTOR_TOOLS.has(name)
+      ? await execClientTool(name, input)
+      : await execStaffTool(name, input);
     res.json({ ok: true, summary });
   } catch (e) {
     console.error('POST /api/ai/exec-tool error:', e);
