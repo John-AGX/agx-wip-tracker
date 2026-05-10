@@ -290,10 +290,23 @@
     { label: 'Most expensive conversations', prompt: 'Show me the 5 most token-expensive conversations in the last 30 days across all agents. For the top one, drill in and summarize what happened. If you spot a recurring waste pattern (e.g., 86 re-asking the same thing every turn), propose a skill pack that fixes it.' },
     { label: 'Where is HR being used?',      prompt: 'How is HR being used? Is it actually getting traction or is it sitting idle? Pull recent HR (entity_type=client) conversations and characterize the work. If a pattern emerges that could shift from per-turn instruction to a skill pack, propose it.' }
   ];
+  // Ask 86 (global, no entity) — general-purpose prompts the user
+  // might run from anywhere in the app. Deliberately broad: no
+  // estimate-specific or job-specific presets here since this
+  // surface has no entity attached. For per-entity work the user
+  // opens that entity's AI panel.
+  var ASK86_PRESETS = [
+    { label: 'Look up a job number',  prompt: 'Look up [paste a job number or short name] in the live reference sheets and tell me everything we know about it — full QB name, client, address, status.' },
+    { label: 'Search material price', prompt: 'Use web_search to find current pricing on [paste material / SKU]. Compare a couple of suppliers and tell me the typical Central-FL range.' },
+    { label: 'WIP snapshot',          prompt: 'Pull the WIP report from the live reference sheets and summarize what\'s under contract right now — total value, top 5 jobs by remaining backlog, anything that looks behind schedule.' },
+    { label: 'Brainstorm scope',      prompt: 'I\'m thinking through a [scope] at [property type / size / age]. Walk me through the line items, gotchas, and questions I should ask the property manager before I quote.' },
+    { label: 'How does X work here?', prompt: 'Explain how [feature / process — e.g., "the node graph", "lead intake", "change orders"] works in Project 86. Reference the live reference sheets if relevant.' }
+  ];
   function getActivePresets() {
     if (isJobMode())    return JOB_PRESETS;
     if (isClientMode()) return CLIENT_PRESETS;
     if (isStaffMode())  return STAFF_PRESETS;
+    if (isAsk86Mode())  return ASK86_PRESETS;
     return ESTIMATE_PRESETS;
   }
 
