@@ -928,6 +928,27 @@ async function initSchema() {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
+    -- Phase 2 native-skills assignment — per-agent attachment of
+    -- native Anthropic Skills (skill_id values from beta.skills.create).
+    -- Replaces the legacy "scan app_settings.agent_skills for packs
+    -- whose agents[] includes this agent" path. The runtime collector
+    -- (collectSkillsFor in admin-agents-routes.js) UNIONs this table
+    -- with the legacy source so existing assignments keep working
+    -- while admins migrate.
+    --
+    -- position is 0-based ordering — Anthropic respects skill order
+    -- in the agent definition, so we preserve it. enabled lets the
+    -- admin temporarily detach a skill without losing the row.
+    CREATE TABLE IF NOT EXISTS managed_agent_skills (
+      agent_key TEXT NOT NULL,                             -- matches managed_agent_registry.agent_key
+      skill_id TEXT NOT NULL,                              -- Anthropic-side skill id from beta.skills.create
+      position INTEGER NOT NULL DEFAULT 0,
+      enabled BOOLEAN NOT NULL DEFAULT true,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (agent_key, skill_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_managed_agent_skills_agent ON managed_agent_skills(agent_key, position);
+
     -- Reference links the AI agents see in their system prompt.
     -- Each row points at a SharePoint / OneDrive XLSX share URL that
     -- the server fetches + parses + caches; the parsed rows are

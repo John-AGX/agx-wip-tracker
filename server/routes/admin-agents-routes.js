@@ -1450,18 +1450,65 @@ function toCustomToolParam(tool) {
   };
 }
 
-// Pull every always-on skill pack with anthropic_skill_id set for the
-// given agent key. Returns BetaManagedAgentsSkillParams entries
-// referencing the synced Anthropic Skill ids.
+// Pull every native Anthropic Skill assigned to this agent key.
+// Sources (UNIONed, deduped, capped at 20 per Anthropic's limit):
+//
+//   1. managed_agent_skills table (Phase 2 native-first source). Rows
+//      with enabled=true and a non-null skill_id. Ordered by position
+//      first so the admin's intentional ordering is preserved.
+//
+//   2. Legacy app_settings.agent_skills JSONB: packs with both
+//      anthropic_skill_id set AND agents[] including this agent_key.
+//      Kept for back-compat — existing assignments keep working while
+//      the admin migrates to the new table.
+//
+// First source wins on conflict (skill_id already attached via the
+// new table won't be re-added via the legacy path). Returns an array
+// of {type:'custom', skill_id} entries shaped for beta.agents.create.
 async function collectSkillsFor(agentKey) {
-  const r = await pool.query(`SELECT value FROM app_settings WHERE key = 'agent_skills'`);
-  if (!r.rows.length) return [];
-  const cfg = r.rows[0].value || {};
-  const skills = Array.isArray(cfg.skills) ? cfg.skills : [];
-  return skills
-    .filter(s => s && s.anthropic_skill_id && Array.isArray(s.agents) && s.agents.indexOf(agentKey) >= 0)
-    .slice(0, 20) // Anthropic caps at 20 skills per agent
-    .map(s => ({ type: 'custom', skill_id: s.anthropic_skill_id }));
+  const out = [];
+  const seen = new Set();
+
+  // Source 1: managed_agent_skills (preferred — Phase 2)
+  try {
+    const newR = await pool.query(
+      `SELECT skill_id FROM managed_agent_skills
+        WHERE agent_key = $1 AND enabled = true AND skill_id IS NOT NULL
+        ORDER BY position ASC, created_at ASC`,
+      [agentKey]
+    );
+    for (const row of newR.rows) {
+      if (out.length >= 20) break;
+      if (seen.has(row.skill_id)) continue;
+      seen.add(row.skill_id);
+      out.push({ type: 'custom', skill_id: row.skill_id });
+    }
+  } catch (e) {
+    // Table might not exist yet on a deploy that predates the
+    // migration — fall through to the legacy source.
+    console.warn('[collectSkillsFor] managed_agent_skills read failed:', e.message);
+  }
+
+  // Source 2: legacy app_settings.agent_skills (back-compat)
+  try {
+    const r = await pool.query(`SELECT value FROM app_settings WHERE key = 'agent_skills'`);
+    if (r.rows.length) {
+      const cfg = r.rows[0].value || {};
+      const skills = Array.isArray(cfg.skills) ? cfg.skills : [];
+      for (const s of skills) {
+        if (out.length >= 20) break;
+        if (!s || !s.anthropic_skill_id || !Array.isArray(s.agents)) continue;
+        if (s.agents.indexOf(agentKey) < 0) continue;
+        if (seen.has(s.anthropic_skill_id)) continue;
+        seen.add(s.anthropic_skill_id);
+        out.push({ type: 'custom', skill_id: s.anthropic_skill_id });
+      }
+    }
+  } catch (e) {
+    console.warn('[collectSkillsFor] legacy pack scan failed:', e.message);
+  }
+
+  return out;
 }
 
 // Built-in toolset configuration per agent key. Conservative defaults —
@@ -1961,6 +2008,143 @@ async function backgroundRefreshAll() {
 // stored — process exit cleans up.
 setTimeout(backgroundRefreshAll, 30 * 1000);
 setInterval(backgroundRefreshAll, REFRESH_INTERVAL_MS);
+
+// ──────── Native Skills assignment per agent (Phase 2) ────────
+//
+// Stores assignment rows in managed_agent_skills (agent_key, skill_id).
+// The UI surfaces these per agent; collectSkillsFor unions them with
+// the legacy local-pack source for back-compat. New work goes
+// straight into this table — the legacy path is just there so we
+// don't break working state during the transition.
+//
+// The skill_id list returned here mixes 'attached' (in our table)
+// with metadata from the Anthropic side (display_title, description,
+// created_at) so the UI can render a useful row without a second
+// round-trip per skill.
+
+// GET /api/admin/agents/:agentKey/native-skills
+//   Returns: { assigned: [{skill_id, position, enabled, ...metadata}],
+//              available: [{id, display_title, description, created_at}] }
+//   `assigned` is everything in our table for this agent (joined with
+//   beta.skills metadata where available). `available` is the full
+//   Anthropic-side skill list minus already-assigned ones — the UI
+//   uses this to populate an "Attach a skill" picker.
+router.get('/agents/:agentKey/native-skills', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+  try {
+    const agentKey = String(req.params.agentKey || '').trim();
+    if (!agentKey) return res.status(400).json({ error: 'agentKey is required' });
+
+    const anthropic = getAnthropic();
+    if (!anthropic) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not set on this deployment.' });
+
+    // Load Anthropic-side metadata for ALL skills (we'll filter into
+    // assigned vs available below). Cap at 200 — accounts with more
+    // than that are unlikely in practice.
+    let allSkills = [];
+    try {
+      const page = await anthropic.beta.skills.list({ limit: 200 });
+      allSkills = (page && (page.data || page)) || [];
+      if (!Array.isArray(allSkills)) allSkills = [];
+    } catch (e) {
+      console.warn('[native-skills GET] beta.skills.list failed:', e.message);
+    }
+    const metaById = new Map();
+    allSkills.forEach(s => { if (s && s.id) metaById.set(s.id, s); });
+
+    const r = await pool.query(
+      `SELECT skill_id, position, enabled, created_at FROM managed_agent_skills
+        WHERE agent_key = $1
+        ORDER BY position ASC, created_at ASC`,
+      [agentKey]
+    );
+
+    const assignedIds = new Set();
+    const assigned = r.rows.map(row => {
+      assignedIds.add(row.skill_id);
+      const meta = metaById.get(row.skill_id) || {};
+      return {
+        skill_id: row.skill_id,
+        position: row.position,
+        enabled: row.enabled,
+        attached_at: row.created_at,
+        display_title: meta.display_title || meta.name || null,
+        description: meta.description || null,
+        anthropic_created_at: meta.created_at || null,
+        anthropic_missing: !metaById.has(row.skill_id)
+      };
+    });
+    const available = allSkills
+      .filter(s => s && s.id && !assignedIds.has(s.id))
+      .map(s => ({
+        id: s.id,
+        display_title: s.display_title || s.name || null,
+        description: s.description || null,
+        created_at: s.created_at || null
+      }));
+
+    res.json({ agent_key: agentKey, assigned, available });
+  } catch (e) {
+    console.error('GET /agents/:agentKey/native-skills error:', e);
+    res.status(500).json({ error: 'Server error: ' + (e.message || 'unknown') });
+  }
+});
+
+// POST /api/admin/agents/:agentKey/native-skills
+//   Body: { skill_id: string, position?: number }
+//   Attaches the skill_id to this agent. Idempotent: re-attaching an
+//   already-attached skill returns ok without error.
+router.post('/agents/:agentKey/native-skills', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+  try {
+    const agentKey = String(req.params.agentKey || '').trim();
+    const skillId = String(req.body && req.body.skill_id || '').trim();
+    if (!agentKey || !skillId) return res.status(400).json({ error: 'agentKey and skill_id are required' });
+
+    // Default position = max(existing) + 1 so new attachments append.
+    let position;
+    if (typeof req.body.position === 'number' && Number.isFinite(req.body.position)) {
+      position = Math.max(0, Math.floor(req.body.position));
+    } else {
+      const mr = await pool.query(
+        `SELECT COALESCE(MAX(position), -1) AS max_pos FROM managed_agent_skills WHERE agent_key = $1`,
+        [agentKey]
+      );
+      position = (mr.rows[0] && mr.rows[0].max_pos != null) ? Number(mr.rows[0].max_pos) + 1 : 0;
+    }
+
+    await pool.query(
+      `INSERT INTO managed_agent_skills (agent_key, skill_id, position, enabled, created_at)
+       VALUES ($1, $2, $3, true, NOW())
+       ON CONFLICT (agent_key, skill_id) DO UPDATE
+         SET enabled = true, position = EXCLUDED.position`,
+      [agentKey, skillId, position]
+    );
+
+    res.json({ ok: true, agent_key: agentKey, skill_id: skillId, position });
+  } catch (e) {
+    console.error('POST /agents/:agentKey/native-skills error:', e);
+    res.status(500).json({ error: 'Server error: ' + (e.message || 'unknown') });
+  }
+});
+
+// DELETE /api/admin/agents/:agentKey/native-skills/:skillId
+//   Detaches the skill from this agent. Does NOT delete the skill
+//   from Anthropic — that's a separate operation
+//   (DELETE /api/admin/anthropic/skills/:id).
+router.delete('/agents/:agentKey/native-skills/:skillId', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+  try {
+    const agentKey = String(req.params.agentKey || '').trim();
+    const skillId = String(req.params.skillId || '').trim();
+    if (!agentKey || !skillId) return res.status(400).json({ error: 'agentKey and skill_id are required' });
+    await pool.query(
+      `DELETE FROM managed_agent_skills WHERE agent_key = $1 AND skill_id = $2`,
+      [agentKey, skillId]
+    );
+    res.json({ ok: true, agent_key: agentKey, skill_id: skillId });
+  } catch (e) {
+    console.error('DELETE /agents/:agentKey/native-skills/:skillId error:', e);
+    res.status(500).json({ error: 'Server error: ' + (e.message || 'unknown') });
+  }
+});
 
 // Exported so ai-routes.js (Phase 1b chat path) can resolve the
 // environment + agent ids without duplicating the SQL.

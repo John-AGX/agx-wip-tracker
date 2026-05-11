@@ -4102,14 +4102,108 @@
       '</div>' +
       '<div id="managed-agents-panel" style="margin-bottom:14px;"></div>' +
       '<div id="anthropic-skills-panel" style="margin-bottom:14px;"></div>' +
+      '<div id="agent-skill-assignments-panel" style="margin-bottom:14px;"></div>' +
       '<div id="anthropic-files-panel" style="margin-bottom:14px;"></div>' +
       '<div id="anthropic-batches-panel" style="margin-bottom:14px;"></div>';
 
     loadManagedAgents();
     loadAnthropicSkills();
+    loadAgentSkillAssignments();
     loadAnthropicFiles();
     loadAnthropicBatches();
   }
+
+  // Per-agent native skill assignment panel. Renders one card per
+  // managed agent showing assigned skills + a picker to attach more.
+  // Backed by GET/POST/DELETE /api/admin/agents/:agentKey/native-skills.
+  function loadAgentSkillAssignments() {
+    var host = document.getElementById('agent-skill-assignments-panel');
+    if (!host) return;
+    var labels = { job: '86 (Operator)', cra: 'HR', staff: 'Chief of Staff' };
+    var agents = ['job', 'cra', 'staff'];
+    var header = '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">' +
+      '<span style="font-size:18px;">🔗</span>' +
+      '<h3 style="margin:0;font-size:14px;font-weight:600;color:var(--text,#fff);">Native Skill Assignments (per agent)</h3>' +
+    '</div>' +
+    '<p style="margin:0 0 12px 0;font-size:12px;color:var(--text-dim,#888);">Which native Anthropic Skills load on which agent. Saved to <code>managed_agent_skills</code> — picked up by <code>collectSkillsFor</code> on the next agent re-registration (Bootstrap button up top). Skills attached here UNION with the legacy local-pack skill mirrors during the transition.</p>';
+    host.innerHTML = header + agents.map(function(k) {
+      return '<div id="agent-skills-card-' + k + '" style="margin-bottom:12px;padding:10px;border:1px solid var(--border,#333);border-radius:6px;background:var(--bg-elev,#1a1a1a);">' +
+        '<div style="font-size:13px;font-weight:600;color:var(--text,#fff);margin-bottom:6px;">' + escapeHTML(labels[k] || k) + ' <span style="font-family:\'SF Mono\',monospace;font-size:11px;color:var(--text-dim,#888);">[' + k + ']</span></div>' +
+        '<div data-agent-skills-body style="font-size:12px;color:var(--text-dim,#888);font-style:italic;">Loading…</div>' +
+      '</div>';
+    }).join('');
+    agents.forEach(loadOneAgentSkillCard);
+  }
+
+  function loadOneAgentSkillCard(agentKey) {
+    var card = document.getElementById('agent-skills-card-' + agentKey);
+    if (!card) return;
+    var body = card.querySelector('[data-agent-skills-body]');
+    if (!body) return;
+    window.p86Api.get('/api/admin/agents/' + encodeURIComponent(agentKey) + '/native-skills').then(function(resp) {
+      var assigned = (resp && resp.assigned) || [];
+      var available = (resp && resp.available) || [];
+      var html = '';
+      if (!assigned.length) {
+        html += '<div style="padding:6px 0;font-size:12px;color:var(--text-dim,#888);font-style:italic;">No native skills attached.</div>';
+      } else {
+        html += '<table style="width:100%;font-size:12px;margin-bottom:8px;"><tbody>';
+        assigned.forEach(function(a) {
+          var title = a.display_title || '(unnamed)';
+          var sid = a.skill_id;
+          var missing = a.anthropic_missing ? ' <span style="color:#f87171;font-size:10px;">[orphan — skill not in Anthropic]</span>' : '';
+          html += '<tr>' +
+            '<td style="padding:3px 6px 3px 0;">' + escapeHTML(title) + missing + '</td>' +
+            '<td style="padding:3px 0;font-family:\'SF Mono\',monospace;font-size:10px;color:var(--text-dim,#aaa);">' + escapeHTML(sid) + '</td>' +
+            '<td style="padding:3px 0;text-align:right;width:1%;white-space:nowrap;">' +
+              '<button type="button" onclick="window.detachAgentSkill && window.detachAgentSkill(\'' + escapeAttr(agentKey) + '\', \'' + escapeAttr(sid) + '\')" ' +
+                'style="font-size:11px;padding:3px 8px;border-radius:4px;border:1px solid #f87171;background:transparent;color:#f87171;cursor:pointer;">Detach</button>' +
+            '</td>' +
+          '</tr>';
+        });
+        html += '</tbody></table>';
+      }
+      if (available.length) {
+        html += '<div style="display:flex;gap:6px;align-items:center;margin-top:6px;">' +
+          '<select id="agent-skill-picker-' + agentKey + '" style="flex:1;padding:5px;border-radius:4px;border:1px solid var(--border,#333);background:var(--bg,#0a0a0a);color:var(--text,#fff);font-size:12px;">' +
+            '<option value="">Choose a native skill to attach…</option>' +
+            available.map(function(s) {
+              var t = s.display_title || '(unnamed)';
+              return '<option value="' + escapeAttr(s.id) + '">' + escapeHTML(t) + ' — ' + escapeHTML(s.id) + '</option>';
+            }).join('') +
+          '</select>' +
+          '<button type="button" onclick="window.attachAgentSkill && window.attachAgentSkill(\'' + escapeAttr(agentKey) + '\')" ' +
+            'style="font-size:12px;padding:5px 12px;border-radius:4px;border:1px solid #4f8cff;background:rgba(79,140,255,0.1);color:#4f8cff;cursor:pointer;">Attach</button>' +
+        '</div>';
+      } else {
+        html += '<div style="margin-top:6px;font-size:11px;color:var(--text-dim,#888);font-style:italic;">All available skills are attached. Add a new one via the Native Skills panel above.</div>';
+      }
+      body.innerHTML = html;
+    }).catch(function(err) {
+      body.innerHTML = '<div style="color:#e74c3c;font-size:12px;">Failed: ' + escapeHTML(err.message || 'unknown') + '</div>';
+    });
+  }
+
+  window.attachAgentSkill = function(agentKey) {
+    var sel = document.getElementById('agent-skill-picker-' + agentKey);
+    if (!sel) return;
+    var skillId = sel.value;
+    if (!skillId) { alert('Pick a skill first.'); return; }
+    window.p86Api.post('/api/admin/agents/' + encodeURIComponent(agentKey) + '/native-skills', { skill_id: skillId }).then(function() {
+      loadOneAgentSkillCard(agentKey);
+    }).catch(function(err) {
+      alert('Attach failed: ' + (err && err.message || 'unknown'));
+    });
+  };
+
+  window.detachAgentSkill = function(agentKey, skillId) {
+    if (!confirm('Detach this skill from ' + agentKey + '?\n\nThe native skill itself stays in Anthropic — this just removes the assignment. Re-attach anytime via the picker.')) return;
+    window.p86Api.del('/api/admin/agents/' + encodeURIComponent(agentKey) + '/native-skills/' + encodeURIComponent(skillId)).then(function() {
+      loadOneAgentSkillCard(agentKey);
+    }).catch(function(err) {
+      alert('Detach failed: ' + (err && err.message || 'unknown'));
+    });
+  };
 
   function loadManagedAgents() {
     var host = document.getElementById('managed-agents-panel');
