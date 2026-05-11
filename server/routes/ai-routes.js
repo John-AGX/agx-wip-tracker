@@ -7780,9 +7780,15 @@ async function buildAsk86Context() {
   stable.push('  • `web_search` — pricing, code references, product specs, supplier research.');
   stable.push('  Live reference sheets (job-number lookup, WIP report, etc.) are auto-injected below — use them for company-data answers without burning a tool call.');
   stable.push('');
-  stable.push('# What you cannot do from THIS surface');
-  stable.push('  You have NO entity-mutating tools in the global Ask 86 surface — no propose_add_line_item, propose_create_lead, set_phase_field, set_node_value, etc. If the user asks for a change to a specific estimate / job / lead, point them at the right entity panel ("Open the AI panel from inside that estimate to propose line items") and offer to draft the language they should paste in.');
-  stable.push('  You also can\'t see a specific job\'s WIP detail, a specific estimate\'s line items, etc., unless the user supplies them. Those live in the per-entity context that the dedicated panel-AIs build. If they want that detail, they should open the entity.');
+  stable.push('# Mutation tools you have here');
+  stable.push('  You CAN make changes from this surface:');
+  stable.push('  • `propose_create_lead` — capture a new lead in one shot. ALWAYS call `read_existing_clients` first to dedupe; if the client exists, pass its id as `existing_client_id`. Same flow as the dedicated intake panel.');
+  stable.push('  • HR client tools — `create_property`, `create_parent_company`, `update_client_field`, `link_property_to_parent`, `rename_client`, `change_property_parent`, `merge_clients`, `split_client_into_parent_and_property`, `attach_business_card_to_client`. Use these inline so the user does not have to open the HR panel for routine directory work.');
+  stable.push('  • Skill-pack changes — `propose_skill_pack_add` / `_edit` / `_delete` / `_mirror` / `_unmirror`. Approval-tier; the user vets every prompt-shaping change.');
+  stable.push('');
+  stable.push('# What lives on the per-entity panels (not here)');
+  stable.push('  Tools that operate on a SPECIFIC open entity — `propose_add_line_item`, `propose_update_line_item`, `set_phase_pct_complete`, `set_node_value`, `wire_nodes`, `create_node`, etc. — are NOT in the global Ask 86 tool list because they require the entity\'s editor / graph to be open client-side. If the user asks to "add a line to estimate X" or "tweak phase Y on job Z", point them at the right entity panel and offer to draft the exact wording they should paste in.');
+  stable.push('  You also can\'t see a specific job\'s live WIP detail, a specific estimate\'s line items, etc., unless the user supplies them in the conversation. Those live in the per-entity context that the dedicated panel-AIs build. Use `read_jobs` / `read_clients` / `read_past_estimates` for the identity-card view from here.');
   stable.push('');
   stable.push('# Tone');
   stable.push('  Concise. Construction trade vocabulary welcome. Lead with the answer, not the framing. If the user\'s question would be better answered inside a specific entity\'s AI panel, say so up front so they don\'t spin their wheels here.');
@@ -7800,12 +7806,15 @@ async function buildAsk86Context() {
   };
 }
 
-// Tools available on the global Ask 86 surface — all read-only, since
-// this surface is not entity-scoped. Mutation tools live on the per-
-// entity panels (estimate / job / intake / client). Built lazily so
-// JOB_TOOLS is fully defined before this captures references.
+// Tools available on the global Ask 86 surface. 86 here is the full
+// operator — he can create leads, audit conversations, propose client
+// edits, push skill-pack changes, etc. Entity-scoped mutations
+// (propose_add_line_item, set_phase_pct_complete, etc.) are NOT
+// included since they need an open editor on the client side; for
+// those, the user opens the entity panel where the mutation belongs.
 function ask86Tools() {
   const wanted = new Set([
+    // Reads — cross-agent (CoS introspection + HR directory)
     'read_jobs', 'read_users', 'read_clients',
     'read_subs', 'read_lead_pipeline',
     'read_materials', 'read_purchase_history',
@@ -7813,7 +7822,17 @@ function ask86Tools() {
     'read_skill_packs', 'load_skill_pack',
     'read_past_estimates', 'read_past_estimate_lines', 'read_leads'
   ]);
-  return JOB_TOOLS.filter(t => wanted.has(t.name));
+  const fromJob = JOB_TOOLS.filter(t => wanted.has(t.name));
+  // Intake tools — propose_create_lead + the dedupe reads that go
+  // with it. Strip the `tier` field that's only used inside the
+  // intake panel's auto-tier dispatcher; the Anthropic tool schema
+  // does not understand it.
+  const intake = INTAKE_TOOLS.map(({ tier, ...t }) => t);
+  // HR client mutation tools — 86 can do client CRUD inline from the
+  // global surface rather than punting the user to the HR panel.
+  // Same shape strip as intake.
+  const client = CLIENT_TOOLS.map(({ tier, ...t }) => t);
+  return [...fromJob, ...intake, ...client];
 }
 
 router.get('/ask86/messages', requireAuth, async (req, res) => {
@@ -7908,6 +7927,108 @@ router.post('/ask86/chat', requireAuth, async (req, res) => {
     });
   } catch (e) {
     console.error('POST /ask86/chat error:', e);
+    try {
+      res.write('data: ' + JSON.stringify({ error: e.message || 'Server error' }) + '\n\n');
+      res.write('data: [DONE]\n\n');
+      res.end();
+    } catch (_) {}
+  }
+});
+
+// POST /api/ai/ask86/chat/continue
+// Approval-flow continuation for the global Ask 86 surface. The client
+// posts tool_results from the approval cards; we apply approval-tier
+// mutations server-side (propose_create_lead, the HR CLIENT_TOOLS
+// mutations, propose_skill_pack_*), then resume the model stream.
+router.post('/ask86/chat/continue', requireAuth, async (req, res) => {
+  const anthropic = getAnthropic();
+  if (!anthropic) return res.status(503).json({ error: 'AI assistant is not configured.' });
+  const pendingContent = req.body && req.body.pending_assistant_content;
+  const toolResults    = req.body && req.body.tool_results;
+  if (!Array.isArray(pendingContent) || !Array.isArray(toolResults) || !toolResults.length) {
+    return res.status(400).json({ error: 'pending_assistant_content and tool_results are required' });
+  }
+  setSSEHeaders(res);
+  try {
+    const histRes = await pool.query(
+      `SELECT role, content FROM ai_messages
+        WHERE entity_type='ask86' AND user_id=$1
+        ORDER BY created_at ASC`,
+      [req.user.id]
+    );
+    let history = histRes.rows;
+    const cap = MAX_HISTORY_PAIRS * 2;
+    if (history.length > cap) history = history.slice(-cap);
+
+    // Apply each approved propose_* tool server-side. Same dispatcher
+    // shape as the job /chat/continue: propose_create_lead goes
+    // through execProposeCreateLead; CLIENT_TOOLS mutations go
+    // through execClientToolWithCtx; everything else falls back to
+    // the client-supplied applied_summary. Rejected proposals just
+    // echo the user's reject reason back to the model.
+    const toolResultBlocks = [];
+    for (const r of toolResults) {
+      let summary;
+      let isError = false;
+      if (!r.approved) {
+        summary = r.reject_reason || 'User rejected this proposal.';
+      } else if (r.name === 'propose_create_lead') {
+        try {
+          summary = await execProposeCreateLead(r.input || {}, req.user.id);
+        } catch (e) {
+          summary = 'Error: ' + (e.message || 'failed');
+          isError = true;
+        }
+      } else if (CLIENT_TOOLS.some(t => t.name === r.name)) {
+        // HR client mutations applied server-side via the same path
+        // HR's V2 sessions use.
+        try {
+          summary = await execClientToolWithCtx(r.name, r.input || {}, { userId: req.user.id });
+        } catch (e) {
+          summary = 'Error: ' + (e.message || 'failed');
+          isError = true;
+        }
+      } else {
+        summary = r.applied_summary || 'User approved. Change applied.';
+      }
+      toolResultBlocks.push({
+        type: 'tool_result',
+        tool_use_id: r.tool_use_id,
+        content: summary,
+        is_error: isError || undefined
+      });
+    }
+
+    const messages = [
+      ...history.map(m => ({ role: m.role, content: m.content })),
+      { role: 'assistant', content: pendingContent },
+      { role: 'user',      content: toolResultBlocks }
+    ];
+    const ctx = await buildAsk86Context();
+    await runStream({
+      anthropic, res,
+      system: ctx.system,
+      messages,
+      tools: ask86Tools(),
+      agentKey: 'job',
+      persistAssistantText: async (text, usage) => {
+        if (!text) return;
+        const aMsgId = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+        await pool.query(
+          `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content, model,
+                                    input_tokens, output_tokens,
+                                    cache_creation_input_tokens, cache_read_input_tokens)
+           VALUES ($1, 'ask86', 'global', $2, 'assistant', $3, $4, $5, $6, $7, $8)`,
+          [aMsgId, req.user.id, text, MODEL,
+           (usage && usage.input_tokens) || null,
+           (usage && usage.output_tokens) || null,
+           (usage && usage.cache_creation_input_tokens) || null,
+           (usage && usage.cache_read_input_tokens) || null]
+        );
+      }
+    });
+  } catch (e) {
+    console.error('POST /ask86/chat/continue error:', e);
     try {
       res.write('data: ' + JSON.stringify({ error: e.message || 'Server error' }) + '\n\n');
       res.write('data: [DONE]\n\n');
