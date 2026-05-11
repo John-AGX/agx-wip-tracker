@@ -1087,6 +1087,39 @@ const JOB_TOOLS = [
     }
   },
   {
+    name: 'navigate',
+    description:
+      'Take the user to a specific page or entity in the app. Auto-tier — applies immediately, no approval card. ' +
+      'Use this when the user asks to "go to", "open", "show me", or "switch to" something. ' +
+      'Destinations: home (dashboard), leads, estimates, clients, subs (sub-tabs of the Estimates section), ' +
+      'schedule, wip, insights, admin (top-level tabs). For specific entities, use job / estimate / lead and ' +
+      'pass entity_id. ' +
+      'Common patterns: "open job RV2001" -> navigate({destination:"job", entity_id:"<that job\'s id>"}); ' +
+      '"take me to leads" -> navigate({destination:"leads"}); "show me the schedule" -> ' +
+      'navigate({destination:"schedule"}). When the user references a job by number or a client by name, ' +
+      'call read_jobs / read_clients first to resolve the id, then navigate.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        destination: {
+          type: 'string',
+          enum: [
+            'home', 'leads', 'estimates', 'clients', 'subs',
+            'schedule', 'wip', 'insights', 'admin',
+            'job', 'estimate', 'lead'
+          ],
+          description: 'Where to take the user.'
+        },
+        entity_id: {
+          type: 'string',
+          description: 'Required when destination is job / estimate / lead. The exact entity id from a prior read tool.'
+        }
+      },
+      required: ['destination']
+    }
+  },
+  {
     name: 'load_skill_pack',
     description:
       'Pull the FULL body of a single named skill pack into your working context. ' +
@@ -1610,7 +1643,10 @@ const PLAN_MODE_ALLOWED_JOB_TOOLS = new Set([
   'read_jobs',
   'read_users',
   'read_clients',
-  'read_lead_pipeline'
+  'read_lead_pipeline',
+  // Navigation — client-side DOM dispatch. No mutation of data so
+  // it stays open in plan mode too.
+  'navigate'
 ]);
 function filterToolsForJobPhase(tools, phase) {
   if (phase !== 'plan') return tools;
@@ -7778,6 +7814,7 @@ async function buildAsk86Context() {
   stable.push('      - Node-graph / workspace question → load "Workspace placement and wiring discipline".');
   stable.push('      - Lead / client-link question → load "Lead/Client Linking".');
   stable.push('  • `web_search` — pricing, code references, product specs, supplier research.');
+  stable.push('  • `navigate({ destination, entity_id? })` — take the user to a page or entity. Use when they say "go to", "open", "show me", "take me to". Destinations: home / leads / estimates / clients / subs / schedule / wip / insights / admin, or job / estimate / lead with entity_id. When the user references an entity by name or number, call read_jobs / read_clients / read_past_estimates first to resolve the id, THEN navigate.');
   stable.push('  Live reference sheets (job-number lookup, WIP report, etc.) are auto-injected below — use them for company-data answers without burning a tool call.');
   stable.push('');
   stable.push('# Mutation tools you have here');

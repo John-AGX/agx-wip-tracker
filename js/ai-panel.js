@@ -1361,6 +1361,7 @@
     read_jobs:                    'Looking up jobs…',
     read_users:                   'Looking up users…',
     load_skill_pack:              'Loading skill pack…',
+    navigate:                     'Navigating…',
     // Estimate proposals (line items / sections / groups / scope / pricing)
     propose_add_line_item:        'Drafting line item…',
     propose_update_line_item:     'Drafting line edit…',
@@ -1738,7 +1739,10 @@
     read_subs: true,
     read_lead_pipeline: true,
     read_building_breakdown: true,
-    read_job_pct_audit: true
+    read_job_pct_audit: true,
+    // Navigation tool — auto-applies on the client side. Renders as
+    // a chip ("Navigating to leads…") rather than an approval card.
+    navigate: true
   };
 
   function finalizeProposalBubble(streamDiv, assistantText, toolUses, pendingContent) {
@@ -2083,7 +2087,67 @@
   // Public for the panel header button
   window._p86AiPanelOpenTrust = openTrustPopover;
 
+  // Navigation tool — purely client-side DOM dispatch. The model
+  // emits a `navigate` tool_use; we route to the right top-level
+  // switchTab / sub-tab / entity-open helper and return a summary
+  // string that gets fed back to the model as the tool_result. No
+  // server round-trip; the server never sees this executor.
+  function _navigate(input) {
+    input = input || {};
+    var dest = String(input.destination || '').toLowerCase();
+    var entityId = input.entity_id || null;
+    function go(top) { if (typeof window.switchTab === 'function') window.switchTab(top); }
+    function sub(name) { if (typeof window.switchEstimatesSubTab === 'function') window.switchEstimatesSubTab(name); }
+    function mark(v) { if (typeof window.markVirtualTabActive === 'function') window.markVirtualTabActive(v); }
+    switch (dest) {
+      case 'home':
+      case 'summary':
+        go('summary');
+        return 'Navigated to the home dashboard.';
+      case 'leads':
+        go('estimates'); sub('leads'); mark('leads');
+        return 'Switched to the Leads list.';
+      case 'estimates':
+        go('estimates'); sub('list'); mark('estimates');
+        return 'Switched to the Estimates list.';
+      case 'clients':
+        go('estimates'); sub('clients'); mark('clients');
+        return 'Switched to the Clients directory.';
+      case 'subs':
+        go('estimates'); sub('subs'); mark('subs');
+        return 'Switched to the Subs directory.';
+      case 'schedule': go('schedule'); return 'Switched to the Schedule.';
+      case 'wip':      go('wip');      return 'Switched to the WIP list.';
+      case 'insights': go('insights'); return 'Switched to Insights.';
+      case 'admin':    go('admin');    return 'Switched to Admin.';
+      case 'job':
+        if (!entityId) return 'navigate: entity_id is required for destination=job.';
+        go('wip');
+        if (typeof window.editJob === 'function') window.editJob(entityId);
+        return 'Opened job ' + entityId + '.';
+      case 'estimate':
+        if (!entityId) return 'navigate: entity_id is required for destination=estimate.';
+        go('estimates'); sub('list'); mark('estimates');
+        if (typeof window.editEstimate === 'function') window.editEstimate(entityId);
+        return 'Opened estimate ' + entityId + '.';
+      case 'lead':
+        if (!entityId) return 'navigate: entity_id is required for destination=lead.';
+        go('estimates'); sub('leads'); mark('leads');
+        if (typeof window.openEditLeadModal === 'function') window.openEditLeadModal(entityId);
+        return 'Opened lead ' + entityId + '.';
+      default:
+        return 'navigate: unknown destination "' + dest + '". Valid destinations: home, leads, estimates, clients, subs, schedule, wip, insights, admin, job, estimate, lead.';
+    }
+  }
+
   function applyTool(tu) {
+    // Navigation is a pure client-side side effect — handle before
+    // entity-mode dispatch so it works the same from Ask 86, job,
+    // estimate, intake, etc. The return string flows back as the
+    // tool_result via the regular auto-apply chip handler.
+    if (tu.name === 'navigate') {
+      return Promise.resolve(_navigate(tu.input));
+    }
     if (isClientMode() || isStaffMode() || isIntakeMode() || isAsk86Mode()) {
       // Server applies these tools on /chat/continue. Just signal
       // approval — there's no client-side mutation to perform.
