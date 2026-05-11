@@ -4189,41 +4189,136 @@
       '</div>';
   }
 
+  function nativeSkillsHeader(count) {
+    return '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;">' +
+      '<div style="display:flex;align-items:center;gap:8px;">' +
+        '<span style="font-size:18px;">🧠</span>' +
+        '<h3 style="margin:0;font-size:14px;font-weight:600;color:var(--text,#fff);">Native Skills' + (count != null ? ' (' + count + ')' : '') + '</h3>' +
+      '</div>' +
+      '<div style="display:flex;gap:6px;">' +
+        '<button type="button" onclick="window.refreshNativeSkills && window.refreshNativeSkills()" ' +
+          'style="font-size:11px;padding:4px 10px;border-radius:4px;border:1px solid var(--border,#333);background:transparent;color:var(--text-dim,#aaa);cursor:pointer;">↻ Refresh</button>' +
+        '<button type="button" onclick="window.openCreateNativeSkill && window.openCreateNativeSkill()" ' +
+          'style="font-size:11px;padding:4px 10px;border-radius:4px;border:1px solid #4f8cff;background:rgba(79,140,255,0.1);color:#4f8cff;cursor:pointer;">+ Add skill</button>' +
+      '</div>' +
+    '</div>';
+  }
+
   function loadAnthropicSkills() {
     var host = document.getElementById('anthropic-skills-panel');
     if (!host) return;
-    host.innerHTML = panelHeader('Native Skills', '🧠') + '<div style="font-size:12px;color:var(--text-dim,#888);font-style:italic;">Loading…</div>';
+    host.innerHTML = nativeSkillsHeader(null) + '<div style="font-size:12px;color:var(--text-dim,#888);font-style:italic;">Loading…</div>';
     window.p86Api.get('/api/admin/anthropic/skills').then(function(resp) {
       var rows = (resp && resp.skills) || [];
       var note = resp && resp.note;
       if (!rows.length) {
-        host.innerHTML = panelHeader('Native Skills', '🧠') +
+        host.innerHTML = nativeSkillsHeader(0) +
           '<div style="font-size:12px;color:var(--text-dim,#888);font-style:italic;padding:10px 0;">' +
             (note ? escapeHTML(note) : 'No native Skills hosted yet.') +
-            ' Project 86 hasn\'t migrated to the native-Skills primitive — see Native Skills migration plan in chat for details.' +
+            ' Click <strong>+ Add skill</strong> to create one from scratch — uploads a SKILL.md to Anthropic and makes it available as a native skill for any agent we register.' +
           '</div>';
         return;
       }
-      var html = panelHeader('Native Skills (' + rows.length + ')', '🧠') +
+      var html = nativeSkillsHeader(rows.length) +
         '<div class="table-container"><table style="width:100%;font-size:12px;">' +
-        '<thead><tr><th>Id</th><th>Name</th><th>Description</th><th>Created</th></tr></thead><tbody>';
+        '<thead><tr><th>Id</th><th>Name</th><th>Description</th><th>Created</th><th style="width:60px;"></th></tr></thead><tbody>';
       rows.forEach(function(s) {
         var when = '';
         try { when = s.created_at ? new Date(s.created_at).toLocaleDateString() : ''; } catch (e) {}
+        var id = s.id || '';
+        var name = s.display_title || s.name || '';
         html += '<tr>' +
-          '<td style="font-family:\'SF Mono\',monospace;font-size:11px;color:var(--text-dim,#aaa);">' + escapeHTML(s.id || '') + '</td>' +
-          '<td>' + escapeHTML(s.name || '') + '</td>' +
+          '<td style="font-family:\'SF Mono\',monospace;font-size:11px;color:var(--text-dim,#aaa);">' + escapeHTML(id) + '</td>' +
+          '<td>' + escapeHTML(name) + '</td>' +
           '<td style="font-size:11px;color:var(--text-dim,#aaa);">' + escapeHTML((s.description || '').slice(0, 120)) + '</td>' +
           '<td style="font-size:11px;color:var(--text-dim,#aaa);">' + escapeHTML(when) + '</td>' +
+          '<td><button type="button" onclick="window.deleteNativeSkill && window.deleteNativeSkill(\'' + encodeURIComponent(id) + '\', \'' + encodeURIComponent(name).replace(/'/g, "\\'") + '\')" ' +
+            'style="font-size:11px;padding:3px 8px;border-radius:4px;border:1px solid #f87171;background:transparent;color:#f87171;cursor:pointer;">Delete</button></td>' +
         '</tr>';
       });
       html += '</tbody></table></div>';
       host.innerHTML = html;
     }).catch(function(err) {
-      host.innerHTML = panelHeader('Native Skills', '🧠') +
+      host.innerHTML = nativeSkillsHeader(null) +
         '<div style="color:#e74c3c;font-size:12px;">Failed: ' + escapeHTML(err.message || 'unknown') + '</div>';
     });
   }
+
+  // Refresh handler — re-runs the list call. Exposed on window so the
+  // inline onclick in the header button can reach it without extra
+  // event-binding glue.
+  window.refreshNativeSkills = function() { loadAnthropicSkills(); };
+
+  // Delete handler — confirm, DELETE, re-list. Decoded id back from
+  // the URI-encoded inline-onclick value.
+  window.deleteNativeSkill = function(encId, encName) {
+    var id = decodeURIComponent(encId);
+    var name = decodeURIComponent(encName);
+    if (!confirm('Delete native Skill "' + name + '" (' + id + ')?\n\nThis removes the skill from Anthropic. Any agent registered with this skill_id will lose access on next bootstrap. Local skill packs (if any) keep their bodies — the next time you mirror them, a fresh native skill is created.')) return;
+    window.p86Api.del('/api/admin/anthropic/skills/' + encodeURIComponent(id)).then(function() {
+      loadAnthropicSkills();
+    }).catch(function(err) {
+      alert('Delete failed: ' + (err && err.message || 'unknown'));
+    });
+  };
+
+  // Create dialog — simple modal with title + markdown body. POSTs to
+  // /api/admin/anthropic/skills. The body is wrapped in SKILL.md
+  // frontmatter server-side unless it already has frontmatter.
+  window.openCreateNativeSkill = function() {
+    var existing = document.getElementById('native-skill-create-modal');
+    if (existing) existing.remove();
+    var modal = document.createElement('div');
+    modal.id = 'native-skill-create-modal';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;z-index:9999;';
+    modal.innerHTML =
+      '<div style="background:var(--bg-elev,#1a1a1a);border:1px solid var(--border,#333);border-radius:8px;padding:20px;width:680px;max-width:90vw;max-height:90vh;display:flex;flex-direction:column;gap:12px;">' +
+        '<h3 style="margin:0;font-size:16px;color:var(--text,#fff);">+ Add native Skill</h3>' +
+        '<p style="margin:0;font-size:12px;color:var(--text-dim,#888);">Uploads a SKILL.md to Anthropic via beta.skills.create. The skill becomes immediately available to register on any agent in this account.</p>' +
+        '<label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--text-dim,#aaa);">Title (≤200 chars)' +
+          '<input type="text" id="native-skill-title" maxlength="200" style="padding:6px 8px;border-radius:4px;border:1px solid var(--border,#333);background:var(--bg,#0a0a0a);color:var(--text,#fff);font-size:13px;" placeholder="e.g. AGX Estimating Playbook">' +
+        '</label>' +
+        '<label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--text-dim,#aaa);">Description (optional — feeds SKILL.md frontmatter)' +
+          '<input type="text" id="native-skill-desc" maxlength="1024" style="padding:6px 8px;border-radius:4px;border:1px solid var(--border,#333);background:var(--bg,#0a0a0a);color:var(--text,#fff);font-size:13px;" placeholder="Short blurb on when Claude should load this skill">' +
+        '</label>' +
+        '<label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--text-dim,#aaa);flex:1;min-height:0;">Body (markdown)' +
+          '<textarea id="native-skill-body" style="flex:1;min-height:220px;padding:8px;border-radius:4px;border:1px solid var(--border,#333);background:var(--bg,#0a0a0a);color:var(--text,#fff);font-size:12px;font-family:\'SF Mono\',ui-monospace,monospace;resize:vertical;" placeholder="# Heading\\n\\nGuidance the model should follow when this skill loads…"></textarea>' +
+        '</label>' +
+        '<div style="display:flex;justify-content:flex-end;gap:8px;">' +
+          '<button type="button" id="native-skill-cancel" style="font-size:12px;padding:6px 14px;border-radius:4px;border:1px solid var(--border,#333);background:transparent;color:var(--text-dim,#aaa);cursor:pointer;">Cancel</button>' +
+          '<button type="button" id="native-skill-submit" style="font-size:12px;padding:6px 14px;border-radius:4px;border:1px solid #4f8cff;background:#4f8cff;color:white;cursor:pointer;">Create</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(modal);
+    var cancel = function() { modal.remove(); };
+    modal.querySelector('#native-skill-cancel').onclick = cancel;
+    modal.onclick = function(e) { if (e.target === modal) cancel(); };
+    modal.querySelector('#native-skill-submit').onclick = function() {
+      var title = (modal.querySelector('#native-skill-title').value || '').trim();
+      var desc = (modal.querySelector('#native-skill-desc').value || '').trim();
+      var bodyText = (modal.querySelector('#native-skill-body').value || '').trim();
+      if (!title) { alert('Title is required.'); return; }
+      if (!bodyText) { alert('Body is required.'); return; }
+      var btn = modal.querySelector('#native-skill-submit');
+      btn.disabled = true; btn.textContent = 'Creating…';
+      window.p86Api.post('/api/admin/anthropic/skills', {
+        display_title: title,
+        description: desc || undefined,
+        body: bodyText
+      }).then(function(resp) {
+        cancel();
+        loadAnthropicSkills();
+        if (resp && resp.skill && resp.skill.id) {
+          // Brief confirmation — the row will already be visible in
+          // the refreshed table; this just confirms the API round-trip.
+          console.log('[native-skills] created', resp.skill.id);
+        }
+      }).catch(function(err) {
+        btn.disabled = false; btn.textContent = 'Create';
+        alert('Create failed: ' + (err && err.message || 'unknown'));
+      });
+    };
+  };
 
   function loadAnthropicFiles() {
     var host = document.getElementById('anthropic-files-panel');

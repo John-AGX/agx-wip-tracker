@@ -1,18 +1,18 @@
-// Admin Anthropic — read-only browser for resources hosted in your
-// Anthropic account: Skills, Files, Batches. Lets the admin see
-// exactly what's been created on the Anthropic side from this app —
-// uploaded photos that became file_ids, submitted batches, native
-// Skills (when we migrate to that primitive).
+// Admin Anthropic — browser AND scaffolding for resources hosted in
+// your Anthropic account: Skills, Files, Batches.
 //
-// All endpoints are thin wrappers around beta.* .list() methods on
-// the SDK. No mutations from this surface — the create/delete paths
-// live in their respective domain routers (admin-files-routes for
-// uploads, admin-batch-routes for submissions, etc.).
+// Skills surface (post Phase 1 native build):
+//   GET    /api/admin/anthropic/skills        list native Skills
+//   POST   /api/admin/anthropic/skills        create a native Skill from markdown
+//   DELETE /api/admin/anthropic/skills/:id    delete a native Skill by id
 //
-// Endpoints:
-//   GET /api/admin/anthropic/skills     list native Skills (after migration)
-//   GET /api/admin/anthropic/files      list every uploaded file
-//   GET /api/admin/anthropic/batches    list every submitted batch
+// Files / Batches remain read-only here — their create paths live in
+// admin-files-routes / admin-batch-routes.
+//
+// The Skills create/delete endpoints are decoupled from the local
+// pack-mirroring flow in admin-agents-routes. Mirror endpoints there
+// still exist for legacy packs; this surface is the going-forward
+// "fresh native build" admin UI.
 //
 // Admin-gated by ROLES_MANAGE.
 
@@ -23,7 +23,7 @@ const router = express.Router();
 
 console.log('[admin-anthropic-routes] mounted at /api/admin/anthropic');
 
-const { Anthropic } = require('@anthropic-ai/sdk');
+const { Anthropic, toFile } = require('@anthropic-ai/sdk');
 let _anth = null;
 function getAnthropic() {
   if (_anth) return _anth;
@@ -54,6 +54,82 @@ router.get('/skills', requireAuth, requireCapability('ROLES_MANAGE'), async (req
     res.json({ skills: Array.isArray(skills) ? skills : [], note: skills.length ? null : 'No native Skills in this account yet.' });
   } catch (e) {
     console.error('GET /api/admin/anthropic/skills error:', e);
+    res.status(500).json({ error: 'Server error: ' + (e.message || 'unknown') });
+  }
+});
+
+// POST /api/admin/anthropic/skills
+//   Body: { display_title: string, body: string (markdown) }
+//   Creates a fresh native Anthropic Skill from a markdown body. The
+//   body is wrapped in YAML frontmatter (name + description) and
+//   uploaded as SKILL.md via beta.skills.create. Returns the created
+//   skill's full record.
+//
+//   This endpoint is DECOUPLED from the local pack JSONB blob — it
+//   creates a native skill directly. Use this when you're building
+//   native-first (no local pack mirror). The legacy mirror endpoints
+//   at /api/admin/agents/skills/:idx/sync-to-anthropic still work for
+//   packs that exist in app_settings.agent_skills.
+router.post('/skills', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+  try {
+    const anthropic = getAnthropic();
+    if (!anthropic) return res.status(503).json(notConfigured());
+    const body = req.body || {};
+    const displayTitle = String(body.display_title || '').trim();
+    const md = String(body.body || '').trim();
+    if (!displayTitle) return res.status(400).json({ error: 'display_title is required' });
+    if (!md) return res.status(400).json({ error: 'body (markdown) is required' });
+    if (displayTitle.length > 200) return res.status(400).json({ error: 'display_title must be 200 chars or fewer' });
+
+    // Build SKILL.md with frontmatter. Anthropic Skills load this as
+    // their identity card — `description` drives when the runtime
+    // decides to surface the skill, so default it to the display
+    // title when the caller doesn't supply one. Leading dashes /
+    // frontmatter blocks already in the body pass through unchanged
+    // — we only wrap if no frontmatter is detected.
+    const description = String(body.description || displayTitle).replace(/[\r\n]/g, ' ').slice(0, 1024);
+    const hasFrontmatter = /^---\s*\n/.test(md);
+    const skillMd = hasFrontmatter
+      ? md
+      : [
+          '---',
+          'name: ' + displayTitle.replace(/[\r\n]/g, ' '),
+          'description: ' + description,
+          '---',
+          '',
+          md
+        ].join('\n');
+
+    const file = await toFile(Buffer.from(skillMd, 'utf8'), 'SKILL.md', { type: 'text/markdown' });
+    const created = await anthropic.beta.skills.create({
+      display_title: displayTitle,
+      files: [file]
+    });
+
+    res.json({ ok: true, skill: created });
+  } catch (e) {
+    console.error('POST /api/admin/anthropic/skills error:', e);
+    res.status(500).json({ error: 'Server error: ' + (e.message || 'unknown') });
+  }
+});
+
+// DELETE /api/admin/anthropic/skills/:id
+//   Deletes a native Anthropic Skill by id. Does NOT touch local
+//   packs in app_settings.agent_skills — if the skill being deleted
+//   was a mirror of a local pack, the local pack's anthropic_skill_id
+//   pointer becomes stale and the admin UI will show it as un-synced.
+//   That's intentional: this endpoint is the "purge from Anthropic"
+//   knob, and re-syncing from the local pack rebuilds the pointer.
+router.delete('/skills/:id', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+  try {
+    const anthropic = getAnthropic();
+    if (!anthropic) return res.status(503).json(notConfigured());
+    const id = String(req.params.id || '').trim();
+    if (!id) return res.status(400).json({ error: 'id is required' });
+    await anthropic.beta.skills.delete(id);
+    res.json({ ok: true, deleted: id });
+  } catch (e) {
+    console.error('DELETE /api/admin/anthropic/skills/:id error:', e);
     res.status(500).json({ error: 'Server error: ' + (e.message || 'unknown') });
   }
 });
