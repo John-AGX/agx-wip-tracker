@@ -7158,7 +7158,13 @@ async function buildIntakeContext(userId) {
 async function execIntakeRead(name, input) {
   if (name === 'read_existing_clients') {
     const q = String((input && input.query) || '').trim();
-    if (!q) return 'No query provided.';
+    if (!q) {
+      // Return a successful empty result rather than a sentinel string —
+      // the model was misreading "No query provided." as a tool error
+      // and looping. This makes the contract explicit: search complete,
+      // zero matches, here's why.
+      return 'Search complete. Query was empty — call again with a query string (company name, property, or city) to match against the directory.';
+    }
     const like = '%' + q.replace(/[\\%_]/g, m => '\\' + m) + '%';
     const r = await pool.query(
       `SELECT c.id, c.name, c.client_type, c.parent_client_id,
@@ -7171,8 +7177,12 @@ async function execIntakeRead(name, input) {
         LIMIT 30`,
       [like]
     );
-    if (!r.rows.length) return 'No clients matched "' + q + '". Safe to propose a new client.';
-    const lines = ['Matched ' + r.rows.length + ' client(s):'];
+    if (!r.rows.length) {
+      // Phrase the zero-match case unambiguously as a successful tool
+      // result so the model doesn't loop thinking the tool is broken.
+      return 'Search complete. Query: "' + q + '". Matches found: 0. The directory has no client whose name, parent, or community contains "' + q + '". This is a valid result — proceed by calling propose_create_lead with new_client (do NOT retry the search with the same query).';
+    }
+    const lines = ['Search complete. Query: "' + q + '". Matches found: ' + r.rows.length + '.'];
     r.rows.forEach(c => {
       const parent = c.parent_name ? ' (under ' + c.parent_name + ')' : '';
       const where  = [c.city, c.state].filter(Boolean).join(', ');
@@ -7186,7 +7196,9 @@ async function execIntakeRead(name, input) {
   }
   if (name === 'read_existing_leads') {
     const q = String((input && input.query) || '').trim();
-    if (!q) return 'No query provided.';
+    if (!q) {
+      return 'Search complete. Query was empty — call again with a query string (project description, property, or city) to match against recent leads.';
+    }
     const like = '%' + q.replace(/[\\%_]/g, m => '\\' + m) + '%';
     const r = await pool.query(
       `SELECT l.id, l.title, l.status, l.city, l.state, l.created_at, l.updated_at,
@@ -7200,8 +7212,10 @@ async function execIntakeRead(name, input) {
         LIMIT 20`,
       [like]
     );
-    if (!r.rows.length) return 'No leads matched "' + q + '" in the last 180 days. Safe to create.';
-    const lines = ['Recent leads matching "' + q + '":'];
+    if (!r.rows.length) {
+      return 'Search complete. Query: "' + q + '". Matches found: 0 (looked back 180 days). No recent leads at that property / title / city. This is a valid result — proceed with propose_create_lead (do NOT retry the search with the same query).';
+    }
+    const lines = ['Search complete. Query: "' + q + '". Matches found: ' + r.rows.length + '.'];
     r.rows.forEach(l => {
       lines.push('- id=`' + l.id + '` · ' + l.title +
         (l.client_name ? ' · ' + l.client_name : '') +
