@@ -1426,8 +1426,12 @@
     read_users:                   'Looking up users…',
     read_existing_clients:        'Checking existing clients…',
     read_existing_leads:          'Checking existing leads…',
+    read_field_tools:             'Checking existing tools…',
     load_skill_pack:              'Loading skill pack…',
     navigate:                     'Navigating…',
+    propose_create_field_tool:    'Drafting field tool…',
+    propose_update_field_tool:    'Editing field tool…',
+    propose_delete_field_tool:    'Removing field tool…',
     // Estimate proposals (line items / sections / groups / scope / pricing)
     propose_add_line_item:        'Drafting line item…',
     propose_update_line_item:     'Drafting line edit…',
@@ -1837,6 +1841,9 @@
     // can match the new lead against existing clients / leads.
     read_existing_clients: true,
     read_existing_leads: true,
+    // Field tools listing — fires before propose_create_field_tool
+    // so the model can check for duplicate names / see what exists.
+    read_field_tools: true,
     // Navigation action — client-side DOM dispatch.
     navigate: true
   };
@@ -2334,7 +2341,10 @@
     // Intake dedup lookups — pure reads of existing clients/leads to
     // help the model spot duplicates before creating a new record.
     read_existing_clients: true,
-    read_existing_leads: true
+    read_existing_leads: true,
+    // Field tools index — pure read, server dispatches to
+    // execFieldToolRead via FIELD_TOOLS_EXECUTOR_TOOLS in /exec-tool.
+    read_field_tools: true
   };
   function execAGAutoTool(name, input) {
     return window.p86Api.post('/api/ai/exec-tool', { name: name, input: input || {} })
