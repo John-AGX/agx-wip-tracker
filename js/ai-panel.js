@@ -123,9 +123,13 @@
       var v2s = isStaffAgentMode() ? '/v2' : '';
       return '/api/ai' + v2s + '/staff';
     }
-    // Global "Ask 86" — entity-less surface backed by 86 (the operator).
-    // Reachable from the header button anywhere in the app.
-    if (_entityType === 'ask86') return '/api/ai/ask86';
+    // Global "Ask 86" — the UNIFIED 86 surface. Reachable from the
+    // header button anywhere in the app. Routes to /api/ai/86 (V2
+    // managed agent, full 69-tool union, single conversation thread
+    // per user, page-context aware via current_context body field).
+    // Legacy /api/ai/ask86 still serves old entity_type='ask86' rows
+    // but new chats go through /86.
+    if (_entityType === 'ask86') return '/api/ai/86';
     // Lead Intake — v2-only (no legacy path). Always /v2/intake.
     if (_entityType === 'intake') return '/api/ai/v2/intake';
     // estimate mode — flag-gated: v2 (Sessions) when agent mode is on,
@@ -140,6 +144,66 @@
   function isIntakeMode() { return _entityType === 'intake'; }
   function isAsk86Mode() { return _entityType === 'ask86'; }
 
+  // Build the per-turn page-context payload for the unified 86
+  // surface. Tells 86 "where is the user, what are they looking at."
+  // Best-effort — every signal is optional; the server treats the
+  // whole object as nullable. Lives in this module because the panel
+  // is the only call site, and it has the cleanest read of the SPA's
+  // current state via the existing `_entityType` / `_entityId` slots
+  // when a per-entity panel is also mounted plus `window.appState`
+  // for the legacy job-shell state.
+  function getCurrentPageContext() {
+    var ctx = {};
+    // Active top-level tab — read from the navbar's .active button.
+    try {
+      var activeBtn = document.querySelector('.tab-btn.active');
+      if (activeBtn) {
+        var tab = activeBtn.getAttribute('data-tab') || activeBtn.textContent || '';
+        tab = String(tab).trim();
+        if (tab) ctx.page = tab;
+      }
+    } catch (e) { /* best-effort */ }
+
+    // Active URL — handy for cross-checking ctx.page when the SPA
+    // routes via hash / path. Keep relative to avoid leaking the
+    // deployment host.
+    try {
+      var url = (window.location.pathname || '') + (window.location.search || '') + (window.location.hash || '');
+      if (url) ctx.url = url;
+    } catch (e) { /* best-effort */ }
+
+    // Open job — the most common entity the user has selected. The
+    // jobs tab + workspace + WIP all surface a job via appState.
+    var openJobId = (window.appState && window.appState.currentJobId) || null;
+    if (openJobId) {
+      ctx.entity_type = 'job';
+      ctx.entity_id = String(openJobId);
+      // Label from the loaded jobs array if available.
+      try {
+        var job = (window.appData && Array.isArray(window.appData.jobs))
+          ? window.appData.jobs.find(function(j) { return j && j.id === openJobId; })
+          : null;
+        if (job) ctx.entity_label = job.name || job.jobNumber || job.id;
+      } catch (e) { /* best-effort */ }
+    }
+
+    // Open estimate — overrides the job entity if the estimate editor
+    // is open (the user is actively editing an estimate, even if it's
+    // linked to a job).
+    try {
+      if (window.estimateEditorAPI && typeof window.estimateEditorAPI.getCurrentEstimateId === 'function') {
+        var eid = window.estimateEditorAPI.getCurrentEstimateId();
+        if (eid) {
+          ctx.entity_type = 'estimate';
+          ctx.entity_id = String(eid);
+          ctx.entity_label = null;
+        }
+      }
+    } catch (e) { /* best-effort */ }
+
+    return Object.keys(ctx).length ? ctx : null;
+  }
+
   // History reads + clear always hit the v1 messages paths regardless
   // of which chat version is active. ai_messages is shared (same DB
   // rows whether v1 or v2 produced them), so there's no /v2/.../messages
@@ -150,7 +214,7 @@
     if (_entityType === 'job') return '/api/ai/jobs/' + encodeURIComponent(_entityId);
     if (_entityType === 'client') return '/api/ai/clients';
     if (_entityType === 'staff') return '/api/ai/staff';
-    if (_entityType === 'ask86') return '/api/ai/ask86';
+    if (_entityType === 'ask86') return '/api/ai/86';
     return '/api/ai/estimates/' + encodeURIComponent(_entityId);
   }
 
@@ -1547,6 +1611,14 @@
       // Elle's per-job phase (plan/build). Server filters JOB_TOOLS
       // and adapts the system prompt based on this value.
       body.aiPhase = getJobAIPhase(_entityId);
+    }
+    // Unified 86 surface — feed the per-turn page context so 86
+    // knows where the user is and what entity (if any) is open. The
+    // server wraps this in <page_context>...</page_context> in front
+    // of the user message text so 86 reads it as part of every turn.
+    if (isAsk86Mode()) {
+      var pageCtx = getCurrentPageContext();
+      if (pageCtx) body.current_context = pageCtx;
     }
     // Combine one-shot images: pre-existing handoff (PDF viewer) + composer.
     var bodyImages = [];

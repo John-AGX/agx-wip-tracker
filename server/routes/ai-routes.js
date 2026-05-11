@@ -8225,6 +8225,269 @@ router.post('/ask86/chat/continue', requireAuth, async (req, res) => {
   }
 });
 
+// ══════════════════════════════════════════════════════════════════════
+// Unified 86 — ONE chat surface across the whole system
+// ══════════════════════════════════════════════════════════════════════
+//
+// User's intent: "I want one unified 86 across the whole system, self
+// aware of what page the user is on and what they are working on,
+// and able to navigate where the user needs to be."
+//
+// The legacy split (per-entity panels each with their own chat
+// endpoint + Ask 86 on V1 messages.stream) is gone here. This single
+// surface:
+//   - Uses the managed `job` agent (69-tool union: estimate +
+//     job + client + intake + reads + navigate).
+//   - Loads/creates ONE session per user via beta.sessions —
+//     keyed on (agent_key='job', entity_type='86', entity_id='global',
+//     user_id). Same agent_id, same conversation continuity wherever
+//     the user is in the app.
+//   - Each turn carries a `current_context` block describing the
+//     user's current page + open entity. 86 reads this on every turn
+//     to know "where are we / what's on screen."
+//   - Native Skills attached to the managed `job` agent via
+//     managed_agent_skills load automatically.
+//
+// Endpoints:
+//   GET    /api/ai/86/messages          → history
+//   DELETE /api/ai/86/messages          → clear
+//   POST   /api/ai/86/chat              → user turn
+//   POST   /api/ai/86/chat/continue     → tool approval continuation
+
+// Render the per-turn page context as a tagged block so the model
+// has a clean separator between "where you are" data and the user's
+// actual message. Wrapping in <page_context> mirrors the
+// <turn_context> convention used by buildJobContext callers.
+function renderPageContextBlock(ctx) {
+  if (!ctx || typeof ctx !== 'object') return '';
+  const lines = ['<page_context>'];
+  if (ctx.page)           lines.push('page: ' + String(ctx.page));
+  if (ctx.entity_type)    lines.push('entity_type: ' + String(ctx.entity_type));
+  if (ctx.entity_id)      lines.push('entity_id: ' + String(ctx.entity_id));
+  if (ctx.entity_label)   lines.push('entity_label: ' + String(ctx.entity_label));
+  if (ctx.url)            lines.push('url: ' + String(ctx.url));
+  if (ctx.open_data_summary) lines.push('open_data_summary:\n  ' + String(ctx.open_data_summary).split('\n').join('\n  '));
+  lines.push('</page_context>');
+  return lines.join('\n');
+}
+
+router.get('/86/messages', requireAuth, async (req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT id, role, content, created_at
+         FROM ai_messages
+        WHERE entity_type='86' AND user_id=$1
+        ORDER BY created_at ASC`,
+      [req.user.id]
+    );
+    res.json({ messages: r.rows });
+  } catch (e) {
+    console.error('GET /86/messages error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.delete('/86/messages', requireAuth, async (req, res) => {
+  try {
+    // Archive the Anthropic-side session too so the next chat starts
+    // with a clean Anthropic context — otherwise the cleared local
+    // history desyncs from the agent's still-loaded events.
+    const sessionRow = await pool.query(
+      `SELECT id, anthropic_session_id FROM ai_sessions
+        WHERE agent_key='job' AND entity_type='86'
+          AND entity_id='global' AND user_id=$1 AND archived_at IS NULL`,
+      [req.user.id]
+    );
+    if (sessionRow.rows.length) {
+      const s = sessionRow.rows[0];
+      try {
+        const anthropic = getAnthropic();
+        if (anthropic) await anthropic.beta.sessions.archive(s.anthropic_session_id);
+      } catch (_) { /* best-effort archive */ }
+      await pool.query(`UPDATE ai_sessions SET archived_at = NOW() WHERE id = $1`, [s.id]);
+    }
+    await pool.query(
+      `DELETE FROM ai_messages WHERE entity_type='86' AND user_id=$1`,
+      [req.user.id]
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('DELETE /86/messages error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.post('/86/chat', requireAuth, async (req, res) => {
+  const anthropic = getAnthropic();
+  if (!anthropic) return res.status(503).json({ error: 'AI assistant is not configured.' });
+  if (!FLAG_AGENT_MODE_86) {
+    return res.status(503).json({ error: 'Unified 86 path requires AGENT_MODE_86=agents on the server.' });
+  }
+  const userMessage = (req.body && req.body.message || '').trim();
+  if (!userMessage) return res.status(400).json({ error: 'message is required' });
+
+  const currentContext = (req.body && req.body.current_context) || null;
+  const additionalImages = Array.isArray(req.body && req.body.additional_images)
+    ? req.body.additional_images.slice(0, 12)
+    : [];
+
+  setSSEHeaders(res);
+  try {
+    // Build the per-turn payload — page context block (optional)
+    // prefixes the user's actual text so 86 always knows "you are
+    // here." Inline images mix in front of the text per Anthropic's
+    // vision guidance.
+    const pageBlock = renderPageContextBlock(currentContext);
+    const turnText = pageBlock ? (pageBlock + '\n\n' + userMessage) : userMessage;
+
+    const inlineImageBlocks = additionalImages
+      .map(b64 => inlineImageBlock(b64))
+      .filter(Boolean);
+    const userContent = inlineImageBlocks.length
+      ? [...inlineImageBlocks, { type: 'text', text: turnText }]
+      : [{ type: 'text', text: turnText }];
+
+    // Persist the user's message (raw, no context prefix — context is
+    // a per-turn synthesis, not durable conversation content).
+    const userMsgId = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+    await pool.query(
+      `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content, photos_included, inline_image_blocks)
+       VALUES ($1, '86', 'global', $2, 'user', $3, $4, $5::jsonb)`,
+      [
+        userMsgId, req.user.id, userMessage, additionalImages.length,
+        inlineImageBlocks.length ? JSON.stringify(inlineImageBlocks) : null
+      ]
+    );
+
+    // ONE session per user — keyed on (job, '86', 'global', user).
+    // The managed `job` agent has the 69-tool union after 6ef82d4.
+    const session = await ensureAiSession({
+      agentKey: 'job',
+      entityType: '86',
+      entityId: 'global',
+      userId: req.user.id
+    });
+    await pool.query('UPDATE ai_sessions SET last_used_at = NOW() WHERE id = $1', [session.id]);
+
+    await runV2SessionStream({
+      anthropic, res,
+      session: session,
+      eventsToSend: [{ type: 'user.message', content: userContent }],
+      // Same auto-tier handler that the per-entity panels use — gives
+      // 86 chip-style read_existing_clients / _leads + intake reads
+      // anywhere in the app.
+      onCustomToolUse: makeIntakeOnCustomToolUse(req.user.id),
+      persistAssistantText: async (text, usage) => {
+        if (!text) return;
+        const aMsgId = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+        await pool.query(
+          `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content, model,
+                                    input_tokens, output_tokens,
+                                    cache_creation_input_tokens, cache_read_input_tokens)
+           VALUES ($1, '86', 'global', $2, 'assistant', $3, $4, $5, $6, $7, $8)`,
+          [aMsgId, req.user.id, text, MODEL,
+           (usage && usage.input_tokens) || null,
+           (usage && usage.output_tokens) || null,
+           (usage && usage.cache_creation_input_tokens) || null,
+           (usage && usage.cache_read_input_tokens) || null]
+        );
+      }
+    });
+  } catch (e) {
+    console.error('POST /86/chat error:', e);
+    try {
+      res.write('data: ' + JSON.stringify({ error: e.message || 'Server error' }) + '\n\n');
+      res.write('data: [DONE]\n\n');
+      res.end();
+    } catch (_) {}
+  }
+});
+
+router.post('/86/chat/continue', requireAuth, async (req, res) => {
+  const anthropic = getAnthropic();
+  if (!anthropic) return res.status(503).json({ error: 'AI assistant is not configured.' });
+  if (!FLAG_AGENT_MODE_86) {
+    return res.status(503).json({ error: 'Unified 86 path requires AGENT_MODE_86=agents on the server.' });
+  }
+  const toolResults = req.body && req.body.tool_results;
+  if (!Array.isArray(toolResults) || !toolResults.length) {
+    return res.status(400).json({ error: 'tool_results is required' });
+  }
+  setSSEHeaders(res);
+  try {
+    const sessionRow = await pool.query(
+      `SELECT * FROM ai_sessions
+         WHERE agent_key='job' AND entity_type='86'
+           AND entity_id='global' AND user_id=$1 AND archived_at IS NULL`,
+      [req.user.id]
+    );
+    if (!sessionRow.rows.length) {
+      res.write('data: ' + JSON.stringify({ error: 'No active session — start a new turn.' }) + '\n\n');
+      res.write('data: [DONE]\n\n');
+      return res.end();
+    }
+    const session = sessionRow.rows[0];
+
+    // Build tool_result events for each approval, applying server-side
+    // any approval-tier propose_* tools the same way the per-entity
+    // panels do. propose_create_lead routes through execProposeCreateLead;
+    // HR client mutations route through execClientToolWithCtx; estimate
+    // / job entity writes echo the client-supplied applied_summary
+    // (those were applied client-side by the editor's tool dispatcher).
+    const eventsToSend = [];
+    for (const r of toolResults) {
+      let summary;
+      let isError = false;
+      if (!r.approved) {
+        summary = r.reject_reason || 'User rejected this proposal.';
+      } else if (r.name === 'propose_create_lead') {
+        try { summary = await execProposeCreateLead(r.input || {}, req.user.id); }
+        catch (e) { summary = 'Error: ' + (e.message || 'failed'); isError = true; }
+      } else if (CLIENT_TOOLS.some(t => t.name === r.name)) {
+        try { summary = await execClientToolWithCtx(r.name, r.input || {}, { userId: req.user.id }); }
+        catch (e) { summary = 'Error: ' + (e.message || 'failed'); isError = true; }
+      } else {
+        summary = r.applied_summary || 'User approved. Change applied.';
+      }
+      eventsToSend.push({
+        type: 'tool_result',
+        tool_use_id: r.tool_use_id,
+        content: summary,
+        is_error: isError || undefined
+      });
+    }
+
+    await runV2SessionStream({
+      anthropic, res,
+      session: session,
+      eventsToSend: eventsToSend,
+      onCustomToolUse: makeIntakeOnCustomToolUse(req.user.id),
+      persistAssistantText: async (text, usage) => {
+        if (!text) return;
+        const aMsgId = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+        await pool.query(
+          `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content, model,
+                                    input_tokens, output_tokens,
+                                    cache_creation_input_tokens, cache_read_input_tokens)
+           VALUES ($1, '86', 'global', $2, 'assistant', $3, $4, $5, $6, $7, $8)`,
+          [aMsgId, req.user.id, text, MODEL,
+           (usage && usage.input_tokens) || null,
+           (usage && usage.output_tokens) || null,
+           (usage && usage.cache_creation_input_tokens) || null,
+           (usage && usage.cache_read_input_tokens) || null]
+        );
+      }
+    });
+  } catch (e) {
+    console.error('POST /86/chat/continue error:', e);
+    try {
+      res.write('data: ' + JSON.stringify({ error: e.message || 'Server error' }) + '\n\n');
+      res.write('data: [DONE]\n\n');
+      res.end();
+    } catch (_) {}
+  }
+});
+
 module.exports = router;
 module.exports.internals = {
   buildEstimateContext,
