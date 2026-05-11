@@ -7916,6 +7916,14 @@ router.post('/ask86/chat', requireAuth, async (req, res) => {
   if (!anthropic) return res.status(503).json({ error: 'AI assistant is not configured.' });
   const userMessage = (req.body && req.body.message || '').trim();
   if (!userMessage) return res.status(400).json({ error: 'message is required' });
+  // Inline images attached to this turn — explicit attachments + auto-
+  // rendered PDF page snapshots. The client packs both into the same
+  // `additional_images` array as base64 data URLs / strings. Capped at
+  // 12 here (Anthropic's per-request image ceiling minus headroom);
+  // the client already trims to 18, this is defense in depth.
+  const additionalImages = Array.isArray(req.body && req.body.additional_images)
+    ? req.body.additional_images.slice(0, 12)
+    : [];
 
   setSSEHeaders(res);
   try {
@@ -7931,14 +7939,25 @@ router.post('/ask86/chat', requireAuth, async (req, res) => {
 
     const userMsgId = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
     await pool.query(
-      `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content)
-       VALUES ($1, 'ask86', 'global', $2, 'user', $3)`,
-      [userMsgId, req.user.id, userMessage]
+      `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content, photos_included)
+       VALUES ($1, 'ask86', 'global', $2, 'user', $3, $4)`,
+      [userMsgId, req.user.id, userMessage, additionalImages.length]
     );
+
+    // Build the user turn. If images are present, mix them in front of
+    // the text block (Anthropic guidance). Otherwise keep content as a
+    // plain string so the persisted history shape stays compatible
+    // with prior turns.
+    const inlineImageBlocks = additionalImages
+      .map(b64 => inlineImageBlock(b64))
+      .filter(Boolean);
+    const userContent = inlineImageBlocks.length
+      ? [...inlineImageBlocks, { type: 'text', text: userMessage }]
+      : userMessage;
 
     const messages = [
       ...history.map(m => ({ role: m.role, content: m.content })),
-      { role: 'user', content: userMessage }
+      { role: 'user', content: userContent }
     ];
     const ctx = await buildAsk86Context();
 
@@ -7949,10 +7968,9 @@ router.post('/ask86/chat', requireAuth, async (req, res) => {
       anthropic, res,
       system: ctx.system,
       messages,
-      // Read-only tool set for global Ask 86 — directory lookups,
-      // metrics, conversation audits, skill-pack introspection, dynamic
-      // skill loading. NO entity-mutation tools (those live on the
-      // per-entity panels). web_search is added by runStream via
+      // Full operator tool set: cross-agent reads, intake (create
+      // leads), HR client mutations, skill-pack edits, and the
+      // navigate action. web_search is added by runStream via
       // WEB_TOOLS regardless of this list.
       tools: ask86Tools(),
       agentKey: 'job',
