@@ -39,6 +39,7 @@ const adminFilesRoutes = require('./routes/admin-files-routes');
 const adminAnthropicRoutes = require('./routes/admin-anthropic-routes');
 const adminSmsRoutes = require('./routes/admin-sms-routes');
 const smsRoutes = require('./routes/sms-routes');
+const reportRoutes = require('./routes/report-routes');
 const { storage } = require('./storage');
 
 const app = express();
@@ -51,6 +52,9 @@ app.use(cookieParser());
 // API routes
 app.use('/api/auth', authRoutes);
 app.use('/api/jobs', jobRoutes);
+// Per-job reports nest under /api/jobs/:jobId/reports (mergeParams on
+// the router preserves :jobId from this prefix).
+app.use('/api/jobs/:jobId/reports', reportRoutes);
 app.use('/api/estimates', estimateRoutes);
 app.use('/api/roles', roleRoutes);
 app.use('/api/clients', clientRoutes);

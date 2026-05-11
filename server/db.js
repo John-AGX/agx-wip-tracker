@@ -1047,6 +1047,35 @@ async function initSchema() {
       error TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_ai_replays_conv ON ai_replays(conversation_key, run_at DESC);
+
+    -- Job-level reports — Project 86 "report" feature similar to
+    -- CompanyCam: a user-curated photo collection grouped into named
+    -- sections (Before / During / After by default, but renamable +
+    -- extensible) with per-photo captions and a summary block at the
+    -- top. Rendered to letter-page PDF via the browser's native print.
+    --
+    -- sections JSONB shape:
+    --   [
+    --     { id, label, photo_ids: [attachment_id, ...],
+    --       captions: { attachment_id: 'text', ... } }
+    --   ]
+    --
+    -- Photos reference the existing attachments table by id, so any
+    -- photo already uploaded to the job (or to a building / phase /
+    -- CO under the job) is available in the report's photo picker.
+    -- No copy is made — if the attachment is deleted, the report
+    -- silently drops it on next render.
+    CREATE TABLE IF NOT EXISTS job_reports (
+      id           TEXT PRIMARY KEY,
+      job_id       TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+      title        TEXT,
+      summary      TEXT,
+      sections     JSONB NOT NULL DEFAULT '[]'::jsonb,
+      created_by   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_job_reports_job ON job_reports(job_id, updated_at DESC);
   `);
 
   // ── Migration: 47 retired (agent_key 'ag' → 'job') ──

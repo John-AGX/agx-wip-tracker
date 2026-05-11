@@ -32,7 +32,8 @@
     { id: 'job-changeorders',  label: 'CO\'s',     icon: 'links' },
     { id: 'job-purchaseorders',label: 'PO\'s',     icon: 'materials' },
     { id: 'job-invoices',      label: 'Invoices',  icon: 'exports' },
-    { id: 'job-subs',          label: 'Subs',      icon: 'subs' }
+    { id: 'job-subs',          label: 'Subs',      icon: 'subs' },
+    { id: 'job-reports',       label: 'Reports',   icon: 'photos' }
   ];
 
   // Workspace toggle state. Tracked at module scope so the toggle can
@@ -799,7 +800,8 @@
       'job-changeorders': 'renderChangeOrders',
       'job-purchaseorders': 'renderPurchaseOrders',
       'job-invoices': 'renderInvoices',
-      'job-wip': 'renderWipTab'
+      'job-wip': 'renderWipTab',
+      'job-reports': 'renderJobReports'
     };
     var fn = renderers[targetId];
     if (fn && typeof window[fn] === 'function') window[fn](jobId);
@@ -1074,7 +1076,8 @@
       'job-changeorders': 'renderChangeOrders',
       'job-purchaseorders': 'renderPurchaseOrders',
       'job-invoices': 'renderInvoices',
-      'job-wip': 'renderWipTab'
+      'job-wip': 'renderWipTab',
+      'job-reports': 'renderJobReports'
     };
 
     function activateTab(targetId) {

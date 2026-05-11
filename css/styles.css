@@ -1998,3 +1998,162 @@
     .tab-btn .p86-icon-slot .p86-icon {
       width: 1.4em; height: 1.4em; vertical-align: -0.32em;
     }
+
+    /* ── Job Reports — editor + photo picker ────────────────────
+       Drives the Reports sub-tab. Photo grid sits inside each
+       section card; clicking "Add photos" opens a modal that lists
+       every image attachment on the job for multi-select. */
+    .rpt-photo-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+      gap: 10px;
+    }
+    .rpt-photo-card {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .rpt-photo-image {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 4 / 3;
+      background-position: center;
+      background-size: cover;
+      background-repeat: no-repeat;
+      background-color: #1a1a2e;
+      border: 1px solid var(--border, #333);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .rpt-photo-remove {
+      position: absolute;
+      top: 4px;
+      right: 4px;
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      background: rgba(0,0,0,0.55);
+      color: #fff;
+      border: 1px solid rgba(255,255,255,0.25);
+      cursor: pointer;
+      line-height: 1;
+      font-size: 14px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+    }
+    .rpt-photo-remove:hover {
+      background: rgba(239, 68, 68, 0.85);
+      border-color: rgba(255,255,255,0.45);
+    }
+    .rpt-photo-caption {
+      width: 100%;
+      padding: 6px 8px;
+      font-size: 11px;
+      line-height: 1.4;
+      background: transparent;
+      border: 1px solid var(--border, #333);
+      border-radius: 6px;
+      color: var(--text, #e6e6e6);
+      font-family: inherit;
+      resize: vertical;
+    }
+    .rpt-photo-caption:focus {
+      outline: none;
+      border-color: rgba(79, 140, 255, 0.65);
+    }
+
+    /* Photo picker modal — overlays the page while user selects
+       images to drop into a section. Built dynamically, attached
+       to document.body, removed on close. */
+    .rpt-picker-modal {
+      position: fixed;
+      inset: 0;
+      z-index: 9000;
+      background: rgba(0, 0, 0, 0.55);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .rpt-picker-content {
+      width: min(900px, 100%);
+      max-height: 86vh;
+      display: flex;
+      flex-direction: column;
+      background: var(--surface, #181a20);
+      border: 1px solid var(--border, #333);
+      border-radius: 12px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.55);
+      overflow: hidden;
+    }
+    .rpt-picker-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--border, #333);
+    }
+    .rpt-picker-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 14px 18px;
+    }
+    .rpt-picker-footer {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 18px;
+      border-top: 1px solid var(--border, #333);
+      background: rgba(255, 255, 255, 0.02);
+    }
+    .rpt-picker-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+      gap: 10px;
+    }
+    .rpt-picker-card {
+      cursor: pointer;
+      display: block;
+      position: relative;
+      border: 2px solid transparent;
+      border-radius: 8px;
+      padding: 4px;
+      transition: border-color 0.12s, background 0.12s;
+    }
+    .rpt-picker-card:hover { background: rgba(255,255,255,0.04); }
+    .rpt-picker-card:has(input:checked) {
+      border-color: rgba(79, 140, 255, 0.85);
+      background: rgba(79, 140, 255, 0.10);
+    }
+    .rpt-picker-checkbox {
+      position: absolute;
+      top: 8px;
+      left: 8px;
+      width: 18px;
+      height: 18px;
+      z-index: 2;
+      cursor: pointer;
+    }
+    .rpt-picker-image {
+      width: 100%;
+      aspect-ratio: 4 / 3;
+      background-position: center;
+      background-size: cover;
+      background-repeat: no-repeat;
+      background-color: #0d1019;
+      border-radius: 6px;
+    }
+    .rpt-picker-filename {
+      font-size: 10px;
+      color: var(--text-dim, #888);
+      margin-top: 4px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      text-align: center;
+    }
+    body.light-mode .rpt-photo-image,
+    body.light-mode .rpt-picker-image { background-color: #e9ecf2; }
+    body.light-mode .rpt-picker-content { background: #fff; }
