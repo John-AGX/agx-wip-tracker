@@ -153,7 +153,7 @@ const router = express.Router();
 // drawing-heavy lead doesn't burst past a separate doc cap. Multer
 // enforces the per-file ceiling; the per-entity total is checked in the
 // handler since it depends on the existing row count.
-const MAX_FILES_PER_ENTITY = 30;
+const MAX_FILES_PER_ENTITY = 100;
 const MAX_FILE_BYTES = 50 * 1024 * 1024; // 50MB — fits most drawings, big PDFs
 // 'user' represents the personal-files folder per user. The entity_id
 // for a user-type attachment is the stringified users.id of the owner;
