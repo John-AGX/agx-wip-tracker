@@ -2215,6 +2215,7 @@
       case 'schedule': go('schedule'); return 'Switched to the Schedule.';
       case 'wip':      go('wip');      return 'Switched to the WIP list.';
       case 'insights': go('insights'); return 'Switched to Insights.';
+      case 'tools':    go('tools');    return 'Switched to Field Tools.';
       case 'admin':    go('admin');    return 'Switched to Admin.';
       case 'job':
         if (!entityId) return 'navigate: entity_id is required for destination=job.';

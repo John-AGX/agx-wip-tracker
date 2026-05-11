@@ -684,6 +684,30 @@ async function initSchema() {
     -- linked_node_id is set by the user (or AI in Phase 3) to attach
     -- a line to a node graph node — that's how QB spend gets reconciled
     -- against the cost-flow tree.
+    -- Field tools — self-contained HTML utilities (calculators, lookups,
+    -- forms) that 86 can spin up on demand and the team uses on phones
+    -- in the field. Stored as a complete <!doctype html>...</html>
+    -- document with inline <style> + <script>. Rendered client-side in
+    -- a sandboxed iframe so untrusted JS can't reach the parent page.
+    --
+    -- Examples:
+    --   - "Pressure Wash Labor Calculator" — sqft × rate calculator
+    --   - "Gable Calculator" — base × peak ÷ 2 for triangle sqft
+    -- More can be added by asking 86 ("save this HTML as a tool called
+    -- X") or via the Tools tab's "+ Add tool" button.
+    CREATE TABLE IF NOT EXISTS field_tools (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      description TEXT,
+      category TEXT,                                       -- 'calculator' | 'lookup' | 'form' | 'other'
+      html_body TEXT NOT NULL,
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_field_tools_category ON field_tools(category);
+    CREATE INDEX IF NOT EXISTS idx_field_tools_updated ON field_tools(updated_at DESC);
+
     CREATE TABLE IF NOT EXISTS qb_cost_lines (
       id TEXT PRIMARY KEY,
       job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,

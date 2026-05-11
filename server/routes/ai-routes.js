@@ -1092,8 +1092,8 @@ const JOB_TOOLS = [
       'Take the user to a specific page or entity in the app. Auto-tier — applies immediately, no approval card. ' +
       'Use this when the user asks to "go to", "open", "show me", or "switch to" something. ' +
       'Destinations: home (dashboard), leads, estimates, clients, subs (sub-tabs of the Estimates section), ' +
-      'schedule, wip, insights, admin (top-level tabs). For specific entities, use job / estimate / lead and ' +
-      'pass entity_id. ' +
+      'schedule, wip, insights, tools (field tools — calculators/lookups), admin (top-level tabs). ' +
+      'For specific entities, use job / estimate / lead and pass entity_id. ' +
       'Common patterns: "open job RV2001" -> navigate({destination:"job", entity_id:"<that job\'s id>"}); ' +
       '"take me to leads" -> navigate({destination:"leads"}); "show me the schedule" -> ' +
       'navigate({destination:"schedule"}). When the user references a job by number or a client by name, ' +
@@ -1106,7 +1106,7 @@ const JOB_TOOLS = [
           type: 'string',
           enum: [
             'home', 'leads', 'estimates', 'clients', 'subs',
-            'schedule', 'wip', 'insights', 'admin',
+            'schedule', 'wip', 'insights', 'tools', 'admin',
             'job', 'estimate', 'lead'
           ],
           description: 'Where to take the user.'
@@ -1161,6 +1161,68 @@ const JOB_TOOLS = [
         limit: { type: 'integer', minimum: 1, maximum: 100 }
       },
       required: []
+    }
+  },
+
+  // ──────── Field tools — self-contained HTML utilities ────────
+  // 86 can spin up small calculators / lookups / forms on demand. They
+  // live in field_tools and render in a sandboxed iframe on the Tools
+  // tab. Use these for quick mobile-friendly utilities the team uses
+  // in the field (pressure-wash labor calc, gable sqft calc, etc.).
+  {
+    name: 'read_field_tools',
+    description: 'List every field tool stored in this workspace. Returns id, name, description, category, last update. Call before propose_create_field_tool to avoid duplicate names, or before propose_update_field_tool / propose_delete_field_tool to find the right id.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {},
+      required: []
+    }
+  },
+  {
+    name: 'propose_create_field_tool',
+    description: 'Create a new field tool — a self-contained HTML document the team opens on a phone in the field. Examples: pressure-wash labor calculator, gable sqft calc, paint coverage estimator, take-off helper. Approval-required so the user reviews the HTML before it lands. STRICT CONSTRAINTS: html_body must be a complete <!doctype html>...</html> document with inline <style> + <script>; NO external CDN / network references (field crews may be offline); mobile-first layout (cards stack vertically, big tap targets); dark theme to match the rest of Project 86. Keep the body under ~400KB.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        name: { type: 'string', description: 'Short title shown in the Tools list. Must be unique.' },
+        description: { type: 'string', description: 'One-line summary of what the tool does (shown as a subtitle on the card).' },
+        category: { type: 'string', enum: ['calculator', 'lookup', 'form', 'other'], description: 'Optional category tag for filtering.' },
+        html_body: { type: 'string', description: 'Full self-contained HTML document. Inline CSS in <style>, inline JS in <script>. No external sources.' },
+        rationale: { type: 'string', description: 'One short sentence shown on the approval card explaining why this tool helps the team.' }
+      },
+      required: ['name', 'html_body', 'rationale']
+    }
+  },
+  {
+    name: 'propose_update_field_tool',
+    description: 'Edit an existing field tool. Pass the id from read_field_tools plus only the fields you want to change. html_body is a full replacement, not a diff — pass the complete updated document.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        id: { type: 'string', description: 'Field tool id from read_field_tools.' },
+        name: { type: 'string', description: 'Optional rename.' },
+        description: { type: 'string', description: 'Optional description update.' },
+        category: { type: 'string', enum: ['calculator', 'lookup', 'form', 'other'] },
+        html_body: { type: 'string', description: 'Optional replacement HTML document.' },
+        rationale: { type: 'string', description: 'One short sentence explaining the change.' }
+      },
+      required: ['id', 'rationale']
+    }
+  },
+  {
+    name: 'propose_delete_field_tool',
+    description: 'Remove a field tool permanently. Approval-required since deletion is irreversible.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        id: { type: 'string', description: 'Field tool id from read_field_tools.' },
+        rationale: { type: 'string', description: 'One short sentence explaining why removal is the right call.' }
+      },
+      required: ['id', 'rationale']
     }
   }
 ];
@@ -4030,6 +4092,17 @@ router.post('/v2/jobs/:id/chat/continue',
         } else if (r.name === 'propose_create_lead') {
           try {
             summary = await execProposeCreateLead(r.input || {}, req.user.id);
+            res.write('data: ' + JSON.stringify({ tool_applied: { id: r.tool_use_id, name: r.name, input: r.input, summary } }) + '\n\n');
+          } catch (e) {
+            summary = 'Error: ' + (e.message || 'failed');
+            isError = true;
+            res.write('data: ' + JSON.stringify({ tool_failed: { id: r.tool_use_id, name: r.name, input: r.input, error: summary } }) + '\n\n');
+          }
+        } else if (r.name === 'propose_create_field_tool'
+                || r.name === 'propose_update_field_tool'
+                || r.name === 'propose_delete_field_tool') {
+          try {
+            summary = await execFieldToolApproval(r.name, r.input || {}, req.user.id);
             res.write('data: ' + JSON.stringify({ tool_applied: { id: r.tool_use_id, name: r.name, input: r.input, summary } }) + '\n\n');
           } catch (e) {
             summary = 'Error: ' + (e.message || 'failed');
@@ -7301,6 +7374,115 @@ async function execIntakeRead(name, input) {
   return 'Unknown intake read tool: ' + name;
 }
 
+// ──────── Field tools — read + approval executors ────────
+//
+// read_field_tools (auto-tier) returns the index without html_body
+// — name, id, description, category, updated. Keeps the prompt
+// short; 86 can call propose_update_field_tool with the id later
+// to swap out the body without needing to re-render the existing.
+async function execFieldToolRead(name, input) {
+  if (name === 'read_field_tools') {
+    const r = await pool.query(
+      `SELECT id, name, description, category, updated_at,
+              LENGTH(html_body) AS html_size
+         FROM field_tools
+        ORDER BY updated_at DESC`
+    );
+    if (!r.rows.length) {
+      return 'No field tools yet. Use propose_create_field_tool to add the first one.';
+    }
+    const lines = [r.rows.length + ' field tool(s):'];
+    r.rows.forEach(t => {
+      const cat = t.category ? ' · ' + t.category : '';
+      const desc = t.description ? ' — ' + t.description : '';
+      const sz = t.html_size ? ' · ' + Math.ceil(Number(t.html_size) / 1024) + 'KB' : '';
+      lines.push('- id=`' + t.id + '` · ' + t.name + cat + sz + desc);
+    });
+    return lines.join('\n');
+  }
+  return 'Unknown field-tools read: ' + name;
+}
+
+// Approval-tier executor — runs when the user approves a
+// propose_*_field_tool card. Returns a summary string for the
+// tool_result event. is_error is set in the caller's catch block.
+async function execFieldToolApproval(name, input, userId) {
+  if (name === 'propose_create_field_tool') {
+    const n = String((input && input.name) || '').trim();
+    const html = String((input && input.html_body) || '').trim();
+    if (!n) throw new Error('name is required');
+    if (!html) throw new Error('html_body is required');
+    if (html.length > 500 * 1024) throw new Error('html_body exceeds 500KB.');
+    const cat = input && input.category ? String(input.category).trim() : null;
+    if (cat && !['calculator', 'lookup', 'form', 'other'].includes(cat)) {
+      throw new Error('category must be calculator | lookup | form | other');
+    }
+    const desc = input && input.description ? String(input.description).trim() : null;
+    const id = 'ft_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+    try {
+      await pool.query(
+        `INSERT INTO field_tools (id, name, description, category, html_body, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [id, n, desc, cat, html, userId]
+      );
+    } catch (e) {
+      if (e.code === '23505') throw new Error('A field tool named "' + n + '" already exists. Use propose_update_field_tool to edit it.');
+      throw e;
+    }
+    return 'Created field tool "' + n + '" (id=' + id + ', ' + Math.ceil(html.length / 1024) + 'KB). Open it from the Tools tab.';
+  }
+
+  if (name === 'propose_update_field_tool') {
+    const id = String((input && input.id) || '').trim();
+    if (!id) throw new Error('id is required');
+    const sets = [];
+    const params = [];
+    let p = 1;
+    if (input.name != null) { sets.push(`name = $${p++}`); params.push(String(input.name).trim()); }
+    if (input.description !== undefined) {
+      sets.push(`description = $${p++}`);
+      params.push(input.description != null ? String(input.description).trim() : null);
+    }
+    if (input.category !== undefined) {
+      const c = input.category != null ? String(input.category).trim() : null;
+      if (c && !['calculator', 'lookup', 'form', 'other'].includes(c)) {
+        throw new Error('category must be calculator | lookup | form | other');
+      }
+      sets.push(`category = $${p++}`); params.push(c);
+    }
+    if (input.html_body != null) {
+      const html = String(input.html_body);
+      if (html.length > 500 * 1024) throw new Error('html_body exceeds 500KB.');
+      sets.push(`html_body = $${p++}`); params.push(html);
+    }
+    if (!sets.length) return 'No fields specified to update for tool "' + id + '".';
+    sets.push('updated_at = NOW()');
+    params.push(id);
+    let r;
+    try {
+      r = await pool.query(
+        `UPDATE field_tools SET ${sets.join(', ')} WHERE id = $${p} RETURNING id, name`,
+        params
+      );
+    } catch (e) {
+      if (e.code === '23505') throw new Error('A field tool with that name already exists.');
+      throw e;
+    }
+    if (!r.rows.length) throw new Error('No field tool with id "' + id + '"');
+    return 'Updated field tool "' + r.rows[0].name + '" (id=' + r.rows[0].id + ').';
+  }
+
+  if (name === 'propose_delete_field_tool') {
+    const id = String((input && input.id) || '').trim();
+    if (!id) throw new Error('id is required');
+    const r = await pool.query(`DELETE FROM field_tools WHERE id = $1 RETURNING name`, [id]);
+    if (!r.rows.length) throw new Error('No field tool with id "' + id + '"');
+    return 'Deleted field tool "' + r.rows[0].name + '" (id=' + id + ').';
+  }
+
+  throw new Error('Unknown field tool approval action: ' + name);
+}
+
 // Generic R2 + sharp + attachments-insert pipeline. Used by intake
 // (drains the per-user bucket onto the new lead) AND by job/estimate
 // chat (each upload lands directly on the entity that owns the chat
@@ -7738,7 +7920,10 @@ const ALLOWED_AG_AUTO_TOOLS = new Set([
   'read_existing_clients',
   'read_existing_leads',
   // Dynamic skill loading — global Ask 86 pulls a pack on-demand
-  'load_skill_pack'
+  'load_skill_pack',
+  // Field tools listing — chip-style auto-apply so 86 can scan
+  // existing tools before proposing a new one.
+  'read_field_tools'
 ]);
 // Tools whose executor lives in execClientTool (HR's directory reads)
 // rather than execStaffTool. The dispatcher routes by name.
@@ -7746,6 +7931,8 @@ const CLIENT_EXECUTOR_TOOLS = new Set(['read_jobs', 'read_users']);
 // Tools whose executor lives in execIntakeRead (intake-side dedup
 // against existing clients / leads before creating a new one).
 const INTAKE_EXECUTOR_TOOLS = new Set(['read_existing_clients', 'read_existing_leads']);
+// Tools whose executor lives in execFieldToolRead.
+const FIELD_TOOLS_EXECUTOR_TOOLS = new Set(['read_field_tools']);
 router.post('/exec-tool', requireAuth, requireCapability('ESTIMATES_VIEW'), async (req, res) => {
   try {
     const name = req.body && req.body.name;
@@ -7755,6 +7942,8 @@ router.post('/exec-tool', requireAuth, requireCapability('ESTIMATES_VIEW'), asyn
     let summary;
     if (INTAKE_EXECUTOR_TOOLS.has(name)) {
       summary = await execIntakeRead(name, input);
+    } else if (FIELD_TOOLS_EXECUTOR_TOOLS.has(name)) {
+      summary = await execFieldToolRead(name, input);
     } else if (CLIENT_EXECUTOR_TOOLS.has(name)) {
       summary = await execClientTool(name, input);
     } else {
@@ -8161,6 +8350,15 @@ router.post('/ask86/chat/continue', requireAuth, async (req, res) => {
           summary = 'Error: ' + (e.message || 'failed');
           isError = true;
         }
+      } else if (r.name === 'propose_create_field_tool'
+              || r.name === 'propose_update_field_tool'
+              || r.name === 'propose_delete_field_tool') {
+        try {
+          summary = await execFieldToolApproval(r.name, r.input || {}, req.user.id);
+        } catch (e) {
+          summary = 'Error: ' + (e.message || 'failed');
+          isError = true;
+        }
       } else if (CLIENT_TOOLS.some(t => t.name === r.name)) {
         // HR client mutations applied server-side via the same path
         // HR's V2 sessions use.
@@ -8442,6 +8640,11 @@ router.post('/86/chat/continue', requireAuth, async (req, res) => {
         summary = r.reject_reason || 'User rejected this proposal.';
       } else if (r.name === 'propose_create_lead') {
         try { summary = await execProposeCreateLead(r.input || {}, req.user.id); }
+        catch (e) { summary = 'Error: ' + (e.message || 'failed'); isError = true; }
+      } else if (r.name === 'propose_create_field_tool'
+              || r.name === 'propose_update_field_tool'
+              || r.name === 'propose_delete_field_tool') {
+        try { summary = await execFieldToolApproval(r.name, r.input || {}, req.user.id); }
         catch (e) { summary = 'Error: ' + (e.message || 'failed'); isError = true; }
       } else if (CLIENT_TOOLS.some(t => t.name === r.name)) {
         try { summary = await execClientToolWithCtx(r.name, r.input || {}, { userId: req.user.id }); }
