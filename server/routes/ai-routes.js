@@ -2011,9 +2011,28 @@ function inlineImageBlock(b64) {
 }
 
 async function runStream({ anthropic, res, system, messages, persistAssistantText, persistArgs, tools, agentKey }) {
-  function send(payload) { res.write('data: ' + JSON.stringify(payload) + '\n\n'); }
-  function endWithDone() { res.write('data: [DONE]\n\n'); res.end(); }
+  // Guard every write on whether the response is already done. The
+  // Anthropic SDK fires BOTH a 'stream.error' event AND throws from
+  // stream.done() when a request fails (e.g. 400 credit-balance-too-
+  // low). Without guards, the error handler aborts first, then the
+  // catch block aborts again — the second res.write() lands after
+  // res.end() and Node throws ERR_STREAM_WRITE_AFTER_END as an
+  // unhandled error event, killing the process. Crash loop in
+  // production. Idempotent send/endWithDone/abort fixes that.
+  let _ended = false;
+  function send(payload) {
+    if (_ended || res.writableEnded) return;
+    try { res.write('data: ' + JSON.stringify(payload) + '\n\n'); }
+    catch (e) { /* peer disconnect / already-ended — swallow */ }
+  }
+  function endWithDone() {
+    if (_ended || res.writableEnded) return;
+    _ended = true;
+    try { res.write('data: [DONE]\n\n'); } catch (e) {}
+    try { res.end(); } catch (e) {}
+  }
   function abort(message) {
+    if (_ended || res.writableEnded) return;
     send({ error: message });
     endWithDone();
   }
@@ -2496,8 +2515,24 @@ async function recoverStuckSession({ anthropic, sessionRow }) {
 }
 
 async function runV2SessionStream({ anthropic, res, session, eventsToSend, persistAssistantText, onCustomToolUse, freshlyCreated }) {
-  function send(payload) { res.write('data: ' + JSON.stringify(payload) + '\n\n'); }
-  function endWithDone() { res.write('data: [DONE]\n\n'); res.end(); }
+  // Same idempotency guard as runStream — V2 sessions also fire dual
+  // error paths (events.send throw + stream 'error' event) on certain
+  // failures (credit-balance, stuck sessions, etc.). Without these
+  // guards, the double-end triggered ERR_STREAM_WRITE_AFTER_END which
+  // crashed the Node process and put Railway into a deploy-restart
+  // loop. Idempotent writes prevent that.
+  let _ended = false;
+  function send(payload) {
+    if (_ended || res.writableEnded) return;
+    try { res.write('data: ' + JSON.stringify(payload) + '\n\n'); }
+    catch (e) {}
+  }
+  function endWithDone() {
+    if (_ended || res.writableEnded) return;
+    _ended = true;
+    try { res.write('data: [DONE]\n\n'); } catch (e) {}
+    try { res.end(); } catch (e) {}
+  }
 
   // Resolve the session id, recovering once if the prior session is
   // stuck waiting on tool responses. We have to attempt the events.send

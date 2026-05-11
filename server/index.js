@@ -45,6 +45,21 @@ const { storage } = require('./storage');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Defense-in-depth: never let an unhandled response error kill the
+// process. SSE handlers in ai-routes write asynchronously after the
+// initial request returns, so a single ERR_STREAM_WRITE_AFTER_END
+// from a double-end (Anthropic 400 fires both stream.error AND
+// stream.done() rejects) used to escape every try/catch and crash
+// the worker. Crash loop = Railway marks deploy dead. Log and
+// continue — the failing request is already toast either way; we
+// just want subsequent requests to still get served.
+process.on('uncaughtException', (err) => {
+  console.error('[server] uncaughtException:', err && err.stack || err);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[server] unhandledRejection:', reason && (reason.stack || reason.message) || reason);
+});
+
 // Middleware
 app.use(express.json({ limit: '10mb' }));
 app.use(cookieParser());
