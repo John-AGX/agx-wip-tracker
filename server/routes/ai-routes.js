@@ -7857,7 +7857,11 @@ function ask86Tools() {
     'read_materials', 'read_purchase_history',
     'read_metrics', 'read_recent_conversations', 'read_conversation_detail',
     'read_skill_packs', 'load_skill_pack',
-    'read_past_estimates', 'read_past_estimate_lines', 'read_leads'
+    'read_past_estimates', 'read_past_estimate_lines', 'read_leads',
+    // DOM navigation — client-side dispatch. Without this, the model
+    // on the Ask 86 surface doesn't know it can switch tabs / open
+    // entities, so "take me to X" prompts come back as empty text.
+    'navigate'
   ]);
   const fromJob = JOB_TOOLS.filter(t => wanted.has(t.name));
   // Intake tools — propose_create_lead + the dedupe reads that go
