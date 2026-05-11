@@ -8652,10 +8652,17 @@ router.post('/86/chat/continue', requireAuth, async (req, res) => {
       } else {
         summary = r.applied_summary || 'User approved. Change applied.';
       }
+      // V2 sessions expect user.custom_tool_result events with
+      // custom_tool_use_id (NOT the v1 messages-API shape of
+      // {type:'tool_result', tool_use_id}). My initial /86/chat/continue
+      // used the v1 shape and Anthropic 400'd ("events[0].type:
+      // tool_result is not a valid value"), which made tool approvals
+      // silently fail — the user clicked Approve, the server tried to
+      // POST results, Anthropic rejected, no field tool got created.
       eventsToSend.push({
-        type: 'tool_result',
-        tool_use_id: r.tool_use_id,
-        content: summary,
+        type: 'user.custom_tool_result',
+        custom_tool_use_id: r.tool_use_id,
+        content: [{ type: 'text', text: summary }],
         is_error: isError || undefined
       });
     }
