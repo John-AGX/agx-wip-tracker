@@ -2215,7 +2215,17 @@
       case 'schedule': go('schedule'); return 'Switched to the Schedule.';
       case 'wip':      go('wip');      return 'Switched to the WIP list.';
       case 'insights': go('insights'); return 'Switched to Insights.';
-      case 'tools':    go('tools');    return 'Switched to Field Tools.';
+      case 'tools':
+        // Field tools live inside My Files as a virtual "Tools"
+        // folder. Switch to the my-files tab, then ask my-files to
+        // activate the Tools section.
+        go('my-files');
+        try {
+          if (window.myFiles && typeof window.myFiles.selectFolder === 'function') {
+            window.myFiles.selectFolder('__tools__');
+          }
+        } catch (e) {}
+        return 'Switched to Field Tools.';
       case 'admin':    go('admin');    return 'Switched to Admin.';
       case 'job':
         if (!entityId) return 'navigate: entity_id is required for destination=job.';

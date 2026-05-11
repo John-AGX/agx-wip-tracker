@@ -41,9 +41,15 @@
       '</div>';
   }
 
-  function loadList() {
-    var host = document.getElementById('field-tools-view');
+  // Track the host element so refresh + composer-close can re-render
+  // into the same DOM slot whether we're on a standalone Tools tab or
+  // embedded in the My Files page.
+  var _currentHost = null;
+
+  function loadList(hostOverride) {
+    var host = hostOverride || _currentHost || document.getElementById('field-tools-view');
     if (!host) return;
+    _currentHost = host;
     host.innerHTML = '<div style="padding:20px;color:var(--text-dim,#888);font-size:13px;">Loading tools…</div>';
 
     if (!window.p86Api || !window.p86Api.get) {
@@ -220,8 +226,16 @@
 
   window.refreshFieldTools = function() { loadList(); };
 
-  // Expose a one-call entry point for the tab switcher. Mirrors the
-  // pattern other tabs use (renderJobsList, renderClientsTab, etc.).
-  window.renderFieldToolsTab = function() { loadList(); };
+  // Render the field tools grid into an arbitrary host element. Used
+  // by my-files.js when the virtual "Tools" folder is active so the
+  // grid embeds in the same right pane that normally shows files.
+  window.renderFieldToolsInto = function(host) { loadList(host); };
+
+  // Legacy stand-alone-tab entry point. Kept in case anything else
+  // calls it directly; routes through the same loader.
+  window.renderFieldToolsTab = function() {
+    var host = document.getElementById('field-tools-view');
+    if (host) loadList(host);
+  };
 
 })();
