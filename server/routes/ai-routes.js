@@ -7864,16 +7864,22 @@ function ask86Tools() {
     'navigate'
   ]);
   const fromJob = JOB_TOOLS.filter(t => wanted.has(t.name));
-  // Intake tools — propose_create_lead + the dedupe reads that go
-  // with it. Strip the `tier` field that's only used inside the
-  // intake panel's auto-tier dispatcher; the Anthropic tool schema
-  // does not understand it.
-  const intake = INTAKE_TOOLS.map(({ tier, ...t }) => t);
-  // HR client mutation tools — 86 can do client CRUD inline from the
-  // global surface rather than punting the user to the HR panel.
-  // Same shape strip as intake.
-  const client = CLIENT_TOOLS.map(({ tier, ...t }) => t);
-  return [...fromJob, ...intake, ...client];
+  const intake  = INTAKE_TOOLS.map(({ tier, ...t }) => t);
+  const client  = CLIENT_TOOLS.map(({ tier, ...t }) => t);
+  // Dedupe — read_clients / read_jobs / read_users etc. live in
+  // both JOB_TOOLS (cross-agent reads added when 86 took the team
+  // scope) and CLIENT_TOOLS / INTAKE_TOOLS (HR-side originals).
+  // Anthropic's API rejects requests with duplicate tool names
+  // ("tools: Tool names must be unique"), which surfaced as empty
+  // responses on the Ask 86 panel. First entry wins.
+  const seen = new Set();
+  const merged = [];
+  [...fromJob, ...intake, ...client].forEach(t => {
+    if (!t || !t.name || seen.has(t.name)) return;
+    seen.add(t.name);
+    merged.push(t);
+  });
+  return merged;
 }
 
 router.get('/ask86/messages', requireAuth, async (req, res) => {
