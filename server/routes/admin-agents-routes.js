@@ -1556,13 +1556,32 @@ function customToolsFor(agentKey) {
   if (!aiInternals) return [];
   // estimateTools / jobTools / clientTools / staffTools each include
   // the WEB_TOOLS prefix; strip those because we configure web_search
-  // / web_fetch through the built-in toolset above instead. Intake
-  // is no longer a separate agent — 86's jobTools already spread
-  // INTAKE_TOOLS, so the lead-intake flow runs as 86.
+  // / web_fetch through the built-in toolset above instead.
   let tools = [];
-  if (agentKey === 'ag')          tools = aiInternals.estimateTools();
-  else if (agentKey === 'job')    tools = aiInternals.jobTools();
-  else if (agentKey === 'cra')    tools = aiInternals.clientTools();
+  if (agentKey === 'ag') {
+    tools = aiInternals.estimateTools();
+  } else if (agentKey === 'job') {
+    // ONE 86 — the managed `job` agent serves every 86 surface
+    // (per-job WIP chat, per-estimate chat, lead intake, Ask 86).
+    // So it needs the UNION of every tool 86 uses anywhere:
+    //   - estimateTools  (line items, sections, groups, scope edits)
+    //   - jobTools       (phase pct, node graph, COs, POs, invoices)
+    //   - clientTools    (HR client mutations used on the Ask 86 surface)
+    // Deduped by name; first occurrence wins (estimate-first order).
+    // INTAKE_TOOLS are already spread into jobTools().
+    const seen = new Set();
+    const merged = [];
+    [
+      ...aiInternals.estimateTools(),
+      ...aiInternals.jobTools(),
+      ...aiInternals.clientTools()
+    ].forEach(t => {
+      if (!t || !t.name || seen.has(t.name)) return;
+      seen.add(t.name);
+      merged.push(t);
+    });
+    tools = merged;
+  } else if (agentKey === 'cra')    tools = aiInternals.clientTools();
   else if (agentKey === 'staff')  tools = aiInternals.staffTools();
   return tools
     .filter(t => t.name !== 'web_search')              // built-in toolset owns this
