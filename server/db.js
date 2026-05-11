@@ -1002,10 +1002,11 @@ async function initSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_agent_reference_links_enabled ON agent_reference_links(enabled);
 
-    -- (Migration block for the 47 retire was originally here, but
-    -- it referenced ai_sessions which is created BELOW this point
-    -- in the same SQL template. Moved out to a separate pool.query
-    -- after the main template runs — see init() below.)
+    -- (Migration block for the legacy estimator-agent retirement was
+    -- originally here, but it referenced ai_sessions which is created
+    -- BELOW this point in the same SQL template. Moved out to a
+    -- separate pool.query after the main template runs — see init()
+    -- below.)
 
     -- Phase 1b — durable mapping from (agent_key, entity, user) to
     -- the long-lived Anthropic Session that backs that conversation.
@@ -1138,7 +1139,7 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_job_reports_job ON job_reports(job_id, updated_at DESC);
   `);
 
-  // ── Migration: 47 retired (agent_key 'ag' → 'job') ──
+  // ── Migration: legacy estimator agent retired (agent_key 'ag' → 'job') ──
   // Runs in its own pool.query AFTER the main schema-init template
   // so all referenced tables exist. Idempotent — re-running on a
   // post-migration DB is a no-op. Both tables we touch have unique

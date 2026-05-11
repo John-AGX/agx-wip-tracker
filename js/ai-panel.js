@@ -1306,10 +1306,10 @@
     if (!box) return;
     if (!_messages.length) {
       var hint;
-      // Inline-icon helper so the hint text matches the new agent
-      // identities (detective for 47, dna for 86) without falling
-      // back to emoji glyphs that the page-wide swapper would
-      // otherwise replace anyway.
+      // Inline-icon helper so the hint text matches the agent
+      // identity (dna glyph for 86) without falling back to emoji
+      // glyphs that the page-wide swapper would otherwise replace
+      // anyway.
       var hintIcon = function(name) {
         return (typeof p86Icon === 'function')
           ? '<span class="p86-icon" style="display:inline-flex;width:1em;height:1em;vertical-align:-0.15em;margin-right:6px;">' + p86Icon(name) + '</span>'

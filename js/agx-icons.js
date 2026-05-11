@@ -160,7 +160,7 @@
     '✨':       'sparkle',     // 2728  sparkles
     '♻':       'reset',       // 267B  recycling
     '↺':       'restore',     // 21BA  anticlockwise open circle
-    '🎯': 'target',      // 1F3AF direct hit (47 estimating)
+    '🎯': 'target',      // 1F3AF direct hit (estimating context)
     '⛶':       'fullscreen',  // 26F6  square four corners
     '🗖': 'fullscreen',  // 1F5D6 maximize alt
     '📁': 'collapse',    // 1F4C1 file folder closed
@@ -172,8 +172,8 @@
     '👷': 'subs',        // 1F477 construction worker
     '📄': 'attachments', // 1F4C4 page facing up (po)
     // Project 86 — agent header + admin sub-tab swaps. Replaces the
-    // emoji glyphs in the AI panel title (47 / 86 / HR / Intake
-    // / CoS) and the Admin → Agents sub-tab strip (Metrics /
+    // emoji glyphs in the AI panel title (86 / HR / CoS) and the
+    // Admin → Agents sub-tab strip (Metrics /
     // Conversations / Evals / Skills / Prompt Preview / Batch /
     // Anthropic).
     '📊': 'chart-bar',         // 1F4CA bar chart (86 analyst, Metrics tab)

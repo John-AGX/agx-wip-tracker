@@ -2360,16 +2360,14 @@
   // to that agent's system prompt on every turn.
   // Note: agentKey 'cra' kept for backward compat with skill packs that
   // already reference it. Display label is HR; the underlying agent
-  // assignment value stays 'cra'. 86's key is 'job' (matches its
-  // entity_type) — assignments target the job-side analyst.
-  // (Display rename: AG→47, Elle→86. Underlying agent_keys
-  // ag / job / cra / staff stay the same to avoid a DB migration;
-  // only the user-facing labels change. The 'intake' key was
-  // retired — 86 owns lead-intake now; intake sessions still use
-  // entity_type='intake' as a label, but agent_key='job'.)
-  // 47 retired in 2026-05 — agent_key 'ag' migrated to 'job' on boot.
-  // 86 is now the single canonical operator key. HR's scope expanded
-  // to cover jobs + users in addition to clients + subs.
+  // Active agents in Project 86 today:
+  //   job  → 86 (the unified operator — estimating + WIP + intake + Ask 86)
+  //   cra  → HR (clients, jobs, subs, users — 86's data steward)
+  //   staff → Chief of Staff (meta — observes/tunes 86)
+  // Legacy keys ('ag', 'intake') were retired and migrated to 'job'
+  // in the DB; if any old session/registry row still resolves them,
+  // AGENT_SYSTEM_BASELINE.ag aliases to .job so they all serve the
+  // same 86 identity.
   var AGENT_LABELS = {
     job: '86 (Operator)',
     cra: 'HR (86\'s data steward)'
@@ -3613,7 +3611,7 @@
   // same app_settings.agent_skills row. We sync inputs into the draft
   // before any view switch so unsaved edits don't get clobbered.
   // ─────────── Prompt Preview view ───────────
-  // Shows the EXACT system prompt an agent (47 / 86 / HR / Chief of Staff)
+  // Shows the EXACT system prompt an agent (86 / HR / Chief of Staff)
   // would see right now if a chat turn fired against the supplied entity.
   // Three blocks: stable prefix (cached), dynamic context (refreshed each
   // turn), and skill packs (always-on packs that auto-append). Gives the
@@ -3897,7 +3895,7 @@
         'Anthropic Batch API jobs — proactive analyses that run async at half the synchronous cost. Currently supports 86 audits across every active job.' +
       '</p>' +
       '<div style="display:flex;gap:8px;align-items:center;margin-bottom:14px;">' +
-        '<button class="ee-btn primary" onclick="submitElleAuditBatch()" title="Build one 86 audit per active job and submit as a single Anthropic batch.">&#x1F50D; Run 86 audit on every active job</button>' +
+        '<button class="ee-btn primary" onclick="submitAuditBatch()" title="Build one 86 audit per active job and submit as a single Anthropic batch.">&#x1F50D; Run 86 audit on every active job</button>' +
         '<button class="ee-btn secondary" onclick="renderBatchJobsList()">&#x21BB; Refresh</button>' +
       '</div>' +
       '<div id="batch-jobs-list" style="font-size:12px;color:var(--text-dim,#888);font-style:italic;">Loading…</div>' +
@@ -3907,14 +3905,14 @@
       '<div style="margin-top:24px;padding:14px;background:rgba(255,255,255,0.03);border:1px solid var(--border,#333);border-radius:8px;">' +
         '<h3 style="margin:0 0 6px 0;font-size:13px;color:var(--text,#fff);">&#x1F4C2; Anthropic Files cache</h3>' +
         '<p style="margin:0 0 10px 0;color:var(--text-dim,#888);font-size:11px;">' +
-          'When 47 references a photo across multiple chat turns, currently the photo gets base64-encoded into the request every turn. Uploading once to Anthropic\'s Files API lets future turns reference the photo by id (cheaper, faster). Stats below; click to upload recent images.' +
+          'When 86 references a photo across multiple chat turns, currently the photo gets base64-encoded into the request every turn. Uploading once to Anthropic\'s Files API lets future turns reference the photo by id (cheaper, faster). Stats below; click to upload recent images.' +
         '</p>' +
         '<div id="files-stats-host" style="font-size:11px;color:var(--text-dim,#888);font-style:italic;">Loading…</div>' +
         '<div style="margin-top:10px;">' +
           '<button class="ee-btn secondary" onclick="uploadRecentPhotos(25)">Upload last 25 not-yet-uploaded images</button>' +
         '</div>' +
         '<p style="margin:8px 0 0 0;color:var(--text-dim,#666);font-size:10px;">' +
-          'Note: 47\'s chat path still uses base64 for now. Switching loadPhotoAsBlock to file_id references requires migrating chat from messages.stream() to beta.messages.stream() — that\'s a separate commit. The upload pipeline above sets up the cache in advance so the chat switch is a one-line change later.' +
+          'Note: 86\'s chat path still uses base64 for now. Switching loadPhotoAsBlock to file_id references requires migrating chat from messages.stream() to beta.messages.stream() — that\'s a separate commit. The upload pipeline above sets up the cache in advance so the chat switch is a one-line change later.' +
         '</p>' +
       '</div>';
 
@@ -3970,7 +3968,7 @@
     return '<span style="display:inline-block;padding:2px 8px;border-radius:10px;background:' + bg + ';color:' + color + ';font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">' + escapeHTML(s || 'unknown') + '</span>';
   }
 
-  function submitElleAuditBatch() {
+  function submitAuditBatch() {
     if (!confirm('Submit a new 86 audit batch?\n\nBuilds one audit prompt per active job (excluding Archived/Completed) and submits as a single Anthropic Batch API job. Costs roughly half a synchronous 86 turn per job. Results land here when the batch finishes (typically minutes, up to 24h).')) return;
     var btn = document.activeElement;
     if (btn && btn.tagName === 'BUTTON') { btn.disabled = true; btn.textContent = 'Submitting…'; }
@@ -4056,7 +4054,7 @@
 
   window.renderBatchJobsList = renderBatchJobsList;
   window.renderBatchJobDetail = renderBatchJobDetail;
-  window.submitElleAuditBatch = submitElleAuditBatch;
+  window.submitAuditBatch = submitAuditBatch;
   window.openBatchJobDetail = openBatchJobDetail;
   window.closeBatchJobDetail = closeBatchJobDetail;
   window.refreshBatchJob = refreshBatchJob;
@@ -4696,7 +4694,10 @@
   // fetchOverridableSections() before the skills editor renders so the
   // "Replaces section" dropdown can show options + descriptions.
   // Keys are the canonical agent ids used everywhere in the system:
-  // ag (estimate), job (Elle), cra (HR), staff (Chief of Staff).
+  // job (86 — estimating + WIP + intake + Ask 86), cra (HR), staff
+  // (Chief of Staff). The 'ag' key is kept as a back-compat slot in
+  // case any stale section override is still tagged with it; for new
+  // overrides, target 'job' (the unified 86).
   var _overridableSections = { ag: [], job: [], cra: [], staff: [] };
 
   function fetchOverridableSections() {
