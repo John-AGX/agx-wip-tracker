@@ -4214,9 +4214,15 @@
       // Intake is no longer a separate managed agent — 86 owns the
       // lead-intake flow. Only four agents register on the Anthropic side.
       var labels = { ag: '86 (Estimator context — back-compat key)', job: '86 (Operator — incl. intake)', cra: 'HR (clients, jobs, subs, users)', staff: 'Chief of Staff' };
-      var allKeys = ['job', 'cra', 'staff'];
+      var activeKeys = ['job', 'cra', 'staff'];
       var registered = {};
       rows.forEach(function(r) { registered[r.agent_key] = r; });
+      // Stale rows — registered keys that aren't in the current set
+      // (e.g. 'intake' retired into 86, 'ag' back-compat). Surface
+      // separately with a Delete button.
+      var staleKeys = rows.map(function(r) { return r.agent_key; }).filter(function(k) {
+        return activeKeys.indexOf(k) < 0;
+      });
 
       var bootstrapBar =
         '<p style="margin:0 0 10px 0;font-size:12px;color:var(--text-dim,#888);">' +
@@ -4229,7 +4235,7 @@
 
       var rowsHtml = '<div class="table-container"><table style="width:100%;font-size:12px;">' +
         '<thead><tr><th>Project 86 Agent</th><th>Anthropic Agent ID</th><th>Model</th><th style="text-align:right;">Tools</th><th style="text-align:right;">Skills</th><th>Registered</th><th>Anthropic state</th><th></th></tr></thead><tbody>';
-      allKeys.forEach(function(k) {
+      activeKeys.forEach(function(k) {
         var r = registered[k];
         if (r) {
           var when = '';
@@ -4254,11 +4260,30 @@
       });
       rowsHtml += '</tbody></table></div>';
 
-      host.innerHTML = panelHeader('Managed Agents (Phase 1a — registration)', '🤖') + bootstrapBar + rowsHtml;
+      // Stale registry rows — keys not in the current active set.
+      // Show in a separate slim panel so the admin can clean them up
+      // without confusion with the active agents above.
+      var staleHtml = '';
+      if (staleKeys.length) {
+        staleHtml = '<div style="margin-top:14px;padding:10px;border:1px solid #fbbf24;border-radius:6px;background:rgba(251,191,36,0.05);">' +
+          '<div style="font-size:12px;font-weight:600;color:#fbbf24;margin-bottom:6px;">⚠ Stale registry rows</div>' +
+          '<div style="font-size:11px;color:var(--text-dim,#888);margin-bottom:8px;">These agent_keys were retired but still have rows in <code>managed_agent_registry</code>. They\'re ignored by sync — safe to delete.</div>';
+        staleKeys.forEach(function(k) {
+          var r = registered[k];
+          staleHtml += '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;">' +
+            '<span style="font-family:\'SF Mono\',monospace;font-size:11px;color:var(--text,#fff);">' + escapeHTML(k) + '</span>' +
+            '<span style="font-family:\'SF Mono\',monospace;font-size:10px;color:var(--text-dim,#aaa);flex:1;">' + escapeHTML(r.anthropic_agent_id) + '</span>' +
+            '<button class="ee-btn secondary" onclick="deleteStaleAgentRow(\'' + escapeAttr(k) + '\')" style="font-size:11px;">Delete row</button>' +
+          '</div>';
+        });
+        staleHtml += '</div>';
+      }
+
+      host.innerHTML = panelHeader('Managed Agents (Phase 1a — registration)', '🤖') + bootstrapBar + rowsHtml + staleHtml;
       // Fetch Anthropic-side state per agent — version + drift signal.
       // Done after render so the table draws immediately and per-row
       // cells fill in as the calls return. Failures show as "—".
-      allKeys.forEach(function(k) {
+      activeKeys.forEach(function(k) {
         if (!registered[k]) return;
         var cell = document.getElementById('agent-state-' + k);
         if (!cell) return;
@@ -4293,6 +4318,15 @@
       loadManagedAgents();
     }).catch(function(err) {
       alert('Sync failed: ' + (err && err.message || 'unknown'));
+    });
+  };
+
+  window.deleteStaleAgentRow = function(agentKey) {
+    if (!confirm('Delete the local registry row for "' + agentKey + '"?\n\nThis only removes the Project 86-side row in managed_agent_registry. The Anthropic-side agent (if any) is unaffected — you can leave it archived or delete it separately in the Anthropic console.')) return;
+    window.p86Api.del('/api/admin/agents/managed/' + encodeURIComponent(agentKey)).then(function() {
+      loadManagedAgents();
+    }).catch(function(err) {
+      alert('Delete failed: ' + (err && err.message || 'unknown'));
     });
   };
 

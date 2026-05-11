@@ -2155,36 +2155,73 @@ router.post('/managed/:agentKey/sync', requireAuth, requireCapability('ROLES_MAN
     if (!reg.rows.length) return res.status(404).json({ error: 'Agent is not yet registered. Click Bootstrap first.' });
     const agentId = reg.rows[0].anthropic_agent_id;
 
-    // CAS version: retrieve current version unless caller supplied
-    // force_version. Bumping prevents accidental rollback when the
-    // admin is staring at a stale UI.
-    let currentVersion;
-    if (req.body && typeof req.body.force_version === 'number') {
-      currentVersion = req.body.force_version;
-    } else {
-      const remote = await anthropic.beta.agents.retrieve(agentId);
-      currentVersion = remote.version;
-    }
-
     const baseline = AGENT_SYSTEM_BASELINE[agentKey] || '';
     const aiInternals = require('./ai-routes-internals');
     const model = aiInternals && aiInternals.defaultModel ? aiInternals.defaultModel() : 'claude-sonnet-4-6';
     const skills = await collectSkillsFor(agentKey);
     const customTools = customToolsFor(agentKey);
     const builtinTools = builtinToolsetFor(agentKey);
+    const toolList = [...builtinTools, ...customTools];
+    const toolCount = customTools.length + builtinTools.length;
+    const name = 'Project 86 ' + agentKey.toUpperCase();
+    const description = baseline.slice(0, 200);
+
+    // Always retrieve so we can detect archived state (no unarchive
+    // endpoint on Anthropic — archived means we have to mint a
+    // fresh agent). force_version still bypasses the CAS lookup
+    // when supplied; in that case we trust the caller saw the
+    // archived flag separately.
+    const remote = await anthropic.beta.agents.retrieve(agentId);
+    if (remote.archived_at) {
+      // Archived → create fresh, replace registry row.
+      const created = await anthropic.beta.agents.create({
+        model: model,
+        name: name,
+        description: description,
+        system: baseline,
+        skills: skills,
+        tools: toolList
+      });
+      await pool.query(
+        `UPDATE managed_agent_registry
+            SET anthropic_agent_id = $2,
+                model = $3,
+                tool_count = $4,
+                skill_count = $5,
+                updated_at = NOW()
+          WHERE agent_key = $1`,
+        [agentKey, created.id, model, toolCount, skills.length]
+      );
+      return res.json({
+        ok: true,
+        agent_key: agentKey,
+        status: 'recreated_after_archive',
+        anthropic_agent_id: created.id,
+        previous_anthropic_agent_id: agentId,
+        new_version: created.version,
+        tool_count: toolCount,
+        skill_count: skills.length,
+        note: 'Previous agent was archived on Anthropic. Created a fresh agent (new id, v1). Any v2 sessions bound to the old id are dead — start fresh chats to bind to the new id.'
+      });
+    }
+
+    let currentVersion;
+    if (req.body && typeof req.body.force_version === 'number') {
+      currentVersion = req.body.force_version;
+    } else {
+      currentVersion = remote.version;
+    }
 
     const updated = await anthropic.beta.agents.update(agentId, {
       version: currentVersion,
-      name: 'Project 86 ' + agentKey.toUpperCase(),
-      description: baseline.slice(0, 200),
+      name: name,
+      description: description,
       model: model,
       system: baseline,
       skills: skills,
-      tools: [...builtinTools, ...customTools]
+      tools: toolList
     });
 
-    // Refresh our registry row with the new tool/skill counts. The
-    // anthropic_agent_id is unchanged — same agent, new version.
     await pool.query(
       `UPDATE managed_agent_registry
           SET model = $2,
@@ -2192,20 +2229,42 @@ router.post('/managed/:agentKey/sync', requireAuth, requireCapability('ROLES_MAN
               skill_count = $4,
               updated_at = NOW()
         WHERE agent_key = $1`,
-      [agentKey, model, customTools.length + builtinTools.length, skills.length]
+      [agentKey, model, toolCount, skills.length]
     );
 
     res.json({
       ok: true,
       agent_key: agentKey,
+      status: 'updated',
       anthropic_agent_id: agentId,
       new_version: updated.version,
       previous_version: currentVersion,
-      tool_count: customTools.length + builtinTools.length,
+      tool_count: toolCount,
       skill_count: skills.length
     });
   } catch (e) {
     console.error('POST /managed/:agentKey/sync error:', e);
+    res.status(500).json({ error: 'Server error: ' + (e.message || 'unknown') });
+  }
+});
+
+// DELETE /api/admin/agents/managed/:agentKey
+//   Removes a stale row from managed_agent_registry. Does NOT touch
+//   the Anthropic-side agent — that has its own delete/archive flow.
+//   Use this when the local registry has a row whose agent_key was
+//   retired (e.g. 'intake' after the merge into 86).
+router.delete('/managed/:agentKey', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+  try {
+    const agentKey = String(req.params.agentKey || '').toLowerCase();
+    if (!agentKey) return res.status(400).json({ error: 'agentKey is required' });
+    const r = await pool.query(
+      `DELETE FROM managed_agent_registry WHERE agent_key = $1 RETURNING anthropic_agent_id`,
+      [agentKey]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'No registry row for that agent_key.' });
+    res.json({ ok: true, agent_key: agentKey, freed_anthropic_agent_id: r.rows[0].anthropic_agent_id });
+  } catch (e) {
+    console.error('DELETE /managed/:agentKey error:', e);
     res.status(500).json({ error: 'Server error: ' + (e.message || 'unknown') });
   }
 });
@@ -2237,23 +2296,74 @@ router.post('/managed/sync-all', requireAuth, requireCapability('ROLES_MANAGE'),
       try {
         const baseline = AGENT_SYSTEM_BASELINE[agentKey];
         if (!baseline) {
-          summary.push({ agent_key: agentKey, ok: false, error: 'No baseline system prompt — unknown agent key.' });
+          // Stale registry row — agent_key isn't in our current set
+          // (e.g. 'intake' which was merged into 86). Skip with a
+          // status so the admin can see it and decide whether to
+          // delete the row.
+          summary.push({
+            agent_key: agentKey,
+            ok: false,
+            status: 'stale_row',
+            error: 'No baseline system prompt — agent_key is not in the current set (was retired). Delete this row from managed_agent_registry to clean up.'
+          });
           continue;
         }
-        const remote = await anthropic.beta.agents.retrieve(agentId);
-        const currentVersion = remote.version;
+
         const skills = await collectSkillsFor(agentKey);
         const customTools = customToolsFor(agentKey);
         const builtinTools = builtinToolsetFor(agentKey);
+        const toolList = [...builtinTools, ...customTools];
+        const toolCount = customTools.length + builtinTools.length;
+        const name = 'Project 86 ' + agentKey.toUpperCase();
+        const description = baseline.slice(0, 200);
 
+        // Fetch current state. If the agent is archived (archived_at
+        // is non-null), update() will 400 with "Cannot modify
+        // archived agent" — Anthropic has no unarchive endpoint, so
+        // fall back to create() to mint a fresh agent (new id, v1)
+        // and replace the registry row.
+        const remote = await anthropic.beta.agents.retrieve(agentId);
+        if (remote.archived_at) {
+          const created = await anthropic.beta.agents.create({
+            model: model,
+            name: name,
+            description: description,
+            system: baseline,
+            skills: skills,
+            tools: toolList
+          });
+          await pool.query(
+            `UPDATE managed_agent_registry
+                SET anthropic_agent_id = $2,
+                    model = $3,
+                    tool_count = $4,
+                    skill_count = $5,
+                    updated_at = NOW()
+              WHERE agent_key = $1`,
+            [agentKey, created.id, model, toolCount, skills.length]
+          );
+          summary.push({
+            agent_key: agentKey,
+            ok: true,
+            status: 'recreated_after_archive',
+            anthropic_agent_id: created.id,
+            previous_anthropic_agent_id: agentId,
+            new_version: created.version,
+            tool_count: toolCount,
+            skill_count: skills.length
+          });
+          continue;
+        }
+
+        const currentVersion = remote.version;
         const updated = await anthropic.beta.agents.update(agentId, {
           version: currentVersion,
-          name: 'Project 86 ' + agentKey.toUpperCase(),
-          description: baseline.slice(0, 200),
+          name: name,
+          description: description,
           model: model,
           system: baseline,
           skills: skills,
-          tools: [...builtinTools, ...customTools]
+          tools: toolList
         });
 
         await pool.query(
@@ -2263,20 +2373,21 @@ router.post('/managed/sync-all', requireAuth, requireCapability('ROLES_MANAGE'),
                   skill_count = $4,
                   updated_at = NOW()
             WHERE agent_key = $1`,
-          [agentKey, model, customTools.length + builtinTools.length, skills.length]
+          [agentKey, model, toolCount, skills.length]
         );
 
         summary.push({
           agent_key: agentKey,
           ok: true,
+          status: 'updated',
           anthropic_agent_id: agentId,
           previous_version: currentVersion,
           new_version: updated.version,
-          tool_count: customTools.length + builtinTools.length,
+          tool_count: toolCount,
           skill_count: skills.length
         });
       } catch (e) {
-        summary.push({ agent_key: agentKey, ok: false, error: e.message || 'unknown' });
+        summary.push({ agent_key: agentKey, ok: false, status: 'error', error: e.message || 'unknown' });
       }
     }
 
