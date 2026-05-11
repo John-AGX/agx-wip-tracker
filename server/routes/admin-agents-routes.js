@@ -2029,7 +2029,7 @@ setInterval(backgroundRefreshAll, REFRESH_INTERVAL_MS);
 //   beta.skills metadata where available). `available` is the full
 //   Anthropic-side skill list minus already-assigned ones — the UI
 //   uses this to populate an "Attach a skill" picker.
-router.get('/agents/:agentKey/native-skills', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+router.get('/:agentKey/native-skills', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
   try {
     const agentKey = String(req.params.agentKey || '').trim();
     if (!agentKey) return res.status(400).json({ error: 'agentKey is required' });
@@ -2093,7 +2093,7 @@ router.get('/agents/:agentKey/native-skills', requireAuth, requireCapability('RO
 //   Body: { skill_id: string, position?: number }
 //   Attaches the skill_id to this agent. Idempotent: re-attaching an
 //   already-attached skill returns ok without error.
-router.post('/agents/:agentKey/native-skills', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+router.post('/:agentKey/native-skills', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
   try {
     const agentKey = String(req.params.agentKey || '').trim();
     const skillId = String(req.body && req.body.skill_id || '').trim();
@@ -2130,7 +2130,7 @@ router.post('/agents/:agentKey/native-skills', requireAuth, requireCapability('R
 //   Detaches the skill from this agent. Does NOT delete the skill
 //   from Anthropic — that's a separate operation
 //   (DELETE /api/admin/anthropic/skills/:id).
-router.delete('/agents/:agentKey/native-skills/:skillId', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+router.delete('/:agentKey/native-skills/:skillId', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
   try {
     const agentKey = String(req.params.agentKey || '').trim();
     const skillId = String(req.params.skillId || '').trim();
