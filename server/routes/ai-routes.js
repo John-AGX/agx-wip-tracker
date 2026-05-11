@@ -7927,8 +7927,12 @@ router.post('/ask86/chat', requireAuth, async (req, res) => {
 
   setSSEHeaders(res);
   try {
+    // Pull inline_image_blocks alongside the message text so prior
+    // user turns that carried PDF / image content keep their vision
+    // payload on every subsequent turn. Without this, the model
+    // could see the PDF on turn 1 but had amnesia on turn 2+.
     const histRes = await pool.query(
-      `SELECT role, content FROM ai_messages
+      `SELECT role, content, inline_image_blocks FROM ai_messages
         WHERE entity_type='ask86' AND user_id=$1
         ORDER BY created_at ASC`,
       [req.user.id]
@@ -7936,13 +7940,6 @@ router.post('/ask86/chat', requireAuth, async (req, res) => {
     let history = histRes.rows;
     const cap = MAX_HISTORY_PAIRS * 2;
     if (history.length > cap) history = history.slice(-cap);
-
-    const userMsgId = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
-    await pool.query(
-      `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content, photos_included)
-       VALUES ($1, 'ask86', 'global', $2, 'user', $3, $4)`,
-      [userMsgId, req.user.id, userMessage, additionalImages.length]
-    );
 
     // Build the user turn. If images are present, mix them in front of
     // the text block (Anthropic guidance). Otherwise keep content as a
@@ -7955,8 +7952,24 @@ router.post('/ask86/chat', requireAuth, async (req, res) => {
       ? [...inlineImageBlocks, { type: 'text', text: userMessage }]
       : userMessage;
 
+    const userMsgId = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+    await pool.query(
+      `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content, photos_included, inline_image_blocks)
+       VALUES ($1, 'ask86', 'global', $2, 'user', $3, $4, $5::jsonb)`,
+      [
+        userMsgId, req.user.id, userMessage, additionalImages.length,
+        inlineImageBlocks.length ? JSON.stringify(inlineImageBlocks) : null
+      ]
+    );
+
     const messages = [
-      ...history.map(m => ({ role: m.role, content: m.content })),
+      ...history.map(m => {
+        const blocks = Array.isArray(m.inline_image_blocks) ? m.inline_image_blocks : null;
+        if (blocks && blocks.length && m.role === 'user') {
+          return { role: m.role, content: [...blocks, { type: 'text', text: m.content || '' }] };
+        }
+        return { role: m.role, content: m.content };
+      }),
       { role: 'user', content: userContent }
     ];
     const ctx = await buildAsk86Context();
@@ -8015,8 +8028,11 @@ router.post('/ask86/chat/continue', requireAuth, async (req, res) => {
   }
   setSSEHeaders(res);
   try {
+    // Same as /ask86/chat — pull inline_image_blocks so prior PDFs /
+    // photos in the conversation stay visible to the model through
+    // the approval cycle, not just on the originating turn.
     const histRes = await pool.query(
-      `SELECT role, content FROM ai_messages
+      `SELECT role, content, inline_image_blocks FROM ai_messages
         WHERE entity_type='ask86' AND user_id=$1
         ORDER BY created_at ASC`,
       [req.user.id]
@@ -8065,7 +8081,13 @@ router.post('/ask86/chat/continue', requireAuth, async (req, res) => {
     }
 
     const messages = [
-      ...history.map(m => ({ role: m.role, content: m.content })),
+      ...history.map(m => {
+        const blocks = Array.isArray(m.inline_image_blocks) ? m.inline_image_blocks : null;
+        if (blocks && blocks.length && m.role === 'user') {
+          return { role: m.role, content: [...blocks, { type: 'text', text: m.content || '' }] };
+        }
+        return { role: m.role, content: m.content };
+      }),
       { role: 'assistant', content: pendingContent },
       { role: 'user',      content: toolResultBlocks }
     ];

@@ -437,6 +437,21 @@ async function initSchema() {
     -- they substitute for hardcoded blocks rather than appending.
     ALTER TABLE ai_messages ADD COLUMN IF NOT EXISTS packs_loaded JSONB;
 
+    -- Inline image content blocks that accompanied a user message.
+    -- Stored as a JSONB array of Anthropic image content blocks
+    -- ({ type:'image', source:{ type:'base64', media_type, data } }).
+    -- Without this column the per-turn images were sent to Anthropic
+    -- on the FIRST turn only, then dropped from history when
+    -- /chat/continue (or the next /chat) rebuilt the message array
+    -- from rows that only stored the message TEXT. Symptom: model
+    -- correctly described an attached PDF on turn 1, then on turn 2
+    -- said "I don't actually have the lead details" because the
+    -- image content was gone. Persisting it here lets the history
+    -- rebuilder rehydrate the image blocks alongside the text so
+    -- the model keeps seeing the attachment across the full
+    -- conversation (capped by MAX_HISTORY_PAIRS).
+    ALTER TABLE ai_messages ADD COLUMN IF NOT EXISTS inline_image_blocks JSONB;
+
     -- Materials catalog — Project 86's purchase history (Home Depot to start;
     -- vendor column makes Lowe's / Sherwin Williams / etc. a config
     -- addition later, not a schema change). One row per unique
