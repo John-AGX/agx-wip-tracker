@@ -1365,33 +1365,48 @@ async function initSchema() {
   //     or the admin UI — but at least the value is no longer absent.
   //   - 'cra'-targeted packs → ['client'] (HR surface).
   // Idempotent: only updates packs where `contexts` is missing.
-  await pool.query(`
-    UPDATE app_settings
-       SET value = jsonb_set(
-         value, '{skills}',
-         (
-           SELECT COALESCE(jsonb_agg(
-             CASE
-               WHEN s ? 'contexts' THEN s
-               WHEN s ? 'agents'
-                 AND jsonb_typeof(s->'agents') = 'array'
-                 AND s->'agents' ? 'cra'
-                 AND NOT (s->'agents' ? 'job')
-                 THEN jsonb_set(s, '{contexts}', '["client"]'::jsonb)
-               ELSE jsonb_set(s, '{contexts}', '["estimate","job","intake","ask86"]'::jsonb)
-             END
-           ), '[]'::jsonb)
-           FROM jsonb_array_elements(value->'skills') AS s
-         )
-       ),
-       updated_at = NOW()
-     WHERE key = 'agent_skills'
-       AND value ? 'skills'
-       AND EXISTS (
-         SELECT 1 FROM jsonb_array_elements(value->'skills') s
-         WHERE NOT (s ? 'contexts')
-       );
-  `);
+  //
+  // SAFETY: the WHERE clause guards `jsonb_typeof(value->'skills') = 'array'`
+  // AND the whole block is wrapped in try/catch so a malformed row in
+  // app_settings can never take down boot. Earlier ship of this migration
+  // (4f760b9) crashed Railway because the unguarded jsonb_array_elements
+  // throws when value->'skills' isn't an array — the result was edge-router
+  // 404s with X-Railway-Fallback: true (process never came up).
+  try {
+    await pool.query(`
+      UPDATE app_settings
+         SET value = jsonb_set(
+           value, '{skills}',
+           (
+             SELECT COALESCE(jsonb_agg(
+               CASE
+                 WHEN s ? 'contexts' THEN s
+                 WHEN s ? 'agents'
+                   AND jsonb_typeof(s->'agents') = 'array'
+                   AND s->'agents' ? 'cra'
+                   AND NOT (s->'agents' ? 'job')
+                   THEN jsonb_set(s, '{contexts}', '["client"]'::jsonb)
+                 ELSE jsonb_set(s, '{contexts}', '["estimate","job","intake","ask86"]'::jsonb)
+               END
+             ), '[]'::jsonb)
+             FROM jsonb_array_elements(value->'skills') AS s
+           )
+         ),
+         updated_at = NOW()
+       WHERE key = 'agent_skills'
+         AND value ? 'skills'
+         AND jsonb_typeof(value->'skills') = 'array'
+         AND EXISTS (
+           SELECT 1 FROM jsonb_array_elements(value->'skills') s
+           WHERE NOT (s ? 'contexts')
+         );
+    `);
+  } catch (e) {
+    // Logging — not throwing — preserves boot when production has a
+    // weird agent_skills row. Admin can fix the data and re-deploy to
+    // run the sweep cleanly.
+    console.error('[db.js] contexts backfill skipped:', e.message);
+  }
 
   // Seed built-in roles. ON CONFLICT lets us re-run safely without
   // overwriting capability edits an admin made post-seed (only the label,
