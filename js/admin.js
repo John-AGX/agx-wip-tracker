@@ -4222,8 +4222,9 @@
         '<p style="margin:0 0 10px 0;font-size:12px;color:var(--text-dim,#888);">' +
           'One-time registration of each Project 86 agent as an Anthropic-side managed Agent. Bootstraps the migration from <code>messages.stream</code> to <code>beta.sessions.events.stream</code>. The chat path is still on <code>messages.stream</code> — registering here just creates the Agent records that the v2 chat endpoint will reference once it ships.' +
         '</p>' +
-        '<div style="margin-bottom:10px;">' +
+        '<div style="margin-bottom:10px;display:flex;gap:8px;flex-wrap:wrap;">' +
           '<button class="ee-btn primary" onclick="bootstrapManagedAgents(\'all\')" title="Register every Project 86 agent that isn\'t yet registered.">&#x1F680; Register all unregistered</button>' +
+          '<button class="ee-btn secondary" onclick="syncAllManagedAgents()" title="Push the local config to Anthropic for every registered agent as a new version. Uses beta.agents.update — same agent_id, version increments.">&#x21BB; Sync all to Anthropic</button>' +
         '</div>';
 
       var rowsHtml = '<div class="table-container"><table style="width:100%;font-size:12px;">' +
@@ -4292,6 +4293,28 @@
       loadManagedAgents();
     }).catch(function(err) {
       alert('Sync failed: ' + (err && err.message || 'unknown'));
+    });
+  };
+
+  // Bulk sync — every registered agent gets pushed in one round-trip.
+  // Per-agent failures don't abort the rest; the summary alert shows
+  // the result per agent.
+  window.syncAllManagedAgents = function() {
+    if (!confirm('Push local config to Anthropic for EVERY registered agent?\n\nEach agent gets a new version (beta.agents.update). Per-agent failures don\'t abort the rest. Existing sessions on the old versions keep working.')) return;
+    window.p86Api.post('/api/admin/agents/managed/sync-all', {}).then(function(resp) {
+      var summary = (resp && resp.summary) || [];
+      if (!summary.length) {
+        alert(resp && resp.note ? resp.note : 'No agents registered yet.');
+        return;
+      }
+      var lines = summary.map(function(s) {
+        if (s.ok) return '✓ ' + s.agent_key + ' → v' + s.previous_version + ' → v' + s.new_version + ' (' + s.tool_count + ' tools, ' + s.skill_count + ' skills)';
+        return '✗ ' + s.agent_key + ': ' + s.error;
+      });
+      alert(lines.join('\n'));
+      loadManagedAgents();
+    }).catch(function(err) {
+      alert('Sync all failed: ' + (err && err.message || 'unknown'));
     });
   };
 

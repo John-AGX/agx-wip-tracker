@@ -2210,6 +2210,83 @@ router.post('/managed/:agentKey/sync', requireAuth, requireCapability('ROLES_MAN
   }
 });
 
+// POST /api/admin/agents/managed/sync-all
+//   Bulk variant — syncs every registered agent in one round-trip.
+//   Loops the per-agent sync logic and returns a per-agent summary so
+//   the UI can show which ones moved + which failed. Failures on one
+//   agent don't abort the rest; each agent gets its own try/catch.
+router.post('/managed/sync-all', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+  try {
+    const anthropic = getAnthropic();
+    if (!anthropic) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not set on this deployment.' });
+
+    const reg = await pool.query(
+      `SELECT agent_key, anthropic_agent_id FROM managed_agent_registry ORDER BY agent_key`
+    );
+    if (!reg.rows.length) {
+      return res.json({ summary: [], note: 'No agents registered yet. Bootstrap them first.' });
+    }
+
+    const aiInternals = require('./ai-routes-internals');
+    const model = aiInternals && aiInternals.defaultModel ? aiInternals.defaultModel() : 'claude-sonnet-4-6';
+    const summary = [];
+
+    for (const row of reg.rows) {
+      const agentKey = row.agent_key;
+      const agentId = row.anthropic_agent_id;
+      try {
+        const baseline = AGENT_SYSTEM_BASELINE[agentKey];
+        if (!baseline) {
+          summary.push({ agent_key: agentKey, ok: false, error: 'No baseline system prompt — unknown agent key.' });
+          continue;
+        }
+        const remote = await anthropic.beta.agents.retrieve(agentId);
+        const currentVersion = remote.version;
+        const skills = await collectSkillsFor(agentKey);
+        const customTools = customToolsFor(agentKey);
+        const builtinTools = builtinToolsetFor(agentKey);
+
+        const updated = await anthropic.beta.agents.update(agentId, {
+          version: currentVersion,
+          name: 'Project 86 ' + agentKey.toUpperCase(),
+          description: baseline.slice(0, 200),
+          model: model,
+          system: baseline,
+          skills: skills,
+          tools: [...builtinTools, ...customTools]
+        });
+
+        await pool.query(
+          `UPDATE managed_agent_registry
+              SET model = $2,
+                  tool_count = $3,
+                  skill_count = $4,
+                  updated_at = NOW()
+            WHERE agent_key = $1`,
+          [agentKey, model, customTools.length + builtinTools.length, skills.length]
+        );
+
+        summary.push({
+          agent_key: agentKey,
+          ok: true,
+          anthropic_agent_id: agentId,
+          previous_version: currentVersion,
+          new_version: updated.version,
+          tool_count: customTools.length + builtinTools.length,
+          skill_count: skills.length
+        });
+      } catch (e) {
+        summary.push({ agent_key: agentKey, ok: false, error: e.message || 'unknown' });
+      }
+    }
+
+    res.json({ summary });
+  } catch (e) {
+    console.error('POST /managed/sync-all error:', e);
+    res.status(500).json({ error: 'Server error: ' + (e.message || 'unknown') });
+  }
+});
+
 // ──────── Native Skills assignment per agent (Phase 2) ────────
 //
 // Stores assignment rows in managed_agent_skills (agent_key, skill_id).
