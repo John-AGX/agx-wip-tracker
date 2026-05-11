@@ -11,7 +11,7 @@
 (function() {
   'use strict';
 
-  var MAX_PER_ENTITY = 30;
+  var MAX_PER_ENTITY = 100;
   var MAX_FILE_BYTES = 50 * 1024 * 1024;
 
   function fmtBytes(n) {
