@@ -1353,6 +1353,46 @@ async function initSchema() {
        );
   `);
 
+  // ── Migration: backfill `contexts` on any pack that still lacks it ──
+  // The named-pack migration above covers known packs by name, but any
+  // pack added via propose_skill_pack_add prior to the contexts-required
+  // change would have no contexts field, and packContextsPass treats a
+  // missing array as "load everywhere" — which is the leak. This sweep
+  // gives every untagged pack an explicit fallback so the contexts field
+  // is always set after boot:
+  //   - 'job'-targeted packs → ['estimate','job','intake','ask86'] (all 86
+  //     surfaces). The admin can narrow later via propose_skill_pack_edit
+  //     or the admin UI — but at least the value is no longer absent.
+  //   - 'cra'-targeted packs → ['client'] (HR surface).
+  // Idempotent: only updates packs where `contexts` is missing.
+  await pool.query(`
+    UPDATE app_settings
+       SET value = jsonb_set(
+         value, '{skills}',
+         (
+           SELECT COALESCE(jsonb_agg(
+             CASE
+               WHEN s ? 'contexts' THEN s
+               WHEN s ? 'agents'
+                 AND jsonb_typeof(s->'agents') = 'array'
+                 AND s->'agents' ? 'cra'
+                 AND NOT (s->'agents' ? 'job')
+                 THEN jsonb_set(s, '{contexts}', '["client"]'::jsonb)
+               ELSE jsonb_set(s, '{contexts}', '["estimate","job","intake","ask86"]'::jsonb)
+             END
+           ), '[]'::jsonb)
+           FROM jsonb_array_elements(value->'skills') AS s
+         )
+       ),
+       updated_at = NOW()
+     WHERE key = 'agent_skills'
+       AND value ? 'skills'
+       AND EXISTS (
+         SELECT 1 FROM jsonb_array_elements(value->'skills') s
+         WHERE NOT (s ? 'contexts')
+       );
+  `);
+
   // Seed built-in roles. ON CONFLICT lets us re-run safely without
   // overwriting capability edits an admin made post-seed (only the label,
   // description, and builtin flag get refreshed).
