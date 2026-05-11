@@ -4227,7 +4227,7 @@
         '</div>';
 
       var rowsHtml = '<div class="table-container"><table style="width:100%;font-size:12px;">' +
-        '<thead><tr><th>Project 86 Agent</th><th>Anthropic Agent ID</th><th>Model</th><th style="text-align:right;">Tools</th><th style="text-align:right;">Skills</th><th>Registered</th><th></th></tr></thead><tbody>';
+        '<thead><tr><th>Project 86 Agent</th><th>Anthropic Agent ID</th><th>Model</th><th style="text-align:right;">Tools</th><th style="text-align:right;">Skills</th><th>Registered</th><th>Anthropic state</th><th></th></tr></thead><tbody>';
       allKeys.forEach(function(k) {
         var r = registered[k];
         if (r) {
@@ -4240,12 +4240,13 @@
             '<td style="text-align:right;font-family:\'SF Mono\',monospace;">' + (r.tool_count || 0) + '</td>' +
             '<td style="text-align:right;font-family:\'SF Mono\',monospace;">' + (r.skill_count || 0) + '</td>' +
             '<td style="font-size:11px;color:var(--text-dim,#aaa);">' + escapeHTML(when) + '</td>' +
-            '<td><span style="color:#34d399;font-size:11px;font-weight:600;">REGISTERED</span></td>' +
+            '<td id="agent-state-' + escapeAttr(k) + '" style="font-size:11px;color:var(--text-dim,#888);">Checking…</td>' +
+            '<td><button class="ee-btn secondary" onclick="syncManagedAgent(\'' + escapeAttr(k) + '\')" title="Push the local config to Anthropic as a new version of this same agent id.">Sync</button></td>' +
           '</tr>';
         } else {
           rowsHtml += '<tr style="opacity:0.7;">' +
             '<td>' + escapeHTML(labels[k] || k) + '</td>' +
-            '<td colspan="5" style="font-style:italic;color:var(--text-dim,#888);font-size:11px;">not yet registered</td>' +
+            '<td colspan="6" style="font-style:italic;color:var(--text-dim,#888);font-size:11px;">not yet registered</td>' +
             '<td><button class="ee-btn secondary" onclick="bootstrapManagedAgents(\'' + escapeAttr(k) + '\')">Register</button></td>' +
           '</tr>';
         }
@@ -4253,11 +4254,46 @@
       rowsHtml += '</tbody></table></div>';
 
       host.innerHTML = panelHeader('Managed Agents (Phase 1a — registration)', '🤖') + bootstrapBar + rowsHtml;
+      // Fetch Anthropic-side state per agent — version + drift signal.
+      // Done after render so the table draws immediately and per-row
+      // cells fill in as the calls return. Failures show as "—".
+      allKeys.forEach(function(k) {
+        if (!registered[k]) return;
+        var cell = document.getElementById('agent-state-' + k);
+        if (!cell) return;
+        window.p86Api.get('/api/admin/agents/managed/' + encodeURIComponent(k) + '/anthropic-state').then(function(resp) {
+          if (!resp || !resp.registered || !resp.anthropic) {
+            cell.innerHTML = '<span style="color:var(--text-dim,#888);">—</span>';
+            return;
+          }
+          var v = resp.anthropic.version;
+          var driftCount = (resp.drift || []).length;
+          var driftDesc = driftCount === 0
+            ? '<span style="color:#34d399;font-weight:600;">in sync</span>'
+            : '<span style="color:#fbbf24;font-weight:600;" title="' + escapeAttr((resp.drift || []).map(function(d) { return d.field; }).join(', ')) + '">' + driftCount + ' field' + (driftCount === 1 ? '' : 's') + ' drift</span>';
+          cell.innerHTML = '<span style="font-family:\'SF Mono\',monospace;">v' + v + '</span> · ' + driftDesc;
+        }).catch(function() {
+          cell.innerHTML = '<span style="color:#f87171;">check failed</span>';
+        });
+      });
     }).catch(function(err) {
       host.innerHTML = panelHeader('Managed Agents', '🤖') +
         '<div style="color:#e74c3c;font-size:12px;">Failed: ' + escapeHTML(err.message || 'unknown') + '</div>';
     });
   }
+
+  // Push the current local agent definition to Anthropic as a new
+  // version of the SAME agent id. Same agent_id, version increments —
+  // unlike Bootstrap which creates a brand-new agent every time.
+  window.syncManagedAgent = function(agentKey) {
+    if (!confirm('Push local config for "' + agentKey + '" to Anthropic as a new version?\n\nUses beta.agents.update — same anthropic_agent_id, version increments. Existing sessions stay on their current version; new sessions pick up the new config.')) return;
+    window.p86Api.post('/api/admin/agents/managed/' + encodeURIComponent(agentKey) + '/sync', {}).then(function(resp) {
+      alert('✓ Synced ' + agentKey + ' → v' + (resp.previous_version || '?') + ' → v' + (resp.new_version || '?') + '\nTools: ' + (resp.tool_count || 0) + ', Skills: ' + (resp.skill_count || 0));
+      loadManagedAgents();
+    }).catch(function(err) {
+      alert('Sync failed: ' + (err && err.message || 'unknown'));
+    });
+  };
 
   function bootstrapManagedAgents(key) {
     var label = (key === 'all') ? 'every unregistered Project 86 agent' : key;

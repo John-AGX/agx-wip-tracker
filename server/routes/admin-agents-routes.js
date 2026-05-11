@@ -2009,6 +2009,207 @@ async function backgroundRefreshAll() {
 setTimeout(backgroundRefreshAll, 30 * 1000);
 setInterval(backgroundRefreshAll, REFRESH_INTERVAL_MS);
 
+// ──────── Anthropic-side agent inspection & sync (Phase 2) ────────
+//
+// The legacy /managed/reregister endpoint creates a brand-new agent
+// every time it runs (new anthropic_agent_id, version 1). That's
+// wrong for incremental updates — sessions bound to the old id keep
+// using stale config. Anthropic's beta.agents.update() lets us push
+// a new version of the SAME agent_id with the CAS-style `version`
+// guard so concurrent updates can't clobber each other.
+//
+// The endpoints below give the admin a "look at the console" flow:
+//   GET  → fetch current Anthropic-side state (version, model, etc.)
+//   POST → push local config as a new version
+
+// GET /api/admin/agents/managed/:agentKey/anthropic-state
+//   Retrieves the current Anthropic-side record for this agent and
+//   compares it to what the local code would generate. Useful when
+//   the admin asks "is p86job up to date?" — the response includes
+//   the version, last updated_at, tool/skill counts on Anthropic vs
+//   local, and a list of fields that drifted.
+router.get('/managed/:agentKey/anthropic-state', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+  try {
+    const agentKey = String(req.params.agentKey || '').toLowerCase();
+    if (!['ag', 'job', 'cra', 'staff'].includes(agentKey)) {
+      return res.status(400).json({ error: 'agentKey must be ag | job | cra | staff' });
+    }
+    const anthropic = getAnthropic();
+    if (!anthropic) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not set on this deployment.' });
+
+    const reg = await pool.query(
+      `SELECT * FROM managed_agent_registry WHERE agent_key = $1`,
+      [agentKey]
+    );
+    if (!reg.rows.length) {
+      return res.json({
+        registered: false,
+        agent_key: agentKey,
+        note: 'Agent is not yet registered. Click Bootstrap to create it on Anthropic.'
+      });
+    }
+    const row = reg.rows[0];
+    const remoteAgent = await anthropic.beta.agents.retrieve(row.anthropic_agent_id);
+
+    // Build what the local code WOULD register so we can flag drift.
+    const baseline = AGENT_SYSTEM_BASELINE[agentKey] || '';
+    const aiInternals = require('./ai-routes-internals');
+    const localModel = aiInternals && aiInternals.defaultModel ? aiInternals.defaultModel() : 'claude-sonnet-4-6';
+    const localSkills = await collectSkillsFor(agentKey);
+    const localCustom = customToolsFor(agentKey);
+    const localBuiltin = builtinToolsetFor(agentKey);
+    const localToolCount = localCustom.length + localBuiltin.length;
+    const localSkillCount = localSkills.length;
+    const localSystem = baseline;
+    const localName = 'Project 86 ' + agentKey.toUpperCase();
+    const localDescription = baseline.slice(0, 200);
+
+    // Drift signals — anything where the Anthropic-side value clearly
+    // diverges from what we'd push now. Models on Anthropic can be a
+    // full object (BetaManagedAgentsModelConfig) so unwrap .model.
+    const remoteModel = (remoteAgent.model && (remoteAgent.model.model || remoteAgent.model)) || '';
+    const remoteSkillCount = Array.isArray(remoteAgent.skills) ? remoteAgent.skills.length : 0;
+    const remoteToolCount = Array.isArray(remoteAgent.tools) ? remoteAgent.tools.length : 0;
+    const remoteSystem = remoteAgent.system || '';
+
+    const drift = [];
+    if (remoteModel && remoteModel !== localModel) {
+      drift.push({ field: 'model', remote: remoteModel, local: localModel });
+    }
+    if (remoteSkillCount !== localSkillCount) {
+      drift.push({ field: 'skill_count', remote: remoteSkillCount, local: localSkillCount });
+    }
+    if (remoteToolCount !== localToolCount) {
+      drift.push({ field: 'tool_count', remote: remoteToolCount, local: localToolCount });
+    }
+    if (remoteSystem !== localSystem) {
+      drift.push({
+        field: 'system_prompt',
+        remote_length: remoteSystem.length,
+        local_length: localSystem.length,
+        remote_snippet: remoteSystem.slice(0, 120),
+        local_snippet: localSystem.slice(0, 120)
+      });
+    }
+    if ((remoteAgent.name || '') !== localName) {
+      drift.push({ field: 'name', remote: remoteAgent.name, local: localName });
+    }
+    if ((remoteAgent.description || '') !== localDescription) {
+      drift.push({ field: 'description', remote_length: (remoteAgent.description || '').length, local_length: localDescription.length });
+    }
+
+    res.json({
+      registered: true,
+      agent_key: agentKey,
+      anthropic_agent_id: row.anthropic_agent_id,
+      anthropic: {
+        version: remoteAgent.version,
+        name: remoteAgent.name,
+        description: remoteAgent.description,
+        model: remoteModel,
+        skill_count: remoteSkillCount,
+        tool_count: remoteToolCount,
+        system_length: remoteSystem.length,
+        created_at: remoteAgent.created_at,
+        updated_at: remoteAgent.updated_at,
+        archived_at: remoteAgent.archived_at
+      },
+      local: {
+        model: localModel,
+        skill_count: localSkillCount,
+        tool_count: localToolCount,
+        system_length: localSystem.length,
+        name: localName,
+        description_length: localDescription.length
+      },
+      drift,
+      up_to_date: drift.length === 0
+    });
+  } catch (e) {
+    console.error('GET /managed/:agentKey/anthropic-state error:', e);
+    res.status(500).json({ error: 'Server error: ' + (e.message || 'unknown') });
+  }
+});
+
+// POST /api/admin/agents/managed/:agentKey/sync
+//   Pushes the local agent definition to Anthropic as a new version of
+//   the SAME agent_id (versions, not a fresh create). Uses the CAS
+//   `version` precondition so a concurrent update can't clobber.
+//
+//   Optional body: { force_version?: number } — bypass the auto-fetch
+//   of current version and use this value. Useful when the admin
+//   already knows the version from the inspection endpoint.
+router.post('/managed/:agentKey/sync', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+  try {
+    const agentKey = String(req.params.agentKey || '').toLowerCase();
+    if (!['ag', 'job', 'cra', 'staff'].includes(agentKey)) {
+      return res.status(400).json({ error: 'agentKey must be ag | job | cra | staff' });
+    }
+    const anthropic = getAnthropic();
+    if (!anthropic) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not set on this deployment.' });
+
+    const reg = await pool.query(
+      `SELECT anthropic_agent_id FROM managed_agent_registry WHERE agent_key = $1`,
+      [agentKey]
+    );
+    if (!reg.rows.length) return res.status(404).json({ error: 'Agent is not yet registered. Click Bootstrap first.' });
+    const agentId = reg.rows[0].anthropic_agent_id;
+
+    // CAS version: retrieve current version unless caller supplied
+    // force_version. Bumping prevents accidental rollback when the
+    // admin is staring at a stale UI.
+    let currentVersion;
+    if (req.body && typeof req.body.force_version === 'number') {
+      currentVersion = req.body.force_version;
+    } else {
+      const remote = await anthropic.beta.agents.retrieve(agentId);
+      currentVersion = remote.version;
+    }
+
+    const baseline = AGENT_SYSTEM_BASELINE[agentKey] || '';
+    const aiInternals = require('./ai-routes-internals');
+    const model = aiInternals && aiInternals.defaultModel ? aiInternals.defaultModel() : 'claude-sonnet-4-6';
+    const skills = await collectSkillsFor(agentKey);
+    const customTools = customToolsFor(agentKey);
+    const builtinTools = builtinToolsetFor(agentKey);
+
+    const updated = await anthropic.beta.agents.update(agentId, {
+      version: currentVersion,
+      name: 'Project 86 ' + agentKey.toUpperCase(),
+      description: baseline.slice(0, 200),
+      model: model,
+      system: baseline,
+      skills: skills,
+      tools: [...builtinTools, ...customTools]
+    });
+
+    // Refresh our registry row with the new tool/skill counts. The
+    // anthropic_agent_id is unchanged — same agent, new version.
+    await pool.query(
+      `UPDATE managed_agent_registry
+          SET model = $2,
+              tool_count = $3,
+              skill_count = $4,
+              updated_at = NOW()
+        WHERE agent_key = $1`,
+      [agentKey, model, customTools.length + builtinTools.length, skills.length]
+    );
+
+    res.json({
+      ok: true,
+      agent_key: agentKey,
+      anthropic_agent_id: agentId,
+      new_version: updated.version,
+      previous_version: currentVersion,
+      tool_count: customTools.length + builtinTools.length,
+      skill_count: skills.length
+    });
+  } catch (e) {
+    console.error('POST /managed/:agentKey/sync error:', e);
+    res.status(500).json({ error: 'Server error: ' + (e.message || 'unknown') });
+  }
+});
+
 // ──────── Native Skills assignment per agent (Phase 2) ────────
 //
 // Stores assignment rows in managed_agent_skills (agent_key, skill_id).
