@@ -1360,6 +1360,8 @@
     read_job_pct_audit:           'Auditing % complete…',
     read_jobs:                    'Looking up jobs…',
     read_users:                   'Looking up users…',
+    read_existing_clients:        'Checking existing clients…',
+    read_existing_leads:          'Checking existing leads…',
     load_skill_pack:              'Loading skill pack…',
     navigate:                     'Navigating…',
     // Estimate proposals (line items / sections / groups / scope / pricing)
@@ -1731,7 +1733,12 @@
   // read_materials is async: it hits /api/materials over the network,
   // unlike read_workspace_sheet_full which reads from localStorage.
   // The chip handler awaits the applier so both shapes work.
+  // Tools that auto-apply on the client (render as a chip, run
+  // immediately, feed the result back via /chat/continue without an
+  // approval card). Pure reads + the client-side navigation action.
+  // If a tool emits a side effect on data, it does NOT belong here.
   var AUTO_READ_TOOLS = {
+    // 86's job-side reads
     read_workspace_sheet_full: true,
     read_qb_cost_lines: true,
     read_materials: true,
@@ -1740,8 +1747,25 @@
     read_lead_pipeline: true,
     read_building_breakdown: true,
     read_job_pct_audit: true,
-    // Navigation tool — auto-applies on the client side. Renders as
-    // a chip ("Navigating to leads…") rather than an approval card.
+    // Estimate-side reads
+    read_past_estimates: true,
+    read_past_estimate_lines: true,
+    // HR / cross-agent reads (now exposed on Ask 86 too)
+    read_clients: true,
+    read_leads: true,
+    read_jobs: true,
+    read_users: true,
+    // CoS introspection reads
+    read_metrics: true,
+    read_recent_conversations: true,
+    read_conversation_detail: true,
+    read_skill_packs: true,
+    load_skill_pack: true,
+    // Intake dedup — fires before propose_create_lead so the model
+    // can match the new lead against existing clients / leads.
+    read_existing_clients: true,
+    read_existing_leads: true,
+    // Navigation action — client-side DOM dispatch.
     navigate: true
   };
 
@@ -2223,7 +2247,11 @@
     read_skill_packs: true,
     read_jobs: true,
     read_users: true,
-    load_skill_pack: true
+    load_skill_pack: true,
+    // Intake dedup lookups — pure reads of existing clients/leads to
+    // help the model spot duplicates before creating a new record.
+    read_existing_clients: true,
+    read_existing_leads: true
   };
   function execAGAutoTool(name, input) {
     return window.p86Api.post('/api/ai/exec-tool', { name: name, input: input || {} })

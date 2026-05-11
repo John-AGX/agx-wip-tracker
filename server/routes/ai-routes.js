@@ -7644,21 +7644,34 @@ const ALLOWED_AG_AUTO_TOOLS = new Set([
   // HR directory reads — let 86 do who/where/what lookups inline
   'read_jobs',
   'read_users',
+  // Intake-side dedup reads — without these in the allowlist 86's
+  // pre-lead-create dedup pass renders as approval cards instead of
+  // chips. Pure lookups, no mutation.
+  'read_existing_clients',
+  'read_existing_leads',
   // Dynamic skill loading — global Ask 86 pulls a pack on-demand
   'load_skill_pack'
 ]);
 // Tools whose executor lives in execClientTool (HR's directory reads)
 // rather than execStaffTool. The dispatcher routes by name.
 const CLIENT_EXECUTOR_TOOLS = new Set(['read_jobs', 'read_users']);
+// Tools whose executor lives in execIntakeRead (intake-side dedup
+// against existing clients / leads before creating a new one).
+const INTAKE_EXECUTOR_TOOLS = new Set(['read_existing_clients', 'read_existing_leads']);
 router.post('/exec-tool', requireAuth, requireCapability('ESTIMATES_VIEW'), async (req, res) => {
   try {
     const name = req.body && req.body.name;
     const input = (req.body && req.body.input) || {};
     if (!name || typeof name !== 'string') return res.status(400).json({ error: 'name is required' });
     if (!ALLOWED_AG_AUTO_TOOLS.has(name)) return res.status(400).json({ error: 'tool not allowed via this endpoint' });
-    const summary = CLIENT_EXECUTOR_TOOLS.has(name)
-      ? await execClientTool(name, input)
-      : await execStaffTool(name, input);
+    let summary;
+    if (INTAKE_EXECUTOR_TOOLS.has(name)) {
+      summary = await execIntakeRead(name, input);
+    } else if (CLIENT_EXECUTOR_TOOLS.has(name)) {
+      summary = await execClientTool(name, input);
+    } else {
+      summary = await execStaffTool(name, input);
+    }
     res.json({ ok: true, summary });
   } catch (e) {
     console.error('POST /api/ai/exec-tool error:', e);
