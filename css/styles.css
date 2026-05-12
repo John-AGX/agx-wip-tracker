@@ -414,23 +414,23 @@
            enough to hint at a button surface without a visible gap. */
         .p86-ask86-badge.floating {
             position: fixed;
-            /* Inset evenly from the top-right corner — the gap below
-               the header should read about the same as the gap from
-               the right edge so the badge sits balanced in the
-               corner rather than hanging lower than it is in. */
+            /* Inset evenly from the top-right corner. */
             top: 54px;
             right: 14px;
             z-index: 60;
-            width: 68px;
-            height: 68px;
+            /* Widget = icon size, no separate ring border. The dna-86
+               SVG has its own circular outline baked in — that line
+               IS the ring. The wrapper just fills the inside of the
+               icon's circle with a dark backdrop so it reads as a
+               solid pressable button, and provides the back-glow
+               halo via filter:drop-shadow. */
+            width: 64px;
+            height: 64px;
             padding: 0;
             line-height: 0;
             border-radius: 50%;
-            background: radial-gradient(circle at 50% 50%, rgba(15, 23, 42, 0.92), rgba(15, 23, 42, 0.78));
-            border: 1px solid rgba(79, 140, 255, 0.45);
-            /* Back-glow halo — multi-layer brand-blue drop-shadow stack
-               radiating off the icon's circular silhouette. Breathes on
-               a 3s loop via @keyframes p86-ask86-back-glow below. */
+            border: 0;
+            background: radial-gradient(circle at 50% 50%, rgba(15, 23, 42, 0.94), rgba(15, 23, 42, 0.80));
             filter: drop-shadow(0 0 6px rgba(79, 140, 255, 0.55))
                     drop-shadow(0 0 14px rgba(79, 140, 255, 0.35))
                     drop-shadow(0 0 28px rgba(79, 140, 255, 0.18));
@@ -438,7 +438,6 @@
         }
         .p86-ask86-badge.floating:hover {
             transform: scale(1.06);
-            border-color: rgba(79, 140, 255, 0.70);
         }
         .p86-ask86-badge.floating .p86-icon-slot {
             display: flex;
@@ -449,11 +448,10 @@
             margin: 0;
         }
         .p86-ask86-badge.floating .p86-icon {
-            /* Icon fills the available space inside the backdrop — the
-               1px border is OUTSIDE the 68px box (box-sizing is
-               border-box by default in the inheritance chain, but the
-               radial-gradient backdrop fills the box edge-to-edge so
-               the icon at 64px sits with ~2px ring on each side). */
+            /* Icon fills the entire wrapper edge-to-edge so its own
+               built-in circle outline sits exactly on the wrapper's
+               circular border-radius — no visible gap between the
+               icon's ring and the backdrop edge. */
             width: 64px;
             height: 64px;
             display: block;
@@ -475,11 +473,11 @@
                         drop-shadow(0 0 36px rgba(79, 140, 255, 0.28));
             }
         }
-        /* Light-mode: invert the backdrop to a frosted near-white,
-           keep the ring brand-blue, dial back the glow. */
+        /* Light-mode: invert the backdrop to a frosted near-white;
+           the icon's own ring stays brand-blue and provides the
+           visible boundary. */
         body.light-mode .p86-ask86-badge.floating {
             background: radial-gradient(circle at 50% 50%, rgba(248, 250, 252, 0.96), rgba(232, 240, 254, 0.88));
-            border-color: rgba(79, 140, 255, 0.55);
             animation-name: p86-ask86-back-glow-light;
         }
         @keyframes p86-ask86-back-glow-light {
