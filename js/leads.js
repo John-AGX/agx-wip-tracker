@@ -59,12 +59,13 @@
       ';font-size:10px;text-transform:uppercase;letter-spacing:0.5px;font-weight:700;white-space:nowrap;">' +
       escapeHTML(sm.label) + '</span>';
 
+    // Client cell — single line. The directory's client_name field
+    // already carries the "<parent short_name> - <community>" form
+    // (e.g. "RPM - Waterside I"), so showing client_company on a
+    // second line just duplicates the parent. Drop the sub-line.
     var clientCell;
     if (l.client_name) {
-      clientCell = '<div style="font-size:13px;color:var(--text,#e6e6e6);">' + escapeHTML(l.client_name) + '</div>';
-      if (l.client_company && l.client_company !== l.client_name) {
-        clientCell += '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:1px;">' + escapeHTML(l.client_company) + '</div>';
-      }
+      clientCell = '<span style="font-size:13px;color:var(--text,#e6e6e6);">' + escapeHTML(l.client_name) + '</span>';
     } else {
       clientCell = '<span style="color:var(--text-dim,#666);font-style:italic;font-size:12px;">no client</span>';
     }
@@ -83,10 +84,15 @@
       if (!terminal && !isNaN(pd) && pd < Date.now() - 86400000) projColor = '#f87171';
     }
 
+    // WIP-style single-line title: bold title + small inline grey
+    // suffix for location (city, state). No stacked sub-line.
+    var titleSuffix = location
+      ? '<span style="font-size:11px;color:var(--text-dim,#888);font-weight:normal;margin-left:6px;">' + escapeHTML(location) + '</span>'
+      : '';
     return '<tr class="leads-row" onclick="openEditLeadModal(\'' + escapeAttr(l.id) + '\')">' +
       '<td class="lead-title-cell">' +
-        '<div style="font-weight:600;color:var(--text,#fff);font-size:13px;line-height:1.3;">' + escapeHTML(l.title) + '</div>' +
-        (location ? '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:2px;">' + escapeHTML(location) + '</div>' : '') +
+        '<strong style="color:var(--text,#fff);font-size:13px;">' + escapeHTML(l.title) + '</strong>' +
+        titleSuffix +
       '</td>' +
       '<td>' + clientCell + '</td>' +
       '<td>' + statusPill + '</td>' +

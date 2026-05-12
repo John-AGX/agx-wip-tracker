@@ -71,6 +71,10 @@ function compareEstimates(a, b, key, dir) {
     if (key === 'baseCost') { av = ta.baseCost || 0; bv = tb.baseCost || 0; }
     else if (key === 'markup') { av = ta.blendedMarkup || 0; bv = tb.blendedMarkup || 0; }
     else if (key === 'clientPrice') { av = ta.clientPrice || 0; bv = tb.clientPrice || 0; }
+    else if (key === 'margin') {
+        av = (ta.clientPrice || 0) > 0 ? ((ta.clientPrice - ta.baseCost) / ta.clientPrice) : 0;
+        bv = (tb.clientPrice || 0) > 0 ? ((tb.clientPrice - tb.baseCost) / tb.clientPrice) : 0;
+    }
     else if (key === 'lines') { av = ta.lineCount || 0; bv = tb.lineCount || 0; }
     else if (key === 'updated_at') {
         av = a.updated_at ? new Date(a.updated_at).getTime() : 0;
@@ -94,7 +98,7 @@ function sortEstimatesBy(key) {
         // Numerics + dates default to descending so "biggest/newest first"
         // matches how a user usually wants to scan the list.
         _estimatesSort.dir = (key === 'baseCost' || key === 'markup' || key === 'clientPrice' ||
-                              key === 'lines' || key === 'updated_at') ? 'desc' : 'asc';
+                              key === 'margin' || key === 'lines' || key === 'updated_at') ? 'desc' : 'asc';
     }
     renderEstimatesList();
 }
@@ -159,6 +163,7 @@ function renderEstimatesList() {
                 estimatesHeaderCell('Base Cost',     'baseCost',    { num: true }) +
                 estimatesHeaderCell('Markup %',      'markup',      { num: true }) +
                 estimatesHeaderCell('Client Price',  'clientPrice', { num: true }) +
+                estimatesHeaderCell('Margin %',      'margin',      { num: true }) +
                 estimatesHeaderCell('Updated',       'updated_at');
 
             if (!enriched.length) {
@@ -169,7 +174,7 @@ function renderEstimatesList() {
                     '<div style="border:1px solid var(--border,#333);border-radius:10px;overflow:hidden;background:var(--card-bg,#0f0f1e);">' +
                         '<table class="dense-table" style="width:100%;border-collapse:collapse;">' +
                             '<thead style="background:rgba(255,255,255,0.02);border-bottom:1px solid var(--border,#333);"><tr>' + headerRow + '</tr></thead>' +
-                            '<tbody><tr><td colspan="7" style="padding:24px;text-align:center;color:var(--text-dim,#888);font-size:13px;">' + msg + '</td></tr></tbody>' +
+                            '<tbody><tr><td colspan="8" style="padding:24px;text-align:center;color:var(--text-dim,#888);font-size:13px;">' + msg + '</td></tr></tbody>' +
                         '</table>' +
                     '</div>';
                 return;
@@ -183,27 +188,36 @@ function renderEstimatesList() {
                 const t = est.__totals;
                 const clientLabel = [est.client, est.community].filter(Boolean).join(' &middot; ') ||
                     '<span style="color:var(--text-dim,#666);font-style:italic;">no client</span>';
-                const propertyLine = est.propertyAddr ?
-                    '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:1px;">' + escapeHTML(est.propertyAddr) + '</div>' : '';
-                const titleSub = [];
-                if (est.jobType) titleSub.push(escapeHTML(est.jobType));
-                if (est.nickName) titleSub.push(escapeHTML(est.nickName));
-                const titleSubLine = titleSub.length ?
-                    '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:2px;">' + titleSub.join(' &middot; ') + '</div>' : '';
+                // WIP-style single-line title: bold title + small inline
+                // grey suffix for jobType / nickName. Drops the
+                // propertyAddr line that used to sit under client (the
+                // address lives on the job once linked, no need to
+                // duplicate it on the estimates list).
+                const titleSubBits = [];
+                if (est.jobType) titleSubBits.push(escapeHTML(est.jobType));
+                if (est.nickName) titleSubBits.push(escapeHTML(est.nickName));
+                const titleSuffix = titleSubBits.length
+                    ? '<span style="font-size:11px;color:var(--text-dim,#888);font-weight:normal;margin-left:6px;">' + titleSubBits.join(' · ') + '</span>'
+                    : '';
+                // Margin % = (clientPrice − baseCost) / clientPrice × 100.
+                // Markup is already shown in its own column; margin is
+                // the complementary "what % of revenue stays as profit"
+                // figure the user wanted after the price column.
+                const margin = t.clientPrice > 0 ? ((t.clientPrice - t.baseCost) / t.clientPrice) * 100 : 0;
+                const marginColor = margin >= 30 ? '#34d399' : margin >= 15 ? '#fbbf24' : '#f87171';
                 return '<tr style="cursor:pointer;border-bottom:1px solid var(--border,#2a2a3a);" onclick="editEstimate(\'' + est.id + '\')">' +
                     '<td style="padding:8px 10px;">' +
                         '<strong style="color:var(--text,#fff);font-size:13px;">' + escapeHTML(est.title || '(untitled)') + '</strong>' +
-                        titleSubLine +
+                        titleSuffix +
                     '</td>' +
-                    '<td style="padding:8px 10px;font-size:13px;color:var(--text,#e6e6e6);">' +
-                        clientLabel + propertyLine +
-                    '</td>' +
+                    '<td style="padding:8px 10px;font-size:13px;color:var(--text,#e6e6e6);">' + clientLabel + '</td>' +
                     '<td class="num" style="padding:8px 10px;font-family:\'SF Mono\',monospace;color:var(--text-dim,#aaa);font-size:12px;">' +
-                        t.lineCount + (t.sectionCount ? '<div style="font-size:10px;color:var(--text-dim,#666);">' + t.sectionCount + ' sections</div>' : '') +
+                        t.lineCount +
                     '</td>' +
                     '<td class="num" style="padding:8px 10px;font-family:\'SF Mono\',monospace;">' + formatCurrency(t.baseCost) + '</td>' +
                     '<td class="num" style="padding:8px 10px;color:#fbbf24;font-family:\'SF Mono\',monospace;">' + t.blendedMarkup.toFixed(1) + '%</td>' +
                     '<td class="num" style="padding:8px 10px;font-family:\'SF Mono\',monospace;color:#34d399;font-weight:600;">' + formatCurrency(t.clientPrice) + '</td>' +
+                    '<td class="num" style="padding:8px 10px;font-family:\'SF Mono\',monospace;color:' + marginColor + ';font-weight:600;">' + margin.toFixed(1) + '%</td>' +
                     '<td style="padding:8px 10px;font-size:11px;color:var(--text-dim,#888);white-space:nowrap;" title="' + escapeHTML(est.updated_at || '') + '">' +
                         escapeHTML(fmtRelativeDate(est.updated_at)) +
                     '</td>' +
