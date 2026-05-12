@@ -418,19 +418,25 @@
             top: 54px;
             right: 14px;
             z-index: 60;
-            /* Widget = icon size, no separate ring border. The dna-86
-               SVG has its own circular outline baked in — that line
-               IS the ring. The wrapper just fills the inside of the
-               icon's circle with a dark backdrop so it reads as a
-               solid pressable button, and provides the back-glow
-               halo via filter:drop-shadow. */
-            width: 64px;
-            height: 64px;
+            /* Variant C — backdrop 2px smaller than the icon (62 vs 64).
+               The dark fill slips JUST inside the icon's baked-in
+               circle so the icon's own ring sits at the very edge of
+               the visible wrapper. Denser fill (96/84% vs 94/80%) so
+               the slipped-under area still reads solid against the
+               brand-blue halo. The 64px icon overflows the 62px
+               wrapper by 1px each side — that overflow is exactly
+               the icon's own outer ring, now the only visible
+               boundary. */
+            width: 62px;
+            height: 62px;
             padding: 0;
             line-height: 0;
             border-radius: 50%;
             border: 0;
-            background: radial-gradient(circle at 50% 50%, rgba(15, 23, 42, 0.94), rgba(15, 23, 42, 0.80));
+            background: radial-gradient(circle at 50% 50%, rgba(15, 23, 42, 0.96), rgba(15, 23, 42, 0.84));
+            /* Allow the icon to render outside the 62px box so its ring
+               doesn't get clipped by the wrapper's border-radius. */
+            overflow: visible;
             filter: drop-shadow(0 0 6px rgba(79, 140, 255, 0.55))
                     drop-shadow(0 0 14px rgba(79, 140, 255, 0.35))
                     drop-shadow(0 0 28px rgba(79, 140, 255, 0.18));
@@ -490,13 +496,15 @@
                         drop-shadow(0 0 14px rgba(79, 140, 255, 0.32));
             }
         }
-        /* Mobile: scale down + nudge tighter to the edge. */
+        /* Mobile: scale down + nudge tighter to the edge. Same Variant C
+           overflow relationship — icon 1px larger than wrapper each
+           side so the icon's own ring stays at the visible edge. */
         @media (max-width: 640px) {
             .p86-ask86-badge.floating {
-                top: 56px;
-                right: 12px;
-                width: 56px;
-                height: 56px;
+                top: 48px;
+                right: 10px;
+                width: 50px;
+                height: 50px;
             }
             .p86-ask86-badge.floating .p86-icon {
                 width: 52px;
