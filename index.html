@@ -74,12 +74,20 @@
              this fits everything on one ~46px row to give the workspace
              below more vertical real estate. Mobile breaks back to a
              stacked fallback in the @media block. -->
-        <!-- Global Ask 86 badge is now embedded per-page via the
-             .p86-ask86-mount slot pattern. Pages drop a
-             <span class="p86-ask86-mount"></span> placeholder where
-             they want the badge; the slot-filler script (just below)
-             auto-mounts the actual button into every slot it finds
-             and watches the DOM for new ones. -->
+        <!-- Floating global "Ask 86" badge — fixed top-right, just under
+             the avatar. Visible on every page; clicking opens the unified
+             86 chat panel which auto-detects what entity is currently
+             open via current_context. Replaces the per-page mount slots
+             (those still resolve via the script below but are hidden via
+             CSS so we don't render duplicate badges). -->
+        <button id="floating-ask86-btn" class="p86-ask86-badge floating" type="button"
+                title="Ask 86 — global AI surface" aria-label="Ask 86"
+                data-p86-icon="dna-86"
+                onclick="if (window.p86AI && window.p86AI.open) window.p86AI.open({ entityType: 'ask86' });"></button>
+        <!-- Legacy per-page badge slots — the script below still mounts
+             into <span class="p86-ask86-mount"></span> placeholders for
+             back-compat, but CSS hides them so the floating button is
+             the only visible Ask 86 entry point. -->
         <script>
           (function() {
             // Slot-mount the global Ask 86 badge into every

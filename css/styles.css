@@ -398,16 +398,55 @@
             border-color: rgba(248, 113, 113, 0.50);
         }
 
-        /* Global "Ask 86" badge — embedded per page via the
-           .p86-ask86-mount slot pattern. Single source of truth for
-           the button shape; pages drop a span where they want it.
-           No surrounding pill — the icon stands alone with a
-           breathing brand-blue glow that cross-fades up and down,
-           same energy the watch-output nodes have in the workspace. */
+        /* Global "Ask 86" badge — now a FLOATING fixed-position button
+           in the upper right corner (just under the avatar in the
+           header). Single source of truth for the button shape +
+           glow. The legacy slot-mount pattern still works but is
+           hidden by default; pages can opt back in by removing the
+           display:none rule on a specific mount. */
         .p86-ask86-mount {
-            display: inline-flex;
-            align-items: center;
-            vertical-align: middle;
+            display: none;
+        }
+        /* Floating modifier — fixed top-right, hovers just below the
+           sticky header so it doesn't crowd the avatar. Pointer
+           events stay live so it captures clicks even over scrolling
+           content. Above the sticky header (z-index 60+) but below
+           any modal / overlay surfaces (z-index 1000+). */
+        .p86-ask86-badge.floating {
+            position: fixed;
+            top: 56px;
+            right: 16px;
+            z-index: 60;
+            width: 56px;
+            height: 56px;
+        }
+        .p86-ask86-badge.floating .p86-icon {
+            width: 42px;
+            height: 42px;
+        }
+        /* Mobile: shrink + nudge in slightly so it doesn't crowd the
+           thumb-area. */
+        @media (max-width: 640px) {
+            .p86-ask86-badge.floating {
+                top: 52px;
+                right: 8px;
+                width: 48px;
+                height: 48px;
+            }
+            .p86-ask86-badge.floating .p86-icon {
+                width: 36px;
+                height: 36px;
+            }
+        }
+        /* When the chat panel is open, the floating badge is redundant
+           (the panel itself shows the agent identity) — fade it out
+           so it doesn't compete visually. Visibility hidden keeps the
+           DOM slot but kills clicks; the panel's Close button is the
+           way back. */
+        body.p86-ai-open .p86-ask86-badge.floating {
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.18s ease;
         }
         .p86-ask86-badge {
             width: 64px;
