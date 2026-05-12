@@ -1087,6 +1087,20 @@ const JOB_TOOLS = [
     }
   },
   {
+    name: 'read_attachment_text',
+    description:
+      'Fetch the FULL extracted text body of one attached document (PDF, Excel, Word, CSV, plain text). The per-turn manifest only shows a 200-char preview to keep token costs down — call this when you need to quote, cite, scope from, or compute against the doc. Auto-tier.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        attachment_id: { type: 'string', description: 'The id from the manifest entry (### [source] filename · id=... line in turn_context).' },
+        max_chars: { type: 'integer', minimum: 500, maximum: 200000, description: 'Cap the response. Default 60000 (~15k tokens). Lower this for big specs you only need to skim.' }
+      },
+      required: ['attachment_id']
+    }
+  },
+  {
     name: 'self_diagnose',
     description:
       'Introspect your own recent activity to figure out why a proposed change did not land. Returns, for each recent assistant turn that emitted tool_use blocks: what you proposed (tool name + input), whether the user approved or rejected it on /chat/continue, and — for estimate-side proposals — whether the line/section/group is actually present in the estimate right now. ' +
@@ -1335,11 +1349,19 @@ async function buildEstimateContext(estimateId, includePhotos, aiPhaseOverride) 
   }
 
   docManifest = docRows.map(d => ({
+    id: d.id,
     source: d.source,
     filename: d.filename,
     mime: d.mime_type,
     size: d.size_bytes,
-    extracted_text: d.extracted_text || null  // PDF body text when available
+    // Don't carry the full extracted_text on the manifest object —
+    // the per-turn renderer now shows a preview only (first 200 chars).
+    // 86 calls `read_attachment_text({attachment_id})` to fetch the
+    // full body when he actually needs to quote it. Stops every chat
+    // turn from re-shipping 5–15k tokens of unchanged PDF body.
+    has_text: !!d.extracted_text,
+    text_chars: d.extracted_text ? d.extracted_text.length : 0,
+    text_preview: d.extracted_text ? d.extracted_text.slice(0, 200) : null
   }));
 
   // ────────────────────────────────────────────────────────────────
@@ -1598,10 +1620,10 @@ async function buildEstimateContext(estimateId, includePhotos, aiPhaseOverride) 
   // rendered page images this turn — treat those images as the doc.
   if (docManifest.length) {
     lines.push('## Attached documents (' + docManifest.length + ')');
-    var anyWithText = docManifest.some(function(d) { return d.extracted_text; });
+    var anyWithText = docManifest.some(function(d) { return d.has_text; });
     var headerLine = anyWithText
-      ? 'Extracted text below — quote / cite directly when relevant. Excel takeoffs render as tab-separated rows under `### Sheet:` headers; treat each sheet as a table.'
-      : 'Filenames listed for reference.';
+      ? 'Filenames + size + a 200-char preview of each doc with extracted text. Call `read_attachment_text({attachment_id})` to pull the FULL body of any doc you need to quote, cite, or scope from. Don\'t guess — pull the bytes. The id for each doc is listed below.'
+      : 'Filenames listed for reference. None of these docs have extracted text on file.';
     headerLine += ' For docs WITHOUT extracted text (scanned PDFs, photo reports like CompanyCam, image-only formats):' +
       ' if the user has clicked "Ask AI" from the PDF viewer, the page renders are attached as images this turn — read them with vision and treat that as the document content.' +
       ' Only ask the user to paste excerpts if no images were attached.';
@@ -1610,11 +1632,14 @@ async function buildEstimateContext(estimateId, includePhotos, aiPhaseOverride) 
     docManifest.forEach(function(d) {
       var sizeStr = d.size != null ? ' (' + (d.size > 1048576 ? (d.size / 1048576).toFixed(1) + ' MB' : Math.round(d.size / 1024) + ' KB') + ')' : '';
       var mimeBit = d.mime ? ' · ' + d.mime : '';
-      lines.push('### [' + d.source + '] ' + d.filename + sizeStr + mimeBit);
-      if (d.extracted_text) {
+      var idBit = d.id ? ' · id=' + d.id : '';
+      lines.push('### [' + d.source + '] ' + d.filename + sizeStr + mimeBit + idBit);
+      if (d.has_text) {
+        lines.push('_' + d.text_chars + ' chars of extracted text on file. Preview:_');
         lines.push('```');
-        lines.push(d.extracted_text);
+        lines.push(d.text_preview);
         lines.push('```');
+        lines.push('_Call read_attachment_text({attachment_id:"' + d.id + '"}) to read the full body._');
       } else {
         lines.push('_(no extracted text — either an unsupported format or a scanned image. Read the rendered page images attached this turn, if any.)_');
       }
@@ -1622,10 +1647,21 @@ async function buildEstimateContext(estimateId, includePhotos, aiPhaseOverride) 
     });
   }
 
-  // ─── STABLE PLAYBOOK (cached prefix) ───────────────────────────────
+  // ─── STABLE PLAYBOOK (cached prefix — legacy direct-API only) ──────
   // Section overrides loaded first so each named block can be admin-
   // replaced via a skill pack with `replaces_section` set. See
   // SECTION_DEFAULTS for the registry.
+  //
+  // IMPORTANT (token cost): for the V2 unified /86/chat path, the
+  // SECTION_DEFAULTS bodies are also baked into AGENT_SYSTEM_BASELINE
+  // via composedAgentSystem() at agent-registration / sync time, so the
+  // registered Anthropic agent already carries them in its persistent
+  // system prompt — and /86/chat skips this stable block when
+  // serializing the turn (see ctxDynamicText). The block is still built
+  // here because legacy /estimates/:id/chat + /v2/estimates/:id/chat
+  // paths use the direct messages API where the system array with
+  // cache_control still gives the 10% cache_read pricing. Once those
+  // legacy paths are retired we can stop building stableLines entirely.
   const sectionOverrides = await loadSectionOverridesFor('job');
   renderSection(stableLines, 'ag_identity', sectionOverrides);
   stableLines.push('');
@@ -1644,10 +1680,13 @@ async function buildEstimateContext(estimateId, includePhotos, aiPhaseOverride) 
   renderSection(stableLines, 'ag_web_research', sectionOverrides);
   stableLines.push('');
 
-  // Load admin-editable skill packs targeted at 86. Stable across the
-  // 5-min cache window since admins rarely edit them mid-session.
-  // Pass turn context so packs with triggers (e.g. min_groups, has_lead)
-  // can load conditionally instead of always.
+  // Skill packs — admin-editable prose, often conditional on per-turn
+  // context (min_groups, has_lead). These DON'T go into the baked
+  // baseline because (a) they change without an agent-sync cycle and
+  // (b) only the ones whose triggers match this turn should fire. We
+  // render them into BOTH the stable block (legacy path caching) AND
+  // the dynamic block (so /86/chat — which skips the stable block —
+  // still sees them).
   const triggerCtx = {
     entity_type: 'estimate',
     group_count: alternates.length,
@@ -1656,14 +1695,19 @@ async function buildEstimateContext(estimateId, includePhotos, aiPhaseOverride) 
   };
   const skillBlocks = await loadActiveSkillsFor('job', triggerCtx);
   if (skillBlocks.length) {
-    stableLines.push('# Loaded skills');
-    stableLines.push('Skill packs your admin has assigned. Treat each as binding additional guidance on top of the baseline rules above.');
-    stableLines.push('');
+    const skillPackLines = [];
+    skillPackLines.push('# Loaded skills');
+    skillPackLines.push('Skill packs your admin has assigned. Treat each as binding additional guidance on top of the baseline rules.');
+    skillPackLines.push('');
     skillBlocks.forEach(s => {
-      stableLines.push('## ' + s.name);
-      stableLines.push(s.body);
-      stableLines.push('');
+      skillPackLines.push('## ' + s.name);
+      skillPackLines.push(s.body);
+      skillPackLines.push('');
     });
+    // Stable block — for legacy direct-API cache
+    stableLines.push(...skillPackLines);
+    // Dynamic block — so /86/chat (which doesn't ship stable) still sees them
+    lines.unshift('', ...skillPackLines);
   }
 
   // Tone — overridable via section_id `ag_tone`. See SECTION_DEFAULTS.
@@ -2501,6 +2545,58 @@ function ctxSystemToText(systemArr) {
   return systemArr
     .map(b => (b && b.type === 'text' && typeof b.text === 'string') ? b.text : '')
     .join('');
+}
+
+// Like ctxSystemToText but ONLY returns the dynamic (last) block.
+// Used by /86/chat and other Sessions-API paths where the stable
+// content is baked into the registered Anthropic agent's system
+// prompt via composedAgentSystem and shipping it through the user
+// message every turn would double-bill it as cache_creation.
+function ctxDynamicText(systemArr) {
+  if (typeof systemArr === 'string') return systemArr;
+  if (!Array.isArray(systemArr) || !systemArr.length) return '';
+  const last = systemArr[systemArr.length - 1];
+  return (last && last.type === 'text' && typeof last.text === 'string') ? last.text : '';
+}
+
+// Compose the full system prompt for an agent at registration / sync
+// time. For 'job' (86): baseline identity + the SECTION_DEFAULTS
+// playbook (ag_identity, ag_estimate_structure, ag_role, ag_tools,
+// ag_slotting, ag_pricing, ag_auto_reads, ag_web_research, ag_tone).
+// Section overrides via admin skill packs are applied here too.
+// Once baked into AGENT_SYSTEM_BASELINE on the Anthropic side, this
+// content stops shipping in every user.message turn — saving ~3.5k
+// cache_creation tokens per turn. Admins changing a section override
+// or baseline need to POST /managed/sync-all to push the new system.
+async function composedAgentSystem(agentKey, baseline) {
+  if (agentKey !== 'job') return baseline; // HR / CoS unchanged for now
+  try {
+    const sectionOverrides = await loadSectionOverridesFor('job');
+    const sectionIds = [
+      'ag_identity',
+      'ag_estimate_structure',
+      'ag_role',
+      'ag_tools',
+      'ag_slotting',
+      'ag_pricing',
+      'ag_auto_reads',
+      'ag_web_research',
+      'ag_tone'
+    ];
+    const sectionLines = [];
+    for (const id of sectionIds) {
+      const buf = [];
+      renderSection(buf, id, sectionOverrides);
+      if (buf.length) {
+        sectionLines.push(...buf, '');
+      }
+    }
+    if (!sectionLines.length) return baseline;
+    return baseline + '\n\n# Estimating playbook\n\n' + sectionLines.join('\n');
+  } catch (e) {
+    console.warn('[composedAgentSystem] failed, falling back to bare baseline:', e.message);
+    return baseline;
+  }
 }
 
 // Look up or create the long-lived Session for one (agent, entity,
@@ -5987,6 +6083,31 @@ async function execStaffTool(name, input, ctx) {
       return out.join('\n\n');
     }
 
+    case 'read_attachment_text': {
+      const attachmentId = String((input && input.attachment_id) || '').trim();
+      const maxChars = Math.max(500, Math.min(200000, Number(input && input.max_chars) || 60000));
+      if (!attachmentId) return 'read_attachment_text: attachment_id is required.';
+      const r = await pool.query(
+        `SELECT id, filename, entity_type, mime_type, size_bytes, extracted_text
+           FROM attachments WHERE id = $1`,
+        [attachmentId]
+      );
+      if (!r.rows.length) return 'No attachment with id ' + attachmentId + '.';
+      const row = r.rows[0];
+      const txt = row.extracted_text || '';
+      if (!txt) {
+        return 'Attachment "' + (row.filename || attachmentId) + '" (' + (row.mime_type || 'unknown') +
+          ') has no extracted text on file. ' +
+          'If this is a scanned PDF or image-only doc, ask the user to click "Ask AI" from the PDF viewer to attach page renders this turn.';
+      }
+      const head = '# ' + (row.filename || attachmentId) +
+        ' [' + row.entity_type + ', id=' + row.id + ', ' + txt.length + ' chars total]\n\n';
+      if (txt.length <= maxChars) return head + txt;
+      return head + txt.slice(0, maxChars) +
+        '\n\n[…truncated. ' + (txt.length - maxChars) + ' more chars. ' +
+        'Call read_attachment_text again with a larger max_chars or a smaller chunk if you need the rest.]';
+    }
+
     case 'self_diagnose': {
       // Pull recent assistant turns where tool_uses were emitted, plus
       // any /chat/continue approval traces. Stitches them into a
@@ -7921,6 +8042,26 @@ async function execProposeCreateLead(input, userId) {
 }
 
 function make86OnCustomToolUse(userId) {
+  // Per-request dedupe cache. Scoped to ONE /86/chat (or /chat/continue)
+  // call — closes over this Map. If the model calls e.g.
+  // read_materials({q:"PT 2x4"}) twice in the same turn (which it
+  // sometimes does when reasoning loops on whether the catalog has the
+  // sku), the second invocation returns the cached summary instead of
+  // hitting the executor again. Saves real DB work AND prevents the
+  // tool result from billing twice as cache_creation on the model's
+  // next read of the conversation.
+  const dedupeCache = new Map();
+  function dedupeKey(name, input) {
+    // Stable-stringify by sorting keys so {a:1,b:2} and {b:2,a:1}
+    // hash identically. JSON.stringify with default order isn't
+    // deterministic across object construction paths.
+    try {
+      return name + '\0' + JSON.stringify(input || {}, Object.keys(input || {}).sort());
+    } catch (_) {
+      return name + '\0' + String(input);
+    }
+  }
+
   return async function (tu) {
     // Auto-tier: any tool in ALLOWED_AG_AUTO_TOOLS executes inline
     // and returns its summary to the model. Mirrors the /exec-tool
@@ -7932,9 +8073,17 @@ function make86OnCustomToolUse(userId) {
     // returning {tier:'approval'} — never executing — and the model
     // saw no result, concluding "no match" on real searches.
     if (ALLOWED_AG_AUTO_TOOLS.has(tu.name)) {
+      const name = tu.name;
+      const input = tu.input || {};
+      const k = dedupeKey(name, input);
+      if (dedupeCache.has(k)) {
+        // Soft-warn the model so it knows the loop happened — helps it
+        // break out instead of trying yet another identical call.
+        const prev = dedupeCache.get(k);
+        const note = '[Already returned this turn — same arguments, same result. Use the prior output above instead of recalling.] \n\n' + prev;
+        return { tier: 'auto', summary: note };
+      }
       try {
-        const name = tu.name;
-        const input = tu.input || {};
         let summary;
         if (INTAKE_EXECUTOR_TOOLS.has(name)) {
           summary = await execIntakeRead(name, input);
@@ -7945,6 +8094,7 @@ function make86OnCustomToolUse(userId) {
         } else {
           summary = await execStaffTool(name, input, { userId });
         }
+        dedupeCache.set(k, summary);
         return { tier: 'auto', summary };
       } catch (e) {
         return { tier: 'auto', error: 'Error: ' + (e.message || 'failed') };
@@ -8221,7 +8371,10 @@ const ALLOWED_AG_AUTO_TOOLS = new Set([
   // Self-diagnosis — 86 introspects its own recent proposals + checks
   // whether the corresponding estimate change actually landed. Auto-
   // tier so it runs inline when the user asks "why didn't you do X".
-  'self_diagnose'
+  'self_diagnose',
+  // Lazy-loaded attachment body — manifest carries preview only;
+  // 86 pulls the full text on demand. Auto-tier (pure read).
+  'read_attachment_text'
 ]);
 // Tools whose executor lives in execClientTool (HR's directory reads)
 // rather than execStaffTool. The dispatcher routes by name.
@@ -8867,20 +9020,28 @@ router.post('/86/chat', requireAuth, async (req, res) => {
         // default to 'build' (see cctxAiPhase above) so propose_*
         // tools are available unless the user has explicitly flipped
         // the per-estimate Plan toggle and the panel relayed that.
+        // ctxDynamicText (not ctxSystemToText) — only the per-turn
+        // dynamic block ships in the user.message. The stable
+        // SECTION_DEFAULTS playbook is baked into the registered
+        // Anthropic agent's system prompt via composedAgentSystem,
+        // so duplicating it through user.message would just bill it
+        // as cache_creation every turn for no benefit. Always-on
+        // skill packs are merged INTO the dynamic block by
+        // buildEstimateContext for the same reason.
         const ctx = await buildEstimateContext(cctxEntityId, false, cctxAiPhase);
-        turnContextText = ctxSystemToText(ctx.system);
+        turnContextText = ctxDynamicText(ctx.system);
         if (Array.isArray(ctx.photoBlocks)) extraPhotoBlocks = ctx.photoBlocks;
       } else if (cctxEntityType === 'job' && cctxEntityId) {
         const ctx = await buildJobContext(cctxEntityId, cctxClientCtx, cctxAiPhase);
-        turnContextText = ctxSystemToText(ctx.system);
+        turnContextText = ctxDynamicText(ctx.system);
         if (Array.isArray(ctx.photoBlocks)) extraPhotoBlocks = ctx.photoBlocks;
       } else if (cctxEntityType === 'intake') {
         const ctx = await buildIntakeContext(req.user.id);
-        turnContextText = ctxSystemToText(ctx.system);
+        turnContextText = ctxDynamicText(ctx.system);
         if (Array.isArray(ctx.photoBlocks)) extraPhotoBlocks = ctx.photoBlocks;
       } else if (cctxEntityType === 'client') {
         const ctx = await buildClientDirectoryContext();
-        turnContextText = ctxSystemToText(ctx.system);
+        turnContextText = ctxDynamicText(ctx.system);
       }
     } catch (e) {
       console.warn('[/86/chat] per-entity context build skipped:', e.message);
@@ -9152,6 +9313,11 @@ module.exports.internals = {
   buildStaffContext,
   buildAsk86Context,
   sectionsForAgent,
+  // Compose the full system prompt for an agent at registration / sync
+  // time — appends the SECTION_DEFAULTS playbook to the bare baseline
+  // for 'job' so the prose is cached on the Anthropic agent rather
+  // than re-shipped through every user.message. HR / CoS pass through.
+  composedAgentSystem,
   estimateTools: () => [...WEB_TOOLS, ...ESTIMATE_TOOLS],
   // 86 (job-side) inherits the intake tools too so 86 can capture
   // a new lead from any context — not just the dedicated intake

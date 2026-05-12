@@ -1645,11 +1645,18 @@ async function ensureManagedAgent(agentKey) {
   const customTools = customToolsFor(agentKey);
   const builtinTools = builtinToolsetFor(agentKey);
 
+  // Compose the full system: baseline + SECTION_DEFAULTS playbook
+  // (for 'job') so the playbook prose is cached on the Anthropic
+  // agent instead of re-shipping through every user.message.
+  const composedSystem = (aiInternals && aiInternals.composedAgentSystem)
+    ? await aiInternals.composedAgentSystem(agentKey, baseline)
+    : baseline;
+
   const created = await anthropic.beta.agents.create({
     model: model,
     name: 'Project 86 ' + agentKey.toUpperCase(),
     description: baseline.slice(0, 200),
-    system: baseline,
+    system: composedSystem,
     skills: skills,
     tools: [...builtinTools, ...customTools]
   });
@@ -2216,6 +2223,12 @@ router.post('/managed/:agentKey/sync', requireAuth, requireCapability('ROLES_MAN
     const toolCount = customTools.length + builtinTools.length;
     const name = 'Project 86 ' + agentKey.toUpperCase();
     const description = baseline.slice(0, 200);
+    // Bake SECTION_DEFAULTS into the system prompt at sync time so the
+    // playbook prose is cached on Anthropic's side rather than re-
+    // shipping through every user.message.
+    const composedSystem = (aiInternals && aiInternals.composedAgentSystem)
+      ? await aiInternals.composedAgentSystem(agentKey, baseline)
+      : baseline;
 
     // Always retrieve so we can detect archived state (no unarchive
     // endpoint on Anthropic — archived means we have to mint a
@@ -2229,7 +2242,7 @@ router.post('/managed/:agentKey/sync', requireAuth, requireCapability('ROLES_MAN
         model: model,
         name: name,
         description: description,
-        system: baseline,
+        system: composedSystem,
         skills: skills,
         tools: toolList
       });
@@ -2268,7 +2281,7 @@ router.post('/managed/:agentKey/sync', requireAuth, requireCapability('ROLES_MAN
       name: name,
       description: description,
       model: model,
-      system: baseline,
+      system: composedSystem,
       skills: skills,
       tools: toolList
     });
@@ -2367,6 +2380,9 @@ router.post('/managed/sync-all', requireAuth, requireCapability('ROLES_MANAGE'),
         const toolCount = customTools.length + builtinTools.length;
         const name = 'Project 86 ' + agentKey.toUpperCase();
         const description = baseline.slice(0, 200);
+        const composedSystem = (aiInternals && aiInternals.composedAgentSystem)
+          ? await aiInternals.composedAgentSystem(agentKey, baseline)
+          : baseline;
 
         // Fetch current state. If the agent is archived (archived_at
         // is non-null), update() will 400 with "Cannot modify
@@ -2379,7 +2395,7 @@ router.post('/managed/sync-all', requireAuth, requireCapability('ROLES_MANAGE'),
             model: model,
             name: name,
             description: description,
-            system: baseline,
+            system: composedSystem,
             skills: skills,
             tools: toolList
           });
@@ -2412,7 +2428,7 @@ router.post('/managed/sync-all', requireAuth, requireCapability('ROLES_MANAGE'),
           name: name,
           description: description,
           model: model,
-          system: baseline,
+          system: composedSystem,
           skills: skills,
           tools: toolList
         });

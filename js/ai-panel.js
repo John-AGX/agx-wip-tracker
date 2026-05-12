@@ -2483,7 +2483,10 @@
     // recent proposals + cross-checks the live estimate state.
     // Chip-style so the user sees one inline summary instead of an
     // approval card for a pure read.
-    self_diagnose: true
+    self_diagnose: true,
+    // Lazy attachment body fetch — manifest now ships preview only,
+    // 86 pulls full body via this when he actually needs to quote.
+    read_attachment_text: true
   };
   function execAGAutoTool(name, input) {
     return window.p86Api.post('/api/ai/exec-tool', { name: name, input: input || {} })
