@@ -4029,7 +4029,7 @@ router.post('/v2/jobs/:id/chat',
         // unknown tool name, which is the correct fallback for the
         // approval-tier JOB_TOOLS (propose_*) — they get pushed to
         // pendingToolUses and surface as cards as before.
-        onCustomToolUse: makeIntakeOnCustomToolUse(req.user.id),
+        onCustomToolUse: make86OnCustomToolUse(req.user.id),
         persistAssistantText: async (text, usage) => {
           await saveJobAssistantMessage({ jobId, userId: req.user.id, text, usage });
         }
@@ -4130,7 +4130,7 @@ router.post('/v2/jobs/:id/chat/continue',
         // more read_existing_clients / read_existing_leads after
         // the user approves a propose_create_lead, those still
         // execute inline.
-        onCustomToolUse: makeIntakeOnCustomToolUse(req.user.id),
+        onCustomToolUse: make86OnCustomToolUse(req.user.id),
         persistAssistantText: async (text, usage) => {
           await saveJobAssistantMessage({ jobId, userId: req.user.id, text, usage });
         }
@@ -7571,7 +7571,7 @@ async function attachPendingIntakePhotosToLead(userId, leadId) {
 }
 
 // Approval-tier handler: create the client (if inline), insert the
-// lead, attach the staged photos. Runs inside makeIntakeOnCustomToolUse
+// lead, attach the staged photos. Runs inside make86OnCustomToolUse
 // when the user approves propose_create_lead on /chat/continue.
 async function execProposeCreateLead(input, userId) {
   const t = String(input.title || '').trim();
@@ -7640,25 +7640,39 @@ async function execProposeCreateLead(input, userId) {
   return 'Created lead "' + t + '" id=' + leadId + createdClientNote + photoNote;
 }
 
-function makeIntakeOnCustomToolUse(userId) {
+function make86OnCustomToolUse(userId) {
   return async function (tu) {
-    if (tu.name === 'read_existing_clients' || tu.name === 'read_existing_leads') {
+    // Auto-tier: any tool in ALLOWED_AG_AUTO_TOOLS executes inline
+    // and returns its summary to the model. Mirrors the /exec-tool
+    // HTTP dispatcher exactly so the V2-session path (this handler)
+    // and the client-chip path (/exec-tool) behave identically.
+    //
+    // Without this branch, read_past_estimates / read_jobs /
+    // read_materials / etc. on the unified /86 chat path were all
+    // returning {tier:'approval'} — never executing — and the model
+    // saw no result, concluding "no match" on real searches.
+    if (ALLOWED_AG_AUTO_TOOLS.has(tu.name)) {
       try {
-        const summary = await execIntakeRead(tu.name, tu.input || {});
+        const name = tu.name;
+        const input = tu.input || {};
+        let summary;
+        if (INTAKE_EXECUTOR_TOOLS.has(name)) {
+          summary = await execIntakeRead(name, input);
+        } else if (FIELD_TOOLS_EXECUTOR_TOOLS.has(name)) {
+          summary = await execFieldToolRead(name, input);
+        } else if (CLIENT_EXECUTOR_TOOLS.has(name)) {
+          summary = await execClientTool(name, input);
+        } else {
+          summary = await execStaffTool(name, input);
+        }
         return { tier: 'auto', summary };
       } catch (e) {
         return { tier: 'auto', error: 'Error: ' + (e.message || 'failed') };
       }
     }
-    if (tu.name === 'propose_create_lead') {
-      // Approval flow — surface the card. The actual exec happens in
-      // /chat/continue when the user clicks Approve. The Approve
-      // handler (existing v2 continue path) calls back into us with
-      // tu.name === 'propose_create_lead', tier === 'approval' will
-      // hit it as a custom_tool_use AGAIN through the same callback —
-      // we treat the second-pass call as the execute.
-      return { tier: 'approval' };
-    }
+    // Everything else (propose_*) — approval flow. The card renders
+    // on the client; the actual exec happens in /chat/continue when
+    // the user clicks Approve.
     return { tier: 'approval' };
   };
 }
@@ -7746,7 +7760,7 @@ router.post('/v2/intake/chat',
         session: session,
         eventsToSend: [{ type: 'user.message', content: userContent }],
         freshlyCreated: freshlyCreated,
-        onCustomToolUse: makeIntakeOnCustomToolUse(req.user.id),
+        onCustomToolUse: make86OnCustomToolUse(req.user.id),
         persistAssistantText: async (text, usage) => {
           if (!text) return;
           const aid = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
@@ -7842,7 +7856,7 @@ router.post('/v2/intake/chat/continue',
         anthropic, res,
         session: session,
         eventsToSend,
-        onCustomToolUse: makeIntakeOnCustomToolUse(req.user.id),
+        onCustomToolUse: make86OnCustomToolUse(req.user.id),
         persistAssistantText: async (text, usage) => {
           if (!text) return;
           const aid = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
@@ -8574,7 +8588,7 @@ router.post('/86/chat', requireAuth, async (req, res) => {
       // Same auto-tier handler that the per-entity panels use — gives
       // 86 chip-style read_existing_clients / _leads + intake reads
       // anywhere in the app.
-      onCustomToolUse: makeIntakeOnCustomToolUse(req.user.id),
+      onCustomToolUse: make86OnCustomToolUse(req.user.id),
       persistAssistantText: async (text, usage) => {
         if (!text) return;
         const aMsgId = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
@@ -8671,7 +8685,7 @@ router.post('/86/chat/continue', requireAuth, async (req, res) => {
       anthropic, res,
       session: session,
       eventsToSend: eventsToSend,
-      onCustomToolUse: makeIntakeOnCustomToolUse(req.user.id),
+      onCustomToolUse: make86OnCustomToolUse(req.user.id),
       persistAssistantText: async (text, usage) => {
         if (!text) return;
         const aMsgId = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
