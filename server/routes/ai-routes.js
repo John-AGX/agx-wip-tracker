@@ -1759,13 +1759,17 @@ async function buildEstimateContext(estimateId, includePhotos, aiPhaseOverride) 
   renderSection(stableLines, 'ag_web_research', sectionOverrides);
   stableLines.push('');
 
-  // Skill packs — admin-editable prose, often conditional on per-turn
-  // context (min_groups, has_lead). These DON'T go into the baked
-  // baseline because (a) they change without an agent-sync cycle and
-  // (b) only the ones whose triggers match this turn should fire. We
-  // render them into BOTH the stable block (legacy path caching) AND
-  // the dynamic block (so /86/chat — which skips the stable block —
-  // still sees them).
+  // Skill packs — admin-editable prose. Used to ship as full bodies
+  // every turn via "always-on" injection; now ships as a MANIFEST
+  // (name + one-line description) and 86 calls load_skill_pack(name)
+  // to pull the body when relevant to the current question. Saves
+  // ~1,900 cache_creation tokens per turn for an estimate context
+  // (was eager-loading 5 packs averaging 380 tokens each).
+  //
+  // Legacy direct-API estimate-chat (line 2322) still gets the full
+  // bodies via loadActiveSkillsFor on the stable block — that path
+  // has prompt caching via cache_control, so the bodies are cached
+  // for 5 minutes and only billed once per session.
   const triggerCtx = {
     entity_type: 'estimate',
     group_count: alternates.length,
@@ -1774,19 +1778,28 @@ async function buildEstimateContext(estimateId, includePhotos, aiPhaseOverride) 
   };
   const skillBlocks = await loadActiveSkillsFor('job', triggerCtx);
   if (skillBlocks.length) {
-    const skillPackLines = [];
-    skillPackLines.push('# Loaded skills');
-    skillPackLines.push('Skill packs your admin has assigned. Treat each as binding additional guidance on top of the baseline rules.');
-    skillPackLines.push('');
+    // Stable block (legacy path) — full bodies, cached for 5min.
+    stableLines.push('# Loaded skills');
+    stableLines.push('Skill packs your admin has assigned. Treat each as binding additional guidance on top of the baseline rules.');
+    stableLines.push('');
     skillBlocks.forEach(s => {
-      skillPackLines.push('## ' + s.name);
-      skillPackLines.push(s.body);
-      skillPackLines.push('');
+      stableLines.push('## ' + s.name);
+      stableLines.push(s.body);
+      stableLines.push('');
     });
-    // Stable block — for legacy direct-API cache
-    stableLines.push(...skillPackLines);
-    // Dynamic block — so /86/chat (which doesn't ship stable) still sees them
-    lines.unshift('', ...skillPackLines);
+  }
+  const skillManifest = await loadSkillManifestFor('job', triggerCtx);
+  if (skillManifest.length) {
+    // Dynamic block (/86/chat) — manifest only. ~30 tokens per pack
+    // instead of 250–830. 86 calls load_skill_pack({name:"..."}) to
+    // fetch a full body when starting a relevant kind of work.
+    lines.unshift(
+      '',
+      '# Available skill packs (call load_skill_pack({name}) to read a full body)',
+      'These are situational playbooks your admin maintains. Read the descriptions, call load_skill_pack when you start a kind of work that matches — e.g. pull "Pricing Benchmark Loop" before pricing materials, "Group Discipline" before working with multiple groups. Don\'t pre-load everything; load on demand.',
+      ...skillManifest.map(s => '- **' + s.name + '** — ' + (s.description || '(no description)')),
+      ''
+    );
   }
 
   // Tone — overridable via section_id `ag_tone`. See SECTION_DEFAULTS.
@@ -1911,6 +1924,12 @@ function filterToolsForJobPhase(tools, phase) {
 // matched against them. Packs without triggers always load
 // (alwaysOn baseline).
 async function loadActiveSkillsFor(agentKey, triggerCtx) {
+  // DEPRECATED for runtime body injection — kept ONLY for legacy direct-
+  // API estimate-chat paths that need the full bodies for prompt-cache.
+  // The unified /86/chat path now uses loadSkillManifestFor (below) and
+  // 86 fetches bodies via the load_skill_pack tool on demand. Killing
+  // the always-on body inject saves ~1.9k tokens per estimate turn and
+  // ~3.5k per WIP turn.
   try {
     const { rows } = await pool.query(
       `SELECT value FROM app_settings WHERE key = 'agent_skills'`
@@ -1918,11 +1937,6 @@ async function loadActiveSkillsFor(agentKey, triggerCtx) {
     if (!rows.length) return [];
     const cfg = rows[0].value || {};
     const skills = Array.isArray(cfg.skills) ? cfg.skills : [];
-    // alwaysOn packs append AT THE END of the system prompt. Section
-    // overrides (replaces_section set) are loaded separately by
-    // loadSectionOverridesFor and inserted INLINE at named anchor
-    // points — exclude them from the always-on append list so we
-    // don't double-load.
     return skills
       .filter(s => s && s.alwaysOn !== false && Array.isArray(s.agents) && s.agents.indexOf(agentKey) >= 0 && s.body && !s.replaces_section)
       .filter(s => packContextsPass(s.contexts, triggerCtx))
@@ -1930,6 +1944,45 @@ async function loadActiveSkillsFor(agentKey, triggerCtx) {
       .map(s => ({ name: s.name || '(untitled skill)', body: s.body, category: s.category || null }));
   } catch (e) {
     console.error('loadActiveSkillsFor error:', e);
+    return [];
+  }
+}
+
+// Manifest-only variant: returns {name, description} for every skill
+// pack that targets this agent and matches the turn context. NO body.
+// 86 reads the manifest, decides which packs are relevant to the
+// current question, and calls load_skill_pack({name}) to pull the
+// full body for just that turn. Description is the explicit
+// description field if set, else first non-empty body line capped at
+// 120 chars. Replaces_section packs excluded — those are rendered
+// in-place by the section-override machinery.
+async function loadSkillManifestFor(agentKey, triggerCtx) {
+  try {
+    const { rows } = await pool.query(
+      `SELECT value FROM app_settings WHERE key = 'agent_skills'`
+    );
+    if (!rows.length) return [];
+    const cfg = rows[0].value || {};
+    const skills = Array.isArray(cfg.skills) ? cfg.skills : [];
+    return skills
+      .filter(s => s && Array.isArray(s.agents) && s.agents.indexOf(agentKey) >= 0 && s.body && !s.replaces_section)
+      .filter(s => packContextsPass(s.contexts, triggerCtx))
+      .filter(s => packTriggersPass(s.triggers, triggerCtx))
+      .map(s => {
+        let desc = (s.description || '').toString().trim();
+        if (!desc) {
+          // Pull first non-empty line of body, strip markdown, cap at 120 chars
+          const firstLine = String(s.body).split('\n').map(x => x.trim()).find(x => x && !x.startsWith('#')) || '';
+          desc = firstLine.slice(0, 120);
+        }
+        return {
+          name: s.name || '(untitled skill)',
+          description: desc,
+          contexts: Array.isArray(s.contexts) ? s.contexts : []
+        };
+      });
+  } catch (e) {
+    console.error('loadSkillManifestFor error:', e);
     return [];
   }
 }
@@ -2014,7 +2067,7 @@ const SECTION_DEFAULTS = {
   ag_auto_reads: {
     agent: 'job',
     description: 'Auto-tier read tools — code-side description. Edit to change usage guidance for read_materials, read_subs, etc.',
-    body: '# Auto-tier read tools (no approval, run as inline chips)\n  • `read_materials(q?, subgroup?, category?, limit?)` — catalog summary: description, SKU, unit, last/avg/min/max prices, last-seen, purchase count. Use BEFORE quoting any materials line. Most specific keyword you can — "5/4 PT decking", "Hardie lap 8.25", "joist hanger 2x10".\n  • `read_purchase_history(material_id?, q?, days?, job_name?, limit?)` — receipt-level rows for a SKU. Use to spot trends ("is this getting more expensive?"), find which jobs used a SKU, or answer "what did we pay last time?".\n  • `read_subs(q?, trade?, status?, with_expiring_certs?, limit?)` — subcontractor directory with cert (GL / WC / W9 / Bank) expiry. Use when scoping to a sub: confirm they\'re active and paperwork-current. with_expiring_certs=true for pre-bid audit.\n  • `read_lead_pipeline(q?, status?, market?, salesperson_email?, limit?)` — leads list + status rollup. Use for sibling context ("what other deck jobs are in pipeline?") or pipeline-shape questions.\n  • `read_clients(q?, limit?)` — client directory lookup keyed for linking. Use BEFORE propose_link_to_client when an estimate is unlinked and the user mentions a client name.\n  • `read_leads(q?, status?, limit?)` — direct lead lookup. Use BEFORE propose_link_to_lead.\n  • `read_past_estimate_lines(q, days?, limit?)` — pricing benchmark across past Project 86 estimates. Returns matching line descriptions with unit_cost + median/range across all matches. Use BEFORE quoting a labor or sub line so the unit_cost is anchored to Project 86 history. (Materials still come from read_materials — those are real receipts.) If 0 matches, mark "first-time line — no Project 86 history yet" and quote a defensible Central-FL number.\n  • `read_past_estimates(q?, status?, days?, limit?)` — past estimate lookup by title + linked client. Use to find a recent comparable estimate to model the new one on.\nCap auto-tier reads at ~4 per turn for normal estimates; only chain more for big batched line-item drafts. Each chip costs no approval but does cost API tokens.\n**Hard rule — no read loops.** If a `read_materials` query comes back empty or sparse, DO NOT keep retrying the catalog with narrower keywords. **BROADEN to `web_search`** for current Home Depot / Lowe\'s / supplier pricing on the SKU — the catalog only contains items Project 86 has actually purchased, so most line items will need a web lookup the first time they appear. Only after the web also fails to surface a number, quote a defensible Central-FL estimate from trade knowledge and mark the rationale ("estimated — no catalog match, web search inconclusive"). After ~3 read_materials calls in a row without either a web_search OR a propose_*, the panel will hard-stop the loop on you.'
+    body: '# Auto-tier read tools (no approval, run as inline chips)\n  • `read_materials(q?, subgroup?, category?, limit?)` — catalog summary: description, SKU, unit, last/avg/min/max prices, last-seen, purchase count. Use BEFORE quoting any materials line. Most specific keyword you can — "5/4 PT decking", "Hardie lap 8.25", "joist hanger 2x10".\n  • `read_purchase_history(material_id?, q?, days?, job_name?, limit?)` — receipt-level rows for a SKU. Use to spot trends ("is this getting more expensive?"), find which jobs used a SKU, or answer "what did we pay last time?".\n  • `read_subs(q?, trade?, status?, with_expiring_certs?, limit?)` — subcontractor directory with cert (GL / WC / W9 / Bank) expiry. Use when scoping to a sub: confirm they\'re active and paperwork-current. with_expiring_certs=true for pre-bid audit.\n  • `read_lead_pipeline(q?, status?, market?, salesperson_email?, limit?)` — leads list + status rollup. Use for sibling context ("what other deck jobs are in pipeline?") or pipeline-shape questions.\n  • `read_clients(q?, limit?)` — client directory lookup keyed for linking. Use BEFORE propose_link_to_client when an estimate is unlinked and the user mentions a client name.\n  • `read_leads(q?, status?, limit?)` — direct lead lookup. Use BEFORE propose_link_to_lead.\n  • `read_past_estimate_lines(q, days?, limit?)` — pricing benchmark across past Project 86 estimates. Returns matching line descriptions with unit_cost + median/range across all matches. Use BEFORE quoting a labor or sub line so the unit_cost is anchored to Project 86 history. (Materials still come from read_materials — those are real receipts.) If 0 matches, mark "first-time line — no Project 86 history yet" and quote a defensible Central-FL number.\n  • `read_past_estimates(q?, status?, days?, limit?)` — past estimate lookup by title + linked client. Use to find a recent comparable estimate to model the new one on.\n  • `read_active_lines({estimate_id, section_id?, limit?})` — full line-by-line detail of the active group when the per-turn context shows compact roll-ups (only happens on estimates with >12 cost-side lines). Use to get line_ids before proposing update/delete.\n  • `read_attachment_text({attachment_id, max_chars?})` — full extracted text of an attached PDF / Excel / Word / CSV / TXT. The per-turn manifest only shows a 200-char preview; call this when you need to quote or scope from the body.\n  • `load_skill_pack({name})` — pull the FULL body of a named skill pack listed in the per-turn "Available skill packs" manifest. Call this when starting a kind of work that maps to a pack (e.g. read "Pricing Benchmark Loop" before pricing materials, "Group Discipline" before working with multiple groups). Don\'t pre-load everything; load on demand.\n  • `self_diagnose({window_minutes?, estimate_id?})` — introspect your own recent tool_uses + cross-check whether estimate proposals actually landed. Call this when the user says "you didn\'t do X" / "still nothing" / "why didn\'t you...".\nCap auto-tier reads at ~4 per turn for normal estimates; only chain more for big batched line-item drafts. Each chip costs no approval but does cost API tokens.\n**Hard rule — no read loops.** If a `read_materials` query comes back empty or sparse, DO NOT keep retrying the catalog with narrower keywords. **BROADEN to `web_search`** for current Home Depot / Lowe\'s / supplier pricing on the SKU — the catalog only contains items Project 86 has actually purchased, so most line items will need a web lookup the first time they appear. Only after the web also fails to surface a number, quote a defensible Central-FL estimate from trade knowledge and mark the rationale ("estimated — no catalog match, web search inconclusive"). After ~3 read_materials calls in a row without either a web_search OR a propose_*, the panel will hard-stop the loop on you.'
   },
   ag_web_research: {
     agent: 'job',
@@ -3951,18 +4004,17 @@ async function buildJobContext(jobId, clientContext, aiPhase) {
   lines.push('');
   renderSection(lines, 'elle_web_research', elleSectionOverrides);
 
-  // Skill packs targeted at 86 in JOB context. Pass entity_type='job'
-  // so context-tagged packs (WIP analyst, QB cost mapping, workspace
-  // placement, etc.) load while estimate-only packs stay out.
-  const elleSkills = await loadActiveSkillsFor('job', { entity_type: 'job' });
-  if (elleSkills.length) {
+  // Skill packs — manifest only (was eager-loading full bodies every
+  // turn — for job context that was ~3,500 tokens including the 9.5k-
+  // char WIP Analyst Playbook). 86 calls load_skill_pack({name}) on
+  // demand when starting a kind of work that maps to a pack.
+  const elleManifest = await loadSkillManifestFor('job', { entity_type: 'job' });
+  if (elleManifest.length) {
     lines.push('');
-    lines.push('# Loaded skills');
-    lines.push('Skill packs your admin has assigned to 86. Treat each as binding additional guidance on top of the baseline rules above.');
-    elleSkills.forEach(function(s) {
-      lines.push('');
-      lines.push('## ' + s.name);
-      lines.push(s.body);
+    lines.push('# Available skill packs (call load_skill_pack({name}) to read a full body)');
+    lines.push('Situational playbooks your admin maintains. Pull "WIP Analyst Playbook" before doing margin/WIP analysis, "QB cost → node mapping" before reconciling cost lines, etc. Load on demand — don\'t pre-load everything.');
+    elleManifest.forEach(function(s) {
+      lines.push('- **' + s.name + '** — ' + (s.description || '(no description)'));
     });
   }
 
@@ -5232,6 +5284,9 @@ async function buildClientDirectoryContext() {
   // the cache window since admins rarely edit them mid-session.
   const craSkills = await loadActiveSkillsFor('cra', { entity_type: 'client' });
   if (craSkills.length) {
+    // Legacy HR direct-API path: full bodies in the cached stable
+    // block (cache_control on the messages.create call serves them
+    // from cache after the first turn).
     stable.push('# Loaded skills');
     stable.push('Skill packs your admin has assigned. Treat each as binding additional guidance.');
     stable.push('');
@@ -5239,6 +5294,17 @@ async function buildClientDirectoryContext() {
       stable.push('## ' + s.name);
       stable.push(s.body);
       stable.push('');
+    });
+  }
+  // Unified /86/chat HR context: ships only the dynamic block, so add
+  // a manifest of pack names there too. Cheap (~30 tokens/pack) and
+  // HR can load_skill_pack({name}) when relevant.
+  const craManifest = await loadSkillManifestFor('cra', { entity_type: 'client' });
+  if (craManifest.length) {
+    out.push('');
+    out.push('# Available skill packs (call load_skill_pack({name}) to read a full body)');
+    craManifest.forEach(s => {
+      out.push('- **' + s.name + '** — ' + (s.description || '(no description)'));
     });
   }
 
@@ -7829,20 +7895,17 @@ async function buildIntakeContext(userId) {
   const n = bucket && bucket.images ? bucket.images.length : 0;
   lines.push('Photos staged this turn: ' + n + (n ? ' (in scope for attach_pending_photos:true on propose_create_lead)' : ''));
 
-  // Context-tagged skill packs for the intake mode (Lead/Client Linking,
-  // etc.). Appended to the turn-context block so they ride along with
-  // the per-turn payload. V2 sessions cache the agent definition; this
-  // is dynamic per-turn supplementary guidance.
+  // Skill packs — manifest only (was eager-loading full bodies).
+  // 86 calls load_skill_pack({name}) on demand when a pack maps to
+  // the work he's doing.
   try {
-    const intakePacks = await loadActiveSkillsFor('job', { entity_type: 'intake' });
-    if (intakePacks.length) {
+    const intakeManifest = await loadSkillManifestFor('job', { entity_type: 'intake' });
+    if (intakeManifest.length) {
       lines.push('');
-      lines.push('# Loaded skills (intake context)');
-      lines.push('Skill packs your admin has tagged for the intake flow. Treat each as binding additional guidance.');
-      intakePacks.forEach(s => {
-        lines.push('## ' + s.name);
-        lines.push(s.body);
-        lines.push('');
+      lines.push('# Available skill packs (call load_skill_pack({name}) to read a full body)');
+      lines.push('Situational playbooks tagged for the intake flow. Load on demand when starting work that maps to one.');
+      intakeManifest.forEach(s => {
+        lines.push('- **' + s.name + '** — ' + (s.description || '(no description)'));
       });
     }
   } catch (e) { /* defensive — intake still works without packs */ }
