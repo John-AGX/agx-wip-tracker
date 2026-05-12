@@ -2517,7 +2517,15 @@ async function ensureAiSession({ agentKey, entityType, entityId, userId }) {
   );
   if (found.rows.length) return found.rows[0];
 
-  return createFreshAiSession({ agentKey, entityType, entityId, userId });
+  // Tag freshly-created sessions with a non-persistent flag so the
+  // caller can pass freshlyCreated=true to runV2SessionStream. Without
+  // this, a brand-new session that the API immediately reports as
+  // "stuck" (rare but possible on first events.send race) sends the
+  // recovery path into an archive→create→archive loop. The flag is
+  // only on the JS row, not the DB column.
+  const fresh = await createFreshAiSession({ agentKey, entityType, entityId, userId });
+  if (fresh && typeof fresh === 'object') fresh._freshlyCreated = true;
+  return fresh;
 }
 
 // Create a brand-new Anthropic session row + DB row for the given tuple.
@@ -8951,6 +8959,12 @@ router.post('/86/chat', requireAuth, async (req, res) => {
       // 86 chip-style read_existing_clients / _leads + intake reads
       // anywhere in the app.
       onCustomToolUse: make86OnCustomToolUse(req.user.id),
+      // When ensureAiSession just minted this session (first /86/chat
+      // for the user, or a stuck-session recovery upstream), skip the
+      // archive-and-retry recovery path inside runV2SessionStream —
+      // otherwise a freshly-created session that the API reports as
+      // stuck would archive itself in a loop. See BUG #7.
+      freshlyCreated: !!(session && session._freshlyCreated),
       persistAssistantText: async (text, usage, meta) => {
         // Skip only when there's nothing worth keeping — empty text AND
         // no tool_uses meta. Awaiting-approval turns with zero prose
@@ -9024,7 +9038,14 @@ router.post('/86/chat/continue', requireAuth, async (req, res) => {
     for (const r of toolResults) {
       let summary;
       let isError = false;
-      if (!r.approved) {
+      // Client-side apply threw (BUG #6 path). Tag as is_error so the
+      // agent reacts as if the tool errored — different remediation
+      // than a user-driven reject (retry vs. ask follow-up).
+      if (r.apply_error) {
+        summary = 'ERROR applying ' + (r.name || 'tool') + ': ' + r.apply_error +
+                  ' (client-side mutation failed — propose a corrected version, or ask the user what to do).';
+        isError = true;
+      } else if (!r.approved) {
         summary = r.reject_reason || 'User rejected this proposal.';
       } else if (r.name === 'propose_create_lead') {
         try { summary = await execProposeCreateLead(r.input || {}, req.user.id); }

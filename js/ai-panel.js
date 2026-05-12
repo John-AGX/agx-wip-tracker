@@ -1921,23 +1921,38 @@
     function answer(idx, approved, card) {
       var tu = toolUses[idx];
       var summary = '';
+      var applyError = null;
       if (approved) {
         try {
           summary = applyTool(tu);
         } catch (e) {
+          // Previously this branch alerted the user and silently
+          // RETURNED without pushing a response into `responses[]`.
+          // Effect: the server-side session stayed in requires_action
+          // forever (one tool_use_id with no result), the next /86/chat
+          // either hit stuck-session recovery or 400'd "waiting on
+          // responses to events", and self_diagnose flagged the tool
+          // as orphaned. Now we push an explicit is_error tool_result
+          // back to the agent so it can adapt — typically by surfacing
+          // the error to the user and trying a different approach.
+          applyError = e && (e.message || String(e)) || 'apply failed';
           if (typeof window.p86Alert === 'function') {
-            window.p86Alert({ title: 'Could not apply', message: e.message || String(e) });
-          } else {
-            alert('Could not apply: ' + (e.message || e));
+            window.p86Alert({ title: 'Could not apply', message: applyError });
           }
-          return;
+          markCardDone(card, false, 'apply error: ' + applyError);
         }
       }
       // name + input are echoed back so the v2 (Sessions) /chat/continue
       // path can execute the tool server-side without needing
-      // pending_assistant_content. v1 ignores these fields.
-      responses.push({ tool_use_id: tu.id, name: tu.name, input: tu.input, approved: approved, applied_summary: summary });
-      markCardDone(card, approved, summary);
+      // pending_assistant_content. v1 ignores these fields. apply_error
+      // signals to the server that the client-side apply threw — server
+      // converts that to an is_error=true tool_result so the agent sees
+      // a real error rather than a user-driven rejection (different
+      // remediation: retry vs. ask follow-up).
+      var resp = { tool_use_id: tu.id, name: tu.name, input: tu.input, approved: approved && !applyError, applied_summary: summary };
+      if (applyError) resp.apply_error = applyError;
+      responses.push(resp);
+      if (!applyError) markCardDone(card, approved, summary);
 
       // Refresh bulk-action button count
       if (bulkButtons) {
