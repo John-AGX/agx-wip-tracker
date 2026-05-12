@@ -1399,6 +1399,49 @@ async function initSchema() {
        );
   `);
 
+  // ── One-shot migration: reset estimates.updated_at on rows the
+  // bulk-save-touches-everything bug had been bumping unnecessarily ──
+  //
+  // Before the fix in estimate-routes.js, every saveData() POST
+  // bumped updated_at on every estimate in the array, so the
+  // "Updated" column ended up showing the same recent time on every
+  // row regardless of which one had actually been edited. The fix
+  // stops that going forward, but the existing wrong timestamps
+  // stay until each row is touched naturally.
+  //
+  // This migration is the corrective sweep: set updated_at back to
+  // created_at for every row where they differ. Result is that the
+  // "Updated" column reads as "since creation" — which is the right
+  // floor for any estimate that hasn't been intentionally edited
+  // since the fix. Real edits going forward bump correctly.
+  //
+  // Idempotent via a sentinel app_settings row so it only runs once
+  // even though initSchema() re-runs on every boot.
+  try {
+    const sentinelKey = 'estimates_updated_at_reset_v1';
+    const exists = await pool.query(
+      `SELECT 1 FROM app_settings WHERE key = $1`,
+      [sentinelKey]
+    );
+    if (!exists.rows.length) {
+      const r = await pool.query(
+        `UPDATE estimates SET updated_at = created_at
+          WHERE updated_at > created_at`
+      );
+      await pool.query(
+        `INSERT INTO app_settings (key, value, updated_at)
+         VALUES ($1, $2::jsonb, NOW())
+         ON CONFLICT (key) DO NOTHING`,
+        [sentinelKey, JSON.stringify({ ran_at: new Date().toISOString(), rows_touched: r.rowCount })]
+      );
+      if (r.rowCount > 0) {
+        console.log('[db] estimates updated_at one-shot reset: cleared', r.rowCount, 'bumped row(s).');
+      }
+    }
+  } catch (e) {
+    console.warn('[db] estimates updated_at reset skipped:', e.message);
+  }
+
   // Seed built-in roles. ON CONFLICT lets us re-run safely without
   // overwriting capability edits an admin made post-seed (only the label,
   // description, and builtin flag get refreshed).
