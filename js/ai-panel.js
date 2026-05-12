@@ -1388,11 +1388,19 @@
     // header on top, content takes full panel width below. See
     // appendStreamingBubble for why stacked beats avatar-beside-
     // content for this kind of free-form chat output.
+    var usageFooter = '';
+    if (m.usage) {
+      var ut = formatUsage(m.usage);
+      if (ut) {
+        usageFooter = '<div style="margin-top:6px;font-size:10px;color:var(--text-dim,#666);opacity:0.65;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:0.2px;">' + escapeHTMLLocal(ut) + '</div>';
+      }
+    }
     return '<div style="width:100%;display:block;">' +
       '<div style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-dim,#888);margin-bottom:4px;">' +
         '<span style="font-size:14px;line-height:1;">☁️</span>' +
       '</div>' +
       '<div class="ai-content" style="width:100%;overflow-x:hidden;font-size:13px;line-height:1.55;overflow-wrap:anywhere;word-break:normal;">' + renderMarkdown(m.content) + '</div>' +
+      usageFooter +
     '</div>';
   }
 
@@ -1709,6 +1717,7 @@
     var pendingAssistantContent = null; // full content array for echo-back
     var brainYoga = startBrainYoga(streamDiv);
     var chipsAppended = 0; // tracks tool_applied/tool_failed/tool_rejected count
+    var turnUsage = null;  // captured from `done` event; rendered as a dim footer
     _streaming = true;
     setSendDisabled(true);
 
@@ -1737,9 +1746,11 @@
           var label = TOOL_VERBS[payload.tool_started.name] || (payload.tool_started.name + '…');
           brainYoga.override(label, true);
         } else if (payload.tool_applied) {
-          // Server-side auto-tier tool already executed. Show an inline
-          // confirmation chip in the streaming bubble.
-          appendToolChip(streamDiv, '✓', payload.tool_applied.summary || (payload.tool_applied.name + ' applied'), '#34d399');
+          // Server-side auto-tier tool already executed. Render inline
+          // in Claude-Code style: small dim tool-invocation header,
+          // output text collapsible if long. No card chrome.
+          appendToolBlock(streamDiv, '▸', payload.tool_applied.name || 'tool',
+            payload.tool_applied.summary || '', '#34d399');
           chipsAppended++;
           // Resume rotation once the tool lands.
           brainYoga.override('Got it. Thinking…', false);
@@ -1760,17 +1771,21 @@
           }
           scrollToBottom();
         } else if (payload.tool_failed) {
-          appendToolChip(streamDiv, '✗', payload.tool_failed.error || (payload.tool_failed.name + ' failed'), '#f87171');
+          appendToolBlock(streamDiv, '✗', payload.tool_failed.name || 'tool',
+            payload.tool_failed.error || 'failed', '#f87171');
           chipsAppended++;
           brainYoga.override('Hit a snag. Recovering…', false);
           scrollToBottom();
         } else if (payload.tool_rejected) {
-          appendToolChip(streamDiv, '⊘', (payload.tool_rejected.name || 'tool') + ' rejected', '#a3a3a3');
+          appendToolBlock(streamDiv, '⊘', payload.tool_rejected.name || 'tool',
+            'rejected', '#a3a3a3');
           chipsAppended++;
           scrollToBottom();
         } else if (payload.awaiting_approval) {
           pendingAssistantContent = payload.pending_assistant_content;
+          if (payload.usage) turnUsage = payload.usage;
         } else if (payload.done) {
+          if (payload.usage) turnUsage = payload.usage;
           if (isClientMode() && typeof window.refreshClientsAfterAI === 'function') {
             window.refreshClientsAfterAI();
           }
@@ -1803,7 +1818,7 @@
         // Plain text response — drop the streaming placeholder and add
         // a permanent bubble (history already persisted server-side).
         if (streamDiv && streamDiv.parentNode) streamDiv.parentNode.removeChild(streamDiv);
-        _messages.push({ role: 'assistant', content: assistantText });
+        _messages.push({ role: 'assistant', content: assistantText, usage: turnUsage });
         renderMessages();
       } else if (chipsAppended > 0) {
         // No final narration but built-in tools (web_search /
@@ -1822,6 +1837,12 @@
         }
         var cloudEl = streamDiv && streamDiv.querySelector('[data-stream-cloud]');
         if (cloudEl) cloudEl.classList.remove('p86-cloud-anim');
+        // Tools-only turn — attach usage footer to the live bubble that
+        // sticks around so the user still sees token counts.
+        if (turnUsage) {
+          var contentEl2 = streamDiv && streamDiv.querySelector('[data-stream-content]');
+          if (contentEl2) appendUsageFooter(contentEl2, turnUsage);
+        }
       } else {
         // No text and no chips — true "(no response)" empty turn.
         if (streamDiv && streamDiv.parentNode) streamDiv.parentNode.removeChild(streamDiv);
@@ -3653,15 +3674,86 @@
     }
   }
 
-  // Inline confirmation chip — used when a server-side auto-tier tool
-  // applies during the stream, so the user sees what happened without
+  // Inline tool-invocation block — Claude Code style. No card chrome:
+  // tiny dim header ("▸ tool_name") followed by the output text. When
+  // the output is long (>3 lines or >200 chars), wrap it in a
+  // <details> so the conversation stays scannable but the user can
+  // expand to read the full result. Used for server-side auto-tier
+  // tools that already executed during the stream (read_*,
+  // self_diagnose, etc.) so the user sees what fired without
   // needing an approval card.
-  function appendToolChip(streamDiv, glyph, text, color) {
+  function appendToolBlock(streamDiv, glyph, name, text, color) {
     if (!streamDiv) return;
-    var chip = document.createElement('div');
-    chip.style.cssText = 'display:flex;align-items:center;gap:8px;margin-top:6px;padding:5px 9px;background:rgba(255,255,255,0.04);border:1px solid var(--border,#333);border-left:3px solid ' + color + ';border-radius:4px;font-size:11px;color:var(--text-dim,#aaa);';
-    chip.innerHTML = '<span style="color:' + color + ';font-weight:700;">' + glyph + '</span><span style="flex:1;">' + escapeHTMLLocal(text) + '</span>';
-    streamDiv.appendChild(chip);
+    var content = streamDiv.querySelector('[data-stream-content]') || streamDiv;
+    var wrap = document.createElement('div');
+    wrap.style.cssText = 'margin-top:8px;font-size:11.5px;line-height:1.55;color:var(--text-dim,#9aa0a6);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;';
+
+    var hdr = document.createElement('div');
+    hdr.style.cssText = 'display:flex;align-items:baseline;gap:6px;';
+    hdr.innerHTML =
+      '<span style="color:' + color + ';flex-shrink:0;">' + escapeHTMLLocal(glyph) + '</span>' +
+      '<span style="color:var(--text-dim,#aaa);">' + escapeHTMLLocal(name) + '</span>';
+    wrap.appendChild(hdr);
+
+    var body = String(text || '');
+    if (body) {
+      var isLong = body.length > 200 || body.split('\n').length > 3;
+      if (isLong) {
+        var det = document.createElement('details');
+        det.style.cssText = 'margin-left:14px;margin-top:1px;';
+        var sum = document.createElement('summary');
+        sum.style.cssText = 'cursor:pointer;color:var(--text-dim,#777);font-size:10.5px;list-style:none;';
+        var firstLine = body.split('\n').find(function(l) { return l.trim(); }) || '';
+        sum.textContent = firstLine.replace(/^#+\s*/, '').slice(0, 90) + (body.length > 90 ? '  …' : '');
+        det.appendChild(sum);
+        var pre = document.createElement('div');
+        pre.style.cssText = 'white-space:pre-wrap;color:var(--text-dim,#7d8590);margin-top:4px;padding:6px 8px;background:rgba(255,255,255,0.025);border-left:2px solid rgba(255,255,255,0.08);border-radius:2px;';
+        pre.textContent = body;
+        det.appendChild(pre);
+        wrap.appendChild(det);
+      } else {
+        var inline = document.createElement('div');
+        inline.style.cssText = 'margin-left:14px;color:var(--text-dim,#8a8f96);white-space:pre-wrap;';
+        inline.textContent = body;
+        wrap.appendChild(inline);
+      }
+    }
+
+    content.appendChild(wrap);
+  }
+
+  // Compact usage footer rendered after the assistant's reply ends.
+  // Format: "↑ 1.2k · ↓ 432 · cache 15.8k" — tiny, dim, single line.
+  // Skipped when usage is missing or all-zero.
+  function formatUsage(u) {
+    if (!u) return '';
+    function k(n) {
+      n = Number(n) || 0;
+      if (n < 1000) return String(n);
+      if (n < 10000) return (n / 1000).toFixed(1) + 'k';
+      return Math.round(n / 1000) + 'k';
+    }
+    var inT = Number(u.input_tokens) || 0;
+    var outT = Number(u.output_tokens) || 0;
+    var cacheR = Number(u.cache_read_input_tokens) || 0;
+    var cacheW = Number(u.cache_creation_input_tokens) || 0;
+    if (!inT && !outT && !cacheR && !cacheW) return '';
+    var parts = [];
+    parts.push('↑ ' + k(inT));
+    parts.push('↓ ' + k(outT));
+    if (cacheR) parts.push('cache ' + k(cacheR));
+    if (cacheW) parts.push('+' + k(cacheW) + ' new');
+    return parts.join(' · ');
+  }
+
+  function appendUsageFooter(target, usage) {
+    if (!target || !usage) return;
+    var txt = formatUsage(usage);
+    if (!txt) return;
+    var footer = document.createElement('div');
+    footer.style.cssText = 'margin-top:6px;font-size:10px;color:var(--text-dim,#666);opacity:0.65;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:0.2px;';
+    footer.textContent = txt;
+    target.appendChild(footer);
   }
 
   function continueAfterProposals(pendingContent, responses) {
