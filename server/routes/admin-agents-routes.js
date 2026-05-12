@@ -40,14 +40,34 @@ const MODEL_COSTS = {
 // summaries / log lines — the page-wide icon swapper doesn't reach
 // them. Front-end UIs that want SVG icons render them inline via
 // p86Icon() at the call site.
+// Display labels keyed by AGENT IDENTITY, not entity_type. 86 is one
+// agent — every surface (estimate / job / intake / ask86 / unified 86)
+// rolls up to a single '86' identity here. HR has its own. CoS is
+// shown only when it has activity. The metrics SQL maps entity_type
+// → identity via a CASE expression so the SQL aggregates collapse.
 const AGENT_LABELS = {
-  // One operator agent — 86. The estimate / job entity_types both
-  // resolve to 86; the labels just hint at which surface a row came
-  // from in admin tables. 'client' is HR's surface.
-  estimate: '86 (Estimator)',
-  job:      '86 (Operator)',
-  client:   'HR (data steward)'
+  '86':    '86',
+  'hr':    'HR (data steward)',
+  'staff': 'Chief of Staff'
 };
+
+// Map raw entity_type values in ai_messages to a logical agent
+// identity. Kept as a SQL CASE generator + a JS helper so the
+// metrics aggregation and any client-side rollup stay in sync.
+const ENTITY_TYPE_TO_AGENT_SQL = `
+  CASE
+    WHEN entity_type IN ('estimate', 'job', 'intake', 'ask86', '86') THEN '86'
+    WHEN entity_type = 'client' THEN 'hr'
+    WHEN entity_type = 'staff' THEN 'staff'
+    ELSE entity_type
+  END
+`;
+function entityTypeToAgent(entityType) {
+  if (['estimate', 'job', 'intake', 'ask86', '86'].includes(entityType)) return '86';
+  if (entityType === 'client') return 'hr';
+  if (entityType === 'staff') return 'staff';
+  return entityType;
+}
 
 function costFor(model, inputTokens, outputTokens) {
   const p = MODEL_COSTS[model];
@@ -67,12 +87,13 @@ router.get('/metrics', requireAuth, requireCapability('ROLES_MANAGE'), async (re
   try {
     const range = (req.query.range === '30d') ? '30 days' : '7 days';
 
-    // Per-agent aggregates. role='assistant' rows carry the model +
-    // token usage, so total_turns counts those; user rows are the
-    // user-message side and don't carry tokens.
+    // Per-agent aggregates rolled up to agent identity (86 / hr /
+    // staff). The user's "estimator" vs "operator" split was an
+    // artifact of entity_type — both are 86. The CASE expression
+    // collapses them so the UI shows ONE 86 row.
     const aggSql = `
       SELECT
-        entity_type,
+        ${ENTITY_TYPE_TO_AGENT_SQL}                                AS agent,
         COUNT(*) FILTER (WHERE role = 'assistant')                 AS turns,
         COUNT(*) FILTER (WHERE role = 'user')                      AS user_msgs,
         COUNT(DISTINCT (estimate_id, user_id))                     AS conversations,
@@ -83,16 +104,17 @@ router.get('/metrics', requireAuth, requireCapability('ROLES_MANAGE'), async (re
         COALESCE(SUM(photos_included), 0)::bigint                  AS photos_attached
       FROM ai_messages
       WHERE created_at >= NOW() - INTERVAL '${range}'
-      GROUP BY entity_type
-      ORDER BY entity_type
+      GROUP BY agent
+      ORDER BY agent
     `;
     const aggRes = await pool.query(aggSql);
 
     // Model-mix breakdown — useful when multiple models are in
-    // rotation (A/B trials, sonnet vs opus). We approximate cost too.
+    // rotation (A/B trials, sonnet vs opus). Same rollup so the
+    // pricing rolls up alongside the rest of the agent's traffic.
     const modelSql = `
       SELECT
-        entity_type,
+        ${ENTITY_TYPE_TO_AGENT_SQL}                AS agent,
         COALESCE(model, 'unknown') AS model,
         COUNT(*) FILTER (WHERE role = 'assistant') AS turns,
         COALESCE(SUM(input_tokens),  0)::bigint AS input_tokens,
@@ -100,19 +122,19 @@ router.get('/metrics', requireAuth, requireCapability('ROLES_MANAGE'), async (re
       FROM ai_messages
       WHERE created_at >= NOW() - INTERVAL '${range}'
         AND role = 'assistant'
-      GROUP BY entity_type, model
-      ORDER BY entity_type, turns DESC
+      GROUP BY agent, model
+      ORDER BY agent, turns DESC
     `;
     const modelRes = await pool.query(modelSql);
 
     // Build the response payload. Always include all three agent
-    // buckets (even if empty) so the UI can render zero-state cards
+    // identities (even if empty) so the UI renders zero-state cards
     // consistently.
-    const byType = new Map(aggRes.rows.map(r => [r.entity_type, r]));
-    const byTypeModel = new Map();
+    const byAgent = new Map(aggRes.rows.map(r => [r.agent, r]));
+    const byAgentModel = new Map();
     for (const r of modelRes.rows) {
-      if (!byTypeModel.has(r.entity_type)) byTypeModel.set(r.entity_type, []);
-      byTypeModel.get(r.entity_type).push({
+      if (!byAgentModel.has(r.agent)) byAgentModel.set(r.agent, []);
+      byAgentModel.get(r.agent).push({
         model: r.model,
         turns: Number(r.turns),
         input_tokens: Number(r.input_tokens),
@@ -121,11 +143,14 @@ router.get('/metrics', requireAuth, requireCapability('ROLES_MANAGE'), async (re
       });
     }
 
-    const agents = Object.keys(AGENT_LABELS).map(et => {
-      const r = byType.get(et) || {};
+    const agents = Object.keys(AGENT_LABELS).map(agentKey => {
+      const r = byAgent.get(agentKey) || {};
       return {
-        entity_type: et,
-        label: AGENT_LABELS[et],
+        // Keep the response field name `entity_type` for backwards
+        // compatibility with the UI; the value is now the agent
+        // identity (86 / hr / staff), not a raw entity_type.
+        entity_type: agentKey,
+        label: AGENT_LABELS[agentKey],
         turns: Number(r.turns || 0),
         user_msgs: Number(r.user_msgs || 0),
         conversations: Number(r.conversations || 0),
@@ -134,7 +159,7 @@ router.get('/metrics', requireAuth, requireCapability('ROLES_MANAGE'), async (re
         output_tokens: Number(r.output_tokens || 0),
         tool_uses: Number(r.tool_uses || 0),
         photos_attached: Number(r.photos_attached || 0),
-        models: byTypeModel.get(et) || []
+        models: byAgentModel.get(agentKey) || []
       };
     });
 

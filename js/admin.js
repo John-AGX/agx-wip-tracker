@@ -3404,10 +3404,17 @@
           '<th>Models</th>' +
         '</tr></thead><tbody>';
       rows.forEach(function(c) {
-        var agentLabel = c.entity_type === 'estimate' ? '🧬 86 (est.)'
-                       : c.entity_type === 'job'      ? '📊 86'
-                       : c.entity_type === 'client'   ? '🤝 HR'
-                       : c.entity_type === 'intake'   ? '🧲 Intake'
+        // Per-conversation row labels. 86 is one agent across every
+        // surface; the surface name is shown as a hint in parens for
+        // diagnostic purposes (which panel the conversation came
+        // from) but the agent identity is always "86" unless it's HR.
+        var agentLabel = c.entity_type === 'client'   ? '🤝 HR'
+                       : c.entity_type === 'staff'    ? '🎩 CoS'
+                       : c.entity_type === 'estimate' ? '🧬 86 · estimate'
+                       : c.entity_type === 'job'      ? '🧬 86 · job'
+                       : c.entity_type === 'intake'   ? '🧬 86 · intake'
+                       : c.entity_type === 'ask86'    ? '🧬 86 · ask'
+                       : c.entity_type === '86'       ? '🧬 86'
                        : c.entity_type;
         var when = '';
         try { when = new Date(c.last_at).toLocaleString(); } catch (e) {}
