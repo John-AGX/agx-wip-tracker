@@ -2442,7 +2442,12 @@
     read_existing_leads: true,
     // Field tools index — pure read, server dispatches to
     // execFieldToolRead via FIELD_TOOLS_EXECUTOR_TOOLS in /exec-tool.
-    read_field_tools: true
+    read_field_tools: true,
+    // Self-diagnosis — when 86 calls this, server pulls his own
+    // recent proposals + cross-checks the live estimate state.
+    // Chip-style so the user sees one inline summary instead of an
+    // approval card for a pure read.
+    self_diagnose: true
   };
   function execAGAutoTool(name, input) {
     return window.p86Api.post('/api/ai/exec-tool', { name: name, input: input || {} })

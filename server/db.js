@@ -418,6 +418,17 @@ async function initSchema() {
     -- populate from the streamed turn.
     ALTER TABLE ai_messages ADD COLUMN IF NOT EXISTS tool_use_count INTEGER DEFAULT 0;
 
+    -- tool_uses — full proposal payload for the turn (JSONB array of
+    -- {id, name, input}). Lets 86 introspect its own past activity via
+    -- the self_diagnose tool: "what did I propose, was it approved,
+    -- did the change actually land?" Without this column, awaiting-
+    -- approval turns wrote NO row (text only) and approved turns left
+    -- no trail of what was approved — making it impossible for the
+    -- model to answer "why didn't my line item land?". Populated by
+    -- runV2SessionStream when emitting awaiting_approval, and again
+    -- on /86/chat/continue when the user approves or rejects.
+    ALTER TABLE ai_messages ADD COLUMN IF NOT EXISTS tool_uses JSONB;
+
     -- Prompt-cache breakdown from Anthropic's streaming usage object.
     -- cache_creation_input_tokens = tokens that were *added* to the cache
     -- this turn (5-min ephemeral TTL). cache_read_input_tokens = tokens

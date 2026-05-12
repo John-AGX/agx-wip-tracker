@@ -1087,6 +1087,30 @@ const JOB_TOOLS = [
     }
   },
   {
+    name: 'self_diagnose',
+    description:
+      'Introspect your own recent activity to figure out why a proposed change did not land. Returns, for each recent assistant turn that emitted tool_use blocks: what you proposed (tool name + input), whether the user approved or rejected it on /chat/continue, and — for estimate-side proposals — whether the line/section/group is actually present in the estimate right now. ' +
+      'CRITICAL: call this WHEN the user says things like "you didn\'t add the line items" / "that didn\'t work" / "still nothing" / "why didn\'t you do X". Do not guess — pull the trace. The function answers four questions: (1) what did I propose? (2) did I emit the right tool? (3) did the user approve? (4) did the apply actually mutate the estimate? If a proposal was approved but the row is missing, that is the smoking gun — surface it. ' +
+      'Auto-tier. Default window 1h.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        window_minutes: {
+          type: 'integer',
+          minimum: 5,
+          maximum: 1440,
+          description: 'How far back to look. Default 60.'
+        },
+        estimate_id: {
+          type: 'string',
+          description: 'Optional — narrow to one estimate (by id). When provided, the response also reports current line count and the most recent ai_phase on the estimate.'
+        }
+      },
+      required: []
+    }
+  },
+  {
     name: 'navigate',
     description:
       'Take the user to a specific page or entity in the app. Auto-tier — applies immediately, no approval card. ' +
@@ -2966,6 +2990,36 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
             if (pendingToolUses.length || stopType === 'requires_action') {
               for (const tu of pendingToolUses) {
                 send({ tool_use: tu });
+              }
+              // Persist BOTH the streamed prose AND the proposed tool_use
+              // blocks before we close the response. Previously this branch
+              // emitted awaiting_approval without writing anything to
+              // ai_messages — so any prose 86 streamed alongside the
+              // proposal ("Here's my plan: …") was lost the moment the
+              // user refreshed, and the proposal itself was invisible to
+              // future history reads (no tool_uses row, no tool_use_count
+              // on any message). That made conversations like the
+              // Windermere thread look like 86 ghosted the user even when
+              // it had emitted tool_use blocks. Now we always persist a
+              // row when tools were proposed, even if assistantText is
+              // empty — the tool_uses payload alone is worth keeping.
+              if (persistAssistantText && (assistantText || pendingToolUses.length)) {
+                try {
+                  await persistAssistantText(
+                    assistantText || '',
+                    usage,
+                    {
+                      tool_uses: pendingToolUses.map(t => ({
+                        id: t.id,
+                        name: t.name,
+                        input: t.input
+                      })),
+                      tool_use_count: pendingToolUses.length
+                    }
+                  );
+                } catch (e) {
+                  console.error('persistAssistantText (awaiting) failed:', e);
+                }
               }
               send({
                 awaiting_approval: true,
@@ -5768,7 +5822,11 @@ async function buildStaffContext() {
 
 // Read-tool executor. Inlines the same logic the admin REST endpoints
 // use so we don't have to round-trip through HTTP.
-async function execStaffTool(name, input) {
+async function execStaffTool(name, input, ctx) {
+  // ctx is optional — currently only self_diagnose uses ctx.userId
+  // (it needs to scope the introspection to the calling user). Other
+  // tools ignore it. Callers that have a user handy should pass
+  // { userId } so future tools can opt in without signature churn.
   switch (name) {
     case 'read_metrics': {
       const range = (input && input.range === '30d') ? '30 days' : '7 days';
@@ -5883,7 +5941,7 @@ async function execStaffTool(name, input) {
       if (!Number.isFinite(uid)) throw new Error('user_id portion of key is not a number');
       const r = await pool.query(
         `SELECT role, content, model, input_tokens, output_tokens,
-                tool_use_count, photos_included, created_at
+                tool_use_count, tool_uses, photos_included, created_at
            FROM ai_messages
           WHERE entity_type=$1 AND estimate_id=$2 AND user_id=$3
           ORDER BY created_at ASC`,
@@ -5900,8 +5958,177 @@ async function execStaffTool(name, input) {
         if (body.length > 4000) body = body.slice(0, 4000) + ' [...truncated]';
         out.push('--- ' + m.role.toUpperCase() + ' (' + new Date(m.created_at).toISOString() + ')' + (meta.length ? ' [' + meta.join(', ') + ']' : '') + ' ---');
         out.push(body);
+        // Surface tool_uses metadata so introspection can see what
+        // was proposed/approved on each turn. Without this the
+        // conversation looks like prose-only and 86 can't answer
+        // "did my line item proposal land?".
+        if (Array.isArray(m.tool_uses) && m.tool_uses.length) {
+          out.push('  [tool_uses]');
+          for (const t of m.tool_uses) {
+            if (!t || typeof t !== 'object') continue;
+            const inputStr = t.input ? JSON.stringify(t.input).slice(0, 400) : '';
+            const approvedFlag = (t.approved === true) ? ' ✓approved'
+                              : (t.approved === false) ? ' ✗rejected'
+                              : '';
+            const summaryStr = t.applied_summary ? ' — ' + String(t.applied_summary).slice(0, 200)
+                              : (t.reject_reason ? ' — rejected: ' + String(t.reject_reason).slice(0, 200) : '');
+            out.push('    • ' + (t.name || '(unnamed)') + approvedFlag + summaryStr + (inputStr ? '\n      input: ' + inputStr : ''));
+          }
+        }
       }
       return out.join('\n\n');
+    }
+
+    case 'self_diagnose': {
+      // Pull recent assistant turns where tool_uses were emitted, plus
+      // any /chat/continue approval traces. Stitches them into a
+      // chronological narrative the model can introspect. When an
+      // estimate_id is supplied (or recovered from a recent estimate-
+      // side proposal), also reports the current estimate state so the
+      // model can answer "did the line actually land?".
+      const windowMinutes = Math.max(5, Math.min(1440, Number(input && input.window_minutes) || 60));
+      const userId = ctx && ctx.userId; // injected by /api/ai/exec-tool
+      if (!userId) return 'self_diagnose requires a user context (call from a /api/ai/exec-tool route).';
+
+      // Recent turns with tool_uses OR approval traces, plus matching
+      // user messages so the model sees what was asked.
+      const rowsR = await pool.query(
+        `SELECT id, role, content, created_at, tool_uses, tool_use_count, entity_type, estimate_id
+           FROM ai_messages
+          WHERE user_id = $1
+            AND entity_type = '86'
+            AND created_at >= NOW() - ($2::int || ' minutes')::interval
+          ORDER BY created_at ASC`,
+        [userId, windowMinutes]
+      );
+      if (!rowsR.rows.length) {
+        return 'No 86-side activity in the last ' + windowMinutes + ' minutes for this user.';
+      }
+
+      // If the caller didn't pin an estimate_id, recover the most-recent
+      // one any tool_use referenced (estimate-side proposals carry no
+      // explicit estimate_id in input — the editor's _currentId is
+      // implicit — so we fall back to the parameter or the dialed-in
+      // window's last estimate-mentioning user message).
+      let targetEstimateId = (input && typeof input.estimate_id === 'string')
+        ? input.estimate_id.trim()
+        : '';
+      if (!targetEstimateId) {
+        for (let i = rowsR.rows.length - 1; i >= 0; i--) {
+          const m = rowsR.rows[i];
+          const inText = String(m.content || '');
+          const mm = inText.match(/\b(e\d{10,})\b/);
+          if (mm) { targetEstimateId = mm[1]; break; }
+        }
+      }
+
+      // Build the narrative lines.
+      const out = [];
+      out.push('# Self-diagnosis — last ' + windowMinutes + 'min of 86 activity');
+      out.push('');
+      let proposedCount = 0, approvedCount = 0, rejectedCount = 0;
+
+      for (const m of rowsR.rows) {
+        const ts = new Date(m.created_at).toISOString().replace('T', ' ').slice(0, 19);
+        const prefix = '[' + ts + '] ' + m.role.toUpperCase();
+        const body = String(m.content || '');
+        if (m.role === 'user' && !Array.isArray(m.tool_uses)) {
+          out.push(prefix + ': ' + body.slice(0, 200));
+          continue;
+        }
+        if (m.role === 'user' && Array.isArray(m.tool_uses)) {
+          // approval trace row from /86/chat/continue
+          for (const t of m.tool_uses) {
+            if (!t) continue;
+            if (t.approved) approvedCount++; else rejectedCount++;
+            out.push(prefix + ' [approval] ' + (t.approved ? '✓' : '✗') + ' '
+              + (t.name || '?')
+              + (t.applied_summary ? ' — ' + String(t.applied_summary).slice(0, 160) : '')
+              + (t.reject_reason ? ' — rejected: ' + String(t.reject_reason).slice(0, 160) : ''));
+          }
+          continue;
+        }
+        // assistant row
+        if (body) out.push(prefix + ': ' + body.slice(0, 250));
+        if (Array.isArray(m.tool_uses) && m.tool_uses.length) {
+          for (const t of m.tool_uses) {
+            if (!t || !t.name) continue;
+            proposedCount++;
+            const inputStr = t.input ? JSON.stringify(t.input).slice(0, 250) : '';
+            out.push('    → proposed ' + t.name + (inputStr ? ' ' + inputStr : ''));
+          }
+        }
+      }
+
+      out.push('');
+      out.push('## Tally');
+      out.push('  proposed tool_uses: ' + proposedCount);
+      out.push('  approved on /chat/continue: ' + approvedCount);
+      out.push('  rejected on /chat/continue: ' + rejectedCount);
+      const orphaned = proposedCount - approvedCount - rejectedCount;
+      if (orphaned > 0) {
+        out.push('  ⚠ orphaned (proposed but no /chat/continue trace): ' + orphaned);
+        out.push('    These are tool_uses where the user never clicked Approve or Reject — either the panel');
+        out.push('    swallowed an error in applyTool, the user navigated away, or the approval card never');
+        out.push('    rendered. Inspect the panel JS console + check /86/chat/continue request logs.');
+      }
+
+      // Current estimate state — proves whether the change actually landed.
+      if (targetEstimateId) {
+        try {
+          const e = await pool.query(`SELECT data FROM estimates WHERE id = $1`, [targetEstimateId]);
+          if (!e.rows.length) {
+            out.push('');
+            out.push('## Estimate state (' + targetEstimateId + '): NOT FOUND in DB.');
+          } else {
+            const blob = e.rows[0].data || {};
+            const lines = Array.isArray(blob.lines) ? blob.lines : [];
+            const realLines = lines.filter(l => l.section !== '__section_header__');
+            const sectionHeaders = lines.filter(l => l.section === '__section_header__');
+            out.push('');
+            out.push('## Estimate state (' + targetEstimateId + ')');
+            out.push('  title: ' + (blob.title || '(untitled)'));
+            out.push('  aiPhase: ' + (blob.aiPhase || 'build (default)'));
+            out.push('  section headers: ' + sectionHeaders.length);
+            out.push('  actual line items: ' + realLines.length);
+            if (realLines.length) {
+              out.push('  last 5 lines:');
+              realLines.slice(-5).forEach(l => {
+                out.push('    • ' + (l.description || '(no desc)') +
+                  ' · qty=' + (l.qty == null ? '?' : l.qty) +
+                  ' · clientPrice=' + (l.clientPrice == null ? '?' : l.clientPrice));
+              });
+            }
+            // Cross-check: did any approved propose_add_line_item actually land?
+            const proposedAdds = [];
+            rowsR.rows.forEach(m => {
+              if (!Array.isArray(m.tool_uses)) return;
+              m.tool_uses.forEach(t => {
+                if (!t || !t.name) return;
+                if (t.name === 'propose_add_line_item') {
+                  proposedAdds.push({ desc: (t.input && t.input.description) || null, when: m.created_at });
+                }
+              });
+            });
+            if (proposedAdds.length) {
+              out.push('  proposed line-item adds in window:');
+              const haveDescs = new Set(realLines.map(l => String(l.description || '').toLowerCase().trim()));
+              proposedAdds.forEach(p => {
+                const present = p.desc && haveDescs.has(String(p.desc).toLowerCase().trim());
+                out.push('    ' + (present ? '✓ landed' : '✗ MISSING') + ' — "' + (p.desc || '?') + '"');
+              });
+            }
+          }
+        } catch (e) {
+          out.push('');
+          out.push('## Estimate lookup error: ' + (e.message || 'unknown'));
+        }
+      } else {
+        out.push('');
+        out.push('## Estimate state: not pinned — pass estimate_id or include "e<digits>" in conversation to verify changes landed.');
+      }
+
+      return out.join('\n');
     }
 
     case 'read_skill_packs': {
@@ -7708,7 +7935,7 @@ function make86OnCustomToolUse(userId) {
         } else if (CLIENT_EXECUTOR_TOOLS.has(name)) {
           summary = await execClientTool(name, input);
         } else {
-          summary = await execStaffTool(name, input);
+          summary = await execStaffTool(name, input, { userId });
         }
         return { tier: 'auto', summary };
       } catch (e) {
@@ -7982,7 +8209,11 @@ const ALLOWED_AG_AUTO_TOOLS = new Set([
   'load_skill_pack',
   // Field tools listing — chip-style auto-apply so 86 can scan
   // existing tools before proposing a new one.
-  'read_field_tools'
+  'read_field_tools',
+  // Self-diagnosis — 86 introspects its own recent proposals + checks
+  // whether the corresponding estimate change actually landed. Auto-
+  // tier so it runs inline when the user asks "why didn't you do X".
+  'self_diagnose'
 ]);
 // Tools whose executor lives in execClientTool (HR's directory reads)
 // rather than execStaffTool. The dispatcher routes by name.
@@ -8006,7 +8237,7 @@ router.post('/exec-tool', requireAuth, requireCapability('ESTIMATES_VIEW'), asyn
     } else if (CLIENT_EXECUTOR_TOOLS.has(name)) {
       summary = await execClientTool(name, input);
     } else {
-      summary = await execStaffTool(name, input);
+      summary = await execStaffTool(name, input, { userId: req.user.id });
     }
     res.json({ ok: true, summary });
   } catch (e) {
@@ -8720,19 +8951,31 @@ router.post('/86/chat', requireAuth, async (req, res) => {
       // 86 chip-style read_existing_clients / _leads + intake reads
       // anywhere in the app.
       onCustomToolUse: make86OnCustomToolUse(req.user.id),
-      persistAssistantText: async (text, usage) => {
-        if (!text) return;
+      persistAssistantText: async (text, usage, meta) => {
+        // Skip only when there's nothing worth keeping — empty text AND
+        // no tool_uses meta. Awaiting-approval turns with zero prose
+        // but non-empty tool_uses still write a row so introspection
+        // can see what was proposed.
+        const hasText = !!(text && String(text).trim());
+        const toolUses = (meta && Array.isArray(meta.tool_uses)) ? meta.tool_uses : null;
+        const toolUseCount = (meta && Number.isInteger(meta.tool_use_count))
+          ? meta.tool_use_count
+          : (toolUses ? toolUses.length : 0);
+        if (!hasText && !toolUseCount) return;
         const aMsgId = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
         await pool.query(
           `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content, model,
                                     input_tokens, output_tokens,
-                                    cache_creation_input_tokens, cache_read_input_tokens)
-           VALUES ($1, '86', 'global', $2, 'assistant', $3, $4, $5, $6, $7, $8)`,
-          [aMsgId, req.user.id, text, MODEL,
+                                    cache_creation_input_tokens, cache_read_input_tokens,
+                                    tool_use_count, tool_uses)
+           VALUES ($1, '86', 'global', $2, 'assistant', $3, $4, $5, $6, $7, $8, $9, $10)`,
+          [aMsgId, req.user.id, text || '', MODEL,
            (usage && usage.input_tokens) || null,
            (usage && usage.output_tokens) || null,
            (usage && usage.cache_creation_input_tokens) || null,
-           (usage && usage.cache_read_input_tokens) || null]
+           (usage && usage.cache_read_input_tokens) || null,
+           toolUseCount,
+           toolUses ? JSON.stringify(toolUses) : null]
         );
       }
     });
@@ -8812,24 +9055,61 @@ router.post('/86/chat/continue', requireAuth, async (req, res) => {
       });
     }
 
+    // Persist a row capturing what the user just approved/rejected so
+    // self_diagnose can answer "did my proposal land?". We write this
+    // BEFORE re-entering the stream — even if the next turn errors,
+    // we still know which tool_use_ids were accepted.
+    try {
+      const continueMsgId = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+      const approvalSummary = toolResults.map(r => ({
+        tool_use_id: r.tool_use_id,
+        name: r.name,
+        approved: !!r.approved,
+        applied_summary: r.applied_summary || null,
+        reject_reason: r.reject_reason || null
+      }));
+      await pool.query(
+        `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content, model,
+                                  tool_use_count, tool_uses)
+         VALUES ($1, '86', 'global', $2, 'user', $3, $4, $5, $6)`,
+        [continueMsgId, req.user.id,
+         '[tool_results: ' + approvalSummary.map(a =>
+           (a.approved ? '✓ ' : '✗ ') + a.name +
+           (a.applied_summary ? ' — ' + a.applied_summary.slice(0, 80) : '')
+         ).join(' | ') + ']',
+         MODEL, approvalSummary.length,
+         JSON.stringify(approvalSummary)]
+      );
+    } catch (e) {
+      console.warn('[/86/chat/continue] approval trace insert failed:', e.message);
+    }
+
     await runV2SessionStream({
       anthropic, res,
       session: session,
       eventsToSend: eventsToSend,
       onCustomToolUse: make86OnCustomToolUse(req.user.id),
-      persistAssistantText: async (text, usage) => {
-        if (!text) return;
+      persistAssistantText: async (text, usage, meta) => {
+        const hasText = !!(text && String(text).trim());
+        const toolUses = (meta && Array.isArray(meta.tool_uses)) ? meta.tool_uses : null;
+        const toolUseCount = (meta && Number.isInteger(meta.tool_use_count))
+          ? meta.tool_use_count
+          : (toolUses ? toolUses.length : 0);
+        if (!hasText && !toolUseCount) return;
         const aMsgId = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
         await pool.query(
           `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content, model,
                                     input_tokens, output_tokens,
-                                    cache_creation_input_tokens, cache_read_input_tokens)
-           VALUES ($1, '86', 'global', $2, 'assistant', $3, $4, $5, $6, $7, $8)`,
-          [aMsgId, req.user.id, text, MODEL,
+                                    cache_creation_input_tokens, cache_read_input_tokens,
+                                    tool_use_count, tool_uses)
+           VALUES ($1, '86', 'global', $2, 'assistant', $3, $4, $5, $6, $7, $8, $9, $10)`,
+          [aMsgId, req.user.id, text || '', MODEL,
            (usage && usage.input_tokens) || null,
            (usage && usage.output_tokens) || null,
            (usage && usage.cache_creation_input_tokens) || null,
-           (usage && usage.cache_read_input_tokens) || null]
+           (usage && usage.cache_read_input_tokens) || null,
+           toolUseCount,
+           toolUses ? JSON.stringify(toolUses) : null]
         );
       }
     });
