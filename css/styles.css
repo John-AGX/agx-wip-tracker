@@ -407,29 +407,30 @@
         .p86-ask86-mount {
             display: none;
         }
-        /* Floating modifier — fixed top-right. The icon IS the widget;
-           no separate ring / backdrop. The back-glow box-shadow is
-           what makes it feel like a floating widget — a soft
-           brand-blue halo around the icon, breathing on a 3s loop.
-           Removing the wrapper chrome also fixes the off-center look
-           caused by the SVG's own viewBox padding being eccentric
-           inside a separate ring. */
+        /* Floating modifier — fixed top-right. The icon SVG (dna-86)
+           already has its own circular outer ring baked in; we want
+           the wrapper backdrop tight to that ring so the two circles
+           read as concentric. ~2px of breathing room on each side is
+           enough to hint at a button surface without a visible gap. */
         .p86-ask86-badge.floating {
             position: fixed;
-            top: 64px;
-            right: 20px;
+            /* Inset evenly from the top-right corner — the gap below
+               the header should read about the same as the gap from
+               the right edge so the badge sits balanced in the
+               corner rather than hanging lower than it is in. */
+            top: 54px;
+            right: 14px;
             z-index: 60;
-            width: 64px;
-            height: 64px;
+            width: 68px;
+            height: 68px;
             padding: 0;
             line-height: 0;
-            background: transparent;
-            border: 0;
-            /* Back-glow halo — radiates straight off the icon's circular
-               silhouette. Multi-layer brand-blue bleed gives it depth
-               without a visible ring. Filter (drop-shadow) instead of
-               box-shadow so the glow follows the icon's actual round
-               shape, not a hidden square bounding box. */
+            border-radius: 50%;
+            background: radial-gradient(circle at 50% 50%, rgba(15, 23, 42, 0.92), rgba(15, 23, 42, 0.78));
+            border: 1px solid rgba(79, 140, 255, 0.45);
+            /* Back-glow halo — multi-layer brand-blue drop-shadow stack
+               radiating off the icon's circular silhouette. Breathes on
+               a 3s loop via @keyframes p86-ask86-back-glow below. */
             filter: drop-shadow(0 0 6px rgba(79, 140, 255, 0.55))
                     drop-shadow(0 0 14px rgba(79, 140, 255, 0.35))
                     drop-shadow(0 0 28px rgba(79, 140, 255, 0.18));
@@ -437,6 +438,7 @@
         }
         .p86-ask86-badge.floating:hover {
             transform: scale(1.06);
+            border-color: rgba(79, 140, 255, 0.70);
         }
         .p86-ask86-badge.floating .p86-icon-slot {
             display: flex;
@@ -447,9 +449,11 @@
             margin: 0;
         }
         .p86-ask86-badge.floating .p86-icon {
-            /* Icon fills the widget — no ring around it, the icon
-               IS the widget. Disable the per-icon drop-shadow
-               animation since the wrapper now owns the glow. */
+            /* Icon fills the available space inside the backdrop — the
+               1px border is OUTSIDE the 68px box (box-sizing is
+               border-box by default in the inheritance chain, but the
+               radial-gradient backdrop fills the box edge-to-edge so
+               the icon at 64px sits with ~2px ring on each side). */
             width: 64px;
             height: 64px;
             display: block;
@@ -471,10 +475,11 @@
                         drop-shadow(0 0 36px rgba(79, 140, 255, 0.28));
             }
         }
-        /* Light-mode: dial the glow back so it doesn't overpower a
-           bright page; no backdrop / border since the icon IS the
-           widget. */
+        /* Light-mode: invert the backdrop to a frosted near-white,
+           keep the ring brand-blue, dial back the glow. */
         body.light-mode .p86-ask86-badge.floating {
+            background: radial-gradient(circle at 50% 50%, rgba(248, 250, 252, 0.96), rgba(232, 240, 254, 0.88));
+            border-color: rgba(79, 140, 255, 0.55);
             animation-name: p86-ask86-back-glow-light;
         }
         @keyframes p86-ask86-back-glow-light {
@@ -492,8 +497,8 @@
             .p86-ask86-badge.floating {
                 top: 56px;
                 right: 12px;
-                width: 52px;
-                height: 52px;
+                width: 56px;
+                height: 56px;
             }
             .p86-ask86-badge.floating .p86-icon {
                 width: 52px;
