@@ -756,8 +756,18 @@ function injectImportBtn() {
     if (e.target.files[0]) { processImportFile(e.target.files[0]); }
   });
 
-  actionButtons.appendChild(button);
-  actionButtons.appendChild(fileInput);
+  // Insert BEFORE the search input so all buttons stay on the same
+  // left-side row. The search input has margin-left:auto which pushes
+  // it (and anything after it) to the right edge — appending after
+  // makes the injected button wrap to a new row below.
+  const searchInput = actionButtons.querySelector('#estimates-search');
+  if (searchInput) {
+    actionButtons.insertBefore(button, searchInput);
+    actionButtons.insertBefore(fileInput, searchInput);
+  } else {
+    actionButtons.appendChild(button);
+    actionButtons.appendChild(fileInput);
+  }
 }
 
 function injectTemplateBtn() {
@@ -780,7 +790,14 @@ function injectTemplateBtn() {
   button.textContent = 'Blank Template';
 
   button.addEventListener('click', downloadBlankTemplate);
-  actionButtons.appendChild(button);
+  // Insert BEFORE the search input so all action buttons stay on
+  // the same row (see injectImportBtn for the rationale).
+  const searchInput = actionButtons.querySelector('#estimates-search');
+  if (searchInput) {
+    actionButtons.insertBefore(button, searchInput);
+  } else {
+    actionButtons.appendChild(button);
+  }
 }
 
 let exportInjectTimeout;

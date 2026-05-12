@@ -29,6 +29,42 @@
     if (Math.abs(n) >= 1e3) return '$' + (n / 1e3).toFixed(0) + 'k';
     return '$' + Math.round(n).toLocaleString();
   }
+  // Full precision currency — no thousands/millions rounding.
+  // $234,567.89 not $234k. Used by the leads Revenue column.
+  function fmtCurrencyFull(n) {
+    if (n == null || isNaN(n)) return '';
+    n = Number(n);
+    return '$' + n.toLocaleString('en-US', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    });
+  }
+  // Find the revenue figure for a lead based on its attached estimates.
+  // - No estimates attached  → null (renders as blank)
+  // - One estimate attached  → that estimate's clientPrice
+  // - Multiple attached      → the HIGHEST clientPrice across them
+  // Reads from the global appData.estimates / appData.estimateLines and
+  // computes via computeEstimateTotals (in estimates.js). Skipped
+  // safely if the estimate data hasn't loaded yet (returns null).
+  function revenueFromAttachedEstimates(leadId) {
+    if (!leadId) return null;
+    if (typeof window.appData === 'undefined') return null;
+    if (!Array.isArray(window.appData.estimates)) return null;
+    if (typeof window.computeEstimateTotals !== 'function') return null;
+    var attached = window.appData.estimates.filter(function(e) {
+      return e && e.lead_id === leadId;
+    });
+    if (!attached.length) return null;
+    var maxPrice = null;
+    attached.forEach(function(e) {
+      try {
+        var t = window.computeEstimateTotals(e);
+        var p = t && t.clientPrice;
+        if (p != null && !isNaN(p) && (maxPrice == null || p > maxPrice)) maxPrice = p;
+      } catch (err) { /* skip */ }
+    });
+    return maxPrice;
+  }
   // Project 86-side only uses the single estimated revenue figure (the min).
   // Kept the same function name and accepts (low, high) for back-compat
   // with existing call sites — the high arg is ignored.
@@ -70,7 +106,11 @@
       clientCell = '<span style="color:var(--text-dim,#666);font-style:italic;font-size:12px;">no client</span>';
     }
 
-    var revenue = fmtRevenueRange(l.estimated_revenue_low, l.estimated_revenue_high);
+    // Revenue column = highest clientPrice across attached estimates.
+    // Blank when no estimate is linked. Full-precision dollars (no
+    // thousands rounding).
+    var estRev = revenueFromAttachedEstimates(l.id);
+    var revenue = estRev != null ? fmtCurrencyFull(estRev) : '';
     var conf = (l.confidence != null && l.confidence > 0) ? l.confidence + '%' : '';
     var location = [l.city, l.state].filter(Boolean).join(', ');
 
@@ -120,8 +160,11 @@
       var order = STATUSES.map(function(s) { return s.key; });
       av = order.indexOf(a.status); bv = order.indexOf(b.status);
     } else if (key === 'revenue') {
-      av = Number(a.estimated_revenue_low || 0);
-      bv = Number(b.estimated_revenue_low || 0);
+      // Sort by the same value the column displays — the highest
+      // clientPrice across attached estimates. Leads with no
+      // estimate attached sort as 0 (i.e., to the bottom on desc).
+      av = Number(revenueFromAttachedEstimates(a.id) || 0);
+      bv = Number(revenueFromAttachedEstimates(b.id) || 0);
     } else if (key === 'confidence') {
       av = Number(a.confidence || 0); bv = Number(b.confidence || 0);
     } else if (key === 'created_at' || key === 'updated_at') {
