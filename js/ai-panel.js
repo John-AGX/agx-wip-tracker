@@ -201,6 +201,33 @@
       }
     } catch (e) { /* best-effort */ }
 
+    // URL-based fallback. The editor API can return null when the
+    // editor's open-event hasn't fired yet OR when the user landed
+    // here via a direct URL/deep link and the API isn't initialized.
+    // The URL itself carries the entity id; pull it from there when
+    // the API didn't. Pattern: /estimates/edit/<id>, /leads/<id>,
+    // /jobs/<id>, /clients/<id>. Only fills in when entity_type
+    // wasn't already set by a stronger signal above.
+    if (!ctx.entity_type) {
+      try {
+        var path = window.location.pathname || '';
+        var m;
+        if ((m = path.match(/\/estimates\/(?:edit\/)?([\w-]+)/))) {
+          ctx.entity_type = 'estimate';
+          ctx.entity_id = m[1];
+        } else if ((m = path.match(/\/leads\/(?:edit\/)?([\w-]+)/))) {
+          ctx.entity_type = 'lead';
+          ctx.entity_id = m[1];
+        } else if ((m = path.match(/\/jobs\/(?:edit\/)?([\w-]+)/))) {
+          ctx.entity_type = 'job';
+          ctx.entity_id = m[1];
+        } else if ((m = path.match(/\/clients\/(?:edit\/)?([\w-]+)/))) {
+          ctx.entity_type = 'client';
+          ctx.entity_id = m[1];
+        }
+      } catch (e) { /* best-effort */ }
+    }
+
     return Object.keys(ctx).length ? ctx : null;
   }
 
