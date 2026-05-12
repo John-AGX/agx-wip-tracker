@@ -739,7 +739,10 @@ function injectImportBtn() {
 
   const button = document.createElement('button');
   button.id = 'p86-import-btn';
-  button.className = 'success';
+  // Match the Leads action-bar style: no color class, just an icon
+  // marker that the agx-icon swapper picks up. Same transparent
+  // surface + white text as the rest of the row.
+  button.setAttribute('data-p86-icon', 'import');
   button.textContent = 'Import Lead Report';
 
   const fileInput = document.createElement('input');
@@ -770,7 +773,10 @@ function injectTemplateBtn() {
 
   const button = document.createElement('button');
   button.id = 'p86-template-btn';
-  button.className = 'secondary';
+  // Match the Leads action-bar style — no class, just an icon
+  // marker. The 'estimates' icon (document/page glyph) reads as a
+  // template surface.
+  button.setAttribute('data-p86-icon', 'estimates');
   button.textContent = 'Blank Template';
 
   button.addEventListener('click', downloadBlankTemplate);

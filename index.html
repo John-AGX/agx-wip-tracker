@@ -820,7 +820,16 @@
                     <div id="estimates-subtab-list" class="estimates-subtab-content" style="display:none;">
                         <div id="estimates-list-view">
                             <div class="action-buttons">
-                                <button class="primary" onclick="openNewEstimateForm()">&#x1F4C4; New Estimate</button>
+                                <!-- Same plain-button style as the Leads action
+                                     bar: no class, data-p86-icon for the glyph,
+                                     transparent fill + white text via the
+                                     default .action-buttons button rules. The
+                                     Refresh button mirrors Leads so the two
+                                     pages feel consistent.
+                                     "Import Lead Report" and "Blank Template"
+                                     get injected dynamically by proposal.js. -->
+                                <button onclick="openNewEstimateForm()" data-p86-icon="plus">New Estimate</button>
+                                <button onclick="renderEstimatesList()" data-p86-icon="refresh">Refresh</button>
                                 <input type="text" id="estimates-search" oninput="renderEstimatesList()" placeholder="Search estimates…" style="margin-left:auto;min-width:220px;" />
                                 <span class="p86-ask86-mount"></span>
                             </div>
@@ -2289,7 +2298,7 @@
     <script src="js/my-files.js?v=3b"></script>
     <script src="js/wip.js?v=70b"></script>
     <script src="js/estimates.js?v=36b"></script>
-    <script src="js/proposal.js?v=22b"></script>
+    <script src="js/proposal.js?v=23b"></script>
     <script src="js/estimate-editor.js?v=38b"></script>
     <script src="js/estimate-preview.js?v=10b"></script>
     <script src="js/bt-export.js?v=6b"></script>
