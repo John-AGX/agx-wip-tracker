@@ -314,6 +314,16 @@
     // records that haven't been opened in the new editor yet.
     var includedIds = includedGroupIds(estimate);
     var includedAlts = (estimate.alternates || []).filter(function(a) { return includedIds.indexOf(a.id) >= 0; });
+    // Optional per-group price suffix — driven by the preview toolbar
+    // toggle (_showGroupTotals). Off by default so proposals stay
+    // clean; admins flip it on when the client wants to see each
+    // scope priced separately.
+    function groupTotalSuffix(alt) {
+      if (!_showGroupTotals) return '';
+      var total = computeGroupTotal(estimate, alt.id);
+      if (total == null) return '';
+      return ' (' + fmtProposalCurrency(total) + ')';
+    }
     var scopeHTML;
     if (!includedAlts.length || (includedAlts.length === 1 && !includedAlts[0].scope && estimate.scopeOfWork)) {
       // Legacy path
@@ -330,7 +340,10 @@
       scopeHTML = '<div class="scope-text">';
       includedAlts.forEach(function(alt, idx) {
         var s = (alt.scope || '').trim();
-        scopeHTML += '<h4 style="margin:' + (idx === 0 ? '0' : '14px') + ' 0 6px;color:#333;font-size:13pt;">' + escapeHTMLLocal(alt.name) + '</h4>';
+        scopeHTML += '<h4 style="margin:' + (idx === 0 ? '0' : '14px') + ' 0 6px;color:#333;font-size:13pt;">' +
+          escapeHTMLLocal(alt.name) +
+          escapeHTMLLocal(groupTotalSuffix(alt)) +
+          '</h4>';
         if (s) scopeHTML += s.split(/\n+/).map(function(p) { return '<p>' + escapeHTMLLocal(p) + '</p>'; }).join('');
         else scopeHTML += '<p style="color:#999;font-style:italic;">Scope not entered for this group.</p>';
       });
@@ -647,6 +660,72 @@
   // 'proposal' on hard refresh.
   var _previewMode = 'proposal'; // 'proposal' | 'takeoff'
 
+  // Show per-group totals next to each group heading in the proposal
+  // preview ("Exterior Paint ($142,500.00)"). Off by default —
+  // proposals stay clean; client only sees the grand Total Price
+  // unless the user opts in via the toolbar toggle. Persisted in
+  // localStorage so the preference sticks across sessions.
+  var _showGroupTotals = (function() {
+    try { return localStorage.getItem('p86-preview-show-group-totals') === '1'; }
+    catch (e) { return false; }
+  })();
+
+  // Full-precision currency formatter for proposal output. Matches
+  // the leads-list formatter (dollars + cents, no rounding-to-k/M).
+  function fmtProposalCurrency(n) {
+    if (n == null || isNaN(n)) return '';
+    n = Number(n);
+    return '$' + n.toLocaleString('en-US', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    });
+  }
+
+  // Per-group total = sum of marked-up line extensions for one
+  // alternate. Mirrors the markup math in computeEstimateTotals
+  // (estimates.js) but filtered to a single alternateId so each
+  // group can show its own price suffix. Section-level dollar
+  // markups are added once per section header — same as the
+  // full-estimate version.
+  function computeGroupTotal(estimate, alternateId) {
+    if (!estimate || !alternateId) return null;
+    if (!window.appData || !Array.isArray(window.appData.estimateLines)) return null;
+    var lines = window.appData.estimateLines.filter(function(l) {
+      return l.estimateId === estimate.id && l.alternateId === alternateId;
+    });
+    if (!lines.length) return 0;
+    function sectionHeaderForIdx(idx) {
+      for (var i = idx - 1; i >= 0; i--) {
+        var L = lines[i];
+        if (L && L.section === '__section_header__') return L;
+      }
+      return null;
+    }
+    var markedUp = 0;
+    lines.forEach(function(l, idx) {
+      if (l.section === '__section_header__') {
+        if (l.markupMode === 'dollar' && l.markup !== '' && l.markup != null) {
+          markedUp += Number(l.markup) || 0;
+        }
+        return;
+      }
+      var ext = (l.qty || 0) * (l.unitCost || 0);
+      var section = sectionHeaderForIdx(idx);
+      var inDollar = section && section.markupMode === 'dollar';
+      var m;
+      if (section && section.overrideLineMarkups) {
+        m = inDollar ? 0 : ((section.markup === '' || section.markup == null) ? null : Number(section.markup));
+      } else {
+        m = (l.markup === '' || l.markup == null) ? null : Number(l.markup);
+        if (m == null && !inDollar && section && section.markup !== '' && section.markup != null) m = Number(section.markup);
+      }
+      if (m == null && !inDollar && estimate.defaultMarkup != null && estimate.defaultMarkup !== '') m = Number(estimate.defaultMarkup);
+      if (m == null) m = 0;
+      markedUp += ext * (1 + m / 100);
+    });
+    return markedUp;
+  }
+
   // Render into the Preview tab pane. Called by the editor when the user
   // switches to the Preview tab.
   function renderEstimatePreview() {
@@ -670,6 +749,17 @@
       ? '<button class="primary small" onclick="printEstimateTakeoff()">&#x1F5A8; Print Takeoff</button>'
       : '<button class="primary small" onclick="printEstimateProposal()">&#x1F5A8; Print Proposal</button>';
 
+    // Group-totals toggle — proposal mode only. When on, each group
+    // heading in the Scope of Work section gets a "($142,500.00)"
+    // suffix. Hidden on takeoff (the takeoff is no-prices by design).
+    var groupTotalsToggle = mode === 'proposal'
+      ? '<label style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--text-dim,#aaa);cursor:pointer;user-select:none;">' +
+          '<input type="checkbox" id="ee-preview-show-group-totals" ' + (_showGroupTotals ? 'checked' : '') +
+            ' onchange="window.toggleProposalGroupTotals(this.checked)" style="margin:0;cursor:pointer;" />' +
+          'Show group totals' +
+        '</label>'
+      : '';
+
     pane.innerHTML =
       '<style>' + getProposalCSS() + '</style>' +
       '<div class="no-print" style="display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:8px 16px;background:rgba(255,255,255,0.02);border-bottom:1px solid var(--border,#333);position:sticky;top:0;z-index:5;">' +
@@ -677,6 +767,7 @@
           modeBtn('proposal', '📄 Proposal') +
           modeBtn('takeoff',  '📋 Takeoff &amp; Scope') +
         '</div>' +
+        groupTotalsToggle +
         '<button class="ghost small" onclick="window.invalidateProposalTemplateCache(); renderEstimatePreview();" title="Re-fetch the latest template from the server">&#x21BB; Refresh Template</button>' +
         printBtn +
       '</div>' +
@@ -698,6 +789,17 @@
   // Public toggle hook — flips the preview mode and re-renders.
   function setEstimatePreviewMode(mode) {
     _previewMode = (mode === 'takeoff') ? 'takeoff' : 'proposal';
+    renderEstimatePreview();
+  }
+
+  // Public toggle hook for the "Show group totals" checkbox.
+  // Persists the choice in localStorage so it sticks across
+  // sessions, then re-renders.
+  function toggleProposalGroupTotals(on) {
+    _showGroupTotals = !!on;
+    try {
+      localStorage.setItem('p86-preview-show-group-totals', _showGroupTotals ? '1' : '0');
+    } catch (e) { /* private mode, no-op */ }
     renderEstimatePreview();
   }
 
@@ -777,5 +879,6 @@
   window.printEstimateProposal = printEstimateProposal;
   window.printEstimateTakeoff = printEstimateTakeoff;
   window.setEstimatePreviewMode = setEstimatePreviewMode;
+  window.toggleProposalGroupTotals = toggleProposalGroupTotals;
   window.invalidateProposalTemplateCache = invalidateTemplateCache;
 })();
