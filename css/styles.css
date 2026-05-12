@@ -441,8 +441,10 @@
             border-color: rgba(79, 140, 255, 0.70);
         }
         .p86-ask86-badge.floating .p86-icon {
-            width: 52px;
-            height: 52px;
+            /* Bigger icon = tighter halo against the ring. ~4px breathing
+               room on each side of the 72px widget. */
+            width: 64px;
+            height: 64px;
         }
         /* Back-glow animation — box-shadow bloom that breathes
            in opposition to the icon's foreground glow. The two
@@ -497,8 +499,8 @@
                 height: 60px;
             }
             .p86-ask86-badge.floating .p86-icon {
-                width: 44px;
-                height: 44px;
+                width: 54px;
+                height: 54px;
             }
         }
         /* Reduced-motion preference: hold a brighter glow steady
