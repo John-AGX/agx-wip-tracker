@@ -440,11 +440,34 @@
             transform: scale(1.06);
             border-color: rgba(79, 140, 255, 0.70);
         }
+        /* Force the icon slot to center perfectly inside the round
+           widget — the default inline-flex baseline leaves a sliver
+           of bottom space that pushes the icon up by ~2-3px. The
+           overrides below zero that out: padding:0, line-height:0,
+           the slot itself fills the widget and centers via flex. */
+        .p86-ask86-badge.floating {
+            padding: 0;
+            line-height: 0;
+        }
+        .p86-ask86-badge.floating .p86-icon-slot {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+            height: 100%;
+            margin: 0;
+        }
         .p86-ask86-badge.floating .p86-icon {
             /* Bigger icon = tighter halo against the ring. ~4px breathing
                room on each side of the 72px widget. */
             width: 64px;
             height: 64px;
+            display: block;
+            /* SVG icons sometimes carry asymmetric viewBox padding
+               so the visible glyph isn't centered in its own
+               bounding box. Block + flex-centered above handles
+               most of it; if a specific icon needs a nudge we can
+               add it here. */
         }
         /* Back-glow animation — box-shadow bloom that breathes
            in opposition to the icon's foreground glow. The two
