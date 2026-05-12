@@ -2301,6 +2301,31 @@
     }
   }
 
+  // Estimate-side propose_* tools — these are NOT auto-applied by
+  // the server; the client has to mutate the open estimate editor's
+  // blob directly via estimateEditorAPI. Used to detect when a tool
+  // approved from the Ask 86 surface should fall through to the
+  // estimate dispatcher (below) rather than no-op'ing.
+  var ESTIMATE_SIDE_PROPOSE_TOOLS = {
+    propose_add_line_item: true,
+    propose_add_section: true,
+    propose_update_scope: true,
+    propose_delete_line_item: true,
+    propose_update_line_item: true,
+    propose_delete_section: true,
+    propose_update_section: true,
+    propose_switch_active_group: true,
+    propose_add_group: true,
+    propose_rename_group: true,
+    propose_delete_group: true,
+    propose_toggle_group_include: true,
+    propose_link_to_client: true,
+    propose_link_to_lead: true,
+    propose_update_estimate_field: true,
+    propose_bulk_update_lines: true,
+    propose_bulk_delete_lines: true
+  };
+
   function applyTool(tu) {
     // Navigation is a pure client-side side effect — handle before
     // entity-mode dispatch so it works the same from Ask 86, job,
@@ -2310,15 +2335,30 @@
       return Promise.resolve(_navigate(tu.input));
     }
     if (isClientMode() || isStaffMode() || isIntakeMode() || isAsk86Mode()) {
-      // Server applies these tools on /chat/continue. Just signal
-      // approval — there's no client-side mutation to perform.
-      // - Intake & Ask 86: propose_create_lead runs via
-      //   execProposeCreateLead on the matching /chat/continue.
-      // - Ask 86: also dispatches HR client mutations
-      //   (create_property, update_client_field, etc.) through
-      //   execClientToolWithCtx in /ask86/chat/continue.
-      // - Client mode (HR) + Staff (CoS): same shape.
-      return '';
+      // Ask 86 special-case: when the user has the estimate editor
+      // open and 86 proposes a line-item / section / group edit, the
+      // approval has to mutate the editor blob client-side — the
+      // server doesn't auto-apply these tools the way it does
+      // propose_create_lead. Detect that and fall through to the
+      // estimate dispatcher below.
+      if (isAsk86Mode()
+          && ESTIMATE_SIDE_PROPOSE_TOOLS[tu.name]
+          && window.estimateEditorAPI
+          && typeof window.estimateEditorAPI.applyAddLineItem === 'function') {
+        // Fall through — the switch below uses estimateEditorAPI which
+        // operates on whatever estimate is currently loaded in the
+        // editor, so we don't need _estimateId tracked in ask86 mode.
+      } else {
+        // Server applies these tools on /chat/continue. Just signal
+        // approval — there's no client-side mutation to perform.
+        // - Intake & Ask 86: propose_create_lead runs via
+        //   execProposeCreateLead on the matching /chat/continue.
+        // - Ask 86: also dispatches HR client mutations
+        //   (create_property, update_client_field, etc.) through
+        //   execClientToolWithCtx in /ask86/chat/continue.
+        // - Client mode (HR) + Staff (CoS): same shape.
+        return '';
+      }
     }
     if (isJobMode()) {
       return applyJobTool(tu);
@@ -2333,7 +2373,18 @@
     if (!window.estimateEditorAPI) {
       throw new Error('Estimate editor not loaded — refresh the page.');
     }
-    if (!window.estimateEditorAPI.isOpenFor(_estimateId)) {
+    // In ask86 mode, _estimateId is null (the global widget doesn't
+    // track a specific estimate). Verify *some* estimate is open
+    // instead — the apply* methods operate on whichever estimate is
+    // currently loaded in the editor.
+    if (isAsk86Mode()) {
+      var openId = typeof window.estimateEditorAPI.getOpenId === 'function'
+        ? window.estimateEditorAPI.getOpenId()
+        : null;
+      if (!openId) {
+        throw new Error('Open the estimate in the editor before approving changes.');
+      }
+    } else if (!window.estimateEditorAPI.isOpenFor(_estimateId)) {
       throw new Error('Open the estimate in the editor before approving changes.');
     }
     switch (tu.name) {

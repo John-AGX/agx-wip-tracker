@@ -1233,7 +1233,7 @@ const JOB_TOOLS = [
 // separately so the chat handler can attach them as image blocks.
 // ──────────────────────────────────────────────────────────────────
 
-async function buildEstimateContext(estimateId, includePhotos) {
+async function buildEstimateContext(estimateId, includePhotos, aiPhaseOverride) {
   // Estimate row carries the JSONB blob with all the editor fields plus
   // alternates and lines (the bulk-save routes serialize them this way).
   const estRes = await pool.query(
@@ -1654,8 +1654,16 @@ async function buildEstimateContext(estimateId, includePhotos) {
   // 86 phase — controls whether the model can propose line-item /
   // section edits this turn. Lives on the estimate JSONB blob; defaults
   // to 'build' when unset (back-compat with estimates created before
-  // the toggle existed). Caller filters tools + injects mode block.
-  const aiPhase = blob.aiPhase === 'plan' ? 'plan' : 'build';
+  // the toggle existed). The caller can override via aiPhaseOverride —
+  // this is how the global Ask 86 surface (/86/chat) forces Build, since
+  // chatting from outside the editor means the user has already opted
+  // into action and the per-editor Plan/Build toggle doesn't apply.
+  let aiPhase;
+  if (aiPhaseOverride === 'build' || aiPhaseOverride === 'plan') {
+    aiPhase = aiPhaseOverride;
+  } else {
+    aiPhase = blob.aiPhase === 'plan' ? 'plan' : 'build';
+  }
 
   // Inject the active-mode block last in the dynamic context so the
   // model sees it just before reading the user message. Strong language
@@ -8599,14 +8607,28 @@ router.post('/86/chat', requireAuth, async (req, res) => {
     let turnContextText = '';
     const cctxEntityType = currentContext && currentContext.entity_type;
     const cctxEntityId   = currentContext && currentContext.entity_id;
-    const cctxAiPhase    = (currentContext && currentContext.aiPhase) === 'build' ? 'build' : 'plan';
+    // Default phase for /86/chat is **build** — this endpoint is hit
+    // from both the in-editor chat AND the floating Ask 86 widget; in
+    // either case the user just typed a request, so unless the panel
+    // explicitly signals plan we want write-tools available. The per-
+    // estimate Plan/Build toggle still wins (handled in
+    // buildEstimateContext when the override below is not supplied).
+    const cctxAiPhase    = (currentContext && currentContext.aiPhase) === 'plan' ? 'plan' : 'build';
     const cctxClientCtx  = (currentContext && currentContext.clientContext) || null;
 
     let extraPhotoBlocks = []; // photos pulled from the entity itself (job WIP, estimate, lead)
 
     try {
       if (cctxEntityType === 'estimate' && cctxEntityId) {
-        const ctx = await buildEstimateContext(cctxEntityId, req.user.id);
+        // 2nd arg is includePhotos (boolean) — photos attached this
+        // turn already flow inline via additional_images, and the
+        // estimate's existing photos are surfaced on demand by the
+        // per-entity tools, so don't bloat every turn with them.
+        // 3rd arg is the per-turn phase override; Ask 86 surfaces
+        // default to 'build' (see cctxAiPhase above) so propose_*
+        // tools are available unless the user has explicitly flipped
+        // the per-estimate Plan toggle and the panel relayed that.
+        const ctx = await buildEstimateContext(cctxEntityId, false, cctxAiPhase);
         turnContextText = ctxSystemToText(ctx.system);
         if (Array.isArray(ctx.photoBlocks)) extraPhotoBlocks = ctx.photoBlocks;
       } else if (cctxEntityType === 'job' && cctxEntityId) {
