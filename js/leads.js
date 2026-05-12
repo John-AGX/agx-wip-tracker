@@ -89,18 +89,20 @@
     var titleSuffix = location
       ? '<span style="font-size:11px;color:var(--text-dim,#888);font-weight:normal;margin-left:6px;">' + escapeHTML(location) + '</span>'
       : '';
+    // Force single-line: white-space:nowrap on the title cell stops
+    // the suffix from dropping to a new line when the title is long.
+    // Tooltip carries the full title in case ellipsis truncates it.
     return '<tr class="leads-row" onclick="openEditLeadModal(\'' + escapeAttr(l.id) + '\')">' +
-      '<td class="lead-title-cell">' +
+      '<td class="lead-title-cell" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:0;" title="' + escapeAttr(l.title) + (location ? ' · ' + location : '') + '">' +
         '<strong style="color:var(--text,#fff);font-size:13px;">' + escapeHTML(l.title) + '</strong>' +
         titleSuffix +
       '</td>' +
-      '<td>' + clientCell + '</td>' +
+      '<td style="white-space:nowrap;">' + clientCell + '</td>' +
       '<td>' + statusPill + '</td>' +
-      '<td class="num" style="font-family:\'SF Mono\',monospace;color:#34d399;font-weight:600;font-size:13px;">' + escapeHTML(revenue) + '</td>' +
+      '<td class="num" style="font-family:\'SF Mono\',monospace;color:#34d399;font-weight:600;font-size:13px;white-space:nowrap;">' + escapeHTML(revenue) + '</td>' +
       '<td class="num" style="font-family:\'SF Mono\',monospace;color:var(--text-dim,#aaa);font-size:12px;">' + escapeHTML(conf) + '</td>' +
-      '<td style="font-size:12px;color:var(--text-dim,#aaa);">' + escapeHTML(l.salesperson_name || '') + '</td>' +
-      '<td style="font-size:12px;color:var(--text-dim,#aaa);">' + escapeHTML(l.source || '') + '</td>' +
-      '<td style="font-size:12px;color:var(--text-dim,#aaa);">' + escapeHTML(l.project_type || '') + '</td>' +
+      '<td style="font-size:12px;color:var(--text-dim,#aaa);white-space:nowrap;">' + escapeHTML(l.salesperson_name || '') + '</td>' +
+      '<td style="font-size:12px;color:var(--text-dim,#aaa);white-space:nowrap;">' + escapeHTML(l.project_type || '') + '</td>' +
       '<td style="font-size:11px;color:' + projColor + ';white-space:nowrap;">' + escapeHTML(projDateStr) + '</td>' +
       '<td style="font-size:11px;color:var(--text-dim,#888);white-space:nowrap;" title="created ' + escapeAttr(fmtDate(l.created_at)) + '">' + escapeHTML(fmtDate(l.updated_at || l.created_at)) + '</td>' +
     '</tr>';
@@ -242,7 +244,6 @@
       leadsHeaderCell('Revenue',       'revenue', { num: true }) +
       leadsHeaderCell('Conf',          'confidence', { num: true }) +
       leadsHeaderCell('Salesperson',   'salesperson') +
-      leadsHeaderCell('Source',        'source') +
       leadsHeaderCell('Project Type',  'project_type') +
       leadsHeaderCell('Proj. Sale',    'projected_sale_date') +
       leadsHeaderCell('Updated',       'updated_at');
