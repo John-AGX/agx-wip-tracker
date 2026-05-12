@@ -8545,16 +8545,88 @@ router.post('/86/chat', requireAuth, async (req, res) => {
 
   setSSEHeaders(res);
   try {
-    // Build the per-turn payload — page context block (optional)
-    // prefixes the user's actual text so 86 always knows "you are
-    // here." Inline images mix in front of the text per Anthropic's
-    // vision guidance.
-    const pageBlock = renderPageContextBlock(currentContext);
-    const turnText = pageBlock ? (pageBlock + '\n\n' + userMessage) : userMessage;
+    // ── Per-entity context enrichment (Phase 2 unification) ──
+    // If current_context names an entity (job / estimate / intake),
+    // load the same per-turn data block the legacy per-entity chat
+    // endpoints used to build server-side. Result is a <turn_context>
+    // block that 86 sees alongside the user message, so it has all
+    // the WIP / line-item / lead data it used to.
+    //
+    // Photos: when the active entity is a job or estimate, attach
+    // uploaded images to that entity's attachments table — mirrors
+    // legacy /v2/jobs/:id/chat and /v2/estimate-chat behavior.
+    //
+    // The session is ALWAYS the unified per-user session (one rolling
+    // thread across the app). Entity context is per-turn, not per-
+    // session, so switching pages doesn't fork the conversation.
+    let turnContextText = '';
+    const cctxEntityType = currentContext && currentContext.entity_type;
+    const cctxEntityId   = currentContext && currentContext.entity_id;
+    const cctxAiPhase    = (currentContext && currentContext.aiPhase) === 'build' ? 'build' : 'plan';
+    const cctxClientCtx  = (currentContext && currentContext.clientContext) || null;
 
-    const inlineImageBlocks = additionalImages
+    let extraPhotoBlocks = []; // photos pulled from the entity itself (job WIP, estimate, lead)
+
+    try {
+      if (cctxEntityType === 'estimate' && cctxEntityId) {
+        const ctx = await buildEstimateContext(cctxEntityId, req.user.id);
+        turnContextText = ctxSystemToText(ctx.system);
+        if (Array.isArray(ctx.photoBlocks)) extraPhotoBlocks = ctx.photoBlocks;
+      } else if (cctxEntityType === 'job' && cctxEntityId) {
+        const ctx = await buildJobContext(cctxEntityId, cctxClientCtx, cctxAiPhase);
+        turnContextText = ctxSystemToText(ctx.system);
+        if (Array.isArray(ctx.photoBlocks)) extraPhotoBlocks = ctx.photoBlocks;
+      } else if (cctxEntityType === 'intake') {
+        const ctx = await buildIntakeContext(req.user.id);
+        turnContextText = ctxSystemToText(ctx.system);
+        if (Array.isArray(ctx.photoBlocks)) extraPhotoBlocks = ctx.photoBlocks;
+      } else if (cctxEntityType === 'client') {
+        const ctx = await buildClientDirectoryContext();
+        turnContextText = ctxSystemToText(ctx.system);
+      }
+    } catch (e) {
+      console.warn('[/86/chat] per-entity context build skipped:', e.message);
+    }
+
+    // Auto-attach uploaded photos to whichever entity is open (best-
+    // effort — failures don't block the chat from sending).
+    if (additionalImages.length) {
+      try {
+        if (cctxEntityType === 'job' && cctxEntityId) {
+          await attachBase64PhotosToEntity('job', cctxEntityId, additionalImages, req.user.id, 'chat-photo');
+        } else if (cctxEntityType === 'estimate' && cctxEntityId) {
+          await attachBase64PhotosToEntity('estimate', cctxEntityId, additionalImages, req.user.id, 'chat-photo');
+        } else if (cctxEntityType === 'intake') {
+          // Intake uses the per-user staging bucket — photos move to
+          // the new lead's attachments on propose_create_lead approval.
+          stashPendingIntakeImages(req.user.id, additionalImages);
+        }
+        // 'ask86' / no entity_type → no attachment; photos still go
+        // inline as vision content below.
+      } catch (e) {
+        console.warn('[/86/chat] photo attach skipped:', e.message);
+      }
+    }
+
+    // Build the per-turn user message. <turn_context> (per-entity
+    // snapshot) comes first if present, then the page-context tag
+    // (where the user is in the app), then the actual message text.
+    const pageBlock = renderPageContextBlock(currentContext);
+    const turnTextParts = [];
+    if (turnContextText) turnTextParts.push('<turn_context>\n' + turnContextText + '\n</turn_context>');
+    if (pageBlock) turnTextParts.push(pageBlock);
+    turnTextParts.push(userMessage);
+    const turnText = turnTextParts.join('\n\n');
+
+    // Compose inline vision content: entity photos (cascaded from
+    // buildXContext.photoBlocks) plus any photos the user uploaded
+    // this turn. Cap at 18 to stay under Anthropic's per-turn vision
+    // budget.
+    const uploadedBlocks = additionalImages
       .map(b64 => inlineImageBlock(b64))
       .filter(Boolean);
+    const inlineImageBlocks = [...extraPhotoBlocks, ...uploadedBlocks].slice(0, 18);
+
     const userContent = inlineImageBlocks.length
       ? [...inlineImageBlocks, { type: 'text', text: turnText }]
       : [{ type: 'text', text: turnText }];
@@ -8567,12 +8639,12 @@ router.post('/86/chat', requireAuth, async (req, res) => {
        VALUES ($1, '86', 'global', $2, 'user', $3, $4, $5::jsonb)`,
       [
         userMsgId, req.user.id, userMessage, additionalImages.length,
-        inlineImageBlocks.length ? JSON.stringify(inlineImageBlocks) : null
+        uploadedBlocks.length ? JSON.stringify(uploadedBlocks) : null
       ]
     );
 
     // ONE session per user — keyed on (job, '86', 'global', user).
-    // The managed `job` agent has the 69-tool union after 6ef82d4.
+    // The managed `job` agent has the 73-tool union.
     const session = await ensureAiSession({
       agentKey: 'job',
       entityType: '86',

@@ -111,9 +111,20 @@
     return !!(u && u.feature_flags && u.feature_flags.agent_mode_staff === 'agents');
   }
   function apiBase() {
-    if (_entityType === 'job') {
-      var v2j = isJobAgentMode() ? '/v2' : '';
-      return '/api/ai' + v2j + '/jobs/' + encodeURIComponent(_entityId);
+    // UNIFIED 86 — every 86 surface (ask86 global, per-estimate,
+    // per-job WIP, lead intake) routes to /api/ai/86. The endpoint
+    // accepts current_context describing which entity is open;
+    // server-side it loads the same per-turn snapshot the legacy
+    // per-entity endpoints used to build, but ONE conversation
+    // thread per user persists across pages — true cross-surface
+    // continuity. HR still uses its own surface today (cra agent
+    // is its own brain), so 'client' / 'staff' stay on their legacy
+    // routes.
+    if (_entityType === 'job'
+      || _entityType === 'estimate'
+      || _entityType === 'intake'
+      || _entityType === 'ask86') {
+      return '/api/ai/86';
     }
     if (_entityType === 'client') {
       var v2c = isCraAgentMode() ? '/v2' : '';
@@ -123,19 +134,8 @@
       var v2s = isStaffAgentMode() ? '/v2' : '';
       return '/api/ai' + v2s + '/staff';
     }
-    // Global "Ask 86" — the UNIFIED 86 surface. Reachable from the
-    // header button anywhere in the app. Routes to /api/ai/86 (V2
-    // managed agent, full 69-tool union, single conversation thread
-    // per user, page-context aware via current_context body field).
-    // Legacy /api/ai/ask86 still serves old entity_type='ask86' rows
-    // but new chats go through /86.
-    if (_entityType === 'ask86') return '/api/ai/86';
-    // Lead Intake — v2-only (no legacy path). Always /v2/intake.
-    if (_entityType === 'intake') return '/api/ai/v2/intake';
-    // estimate mode — flag-gated: v2 (Sessions) when agent mode is on,
-    // v1 (messages.stream) by default.
-    var v2 = isAgAgentMode() ? '/v2' : '';
-    return '/api/ai' + v2 + '/estimates/' + encodeURIComponent(_entityId);
+    // Fallback (no entity_type set yet) — global 86 surface.
+    return '/api/ai/86';
   }
   function isEstimateMode() { return _entityType === 'estimate'; }
   function isJobMode() { return _entityType === 'job'; }
@@ -211,11 +211,19 @@
   // closing + reopening a job's chat panel always loads the prior
   // conversation, even when AGENT_MODE_86=agents.
   function messagesApiBase() {
-    if (_entityType === 'job') return '/api/ai/jobs/' + encodeURIComponent(_entityId);
+    // Unified 86 — every 86 surface reads from the same conversation
+    // thread (entity_type='86' in ai_messages). Opening any entity
+    // panel shows the SAME rolling history you'd see on Ask 86.
+    // HR / CoS still have their own threads.
+    if (_entityType === 'job'
+      || _entityType === 'estimate'
+      || _entityType === 'intake'
+      || _entityType === 'ask86') {
+      return '/api/ai/86';
+    }
     if (_entityType === 'client') return '/api/ai/clients';
     if (_entityType === 'staff') return '/api/ai/staff';
-    if (_entityType === 'ask86') return '/api/ai/86';
-    return '/api/ai/estimates/' + encodeURIComponent(_entityId);
+    return '/api/ai/86';
   }
 
   // ── 86 (job-mode) Plan/Build phase ───────────────────────────────
@@ -1609,20 +1617,32 @@
     // (graph in localStorage, QB lines in workspace sheets); when
     // Phase 2 lands the server can pull them from DB and this
     // attachment becomes redundant.
-    if (isJobMode()) {
-      var clientCtx = buildJobClientContext();
-      if (clientCtx) body.clientContext = clientCtx;
-      // Elle's per-job phase (plan/build). Server filters JOB_TOOLS
-      // and adapts the system prompt based on this value.
-      body.aiPhase = getJobAIPhase(_entityId);
-    }
-    // Unified 86 surface — feed the per-turn page context so 86
-    // knows where the user is and what entity (if any) is open. The
-    // server wraps this in <page_context>...</page_context> in front
-    // of the user message text so 86 reads it as part of every turn.
-    if (isAsk86Mode()) {
-      var pageCtx = getCurrentPageContext();
-      if (pageCtx) body.current_context = pageCtx;
+    // Unified 86 — for every 86 surface (estimate / job / intake /
+    // ask86), pack current_context so the server can build the same
+    // per-turn snapshot the legacy per-entity endpoints used to
+    // assemble. The session is shared per-user; the per-entity block
+    // is a one-turn hint to 86 about which entity is open.
+    if (isJobMode() || isEstimateMode() || isIntakeMode() || isAsk86Mode()) {
+      var pageCtx = getCurrentPageContext() || {};
+      // Pin the active entity even when the page-context heuristic
+      // missed it (e.g. an estimate editor opened via deep link).
+      if (isJobMode() || isEstimateMode()) {
+        pageCtx.entity_type = _entityType;
+        pageCtx.entity_id = _entityId;
+      } else if (isIntakeMode()) {
+        pageCtx.entity_type = 'intake';
+      } else if (isAsk86Mode() && !pageCtx.entity_type) {
+        // Ask 86 stays as-is from getCurrentPageContext (page name
+        // only, or whatever entity is incidentally open).
+      }
+      if (isJobMode()) {
+        var clientCtx = buildJobClientContext();
+        if (clientCtx) pageCtx.clientContext = clientCtx;
+        // Per-job plan/build phase — server uses it for both system
+        // prompt shaping AND the tool gate (write tools off in plan).
+        pageCtx.aiPhase = getJobAIPhase(_entityId);
+      }
+      body.current_context = pageCtx;
     }
     // Combine one-shot images: pre-existing handoff (PDF viewer) + composer.
     var bodyImages = [];
