@@ -27,7 +27,7 @@
   // an admin who hasn't yet edited templates still gets the canonical text.
   var FALLBACK_TEMPLATE = {
     company_header: '13191 56th Court, Ste 102 · Clearwater, FL 33760-4030 · Phone: 813-725-5233',
-    intro_template: 'AG Exteriors is pleased to provide you with a proposal to complete the {issue} needed by the {community} community.',
+    intro_template: 'AG Exteriors is pleased to provide you with this proposal to complete the work outlined below.',
     about_paragraph: 'We proudly specialize in a wide range of exterior services, including roofing, siding, painting, deck rebuilding, and more—delivering each with care and attention to detail. Backed by our leadership team with extensive experience in construction, development, and property management. AG Exteriors is committed to bringing a thoughtful, professional approach to every project. With this foundation, we’re committed to providing high-quality work and dependable service on every project.',
     exclusions: [
       'This proposal may be withdrawn by AG Exteriors if not accepted within 30 days.',
@@ -269,7 +269,11 @@
   // any chrome that shouldn't appear in the PDF.
   function buildProposalHTML(estimate, template, ctx) {
     var clientLineLeft = '';
-    if (estimate.client) clientLineLeft += '<div style="font-weight:700;">' + escapeHTMLLocal(estimate.client) + '</div>';
+    // Client / community / address lines all render at the same
+    // regular weight in the AGX reference proposal. No bold on the
+    // first line — keeps the left column reading as one address
+    // block instead of a heading-with-subtitle.
+    if (estimate.client) clientLineLeft += '<div>' + escapeHTMLLocal(estimate.client) + '</div>';
     // When the picker resolves a child property under a parent firm,
     // estimate.client stores the parent firm name and estimate.community
     // stores the child property name. Show the community as a secondary
@@ -372,16 +376,21 @@
 
         '<h1 class="proposal-title">Proposal for ' + escapeHTMLLocal(estimate.title || 'Untitled') + '</h1>' +
 
-        '<p class="greeting">Dear <strong>' + escapeHTMLLocal(ctx.salutation) + '</strong>,</p>' +
-
+        // Greeting now opens with the company line directly — no
+        // "Dear [Salutation]" prefix. Matches the new AGX proposal
+        // format the user shared (more ambiguous, no name-personalization).
         '<p class="intro">' + introHTML + '</p>' +
 
         '<p class="about">' + escapeHTMLLocal(template.about_paragraph || '') + '</p>' +
 
         '<hr class="divider" />' +
 
+        // Scope heading uses an em-dash separator + title-case issue
+        // (e.g. "Scope of Work — Gutter Replacement & Installation")
+        // instead of "Scope of Work: GUTTER REPLACEMENT...". Reads
+        // cleaner on the printed proposal.
         '<h2 class="section-heading">Scope of Work' +
-          (estimate.issue ? ': ' + escapeHTMLLocal(String(estimate.issue).toUpperCase()) : '') +
+          (estimate.issue ? ' &mdash; ' + escapeHTMLLocal(estimate.issue) : '') +
         '</h2>' +
         scopeHTML +
 
@@ -571,30 +580,47 @@
   // the printed PDF rather than rendering everything ~30% larger.
   function getProposalCSS() {
     return (
-      '.p86-proposal { font-family: Arial, sans-serif; color: #222; font-size: 11pt; line-height: 1.45; max-width: 8.5in; margin: 0 auto; padding: 0.5in 0.6in; background: #fff; box-shadow: 0 2px 18px rgba(0,0,0,0.4); }' +
-      '.p86-proposal .proposal-header { text-align: center; margin-bottom: 18px; }' +
-      '.p86-proposal .company-line { font-size: 9pt; color: #444; letter-spacing: 0.2px; }' +
-      '.p86-proposal .proposal-meta { display: flex; justify-content: space-between; gap: 30px; margin-bottom: 18px; font-size: 10pt; }' +
-      '.p86-proposal .meta-left { flex: 1; }' +
-      '.p86-proposal .meta-right { text-align: right; flex: 0 0 auto; min-width: 220px; font-size: 10pt; }' +
-      '.p86-proposal .meta-label { font-weight: 700; color: #333; }' +
-      '.p86-proposal .meta-print-date { margin-top: 6px; }' +
-      '.p86-proposal .proposal-title { font-size: 17pt; font-weight: 700; color: #222; margin: 14px 0 14px; line-height: 1.25; }' +
-      '.p86-proposal .greeting { margin: 8px 0 14px; font-size: 11pt; }' +
-      '.p86-proposal .intro, .p86-proposal .about { margin: 10px 0; text-align: left; font-size: 11pt; }' +
-      '.p86-proposal .divider { border: none; border-top: 1px solid #ccc; margin: 18px 0; }' +
-      '.p86-proposal .section-heading { font-size: 13pt; font-weight: 700; color: #222; margin: 16px 0 8px; }' +
-      '.p86-proposal .italic-heading { font-style: italic; font-size: 11pt; }' +
-      '.p86-proposal .scope-text p { margin: 4px 0; font-size: 11pt; }' +
-      '.p86-proposal .total-block { text-align: right; font-size: 16pt; font-weight: 700; color: #222; margin: 22px 0 16px; padding-top: 10px; border-top: 1px solid #ddd; }' +
-      '.p86-proposal .total-block .total-label { color: #222; margin-right: 10px; }' +
-      '.p86-proposal .exclusions { padding-left: 26px; margin: 8px 0 18px; }' +
-      '.p86-proposal .exclusions li { margin: 6px 0; font-size: 10pt; text-align: left; line-height: 1.4; }' +
-      '.p86-proposal .sig-intro { margin-top: 22px; font-size: 10pt; }' +
-      '.p86-proposal .sig-block { margin-top: 14px; }' +
-      '.p86-proposal .sig-row { display: flex; align-items: center; gap: 10px; margin: 12px 0; font-size: 10pt; }' +
-      '.p86-proposal .sig-label { font-weight: 700; min-width: 80px; }' +
-      '.p86-proposal .sig-line { flex: 1; border-bottom: 1px solid #333; height: 0; }' +
+      // Tuned to mirror the AGX print-from-Buildertrend proposal:
+      // Arial 11pt body, generous breathing room between the header
+      // contact line and the client/job meta block, larger gap before
+      // the title, and right-aligned Total Price on its own visual
+      // line (no top border — the divider above the heading carries
+      // the separation).
+      '.p86-proposal { font-family: Arial, Helvetica, sans-serif; color: #222; font-size: 11pt; line-height: 1.5; max-width: 8.5in; margin: 0 auto; padding: 0.55in 0.6in 0.6in; background: #fff; box-shadow: 0 2px 18px rgba(0,0,0,0.4); }' +
+      '.p86-proposal .proposal-header { text-align: center; margin-bottom: 6px; }' +
+      '.p86-proposal .proposal-header img { height: 70px; display: block; margin: 0 auto 4px; }' +
+      '.p86-proposal .company-line { font-size: 10pt; color: #222; letter-spacing: 0.2px; margin-top: 4px; }' +
+      '.p86-proposal .proposal-meta { display: flex; justify-content: space-between; gap: 30px; margin: 28px 0 8px; font-size: 10pt; }' +
+      '.p86-proposal .meta-left { flex: 1; line-height: 1.45; }' +
+      '.p86-proposal .meta-left > div { margin: 0; }' +
+      '.p86-proposal .meta-right { text-align: right; flex: 0 0 auto; min-width: 200px; font-size: 10pt; line-height: 1.45; }' +
+      '.p86-proposal .meta-right > div { margin: 0; }' +
+      '.p86-proposal .meta-label { font-weight: 700; color: #222; }' +
+      '.p86-proposal .meta-print-date { margin-top: 4px; }' +
+      '.p86-proposal .proposal-title { font-size: 18pt; font-weight: 700; color: #222; margin: 26px 0 18px; line-height: 1.2; }' +
+      '.p86-proposal .intro, .p86-proposal .about { margin: 14px 0; text-align: left; font-size: 11pt; line-height: 1.55; }' +
+      '.p86-proposal .about { margin-bottom: 22px; }' +
+      '.p86-proposal .divider { border: none; border-top: 1px solid #c8c8c8; margin: 18px 0 22px; }' +
+      '.p86-proposal .section-heading { font-size: 13pt; font-weight: 700; color: #222; margin: 18px 0 10px; }' +
+      '.p86-proposal .italic-heading { font-style: italic; font-size: 11pt; margin: 18px 0 10px; }' +
+      '.p86-proposal .scope-text { margin: 6px 0 10px; }' +
+      '.p86-proposal .scope-text p { margin: 2px 0; font-size: 10.5pt; line-height: 1.5; }' +
+      // Total block — right-aligned on its own visual row. The
+      // divider above the Assumptions heading handles the rule, so
+      // no border on the total itself.
+      '.p86-proposal .total-block { text-align: right; font-size: 15pt; font-weight: 700; color: #222; margin: 8px 0 22px; }' +
+      '.p86-proposal .total-block .total-label { color: #222; margin-right: 8px; }' +
+      // Numbered exclusions: indented list, items spaced out so the
+      // wrapped lines read as paragraphs rather than dense bullets.
+      '.p86-proposal .exclusions { padding-left: 26px; margin: 10px 0 22px; }' +
+      '.p86-proposal .exclusions li { margin: 10px 0; font-size: 10.5pt; text-align: left; line-height: 1.5; padding-left: 4px; }' +
+      '.p86-proposal .exclusions li ul { padding-left: 20px; margin: 6px 0; }' +
+      '.p86-proposal .exclusions li ul li { margin: 6px 0; font-size: 10.5pt; }' +
+      '.p86-proposal .sig-intro { margin-top: 26px; font-size: 10pt; }' +
+      '.p86-proposal .sig-block { margin-top: 18px; }' +
+      '.p86-proposal .sig-row { display: flex; align-items: center; gap: 14px; margin: 22px 0; font-size: 10pt; }' +
+      '.p86-proposal .sig-label { font-weight: 700; min-width: 90px; }' +
+      '.p86-proposal .sig-line { flex: 1; border-bottom: 1.5px solid #333; height: 0; }' +
       '.p86-proposal .attached-photos { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin: 10px 0 18px; }' +
       '.p86-proposal .attached-photo { margin: 0; border: 1px solid #ddd; border-radius: 4px; overflow: hidden; background: #fafafa; page-break-inside: avoid; }' +
       '.p86-proposal .attached-photo img { width: 100%; height: auto; display: block; }' +

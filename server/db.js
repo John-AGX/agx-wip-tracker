@@ -1490,7 +1490,7 @@ async function initSchema() {
   const DEFAULT_PROPOSAL_TEMPLATE = {
     company_header: '13191 56th Court, Ste 102 · Clearwater, FL 33760-4030 · Phone: 813-725-5233',
     intro_template:
-      'AG Exteriors is pleased to provide you with a proposal to complete the {issue} needed by the {community} community.',
+      'AG Exteriors is pleased to provide you with this proposal to complete the work outlined below.',
     about_paragraph:
       'We proudly specialize in a wide range of exterior services, including roofing, siding, painting, deck rebuilding, and more—delivering each with care and attention to detail. Backed by our leadership team with extensive experience in construction, development, and property management. AG Exteriors is committed to bringing a thoughtful, professional approach to every project. With this foundation, we’re committed to providing high-quality work and dependable service on every project.',
     exclusions: [
@@ -1512,6 +1512,26 @@ async function initSchema() {
      ON CONFLICT (key) DO NOTHING`,
     [JSON.stringify(DEFAULT_PROPOSAL_TEMPLATE)]
   );
+
+  // Auto-upgrade: if a deployment still carries the OLD intro_template
+  // (with {issue} / {community} placeholders), swap it for the new
+  // ambiguous one that matches the AGX print-format reference. We
+  // only update when the stored value EXACTLY matches the old
+  // default — admin customizations are preserved.
+  try {
+    const OLD_INTRO = 'AG Exteriors is pleased to provide you with a proposal to complete the {issue} needed by the {community} community.';
+    const NEW_INTRO = DEFAULT_PROPOSAL_TEMPLATE.intro_template;
+    await pool.query(
+      `UPDATE app_settings
+          SET value = jsonb_set(value, '{intro_template}', to_jsonb($1::text), false),
+              updated_at = NOW()
+        WHERE key = 'proposal_template'
+          AND value->>'intro_template' = $2`,
+      [NEW_INTRO, OLD_INTRO]
+    );
+  } catch (e) {
+    console.warn('[db] proposal intro_template auto-upgrade skipped:', e.message);
+  }
 
   // BT export mapping — drives the Buildertrend xlsx exporter. As of
   // the new BT proposal-import format (Phase D), each Project 86 btCategory
