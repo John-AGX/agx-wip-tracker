@@ -89,11 +89,14 @@
     var titleSuffix = location
       ? '<span style="font-size:11px;color:var(--text-dim,#888);font-weight:normal;margin-left:6px;">' + escapeHTML(location) + '</span>'
       : '';
-    // Force single-line: white-space:nowrap on the title cell stops
-    // the suffix from dropping to a new line when the title is long.
-    // Tooltip carries the full title in case ellipsis truncates it.
+    // Single-line guarantee: white-space:nowrap stops the suffix from
+    // dropping below. min-width gives the title cell a fair share of
+    // the row so it doesn't get squashed by the dense columns to its
+    // right. Ellipsis kicks in only when an individual title genuinely
+    // overflows that min-width — the prior max-width:0 was clamping
+    // every cell to its first few characters.
     return '<tr class="leads-row" onclick="openEditLeadModal(\'' + escapeAttr(l.id) + '\')">' +
-      '<td class="lead-title-cell" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:0;" title="' + escapeAttr(l.title) + (location ? ' · ' + location : '') + '">' +
+      '<td class="lead-title-cell" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:240px;max-width:380px;" title="' + escapeAttr(l.title) + (location ? ' · ' + location : '') + '">' +
         '<strong style="color:var(--text,#fff);font-size:13px;">' + escapeHTML(l.title) + '</strong>' +
         titleSuffix +
       '</td>' +
@@ -249,7 +252,7 @@
       leadsHeaderCell('Updated',       'updated_at');
 
     listEl.innerHTML =
-      '<div class="leads-table-wrap" style="border:1px solid var(--border,#333);border-radius:10px;overflow:hidden;background:var(--card-bg,#0f0f1e);">' +
+      '<div class="leads-table-wrap" style="border:1px solid var(--border,#333);border-radius:10px;overflow-x:auto;background:var(--card-bg,#0f0f1e);">' +
         '<table class="leads-table" style="width:100%;border-collapse:collapse;table-layout:auto;">' +
           '<thead style="background:rgba(255,255,255,0.02);border-bottom:1px solid var(--border,#333);">' +
             '<tr>' + headerRow + '</tr>' +
