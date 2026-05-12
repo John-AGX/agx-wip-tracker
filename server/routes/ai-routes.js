@@ -1087,6 +1087,22 @@ const JOB_TOOLS = [
     }
   },
   {
+    name: 'read_active_lines',
+    description:
+      'Return the full line-by-line detail of the active group on an estimate: section header rows, cost-side line items with description / qty / unit / unit_cost / markup / line_id, plus subgroup roll-ups. Use when you need to propose an edit, audit an estimate, or compute totals. ' +
+      'The per-turn estimate context shows compact subgroup roll-ups only when the estimate has more than 12 cost-side lines — call this to get the line_ids and full detail. Auto-tier.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        estimate_id: { type: 'string', description: 'The estimate id (e.g. "e1778605032519"). Omit to use the estimate referenced in the current turn_context.' },
+        section_id: { type: 'string', description: 'Optional — scope to one subgroup (use the subgroup_id from the roll-up).' },
+        limit: { type: 'integer', minimum: 1, maximum: 500, description: 'Cap the line count returned. Default 200 (well above any realistic active-group size).' }
+      },
+      required: []
+    }
+  },
+  {
     name: 'read_attachment_text',
     description:
       'Fetch the FULL extracted text body of one attached document (PDF, Excel, Word, CSV, plain text). The per-turn manifest only shows a 200-char preview to keep token costs down — call this when you need to quote, cite, scope from, or compute against the doc. Auto-tier.',
@@ -1384,6 +1400,7 @@ async function buildEstimateContext(estimateId, includePhotos, aiPhaseOverride) 
   lines.push('Here is the current estimate the user is working on:');
   lines.push('');
   lines.push('# Estimate');
+  lines.push('- ID: ' + estimateId);
   lines.push('- Title: ' + (blob.title || '(untitled)'));
   if (blob.issue) lines.push('- Issue / repair: ' + blob.issue);
   if (blob.jobType) lines.push('- Project type: ' + blob.jobType);
@@ -1505,31 +1522,93 @@ async function buildEstimateContext(estimateId, includePhotos, aiPhaseOverride) 
   // individual lines can override. Subgroups are the four cost categories
   // (Materials / Labor / GC / Subs); the active group is the active
   // alternate (e.g., "Deck 1" or "Roof").
+  //
+  // Two render modes:
+  //   COMPACT (>COMPACT_THRESHOLD cost-side lines)
+  //     Subgroup roll-ups only: id + count + cost subtotal + markup +
+  //     marked-up subtotal. Saves 60–80% on tokens for dense estimates.
+  //     86 calls read_active_lines() to fetch the line-by-line detail
+  //     when proposing edits.
+  //   FULL (small estimates)
+  //     Every line rendered with description/qty/unit/cost/markup/id,
+  //     same as before. Useful while building so 86 spots gaps.
+  const COMPACT_THRESHOLD = 12;
+  const costLines = activeLines.filter(l => l && l.section !== '__section_header__');
+  const sectionHeaders = activeLines.filter(l => l && l.section === '__section_header__');
   if (activeLines.length) {
-    lines.push('## Line items in active group (cost-side)');
-    let currentSubgroup = '(uncategorized)';
-    let currentSubgroupMarkup = (blob.defaultMarkup != null && blob.defaultMarkup !== '') ? parseFloat(blob.defaultMarkup) : 0;
-    let lineNumInSubgroup = 0;
-    activeLines.forEach(l => {
-      if (l.section === '__section_header__') {
-        currentSubgroup = l.description || 'subgroup';
-        currentSubgroupMarkup = (l.markup === '' || l.markup == null)
-          ? ((blob.defaultMarkup != null && blob.defaultMarkup !== '') ? parseFloat(blob.defaultMarkup) : 0)
-          : parseFloat(l.markup);
-        lineNumInSubgroup = 0;
-        lines.push(`### ${currentSubgroup} (subgroup markup ${currentSubgroupMarkup}%, subgroup_id=${l.id})`);
-      } else {
-        lineNumInSubgroup++;
-        const qty = parseFloat(l.qty) || 0;
-        const unit = l.unit || 'ea';
-        const cost = parseFloat(l.unitCost) || 0;
-        const ext = qty * cost;
-        const markup = (l.markup === '' || l.markup == null) ? currentSubgroupMarkup : parseFloat(l.markup);
-        const markupNote = (l.markup === '' || l.markup == null) ? '' : ' [overrides subgroup]';
-        lines.push(`${lineNumInSubgroup}. ${l.description || '(no description)'} — qty ${qty} ${unit} @ $${cost.toFixed(2)} = $${ext.toFixed(2)}; markup ${markup}%${markupNote} [line_id=${l.id}]`);
+    if (costLines.length > COMPACT_THRESHOLD) {
+      // Compact mode — subgroup roll-ups.
+      lines.push('## Line items in active group (compact — ' + costLines.length + ' lines across ' + sectionHeaders.length + ' subgroups)');
+      lines.push('Call `read_active_lines({estimate_id: "' + estimateId + '"})` to fetch the full line-by-line detail (line_id, description, qty, unit, cost, markup) when you need to propose an edit. Pass `{estimate_id, section_id}` to scope to one subgroup.');
+      lines.push('');
+      // Walk in declared order so subgroup positions are preserved
+      const groupDefaultMarkup = (blob.defaultMarkup != null && blob.defaultMarkup !== '') ? parseFloat(blob.defaultMarkup) : 0;
+      let currentHeader = null;
+      let groupRows = [];
+      function flushGroup() {
+        if (!currentHeader) return;
+        const subMarkup = (currentHeader.markup === '' || currentHeader.markup == null)
+          ? groupDefaultMarkup
+          : parseFloat(currentHeader.markup);
+        let cost = 0;
+        groupRows.forEach(l => {
+          const qty = parseFloat(l.qty) || 0;
+          const uc = parseFloat(l.unitCost) || 0;
+          cost += qty * uc;
+        });
+        // Marked-up subtotal — apply per-line override when set, else subgroup markup.
+        let markedUp = 0;
+        groupRows.forEach(l => {
+          const qty = parseFloat(l.qty) || 0;
+          const uc = parseFloat(l.unitCost) || 0;
+          const lineMarkup = (l.markup === '' || l.markup == null) ? subMarkup : parseFloat(l.markup);
+          markedUp += (qty * uc) * (1 + (lineMarkup / 100));
+        });
+        lines.push('- ' + (currentHeader.description || 'subgroup') +
+          ' (subgroup_id=' + currentHeader.id + '): ' +
+          groupRows.length + ' line' + (groupRows.length === 1 ? '' : 's') +
+          ', cost $' + cost.toFixed(2) +
+          ', markup ' + subMarkup + '%' +
+          ' → marked-up $' + markedUp.toFixed(2));
+        groupRows = [];
       }
-    });
-    lines.push('');
+      activeLines.forEach(l => {
+        if (l.section === '__section_header__') {
+          flushGroup();
+          currentHeader = l;
+        } else if (currentHeader) {
+          groupRows.push(l);
+        }
+      });
+      flushGroup();
+      lines.push('');
+    } else {
+      // Full mode — render every line, same as before.
+      lines.push('## Line items in active group (cost-side)');
+      let currentSubgroup = '(uncategorized)';
+      let currentSubgroupMarkup = (blob.defaultMarkup != null && blob.defaultMarkup !== '') ? parseFloat(blob.defaultMarkup) : 0;
+      let lineNumInSubgroup = 0;
+      activeLines.forEach(l => {
+        if (l.section === '__section_header__') {
+          currentSubgroup = l.description || 'subgroup';
+          currentSubgroupMarkup = (l.markup === '' || l.markup == null)
+            ? ((blob.defaultMarkup != null && blob.defaultMarkup !== '') ? parseFloat(blob.defaultMarkup) : 0)
+            : parseFloat(l.markup);
+          lineNumInSubgroup = 0;
+          lines.push(`### ${currentSubgroup} (subgroup markup ${currentSubgroupMarkup}%, subgroup_id=${l.id})`);
+        } else {
+          lineNumInSubgroup++;
+          const qty = parseFloat(l.qty) || 0;
+          const unit = l.unit || 'ea';
+          const cost = parseFloat(l.unitCost) || 0;
+          const ext = qty * cost;
+          const markup = (l.markup === '' || l.markup == null) ? currentSubgroupMarkup : parseFloat(l.markup);
+          const markupNote = (l.markup === '' || l.markup == null) ? '' : ' [overrides subgroup]';
+          lines.push(`${lineNumInSubgroup}. ${l.description || '(no description)'} — qty ${qty} ${unit} @ $${cost.toFixed(2)} = $${ext.toFixed(2)}; markup ${markup}%${markupNote} [line_id=${l.id}]`);
+        }
+      });
+      lines.push('');
+    }
   } else {
     lines.push('## Line items');
     lines.push('(none yet)');
@@ -6083,6 +6162,76 @@ async function execStaffTool(name, input, ctx) {
       return out.join('\n\n');
     }
 
+    case 'read_active_lines': {
+      const estimateId = String((input && input.estimate_id) || '').trim();
+      const sectionId = String((input && input.section_id) || '').trim();
+      const limit = Math.max(1, Math.min(500, Number(input && input.limit) || 200));
+      if (!estimateId) {
+        return 'read_active_lines: estimate_id is required. (turn_context shows the id at the top of the estimate block.)';
+      }
+      const e = await pool.query(`SELECT data FROM estimates WHERE id = $1`, [estimateId]);
+      if (!e.rows.length) return 'No estimate with id ' + estimateId + '.';
+      const blob = e.rows[0].data || {};
+      const allLines = Array.isArray(blob.lines) ? blob.lines : [];
+      const alternates = Array.isArray(blob.alternates) ? blob.alternates : [];
+      const activeAlt = alternates.find(a => a.id === blob.activeAlternateId) || alternates[0] || null;
+      let activeLines = activeAlt ? allLines.filter(l => l.alternateId === activeAlt.id) : allLines;
+      if (sectionId) {
+        // Find the section header and the cost-side lines that follow it,
+        // up to the next section header. Walk in declared order.
+        const out = [];
+        let inTarget = false;
+        for (const l of activeLines) {
+          if (l.section === '__section_header__') {
+            if (inTarget) break; // hit next header — stop
+            if (l.id === sectionId) {
+              inTarget = true;
+              out.push(l);
+            }
+            continue;
+          }
+          if (inTarget) out.push(l);
+        }
+        activeLines = out;
+        if (!activeLines.length) return 'No subgroup with id ' + sectionId + ' in the active group of estimate ' + estimateId + '.';
+      }
+      const groupDefaultMarkup = (blob.defaultMarkup != null && blob.defaultMarkup !== '') ? parseFloat(blob.defaultMarkup) : 0;
+      const out = [];
+      const altLabel = activeAlt ? (activeAlt.name || activeAlt.id) : '(no active alternate)';
+      out.push('# Active-group lines on ' + estimateId + ' (group: ' + altLabel + ')');
+      out.push('');
+      let currentMarkup = groupDefaultMarkup;
+      let lineNum = 0;
+      let shown = 0;
+      for (const l of activeLines) {
+        if (shown >= limit) {
+          out.push('[…truncated at ' + limit + ' rows. Re-call with section_id or a smaller scope.]');
+          break;
+        }
+        if (l.section === '__section_header__') {
+          const m = (l.markup === '' || l.markup == null) ? groupDefaultMarkup : parseFloat(l.markup);
+          currentMarkup = m;
+          lineNum = 0;
+          out.push('### ' + (l.description || 'subgroup') + ' (subgroup_id=' + l.id + ', markup ' + m + '%)');
+          shown++;
+        } else {
+          lineNum++;
+          const qty = parseFloat(l.qty) || 0;
+          const unit = l.unit || 'ea';
+          const cost = parseFloat(l.unitCost) || 0;
+          const ext = qty * cost;
+          const mk = (l.markup === '' || l.markup == null) ? currentMarkup : parseFloat(l.markup);
+          const mkNote = (l.markup === '' || l.markup == null) ? '' : ' [overrides subgroup]';
+          out.push(lineNum + '. ' + (l.description || '(no description)') +
+            ' — qty ' + qty + ' ' + unit + ' @ $' + cost.toFixed(2) +
+            ' = $' + ext.toFixed(2) + '; markup ' + mk + '%' + mkNote +
+            ' [line_id=' + l.id + ']');
+          shown++;
+        }
+      }
+      return out.join('\n');
+    }
+
     case 'read_attachment_text': {
       const attachmentId = String((input && input.attachment_id) || '').trim();
       const maxChars = Math.max(500, Math.min(200000, Number(input && input.max_chars) || 60000));
@@ -8374,7 +8523,10 @@ const ALLOWED_AG_AUTO_TOOLS = new Set([
   'self_diagnose',
   // Lazy-loaded attachment body — manifest carries preview only;
   // 86 pulls the full text on demand. Auto-tier (pure read).
-  'read_attachment_text'
+  'read_attachment_text',
+  // Lazy-loaded line-item detail — compact roll-ups ship in
+  // turn_context for dense estimates; 86 pulls full lines on demand.
+  'read_active_lines'
 ]);
 // Tools whose executor lives in execClientTool (HR's directory reads)
 // rather than execStaffTool. The dispatcher routes by name.

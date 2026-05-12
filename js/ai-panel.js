@@ -2486,7 +2486,11 @@
     self_diagnose: true,
     // Lazy attachment body fetch — manifest now ships preview only,
     // 86 pulls full body via this when he actually needs to quote.
-    read_attachment_text: true
+    read_attachment_text: true,
+    // Lazy line-item detail — turn_context shows compact roll-ups for
+    // estimates with >12 cost-side lines; 86 calls this for full
+    // line_ids when proposing edits.
+    read_active_lines: true
   };
   function execAGAutoTool(name, input) {
     return window.p86Api.post('/api/ai/exec-tool', { name: name, input: input || {} })
