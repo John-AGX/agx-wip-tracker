@@ -1528,6 +1528,9 @@
     formEl.innerHTML =
       '<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;max-width:900px;">' +
         '<div>' +
+          // Title at the top of the Details form — same value the
+          // sticky header carries (#ee-title), kept in sync below.
+          field('Title', 'ee-titleDetails', est.title, { placeholder: 'e.g. Windermere Park Equipment — Replace Benches' }) +
           '<div style="margin-bottom:12px;">' +
             '<label style="display:block;">Pick from Client Directory</label>' +
             '<select id="ee-clientPicker" onchange="onEstimateClientPicked(\'edit\')" style="width:100%;"></select>' +
@@ -1566,6 +1569,36 @@
           'Markup is per-section — set it on each section header in <strong>Line Items</strong>. Tax applies after fees. Round-up is the last step.' +
         '</div>' +
       '</fieldset>';
+
+    // Title — keystroke-live so it matches the sticky header input
+    // behavior, and bidirectionally synced with #ee-title so editing
+    // either field keeps the other current.
+    var titleDetailsEl = document.getElementById('ee-titleDetails');
+    if (titleDetailsEl) {
+      titleDetailsEl.oninput = function() {
+        var e = getEstimate(); if (!e) return;
+        e.title = titleDetailsEl.value;
+        var hdrTitle = document.getElementById('ee-title');
+        if (hdrTitle && hdrTitle.value !== titleDetailsEl.value) {
+          hdrTitle.value = titleDetailsEl.value;
+        }
+        debouncedSave();
+      };
+    }
+    // Mirror the sticky-header title input into the details field when
+    // the user types up there — keeps both views consistent. Append
+    // rather than replace any prior handler set by openEditor().
+    var hdrTitleEl = document.getElementById('ee-title');
+    if (hdrTitleEl) {
+      var prevHandler = hdrTitleEl.oninput;
+      hdrTitleEl.oninput = function() {
+        if (typeof prevHandler === 'function') prevHandler.apply(this, arguments);
+        var detailsEl = document.getElementById('ee-titleDetails');
+        if (detailsEl && detailsEl.value !== hdrTitleEl.value) {
+          detailsEl.value = hdrTitleEl.value;
+        }
+      };
+    }
 
     // Wire each field's onchange to live-update the estimate record.
     var fieldMap = {
