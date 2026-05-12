@@ -90,13 +90,12 @@
       ? '<span style="font-size:11px;color:var(--text-dim,#888);font-weight:normal;margin-left:6px;">' + escapeHTML(location) + '</span>'
       : '';
     // Single-line guarantee: white-space:nowrap stops the suffix from
-    // dropping below. min-width gives the title cell a fair share of
-    // the row so it doesn't get squashed by the dense columns to its
-    // right. Ellipsis kicks in only when an individual title genuinely
-    // overflows that min-width — the prior max-width:0 was clamping
-    // every cell to its first few characters.
+    // dropping below. No width clamping — the cell stretches to fit
+    // whatever the title needs. table-layout:auto handles the
+    // distribution; if everything together exceeds the viewport,
+    // the wrapper's overflow-x:auto provides a horizontal scroll.
     return '<tr class="leads-row" onclick="openEditLeadModal(\'' + escapeAttr(l.id) + '\')">' +
-      '<td class="lead-title-cell" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:240px;max-width:380px;" title="' + escapeAttr(l.title) + (location ? ' · ' + location : '') + '">' +
+      '<td class="lead-title-cell" style="white-space:nowrap;" title="' + escapeAttr(l.title) + (location ? ' · ' + location : '') + '">' +
         '<strong style="color:var(--text,#fff);font-size:13px;">' + escapeHTML(l.title) + '</strong>' +
         titleSuffix +
       '</td>' +
