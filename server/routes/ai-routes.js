@@ -2845,6 +2845,14 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
               console.log('[v2-stream] flushing', pendingAutoResults.length,
                 'auto-tier tool_result(s) for', sessionId);
               nextEventsToSend = pendingAutoResults.slice();
+              // CRITICAL: clear the queue after capturing. Without this,
+              // a subsequent batch of auto-tier tools (e.g. 86 fires 3
+              // reads, idles, flushes, then fires a 4th read on the
+              // next round) would re-flush ALL prior results — including
+              // ones the session already resolved. Anthropic 400s with
+              // "tool_use_id … does not match any custom_tool_use event
+              // in this session" because the earlier ids are gone.
+              pendingAutoResults.length = 0;
               stallNudgeQueued = true; // signals "reopen stream"
               break; // exit switch; post-switch check exits for-await
             }
