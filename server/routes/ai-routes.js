@@ -1537,6 +1537,35 @@ async function buildEstimateContext(estimateId, includePhotos) {
     }
   } catch (e) { /* materials table may not exist yet on a fresh deploy */ }
 
+  // Attachments roll-up — ALWAYS rendered so the model has a
+  // definitive signal of "I checked, here's what's attached" even
+  // when nothing is. Splits estimate-side vs lead-side counts so
+  // the model can tell the user exactly where to look (or upload).
+  // Photos are sent inline as vision content; docs are listed with
+  // extracted text (when available) for direct citation.
+  var estPhotos = photoRows.filter(function(p) { return p.source === 'estimate'; }).length;
+  var leadPhotos = photoRows.filter(function(p) { return p.source === 'lead'; }).length;
+  var estDocs   = docManifest.filter(function(d) { return d.source === 'estimate'; }).length;
+  var leadDocs  = docManifest.filter(function(d) { return d.source === 'lead'; }).length;
+  var totalAtts = estPhotos + leadPhotos + estDocs + leadDocs;
+
+  lines.push('# Attachments');
+  if (totalAtts === 0) {
+    lines.push('No attachments persisted on this estimate or its linked lead.');
+    lines.push('If the user references "the attached document / RFP / spec sheet" and you can\'t find it here, tell them to upload it to either:');
+    lines.push('  - Estimate → Attachments tab (for docs specific to this proposal), or');
+    lines.push('  - Lead → Attachments tab (for the original RFQ from the client).');
+    lines.push('Any images the user dropped INLINE THIS TURN (via the chat composer) are visible above as vision content — read those first if they relate to the question.');
+    lines.push('');
+  } else {
+    lines.push('Estimate: ' + estPhotos + ' photo' + (estPhotos === 1 ? '' : 's') + ', ' + estDocs + ' doc' + (estDocs === 1 ? '' : 's') + '.');
+    if (blob.lead_id) {
+      lines.push('Linked lead: ' + leadPhotos + ' photo' + (leadPhotos === 1 ? '' : 's') + ', ' + leadDocs + ' doc' + (leadDocs === 1 ? '' : 's') + '.');
+    }
+    lines.push('Photos (' + (estPhotos + leadPhotos) + ') are attached as vision content above — describe / cite them directly.');
+    lines.push('');
+  }
+
   // Document manifest. PDF, Excel, Word, CSV, and plain-text contents are
   // extracted at upload time and inlined below in fenced blocks — read them
   // as authoritative content (RFPs, scopes, takeoffs, lead reports). For
@@ -1544,10 +1573,10 @@ async function buildEstimateContext(estimateId, includePhotos) {
   // layer, the user can click "Ask AI" from the PDF viewer to attach
   // rendered page images this turn — treat those images as the doc.
   if (docManifest.length) {
-    lines.push('# Attached documents (' + docManifest.length + ')');
+    lines.push('## Attached documents (' + docManifest.length + ')');
     var anyWithText = docManifest.some(function(d) { return d.extracted_text; });
     var headerLine = anyWithText
-      ? 'Extracted text below — quote / cite directly when relevant. Excel takeoffs render as tab-separated rows under `## Sheet:` headers; treat each sheet as a table.'
+      ? 'Extracted text below — quote / cite directly when relevant. Excel takeoffs render as tab-separated rows under `### Sheet:` headers; treat each sheet as a table.'
       : 'Filenames listed for reference.';
     headerLine += ' For docs WITHOUT extracted text (scanned PDFs, photo reports like CompanyCam, image-only formats):' +
       ' if the user has clicked "Ask AI" from the PDF viewer, the page renders are attached as images this turn — read them with vision and treat that as the document content.' +
@@ -1557,7 +1586,7 @@ async function buildEstimateContext(estimateId, includePhotos) {
     docManifest.forEach(function(d) {
       var sizeStr = d.size != null ? ' (' + (d.size > 1048576 ? (d.size / 1048576).toFixed(1) + ' MB' : Math.round(d.size / 1024) + ' KB') + ')' : '';
       var mimeBit = d.mime ? ' · ' + d.mime : '';
-      lines.push('## [' + d.source + '] ' + d.filename + sizeStr + mimeBit);
+      lines.push('### [' + d.source + '] ' + d.filename + sizeStr + mimeBit);
       if (d.extracted_text) {
         lines.push('```');
         lines.push(d.extracted_text);
