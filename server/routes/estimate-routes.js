@@ -61,9 +61,29 @@ router.put('/bulk/save', requireAuth, requireCapability('ESTIMATES_EDIT'), async
         if (!Array.isArray(blob.alternates) || !blob.alternates.length) {
           blob.alternates = (estimateAlternates || []).filter(a => a.estimateId === est.id);
         }
+        // Strip computed-on-render fields before persisting. These are
+        // re-derived every time the list renders (computeEstimateTotals),
+        // so storing them does two bad things:
+        //  1. Bloats the JSONB row with stale numbers.
+        //  2. Causes spurious "data changed" diffs that bump updated_at
+        //     on every save even when nothing real changed (because the
+        //     __totals payload may shift by a fraction-of-a-cent between
+        //     renders).
+        delete blob.__totals;
+        // Only bump updated_at when the JSONB actually differs from what's
+        // stored. The frontend bulk-save sends EVERY estimate on every
+        // save, so without this gate, opening any one estimate would
+        // refresh the Updated column for the entire list. Postgres'
+        // JSONB equality is normalized (key order / whitespace
+        // independent), so IS DISTINCT FROM correctly catches real edits.
         await client.query(
           `INSERT INTO estimates (id, owner_id, data) VALUES ($1, $2, $3)
-           ON CONFLICT (id) DO UPDATE SET data = $3, updated_at = NOW()`,
+           ON CONFLICT (id) DO UPDATE
+             SET data = EXCLUDED.data,
+                 updated_at = CASE
+                   WHEN estimates.data IS DISTINCT FROM EXCLUDED.data THEN NOW()
+                   ELSE estimates.updated_at
+                 END`,
           [est.id, req.user.id, JSON.stringify(blob)]
         );
       }
