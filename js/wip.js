@@ -1633,26 +1633,35 @@ function renderWIPMain() {
                 coSection.style.cssText = 'margin-top:14px;';
                 let coTotalInc = 0, coTotalCost = 0;
                 cos.forEach(c => { coTotalInc += c.income || 0; coTotalCost += c.estimatedCosts || 0; });
-                var coRows = cos.map(c => {
+                const coRows = cos.map(function(c) {
                     const profit = (c.income || 0) - (c.estimatedCosts || 0);
-                    return `<div class="card" style="cursor:pointer;padding:8px 12px;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;gap:12px;" onclick="editCO('${escapeHTML(c.id)}')" title="Click to edit">
-                        <div style="min-width:0;flex:1;">
-                            <div style="font-size:13px;font-weight:600;">${escapeHTML(c.coNumber || 'CO')} — ${escapeHTML(c.description || '')}</div>
-                            ${c.date ? '<div style="font-size:10px;color:var(--text-dim);">' + escapeHTML(c.date) + '</div>' : ''}
-                        </div>
-                        <div style="display:flex;gap:14px;font-size:12px;flex-shrink:0;">
-                            <div><span style="color:var(--text-dim);">Inc</span> <b style="color:var(--green);">${formatCurrency(c.income)}</b></div>
-                            <div><span style="color:var(--text-dim);">Cost</span> <b>${formatCurrency(c.estimatedCosts)}</b></div>
-                            <div><span style="color:var(--text-dim);">Profit</span> <b style="color:${profit >= 0 ? 'var(--green)' : 'var(--red)'};">${formatCurrency(profit)}</b></div>
-                        </div>
-                    </div>`;
+                    return '<tr class="overview-row" style="cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.04);" onclick="editCO(\'' + escapeHTML(c.id) + '\')" title="Click to edit">' +
+                        '<td style="white-space:nowrap;padding:6px 10px;"><strong style="color:var(--text,#fff);font-size:13px;">' + escapeHTML(c.coNumber || 'CO') + '</strong></td>' +
+                        '<td style="padding:6px 10px;font-size:12px;color:var(--text-dim,#aaa);">' + escapeHTML(c.description || '') + '</td>' +
+                        '<td style="white-space:nowrap;padding:6px 10px;font-size:11px;color:var(--text-dim,#888);">' + escapeHTML(c.date || '') + '</td>' +
+                        '<td class="num" style="text-align:right;white-space:nowrap;padding:6px 10px;font-family:\'SF Mono\',monospace;font-size:13px;color:var(--green);font-weight:600;">' + formatCurrency(c.income) + '</td>' +
+                        '<td class="num" style="text-align:right;white-space:nowrap;padding:6px 10px;font-family:\'SF Mono\',monospace;font-size:13px;color:var(--accent);font-weight:600;">' + formatCurrency(c.estimatedCosts) + '</td>' +
+                        '<td class="num" style="text-align:right;white-space:nowrap;padding:6px 10px;font-family:\'SF Mono\',monospace;font-size:13px;font-weight:600;color:' + (profit >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + formatCurrency(profit) + '</td>' +
+                    '</tr>';
                 }).join('');
-                coSection.innerHTML = `
-                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-                        <h3 style="font-size:13px;margin:0;">&#x1F4DD; Change Orders (${cos.length})</h3>
-                        <div style="font-size:12px;color:var(--text-dim);">Total Inc: <b style="color:var(--green);">${formatCurrency(coTotalInc)}</b> &nbsp; Profit: <b style="color:${(coTotalInc-coTotalCost)>=0?'var(--green)':'var(--red)'};">${formatCurrency(coTotalInc-coTotalCost)}</b></div>
-                    </div>
-                    ${coRows}`;
+                coSection.innerHTML =
+                    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">' +
+                        '<h3 style="font-size:13px;margin:0;">&#x1F4DD; Change Orders (' + cos.length + ')</h3>' +
+                        '<div style="font-size:12px;color:var(--text-dim);">Total Inc: <b style="color:var(--green);">' + formatCurrency(coTotalInc) + '</b> &nbsp; Profit: <b style="color:' + ((coTotalInc - coTotalCost) >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + formatCurrency(coTotalInc - coTotalCost) + '</b></div>' +
+                    '</div>' +
+                    '<div style="border:1px solid var(--border,#333);border-radius:10px;overflow-x:auto;background:var(--card-bg,#0f0f1e);">' +
+                        '<table style="width:100%;border-collapse:collapse;table-layout:auto;">' +
+                            '<thead style="background:rgba(255,255,255,0.02);border-bottom:1px solid var(--border,#333);"><tr>' +
+                                thCell('CO #', 'left') +
+                                thCell('Description', 'left') +
+                                thCell('Date', 'left') +
+                                thCell('Income', 'right') +
+                                thCell('Cost', 'right') +
+                                thCell('Profit', 'right') +
+                            '</tr></thead>' +
+                            '<tbody>' + coRows + '</tbody>' +
+                        '</table>' +
+                    '</div>';
                 container.appendChild(coSection);
             }
 
@@ -1663,28 +1672,38 @@ function renderWIPMain() {
                 poSection.style.cssText = 'margin-top:14px;';
                 let poTotalAmt = 0, poTotalBilled = 0;
                 pos.forEach(p => { poTotalAmt += p.amount || 0; poTotalBilled += p.billedToDate || 0; });
-                var poRows = pos.map(p => {
+                const poRows = pos.map(function(p) {
                     const remaining = (p.amount || 0) - (p.billedToDate || 0);
                     const statusColor = p.status === 'Closed' ? 'var(--green)' : p.status === 'Partial' ? 'var(--yellow)' : 'var(--accent)';
-                    return `<div class="card" style="cursor:pointer;padding:8px 12px;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;gap:12px;" onclick="editPO('${escapeHTML(p.id)}')" title="Click to edit">
-                        <div style="min-width:0;flex:1;">
-                            <div style="font-size:13px;font-weight:600;">${escapeHTML(p.poNumber || 'PO')} — ${escapeHTML(p.vendor || '')}</div>
-                            ${p.description ? '<div style="font-size:11px;color:var(--text-dim);">' + escapeHTML(p.description) + '</div>' : ''}
-                        </div>
-                        <div style="display:flex;gap:14px;font-size:12px;align-items:center;flex-shrink:0;">
-                            <div><span style="color:var(--text-dim);">Amt</span> <b>${formatCurrency(p.amount)}</b></div>
-                            <div><span style="color:var(--text-dim);">Billed</span> <b>${formatCurrency(p.billedToDate)}</b></div>
-                            <div><span style="color:var(--text-dim);">Rem</span> <b style="color:${remaining > 0 ? 'var(--yellow)' : 'var(--green)'};">${formatCurrency(remaining)}</b></div>
-                            <span style="font-size:10px;padding:2px 8px;border-radius:10px;background:rgba(79,140,255,0.1);color:${statusColor};font-weight:600;">${escapeHTML(p.status || 'Open')}</span>
-                        </div>
-                    </div>`;
+                    return '<tr class="overview-row" style="cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.04);" onclick="editPO(\'' + escapeHTML(p.id) + '\')" title="Click to edit">' +
+                        '<td style="white-space:nowrap;padding:6px 10px;"><strong style="color:var(--text,#fff);font-size:13px;">' + escapeHTML(p.poNumber || 'PO') + '</strong></td>' +
+                        '<td style="padding:6px 10px;font-size:12px;color:var(--text-dim,#aaa);">' + escapeHTML(p.vendor || '') + '</td>' +
+                        '<td style="padding:6px 10px;font-size:11px;color:var(--text-dim,#888);">' + escapeHTML(p.description || '') + '</td>' +
+                        '<td class="num" style="text-align:right;white-space:nowrap;padding:6px 10px;font-family:\'SF Mono\',monospace;font-size:13px;color:var(--accent);font-weight:600;">' + formatCurrency(p.amount) + '</td>' +
+                        '<td class="num" style="text-align:right;white-space:nowrap;padding:6px 10px;font-family:\'SF Mono\',monospace;font-size:13px;color:var(--green);font-weight:600;">' + formatCurrency(p.billedToDate) + '</td>' +
+                        '<td class="num" style="text-align:right;white-space:nowrap;padding:6px 10px;font-family:\'SF Mono\',monospace;font-size:13px;font-weight:600;color:' + (remaining > 0 ? 'var(--yellow)' : 'var(--green)') + ';">' + formatCurrency(remaining) + '</td>' +
+                        '<td style="white-space:nowrap;padding:6px 10px;"><span style="font-size:10px;padding:2px 8px;border-radius:10px;background:rgba(79,140,255,0.1);color:' + statusColor + ';font-weight:600;">' + escapeHTML(p.status || 'Open') + '</span></td>' +
+                    '</tr>';
                 }).join('');
-                poSection.innerHTML = `
-                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-                        <h3 style="font-size:13px;margin:0;">&#x1F4C4; Purchase Orders (${pos.length})</h3>
-                        <div style="font-size:12px;color:var(--text-dim);">Total: <b>${formatCurrency(poTotalAmt)}</b> &nbsp; Billed: <b>${formatCurrency(poTotalBilled)}</b> &nbsp; Rem: <b style="color:${(poTotalAmt-poTotalBilled)>0?'var(--yellow)':'var(--green)'};">${formatCurrency(poTotalAmt-poTotalBilled)}</b></div>
-                    </div>
-                    ${poRows}`;
+                poSection.innerHTML =
+                    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">' +
+                        '<h3 style="font-size:13px;margin:0;">&#x1F4C4; Purchase Orders (' + pos.length + ')</h3>' +
+                        '<div style="font-size:12px;color:var(--text-dim);">Total: <b>' + formatCurrency(poTotalAmt) + '</b> &nbsp; Billed: <b>' + formatCurrency(poTotalBilled) + '</b> &nbsp; Rem: <b style="color:' + ((poTotalAmt - poTotalBilled) > 0 ? 'var(--yellow)' : 'var(--green)') + ';">' + formatCurrency(poTotalAmt - poTotalBilled) + '</b></div>' +
+                    '</div>' +
+                    '<div style="border:1px solid var(--border,#333);border-radius:10px;overflow-x:auto;background:var(--card-bg,#0f0f1e);">' +
+                        '<table style="width:100%;border-collapse:collapse;table-layout:auto;">' +
+                            '<thead style="background:rgba(255,255,255,0.02);border-bottom:1px solid var(--border,#333);"><tr>' +
+                                thCell('PO #', 'left') +
+                                thCell('Vendor', 'left') +
+                                thCell('Description', 'left') +
+                                thCell('Amount', 'right') +
+                                thCell('Billed', 'right') +
+                                thCell('Remaining', 'right') +
+                                thCell('Status', 'left') +
+                            '</tr></thead>' +
+                            '<tbody>' + poRows + '</tbody>' +
+                        '</table>' +
+                    '</div>';
                 container.appendChild(poSection);
             }
 
@@ -1695,27 +1714,37 @@ function renderWIPMain() {
                 invSection.style.cssText = 'margin-top:14px;';
                 let invTotalAmt = 0, invTotalPaid = 0;
                 invs.forEach(i => { invTotalAmt += i.amount || 0; if (i.status === 'Paid') invTotalPaid += i.amount || 0; });
-                var invRows = invs.map(i => {
+                const invRows = invs.map(function(i) {
                     const statusColor = i.status === 'Paid' ? 'var(--green)' : i.status === 'Sent' ? 'var(--yellow)' : 'var(--text-dim)';
-                    return `<div class="card" style="cursor:pointer;padding:8px 12px;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;gap:12px;" onclick="editInvoice('${escapeHTML(i.id)}')" title="Click to edit">
-                        <div style="min-width:0;flex:1;">
-                            <div style="font-size:13px;font-weight:600;">${escapeHTML(i.invNumber || 'INV')} — ${escapeHTML(i.vendor || '')}</div>
-                            ${i.description ? '<div style="font-size:11px;color:var(--text-dim);">' + escapeHTML(i.description) + '</div>' : ''}
-                        </div>
-                        <div style="display:flex;gap:14px;font-size:12px;align-items:center;flex-shrink:0;">
-                            <div><span style="color:var(--text-dim);">Amt</span> <b>${formatCurrency(i.amount)}</b></div>
-                            ${i.date ? '<div><span style="color:var(--text-dim);">Date</span> <b>' + escapeHTML(i.date) + '</b></div>' : ''}
-                            ${i.dueDate ? '<div><span style="color:var(--text-dim);">Due</span> <b>' + escapeHTML(i.dueDate) + '</b></div>' : ''}
-                            <span style="font-size:10px;padding:2px 8px;border-radius:10px;background:rgba(79,140,255,0.1);color:${statusColor};font-weight:600;">${escapeHTML(i.status || 'Draft')}</span>
-                        </div>
-                    </div>`;
+                    return '<tr class="overview-row" style="cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.04);" onclick="editInvoice(\'' + escapeHTML(i.id) + '\')" title="Click to edit">' +
+                        '<td style="white-space:nowrap;padding:6px 10px;"><strong style="color:var(--text,#fff);font-size:13px;">' + escapeHTML(i.invNumber || 'INV') + '</strong></td>' +
+                        '<td style="padding:6px 10px;font-size:12px;color:var(--text-dim,#aaa);">' + escapeHTML(i.vendor || '') + '</td>' +
+                        '<td style="padding:6px 10px;font-size:11px;color:var(--text-dim,#888);">' + escapeHTML(i.description || '') + '</td>' +
+                        '<td class="num" style="text-align:right;white-space:nowrap;padding:6px 10px;font-family:\'SF Mono\',monospace;font-size:13px;font-weight:600;color:var(--accent);">' + formatCurrency(i.amount) + '</td>' +
+                        '<td style="white-space:nowrap;padding:6px 10px;font-size:11px;color:var(--text-dim,#888);">' + escapeHTML(i.date || '') + '</td>' +
+                        '<td style="white-space:nowrap;padding:6px 10px;font-size:11px;color:var(--text-dim,#888);">' + escapeHTML(i.dueDate || '') + '</td>' +
+                        '<td style="white-space:nowrap;padding:6px 10px;"><span style="font-size:10px;padding:2px 8px;border-radius:10px;background:rgba(79,140,255,0.1);color:' + statusColor + ';font-weight:600;">' + escapeHTML(i.status || 'Draft') + '</span></td>' +
+                    '</tr>';
                 }).join('');
-                invSection.innerHTML = `
-                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-                        <h3 style="font-size:13px;margin:0;">&#x1F4B3; Invoices (${invs.length})</h3>
-                        <div style="font-size:12px;color:var(--text-dim);">Total: <b>${formatCurrency(invTotalAmt)}</b> &nbsp; Paid: <b style="color:var(--green);">${formatCurrency(invTotalPaid)}</b> &nbsp; Outstanding: <b style="color:var(--yellow);">${formatCurrency(invTotalAmt-invTotalPaid)}</b></div>
-                    </div>
-                    ${invRows}`;
+                invSection.innerHTML =
+                    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">' +
+                        '<h3 style="font-size:13px;margin:0;">&#x1F4B3; Invoices (' + invs.length + ')</h3>' +
+                        '<div style="font-size:12px;color:var(--text-dim);">Total: <b>' + formatCurrency(invTotalAmt) + '</b> &nbsp; Paid: <b style="color:var(--green);">' + formatCurrency(invTotalPaid) + '</b> &nbsp; Outstanding: <b style="color:var(--yellow);">' + formatCurrency(invTotalAmt - invTotalPaid) + '</b></div>' +
+                    '</div>' +
+                    '<div style="border:1px solid var(--border,#333);border-radius:10px;overflow-x:auto;background:var(--card-bg,#0f0f1e);">' +
+                        '<table style="width:100%;border-collapse:collapse;table-layout:auto;">' +
+                            '<thead style="background:rgba(255,255,255,0.02);border-bottom:1px solid var(--border,#333);"><tr>' +
+                                thCell('Inv #', 'left') +
+                                thCell('Vendor', 'left') +
+                                thCell('Description', 'left') +
+                                thCell('Amount', 'right') +
+                                thCell('Date', 'left') +
+                                thCell('Due', 'left') +
+                                thCell('Status', 'left') +
+                            '</tr></thead>' +
+                            '<tbody>' + invRows + '</tbody>' +
+                        '</table>' +
+                    '</div>';
                 container.appendChild(invSection);
             }
 
@@ -2568,19 +2597,22 @@ function renderWIPMain() {
             });
             const totalProfit = totalRev - totalCost;
 
-            const headerHTML =
+            const titleHTML =
                 '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">' +
                     '<h3 style="font-size:13px;margin:0;">&#x1F4CB; Phases (' + groupKeys.length + ')</h3>' +
                     '<div style="font-size:12px;color:var(--text-dim);">Rev: <b style="color:var(--green);">' + formatCurrency(totalRev) + '</b> &nbsp; Cost: <b>' + formatCurrency(totalCost) + '</b> &nbsp; Profit: <b style="color:' + (totalProfit >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + formatCurrency(totalProfit) + '</b></div>' +
                 '</div>';
-            container.innerHTML = headerHTML;
 
             if (groupKeys.length === 0) {
-                container.innerHTML += '<div style="padding:12px;text-align:center;color:var(--text-dim);font-size:12px;">No phases yet. Click + Phase above to add one.</div>';
+                container.innerHTML = titleHTML +
+                    '<div style="padding:12px;text-align:center;color:var(--text-dim);font-size:12px;">No phases yet. Click + Phase above to add one.</div>';
                 return;
             }
 
-            groupKeys.forEach(phaseName => {
+            const ARROW_RIGHT = '▶';
+            const ARROW_DOWN = '▼';
+
+            const rowsHTML = groupKeys.map(function(phaseName) {
                 const phaseList = phaseGroups[phaseName];
                 const revTotal = phaseList.reduce((s, p) => s + (p.asSoldRevenue || 0), 0);
                 const matTotal = phaseList.reduce((s, p) => s + (p.materials || 0), 0);
@@ -2588,25 +2620,36 @@ function renderWIPMain() {
                 const subTotal = phaseList.reduce((s, p) => s + (p.sub || 0), 0);
                 const equipTotal = phaseList.reduce((s, p) => s + (p.equipment || 0), 0);
                 const costTotal = matTotal + labTotal + subTotal + equipTotal;
+                const profitTotal = revTotal - costTotal;
                 const avgPct = Math.round(phaseList.reduce((s, p) => s + (p.pctComplete || 0), 0) / phaseList.length);
                 const uid = 'ph-grp-' + phaseName.replace(/\W/g, '_');
+                const arrowId = uid + '-arrow';
 
-                var card = document.createElement('div');
-                card.style.cssText = 'background:var(--surface);border:1px solid var(--border);border-radius:8px;margin-bottom:6px;overflow:hidden;';
+                const summaryRow =
+                    '<tr class="ph-row" style="cursor:pointer;user-select:none;border-bottom:1px solid rgba(255,255,255,0.04);" ' +
+                        'onclick="(function(){var d=document.getElementById(\'' + uid + '\');var a=document.getElementById(\'' + arrowId + '\');var open=d.style.display===\'none\'||!d.style.display;d.style.display=open?\'\':\'none\';a.textContent=open?\'' + ARROW_DOWN + '\':\'' + ARROW_RIGHT + '\';})()">' +
+                        '<td style="white-space:nowrap;padding:6px 10px;">' +
+                            '<span id="' + arrowId + '" style="font-size:10px;color:var(--text-dim);display:inline-block;width:10px;">' + ARROW_RIGHT + '</span> ' +
+                            '<strong style="color:var(--text,#fff);font-size:13px;">' + escapeHTML(phaseName) + '</strong>' +
+                        '</td>' +
+                        '<td class="num" style="text-align:right;white-space:nowrap;padding:6px 10px;font-size:12px;color:var(--text-dim,#aaa);">' +
+                            phaseList.length +
+                        '</td>' +
+                        '<td class="num" style="text-align:right;white-space:nowrap;padding:6px 10px;font-family:\'SF Mono\',monospace;font-size:13px;color:var(--green);font-weight:600;">' +
+                            formatCurrency(revTotal) +
+                        '</td>' +
+                        '<td class="num" style="text-align:right;white-space:nowrap;padding:6px 10px;font-family:\'SF Mono\',monospace;font-size:13px;color:var(--orange);font-weight:600;">' +
+                            formatCurrency(costTotal) +
+                        '</td>' +
+                        '<td class="num" style="text-align:right;white-space:nowrap;padding:6px 10px;font-family:\'SF Mono\',monospace;font-size:13px;font-weight:600;color:' + (profitTotal >= 0 ? 'var(--green)' : 'var(--red)') + ';">' +
+                            formatCurrency(profitTotal) +
+                        '</td>' +
+                        '<td class="num" style="text-align:right;white-space:nowrap;padding:6px 10px;font-family:\'SF Mono\',monospace;font-size:13px;font-weight:700;color:var(--accent);">' +
+                            avgPct + '%' +
+                        '</td>' +
+                    '</tr>';
 
-                var hdr = '<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;cursor:pointer;user-select:none;" onclick="var d=document.getElementById(\'' + uid + '\');d.style.display=d.style.display===\'none\'?\'block\':\'none\';this.querySelector(\'.ph-arrow\').textContent=d.style.display===\'none\'?\'\\u25B6\':\'\\u25BC\';">' +
-                    '<div style="display:flex;align-items:center;gap:10px;">' +
-                    '<span class="ph-arrow" style="font-size:10px;color:var(--text-dim);">&#x25B6;</span>' +
-                    '<span style="font-weight:700;font-size:14px;color:var(--text);">' + escapeHTML(phaseName) + '</span>' +
-                    '<span style="font-size:11px;color:var(--text-dim);">' + phaseList.length + ' instance' + (phaseList.length > 1 ? 's' : '') + '</span>' +
-                    '</div>' +
-                    '<div style="display:flex;gap:14px;font-size:12px;">' +
-                    '<span style="color:var(--text-dim);">Rev: <strong style="color:var(--green);">' + formatCurrency(revTotal) + '</strong></span>' +
-                    '<span style="color:var(--text-dim);">Cost: <strong style="color:var(--orange);">' + formatCurrency(costTotal) + '</strong></span>' +
-                    '<span style="color:var(--text-dim);">Avg: <strong style="color:var(--accent);">' + avgPct + '%</strong></span>' +
-                    '</div></div>';
-
-                var body = '<div id="' + uid + '" style="display:none;border-top:1px solid var(--border);padding:8px 12px;background:var(--surface2);">';
+                let body = '<tr id="' + uid + '" class="ph-body" style="display:none;"><td colspan="6" style="padding:8px 12px;background:var(--surface2);border-bottom:1px solid var(--border,#333);">';
                 phaseList.forEach(function(p) {
                     var bldg = appData.buildings.find(function(b) { return b.id === p.buildingId; });
                     var bldgName = bldg ? bldg.name : '?';
@@ -2615,17 +2658,31 @@ function renderWIPMain() {
                         '<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px;">' +
                         '<div>' +
                         '<span style="font-size:13px;font-weight:600;color:var(--text);">' + escapeHTML(bldgName) + '</span>' +
-                        '<span style="font-size:11px;color:var(--text-dim);margin-left:8px;">Rev: ' + formatCurrency(p.asSoldRevenue || 0) + ' | Mat: ' + formatCurrency(p.materials || 0) + ' | Lab: ' + formatCurrency(p.labor || 0) + ' | Sub: ' + formatCurrency(p.sub || 0) + ' | Equip: ' + formatCurrency(p.equipment || 0) + '</span>' +
+                        '<span style="font-size:11px;color:var(--text-dim);margin-left:8px;">Rev: ' + formatCurrency(p.asSoldRevenue || 0) + ' | Mat: ' + formatCurrency(p.materials || 0) + ' | Lab: ' + formatCurrency(p.labor || 0) + ' | Sub: ' + formatCurrency(p.sub || 0) + ' | Equip: ' + formatCurrency(p.equipment || 0) + ' | <b style="color:var(--accent);">' + (p.pctComplete || 0) + '%</b></span>' +
                         '</div>' +
-                        '<button class="ee-btn ghost" onclick="editPhase(\'' + escapeHTML(p.id) + '\')">&#x270F;&#xFE0F; Edit</button>' +
+                        '<button class="ee-btn ghost" onclick="event.stopPropagation();editPhase(\'' + escapeHTML(p.id) + '\')">&#x270F;&#xFE0F; Edit</button>' +
                         '</div>' +
                         '<div style="margin-top:4px;">' + renderConnectionList(conns) + '</div>' +
                         '</div>';
                 });
-                body += '</div>';
-                card.innerHTML = hdr + body;
-                container.appendChild(card);
-            });
+                body += '</td></tr>';
+                return summaryRow + body;
+            }).join('');
+
+            container.innerHTML = titleHTML +
+                '<div style="border:1px solid var(--border,#333);border-radius:10px;overflow-x:auto;background:var(--card-bg,#0f0f1e);">' +
+                    '<table style="width:100%;border-collapse:collapse;table-layout:auto;">' +
+                        '<thead style="background:rgba(255,255,255,0.02);border-bottom:1px solid var(--border,#333);"><tr>' +
+                            thCell('Phase', 'left') +
+                            thCell('Instances', 'right') +
+                            thCell('Revenue', 'right') +
+                            thCell('Cost', 'right') +
+                            thCell('Profit', 'right') +
+                            thCell('Avg %', 'right') +
+                        '</tr></thead>' +
+                        '<tbody>' + rowsHTML + '</tbody>' +
+                    '</table>' +
+                '</div>';
         }
 
         function renderJobPhases(jobId) {
@@ -2636,20 +2693,23 @@ function renderWIPMain() {
 
         function renderOverviewSubsInto(container, jobId, subs) {
             container.innerHTML = '';
-            let totalContract = 0, totalBilled = 0;
 
-            const headerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">' +
+            const titleHTML = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">' +
                 '<h3 style="font-size:13px;margin:0;">&#x1F477; Subcontractors (' + subs.length + ')</h3>' +
                 '<div id="' + container.id + '-totals" style="font-size:12px;color:var(--text-dim);"></div>' +
                 '</div>';
-            container.innerHTML = headerHTML;
 
             if (subs.length === 0) {
-                container.innerHTML += '<div style="padding:12px;text-align:center;color:var(--text-dim);font-size:12px;">No subcontractors yet.</div>';
+                container.innerHTML = titleHTML +
+                    '<div style="padding:12px;text-align:center;color:var(--text-dim);font-size:12px;">No subcontractors yet.</div>';
                 return;
             }
 
-            subs.forEach(sub => {
+            const ARROW_RIGHT = '▶';
+            const ARROW_DOWN = '▼';
+            let totalContract = 0, totalBilled = 0;
+
+            const rowsHTML = subs.map(function(sub) {
                 const contract = sub.contractAmt || 0;
                 const billed = sub.billedToDate || 0;
                 const remaining = contract - billed;
@@ -2659,26 +2719,37 @@ function renderWIPMain() {
 
                 const conns = getNodeGraphConnections('sub', sub.id);
                 const uid = 'sub-grp-' + sub.id.replace(/\W/g, '_');
+                const arrowId = uid + '-arrow';
 
-                var card = document.createElement('div');
-                card.style.cssText = 'background:var(--surface);border:1px solid var(--border);border-radius:8px;margin-bottom:8px;overflow:hidden;';
+                const summaryRow =
+                    '<tr class="sub-row" style="cursor:pointer;user-select:none;border-bottom:1px solid rgba(255,255,255,0.04);" ' +
+                        'onclick="(function(){var d=document.getElementById(\'' + uid + '\');var a=document.getElementById(\'' + arrowId + '\');var open=d.style.display===\'none\'||!d.style.display;d.style.display=open?\'\':\'none\';a.textContent=open?\'' + ARROW_DOWN + '\':\'' + ARROW_RIGHT + '\';})()">' +
+                        '<td style="white-space:nowrap;padding:6px 10px;">' +
+                            '<span id="' + arrowId + '" style="font-size:10px;color:var(--text-dim);display:inline-block;width:10px;">' + ARROW_RIGHT + '</span> ' +
+                            '<strong style="color:var(--text,#fff);font-size:13px;">' + escapeHTML(sub.name) + '</strong>' +
+                            (conns.length > 0 ? '<span style="margin-left:6px;font-size:10px;padding:1px 6px;border-radius:10px;background:rgba(79,140,255,0.15);color:var(--accent);">' + conns.length + ' node' + (conns.length > 1 ? 's' : '') + '</span>' : '') +
+                        '</td>' +
+                        '<td style="white-space:nowrap;padding:6px 10px;font-size:12px;color:var(--text-dim,#aaa);">' +
+                            escapeHTML(sub.trade || '') +
+                        '</td>' +
+                        '<td class="num" style="text-align:right;white-space:nowrap;padding:6px 10px;font-family:\'SF Mono\',monospace;font-size:13px;color:var(--accent);font-weight:600;">' +
+                            formatCurrency(contract) +
+                        '</td>' +
+                        '<td class="num" style="text-align:right;white-space:nowrap;padding:6px 10px;font-family:\'SF Mono\',monospace;font-size:13px;color:var(--green);font-weight:600;">' +
+                            formatCurrency(billed) +
+                        '</td>' +
+                        '<td class="num" style="text-align:right;white-space:nowrap;padding:6px 10px;font-family:\'SF Mono\',monospace;font-size:13px;color:var(--orange);font-weight:600;">' +
+                            formatCurrency(remaining) +
+                        '</td>' +
+                        '<td class="num" style="text-align:right;white-space:nowrap;padding:6px 10px;font-family:\'SF Mono\',monospace;font-size:12px;color:var(--text-dim,#aaa);">' +
+                            pctBilled + '%' +
+                        '</td>' +
+                        '<td style="white-space:nowrap;padding:6px 10px;text-align:right;">' +
+                            '<button class="ee-btn ghost" style="font-size:11px;padding:3px 8px;" onclick="event.stopPropagation();editSub(\'' + escapeHTML(sub.id) + '\')">&#x270F;&#xFE0F; Edit</button>' +
+                        '</td>' +
+                    '</tr>';
 
-                var hdr = '<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;cursor:pointer;user-select:none;" onclick="var d=document.getElementById(\'' + uid + '\');d.style.display=d.style.display===\'none\'?\'block\':\'none\';this.querySelector(\'.ph-arrow\').textContent=d.style.display===\'none\'?\'\\u25B6\':\'\\u25BC\';">' +
-                    '<div style="display:flex;align-items:center;gap:10px;">' +
-                    '<span class="ph-arrow" style="font-size:10px;color:var(--text-dim);">&#x25B6;</span>' +
-                    '<span style="font-weight:700;font-size:14px;color:var(--text);">' + escapeHTML(sub.name) + '</span>' +
-                    '<span style="font-size:11px;color:var(--text-dim);">' + escapeHTML(sub.trade || '') + '</span>' +
-                    (conns.length > 0 ? '<span style="font-size:10px;padding:1px 6px;border-radius:10px;background:var(--accent-dim);color:var(--accent);">' + conns.length + ' node' + (conns.length > 1 ? 's' : '') + '</span>' : '') +
-                    '</div>' +
-                    '<div style="display:flex;gap:16px;font-size:12px;align-items:center;">' +
-                    '<span style="color:var(--text-dim);">Contract: <strong style="color:var(--accent);">' + formatCurrency(contract) + '</strong></span>' +
-                    '<span style="color:var(--text-dim);">Billed: <strong style="color:var(--green);">' + formatCurrency(billed) + '</strong></span>' +
-                    '<span style="color:var(--text-dim);">Rem: <strong style="color:var(--orange);">' + formatCurrency(remaining) + '</strong></span>' +
-                    '<span style="color:var(--text-dim);">' + pctBilled + '%</span>' +
-                    '<button class="ee-btn ghost" onclick="event.stopPropagation();editSub(\'' + escapeHTML(sub.id) + '\')">&#x270F;&#xFE0F; Edit</button>' +
-                    '</div></div>';
-
-                var body = '<div id="' + uid + '" style="display:none;border-top:1px solid var(--border);padding:10px 14px;">';
+                let body = '<tr id="' + uid + '" class="sub-body" style="display:none;"><td colspan="7" style="padding:10px 14px;background:var(--surface2);border-bottom:1px solid var(--border,#333);">';
                 if (sub.notes) {
                     body += '<div style="font-size:11px;color:var(--text-dim);margin-bottom:8px;">' + escapeHTML(sub.notes) + '</div>';
                 }
@@ -2690,16 +2761,31 @@ function renderWIPMain() {
                         var wireDesc = [];
                         c.targets.forEach(function(t) { wireDesc.push('<span style="color:var(--green);">&rarr; ' + escapeHTML(t.label) + '</span>'); });
                         c.sources.forEach(function(s) { wireDesc.push('<span style="color:var(--accent);">' + escapeHTML(s.label) + ' &rarr;</span>'); });
-                        body += '<div style="padding:4px 8px;margin:3px 0;background:var(--surface2);border-radius:4px;font-size:11px;display:flex;align-items:center;gap:8px;">' +
+                        body += '<div style="padding:4px 8px;margin:3px 0;background:var(--surface);border-radius:4px;font-size:11px;display:flex;align-items:center;gap:8px;">' +
                             '<span style="color:var(--purple);font-weight:600;">Instance #' + (i + 1) + '</span>' +
                             (wireDesc.length ? wireDesc.join(' ') : '<span style="color:var(--text-dim);">Unconnected</span>') +
                             '</div>';
                     });
                 }
-                body += '</div>';
-                card.innerHTML = hdr + body;
-                container.appendChild(card);
-            });
+                body += '</td></tr>';
+                return summaryRow + body;
+            }).join('');
+
+            container.innerHTML = titleHTML +
+                '<div style="border:1px solid var(--border,#333);border-radius:10px;overflow-x:auto;background:var(--card-bg,#0f0f1e);">' +
+                    '<table style="width:100%;border-collapse:collapse;table-layout:auto;">' +
+                        '<thead style="background:rgba(255,255,255,0.02);border-bottom:1px solid var(--border,#333);"><tr>' +
+                            thCell('Subcontractor', 'left') +
+                            thCell('Trade', 'left') +
+                            thCell('Contract', 'right') +
+                            thCell('Billed', 'right') +
+                            thCell('Remaining', 'right') +
+                            thCell('% Billed', 'right') +
+                            thCell('', 'right') +
+                        '</tr></thead>' +
+                        '<tbody>' + rowsHTML + '</tbody>' +
+                    '</table>' +
+                '</div>';
 
             // Inline totals in section header
             const totalRemaining = totalContract - totalBilled;
