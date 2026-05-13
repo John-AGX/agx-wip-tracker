@@ -102,14 +102,9 @@
     var u = (window.p86Auth && window.p86Auth.getUser) ? window.p86Auth.getUser() : null;
     return !!(u && u.feature_flags && u.feature_flags.agent_mode_job === 'agents');
   }
-  function isCraAgentMode() {
-    var u = (window.p86Auth && window.p86Auth.getUser) ? window.p86Auth.getUser() : null;
-    return !!(u && u.feature_flags && u.feature_flags.agent_mode_cra === 'agents');
-  }
-  function isStaffAgentMode() {
-    var u = (window.p86Auth && window.p86Auth.getUser) ? window.p86Auth.getUser() : null;
-    return !!(u && u.feature_flags && u.feature_flags.agent_mode_staff === 'agents');
-  }
+  // isCraAgentMode / isStaffAgentMode removed — the cra and staff
+  // managed agents were archived; every surface uses the unified
+  // 'job' agent now, so per-agent feature-flag gating is moot.
   function apiBase() {
     // UNIFIED 86 — every surface routes to /api/ai/86. The endpoint
     // accepts current_context describing which entity is open;
@@ -1067,8 +1062,8 @@
         return ic + text;
       }
       if (isJobMode())            headerEl.innerHTML = withIcon('dna',       '📊', '86 · Lead Agent');
-      else if (isClientMode())    headerEl.innerHTML = withIcon('chart-pie', '🤝', 'HR · 86\'s Assistant');
-      else if (isStaffMode())     headerEl.innerHTML = withIcon('briefcase', '🎩', 'Chief of Staff · Handler');
+      else if (isClientMode())    headerEl.innerHTML = withIcon('chart-pie', '🤝', '86 · Client Directory');
+      else if (isStaffMode())     headerEl.innerHTML = withIcon('briefcase', '🎩', '86 · Admin');
       else if (isIntakeMode())    headerEl.innerHTML = withIcon('dna',       '📊', '86 · Intake');
       else if (isAsk86Mode())     headerEl.innerHTML = withIcon('dna',       '🧬', 'Ask 86');
       else                        headerEl.innerHTML = withIcon('dna', '🎯', '86 · Estimator');
@@ -1201,8 +1196,8 @@
     var noticeEl = document.querySelector('#p86-ai-panel #ai-notice');
     if (noticeEl) {
       if (isJobMode()) noticeEl.textContent = 'I\'m 86 — Project 86\'s operator. Estimating, scope, line items, leads, WIP, margin, schedule, the node graph — I do all of it. HR keeps the rolodex (clients, jobs, subs, users) clean for me. I propose changes; you approve before they land.';
-      else if (isClientMode()) noticeEl.textContent = 'I\'m HR — 86\'s data steward. I keep the directory clean: clients, jobs, subs, users. Lookups, dedupes, name/short-name fixes, agent notes. I propose changes; 86 or you approve before they apply.';
-      else if (isStaffMode()) noticeEl.textContent = 'Chief of Staff — I\'m 86\'s handler. I observe 86 + HR, audit conversations, and propose skill-pack edits when the playbook needs to evolve. I tune the team rather than do their work.';
+      else if (isClientMode()) noticeEl.textContent = 'Client directory mode — I can split parent+property compounds, link unparented properties, capture durable client notes, propose mutations. Same brain as everywhere else, scoped to your directory snapshot.';
+      else if (isStaffMode()) noticeEl.textContent = 'Admin mode — I see cross-agent metrics, recent conversations, and your skill packs. I can propose skill-pack edits when a workflow should be standardized. Same brain as everywhere else, scoped to the admin snapshot.';
       else if (isIntakeMode()) noticeEl.textContent = 'New lead intake — I\'m 86. Tell me what the lead is (property name, scope, salesperson) and drop any photos. I\'ll dedupe against existing clients/leads, propose the new lead for your approval, and tee up the estimate.';
       else if (isAsk86Mode()) noticeEl.textContent = 'I\'m 86 — global mode. Ask me anything. I have web search, the live reference sheets, and can create leads / update clients / propose skill-pack changes inline. For per-line-item edits on a specific estimate or job, open that entity\'s AI panel.';
       else {
@@ -1324,8 +1319,8 @@
       };
       if (isAsk86Mode()) hint = '<strong style="color:var(--text,#fff);">' + hintIcon('dna') + 'Ask 86</strong><br>Talk to 86 directly. I can create leads, update clients, audit conversations, push skill-pack changes, and search the web — and I have the live reference sheets (job numbers, WIP, etc.).<br><span style="font-size:11px;opacity:0.7;">For per-line edits on a specific estimate or job, open that entity\'s AI panel.</span>';
       else if (isJobMode()) hint = '<strong style="color:var(--text,#fff);">' + hintIcon('dna') + '86 · Lead Agent</strong><br>Pick a preset below or ask anything about this job.<br><span style="font-size:11px;opacity:0.7;">I see contract, costs, COs, %complete, billing — plus the node graph wiring and QuickBooks cost lines.</span>';
-      else if (isClientMode()) hint = '<strong style="color:var(--text,#fff);">' + hintIcon('chart-pie') + 'HR · Customer Relations</strong><br>Tap <strong>Run full audit</strong> to clean up the directory in one pass — I\'ll split parent+property compounds, link unparented entries, merge dupes, and surface anything ambiguous for you.<br><span style="font-size:11px;opacity:0.7;">I know the Project 86 hierarchy: parent management company → property/community → CAM contact.</span>';
-      else if (isStaffMode()) hint = '<strong style="color:var(--text,#fff);">' + hintIcon('briefcase') + 'Chief of Staff</strong><br>I observe 86 + HR — usage, cost, conversations, skill packs — and I can propose skill-pack edits for you to approve.<br><span style="font-size:11px;opacity:0.7;">Conversation replay is still queued.</span>';
+      else if (isClientMode()) hint = '<strong style="color:var(--text,#fff);">' + hintIcon('chart-pie') + '86 · Client Directory</strong><br>Tap <strong>Run full audit</strong> to clean up the directory in one pass — I\'ll split parent+property compounds, link unparented entries, merge dupes, and surface anything ambiguous for you.<br><span style="font-size:11px;opacity:0.7;">Hierarchy: parent management company → property/community → CAM contact.</span>';
+      else if (isStaffMode()) hint = '<strong style="color:var(--text,#fff);">' + hintIcon('briefcase') + '86 · Admin</strong><br>Cross-agent metrics, recent conversations, skill-pack curation. Ask about usage patterns or propose skill-pack edits.<br><span style="font-size:11px;opacity:0.7;">Same brain as the rest of 86 — admin context just narrows the snapshot.</span>';
       else hint = '<strong style="color:var(--text,#fff);">' + hintIcon('dna') + '86 · Estimator</strong><br>Pick a preset or describe what you need. I can read the estimate, scope, client, and photos — and propose adds, edits, deletes, and pricing changes for you to approve.<br><span style="font-size:11px;opacity:0.7;">Try "tighten this estimate" or "build my line items".</span>';
       box.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;padding:20px 0;text-align:center;line-height:1.6;">' + hint + '</div>';
       return;
