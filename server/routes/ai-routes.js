@@ -1759,35 +1759,16 @@ async function buildEstimateContext(estimateId, includePhotos, aiPhaseOverride) 
   renderSection(stableLines, 'ag_web_research', sectionOverrides);
   stableLines.push('');
 
-  // Skill packs — admin-editable prose. Used to ship as full bodies
-  // every turn via "always-on" injection; now ships as a MANIFEST
-  // (name + one-line description) and 86 calls load_skill_pack(name)
-  // to pull the body when relevant to the current question. Saves
-  // ~1,900 cache_creation tokens per turn for an estimate context
-  // (was eager-loading 5 packs averaging 380 tokens each).
-  //
-  // Legacy direct-API estimate-chat (line 2322) still gets the full
-  // bodies via loadActiveSkillsFor on the stable block — that path
-  // has prompt caching via cache_control, so the bodies are cached
-  // for 5 minutes and only billed once per session.
+  // Skill packs — manifest only. Every pack matching agent + context
+  // ships as a single name + one-line description. 86 calls
+  // load_skill_pack({name}) to pull the body on demand. The `alwaysOn`
+  // flag is no longer consulted at runtime — see commit history.
   const triggerCtx = {
     entity_type: 'estimate',
     group_count: alternates.length,
     has_lead: !!blob.lead_id,
     has_client: !!blob.client_id
   };
-  const skillBlocks = await loadActiveSkillsFor('job', triggerCtx);
-  if (skillBlocks.length) {
-    // Stable block (legacy path) — full bodies, cached for 5min.
-    stableLines.push('# Loaded skills');
-    stableLines.push('Skill packs your admin has assigned. Treat each as binding additional guidance on top of the baseline rules.');
-    stableLines.push('');
-    skillBlocks.forEach(s => {
-      stableLines.push('## ' + s.name);
-      stableLines.push(s.body);
-      stableLines.push('');
-    });
-  }
   const skillManifest = await loadSkillManifestFor('job', triggerCtx);
   if (skillManifest.length) {
     // Dynamic block (/86/chat) — manifest only. ~30 tokens per pack
@@ -1923,32 +1904,14 @@ function filterToolsForJobPhase(tools, phase) {
 // only when the estimate has at least N groups), this context is
 // matched against them. Packs without triggers always load
 // (alwaysOn baseline).
-async function loadActiveSkillsFor(agentKey, triggerCtx) {
-  // DEPRECATED for runtime body injection — kept ONLY for legacy direct-
-  // API estimate-chat paths that need the full bodies for prompt-cache.
-  // The unified /86/chat path now uses loadSkillManifestFor (below) and
-  // 86 fetches bodies via the load_skill_pack tool on demand. Killing
-  // the always-on body inject saves ~1.9k tokens per estimate turn and
-  // ~3.5k per WIP turn.
-  try {
-    const { rows } = await pool.query(
-      `SELECT value FROM app_settings WHERE key = 'agent_skills'`
-    );
-    if (!rows.length) return [];
-    const cfg = rows[0].value || {};
-    const skills = Array.isArray(cfg.skills) ? cfg.skills : [];
-    return skills
-      .filter(s => s && s.alwaysOn !== false && Array.isArray(s.agents) && s.agents.indexOf(agentKey) >= 0 && s.body && !s.replaces_section)
-      .filter(s => packContextsPass(s.contexts, triggerCtx))
-      .filter(s => packTriggersPass(s.triggers, triggerCtx))
-      .map(s => ({ name: s.name || '(untitled skill)', body: s.body, category: s.category || null }));
-  } catch (e) {
-    console.error('loadActiveSkillsFor error:', e);
-    return [];
-  }
-}
+// loadActiveSkillsFor was removed in the alwaysOn cleanup. Every
+// agent surface now uses loadSkillManifestFor (manifest in prompt) +
+// the load_skill_pack tool (on-demand body). The `alwaysOn` flag is
+// no longer consulted at runtime — preserved in the JSONB only so
+// existing rows don't blow up; propose_skill_pack_* accepts it and
+// ignores it.
 
-// Manifest-only variant: returns {name, description} for every skill
+// Manifest-only: returns {name, description} for every skill
 // pack that targets this agent and matches the turn context. NO body.
 // 86 reads the manifest, decides which packs are relevant to the
 // current question, and calls load_skill_pack({name}) to pull the
@@ -4682,6 +4645,19 @@ setInterval(() => {
 
 const CLIENT_TOOLS = [
   {
+    name: 'load_skill_pack',
+    tier: 'auto',
+    description:
+      'Pull the FULL body of a named skill pack listed in your turn-context "Available skill packs" manifest. Call this when starting a kind of work that maps to a pack — e.g. "Customer Directory Hygiene" before auditing the directory. Don\'t pre-load everything; load on demand. Auto-tier.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Exact pack name from the manifest.' }
+      },
+      required: ['name']
+    }
+  },
+  {
     name: 'create_property',
     tier: 'auto',
     description: 'Create a new property/community under an existing parent management company. Use this when the user asks to add a new property and the parent company already exists in the directory. The parent_client_id MUST refer to an existing client (look it up in the directory context).',
@@ -5279,26 +5255,9 @@ async function buildClientDirectoryContext() {
   renderSection(stable, 'hr_photos', hrSectionOverrides);
   stable.push('');
 
-  // Skill packs targeted at HR (customer relations). Same loader as
-  // 86 — admin-editable additions to the baseline prompt. Stable across
-  // the cache window since admins rarely edit them mid-session.
-  const craSkills = await loadActiveSkillsFor('cra', { entity_type: 'client' });
-  if (craSkills.length) {
-    // Legacy HR direct-API path: full bodies in the cached stable
-    // block (cache_control on the messages.create call serves them
-    // from cache after the first turn).
-    stable.push('# Loaded skills');
-    stable.push('Skill packs your admin has assigned. Treat each as binding additional guidance.');
-    stable.push('');
-    craSkills.forEach(s => {
-      stable.push('## ' + s.name);
-      stable.push(s.body);
-      stable.push('');
-    });
-  }
-  // Unified /86/chat HR context: ships only the dynamic block, so add
-  // a manifest of pack names there too. Cheap (~30 tokens/pack) and
-  // HR can load_skill_pack({name}) when relevant.
+  // Skill packs — manifest only. HR can call load_skill_pack({name})
+  // to pull a body on demand. The `alwaysOn` flag is no longer
+  // consulted at runtime.
   const craManifest = await loadSkillManifestFor('cra', { entity_type: 'client' });
   if (craManifest.length) {
     out.push('');
@@ -5891,22 +5850,21 @@ const STAFF_TOOLS = [
     name: 'propose_skill_pack_add',
     tier: 'approval',
     description:
-      'Propose creating a new admin-editable skill pack. Skill packs are reusable instruction blocks that get appended to an agent\'s system prompt every turn — perfect place to teach Project 86-specific workflows, pricing rules, slotting preferences, and common-scope playbooks. Only call this AFTER you have read the existing packs (read_skill_packs) to confirm you are not creating a duplicate. ' +
-      'CRITICAL: every pack must specify both `agents` AND `contexts`. `agents` is who loads it (job=86, cra=HR). `contexts` is the entity surfaces where it loads. Tagging a pack with the WRONG surface (e.g. estimating guidance loaded on the WIP/job surface) pollutes other 86 conversations and is a frequent cause of stale/contradictory behavior. Pick the narrowest scope that fits — never default to "everywhere". ' +
+      'Propose creating a new admin-editable skill pack. Skill packs are situational instruction blocks that 86 loads on-demand via load_skill_pack({name}) — they do NOT auto-load every turn anymore. Only call this AFTER read_skill_packs to confirm no name collision. ' +
+      'Every pack must specify both `agents` AND `contexts`. `agents` is who can see it in the manifest. `contexts` is the entity surfaces where the manifest entry appears. Pick narrowly so the manifest stays readable. ' +
       'Approval-required so the user vets the wording before it lands.',
     input_schema: {
       type: 'object',
       additionalProperties: false,
       properties: {
         name: { type: 'string', description: 'Short, unique title (e.g., "Trex decking spec reference"). Must not collide with an existing pack.' },
-        body: { type: 'string', description: 'The skill content. Markdown allowed. Be tight — every always-on pack costs tokens on every turn.' },
-        agents: { type: 'array', items: { type: 'string', enum: ['cra', 'job'] }, description: 'Which agents load this pack. Use "job" for 86 (operator — estimating + lead intake + WIP), "cra" for HR (data steward — clients/jobs/subs/users; key is "cra" for back-compat).' },
+        body: { type: 'string', description: 'The skill content. Markdown allowed. Pack body is only seen when 86 explicitly calls load_skill_pack({name}), so write it as guidance for THAT moment — not as if it always rides along.' },
+        agents: { type: 'array', items: { type: 'string', enum: ['cra', 'job'] }, description: 'Which agents see this pack in their manifest. "job" for 86, "cra" for HR.' },
         contexts: {
           type: 'array',
           items: { type: 'string', enum: ['estimate', 'job', 'intake', 'ask86', 'client'] },
-          description: 'Which entity surfaces load this pack. For 86: "estimate" = the estimate editor panel, "job" = the WIP/job panel, "intake" = the lead-intake panel, "ask86" = the global Ask 86 surface. For HR: "client" = the HR client directory. PICK NARROWLY. Estimating playbooks → ["estimate"] only. WIP/job-mapping playbooks → ["job"] only. Lead dedup → ["intake"]. If you really intend the pack to load everywhere on 86, pass ["estimate","job","intake","ask86"] explicitly — there is no implicit "everywhere" default.'
+          description: 'Which entity surfaces show this pack in the manifest. PICK NARROWLY. Estimating playbooks → ["estimate"]. WIP/job-mapping → ["job"]. Lead dedup → ["intake"]. HR ops → ["client"].'
         },
-        alwaysOn: { type: 'boolean', description: 'If true (default), pack is appended on every turn. If false, the pack is registered but inactive.' },
         rationale: { type: 'string', description: 'One short sentence shown on the approval card explaining why this pack is worth keeping.' }
       },
       required: ['name', 'body', 'agents', 'contexts', 'rationale']
@@ -5917,7 +5875,7 @@ const STAFF_TOOLS = [
     tier: 'approval',
     description:
       'Propose editing an existing skill pack. Pass the exact name from read_skill_packs and only the fields you want to change. Body edits replace the entire body — pass the full new content, not a diff. ' +
-      'NOTE: `contexts` (the entity surfaces this pack loads on) is editable here — use it to narrow an over-scoped legacy pack ("loaded everywhere" → "only on the estimate surface"). Approval-required so the user vets every change to a prompt-shaping artifact.',
+      'NOTE: `contexts` (the entity surfaces this pack appears on in the manifest) is editable here — use it to narrow an over-scoped legacy pack. Approval-required so the user vets every change to a prompt-shaping artifact.',
     input_schema: {
       type: 'object',
       additionalProperties: false,
@@ -5925,13 +5883,12 @@ const STAFF_TOOLS = [
         name: { type: 'string', description: 'Existing pack name (must match exactly).' },
         new_name: { type: 'string', description: 'Optional rename.' },
         new_body: { type: 'string', description: 'Optional replacement body. Pass the full new content.' },
-        agents: { type: 'array', items: { type: 'string', enum: ['cra', 'job'] }, description: 'Optional updated agent assignment. job=86, cra=HR (back-compat key).' },
+        agents: { type: 'array', items: { type: 'string', enum: ['cra', 'job'] }, description: 'Optional updated agent assignment. job=86, cra=HR.' },
         contexts: {
           type: 'array',
           items: { type: 'string', enum: ['estimate', 'job', 'intake', 'ask86', 'client'] },
-          description: 'Optional updated context scope. Pass the full new array — replaces the existing contexts list. Use to narrow a pack that was leaking onto surfaces it shouldn\'t (e.g., an estimating playbook leaking onto the WIP surface).'
+          description: 'Optional updated context scope. Pass the full new array — replaces the existing contexts list.'
         },
-        alwaysOn: { type: 'boolean', description: 'Optional updated alwaysOn flag.' },
         rationale: { type: 'string', description: 'One short sentence shown on the approval card explaining the change.' }
       },
       required: ['name', 'rationale']
@@ -6030,9 +5987,9 @@ async function buildStaffContext() {
   stable.push('  • `read_subs(q?, trade?, status?, with_expiring_certs?, limit?)` — subcontractor directory with cert expiry. Use to surface paperwork-expiring subs, list subs by trade, or confirm a named sub is active. with_expiring_certs=true for compliance audits.');
   stable.push('  • `read_lead_pipeline(q?, status?, market?, salesperson_email?, limit?)` — leads list + always-included status rollup ($ counts per status). Use for "what does our pipeline look like?", spotting deal-source patterns, or seeing which markets are hot.');
   stable.push('Propose tools (approval-required — user clicks Approve/Reject on a card):');
-  stable.push('  • `propose_skill_pack_add(name, body, agents, contexts, alwaysOn?, rationale)` — add a new skill pack. agents accepts ["cra", "job"] (job=86, cra=HR). contexts is REQUIRED and accepts a subset of ["estimate","job","intake","ask86","client"] — the entity surfaces this pack loads on. Pick narrowly. ALWAYS call read_skill_packs first to confirm no name collision.');
-  stable.push('  • `propose_skill_pack_edit(name, new_name?, new_body?, agents?, contexts?, alwaysOn?, rationale)` — change an existing pack. body edits replace the whole body. contexts replaces the existing scope (use to narrow an over-scoped legacy pack).');
-  stable.push('  • `propose_skill_pack_delete(name, rationale)` — remove a pack entirely. alwaysOn=false is usually a softer alternative.');
+  stable.push('  • `propose_skill_pack_add(name, body, agents, contexts, rationale)` — add a new skill pack (on-demand only; agents call load_skill_pack({name}) when relevant). agents=["cra","job"]. contexts is REQUIRED — narrow scope (["estimate"], ["job"], etc.).');
+  stable.push('  • `propose_skill_pack_edit(name, new_name?, new_body?, agents?, contexts?, rationale)` — change an existing pack. body edits replace the whole body. contexts replaces the existing scope.');
+  stable.push('  • `propose_skill_pack_delete(name, rationale)` — remove a pack entirely.');
   stable.push('  • `propose_skill_pack_mirror(name, rationale)` — mirror a pack to Anthropic native Skills (uploads SKILL.md via beta.skills.create). Local injection at chat time keeps running unchanged; mirroring is additive. After approval, the pack shows a Synced badge in the admin UI and registered agents can reference the skill_id natively. Re-register the affected agents (Admin → Agents → Bootstrap) so the new id flows into their Anthropic-side definition.');
   stable.push('  • `propose_skill_pack_unmirror(name, rationale)` — delete the Anthropic-side mirror only. Local pack body is preserved and continues to load at chat time. Use to retire a mirror or before re-mirroring after a body edit.');
   stable.push('');
@@ -6484,8 +6441,9 @@ async function execStaffTool(name, input, ctx) {
       for (const s of skills) {
         const agents = Array.isArray(s.agents) ? s.agents.join(',') : '(none)';
         const ctxs = Array.isArray(s.contexts) && s.contexts.length ? s.contexts.join(',') : 'all';
-        const onOff = s.alwaysOn === false ? 'inactive' : 'always-on';
-        lines.push('• "' + (s.name || '(untitled)') + '" → agents=' + agents + ', contexts=' + ctxs + ', ' + onOff);
+        // No "always-on"/"inactive" marker — runtime no longer treats
+        // packs as always-on. Every pack is on-demand via load_skill_pack.
+        lines.push('• "' + (s.name || '(untitled)') + '" → agents=' + agents + ', contexts=' + ctxs);
         const body = String(s.body || '');
         if (body) {
           lines.push('  ```');
@@ -6509,12 +6467,16 @@ async function execStaffTool(name, input, ctx) {
       }
       const body = String(pack.body || '').trim();
       if (!body) return 'Pack "' + wantName + '" has an empty body.';
+      // No "always-on"/"inactive" marker — runtime no longer treats
+      // packs as always-on. Pack bodies that still claim "READ FIRST
+      // EVERY TURN" or similar are stale; treat them as guidance for
+      // THIS turn only.
       const meta = [];
       if (Array.isArray(pack.agents) && pack.agents.length) meta.push('agents=' + pack.agents.join(','));
       if (Array.isArray(pack.contexts) && pack.contexts.length) meta.push('contexts=' + pack.contexts.join(','));
-      meta.push(pack.alwaysOn === false ? 'inactive' : 'always-on');
-      return '# ' + pack.name + ' (' + meta.join(', ') + ')\n\n' + body +
-        '\n\n— end of pack body. Treat the above as binding additional guidance for this turn.';
+      const header = meta.length ? ' (' + meta.join(', ') + ')' : '';
+      return '# ' + pack.name + header + '\n\n' + body +
+        '\n\n— end of pack body. Treat the above as binding additional guidance for THIS turn (you loaded it on demand; it is NOT auto-loaded going forward).';
     }
 
     case 'read_materials': {
@@ -6960,8 +6922,7 @@ async function execStaffApprovalTool(name, input) {
         name: input.name,
         body: input.body,
         agents: input.agents,
-        contexts: input.contexts,
-        alwaysOn: input.alwaysOn === false ? false : true
+        contexts: input.contexts
       });
       const newCfg = Object.assign({}, cfg, { skills });
       await pool.query(
@@ -6970,8 +6931,7 @@ async function execStaffApprovalTool(name, input) {
         [JSON.stringify(newCfg)]
       );
       return 'Added skill pack "' + input.name + '" → agents=' + input.agents.join(',') +
-        ', contexts=' + input.contexts.join(',') +
-        (input.alwaysOn === false ? ' (inactive)' : ' (always-on)');
+        ', contexts=' + input.contexts.join(',') + '. Available on demand via load_skill_pack({name:"' + input.name + '"}).';
     }
     case 'propose_skill_pack_edit': {
       if (!input || !input.name) throw new Error('name is required');
@@ -7009,10 +6969,9 @@ async function execStaffApprovalTool(name, input) {
         updated.contexts = input.contexts;
         changes.push('contexts → ' + input.contexts.join(','));
       }
-      if (typeof input.alwaysOn === 'boolean') {
-        updated.alwaysOn = input.alwaysOn;
-        changes.push(input.alwaysOn ? 'activated' : 'deactivated');
-      }
+      // alwaysOn intentionally ignored — the runtime no longer
+      // distinguishes always-on vs inactive packs. Every pack is
+      // on-demand via load_skill_pack.
       if (!changes.length) return 'No changes specified for "' + input.name + '".';
       skills[idx] = updated;
       const newCfg = Object.assign({}, cfg, { skills });

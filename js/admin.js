@@ -2379,8 +2379,7 @@
     html += '<fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;margin-bottom:14px;">';
     html += '<legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Agent Skill Packs</legend>';
     html += '<p style="margin:0 0 10px 0;color:var(--text-dim,#888);font-size:12px;">' +
-      'Reusable instruction blocks loaded into the in-app AI agents at chat time. Use these to teach Project 86-specific workflows, pricing rules, slotting preferences, and common-scope playbooks. ' +
-      '<strong>Always-on</strong> skills get appended to the agent\'s system prompt on every turn (token cost: a few hundred each).' +
+      'Reusable instruction blocks. Each pack appears in the agent\'s per-turn manifest by name + description; the agent calls <code>load_skill_pack({name})</code> to pull the full body when relevant. No always-on injection — packs cost zero tokens until the agent actually loads one.' +
       '</p>';
 
     if (!_skillsDraft.skills.length) {
@@ -2405,9 +2404,6 @@
         html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">' +
           '<input type="text" data-skill-name="' + idx + '" value="' + escapeHTML(skill.name || '') + '" placeholder="Skill name (e.g., Project 86 Estimating Playbook)" style="flex:1;font-weight:600;" />' +
           syncBadge +
-          '<label style="display:inline-flex;align-items:center;gap:4px;font-size:11px;color:var(--text-dim,#aaa);text-transform:none !important;letter-spacing:normal !important;font-weight:400 !important;cursor:pointer;">' +
-            '<input type="checkbox" data-skill-alwayson="' + idx + '" ' + (skill.alwaysOn === false ? '' : 'checked') + ' style="margin:0;" /> always on' +
-          '</label>' +
           '<button class="ee-btn ee-icon-btn danger" onclick="deleteSkill(' + idx + ')" title="Remove skill">&#x1F5D1;</button>' +
         '</div>';
         // Agent checkboxes — which agents load this skill
@@ -2474,11 +2470,12 @@
     _skillsDraft.skills.forEach(function(skill, idx) {
       var nameEl = document.querySelector('[data-skill-name="' + idx + '"]');
       var bodyEl = document.querySelector('[data-skill-body="' + idx + '"]');
-      var alwaysOnEl = document.querySelector('[data-skill-alwayson="' + idx + '"]');
       var replacesEl = document.querySelector('[data-skill-replaces="' + idx + '"]');
       if (nameEl) skill.name = nameEl.value;
       if (bodyEl) skill.body = bodyEl.value;
-      if (alwaysOnEl) skill.alwaysOn = !!alwaysOnEl.checked;
+      // alwaysOn intentionally not read — checkbox removed, runtime
+      // doesn't consult the flag anyway. Existing JSONB rows that
+      // still have the field set are harmless.
       if (replacesEl) {
         // Empty option = append-at-end mode; clear the field.
         var v = replacesEl.value || '';
@@ -2522,7 +2519,6 @@
       id: 'sk_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
       name: '',
       agents: ['job'],
-      alwaysOn: true,
       body: ''
     });
     renderTemplatesForm();

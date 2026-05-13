@@ -3942,17 +3942,18 @@
     } else if (tu.name === 'propose_skill_pack_add') {
       heading = '&#x1F9E0; Add skill pack';
       var spaAgents = Array.isArray(input.agents) ? input.agents.join(', ') : '(none)';
+      var spaCtxs = Array.isArray(input.contexts) ? input.contexts.join(', ') : '(none)';
       detail = '<div style="font-size:13px;color:var(--text,#fff);font-weight:600;">' + escapeHTMLLocal(input.name || '') + '</div>' +
-        '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:2px;">agents: ' + escapeHTMLLocal(spaAgents) + (input.alwaysOn === false ? ' · inactive' : ' · always-on') + '</div>' +
+        '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:2px;">agents: ' + escapeHTMLLocal(spaAgents) + ' · contexts: ' + escapeHTMLLocal(spaCtxs) + '</div>' +
         '<pre style="white-space:pre-wrap;font-size:11px;color:var(--text-dim,#ccc);background:rgba(0,0,0,0.2);padding:8px;border-radius:4px;margin:6px 0 0;max-height:180px;overflow:auto;font-family:inherit;">' + escapeHTMLLocal(input.body || '') + '</pre>' +
-        '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:6px;">Loads into the named agents\' system prompt every turn.</div>';
+        '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:6px;">On-demand only: the agent loads this pack by calling load_skill_pack({name}) when relevant. Listed in the per-turn manifest by name + description.</div>';
     } else if (tu.name === 'propose_skill_pack_edit') {
       heading = '&#x270F; Edit skill pack';
       var speChanges = [];
       if (input.new_name) speChanges.push('rename → "' + input.new_name + '"');
       if (input.new_body != null) speChanges.push('body (' + (input.new_body.length || 0) + ' chars)');
       if (Array.isArray(input.agents)) speChanges.push('agents → ' + input.agents.join(','));
-      if (typeof input.alwaysOn === 'boolean') speChanges.push(input.alwaysOn ? 'activate' : 'deactivate');
+      if (Array.isArray(input.contexts)) speChanges.push('contexts → ' + input.contexts.join(','));
       detail = '<div style="font-size:13px;color:var(--text,#fff);font-weight:600;">' + escapeHTMLLocal(input.name || '') + '</div>' +
         (speChanges.length
           ? '<div style="font-size:12px;color:var(--text,#ccc);margin-top:4px;">' + escapeHTMLLocal(speChanges.join(' · ')) + '</div>'
