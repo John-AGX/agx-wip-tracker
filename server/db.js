@@ -44,6 +44,69 @@ async function initSchema() {
     -- users.sub_id (sub portal) is added AFTER the subs table is
     -- created further down so the FK resolves on first run.
 
+    -- ───────────────────────────────────────────────────────────────
+    -- Organizations — multi-tenant foundation. Each row = one company
+    -- using the Project 86 platform. Today there's exactly one
+    -- (AGX Central Florida); the table exists so future signups can
+    -- be onboarded without a code change. Each org has:
+    --   - slug: stable URL-safe key (e.g. 'agx') — used in admin URLs
+    --     and as the suffix when registering per-org Anthropic agents
+    --     in Phase 2c (e.g. agent_key='job_agx').
+    --   - name: display name (e.g. 'AGX Central Florida').
+    --   - description: short marketing-style blurb (used in the
+    --     Anthropic agent's description field on registration).
+    --   - identity_body: ADMIN-EDITABLE prose composed into the
+    --     agent's system prompt at registration / sync time. This is
+    --     the org-specific "who 86 is working for" text — the AGX
+    --     baseline that used to live hardcoded in
+    --     AGENT_SYSTEM_BASELINE.job. Phase 2c moves it here so other
+    --     tenants can customize without touching code.
+    --   - settings JSONB: catch-all for per-org config (default
+    --     markups, web-research caps, etc.) — extended over time.
+    --   - archived_at: soft delete. Archived orgs keep their data
+    --     but their users can't log in and their agent is
+    --     deregistered from Anthropic.
+    CREATE TABLE IF NOT EXISTS organizations (
+      id SERIAL PRIMARY KEY,
+      slug TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      identity_body TEXT NOT NULL DEFAULT '',
+      settings JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      archived_at TIMESTAMPTZ
+    );
+    CREATE INDEX IF NOT EXISTS idx_organizations_slug ON organizations(slug) WHERE archived_at IS NULL;
+
+    -- Seed AGX as the sole org. Idempotent — no-op if a row with
+    -- slug='agx' already exists. The identity_body matches what
+    -- AGENT_SYSTEM_BASELINE.job currently hardcodes about AGX so
+    -- the agent's behavior doesn't shift the moment 2c flips to
+    -- reading from this column.
+    INSERT INTO organizations (slug, name, description, identity_body)
+    VALUES (
+      'agx',
+      'AGX Central Florida',
+      'Central-Florida construction-services company specializing in painting, deck repairs, roofing, and exterior services for HOAs and apartment communities.',
+      '# About the company you serve\nYou are working for AGX Central Florida — a Central-FL construction-services company specializing in painting, deck repairs, roofing, and exterior services for HOAs and apartment communities.\n\nAGX standards:\n- Estimate structure: every line item lives in one of four standard subgroups (Materials & Supplies / Direct Labor / General Conditions / Subcontractors).\n- Typical markups: Materials 20%, Labor 35%, General Conditions 25%, Subs 10%.\n- Pricing posture: materials anchored to actual purchase history (the materials catalog), labor + subs anchored to past-estimate medians. When neither source has a number, defensible Central-FL estimate with rationale.\n- Customers: HOA boards, property management companies, apartment community CAMs. Treat their hierarchy seriously (parent management co → property/community → CAM contact).\n\nThese standards define how AGX operates — they do NOT define WHO YOU are. You are 86 (the Project 86 platform agent). AGX is the company you currently work for.'
+    )
+    ON CONFLICT (slug) DO NOTHING;
+
+    -- Link users to their organization. Nullable for the duration
+    -- of the migration; backfilled to AGX immediately below; flipped
+    -- to NOT NULL once we're confident no orphan rows can appear
+    -- (Phase 2c after the org-aware user-creation flow lands).
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS organization_id INTEGER
+      REFERENCES organizations(id) ON DELETE RESTRICT;
+    CREATE INDEX IF NOT EXISTS idx_users_organization_id ON users(organization_id);
+
+    -- Backfill: every existing user belongs to AGX. Safe re-run
+    -- (only touches NULL rows; explicit assignments stay).
+    UPDATE users
+       SET organization_id = (SELECT id FROM organizations WHERE slug = 'agx')
+     WHERE organization_id IS NULL;
+
     -- Team messaging — per-entity comment threads + (future) DMs.
     -- thread_key conventions:
     --   'job:<id>'      one thread per job (per-job comments)
@@ -1788,4 +1851,67 @@ async function init() {
   await initSchema();
 }
 
-module.exports = { pool, init };
+// ────────────────────────────────────────────────────────────────
+// Organization helpers — used by request handlers + agent
+// registration to scope work per tenant. All public callers should
+// use these instead of re-querying organizations directly so the
+// schema can evolve (e.g. caching) without touching every caller.
+// ────────────────────────────────────────────────────────────────
+
+// Resolve a user's organization row. Returns null if the user has
+// no organization (only possible during the migration window — the
+// boot-time backfill assigns AGX to every existing user). Callers
+// that require an org should treat null as a 500-level bug.
+async function getOrgForUser(userId) {
+  if (!userId) return null;
+  const r = await pool.query(
+    `SELECT o.*
+       FROM organizations o
+       JOIN users u ON u.organization_id = o.id
+      WHERE u.id = $1
+        AND o.archived_at IS NULL
+      LIMIT 1`,
+    [userId]
+  );
+  return r.rows[0] || null;
+}
+
+// Lookup an org by its slug (e.g. 'agx'). Used by admin endpoints
+// that operate on a specific org without going through a user
+// context.
+async function getOrgBySlug(slug) {
+  if (!slug) return null;
+  const r = await pool.query(
+    `SELECT * FROM organizations WHERE slug = $1 AND archived_at IS NULL LIMIT 1`,
+    [String(slug).toLowerCase()]
+  );
+  return r.rows[0] || null;
+}
+
+// Lookup an org by id. Cheaper than getOrgForUser when the caller
+// already has the org id (e.g. from a JWT claim).
+async function getOrgById(orgId) {
+  if (!orgId) return null;
+  const r = await pool.query(
+    `SELECT * FROM organizations WHERE id = $1 AND archived_at IS NULL LIMIT 1`,
+    [orgId]
+  );
+  return r.rows[0] || null;
+}
+
+// List every active org (admin views, future signup screens).
+async function listOrganizations() {
+  const r = await pool.query(
+    `SELECT * FROM organizations WHERE archived_at IS NULL ORDER BY created_at ASC`
+  );
+  return r.rows;
+}
+
+module.exports = {
+  pool,
+  init,
+  getOrgForUser,
+  getOrgBySlug,
+  getOrgById,
+  listOrganizations
+};

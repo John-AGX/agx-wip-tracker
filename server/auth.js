@@ -79,7 +79,12 @@ function signToken(user) {
       // sub_id is only set for role='sub' users; carrying it in the
       // JWT means the portal endpoints can scope queries without an
       // extra users-table lookup on every request.
-      sub_id: user.sub_id || null
+      sub_id: user.sub_id || null,
+      // organization_id — multi-tenant scope key. Embedded in the
+      // JWT so every authed request has the tenant id without a
+      // round-trip. Null only for legacy tokens issued before the
+      // organizations table existed; those should re-login.
+      organization_id: user.organization_id || null
     },
     JWT_SECRET,
     { expiresIn: TOKEN_EXPIRY }
@@ -119,6 +124,42 @@ function requireAuth(req, res, next) {
   }
 }
 
+// Resolve the caller's organization. Handlers that need the org
+// (chat surfaces, per-tenant queries, etc.) call this. The function
+// trusts req.user.organization_id when present (set from the JWT at
+// login) and falls back to a DB read for legacy tokens issued
+// before the organizations table existed. Returns the full org row
+// or null if the user has no org (shouldn't happen after the boot
+// migration, but treat it as a 403/401-level bug).
+async function resolveUserOrg(req) {
+  if (!req || !req.user) return null;
+  if (req.user._cachedOrg) return req.user._cachedOrg;
+  let orgId = req.user.organization_id;
+  if (orgId == null && _pool) {
+    try {
+      const r = await _pool.query(
+        'SELECT organization_id FROM users WHERE id = $1',
+        [req.user.id]
+      );
+      if (r.rows.length) {
+        orgId = r.rows[0].organization_id;
+        req.user.organization_id = orgId;
+      }
+    } catch (e) { /* swallow — caller treats null as missing */ }
+  }
+  if (!orgId || !_pool) return null;
+  try {
+    const r = await _pool.query(
+      'SELECT * FROM organizations WHERE id = $1 AND archived_at IS NULL LIMIT 1',
+      [orgId]
+    );
+    req.user._cachedOrg = r.rows[0] || null;
+    return req.user._cachedOrg;
+  } catch (e) {
+    return null;
+  }
+}
+
 function requireRole(...roles) {
   return function(req, res, next) {
     if (!req.user) return res.status(401).json({ error: 'Not authenticated' });
@@ -135,7 +176,7 @@ function requireRole(...roles) {
 //   pm        — edit own jobs and jobs they're assigned to
 
 module.exports = {
-  signToken, requireAuth, requireRole, JWT_SECRET,
+  signToken, requireAuth, requireRole, resolveUserOrg, JWT_SECRET,
   // Roles / capabilities
   CAPABILITY_KEYS, setRolePool, refreshRoleCache, hasCapability, requireCapability
 };
