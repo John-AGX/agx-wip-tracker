@@ -3016,7 +3016,7 @@
   var _agentsConvKey = null;   // when drilled into one conversation
   var _agentsEvalId = null;    // when drilled into one eval's run history
   var _agentsEvalNew = false;  // when the new-eval fixture form is showing
-  var _previewAgent = 'ag';    // last-used agent in the prompt preview view
+  var _previewSurface = 'estimate'; // last-used surface in the prompt preview view
   var _previewEntityId = '';   // last-used entity id (estimate / job)
   var _batchJobId = null;      // when drilled into a single batch's results
 
@@ -3630,11 +3630,11 @@
       '</p>' +
       '<div style="display:flex;gap:10px;align-items:end;margin-bottom:14px;flex-wrap:wrap;">' +
         '<div><label style="display:block;font-size:11px;color:var(--text-dim,#888);margin-bottom:4px;">Surface</label>' +
-          '<select id="preview-agent" style="font-size:13px;padding:6px 10px;min-width:200px;">' +
-            '<option value="ag"' + (_previewAgent === 'ag' ? ' selected' : '') + '>Estimate context</option>' +
-            '<option value="elle"' + (_previewAgent === 'elle' ? ' selected' : '') + '>Job / WIP context</option>' +
-            '<option value="hr"' + (_previewAgent === 'hr' ? ' selected' : '') + '>Client Directory context</option>' +
-            '<option value="cos"' + (_previewAgent === 'cos' ? ' selected' : '') + '>Admin / cross-agent context</option>' +
+          '<select id="preview-surface" style="font-size:13px;padding:6px 10px;min-width:200px;">' +
+            '<option value="estimate"' + (_previewSurface === 'estimate' ? ' selected' : '') + '>Estimate context</option>' +
+            '<option value="job"'      + (_previewSurface === 'job'      ? ' selected' : '') + '>Job / WIP context</option>' +
+            '<option value="client"'   + (_previewSurface === 'client'   ? ' selected' : '') + '>Client Directory context</option>' +
+            '<option value="admin"'    + (_previewSurface === 'admin'    ? ' selected' : '') + '>Admin / cross-agent context</option>' +
           '</select></div>' +
         '<div style="flex:1;min-width:240px;"><label id="preview-entity-label" style="display:block;font-size:11px;color:var(--text-dim,#888);margin-bottom:4px;">Entity (estimate / job)</label>' +
           '<select id="preview-entity-id" style="font-size:13px;padding:6px 10px;width:100%;">' +
@@ -3644,22 +3644,22 @@
       '</div>' +
       '<div id="preview-result" style="font-size:12px;color:var(--text-dim,#888);font-style:italic;">Pick an agent + entity and click Assemble Prompt.</div>';
 
-    // Wire the agent select so the entity dropdown re-populates with
-    // estimates or jobs depending on the agent. HR + COS have no entity
-    // (system-wide) so the dropdown disables itself.
-    var agentSel = document.getElementById('preview-agent');
+    // Wire the surface select so the entity dropdown re-populates with
+    // estimates or jobs depending on the surface. Client + Admin are
+    // system-wide so the entity dropdown disables itself.
+    var surfaceSel = document.getElementById('preview-surface');
     var entitySel = document.getElementById('preview-entity-id');
     var entityLabel = document.getElementById('preview-entity-label');
-    function populateEntityList(agent) {
-      _previewAgent = agent;
-      if (agent === 'hr' || agent === 'cos') {
+    function populateEntityList(surface) {
+      _previewSurface = surface;
+      if (surface === 'client' || surface === 'admin') {
         entitySel.innerHTML = '<option value="">(system-wide — no entity)</option>';
         entitySel.disabled = true;
         entityLabel.textContent = 'Entity (n/a — assembles system-wide prompt)';
         return;
       }
       entitySel.disabled = false;
-      if (agent === 'ag') {
+      if (surface === 'estimate') {
         entityLabel.textContent = 'Entity — recent estimates';
         if (window.p86Api && window.p86Api.estimates && typeof window.p86Api.estimates.list === 'function') {
           window.p86Api.estimates.list().then(function(resp) {
@@ -3673,7 +3673,7 @@
               }).join('');
           }).catch(function() { entitySel.innerHTML = '<option value="">(failed to load estimates)</option>'; });
         }
-      } else if (agent === 'elle') {
+      } else if (surface === 'job') {
         entityLabel.textContent = 'Entity — recent jobs';
         if (window.p86Api && window.p86Api.jobs && typeof window.p86Api.jobs.list === 'function') {
           window.p86Api.jobs.list().then(function(resp) {
@@ -3689,27 +3689,27 @@
         }
       }
     }
-    if (agentSel) {
-      agentSel.addEventListener('change', function() { populateEntityList(agentSel.value); });
-      populateEntityList(_previewAgent);
+    if (surfaceSel) {
+      surfaceSel.addEventListener('change', function() { populateEntityList(surfaceSel.value); });
+      populateEntityList(_previewSurface);
     }
   }
 
   function loadPromptPreview() {
-    var agent = document.getElementById('preview-agent').value;
+    var surface = document.getElementById('preview-surface').value;
     var entityId = document.getElementById('preview-entity-id').value;
     var resultHost = document.getElementById('preview-result');
-    if (!agent) return;
-    if ((agent === 'ag' || agent === 'elle') && !entityId) {
+    if (!surface) return;
+    if ((surface === 'estimate' || surface === 'job') && !entityId) {
       resultHost.innerHTML = '<div style="color:#fbbf24;font-size:12px;">Pick an entity first.</div>';
       return;
     }
     _previewEntityId = entityId;
     resultHost.innerHTML = '<div style="color:var(--text-dim,#888);font-style:italic;font-size:12px;padding:14px 0;">Assembling…</div>';
 
-    var qs = '?agent=' + encodeURIComponent(agent);
-    if (agent === 'ag')   qs += '&estimate_id=' + encodeURIComponent(entityId);
-    if (agent === 'elle') qs += '&job_id=' + encodeURIComponent(entityId);
+    var qs = '?surface=' + encodeURIComponent(surface);
+    if (surface === 'estimate') qs += '&estimate_id=' + encodeURIComponent(entityId);
+    if (surface === 'job')      qs += '&job_id=' + encodeURIComponent(entityId);
 
     window.p86Api.get('/api/admin/agents/preview-prompt' + qs).then(function(data) {
       resultHost.innerHTML = renderPreviewPayload(data);

@@ -847,29 +847,43 @@ router.get('/sections', requireAuth, requireCapability('ROLES_MANAGE'), async (r
 });
 
 // GET /api/admin/agents/preview-prompt
-//   ?agent=ag|elle|hr|cos     — required. Which agent's system prompt to assemble.
-//   ?estimate_id=<id>         — required when agent=ag
-//   ?job_id=<id>              — required when agent=elle
+//   ?surface=estimate|job|client|admin   — required. Which surface
+//                                           context to assemble.
+//   ?estimate_id=<id>                    — required when surface=estimate
+//   ?job_id=<id>                         — required when surface=job
 //
-// Returns the EXACT system-prompt blocks the agent would see right
-// now if a chat turn were initiated against the supplied entity:
+// Returns the EXACT system-prompt blocks 86 would see right now if a
+// chat turn were initiated on the supplied surface. The legacy
+// `agent` query param + agent-name values (ag/elle/hr/cos) are still
+// accepted for back-compat — they map to surface values:
+//   ag   → estimate   elle → job
+//   hr   → client     cos  → admin
+//
+// Returns:
 //   - stable_prefix: cached playbook (identity / structure / tools /
 //     slotting / etc.) — token-counted so admin can see what % of the
 //     turn is cacheable.
 //   - dynamic_context: per-turn estimate / job / client data (refreshed
 //     each turn — never cached).
-//   - tools: list of tool names available to this agent in this phase.
-//   - skill_packs: which always-on packs from app_settings.agent_skills
-//     are loaded for this agent.
+//   - tools: list of tool names available on this surface in this phase.
+//   - skill_packs: which packs from app_settings.agent_skills appear
+//     in the manifest for this surface.
 //   - ai_phase: 'plan' | 'build' (when applicable).
 //
-// Read-only, no side effects on conversation history. Used by
-// Admin → Agents → Prompt Preview to show "what does AG actually see?"
+// Read-only, no side effects on conversation history.
 router.get('/preview-prompt', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
   try {
     const aiInternals = require('./ai-routes-internals');
     if (!aiInternals) throw new Error('ai-routes internals not available.');
-    const agent = String(req.query.agent || '').toLowerCase();
+    // Accept `surface` (canonical) or `agent` (legacy). Normalize legacy
+    // agent-name values to surface keys.
+    const rawSurface = String(req.query.surface || req.query.agent || '').toLowerCase();
+    const surface = ({
+      ag: 'estimate', estimate: 'estimate',
+      elle: 'job',   job: 'job',
+      hr: 'client',  cra: 'client', client: 'client',
+      cos: 'admin',  staff: 'admin', admin: 'admin'
+    })[rawSurface] || rawSurface;
     let systemBlocks = null;
     let toolNames = [];
     let aiPhase = null;
@@ -897,15 +911,15 @@ router.get('/preview-prompt', requireAuth, requireCapability('ROLES_MANAGE'), as
         .map(s => ({ name: s.name || '(untitled)', tokens: approxTokens(s.body) }));
     }
 
-    if (agent === 'ag') {
+    if (surface === 'estimate') {
       const estimateId = req.query.estimate_id;
-      if (!estimateId) return res.status(400).json({ error: 'estimate_id is required for agent=ag' });
+      if (!estimateId) return res.status(400).json({ error: 'estimate_id is required for surface=estimate' });
       const ctx = await aiInternals.buildEstimateContext(estimateId, false);
       systemBlocks = ctx.system;
       aiPhase = ctx.aiPhase;
       const toolList = aiInternals.estimateTools();
       // Plan-mode filter mirrors what the chat handler does so the
-      // preview shows the actual tool subset the agent would have.
+      // preview shows the actual tool subset 86 would have on this turn.
       const filtered = (aiPhase === 'plan')
         ? toolList.filter(t => [
             'web_search', 'propose_update_scope', 'propose_add_client_note',
@@ -916,12 +930,10 @@ router.get('/preview-prompt', requireAuth, requireCapability('ROLES_MANAGE'), as
       toolNames = filtered.map(t => t.name);
       const eRow = await pool.query("SELECT data->>'title' AS title FROM estimates WHERE id = $1", [estimateId]);
       entityLabel = eRow.rows.length ? (eRow.rows[0].title || estimateId) : estimateId;
-      // 86 unified: 'ag' agent_key was retired and migrated to 'job',
-      // so the estimate-context preview pulls packs from 'job'.
       skillPackNames = await loadPackNamesFor('job');
-    } else if (agent === 'elle' || agent === 'job') {
+    } else if (surface === 'job') {
       const jobId = req.query.job_id;
-      if (!jobId) return res.status(400).json({ error: 'job_id is required for agent=elle' });
+      if (!jobId) return res.status(400).json({ error: 'job_id is required for surface=job' });
       const ctx = await aiInternals.buildJobContext(jobId, '', null);
       systemBlocks = ctx.system;
       aiPhase = ctx.aiPhase;
@@ -937,20 +949,33 @@ router.get('/preview-prompt', requireAuth, requireCapability('ROLES_MANAGE'), as
       const jRow = await pool.query('SELECT data FROM jobs WHERE id = $1', [jobId]);
       entityLabel = jRow.rows.length ? ((jRow.rows[0].data && jRow.rows[0].data.title) || jobId) : jobId;
       skillPackNames = await loadPackNamesFor('job');
-    } else if (agent === 'hr' || agent === 'cra') {
+    } else if (surface === 'client') {
       const ctx = await aiInternals.buildClientDirectoryContext();
       systemBlocks = ctx.system;
       toolNames = aiInternals.clientTools().map(t => t.name);
       entityLabel = 'Client directory (system-wide)';
-      skillPackNames = await loadPackNamesFor('cra');
-    } else if (agent === 'cos' || agent === 'staff') {
+      // After the HR→86 absorb, client-context packs are tagged
+      // agent='job'. Old packs still tagged 'cra' show up too —
+      // Phase 1c retargeted them in the DB but we accept both keys
+      // here for any lingering legacy rows.
+      const jobPacks = await loadPackNamesFor('job');
+      const craPacks = await loadPackNamesFor('cra');
+      const seen = new Set();
+      skillPackNames = [...jobPacks, ...craPacks].filter(p => {
+        if (seen.has(p.name)) return false;
+        seen.add(p.name);
+        return true;
+      });
+    } else if (surface === 'admin') {
       const ctx = await aiInternals.buildStaffContext();
       systemBlocks = ctx.system;
+      // Admin surface uses 86's full tool union (CoS responsibilities
+      // were absorbed). Approx by listing the staff-side reads.
       toolNames = aiInternals.staffTools().map(t => t.name);
-      entityLabel = 'Chief of Staff (system-wide)';
-      skillPackNames = await loadPackNamesFor('staff');
+      entityLabel = 'Admin / cross-agent (system-wide)';
+      skillPackNames = await loadPackNamesFor('job');
     } else {
-      return res.status(400).json({ error: 'agent must be one of: ag, elle, hr, cos' });
+      return res.status(400).json({ error: 'surface must be one of: estimate, job, client, admin' });
     }
 
     // System blocks come back as an array — first is stable (cached),
@@ -968,7 +993,7 @@ router.get('/preview-prompt', requireAuth, requireCapability('ROLES_MANAGE'), as
     }
 
     res.json({
-      agent: agent,
+      surface: surface,
       entity: { label: entityLabel },
       ai_phase: aiPhase,
       stable_prefix: { text: stable, tokens: approxTokens(stable) },
