@@ -1,7 +1,7 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
-const { pool } = require('../db');
-const { signToken, requireAuth, requireRole } = require('../auth');
+const { pool, getOrgById } = require('../db');
+const { signToken, requireAuth, requireRole, resolveUserOrg } = require('../auth');
 
 const router = express.Router();
 
@@ -37,7 +37,24 @@ router.post('/logout', (req, res) => {
 });
 
 // GET /api/auth/me
-router.get('/me', requireAuth, (req, res) => {
+router.get('/me', requireAuth, async (req, res) => {
+  // Resolve the caller's organization so the frontend can show
+  // "Logged into AGX" and use the slug for any per-org navigation.
+  // Doesn't fail the response if the lookup errors — /me has to
+  // stay functional even if the org row is briefly unreachable.
+  let organization = null;
+  try {
+    const org = await resolveUserOrg(req);
+    if (org) {
+      organization = {
+        id: org.id,
+        slug: org.slug,
+        name: org.name,
+        description: org.description
+      };
+    }
+  } catch (_) { /* keep going */ }
+
   // Surface server-side feature flags to the client so the UI can flip
   // experimental code paths without a redeploy. Read from env on every
   // request so flipping a Railway env var takes effect immediately
@@ -59,7 +76,7 @@ router.get('/me', requireAuth, (req, res) => {
     // flow now, so the "🧲 New Lead with AI" entry point gates on
     // agent_mode_job (= AGENT_MODE_86) rather than a separate flag.
   };
-  res.json({ user: req.user, feature_flags: featureFlags });
+  res.json({ user: req.user, organization: organization, feature_flags: featureFlags });
 });
 
 // POST /api/auth/register (admin only)
