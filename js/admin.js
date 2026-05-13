@@ -3626,15 +3626,15 @@
     if (!host) return;
     host.innerHTML =
       '<p style="margin:0 0 14px 0;color:var(--text-dim,#888);font-size:12px;">' +
-        'Assemble the live system prompt an agent would see for a given entity. Lets you spot wasted tokens, confirm the skill-pack manifest is rendering, and verify which tools the agent has access to in plan vs. build mode.' +
+        'Assemble the live system prompt 86 would see for a given surface + entity. Lets you spot wasted tokens, confirm the skill-pack manifest is rendering, and verify which tools 86 has access to in plan vs. build mode.' +
       '</p>' +
       '<div style="display:flex;gap:10px;align-items:end;margin-bottom:14px;flex-wrap:wrap;">' +
-        '<div><label style="display:block;font-size:11px;color:var(--text-dim,#888);margin-bottom:4px;">Agent</label>' +
-          '<select id="preview-agent" style="font-size:13px;padding:6px 10px;min-width:160px;">' +
-            '<option value="ag"' + (_previewAgent === 'ag' ? ' selected' : '') + '>86 (estimating context)</option>' +
-            '<option value="elle"' + (_previewAgent === 'elle' ? ' selected' : '') + '>86 (analyst)</option>' +
-            '<option value="hr"' + (_previewAgent === 'hr' ? ' selected' : '') + '>HR (clients + user health)</option>' +
-            '<option value="cos"' + (_previewAgent === 'cos' ? ' selected' : '') + '>Chief of Staff</option>' +
+        '<div><label style="display:block;font-size:11px;color:var(--text-dim,#888);margin-bottom:4px;">Surface</label>' +
+          '<select id="preview-agent" style="font-size:13px;padding:6px 10px;min-width:200px;">' +
+            '<option value="ag"' + (_previewAgent === 'ag' ? ' selected' : '') + '>Estimate context</option>' +
+            '<option value="elle"' + (_previewAgent === 'elle' ? ' selected' : '') + '>Job / WIP context</option>' +
+            '<option value="hr"' + (_previewAgent === 'hr' ? ' selected' : '') + '>Client Directory context</option>' +
+            '<option value="cos"' + (_previewAgent === 'cos' ? ' selected' : '') + '>Admin / cross-agent context</option>' +
           '</select></div>' +
         '<div style="flex:1;min-width:240px;"><label id="preview-entity-label" style="display:block;font-size:11px;color:var(--text-dim,#888);margin-bottom:4px;">Entity (estimate / job)</label>' +
           '<select id="preview-entity-id" style="font-size:13px;padding:6px 10px;width:100%;">' +
@@ -4122,8 +4122,8 @@
   function loadAgentSkillAssignments() {
     var host = document.getElementById('agent-skill-assignments-panel');
     if (!host) return;
-    var labels = { job: '86 (Operator)', cra: 'HR', staff: 'Chief of Staff' };
-    var agents = ['job', 'cra', 'staff'];
+    var labels = { job: '86' };
+    var agents = ['job'];
     var header = '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">' +
       '<span style="font-size:18px;">🔗</span>' +
       '<h3 style="margin:0;font-size:14px;font-weight:600;color:var(--text,#fff);">Native Skill Assignments (per agent)</h3>' +
@@ -4216,8 +4216,8 @@
       var rows = (resp && resp.agents) || [];
       // Intake is no longer a separate managed agent — 86 owns the
       // lead-intake flow. Only four agents register on the Anthropic side.
-      var labels = { ag: '86 (Estimator context — back-compat key)', job: '86 (Operator — incl. intake)', cra: 'HR (clients, jobs, subs, users)', staff: 'Chief of Staff' };
-      var activeKeys = ['job', 'cra', 'staff'];
+      var labels = { job: '86 (unified operator agent — every surface)' };
+      var activeKeys = ['job'];
       var registered = {};
       rows.forEach(function(r) { registered[r.agent_key] = r; });
       // Stale rows — registered keys that aren't in the current set
@@ -4738,7 +4738,7 @@
   var _overridableSections = { ag: [], job: [], cra: [], staff: [] };
 
   function fetchOverridableSections() {
-    var agentKeys = ['job', 'cra', 'staff'];
+    var agentKeys = ['job'];
     return Promise.all(agentKeys.map(function(a) {
       return window.p86Api.get('/api/admin/agents/sections?agent=' + a)
         .then(function(r) { _overridableSections[a] = (r && r.sections) || []; })
