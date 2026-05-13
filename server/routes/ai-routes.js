@@ -9216,6 +9216,12 @@ router.post('/86/chat', requireAuth, async (req, res) => {
       } else if (cctxEntityType === 'client') {
         const ctx = await buildClientDirectoryContext();
         turnContextText = ctxDynamicText(ctx.system);
+      } else if (cctxEntityType === 'staff' || cctxEntityType === 'admin') {
+        // Admin / Chief-of-Staff context — 86 absorbed the CoS role.
+        // buildStaffContext returns the cross-agent observability
+        // snapshot (metrics, recent conversations, skill packs).
+        const ctx = await buildStaffContext();
+        turnContextText = ctxDynamicText(ctx.system);
       }
     } catch (e) {
       console.warn('[/86/chat] per-entity context build skipped:', e.message);

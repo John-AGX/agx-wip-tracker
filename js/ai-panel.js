@@ -111,30 +111,11 @@
     return !!(u && u.feature_flags && u.feature_flags.agent_mode_staff === 'agents');
   }
   function apiBase() {
-    // UNIFIED 86 — every 86 surface (ask86 global, per-estimate,
-    // per-job WIP, lead intake) routes to /api/ai/86. The endpoint
+    // UNIFIED 86 — every surface routes to /api/ai/86. The endpoint
     // accepts current_context describing which entity is open;
-    // server-side it loads the same per-turn snapshot the legacy
-    // per-entity endpoints used to build, but ONE conversation
-    // thread per user persists across pages — true cross-surface
-    // continuity. HR still uses its own surface today (cra agent
-    // is its own brain), so 'client' / 'staff' stay on their legacy
-    // routes.
-    if (_entityType === 'job'
-      || _entityType === 'estimate'
-      || _entityType === 'intake'
-      || _entityType === 'ask86') {
-      return '/api/ai/86';
-    }
-    if (_entityType === 'client') {
-      var v2c = isCraAgentMode() ? '/v2' : '';
-      return '/api/ai' + v2c + '/clients';
-    }
-    if (_entityType === 'staff') {
-      var v2s = isStaffAgentMode() ? '/v2' : '';
-      return '/api/ai' + v2s + '/staff';
-    }
-    // Fallback (no entity_type set yet) — global 86 surface.
+    // server-side it loads the appropriate per-turn snapshot (estimate,
+    // job WIP, intake bucket, client directory, admin/CoS metrics). ONE
+    // conversation thread per user persists across pages.
     return '/api/ai/86';
   }
   function isEstimateMode() { return _entityType === 'estimate'; }
@@ -238,18 +219,9 @@
   // closing + reopening a job's chat panel always loads the prior
   // conversation, even when AGENT_MODE_86=agents.
   function messagesApiBase() {
-    // Unified 86 — every 86 surface reads from the same conversation
-    // thread (entity_type='86' in ai_messages). Opening any entity
-    // panel shows the SAME rolling history you'd see on Ask 86.
-    // HR / CoS still have their own threads.
-    if (_entityType === 'job'
-      || _entityType === 'estimate'
-      || _entityType === 'intake'
-      || _entityType === 'ask86') {
-      return '/api/ai/86';
-    }
-    if (_entityType === 'client') return '/api/ai/clients';
-    if (_entityType === 'staff') return '/api/ai/staff';
+    // Unified 86 — every surface reads from the same conversation
+    // thread (entity_type='86' in ai_messages). One rolling history
+    // across estimate / job / intake / client / admin / ask86.
     return '/api/ai/86';
   }
 

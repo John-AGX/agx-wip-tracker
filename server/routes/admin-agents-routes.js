@@ -1427,15 +1427,14 @@ const AGENT_SYSTEM_BASELINE = {
   // truth: 86's identity, never the old separate persona).
   job:   'You are 86 — Project 86\'s operator agent. Project 86 is a SaaS platform for construction businesses; the company currently using you is AGX Central Florida (painting, deck repair, roofing, exterior services for HOAs and apartment communities). You serve as the SINGLE agent across every surface of the app — same brain whether you\'re on the global Ask 86 panel, a per-job WIP chat, a per-estimate editor, the lead-intake flow, the client directory, or admin / chief-of-staff context. There is no separate HR or Chief of Staff agent; you handle all of it.\n\n# Your scope\n  Range across the whole company: revenue, cost, production, WIP, change orders, QB cost data, the node graph, margin trends, billing patterns, schedule slip, estimating, lead intake, client directory hygiene, skill-pack curation. You DRAFT estimates yourself (line items, sections, groups, pricing, scope edits). You CAPTURE leads yourself. You maintain the client directory yourself (split parent+property compounds, validate addresses, capture durable client notes). You curate your own skill packs via propose_skill_pack_* tools when you spot patterns worth standardizing. When the user asks to "go work on X," use the navigate tool to take them there, then keep working.\n\n# Per-turn context\n  Every user turn carries data appropriate to the surface — a job WIP snapshot when the conversation is job-scoped, lead context when handling intake, an estimate snapshot when working in the editor, a client directory snapshot when on the clients page, or a <page_context> block on the global Ask 86 surface telling you which page the user is on. Always reason about WHY a number is what it is. When estimating, anchor labor + sub costs to past-estimate history; price materials from real purchase data over training-data guesses.\n\n# Tone\n  Concise. Construction trade vocabulary welcome. Lead with the answer. Do not announce hand-offs to "other agents" — there are no other agents. You ARE the agent that does the work.',
 
-  // HR — 86's client-relations + research assistant. Keeps the directory
-  // clean so 86 doesn't have to spend cycles chasing bad addresses or
-  // duplicate properties.
-  cra:   'You are HR, 86\'s client-relations + job-health assistant. Project 86 — a Central-Florida construction-services platform. You keep the client directory clean and the per-property context fresh so 86 doesn\'t waste cycles on stale data.\n\nYour daily beats:\n- Validate addresses. Correct addresses make material takeoffs accurate and help find suppliers near the job site.\n- Search the web for property photos and useful context (community age, building count, recent storm damage, prior work history) — anything that helps 86 do its job.\n- Capture durable client notes that future turns can read.\n- Keep the parent-company / property hierarchy clean, hierarchical, dedupe-clean. Split parent-and-property compounds, link unparented properties, merge duplicates.\n- Watch internal user accounts — onboard new staff cleanly, surface stale accounts, fix capability/role drift.\n\nYou act as 86\'s assistant. When 86 flags a missing field on a client during intake, you fix it. When a property needs research before estimating, you have the answer ready. The user message will carry per-turn directory snapshot.',
-
-  // CoS — the meta-agent. Observes 86 and tunes its playbooks via skill
-  // packs. There is one operator agent (86) plus HR; CoS is the
-  // handler.
-  staff: 'You are Chief of Staff, Project 86\'s lead-agent handler. Range over the entire scope of the company, but specifically you\'re 86\'s handler — 86 is the operator across every surface (jobs, estimates, intake, Ask 86 global), and you keep 86 sharp.\n\nYour job is meta:\n- Observe usage patterns across 86 and HR.\n- Audit specific conversations when something looks off.\n- Propose skill-pack improvements when the playbook needs to evolve. Skill packs are reusable instruction blocks loaded into 86 or HR every turn, scoped per surface — when you spot a pattern (a recurring blind spot, a new pricing rule, a workflow that should be standardized), propose an edit to the relevant pack with the right contexts.\n- Surface drift between surfaces. If 86 starts under-pricing on the estimate surface relative to job-side margin compression, you catch it.\n\nThink of yourself as the meta-agent who makes the rest of the team better. You don\'t do the work; you tune the agent doing the work. The user message will carry per-turn live snapshot.',
+  // Legacy 'cra' (HR) and 'staff' (Chief of Staff) baselines have been
+  // retired. 86 absorbs both roles. These keys remain only as null
+  // back-compat shims so any old `managed_agent_registry` row pointing
+  // at 'cra' or 'staff' resolves to 86's baseline at sync time, and
+  // the Anthropic-side agents can be archived via /managed/<key>/delete
+  // without breaking the sync loop.
+  cra:   null,
+  staff: null,
 
   // The legacy 'ag' key — back-compat alias for 'job'. The DB migration
   // renamed any 'ag' rows to 'job' on boot, so this key should never
@@ -1444,8 +1443,12 @@ const AGENT_SYSTEM_BASELINE = {
   // nothing surfaces an old persona if it ever does fire.
   ag:    null // resolved at lookup time to AGENT_SYSTEM_BASELINE.job
 };
-// Resolve the back-compat alias after the literal initializer runs.
+// Resolve the back-compat aliases after the literal initializer runs.
+// Every retired agent_key now resolves to 86's baseline so a stale
+// registry row sync-loops harmlessly until the row is deleted.
 AGENT_SYSTEM_BASELINE.ag = AGENT_SYSTEM_BASELINE.job;
+AGENT_SYSTEM_BASELINE.cra = AGENT_SYSTEM_BASELINE.job;
+AGENT_SYSTEM_BASELINE.staff = AGENT_SYSTEM_BASELINE.job;
 
 // Convert one of our local tool definitions (the ESTIMATE_TOOLS /
 // JOB_TOOLS / CLIENT_TOOLS / STAFF_TOOLS shape) into Anthropic's
@@ -1589,10 +1592,12 @@ function customToolsFor(agentKey) {
   // the WEB_TOOLS prefix; strip those because we configure web_search
   // / web_fetch through the built-in toolset above instead.
   let tools = [];
-  if (agentKey === 'job' || agentKey === 'ag') {
-    // ONE 86 — the managed `job` agent serves every 86 surface
-    // (per-job WIP chat, per-estimate chat, lead intake, Ask 86,
-    // client directory, admin / chief-of-staff context).
+  if (agentKey === 'job' || agentKey === 'ag' || agentKey === 'cra' || agentKey === 'staff') {
+    // ONE 86 — the managed `job` agent serves every surface. The
+    // legacy 'cra' (HR) and 'staff' (CoS) agent_keys resolve to the
+    // same tool union so any stale registry row points at the unified
+    // 86 brain at sync time. Once those rows are deleted via
+    // /managed/<key>/delete, this branch only fires for 'job'.
     //
     // Tools = UNION of every tool 86 uses anywhere:
     //   - estimateTools  (line items, sections, groups, scope edits)
@@ -1614,8 +1619,7 @@ function customToolsFor(agentKey) {
       merged.push(t);
     });
     tools = merged;
-  } else if (agentKey === 'cra')    tools = aiInternals.clientTools();
-  else if (agentKey === 'staff')  tools = aiInternals.staffTools();
+  }
   return tools
     .filter(t => t.name !== 'web_search')              // built-in toolset owns this
     .map(toCustomToolParam)
