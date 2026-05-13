@@ -1016,8 +1016,17 @@
                              #admin-subtab-email-templates that lives inside the templates pane. -->
 
                         <button class="ws-right-tab" data-admin-subtab="agents" data-p86-icon="discord" onclick="switchAdminSubTab('agents')">Agents</button>
+                        <button class="ws-right-tab" data-admin-subtab="organization" data-p86-icon="briefcase" onclick="switchAdminSubTab('organization')">Organization</button>
                         <button class="ws-right-tab" data-admin-subtab="sms" data-p86-icon="conversations" onclick="switchAdminSubTab('sms')">SMS</button>
                         <span class="p86-ask86-mount" style="margin-left:auto;"></span>
+                    </div>
+
+                    <!-- Organization sub-tab — per-tenant settings: identity_body
+                         that gets composed into 86's system prompt, plus the
+                         per-org skill packs editor. Replaces the legacy
+                         Templates → Skills editor for non-section packs. -->
+                    <div id="admin-subtab-organization" class="admin-subtab-content" style="display:none;">
+                        <div id="admin-organization-content"></div>
                     </div>
 
                     <!-- Users sub-tab -->
@@ -2282,7 +2291,7 @@
     <script src="js/attachments.js?v=11b"></script>
     <script src="js/markup-viewer.js?v=17b"></script>
     <script src="js/pdf-viewer.js?v=3b"></script>
-    <script src="js/admin.js?v=77g"></script>
+    <script src="js/admin.js?v=77h"></script>
     <script src="js/field-tools.js?v=2b"></script>
     <script src="js/clients.js?v=16b"></script>
     <script src="js/subs.js?v=8b"></script>

@@ -1041,6 +1041,7 @@
     else if (name === 'materials') renderAdminMaterials();
     else if (name === 'email') renderAdminEmail();
     else if (name === 'agents') renderAdminAgents();
+    else if (name === 'organization') renderAdminOrganization();
     else if (name === 'sms') renderAdminSms();
     // 'email-templates' moved into Templates → Email; if a saved nav state
     // points at the old top-level tab, reroute to templates.
@@ -3019,6 +3020,282 @@
   var _previewSurface = 'estimate'; // last-used surface in the prompt preview view
   var _previewEntityId = '';   // last-used entity id (estimate / job)
   var _batchJobId = null;      // when drilled into a single batch's results
+
+  // ──────────────────────── Organization admin tab ─────────────────
+  // Two stacked sections: (1) Identity — name/description/identity_body
+  // editor that drives 86's composed system prompt; (2) Skill Packs —
+  // CRUD for org_skill_packs. Both read/write through the new
+  // /api/admin/organizations endpoints. Save → sync the managed
+  // agent so changes reach Anthropic.
+  var _orgDraft = null;          // currently-loaded organization row (clone)
+  var _orgPacksDraft = null;     // currently-loaded org_skill_packs rows (clones)
+  var _orgPacksDirty = new Set();// pack ids with unsaved changes
+
+  function renderAdminOrganization() {
+    var host = document.getElementById('admin-organization-content');
+    if (!host) return;
+    host.innerHTML = '<div style="color:var(--text-dim,#888);font-style:italic;font-size:12px;padding:20px 0;">Loading organization…</div>';
+    Promise.all([
+      window.p86Api.get('/api/admin/organizations/me'),
+      window.p86Api.get('/api/admin/organizations/me').then(function(r) {
+        return window.p86Api.get('/api/admin/organizations/' + r.organization.id + '/skill-packs');
+      })
+    ]).then(function(results) {
+      _orgDraft = Object.assign({}, results[0].organization);
+      _orgPacksDraft = (results[1].skill_packs || []).map(function(p) { return Object.assign({}, p); });
+      _orgPacksDirty = new Set();
+      host.innerHTML = renderOrgHTML();
+      attachOrgHandlers();
+    }).catch(function(err) {
+      host.innerHTML = '<div style="color:#e74c3c;padding:14px 0;">Failed to load organization: ' + escapeHTML(err.message || 'unknown') + '</div>';
+    });
+  }
+  window.renderAdminOrganization = renderAdminOrganization;
+
+  function renderOrgHTML() {
+    var o = _orgDraft || {};
+    var packs = _orgPacksDraft || [];
+    return ''
+      + '<div style="margin:0 0 14px 0;padding:12px 14px;background:rgba(79,140,255,0.05);border:1px solid rgba(79,140,255,0.20);border-radius:8px;font-size:12px;line-height:1.55;color:var(--text-dim,#aaa);">'
+      +   '<div style="font-weight:600;color:#4f8cff;margin-bottom:4px;">&#x1F3E2; Organization settings</div>'
+      +   'Each tenant in Project 86 has its own identity, skill packs, and managed Anthropic agent. '
+      +   '<strong>Identity</strong> below feeds into 86\'s composed system prompt at registration / sync time. '
+      +   '<strong>Skill packs</strong> are on-demand instruction blocks 86 calls via load_skill_pack({name}).'
+      + '</div>'
+
+      // ── Identity ──
+      + '<fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:14px;margin-bottom:18px;">'
+      +   '<legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Identity</legend>'
+      +   '<div style="display:grid;grid-template-columns:120px 1fr;gap:10px 12px;align-items:center;font-size:12px;">'
+      +     '<label>Slug</label>'
+      +     '<input type="text" value="' + escapeAttr(o.slug || '') + '" readonly style="background:rgba(255,255,255,0.04);font-family:\'SF Mono\',monospace;" title="Read-only — set at org creation time" />'
+      +     '<label>Name</label>'
+      +     '<input id="org-name" type="text" value="' + escapeAttr(o.name || '') + '" maxlength="200" />'
+      +     '<label>Description</label>'
+      +     '<input id="org-description" type="text" value="' + escapeAttr(o.description || '') + '" placeholder="Short blurb — shown on the agent\'s description field" />'
+      +   '</div>'
+      +   '<div style="margin-top:14px;font-size:12px;">'
+      +     '<label style="display:block;margin-bottom:4px;color:var(--text-dim,#aaa);">Identity body — admin-editable prose composed into 86\'s registered system prompt'
+      +     '</label>'
+      +     '<textarea id="org-identity-body" rows="16" style="width:100%;font-family:\'SF Mono\',ui-monospace,monospace;font-size:12px;line-height:1.5;resize:vertical;" placeholder="# About the company you serve&#10;You are working for ___ &mdash; describe their industry, standards, market, customer hierarchy here.">' + escapeHTML(o.identity_body || '') + '</textarea>'
+      +     '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:6px;line-height:1.5;">'
+      +       'This text appears in 86\'s registered system prompt right after the platform-identity baseline. Use it to define the COMPANY\'S identity (standards, markets, customer hierarchy) — not 86\'s identity. After saving, click <strong>Sync managed agent</strong> to push the new system prompt to Anthropic so 86 picks it up on the next chat.'
+      +     '</div>'
+      +   '</div>'
+      +   '<div style="display:flex;gap:8px;margin-top:14px;align-items:center;">'
+      +     '<span id="org-identity-status" style="flex:1;font-size:11px;color:var(--text-dim,#888);"></span>'
+      +     '<button class="ee-btn secondary" onclick="renderAdminOrganization()">Discard</button>'
+      +     '<button class="ee-btn primary" onclick="saveOrgIdentity()">&#x1F4BE; Save identity</button>'
+      +     '<button class="ee-btn" onclick="syncOrgAgent()" title="Push the updated identity_body + skill packs to the registered Anthropic agent" style="background:linear-gradient(135deg,#4f8cff,#7c3aed);color:#fff;border:none;font-weight:600;">&#x1F4E1; Sync managed agent</button>'
+      +   '</div>'
+      + '</fieldset>'
+
+      // ── Skill packs ──
+      + '<fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:14px;">'
+      +   '<legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Skill packs (' + packs.length + ')</legend>'
+      +   '<p style="margin:0 0 12px 0;font-size:12px;color:var(--text-dim,#888);line-height:1.55;">'
+      +     'On-demand instruction blocks. 86 sees the list of pack names in his per-turn manifest and calls <code>load_skill_pack({name})</code> to pull a body when a pack maps to the work he\'s doing. No always-on injection.'
+      +   '</p>'
+      +   '<div id="org-packs-list">' + renderOrgPacksHTML() + '</div>'
+      +   '<div style="display:flex;gap:8px;margin-top:14px;align-items:center;">'
+      +     '<span id="org-packs-status" style="flex:1;font-size:11px;color:var(--text-dim,#888);"></span>'
+      +     '<button class="ee-btn secondary" onclick="addOrgPack()">&#x2795; New pack</button>'
+      +     '<button class="ee-btn primary" onclick="saveOrgPacks()">&#x1F4BE; Save changed packs</button>'
+      +   '</div>'
+      + '</fieldset>';
+  }
+
+  function renderOrgPacksHTML() {
+    var packs = _orgPacksDraft || [];
+    if (!packs.length) {
+      return '<div style="padding:14px;text-align:center;color:var(--text-dim,#888);border:1px dashed var(--border,#333);border-radius:6px;font-size:12px;">'
+        + 'No skill packs yet. Click <strong>+ New pack</strong> below.'
+        + '</div>';
+    }
+    return packs.map(function(p, idx) {
+      var agents = Array.isArray(p.agents) ? p.agents : [];
+      var contexts = Array.isArray(p.contexts) ? p.contexts : [];
+      var isDirty = _orgPacksDirty.has(p.id || ('new:' + idx));
+      var dirtyBadge = isDirty
+        ? '<span style="display:inline-block;padding:1px 6px;border-radius:8px;background:rgba(251,191,36,0.15);color:#fbbf24;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;">Unsaved</span>'
+        : '';
+      var mirrorChip = p.anthropic_skill_id
+        ? '<span style="display:inline-flex;align-items:center;gap:4px;background:rgba(52,211,153,0.12);color:#34d399;font-size:10px;padding:2px 8px;border-radius:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;" title="Mirrored to Anthropic: ' + escapeAttr(p.anthropic_skill_id) + '">&#x1F310; Mirrored</span>'
+        : '';
+      return ''
+        + '<div data-org-pack-idx="' + idx + '" style="border:1px solid ' + (isDirty ? 'rgba(251,191,36,0.4)' : 'var(--border,#333)') + ';border-radius:6px;padding:10px 12px;margin-bottom:10px;background:rgba(255,255,255,0.015);">'
+        +   '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">'
+        +     '<input type="text" data-pack-field="name" value="' + escapeAttr(p.name || '') + '" placeholder="Pack name" style="flex:1;font-weight:600;" />'
+        +     dirtyBadge + ' ' + mirrorChip
+        +     '<button class="ee-btn ee-icon-btn danger" onclick="deleteOrgPack(' + idx + ')" title="Soft-delete (sets archived_at)">&#x1F5D1;</button>'
+        +   '</div>'
+        +   '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;font-size:11px;color:var(--text-dim,#aaa);">'
+        +     '<div><label style="display:block;margin-bottom:3px;">Description</label>'
+        +       '<input type="text" data-pack-field="description" value="' + escapeAttr(p.description || '') + '" placeholder="Short label shown in the per-turn manifest" /></div>'
+        +     '<div><label style="display:block;margin-bottom:3px;">Category</label>'
+        +       '<input type="text" data-pack-field="category" value="' + escapeAttr(p.category || '') + '" placeholder="(optional)" /></div>'
+        +   '</div>'
+        +   '<div style="display:flex;gap:16px;margin-bottom:8px;font-size:11px;color:var(--text-dim,#aaa);">'
+        +     '<div><label style="display:block;margin-bottom:3px;">Contexts (which surfaces show this in the manifest)</label>'
+        +       ['estimate','job','intake','ask86','client'].map(function(c) {
+                var checked = contexts.indexOf(c) >= 0 ? 'checked' : '';
+                return '<label style="display:inline-flex;align-items:center;gap:3px;margin-right:10px;cursor:pointer;text-transform:none;font-weight:400;letter-spacing:normal;">'
+                  + '<input type="checkbox" data-pack-context="' + c + '" ' + checked + ' style="margin:0;" /> ' + c
+                  + '</label>';
+              }).join('')
+        +     '</div>'
+        +   '</div>'
+        +   '<textarea data-pack-field="body" rows="6" style="width:100%;font-family:\'SF Mono\',ui-monospace,monospace;font-size:12px;line-height:1.5;resize:vertical;" placeholder="Pack body — what 86 sees when he calls load_skill_pack on this pack.">' + escapeHTML(p.body || '') + '</textarea>'
+        + '</div>';
+    }).join('');
+  }
+
+  function attachOrgHandlers() {
+    // Mark identity inputs as dirty on change (visual only — actual save
+    // is on the button click). Light touch — no state tracking yet.
+    // Pack inputs: mark the row's id dirty when any field changes.
+    document.querySelectorAll('[data-org-pack-idx]').forEach(function(row) {
+      var idx = Number(row.getAttribute('data-org-pack-idx'));
+      var pack = _orgPacksDraft && _orgPacksDraft[idx];
+      if (!pack) return;
+      function markDirty() {
+        var key = pack.id || ('new:' + idx);
+        if (!_orgPacksDirty.has(key)) {
+          _orgPacksDirty.add(key);
+          // Re-render the dirty badge without losing focus by toggling the
+          // border color on the row. Cheap visual cue.
+          row.style.borderColor = 'rgba(251,191,36,0.4)';
+        }
+      }
+      row.querySelectorAll('input[data-pack-field], textarea[data-pack-field], input[data-pack-context]').forEach(function(el) {
+        el.addEventListener('input', markDirty);
+        el.addEventListener('change', markDirty);
+      });
+    });
+  }
+
+  function syncPackFromInputs(idx) {
+    var row = document.querySelector('[data-org-pack-idx="' + idx + '"]');
+    if (!row) return null;
+    var pack = _orgPacksDraft[idx];
+    pack.name = (row.querySelector('[data-pack-field="name"]') || {}).value || '';
+    pack.body = (row.querySelector('[data-pack-field="body"]') || {}).value || '';
+    pack.description = (row.querySelector('[data-pack-field="description"]') || {}).value || '';
+    pack.category = (row.querySelector('[data-pack-field="category"]') || {}).value || null;
+    pack.contexts = [];
+    row.querySelectorAll('[data-pack-context]').forEach(function(el) {
+      if (el.checked) pack.contexts.push(el.getAttribute('data-pack-context'));
+    });
+    // agents stays as-is for now — UI doesn't expose it (always 'job').
+    if (!Array.isArray(pack.agents) || !pack.agents.length) pack.agents = ['job'];
+    return pack;
+  }
+
+  window.saveOrgIdentity = function() {
+    if (!_orgDraft || !_orgDraft.id) return;
+    var name = document.getElementById('org-name').value.trim();
+    var description = document.getElementById('org-description').value;
+    var identityBody = document.getElementById('org-identity-body').value;
+    var status = document.getElementById('org-identity-status');
+    if (status) { status.textContent = 'Saving…'; status.style.color = 'var(--text-dim,#888)'; }
+    window.p86Api.put('/api/admin/organizations/' + _orgDraft.id, {
+      name: name, description: description, identity_body: identityBody
+    }).then(function(resp) {
+      if (resp && resp.organization) _orgDraft = resp.organization;
+      if (status) { status.textContent = 'Saved. Click "Sync managed agent" to push to Anthropic.'; status.style.color = '#34d399'; }
+    }).catch(function(err) {
+      if (status) { status.textContent = 'Save failed: ' + (err.message || 'unknown'); status.style.color = '#f87171'; }
+    });
+  };
+
+  window.syncOrgAgent = function() {
+    var status = document.getElementById('org-identity-status');
+    if (status) { status.textContent = 'Syncing managed agent…'; status.style.color = 'var(--text-dim,#888)'; }
+    window.p86Api.post('/api/admin/agents/managed/sync-all', {}).then(function(resp) {
+      var rows = (resp && resp.summary) || [];
+      var ok = rows.filter(function(r) { return r.ok; }).length;
+      if (status) {
+        status.textContent = 'Synced ' + ok + '/' + rows.length + ' agents. ' +
+          rows.map(function(r) {
+            return r.agent_key + ': v' + r.previous_version + '→v' + r.new_version + ' (' + r.tool_count + ' tools)';
+          }).join(' · ');
+        status.style.color = '#34d399';
+      }
+    }).catch(function(err) {
+      if (status) { status.textContent = 'Sync failed: ' + (err.message || 'unknown'); status.style.color = '#f87171'; }
+    });
+  };
+
+  window.addOrgPack = function() {
+    if (!_orgPacksDraft) _orgPacksDraft = [];
+    _orgPacksDraft.push({
+      id: null, name: '', body: '', description: '', agents: ['job'], contexts: ['estimate'], category: null, triggers: {}
+    });
+    _orgPacksDirty.add('new:' + (_orgPacksDraft.length - 1));
+    document.getElementById('org-packs-list').innerHTML = renderOrgPacksHTML();
+    attachOrgHandlers();
+  };
+
+  window.deleteOrgPack = function(idx) {
+    var pack = _orgPacksDraft && _orgPacksDraft[idx];
+    if (!pack) return;
+    if (!confirm('Delete skill pack "' + (pack.name || '(unnamed)') + '"?\n\nSoft-deletes — sets archived_at on the row. Name becomes available for re-use immediately.')) return;
+    if (!pack.id) {
+      // Never-saved row — just remove from draft
+      _orgPacksDraft.splice(idx, 1);
+      document.getElementById('org-packs-list').innerHTML = renderOrgPacksHTML();
+      attachOrgHandlers();
+      return;
+    }
+    window.p86Api.del('/api/admin/organizations/' + _orgDraft.id + '/skill-packs/' + pack.id).then(function() {
+      _orgPacksDraft.splice(idx, 1);
+      document.getElementById('org-packs-list').innerHTML = renderOrgPacksHTML();
+      attachOrgHandlers();
+      var status = document.getElementById('org-packs-status');
+      if (status) { status.textContent = 'Deleted.'; status.style.color = '#34d399'; }
+    }).catch(function(err) {
+      alert('Delete failed: ' + (err.message || 'unknown'));
+    });
+  };
+
+  window.saveOrgPacks = function() {
+    if (!_orgPacksDraft || !_orgDraft) return;
+    var status = document.getElementById('org-packs-status');
+    if (status) { status.textContent = 'Saving…'; status.style.color = 'var(--text-dim,#888)'; }
+    // Sync all dirty rows from their inputs to the in-memory draft first.
+    _orgPacksDraft.forEach(function(_, idx) { syncPackFromInputs(idx); });
+    var dirtyIdxs = [];
+    _orgPacksDraft.forEach(function(p, idx) {
+      var key = p.id || ('new:' + idx);
+      if (_orgPacksDirty.has(key)) dirtyIdxs.push(idx);
+    });
+    if (!dirtyIdxs.length) {
+      if (status) { status.textContent = 'Nothing changed.'; status.style.color = 'var(--text-dim,#888)'; }
+      return;
+    }
+    var tasks = dirtyIdxs.map(function(idx) {
+      var pack = _orgPacksDraft[idx];
+      var payload = {
+        name: pack.name, body: pack.body, description: pack.description || '',
+        agents: pack.agents, contexts: pack.contexts, category: pack.category || null,
+        triggers: pack.triggers || {}
+      };
+      if (pack.id) {
+        return window.p86Api.put('/api/admin/organizations/' + _orgDraft.id + '/skill-packs/' + pack.id, payload)
+          .then(function(r) { if (r && r.skill_pack) _orgPacksDraft[idx] = Object.assign(pack, r.skill_pack); });
+      }
+      return window.p86Api.post('/api/admin/organizations/' + _orgDraft.id + '/skill-packs', payload)
+        .then(function(r) { if (r && r.skill_pack) _orgPacksDraft[idx] = Object.assign(pack, r.skill_pack); });
+    });
+    Promise.all(tasks).then(function() {
+      _orgPacksDirty = new Set();
+      document.getElementById('org-packs-list').innerHTML = renderOrgPacksHTML();
+      attachOrgHandlers();
+      if (status) { status.textContent = 'Saved ' + tasks.length + ' pack(s).'; status.style.color = '#34d399'; }
+    }).catch(function(err) {
+      if (status) { status.textContent = 'Save failed: ' + (err.message || 'unknown'); status.style.color = '#f87171'; }
+    });
+  };
 
   function renderAdminAgents() {
     var pane = document.getElementById('admin-subtab-agents');
