@@ -1005,7 +1005,7 @@ async function initSchema() {
     -- if the local definition diverges from what was registered, the
     -- bootstrap can update the agent instead of leaving stale config.
     CREATE TABLE IF NOT EXISTS managed_agent_registry (
-      agent_key TEXT PRIMARY KEY,                          -- 'ag' | 'job' | 'cra' | 'staff'
+      agent_key TEXT PRIMARY KEY,                          -- 'job' (post-unification — was 'ag'|'job'|'cra'|'staff')
       anthropic_agent_id TEXT NOT NULL,
       model TEXT,
       tool_count INTEGER NOT NULL DEFAULT 0,
@@ -1013,6 +1013,37 @@ async function initSchema() {
       registered_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+    -- Phase 2c: move from one-agent-per-key to one-agent-per-(key, org).
+    -- Each tenant gets their own Anthropic agent so the registered
+    -- system prompt can carry per-org identity (identity_body from the
+    -- organizations table). Migration steps below are idempotent so a
+    -- re-run on a deployment that already migrated is a no-op.
+    ALTER TABLE managed_agent_registry
+      ADD COLUMN IF NOT EXISTS organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE;
+    -- Backfill: existing rows belong to AGX (the only tenant so far).
+    UPDATE managed_agent_registry
+       SET organization_id = (SELECT id FROM organizations WHERE slug = 'agx')
+     WHERE organization_id IS NULL;
+    -- Re-key: drop the old single-column PK and replace with the
+    -- composite (agent_key, organization_id). Wrapped in DO so a
+    -- re-run (where the PK is already composite) doesn't error.
+    DO $migrate_mar_pk$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM pg_constraint
+         WHERE conrelid = 'managed_agent_registry'::regclass
+           AND contype = 'p'
+           AND conname = 'managed_agent_registry_pkey'
+           AND array_length(conkey, 1) = 1
+      ) THEN
+        ALTER TABLE managed_agent_registry DROP CONSTRAINT managed_agent_registry_pkey;
+        ALTER TABLE managed_agent_registry
+          ADD CONSTRAINT managed_agent_registry_pkey PRIMARY KEY (agent_key, organization_id);
+      END IF;
+    END
+    $migrate_mar_pk$;
+    CREATE INDEX IF NOT EXISTS idx_managed_agent_registry_org
+      ON managed_agent_registry(organization_id);
 
     -- Phase 1b — single shared Anthropic-side Environment that all our
     -- managed agents' Sessions provision containers from. We only ever

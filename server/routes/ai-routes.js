@@ -2663,9 +2663,19 @@ function ctxDynamicText(systemArr) {
 // content stops shipping in every user.message turn — saving ~3.5k
 // cache_creation tokens per turn. Admins changing a section override
 // or baseline need to POST /managed/sync-all to push the new system.
-async function composedAgentSystem(agentKey, baseline) {
-  if (agentKey !== 'job') return baseline; // HR / CoS unchanged for now
+async function composedAgentSystem(agentKey, baseline, org) {
+  if (agentKey !== 'job') return baseline; // legacy keys passthrough
   try {
+    let parts = [baseline];
+    // Org-level identity_body — describes who 86 is working FOR.
+    // Phase 2a moved AGX-specific prose out of the baseline; this
+    // is where it lands back into the agent's registered system
+    // prompt. Each tenant's agent registration carries its own
+    // identity_body so the same platform baseline can be re-used.
+    if (org && org.identity_body && org.identity_body.trim()) {
+      parts.push(String(org.identity_body).trim());
+    }
+    // Estimating playbook — SECTION_DEFAULTS, admin-overridable.
     const sectionOverrides = await loadSectionOverridesFor('job');
     const sectionIds = [
       'ag_identity',
@@ -2686,8 +2696,10 @@ async function composedAgentSystem(agentKey, baseline) {
         sectionLines.push(...buf, '');
       }
     }
-    if (!sectionLines.length) return baseline;
-    return baseline + '\n\n# Estimating playbook\n\n' + sectionLines.join('\n');
+    if (sectionLines.length) {
+      parts.push('# Estimating playbook\n\n' + sectionLines.join('\n'));
+    }
+    return parts.join('\n\n');
   } catch (e) {
     console.warn('[composedAgentSystem] failed, falling back to bare baseline:', e.message);
     return baseline;
@@ -2696,7 +2708,12 @@ async function composedAgentSystem(agentKey, baseline) {
 
 // Look up or create the long-lived Session for one (agent, entity,
 // user) tuple. Race-safe via the unique partial index on ai_sessions.
-async function ensureAiSession({ agentKey, entityType, entityId, userId }) {
+// `organization` is the full org row; required as of Phase 2c so the
+// session binds to the right per-tenant Anthropic agent.
+async function ensureAiSession({ agentKey, entityType, entityId, userId, organization }) {
+  if (!organization || !organization.id) {
+    throw new Error('ensureAiSession requires an organization row.');
+  }
   const found = await pool.query(
     `SELECT * FROM ai_sessions
        WHERE agent_key = $1
@@ -2708,33 +2725,24 @@ async function ensureAiSession({ agentKey, entityType, entityId, userId }) {
   );
   if (found.rows.length) return found.rows[0];
 
-  // Tag freshly-created sessions with a non-persistent flag so the
-  // caller can pass freshlyCreated=true to runV2SessionStream. Without
-  // this, a brand-new session that the API immediately reports as
-  // "stuck" (rare but possible on first events.send race) sends the
-  // recovery path into an archive→create→archive loop. The flag is
-  // only on the JS row, not the DB column.
-  const fresh = await createFreshAiSession({ agentKey, entityType, entityId, userId });
+  const fresh = await createFreshAiSession({ agentKey, entityType, entityId, userId, organization });
   if (fresh && typeof fresh === 'object') fresh._freshlyCreated = true;
   return fresh;
 }
 
-// Create a brand-new Anthropic session row + DB row for the given tuple.
-// Extracted so we can recover from stuck sessions (e.g. requires_action
-// state inherited from a prior broken bootstrap) by archiving the
-// previous row and creating a fresh one in its place.
-async function createFreshAiSession({ agentKey, entityType, entityId, userId }) {
-  // Lazy require avoids the ai-routes ↔ admin-agents-routes cycle at
-  // module-load time (admin-agents pulls ai-routes-internals).
+async function createFreshAiSession({ agentKey, entityType, entityId, userId, organization }) {
   const adminAgents = require('./admin-agents-routes');
   const env = await adminAgents.ensureManagedEnvironment();
-  const agent = await adminAgents.ensureManagedAgent(agentKey);
+  // Per-org Anthropic agent — ensureManagedAgent looks up by
+  // (agent_key, organization_id) and creates with org.identity_body
+  // composed into the system prompt on first registration.
+  const agent = await adminAgents.ensureManagedAgent(agentKey, organization);
   const anthropic = getAnthropic();
 
   const created = await anthropic.beta.sessions.create({
     agent: agent.anthropic_agent_id,
     environment_id: env.anthropic_environment_id,
-    title: 'Project 86' + agentKey + ' / ' + entityType + '/' + (entityId || 'staff') + ' (user ' + userId + ')'
+    title: 'Project 86 ' + agentKey + ' · ' + organization.slug + ' / ' + entityType + ' / ' + (entityId || 'global') + ' (user ' + userId + ')'
   });
 
   try {
@@ -2747,8 +2755,6 @@ async function createFreshAiSession({ agentKey, entityType, entityId, userId }) 
     );
     return inserted.rows[0];
   } catch (e) {
-    // Race: a parallel request inserted first. Archive the orphan
-    // session we created and use the canonical row.
     try { await anthropic.beta.sessions.archive(created.id); } catch (_) {}
     const reread = await pool.query(
       `SELECT * FROM ai_sessions
@@ -3293,7 +3299,7 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
 // POST /api/ai/v2/estimates/:id/chat — Sessions-backed chat for 86.
 // Body: { message, includePhotos, additional_images }
 router.post('/v2/estimates/:id/chat',
-  requireAuth, requireCapability('ESTIMATES_VIEW'),
+  requireAuth, requireCapability('ESTIMATES_VIEW'), requireOrg,
   async (req, res) => {
     const anthropic = getAnthropic();
     if (!anthropic) {
@@ -3351,7 +3357,8 @@ router.post('/v2/estimates/:id/chat',
         agentKey: 'job',
         entityType: 'estimate',
         entityId: estimateId,
-        userId: req.user.id
+        userId: req.user.id,
+        organization: req.organization
       });
       await pool.query('UPDATE ai_sessions SET last_used_at = NOW() WHERE id = $1', [session.id]);
 
@@ -3384,7 +3391,7 @@ router.post('/v2/estimates/:id/chat',
 // Body: { tool_results: [{ tool_use_id, approved, applied_summary?, reject_reason? }] }
 // pending_assistant_content is NOT required — the session holds it.
 router.post('/v2/estimates/:id/chat/continue',
-  requireAuth, requireCapability('ESTIMATES_VIEW'),
+  requireAuth, requireCapability('ESTIMATES_VIEW'), requireOrg,
   async (req, res) => {
     const anthropic = getAnthropic();
     if (!anthropic) {
@@ -4248,7 +4255,7 @@ async function saveJobAssistantMessage({ jobId, userId, text, usage }) {
 // POST /api/ai/v2/jobs/:id/chat — Sessions-backed chat for 86.
 // Body: { message, clientContext, aiPhase }
 router.post('/v2/jobs/:id/chat',
-  requireAuth, requireCapability('FINANCIALS_VIEW'),
+  requireAuth, requireCapability('FINANCIALS_VIEW'), requireOrg,
   async (req, res) => {
     const anthropic = getAnthropic();
     if (!anthropic) {
@@ -4304,7 +4311,8 @@ router.post('/v2/jobs/:id/chat',
         agentKey: 'job',
         entityType: 'job',
         entityId: jobId,
-        userId: req.user.id
+        userId: req.user.id,
+        organization: req.organization
       });
       await pool.query('UPDATE ai_sessions SET last_used_at = NOW() WHERE id = $1', [session.id]);
 
@@ -4343,7 +4351,7 @@ router.post('/v2/jobs/:id/chat',
 // POST /api/ai/v2/jobs/:id/chat/continue
 // Body: { tool_results: [{ tool_use_id, approved, applied_summary?, reject_reason? }] }
 router.post('/v2/jobs/:id/chat/continue',
-  requireAuth, requireCapability('FINANCIALS_VIEW'),
+  requireAuth, requireCapability('FINANCIALS_VIEW'), requireOrg,
   async (req, res) => {
     const anthropic = getAnthropic();
     if (!anthropic) {
@@ -7244,7 +7252,7 @@ function make86OnCustomToolUse(userId) {
 
 // POST /api/ai/v2/intake/chat — fresh session per call.
 router.post('/v2/intake/chat',
-  requireAuth, requireCapability('LEADS_EDIT'),
+  requireAuth, requireCapability('LEADS_EDIT'), requireOrg,
   async (req, res) => {
     const anthropic = getAnthropic();
     if (!anthropic) return res.status(503).json({ error: 'AI assistant is not configured.' });
@@ -7299,7 +7307,8 @@ router.post('/v2/intake/chat',
       // sessions distinct from job-scoped 86 chats so panel-open
       // semantics stay one-shot.
       const session = await ensureAiSession({
-        agentKey: 'job', entityType: 'intake', entityId: null, userId: req.user.id
+        agentKey: 'job', entityType: 'intake', entityId: null, userId: req.user.id,
+        organization: req.organization
       });
       await pool.query('UPDATE ai_sessions SET last_used_at = NOW() WHERE id = $1', [session.id]);
 
@@ -8247,12 +8256,13 @@ router.post('/86/chat', requireAuth, requireOrg, async (req, res) => {
     );
 
     // ONE session per user — keyed on (job, '86', 'global', user).
-    // The managed `job` agent has the 73-tool union.
+    // The per-tenant `job` agent is selected via req.organization.
     const session = await ensureAiSession({
       agentKey: 'job',
       entityType: '86',
       entityId: 'global',
-      userId: req.user.id
+      userId: req.user.id,
+      organization: req.organization
     });
     await pool.query('UPDATE ai_sessions SET last_used_at = NOW() WHERE id = $1', [session.id]);
 

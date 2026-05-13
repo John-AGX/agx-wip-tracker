@@ -1450,7 +1450,7 @@ const AGENT_SYSTEM_BASELINE = {
   // dead-code back-compat — if some old code path ever resolves an
   // 'ag' key, the baseline below also serves it (single source of
   // truth: 86's identity, never the old separate persona).
-  job:   'You are 86 — Project 86\'s operator agent. Project 86 is a SaaS platform for construction businesses; the company currently using you is AGX Central Florida (painting, deck repair, roofing, exterior services for HOAs and apartment communities). You serve as the SINGLE agent across every surface of the app — same brain whether you\'re on the global Ask 86 panel, a per-job WIP chat, a per-estimate editor, the lead-intake flow, the client directory, or admin / chief-of-staff context. There is no separate HR or Chief of Staff agent; you handle all of it.\n\n# Your scope\n  Range across the whole company: revenue, cost, production, WIP, change orders, QB cost data, the node graph, margin trends, billing patterns, schedule slip, estimating, lead intake, client directory hygiene, skill-pack curation. You DRAFT estimates yourself (line items, sections, groups, pricing, scope edits). You CAPTURE leads yourself. You maintain the client directory yourself (split parent+property compounds, validate addresses, capture durable client notes). You curate your own skill packs via propose_skill_pack_* tools when you spot patterns worth standardizing. When the user asks to "go work on X," use the navigate tool to take them there, then keep working.\n\n# Per-turn context\n  Every user turn carries data appropriate to the surface — a job WIP snapshot when the conversation is job-scoped, lead context when handling intake, an estimate snapshot when working in the editor, a client directory snapshot when on the clients page, or a <page_context> block on the global Ask 86 surface telling you which page the user is on. Always reason about WHY a number is what it is. When estimating, anchor labor + sub costs to past-estimate history; price materials from real purchase data over training-data guesses.\n\n# Tone\n  Concise. Construction trade vocabulary welcome. Lead with the answer. Do not announce hand-offs to "other agents" — there are no other agents. You ARE the agent that does the work.',
+  job:   'You are 86 — Project 86\'s operator agent. Project 86 is a SaaS platform for construction businesses. You serve as the SINGLE agent across every surface of the app — same brain whether you\'re on the global Ask 86 panel, a per-job WIP chat, a per-estimate editor, the lead-intake flow, the client directory, or admin context. There is no separate HR or Chief of Staff agent; you handle all of it.\n\nThe SPECIFIC COMPANY you\'re working for is appended below in the "About the company you serve" block — that section names the tenant, their industry / market / customer hierarchy / pricing standards. Those standards define how THAT company operates; they do NOT define who you are. You are 86 (the platform agent). The tenant is the company you currently work for.\n\n# Your scope\n  Range across the whole company you serve: revenue, cost, production, WIP, change orders, QB cost data, the node graph, margin trends, billing patterns, schedule slip, estimating, lead intake, client directory hygiene, skill-pack curation. You DRAFT estimates yourself (line items, sections, groups, pricing, scope edits). You CAPTURE leads yourself. You maintain the client directory yourself (split parent+property compounds, validate addresses, capture durable client notes). You curate your own skill packs via propose_skill_pack_* tools when you spot patterns worth standardizing. When the user asks to "go work on X," use the navigate tool to take them there, then keep working.\n\n# Per-turn context\n  Every user turn carries data appropriate to the surface — a job WIP snapshot when the conversation is job-scoped, lead context when handling intake, an estimate snapshot when working in the editor, a client directory snapshot when on the clients page, or a <page_context> block on the global Ask 86 surface telling you which page the user is on. Always reason about WHY a number is what it is. When estimating, anchor labor + sub costs to past-estimate history; price materials from real purchase data over training-data guesses.\n\n# Tone\n  Concise. Construction trade vocabulary welcome. Lead with the answer. Do not announce hand-offs to "other agents" — there are no other agents. You ARE the agent that does the work.',
 
   // Legacy 'cra' (HR) and 'staff' (Chief of Staff) baselines have been
   // retired. 86 absorbs both roles. These keys remain only as null
@@ -1651,22 +1651,31 @@ function customToolsFor(agentKey) {
     .slice(0, 128);                                     // Anthropic caps tools at 128
 }
 
-// Idempotent register-or-update for one Project 86 agent. Creates the
-// Anthropic-side Agent if no row exists in managed_agent_registry,
-// otherwise leaves the existing record (no update path yet — Phase 2
-// adds drift detection + agent.update calls).
-async function ensureManagedAgent(agentKey) {
+// Idempotent register-or-update for one Project 86 agent on behalf
+// of one organization. Each (agent_key, organization_id) tuple maps
+// to a distinct Anthropic agent so tenants can have their own
+// identity_body composed into the registered system prompt.
+//
+// `organization` is the full org row (from organizations table).
+// Required — callers must resolve it first. The previous single-arg
+// signature (agentKey only) is no longer supported; passing only
+// the key throws so any stale caller crashes loudly instead of
+// silently registering against the wrong tenant.
+async function ensureManagedAgent(agentKey, organization) {
   const anthropic = getAnthropic();
   if (!anthropic) throw new Error('ANTHROPIC_API_KEY not set on this deployment.');
   const baseline = AGENT_SYSTEM_BASELINE[agentKey];
   if (!baseline) throw new Error('Unknown agent key: ' + agentKey);
+  if (!organization || !organization.id) {
+    throw new Error('ensureManagedAgent requires an organization row (Phase 2c — every agent is per-tenant now).');
+  }
 
   const existing = await pool.query(
-    'SELECT * FROM managed_agent_registry WHERE agent_key = $1',
-    [agentKey]
+    'SELECT * FROM managed_agent_registry WHERE agent_key = $1 AND organization_id = $2',
+    [agentKey, organization.id]
   );
   if (existing.rows.length) {
-    return existing.rows[0]; // already registered — Phase 2 adds update path
+    return existing.rows[0]; // already registered for this tenant
   }
 
   const aiInternals = require('./ai-routes-internals');
@@ -1675,17 +1684,17 @@ async function ensureManagedAgent(agentKey) {
   const customTools = customToolsFor(agentKey);
   const builtinTools = builtinToolsetFor(agentKey);
 
-  // Compose the full system: baseline + SECTION_DEFAULTS playbook
-  // (for 'job') so the playbook prose is cached on the Anthropic
-  // agent instead of re-shipping through every user.message.
+  // Compose the full system: platform baseline + org.identity_body +
+  // SECTION_DEFAULTS playbook. Per-tenant content gets cached on the
+  // Anthropic agent so the per-turn prompt stays slim.
   const composedSystem = (aiInternals && aiInternals.composedAgentSystem)
-    ? await aiInternals.composedAgentSystem(agentKey, baseline)
+    ? await aiInternals.composedAgentSystem(agentKey, baseline, organization)
     : baseline;
 
   const created = await anthropic.beta.agents.create({
     model: model,
-    name: 'Project 86 ' + agentKey.toUpperCase(),
-    description: baseline.slice(0, 200),
+    name: 'Project 86 ' + agentKey.toUpperCase() + ' · ' + (organization.name || organization.slug),
+    description: (organization.description || baseline).slice(0, 200),
     system: composedSystem,
     skills: skills,
     tools: [...builtinTools, ...customTools]
@@ -1693,13 +1702,14 @@ async function ensureManagedAgent(agentKey) {
 
   await pool.query(
     `INSERT INTO managed_agent_registry
-       (agent_key, anthropic_agent_id, model, tool_count, skill_count, updated_at)
-     VALUES ($1, $2, $3, $4, $5, NOW())`,
-    [agentKey, created.id, model, customTools.length + builtinTools.length, skills.length]
+       (agent_key, organization_id, anthropic_agent_id, model, tool_count, skill_count, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, NOW())`,
+    [agentKey, organization.id, created.id, model, customTools.length + builtinTools.length, skills.length]
   );
 
   return {
     agent_key: agentKey,
+    organization_id: organization.id,
     anthropic_agent_id: created.id,
     model: model,
     tool_count: customTools.length + builtinTools.length,
@@ -1770,29 +1780,44 @@ router.post('/managed/reregister', requireAuth, requireCapability('ROLES_MANAGE'
   }
 });
 
-// POST /api/admin/agents/managed/bootstrap?key=ag|job|cra|staff|all
-//   Registers the requested Project 86 agent (or all four) as Anthropic-side
-//   managed Agents. Idempotent — agents already in
-//   managed_agent_registry are left alone.
-router.post('/managed/bootstrap', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
-  try {
-    const key = String(req.query.key || 'all').toLowerCase();
-    const agents = (key === 'all') ? ['ag', 'job', 'cra', 'staff'] : [key];
-    const summary = [];
-    for (const agentKey of agents) {
-      try {
-        const row = await ensureManagedAgent(agentKey);
-        summary.push({ agent_key: agentKey, ok: true, anthropic_agent_id: row.anthropic_agent_id, tool_count: row.tool_count, skill_count: row.skill_count });
-      } catch (e) {
-        summary.push({ agent_key: agentKey, ok: false, error: e.message });
+// POST /api/admin/agents/managed/bootstrap?key=job|all
+//   Registers 86 (the unified operator agent) as the caller's
+//   organization's managed Anthropic Agent. Idempotent — if a row
+//   already exists for (agent_key, organization_id), it's returned
+//   as-is. Use /managed/sync to push changes to an already-registered
+//   agent.
+router.post('/managed/bootstrap',
+  requireAuth, requireCapability('ROLES_MANAGE'), require('../auth').requireOrg,
+  async (req, res) => {
+    try {
+      const key = String(req.query.key || 'all').toLowerCase();
+      // Post-unification, only 'job' is a real agent. 'all' and any
+      // legacy key alias to 'job'.
+      const agents = (key === 'all' || key === '') ? ['job'] : [key === 'job' ? 'job' : 'job'];
+      const summary = [];
+      for (const agentKey of agents) {
+        try {
+          const row = await ensureManagedAgent(agentKey, req.organization);
+          summary.push({
+            agent_key: agentKey,
+            organization_id: req.organization.id,
+            organization_slug: req.organization.slug,
+            ok: true,
+            anthropic_agent_id: row.anthropic_agent_id,
+            tool_count: row.tool_count,
+            skill_count: row.skill_count
+          });
+        } catch (e) {
+          summary.push({ agent_key: agentKey, ok: false, error: e.message });
+        }
       }
+      res.json({ summary });
+    } catch (e) {
+      console.error('POST /api/admin/agents/managed/bootstrap error:', e);
+      res.status(500).json({ error: 'Server error: ' + (e.message || 'unknown') });
     }
-    res.json({ summary });
-  } catch (e) {
-    console.error('POST /api/admin/agents/managed/bootstrap error:', e);
-    res.status(500).json({ error: 'Server error: ' + (e.message || 'unknown') });
   }
-});
+);
 
 // GET /api/admin/agents/managed
 //   Returns the current registry — agent_key + anthropic_agent_id +
@@ -2227,7 +2252,9 @@ router.get('/managed/:agentKey/anthropic-state', requireAuth, requireCapability(
 //   Optional body: { force_version?: number } — bypass the auto-fetch
 //   of current version and use this value. Useful when the admin
 //   already knows the version from the inspection endpoint.
-router.post('/managed/:agentKey/sync', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+router.post('/managed/:agentKey/sync',
+  requireAuth, requireCapability('ROLES_MANAGE'), require('../auth').requireOrg,
+  async (req, res) => {
   try {
     const agentKey = String(req.params.agentKey || '').toLowerCase();
     if (!['ag', 'job', 'cra', 'staff'].includes(agentKey)) {
@@ -2237,10 +2264,11 @@ router.post('/managed/:agentKey/sync', requireAuth, requireCapability('ROLES_MAN
     if (!anthropic) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not set on this deployment.' });
 
     const reg = await pool.query(
-      `SELECT anthropic_agent_id FROM managed_agent_registry WHERE agent_key = $1`,
-      [agentKey]
+      `SELECT anthropic_agent_id FROM managed_agent_registry
+        WHERE agent_key = $1 AND organization_id = $2`,
+      [agentKey, req.organization.id]
     );
-    if (!reg.rows.length) return res.status(404).json({ error: 'Agent is not yet registered. Click Bootstrap first.' });
+    if (!reg.rows.length) return res.status(404).json({ error: 'Agent is not yet registered for ' + req.organization.slug + '. Click Bootstrap first.' });
     const agentId = reg.rows[0].anthropic_agent_id;
 
     const baseline = AGENT_SYSTEM_BASELINE[agentKey] || '';
@@ -2251,13 +2279,12 @@ router.post('/managed/:agentKey/sync', requireAuth, requireCapability('ROLES_MAN
     const builtinTools = builtinToolsetFor(agentKey);
     const toolList = [...builtinTools, ...customTools];
     const toolCount = customTools.length + builtinTools.length;
-    const name = 'Project 86 ' + agentKey.toUpperCase();
-    const description = baseline.slice(0, 200);
-    // Bake SECTION_DEFAULTS into the system prompt at sync time so the
-    // playbook prose is cached on Anthropic's side rather than re-
-    // shipping through every user.message.
+    const name = 'Project 86 ' + agentKey.toUpperCase() + ' · ' + (req.organization.name || req.organization.slug);
+    const description = (req.organization.description || baseline).slice(0, 200);
+    // Compose: platform baseline + org.identity_body + SECTION_DEFAULTS.
+    // Per-org content is cached on the Anthropic agent.
     const composedSystem = (aiInternals && aiInternals.composedAgentSystem)
-      ? await aiInternals.composedAgentSystem(agentKey, baseline)
+      ? await aiInternals.composedAgentSystem(agentKey, baseline, req.organization)
       : baseline;
 
     // Always retrieve so we can detect archived state (no unarchive
@@ -2278,17 +2305,18 @@ router.post('/managed/:agentKey/sync', requireAuth, requireCapability('ROLES_MAN
       });
       await pool.query(
         `UPDATE managed_agent_registry
-            SET anthropic_agent_id = $2,
-                model = $3,
-                tool_count = $4,
-                skill_count = $5,
+            SET anthropic_agent_id = $3,
+                model = $4,
+                tool_count = $5,
+                skill_count = $6,
                 updated_at = NOW()
-          WHERE agent_key = $1`,
-        [agentKey, created.id, model, toolCount, skills.length]
+          WHERE agent_key = $1 AND organization_id = $2`,
+        [agentKey, req.organization.id, created.id, model, toolCount, skills.length]
       );
       return res.json({
         ok: true,
         agent_key: agentKey,
+        organization_id: req.organization.id,
         status: 'recreated_after_archive',
         anthropic_agent_id: created.id,
         previous_anthropic_agent_id: agentId,
@@ -2318,17 +2346,18 @@ router.post('/managed/:agentKey/sync', requireAuth, requireCapability('ROLES_MAN
 
     await pool.query(
       `UPDATE managed_agent_registry
-          SET model = $2,
-              tool_count = $3,
-              skill_count = $4,
+          SET model = $3,
+              tool_count = $4,
+              skill_count = $5,
               updated_at = NOW()
-        WHERE agent_key = $1`,
-      [agentKey, model, toolCount, skills.length]
+        WHERE agent_key = $1 AND organization_id = $2`,
+      [agentKey, req.organization.id, model, toolCount, skills.length]
     );
 
     res.json({
       ok: true,
       agent_key: agentKey,
+      organization_id: req.organization.id,
       status: 'updated',
       anthropic_agent_id: agentId,
       new_version: updated.version,
@@ -2368,16 +2397,33 @@ router.delete('/managed/:agentKey', requireAuth, requireCapability('ROLES_MANAGE
 //   Loops the per-agent sync logic and returns a per-agent summary so
 //   the UI can show which ones moved + which failed. Failures on one
 //   agent don't abort the rest; each agent gets its own try/catch.
-router.post('/managed/sync-all', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+// POST /api/admin/agents/managed/sync-all
+//   Sync every (agent_key, organization_id) registry row to its
+//   Anthropic agent. Body { organization_id?: number } scopes to a
+//   single tenant — omit to sync EVERY tenant the platform owner
+//   manages. The caller's own organization is the default if no
+//   body param is given.
+router.post('/managed/sync-all',
+  requireAuth, requireCapability('ROLES_MANAGE'), require('../auth').requireOrg,
+  async (req, res) => {
   try {
     const anthropic = getAnthropic();
     if (!anthropic) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not set on this deployment.' });
 
+    // Default to syncing only the caller's org. Future: a platform-
+    // owner role can pass ?all_orgs=true to sync every tenant.
+    const targetOrgId = (req.body && req.body.organization_id) || req.organization.id;
     const reg = await pool.query(
-      `SELECT agent_key, anthropic_agent_id FROM managed_agent_registry ORDER BY agent_key`
+      `SELECT r.agent_key, r.organization_id, r.anthropic_agent_id,
+              o.slug AS org_slug, o.name AS org_name, o.description AS org_description, o.identity_body AS org_identity_body
+         FROM managed_agent_registry r
+         JOIN organizations o ON o.id = r.organization_id
+        WHERE r.organization_id = $1
+        ORDER BY r.agent_key`,
+      [targetOrgId]
     );
     if (!reg.rows.length) {
-      return res.json({ summary: [], note: 'No agents registered yet. Bootstrap them first.' });
+      return res.json({ summary: [], note: 'No agents registered for organization ' + targetOrgId + '. Bootstrap first.' });
     }
 
     const aiInternals = require('./ai-routes-internals');
@@ -2387,18 +2433,24 @@ router.post('/managed/sync-all', requireAuth, requireCapability('ROLES_MANAGE'),
     for (const row of reg.rows) {
       const agentKey = row.agent_key;
       const agentId = row.anthropic_agent_id;
+      const org = {
+        id: row.organization_id,
+        slug: row.org_slug,
+        name: row.org_name,
+        description: row.org_description,
+        identity_body: row.org_identity_body
+      };
       try {
         const baseline = AGENT_SYSTEM_BASELINE[agentKey];
         if (!baseline) {
-          // Stale registry row — agent_key isn't in our current set
-          // (e.g. 'intake' which was merged into 86). Skip with a
-          // status so the admin can see it and decide whether to
-          // delete the row.
+          // Stale registry row — agent_key isn't in the current set
+          // (e.g. 'cra'/'staff' from the pre-unification era).
           summary.push({
             agent_key: agentKey,
+            organization_id: row.organization_id,
             ok: false,
             status: 'stale_row',
-            error: 'No baseline system prompt — agent_key is not in the current set (was retired). Delete this row from managed_agent_registry to clean up.'
+            error: 'No baseline for agent_key=' + agentKey + ' — delete this row.'
           });
           continue;
         }
@@ -2408,17 +2460,12 @@ router.post('/managed/sync-all', requireAuth, requireCapability('ROLES_MANAGE'),
         const builtinTools = builtinToolsetFor(agentKey);
         const toolList = [...builtinTools, ...customTools];
         const toolCount = customTools.length + builtinTools.length;
-        const name = 'Project 86 ' + agentKey.toUpperCase();
-        const description = baseline.slice(0, 200);
+        const name = 'Project 86 ' + agentKey.toUpperCase() + ' · ' + (org.name || org.slug);
+        const description = (org.description || baseline).slice(0, 200);
         const composedSystem = (aiInternals && aiInternals.composedAgentSystem)
-          ? await aiInternals.composedAgentSystem(agentKey, baseline)
+          ? await aiInternals.composedAgentSystem(agentKey, baseline, org)
           : baseline;
 
-        // Fetch current state. If the agent is archived (archived_at
-        // is non-null), update() will 400 with "Cannot modify
-        // archived agent" — Anthropic has no unarchive endpoint, so
-        // fall back to create() to mint a fresh agent (new id, v1)
-        // and replace the registry row.
         const remote = await anthropic.beta.agents.retrieve(agentId);
         if (remote.archived_at) {
           const created = await anthropic.beta.agents.create({
@@ -2431,16 +2478,17 @@ router.post('/managed/sync-all', requireAuth, requireCapability('ROLES_MANAGE'),
           });
           await pool.query(
             `UPDATE managed_agent_registry
-                SET anthropic_agent_id = $2,
-                    model = $3,
-                    tool_count = $4,
-                    skill_count = $5,
+                SET anthropic_agent_id = $3,
+                    model = $4,
+                    tool_count = $5,
+                    skill_count = $6,
                     updated_at = NOW()
-              WHERE agent_key = $1`,
-            [agentKey, created.id, model, toolCount, skills.length]
+              WHERE agent_key = $1 AND organization_id = $2`,
+            [agentKey, row.organization_id, created.id, model, toolCount, skills.length]
           );
           summary.push({
             agent_key: agentKey,
+            organization_id: row.organization_id,
             ok: true,
             status: 'recreated_after_archive',
             anthropic_agent_id: created.id,
@@ -2465,16 +2513,17 @@ router.post('/managed/sync-all', requireAuth, requireCapability('ROLES_MANAGE'),
 
         await pool.query(
           `UPDATE managed_agent_registry
-              SET model = $2,
-                  tool_count = $3,
-                  skill_count = $4,
+              SET model = $3,
+                  tool_count = $4,
+                  skill_count = $5,
                   updated_at = NOW()
-            WHERE agent_key = $1`,
-          [agentKey, model, toolCount, skills.length]
+            WHERE agent_key = $1 AND organization_id = $2`,
+          [agentKey, row.organization_id, model, toolCount, skills.length]
         );
 
         summary.push({
           agent_key: agentKey,
+          organization_id: row.organization_id,
           ok: true,
           status: 'updated',
           anthropic_agent_id: agentId,
@@ -2484,7 +2533,7 @@ router.post('/managed/sync-all', requireAuth, requireCapability('ROLES_MANAGE'),
           skill_count: skills.length
         });
       } catch (e) {
-        summary.push({ agent_key: agentKey, ok: false, status: 'error', error: e.message || 'unknown' });
+        summary.push({ agent_key: agentKey, organization_id: row.organization_id, ok: false, status: 'error', error: e.message || 'unknown' });
       }
     }
 
