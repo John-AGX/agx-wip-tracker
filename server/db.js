@@ -2173,14 +2173,25 @@ async function initSchema() {
   // system-managed account, not user-facing — change the env var to rotate the password.
   // Without env vars, fall back to a clearly-fake dev seed only when the DB is empty.
   if (process.env.ADMIN_EMAIL && process.env.ADMIN_PASSWORD) {
+    // Normalize the email the same way PUT /api/auth/users/:id does
+    // (lowercase + trim) so a typo in the env var with stray whitespace
+    // or different casing doesn't miss the ON CONFLICT and create a
+    // duplicate admin row.
+    const adminEmail = String(process.env.ADMIN_EMAIL).trim().toLowerCase();
     const hash = bcrypt.hashSync(process.env.ADMIN_PASSWORD, 10);
-    await pool.query(
+    const result = await pool.query(
       `INSERT INTO users (email, password_hash, name, role)
        VALUES ($1, $2, 'Admin', 'admin')
-       ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash`,
-      [process.env.ADMIN_EMAIL, hash]
+       ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash
+       RETURNING (xmax = 0) AS inserted, id, role`,
+      [adminEmail, hash]
     );
-    console.log(`Synced admin user from env: ${process.env.ADMIN_EMAIL}`);
+    const row = result.rows[0] || {};
+    if (row.inserted) {
+      console.log(`Created admin user from env (id=${row.id}): ${adminEmail}`);
+    } else {
+      console.log(`Refreshed admin password from env (id=${row.id}, role=${row.role}): ${adminEmail}`);
+    }
   } else {
     const { rows } = await pool.query('SELECT COUNT(*)::int as c FROM users');
     if (rows[0].c === 0) {
