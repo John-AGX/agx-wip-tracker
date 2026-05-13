@@ -2403,8 +2403,8 @@
     // endpoint. None of these need the estimate editor open — they\'re
     // pure data lookups against the Project 86 database. Handled before the
     // editor checks so AG can run them from any context.
-    if (AG_SERVER_AUTO_TOOLS[tu.name]) {
-      return execAGAutoTool(tu.name, tu.input || {});
+    if (SERVER_AUTO_TIER_TOOLS[tu.name]) {
+      return execAutoTierTool(tu.name, tu.input || {});
     }
     if (!window.estimateEditorAPI) {
       throw new Error('Estimate editor not loaded — refresh the page.');
@@ -2454,7 +2454,7 @@
   // (same code path the chief of staff uses) and returns a string;
   // we pass it straight back as the tool_result so the model sees
   // identical output regardless of which agent invokes the tool.
-  var AG_SERVER_AUTO_TOOLS = {
+  var SERVER_AUTO_TIER_TOOLS = {
     read_materials: true,
     read_purchase_history: true,
     read_subs: true,
@@ -2492,7 +2492,7 @@
     // line_ids when proposing edits.
     read_active_lines: true
   };
-  function execAGAutoTool(name, input) {
+  function execAutoTierTool(name, input) {
     return window.p86Api.post('/api/ai/exec-tool', { name: name, input: input || {} })
       .then(function(resp) {
         if (resp && typeof resp.summary === 'string') return resp.summary;

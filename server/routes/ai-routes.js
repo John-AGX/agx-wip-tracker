@@ -2043,12 +2043,12 @@ const SECTION_DEFAULTS = {
     body: '# Tone\n- Concise. Trade vocabulary welcome. Mix prose with proposals — short lead-in, the cards, a one-line wrap-up. Don\'t emit proposals without any explanation. If you need one piece of info to answer well, ask one targeted question first.'
   },
   // ──── 86 (job-side WIP analyst) ────────────────────────────────
-  elle_role: {
+  job_role: {
     agent: 'job',
     description: "86's role + how 86 coordinates with 86 and HR. Edit to change how aggressive 86 is at proposing changes vs analyzing only.",
     body: '# Your role\n- You are 86, Project 86\'s lead agent. Range across the whole company: revenue, cost, production, company health, WIP, change orders, QB cost data, the node graph, margin trends, billing patterns, schedule slip. The user comes to you first.\n- You ALSO own the lead-intake flow. When the user describes a new lead, capture it cleanly via propose_create_lead (your job-tool surface includes the intake tools too — they work the same here as in the dedicated intake panel).\n- You delegate. Hand 86 (the estimator) scoped jobs once a lead is in shape — pre-load the property, scope summary, photo interpretation, and any historical context. Ping HR (your research + client-relations assistant) when client / property data is missing or stale (correct address for material takeoffs, missing on-site CAM, missing market designation). The Chief of Staff is your handler — they watch the team and propose skill-pack changes when patterns warrant.\n- Read the WIP snapshot, change orders, cost lines, node graph, and QB cost data together — they tell a story about whether the job is healthy.\n- Spot mismatches: % complete way ahead of revenue earned (under-pulled progress), revenue earned way ahead of invoiced (under-billed), JTD margin diverging from revised margin (cost overruns), large recurring vendors that should have been a CO, QB lines unlinked to graph nodes.\n- When citing dollar figures, match the field name from the snapshot above so the PM can find them in the UI.\n- **You CAN make changes.** Available tools: `create_node` (add a new graph node — t1/t2/cost-bucket/sub/po/inv/co/watch/note), `delete_node` (remove a node + its wires — does NOT delete underlying job data), `set_phase_pct_complete`, `set_phase_field` (revenue / pct dollars on a PHASE record from # Structure — note: phase entry was decluttered, materials/labor/sub/equipment are no longer per-phase inputs; cost flows through node-graph wires), `set_node_value` (QB Total / value on a cost-bucket NODE from # Node graph — labor/mat/gc/other/sub/burden), `wire_nodes` (connect graph nodes), `assign_qb_line` / `assign_qb_lines_bulk` (link QB cost lines to a graph node, single or bulk), `read_workspace_sheet_full` and `read_qb_cost_lines` (auto-apply, no approval). Each writer tool writes a proposal card the user approves; trusted tool types auto-apply after a 5s countdown.\n- **set_phase_field vs set_node_value — DO NOT MIX THEM UP.** `set_phase_field` writes to a phase record (phase_id from # Structure, e.g. "ph_..."). `set_node_value` writes the QB Total field to a graph node (node_id from # Node graph, e.g. "n38"). When the user says "load the QB Materials & Supplies total into the Materials node" or similar, that is `set_node_value` on a `mat` node — passing a node id like "n38" to `set_phase_field` will fail because n38 is not in appData.phases.\n- **Sub assignments are job-level only now.** No more building / phase distinction on subs — node-graph wires drive per-phase cost allocation. When proposing a new sub assignment, level=\'job\' is the only option.\n- **Every block above is LIVE for this turn** — node graph, QB cost lines, workspace sheets all rebuild from the client on every user message and every tool_use continuation. If something was just created/edited, it\'s in the data above. NEVER say "I can\'t see new X" or "the snapshot is stale" or "you need to refresh the session" — those statements are factually wrong about how this assistant works.\n- When the user references a node/sheet/line by name and you can\'t find it, search the relevant block by case-insensitive partial match before asking — it\'s usually there.\n- Be concise and direct. Construction trade vocabulary is welcome. If you need one piece of info to answer well, ask one targeted question first.'
   },
-  elle_web_research: {
+  job_web_research: {
     agent: 'job',
     description: "When 86 should use web search. Tighter than 86 since most answers are in the WIP / QB data already.",
     body: '# Web research (web_search tool)\nYou have a web_search tool. Use it sparingly on the job side — most answers are already in the WIP snapshot, change orders, QB cost lines, and node graph above. Good reasons to search:\n  • Look up a recurring vendor name to figure out what trade/category they serve when the QB account label is ambiguous (e.g., "is ACME Supply Co a roofing supplier or a general lumberyard?").\n  • Confirm a sub\'s scope or licensing when categorizing their cost lines.\n  • Look up a product/material SKU charged to the job when the PM asks "what did we buy here?".\nDo NOT search for Project 86-internal financial questions, margin math, or anything answered by the data above. Cap at ~2 searches per turn.'
@@ -3962,21 +3962,21 @@ async function buildJobContext(jobId, clientContext, aiPhase) {
 
   // Section overrides for 86. Loaded once and used at named anchor
   // points so admins can edit instructions without code changes.
-  const elleSectionOverrides = await loadSectionOverridesFor('job');
-  renderSection(lines, 'elle_role', elleSectionOverrides);
+  const jobSectionOverrides = await loadSectionOverridesFor('job');
+  renderSection(lines, 'job_role', jobSectionOverrides);
   lines.push('');
-  renderSection(lines, 'elle_web_research', elleSectionOverrides);
+  renderSection(lines, 'job_web_research', jobSectionOverrides);
 
   // Skill packs — manifest only (was eager-loading full bodies every
   // turn — for job context that was ~3,500 tokens including the 9.5k-
   // char WIP Analyst Playbook). 86 calls load_skill_pack({name}) on
   // demand when starting a kind of work that maps to a pack.
-  const elleManifest = await loadSkillManifestFor('job', { entity_type: 'job' });
-  if (elleManifest.length) {
+  const jobManifest = await loadSkillManifestFor('job', { entity_type: 'job' });
+  if (jobManifest.length) {
     lines.push('');
     lines.push('# Available skill packs (call load_skill_pack({name}) to read a full body)');
     lines.push('Situational playbooks your admin maintains. Pull "WIP Analyst Playbook" before doing margin/WIP analysis, "QB cost → node mapping" before reconciling cost lines, etc. Load on demand — don\'t pre-load everything.');
-    elleManifest.forEach(function(s) {
+    jobManifest.forEach(function(s) {
       lines.push('- **' + s.name + '** — ' + (s.description || '(no description)'));
     });
   }
@@ -4016,7 +4016,7 @@ async function buildJobContext(jobId, clientContext, aiPhase) {
     system: lines.join('\n'),
     photoBlocks: cascadePhotoBlocks,
     aiPhase: aiPhase,
-    packsLoaded: elleSkills.map(s => s.name)
+    packsLoaded: jobManifest.map(s => s.name)
   };
 }
 
@@ -5344,7 +5344,7 @@ async function buildClientDirectoryContext() {
       { type: 'text', text: '\n\n' + out.join('\n') }
     ],
     totalClients: rows.length,
-    packsLoaded: craSkills.map(s => s.name)
+    packsLoaded: craManifest.map(s => s.name)
   };
 }
 
@@ -7492,13 +7492,13 @@ function makeStaffOnCustomToolUse() {
 // (was the source of "86 isn't actually performing the task" — every
 // read paused for an approval-card flash + extra HTTP turn).
 //
-// 86's allowed auto-tier set (ALLOWED_AG_AUTO_TOOLS) is a strict
+// 86's allowed auto-tier set (ALLOWED_AUTO_TIER_TOOLS) is a strict
 // subset of execStaffTool's switch cases, so we reuse the same
 // executor instead of duplicating the read logic. Approval-tier
 // tools (propose_*) drop through to the UI exactly like before.
 function makeAgOnCustomToolUse() {
   return async function (tu) {
-    if (!ALLOWED_AG_AUTO_TOOLS.has(tu.name)) return { tier: 'approval' };
+    if (!ALLOWED_AUTO_TIER_TOOLS.has(tu.name)) return { tier: 'approval' };
     try {
       const summary = await execStaffTool(tu.name, tu.input || {});
       return { tier: 'auto', summary };
@@ -8234,7 +8234,7 @@ function make86OnCustomToolUse(userId) {
   }
 
   return async function (tu) {
-    // Auto-tier: any tool in ALLOWED_AG_AUTO_TOOLS executes inline
+    // Auto-tier: any tool in ALLOWED_AUTO_TIER_TOOLS executes inline
     // and returns its summary to the model. Mirrors the /exec-tool
     // HTTP dispatcher exactly so the V2-session path (this handler)
     // and the client-chip path (/exec-tool) behave identically.
@@ -8243,7 +8243,7 @@ function make86OnCustomToolUse(userId) {
     // read_materials / etc. on the unified /86 chat path were all
     // returning {tier:'approval'} — never executing — and the model
     // saw no result, concluding "no match" on real searches.
-    if (ALLOWED_AG_AUTO_TOOLS.has(tu.name)) {
+    if (ALLOWED_AUTO_TIER_TOOLS.has(tu.name)) {
       const name = tu.name;
       const input = tu.input || {};
       const k = dedupeKey(name, input);
@@ -8511,7 +8511,7 @@ router.post('/v2/intake/chat/continue',
 // without bouncing the user to a different agent panel. Mutation tools
 // (propose_skill_pack_*, create_property, etc.) are kept off this auto-
 // tier endpoint — those still go through approval cards.
-const ALLOWED_AG_AUTO_TOOLS = new Set([
+const ALLOWED_AUTO_TIER_TOOLS = new Set([
   // 86's existing read tools (already routed to execStaffTool below)
   'read_materials',
   'read_purchase_history',
@@ -8563,7 +8563,7 @@ router.post('/exec-tool', requireAuth, requireCapability('ESTIMATES_VIEW'), asyn
     const name = req.body && req.body.name;
     const input = (req.body && req.body.input) || {};
     if (!name || typeof name !== 'string') return res.status(400).json({ error: 'name is required' });
-    if (!ALLOWED_AG_AUTO_TOOLS.has(name)) return res.status(400).json({ error: 'tool not allowed via this endpoint' });
+    if (!ALLOWED_AUTO_TIER_TOOLS.has(name)) return res.status(400).json({ error: 'tool not allowed via this endpoint' });
     let summary;
     if (INTAKE_EXECUTOR_TOOLS.has(name)) {
       summary = await execIntakeRead(name, input);
