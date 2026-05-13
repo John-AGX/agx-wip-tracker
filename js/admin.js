@@ -3961,6 +3961,14 @@
     if (!host) return;
     host.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;font-style:italic;padding:20px 0;">Loading metrics…</div>';
     window.p86Api.get('/api/admin/agents/metrics?range=' + _agentsRange).then(function(resp) {
+      var a86 = resp && resp.agent86;
+      if (a86) {
+        host.innerHTML = render86MetricsCard(a86) +
+          '<div id="subtasks-recent-mount" style="margin-top:18px;"></div>';
+        loadSubtasksRecent();
+        return;
+      }
+      // Legacy fallback if a stale server lacks the rich payload.
       var agents = (resp && resp.agents) || [];
       if (!agents.length) {
         host.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;font-style:italic;padding:20px 0;">No data.</div>';
@@ -3974,6 +3982,166 @@
     }).catch(function(err) {
       host.innerHTML = '<div style="color:#e74c3c;font-size:12px;padding:20px 0;">Failed: ' + escapeHTML(err.message || 'unknown') + '</div>';
     });
+  }
+
+  // Phase-1 unified 86 card — one wide block with sections for activity,
+  // tokens & cache, surface mix, tools used, sub-agent fan-out (Phase 3),
+  // memory (Phase 4), watches (Phase 5), MCP connectors (Phase 6).
+  function render86MetricsCard(a) {
+    var t = a.tokens || {};
+    var cacheRatioPct = (t.cache_hit_ratio || 0) * 100;
+    var totalInputFootprint = (t.input || 0) + (t.cache_read || 0);
+
+    var surfaceRows = (a.surfaces || []).map(function(s) {
+      return '<tr>' +
+        '<td style="padding:3px 8px;font-family:\'SF Mono\',monospace;font-size:11px;color:var(--text,#fff);">' + escapeHTML(s.entity_type) + '</td>' +
+        '<td style="padding:3px 8px;text-align:right;font-size:11px;color:var(--text-dim,#aaa);">' + s.turns + '</td>' +
+        '<td style="padding:3px 8px;text-align:right;font-size:11px;color:var(--text-dim,#aaa);">' + s.conversations + '</td>' +
+        '<td style="padding:3px 8px;text-align:right;font-size:11px;color:var(--text-dim,#aaa);">' + tokFmt(s.input_tokens) + ' / ' + tokFmt(s.output_tokens) + '</td>' +
+      '</tr>';
+    }).join('');
+    if (!surfaceRows) {
+      surfaceRows = '<tr><td colspan="4" style="padding:8px;font-size:11px;color:var(--text-dim,#666);font-style:italic;">No surface activity in this window.</td></tr>';
+    }
+
+    var toolRows = (a.tools_top || []).map(function(tl) {
+      return '<div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text-dim,#aaa);font-family:\'SF Mono\',monospace;padding:2px 0;">' +
+        '<span>' + escapeHTML(tl.name) + '</span>' +
+        '<span style="color:var(--text,#fff);">' + tl.uses + '</span>' +
+      '</div>';
+    }).join('');
+    if (!toolRows) {
+      toolRows = '<div style="font-size:11px;color:var(--text-dim,#666);font-style:italic;">No approval-tier tool proposals in this window. (Auto-tier reads execute inline and aren\'t tracked per-call.)</div>';
+    }
+
+    var modelRows = (a.models || []).map(function(m) {
+      return '<div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text-dim,#aaa);font-family:\'SF Mono\',monospace;padding:2px 0;">' +
+        '<span>' + escapeHTML(m.model) + '</span>' +
+        '<span>' + m.turns + ' turns' + (m.cost_usd != null ? ' · $' + m.cost_usd.toFixed(2) : '') + '</span>' +
+      '</div>';
+    }).join('');
+    if (!modelRows) {
+      modelRows = '<div style="font-size:11px;color:var(--text-dim,#666);font-style:italic;">No assistant turns yet.</div>';
+    }
+
+    var sub = a.subtasks || {};
+    var mem = a.memory || {};
+    var wch = a.watches || {};
+    var mcp = a.mcp_servers || {};
+
+    return '<div style="background:linear-gradient(135deg,rgba(59,130,246,0.04),rgba(124,58,237,0.04));border:1px solid var(--border,#333);border-radius:10px;padding:18px;">' +
+
+      // ── Header
+      '<div style="display:flex;align-items:baseline;gap:12px;margin-bottom:14px;">' +
+        '<div style="font-size:20px;font-weight:700;color:var(--text,#fff);letter-spacing:-0.01em;">86</div>' +
+        '<div style="font-size:11px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;">Unified operator agent</div>' +
+        '<div style="flex:1;"></div>' +
+        '<div style="font-size:11px;color:var(--text-dim,#888);font-family:\'SF Mono\',monospace;">' + _agentsRange + '</div>' +
+      '</div>' +
+
+      // ── Section: Activity
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:18px;">' +
+        bigStat('Turns', a.turns) +
+        bigStat('Conversations', a.conversations) +
+        bigStat('Unique users', a.unique_users) +
+        bigStat('Tool uses', a.tool_uses) +
+        bigStat('Photos attached', a.photos_attached) +
+        bigStat('Est. cost', '$' + (a.cost_usd || 0).toFixed(2)) +
+      '</div>' +
+
+      // ── Section: Tokens & cache
+      '<div style="margin-bottom:18px;">' +
+        '<div style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-dim,#888);margin-bottom:8px;">Tokens (in / out / cache)</div>' +
+        '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px 14px;font-size:12px;">' +
+          tokenStat('Input', t.input) +
+          tokenStat('Output', t.output) +
+          tokenStat('Cache writes', t.cache_creation) +
+          tokenStat('Cache reads', t.cache_read) +
+          tokenStat('Total input footprint', totalInputFootprint) +
+          '<div><div style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-dim,#666);">Cache hit ratio</div>' +
+            '<div style="font-size:14px;font-weight:600;color:' + (cacheRatioPct > 70 ? '#34d399' : cacheRatioPct > 30 ? '#fbbf24' : '#f87171') + ';">' + cacheRatioPct.toFixed(0) + '%</div></div>' +
+        '</div>' +
+      '</div>' +
+
+      // ── Section: Surface mix
+      '<div style="margin-bottom:18px;">' +
+        '<div style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-dim,#888);margin-bottom:8px;">Surface mix (where 86 is called from)</div>' +
+        '<table style="width:100%;border-collapse:collapse;">' +
+          '<thead><tr>' +
+            '<th style="text-align:left;padding:3px 8px;font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-dim,#666);">Entity</th>' +
+            '<th style="text-align:right;padding:3px 8px;font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-dim,#666);">Turns</th>' +
+            '<th style="text-align:right;padding:3px 8px;font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-dim,#666);">Convs</th>' +
+            '<th style="text-align:right;padding:3px 8px;font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-dim,#666);">Tokens (in/out)</th>' +
+          '</tr></thead>' +
+          '<tbody>' + surfaceRows + '</tbody>' +
+        '</table>' +
+      '</div>' +
+
+      // ── Section: Tools + Models
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:18px;">' +
+        '<div>' +
+          '<div style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-dim,#888);margin-bottom:8px;">Top tools (approval-tier)</div>' +
+          toolRows +
+        '</div>' +
+        '<div>' +
+          '<div style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-dim,#888);margin-bottom:8px;">Model mix</div>' +
+          modelRows +
+        '</div>' +
+      '</div>' +
+
+      // ── Section: Phase 3 / 4 / 5 / 6 capability summary
+      '<div style="border-top:1px solid var(--border,#333);padding-top:14px;display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;">' +
+        '<div>' +
+          '<div style="font-size:11px;font-weight:600;color:#a5b4fc;margin-bottom:4px;">&#x1F500; Sub-agent fan-out</div>' +
+          '<div style="font-size:11px;color:var(--text-dim,#aaa);line-height:1.55;">' +
+            (sub.total || 0) + ' spawned · ' +
+            (sub.completed || 0) + ' completed · ' +
+            (sub.failed || 0) + ' failed · ' +
+            (sub.in_flight || 0) + ' in flight<br>' +
+            '<span style="color:var(--text-dim,#666);">Spend: ' + tokFmt((sub.input_tokens || 0) + (sub.output_tokens || 0)) + ' tokens' +
+            (sub.cost_usd != null ? ' · $' + sub.cost_usd.toFixed(2) : '') + '</span>' +
+          '</div>' +
+        '</div>' +
+        '<div>' +
+          '<div style="font-size:11px;font-weight:600;color:#fbbf24;margin-bottom:4px;">&#x1F9E0; Long-term memory</div>' +
+          '<div style="font-size:11px;color:var(--text-dim,#aaa);line-height:1.55;">' +
+            (mem.active || 0) + ' active · ' +
+            (mem.recent_saves || 0) + ' saved this window · ' +
+            (mem.recent_recalls || 0) + ' recalled<br>' +
+            '<span style="color:var(--text-dim,#666);">Cross-session facts via remember/recall</span>' +
+          '</div>' +
+        '</div>' +
+        '<div>' +
+          '<div style="font-size:11px;font-weight:600;color:#34d399;margin-bottom:4px;">&#x23F0; Proactive watches</div>' +
+          '<div style="font-size:11px;color:var(--text-dim,#aaa);line-height:1.55;">' +
+            (wch.active || 0) + ' active / ' + (wch.configured || 0) + ' configured<br>' +
+            (wch.runs || 0) + ' fires (' + (wch.runs_completed || 0) + ' ok, ' + (wch.runs_failed || 0) + ' failed)<br>' +
+            '<span style="color:var(--text-dim,#666);">Spend: ' + tokFmt((wch.input_tokens || 0) + (wch.output_tokens || 0)) + ' tokens' +
+            (wch.cost_usd != null ? ' · $' + wch.cost_usd.toFixed(2) : '') + '</span>' +
+          '</div>' +
+        '</div>' +
+        '<div>' +
+          '<div style="font-size:11px;font-weight:600;color:#c084fc;margin-bottom:4px;">&#x1F50C; MCP connectors</div>' +
+          '<div style="font-size:11px;color:var(--text-dim,#aaa);line-height:1.55;">' +
+            (mcp.active || 0) + ' active / ' + (mcp.configured || 0) + ' configured<br>' +
+            '<span style="color:var(--text-dim,#666);">External tool reach (Gmail, QuickBooks, …)</span>' +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  }
+
+  function bigStat(label, value) {
+    return '<div>' +
+      '<div style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-dim,#666);margin-bottom:2px;">' + escapeHTML(label) + '</div>' +
+      '<div style="font-size:20px;font-weight:700;color:var(--text,#fff);line-height:1.2;">' + escapeHTML(String(value == null ? '—' : value)) + '</div>' +
+    '</div>';
+  }
+  function tokenStat(label, n) {
+    return '<div>' +
+      '<div style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-dim,#666);">' + escapeHTML(label) + '</div>' +
+      '<div style="font-size:14px;font-weight:600;color:var(--text,#fff);">' + tokFmt(n) + '</div>' +
+    '</div>';
   }
 
   // Phase 3b — recent subtasks under the agent metrics cards.

@@ -83,38 +83,77 @@ function costFor(model, inputTokens, outputTokens) {
 // for the requested window. Numbers are computed in one SQL pass for
 // speed — even on a chatty deployment ai_messages stays small enough
 // that a full table scan is fine for the admin window.
-router.get('/metrics', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+router.get('/metrics',
+  requireAuth, requireCapability('ROLES_MANAGE'), require('../auth').requireOrg,
+  async (req, res) => {
   try {
     const range = (req.query.range === '30d') ? '30 days' : '7 days';
+    const orgId = req.organization.id;
 
-    // Per-agent aggregates rolled up to agent identity (86 / hr /
-    // staff). The user's "estimator" vs "operator" split was an
-    // artifact of entity_type — both are 86. The CASE expression
-    // collapses them so the UI shows ONE 86 row.
+    // Phase 1 unified HR + Chief of Staff into 86 — every entity_type
+    // below now feeds the single 86 agent. The card UI surfaces one
+    // big metrics block with a "by surface" breakdown inside.
+    const ENTITY_TYPES_FOR_86 = ['estimate', 'job', 'intake', 'ask86', '86', 'client', 'staff'];
+
     const aggSql = `
       SELECT
-        ${ENTITY_TYPE_TO_AGENT_SQL}                                AS agent,
-        COUNT(*) FILTER (WHERE role = 'assistant')                 AS turns,
-        COUNT(*) FILTER (WHERE role = 'user')                      AS user_msgs,
-        COUNT(DISTINCT (estimate_id, user_id))                     AS conversations,
-        COUNT(DISTINCT user_id)                                    AS unique_users,
-        COALESCE(SUM(input_tokens),  0)::bigint                    AS input_tokens,
-        COALESCE(SUM(output_tokens), 0)::bigint                    AS output_tokens,
-        COALESCE(SUM(tool_use_count), 0)::bigint                   AS tool_uses,
-        COALESCE(SUM(photos_included), 0)::bigint                  AS photos_attached
+        COUNT(*) FILTER (WHERE role = 'assistant')                AS turns,
+        COUNT(*) FILTER (WHERE role = 'user')                     AS user_msgs,
+        COUNT(DISTINCT (entity_type, estimate_id, user_id))       AS conversations,
+        COUNT(DISTINCT user_id)                                   AS unique_users,
+        COALESCE(SUM(input_tokens),  0)::bigint                   AS input_tokens,
+        COALESCE(SUM(output_tokens), 0)::bigint                   AS output_tokens,
+        COALESCE(SUM(cache_creation_input_tokens), 0)::bigint     AS cache_creation_tokens,
+        COALESCE(SUM(cache_read_input_tokens),     0)::bigint     AS cache_read_tokens,
+        COALESCE(SUM(tool_use_count), 0)::bigint                  AS tool_uses,
+        COALESCE(SUM(photos_included), 0)::bigint                 AS photos_attached
       FROM ai_messages
       WHERE created_at >= NOW() - INTERVAL '${range}'
-      GROUP BY agent
-      ORDER BY agent
+        AND entity_type = ANY($1)
     `;
-    const aggRes = await pool.query(aggSql);
+    const aggRes = await pool.query(aggSql, [ENTITY_TYPES_FOR_86]);
+    const agg = aggRes.rows[0] || {};
 
-    // Model-mix breakdown — useful when multiple models are in
-    // rotation (A/B trials, sonnet vs opus). Same rollup so the
-    // pricing rolls up alongside the rest of the agent's traffic.
+    // Surface breakdown — how 86 is being used: estimate panel vs
+    // job WIP vs intake vs ask86 vs older HR (client) / CoS (staff)
+    // entry points. Useful for spotting which workflows actually drive
+    // usage.
+    const surfaceSql = `
+      SELECT
+        entity_type,
+        COUNT(*) FILTER (WHERE role = 'assistant')                AS turns,
+        COUNT(DISTINCT (estimate_id, user_id))                    AS conversations,
+        COALESCE(SUM(input_tokens),  0)::bigint                   AS input_tokens,
+        COALESCE(SUM(output_tokens), 0)::bigint                   AS output_tokens
+      FROM ai_messages
+      WHERE created_at >= NOW() - INTERVAL '${range}'
+        AND entity_type = ANY($1)
+      GROUP BY entity_type
+      ORDER BY turns DESC
+    `;
+    const surfaceRes = await pool.query(surfaceSql, [ENTITY_TYPES_FOR_86]);
+
+    // Tool breakdown — pull tool_use names out of the JSONB array.
+    // Only counts approval-tier proposals (auto-tier reads aren't
+    // persisted per-call). Top 15 by frequency.
+    const toolSql = `
+      SELECT
+        (jsonb_array_elements(tool_uses)->>'name') AS tool_name,
+        COUNT(*) AS uses
+      FROM ai_messages
+      WHERE created_at >= NOW() - INTERVAL '${range}'
+        AND tool_uses IS NOT NULL
+        AND jsonb_typeof(tool_uses) = 'array'
+        AND entity_type = ANY($1)
+      GROUP BY tool_name
+      ORDER BY uses DESC
+      LIMIT 15
+    `;
+    const toolRes = await pool.query(toolSql, [ENTITY_TYPES_FOR_86]);
+
+    // Model-mix breakdown.
     const modelSql = `
       SELECT
-        ${ENTITY_TYPE_TO_AGENT_SQL}                AS agent,
         COALESCE(model, 'unknown') AS model,
         COUNT(*) FILTER (WHERE role = 'assistant') AS turns,
         COALESCE(SUM(input_tokens),  0)::bigint AS input_tokens,
@@ -122,48 +161,167 @@ router.get('/metrics', requireAuth, requireCapability('ROLES_MANAGE'), async (re
       FROM ai_messages
       WHERE created_at >= NOW() - INTERVAL '${range}'
         AND role = 'assistant'
-      GROUP BY agent, model
-      ORDER BY agent, turns DESC
+        AND entity_type = ANY($1)
+      GROUP BY model
+      ORDER BY turns DESC
     `;
-    const modelRes = await pool.query(modelSql);
+    const modelRes = await pool.query(modelSql, [ENTITY_TYPES_FOR_86]);
 
-    // Build the response payload. Always include all three agent
-    // identities (even if empty) so the UI renders zero-state cards
-    // consistently.
-    const byAgent = new Map(aggRes.rows.map(r => [r.agent, r]));
-    const byAgentModel = new Map();
-    for (const r of modelRes.rows) {
-      if (!byAgentModel.has(r.agent)) byAgentModel.set(r.agent, []);
-      byAgentModel.get(r.agent).push({
-        model: r.model,
+    // Phase 3 — subtask rollup for this org.
+    const subtaskSql = `
+      SELECT
+        COUNT(*)::int                                        AS total,
+        COUNT(*) FILTER (WHERE status = 'completed')::int    AS completed,
+        COUNT(*) FILTER (WHERE status = 'failed')::int       AS failed,
+        COUNT(*) FILTER (WHERE status IN ('pending','running'))::int AS in_flight,
+        COALESCE(SUM(input_tokens),  0)::bigint              AS input_tokens,
+        COALESCE(SUM(output_tokens), 0)::bigint              AS output_tokens
+      FROM ai_subtasks
+      WHERE organization_id = $1
+        AND created_at >= NOW() - INTERVAL '${range}'
+    `;
+    const subtaskRes = await pool.query(subtaskSql, [orgId]);
+    const sub = subtaskRes.rows[0] || {};
+
+    // Phase 4 — memory counts (active + recently saved).
+    const memorySql = `
+      SELECT
+        COUNT(*) FILTER (WHERE archived_at IS NULL)::int                                              AS active,
+        COUNT(*) FILTER (WHERE archived_at IS NULL AND created_at >= NOW() - INTERVAL '${range}')::int AS recent_saves,
+        COUNT(*) FILTER (WHERE archived_at IS NULL AND last_recalled_at >= NOW() - INTERVAL '${range}')::int AS recent_recalls
+      FROM ai_memories
+      WHERE organization_id = $1
+    `;
+    const memoryRes = await pool.query(memorySql, [orgId]);
+    const mem = memoryRes.rows[0] || {};
+
+    // Phase 5 — watch configuration + run rollup.
+    const watchSql = `
+      SELECT
+        COUNT(*) FILTER (WHERE enabled = true AND archived_at IS NULL)::int AS active,
+        COUNT(*) FILTER (WHERE archived_at IS NULL)::int                    AS configured
+      FROM ai_watches
+      WHERE organization_id = $1
+    `;
+    const watchRes = await pool.query(watchSql, [orgId]);
+    const watch = watchRes.rows[0] || {};
+
+    const watchRunsSql = `
+      SELECT
+        COUNT(*)::int                                       AS runs,
+        COUNT(*) FILTER (WHERE status = 'completed')::int   AS completed,
+        COUNT(*) FILTER (WHERE status = 'failed')::int      AS failed,
+        COALESCE(SUM(input_tokens),  0)::bigint             AS input_tokens,
+        COALESCE(SUM(output_tokens), 0)::bigint             AS output_tokens
+      FROM ai_watch_runs
+      WHERE organization_id = $1
+        AND triggered_at >= NOW() - INTERVAL '${range}'
+    `;
+    const watchRunsRes = await pool.query(watchRunsSql, [orgId]);
+    const watchRuns = watchRunsRes.rows[0] || {};
+
+    // MCP servers — Phase 6.
+    const mcpSql = `
+      SELECT
+        COUNT(*) FILTER (WHERE enabled = true AND archived_at IS NULL)::int AS active,
+        COUNT(*) FILTER (WHERE archived_at IS NULL)::int                    AS configured
+      FROM org_mcp_servers
+      WHERE organization_id = $1
+    `;
+    const mcpRes = await pool.query(mcpSql, [orgId]);
+    const mcp = mcpRes.rows[0] || {};
+
+    // Compose the rich 86 payload.
+    const models = modelRes.rows.map(r => ({
+      model: r.model,
+      turns: Number(r.turns),
+      input_tokens: Number(r.input_tokens),
+      output_tokens: Number(r.output_tokens),
+      cost_usd: costFor(r.model, r.input_tokens, r.output_tokens)
+    }));
+    const totalCost = models.reduce((s, m) => s + (m.cost_usd || 0), 0);
+    const subtaskCost = costFor('claude-opus-4-7', sub.input_tokens, sub.output_tokens);
+    const watchCost = costFor('claude-opus-4-7', watchRuns.input_tokens, watchRuns.output_tokens);
+
+    const cacheReads = Number(agg.cache_read_tokens || 0);
+    const directInputs = Number(agg.input_tokens || 0);
+    const cacheRatio = (cacheReads + directInputs) > 0
+      ? cacheReads / (cacheReads + directInputs)
+      : 0;
+
+    const agent86 = {
+      label: '86',
+      turns: Number(agg.turns || 0),
+      user_msgs: Number(agg.user_msgs || 0),
+      conversations: Number(agg.conversations || 0),
+      unique_users: Number(agg.unique_users || 0),
+      photos_attached: Number(agg.photos_attached || 0),
+      tool_uses: Number(agg.tool_uses || 0),
+      tokens: {
+        input: directInputs,
+        output: Number(agg.output_tokens || 0),
+        cache_creation: Number(agg.cache_creation_tokens || 0),
+        cache_read: cacheReads,
+        cache_hit_ratio: cacheRatio
+      },
+      cost_usd: totalCost,
+      surfaces: surfaceRes.rows.map(r => ({
+        entity_type: r.entity_type,
         turns: Number(r.turns),
+        conversations: Number(r.conversations),
         input_tokens: Number(r.input_tokens),
-        output_tokens: Number(r.output_tokens),
-        cost_usd: costFor(r.model, r.input_tokens, r.output_tokens)
-      });
-    }
+        output_tokens: Number(r.output_tokens)
+      })),
+      tools_top: toolRes.rows.map(r => ({ name: r.tool_name, uses: Number(r.uses) })),
+      models,
+      subtasks: {
+        total: Number(sub.total || 0),
+        completed: Number(sub.completed || 0),
+        failed: Number(sub.failed || 0),
+        in_flight: Number(sub.in_flight || 0),
+        input_tokens: Number(sub.input_tokens || 0),
+        output_tokens: Number(sub.output_tokens || 0),
+        cost_usd: subtaskCost
+      },
+      memory: {
+        active: Number(mem.active || 0),
+        recent_saves: Number(mem.recent_saves || 0),
+        recent_recalls: Number(mem.recent_recalls || 0)
+      },
+      watches: {
+        active: Number(watch.active || 0),
+        configured: Number(watch.configured || 0),
+        runs: Number(watchRuns.runs || 0),
+        runs_completed: Number(watchRuns.completed || 0),
+        runs_failed: Number(watchRuns.failed || 0),
+        input_tokens: Number(watchRuns.input_tokens || 0),
+        output_tokens: Number(watchRuns.output_tokens || 0),
+        cost_usd: watchCost
+      },
+      mcp_servers: {
+        active: Number(mcp.active || 0),
+        configured: Number(mcp.configured || 0)
+      }
+    };
 
-    const agents = Object.keys(AGENT_LABELS).map(agentKey => {
-      const r = byAgent.get(agentKey) || {};
-      return {
-        // Keep the response field name `entity_type` for backwards
-        // compatibility with the UI; the value is now the agent
-        // identity (86 / hr / staff), not a raw entity_type.
-        entity_type: agentKey,
-        label: AGENT_LABELS[agentKey],
-        turns: Number(r.turns || 0),
-        user_msgs: Number(r.user_msgs || 0),
-        conversations: Number(r.conversations || 0),
-        unique_users: Number(r.unique_users || 0),
-        input_tokens: Number(r.input_tokens || 0),
-        output_tokens: Number(r.output_tokens || 0),
-        tool_uses: Number(r.tool_uses || 0),
-        photos_attached: Number(r.photos_attached || 0),
-        models: byAgentModel.get(agentKey) || []
-      };
-    });
+    // Backwards-compat: keep the `agents` array shape but emit a single
+    // 86 entry derived from the rich object. Any consumer still on the
+    // old shape (renderAgentMetricsCard fallback) keeps working.
+    const agents = [{
+      entity_type: '86',
+      label: '86',
+      turns: agent86.turns,
+      user_msgs: agent86.user_msgs,
+      conversations: agent86.conversations,
+      unique_users: agent86.unique_users,
+      input_tokens: agent86.tokens.input,
+      output_tokens: agent86.tokens.output,
+      tool_uses: agent86.tool_uses,
+      photos_attached: agent86.photos_attached,
+      models: agent86.models
+    }];
 
-    res.json({ range, agents });
+    res.json({ range, agents, agent86 });
   } catch (e) {
     console.error('GET /api/admin/agents/metrics error:', e);
     res.status(500).json({ error: 'Server error' });
