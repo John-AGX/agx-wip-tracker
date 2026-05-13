@@ -172,6 +172,58 @@ router.get('/metrics', requireAuth, requireCapability('ROLES_MANAGE'), async (re
 
 // GET /api/admin/agents/conversations?range=7d|30d&entity_type=&user_id=&limit=
 //
+// Phase 3b — admin observability for sub-agent fan-out. Lists recent
+// subtasks across the org with parent-session context, status, token
+// cost, and duration. Scoped to the caller's org via requireOrg so
+// system admins still see only their own org's data — cross-org rollup
+// belongs under the System Admin tab if/when we surface it.
+router.get('/subtasks/recent',
+  requireAuth, requireCapability('ROLES_MANAGE'), require('../auth').requireOrg,
+  async (req, res) => {
+  try {
+    const range = (req.query.range === '30d') ? '30 days' : '7 days';
+    const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 50));
+    const r = await pool.query(`
+      SELECT s.id, s.title, s.status, s.agent_key, s.depth,
+             s.input_tokens, s.output_tokens,
+             s.cache_creation_tokens, s.cache_read_tokens,
+             s.started_at, s.finished_at, s.created_at,
+             s.error,
+             ps.entity_type AS parent_entity_type,
+             ps.entity_id   AS parent_entity_id,
+             u.name         AS spawned_by_name,
+             u.email        AS spawned_by_email,
+             EXTRACT(EPOCH FROM (s.finished_at - s.started_at))::int AS duration_seconds
+        FROM ai_subtasks s
+        JOIN ai_sessions ps ON ps.id = s.parent_session_id
+        JOIN users u ON u.id = s.user_id
+       WHERE s.organization_id = $1
+         AND s.created_at >= NOW() - INTERVAL '${range}'
+       ORDER BY s.created_at DESC
+       LIMIT $2
+    `, [req.organization.id, limit]);
+
+    // Rollup: counts + total spend, useful for the header.
+    const rollup = await pool.query(`
+      SELECT
+        COUNT(*)::int                                     AS total,
+        COUNT(*) FILTER (WHERE status = 'completed')::int AS completed,
+        COUNT(*) FILTER (WHERE status = 'failed')::int    AS failed,
+        COUNT(*) FILTER (WHERE status IN ('pending','running'))::int AS in_flight,
+        COALESCE(SUM(input_tokens), 0)::bigint            AS input_tokens,
+        COALESCE(SUM(output_tokens), 0)::bigint           AS output_tokens
+        FROM ai_subtasks
+       WHERE organization_id = $1
+         AND created_at >= NOW() - INTERVAL '${range}'
+    `, [req.organization.id]);
+
+    res.json({ subtasks: r.rows, rollup: rollup.rows[0], range });
+  } catch (e) {
+    console.error('GET /admin/agents/subtasks/recent error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Lists recent conversations grouped by (entity_type, estimate_id,
 // user_id). Each row carries the most recent activity timestamp,
 // turn count, total tokens, and the entity's display title (looked up

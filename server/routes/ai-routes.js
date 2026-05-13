@@ -3045,7 +3045,12 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
                 if (isError) {
                   send({ tool_failed: { id: tu.id, name: tu.name, input: tu.input, error: summary } });
                 } else {
-                  send({ tool_applied: { id: tu.id, name: tu.name, input: tu.input, summary: summary.slice(0, 500) } });
+                  // `meta` carries structured tool-specific data
+                  // (e.g. subtask_id for spawn_subtask) so the client
+                  // can render dedicated UI without parsing summary text.
+                  const appliedPayload = { id: tu.id, name: tu.name, input: tu.input, summary: summary.slice(0, 500) };
+                  if (decision.meta) appliedPayload.meta = decision.meta;
+                  send({ tool_applied: appliedPayload });
                 }
                 // QUEUE the result; flushed in batch at session.status_idle.
                 // See pendingAutoResults comment above for why we don't
@@ -7341,7 +7346,10 @@ async function execSubtaskTool(name, input, ctx) {
       });
     });
 
-    return 'Spawned subtask ' + subId + ' (title: "' + title + '"). Status: pending. Call await_subtasks({subtask_ids:["' + subId + '"]}) to gather the result.';
+    return {
+      summary: 'Spawned subtask ' + subId + ' (title: "' + title + '"). Status: pending. Call await_subtasks({subtask_ids:["' + subId + '"]}) to gather the result.',
+      meta: { kind: 'subtask_spawned', subtask_id: subId, title: title }
+    };
   }
 
   if (name === 'subtask_status' || name === 'await_subtasks') {
@@ -7374,7 +7382,14 @@ async function execSubtaskTool(name, input, ctx) {
       const rows = r.rows;
       const allDone = rows.every(row => TERMINAL.has(row.status));
       if (allDone || !isAwait || Date.now() >= deadline) {
-        return formatSubtaskBundle(rows);
+        return {
+          summary: formatSubtaskBundle(rows),
+          meta: {
+            kind: 'subtask_resolved',
+            subtask_ids: rows.map(row => row.id),
+            statuses: rows.map(row => ({ id: row.id, status: row.status }))
+          }
+        };
       }
       // Sleep 1s between polls. Cheap; subtask runs are usually 10s–2min.
       await new Promise(resolve => setTimeout(resolve, 1000));
@@ -7386,6 +7401,31 @@ async function execSubtaskTool(name, input, ctx) {
 
 function formatSubtaskBundle(rows) {
   if (!rows.length) return 'No subtasks found.';
+
+  // Auto-summary header when N>2 subtasks — gives 86 a one-glance roll
+  // up before the per-subtask blocks. Counts statuses and totals tokens
+  // so the parent agent doesn't have to re-derive them from the bodies.
+  let header = '';
+  if (rows.length > 2) {
+    const buckets = { completed: 0, failed: 0, canceled: 0, running: 0, pending: 0 };
+    let totalIn = 0, totalOut = 0;
+    rows.forEach(row => {
+      buckets[row.status] = (buckets[row.status] || 0) + 1;
+      totalIn += Number(row.input_tokens) || 0;
+      totalOut += Number(row.output_tokens) || 0;
+    });
+    const statusParts = [];
+    if (buckets.completed) statusParts.push(buckets.completed + ' completed');
+    if (buckets.failed) statusParts.push(buckets.failed + ' failed');
+    if (buckets.canceled) statusParts.push(buckets.canceled + ' canceled');
+    if (buckets.running) statusParts.push(buckets.running + ' still running');
+    if (buckets.pending) statusParts.push(buckets.pending + ' pending');
+    header =
+      '── SUBTASK BUNDLE (' + rows.length + ' total) ──\n' +
+      statusParts.join(', ') + ' · ' +
+      (totalIn + totalOut) + ' tokens spent (in:' + totalIn + ' out:' + totalOut + ')\n\n';
+  }
+
   const lines = rows.map(row => {
     const tokens = (row.input_tokens || 0) + (row.output_tokens || 0);
     const head = '── ' + row.id + ' [' + row.status + '] "' + (row.title || '(no title)') + '" · ' + tokens + ' tokens';
@@ -7400,7 +7440,7 @@ function formatSubtaskBundle(rows) {
     }
     return head + '\n(still ' + row.status + ' — call await_subtasks or subtask_status again)';
   });
-  return lines.join('\n\n');
+  return header + lines.join('\n\n');
 }
 
 function make86OnCustomToolUse(userId, parentSession) {
@@ -7434,8 +7474,14 @@ function make86OnCustomToolUse(userId, parentSession) {
         return { tier: 'auto', error: 'spawn_subtask requires a parent session — this code path was reached without one. Report this to the admin.' };
       }
       try {
-        const summary = await execSubtaskTool(tu.name, tu.input || {}, { parentSession, userId });
-        return { tier: 'auto', summary };
+        const out = await execSubtaskTool(tu.name, tu.input || {}, { parentSession, userId });
+        // out is { summary, meta? } — structured shape carries the
+        // subtask_id(s) so the client can render dedicated cards
+        // without parsing the summary string.
+        if (out && typeof out === 'object' && typeof out.summary === 'string') {
+          return { tier: 'auto', summary: out.summary, meta: out.meta || null };
+        }
+        return { tier: 'auto', summary: String(out || 'Done.') };
       } catch (e) {
         return { tier: 'auto', error: 'Subtask tool error: ' + (e.message || 'unknown') };
       }
@@ -8578,6 +8624,34 @@ function renderPageContextBlock(ctx) {
   lines.push('</page_context>');
   return lines.join('\n');
 }
+
+// Phase 3b — subtask polling endpoint for the chat UI. Returns the
+// status + cumulative tokens of one or more subtasks. Scoped: the
+// caller can only read subtasks they spawned (user_id match) so
+// cross-user polling is impossible. Returns 200 with an empty array
+// when none of the ids resolve (rather than 404) so the client poll
+// loop can degrade gracefully without surfacing an error chip.
+router.get('/subtasks', requireAuth, async (req, res) => {
+  try {
+    const idsParam = String(req.query.ids || '').trim();
+    if (!idsParam) return res.json({ subtasks: [] });
+    const ids = idsParam.split(',').map(s => s.trim()).filter(Boolean).slice(0, 40);
+    if (!ids.length) return res.json({ subtasks: [] });
+    const r = await pool.query(
+      `SELECT id, title, status, result, error,
+              input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
+              started_at, finished_at, created_at
+         FROM ai_subtasks
+        WHERE id = ANY($1) AND user_id = $2
+        ORDER BY created_at ASC`,
+      [ids, req.user.id]
+    );
+    res.json({ subtasks: r.rows });
+  } catch (e) {
+    console.error('GET /subtasks error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
 
 router.get('/86/messages', requireAuth, async (req, res) => {
   try {
