@@ -1476,7 +1476,11 @@
     // Staff / CoS proposals
     propose_skill_pack_add:       'Drafting skill pack…',
     propose_skill_pack_edit:      'Drafting skill pack edit…',
-    propose_skill_pack_delete:    'Drafting skill pack removal…'
+    propose_skill_pack_delete:    'Drafting skill pack removal…',
+    // Phase 3 — sub-agent fan-out
+    spawn_subtask:                'Spawning helper agent…',
+    await_subtasks:               'Waiting on helper agents…',
+    subtask_status:               'Checking helper status…'
   };
 
   function appendStreamingBubble() {

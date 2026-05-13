@@ -1285,6 +1285,54 @@ async function initSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_ai_replays_conv ON ai_replays(conversation_key, run_at DESC);
 
+    -- ai_subtasks — Phase 3 (parallel work / sub-agent fan-out).
+    -- 86 spawns these via the spawn_subtask tool. Each row is a child
+    -- Anthropic session running on the same per-org managed agent, with
+    -- an isolated context window so parallel fan-out doesn't poison
+    -- the parent. parent_session_id binds back to the ai_sessions row
+    -- that spawned it so we can show nested progress in the chat UI
+    -- and roll up token cost.
+    --
+    -- status lifecycle: pending → running → completed | failed | canceled.
+    -- 'pending' is the brief window between spawn_subtask returning
+    -- and the background runner picking it up; usually milliseconds.
+    --
+    -- depth caps recursion: a subtask cannot spawn its own subtasks
+    -- (depth 0 = top-level user turn, depth 1 = subtask). Enforced in
+    -- the spawn_subtask handler, not the schema, but recorded here for
+    -- audit visibility.
+    --
+    -- result is the final assistant text on completion; error is set
+    -- on failure. Both null while running.
+    --
+    -- tokens columns mirror ai_messages so cost rollups treat subtask
+    -- usage the same as direct user turns.
+    CREATE TABLE IF NOT EXISTS ai_subtasks (
+      id TEXT PRIMARY KEY,
+      parent_session_id BIGINT NOT NULL REFERENCES ai_sessions(id) ON DELETE CASCADE,
+      organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      agent_key TEXT NOT NULL,
+      depth INTEGER NOT NULL DEFAULT 1,
+      title TEXT,
+      prompt TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      result TEXT,
+      error TEXT,
+      anthropic_session_id TEXT,
+      anthropic_agent_id TEXT,
+      input_tokens INTEGER NOT NULL DEFAULT 0,
+      output_tokens INTEGER NOT NULL DEFAULT 0,
+      cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+      cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+      started_at TIMESTAMPTZ,
+      finished_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_ai_subtasks_parent ON ai_subtasks(parent_session_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_ai_subtasks_status ON ai_subtasks(status) WHERE status IN ('pending','running');
+    CREATE INDEX IF NOT EXISTS idx_ai_subtasks_org ON ai_subtasks(organization_id, created_at DESC);
+
     -- Job-level reports — Project 86 "report" feature similar to
     -- CompanyCam: a user-curated photo collection grouped into named
     -- sections (Before / During / After by default, but renamable +

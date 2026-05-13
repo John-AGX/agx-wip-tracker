@@ -1629,6 +1629,8 @@ function customToolsFor(agentKey) {
     //   - jobTools       (phase pct, node graph, COs, POs, invoices)
     //   - clientTools    (HR client + property + sub mutations)
     //   - staffTools     (skill pack mutations + introspection reads)
+    //   - subtaskTools   (Phase 3: spawn_subtask / await_subtasks /
+    //                     subtask_status — parallel fan-out)
     // Deduped by name; first occurrence wins (estimate-first order).
     // INTAKE_TOOLS are already spread into jobTools().
     const seen = new Set();
@@ -1637,7 +1639,8 @@ function customToolsFor(agentKey) {
       ...aiInternals.estimateTools(),
       ...aiInternals.jobTools(),
       ...aiInternals.clientTools(),
-      ...aiInternals.staffTools()
+      ...aiInternals.staffTools(),
+      ...aiInternals.subtaskTools()
     ].forEach(t => {
       if (!t || !t.name || seen.has(t.name)) return;
       seen.add(t.name);
