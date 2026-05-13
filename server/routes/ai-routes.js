@@ -2844,6 +2844,20 @@ function isStuckSessionError(e) {
     /waiting on responses to events/.test(String(e.message || ''));
 }
 
+// Pull out the sevt_* event ids the Anthropic Sessions API tells us
+// the session is blocked on. The error message format is:
+//   "waiting on responses to events [sevt_abc, sevt_def]"
+// Returns an array of ids (may be empty if no ids found — caller
+// should fall through to a fresh-session recovery in that case).
+function extractStuckEventIds(e) {
+  const msg = String(e && e.message || '');
+  const ids = [];
+  const re = /sevt_[A-Za-z0-9]+/g;
+  let m;
+  while ((m = re.exec(msg)) !== null) ids.push(m[0]);
+  return ids;
+}
+
 // Companion to isStuckSessionError. Fires when the client sends a
 // user.custom_tool_result whose custom_tool_use_id doesn't match any
 // event the session knows about — typically because the session was
@@ -2941,6 +2955,10 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
   // session id is now archived.
   let activeSession = session;
   let sessionId = session.anthropic_session_id;
+  // Tracks whether we've already tried the non-destructive "resolve
+  // the dangling sevt_* ids" recovery on this turn. Prevents looping
+  // when the in-place recovery itself triggers another stuck error.
+  let inPlaceRecoveryAttempted = false;
 
   // Stall recovery: when the model emits agent.thinking but produces
   // neither a text reply nor a follow-up tool_use before the session
@@ -2999,16 +3017,55 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
         console.log('[v2-stream] sent', eventsForThisOpen.length, 'event(s) to', sessionId);
       } catch (e) {
         if (isStuckSessionError(e) && !freshlyCreated) {
-          // Stuck session on a reused id: archive + recreate, then retry
-          // once. Skipped when freshlyCreated — see comment above.
+          // In-place recovery FIRST: parse the blocked sevt_* ids out
+          // of the error, send user.custom_tool_result events to
+          // resolve them, then retry the original send on the SAME
+          // session. This preserves Anthropic-side conversation
+          // history (without this branch, the agent would forget the
+          // prior turn — see the "option 1" amnesia bug). Only fall
+          // through to the nuclear archive+recreate if in-place
+          // recovery itself fails.
+          if (!inPlaceRecoveryAttempted) {
+            const blockedIds = extractStuckEventIds(e);
+            if (blockedIds.length) {
+              console.warn('[v2-stream] in-place recovery on', sessionId,
+                '— resolving', blockedIds.length, 'dangling tool_use id(s):',
+                JSON.stringify(blockedIds));
+              try {
+                // Resolve each dangling event with a generic "Continue."
+                // tool_result. Then close this stream and reopen with
+                // the user's original events on the same session.
+                const resolveEvents = blockedIds.map(id => ({
+                  type: 'user.custom_tool_result',
+                  custom_tool_use_id: id,
+                  content: [{ type: 'text', text: 'Continue.' }]
+                }));
+                await anthropic.beta.sessions.events.send(sessionId, { events: resolveEvents });
+                try { await stream.controller.abort(); } catch (_) {}
+                // Re-enter openStreamAndSend with the SAME sessionId
+                // and the user's ORIGINAL events. Mark
+                // inPlaceRecoveryAttempted so a repeat stuck error
+                // on this turn falls through to nuclear recovery
+                // instead of looping forever.
+                inPlaceRecoveryAttempted = true;
+                return openStreamAndSend(eventsForThisOpen);
+              } catch (eInPlace) {
+                console.error('[v2-stream] in-place recovery failed, falling through to archive+recreate:', eInPlace && eInPlace.message);
+                // Fall through to the nuclear branch below.
+              }
+            } else {
+              console.warn('[v2-stream] stuck-session error had no parseable sevt_* ids, jumping to nuclear recovery');
+            }
+          } else {
+            console.warn('[v2-stream] in-place recovery already attempted, escalating to archive+recreate');
+          }
+          // Nuclear fallback: archive + recreate. Loses Anthropic-side
+          // history; user has to re-state context if they ask a
+          // follow-up that depended on a prior turn.
           try {
             activeSession = await recoverStuckSession({ anthropic, sessionRow: activeSession });
             sessionId = activeSession.anthropic_session_id;
-            // Re-open the stream against the new session id; the
-            // previous stream is bound to the archived session.
-            try {
-              await stream.controller.abort();
-            } catch (_) { /* best-effort */ }
+            try { await stream.controller.abort(); } catch (_) {}
             return openStreamAndSend(eventsForThisOpen);
           } catch (e2) {
             console.error('Stuck-session recovery failed:', e2);
