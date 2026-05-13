@@ -1380,6 +1380,71 @@ async function initSchema() {
       ON ai_memories (organization_id, user_id, topic)
       WHERE archived_at IS NULL;
 
+    -- ai_watches — Phase 5 (proactive watching).
+    -- A watch is a recurring instruction 86 runs on its own (without a
+    -- user prompt). cadence + time_of_day_utc define when. The runner
+    -- creates a fresh Anthropic session per fire — runs aren't bound to
+    -- any specific user turn; they live in their own ai_watch_runs row.
+    --
+    -- cadence enum:
+    --   'hourly' — top of every hour
+    --   'daily'  — once a day at time_of_day_utc (HH:MM)
+    --   'weekly' — once a week, Monday at time_of_day_utc
+    --
+    -- next_fire_at gets recomputed on save AND on every fire. The
+    -- scheduler picks up rows where next_fire_at <= NOW(), enabled is
+    -- true, and archived_at IS NULL.
+    --
+    -- created_by_user_id is the user who set the watch up; runs use
+    -- that user's id for context and ownership.
+    CREATE TABLE IF NOT EXISTS ai_watches (
+      id TEXT PRIMARY KEY,
+      organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      created_by_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      description TEXT,
+      cadence TEXT NOT NULL,
+      time_of_day_utc TEXT,
+      prompt TEXT NOT NULL,
+      enabled BOOLEAN NOT NULL DEFAULT true,
+      last_fired_at TIMESTAMPTZ,
+      next_fire_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      archived_at TIMESTAMPTZ
+    );
+    CREATE INDEX IF NOT EXISTS idx_ai_watches_due
+      ON ai_watches (next_fire_at)
+      WHERE enabled AND archived_at IS NULL;
+    CREATE INDEX IF NOT EXISTS idx_ai_watches_org
+      ON ai_watches (organization_id, created_at DESC);
+
+    -- ai_watch_runs — one row per fire. result holds the assistant's
+    -- final reply; error holds the failure mode if the runner blew up.
+    -- input_tokens / output_tokens roll up per run so admins see watch
+    -- cost over time.
+    CREATE TABLE IF NOT EXISTS ai_watch_runs (
+      id TEXT PRIMARY KEY,
+      watch_id TEXT NOT NULL REFERENCES ai_watches(id) ON DELETE CASCADE,
+      organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      triggered_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      started_at TIMESTAMPTZ,
+      finished_at TIMESTAMPTZ,
+      status TEXT NOT NULL DEFAULT 'pending',
+      result TEXT,
+      error TEXT,
+      anthropic_session_id TEXT,
+      input_tokens INTEGER NOT NULL DEFAULT 0,
+      output_tokens INTEGER NOT NULL DEFAULT 0,
+      cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+      cache_read_tokens INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_ai_watch_runs_watch
+      ON ai_watch_runs (watch_id, triggered_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_ai_watch_runs_status
+      ON ai_watch_runs (status)
+      WHERE status IN ('pending','running');
+
     -- Job-level reports — Project 86 "report" feature similar to
     -- CompanyCam: a user-curated photo collection grouped into named
     -- sections (Before / During / After by default, but renamable +

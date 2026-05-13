@@ -5769,6 +5769,80 @@ const MEMORY_TOOLS = [
   }
 ];
 
+// Phase 5 — proactive watching tools. Watches are recurring 86
+// instructions that fire on a cadence (hourly / daily / weekly).
+// Each fire creates a fresh Anthropic session and runs the watch's
+// prompt to completion; results are stored in ai_watch_runs for
+// later review.
+//
+// propose_watch_create is approval-tier because each watch becomes
+// recurring API spend — the user should explicitly opt in via the
+// chat approval card. Reads are auto-tier.
+const WATCH_TOOLS = [
+  {
+    name: 'propose_watch_create',
+    tier: 'approval',
+    description:
+      'Set up a recurring instruction that you (86) will run on a schedule, without the user prompting you. Use for periodic audits / reviews ("every day at 6am, summarize yesterday\'s estimate activity"), proactive alerts ("every Monday at 9am, list any active jobs with margin under 18%"), or follow-up nudges. Each fire spends API tokens — propose conservative cadences. The user must approve this card before the watch starts running.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        name:            { type: 'string', description: 'Short label shown in the watches list (e.g. "Daily margin scan"). Max 100 chars.' },
+        description:     { type: 'string', description: 'One-sentence explanation of what this watch does and why. Shown to admins reviewing recurring spend.' },
+        cadence:         { type: 'string', enum: ['hourly', 'daily', 'weekly'], description: 'How often it fires.' },
+        time_of_day_utc: { type: 'string', description: 'HH:MM UTC for daily/weekly fires (ignored for hourly). Default 03:00 UTC.' },
+        prompt:          { type: 'string', description: 'The instruction to run on each fire. Treat like briefing a fresh teammate — include every detail; the runner does NOT see the conversation it was created in.' }
+      },
+      required: ['name', 'cadence', 'prompt']
+    }
+  },
+  {
+    name: 'list_watches',
+    tier: 'auto',
+    description:
+      'List currently active watches with their cadence, last fire, next fire, and whether they are enabled. Use to answer "what am I watching?" or before proposing a new watch (so we don\'t stack duplicates).',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        include_archived: { type: 'boolean', description: 'Include archived watches. Default false.' }
+      },
+      required: []
+    }
+  },
+  {
+    name: 'read_recent_watch_runs',
+    tier: 'auto',
+    description:
+      'Read the most recent watch fires (across all watches in this org). Each row has the watch name, status, triggered_at, duration, tokens, and the result text. Use this for "what did your watches find this week?" or to debug a failing watch.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        watch_id: { type: 'string', description: 'Limit to one watch.' },
+        limit:    { type: 'integer', minimum: 1, maximum: 50, description: 'Max runs to return. Default 10.' }
+      },
+      required: []
+    }
+  },
+  {
+    name: 'propose_watch_archive',
+    tier: 'approval',
+    description:
+      'Disable and archive a watch so it stops firing. Soft delete — the row stays for audit. Use when the watch is no longer useful or when the user asks to stop a specific scheduled review.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        id:        { type: 'string', description: 'Watch id from list_watches.' },
+        rationale: { type: 'string', description: 'One short sentence explaining why this watch is being archived (shown on the approval card).' }
+      },
+      required: ['id', 'rationale']
+    }
+  }
+];
+
 // Build the SKILL.md body for one local pack. Mirrors the helper of
 // the same name in admin-agents-routes.js so CoS-driven mirrors and
 // admin-button mirrors produce byte-identical uploads.
@@ -6905,9 +6979,81 @@ async function execStaffApprovalTool(name, input, ctx) {
       );
       return 'Removed Anthropic mirror for "' + input.name + '" (was ' + priorId + '). Local pack body is unchanged.';
     }
+    // Phase 5 — proactive watching writes (approval-tier).
+    case 'propose_watch_create': {
+      if (!input || !input.name) throw new Error('name is required');
+      if (!input.prompt) throw new Error('prompt is required');
+      const cadence = input.cadence;
+      if (!['hourly', 'daily', 'weekly'].includes(cadence)) {
+        throw new Error('cadence must be one of: hourly, daily, weekly');
+      }
+      const timeOfDay = String(input.time_of_day_utc || '03:00').trim();
+      if (!/^\d{1,2}:\d{2}$/.test(timeOfDay)) {
+        throw new Error('time_of_day_utc must be HH:MM');
+      }
+      const orgId = await resolveOrgIdFromCtx(ctx);
+      const watchId = 'wch_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+      const nextFire = computeNextFireAt(cadence, timeOfDay, new Date());
+      await pool.query(
+        `INSERT INTO ai_watches
+           (id, organization_id, created_by_user_id, name, description,
+            cadence, time_of_day_utc, prompt, enabled, next_fire_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true, $9)`,
+        [
+          watchId, orgId, ctx.userId,
+          String(input.name).slice(0, 100),
+          input.description ? String(input.description).slice(0, 500) : null,
+          cadence, timeOfDay, String(input.prompt).slice(0, 8000), nextFire
+        ]
+      );
+      return 'Created watch ' + watchId + ' "' + input.name + '" — cadence: ' + cadence +
+        (cadence !== 'hourly' ? ' at ' + timeOfDay + ' UTC' : '') +
+        '. First fire: ' + nextFire.toISOString() + '.';
+    }
+    case 'propose_watch_archive': {
+      if (!input || !input.id) throw new Error('id is required');
+      const orgId = await resolveOrgIdFromCtx(ctx);
+      const r = await pool.query(
+        `UPDATE ai_watches SET archived_at = NOW(), enabled = false, updated_at = NOW()
+          WHERE id = $1 AND organization_id = $2 AND archived_at IS NULL
+        RETURNING name`,
+        [input.id, orgId]
+      );
+      if (!r.rows.length) throw new Error('No active watch found with id ' + input.id);
+      return 'Archived watch ' + input.id + ' ("' + r.rows[0].name + '"). It will not fire again.';
+    }
     default:
       throw new Error('Unknown approval-tier staff tool: ' + name);
   }
+}
+
+// Phase 5 — next-fire-at computation for a watch cadence.
+// Pure function so it's testable in isolation; called both at watch
+// create time and after each fire.
+function computeNextFireAt(cadence, timeOfDayUtc, from) {
+  const now = new Date(from);
+  if (cadence === 'hourly') {
+    const next = new Date(now);
+    next.setUTCMinutes(0, 0, 0);
+    next.setUTCHours(next.getUTCHours() + 1);
+    return next;
+  }
+  const [hh, mm] = String(timeOfDayUtc || '03:00').split(':').map(Number);
+  const next = new Date(now);
+  next.setUTCHours(hh, mm, 0, 0);
+  if (cadence === 'daily') {
+    if (next <= now) next.setUTCDate(next.getUTCDate() + 1);
+    return next;
+  }
+  if (cadence === 'weekly') {
+    // Monday in UTC.
+    const dayUTC = next.getUTCDay(); // 0=Sun..6=Sat
+    const daysUntilMonday = ((1 - dayUTC) + 7) % 7;
+    next.setUTCDate(next.getUTCDate() + daysUntilMonday);
+    if (next <= now) next.setUTCDate(next.getUTCDate() + 7);
+    return next;
+  }
+  return next;
 }
 
 // LEGACY /staff/chat + /staff/chat/continue — removed. /86/chat
@@ -7680,6 +7826,85 @@ async function execMemoryTool(name, input, ctx) {
   throw new Error('Unknown memory tool: ' + name);
 }
 
+// Phase 5 — auto-tier read handlers for watches. Same pattern as
+// execMemoryTool: called from make86OnCustomToolUse when 86 emits
+// list_watches or read_recent_watch_runs. ctx = { userId }.
+async function execWatchTool(name, input, ctx) {
+  const { userId } = ctx;
+  const orgRow = await pool.query(`SELECT organization_id FROM users WHERE id = $1`, [userId]);
+  const orgId = orgRow.rows[0] && orgRow.rows[0].organization_id;
+  if (!orgId) throw new Error('User has no organization — cannot use watch tools.');
+
+  if (name === 'list_watches') {
+    const includeArchived = input && input.include_archived === true;
+    const r = await pool.query(`
+      SELECT id, name, description, cadence, time_of_day_utc, enabled,
+             last_fired_at, next_fire_at, created_at, archived_at,
+             SUBSTRING(prompt, 1, 200) AS prompt_preview
+        FROM ai_watches
+       WHERE organization_id = $1
+         ${includeArchived ? '' : 'AND archived_at IS NULL'}
+       ORDER BY (CASE WHEN enabled AND archived_at IS NULL THEN 0 ELSE 1 END), created_at DESC
+       LIMIT 50
+    `, [orgId]);
+    if (!r.rows.length) return 'No watches configured yet.';
+    const lines = r.rows.map(row => {
+      const state =
+        row.archived_at ? '[ARCHIVED]' :
+        row.enabled ? '[ACTIVE]' : '[DISABLED]';
+      const when = row.cadence === 'hourly'
+        ? 'every hour'
+        : row.cadence + ' at ' + (row.time_of_day_utc || '03:00') + ' UTC';
+      const last = row.last_fired_at ? new Date(row.last_fired_at).toISOString() : 'never';
+      const next = row.next_fire_at ? new Date(row.next_fire_at).toISOString() : '—';
+      return '── ' + row.id + ' ' + state + ' "' + row.name + '" · ' + when +
+        '\n   last: ' + last + ' · next: ' + next +
+        '\n   prompt: ' + (row.prompt_preview || '') + (row.prompt_preview && row.prompt_preview.length === 200 ? '…' : '');
+    });
+    return 'Watches (' + r.rows.length + '):\n\n' + lines.join('\n\n');
+  }
+
+  if (name === 'read_recent_watch_runs') {
+    const limit = Math.max(1, Math.min(50, Number(input && input.limit) || 10));
+    const params = [orgId];
+    let watchClause = '';
+    if (input && input.watch_id) {
+      params.push(String(input.watch_id));
+      watchClause = ' AND r.watch_id = $2';
+    }
+    params.push(limit);
+    const r = await pool.query(`
+      SELECT r.id, r.watch_id, r.status, r.triggered_at, r.started_at, r.finished_at,
+             r.input_tokens, r.output_tokens, r.result, r.error,
+             w.name AS watch_name,
+             EXTRACT(EPOCH FROM (r.finished_at - r.started_at))::int AS duration_seconds
+        FROM ai_watch_runs r
+        JOIN ai_watches w ON w.id = r.watch_id
+       WHERE r.organization_id = $1${watchClause}
+       ORDER BY r.triggered_at DESC
+       LIMIT $${params.length}
+    `, params);
+    if (!r.rows.length) return 'No watch runs yet.';
+    const lines = r.rows.map(row => {
+      const tokens = (Number(row.input_tokens) || 0) + (Number(row.output_tokens) || 0);
+      const head = '── ' + row.id + ' [' + row.status + '] "' + row.watch_name + '" · ' +
+        new Date(row.triggered_at).toISOString() +
+        (row.duration_seconds != null ? ' · ' + row.duration_seconds + 's' : '') +
+        ' · ' + tokens + ' tokens';
+      if (row.status === 'completed') {
+        return head + '\n' + (row.result || '(no result text)').slice(0, 2000);
+      }
+      if (row.status === 'failed') {
+        return head + '\nFAILED: ' + (row.error || 'unknown');
+      }
+      return head + '\n(' + row.status + ')';
+    });
+    return 'Recent watch runs (' + r.rows.length + '):\n\n' + lines.join('\n\n');
+  }
+
+  throw new Error('Unknown watch read tool: ' + name);
+}
+
 function make86OnCustomToolUse(userId, parentSession) {
   // Per-request dedupe cache. Scoped to ONE /86/chat (or /chat/continue)
   // call — closes over this Map. If the model calls e.g.
@@ -7714,6 +7939,17 @@ function make86OnCustomToolUse(userId, parentSession) {
         return { tier: 'auto', summary };
       } catch (e) {
         return { tier: 'auto', error: 'Memory tool error: ' + (e.message || 'unknown') };
+      }
+    }
+    // Phase 5 — watch READS (auto-tier). The WRITES
+    // (propose_watch_create / propose_watch_archive) fall through to
+    // the default approval-tier path so they surface as approval cards.
+    if (tu.name === 'list_watches' || tu.name === 'read_recent_watch_runs') {
+      try {
+        const summary = await execWatchTool(tu.name, tu.input || {}, { userId });
+        return { tier: 'auto', summary };
+      } catch (e) {
+        return { tier: 'auto', error: 'Watch tool error: ' + (e.message || 'unknown') };
       }
     }
     if (tu.name === 'spawn_subtask' || tu.name === 'await_subtasks' || tu.name === 'subtask_status') {
@@ -8053,6 +8289,191 @@ async function driveSubtaskTurn({ anthropic, sessionId, eventsToSend, onCustomTo
   }
 
   return { text: collectedText, usage: aggUsage, error: 'Subtask hit turn cap (' + MAX_SUBTASK_TURNS + '). Likely a tool loop.' };
+}
+
+// ─── Phase 5: watch runner + scheduler ────────────────────────────────
+//
+// A watch fire = creating a fresh Anthropic session, running the
+// watch's prompt to completion, persisting the result. Same shape as
+// runSubtaskInBackground; reuses driveSubtaskTurn so we keep one
+// streaming driver instead of two.
+//
+// runWatchFire(watchRunId) is the unit of work; the scheduler creates
+// one ai_watch_runs row per due watch and enqueues a fire.
+
+async function runWatchFire(watchRunId) {
+  const anthropic = getAnthropic();
+  if (!anthropic) {
+    await pool.query(
+      `UPDATE ai_watch_runs SET status='failed', error=$2, finished_at=NOW() WHERE id=$1`,
+      [watchRunId, 'ANTHROPIC_API_KEY not configured.']
+    );
+    return;
+  }
+
+  const lookup = await pool.query(
+    `SELECT r.*, w.prompt AS watch_prompt, w.name AS watch_name,
+            w.created_by_user_id AS user_id, w.organization_id AS watch_org_id
+       FROM ai_watch_runs r
+       JOIN ai_watches w ON w.id = r.watch_id
+      WHERE r.id = $1`,
+    [watchRunId]
+  );
+  if (!lookup.rows.length) return;
+  const row = lookup.rows[0];
+
+  const orgRow = await pool.query(`SELECT * FROM organizations WHERE id = $1`, [row.watch_org_id]);
+  const organization = orgRow.rows[0];
+  if (!organization) {
+    await pool.query(
+      `UPDATE ai_watch_runs SET status='failed', error=$2, finished_at=NOW() WHERE id=$1`,
+      [watchRunId, 'Watch organization not found.']
+    );
+    return;
+  }
+
+  const flip = await pool.query(
+    `UPDATE ai_watch_runs SET status='running', started_at=NOW()
+      WHERE id=$1 AND status='pending' RETURNING id`,
+    [watchRunId]
+  );
+  if (!flip.rows.length) return;
+
+  let sessionId = null;
+  try {
+    const adminAgents = require('./admin-agents-routes');
+    const env = await adminAgents.ensureManagedEnvironment();
+    const agent = await adminAgents.ensureManagedAgent('job', organization);
+
+    const created = await anthropic.beta.sessions.create({
+      agent: agent.anthropic_agent_id,
+      environment_id: env.anthropic_environment_id,
+      title: 'Project 86 watch · ' + organization.slug + ' · ' + row.watch_name.slice(0, 60)
+    });
+    sessionId = created.id;
+    await pool.query(`UPDATE ai_watch_runs SET anthropic_session_id=$2 WHERE id=$1`, [watchRunId, sessionId]);
+
+    // Use 86's normal auto-exec, but reject subtask-spawning attempts
+    // (a watch is itself a top-level fire; nested fan-out would burn
+    // unbounded spend without a user gate). parentSession=null so the
+    // wrapper rejects spawn/await/status.
+    const baseCallback = make86OnCustomToolUse(row.user_id, null);
+    const watchCallback = async (tu) => {
+      if (tu.name === 'spawn_subtask' || tu.name === 'await_subtasks' || tu.name === 'subtask_status') {
+        return { tier: 'auto', error: 'Watches cannot spawn subtasks (recursion guard). Do the work directly in this fire.' };
+      }
+      const decision = await baseCallback(tu);
+      if (decision && decision.tier === 'approval') {
+        return {
+          tier: 'auto',
+          error: 'Tool "' + tu.name + '" is approval-tier and cannot run inside a watch. Summarize what you would propose instead.'
+        };
+      }
+      return decision;
+    };
+
+    const prompt =
+      '[You are running as a Project 86 watch — a scheduled fire of a recurring instruction set up by the user. ' +
+      'Do the work, then reply with ONE final message containing your findings. ' +
+      'No conversational filler; the user will read this asynchronously.]\n\n' +
+      String(row.watch_prompt || '');
+
+    const result = await driveSubtaskTurn({
+      anthropic,
+      sessionId,
+      eventsToSend: [{ type: 'user.message', content: [{ type: 'text', text: prompt }] }],
+      onCustomToolUse: watchCallback
+    });
+
+    await pool.query(
+      `UPDATE ai_watch_runs SET
+         status = $2, result = $3, error = $4,
+         input_tokens = COALESCE(input_tokens,0) + $5,
+         output_tokens = COALESCE(output_tokens,0) + $6,
+         cache_creation_tokens = COALESCE(cache_creation_tokens,0) + $7,
+         cache_read_tokens = COALESCE(cache_read_tokens,0) + $8,
+         finished_at = NOW()
+       WHERE id = $1`,
+      [
+        watchRunId,
+        result.error ? 'failed' : 'completed',
+        result.text || null,
+        result.error || null,
+        result.usage.input_tokens || 0,
+        result.usage.output_tokens || 0,
+        result.usage.cache_creation_input_tokens || 0,
+        result.usage.cache_read_input_tokens || 0
+      ]
+    );
+  } catch (e) {
+    console.error('[watch] runner failed for', watchRunId, e);
+    await pool.query(
+      `UPDATE ai_watch_runs SET status='failed', error=$2, finished_at=NOW() WHERE id=$1`,
+      [watchRunId, (e && e.message) || 'Watch runner error']
+    );
+  } finally {
+    if (sessionId) {
+      try { await anthropic.beta.sessions.archive(sessionId); } catch (_) {}
+    }
+  }
+}
+
+// Scheduler tick. Looks for due watches, creates one ai_watch_runs row
+// per fire, advances next_fire_at, then enqueues the runner. Race-safe
+// via an atomic UPDATE-with-WHERE on next_fire_at — if two ticks fire
+// simultaneously, only one will see the row in the "due" state.
+async function tickWatchScheduler() {
+  try {
+    const due = await pool.query(`
+      SELECT id, organization_id, cadence, time_of_day_utc, next_fire_at
+        FROM ai_watches
+       WHERE enabled = true
+         AND archived_at IS NULL
+         AND next_fire_at <= NOW()
+       LIMIT 20
+    `);
+    for (const w of due.rows) {
+      const newNext = computeNextFireAt(w.cadence, w.time_of_day_utc, new Date());
+      // CAS update: only fire if next_fire_at still matches what we
+      // read. If another scheduler beat us, this row will get 0 rows
+      // updated and we skip.
+      const cas = await pool.query(
+        `UPDATE ai_watches
+            SET last_fired_at = NOW(), next_fire_at = $2, updated_at = NOW()
+          WHERE id = $1 AND next_fire_at = $3
+        RETURNING id`,
+        [w.id, newNext, w.next_fire_at]
+      );
+      if (!cas.rows.length) continue;
+      const runId = 'wrn_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+      await pool.query(
+        `INSERT INTO ai_watch_runs (id, watch_id, organization_id, status)
+         VALUES ($1, $2, $3, 'pending')`,
+        [runId, w.id, w.organization_id]
+      );
+      setImmediate(() => {
+        runWatchFire(runId).catch(err => {
+          console.error('[watch] fire crashed for', runId, err);
+        });
+      });
+    }
+  } catch (e) {
+    console.error('[watch] scheduler tick failed:', e);
+  }
+}
+
+// Start the scheduler. Called once at boot from server/index.js.
+// SCHEDULER_INTERVAL_MS = 60s. Calls tickWatchScheduler immediately
+// then on each interval. unref() so a leftover timer doesn't keep the
+// process alive at shutdown.
+function startWatchScheduler() {
+  const intervalMs = Number(process.env.WATCH_SCHEDULER_MS) || 60000;
+  console.log('[watch] scheduler starting (tick every ' + intervalMs + 'ms)');
+  // First tick after 10s to let DB init finish.
+  setTimeout(tickWatchScheduler, 10000);
+  const handle = setInterval(tickWatchScheduler, intervalMs);
+  if (handle.unref) handle.unref();
+  return handle;
 }
 
 // POST /api/ai/v2/intake/chat — fresh session per call.
@@ -9301,6 +9722,7 @@ router.post('/86/chat/continue', requireAuth, requireOrg, async (req, res) => {
 });
 
 module.exports = router;
+module.exports.startWatchScheduler = startWatchScheduler;
 module.exports.internals = {
   buildEstimateContext,
   buildJobContext,
@@ -9328,6 +9750,9 @@ module.exports.internals = {
   subtaskTools:  () => SUBTASK_TOOLS.map(({ tier, ...t }) => t),
   // Phase 4 — long-term semantic memory tools.
   memoryTools:   () => MEMORY_TOOLS.map(({ tier, ...t }) => t),
+  // Phase 5 — proactive watching tools (3 of 4 are auto; the writes
+  // are approval-tier and surface as cards).
+  watchTools:    () => WATCH_TOOLS.map(({ tier, ...t }) => t),
   defaultModel: () => MODEL,
   maxTokens: () => MAX_TOKENS,
   // Resolve the effort string for a given model. Caller passes the

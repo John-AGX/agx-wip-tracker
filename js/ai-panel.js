@@ -1485,7 +1485,12 @@
     remember:                     'Saving to memory…',
     recall:                       'Searching memory…',
     list_memories:                'Listing memories…',
-    forget:                       'Archiving memory…'
+    forget:                       'Archiving memory…',
+    // Phase 5 — proactive watching
+    propose_watch_create:         'Drafting new watch…',
+    list_watches:                 'Listing watches…',
+    read_recent_watch_runs:       'Reading watch runs…',
+    propose_watch_archive:        'Drafting watch removal…'
   };
 
   function appendStreamingBubble() {

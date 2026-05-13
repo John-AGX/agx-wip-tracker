@@ -1685,6 +1685,8 @@ function customToolsFor(agentKey) {
     //                     subtask_status — parallel fan-out)
     //   - memoryTools    (Phase 4: remember / recall / list_memories /
     //                     forget — cross-session memory)
+    //   - watchTools     (Phase 5: propose_watch_create / list_watches /
+    //                     read_recent_watch_runs / propose_watch_archive)
     // Deduped by name; first occurrence wins (estimate-first order).
     // INTAKE_TOOLS are already spread into jobTools().
     const seen = new Set();
@@ -1695,7 +1697,8 @@ function customToolsFor(agentKey) {
       ...aiInternals.clientTools(),
       ...aiInternals.staffTools(),
       ...aiInternals.subtaskTools(),
-      ...aiInternals.memoryTools()
+      ...aiInternals.memoryTools(),
+      ...aiInternals.watchTools()
     ].forEach(t => {
       if (!t || !t.name || seen.has(t.name)) return;
       seen.add(t.name);

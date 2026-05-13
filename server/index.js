@@ -167,6 +167,15 @@ function startServer() {
       } catch (e) {
         console.warn('[cert-expiry] failed to start scanner:', e && e.message);
       }
+      // Phase 5 — proactive-watch scheduler. Ticks every 60s,
+      // fires watches with next_fire_at <= NOW. Runs in-process; one
+      // tick per app instance (multiple Railway instances would each
+      // tick, but the CAS update on next_fire_at prevents double fires).
+      try {
+        if (aiRoutes.startWatchScheduler) aiRoutes.startWatchScheduler();
+      } catch (e) {
+        console.warn('[watch] failed to start scheduler:', e && e.message);
+      }
     }
   });
 }
