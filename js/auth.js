@@ -215,7 +215,7 @@
       // refreshUsers; non-admins just need the cache populated so PM-by-id
       // lookups in the Job Information panel resolve names correctly).
       if (window.p86Admin) {
-        if (currentUser.role === 'admin') window.p86Admin.refreshUsers();
+        if (currentUser.role === 'admin' || currentUser.role === 'system_admin') window.p86Admin.refreshUsers();
         else if (window.p86Admin.loadUsersCache) window.p86Admin.loadUsersCache();
       }
     })
@@ -227,6 +227,27 @@
   }
 
   function checkSession() {
+    // Refresh the token first so any server-side role / org changes
+    // since the last login propagate without requiring a logout +
+    // back-in. POST /refresh-token re-reads role + organization_id
+    // from the DB and re-issues the JWT cookie. Falls through to
+    // the original /me read if the refresh endpoint isn't available
+    // (older server). Non-fatal — /me still works either way.
+    fetch('/api/auth/refresh-token', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + token },
+      credentials: 'include'
+    })
+    .then(function(r) {
+      if (r.ok) return r.json().then(function(j) {
+        if (j && j.token) {
+          token = j.token;
+          try { localStorage.setItem('p86-auth-token', j.token); } catch (_) {}
+        }
+      });
+    })
+    .catch(function() { /* refresh is best-effort */ })
+    .finally(function() {
     fetch('/api/auth/me', {
       headers: { 'Authorization': 'Bearer ' + token }
     })
@@ -257,7 +278,7 @@
       // refreshUsers; non-admins just need the cache populated so PM-by-id
       // lookups in the Job Information panel resolve names correctly).
       if (window.p86Admin) {
-        if (currentUser.role === 'admin') window.p86Admin.refreshUsers();
+        if (currentUser.role === 'admin' || currentUser.role === 'system_admin') window.p86Admin.refreshUsers();
         else if (window.p86Admin.loadUsersCache) window.p86Admin.loadUsersCache();
       }
     })
@@ -265,6 +286,7 @@
       localStorage.removeItem('p86-auth-token');
       token = null;
       showLogin();
+    });
     });
   }
 
