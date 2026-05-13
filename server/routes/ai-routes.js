@@ -1189,8 +1189,23 @@ const JOB_TOOLS = [
     }
   },
   {
+    name: 'read_wip_summary',
+    description:
+      'Company-wide WIP roll-up. Returns per-job financial summary (contract value, costs, % complete, revenue earned, JTD profit/margin, backlog, invoiced, unbilled) PLUS portfolio totals. Use this for "what\'s under contract right now", "show me our biggest jobs by remaining backlog", "any margin red flags", "what\'s our total billed-to-date". This is the AGGREGATE rollup — replaces the need to fan out per-job WIP reads. Filter by status (e.g. "In Progress" excludes Completed/Archived). The numbers match what the PM sees on the WIP page tiles — same `computeJobWIP` formula. Auto-tier.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        status: { type: 'string', description: 'Filter to one status: New / In Progress / Backlog / On Hold / Completed / Archived. Omit to include all.' },
+        sort_by: { type: 'string', enum: ['backlog', 'contract', 'margin', 'pct_complete'], description: 'Sort key for the per-job list. Default backlog (descending = biggest remaining first).' },
+        limit: { type: 'integer', minimum: 1, maximum: 200, description: 'Max jobs in per-job list (totals still cover the full filtered set). Default 20.' }
+      },
+      required: []
+    }
+  },
+  {
     name: 'read_jobs',
-    description: 'List jobs in Project 86 with their identity-card fields (jobNumber, title, client linkage, status, location, PM). Use to answer who/where/what for a specific job — NOT financial / WIP / scope detail. Pass q for fuzzy match. Auto-tier.',
+    description: 'List jobs in Project 86 with their identity-card fields (jobNumber, title, client linkage, status, location, PM). Use to answer who/where/what for a specific job — NOT financial / WIP / scope detail. For financial roll-up use read_wip_summary instead. Pass q for fuzzy match. Auto-tier.',
     input_schema: {
       type: 'object',
       additionalProperties: false,
@@ -5107,6 +5122,132 @@ async function execClientTool(name, input) {
         (j.clientId ? ' · linked to client ' + j.clientId : ' · no client link')
       ).join('\n');
     }
+    case 'read_wip_summary': {
+      // Company-wide WIP roll-up. Reuses computeJobWIP per job so the
+      // numbers match the WIP page tiles exactly. SELECT all jobs once,
+      // compute in Node — jobs table is small (hundreds of rows max).
+      const statusFilter = String(input.status || '').trim();
+      const sortBy = ['backlog', 'contract', 'margin', 'pct_complete'].includes(input.sort_by)
+        ? input.sort_by : 'backlog';
+      const limit = Math.max(1, Math.min(200, parseInt(input.limit, 10) || 20));
+      const r = await pool.query(
+        'SELECT j.id, j.data, j.updated_at, c.name AS client_name ' +
+        'FROM jobs j ' +
+        "LEFT JOIN clients c ON c.id = (j.data->>'clientId') " +
+        'ORDER BY j.updated_at DESC NULLS LAST'
+      );
+      const allJobs = r.rows.map(row => {
+        const d = row.data || {};
+        const buildings = Array.isArray(d.buildings) ? d.buildings : [];
+        const phases = Array.isArray(d.phases) ? d.phases : [];
+        const changeOrders = Array.isArray(d.changeOrders) ? d.changeOrders : [];
+        const subs = Array.isArray(d.subs) ? d.subs : [];
+        const invoices = Array.isArray(d.invoices) ? d.invoices : [];
+        const wip = computeJobWIP(d, buildings, phases, changeOrders, subs, invoices);
+        return {
+          id: row.id,
+          jobNumber: d.jobNumber || null,
+          title: d.title || d.jobName || '(untitled)',
+          client: row.client_name || d.client || null,
+          status: d.status || null,
+          pm: d.pm || null,
+          targetMarginPct: d.targetMarginPct != null ? Number(d.targetMarginPct) : null,
+          updated_at: row.updated_at,
+          wip
+        };
+      });
+      const filtered = statusFilter
+        ? allJobs.filter(j => String(j.status || '').toLowerCase() === statusFilter.toLowerCase())
+        : allJobs;
+      if (!filtered.length) {
+        return statusFilter
+          ? 'No jobs with status "' + statusFilter + '".'
+          : 'No jobs in the system.';
+      }
+
+      // Portfolio totals across the filtered set.
+      const totals = filtered.reduce((acc, j) => {
+        acc.contract += j.wip.totalIncome;
+        acc.estCosts += j.wip.revisedEstCosts;
+        acc.actualCosts += j.wip.actualCosts;
+        acc.revenueEarned += j.wip.revenueEarned;
+        acc.invoiced += j.wip.invoiced;
+        acc.unbilled += j.wip.unbilled;
+        acc.backlog += j.wip.backlog;
+        return acc;
+      }, { contract: 0, estCosts: 0, actualCosts: 0, revenueEarned: 0, invoiced: 0, unbilled: 0, backlog: 0 });
+      const portfolioMargin = totals.revenueEarned > 0
+        ? ((totals.revenueEarned - totals.actualCosts) / totals.revenueEarned * 100)
+        : 0;
+
+      // Margin red flags — jobs where JTD margin is below target (or
+      // below 15% if no target set) AND they have meaningful revenue
+      // earned. Helps 86 surface the "anything looks off" answer.
+      const redFlags = filtered.filter(j => {
+        const target = j.targetMarginPct != null ? j.targetMarginPct : 15;
+        return j.wip.revenueEarned > 1000 && j.wip.jtdMargin < target;
+      }).sort((a, b) => a.wip.jtdMargin - b.wip.jtdMargin).slice(0, 5);
+
+      // Sort the per-job list.
+      const sortKey = {
+        backlog: j => j.wip.backlog,
+        contract: j => j.wip.totalIncome,
+        margin: j => -j.wip.jtdMargin, // worst first (negative so descending sort surfaces worst)
+        pct_complete: j => j.wip.pctComplete
+      }[sortBy];
+      const sorted = filtered.slice().sort((a, b) => sortKey(b) - sortKey(a));
+      const top = sorted.slice(0, limit);
+
+      // Format. Use $ formatter from local fmtMoney equivalent.
+      function $(n) {
+        const sign = n < 0 ? '-' : '';
+        const abs = Math.abs(Math.round(Number(n) || 0));
+        return sign + '$' + abs.toLocaleString('en-US');
+      }
+      function pctFmt(n) { return (Number(n) || 0).toFixed(1) + '%'; }
+
+      const out = [];
+      out.push('## WIP ROLL-UP' + (statusFilter ? ' (status: ' + statusFilter + ')' : '') + ' — ' + filtered.length + ' job' + (filtered.length === 1 ? '' : 's'));
+      out.push('');
+      out.push('### Portfolio totals');
+      out.push('- Contract value (incl. COs): **' + $(totals.contract) + '**');
+      out.push('- Estimated costs (revised): ' + $(totals.estCosts));
+      out.push('- Actual costs JTD: ' + $(totals.actualCosts));
+      out.push('- Revenue earned JTD: ' + $(totals.revenueEarned));
+      out.push('- Invoiced JTD: ' + $(totals.invoiced));
+      out.push('- Unbilled (earned not invoiced): ' + $(totals.unbilled));
+      out.push('- Remaining backlog: **' + $(totals.backlog) + '**');
+      out.push('- Portfolio JTD margin: **' + pctFmt(portfolioMargin) + '**');
+      out.push('');
+
+      if (redFlags.length) {
+        out.push('### Margin red flags (JTD margin below target, sorted worst-first)');
+        redFlags.forEach(j => {
+          const target = j.targetMarginPct != null ? j.targetMarginPct : 15;
+          out.push('- ' + (j.jobNumber ? '[' + j.jobNumber + '] ' : '') + j.title +
+            (j.client ? ' (' + j.client + ')' : '') +
+            ' — JTD margin ' + pctFmt(j.wip.jtdMargin) + ' vs target ' + pctFmt(target) +
+            ' · revenue earned ' + $(j.wip.revenueEarned));
+        });
+        out.push('');
+      }
+
+      out.push('### Top ' + top.length + ' job' + (top.length === 1 ? '' : 's') + ' by ' + sortBy + (sortBy === 'margin' ? ' (worst first)' : ' (descending)'));
+      top.forEach(j => {
+        out.push('- ' + (j.jobNumber ? '[' + j.jobNumber + '] ' : '') + j.title +
+          (j.client ? ' (' + j.client + ')' : '') +
+          (j.status ? ' · ' + j.status : '') +
+          (j.pm ? ' · PM ' + j.pm : ''));
+        out.push('    contract ' + $(j.wip.totalIncome) +
+          ' · pct ' + pctFmt(j.wip.pctComplete) +
+          ' · earned ' + $(j.wip.revenueEarned) +
+          ' · costs ' + $(j.wip.actualCosts) +
+          ' · margin ' + pctFmt(j.wip.jtdMargin) +
+          ' · backlog ' + $(j.wip.backlog));
+      });
+
+      return out.join('\n');
+    }
     case 'read_users': {
       const q = String(input.q || '').trim().toLowerCase();
       const role = String(input.role || '').trim();
@@ -8728,6 +8869,8 @@ const ALLOWED_AUTO_TIER_TOOLS = new Set([
   // HR directory reads — let 86 do who/where/what lookups inline
   'read_jobs',
   'read_users',
+  // Company-wide WIP roll-up (financial aggregate across all jobs)
+  'read_wip_summary',
   // Intake-side dedup reads — without these in the allowlist 86's
   // pre-lead-create dedup pass renders as approval cards instead of
   // chips. Pure lookups, no mutation.
@@ -8751,7 +8894,7 @@ const ALLOWED_AUTO_TIER_TOOLS = new Set([
 ]);
 // Tools whose executor lives in execClientTool (HR's directory reads)
 // rather than execStaffTool. The dispatcher routes by name.
-const CLIENT_EXECUTOR_TOOLS = new Set(['read_jobs', 'read_users']);
+const CLIENT_EXECUTOR_TOOLS = new Set(['read_jobs', 'read_users', 'read_wip_summary']);
 // Tools whose executor lives in execIntakeRead (intake-side dedup
 // against existing clients / leads before creating a new one).
 const INTAKE_EXECUTOR_TOOLS = new Set(['read_existing_clients', 'read_existing_leads']);
