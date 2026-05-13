@@ -3058,6 +3058,7 @@
       _orgPacksDirty = new Set();
       host.innerHTML = renderOrgHTML();
       attachOrgHandlers();
+      loadOrgMcpServers();
     }).catch(function(err) {
       host.innerHTML = '<div style="color:#e74c3c;padding:14px 0;">Failed to load organization: ' + escapeHTML(err.message || 'unknown') + '</div>';
     });
@@ -3114,8 +3115,141 @@
       +     '<button class="ee-btn secondary" onclick="addOrgPack()">&#x2795; New pack</button>'
       +     '<button class="ee-btn primary" onclick="saveOrgPacks()">&#x1F4BE; Save changed packs</button>'
       +   '</div>'
+      + '</fieldset>'
+
+      // ── MCP connectors (Phase 6) ──
+      + '<fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:14px;margin-top:18px;">'
+      +   '<legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">MCP connectors</legend>'
+      +   '<p style="margin:0 0 12px 0;font-size:12px;color:var(--text-dim,#888);line-height:1.55;">'
+      +     'External tool reach via Model Context Protocol — Gmail, Calendar, QuickBooks, Slack, custom MCP servers. Each entry is one MCP server URL plus an optional bearer token. Added servers register on the next <strong>Sync managed agent</strong>; once registered, 86 can call the server\'s tools natively.'
+      +   '</p>'
+      +   '<div id="org-mcp-list">' + '<div style="font-size:11px;color:var(--text-dim,#666);font-style:italic;">Loading connectors…</div>' + '</div>'
+      +   '<div style="display:flex;gap:8px;margin-top:14px;align-items:center;">'
+      +     '<span id="org-mcp-status" style="flex:1;font-size:11px;color:var(--text-dim,#888);"></span>'
+      +     '<button class="ee-btn secondary" onclick="openMcpServerModal()">&#x2795; Add connector</button>'
+      +   '</div>'
       + '</fieldset>';
   }
+
+  // Phase 6 — load + render MCP server list under the org settings view.
+  // Stored separately from _orgPacksDraft because servers don't have an
+  // unsaved-state concept — every add/edit/delete posts to the API
+  // immediately. Each row carries a masked token (last 4 chars only).
+  var _orgMcpServers = [];
+
+  function loadOrgMcpServers() {
+    var orgId = _orgDraft && _orgDraft.id;
+    if (!orgId) return;
+    window.p86Api.get('/api/admin/organizations/' + orgId + '/mcp-servers')
+      .then(function(r) {
+        _orgMcpServers = (r && r.servers) || [];
+        renderOrgMcpList();
+      }).catch(function(err) {
+        var mount = document.getElementById('org-mcp-list');
+        if (mount) mount.innerHTML = '<div style="color:#e74c3c;font-size:12px;">Load failed: ' + escapeHTML(err.message || 'unknown') + '</div>';
+      });
+  }
+
+  function renderOrgMcpList() {
+    var mount = document.getElementById('org-mcp-list');
+    if (!mount) return;
+    if (!_orgMcpServers.length) {
+      mount.innerHTML =
+        '<div style="padding:14px;text-align:center;color:var(--text-dim,#888);border:1px dashed var(--border,#333);border-radius:6px;font-size:12px;">' +
+          'No MCP connectors configured. Click <strong>+ Add connector</strong> to wire one up.' +
+        '</div>';
+      return;
+    }
+    mount.innerHTML = _orgMcpServers.map(function(s) {
+      var statusColor = s.enabled ? '#34d399' : '#9ca3af';
+      var statusLabel = s.enabled ? 'enabled' : 'disabled';
+      var tokenLine = s.has_token
+        ? '<span style="font-family:\'SF Mono\',monospace;color:var(--text-dim,#777);">token: ' + escapeHTML(s.authorization_token_masked || '****') + '</span>'
+        : '<span style="font-style:italic;color:var(--text-dim,#777);">no token</span>';
+      return '<div style="border:1px solid var(--border,#333);border-radius:6px;padding:10px 12px;margin-bottom:8px;display:flex;align-items:flex-start;gap:10px;">' +
+        '<div style="flex:1;min-width:0;">' +
+          '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">' +
+            '<span style="font-size:13px;font-weight:600;color:var(--text,#fff);">' + escapeHTML(s.name) + '</span>' +
+            '<span style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:' + statusColor + ';">' + statusLabel + '</span>' +
+          '</div>' +
+          '<div style="font-size:11px;color:var(--text-dim,#aaa);font-family:\'SF Mono\',monospace;word-break:break-all;margin-bottom:4px;">' + escapeHTML(s.url) + '</div>' +
+          '<div style="font-size:11px;">' + tokenLine + '</div>' +
+          (s.description ? '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:4px;">' + escapeHTML(s.description) + '</div>' : '') +
+        '</div>' +
+        '<div style="display:flex;flex-direction:column;gap:4px;">' +
+          '<button class="ee-btn ghost" onclick="openMcpServerModal(\'' + escapeAttr(s.id) + '\')" style="padding:2px 8px;font-size:11px;">Edit</button>' +
+          '<button class="ee-btn ghost" onclick="archiveMcpServer(\'' + escapeAttr(s.id) + '\', \'' + escapeAttr(s.name) + '\')" style="padding:2px 8px;font-size:11px;color:#f87171;">Archive</button>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+  }
+
+  window.openMcpServerModal = function(serverId) {
+    var existing = serverId ? _orgMcpServers.find(function(s) { return s.id === serverId; }) : null;
+    var title = existing ? 'Edit MCP connector' : 'Add MCP connector';
+    var modal = document.createElement('div');
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:9999;';
+    modal.innerHTML =
+      '<div style="background:var(--bg,#1a1a1a);border:1px solid var(--border,#333);border-radius:10px;padding:20px;max-width:560px;width:92%;">' +
+        '<div style="font-size:15px;font-weight:600;color:var(--text,#fff);margin-bottom:14px;">' + escapeHTML(title) + '</div>' +
+        '<div style="display:grid;gap:10px;font-size:12px;">' +
+          '<label style="display:grid;gap:4px;">' +
+            '<span style="color:var(--text-dim,#aaa);">Name (short label, e.g. "gmail", "quickbooks")</span>' +
+            '<input id="mcp-modal-name" type="text" value="' + escapeAttr(existing && existing.name || '') + '" maxlength="100" />' +
+          '</label>' +
+          '<label style="display:grid;gap:4px;">' +
+            '<span style="color:var(--text-dim,#aaa);">URL (https://...)</span>' +
+            '<input id="mcp-modal-url" type="text" value="' + escapeAttr(existing && existing.url || '') + '" placeholder="https://mcp.example.com/sse" />' +
+          '</label>' +
+          '<label style="display:grid;gap:4px;">' +
+            '<span style="color:var(--text-dim,#aaa);">Authorization token (optional bearer; leave blank for none)</span>' +
+            '<input id="mcp-modal-token" type="password" autocomplete="off" placeholder="' + (existing && existing.has_token ? '(unchanged — type to replace)' : '(none)') + '" />' +
+          '</label>' +
+          '<label style="display:grid;gap:4px;">' +
+            '<span style="color:var(--text-dim,#aaa);">Description (optional)</span>' +
+            '<textarea id="mcp-modal-description" rows="2" maxlength="500">' + escapeHTML(existing && existing.description || '') + '</textarea>' +
+          '</label>' +
+          '<label style="display:flex;align-items:center;gap:8px;">' +
+            '<input id="mcp-modal-enabled" type="checkbox"' + (!existing || existing.enabled ? ' checked' : '') + ' />' +
+            '<span>Enabled (registered with the managed agent on next sync)</span>' +
+          '</label>' +
+        '</div>' +
+        '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:18px;">' +
+          '<button class="ee-btn secondary" id="mcp-modal-cancel">Cancel</button>' +
+          '<button class="ee-btn primary" id="mcp-modal-save">' + (existing ? 'Save changes' : 'Add connector') + '</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(modal);
+    modal.querySelector('#mcp-modal-cancel').addEventListener('click', function() { document.body.removeChild(modal); });
+    modal.querySelector('#mcp-modal-save').addEventListener('click', function() {
+      var name = document.getElementById('mcp-modal-name').value.trim();
+      var url = document.getElementById('mcp-modal-url').value.trim();
+      var token = document.getElementById('mcp-modal-token').value;
+      var description = document.getElementById('mcp-modal-description').value;
+      var enabled = document.getElementById('mcp-modal-enabled').checked;
+      if (!name || !url) { alert('Name and URL are required.'); return; }
+      var orgId = _orgDraft && _orgDraft.id;
+      var body = { name: name, url: url, description: description, enabled: enabled };
+      if (token) body.authorization_token = token;
+      var req = existing
+        ? window.p86Api.put('/api/admin/organizations/' + orgId + '/mcp-servers/' + serverId, body)
+        : window.p86Api.post('/api/admin/organizations/' + orgId + '/mcp-servers', body);
+      req.then(function() {
+        document.body.removeChild(modal);
+        loadOrgMcpServers();
+      }).catch(function(err) {
+        alert((existing ? 'Save' : 'Add') + ' failed: ' + (err && err.message || 'unknown'));
+      });
+    });
+  };
+
+  window.archiveMcpServer = function(serverId, name) {
+    if (!confirm('Archive MCP connector "' + name + '"? It will no longer register with the managed agent.')) return;
+    var orgId = _orgDraft && _orgDraft.id;
+    window.p86Api.del('/api/admin/organizations/' + orgId + '/mcp-servers/' + serverId)
+      .then(function() { loadOrgMcpServers(); })
+      .catch(function(err) { alert('Archive failed: ' + (err && err.message || 'unknown')); });
+  };
 
   function renderOrgPacksHTML() {
     var packs = _orgPacksDraft || [];

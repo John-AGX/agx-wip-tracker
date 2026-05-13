@@ -1445,6 +1445,40 @@ async function initSchema() {
       ON ai_watch_runs (status)
       WHERE status IN ('pending','running');
 
+    -- org_mcp_servers — Phase 6 (MCP connectors). Per-tenant external
+    -- tool reach: Gmail, Google Calendar, QuickBooks, Slack, etc.
+    -- Each row is one MCP server URL the tenant has provisioned (either
+    -- a self-hosted MCP server or an Anthropic-hosted connector with a
+    -- shareable URL).
+    --
+    -- authorization_token is the optional bearer the agent sends with
+    -- every MCP request. STORED IN PLAIN TEXT for now — system admins
+    -- already see other tenant secrets; encrypting only this would be
+    -- security theatre. TODO: when we introduce per-tenant KMS, encrypt
+    -- this column.
+    --
+    -- (organization_id, name) is unique while not archived so the
+    -- "gmail" label can only refer to one server per tenant; readers
+    -- always pick the active row.
+    CREATE TABLE IF NOT EXISTS org_mcp_servers (
+      id TEXT PRIMARY KEY,
+      organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      url TEXT NOT NULL,
+      authorization_token TEXT,
+      description TEXT,
+      enabled BOOLEAN NOT NULL DEFAULT true,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      archived_at TIMESTAMPTZ
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_org_mcp_servers_unique
+      ON org_mcp_servers (organization_id, name)
+      WHERE archived_at IS NULL;
+    CREATE INDEX IF NOT EXISTS idx_org_mcp_servers_enabled
+      ON org_mcp_servers (organization_id)
+      WHERE enabled AND archived_at IS NULL;
+
     -- Job-level reports — Project 86 "report" feature similar to
     -- CompanyCam: a user-curated photo collection grouped into named
     -- sections (Before / During / After by default, but renamable +

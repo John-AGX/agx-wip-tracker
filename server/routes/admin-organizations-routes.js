@@ -323,4 +323,147 @@ router.delete('/:id/skill-packs/:packId', requireAuth, requireOrg, requireCapabi
   }
 });
 
+// ─── Phase 6: MCP connector CRUD ──────────────────────────────────────
+//
+// Per-tenant MCP server configuration. Each org points 86 at zero or
+// more MCP servers (Gmail, Calendar, QuickBooks, Slack, etc.). On
+// agent registration / sync, the active servers are passed to the
+// Anthropic managed agent so the model can call MCP tools natively.
+//
+// authorization_token is returned masked on GET (only the last 4
+// chars surface) so a system admin can verify "is this set?" without
+// the panel leaking the bearer.
+
+function maskToken(t) {
+  if (!t) return null;
+  const s = String(t);
+  if (s.length <= 4) return '****';
+  return '****' + s.slice(-4);
+}
+
+router.get('/:id/mcp-servers',
+  requireAuth, requireCapability('ROLES_MANAGE'), requireOrg,
+  async (req, res) => {
+    try {
+      const targetId = assertOrgScope(req, req.params.id);
+      const r = await pool.query(
+        `SELECT id, name, url, description, enabled, authorization_token,
+                created_at, updated_at, archived_at
+           FROM org_mcp_servers
+          WHERE organization_id = $1 AND archived_at IS NULL
+          ORDER BY name ASC`,
+        [targetId]
+      );
+      const rows = r.rows.map(row => ({
+        id: row.id,
+        name: row.name,
+        url: row.url,
+        description: row.description,
+        enabled: row.enabled,
+        authorization_token_masked: maskToken(row.authorization_token),
+        has_token: !!row.authorization_token,
+        created_at: row.created_at,
+        updated_at: row.updated_at
+      }));
+      res.json({ servers: rows });
+    } catch (e) {
+      const status = e.status || 500;
+      console.error('GET /:id/mcp-servers error:', e);
+      res.status(status).json({ error: e.message || 'Server error' });
+    }
+});
+
+router.post('/:id/mcp-servers',
+  requireAuth, requireCapability('ROLES_MANAGE'), requireOrg,
+  async (req, res) => {
+    try {
+      const targetId = assertOrgScope(req, req.params.id);
+      const body = req.body || {};
+      const name = String(body.name || '').trim();
+      const url = String(body.url || '').trim();
+      if (!name) return res.status(400).json({ error: 'name is required' });
+      if (!url) return res.status(400).json({ error: 'url is required' });
+      if (!/^https?:\/\//i.test(url)) return res.status(400).json({ error: 'url must start with http(s)://' });
+      const token = body.authorization_token ? String(body.authorization_token) : null;
+      const description = body.description ? String(body.description).slice(0, 500) : null;
+      const enabled = body.enabled !== false;
+      const id = 'mcp_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+      try {
+        await pool.query(
+          `INSERT INTO org_mcp_servers (id, organization_id, name, url, authorization_token, description, enabled)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [id, targetId, name.slice(0, 100), url, token, description, enabled]
+        );
+      } catch (e) {
+        if (e && e.code === '23505') return res.status(409).json({ error: 'An MCP server named "' + name + '" already exists for this org.' });
+        throw e;
+      }
+      res.json({ ok: true, id, name, url });
+    } catch (e) {
+      const status = e.status || 500;
+      console.error('POST /:id/mcp-servers error:', e);
+      res.status(status).json({ error: e.message || 'Server error' });
+    }
+});
+
+router.put('/:id/mcp-servers/:serverId',
+  requireAuth, requireCapability('ROLES_MANAGE'), requireOrg,
+  async (req, res) => {
+    try {
+      const targetId = assertOrgScope(req, req.params.id);
+      const body = req.body || {};
+      const updates = [];
+      const params = [targetId, req.params.serverId];
+      let p = 3;
+      if (typeof body.name === 'string') { updates.push('name = $' + p); params.push(body.name.slice(0, 100)); p++; }
+      if (typeof body.url === 'string') {
+        if (!/^https?:\/\//i.test(body.url)) return res.status(400).json({ error: 'url must start with http(s)://' });
+        updates.push('url = $' + p); params.push(body.url); p++;
+      }
+      if (typeof body.description === 'string') { updates.push('description = $' + p); params.push(body.description.slice(0, 500)); p++; }
+      if (typeof body.enabled === 'boolean') { updates.push('enabled = $' + p); params.push(body.enabled); p++; }
+      // authorization_token: explicit null = clear; string = set; missing = no change.
+      if ('authorization_token' in body) {
+        updates.push('authorization_token = $' + p);
+        params.push(body.authorization_token === null ? null : String(body.authorization_token));
+        p++;
+      }
+      if (!updates.length) return res.status(400).json({ error: 'No fields to update.' });
+      updates.push('updated_at = NOW()');
+      const r = await pool.query(
+        `UPDATE org_mcp_servers SET ${updates.join(', ')}
+          WHERE organization_id = $1 AND id = $2 AND archived_at IS NULL
+        RETURNING id, name`,
+        params
+      );
+      if (!r.rows.length) return res.status(404).json({ error: 'MCP server not found' });
+      res.json({ ok: true, id: r.rows[0].id, name: r.rows[0].name });
+    } catch (e) {
+      if (e && e.code === '23505') return res.status(409).json({ error: 'A server with that name already exists for this org.' });
+      const status = e.status || 500;
+      console.error('PUT /:id/mcp-servers/:serverId error:', e);
+      res.status(status).json({ error: e.message || 'Server error' });
+    }
+});
+
+router.delete('/:id/mcp-servers/:serverId',
+  requireAuth, requireCapability('ROLES_MANAGE'), requireOrg,
+  async (req, res) => {
+    try {
+      const targetId = assertOrgScope(req, req.params.id);
+      const r = await pool.query(
+        `UPDATE org_mcp_servers SET archived_at = NOW(), enabled = false, updated_at = NOW()
+          WHERE organization_id = $1 AND id = $2 AND archived_at IS NULL
+        RETURNING id, name`,
+        [targetId, req.params.serverId]
+      );
+      if (!r.rows.length) return res.status(404).json({ error: 'MCP server not found' });
+      res.json({ ok: true, id: r.rows[0].id, name: r.rows[0].name });
+    } catch (e) {
+      const status = e.status || 500;
+      console.error('DELETE /:id/mcp-servers/:serverId error:', e);
+      res.status(status).json({ error: e.message || 'Server error' });
+    }
+});
+
 module.exports = router;

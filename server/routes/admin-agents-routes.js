@@ -1722,6 +1722,27 @@ function customToolsFor(agentKey) {
 // signature (agentKey only) is no longer supported; passing only
 // the key throws so any stale caller crashes loudly instead of
 // silently registering against the wrong tenant.
+// Phase 6 — load the org's active MCP servers and shape them for
+// beta.agents.create's mcp_servers field. Returns an array (possibly
+// empty); callers can spread it conditionally so an org with zero
+// connectors registers the same way as before.
+async function collectMcpServersFor(organization) {
+  if (!organization || !organization.id) return [];
+  const r = await pool.query(
+    `SELECT name, url, authorization_token
+       FROM org_mcp_servers
+      WHERE organization_id = $1
+        AND enabled = true
+        AND archived_at IS NULL`,
+    [organization.id]
+  );
+  return r.rows.map(row => {
+    const server = { type: 'url', name: row.name, url: row.url };
+    if (row.authorization_token) server.authorization_token = row.authorization_token;
+    return server;
+  });
+}
+
 async function ensureManagedAgent(agentKey, organization) {
   const anthropic = getAnthropic();
   if (!anthropic) throw new Error('ANTHROPIC_API_KEY not set on this deployment.');
@@ -1744,6 +1765,7 @@ async function ensureManagedAgent(agentKey, organization) {
   const skills = await collectSkillsFor(agentKey);
   const customTools = customToolsFor(agentKey);
   const builtinTools = builtinToolsetFor(agentKey);
+  const mcpServers = await collectMcpServersFor(organization);
 
   // Compose the full system: platform baseline + org.identity_body +
   // SECTION_DEFAULTS playbook. Per-tenant content gets cached on the
@@ -1752,14 +1774,16 @@ async function ensureManagedAgent(agentKey, organization) {
     ? await aiInternals.composedAgentSystem(agentKey, baseline, organization)
     : baseline;
 
-  const created = await anthropic.beta.agents.create({
+  const createPayload = {
     model: model,
     name: 'Project 86 ' + agentKey.toUpperCase() + ' · ' + (organization.name || organization.slug),
     description: (organization.description || baseline).slice(0, 200),
     system: composedSystem,
     skills: skills,
     tools: [...builtinTools, ...customTools]
-  });
+  };
+  if (mcpServers.length) createPayload.mcp_servers = mcpServers;
+  const created = await anthropic.beta.agents.create(createPayload);
 
   await pool.query(
     `INSERT INTO managed_agent_registry
@@ -2340,6 +2364,7 @@ router.post('/managed/:agentKey/sync',
     const builtinTools = builtinToolsetFor(agentKey);
     const toolList = [...builtinTools, ...customTools];
     const toolCount = customTools.length + builtinTools.length;
+    const mcpServers = await collectMcpServersFor(req.organization);
     const name = 'Project 86 ' + agentKey.toUpperCase() + ' · ' + (req.organization.name || req.organization.slug);
     const description = (req.organization.description || baseline).slice(0, 200);
     // Compose: platform baseline + org.identity_body + SECTION_DEFAULTS.
@@ -2356,14 +2381,16 @@ router.post('/managed/:agentKey/sync',
     const remote = await anthropic.beta.agents.retrieve(agentId);
     if (remote.archived_at) {
       // Archived → create fresh, replace registry row.
-      const created = await anthropic.beta.agents.create({
+      const createPayload = {
         model: model,
         name: name,
         description: description,
         system: composedSystem,
         skills: skills,
         tools: toolList
-      });
+      };
+      if (mcpServers.length) createPayload.mcp_servers = mcpServers;
+      const created = await anthropic.beta.agents.create(createPayload);
       await pool.query(
         `UPDATE managed_agent_registry
             SET anthropic_agent_id = $3,
@@ -2395,7 +2422,7 @@ router.post('/managed/:agentKey/sync',
       currentVersion = remote.version;
     }
 
-    const updated = await anthropic.beta.agents.update(agentId, {
+    const updatePayload = {
       version: currentVersion,
       name: name,
       description: description,
@@ -2403,7 +2430,9 @@ router.post('/managed/:agentKey/sync',
       system: composedSystem,
       skills: skills,
       tools: toolList
-    });
+    };
+    if (mcpServers.length) updatePayload.mcp_servers = mcpServers;
+    const updated = await anthropic.beta.agents.update(agentId, updatePayload);
 
     await pool.query(
       `UPDATE managed_agent_registry
@@ -2748,3 +2777,4 @@ module.exports = router;
 module.exports.ensureManagedAgent = ensureManagedAgent;
 module.exports.ensureManagedEnvironment = ensureManagedEnvironment;
 module.exports.buildReferenceLinksBlock = buildReferenceLinksBlock;
+module.exports.collectMcpServersFor = collectMcpServersFor;
