@@ -79,6 +79,31 @@ router.get('/me', requireAuth, async (req, res) => {
   res.json({ user: req.user, organization: organization, feature_flags: featureFlags });
 });
 
+// POST /api/auth/refresh-token
+//   Re-reads the caller's current role + organization from the DB
+//   and re-issues the JWT cookie. Used after a role change (e.g.
+//   auto-promotion to system_admin on boot) so the user doesn't
+//   have to log out + back in to pick up the new claims.
+router.post('/refresh-token', requireAuth, async (req, res) => {
+  try {
+    const r = await pool.query(
+      'SELECT * FROM users WHERE id = $1 AND active = true',
+      [req.user.id]
+    );
+    if (!r.rows.length) return res.status(401).json({ error: 'User not found or inactive' });
+    const user = r.rows[0];
+    const token = signToken(user);
+    res.cookie('token', token, { httpOnly: true, sameSite: 'lax', maxAge: 7 * 24 * 60 * 60 * 1000 });
+    res.json({
+      token,
+      user: { id: user.id, email: user.email, name: user.name, role: user.role, organization_id: user.organization_id }
+    });
+  } catch (e) {
+    console.error('POST /api/auth/refresh-token error:', e);
+    res.status(500).json({ error: e.message || 'Server error' });
+  }
+});
+
 // POST /api/auth/register (admin only)
 router.post('/register', requireAuth, requireRole('admin'), async (req, res) => {
   try {
