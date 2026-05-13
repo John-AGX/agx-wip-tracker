@@ -2336,6 +2336,24 @@
       case 'admin':    go('admin');    return 'Switched to Admin.';
       case 'job':
         if (!entityId) return 'navigate: entity_id is required for destination=job.';
+        // Resolve: 86 sometimes passes the jobNumber (e.g. "RV2000")
+        // instead of the row id (e.g. "j5"). Walk appData.jobs and
+        // remap if we find a jobNumber match. Returns an actionable
+        // error if neither hits, so 86 knows to call read_jobs first.
+        if (window.appData && Array.isArray(window.appData.jobs)) {
+          var jobs = window.appData.jobs;
+          var byId = jobs.find(function(j) { return j.id === entityId; });
+          if (!byId) {
+            var byNumber = jobs.find(function(j) {
+              return (j.data && j.data.jobNumber) === entityId;
+            });
+            if (byNumber) {
+              entityId = byNumber.id; // remap to the real id
+            } else {
+              return 'navigate: no job found with id or jobNumber "' + entityId + '". Call read_jobs first to resolve the right id.';
+            }
+          }
+        }
         go('wip');
         if (typeof window.editJob === 'function') window.editJob(entityId);
         return 'Opened job ' + entityId + '.';

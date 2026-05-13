@@ -1148,10 +1148,12 @@ const JOB_TOOLS = [
       'Destinations: home (dashboard), leads, estimates, clients, subs (sub-tabs of the Estimates section), ' +
       'schedule, wip, insights, tools (field tools — calculators/lookups), admin (top-level tabs). ' +
       'For specific entities, use job / estimate / lead and pass entity_id. ' +
-      'Common patterns: "open job RV2001" -> navigate({destination:"job", entity_id:"<that job\'s id>"}); ' +
-      '"take me to leads" -> navigate({destination:"leads"}); "show me the schedule" -> ' +
-      'navigate({destination:"schedule"}). When the user references a job by number or a client by name, ' +
-      'call read_jobs / read_clients first to resolve the id, then navigate.',
+      '**CRITICAL: entity_id must be the ROW id (e.g. "j5", "j_1778251182669"), NOT the human-readable ' +
+      'jobNumber (e.g. "RV2001"). Passing the jobNumber opens an empty page because the route does ' +
+      'not look up by display number.** When the user references a job by jobNumber or a client by name, ' +
+      'ALWAYS call read_jobs / read_clients first to resolve the row id, then pass that id to navigate. ' +
+      'Example: user says "open RV2001" -> first read_jobs({q:"RV2001"}) returns id "j5" -> ' +
+      'navigate({destination:"job", entity_id:"j5"}).',
     input_schema: {
       type: 'object',
       additionalProperties: false,
