@@ -2309,7 +2309,7 @@ function renderWIPMain() {
                 const arrowId = uid + '-arrow';
                 const summaryRow =
                     '<tr class="bldg-row" style="cursor:pointer;user-select:none;border-bottom:1px solid rgba(255,255,255,0.04);" ' +
-                        'onclick="(function(){var d=document.getElementById(\'' + uid + '\');var a=document.getElementById(\'' + arrowId + '\');var open=d.style.display===\'none\'||!d.style.display;d.style.display=open?\'\':\'none\';a.textContent=open?\'' + ARROW_DOWN + '\':\'' + ARROW_RIGHT + '\';})()">' +
+                        'onclick="(function(){var d=document.getElementById(\'' + uid + '\');var a=document.getElementById(\'' + arrowId + '\');var closed=d.style.display===\'none\';d.style.display=closed?\'table-row\':\'none\';var open=closed;a.textContent=open?\'' + ARROW_DOWN + '\':\'' + ARROW_RIGHT + '\';})()">' +
                         '<td style="white-space:nowrap;padding:6px 10px;">' +
                             '<span id="' + arrowId + '" style="font-size:10px;color:var(--text-dim);display:inline-block;width:10px;">' + ARROW_RIGHT + '</span> ' +
                             '<strong style="color:var(--text,#fff);font-size:13px;">' + escapeHTML(building.name) + '</strong>' +
@@ -2627,7 +2627,7 @@ function renderWIPMain() {
 
                 const summaryRow =
                     '<tr class="ph-row" style="cursor:pointer;user-select:none;border-bottom:1px solid rgba(255,255,255,0.04);" ' +
-                        'onclick="(function(){var d=document.getElementById(\'' + uid + '\');var a=document.getElementById(\'' + arrowId + '\');var open=d.style.display===\'none\'||!d.style.display;d.style.display=open?\'\':\'none\';a.textContent=open?\'' + ARROW_DOWN + '\':\'' + ARROW_RIGHT + '\';})()">' +
+                        'onclick="(function(){var d=document.getElementById(\'' + uid + '\');var a=document.getElementById(\'' + arrowId + '\');var closed=d.style.display===\'none\';d.style.display=closed?\'table-row\':\'none\';var open=closed;a.textContent=open?\'' + ARROW_DOWN + '\':\'' + ARROW_RIGHT + '\';})()">' +
                         '<td style="white-space:nowrap;padding:6px 10px;">' +
                             '<span id="' + arrowId + '" style="font-size:10px;color:var(--text-dim);display:inline-block;width:10px;">' + ARROW_RIGHT + '</span> ' +
                             '<strong style="color:var(--text,#fff);font-size:13px;">' + escapeHTML(phaseName) + '</strong>' +
@@ -2723,7 +2723,7 @@ function renderWIPMain() {
 
                 const summaryRow =
                     '<tr class="sub-row" style="cursor:pointer;user-select:none;border-bottom:1px solid rgba(255,255,255,0.04);" ' +
-                        'onclick="(function(){var d=document.getElementById(\'' + uid + '\');var a=document.getElementById(\'' + arrowId + '\');var open=d.style.display===\'none\'||!d.style.display;d.style.display=open?\'\':\'none\';a.textContent=open?\'' + ARROW_DOWN + '\':\'' + ARROW_RIGHT + '\';})()">' +
+                        'onclick="(function(){var d=document.getElementById(\'' + uid + '\');var a=document.getElementById(\'' + arrowId + '\');var closed=d.style.display===\'none\';d.style.display=closed?\'table-row\':\'none\';var open=closed;a.textContent=open?\'' + ARROW_DOWN + '\':\'' + ARROW_RIGHT + '\';})()">' +
                         '<td style="white-space:nowrap;padding:6px 10px;">' +
                             '<span id="' + arrowId + '" style="font-size:10px;color:var(--text-dim);display:inline-block;width:10px;">' + ARROW_RIGHT + '</span> ' +
                             '<strong style="color:var(--text,#fff);font-size:13px;">' + escapeHTML(sub.name) + '</strong>' +
