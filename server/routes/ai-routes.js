@@ -21,7 +21,7 @@ const Anthropic = require('@anthropic-ai/sdk');
 // local packs to Anthropic native Skills via the approval flow.
 const { toFile } = require('@anthropic-ai/sdk');
 const { pool } = require('../db');
-const { requireAuth, requireCapability, hasCapability } = require('../auth');
+const { requireAuth, requireCapability, hasCapability, requireOrg } = require('../auth');
 const { storage } = require('../storage');
 
 const router = express.Router();
@@ -7790,7 +7790,7 @@ router.delete('/ask86/messages', requireAuth, async (req, res) => {
   }
 });
 
-router.post('/ask86/chat', requireAuth, async (req, res) => {
+router.post('/ask86/chat', requireAuth, requireOrg, async (req, res) => {
   const anthropic = getAnthropic();
   if (!anthropic) return res.status(503).json({ error: 'AI assistant is not configured.' });
   const userMessage = (req.body && req.body.message || '').trim();
@@ -7897,7 +7897,7 @@ router.post('/ask86/chat', requireAuth, async (req, res) => {
 // posts tool_results from the approval cards; we apply approval-tier
 // mutations server-side (propose_create_lead, the HR CLIENT_TOOLS
 // mutations, propose_skill_pack_*), then resume the model stream.
-router.post('/ask86/chat/continue', requireAuth, async (req, res) => {
+router.post('/ask86/chat/continue', requireAuth, requireOrg, async (req, res) => {
   const anthropic = getAnthropic();
   if (!anthropic) return res.status(503).json({ error: 'AI assistant is not configured.' });
   const pendingContent = req.body && req.body.pending_assistant_content;
@@ -8104,7 +8104,7 @@ router.delete('/86/messages', requireAuth, async (req, res) => {
   }
 });
 
-router.post('/86/chat', requireAuth, async (req, res) => {
+router.post('/86/chat', requireAuth, requireOrg, async (req, res) => {
   const anthropic = getAnthropic();
   if (!anthropic) return res.status(503).json({ error: 'AI assistant is not configured.' });
   if (!FLAG_AGENT_MODE_86) {
@@ -8308,7 +8308,7 @@ router.post('/86/chat', requireAuth, async (req, res) => {
   }
 });
 
-router.post('/86/chat/continue', requireAuth, async (req, res) => {
+router.post('/86/chat/continue', requireAuth, requireOrg, async (req, res) => {
   const anthropic = getAnthropic();
   if (!anthropic) return res.status(503).json({ error: 'AI assistant is not configured.' });
   if (!FLAG_AGENT_MODE_86) {

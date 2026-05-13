@@ -175,8 +175,27 @@ function requireRole(...roles) {
 //   corporate — read-only access to all jobs, insights dashboard
 //   pm        — edit own jobs and jobs they're assigned to
 
+// requireOrg — gate a route on the caller having an organization.
+// Use AFTER requireAuth: `router.post('/x', requireAuth, requireOrg,
+// handler)`. Resolves the org row (using the JWT shortcut when
+// possible, falling back to a DB lookup for legacy tokens) and
+// attaches it to `req.organization`. 403s if the user has no org
+// (shouldn't happen post-migration but stays defensive).
+async function requireOrg(req, res, next) {
+  try {
+    const org = await resolveUserOrg(req);
+    if (!org) {
+      return res.status(403).json({ error: 'User is not associated with an organization. Contact an admin.' });
+    }
+    req.organization = org;
+    next();
+  } catch (e) {
+    return res.status(500).json({ error: 'Failed to resolve organization: ' + (e.message || 'unknown') });
+  }
+}
+
 module.exports = {
-  signToken, requireAuth, requireRole, resolveUserOrg, JWT_SECRET,
+  signToken, requireAuth, requireRole, requireOrg, resolveUserOrg, JWT_SECRET,
   // Roles / capabilities
   CAPABILITY_KEYS, setRolePool, refreshRoleCache, hasCapability, requireCapability
 };
