@@ -2857,11 +2857,27 @@ async function recoverStuckSession({ anthropic, sessionRow }) {
   try { await anthropic.beta.sessions.archive(sessionRow.anthropic_session_id); }
   catch (e) { console.warn('Archive of stuck session failed (non-fatal):', e && e.message); }
   await pool.query('UPDATE ai_sessions SET archived_at = NOW() WHERE id = $1', [sessionRow.id]);
+
+  // Phase 2c: every agent is per-tenant, so createFreshAiSession needs
+  // the full organization row. Resolve from the session's user_id —
+  // user → organization is 1:1.
+  const orgRow = await pool.query(
+    `SELECT o.* FROM organizations o
+       JOIN users u ON u.organization_id = o.id
+      WHERE u.id = $1`,
+    [sessionRow.user_id]
+  );
+  const organization = orgRow.rows[0];
+  if (!organization) {
+    throw new Error('Cannot recover stuck session: user ' + sessionRow.user_id + ' has no organization.');
+  }
+
   return createFreshAiSession({
     agentKey: sessionRow.agent_key,
     entityType: sessionRow.entity_type,
     entityId: sessionRow.entity_id,
-    userId: sessionRow.user_id
+    userId: sessionRow.user_id,
+    organization
   });
 }
 
