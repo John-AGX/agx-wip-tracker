@@ -5691,6 +5691,84 @@ const SUBTASK_TOOLS = [
   }
 ];
 
+// Phase 4 — long-term semantic memory tools.
+//
+// 86 saves cross-session facts via remember(), pulls them back with
+// recall(). Scoped per-tenant: a memory saved in AGX never leaks to
+// another org. Within a tenant, scope='user' is private to the user
+// who saved it; scope='org' is shared across all users in the org
+// (useful for "the company standardized on PT 2x4s for porch framing").
+//
+// Auto-tier — same as subtask tools, no approval card. The user is
+// already opting in by talking to 86; making them approve every save
+// would feel adversarial.
+const MEMORY_TOOLS = [
+  {
+    name: 'remember',
+    tier: 'auto',
+    description:
+      'Save a cross-session memory so you can recall it on future turns and future days. Use when the user states a preference ("always show margin as percent"), a per-client quirk ("Solace Tampa has a 4pm delivery cutoff"), a decision ("we standardized on PT 2x4s for porch framing"), or any other fact that should outlive the current conversation. Topic is the short retrieval key — pick something specific you would later search for. Body is the full content. If the same topic exists, it is OVERWRITTEN — use this to update stale memories rather than stacking near-duplicates.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        topic:      { type: 'string', description: 'Short retrieval key (e.g. "estimate-format-pref", "Solace-Tampa-gate-rules"). Lowercase, hyphenated, descriptive. Max 100 chars.' },
+        body:       { type: 'string', description: 'The actual memory content. 1-3 sentences ideal. Max 2000 chars.' },
+        kind:       { type: 'string', enum: ['preference', 'fact', 'decision', 'context'], description: 'Category. Default: fact.' },
+        scope:      { type: 'string', enum: ['user', 'org'], description: '"user" (private to this user) or "org" (every user in the org sees it). Default: user.' },
+        importance: { type: 'integer', minimum: 1, maximum: 10, description: 'How load-bearing this memory is. 1-3 = nice-to-have, 4-7 = useful, 8-10 = critical to operations. Default 5.' }
+      },
+      required: ['topic', 'body']
+    }
+  },
+  {
+    name: 'recall',
+    tier: 'auto',
+    description:
+      'Search saved memories by keyword. Returns matching memories with topic, body, kind, importance, and when they were last recalled. Use BEFORE answering a question that might benefit from prior context — e.g. before drafting an estimate, recall "estimate-format" or the client name. Searches both topic and body; topic matches rank higher. Pulls from this user\'s private memories AND org-wide memories visible to them.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        query: { type: 'string', description: 'Keywords or phrase to search for. Searches topic + body. Min 2 chars.' },
+        limit: { type: 'integer', minimum: 1, maximum: 20, description: 'Max memories to return. Default 5.' }
+      },
+      required: ['query']
+    }
+  },
+  {
+    name: 'list_memories',
+    tier: 'auto',
+    description:
+      'List recent saved memories (most recent first) so you can audit what you remember without having to recall a specific topic. Useful for "what do you remember about X?" or for periodic review. Returns id, topic, kind, importance, and a snippet of the body.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        kind:  { type: 'string', enum: ['preference', 'fact', 'decision', 'context'], description: 'Filter to one kind.' },
+        scope: { type: 'string', enum: ['user', 'org', 'all'], description: 'Filter by scope. Default "all".' },
+        limit: { type: 'integer', minimum: 1, maximum: 100, description: 'Max rows. Default 20.' }
+      },
+      required: []
+    }
+  },
+  {
+    name: 'forget',
+    tier: 'auto',
+    description:
+      'Archive a memory so it no longer surfaces on recall. Pass either id (from list_memories / recall) or topic. Soft delete — the row stays in the DB for audit but is excluded from search. Use when the user says "forget that" or when a memory becomes stale (e.g. a decision was reversed).',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        id:    { type: 'string', description: 'Memory id (preferred — unambiguous).' },
+        topic: { type: 'string', description: 'Topic key (used only when id is omitted; archives the user\'s memory at that topic).' }
+      },
+      required: []
+    }
+  }
+];
+
 // Build the SKILL.md body for one local pack. Mirrors the helper of
 // the same name in admin-agents-routes.js so CoS-driven mirrors and
 // admin-button mirrors produce byte-identical uploads.
@@ -7443,6 +7521,165 @@ function formatSubtaskBundle(rows) {
   return header + lines.join('\n\n');
 }
 
+// Phase 4 — memory tool handler. Same shape as execSubtaskTool: called
+// from make86OnCustomToolUse when 86 emits remember/recall/list_memories/forget.
+// ctx = { userId }; org resolved from the user's row. Returns the
+// summary string fed back to 86.
+async function execMemoryTool(name, input, ctx) {
+  const { userId } = ctx;
+  const orgRow = await pool.query(`SELECT organization_id FROM users WHERE id = $1`, [userId]);
+  const orgId = orgRow.rows[0] && orgRow.rows[0].organization_id;
+  if (!orgId) throw new Error('User has no organization — cannot use memory tools.');
+
+  if (name === 'remember') {
+    const topic = String(input.topic || '').trim().slice(0, 100);
+    const body = String(input.body || '').trim().slice(0, 2000);
+    if (!topic) throw new Error('topic is required.');
+    if (!body) throw new Error('body is required.');
+    const kind = ['preference', 'fact', 'decision', 'context'].includes(input.kind) ? input.kind : 'fact';
+    const scope = (input.scope === 'org') ? 'org' : 'user';
+    const importance = Math.max(1, Math.min(10, Number(input.importance) || 5));
+
+    // Upsert on (org, user, topic). If a memory with this topic
+    // already exists, REPLACE the body — that's the "update" path.
+    // Resurrect from archived state if needed (set archived_at = NULL).
+    const existing = await pool.query(
+      `SELECT id, archived_at FROM ai_memories
+        WHERE organization_id = $1 AND user_id = $2 AND topic = $3`,
+      [orgId, userId, topic]
+    );
+
+    if (existing.rows.length) {
+      const memId = existing.rows[0].id;
+      await pool.query(
+        `UPDATE ai_memories
+            SET body = $2, kind = $3, scope = $4, importance = $5,
+                source = 'explicit', updated_at = NOW(), archived_at = NULL
+          WHERE id = $1`,
+        [memId, body, kind, scope, importance]
+      );
+      return 'Updated memory ' + memId + ' (topic: "' + topic + '").';
+    }
+
+    const memId = 'mem_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+    await pool.query(
+      `INSERT INTO ai_memories (id, organization_id, user_id, scope, kind, topic, body, source, importance)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'explicit', $8)`,
+      [memId, orgId, userId, scope, kind, topic, body, importance]
+    );
+    return 'Saved memory ' + memId + ' (topic: "' + topic + '", kind: ' + kind + ', scope: ' + scope + ', importance: ' + importance + ').';
+  }
+
+  if (name === 'recall') {
+    const query = String(input.query || '').trim();
+    if (query.length < 2) throw new Error('query must be at least 2 chars.');
+    const limit = Math.max(1, Math.min(20, Number(input.limit) || 5));
+    const like = '%' + query.replace(/[%_]/g, c => '\\' + c) + '%';
+    // Ranking heuristic:
+    //   topic match worth 100, body match worth 30, importance up to 10,
+    //   recency (last_recalled_at) breaks ties. ORDER BY computed in
+    //   the query for atomicity.
+    const r = await pool.query(`
+      SELECT id, topic, body, kind, scope, importance, source,
+             updated_at, last_recalled_at,
+             ((CASE WHEN topic ILIKE $2 THEN 100 ELSE 0 END) +
+              (CASE WHEN body  ILIKE $2 THEN  30 ELSE 0 END) +
+              importance) AS score
+        FROM ai_memories
+       WHERE organization_id = $1
+         AND (user_id = $3 OR scope = 'org')
+         AND archived_at IS NULL
+         AND (topic ILIKE $2 OR body ILIKE $2)
+       ORDER BY score DESC,
+                COALESCE(last_recalled_at, updated_at) DESC
+       LIMIT $4
+    `, [orgId, like, userId, limit]);
+
+    if (!r.rows.length) {
+      return 'No memories matched "' + query + '". Either there are none yet, or the topic/body wording differs — try a different keyword.';
+    }
+
+    // Bump last_recalled_at for the hits so frequently-used memories
+    // surface earlier next time.
+    const hitIds = r.rows.map(row => row.id);
+    await pool.query(
+      `UPDATE ai_memories SET last_recalled_at = NOW() WHERE id = ANY($1)`,
+      [hitIds]
+    );
+
+    const lines = r.rows.map(row => {
+      return '── ' + row.id + ' [' + row.kind + '/' + row.scope + '/imp:' + row.importance + '] "' + row.topic + '"\n' + row.body;
+    });
+    return 'Recalled ' + r.rows.length + ' memor' + (r.rows.length === 1 ? 'y' : 'ies') + ' matching "' + query + '":\n\n' + lines.join('\n\n');
+  }
+
+  if (name === 'list_memories') {
+    const limit = Math.max(1, Math.min(100, Number(input.limit) || 20));
+    const conds = ['organization_id = $1', 'archived_at IS NULL'];
+    const params = [orgId];
+    let p = 2;
+    const scope = input.scope || 'all';
+    if (scope === 'user') {
+      conds.push('user_id = $' + p);
+      params.push(userId);
+      p++;
+    } else if (scope === 'org') {
+      conds.push("scope = 'org'");
+    } else {
+      conds.push('(user_id = $' + p + " OR scope = 'org')");
+      params.push(userId);
+      p++;
+    }
+    if (input.kind) {
+      conds.push('kind = $' + p);
+      params.push(input.kind);
+      p++;
+    }
+    params.push(limit);
+    const r = await pool.query(`
+      SELECT id, topic, kind, scope, importance, body, updated_at
+        FROM ai_memories
+       WHERE ${conds.join(' AND ')}
+       ORDER BY updated_at DESC
+       LIMIT $${p}
+    `, params);
+    if (!r.rows.length) return 'No memories stored yet.';
+    const lines = r.rows.map(row => {
+      const snippet = row.body.length > 120 ? row.body.slice(0, 117) + '…' : row.body;
+      return '── ' + row.id + ' [' + row.kind + '/' + row.scope + '/imp:' + row.importance + '] "' + row.topic + '" — ' + snippet;
+    });
+    return 'Listing ' + r.rows.length + ' memor' + (r.rows.length === 1 ? 'y' : 'ies') + ':\n\n' + lines.join('\n');
+  }
+
+  if (name === 'forget') {
+    const id = input.id && String(input.id).trim();
+    const topic = input.topic && String(input.topic).trim();
+    if (!id && !topic) throw new Error('Pass either id or topic.');
+    let target;
+    if (id) {
+      const r = await pool.query(
+        `SELECT id FROM ai_memories
+          WHERE id = $1 AND organization_id = $2
+            AND (user_id = $3 OR scope = 'org') AND archived_at IS NULL`,
+        [id, orgId, userId]
+      );
+      target = r.rows[0];
+    } else {
+      const r = await pool.query(
+        `SELECT id FROM ai_memories
+          WHERE organization_id = $1 AND user_id = $2 AND topic = $3 AND archived_at IS NULL`,
+        [orgId, userId, topic]
+      );
+      target = r.rows[0];
+    }
+    if (!target) return 'No matching memory found to forget.';
+    await pool.query(`UPDATE ai_memories SET archived_at = NOW() WHERE id = $1`, [target.id]);
+    return 'Archived memory ' + target.id + '.';
+  }
+
+  throw new Error('Unknown memory tool: ' + name);
+}
+
 function make86OnCustomToolUse(userId, parentSession) {
   // Per-request dedupe cache. Scoped to ONE /86/chat (or /chat/continue)
   // call — closes over this Map. If the model calls e.g.
@@ -7469,6 +7706,16 @@ function make86OnCustomToolUse(userId, parentSession) {
     // because the user already approved the top-level 86 turn that
     // chose to fan out. parentSession is required (null = called from
     // a subtask, where spawn/await/status are rejected upstream).
+    // Phase 4 — memory tools. Auto-tier, no parent session needed
+    // (memories are per-user/org, not per-session).
+    if (tu.name === 'remember' || tu.name === 'recall' || tu.name === 'list_memories' || tu.name === 'forget') {
+      try {
+        const summary = await execMemoryTool(tu.name, tu.input || {}, { userId });
+        return { tier: 'auto', summary };
+      } catch (e) {
+        return { tier: 'auto', error: 'Memory tool error: ' + (e.message || 'unknown') };
+      }
+    }
     if (tu.name === 'spawn_subtask' || tu.name === 'await_subtasks' || tu.name === 'subtask_status') {
       if (!parentSession || !parentSession.id) {
         return { tier: 'auto', error: 'spawn_subtask requires a parent session — this code path was reached without one. Report this to the admin.' };
@@ -9079,6 +9326,8 @@ module.exports.internals = {
   // registered tool set without polluting the staff/CRA/estimate
   // contexts (which never spawn subtasks).
   subtaskTools:  () => SUBTASK_TOOLS.map(({ tier, ...t }) => t),
+  // Phase 4 — long-term semantic memory tools.
+  memoryTools:   () => MEMORY_TOOLS.map(({ tier, ...t }) => t),
   defaultModel: () => MODEL,
   maxTokens: () => MAX_TOKENS,
   // Resolve the effort string for a given model. Caller passes the

@@ -1333,6 +1333,53 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_ai_subtasks_status ON ai_subtasks(status) WHERE status IN ('pending','running');
     CREATE INDEX IF NOT EXISTS idx_ai_subtasks_org ON ai_subtasks(organization_id, created_at DESC);
 
+    -- ai_memories — Phase 4 (long-term semantic memory).
+    -- 86 stores cross-session facts here so the user doesn't have to
+    -- repeat themselves: preferences ("John prefers margin shown as a
+    -- percentage on estimates"), per-client quirks ("Solace project
+    -- has a 4pm delivery cutoff at the gate"), decisions ("we standardized
+    -- on PT 2x4s for porch framing in Q1 2026").
+    --
+    -- scope = 'user' — memory visible only to the user who saved it
+    -- scope = 'org'  — memory visible to every user in the org
+    --
+    -- kind is a soft category: 'preference' | 'fact' | 'decision' |
+    -- 'context'. Free-text so 86 can invent new ones.
+    --
+    -- topic is the short retrieval key; body is the actual content.
+    -- importance (1-10) breaks ties when many memories match a query.
+    -- last_recalled_at gets bumped on each recall hit so a per-topic
+    -- "recency" signal feeds back into ranking.
+    --
+    -- Soft delete via archived_at (the forget tool sets this, never
+    -- DELETE — preserves audit trail and recovery).
+    CREATE TABLE IF NOT EXISTS ai_memories (
+      id TEXT PRIMARY KEY,
+      organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      scope TEXT NOT NULL DEFAULT 'user',
+      kind TEXT NOT NULL DEFAULT 'fact',
+      topic TEXT NOT NULL,
+      body TEXT NOT NULL,
+      source TEXT NOT NULL DEFAULT 'explicit',
+      importance INTEGER NOT NULL DEFAULT 5,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      last_recalled_at TIMESTAMPTZ,
+      archived_at TIMESTAMPTZ
+    );
+    CREATE INDEX IF NOT EXISTS idx_ai_memories_org_user
+      ON ai_memories (organization_id, user_id)
+      WHERE archived_at IS NULL;
+    CREATE INDEX IF NOT EXISTS idx_ai_memories_topic
+      ON ai_memories (organization_id, topic)
+      WHERE archived_at IS NULL;
+    -- Block exact duplicates within (org, user, topic) so callers
+    -- update instead of stacking near-identical rows.
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_memories_unique_topic
+      ON ai_memories (organization_id, user_id, topic)
+      WHERE archived_at IS NULL;
+
     -- Job-level reports — Project 86 "report" feature similar to
     -- CompanyCam: a user-curated photo collection grouped into named
     -- sections (Before / During / After by default, but renamable +

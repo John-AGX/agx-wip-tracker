@@ -1480,7 +1480,12 @@
     // Phase 3 — sub-agent fan-out
     spawn_subtask:                'Spawning helper agent…',
     await_subtasks:               'Waiting on helper agents…',
-    subtask_status:               'Checking helper status…'
+    subtask_status:               'Checking helper status…',
+    // Phase 4 — long-term memory
+    remember:                     'Saving to memory…',
+    recall:                       'Searching memory…',
+    list_memories:                'Listing memories…',
+    forget:                       'Archiving memory…'
   };
 
   function appendStreamingBubble() {
