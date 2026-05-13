@@ -4998,18 +4998,30 @@
           // Reset the silence countdown on every result (interim too)
           // so as long as the user is mid-sentence the mic stays open.
           lastResultTs = Date.now();
-          var final = '';
-          var interim = '';
-          for (var i = e.resultIndex; i < e.results.length; i++) {
+          // Iterate the FULL e.results array, not e.resultIndex onward.
+          // Mobile Safari + some Android browsers don't advance
+          // resultIndex reliably — when a final result is re-emitted
+          // (or when continuous mode re-fires onresult for the same
+          // utterance), the old loop from resultIndex would treat the
+          // same finals as "new" and append them to baseValue,
+          // producing the doubled/tripled wording the user saw on
+          // mobile. Reconstructing from scratch is idempotent: no
+          // matter how many times this fires for the same logical
+          // utterance, input.value lands at the right text.
+          var allFinal = '';
+          var allInterim = '';
+          for (var i = 0; i < e.results.length; i++) {
             var t = e.results[i][0].transcript;
-            if (e.results[i].isFinal) final += t;
-            else interim += t;
+            if (e.results[i].isFinal) allFinal += t;
+            else allInterim += t;
           }
           var input = document.getElementById('ai-input');
           if (input) {
-            input.value = baseValue + final + interim;
+            input.value = baseValue + allFinal + allInterim;
             input.dispatchEvent(new Event('input'));
-            if (final) baseValue += final;
+            // Do NOT mutate baseValue here. The full-rescan loop
+            // above already includes every prior final, so accumulating
+            // would re-add the same text to the next event's render.
           }
         };
         _recognition.onerror = function(ev) {
