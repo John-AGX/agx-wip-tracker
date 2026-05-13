@@ -3676,10 +3676,11 @@
           '<button class="ws-right-tab' + (_agentsView === 'references' ? ' active' : '') + '" onclick="switchAgentsView(\'references\')">&#x1F4D2; References</button>' +
         '</div>' +
         '<div style="flex:1;"></div>' +
-        '<button class="ee-btn" onclick="openChiefOfStaff()" title="Open the Chief of Staff agent — observes 86 + HR, audits conversations, reviews skill packs" style="background:linear-gradient(135deg,#fbbf24,#f97316);color:#fff;border:none;font-weight:600;">&#x1F3A9; Ask Chief of Staff</button>' +
+        // "Ask Chief of Staff" button + "Window" label removed —
+        // Chief of Staff was rolled into 86 in Phase 1 unification,
+        // and the bare range dropdown is self-explanatory.
         (showRange
-          ? ('<label style="font-size:11px;color:var(--text-dim,#888);">Window</label>' +
-             '<select id="agents-range-select" onchange="setAgentsRange(this.value)" style="font-size:12px;padding:4px 8px;">' +
+          ? ('<select id="agents-range-select" onchange="setAgentsRange(this.value)" style="font-size:12px;padding:4px 8px;">' +
                '<option value="7d"' + (_agentsRange === '7d' ? ' selected' : '') + '>Last 7 days</option>' +
                '<option value="30d"' + (_agentsRange === '30d' ? ' selected' : '') + '>Last 30 days</option>' +
              '</select>' +
