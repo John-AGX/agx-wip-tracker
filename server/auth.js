@@ -169,10 +169,13 @@ async function resolveUserOrg(req) {
 function requireRole(...roles) {
   return function(req, res, next) {
     if (!req.user) return res.status(401).json({ error: 'Not authenticated' });
-    if (!roles.includes(req.user.role)) {
-      return res.status(403).json({ error: 'Insufficient permissions' });
-    }
-    next();
+    // system_admin is a strict superset of admin — it satisfies any
+    // requireRole check that admits 'admin'. Without this branch,
+    // every legacy `requireRole('admin')` 403s system admins, which
+    // is wrong by design (Phase 2 System Admin tier work).
+    if (roles.includes(req.user.role)) return next();
+    if (req.user.role === 'system_admin' && roles.includes('admin')) return next();
+    return res.status(403).json({ error: 'Insufficient permissions' });
   };
 }
 
