@@ -1287,7 +1287,7 @@ const JOB_TOOLS = [
 // separately so the chat handler can attach them as image blocks.
 // ──────────────────────────────────────────────────────────────────
 
-async function buildEstimateContext(estimateId, includePhotos, aiPhaseOverride) {
+async function buildEstimateContext(estimateId, includePhotos, aiPhaseOverride, organization) {
   // Estimate row carries the JSONB blob with all the editor fields plus
   // alternates and lines (the bulk-save routes serialize them this way).
   const estRes = await pool.query(
@@ -1769,7 +1769,7 @@ async function buildEstimateContext(estimateId, includePhotos, aiPhaseOverride) 
     has_lead: !!blob.lead_id,
     has_client: !!blob.client_id
   };
-  const skillManifest = await loadSkillManifestFor('job', triggerCtx);
+  const skillManifest = await loadSkillManifestFor('job', triggerCtx, organization && organization.id);
   if (skillManifest.length) {
     // Dynamic block (/86/chat) — manifest only. ~30 tokens per pack
     // instead of 250–830. 86 calls load_skill_pack({name:"..."}) to
@@ -1919,16 +1919,24 @@ function filterToolsForJobPhase(tools, phase) {
 // description field if set, else first non-empty body line capped at
 // 120 chars. Replaces_section packs excluded — those are rendered
 // in-place by the section-override machinery.
-async function loadSkillManifestFor(agentKey, triggerCtx) {
+async function loadSkillManifestFor(agentKey, triggerCtx, organizationId) {
+  // Phase 2d: reads from per-tenant org_skill_packs. organizationId
+  // is required — without it we'd leak packs across tenants.
+  if (!organizationId) {
+    console.warn('loadSkillManifestFor called without organizationId — returning empty manifest');
+    return [];
+  }
   try {
     const { rows } = await pool.query(
-      `SELECT value FROM app_settings WHERE key = 'agent_skills'`
+      `SELECT name, body, description, agents, contexts, triggers
+         FROM org_skill_packs
+        WHERE organization_id = $1
+          AND archived_at IS NULL
+        ORDER BY id ASC`,
+      [organizationId]
     );
-    if (!rows.length) return [];
-    const cfg = rows[0].value || {};
-    const skills = Array.isArray(cfg.skills) ? cfg.skills : [];
-    return skills
-      .filter(s => s && Array.isArray(s.agents) && s.agents.indexOf(agentKey) >= 0 && s.body && !s.replaces_section)
+    return rows
+      .filter(s => s && Array.isArray(s.agents) && s.agents.indexOf(agentKey) >= 0 && s.body)
       .filter(s => packContextsPass(s.contexts, triggerCtx))
       .filter(s => packTriggersPass(s.triggers, triggerCtx))
       .map(s => {
@@ -3326,7 +3334,7 @@ router.post('/v2/estimates/:id/chat',
     setSSEHeaders(res);
 
     try {
-      const ctx = await buildEstimateContext(estimateId, includePhotos);
+      const ctx = await buildEstimateContext(estimateId, includePhotos, undefined, req.organization);
 
       // Inline images for this turn (estimate photos + per-turn additionals).
       const inlineImageBlocks = [...ctx.photoBlocks];
@@ -3436,7 +3444,7 @@ router.post('/v2/estimates/:id/chat/continue',
         }]
       }));
 
-      const ctx = await buildEstimateContext(estimateId, false);
+      const ctx = await buildEstimateContext(estimateId, false, undefined, req.organization);
       await pool.query('UPDATE ai_sessions SET last_used_at = NOW() WHERE id = $1', [session.id]);
 
       await runV2SessionStream({
@@ -3530,7 +3538,7 @@ function computeJobWIP(job, jobBuildings, jobPhases, jobChangeOrders, jobSubs, j
 // localStorage; QB cost lines aren't in the DB until Phase 2).
 // Fields used: { nodeGraph: { nodes, wires }, qbCosts: { total,
 // byCategory, lineCount, mostRecentImport, samples[] } }
-async function buildJobContext(jobId, clientContext, aiPhase) {
+async function buildJobContext(jobId, clientContext, aiPhase, organization) {
   // aiPhase: 'plan' (read-only analysis, no writes) | 'build' (full
   // tool access). Defaults to 'plan' for 86 — she's an analyst, so
   // the safer default is no surprise mutations until the PM explicitly
@@ -3978,7 +3986,7 @@ async function buildJobContext(jobId, clientContext, aiPhase) {
   // turn — for job context that was ~3,500 tokens including the 9.5k-
   // char WIP Analyst Playbook). 86 calls load_skill_pack({name}) on
   // demand when starting a kind of work that maps to a pack.
-  const jobManifest = await loadSkillManifestFor('job', { entity_type: 'job' });
+  const jobManifest = await loadSkillManifestFor('job', { entity_type: 'job' }, organization && organization.id);
   if (jobManifest.length) {
     lines.push('');
     lines.push('# Available skill packs (call load_skill_pack({name}) to read a full body)');
@@ -4094,7 +4102,7 @@ router.post('/jobs/:id/chat',
       const cap = MAX_HISTORY_PAIRS * 2;
       if (history.length > cap) history = history.slice(-cap);
 
-      const ctx = await buildJobContext(jobId, clientContext, aiPhase);
+      const ctx = await buildJobContext(jobId, clientContext, aiPhase, req.organization);
 
       const messages = [
         ...history.map(m => ({ role: m.role, content: m.content })),
@@ -4173,7 +4181,7 @@ router.post('/jobs/:id/chat/continue',
       const cap = MAX_HISTORY_PAIRS * 2;
       if (history.length > cap) history = history.slice(-cap);
 
-      const ctx = await buildJobContext(jobId, clientContext, aiPhase);
+      const ctx = await buildJobContext(jobId, clientContext, aiPhase, req.organization);
 
       const toolResultBlocks = toolResults.map(r => ({
         type: 'tool_result',
@@ -4285,7 +4293,7 @@ router.post('/v2/jobs/:id/chat',
     setSSEHeaders(res);
 
     try {
-      const ctx = await buildJobContext(jobId, clientContext, aiPhase);
+      const ctx = await buildJobContext(jobId, clientContext, aiPhase, req.organization);
 
       // Wrap per-turn dynamic context in <turn_context> tags so the
       // agent's stable system prompt isn't polluted with churn-prone
@@ -5218,7 +5226,7 @@ function isClientToolAutoTier(name) {
 
 // Build the directory snapshot Claude reads as context. Capped per
 // parent so a huge directory doesn't blow the prompt window.
-async function buildClientDirectoryContext() {
+async function buildClientDirectoryContext(organization) {
   const { rows } = await pool.query(
     `SELECT id, name, short_name, parent_client_id, client_type, company_name, community_name,
             community_manager, cm_email, cm_phone, market, property_address,
@@ -5266,11 +5274,21 @@ async function buildClientDirectoryContext() {
   // Skill packs — manifest only. HR can call load_skill_pack({name})
   // to pull a body on demand. The `alwaysOn` flag is no longer
   // consulted at runtime.
-  const craManifest = await loadSkillManifestFor('cra', { entity_type: 'client' });
-  if (craManifest.length) {
+  // 'cra' was the old HR agent_key — packs may still target it for
+  // back-compat; we also surface 'job'-targeted packs since 86 absorbed
+  // HR's role and any pack tagged for the client surface is relevant.
+  const craManifest = await loadSkillManifestFor('cra', { entity_type: 'client' }, organization && organization.id);
+  const jobClientManifest = await loadSkillManifestFor('job', { entity_type: 'client' }, organization && organization.id);
+  const _seenManifest = new Set();
+  const mergedClientManifest = [...craManifest, ...jobClientManifest].filter(m => {
+    if (_seenManifest.has(m.name)) return false;
+    _seenManifest.add(m.name);
+    return true;
+  });
+  if (mergedClientManifest.length) {
     out.push('');
     out.push('# Available skill packs (call load_skill_pack({name}) to read a full body)');
-    craManifest.forEach(s => {
+    mergedClientManifest.forEach(s => {
       out.push('- **' + s.name + '** — ' + (s.description || '(no description)'));
     });
   }
@@ -5352,7 +5370,7 @@ async function buildClientDirectoryContext() {
       { type: 'text', text: '\n\n' + out.join('\n') }
     ],
     totalClients: rows.length,
-    packsLoaded: craManifest.map(s => s.name)
+    packsLoaded: mergedClientManifest.map(s => s.name)
   };
 }
 
@@ -6096,16 +6114,27 @@ async function execStaffTool(name, input, ctx) {
     }
 
     case 'read_skill_packs': {
-      const r = await pool.query(`SELECT value FROM app_settings WHERE key = 'agent_skills'`);
-      const cfg = r.rows.length ? (r.rows[0].value || {}) : {};
-      const skills = Array.isArray(cfg.skills) ? cfg.skills : [];
-      if (!skills.length) return 'No skill packs configured.';
-      const lines = ['Skill packs (' + skills.length + '):'];
-      for (const s of skills) {
+      // Phase 2d: reads from per-tenant org_skill_packs scoped to the
+      // caller's org. The userId injected by /api/ai/exec-tool lets us
+      // resolve the org without an explicit param.
+      const userId = ctx && ctx.userId;
+      const orgRow = userId
+        ? (await pool.query('SELECT organization_id FROM users WHERE id = $1', [userId])).rows[0]
+        : null;
+      const orgId = orgRow && orgRow.organization_id;
+      if (!orgId) return 'No organization scope — cannot read skill packs.';
+      const r = await pool.query(
+        `SELECT name, body, description, agents, contexts
+           FROM org_skill_packs
+          WHERE organization_id = $1 AND archived_at IS NULL
+          ORDER BY id ASC`,
+        [orgId]
+      );
+      if (!r.rows.length) return 'No skill packs configured.';
+      const lines = ['Skill packs (' + r.rows.length + '):'];
+      for (const s of r.rows) {
         const agents = Array.isArray(s.agents) ? s.agents.join(',') : '(none)';
         const ctxs = Array.isArray(s.contexts) && s.contexts.length ? s.contexts.join(',') : 'all';
-        // No "always-on"/"inactive" marker — runtime no longer treats
-        // packs as always-on. Every pack is on-demand via load_skill_pack.
         lines.push('• "' + (s.name || '(untitled)') + '" → agents=' + agents + ', contexts=' + ctxs);
         const body = String(s.body || '');
         if (body) {
@@ -6120,20 +6149,29 @@ async function execStaffTool(name, input, ctx) {
     case 'load_skill_pack': {
       const wantName = String((input && input.name) || '').trim();
       if (!wantName) return 'name parameter is required.';
-      const r = await pool.query(`SELECT value FROM app_settings WHERE key = 'agent_skills'`);
-      const cfg = r.rows.length ? (r.rows[0].value || {}) : {};
-      const skills = Array.isArray(cfg.skills) ? cfg.skills : [];
-      const pack = skills.find(s => s && s.name === wantName);
-      if (!pack) {
-        const known = skills.map(s => s && s.name).filter(Boolean).join(', ');
+      const userId = ctx && ctx.userId;
+      const orgRow = userId
+        ? (await pool.query('SELECT organization_id FROM users WHERE id = $1', [userId])).rows[0]
+        : null;
+      const orgId = orgRow && orgRow.organization_id;
+      if (!orgId) return 'No organization scope — cannot load skill pack.';
+      const r = await pool.query(
+        `SELECT name, body, agents, contexts
+           FROM org_skill_packs
+          WHERE organization_id = $1 AND archived_at IS NULL AND name = $2
+          LIMIT 1`,
+        [orgId, wantName]
+      );
+      if (!r.rows.length) {
+        const known = (await pool.query(
+          `SELECT name FROM org_skill_packs WHERE organization_id = $1 AND archived_at IS NULL`,
+          [orgId]
+        )).rows.map(x => x.name).join(', ');
         return 'No skill pack named "' + wantName + '". Known packs: ' + (known || '(none)');
       }
+      const pack = r.rows[0];
       const body = String(pack.body || '').trim();
       if (!body) return 'Pack "' + wantName + '" has an empty body.';
-      // No "always-on"/"inactive" marker — runtime no longer treats
-      // packs as always-on. Pack bodies that still claim "READ FIRST
-      // EVERY TURN" or similar are stale; treat them as guidance for
-      // THIS turn only.
       const meta = [];
       if (Array.isArray(pack.agents) && pack.agents.length) meta.push('agents=' + pack.agents.join(','));
       if (Array.isArray(pack.contexts) && pack.contexts.length) meta.push('contexts=' + pack.contexts.join(','));
@@ -6555,122 +6593,131 @@ async function execStaffTool(name, input, ctx) {
   }
 }
 
-// Approval-tier executor for skill-pack mutations. Called from the
-// /staff/chat/continue endpoint after the user approves a propose
-// card. Reads + writes app_settings.agent_skills as a single JSONB
-// blob, optimistic-concurrency be damned (single admin user, no race).
-async function execStaffApprovalTool(name, input) {
+// Approval-tier executor for skill-pack mutations. Reads + writes the
+// per-tenant org_skill_packs table. Caller passes ctx={userId} so we
+// can resolve the right organization.
+const VALID_PACK_CONTEXTS = ['estimate', 'job', 'intake', 'ask86', 'client'];
+async function resolveOrgIdFromCtx(ctx) {
+  const userId = ctx && ctx.userId;
+  if (!userId) throw new Error('Skill-pack mutation requires a user context (call from /api/ai/exec-tool).');
+  const r = await pool.query('SELECT organization_id FROM users WHERE id = $1', [userId]);
+  const orgId = r.rows[0] && r.rows[0].organization_id;
+  if (!orgId) throw new Error('User is not associated with an organization.');
+  return orgId;
+}
+
+async function execStaffApprovalTool(name, input, ctx) {
   switch (name) {
     case 'propose_skill_pack_add': {
       if (!input || !input.name || !input.body) throw new Error('name and body are required');
       if (!Array.isArray(input.agents) || !input.agents.length) throw new Error('agents must be a non-empty array');
-      // contexts is required — every pack must declare which entity
-      // surfaces it loads on. Stops untagged packs from leaking onto
-      // every 86 surface. See packContextsPass for filter semantics.
       if (!Array.isArray(input.contexts) || !input.contexts.length) {
-        throw new Error('contexts must be a non-empty array — pick the narrowest scope (e.g. ["estimate"] for an estimating playbook). Pass ["estimate","job","intake","ask86"] only if the pack truly belongs on every 86 surface.');
+        throw new Error('contexts must be a non-empty array — pick the narrowest scope (e.g. ["estimate"] for an estimating playbook).');
       }
-      const validContexts = ['estimate', 'job', 'intake', 'ask86', 'client'];
-      const badContexts = input.contexts.filter(c => !validContexts.includes(c));
+      const badContexts = input.contexts.filter(c => !VALID_PACK_CONTEXTS.includes(c));
       if (badContexts.length) {
-        throw new Error('Unknown context(s): ' + badContexts.join(', ') + '. Valid contexts: ' + validContexts.join(', '));
+        throw new Error('Unknown context(s): ' + badContexts.join(', ') + '. Valid contexts: ' + VALID_PACK_CONTEXTS.join(', '));
       }
-      const r = await pool.query(`SELECT value FROM app_settings WHERE key = 'agent_skills'`);
-      const cfg = r.rows.length ? (r.rows[0].value || {}) : {};
-      const skills = Array.isArray(cfg.skills) ? cfg.skills.slice() : [];
-      if (skills.some(s => s && s.name === input.name)) {
-        throw new Error('A skill pack named "' + input.name + '" already exists. Use propose_skill_pack_edit to modify it.');
+      const orgId = await resolveOrgIdFromCtx(ctx);
+      try {
+        await pool.query(
+          `INSERT INTO org_skill_packs (organization_id, name, body, agents, contexts)
+           VALUES ($1, $2, $3, $4::jsonb, $5::jsonb)`,
+          [orgId, input.name, input.body, JSON.stringify(input.agents), JSON.stringify(input.contexts)]
+        );
+      } catch (e) {
+        if (e && e.code === '23505') {
+          throw new Error('A skill pack named "' + input.name + '" already exists for this organization. Use propose_skill_pack_edit to modify it.');
+        }
+        throw e;
       }
-      skills.push({
-        name: input.name,
-        body: input.body,
-        agents: input.agents,
-        contexts: input.contexts
-      });
-      const newCfg = Object.assign({}, cfg, { skills });
-      await pool.query(
-        `INSERT INTO app_settings (key, value, updated_at) VALUES ('agent_skills', $1, NOW())
-         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
-        [JSON.stringify(newCfg)]
-      );
       return 'Added skill pack "' + input.name + '" → agents=' + input.agents.join(',') +
         ', contexts=' + input.contexts.join(',') + '. Available on demand via load_skill_pack({name:"' + input.name + '"}).';
     }
     case 'propose_skill_pack_edit': {
       if (!input || !input.name) throw new Error('name is required');
-      const r = await pool.query(`SELECT value FROM app_settings WHERE key = 'agent_skills'`);
-      const cfg = r.rows.length ? (r.rows[0].value || {}) : {};
-      const skills = Array.isArray(cfg.skills) ? cfg.skills.slice() : [];
-      const idx = skills.findIndex(s => s && s.name === input.name);
-      if (idx < 0) throw new Error('No skill pack named "' + input.name + '"');
-      const updated = Object.assign({}, skills[idx]);
+      const orgId = await resolveOrgIdFromCtx(ctx);
+      const r = await pool.query(
+        `SELECT * FROM org_skill_packs WHERE organization_id = $1 AND name = $2 AND archived_at IS NULL`,
+        [orgId, input.name]
+      );
+      if (!r.rows.length) throw new Error('No skill pack named "' + input.name + '"');
+      const pack = r.rows[0];
+      const updates = [];
+      const params = [orgId, input.name];
       const changes = [];
-      if (input.new_name && input.new_name !== updated.name) {
-        if (skills.some(s => s && s !== updated && s.name === input.new_name)) {
-          throw new Error('A skill pack named "' + input.new_name + '" already exists.');
-        }
-        changes.push('name "' + updated.name + '" → "' + input.new_name + '"');
-        updated.name = input.new_name;
+      let p = 3;
+      if (input.new_name && input.new_name !== pack.name) {
+        const conflict = await pool.query(
+          `SELECT 1 FROM org_skill_packs WHERE organization_id = $1 AND name = $2 AND id <> $3`,
+          [orgId, input.new_name, pack.id]
+        );
+        if (conflict.rows.length) throw new Error('A skill pack named "' + input.new_name + '" already exists.');
+        updates.push('name = $' + p);
+        params.push(input.new_name);
+        p++;
+        changes.push('name "' + pack.name + '" → "' + input.new_name + '"');
       }
       if (input.new_body != null) {
-        updated.body = input.new_body;
+        updates.push('body = $' + p);
+        params.push(input.new_body);
+        p++;
         changes.push('body (' + (input.new_body.length || 0) + ' chars)');
       }
       if (Array.isArray(input.agents)) {
-        updated.agents = input.agents;
+        updates.push('agents = $' + p + '::jsonb');
+        params.push(JSON.stringify(input.agents));
+        p++;
         changes.push('agents → ' + input.agents.join(','));
       }
       if (Array.isArray(input.contexts)) {
         if (!input.contexts.length) {
-          throw new Error('contexts cannot be set to empty — either pass a non-empty array or omit the field entirely.');
+          throw new Error('contexts cannot be set to empty — pass a non-empty array or omit the field entirely.');
         }
-        const validContexts = ['estimate', 'job', 'intake', 'ask86', 'client'];
-        const badContexts = input.contexts.filter(c => !validContexts.includes(c));
+        const badContexts = input.contexts.filter(c => !VALID_PACK_CONTEXTS.includes(c));
         if (badContexts.length) {
-          throw new Error('Unknown context(s): ' + badContexts.join(', ') + '. Valid contexts: ' + validContexts.join(', '));
+          throw new Error('Unknown context(s): ' + badContexts.join(', ') + '. Valid: ' + VALID_PACK_CONTEXTS.join(', '));
         }
-        updated.contexts = input.contexts;
+        updates.push('contexts = $' + p + '::jsonb');
+        params.push(JSON.stringify(input.contexts));
+        p++;
         changes.push('contexts → ' + input.contexts.join(','));
       }
-      // alwaysOn intentionally ignored — the runtime no longer
-      // distinguishes always-on vs inactive packs. Every pack is
-      // on-demand via load_skill_pack.
-      if (!changes.length) return 'No changes specified for "' + input.name + '".';
-      skills[idx] = updated;
-      const newCfg = Object.assign({}, cfg, { skills });
+      if (!updates.length) return 'No changes specified for "' + input.name + '".';
+      updates.push('updated_at = NOW()');
       await pool.query(
-        `INSERT INTO app_settings (key, value, updated_at) VALUES ('agent_skills', $1, NOW())
-         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
-        [JSON.stringify(newCfg)]
+        `UPDATE org_skill_packs SET ${updates.join(', ')}
+          WHERE organization_id = $1 AND name = $2`,
+        params
       );
       return 'Edited skill pack "' + input.name + '": ' + changes.join('; ');
     }
     case 'propose_skill_pack_delete': {
       if (!input || !input.name) throw new Error('name is required');
-      const r = await pool.query(`SELECT value FROM app_settings WHERE key = 'agent_skills'`);
-      const cfg = r.rows.length ? (r.rows[0].value || {}) : {};
-      const skills = Array.isArray(cfg.skills) ? cfg.skills.slice() : [];
-      const idx = skills.findIndex(s => s && s.name === input.name);
-      if (idx < 0) throw new Error('No skill pack named "' + input.name + '"');
-      skills.splice(idx, 1);
-      const newCfg = Object.assign({}, cfg, { skills });
-      await pool.query(
-        `INSERT INTO app_settings (key, value, updated_at) VALUES ('agent_skills', $1, NOW())
-         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
-        [JSON.stringify(newCfg)]
+      const orgId = await resolveOrgIdFromCtx(ctx);
+      // Soft delete via archived_at — preserves history; UNIQUE
+      // constraint on (organization_id, name) means re-adding with
+      // the same name later requires hard-delete (separate flow).
+      const r = await pool.query(
+        `UPDATE org_skill_packs SET archived_at = NOW()
+          WHERE organization_id = $1 AND name = $2 AND archived_at IS NULL
+          RETURNING id`,
+        [orgId, input.name]
       );
-      return 'Deleted skill pack "' + input.name + '".';
+      if (!r.rows.length) throw new Error('No skill pack named "' + input.name + '"');
+      return 'Deleted skill pack "' + input.name + '" (soft-archived).';
     }
     case 'propose_skill_pack_mirror': {
       if (!input || !input.name) throw new Error('name is required');
       const anthropic = getAnthropic();
       if (!anthropic) throw new Error('ANTHROPIC_API_KEY not set on this deployment.');
-      const r = await pool.query(`SELECT value FROM app_settings WHERE key = 'agent_skills'`);
-      const cfg = r.rows.length ? (r.rows[0].value || {}) : {};
-      const skills = Array.isArray(cfg.skills) ? cfg.skills.slice() : [];
-      const idx = skills.findIndex(s => s && s.name === input.name);
-      if (idx < 0) throw new Error('No skill pack named "' + input.name + '"');
-      const pack = skills[idx];
+      const orgId = await resolveOrgIdFromCtx(ctx);
+      const r = await pool.query(
+        `SELECT * FROM org_skill_packs WHERE organization_id = $1 AND name = $2 AND archived_at IS NULL`,
+        [orgId, input.name]
+      );
+      if (!r.rows.length) throw new Error('No skill pack named "' + input.name + '"');
+      const pack = r.rows[0];
       if (pack.anthropic_skill_id) {
         return 'Skill pack "' + input.name + '" is already mirrored (' + pack.anthropic_skill_id + ').';
       }
@@ -6680,45 +6727,36 @@ async function execStaffApprovalTool(name, input) {
         display_title: (pack.name || 'Project 86 skill').slice(0, 200),
         files: [file]
       });
-      skills[idx] = Object.assign({}, pack, { anthropic_skill_id: created.id });
-      const newCfg = Object.assign({}, cfg, { skills });
       await pool.query(
-        `INSERT INTO app_settings (key, value, updated_at) VALUES ('agent_skills', $1, NOW())
-         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
-        [JSON.stringify(newCfg)]
+        `UPDATE org_skill_packs SET anthropic_skill_id = $1, updated_at = NOW()
+          WHERE organization_id = $2 AND name = $3`,
+        [created.id, orgId, input.name]
       );
-      return 'Mirrored skill pack "' + input.name + '" to Anthropic native Skills (' + created.id + '). Re-register the agents that load it so the new skill_id is referenced server-side.';
+      return 'Mirrored skill pack "' + input.name + '" to Anthropic native Skills (' + created.id + '). Sync the agent so the new skill_id is referenced server-side.';
     }
     case 'propose_skill_pack_unmirror': {
       if (!input || !input.name) throw new Error('name is required');
       const anthropic = getAnthropic();
       if (!anthropic) throw new Error('ANTHROPIC_API_KEY not set on this deployment.');
-      const r = await pool.query(`SELECT value FROM app_settings WHERE key = 'agent_skills'`);
-      const cfg = r.rows.length ? (r.rows[0].value || {}) : {};
-      const skills = Array.isArray(cfg.skills) ? cfg.skills.slice() : [];
-      const idx = skills.findIndex(s => s && s.name === input.name);
-      if (idx < 0) throw new Error('No skill pack named "' + input.name + '"');
-      const pack = skills[idx];
+      const orgId = await resolveOrgIdFromCtx(ctx);
+      const r = await pool.query(
+        `SELECT * FROM org_skill_packs WHERE organization_id = $1 AND name = $2 AND archived_at IS NULL`,
+        [orgId, input.name]
+      );
+      if (!r.rows.length) throw new Error('No skill pack named "' + input.name + '"');
+      const pack = r.rows[0];
       if (!pack.anthropic_skill_id) {
         return 'Skill pack "' + input.name + '" is not currently mirrored.';
       }
       const priorId = pack.anthropic_skill_id;
-      // Best-effort delete on Anthropic. If they already 404 it (e.g.,
-      // skill manually deleted upstream), still scrub the local id so
-      // the admin UI shows the unsynced state and a future re-mirror
-      // generates a fresh upload.
       try { await anthropic.beta.skills.delete(priorId); }
       catch (e) { /* swallow — proceed to local scrub */ }
-      const updated = Object.assign({}, pack);
-      delete updated.anthropic_skill_id;
-      skills[idx] = updated;
-      const newCfg = Object.assign({}, cfg, { skills });
       await pool.query(
-        `INSERT INTO app_settings (key, value, updated_at) VALUES ('agent_skills', $1, NOW())
-         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
-        [JSON.stringify(newCfg)]
+        `UPDATE org_skill_packs SET anthropic_skill_id = NULL, updated_at = NOW()
+          WHERE organization_id = $1 AND name = $2`,
+        [orgId, input.name]
       );
-      return 'Removed Anthropic mirror for "' + input.name + '" (was ' + priorId + '). Local pack body is unchanged and still loads at chat time.';
+      return 'Removed Anthropic mirror for "' + input.name + '" (was ' + priorId + '). Local pack body is unchanged.';
     }
     default:
       throw new Error('Unknown approval-tier staff tool: ' + name);
@@ -6806,7 +6844,7 @@ function clearPendingIntakeImages(userId) {
 // Per-turn context for the intake agent. Light — just who the user
 // is, the date, and how many photos are staged. The agent's stable
 // system prompt carries the rest.
-async function buildIntakeContext(userId) {
+async function buildIntakeContext(userId, organization) {
   const lines = [];
   lines.push('# Intake session');
   let userRow = null;
@@ -6830,7 +6868,7 @@ async function buildIntakeContext(userId) {
   // 86 calls load_skill_pack({name}) on demand when a pack maps to
   // the work he's doing.
   try {
-    const intakeManifest = await loadSkillManifestFor('job', { entity_type: 'intake' });
+    const intakeManifest = await loadSkillManifestFor('job', { entity_type: 'intake' }, organization && organization.id);
     if (intakeManifest.length) {
       lines.push('');
       lines.push('# Available skill packs (call load_skill_pack({name}) to read a full body)');
@@ -7289,7 +7327,7 @@ router.post('/v2/intake/chat',
         clearPendingIntakeImages(req.user.id);
       }
 
-      const ctx = await buildIntakeContext(req.user.id);
+      const ctx = await buildIntakeContext(req.user.id, req.organization);
       const turnText =
         '<turn_context>\n' + ctx.system + '\n</turn_context>\n\n' + userMessage;
 
@@ -8175,24 +8213,22 @@ router.post('/86/chat', requireAuth, requireOrg, async (req, res) => {
         // as cache_creation every turn for no benefit. Always-on
         // skill packs are merged INTO the dynamic block by
         // buildEstimateContext for the same reason.
-        const ctx = await buildEstimateContext(cctxEntityId, false, cctxAiPhase);
+        const ctx = await buildEstimateContext(cctxEntityId, false, cctxAiPhase, req.organization);
         turnContextText = ctxDynamicText(ctx.system);
         if (Array.isArray(ctx.photoBlocks)) extraPhotoBlocks = ctx.photoBlocks;
       } else if (cctxEntityType === 'job' && cctxEntityId) {
-        const ctx = await buildJobContext(cctxEntityId, cctxClientCtx, cctxAiPhase);
+        const ctx = await buildJobContext(cctxEntityId, cctxClientCtx, cctxAiPhase, req.organization);
         turnContextText = ctxDynamicText(ctx.system);
         if (Array.isArray(ctx.photoBlocks)) extraPhotoBlocks = ctx.photoBlocks;
       } else if (cctxEntityType === 'intake') {
-        const ctx = await buildIntakeContext(req.user.id);
+        const ctx = await buildIntakeContext(req.user.id, req.organization);
         turnContextText = ctxDynamicText(ctx.system);
         if (Array.isArray(ctx.photoBlocks)) extraPhotoBlocks = ctx.photoBlocks;
       } else if (cctxEntityType === 'client') {
-        const ctx = await buildClientDirectoryContext();
+        const ctx = await buildClientDirectoryContext(req.organization);
         turnContextText = ctxDynamicText(ctx.system);
       } else if (cctxEntityType === 'staff' || cctxEntityType === 'admin') {
-        // Admin / Chief-of-Staff context — 86 absorbed the CoS role.
-        // buildStaffContext returns the cross-agent observability
-        // snapshot (metrics, recent conversations, skill packs).
+        // Admin context — 86 absorbed the CoS role.
         const ctx = await buildStaffContext();
         turnContextText = ctxDynamicText(ctx.system);
       }
@@ -8378,7 +8414,7 @@ router.post('/86/chat/continue', requireAuth, requireOrg, async (req, res) => {
         // Skill-pack mutations (formerly CoS-only — 86 owns these
         // now that the staff agent is being absorbed). Same handler
         // as the legacy /staff/chat/continue path.
-        try { summary = await execStaffApprovalTool(r.name, r.input || {}); }
+        try { summary = await execStaffApprovalTool(r.name, r.input || {}, { userId: req.user.id }); }
         catch (e) { summary = 'Error: ' + (e.message || 'failed'); isError = true; }
       } else if (CLIENT_TOOLS.some(t => t.name === r.name)) {
         try { summary = await execClientToolWithCtx(r.name, r.input || {}, { userId: req.user.id }); }

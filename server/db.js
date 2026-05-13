@@ -107,6 +107,77 @@ async function initSchema() {
        SET organization_id = (SELECT id FROM organizations WHERE slug = 'agx')
      WHERE organization_id IS NULL;
 
+    -- ───────────────────────────────────────────────────────────────
+    -- Per-org skill packs. Replaces the global app_settings.agent_skills
+    -- JSONB blob (which conflated skill packs with section overrides)
+    -- with a proper per-tenant table. Each pack:
+    --   - belongs to one organization
+    --   - targets one or more agent keys (today only 'job')
+    --   - is scoped to one or more surface contexts
+    --   - has an admin-editable body, optional category + triggers
+    --   - tracks a mirror to native Anthropic Skills via anthropic_skill_id
+    --   - soft-deletes via archived_at so name conflicts don't bite
+    --     after a pack is removed
+    -- The runtime reads this table via loadSkillManifestFor (manifest
+    -- only — bodies are pulled on demand via load_skill_pack). The
+    -- legacy app_settings.agent_skills row stays in place because
+    -- loadSectionOverridesFor still uses it for replaces_section
+    -- packs — those are a different concept (system-prompt patches,
+    -- not loadable packs).
+    CREATE TABLE IF NOT EXISTS org_skill_packs (
+      id SERIAL PRIMARY KEY,
+      organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      body TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      agents JSONB NOT NULL DEFAULT '["job"]'::jsonb,    -- agent_keys this pack targets
+      contexts JSONB NOT NULL DEFAULT '[]'::jsonb,       -- entity surfaces (estimate/job/intake/ask86/client)
+      category TEXT,
+      triggers JSONB NOT NULL DEFAULT '{}'::jsonb,       -- conditional load rules
+      anthropic_skill_id TEXT,                           -- when mirrored to native Anthropic Skills
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      archived_at TIMESTAMPTZ,
+      -- Unique per (organization, name) so propose_skill_pack_add can
+      -- safely upsert without colliding across tenants.
+      UNIQUE (organization_id, name)
+    );
+    CREATE INDEX IF NOT EXISTS idx_org_skill_packs_org
+      ON org_skill_packs(organization_id) WHERE archived_at IS NULL;
+
+    -- One-shot migration: copy non-replaces_section packs from the
+    -- legacy app_settings.agent_skills row into org_skill_packs under
+    -- AGX. Uses a JSONB-extract subquery so the migration runs as a
+    -- single SQL pass — Postgres-side, no Node code involved. Safe
+    -- re-run because of UNIQUE (organization_id, name) + ON CONFLICT.
+    DO $migrate_packs$
+    DECLARE
+      agx_id INTEGER;
+    BEGIN
+      SELECT id INTO agx_id FROM organizations WHERE slug = 'agx';
+      IF agx_id IS NULL THEN RETURN; END IF;
+      INSERT INTO org_skill_packs (
+        organization_id, name, body, description,
+        agents, contexts, category, triggers, anthropic_skill_id
+      )
+      SELECT
+        agx_id,
+        COALESCE(pack->>'name', '(untitled)'),
+        COALESCE(pack->>'body', ''),
+        COALESCE(pack->>'description', ''),
+        COALESCE(pack->'agents', '["job"]'::jsonb),
+        COALESCE(pack->'contexts', '[]'::jsonb),
+        pack->>'category',
+        COALESCE(pack->'triggers', '{}'::jsonb),
+        pack->>'anthropic_skill_id'
+      FROM app_settings,
+           LATERAL jsonb_array_elements(value->'skills') pack
+      WHERE app_settings.key = 'agent_skills'
+        AND COALESCE(pack->>'replaces_section', '') = ''
+      ON CONFLICT (organization_id, name) DO NOTHING;
+    END
+    $migrate_packs$;
+
     -- Team messaging — per-entity comment threads + (future) DMs.
     -- thread_key conventions:
     --   'job:<id>'      one thread per job (per-job comments)
