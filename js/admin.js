@@ -2377,13 +2377,12 @@
   //   job  → 86 (the unified operator — estimating + WIP + intake + Ask 86)
   //   cra  → HR (clients, jobs, subs, users — 86's data steward)
   //   staff → Chief of Staff (meta — observes/tunes 86)
-  // Legacy keys ('ag', 'intake') were retired and migrated to 'job'
-  // in the DB; if any old session/registry row still resolves them,
-  // AGENT_SYSTEM_BASELINE.ag aliases to .job so they all serve the
-  // same 86 identity.
+  // 86 is the unified operator agent (Phase 1). Legacy keys ('ag',
+  // 'intake', 'cra', 'staff') were retired and migrated to 'job';
+  // any stale session/registry rows still pointing at them resolve
+  // back to 86 via AGENT_SYSTEM_BASELINE aliases on the server.
   var AGENT_LABELS = {
-    job: '86 (Operator)',
-    cra: 'HR (86\'s data steward)'
+    job: '86'
   };
 
   function renderAgentSkillsHTML() {
@@ -4469,13 +4468,8 @@
     '</div>';
   }
 
-  function openChiefOfStaff() {
-    if (!window.p86AI || typeof window.p86AI.open !== 'function') {
-      alert('AI panel not loaded — refresh the page.');
-      return;
-    }
-    window.p86AI.open({ entityType: 'staff' });
-  }
+  // openChiefOfStaff removed — Chief of Staff was rolled into the
+  // unified 86 agent in Phase 1. The window export below also gone.
 
   // ─────────── Skills view (mounted on the Agents page) ───────────
   // Reuses the existing skill-pack renderer + draft state from the
@@ -4484,13 +4478,13 @@
   // same app_settings.agent_skills row. We sync inputs into the draft
   // before any view switch so unsaved edits don't get clobbered.
   // ─────────── Prompt Preview view ───────────
-  // Shows the EXACT system prompt an agent (86 / HR / Chief of Staff)
-  // would see right now if a chat turn fired against the supplied
-  // entity. Two blocks: the registered baseline (SECTION_DEFAULTS +
-  // identity, cached on Anthropic's side via composedAgentSystem)
-  // and the per-turn dynamic context (refreshed each turn, includes
-  // the on-demand skill-pack manifest). Gives the admin the
-  // visibility this used to require code-spelunking for.
+  // Shows the EXACT system prompt 86 would see right now if a chat
+  // turn fired against the supplied entity. Two blocks: the registered
+  // baseline (SECTION_DEFAULTS + org identity, cached on Anthropic's
+  // side via composedAgentSystem) and the per-turn dynamic context
+  // (refreshed each turn, includes the on-demand skill-pack manifest).
+  // Gives the admin the visibility this used to require code-spelunking
+  // for.
   function renderPromptPreview() {
     var host = document.getElementById('agents-content');
     if (!host) return;
@@ -4600,18 +4594,9 @@
     var totalTokens = d.total_approx_tokens || (stableTokens + dynamicTokens);
     var cachedPct = totalTokens > 0 ? Math.round((stableTokens / totalTokens) * 100) : 0;
 
-    // Map legacy agent_keys (kept around for backward compat in URLs
-    // and stored data) to the current product-facing display names.
-    var AGENT_DISPLAY = {
-      ag:    '86 (estimating)',
-      elle:  '86 (analyst)',
-      job:   '86 (analyst)',
-      hr:    'HR',
-      cra:   'HR',
-      cos:   'Chief of Staff',
-      staff: 'Chief of Staff'
-    };
-    var agentLabel = AGENT_DISPLAY[(d.agent || '').toLowerCase()] || d.agent || '';
+    // All legacy agent_keys (ag, elle, hr, cra, cos, staff) collapsed
+    // into 86 in Phase 1. Anything in stored data still resolves to 86.
+    var agentLabel = '86';
     var summary =
       '<div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:14px;background:rgba(79,140,255,0.06);border:1px solid rgba(79,140,255,0.25);border-radius:8px;padding:12px 14px;">' +
         '<div><div style="font-size:10px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;">Agent</div>' +
@@ -6079,7 +6064,6 @@
   window.openAgentConversation = openAgentConversation;
   window.closeAgentConversation = closeAgentConversation;
   window.openReplayDialog = openReplayDialog;
-  window.openChiefOfStaff = openChiefOfStaff;
   window.renderAgentsSkillsView = renderAgentsSkillsView;
   window.saveAgentsSkills = saveAgentsSkills;
   window.openEvalDetail = openEvalDetail;

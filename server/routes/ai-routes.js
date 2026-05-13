@@ -2821,6 +2821,17 @@ function isStuckSessionError(e) {
     /waiting on responses to events/.test(String(e.message || ''));
 }
 
+// Companion to isStuckSessionError. Fires when the client sends a
+// user.custom_tool_result whose custom_tool_use_id doesn't match any
+// event the session knows about — typically because the session was
+// archived + recreated between the proposal card being shown and the
+// user clicking approve. Recovery is to archive any pending toolUses
+// in the client and start a fresh turn from the user's intent.
+function isStaleToolUseIdError(e) {
+  return e && e.status === 400 &&
+    /does not match any custom_tool_use event/.test(String(e.message || ''));
+}
+
 // Recovery: archive the stuck Anthropic-side session, mark the local
 // row archived, and create a fresh session for the same (agent_key,
 // entity_type, entity_id, user_id) tuple. Caller swaps the active
@@ -2985,6 +2996,19 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
         }
         if (isStuckSessionError(e) && freshlyCreated) {
           console.error('[v2-stream] freshly-created session reported stuck — refusing to recover (would loop):', sessionId);
+        }
+        // Stale tool_use_id — the client posted approval for a card
+        // whose tool_use event lives in an archived session. Surface
+        // a clear instruction instead of bubbling raw Anthropic JSON.
+        // The client side drops pendingToolUses on next chat call, so
+        // the user just needs to re-prompt.
+        if (isStaleToolUseIdError(e)) {
+          console.warn('[v2-stream] stale tool_use_id on', sessionId,
+            '— session was recreated after the proposal card was shown.');
+          send({ error: 'The chat session was reset between turns, so those approval cards no longer apply. Re-send your request and I\'ll redo the proposals fresh.' });
+          send({ stale_tool_use_id: true });
+          endWithDone();
+          return null;
         }
         console.error('Session events.send failed:', e);
         send({ error: e.message || 'Failed to send session events' });

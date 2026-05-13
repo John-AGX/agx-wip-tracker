@@ -41,31 +41,27 @@ const MODEL_COSTS = {
 // them. Front-end UIs that want SVG icons render them inline via
 // p86Icon() at the call site.
 // Display labels keyed by AGENT IDENTITY, not entity_type. 86 is one
-// agent — every surface (estimate / job / intake / ask86 / unified 86)
-// rolls up to a single '86' identity here. HR has its own. CoS is
-// shown only when it has activity. The metrics SQL maps entity_type
-// → identity via a CASE expression so the SQL aggregates collapse.
+// Phase 1 collapsed every agent identity into the unified 86. HR and
+// Chief of Staff used to live here as separate buckets; both folded
+// in. Anything still landing in 'hr' / 'staff' rows from old data
+// rolls up to '86' via ENTITY_TYPE_TO_AGENT_SQL below.
 const AGENT_LABELS = {
-  '86':    '86',
-  'hr':    'HR (data steward)',
-  'staff': 'Chief of Staff'
+  '86': '86'
 };
 
 // Map raw entity_type values in ai_messages to a logical agent
-// identity. Kept as a SQL CASE generator + a JS helper so the
-// metrics aggregation and any client-side rollup stay in sync.
+// identity. Post-Phase-1, every entity_type that used to split into
+// HR or Chief of Staff (client / staff) folds back into the single
+// unified 86 identity. Kept as a SQL CASE generator + a JS helper so
+// the metrics aggregation and any client-side rollup stay in sync.
 const ENTITY_TYPE_TO_AGENT_SQL = `
   CASE
-    WHEN entity_type IN ('estimate', 'job', 'intake', 'ask86', '86') THEN '86'
-    WHEN entity_type = 'client' THEN 'hr'
-    WHEN entity_type = 'staff' THEN 'staff'
+    WHEN entity_type IN ('estimate', 'job', 'intake', 'ask86', '86', 'client', 'staff') THEN '86'
     ELSE entity_type
   END
 `;
 function entityTypeToAgent(entityType) {
-  if (['estimate', 'job', 'intake', 'ask86', '86'].includes(entityType)) return '86';
-  if (entityType === 'client') return 'hr';
-  if (entityType === 'staff') return 'staff';
+  if (['estimate', 'job', 'intake', 'ask86', '86', 'client', 'staff'].includes(entityType)) return '86';
   return entityType;
 }
 
