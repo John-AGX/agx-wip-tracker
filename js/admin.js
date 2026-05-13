@@ -4499,10 +4499,15 @@
         body: bodyText
       }).then(function(resp) {
         cancel();
-        loadAnthropicSkills();
+        // Refresh whichever views are currently mounted. The Anthropic
+        // resources table + per-agent panels both surface the new
+        // skill — refresh both defensively (each is a cheap no-op if
+        // its container isn't in the DOM).
+        if (typeof loadAnthropicSkills === 'function') loadAnthropicSkills();
+        if (typeof loadAgentSkillAssignments === 'function' && document.getElementById('agent-skill-assignments-panel')) {
+          loadAgentSkillAssignments();
+        }
         if (resp && resp.skill && resp.skill.id) {
-          // Brief confirmation — the row will already be visible in
-          // the refreshed table; this just confirms the API round-trip.
           console.log('[native-skills] created', resp.skill.id);
         }
       }).catch(function(err) {
@@ -4644,6 +4649,33 @@
   window.syncSkillToAnthropic = syncSkillToAnthropic;
   window.unsyncSkillFromAnthropic = unsyncSkillFromAnthropic;
 
+  // One-click sync of managed agent definitions to Anthropic after
+  // attaching / detaching native skills. POSTs /managed/sync-all so
+  // every registered agent picks up its updated skill list. Without
+  // this, managed_agent_skills changes are saved locally but the
+  // agent on Anthropic's side keeps serving the OLD skill list until
+  // someone manually clicks Bootstrap. Shown in the Skills view
+  // header so the user sees "attach → click sync → done."
+  window.syncManagedAgentsAfterSkillEdit = function() {
+    if (!confirm('Push attach/detach changes to Anthropic now?\n\nThis re-registers all three managed agents (job, cra, staff) with their current skill + tool lists. Takes a few seconds. Existing in-flight chats keep their current agent version; new turns bind to the updated one.')) return;
+    var btn = event && event.target && event.target.closest('button');
+    if (btn) { btn.disabled = true; var prev = btn.textContent; btn.textContent = 'Syncing…'; btn.dataset.prev = prev; }
+    window.p86Api.post('/api/admin/agents/managed/sync-all', {}).then(function(resp) {
+      var summary = (resp && resp.summary) || [];
+      var ok = summary.filter(function(s) { return s.ok; }).length;
+      alert('Synced ' + ok + '/' + summary.length + ' agents.\n\n' + summary.map(function(s) {
+        return s.agent_key + ': ' + s.status + (s.new_version ? ' (v' + s.previous_version + '→v' + s.new_version + ', ' + s.tool_count + ' tools, ' + s.skill_count + ' skills)' : '');
+      }).join('\n'));
+      if (typeof loadAgentSkillAssignments === 'function' && document.getElementById('agent-skill-assignments-panel')) {
+        loadAgentSkillAssignments();
+      }
+    }).catch(function(err) {
+      alert('Sync failed: ' + (err && err.message || 'unknown'));
+    }).finally(function() {
+      if (btn) { btn.disabled = false; btn.textContent = btn.dataset.prev || 'Sync agents now'; }
+    });
+  };
+
   // ─────────── Run all evals (post-save verification) ───────────
   // Hits /api/admin/agents/skills/run-all-evals which runs every
   // defined eval against the current SAVED skill-pack config.
@@ -4719,45 +4751,40 @@
   function renderAgentsSkillsView() {
     var host = document.getElementById('agents-content');
     if (!host) return;
-    host.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;font-style:italic;padding:20px 0;">Loading skill packs…</div>';
-    Promise.all([
-      window.p86Api.settings.get('agent_skills'),
-      fetchOverridableSections()
-    ]).then(function(results) {
-      var res = results[0];
-      _skillsDraft = (res && res.setting && res.setting.value) || { skills: [] };
-      if (!Array.isArray(_skillsDraft.skills)) _skillsDraft.skills = [];
-      // Reuse the same body markup the Templates → Skills tab renders,
-      // wrap with a save bar tailored for the agents page (lighter than
-      // saveAdminTemplate's "save all settings" action).
-      // Native Skills migration banner — packs sit in this homegrown
-      // system today, but each one can be MIRRORED to Anthropic Skills
-      // via the per-pack Sync button. Runtime cutover (model loading
-      // skills on demand instead of always-on append) requires migrating
-      // chat to beta.agents — that's a separate workstream.
-      host.innerHTML =
-        '<div style="margin:0 0 14px 0;padding:12px 14px;background:rgba(251,191,36,0.06);border:1px solid rgba(251,191,36,0.25);border-radius:8px;font-size:12px;line-height:1.5;color:var(--text-dim,#aaa);">' +
-          '<div style="font-weight:600;color:#fbbf24;margin-bottom:4px;">&#x1F6A7; Native Skills migration in progress</div>' +
-          'Packs below are Project 86\'s homegrown skill system — still <strong>active in production</strong>; 86 + HR load them every turn. ' +
-          'Use <button class="ee-btn secondary" onclick="syncAllSkillsToAnthropic()" style="margin:0 4px;font-size:11px;padding:2px 8px;">&#x1F310; Sync all to Anthropic</button> to mirror them as native Skills. ' +
-          'Mirrored skills appear in <a href="#" onclick="switchAgentsView(\'anthropic\');return false;" style="color:#4f8cff;">Anthropic &rarr; Skills</a>. ' +
-          'Runtime cutover (model loading skills on-demand via beta.agents) is a separate workstream — until then this surface remains source-of-truth.' +
+    // New Skills tab: native Anthropic Skills per agent. The legacy
+    // local-pack editor was retired here because the /86/chat path no
+    // longer eager-loads packs (0242ef1 — manifest only). Local packs
+    // remain editable from Templates → Skills for any back-compat needs
+    // on the legacy direct-API estimate-chat paths.
+    host.innerHTML =
+      '<div style="margin:0 0 14px 0;padding:12px 14px;background:rgba(79,140,255,0.05);border:1px solid rgba(79,140,255,0.20);border-radius:8px;font-size:12px;line-height:1.55;color:var(--text-dim,#aaa);">' +
+        '<div style="font-weight:600;color:#4f8cff;margin-bottom:4px;">&#x1F9E0; Native Anthropic Skills</div>' +
+        'Skills attached to each managed agent on Anthropic\'s platform. The model loads these on-demand via Anthropic\'s built-in Skills mechanism — they don\'t ship in every turn\'s prompt, so they\'re effectively free until the model uses one. ' +
+        'After attaching or detaching, click <strong>Bootstrap / Sync</strong> on the agent card under <a href="#" onclick="switchAgentsView(\'anthropic\');return false;" style="color:#4f8cff;">Anthropic &rarr; Agents</a> so the change reaches the registered agent definition. ' +
+        'Legacy local skill packs (in-prompt prose) still live in the DB and remain editable from <a href="#" onclick="switchAdminSubTab(\'templates\');return false;" style="color:#4f8cff;">Templates &rarr; Skills</a> — they only affect legacy direct-API chat paths now.' +
+      '</div>' +
+      '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;gap:8px;">' +
+        '<div style="font-size:13px;font-weight:600;color:var(--text,#fff);">Per-agent skill attachments</div>' +
+        '<div style="display:flex;gap:8px;">' +
+          '<button class="ee-btn secondary" onclick="window.openCreateNativeSkill && window.openCreateNativeSkill()" title="Upload a new SKILL.md to Anthropic. Once created it appears in the picker on each agent card.">&#x2795; Create new skill</button>' +
+          '<button class="ee-btn primary" onclick="syncManagedAgentsAfterSkillEdit()" title="Push attach/detach changes to the registered Anthropic agent definitions. Required after changing assignments so the agent actually sees the new skill list.">&#x1F4E1; Sync agents now</button>' +
+          '<button class="ee-btn secondary" onclick="renderAgentsSkillsView()" title="Refresh">&#x21BB; Refresh</button>' +
         '</div>' +
-        '<p style="margin:0 0 14px 0;color:var(--text-dim,#888);font-size:12px;opacity:0.6;">' +
-          'Reusable instruction blocks loaded into the in-app AI agents at chat time. The Chief of Staff can also propose skill-pack edits — those land here on approval. Edits made here are also visible from <a href="#" onclick="switchAdminSubTab(\'templates\');return false;" style="color:#4f8cff;">Templates &rarr; Skills</a>.' +
-        '</p>' +
-        '<div id="agents-skills-body">' + renderAgentSkillsHTML() + '</div>' +
-        '<div style="display:flex;gap:8px;align-items:center;margin-top:14px;padding:10px 12px;background:rgba(255,255,255,0.03);border:1px solid var(--border,#333);border-radius:6px;">' +
-          '<span id="agents-skills-status" style="flex:1;font-size:12px;color:var(--text-dim,#888);"></span>' +
-          '<button class="ee-btn secondary" onclick="openSkillsVersionHistory()">&#x23F1; History</button>' +
-          '<button class="ee-btn secondary" onclick="runAllEvals()" title="Run every defined eval against the current saved skill packs. Use after Save to verify nothing regressed.">&#x1F9EA; Run all evals</button>' +
-          '<button class="ee-btn secondary" onclick="renderAgentsSkillsView()">Discard changes</button>' +
-          '<button class="ee-btn primary" onclick="saveAgentsSkills()">&#x1F4BE; Save skills</button>' +
+      '</div>' +
+      '<div id="agent-skill-assignments-panel" style="margin-bottom:18px;"></div>' +
+      '<details style="margin-top:14px;border-top:1px solid var(--border,#333);padding-top:12px;">' +
+        '<summary style="cursor:pointer;font-size:12px;color:var(--text-dim,#888);">Legacy local skill packs (still saved in DB; only used by legacy chat paths)</summary>' +
+        '<div style="margin-top:8px;font-size:12px;color:var(--text-dim,#888);line-height:1.5;">' +
+          'The 9 local prose-packs (Estimating Playbook, WIP Analyst Playbook, etc.) stopped shipping into <code>/86/chat</code> on commit 0242ef1. They still load on the older <code>/estimates/:id/chat</code> direct-API path. ' +
+          'Edit them at <a href="#" onclick="switchAdminSubTab(\'templates\');return false;" style="color:#4f8cff;">Templates &rarr; Skills</a> or mirror them to native Anthropic skills with the button below.' +
         '</div>' +
-        '<div id="agents-skills-eval-results" style="margin-top:12px;"></div>';
-    }).catch(function(err) {
-      host.innerHTML = '<div style="color:#e74c3c;font-size:12px;padding:20px 0;">Failed: ' + escapeHTML(err.message || 'unknown') + '</div>';
-    });
+        '<button class="ee-btn secondary" onclick="syncAllSkillsToAnthropic()" style="margin-top:8px;font-size:11px;padding:4px 10px;">&#x1F310; Mirror all legacy packs to Anthropic</button>' +
+      '</details>';
+    // Load the per-agent native skill cards (existing loader, panel id
+    // matches its container above).
+    if (typeof loadAgentSkillAssignments === 'function') {
+      loadAgentSkillAssignments();
+    }
   }
 
   function saveAgentsSkills() {
