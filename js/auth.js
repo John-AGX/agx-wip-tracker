@@ -128,7 +128,7 @@
   // - [data-cap="KEY"] toggles on the corresponding capability. Multiple
   //   capabilities (any-of) can be supplied space-separated: data-cap="A B".
   function applyRoleVisibility() {
-    var isAdmin = isOffline || (currentUser && currentUser.role === 'admin');
+    var isAdmin = isOffline || (currentUser && (currentUser.role === 'admin' || currentUser.role === 'system_admin'));
     document.querySelectorAll('[data-admin-only]').forEach(function(el) {
       el.style.display = isAdmin ? '' : 'none';
     });
@@ -291,8 +291,9 @@
     getUser: function() { return currentUser; },
     getToken: function() { return token; },
     isOffline: function() { return isOffline; },
-    isAdmin: function() { return currentUser && currentUser.role === 'admin'; },
-    canEdit: function() { return currentUser && (currentUser.role === 'admin' || currentUser.role === 'pm'); },
+    isAdmin: function() { return currentUser && (currentUser.role === 'admin' || currentUser.role === 'system_admin'); },
+    isSystemAdmin: function() { return currentUser && currentUser.role === 'system_admin'; },
+    canEdit: function() { return currentUser && (currentUser.role === 'admin' || currentUser.role === 'system_admin' || currentUser.role === 'pm'); },
     isReadOnly: function() { return currentUser && currentUser.role === 'corporate'; },
     hasCapability: hasCapability,
     getCapabilities: function() { return Array.from(capabilities); },

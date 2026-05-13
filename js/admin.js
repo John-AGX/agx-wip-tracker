@@ -1020,7 +1020,18 @@
   window.handleMaterialsImportFile = handleMaterialsImportFile;
   window.recategorizeMaterials = recategorizeMaterials;
 
+  function refreshSystemAdminTabVisibility() {
+    // Show the System sub-tab only when the caller has SYSTEM_ADMIN.
+    // Defensive — auth might not be loaded yet on first paint.
+    var btn = document.querySelector('[data-admin-subtab="system"]');
+    if (!btn) return;
+    var ok = window.p86Auth && typeof window.p86Auth.isSystemAdmin === 'function' && window.p86Auth.isSystemAdmin();
+    btn.style.display = ok ? 'inline-flex' : 'none';
+  }
+  window.refreshSystemAdminTabVisibility = refreshSystemAdminTabVisibility;
+
   function switchAdminSubTab(name) {
+    refreshSystemAdminTabVisibility();
     document.querySelectorAll('[data-admin-subtab]').forEach(function(btn) {
       btn.classList.toggle('active', btn.dataset.adminSubtab === name);
     });
@@ -1042,6 +1053,7 @@
     else if (name === 'email') renderAdminEmail();
     else if (name === 'agents') renderAdminAgents();
     else if (name === 'organization') renderAdminOrganization();
+    else if (name === 'system') renderAdminSystem();
     else if (name === 'sms') renderAdminSms();
     // 'email-templates' moved into Templates → Email; if a saved nav state
     // points at the old top-level tab, reroute to templates.
@@ -3296,6 +3308,216 @@
       if (status) { status.textContent = 'Save failed: ' + (err.message || 'unknown'); status.style.color = '#f87171'; }
     });
   };
+
+  // ──────────────────────── System Admin tab ───────────────────────
+  // Cross-tenant operations visible only to users with the
+  // SYSTEM_ADMIN capability (server-side requireSystemAdmin gates the
+  // endpoints behind every section). Today: Organizations CRUD,
+  // cross-org metrics, Anthropic-account-wide resources, platform
+  // settings (stub).
+  function renderAdminSystem() {
+    if (!window.p86Auth || !window.p86Auth.isSystemAdmin || !window.p86Auth.isSystemAdmin()) {
+      var hostGate = document.getElementById('admin-system-content');
+      if (hostGate) hostGate.innerHTML =
+        '<div style="padding:20px;color:var(--text-dim,#888);font-size:13px;line-height:1.6;">' +
+          '<strong style="color:var(--text,#fff);">System Admin access required.</strong><br>' +
+          'This section is reserved for the platform owner. Org Admins manage their own tenant via the other admin sub-tabs.' +
+        '</div>';
+      return;
+    }
+    var host = document.getElementById('admin-system-content');
+    if (!host) return;
+    host.innerHTML =
+      '<div style="margin:0 0 14px 0;padding:12px 14px;background:linear-gradient(135deg,rgba(124,58,237,0.08),rgba(79,140,255,0.08));border:1px solid rgba(124,58,237,0.25);border-radius:8px;font-size:12px;line-height:1.55;color:var(--text-dim,#aaa);">' +
+        '<div style="font-weight:600;color:#a78bfa;margin-bottom:4px;">&#x2699; System Admin · platform-owner surface</div>' +
+        'Cross-tenant operations. Manage organizations (create / archive), see cross-org metrics + costs, manage Anthropic-account-wide resources. Org-level edits (your own org\'s identity, skill packs, users) live in the regular admin sub-tabs.' +
+      '</div>' +
+
+      // Internal tab nav for System sections
+      '<div style="display:flex;gap:8px;align-items:center;margin-bottom:14px;flex-wrap:wrap;">' +
+        '<div class="ws-right-tabs" style="margin:0;">' +
+          '<button class="ws-right-tab' + (_systemView === 'organizations' ? ' active' : '') + '" onclick="switchSystemView(\'organizations\')">&#x1F3E2; Organizations</button>' +
+          '<button class="ws-right-tab' + (_systemView === 'metrics' ? ' active' : '') + '" onclick="switchSystemView(\'metrics\')">&#x1F4CA; Cross-org Metrics</button>' +
+          '<button class="ws-right-tab' + (_systemView === 'anthropic' ? ' active' : '') + '" onclick="switchSystemView(\'anthropic\')">&#x1F310; Anthropic Resources</button>' +
+          '<button class="ws-right-tab' + (_systemView === 'settings' ? ' active' : '') + '" onclick="switchSystemView(\'settings\')">&#x1F527; Platform Settings</button>' +
+        '</div>' +
+      '</div>' +
+      '<div id="system-section-host"></div>';
+    renderSystemSection();
+  }
+  window.renderAdminSystem = renderAdminSystem;
+
+  var _systemView = 'organizations';
+  window.switchSystemView = function(view) {
+    _systemView = view;
+    document.querySelectorAll('#admin-system-content .ws-right-tabs .ws-right-tab').forEach(function(btn) {
+      var label = (btn.textContent || '').trim().toLowerCase();
+      btn.classList.toggle('active',
+        (view === 'organizations' && label.indexOf('organizations') >= 0) ||
+        (view === 'metrics' && label.indexOf('metrics') >= 0) ||
+        (view === 'anthropic' && label.indexOf('anthropic') >= 0) ||
+        (view === 'settings' && label.indexOf('settings') >= 0)
+      );
+    });
+    renderSystemSection();
+  };
+
+  function renderSystemSection() {
+    var host = document.getElementById('system-section-host');
+    if (!host) return;
+    if (_systemView === 'organizations') return renderSystemOrganizations(host);
+    if (_systemView === 'metrics') return renderSystemMetrics(host);
+    if (_systemView === 'anthropic') return renderSystemAnthropic(host);
+    if (_systemView === 'settings') return renderSystemSettings(host);
+  }
+
+  function renderSystemOrganizations(host) {
+    host.innerHTML = '<div style="font-style:italic;color:var(--text-dim,#888);padding:14px 0;">Loading organizations…</div>';
+    window.p86Api.get('/api/admin/organizations').then(function(resp) {
+      var orgs = (resp && resp.organizations) || [];
+      var rows = orgs.map(function(o) {
+        var archived = o.archived_at
+          ? '<span style="color:#f87171;font-size:11px;">archived ' + new Date(o.archived_at).toLocaleDateString() + '</span>'
+          : '<span style="color:#34d399;font-size:11px;">active</span>';
+        return '<tr>' +
+          '<td style="padding:8px 10px;font-family:\'SF Mono\',monospace;font-size:11px;color:var(--text-dim,#aaa);">' + escapeHTML(o.slug) + '</td>' +
+          '<td style="padding:8px 10px;font-weight:600;">' + escapeHTML(o.name) +
+            (o.description ? '<div style="font-size:11px;color:var(--text-dim,#888);font-weight:400;margin-top:2px;">' + escapeHTML(o.description) + '</div>' : '') +
+          '</td>' +
+          '<td style="padding:8px 10px;text-align:center;">' + archived + '</td>' +
+          '<td style="padding:8px 10px;font-size:11px;color:var(--text-dim,#888);white-space:nowrap;">' + new Date(o.created_at).toLocaleDateString() + '</td>' +
+          '<td style="padding:8px 10px;text-align:right;white-space:nowrap;">' +
+            (o.archived_at ? '' :
+              '<button class="ee-btn ghost" onclick="archiveOrg(' + o.id + ', \'' + escapeAttr(o.slug) + '\')" style="font-size:11px;padding:3px 8px;color:#f87171;">&#x1F5D1; Archive</button>') +
+          '</td>' +
+        '</tr>';
+      }).join('');
+      var empty = '<tr><td colspan="5" style="padding:30px;text-align:center;color:var(--text-dim,#888);font-style:italic;">No organizations yet. Click "+ New organization" to add one.</td></tr>';
+      host.innerHTML =
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">' +
+          '<div style="font-size:13px;font-weight:600;color:var(--text,#fff);">All organizations (' + orgs.length + ')</div>' +
+          '<button class="ee-btn primary" onclick="openNewOrgModal()">&#x2795; New organization</button>' +
+        '</div>' +
+        '<div style="border:1px solid var(--border,#333);border-radius:8px;overflow:hidden;">' +
+          '<table style="width:100%;border-collapse:collapse;font-size:13px;">' +
+            '<thead style="background:rgba(255,255,255,0.03);border-bottom:1px solid var(--border,#333);">' +
+              '<tr>' +
+                '<th style="padding:8px 10px;text-align:left;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-dim,#888);">Slug</th>' +
+                '<th style="padding:8px 10px;text-align:left;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-dim,#888);">Name</th>' +
+                '<th style="padding:8px 10px;text-align:center;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-dim,#888);">Status</th>' +
+                '<th style="padding:8px 10px;text-align:left;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-dim,#888);">Created</th>' +
+                '<th style="padding:8px 10px;text-align:right;"></th>' +
+              '</tr>' +
+            '</thead>' +
+            '<tbody>' + (rows || empty) + '</tbody>' +
+          '</table>' +
+        '</div>';
+    }).catch(function(err) {
+      host.innerHTML = '<div style="color:#e74c3c;padding:14px 0;">Failed: ' + escapeHTML(err.message || 'unknown') + '</div>';
+    });
+  }
+
+  window.openNewOrgModal = function() {
+    var existing = document.getElementById('new-org-modal');
+    if (existing) existing.remove();
+    var modal = document.createElement('div');
+    modal.id = 'new-org-modal';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;z-index:9999;';
+    modal.innerHTML =
+      '<div style="background:var(--bg-elev,#1a1a1a);border:1px solid var(--border,#333);border-radius:8px;padding:20px;width:680px;max-width:90vw;display:flex;flex-direction:column;gap:12px;">' +
+        '<h3 style="margin:0;font-size:16px;color:var(--text,#fff);">+ New organization</h3>' +
+        '<p style="margin:0;font-size:12px;color:var(--text-dim,#888);">Creates a tenant row. The platform owner is responsible for adding users to the new org separately. The tenant\'s first chat will mint its own Anthropic managed agent.</p>' +
+        '<label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--text-dim,#aaa);">Slug (lowercase, used in admin URLs + agent name) ' +
+          '<input type="text" id="new-org-slug" maxlength="64" style="padding:6px 8px;border-radius:4px;border:1px solid var(--border,#333);background:var(--bg,#0a0a0a);color:var(--text,#fff);font-family:\'SF Mono\',monospace;" placeholder="e.g. agx" />' +
+        '</label>' +
+        '<label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--text-dim,#aaa);">Display name ' +
+          '<input type="text" id="new-org-name" maxlength="200" style="padding:6px 8px;border-radius:4px;border:1px solid var(--border,#333);background:var(--bg,#0a0a0a);color:var(--text,#fff);" placeholder="e.g. AGX Central Florida" />' +
+        '</label>' +
+        '<label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--text-dim,#aaa);">Description (short blurb) ' +
+          '<input type="text" id="new-org-description" style="padding:6px 8px;border-radius:4px;border:1px solid var(--border,#333);background:var(--bg,#0a0a0a);color:var(--text,#fff);" />' +
+        '</label>' +
+        '<label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--text-dim,#aaa);">Identity body (composed into 86\'s system prompt) ' +
+          '<textarea id="new-org-identity" rows="8" style="padding:8px;border-radius:4px;border:1px solid var(--border,#333);background:var(--bg,#0a0a0a);color:var(--text,#fff);font-family:\'SF Mono\',monospace;font-size:12px;line-height:1.5;" placeholder="# About the company you serve&#10;You are working for ___"></textarea>' +
+        '</label>' +
+        '<div style="display:flex;justify-content:flex-end;gap:8px;">' +
+          '<button type="button" id="new-org-cancel" class="ee-btn secondary">Cancel</button>' +
+          '<button type="button" id="new-org-submit" class="ee-btn primary">Create</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(modal);
+    var cancel = function() { modal.remove(); };
+    modal.querySelector('#new-org-cancel').onclick = cancel;
+    modal.onclick = function(e) { if (e.target === modal) cancel(); };
+    modal.querySelector('#new-org-submit').onclick = function() {
+      var payload = {
+        slug: modal.querySelector('#new-org-slug').value,
+        name: modal.querySelector('#new-org-name').value,
+        description: modal.querySelector('#new-org-description').value,
+        identity_body: modal.querySelector('#new-org-identity').value
+      };
+      if (!payload.slug || !payload.name) { alert('Slug and Name are required.'); return; }
+      var btn = modal.querySelector('#new-org-submit');
+      btn.disabled = true; btn.textContent = 'Creating…';
+      window.p86Api.post('/api/admin/organizations', payload).then(function() {
+        cancel();
+        renderSystemOrganizations(document.getElementById('system-section-host'));
+      }).catch(function(err) {
+        btn.disabled = false; btn.textContent = 'Create';
+        alert('Create failed: ' + (err && err.message || 'unknown'));
+      });
+    };
+  };
+
+  window.archiveOrg = function(id, slug) {
+    if (!confirm('Archive organization "' + slug + '"?\n\nSoft-archives (sets archived_at). Users in that org won\'t be able to access their data via the chat surfaces. Data stays in the DB.')) return;
+    window.p86Api.del('/api/admin/organizations/' + id).then(function() {
+      renderSystemOrganizations(document.getElementById('system-section-host'));
+    }).catch(function(err) {
+      alert('Archive failed: ' + (err && err.message || 'unknown'));
+    });
+  };
+
+  function renderSystemMetrics(host) {
+    host.innerHTML =
+      '<div style="padding:30px;text-align:center;color:var(--text-dim,#888);border:1px dashed var(--border,#333);border-radius:8px;">' +
+        '<div style="font-size:14px;color:var(--text,#fff);margin-bottom:6px;">Cross-org metrics</div>' +
+        '<div style="font-size:12px;line-height:1.6;">Per-tenant chat usage, cost, agent activity, conversation counts.<br>Coming in the next iteration — for now use Admin → Agents → Metrics (scoped to your own org).</div>' +
+      '</div>';
+  }
+
+  function renderSystemAnthropic(host) {
+    // Delegate to the existing renderAnthropicResources from the
+    // Agents → Anthropic surface. The view itself is platform-level
+    // (one Anthropic account for the whole SaaS) so showing it here
+    // is the canonical location. Org admins won\'t see it because
+    // the System tab is gated.
+    host.innerHTML = '<div style="font-style:italic;color:var(--text-dim,#888);padding:14px 0;">Mounting Anthropic resources view…</div>';
+    // Repurpose by injecting the same DOM container the Anthropic view
+    // expects, then calling its loader. This is intentionally a thin
+    // wrapper so the source-of-truth code stays in one place.
+    setTimeout(function() {
+      host.innerHTML = '<div id="anthropic-resources-mount">' +
+        '<div id="managed-agents-panel" style="margin-bottom:16px;"></div>' +
+        '<div id="agent-skill-assignments-panel" style="margin-bottom:16px;"></div>' +
+        '<div id="anthropic-skills-panel" style="margin-bottom:16px;"></div>' +
+        '<div id="anthropic-files-panel" style="margin-bottom:16px;"></div>' +
+        '<div id="anthropic-batches-panel" style="margin-bottom:16px;"></div>' +
+      '</div>';
+      if (typeof loadManagedAgents === 'function') loadManagedAgents();
+      if (typeof loadAgentSkillAssignments === 'function') loadAgentSkillAssignments();
+      if (typeof loadAnthropicSkills === 'function') loadAnthropicSkills();
+      if (typeof loadAnthropicFiles === 'function') loadAnthropicFiles();
+      if (typeof loadAnthropicBatches === 'function') loadAnthropicBatches();
+    }, 0);
+  }
+
+  function renderSystemSettings(host) {
+    host.innerHTML =
+      '<div style="padding:30px;text-align:center;color:var(--text-dim,#888);border:1px dashed var(--border,#333);border-radius:8px;">' +
+        '<div style="font-size:14px;color:var(--text,#fff);margin-bottom:6px;">Platform settings</div>' +
+        '<div style="font-size:12px;line-height:1.6;">Reserved for SaaS-level config: rate limits, default org settings, system-wide feature flags.<br>None defined yet.</div>' +
+      '</div>';
+  }
 
   function renderAdminAgents() {
     var pane = document.getElementById('admin-subtab-agents');

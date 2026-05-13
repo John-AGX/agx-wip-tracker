@@ -1623,9 +1623,23 @@ async function initSchema() {
   // description, and builtin flag get refreshed).
   const BUILTIN_ROLES = [
     {
+      name: 'system_admin',
+      label: 'System Admin',
+      description: 'Platform owner. All admin capabilities PLUS cross-tenant access (manage organizations, see cross-org metrics, manage Anthropic-account-wide resources).',
+      capabilities: [
+        'JOBS_VIEW_ALL', 'JOBS_EDIT_ANY', 'JOBS_DELETE', 'JOBS_GO_LIVE', 'JOBS_REASSIGN',
+        'FINANCIALS_VIEW', 'PROGRESS_UPDATE',
+        'ESTIMATES_VIEW', 'ESTIMATES_EDIT',
+        'LEADS_VIEW', 'LEADS_EDIT',
+        'USERS_MANAGE', 'ROLES_MANAGE',
+        'INSIGHTS_VIEW', 'ADMIN_METRICS',
+        'SYSTEM_ADMIN'
+      ]
+    },
+    {
       name: 'admin',
-      label: 'Admin',
-      description: 'Full access. Manages users, roles, jobs, and site settings.',
+      label: 'Org Admin',
+      description: 'Full access within ONE organization. Manages users, roles, jobs, and org settings for their tenant. Does NOT see cross-tenant operations (those require System Admin).',
       capabilities: [
         'JOBS_VIEW_ALL', 'JOBS_EDIT_ANY', 'JOBS_DELETE', 'JOBS_GO_LIVE', 'JOBS_REASSIGN',
         'FINANCIALS_VIEW', 'PROGRESS_UPDATE',
@@ -1633,9 +1647,7 @@ async function initSchema() {
         'LEADS_VIEW', 'LEADS_EDIT',
         'USERS_MANAGE', 'ROLES_MANAGE',
         'INSIGHTS_VIEW', 'ADMIN_METRICS'
-        // Note: SUB_PORTAL_* are intentionally NOT on admin —
-        // they're exclusive to role='sub'. Admins manage subs
-        // through the PM UI, not the sub-facing portal.
+        // SYSTEM_ADMIN intentionally absent.
       ]
     },
     {
@@ -1670,12 +1682,13 @@ async function initSchema() {
     }
   ];
   for (const r of BUILTIN_ROLES) {
-    // The admin role is special-cased: its capability list is always re-synced
-    // to the canonical full set on boot. That way new capabilities added to
-    // the codebase (LEADS_*, future features) flow automatically to admins
-    // without anyone having to toggle them in the Roles UI. Other built-ins
-    // preserve admin customizations on conflict.
-    if (r.name === 'admin') {
+    // The admin + system_admin roles are special-cased: their capability
+    // lists are always re-synced to the canonical full set on boot.
+    // New capabilities added to the codebase (LEADS_*, SYSTEM_ADMIN, etc.)
+    // flow automatically to these roles without anyone having to toggle
+    // them in the Roles UI. Other built-ins preserve admin customizations
+    // on conflict.
+    if (r.name === 'admin' || r.name === 'system_admin') {
       await pool.query(
         `INSERT INTO roles (name, label, description, builtin, capabilities)
          VALUES ($1, $2, $3, true, $4::jsonb)
@@ -1699,6 +1712,44 @@ async function initSchema() {
         [r.name, r.label, r.description, JSON.stringify(r.capabilities)]
       );
     }
+  }
+
+  // Promote a user to system_admin so the platform owner exists.
+  // Two paths, applied in order:
+  //   1. Explicit env override: SYSTEM_ADMIN_EMAIL — promote the
+  //      user with that email (idempotent).
+  //   2. Single-tenant bootstrap: if NO user has role='system_admin'
+  //      yet AND exactly one user has role='admin', promote that
+  //      one admin. This handles the first deploy after this
+  //      migration lands — the existing sole admin becomes the
+  //      platform owner automatically.
+  // If neither condition fires (multiple admins, no env, no admin
+  // at all), the migration leaves users alone — the platform owner
+  // is expected to set SYSTEM_ADMIN_EMAIL or promote a user via
+  // SQL manually.
+  try {
+    const envEmail = (process.env.SYSTEM_ADMIN_EMAIL || '').trim().toLowerCase();
+    if (envEmail) {
+      await pool.query(
+        `UPDATE users SET role = 'system_admin' WHERE LOWER(email) = $1`,
+        [envEmail]
+      );
+    }
+    const hasSysAdmin = await pool.query(
+      `SELECT 1 FROM users WHERE role = 'system_admin' LIMIT 1`
+    );
+    if (!hasSysAdmin.rows.length) {
+      const adminsR = await pool.query(`SELECT id FROM users WHERE role = 'admin'`);
+      if (adminsR.rows.length === 1) {
+        await pool.query(
+          `UPDATE users SET role = 'system_admin' WHERE id = $1`,
+          [adminsR.rows[0].id]
+        );
+        console.log('[db] Auto-promoted sole admin (id=' + adminsR.rows[0].id + ') to system_admin.');
+      }
+    }
+  } catch (e) {
+    console.warn('[db] system_admin promotion skipped:', e.message);
   }
 
   // Seed the default proposal template once. Re-running is a no-op so admins

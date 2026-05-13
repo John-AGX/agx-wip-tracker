@@ -1018,6 +1018,12 @@
                         <button class="ws-right-tab" data-admin-subtab="agents" data-p86-icon="discord" onclick="switchAdminSubTab('agents')">Agents</button>
                         <button class="ws-right-tab" data-admin-subtab="organization" data-p86-icon="briefcase" onclick="switchAdminSubTab('organization')">Organization</button>
                         <button class="ws-right-tab" data-admin-subtab="sms" data-p86-icon="conversations" onclick="switchAdminSubTab('sms')">SMS</button>
+                        <!-- System Admin sub-tab — visible ONLY to users with the
+                             SYSTEM_ADMIN capability (platform owner). JS sets
+                             display:inline-flex on /me load when the cap is
+                             present. Cross-tenant ops live here: tenants list,
+                             cross-org metrics, Anthropic-account resources. -->
+                        <button class="ws-right-tab" data-admin-subtab="system" data-p86-icon="admin" onclick="switchAdminSubTab('system')" style="display:none;background:linear-gradient(135deg,rgba(124,58,237,0.12),rgba(79,140,255,0.12));border-color:rgba(124,58,237,0.4);">⚙ System</button>
                         <span class="p86-ask86-mount" style="margin-left:auto;"></span>
                     </div>
 
@@ -1027,6 +1033,13 @@
                          Templates → Skills editor for non-section packs. -->
                     <div id="admin-subtab-organization" class="admin-subtab-content" style="display:none;">
                         <div id="admin-organization-content"></div>
+                    </div>
+
+                    <!-- System Admin sub-tab — cross-tenant ops for the platform
+                         owner. Hidden from org admins via the requireSystemAdmin
+                         capability gate on every endpoint behind these views. -->
+                    <div id="admin-subtab-system" class="admin-subtab-content" style="display:none;">
+                        <div id="admin-system-content"></div>
                     </div>
 
                     <!-- Users sub-tab -->
@@ -2291,7 +2304,7 @@
     <script src="js/attachments.js?v=11b"></script>
     <script src="js/markup-viewer.js?v=17b"></script>
     <script src="js/pdf-viewer.js?v=3b"></script>
-    <script src="js/admin.js?v=77h"></script>
+    <script src="js/admin.js?v=77i"></script>
     <script src="js/field-tools.js?v=2b"></script>
     <script src="js/clients.js?v=16b"></script>
     <script src="js/subs.js?v=8b"></script>

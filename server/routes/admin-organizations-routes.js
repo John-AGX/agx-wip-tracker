@@ -17,7 +17,7 @@
 
 const express = require('express');
 const { pool, listOrganizations, getOrgById } = require('../db');
-const { requireAuth, requireCapability, requireOrg } = require('../auth');
+const { requireAuth, requireCapability, requireOrg, requireSystemAdmin } = require('../auth');
 
 const router = express.Router();
 
@@ -41,14 +41,63 @@ function assertOrgScope(req, requestedId) {
   return requested;
 }
 
-// GET /api/admin/organizations — list all active orgs. Admin-only.
-// For single-tenant deployments this returns one row.
-router.get('/', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+// GET /api/admin/organizations — list all active orgs.
+// SYSTEM_ADMIN only — org admins can't see other tenants.
+router.get('/', requireAuth, requireSystemAdmin, async (req, res) => {
   try {
     const orgs = await listOrganizations();
     res.json({ organizations: orgs });
   } catch (e) {
     console.error('GET /api/admin/organizations error:', e);
+    res.status(500).json({ error: e.message || 'Server error' });
+  }
+});
+
+// POST /api/admin/organizations — create a new tenant.
+// SYSTEM_ADMIN only. Body: { slug, name, description?, identity_body? }
+router.post('/', requireAuth, requireSystemAdmin, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const slug = String(b.slug || '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '');
+    const name = String(b.name || '').trim();
+    if (!slug) return res.status(400).json({ error: 'slug is required (lowercase letters, digits, _ or -)' });
+    if (!name) return res.status(400).json({ error: 'name is required' });
+    try {
+      const r = await pool.query(
+        `INSERT INTO organizations (slug, name, description, identity_body)
+         VALUES ($1, $2, $3, $4)
+         RETURNING *`,
+        [slug, name, b.description || '', b.identity_body || '']
+      );
+      res.json({ organization: r.rows[0] });
+    } catch (e) {
+      if (e && e.code === '23505') {
+        return res.status(409).json({ error: 'An organization with slug "' + slug + '" already exists.' });
+      }
+      throw e;
+    }
+  } catch (e) {
+    console.error('POST /api/admin/organizations error:', e);
+    res.status(500).json({ error: e.message || 'Server error' });
+  }
+});
+
+// DELETE /api/admin/organizations/:id — soft-archive.
+// SYSTEM_ADMIN only. Sets archived_at; data stays for audit.
+router.delete('/:id', requireAuth, requireSystemAdmin, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid org id' });
+    const r = await pool.query(
+      `UPDATE organizations SET archived_at = NOW(), updated_at = NOW()
+        WHERE id = $1 AND archived_at IS NULL
+        RETURNING id, slug, name`,
+      [id]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'Organization not found or already archived' });
+    res.json({ ok: true, organization: r.rows[0] });
+  } catch (e) {
+    console.error('DELETE /api/admin/organizations/:id error:', e);
     res.status(500).json({ error: e.message || 'Server error' });
   }
 });

@@ -29,6 +29,12 @@ const CAPABILITY_KEYS = [
   { key: 'ROLES_MANAGE',    group: 'Admin',      label: 'Manage roles + capabilities' },
   { key: 'INSIGHTS_VIEW',   group: 'Admin',      label: 'View Insights dashboard' },
   { key: 'ADMIN_METRICS',   group: 'Admin',      label: 'Access Admin Metrics tab + Go Live controls' },
+  // System Admin — platform owner tier. Reserved for the SaaS
+  // operator (today: John). Gates cross-tenant operations: create
+  // / archive organizations, see cross-org metrics + costs, manage
+  // Anthropic-account-wide resources (Skills, Files, Batches),
+  // tweak platform settings. Org admins NEVER get this cap.
+  { key: 'SYSTEM_ADMIN',    group: 'System',     label: 'Platform-owner access (cross-tenant operations)' },
   // Sub portal — exclusively held by the `sub` role; PMs/admins
   // never need these because they have full access through the
   // PM UI. Keeping them isolated means a misconfigured PM role
@@ -175,6 +181,20 @@ function requireRole(...roles) {
 //   corporate — read-only access to all jobs, insights dashboard
 //   pm        — edit own jobs and jobs they're assigned to
 
+// requireSystemAdmin — gate a route on SYSTEM_ADMIN capability.
+// Used by cross-tenant operations (manage organizations, see
+// cross-org metrics, manage Anthropic-account-wide resources).
+// Returns 403 with a clear message if missing — distinct from the
+// generic ROLES_MANAGE 403 so the UI can route the user back to
+// their own surfaces.
+function requireSystemAdmin(req, res, next) {
+  if (!req || !req.user) return res.status(401).json({ error: 'Not authenticated' });
+  if (!hasCapability(req.user, 'SYSTEM_ADMIN')) {
+    return res.status(403).json({ error: 'System Admin access required for this operation. Org Admins manage their own tenant only.' });
+  }
+  next();
+}
+
 // requireOrg — gate a route on the caller having an organization.
 // Use AFTER requireAuth: `router.post('/x', requireAuth, requireOrg,
 // handler)`. Resolves the org row (using the JWT shortcut when
@@ -195,7 +215,7 @@ async function requireOrg(req, res, next) {
 }
 
 module.exports = {
-  signToken, requireAuth, requireRole, requireOrg, resolveUserOrg, JWT_SECRET,
+  signToken, requireAuth, requireRole, requireOrg, requireSystemAdmin, resolveUserOrg, JWT_SECRET,
   // Roles / capabilities
   CAPABILITY_KEYS, setRolePool, refreshRoleCache, hasCapability, requireCapability
 };
