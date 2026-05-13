@@ -248,7 +248,7 @@ router.put('/users/:id/notification-prefs', requireAuth, requireRole('admin'), a
 // PUT /api/auth/users/:id (admin only)
 router.put('/users/:id', requireAuth, requireRole('admin'), async (req, res) => {
   try {
-    const { name, role, active, phone_number } = req.body;
+    const { name, role, active, phone_number, email } = req.body;
     const { rows } = await pool.query('SELECT * FROM users WHERE id = $1', [req.params.id]);
     const user = rows[0];
     if (!user) return res.status(404).json({ error: 'User not found' });
@@ -271,16 +271,34 @@ router.put('/users/:id', requireAuth, requireRole('admin'), async (req, res) => 
       }
     }
 
+    // Email change. Optional. Absent or empty = leave alone. Otherwise:
+    // - lowercase + trim
+    // - must contain "@"
+    // - uniqueness enforced by the DB; we catch 23505 below
+    let emailUpdate = user.email;
+    if (Object.prototype.hasOwnProperty.call(req.body, 'email') && email != null && String(email).trim() !== '') {
+      const normalized = String(email).trim().toLowerCase();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) {
+        return res.status(400).json({ error: 'Email is not a valid address' });
+      }
+      emailUpdate = normalized;
+    }
+
     await pool.query(
-      'UPDATE users SET name = $1, role = $2, active = $3, phone_number = $4, updated_at = NOW() WHERE id = $5',
-      [name || user.name, role || user.role, active != null ? active : user.active, phoneUpdate, req.params.id]
+      'UPDATE users SET name = $1, role = $2, active = $3, phone_number = $4, email = $5, updated_at = NOW() WHERE id = $6',
+      [name || user.name, role || user.role, active != null ? active : user.active, phoneUpdate, emailUpdate, req.params.id]
     );
 
     res.json({ ok: true });
   } catch (e) {
     if (e && e.code === '23505') {
-      return res.status(409).json({ error: 'That phone number is already used by another user' });
+      // Could be email or phone; check the constraint name where possible.
+      const detail = (e.detail || '').toLowerCase();
+      if (detail.includes('email')) return res.status(409).json({ error: 'That email is already used by another user' });
+      if (detail.includes('phone')) return res.status(409).json({ error: 'That phone number is already used by another user' });
+      return res.status(409).json({ error: 'Conflict — value already in use' });
     }
+    console.error('PUT /users/:id error:', e);
     res.status(500).json({ error: 'Server error' });
   }
 });
