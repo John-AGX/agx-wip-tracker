@@ -179,6 +179,19 @@ function requireRole(...roles) {
   };
 }
 
+// Centralized "is this an admin-tier user" predicate. Accepts either
+// a user object ({role}) or a raw role string. Returns true for both
+// 'admin' and 'system_admin' — since Phase 2 system_admin is a strict
+// superset of admin for in-tenant operations. Use this in route
+// handlers and access-check helpers (canEdit, canAccess) instead of
+// raw `role === 'admin'` comparisons, which silently 403 system admins.
+function isAdminish(userOrRole) {
+  const role = typeof userOrRole === 'string'
+    ? userOrRole
+    : (userOrRole && userOrRole.role);
+  return role === 'admin' || role === 'system_admin';
+}
+
 // Roles:
 //   admin     — full access: manage users, see all jobs, edit anything
 //   corporate — read-only access to all jobs, insights dashboard
@@ -220,5 +233,6 @@ async function requireOrg(req, res, next) {
 module.exports = {
   signToken, requireAuth, requireRole, requireOrg, requireSystemAdmin, resolveUserOrg, JWT_SECRET,
   // Roles / capabilities
-  CAPABILITY_KEYS, setRolePool, refreshRoleCache, hasCapability, requireCapability
+  CAPABILITY_KEYS, setRolePool, refreshRoleCache, hasCapability, requireCapability,
+  isAdminish
 };

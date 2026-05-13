@@ -1,6 +1,6 @@
 const express = require('express');
 const { pool } = require('../db');
-const { requireAuth, requireRole } = require('../auth');
+const { requireAuth, requireRole, isAdminish } = require('../auth');
 const { sendEmail } = require('../email');
 const { jobAssigned } = require('../email-templates');
 
@@ -38,7 +38,7 @@ async function maybeNotifyJobAssigned({ ownerId, job, action, fromUserName }) {
 }
 
 async function canAccess(userId, userRole, jobId) {
-  if (userRole === 'admin' || userRole === 'corporate') return true;
+  if (isAdminish(userRole) || userRole === 'corporate') return true;
   const { rows } = await pool.query('SELECT owner_id FROM jobs WHERE id = $1', [jobId]);
   if (!rows.length) return false;
   if (rows[0].owner_id === userId) return true;
@@ -47,7 +47,7 @@ async function canAccess(userId, userRole, jobId) {
 }
 
 async function canEdit(userId, userRole, jobId) {
-  if (userRole === 'admin') return true;
+  if (isAdminish(userRole)) return true;
   if (userRole === 'corporate') return false;
   const { rows } = await pool.query('SELECT owner_id FROM jobs WHERE id = $1', [jobId]);
   if (!rows.length) return false;
@@ -70,7 +70,7 @@ router.get('/', requireAuth, async (req, res) => {
     `, [req.user.id]);
     const result = rows.map(j => {
       let canEdit = false;
-      if (req.user.role === 'admin') canEdit = true;
+      if (isAdminish(req.user)) canEdit = true;
       else if (req.user.role === 'corporate') canEdit = false;
       else if (j.owner_id === req.user.id) canEdit = true;
       else if (j.access_level === 'edit') canEdit = true;
@@ -110,7 +110,7 @@ router.post('/', requireAuth, requireRole('admin', 'pm'), async (req, res) => {
   try {
     const id = req.body.id || 'job' + Date.now();
     let ownerId = req.user.id;
-    if (req.user.role === 'admin' && req.body.owner_id) {
+    if (isAdminish(req.user) && req.body.owner_id) {
       const { rows } = await pool.query('SELECT id FROM users WHERE id = $1 AND active = true', [req.body.owner_id]);
       if (!rows.length) return res.status(400).json({ error: 'Invalid owner_id' });
       ownerId = req.body.owner_id;
@@ -201,7 +201,7 @@ router.delete('/:id', requireAuth, requireRole('admin'), async (req, res) => {
 
 // Helper: only admin or job owner can manage access for a given job.
 async function canManageAccess(req, jobId) {
-  if (req.user.role === 'admin') return true;
+  if (isAdminish(req.user)) return true;
   const { rows } = await pool.query('SELECT owner_id FROM jobs WHERE id = $1', [jobId]);
   if (!rows.length) return null; // job not found
   return rows[0].owner_id === req.user.id;
@@ -289,7 +289,7 @@ router.put('/bulk/save', requireAuth, requireRole('admin', 'pm'), async (req, re
         );
         if (existing.rows.length) {
           let canEdit = false;
-          if (req.user.role === 'admin') canEdit = true;
+          if (isAdminish(req.user)) canEdit = true;
           else if (req.user.role === 'corporate') canEdit = false;
           else if (existing.rows[0].owner_id === req.user.id) canEdit = true;
           else {
@@ -321,7 +321,7 @@ router.put('/bulk/save', requireAuth, requireRole('admin', 'pm'), async (req, re
         // For new jobs, admins can specify owner_id to assign a PM. Non-admins
         // (PMs creating their own jobs) always own what they create. ON CONFLICT
         // never touches owner_id, so existing jobs keep their original PM.
-        const ownerId = (req.user.role === 'admin' && job.owner_id) ? job.owner_id : req.user.id;
+        const ownerId = (isAdminish(req.user) && job.owner_id) ? job.owner_id : req.user.id;
         const isNewJob = !existing.rows.length;
         const priorOwnerId = isNewJob ? null : existing.rows[0].owner_id;
         await client.query(

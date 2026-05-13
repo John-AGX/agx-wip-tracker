@@ -14,7 +14,7 @@ const express = require('express');
 const multer = require('multer');
 const sharp = require('sharp');
 const { pool } = require('../db');
-const { requireAuth, requireCapability } = require('../auth');
+const { requireAuth, requireCapability, isAdminish } = require('../auth');
 const { storage } = require('../storage');
 
 // ──────────────────────────────────────────────────────────────────
@@ -205,7 +205,7 @@ function writeCapForEntity(entityType) {
 // allowed, false otherwise. Caller is responsible for the 403.
 function ensureUserAttachmentOwner(req, entityId) {
   if (!req.user) return false;
-  if (req.user.role === 'admin') return true;
+  if (isAdminish(req.user)) return true;
   return String(entityId) === String(req.user.id);
 }
 

@@ -29,7 +29,7 @@
 const express = require('express');
 const crypto = require('crypto');
 const { pool } = require('../db');
-const { requireAuth } = require('../auth');
+const { requireAuth, isAdminish } = require('../auth');
 
 const router = express.Router();
 
@@ -254,7 +254,7 @@ router.delete('/:id', async (req, res) => {
     const id = String(req.params.id || '');
     const { rows } = await pool.query('SELECT user_id FROM messages WHERE id = $1', [id]);
     if (!rows.length) return res.status(404).json({ error: 'Message not found' });
-    const isAdmin = req.user.role === 'admin';
+    const isAdmin = isAdminish(req.user);
     const isAuthor = rows[0].user_id === req.user.id;
     if (!isAdmin && !isAuthor) {
       return res.status(403).json({ error: 'Only the author or an admin can delete a message.' });
