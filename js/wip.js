@@ -2252,13 +2252,14 @@ function renderWIPMain() {
         function renderJobBuildings(jobId) {
             const buildings = appData.buildings.filter(b => b.jobId === jobId);
             const container = document.getElementById('job-buildings-content');
-            container.innerHTML = '';
+            if (!buildings.length) { container.innerHTML = ''; return; }
 
-            buildings.forEach(building => {
+            const totalBudget = buildings.reduce((s, b) => s + (b.budget || 0), 0);
+
+            const rowsHTML = buildings.map(function(building) {
                 const wiredPhases = getPhasesWiredToBuilding(building.id);
-                const phases = wiredPhases.map(function(wp) { return wp.phase; });
                 let phaseCost = 0;
-                wiredPhases.forEach(wp => {
+                wiredPhases.forEach(function(wp) {
                     var p = wp.phase;
                     var pct = (wp.allocPct != null ? wp.allocPct : 100) / 100;
                     phaseCost += ((p.materials || 0) + (p.labor || 0) + (p.sub || 0) + (p.equipment || 0)) * pct;
@@ -2267,9 +2268,6 @@ function renderWIPMain() {
                 const bldgDirectCost = bMat + bLab + bSub + bEquip;
                 const buildingCost = phaseCost + bldgDirectCost;
                 const variance = (building.budget || 0) - buildingCost;
-
-                const allBldgs = appData.buildings.filter(b => b.jobId === jobId);
-                const totalBudget = allBldgs.reduce((s, b) => s + (b.budget || 0), 0);
                 const bldgPct = totalBudget > 0 ? ((building.budget || 0) / totalBudget * 100).toFixed(1) : '—';
                 const pctComplete = calcBuildingPctComplete(building.id, jobId).toFixed(1);
                 const scope = building.workScope || 'in-house';
@@ -2277,34 +2275,42 @@ function renderWIPMain() {
 
                 const cosWired = getCOsConnectedTo('t1', building.id);
                 const uid = 'bldg-grp-' + building.id.replace(/\W/g, '_');
+                const ARROW_RIGHT = '\u25B6';
+                const ARROW_DOWN = '\u25BC';
+                const arrowId = uid + '-arrow';
+                const summaryRow =
+                    '<tr class="bldg-row" style="cursor:pointer;user-select:none;border-bottom:1px solid rgba(255,255,255,0.04);" ' +
+                        'onclick="(function(){var d=document.getElementById(\'' + uid + '\');var a=document.getElementById(\'' + arrowId + '\');var open=d.style.display===\'none\'||!d.style.display;d.style.display=open?\'\':\'none\';a.textContent=open?\'' + ARROW_DOWN + '\':\'' + ARROW_RIGHT + '\';})()">' +
+                        '<td style="white-space:nowrap;padding:6px 10px;">' +
+                            '<span id="' + arrowId + '" style="font-size:10px;color:var(--text-dim);display:inline-block;width:10px;">' + ARROW_RIGHT + '</span> ' +
+                            '<strong style="color:var(--text,#fff);font-size:13px;">' + escapeHTML(building.name) + '</strong>' +
+                            (building.address ? '<span style="font-size:11px;color:var(--text-dim,#888);font-weight:normal;margin-left:6px;">' + escapeHTML(building.address) + '</span>' : '') +
+                        '</td>' +
+                        '<td class="num" style="text-align:right;white-space:nowrap;padding:6px 10px;font-family:\'SF Mono\',monospace;font-size:13px;color:var(--accent);font-weight:600;">' +
+                            formatCurrency(building.budget) +
+                            (building.coBudget ? '<span style="font-size:10px;color:var(--green);margin-left:4px;">+' + formatCurrency(building.coBudget) + '</span>' : '') +
+                        '</td>' +
+                        '<td class="num" style="text-align:right;white-space:nowrap;padding:6px 10px;font-family:\'SF Mono\',monospace;font-size:13px;color:var(--accent);font-weight:600;">' +
+                            formatCurrency(buildingCost) +
+                        '</td>' +
+                        '<td class="num" style="text-align:right;white-space:nowrap;padding:6px 10px;font-family:\'SF Mono\',monospace;font-size:13px;font-weight:600;color:' + (variance >= 0 ? 'var(--green)' : 'var(--red)') + ';">' +
+                            formatCurrency(variance) +
+                        '</td>' +
+                        '<td class="num" style="text-align:right;white-space:nowrap;padding:6px 10px;font-family:\'SF Mono\',monospace;font-size:13px;font-weight:700;color:var(--green);">' +
+                            pctComplete + '%' +
+                        '</td>' +
+                        '<td class="num" style="text-align:right;white-space:nowrap;padding:6px 10px;font-size:12px;color:var(--text-dim,#aaa);">' +
+                            bldgPct + '%' +
+                        '</td>' +
+                        '<td style="white-space:nowrap;padding:6px 10px;">' +
+                            '<span style="font-size:10px;padding:1px 8px;border-radius:8px;background:rgba(79,140,255,0.1);color:' + scopeColor + ';font-weight:600;text-transform:capitalize;">' + escapeHTML(scope) + '</span>' +
+                        '</td>' +
+                        '<td style="white-space:nowrap;padding:6px 10px;text-align:right;">' +
+                            '<button class="ee-btn ghost" style="font-size:11px;padding:3px 8px;" onclick="event.stopPropagation();editBuilding(\'' + escapeHTML(building.id) + '\')">&#x270F;&#xFE0F; Edit</button>' +
+                        '</td>' +
+                    '</tr>';
 
-                const card = document.createElement('div');
-                card.className = 'card';
-                card.style.cssText = 'padding:0;margin-bottom:8px;overflow:hidden;';
-
-                const header = `
-                    <div style="padding:10px 12px;cursor:pointer;user-select:none;" onclick="var d=document.getElementById('${uid}');d.style.display=d.style.display==='none'?'block':'none';this.querySelector('.bldg-arrow').textContent=d.style.display==='none'?'\u25B6':'\u25BC';">
-                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-                            <div style="min-width:0;flex:1;display:flex;align-items:center;gap:8px;">
-                                <span class="bldg-arrow" style="font-size:10px;color:var(--text-dim);">&#x25B6;</span>
-                                <span style="font-size:14px;font-weight:700;">${escapeHTML(building.name)}</span>
-                                ${building.address ? '<span style="font-size:11px;color:var(--text-dim);">' + escapeHTML(building.address) + '</span>' : ''}
-                            </div>
-                            <div style="text-align:right;flex-shrink:0;margin-left:8px;display:flex;align-items:center;gap:8px;">
-                                <span style="font-size:13px;font-weight:700;color:var(--green);">${pctComplete}%</span>
-                                <span style="font-size:10px;color:var(--text-dim);">${bldgPct}% of job</span>
-                                <button class="ee-btn ghost" onclick="event.stopPropagation();editBuilding('${escapeHTML(building.id)}')">&#x270F;&#xFE0F; Edit</button>
-                            </div>
-                        </div>
-                        <div style="display:flex;gap:12px;font-size:12px;margin-bottom:6px;">
-                            <div><span style="color:var(--text-dim);">Budget</span> <span style="font-weight:600;color:var(--accent);">${formatCurrency(building.budget)}</span>${(building.coBudget ? ' <span style="font-size:10px;color:var(--green);">(+' + formatCurrency(building.coBudget) + ' CO)</span>' : '')}</div>
-                            <div><span style="color:var(--text-dim);">Spent</span> <span style="font-weight:600;color:var(--accent);">${formatCurrency(buildingCost)}</span></div>
-                            <div><span style="color:var(--text-dim);">Var</span> <span style="font-weight:600;color:${variance >= 0 ? 'var(--green)' : 'var(--red)'};">${formatCurrency(variance)}</span></div>
-                            <div style="margin-left:auto;"><span style="font-size:10px;padding:1px 6px;border-radius:8px;background:rgba(79,140,255,0.1);color:${scopeColor};font-weight:600;text-transform:capitalize;">${escapeHTML(scope)}</span></div>
-                        </div>
-                    </div>`;
-
-                let body = `<div id="${uid}" style="display:none;border-top:1px solid var(--border);padding:10px 12px;background:var(--surface2);">`;
+                let body = '<tr id="' + uid + '" class="bldg-body" style="display:none;"><td colspan="8" style="padding:10px 12px;background:var(--surface2);border-bottom:1px solid var(--border,#333);">';
 
                 // Cost breakdown
                 body += '<div style="display:flex;gap:10px;font-size:11px;color:var(--text-dim);margin-bottom:8px;flex-wrap:wrap;">' +
@@ -2349,10 +2355,30 @@ function renderWIPMain() {
                     body += '</div>';
                 }
 
-                body += '</div>';
-                card.innerHTML = header + body;
-                container.appendChild(card);
-            });
+                body += '</td></tr>';
+                return summaryRow + body;
+            }).join('');
+
+            container.innerHTML =
+                '<div style="border:1px solid var(--border,#333);border-radius:10px;overflow-x:auto;background:var(--card-bg,#0f0f1e);">' +
+                    '<table style="width:100%;border-collapse:collapse;table-layout:auto;">' +
+                        '<thead style="background:rgba(255,255,255,0.02);border-bottom:1px solid var(--border,#333);"><tr>' +
+                            thCell('Building', 'left') +
+                            thCell('Budget', 'right') +
+                            thCell('Spent', 'right') +
+                            thCell('Var', 'right') +
+                            thCell('%', 'right') +
+                            thCell('Of Job', 'right') +
+                            thCell('Scope', 'left') +
+                            thCell('', 'right') +
+                        '</tr></thead>' +
+                        '<tbody>' + rowsHTML + '</tbody>' +
+                    '</table>' +
+                '</div>';
+        }
+
+        function thCell(label, align) {
+            return '<th style="text-align:' + (align || 'left') + ';padding:8px 10px;font-size:10px;text-transform:uppercase;letter-spacing:0.5px;font-weight:700;color:var(--text-dim,#888);">' + label + '</th>';
         }
 
         function lookupConnDetails(item) {
