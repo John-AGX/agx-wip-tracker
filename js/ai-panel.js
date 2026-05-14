@@ -832,12 +832,20 @@
       '<div id="ai-notice" style="padding:8px 14px;background:rgba(79,140,255,0.08);border-bottom:1px solid var(--border,#333);font-size:11px;color:var(--text-dim,#aaa);">' +
         'Read-only — I see your estimate and photos but cannot change anything. Apply suggestions by hand.' +
       '</div>' +
+      // Body wrapper — flex ROW so the sidebar can live as a real
+      // left-rail column next to the chat content rather than as an
+      // overlay. Width animates between 0 (collapsed) and a fixed
+      // target so the sidebar feels inline, not pasted on top.
+      '<div id="ai-body" style="flex:1;display:flex;flex-direction:row;min-height:0;">' +
       // Messages scroll area — dotted background for a Claude-style canvas feel.
       // overflow-x:hidden + min-width:0 are critical: without them, a
       // child with intrinsic min-content wider than the panel (e.g. a
       // <pre> overflow:auto block, or a long unbreakable token) makes
       // every flex child collapse to single-character width — the
       // browser tries to find a feasible layout and fails ugly.
+      // Wrapped in a column so messages + presets + input live together
+      // as the right pane of the row layout.
+      '<div id="ai-content" style="flex:1;display:flex;flex-direction:column;min-width:0;min-height:0;">' +
       '<div id="ai-messages" style="flex:1;overflow-y:auto;overflow-x:hidden;min-width:0;padding:18px 18px;display:flex;flex-direction:column;gap:14px;font-size:13px;color:var(--text,#e6e6e6);background-image:radial-gradient(circle, rgba(255,140,80,0.18) 1px, transparent 1px);background-size:14px 14px;"></div>' +
       // Preset prompts
       '<div id="ai-presets" style="padding:8px 12px;border-top:1px solid var(--border,#333);display:flex;flex-wrap:wrap;gap:6px;background:rgba(255,255,255,0.02);"></div>' +
@@ -867,31 +875,38 @@
           '</div>' +
         '</div>' +
       '</div>' +
-      // Sessions sidebar — overlay that slides in from the left edge
-      // of the panel. Lists the user's recent sessions (one Anthropic
-      // agent, many user-pickable conversation threads, like Claude
-      // Code's left rail). Hidden by default; opens via the hamburger
-      // button in the header. Closes when a session is picked or the
-      // user taps outside.
-      '<div id="ai-sessions-sidebar" aria-hidden="true" style="position:absolute;top:0;bottom:0;left:0;width:78%;max-width:340px;background:linear-gradient(180deg,#0c1220 0%,#0f172a 100%);border-right:1px solid rgba(34,211,238,0.18);box-shadow:6px 0 22px rgba(0,0,0,0.5);z-index:5;display:flex;flex-direction:column;transform:translateX(-100%);transition:transform 0.22s ease;">' +
-        '<div style="padding:10px 12px;border-bottom:1px solid rgba(255,255,255,0.08);display:flex;align-items:center;gap:8px;">' +
-          '<button id="ai-sidebar-new" type="button" title="Start a new chat" style="flex:1;background:rgba(79,140,255,0.15);color:#dbeafe;border:1px solid rgba(79,140,255,0.4);border-radius:8px;padding:8px 12px;font-size:12px;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;">' +
-            '<span style="font-size:16px;line-height:1;">+</span><span>New chat</span>' +
-          '</button>' +
-          '<button id="ai-sidebar-close" type="button" title="Close sidebar" aria-label="Close sidebar" style="background:rgba(255,255,255,0.08);color:#ccc;border:1px solid rgba(255,255,255,0.15);border-radius:6px;width:30px;height:30px;font-size:14px;cursor:pointer;">&times;</button>' +
+        // close #ai-content (messages + presets + input column)
         '</div>' +
-        '<div style="padding:8px 12px;border-bottom:1px solid rgba(255,255,255,0.05);">' +
-          '<input id="ai-sidebar-search" type="search" placeholder="Search sessions…" ' +
-            'style="width:100%;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:6px 10px;color:#fff;font-size:12px;outline:none;box-sizing:border-box;" />' +
+        // Sessions sidebar — true left-rail column inside the flex
+        // body. Collapses to width:0 when closed so it occupies no
+        // space and the chat takes the full row. Same surface color
+        // as the panel so it reads as part of the panel rather than
+        // a separate overlay. The hamburger toggle in the header
+        // animates it open/closed.
+        '<div id="ai-sessions-sidebar" aria-hidden="true" style="width:0;flex-shrink:0;background:var(--surface,#0f0f1e);border-left:1px solid rgba(255,255,255,0.06);overflow:hidden;display:flex;flex-direction:column;transition:width 0.22s ease;">' +
+          // Inner wrapper at the target width so content doesn\'t
+          // squish during the width animation.
+          '<div style="width:260px;height:100%;display:flex;flex-direction:column;">' +
+            '<div style="padding:10px 12px;display:flex;align-items:center;gap:6px;border-bottom:1px solid rgba(255,255,255,0.05);">' +
+              '<button id="ai-sidebar-new" type="button" title="Start a new chat" style="flex:1;background:rgba(255,255,255,0.04);color:#e6e6e6;border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:7px 10px;font-size:12px;font-weight:500;cursor:pointer;display:flex;align-items:center;justify-content:flex-start;gap:8px;transition:background 0.12s, border-color 0.12s;"' +
+              ' onmouseenter="this.style.background=\'rgba(255,255,255,0.07)\';this.style.borderColor=\'rgba(255,255,255,0.14)\'"' +
+              ' onmouseleave="this.style.background=\'rgba(255,255,255,0.04)\';this.style.borderColor=\'rgba(255,255,255,0.08)\'">' +
+                '<span style="font-size:14px;line-height:1;opacity:0.7;">&#x002B;</span><span>New chat</span>' +
+              '</button>' +
+            '</div>' +
+            '<div style="padding:6px 12px 8px 12px;">' +
+              '<input id="ai-sidebar-search" type="search" placeholder="Search sessions" ' +
+                'style="width:100%;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);border-radius:6px;padding:6px 10px;color:#e6e6e6;font-size:12px;outline:none;box-sizing:border-box;transition:border-color 0.12s, background 0.12s;"' +
+                ' onfocus="this.style.borderColor=\'rgba(79,140,255,0.35)\';this.style.background=\'rgba(255,255,255,0.05)\'"' +
+                ' onblur="this.style.borderColor=\'rgba(255,255,255,0.06)\';this.style.background=\'rgba(255,255,255,0.03)\'" />' +
+            '</div>' +
+            '<div id="ai-sidebar-list" style="flex:1;overflow-y:auto;padding:2px 0 10px 0;font-size:12px;color:#e6e6e6;">' +
+              '<div style="padding:14px;color:rgba(255,255,255,0.35);font-size:11.5px;">Loading sessions…</div>' +
+            '</div>' +
+          '</div>' +
         '</div>' +
-        '<div id="ai-sidebar-list" style="flex:1;overflow-y:auto;padding:6px 0;font-size:12px;color:#e6e6e6;">' +
-          '<div style="padding:14px;color:#888;font-style:italic;">Loading…</div>' +
-        '</div>' +
-      '</div>' +
-      // Click-outside scrim — covers the panel body when the sidebar is
-      // open so a tap outside the sidebar closes it without selecting
-      // a message accidentally.
-      '<div id="ai-sidebar-scrim" style="position:absolute;top:0;right:0;bottom:0;left:0;background:rgba(0,0,0,0.35);z-index:4;display:none;"></div>';
+      // close #ai-body
+      '</div>';
     document.body.appendChild(panel);
 
     // Wire interactions
@@ -899,8 +914,6 @@
     panel.querySelector('#ai-clear').onclick = clearConversation;
     panel.querySelector('#ai-send').onclick = onSend;
     panel.querySelector('#ai-sidebar-new').onclick = sidebarStartNewChat;
-    panel.querySelector('#ai-sidebar-close').onclick = closeSidebar;
-    panel.querySelector('#ai-sidebar-scrim').onclick = closeSidebar;
     var searchInput = panel.querySelector('#ai-sidebar-search');
     if (searchInput) {
       var _searchTimer = null;
@@ -911,7 +924,7 @@
       };
     }
     wireAIPanelResizer(panel);
-    panel.querySelector('#ai-sidebar-toggle').onclick = openSidebar;
+    panel.querySelector('#ai-sidebar-toggle').onclick = toggleSidebar;
     var trustBtn = panel.querySelector('#ai-trust');
     if (trustBtn) trustBtn.onclick = function(e) {
       e.stopPropagation();
@@ -1402,26 +1415,57 @@
   var _sessionList = [];
   var _sessionListLoaded = false;
 
+  // Sidebar lives as a true left-rail column inside the panel's flex
+  // body. Open animates the column's width from 0 → 260px; close goes
+  // the other way. On narrow panels (<560px wide) we also bump the
+  // panel's width by the sidebar's target width so the chat content
+  // doesn't get crushed. The original panel width is restored on
+  // close.
+  var SIDEBAR_TARGET_WIDTH = 260;
+
+  function sidebarIsOpen() {
+    var sidebar = document.getElementById('ai-sessions-sidebar');
+    return !!sidebar && sidebar.getAttribute('aria-hidden') !== 'true';
+  }
+
+  function toggleSidebar() {
+    if (sidebarIsOpen()) closeSidebar(); else openSidebar();
+  }
+
   function openSidebar() {
     var sidebar = document.getElementById('ai-sessions-sidebar');
-    var scrim = document.getElementById('ai-sidebar-scrim');
-    if (!sidebar || !scrim) return;
-    sidebar.style.transform = 'translateX(0)';
+    var panel = document.getElementById('p86-ai-panel');
+    if (!sidebar || !panel) return;
+    sidebar.style.width = SIDEBAR_TARGET_WIDTH + 'px';
     sidebar.setAttribute('aria-hidden', 'false');
-    scrim.style.display = 'block';
-    // Refresh the list each time the sidebar opens so freshly-created
-    // sessions (e.g. an auto-anchored job session from another tab)
-    // show up immediately. Cheap — one indexed query per open.
+    // Visual feedback on the header toggle so the user can see at a
+    // glance whether the rail is open.
+    var toggleBtn = panel.querySelector('#ai-sidebar-toggle');
+    if (toggleBtn) toggleBtn.style.background = 'rgba(79,140,255,0.22)';
+    // Auto-grow only when the panel is narrow enough that opening the
+    // sidebar would crush the chat content. Store the prior width so
+    // close can restore it.
+    var current = panel.offsetWidth;
+    if (current < 800) {
+      var grown = Math.min(window.innerWidth * 0.92, current + SIDEBAR_TARGET_WIDTH);
+      panel.dataset.preSidebarWidth = current;
+      panel.style.width = grown + 'px';
+    }
     fetchSessions();
   }
 
   function closeSidebar() {
     var sidebar = document.getElementById('ai-sessions-sidebar');
-    var scrim = document.getElementById('ai-sidebar-scrim');
-    if (!sidebar || !scrim) return;
-    sidebar.style.transform = 'translateX(-100%)';
+    var panel = document.getElementById('p86-ai-panel');
+    if (!sidebar || !panel) return;
+    sidebar.style.width = '0px';
     sidebar.setAttribute('aria-hidden', 'true');
-    scrim.style.display = 'none';
+    var toggleBtn = panel.querySelector('#ai-sidebar-toggle');
+    if (toggleBtn) toggleBtn.style.background = 'rgba(255,255,255,0.08)';
+    if (panel.dataset.preSidebarWidth) {
+      panel.style.width = panel.dataset.preSidebarWidth + 'px';
+      delete panel.dataset.preSidebarWidth;
+    }
   }
 
   function fetchSessions() {
@@ -1498,38 +1542,48 @@
     var host = document.getElementById('ai-sidebar-list');
     if (!host) return;
     if (!rows.length) {
-      host.innerHTML = '<div style="padding:14px;color:#888;font-style:italic;">No sessions yet. Click "New chat" to start one.</div>';
+      host.innerHTML = '<div style="padding:18px 14px;color:rgba(255,255,255,0.4);font-size:11.5px;line-height:1.5;">No sessions yet. Click <strong style="color:rgba(255,255,255,0.7);">+ New chat</strong> to start one, or just send a message — a session will be created automatically.</div>';
       return;
     }
     var groups = bucketSessions(rows);
     var html = '';
     function renderGroup(label, items) {
       if (!items.length) return;
-      html += '<div style="padding:8px 12px 4px 12px;font-size:10px;text-transform:uppercase;letter-spacing:0.05em;color:#6b7280;">' + escapeHTML(label) + '</div>';
+      html += '<div style="padding:10px 12px 4px 12px;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:rgba(255,255,255,0.32);">' + escapeHTML(label) + '</div>';
       items.forEach(function(r) {
         var active = (_currentSessionId === r.id);
+        // Active row: subtle accent (no harsh left bar). Hover: faint
+        // tint that matches the rest of the panel's hover language.
         var rowStyle =
-          'display:flex;align-items:flex-start;gap:8px;padding:8px 12px;cursor:pointer;border-left:3px solid transparent;transition:background 0.12s;' +
-          (active ? 'background:rgba(79,140,255,0.15);border-left-color:#4f8cff;' : '');
-        var pinnedBadge = r.pinned ? '<span style="margin-left:4px;font-size:10px;" title="Pinned">⭐</span>' : '';
-        var turnBadge = r.turn_count
-          ? '<span style="font-size:10px;color:#6b7280;margin-left:6px;">' + r.turn_count + 't</span>'
+          'display:flex;align-items:center;gap:10px;padding:8px 12px;margin:1px 6px;border-radius:8px;cursor:pointer;transition:background 0.12s;' +
+          (active
+            ? 'background:rgba(79,140,255,0.14);'
+            : '');
+        var pinnedMark = r.pinned ? ' <span style="font-size:10px;opacity:0.7;" title="Pinned">⭐</span>' : '';
+        // Sub-line: ONLY summary if we have one, otherwise nothing.
+        // The redundant "estimate · e1778..." trail was noise — the
+        // entity is already conveyed by the icon and the label.
+        var subLine = '';
+        if (r.summary) {
+          subLine = '<div style="font-size:11px;color:rgba(255,255,255,0.45);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px;">' +
+            escapeHTML(String(r.summary).slice(0, 80)) + '</div>';
+        }
+        var turnsRight = r.turn_count
+          ? '<span style="font-size:10px;color:rgba(255,255,255,0.32);">' + r.turn_count + '</span>'
           : '';
-        var sub = r.summary
-          ? escapeHTML(String(r.summary).slice(0, 80))
-          : (r.entity_id ? escapeHTML(String(r.entity_type) + ' · ' + r.entity_id) : 'No messages yet');
-        html += '<div data-session-id="' + r.id + '" class="ai-session-row" style="' + rowStyle + '" ' +
-                  'onmouseenter="this.style.background=\'' + (active ? 'rgba(79,140,255,0.22)' : 'rgba(255,255,255,0.04)') + '\'" ' +
-                  'onmouseleave="this.style.background=\'' + (active ? 'rgba(79,140,255,0.15)' : 'transparent') + '\'">' +
-          '<span style="font-size:16px;line-height:1.3;">' + entityIcon(r.entity_type) + '</span>' +
+        html += '<div data-session-id="' + r.id + '" class="ai-session-row" data-active="' + (active ? '1' : '0') + '" style="' + rowStyle + '" ' +
+                  'onmouseenter="if(this.dataset.active!==\'1\') this.style.background=\'rgba(255,255,255,0.04)\'" ' +
+                  'onmouseleave="if(this.dataset.active!==\'1\') this.style.background=\'transparent\'">' +
+          '<span style="font-size:15px;line-height:1;flex-shrink:0;width:18px;text-align:center;opacity:0.85;">' + entityIcon(r.entity_type) + '</span>' +
           '<div style="flex:1;min-width:0;">' +
-            '<div style="display:flex;align-items:baseline;gap:6px;">' +
-              '<div style="flex:1;min-width:0;color:#e6e6e6;font-weight:500;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' +
-                escapeHTML(r.label || ('Session ' + r.id)) + pinnedBadge +
-              '</div>' +
-              '<span style="font-size:10px;color:#6b7280;flex-shrink:0;">' + escapeHTML(relativeTime(r.last_used_at)) + '</span>' +
+            '<div style="color:rgba(255,255,255,0.92);font-weight:500;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.3;">' +
+              escapeHTML(r.label || ('Session ' + r.id)) + pinnedMark +
             '</div>' +
-            '<div style="font-size:11px;color:#9ca3af;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + sub + turnBadge + '</div>' +
+            subLine +
+          '</div>' +
+          '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px;flex-shrink:0;">' +
+            '<span style="font-size:10px;color:rgba(255,255,255,0.35);">' + escapeHTML(relativeTime(r.last_used_at)) + '</span>' +
+            turnsRight +
           '</div>' +
         '</div>';
       });
@@ -1718,13 +1772,18 @@
         host.innerHTML = '<div style="padding:14px;color:#888;font-style:italic;">No matches for "' + escapeHTML(q) + '".</div>';
         return;
       }
-      var html = '<div style="padding:8px 12px 4px 12px;font-size:10px;text-transform:uppercase;letter-spacing:0.05em;color:#6b7280;">Results (' + results.length + ')</div>';
+      var html = '<div style="padding:10px 12px 4px 12px;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:rgba(255,255,255,0.32);">Results (' + results.length + ')</div>';
       results.forEach(function(r) {
-        var snippet = r.snippet ? '<div style="font-size:11px;color:#9ca3af;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escapeHTML(r.snippet) + '</div>' : '';
-        html += '<div data-session-id="' + r.id + '" class="ai-session-row" style="display:flex;align-items:flex-start;gap:8px;padding:8px 12px;cursor:pointer;">' +
-          '<span style="font-size:16px;line-height:1.3;">' + entityIcon(r.entity_type) + '</span>' +
+        var snippet = r.snippet
+          ? '<div style="font-size:11px;color:rgba(255,255,255,0.45);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escapeHTML(r.snippet) + '</div>'
+          : '';
+        html += '<div data-session-id="' + r.id + '" class="ai-session-row" style="display:flex;align-items:center;gap:10px;padding:8px 12px;margin:1px 6px;border-radius:8px;cursor:pointer;transition:background 0.12s;" ' +
+                  'onmouseenter="this.style.background=\'rgba(255,255,255,0.04)\'" onmouseleave="this.style.background=\'transparent\'">' +
+          '<span style="font-size:15px;line-height:1;flex-shrink:0;width:18px;text-align:center;opacity:0.85;">' + entityIcon(r.entity_type) + '</span>' +
           '<div style="flex:1;min-width:0;">' +
-            '<div style="color:#e6e6e6;font-weight:500;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escapeHTML(r.label || ('Session ' + r.id)) + '</div>' +
+            '<div style="color:rgba(255,255,255,0.92);font-weight:500;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.3;">' +
+              escapeHTML(r.label || ('Session ' + r.id)) +
+            '</div>' +
             snippet +
           '</div>' +
         '</div>';
