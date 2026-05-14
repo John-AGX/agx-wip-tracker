@@ -1959,10 +1959,16 @@
     // appendStreamingBubble for why stacked beats avatar-beside-
     // content for this kind of free-form chat output.
     var usageFooter = '';
-    if (m.usage) {
+    var timerStr = '';
+    if (m.elapsed_ms && m.elapsed_ms >= 1000) {
+      var es = Math.floor(m.elapsed_ms / 1000);
+      timerStr = es < 60 ? es + 's' : (Math.floor(es / 60) + 'm ' + (es % 60) + 's');
+    }
+    if (m.usage || timerStr) {
       var ut = formatUsage(m.usage);
-      if (ut) {
-        usageFooter = '<div style="margin-top:6px;font-size:10px;color:var(--text-dim,#666);opacity:0.65;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:0.2px;">' + escapeHTMLLocal(ut) + '</div>';
+      var line = [timerStr, ut].filter(Boolean).join(' · ');
+      if (line) {
+        usageFooter = '<div style="margin-top:6px;font-size:10px;color:var(--text-dim,#666);opacity:0.65;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:0.2px;">' + escapeHTMLLocal(line) + '</div>';
       }
     }
     return '<div style="width:100%;display:block;">' +
@@ -2101,24 +2107,38 @@
     if (!box) return null;
     var div = document.createElement('div');
     div.className = 'ai-streaming';
-    // Stacked layout — avatar + role badge on top as a small header,
-    // content takes the full panel width below. Same pattern Claude.ai
-    // and ChatGPT use. Replaces the avatar-beside-content row, which
-    // was fragile to deep-content min-content shenanigans (single-char
-    // wraps, sibling-bubble overlaps) regardless of flex / grid choice
-    // on the row. Block layout sidesteps all of that.
     div.style.cssText = 'width:100%;display:block;';
     var startPhrase = BRAIN_YOGA_PHRASES[Math.floor(Math.random() * BRAIN_YOGA_PHRASES.length)];
+    // Header carries: cloud animation, brain-yoga phrase, live timer.
+    // Timer renders as "· 18s" in muted mono once a second has passed.
     div.innerHTML =
       '<div style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-dim,#888);margin-bottom:4px;">' +
         '<span class="p86-cloud-anim" data-stream-cloud style="font-size:14px;line-height:1;">☁️</span>' +
-        '<span data-stream-phrase class="p86-phrase" style="font-style:italic;">' + startPhrase + '</span>' +
+        '<span data-stream-phrase class="p86-phrase" style="font-style:italic;flex:1;min-width:0;">' + startPhrase + '</span>' +
+        '<span data-stream-timer style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--text-dim,#666);font-size:10.5px;opacity:0.7;flex-shrink:0;"></span>' +
       '</div>' +
-      // Content lives in its own block at full panel width. overflow
-      // safety pins remain so a long unbreakable string can\'t push
-      // the panel wider than the parent.
       '<div class="ai-content" data-stream-content style="width:100%;overflow-x:hidden;font-size:13px;line-height:1.55;overflow-wrap:anywhere;word-break:normal;"></div>';
     box.appendChild(div);
+    // Stash the start time so streamFromEndpoint can read it for the
+    // final usage footer ("18s · 46 tokens" Claude-Code style).
+    div.dataset.startedAt = String(Date.now());
+    // Live timer ticks every second from t=1s onward. Cleared on done.
+    var timerEl = div.querySelector('[data-stream-timer]');
+    var startedAt = Date.now();
+    function fmtSecs(ms) {
+      var s = Math.floor(ms / 1000);
+      if (s < 60) return s + 's';
+      var m = Math.floor(s / 60);
+      return m + 'm ' + (s % 60) + 's';
+    }
+    var tick = setInterval(function() {
+      if (!div.isConnected) { clearInterval(tick); return; }
+      var ms = Date.now() - startedAt;
+      if (ms >= 1000) timerEl.textContent = fmtSecs(ms);
+    }, 500);
+    // Expose the clear handle so streamFromEndpoint can stop ticking
+    // exactly when `done` arrives.
+    div._stopTimer = function() { clearInterval(tick); };
     box.scrollTop = box.scrollHeight;
     return div;
   }
@@ -2373,10 +2393,12 @@
             return;
           }
           // Server-side auto-tier tool already executed. Render inline
-          // in Claude-Code style: small dim tool-invocation header,
-          // output text collapsible if long. No card chrome.
-          appendToolBlock(streamDiv, '▸', payload.tool_applied.name || 'tool',
-            payload.tool_applied.summary || '', '#34d399');
+          // in Claude-Code style: a single-line chip showing verb +
+          // primary arg in monospace, click-to-expand for the result.
+          appendToolBlock(streamDiv, payload.tool_applied.name || 'tool',
+            payload.tool_applied.input || null,
+            payload.tool_applied.summary || '',
+            'ok');
           chipsAppended++;
           // Resume rotation once the tool lands.
           brainYoga.override('Got it. Thinking…', false);
@@ -2397,14 +2419,18 @@
           }
           scrollToBottom();
         } else if (payload.tool_failed) {
-          appendToolBlock(streamDiv, '✗', payload.tool_failed.name || 'tool',
-            payload.tool_failed.error || 'failed', '#f87171');
+          appendToolBlock(streamDiv, payload.tool_failed.name || 'tool',
+            payload.tool_failed.input || null,
+            payload.tool_failed.error || 'failed',
+            'failed');
           chipsAppended++;
           brainYoga.override('Hit a snag. Recovering…', false);
           scrollToBottom();
         } else if (payload.tool_rejected) {
-          appendToolBlock(streamDiv, '⊘', payload.tool_rejected.name || 'tool',
-            'rejected', '#a3a3a3');
+          appendToolBlock(streamDiv, payload.tool_rejected.name || 'tool',
+            payload.tool_rejected.input || null,
+            'rejected by user',
+            'rejected');
           chipsAppended++;
           scrollToBottom();
         } else if (payload.awaiting_approval) {
@@ -2421,6 +2447,7 @@
       });
     }).then(function() {
       brainYoga.stop();
+      if (streamDiv && typeof streamDiv._stopTimer === 'function') streamDiv._stopTimer();
       _streaming = false;
       setSendDisabled(false);
       _abortController = null;
@@ -2443,8 +2470,11 @@
       } else if (assistantText) {
         // Plain text response — drop the streaming placeholder and add
         // a permanent bubble (history already persisted server-side).
+        var elapsed = streamDiv && streamDiv.dataset.startedAt
+          ? Date.now() - Number(streamDiv.dataset.startedAt)
+          : null;
         if (streamDiv && streamDiv.parentNode) streamDiv.parentNode.removeChild(streamDiv);
-        _messages.push({ role: 'assistant', content: assistantText, usage: turnUsage });
+        _messages.push({ role: 'assistant', content: assistantText, usage: turnUsage, elapsed_ms: elapsed });
         renderMessages();
       } else if (chipsAppended > 0) {
         // No final narration but built-in tools (web_search /
@@ -2464,11 +2494,15 @@
         var cloudEl = streamDiv && streamDiv.querySelector('[data-stream-cloud]');
         if (cloudEl) cloudEl.classList.remove('p86-cloud-anim');
         // Tools-only turn — attach usage footer to the live bubble that
-        // sticks around so the user still sees token counts.
-        if (turnUsage) {
-          var contentEl2 = streamDiv && streamDiv.querySelector('[data-stream-content]');
-          if (contentEl2) appendUsageFooter(contentEl2, turnUsage);
-        }
+        // sticks around so the user still sees token counts + timer.
+        var contentEl2 = streamDiv && streamDiv.querySelector('[data-stream-content]');
+        var elapsed2 = streamDiv && streamDiv.dataset.startedAt
+          ? Date.now() - Number(streamDiv.dataset.startedAt)
+          : null;
+        if (contentEl2) appendUsageFooter(contentEl2, turnUsage, elapsed2);
+        // Clear the live timer in the header — replaced by the footer.
+        var hdrTimer = streamDiv && streamDiv.querySelector('[data-stream-timer]');
+        if (hdrTimer) hdrTimer.textContent = '';
       } else {
         // No text and no chips — true "(no response)" empty turn.
         if (streamDiv && streamDiv.parentNode) streamDiv.parentNode.removeChild(streamDiv);
@@ -2477,6 +2511,7 @@
       }
     }).catch(function(err) {
       brainYoga.stop();
+      if (streamDiv && typeof streamDiv._stopTimer === 'function') streamDiv._stopTimer();
       _streaming = false;
       setSendDisabled(false);
       _abortController = null;
@@ -4461,44 +4496,132 @@
     setTimeout(tick, 100); // First tick fast so pending → running flips quickly.
   }
 
-  function appendToolBlock(streamDiv, glyph, name, text, color) {
+  // Verb / past-tense / arg / result helpers for the Claude-Code-style
+  // tool chip. The chip is one short monospace line: a colored dot,
+  // the past-tense verb, the principal argument in muted text, and
+  // a small result badge ("12 clients", "error"). Click to expand
+  // the full tool output in a code-style block.
+  function toolChipVerb(name) {
+    if (!name) return { verb: 'Tool', past: 'Used' };
+    if (name === 'web_search')        return { verb: 'Searching', past: 'Searched' };
+    if (name === 'web_fetch')         return { verb: 'Fetching',  past: 'Fetched'  };
+    if (name === 'bash')              return { verb: 'Running',   past: 'Ran'      };
+    if (name === 'read')              return { verb: 'Reading',   past: 'Read'     };
+    if (name === 'write')             return { verb: 'Writing',   past: 'Wrote'    };
+    if (name === 'edit')              return { verb: 'Editing',   past: 'Edited'   };
+    if (name === 'glob')              return { verb: 'Finding',   past: 'Found'    };
+    if (name === 'grep')              return { verb: 'Searching', past: 'Searched' };
+    if (name === 'navigate')          return { verb: 'Navigating', past: 'Navigated' };
+    if (name === 'search_my_sessions') return { verb: 'Searching sessions', past: 'Searched sessions' };
+    if (name === 'self_diagnose')     return { verb: 'Self-diagnosing', past: 'Self-diagnosed' };
+    if (/^read_/.test(name))          return { verb: 'Reading',   past: 'Read'     };
+    if (/^search_/.test(name))        return { verb: 'Searching', past: 'Searched' };
+    if (/^list_/.test(name))          return { verb: 'Listing',   past: 'Listed'   };
+    if (/^create_/.test(name))        return { verb: 'Creating',  past: 'Created'  };
+    if (/^delete_/.test(name))        return { verb: 'Deleting',  past: 'Deleted'  };
+    if (/^set_/.test(name))           return { verb: 'Setting',   past: 'Set'      };
+    if (/^update_/.test(name))        return { verb: 'Updating',  past: 'Updated'  };
+    if (/^propose_/.test(name))       return { verb: 'Proposing', past: 'Proposed' };
+    if (/^attach_/.test(name))        return { verb: 'Attaching', past: 'Attached' };
+    if (/^link_/.test(name))          return { verb: 'Linking',   past: 'Linked'   };
+    if (/^rename_/.test(name))        return { verb: 'Renaming',  past: 'Renamed'  };
+    if (/^merge_/.test(name))         return { verb: 'Merging',   past: 'Merged'   };
+    if (/^split_/.test(name))         return { verb: 'Splitting', past: 'Split'    };
+    if (/^wire_/.test(name))          return { verb: 'Wiring',    past: 'Wired'    };
+    if (/^spawn_/.test(name))         return { verb: 'Spawning',  past: 'Spawned'  };
+    if (/^remember|^recall|^forget/.test(name)) return { verb: 'Memory', past: 'Memory' };
+    return { verb: 'Tool', past: 'Used' };
+  }
+
+  function toolChipArg(name, input) {
+    if (!input || typeof input !== 'object') return '';
+    function last(p) { return String(p || '').split(/[\\/]/).pop(); }
+    function trim(s, n) { s = String(s || '').replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1) + '…' : s; }
+    if (name === 'web_search' || name === 'grep') return trim(input.query || input.pattern, 70);
+    if (name === 'web_fetch')                     return trim(input.url, 70);
+    if (name === 'bash')                          return trim(input.command, 70);
+    if (name === 'read' || name === 'write' || name === 'edit') return last(input.path || input.file_path);
+    if (name === 'glob')                          return trim(input.pattern, 70);
+    if (name === 'search_my_sessions')            return trim(input.query, 70);
+    if (name === 'navigate')                      return trim(input.target || (input.entity_type ? input.entity_type + (input.entity_id ? ' ' + input.entity_id : '') : ''), 70);
+    if (/^read_/.test(name)) {
+      return trim(input.q || input.query || input.id || input.attachment_id || input.estimate_id || input.job_id || input.phase_id || input.sheet_name || '', 70);
+    }
+    if (/^propose_|^set_|^create_|^delete_|^update_|^link_|^attach_|^wire_|^rename_|^merge_|^split_/.test(name)) {
+      var id = input.line_id || input.section_id || input.group_id || input.phase_id || input.node_id || input.client_id ||
+               input.lead_id || input.estimate_id || input.job_id || input.id || input.name || '';
+      return trim(id, 70);
+    }
+    return trim(JSON.stringify(input).slice(1, -1), 70);
+  }
+
+  function toolChipResult(name, summary, state) {
+    if (state === 'failed')   return 'error';
+    if (state === 'rejected') return 'rejected';
+    var body = String(summary || '').trim();
+    if (!body) return '';
+    var firstLine = body.split('\n').find(function(l) { return l.trim(); }) || '';
+    var m = firstLine.match(/^(?:Found|Returned|Listed|Search\s+complete[^.]*)\s+(\d[\d,.]*)\s+(\w+)/i);
+    if (m) return m[1] + ' ' + m[2];
+    if (/^no\s+/i.test(firstLine)) return firstLine.slice(0, 30) + (firstLine.length > 30 ? '…' : '');
+    return '';
+  }
+
+  function appendToolBlock(streamDiv, name, input, text, state) {
     if (!streamDiv) return;
     var content = streamDiv.querySelector('[data-stream-content]') || streamDiv;
-    var wrap = document.createElement('div');
-    wrap.style.cssText = 'margin-top:8px;font-size:11.5px;line-height:1.55;color:var(--text-dim,#9aa0a6);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;';
-
-    var hdr = document.createElement('div');
-    hdr.style.cssText = 'display:flex;align-items:baseline;gap:6px;';
-    hdr.innerHTML =
-      '<span style="color:' + color + ';flex-shrink:0;">' + escapeHTMLLocal(glyph) + '</span>' +
-      '<span style="color:var(--text-dim,#aaa);">' + escapeHTMLLocal(name) + '</span>';
-    wrap.appendChild(hdr);
-
+    var info = toolChipVerb(name);
+    var arg = toolChipArg(name, input);
+    var result = toolChipResult(name, text, state);
     var body = String(text || '');
-    if (body) {
-      var isLong = body.length > 200 || body.split('\n').length > 3;
-      if (isLong) {
-        var det = document.createElement('details');
-        det.style.cssText = 'margin-left:14px;margin-top:1px;';
-        var sum = document.createElement('summary');
-        sum.style.cssText = 'cursor:pointer;color:var(--text-dim,#777);font-size:10.5px;list-style:none;';
-        var firstLine = body.split('\n').find(function(l) { return l.trim(); }) || '';
-        sum.textContent = firstLine.replace(/^#+\s*/, '').slice(0, 90) + (body.length > 90 ? '  …' : '');
-        det.appendChild(sum);
-        var pre = document.createElement('div');
-        pre.style.cssText = 'white-space:pre-wrap;color:var(--text-dim,#7d8590);margin-top:4px;padding:6px 8px;background:rgba(255,255,255,0.025);border-left:2px solid rgba(255,255,255,0.08);border-radius:2px;';
-        pre.textContent = body;
-        det.appendChild(pre);
-        wrap.appendChild(det);
-      } else {
-        var inline = document.createElement('div');
-        inline.style.cssText = 'margin-left:14px;color:var(--text-dim,#8a8f96);white-space:pre-wrap;';
-        inline.textContent = body;
-        wrap.appendChild(inline);
-      }
-    }
+    var dotColor = state === 'failed' ? '#f87171'
+                 : state === 'rejected' ? '#a3a3a3'
+                 : '#22c55e';
 
-    content.appendChild(wrap);
+    var det = document.createElement('details');
+    det.style.cssText = 'margin-top:6px;';
+    det.className = 'p86-tool-chip';
+
+    var sum = document.createElement('summary');
+    sum.style.cssText =
+      'list-style:none;-webkit-appearance:none;appearance:none;' +
+      'cursor:pointer;display:flex;align-items:center;gap:8px;' +
+      'padding:5px 9px;border-radius:6px;background:rgba(255,255,255,0.025);' +
+      'border:1px solid rgba(255,255,255,0.05);' +
+      'font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;' +
+      'color:rgba(255,255,255,0.65);transition:background 0.12s;';
+    sum.onmouseenter = function() { sum.style.background = 'rgba(255,255,255,0.045)'; };
+    sum.onmouseleave = function() { sum.style.background = 'rgba(255,255,255,0.025)'; };
+
+    var chev      = '<span data-chev style="font-size:9px;color:rgba(255,255,255,0.3);flex-shrink:0;transition:transform 0.12s;display:inline-block;">&#9654;</span>';
+    var dot       = '<span style="width:6px;height:6px;border-radius:50%;background:' + dotColor + ';flex-shrink:0;"></span>';
+    var verbSpan  = '<span style="color:rgba(255,255,255,0.85);font-weight:500;flex-shrink:0;">' + escapeHTMLLocal(info.past) + '</span>';
+    var argSpan   = arg
+      ? '<span style="color:rgba(255,255,255,0.55);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1;">' + escapeHTMLLocal(arg) + '</span>'
+      : '<span style="color:rgba(255,255,255,0.32);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1;">' + escapeHTMLLocal(name) + '</span>';
+    var resultSpan = result
+      ? '<span style="color:rgba(255,255,255,0.4);flex-shrink:0;">' + escapeHTMLLocal(result) + '</span>'
+      : '';
+    sum.innerHTML = chev + dot + verbSpan + argSpan + resultSpan;
+    det.appendChild(sum);
+
+    if (body) {
+      var pre = document.createElement('div');
+      pre.style.cssText =
+        'white-space:pre-wrap;color:rgba(255,255,255,0.55);' +
+        'margin:6px 0 0 14px;padding:8px 10px;' +
+        'background:rgba(255,255,255,0.02);border-left:2px solid rgba(255,255,255,0.08);' +
+        'border-radius:3px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;line-height:1.5;' +
+        'max-height:360px;overflow-y:auto;';
+      pre.textContent = body;
+      det.appendChild(pre);
+    }
+    det.addEventListener('toggle', function() {
+      var c = sum.querySelector('[data-chev]');
+      if (c) c.style.transform = det.open ? 'rotate(90deg)' : 'rotate(0)';
+    });
+
+    content.appendChild(det);
   }
 
   // Compact usage footer rendered after the assistant's reply ends.
@@ -4525,13 +4648,21 @@
     return parts.join(' · ');
   }
 
-  function appendUsageFooter(target, usage) {
-    if (!target || !usage) return;
+  // elapsedMs is optional — when provided, we prepend "Xs · " so the
+  // footer reads "18s · ↑ 1.2k · ↓ 432 · cache 15.8k" Claude-Code style.
+  function appendUsageFooter(target, usage, elapsedMs) {
+    if (!target) return;
     var txt = formatUsage(usage);
-    if (!txt) return;
+    var timer = '';
+    if (elapsedMs && elapsedMs >= 1000) {
+      var s = Math.floor(elapsedMs / 1000);
+      timer = s < 60 ? s + 's' : (Math.floor(s / 60) + 'm ' + (s % 60) + 's');
+    }
+    var line = [timer, txt].filter(Boolean).join(' · ');
+    if (!line) return;
     var footer = document.createElement('div');
     footer.style.cssText = 'margin-top:6px;font-size:10px;color:var(--text-dim,#666);opacity:0.65;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:0.2px;';
-    footer.textContent = txt;
+    footer.textContent = line;
     target.appendChild(footer);
   }
 
