@@ -1200,8 +1200,8 @@ async function initSchema() {
     CREATE TABLE IF NOT EXISTS ai_sessions (
       id BIGSERIAL PRIMARY KEY,
       agent_key TEXT NOT NULL,                             -- 'ag' | 'job' | 'cra' | 'staff'
-      entity_type TEXT NOT NULL,                           -- 'estimate' | 'job' | 'client' | 'staff'
-      entity_id TEXT,                                      -- estimate id / job id / client id; NULL for staff
+      entity_type TEXT NOT NULL,                           -- 'estimate' | 'job' | 'client' | 'staff' | 'general'
+      entity_id TEXT,                                      -- estimate id / job id / client id; NULL for general
       user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       anthropic_session_id TEXT NOT NULL,
       anthropic_agent_id TEXT NOT NULL,                    -- snapshot at create time
@@ -1209,11 +1209,50 @@ async function initSchema() {
       last_used_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       archived_at TIMESTAMPTZ
     );
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_sessions_active
-      ON ai_sessions (agent_key, entity_type, COALESCE(entity_id, ''), user_id)
+
+    -- Sidebar-driven session columns (added when sessions became
+    -- user-pickable from a left-rail list, like Claude Code). label is
+    -- shown in the sidebar row; summary is a one-line auto-generated
+    -- description set after the first turn; pinned floats the row to
+    -- the top of the list; turn_count / total_cost_usd are display
+    -- counters. effort_override lets the user dial individual sessions
+    -- up to 'max' for deep-dive work without changing the global
+    -- default.
+    ALTER TABLE ai_sessions ADD COLUMN IF NOT EXISTS label TEXT;
+    ALTER TABLE ai_sessions ADD COLUMN IF NOT EXISTS summary TEXT;
+    ALTER TABLE ai_sessions ADD COLUMN IF NOT EXISTS pinned BOOLEAN NOT NULL DEFAULT FALSE;
+    ALTER TABLE ai_sessions ADD COLUMN IF NOT EXISTS turn_count INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE ai_sessions ADD COLUMN IF NOT EXISTS total_cost_usd NUMERIC(12,6) NOT NULL DEFAULT 0;
+    ALTER TABLE ai_sessions ADD COLUMN IF NOT EXISTS effort_override TEXT;
+
+    -- The old unique-active index enforced "one session per (agent,
+    -- entity, user)" — the legacy single-thread-per-context model.
+    -- The sidebar architecture allows many sessions per context, so
+    -- the unique constraint is gone. The replacement indexes below
+    -- speed up the two queries that actually matter:
+    --   1. user's sidebar (latest sessions for this user)
+    --   2. auto-anchor (most-recent session for user+context)
+    DROP INDEX IF EXISTS idx_ai_sessions_active;
+    CREATE INDEX IF NOT EXISTS idx_ai_sessions_user_last
+      ON ai_sessions(user_id, last_used_at DESC) WHERE archived_at IS NULL;
+    CREATE INDEX IF NOT EXISTS idx_ai_sessions_context
+      ON ai_sessions(user_id, entity_type, entity_id, last_used_at DESC)
       WHERE archived_at IS NULL;
     CREATE INDEX IF NOT EXISTS idx_ai_sessions_last_used
       ON ai_sessions(last_used_at DESC);
+
+    -- Backfill labels for pre-sidebar rows so the sidebar UI doesn't
+    -- show blank labels on existing sessions. "General" for the
+    -- catch-all (entity_type='86' historically meant the global
+    -- thread). Entity-anchored rows get a placeholder label that the
+    -- UI / auto-label flow will replace on next turn.
+    UPDATE ai_sessions
+       SET label = CASE
+         WHEN entity_type IN ('86', 'general', 'ask86') THEN 'General'
+         WHEN entity_id IS NOT NULL THEN INITCAP(entity_type) || ' ' || entity_id
+         ELSE INITCAP(entity_type)
+       END
+     WHERE label IS NULL;
 
     -- Batch jobs — wraps Anthropic's Batches API for proactive
     -- analyses (currently nightly 86 audits across active jobs).

@@ -25,6 +25,7 @@ const leadRoutes = require('./routes/lead-routes');
 const settingsRoutes = require('./routes/settings-routes');
 const attachmentRoutes = require('./routes/attachment-routes');
 const aiRoutes = require('./routes/ai-routes');
+const aiSessionsRoutes = require('./routes/ai-sessions-routes');
 const materialRoutes = require('./routes/material-routes');
 const qbCostRoutes = require('./routes/qb-cost-routes');
 const subRoutes = require('./routes/sub-routes');
@@ -79,6 +80,12 @@ app.use('/api/clients', clientRoutes);
 app.use('/api/leads', leadRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/attachments', attachmentRoutes);
+// Sessions sidebar routes mount BEFORE the catch-all aiRoutes so they
+// claim /api/ai/sessions/* before any wildcard handler in aiRoutes
+// would. Both share helpers via the require('./ai-routes') call inside
+// ai-sessions-routes — that's safe because Node caches the export
+// object, so the two modules see the same instance.
+app.use('/api/ai/sessions', aiSessionsRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/materials', materialRoutes);
 app.use('/api/qb-costs', qbCostRoutes);

@@ -2785,6 +2785,120 @@ async function ensureAiSession({ agentKey, entityType, entityId, userId, organiz
   return fresh;
 }
 
+// Sidebar-aware session resolver. Replaces the legacy
+// ensureAiSession({entityType:'86', entityId:'global'}) call inside
+// /86/chat with the four-step decision the sidebar architecture
+// needs:
+//
+//   1. explicit session_id in the request body? Load that row (and
+//      verify the caller owns it). Used when the user has picked a
+//      session from the sidebar.
+//   2. current_context has an entity (estimate/job/lead/intake)?
+//      Find the most-recent active session anchored to that
+//      (user, entity_type, entity_id). If none exists, mint one
+//      auto-labeled from the entity ("Job RV2024").
+//   3. current_context names a non-entity surface (ask86, schedule,
+//      insights, dashboard) → resume / create the user's "General"
+//      session. One per user.
+//   4. fallback (no context, no session id) → "General" session.
+//
+// Returns the same row shape ensureAiSession returns; the caller
+// uses session.entity_type / entity_id when keying ai_messages
+// inserts. Sets _freshlyCreated for first-turn detection (skip the
+// stuck-session-recovery retry loop on a brand-new session).
+async function resolveSessionForChat({ sessionId, currentContext, userId, organization }) {
+  if (sessionId) {
+    const sid = parseInt(sessionId, 10);
+    if (Number.isFinite(sid)) {
+      const r = await pool.query(
+        `SELECT * FROM ai_sessions
+           WHERE id = $1 AND user_id = $2 AND archived_at IS NULL`,
+        [sid, userId]
+      );
+      if (r.rows.length) return r.rows[0];
+      // Fall through to auto-anchor — a stale session_id (archived /
+      // deleted upstream) shouldn't 500 the request.
+    }
+  }
+
+  const ctxType = currentContext && currentContext.entity_type;
+  const ctxId   = currentContext && currentContext.entity_id;
+  const ANCHORABLE = new Set(['estimate', 'job', 'lead', 'intake']);
+
+  if (ctxType && ctxId && ANCHORABLE.has(ctxType)) {
+    // Anchored to a concrete entity. Resume the most-recent active
+    // session for this (user, entity_type, entity_id), else create.
+    const r = await pool.query(
+      `SELECT * FROM ai_sessions
+         WHERE user_id = $1 AND entity_type = $2 AND entity_id = $3
+           AND archived_at IS NULL
+         ORDER BY last_used_at DESC
+         LIMIT 1`,
+      [userId, ctxType, String(ctxId)]
+    );
+    if (r.rows.length) return r.rows[0];
+
+    const fresh = await createFreshAiSession({
+      agentKey: 'job',
+      entityType: ctxType,
+      entityId: String(ctxId),
+      userId,
+      organization
+    });
+    // Auto-label from the entity. Format chosen so the sidebar shows
+    // "Job RV2024" / "Estimate EST-0142" / "Lead Solace Tampa" out of
+    // the box. The user can rename; the auto-label background task
+    // (after first turn) may overwrite with something more specific.
+    const initialLabel = autoLabelFromContext(ctxType, ctxId, currentContext);
+    if (initialLabel) {
+      await pool.query(
+        `UPDATE ai_sessions SET label = $1 WHERE id = $2`,
+        [initialLabel, fresh.id]
+      );
+      fresh.label = initialLabel;
+    }
+    fresh._freshlyCreated = true;
+    return fresh;
+  }
+
+  // Non-entity surface or no context at all → user's "General"
+  // session. Single row per user, auto-resumes across pages.
+  const general = await pool.query(
+    `SELECT * FROM ai_sessions
+       WHERE user_id = $1 AND entity_type = 'general'
+         AND archived_at IS NULL
+       ORDER BY last_used_at DESC
+       LIMIT 1`,
+    [userId]
+  );
+  if (general.rows.length) return general.rows[0];
+
+  const fresh = await createFreshAiSession({
+    agentKey: 'job',
+    entityType: 'general',
+    entityId: null,
+    userId,
+    organization
+  });
+  await pool.query(`UPDATE ai_sessions SET label = 'General' WHERE id = $1`, [fresh.id]);
+  fresh.label = 'General';
+  fresh._freshlyCreated = true;
+  return fresh;
+}
+
+// Generate a starter label from the current_context payload. The
+// frontend ships entity name / number / display when available so we
+// can build something readable without a DB round-trip. Falls back to
+// "Type <id>" if nothing better is present.
+function autoLabelFromContext(entityType, entityId, ctx) {
+  const display = ctx && (ctx.entity_label || ctx.entity_display || ctx.entity_name);
+  if (display && typeof display === 'string') {
+    return String(display).slice(0, 200);
+  }
+  const cap = String(entityType).charAt(0).toUpperCase() + String(entityType).slice(1);
+  return (cap + ' ' + entityId).slice(0, 200);
+}
+
 async function createFreshAiSession({ agentKey, entityType, entityId, userId, organization }) {
   const adminAgents = require('./admin-agents-routes');
   const env = await adminAgents.ensureManagedEnvironment();
@@ -9477,6 +9591,31 @@ router.get('/subtasks', requireAuth, async (req, res) => {
 
 router.get('/86/messages', requireAuth, async (req, res) => {
   try {
+    // Multi-session: when the sidebar passes ?session_id=N, return
+    // that session's history (keyed by its own entity_type+entity_id).
+    // Without session_id we fall back to the legacy "all entity_type='86'
+    // rows" query so any caller that hasn't migrated still works.
+    const sessionId = req.query && (req.query.session_id || req.query.sessionId);
+    if (sessionId) {
+      const sid = parseInt(sessionId, 10);
+      if (!Number.isFinite(sid)) return res.status(400).json({ error: 'invalid session_id' });
+      const sr = await pool.query(
+        `SELECT entity_type, entity_id FROM ai_sessions WHERE id = $1 AND user_id = $2`,
+        [sid, req.user.id]
+      );
+      if (!sr.rows.length) return res.status(404).json({ error: 'session not found' });
+      const s = sr.rows[0];
+      const mr = await pool.query(
+        `SELECT id, role, content, created_at
+           FROM ai_messages
+          WHERE user_id = $1
+            AND entity_type = $2
+            AND COALESCE(estimate_id, '') = COALESCE($3, '')
+          ORDER BY created_at ASC`,
+        [req.user.id, s.entity_type, s.entity_id]
+      );
+      return res.json({ messages: mr.rows });
+    }
     const r = await pool.query(
       `SELECT id, role, content, created_at
          FROM ai_messages
@@ -9531,6 +9670,12 @@ router.post('/86/chat', requireAuth, requireOrg, async (req, res) => {
   if (!userMessage) return res.status(400).json({ error: 'message is required' });
 
   const currentContext = (req.body && req.body.current_context) || null;
+  // Sidebar-driven multi-session: the client can pin a specific
+  // session by id (user picked it from the sidebar), or omit it and
+  // let the auto-anchor logic resolve from current_context. The
+  // resolution happens after history load below so we can use the
+  // session's own entity_type/entity_id to key the inserts.
+  const explicitSessionId = req.body && (req.body.session_id || req.body.sessionId);
   const additionalImages = Array.isArray(req.body && req.body.additional_images)
     ? req.body.additional_images.slice(0, 12)
     : [];
@@ -9649,28 +9794,44 @@ router.post('/86/chat', requireAuth, requireOrg, async (req, res) => {
       ? [...inlineImageBlocks, { type: 'text', text: turnText }]
       : [{ type: 'text', text: turnText }];
 
-    // Persist the user's message (raw, no context prefix — context is
-    // a per-turn synthesis, not durable conversation content).
+    // Resolve which session this turn belongs to. Order of precedence:
+    //   explicit session_id from the sidebar pick → entity-anchored
+    //   match (job/estimate/lead/intake) → user's "General" session.
+    // Resolve BEFORE inserting the user message so the row gets keyed
+    // by the session's own (entity_type, entity_id).
+    const session = await resolveSessionForChat({
+      sessionId: explicitSessionId,
+      currentContext,
+      userId: req.user.id,
+      organization: req.organization
+    });
+
+    // Persist the user's message under the resolved session's keys.
+    // estimate_id is the legacy column name for "entity_id" on
+    // ai_messages — kept as-is to avoid a wider migration.
     const userMsgId = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
     await pool.query(
       `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content, photos_included, inline_image_blocks)
-       VALUES ($1, '86', 'global', $2, 'user', $3, $4, $5::jsonb)`,
+       VALUES ($1, $2, $3, $4, 'user', $5, $6, $7::jsonb)`,
       [
-        userMsgId, req.user.id, userMessage, additionalImages.length,
+        userMsgId,
+        session.entity_type,
+        session.entity_id,
+        req.user.id, userMessage, additionalImages.length,
         uploadedBlocks.length ? JSON.stringify(uploadedBlocks) : null
       ]
     );
 
-    // ONE session per user — keyed on (job, '86', 'global', user).
-    // The per-tenant `job` agent is selected via req.organization.
-    const session = await ensureAiSession({
-      agentKey: 'job',
-      entityType: '86',
-      entityId: 'global',
-      userId: req.user.id,
-      organization: req.organization
-    });
-    await pool.query('UPDATE ai_sessions SET last_used_at = NOW() WHERE id = $1', [session.id]);
+    // Track activity + turn counter so the sidebar can order by
+    // recency and show "12 turns" badges. last_used_at is what the
+    // sidebar's pinned-then-recent sort keys on.
+    await pool.query(
+      `UPDATE ai_sessions
+          SET last_used_at = NOW(),
+              turn_count = turn_count + 1
+        WHERE id = $1`,
+      [session.id]
+    );
 
     await runV2SessionStream({
       anthropic, res,
@@ -9703,8 +9864,8 @@ router.post('/86/chat', requireAuth, requireOrg, async (req, res) => {
                                     input_tokens, output_tokens,
                                     cache_creation_input_tokens, cache_read_input_tokens,
                                     tool_use_count, tool_uses)
-           VALUES ($1, '86', 'global', $2, 'assistant', $3, $4, $5, $6, $7, $8, $9, $10)`,
-          [aMsgId, req.user.id, text || '', MODEL,
+           VALUES ($1, $2, $3, $4, 'assistant', $5, $6, $7, $8, $9, $10, $11, $12)`,
+          [aMsgId, session.entity_type, session.entity_id, req.user.id, text || '', MODEL,
            (usage && usage.input_tokens) || null,
            (usage && usage.output_tokens) || null,
            (usage && usage.cache_creation_input_tokens) || null,
@@ -9734,20 +9895,43 @@ router.post('/86/chat/continue', requireAuth, requireOrg, async (req, res) => {
   if (!Array.isArray(toolResults) || !toolResults.length) {
     return res.status(400).json({ error: 'tool_results is required' });
   }
+  // Continue handler also accepts an explicit session_id so the
+  // approval card always lands on the same session the proposing
+  // turn used — even if the user has clicked a different sidebar row
+  // between proposal and approval.
+  const continueSessionId = req.body && (req.body.session_id || req.body.sessionId);
+
   setSSEHeaders(res);
   try {
-    const sessionRow = await pool.query(
-      `SELECT * FROM ai_sessions
-         WHERE agent_key='job' AND entity_type='86'
-           AND entity_id='global' AND user_id=$1 AND archived_at IS NULL`,
-      [req.user.id]
-    );
-    if (!sessionRow.rows.length) {
+    let session = null;
+    if (continueSessionId) {
+      const sid = parseInt(continueSessionId, 10);
+      if (Number.isFinite(sid)) {
+        const r = await pool.query(
+          `SELECT * FROM ai_sessions WHERE id = $1 AND user_id = $2 AND archived_at IS NULL`,
+          [sid, req.user.id]
+        );
+        if (r.rows.length) session = r.rows[0];
+      }
+    }
+    if (!session) {
+      // Fallback: any active session for this user. Picks the
+      // most-recent, which is almost certainly the one the approval
+      // card came from. Preserves legacy behavior where the continue
+      // handler "just worked" without a session_id.
+      const r = await pool.query(
+        `SELECT * FROM ai_sessions
+           WHERE user_id = $1 AND archived_at IS NULL
+           ORDER BY last_used_at DESC LIMIT 1`,
+        [req.user.id]
+      );
+      if (r.rows.length) session = r.rows[0];
+    }
+    if (!session) {
       res.write('data: ' + JSON.stringify({ error: 'No active session — start a new turn.' }) + '\n\n');
       res.write('data: [DONE]\n\n');
       return res.end();
     }
-    const session = sessionRow.rows[0];
 
     // Build tool_result events for each approval, applying server-side
     // any approval-tier propose_* tools the same way the per-entity
@@ -9821,8 +10005,8 @@ router.post('/86/chat/continue', requireAuth, requireOrg, async (req, res) => {
       await pool.query(
         `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content, model,
                                   tool_use_count, tool_uses)
-         VALUES ($1, '86', 'global', $2, 'user', $3, $4, $5, $6)`,
-        [continueMsgId, req.user.id,
+         VALUES ($1, $2, $3, $4, 'user', $5, $6, $7, $8)`,
+        [continueMsgId, session.entity_type, session.entity_id, req.user.id,
          '[tool_results: ' + approvalSummary.map(a =>
            (a.approved ? '✓ ' : '✗ ') + a.name +
            (a.applied_summary ? ' — ' + a.applied_summary.slice(0, 80) : '')
@@ -9852,8 +10036,8 @@ router.post('/86/chat/continue', requireAuth, requireOrg, async (req, res) => {
                                     input_tokens, output_tokens,
                                     cache_creation_input_tokens, cache_read_input_tokens,
                                     tool_use_count, tool_uses)
-           VALUES ($1, '86', 'global', $2, 'assistant', $3, $4, $5, $6, $7, $8, $9, $10)`,
-          [aMsgId, req.user.id, text || '', MODEL,
+           VALUES ($1, $2, $3, $4, 'assistant', $5, $6, $7, $8, $9, $10, $11, $12)`,
+          [aMsgId, session.entity_type, session.entity_id, req.user.id, text || '', MODEL,
            (usage && usage.input_tokens) || null,
            (usage && usage.output_tokens) || null,
            (usage && usage.cache_creation_input_tokens) || null,
@@ -9875,6 +10059,13 @@ router.post('/86/chat/continue', requireAuth, requireOrg, async (req, res) => {
 
 module.exports = router;
 module.exports.startWatchScheduler = startWatchScheduler;
+// Exposed for ai-sessions-routes.js (sidebar CRUD shares the Anthropic
+// session lifecycle helpers so there's one code path that talks to
+// beta.sessions.*).
+module.exports.createFreshAiSession = createFreshAiSession;
+module.exports.ensureAiSession      = ensureAiSession;
+module.exports.archiveActiveAiSession = archiveActiveAiSession;
+module.exports.getAnthropic         = getAnthropic;
 module.exports.internals = {
   buildEstimateContext,
   buildJobContext,
