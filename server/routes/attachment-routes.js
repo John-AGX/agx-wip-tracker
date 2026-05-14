@@ -16,6 +16,7 @@ const sharp = require('sharp');
 const { pool } = require('../db');
 const { requireAuth, requireCapability, isAdminish } = require('../auth');
 const { storage } = require('../storage');
+const { eagerUploadAttachmentById, deleteAnthropicFile } = require('../anthropic-files');
 
 // ──────────────────────────────────────────────────────────────────
 // Text extraction pipeline. Runs at upload time so AG can read the
@@ -454,6 +455,22 @@ router.post('/:entityType/:entityId',
         ]
       );
       res.json({ ok: true, attachment: ins.rows[0] });
+
+      // Eager push to the Anthropic Files cache for image attachments
+      // so 86's first chat reference doesn't pay an upload latency
+      // hit. Runs AFTER the response is sent so the upload-confirm
+      // round-trip stays fast — the user sees their photo in the
+      // grid as soon as multer + the resize pipeline finish, and the
+      // Anthropic Files upload happens in the background. The lazy
+      // fallback in ai-routes.js catches anything that misses (e.g.
+      // server restart between INSERT and upload).
+      if (mime && mime.startsWith('image/')) {
+        setImmediate(() => {
+          eagerUploadAttachmentById(id).catch(e => {
+            console.warn('[attachments POST] background Anthropic Files upload failed for', id, ':', e.message);
+          });
+        });
+      }
     } catch (e) {
       console.error('POST /api/attachments error:', e);
       res.status(500).json({ error: 'Server error: ' + e.message });
@@ -485,24 +502,11 @@ router.delete('/:id', requireAuth, async (req, res) => {
     const keysToDelete = [att.thumb_key, att.web_key, att.original_key].filter(Boolean);
     await Promise.all(keysToDelete.map(function(k) { return storage.delete(k); }));
 
-    // If this attachment was uploaded to Anthropic's Files cache,
-    // delete the cached blob too so we don't accumulate orphans
-    // against the account quota. Best-effort — if Anthropic 404s the
-    // file (already gone) or 5xxs we still complete the local delete.
+    // Clean up the Anthropic Files cache entry if this attachment was
+    // cached. Best-effort — failures are logged but don't block the
+    // local delete (orphan blobs are cheap; blocked deletes lose data).
     if (att.anthropic_file_id) {
-      try {
-        const { Anthropic } = require('@anthropic-ai/sdk');
-        const key = (process.env.ANTHROPIC_API_KEY || '').trim();
-        if (key) {
-          const anthropic = new Anthropic({
-            apiKey: key,
-            defaultHeaders: { 'anthropic-beta': 'files-api-2025-04-14' }
-          });
-          await anthropic.beta.files.delete(att.anthropic_file_id);
-        }
-      } catch (delErr) {
-        console.warn('[attachments DELETE] Anthropic Files delete failed:', delErr.message || delErr);
-      }
+      await deleteAnthropicFile(att.anthropic_file_id);
     }
 
     await pool.query('DELETE FROM attachments WHERE id = $1', [req.params.id]);

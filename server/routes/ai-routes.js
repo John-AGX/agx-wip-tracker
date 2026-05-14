@@ -2202,33 +2202,25 @@ async function loadPhotoAsBlock(photoRow) {
   }
 }
 
-// Lazy upload helper — if the attachment row doesn't yet have an
-// anthropic_file_id, upload the web variant to Anthropic Files and
-// persist the returned id so future turns reference by id instead of
-// shipping bytes again. Safe to call concurrently for the same id —
-// a second caller may race-upload, but the second write is harmless
-// (each call gets the most-recent id from the DB anyway).
-const { toFile: _toFile } = require('@anthropic-ai/sdk');
+// Lazy upload fallback — the eager auto-upload in attachment-routes.js
+// runs after every POST, so a fresh photo should already be cached by
+// the time chat references it. This catches the edge cases: server
+// restart between the INSERT and the background upload, ANTHROPIC_
+// API_KEY transient failure, or attachments uploaded before the eager
+// path landed. Delegates to the shared helper so all three callers
+// (attachment-routes eager, ai-routes lazy, admin-files-routes
+// pre-warm) use one implementation. Returns null on failure so the
+// caller falls back to base64.
+const _anthropicFilesLib = require('../anthropic-files');
 async function ensurePhotoUploadedToAnthropic(photoRow) {
   if (!photoRow || !photoRow.web_key) return null;
   if (photoRow.anthropic_file_id) return photoRow.anthropic_file_id;
-
-  const anthropic = getAnthropic();
-  if (!anthropic) return null;
-
-  const buf = await storage.getBuffer(photoRow.web_key);
-  if (!buf || !buf.length) return null;
-
-  const filename = String(photoRow.web_key).split(/[\\/]/).pop() || (photoRow.id + '.jpg');
-  const file = await _toFile(buf, filename, { type: 'image/jpeg' });
-  const meta = await anthropic.beta.files.upload({ file });
-  await pool.query(
-    `UPDATE attachments
-        SET anthropic_file_id = $1, anthropic_file_uploaded_at = NOW()
-      WHERE id = $2`,
-    [meta.id, photoRow.id]
-  );
-  return meta.id;
+  try {
+    return await _anthropicFilesLib.uploadAttachmentToAnthropic(photoRow);
+  } catch (e) {
+    console.warn('[ensurePhotoUploadedToAnthropic] lazy upload failed:', e.message);
+    return null;
+  }
 }
 
 // ──────────────────────────────────────────────────────────────────

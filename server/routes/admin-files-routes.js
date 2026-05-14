@@ -16,51 +16,13 @@
 // Admin-gated by ROLES_MANAGE.
 
 const express = require('express');
-const fs = require('fs');
-const path = require('path');
 const { pool } = require('../db');
 const { requireAuth, requireCapability } = require('../auth');
-const { storage } = require('../storage');
+const { uploadAttachmentToAnthropic } = require('../anthropic-files');
 
 const router = express.Router();
 
 console.log('[admin-files-routes] mounted at /api/admin/files');
-
-const { Anthropic, toFile } = require('@anthropic-ai/sdk');
-let _anth = null;
-function getAnthropic() {
-  if (_anth) return _anth;
-  const key = (process.env.ANTHROPIC_API_KEY || '').trim();
-  if (!key) return null;
-  _anth = new Anthropic({ apiKey: key });
-  return _anth;
-}
-
-// Internal: upload one attachment's web variant to Anthropic.
-// Returns the file id (or null on failure). Persists to the row so
-// repeat calls return the cached id without re-uploading.
-async function uploadAttachmentToAnthropic(att) {
-  if (att.anthropic_file_id) return att.anthropic_file_id;
-  if (!storage.localRoot) throw new Error('storage.localRoot not configured — Files API needs the local storage backend.');
-  if (!att.web_key) throw new Error('attachment has no web_key (non-image?)');
-  const anthropic = getAnthropic();
-  if (!anthropic) throw new Error('AI not configured (ANTHROPIC_API_KEY missing).');
-
-  const fullPath = path.join(storage.localRoot, att.web_key);
-  // toFile takes a Buffer + filename + { type } — wraps for upload.
-  // Stream from disk to keep memory low when the photo is large.
-  const buf = await fs.promises.readFile(fullPath);
-  const filename = att.web_key.split(/[\\/]/).pop() || (att.id + '.jpg');
-  const file = await toFile(buf, filename, { type: 'image/jpeg' });
-  const meta = await anthropic.beta.files.upload({ file });
-  await pool.query(
-    `UPDATE attachments
-        SET anthropic_file_id = $1, anthropic_file_uploaded_at = NOW()
-      WHERE id = $2`,
-    [meta.id, att.id]
-  );
-  return meta.id;
-}
 
 // POST /api/admin/files/upload-attachment/:id
 router.post('/upload-attachment/:id', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
