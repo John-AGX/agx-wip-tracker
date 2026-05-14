@@ -2217,7 +2217,47 @@
   var _autoHopCount = 0;
   var MAX_AUTO_HOPS = 8;
 
+  // Chat-intent assent — Pass 2 of the talk-through workflow. If the
+  // user has a pending talk-through row (86 just laid out a plan and
+  // is waiting for "approve") AND their next message is a short
+  // assent / dissent phrase, fire the row's Approve / Reject commit
+  // instead of sending the text to the server as a new chat turn.
+  // The chat reads as "86: here's my plan… You: approve" without an
+  // extra round-trip to the model.
+  var ASSENT_RE = /^\s*(?:yes|yeah|yep|ok|okay|approve|approved|sure|do it|go|go ahead|let'?s do it|sounds good|looks good|lgtm|\u{1f44d})\s*\.?\s*$/iu;
+  var DISSENT_RE = /^\s*(?:no|nope|nah|reject|cancel|don'?t|stop|hold on|wait|nevermind|never mind)\s*\.?\s*$/i;
+  function findPendingTalkThroughRow() {
+    var rows = document.querySelectorAll('[data-talk-through-row]');
+    for (var i = rows.length - 1; i >= 0; i--) {
+      var r = rows[i];
+      // The row is "pending" while its commit handle is still attached
+      // to its streamDiv parent (we set _talkThroughCommit on commit).
+      var parent = r.closest('.ai-streaming') || r.parentElement;
+      while (parent && !parent._talkThroughCommit) parent = parent.parentElement;
+      if (parent && parent._talkThroughCommit) return { row: r, streamDiv: parent };
+    }
+    return null;
+  }
+
   function sendMessage(text) {
+    // Intercept assent / dissent when a talk-through plan is pending.
+    var pending = findPendingTalkThroughRow();
+    if (pending) {
+      if (ASSENT_RE.test(text)) {
+        pending.streamDiv._talkThroughCommit(true, null);
+        delete pending.streamDiv._talkThroughCommit; // one-shot
+        return;
+      }
+      if (DISSENT_RE.test(text)) {
+        pending.streamDiv._talkThroughCommit(false, text);
+        delete pending.streamDiv._talkThroughCommit;
+        return;
+      }
+      // Anything else — let it flow through as a regular chat turn.
+      // 86 sees the response naturally and can re-propose or refine.
+      // (Don't clear the row; the user might still type "approve" on
+      // a later turn.)
+    }
     _autoHopCount = 0;
     // Pull any base64 images from the composer chips (uploads or PDF
     // renders) for one-shot vision on this turn. The same images are
@@ -2339,6 +2379,12 @@
     // "Reading file.ts" becomes "Read file.ts · 12 matched" on the
     // same line.
     var liveChip = null;
+    // Approval-tier metadata per-tool_use_id, set from the per-event
+    // `tier` field on tool_use SSE events. Used by finalizeProposalBubble
+    // to decide: structured cards (approval) or one inline Approve /
+    // Reject row (talk_through).
+    var tierByToolUseId = {};
+    var turnTier = null;
     _streaming = true;
     setSendDisabled(true);
 
@@ -2360,6 +2406,9 @@
           scrollToBottom();
         } else if (payload.tool_use) {
           pendingToolUses.push(payload.tool_use);
+          if (payload.tier && payload.tool_use && payload.tool_use.id) {
+            tierByToolUseId[payload.tool_use.id] = payload.tier;
+          }
         } else if (payload.tool_started) {
           // Append a live chip showing the running tool. Replaced in
           // place when the matching tool_applied / _failed / _rejected
@@ -2472,6 +2521,7 @@
           scrollToBottom();
         } else if (payload.awaiting_approval) {
           pendingAssistantContent = payload.pending_assistant_content;
+          if (payload.tier) turnTier = payload.tier;
           if (payload.usage) turnUsage = payload.usage;
         } else if (payload.done) {
           if (payload.usage) turnUsage = payload.usage;
@@ -2490,20 +2540,20 @@
       _abortController = null;
 
       if (pendingToolUses.length) {
-        // Tool-use turn — render approval cards inline. The streamDiv
-        // stays as the assistant bubble; cards get appended below the
-        // text. No history persistence on this turn — the conversation
-        // gets persisted only after the final text response of the
-        // multi-step exchange.
-        //
-        // pendingAssistantContent is non-null on v1 (the server echoes
-        // the assistant's full content array so /chat/continue can
-        // replay it) and null on v2 (the Anthropic Session holds it
-        // server-side; client doesn't need to echo). Either way, the
-        // tool cards still need to render — earlier this gate also
-        // required pendingAssistantContent which silently dropped v2
-        // tool turns to "(no response)".
-        finalizeProposalBubble(streamDiv, assistantText, pendingToolUses, pendingAssistantContent);
+        // Tool-use turn. The server tags the turn with a tier:
+        //   talk_through  → one inline Approve / Reject row beneath
+        //                   86's prose (the plan IS the prose; no
+        //                   per-tool structured form).
+        //   approval      → per-tool approval cards with structured
+        //                   fields (the original heavy flow).
+        // Mixed turns (some talk_through, some approval) fall back to
+        // cards so the user sees the structured fields for the higher-
+        // stakes tools.
+        if (turnTier === 'talk_through') {
+          finalizeTalkThroughBubble(streamDiv, assistantText, pendingToolUses, pendingAssistantContent);
+        } else {
+          finalizeProposalBubble(streamDiv, assistantText, pendingToolUses, pendingAssistantContent);
+        }
       } else if (assistantText) {
         // Plain text response — drop the streaming placeholder and add
         // a permanent bubble (history already persisted server-side).
@@ -3051,6 +3101,97 @@
       default:
         return 'navigate: unknown destination "' + dest + '". Valid destinations: home, leads, estimates, clients, subs, schedule, wip, insights, admin, job, estimate, lead.';
     }
+  }
+
+  // Talk-through bubble — one inline Approve / Reject row under 86's
+  // prose, no per-tool cards. 86's text IS the plan; the toolUses
+  // carry the structured mutations behind the scenes. Approve applies
+  // every tool in the bundle in one shot.
+  function finalizeTalkThroughBubble(streamDiv, assistantText, toolUses, pendingContent) {
+    var contentEl = streamDiv && streamDiv.querySelector('[data-stream-content]');
+    if (contentEl) contentEl.innerHTML = renderMarkdown(assistantText || '');
+
+    var row = document.createElement('div');
+    row.setAttribute('data-talk-through-row', '1');
+    // Sit inline beneath the prose. Same color language as the rest of
+    // the chat — soft surface, not a structured card.
+    row.style.cssText =
+      'margin-top:10px;padding:8px 4px 4px 4px;display:flex;align-items:center;gap:8px;' +
+      'border-top:1px solid rgba(255,255,255,0.06);width:100%;box-sizing:border-box;';
+    (contentEl || streamDiv).appendChild(row);
+
+    var label = document.createElement('span');
+    label.style.cssText = 'flex:1;font-size:11px;color:rgba(255,255,255,0.55);';
+    label.textContent = toolUses.length === 1
+      ? 'Apply this change?'
+      : 'Apply all ' + toolUses.length + ' changes?';
+    row.appendChild(label);
+
+    function makeBtn(text, kind, onClick) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = text;
+      var base = 'border:1px solid rgba(255,255,255,0.15);border-radius:6px;' +
+                 'padding:5px 12px;font-size:11.5px;font-weight:600;cursor:pointer;' +
+                 'transition:background 0.12s,border-color 0.12s;';
+      if (kind === 'approve') {
+        b.style.cssText = base +
+          'background:rgba(34,197,94,0.18);color:#86efac;border-color:rgba(34,197,94,0.4);';
+        b.onmouseenter = function() { b.style.background = 'rgba(34,197,94,0.28)'; };
+        b.onmouseleave = function() { b.style.background = 'rgba(34,197,94,0.18)'; };
+      } else {
+        b.style.cssText = base +
+          'background:rgba(255,255,255,0.04);color:rgba(255,255,255,0.7);';
+        b.onmouseenter = function() { b.style.background = 'rgba(255,255,255,0.08)'; };
+        b.onmouseleave = function() { b.style.background = 'rgba(255,255,255,0.04)'; };
+      }
+      b.onclick = onClick;
+      return b;
+    }
+
+    function commit(approved, rejectReason) {
+      // Disable the row + give visual feedback so a second click can't
+      // re-fire the apply.
+      var btns = row.querySelectorAll('button');
+      btns.forEach(function(b) { b.disabled = true; b.style.opacity = '0.55'; b.style.cursor = 'default'; });
+      label.textContent = approved ? 'Applying…' : 'Rejected.';
+
+      var responses = toolUses.map(function(tu) {
+        var summary = '';
+        var applyError = null;
+        if (approved) {
+          try { summary = applyTool(tu); }
+          catch (e) {
+            applyError = e && (e.message || String(e)) || 'apply failed';
+          }
+        }
+        var resp = {
+          tool_use_id: tu.id, name: tu.name, input: tu.input,
+          approved: approved && !applyError,
+          applied_summary: summary,
+          reject_reason: !approved ? (rejectReason || 'User rejected the plan.') : null
+        };
+        if (applyError) resp.apply_error = applyError;
+        return resp;
+      });
+      // Swap row to a finalized one-liner — terse audit trail under
+      // the prose, no buttons. Matches the rest of the bubble's tone.
+      var finalText = approved
+        ? '✓ Applied ' + toolUses.length + ' change' + (toolUses.length === 1 ? '' : 's')
+        : '✗ Rejected';
+      row.innerHTML = '<span style="font-size:11px;color:rgba(255,255,255,0.45);">' +
+        escapeHTMLLocal(finalText) + '</span>';
+
+      continueAfterProposals(pendingContent, responses);
+    }
+
+    row.appendChild(makeBtn('Reject', 'reject', function() { commit(false, null); }));
+    row.appendChild(makeBtn('Approve', 'approve', function() { commit(true, null); }));
+    // Expose for the chat-intent assent path (Pass 2): when the user
+    // types "yes" / "approve" / "go" as their next message, that
+    // handler finds the pending row and clicks Approve programmatically.
+    streamDiv._talkThroughCommit = commit;
+    scrollToBottom();
   }
 
   // Estimate-side propose_* tools — these are NOT auto-applied by

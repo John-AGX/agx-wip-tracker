@@ -2440,17 +2440,22 @@ async function runStream({ anthropic, res, system, messages, persistAssistantTex
 
   if (toolUseBlocks.length) {
     // Stream each proposal as a discrete event so the client can render
-    // approval cards in order.
+    // approval cards in order. Each carries a `tier` flag so the client
+    // can switch to inline-button rendering for talk_through tools.
     for (const tu of toolUseBlocks) {
-      send({ tool_use: { id: tu.id, name: tu.name, input: tu.input } });
+      send({ tool_use: { id: tu.id, name: tu.name, input: tu.input }, tier: tierFor(tu.name) });
     }
     // Send the full assistant content back so the client can echo it on
     // /chat/continue — Anthropic needs the original tool_use blocks in
     // the conversation history to match against the user-side tool_result.
+    const turnTier = toolUseBlocks.every(t => TALK_THROUGH_TOOLS.has(t.name))
+      ? 'talk_through'
+      : 'approval';
     send({
       awaiting_approval: true,
       pending_assistant_content: finalContent,
       tool_use_count: toolUseBlocks.length,
+      tier: turnTier,
       usage: usage
     });
     endWithDone();
@@ -3566,7 +3571,10 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
 
             if (pendingToolUses.length || stopType === 'requires_action') {
               for (const tu of pendingToolUses) {
-                send({ tool_use: tu });
+                // Tag each tool_use with its approval tier so the client
+                // can render talk_through tools as a single inline
+                // Approve / Reject row rather than per-tool cards.
+                send({ tool_use: tu, tier: tierFor(tu.name) });
               }
               // Persist BOTH the streamed prose AND the proposed tool_use
               // blocks before we close the response. Previously this branch
@@ -3598,12 +3606,21 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
                   console.error('persistAssistantText (awaiting) failed:', e);
                 }
               }
+              // Determine the overall tier for the turn. If every
+              // pending tool is talk_through, the client renders ONE
+              // inline Approve / Reject row. Mixed turns fall back to
+              // per-tool approval cards so the user sees the structured
+              // fields for the higher-stakes tools.
+              const turnTier = pendingToolUses.every(t => TALK_THROUGH_TOOLS.has(t.name))
+                ? 'talk_through'
+                : 'approval';
               send({
                 awaiting_approval: true,
                 // Session is server-managed; client doesn't need to echo
                 // the assistant content back on /chat/continue.
                 pending_assistant_content: null,
                 tool_use_count: pendingToolUses.length,
+                tier: turnTier,
                 usage: usage,
                 session_id: sessionId
               });
@@ -9200,6 +9217,51 @@ router.post('/v2/intake/chat/continue',
 // without bouncing the user to a different agent panel. Mutation tools
 // (propose_skill_pack_*, create_property, etc.) are kept off this auto-
 // tier endpoint — those still go through approval cards.
+
+// ── Talk-through tier ───────────────────────────────────────────────
+// Tools in this set still require user assent (just like approval-
+// tier), but instead of rendering a structured Approve / Reject card
+// per tool, the client shows a single inline "Approve / Reject" row
+// under 86's prose. 86 is expected (via the talk-through skill pack)
+// to describe his plan in prose first, then call one or more of these
+// tools in the same turn; the user reads the plan and approves all
+// of them in one click.
+//
+// Excluded: high-stakes / irreversible / structured-form mutations
+// (propose_skill_pack_*, delete_client, merge_clients, propose_*_field_
+// _tool, propose_watch_*). Those keep the full approval card so the
+// admin can review fields one by one.
+const TALK_THROUGH_TOOLS = new Set([
+  // Scope + line items
+  'propose_update_scope',
+  'propose_add_line_item',
+  'propose_update_line_item',
+  'propose_delete_line_item',
+  'propose_bulk_update_lines',
+  'propose_bulk_delete_lines',
+  'propose_add_section',
+  'propose_update_section',
+  'propose_delete_section',
+  // Groups
+  'propose_switch_active_group',
+  'propose_add_group',
+  'propose_rename_group',
+  'propose_delete_group',
+  'propose_toggle_group_include',
+  // Relationships
+  'propose_link_to_client',
+  'propose_link_to_lead',
+  // Estimate metadata + notes
+  'propose_update_estimate_field',
+  'propose_add_client_note',
+  // Lead creation — routine intake action, no structured form needed
+  // when 86 talks the user through the values in prose first.
+  'propose_create_lead'
+]);
+function tierFor(toolName) {
+  return TALK_THROUGH_TOOLS.has(toolName) ? 'talk_through' : 'approval';
+}
+
 const ALLOWED_AUTO_TIER_TOOLS = new Set([
   // 86's existing read tools (already routed to execStaffTool below)
   'read_materials',
