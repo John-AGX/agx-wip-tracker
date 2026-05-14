@@ -4765,15 +4765,12 @@
       '<div style="margin-top:24px;padding:14px;background:rgba(255,255,255,0.03);border:1px solid var(--border,#333);border-radius:8px;">' +
         '<h3 style="margin:0 0 6px 0;font-size:13px;color:var(--text,#fff);">&#x1F4C2; Anthropic Files cache</h3>' +
         '<p style="margin:0 0 10px 0;color:var(--text-dim,#888);font-size:11px;">' +
-          'When 86 references a photo across multiple chat turns, currently the photo gets base64-encoded into the request every turn. Uploading once to Anthropic\'s Files API lets future turns reference the photo by id (cheaper, faster). Stats below; click to upload recent images.' +
+          'Photos referenced in chat are uploaded once to Anthropic\'s Files API and then referenced by file_id on every turn — bytes don\'t ride along again. Upload happens lazily on first chat reference; the button below lets you pre-warm recent images so the first turn that touches them isn\'t slow. Delete propagates: removing an attachment locally also drops the cached blob upstream.' +
         '</p>' +
         '<div id="files-stats-host" style="font-size:11px;color:var(--text-dim,#888);font-style:italic;">Loading…</div>' +
         '<div style="margin-top:10px;">' +
-          '<button class="ee-btn secondary" onclick="uploadRecentPhotos(25)">Upload last 25 not-yet-uploaded images</button>' +
+          '<button class="ee-btn secondary" onclick="uploadRecentPhotos(25)">Pre-warm last 25 unuploaded images</button>' +
         '</div>' +
-        '<p style="margin:8px 0 0 0;color:var(--text-dim,#666);font-size:10px;">' +
-          'Note: 86\'s chat path still uses base64 for now. Switching loadPhotoAsBlock to file_id references requires migrating chat from messages.stream() to beta.messages.stream() — that\'s a separate commit. The upload pipeline above sets up the cache in advance so the chat switch is a one-line change later.' +
-        '</p>' +
       '</div>';
 
     window.p86Api.get('/api/admin/files/stats').then(function(s) {
@@ -5066,7 +5063,7 @@
   function loadManagedAgents() {
     var host = document.getElementById('managed-agents-panel');
     if (!host) return;
-    host.innerHTML = panelHeader('Managed Agents (Phase 1a)', '🤖') + '<div style="font-size:12px;color:var(--text-dim,#888);font-style:italic;">Loading…</div>';
+    host.innerHTML = panelHeader('Managed Agents', '🤖') + '<div style="font-size:12px;color:var(--text-dim,#888);font-style:italic;">Loading…</div>';
     window.p86Api.get('/api/admin/agents/managed').then(function(resp) {
       var rows = (resp && resp.agents) || [];
       // Intake is no longer a separate managed agent — 86 owns the
@@ -5084,7 +5081,7 @@
 
       var bootstrapBar =
         '<p style="margin:0 0 10px 0;font-size:12px;color:var(--text-dim,#888);">' +
-          'One-time registration of each Project 86 agent as an Anthropic-side managed Agent. Bootstraps the migration from <code>messages.stream</code> to <code>beta.sessions.events.stream</code>. The chat path is still on <code>messages.stream</code> — registering here just creates the Agent records that the v2 chat endpoint will reference once it ships.' +
+          'Each Project 86 surface runs as an Anthropic-side managed Agent via <code>beta.sessions.events.stream</code>. The live chat path uses this registration today — Sync pushes any local tool/skill/prompt changes as a new agent version (same agent_id, version increments). Re-register only if the row was deleted upstream.' +
         '</p>' +
         '<div style="margin-bottom:10px;display:flex;gap:8px;flex-wrap:wrap;">' +
           '<button class="ee-btn primary" onclick="bootstrapManagedAgents(\'all\')" title="Register every Project 86 agent that isn\'t yet registered.">&#x1F680; Register all unregistered</button>' +
@@ -5137,7 +5134,7 @@
         staleHtml += '</div>';
       }
 
-      host.innerHTML = panelHeader('Managed Agents (Phase 1a — registration)', '🤖') + bootstrapBar + rowsHtml + staleHtml;
+      host.innerHTML = panelHeader('Managed Agents', '🤖') + bootstrapBar + rowsHtml + staleHtml;
       // Fetch Anthropic-side state per agent — version + drift signal.
       // Done after render so the table draws immediately and per-row
       // cells fill in as the calls return. Failures show as "—".
@@ -5378,7 +5375,7 @@
       var rows = (resp && resp.files) || [];
       if (!rows.length) {
         host.innerHTML = panelHeader('Files', '📂') +
-          '<div style="font-size:12px;color:var(--text-dim,#888);font-style:italic;padding:10px 0;">No files uploaded yet. Upload from Admin → Agents → 📦 Batch → Files cache panel.</div>';
+          '<div style="font-size:12px;color:var(--text-dim,#888);font-style:italic;padding:10px 0;">No files uploaded yet. Photos auto-upload on first chat reference; pre-warm from Admin → Agents → 📦 Batch → Files cache panel.</div>';
         return;
       }
       var totalBytes = rows.reduce(function(s, f) { return s + (Number(f.size_bytes) || 0); }, 0);

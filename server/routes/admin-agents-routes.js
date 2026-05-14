@@ -2859,7 +2859,9 @@ router.post('/managed/sync-all',
 //   beta.skills metadata where available). `available` is the full
 //   Anthropic-side skill list minus already-assigned ones — the UI
 //   uses this to populate an "Attach a skill" picker.
-router.get('/:agentKey/native-skills', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+router.get('/:agentKey/native-skills',
+  requireAuth, requireCapability('ROLES_MANAGE'), require('../auth').requireOrg,
+  async (req, res) => {
   try {
     const agentKey = String(req.params.agentKey || '').trim();
     if (!agentKey) return res.status(400).json({ error: 'agentKey is required' });
@@ -2869,40 +2871,93 @@ router.get('/:agentKey/native-skills', requireAuth, requireCapability('ROLES_MAN
 
     // Load Anthropic-side metadata for ALL skills (we'll filter into
     // assigned vs available below). Cap at 200 — accounts with more
-    // than that are unlikely in practice.
+    // than that are unlikely in practice. Phantom rows (no skill_ id
+    // prefix) get stripped here so they never appear in the UI.
     let allSkills = [];
     try {
       const page = await anthropic.beta.skills.list({ limit: 200 });
-      allSkills = (page && (page.data || page)) || [];
-      if (!Array.isArray(allSkills)) allSkills = [];
+      const raw = (page && (page.data || page)) || [];
+      allSkills = (Array.isArray(raw) ? raw : []).filter(s =>
+        s && typeof s.id === 'string' && s.id.startsWith('skill_')
+      );
     } catch (e) {
       console.warn('[native-skills GET] beta.skills.list failed:', e.message);
     }
     const metaById = new Map();
     allSkills.forEach(s => { if (s && s.id) metaById.set(s.id, s); });
 
-    const r = await pool.query(
+    // Two sources of "this skill is attached to this agent":
+    // 1. managed_agent_skills — legacy direct-attach table (admin
+    //    clicks "Attach" in the UI). Keyed by agent_key only.
+    // 2. org_skill_packs.anthropic_skill_id — the per-tenant bridge
+    //    that collectSkillsFor() reads. This is how the 12 mirrored
+    //    packs reach the agent at sync time. The UI must report these
+    //    as "attached" or the admin sees the misleading "No native
+    //    skills attached" message while the agent actually has 12.
+    const direct = await pool.query(
       `SELECT skill_id, position, enabled, created_at FROM managed_agent_skills
         WHERE agent_key = $1
         ORDER BY position ASC, created_at ASC`,
       [agentKey]
     );
 
+    const orgId = req.organization && req.organization.id;
+    const bridged = orgId
+      ? await pool.query(
+          `SELECT anthropic_skill_id AS skill_id, name AS pack_name, created_at
+             FROM org_skill_packs
+            WHERE organization_id = $1
+              AND anthropic_skill_id IS NOT NULL
+              AND archived_at IS NULL
+              AND ($2::text = ANY (
+                  SELECT jsonb_array_elements_text(agents)
+                ) OR $2 = 'job')
+            ORDER BY created_at ASC`,
+          [orgId, agentKey]
+        )
+      : { rows: [] };
+
     const assignedIds = new Set();
-    const assigned = r.rows.map(row => {
+    const assigned = [];
+
+    // Direct attachments first (preserve admin-set position order).
+    direct.rows.forEach(row => {
+      if (assignedIds.has(row.skill_id)) return;
       assignedIds.add(row.skill_id);
       const meta = metaById.get(row.skill_id) || {};
-      return {
+      assigned.push({
         skill_id: row.skill_id,
         position: row.position,
         enabled: row.enabled,
         attached_at: row.created_at,
+        source: 'direct',
         display_title: meta.display_title || meta.name || null,
         description: meta.description || null,
         anthropic_created_at: meta.created_at || null,
         anthropic_missing: !metaById.has(row.skill_id)
-      };
+      });
     });
+
+    // Org-pack bridge attachments. These don't have a position — they
+    // ride along automatically based on the per-tenant pack registry.
+    bridged.rows.forEach(row => {
+      if (assignedIds.has(row.skill_id)) return;
+      assignedIds.add(row.skill_id);
+      const meta = metaById.get(row.skill_id) || {};
+      assigned.push({
+        skill_id: row.skill_id,
+        position: null,
+        enabled: true,
+        attached_at: row.created_at,
+        source: 'org_skill_pack',
+        pack_name: row.pack_name,
+        display_title: meta.display_title || meta.name || row.pack_name || null,
+        description: meta.description || null,
+        anthropic_created_at: meta.created_at || null,
+        anthropic_missing: !metaById.has(row.skill_id)
+      });
+    });
+
     const available = allSkills
       .filter(s => s && s.id && !assignedIds.has(s.id))
       .map(s => ({

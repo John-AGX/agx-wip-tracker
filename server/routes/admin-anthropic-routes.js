@@ -40,18 +40,20 @@ function notConfigured() {
 // GET /api/admin/anthropic/skills?limit=100
 //   Lists native Skills attached to the API key's account. Returns
 //   id, name, description (snippet), version count, created_at —
-//   whatever the list endpoint surfaces. We haven't migrated to
-//   native Skills yet so this likely returns empty for Project 86 today;
-//   the endpoint is here for when we do.
+//   whatever the list endpoint surfaces. Filters out non-skill rows
+//   (Anthropic Files objects sometimes leak into this listing on
+//   legacy accounts — they have no `skill_` id prefix).
 router.get('/skills', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
   try {
     const anthropic = getAnthropic();
     if (!anthropic) return res.status(503).json(notConfigured());
     const limit = Math.max(1, Math.min(200, parseInt(req.query.limit, 10) || 100));
     const page = await anthropic.beta.skills.list({ limit });
-    // SDK returns a Page-like with .data array.
-    const skills = (page && (page.data || page)) || [];
-    res.json({ skills: Array.isArray(skills) ? skills : [], note: skills.length ? null : 'No native Skills in this account yet.' });
+    const raw = (page && (page.data || page)) || [];
+    const skills = (Array.isArray(raw) ? raw : []).filter(s =>
+      s && typeof s.id === 'string' && s.id.startsWith('skill_')
+    );
+    res.json({ skills, note: skills.length ? null : 'No native Skills in this account yet.' });
   } catch (e) {
     console.error('GET /api/admin/anthropic/skills error:', e);
     res.status(500).json({ error: 'Server error: ' + (e.message || 'unknown') });

@@ -484,6 +484,27 @@ router.delete('/:id', requireAuth, async (req, res) => {
     // Documents have null thumb/web keys — only delete what's actually stored.
     const keysToDelete = [att.thumb_key, att.web_key, att.original_key].filter(Boolean);
     await Promise.all(keysToDelete.map(function(k) { return storage.delete(k); }));
+
+    // If this attachment was uploaded to Anthropic's Files cache,
+    // delete the cached blob too so we don't accumulate orphans
+    // against the account quota. Best-effort — if Anthropic 404s the
+    // file (already gone) or 5xxs we still complete the local delete.
+    if (att.anthropic_file_id) {
+      try {
+        const { Anthropic } = require('@anthropic-ai/sdk');
+        const key = (process.env.ANTHROPIC_API_KEY || '').trim();
+        if (key) {
+          const anthropic = new Anthropic({
+            apiKey: key,
+            defaultHeaders: { 'anthropic-beta': 'files-api-2025-04-14' }
+          });
+          await anthropic.beta.files.delete(att.anthropic_file_id);
+        }
+      } catch (delErr) {
+        console.warn('[attachments DELETE] Anthropic Files delete failed:', delErr.message || delErr);
+      }
+    }
+
     await pool.query('DELETE FROM attachments WHERE id = $1', [req.params.id]);
     res.json({ ok: true });
   } catch (e) {

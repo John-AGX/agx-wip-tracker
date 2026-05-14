@@ -37,9 +37,17 @@ function getAnthropic() {
   const raw = process.env.ANTHROPIC_API_KEY || '';
   const key = raw.trim();
   if (!key) return null;
-  // Recreate the client if the key changed (rare, but possible on rotation)
+  // Recreate the client if the key changed (rare, but possible on rotation).
+  // Default headers opt every request into the beta features we
+  // depend on: files-api-2025-04-14 unlocks {source:{type:'file',
+  // file_id:'...'}} image blocks so the chat path can reference
+  // pre-uploaded photos by id instead of re-base64-encoding the bytes
+  // every turn.
   if (!_anthropicClient || _anthropicKey !== key) {
-    _anthropicClient = new Anthropic({ apiKey: key });
+    _anthropicClient = new Anthropic({
+      apiKey: key,
+      defaultHeaders: { 'anthropic-beta': 'files-api-2025-04-14' }
+    });
     _anthropicKey = key;
   }
   return _anthropicClient;
@@ -2157,12 +2165,28 @@ function renderSection(stableLines, sectionId, overrides) {
 async function loadPhotoAsBlock(photoRow) {
   try {
     if (!photoRow.web_key) return null;
-    // Use the storage adapter's getBuffer so this works for BOTH the
-    // local-disk dev backend AND the R2 production backend. The old
-    // path-only branch silently returned null on Railway, which is
-    // why 86 stopped seeing photos in production despite them being
-    // attached correctly. (LocalDiskStorage.getBuffer reads from
-    // disk; R2Storage.getBuffer streams from the bucket.)
+
+    // Prefer the Anthropic Files cache: if we already uploaded this
+    // attachment, reference it by id so the bytes don't ride along
+    // again. Falls back to base64 if the row hasn't been uploaded yet
+    // (and lazily uploads on this turn so the next turn is fast).
+    let fileId = photoRow.anthropic_file_id || null;
+    if (!fileId) {
+      try {
+        fileId = await ensurePhotoUploadedToAnthropic(photoRow);
+      } catch (e) {
+        console.warn('[loadPhotoAsBlock] lazy upload failed, falling back to base64:', e.message);
+      }
+    }
+    if (fileId) {
+      return {
+        type: 'image',
+        source: { type: 'file', file_id: fileId }
+      };
+    }
+
+    // Fallback: legacy base64 path. Use the storage adapter's getBuffer
+    // so this works for BOTH local-disk dev and R2 production backends.
     const buf = await storage.getBuffer(photoRow.web_key);
     return {
       type: 'image',
@@ -2176,6 +2200,35 @@ async function loadPhotoAsBlock(photoRow) {
     console.warn('Could not load photo', photoRow.id, ':', e.message);
     return null;
   }
+}
+
+// Lazy upload helper — if the attachment row doesn't yet have an
+// anthropic_file_id, upload the web variant to Anthropic Files and
+// persist the returned id so future turns reference by id instead of
+// shipping bytes again. Safe to call concurrently for the same id —
+// a second caller may race-upload, but the second write is harmless
+// (each call gets the most-recent id from the DB anyway).
+const { toFile: _toFile } = require('@anthropic-ai/sdk');
+async function ensurePhotoUploadedToAnthropic(photoRow) {
+  if (!photoRow || !photoRow.web_key) return null;
+  if (photoRow.anthropic_file_id) return photoRow.anthropic_file_id;
+
+  const anthropic = getAnthropic();
+  if (!anthropic) return null;
+
+  const buf = await storage.getBuffer(photoRow.web_key);
+  if (!buf || !buf.length) return null;
+
+  const filename = String(photoRow.web_key).split(/[\\/]/).pop() || (photoRow.id + '.jpg');
+  const file = await _toFile(buf, filename, { type: 'image/jpeg' });
+  const meta = await anthropic.beta.files.upload({ file });
+  await pool.query(
+    `UPDATE attachments
+        SET anthropic_file_id = $1, anthropic_file_uploaded_at = NOW()
+      WHERE id = $2`,
+    [meta.id, photoRow.id]
+  );
+  return meta.id;
 }
 
 // ──────────────────────────────────────────────────────────────────
@@ -9128,45 +9181,24 @@ function ask86Tools() {
   return merged;
 }
 
-router.get('/ask86/messages', requireAuth, async (req, res) => {
-  try {
-    const r = await pool.query(
-      `SELECT id, role, content, created_at
-         FROM ai_messages
-        WHERE entity_type='ask86' AND user_id=$1
-        ORDER BY created_at ASC`,
-      [req.user.id]
-    );
-    res.json({ messages: r.rows });
-  } catch (e) {
-    console.error('GET /ask86/messages error:', e);
-    res.status(500).json({ error: e.message });
-  }
+// Legacy V1 /ask86/* routes — replaced by managed-agents V2 at
+// /api/ai/86/*. Frontend has been migrated; these stubs surface a
+// clear 410 if any stale client retries the old path.
+router.all('/ask86/messages', requireAuth, (req, res) => {
+  res.status(410).json({ error: 'Removed. Use /api/ai/86/messages (managed-agents V2).' });
 });
 
-router.delete('/ask86/messages', requireAuth, async (req, res) => {
-  try {
-    await pool.query(
-      `DELETE FROM ai_messages WHERE entity_type='ask86' AND user_id=$1`,
-      [req.user.id]
-    );
-    res.json({ ok: true });
-  } catch (e) {
-    console.error('DELETE /ask86/messages error:', e);
-    res.status(500).json({ error: e.message });
-  }
+router.all('/ask86/chat', requireAuth, (req, res) => {
+  res.status(410).json({ error: 'Removed. Use /api/ai/86/chat (managed-agents V2).' });
 });
-
-router.post('/ask86/chat', requireAuth, requireOrg, async (req, res) => {
+const _ask86ChatLegacyHandlerRemoved_keepBalanced = async (req, res) => {
   const anthropic = getAnthropic();
   if (!anthropic) return res.status(503).json({ error: 'AI assistant is not configured.' });
   const userMessage = (req.body && req.body.message || '').trim();
   if (!userMessage) return res.status(400).json({ error: 'message is required' });
-  // Inline images attached to this turn — explicit attachments + auto-
-  // rendered PDF page snapshots. The client packs both into the same
-  // `additional_images` array as base64 data URLs / strings. Capped at
-  // 12 here (Anthropic's per-request image ceiling minus headroom);
-  // the client already trims to 18, this is defense in depth.
+  // Legacy body retained as a no-op so we don't risk a partial delete
+  // unbalancing the parser. The function is unreachable (never
+  // registered as a route).
   const additionalImages = Array.isArray(req.body && req.body.additional_images)
     ? req.body.additional_images.slice(0, 12)
     : [];
@@ -9257,14 +9289,12 @@ router.post('/ask86/chat', requireAuth, requireOrg, async (req, res) => {
       res.end();
     } catch (_) {}
   }
-});
+};
 
-// POST /api/ai/ask86/chat/continue
-// Approval-flow continuation for the global Ask 86 surface. The client
-// posts tool_results from the approval cards; we apply approval-tier
-// mutations server-side (propose_create_lead, the HR CLIENT_TOOLS
-// mutations, propose_skill_pack_*), then resume the model stream.
-router.post('/ask86/chat/continue', requireAuth, requireOrg, async (req, res) => {
+router.all('/ask86/chat/continue', requireAuth, (req, res) => {
+  res.status(410).json({ error: 'Removed. Use /api/ai/86/chat/continue (managed-agents V2).' });
+});
+const _ask86ContinueLegacyHandlerRemoved_keepBalanced = async (req, res) => {
   const anthropic = getAnthropic();
   if (!anthropic) return res.status(503).json({ error: 'AI assistant is not configured.' });
   const pendingContent = req.body && req.body.pending_assistant_content;
@@ -9377,7 +9407,7 @@ router.post('/ask86/chat/continue', requireAuth, requireOrg, async (req, res) =>
       res.end();
     } catch (_) {}
   }
-});
+};
 
 // ══════════════════════════════════════════════════════════════════════
 // Unified 86 — ONE chat surface across the whole system
