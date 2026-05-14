@@ -1730,9 +1730,42 @@ function toCustomToolParam(tool) {
 // First source wins on conflict (skill_id already attached via the
 // new table won't be re-added via the legacy path). Returns an array
 // of {type:'custom', skill_id} entries shaped for beta.agents.create.
-async function collectSkillsFor(agentKey) {
+async function collectSkillsFor(agentKey, organization) {
   const out = [];
   const seen = new Set();
+
+  // Source 0 (preferred — Phase 2d): per-tenant org_skill_packs rows
+  // that have been mirrored to Anthropic native Skills. The
+  // propose_skill_pack_mirror flow uploads a pack body via
+  // anthropic.beta.skills.create and stamps the returned id onto
+  // org_skill_packs.anthropic_skill_id; this is where we pick it up
+  // so it actually lands in the agent's registered skills.
+  //
+  // Before this branch existed, mirrored packs were on Anthropic but
+  // never linked to the agent — every sync reported skill_count: 0,
+  // and 86 had to fall back to the load_skill_pack round-trip on
+  // every turn. Closing that bridge is the whole reason the function
+  // takes `organization` now.
+  if (organization && organization.id) {
+    try {
+      const orgR = await pool.query(
+        `SELECT anthropic_skill_id, name FROM org_skill_packs
+          WHERE organization_id = $1
+            AND anthropic_skill_id IS NOT NULL
+            AND archived_at IS NULL
+          ORDER BY created_at ASC`,
+        [organization.id]
+      );
+      for (const row of orgR.rows) {
+        if (out.length >= 20) break;
+        if (seen.has(row.anthropic_skill_id)) continue;
+        seen.add(row.anthropic_skill_id);
+        out.push({ type: 'custom', skill_id: row.anthropic_skill_id });
+      }
+    } catch (e) {
+      console.warn('[collectSkillsFor] org_skill_packs read failed:', e.message);
+    }
+  }
 
   // Source 1: managed_agent_skills (preferred — Phase 2)
   try {
@@ -1916,7 +1949,7 @@ async function ensureManagedAgent(agentKey, organization) {
 
   const aiInternals = require('./ai-routes-internals');
   const model = aiInternals && aiInternals.defaultModel ? aiInternals.defaultModel() : 'claude-sonnet-4-6';
-  const skills = await collectSkillsFor(agentKey);
+  const skills = await collectSkillsFor(agentKey, organization);
   const customTools = customToolsFor(agentKey);
   const builtinTools = builtinToolsetFor(agentKey);
   const mcpServers = await collectMcpServersFor(organization);
@@ -2404,10 +2437,17 @@ router.get('/managed/:agentKey/anthropic-state', requireAuth, requireCapability(
     const remoteAgent = await anthropic.beta.agents.retrieve(row.anthropic_agent_id);
 
     // Build what the local code WOULD register so we can flag drift.
+    // Pull the registry row's organization so collectSkillsFor can
+    // include the org's mirrored org_skill_packs in the local count.
     const baseline = AGENT_SYSTEM_BASELINE[agentKey] || '';
     const aiInternals = require('./ai-routes-internals');
     const localModel = aiInternals && aiInternals.defaultModel ? aiInternals.defaultModel() : 'claude-sonnet-4-6';
-    const localSkills = await collectSkillsFor(agentKey);
+    let localOrg = null;
+    if (row.organization_id) {
+      const orgRow = await pool.query('SELECT * FROM organizations WHERE id = $1', [row.organization_id]);
+      localOrg = orgRow.rows[0] || null;
+    }
+    const localSkills = await collectSkillsFor(agentKey, localOrg);
     const localCustom = customToolsFor(agentKey);
     const localBuiltin = builtinToolsetFor(agentKey);
     const localToolCount = localCustom.length + localBuiltin.length;
@@ -2513,7 +2553,7 @@ router.post('/managed/:agentKey/sync',
     const baseline = AGENT_SYSTEM_BASELINE[agentKey] || '';
     const aiInternals = require('./ai-routes-internals');
     const model = aiInternals && aiInternals.defaultModel ? aiInternals.defaultModel() : 'claude-sonnet-4-6';
-    const skills = await collectSkillsFor(agentKey);
+    const skills = await collectSkillsFor(agentKey, req.organization);
     const customTools = customToolsFor(agentKey);
     const builtinTools = builtinToolsetFor(agentKey);
     const toolList = [...builtinTools, ...customTools];
@@ -2699,7 +2739,7 @@ router.post('/managed/sync-all',
           continue;
         }
 
-        const skills = await collectSkillsFor(agentKey);
+        const skills = await collectSkillsFor(agentKey, org);
         const customTools = customToolsFor(agentKey);
         const builtinTools = builtinToolsetFor(agentKey);
         const toolList = [...builtinTools, ...customTools];

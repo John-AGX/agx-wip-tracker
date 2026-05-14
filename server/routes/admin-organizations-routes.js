@@ -16,10 +16,37 @@
 // (future — for now any admin can edit their own org).
 
 const express = require('express');
+const { toFile } = require('@anthropic-ai/sdk');
 const { pool, listOrganizations, getOrgById } = require('../db');
 const { requireAuth, requireCapability, requireOrg, requireSystemAdmin } = require('../auth');
 
 const router = express.Router();
+
+// Anthropic client (lazy — same pattern as ai-routes.js).
+let _anthropic = null;
+function getAnthropic() {
+  if (_anthropic) return _anthropic;
+  if (!process.env.ANTHROPIC_API_KEY) return null;
+  const Anthropic = require('@anthropic-ai/sdk').Anthropic;
+  _anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  return _anthropic;
+}
+
+// Build a SKILL.md body for a pack. Mirrors buildSkillMarkdownForMirror
+// in ai-routes.js so admin-button mirrors produce byte-identical
+// uploads to CoS-driven ones (legacy code path).
+function buildPackSkillMd(pack) {
+  const name = String(pack.name || 'Project 86 skill').replace(/[\r\n]/g, ' ');
+  const desc = String(pack.description || pack.name || 'skill pack').replace(/[\r\n]/g, ' ');
+  return [
+    '---',
+    'name: ' + name,
+    'description: ' + desc,
+    '---',
+    '',
+    pack.body || ''
+  ].join('\n');
+}
 
 // Helper: confirm the caller is allowed to act on the requested
 // organization id. Today: must match their own org (no cross-org
@@ -462,6 +489,78 @@ router.delete('/:id/mcp-servers/:serverId',
     } catch (e) {
       const status = e.status || 500;
       console.error('DELETE /:id/mcp-servers/:serverId error:', e);
+      res.status(status).json({ error: e.message || 'Server error' });
+    }
+});
+
+// ─── Bulk-mirror unmirrored skill packs to Anthropic native Skills ───
+//
+// The whole point of mirroring is to move pack bodies OUT of the
+// per-turn dynamic context (where they bloat token usage and require a
+// load_skill_pack round-trip when needed) and INTO the agent's
+// registered skills (where Anthropic auto-discovers them based on
+// each skill's description). After this fires, collectSkillsFor()
+// includes the org's mirrored packs in the next agent sync.
+//
+// Idempotent: only mirrors packs where anthropic_skill_id IS NULL.
+// Errors on individual packs don't stop the batch — they're reported
+// in the response so the admin can retry the failed ones.
+router.post('/:id/skill-packs/mirror-all',
+  requireAuth, requireCapability('ROLES_MANAGE'), requireOrg,
+  async (req, res) => {
+    try {
+      const targetId = assertOrgScope(req, req.params.id);
+      const anthropic = getAnthropic();
+      if (!anthropic) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not set on this deployment.' });
+
+      const r = await pool.query(
+        `SELECT id, name, description, body
+           FROM org_skill_packs
+          WHERE organization_id = $1
+            AND anthropic_skill_id IS NULL
+            AND archived_at IS NULL
+          ORDER BY created_at ASC`,
+        [targetId]
+      );
+      const packs = r.rows;
+
+      const results = [];
+      for (const pack of packs) {
+        try {
+          const md = buildPackSkillMd(pack);
+          const file = await toFile(Buffer.from(md, 'utf8'), 'SKILL.md', { type: 'text/markdown' });
+          const created = await anthropic.beta.skills.create({
+            display_title: String(pack.name || 'Project 86 skill').slice(0, 200),
+            files: [file]
+          });
+          await pool.query(
+            `UPDATE org_skill_packs
+                SET anthropic_skill_id = $1, updated_at = NOW()
+              WHERE id = $2`,
+            [created.id, pack.id]
+          );
+          results.push({ pack: pack.name, ok: true, anthropic_skill_id: created.id });
+        } catch (e) {
+          console.error('[mirror-all] failed for pack', pack.name, e && e.message);
+          results.push({ pack: pack.name, ok: false, error: e && e.message ? e.message : 'unknown' });
+        }
+      }
+
+      const succeeded = results.filter(x => x.ok).length;
+      const failed = results.filter(x => !x.ok).length;
+      res.json({
+        ok: true,
+        total: packs.length,
+        succeeded,
+        failed,
+        results,
+        note: succeeded > 0
+          ? 'Mirrored ' + succeeded + ' pack(s). Run /managed/job/sync next so the agent picks up the new native skills.'
+          : 'No packs needed mirroring.'
+      });
+    } catch (e) {
+      const status = e.status || 500;
+      console.error('POST /:id/skill-packs/mirror-all error:', e);
       res.status(status).json({ error: e.message || 'Server error' });
     }
 });
