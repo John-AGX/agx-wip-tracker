@@ -2878,6 +2878,9 @@ async function resolveSessionForChat({ sessionId, currentContext, userId, organi
 
   // Non-entity surface or no context at all → user's "General"
   // session. Single row per user, auto-resumes across pages.
+  // We use 'global' as the entity_id sentinel (matches the legacy
+  // (86, global) convention) so the ai_messages.estimate_id NOT NULL
+  // constraint is satisfied and history reads via COALESCE work.
   const general = await pool.query(
     `SELECT * FROM ai_sessions
        WHERE user_id = $1 AND entity_type = 'general'
@@ -2891,7 +2894,7 @@ async function resolveSessionForChat({ sessionId, currentContext, userId, organi
   const fresh = await createFreshAiSession({
     agentKey: 'job',
     entityType: 'general',
-    entityId: null,
+    entityId: 'global',
     userId,
     organization
   });
