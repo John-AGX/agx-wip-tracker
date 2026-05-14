@@ -383,13 +383,15 @@ router.put('/:id/skill-packs/:packId', requireAuth, requireOrg, requireCapabilit
       const updated = r.rows[0];
 
       // Re-mirror to Anthropic if the SKILL.md content changed.
-      // Stable skill_id is preserved via the versions API so registered
-      // agents don't need to be re-registered after every edit.
+      // Try versions.create first (preserves the stable skill_id so
+      // the agent doesn't need to be re-registered). If that fails
+      // for any reason, fall back to delete-and-recreate: drop the
+      // old Anthropic skill, mint a fresh one with the new content,
+      // and update our local pointer. The agent picks up the new id
+      // on next sync. Failing both paths rolls the local edit back.
       if (contentChanged && updated.anthropic_skill_id) {
         const anthropic = getAnthropic();
         if (!anthropic) {
-          // Roll back the local update — a divergent pack is worse
-          // than a failed edit.
           await pool.query(
             `UPDATE org_skill_packs SET name = $1, body = $2, description = $3, updated_at = NOW()
                WHERE id = $4`,
@@ -397,16 +399,46 @@ router.put('/:id/skill-packs/:packId', requireAuth, requireOrg, requireCapabilit
           );
           return res.status(503).json({ error: 'ANTHROPIC_API_KEY not set. Edit rolled back — packs must stay in sync with Anthropic.' });
         }
+        let mirrored = false;
+        let versionsErr = null;
         try {
           await uploadPackAsNewVersion(anthropic, updated.anthropic_skill_id, updated);
-        } catch (mirrorErr) {
-          await pool.query(
-            `UPDATE org_skill_packs SET name = $1, body = $2, description = $3, updated_at = NOW()
-               WHERE id = $4`,
-            [prev.name, prev.body, prev.description, packId]
-          );
-          console.error('[skill-pack edit] mirror failed; rolled back local edit:', mirrorErr);
-          return res.status(502).json({ error: 'Failed to mirror edit to Anthropic: ' + (mirrorErr.message || 'unknown') + '. Local edit rolled back.' });
+          mirrored = true;
+        } catch (e) {
+          versionsErr = e;
+          console.warn('[skill-pack edit] versions.create failed, attempting delete+recreate fallback:', e.message);
+        }
+        if (!mirrored) {
+          // Fallback: delete the existing skill upstream, create a
+          // fresh one with the new content, repoint anthropic_skill_id.
+          // The next agent sync picks up the new id (collectSkillsFor
+          // reads from org_skill_packs.anthropic_skill_id).
+          const oldSkillId = updated.anthropic_skill_id;
+          try {
+            try { await anthropic.beta.skills.delete(oldSkillId); }
+            catch (delErr) {
+              // 404 means it was already gone — fine, proceed to create.
+              if (!/404|not.?found/i.test(String(delErr.message || ''))) throw delErr;
+            }
+            const created = await uploadPackAsNewSkill(anthropic, updated);
+            await pool.query(
+              `UPDATE org_skill_packs SET anthropic_skill_id = $1 WHERE id = $2`,
+              [created.id, packId]
+            );
+            updated.anthropic_skill_id = created.id;
+            mirrored = true;
+          } catch (fallbackErr) {
+            console.error('[skill-pack edit] fallback delete+recreate failed:', fallbackErr);
+            await pool.query(
+              `UPDATE org_skill_packs SET name = $1, body = $2, description = $3, updated_at = NOW()
+                 WHERE id = $4`,
+              [prev.name, prev.body, prev.description, packId]
+            );
+            return res.status(502).json({
+              error: 'Failed to mirror edit to Anthropic. Versions: ' + (versionsErr && versionsErr.message || '?') +
+                     '. Fallback: ' + (fallbackErr.message || '?') + '. Local edit rolled back.'
+            });
+          }
         }
       } else if (contentChanged && !updated.anthropic_skill_id) {
         // Pack exists locally but never mirrored (shouldn't happen
