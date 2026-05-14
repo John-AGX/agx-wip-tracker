@@ -2333,6 +2333,12 @@
     // status reuse the existing element on resolution. pollCtx drives
     // the live-poll loop; stopped on terminal-all or abort.
     var subtaskCtx = { cards: {}, timer: null, stop: null };
+    // The most-recent live tool chip. tool_started creates one;
+    // tool_applied / _failed / _rejected updates it IN PLACE rather
+    // than appending a second chip. Mirrors Claude Code's behavior:
+    // "Reading file.ts" becomes "Read file.ts · 12 matched" on the
+    // same line.
+    var liveChip = null;
     _streaming = true;
     setSendDisabled(true);
 
@@ -2355,11 +2361,15 @@
         } else if (payload.tool_use) {
           pendingToolUses.push(payload.tool_use);
         } else if (payload.tool_started) {
-          // v2 auto-tier tool kicked off server-side. Override the
-          // brain-yoga caption with a tool-specific verb until the
-          // matching tool_applied / tool_failed lands.
+          // Append a live chip showing the running tool. Replaced in
+          // place when the matching tool_applied / _failed / _rejected
+          // lands — no stacked "live → done" duplicate rows.
+          liveChip = appendLiveToolChip(streamDiv,
+            payload.tool_started.name || 'tool',
+            payload.tool_started.input || null);
           var label = TOOL_VERBS[payload.tool_started.name] || (payload.tool_started.name + '…');
           brainYoga.override(label, true);
+          scrollToBottom();
         } else if (payload.tool_applied) {
           // Phase 3b — subtask tools render a dedicated live-polling
           // card instead of the generic chip. spawn_subtask creates
@@ -2392,13 +2402,22 @@
             scrollToBottom();
             return;
           }
-          // Server-side auto-tier tool already executed. Render inline
-          // in Claude-Code style: a single-line chip showing verb +
-          // primary arg in monospace, click-to-expand for the result.
-          appendToolBlock(streamDiv, payload.tool_applied.name || 'tool',
-            payload.tool_applied.input || null,
-            payload.tool_applied.summary || '',
-            'ok');
+          // Server-side auto-tier tool finished. If we already have a
+          // live chip from the preceding tool_started, transition it
+          // in place; otherwise append a fresh chip.
+          if (liveChip) {
+            finalizeLiveToolChip(liveChip,
+              payload.tool_applied.name || 'tool',
+              payload.tool_applied.input || null,
+              payload.tool_applied.summary || '',
+              'ok');
+            liveChip = null;
+          } else {
+            appendToolBlock(streamDiv, payload.tool_applied.name || 'tool',
+              payload.tool_applied.input || null,
+              payload.tool_applied.summary || '',
+              'ok');
+          }
           chipsAppended++;
           // Resume rotation once the tool lands.
           brainYoga.override('Got it. Thinking…', false);
@@ -2419,18 +2438,36 @@
           }
           scrollToBottom();
         } else if (payload.tool_failed) {
-          appendToolBlock(streamDiv, payload.tool_failed.name || 'tool',
-            payload.tool_failed.input || null,
-            payload.tool_failed.error || 'failed',
-            'failed');
+          if (liveChip) {
+            finalizeLiveToolChip(liveChip,
+              payload.tool_failed.name || 'tool',
+              payload.tool_failed.input || null,
+              payload.tool_failed.error || 'failed',
+              'failed');
+            liveChip = null;
+          } else {
+            appendToolBlock(streamDiv, payload.tool_failed.name || 'tool',
+              payload.tool_failed.input || null,
+              payload.tool_failed.error || 'failed',
+              'failed');
+          }
           chipsAppended++;
           brainYoga.override('Hit a snag. Recovering…', false);
           scrollToBottom();
         } else if (payload.tool_rejected) {
-          appendToolBlock(streamDiv, payload.tool_rejected.name || 'tool',
-            payload.tool_rejected.input || null,
-            'rejected by user',
-            'rejected');
+          if (liveChip) {
+            finalizeLiveToolChip(liveChip,
+              payload.tool_rejected.name || 'tool',
+              payload.tool_rejected.input || null,
+              'rejected by user',
+              'rejected');
+            liveChip = null;
+          } else {
+            appendToolBlock(streamDiv, payload.tool_rejected.name || 'tool',
+              payload.tool_rejected.input || null,
+              'rejected by user',
+              'rejected');
+          }
           chipsAppended++;
           scrollToBottom();
         } else if (payload.awaiting_approval) {
@@ -4567,61 +4604,121 @@
     return '';
   }
 
-  function appendToolBlock(streamDiv, name, input, text, state) {
-    if (!streamDiv) return;
-    var content = streamDiv.querySelector('[data-stream-content]') || streamDiv;
+  // Render the chip's summary <summary> innards. State: 'running' |
+  // 'ok' | 'failed' | 'rejected'. Used for both initial render (on
+  // tool_started) and in-place updates (on tool_applied/_failed/
+  // _rejected) so the visual transitions live → done is just a swap
+  // of innerHTML, never a new DOM node below.
+  function renderChipSummary(sum, name, input, text, state) {
     var info = toolChipVerb(name);
     var arg = toolChipArg(name, input);
-    var result = toolChipResult(name, text, state);
-    var body = String(text || '');
+    var verbWord = state === 'running' ? info.verb : info.past;
     var dotColor = state === 'failed' ? '#f87171'
                  : state === 'rejected' ? '#a3a3a3'
+                 : state === 'running' ? '#fbbf24'
                  : '#22c55e';
+    var dotStyle = state === 'running' ? ';animation:p86-pulse 1.2s ease-in-out infinite;' : '';
+    var result = state === 'running' ? '' : toolChipResult(name, text, state);
+    var hasBody = !!(text && String(text).trim());
+    var chev = hasBody
+      ? '<span data-chev style="font-size:9px;color:rgba(255,255,255,0.32);flex-shrink:0;transition:transform 0.12s;display:inline-block;">&#9654;</span>'
+      : '<span style="width:7px;flex-shrink:0;"></span>';
+    var dot     = '<span style="width:6px;height:6px;border-radius:50%;background:' + dotColor + ';flex-shrink:0;' + dotStyle + '"></span>';
+    var verb    = '<span style="color:rgba(255,255,255,0.92);font-weight:600;flex-shrink:0;">' + escapeHTMLLocal(verbWord) + '</span>';
+    var argHTML = arg
+      ? '<span style="color:rgba(255,255,255,0.5);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">' + escapeHTMLLocal(arg) + '</span>'
+      : '<span style="color:rgba(255,255,255,0.32);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1;">' + escapeHTMLLocal(name) + '</span>';
+    var resHTML = result
+      ? '<span style="color:rgba(255,255,255,0.38);flex-shrink:0;">' + escapeHTMLLocal(result) + '</span>'
+      : '';
+    sum.innerHTML = chev + dot + verb + argHTML + resHTML;
+    sum.dataset.hasBody = hasBody ? '1' : '0';
+    sum.style.cursor = hasBody ? 'pointer' : 'default';
+  }
 
+  // Build the <details> shell once. Plain-text styling — no card
+  // background, no border, no padding. Reads like inline body text.
+  function buildChipShell(streamDiv) {
+    var content = streamDiv.querySelector('[data-stream-content]') || streamDiv;
     var det = document.createElement('details');
-    det.style.cssText = 'margin-top:6px;';
+    det.style.cssText = 'margin-top:4px;';
     det.className = 'p86-tool-chip';
 
     var sum = document.createElement('summary');
     sum.style.cssText =
       'list-style:none;-webkit-appearance:none;appearance:none;' +
-      'cursor:pointer;display:flex;align-items:center;gap:8px;' +
-      'padding:5px 9px;border-radius:6px;background:rgba(255,255,255,0.025);' +
-      'border:1px solid rgba(255,255,255,0.05);' +
-      'font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;' +
-      'color:rgba(255,255,255,0.65);transition:background 0.12s;';
-    sum.onmouseenter = function() { sum.style.background = 'rgba(255,255,255,0.045)'; };
-    sum.onmouseleave = function() { sum.style.background = 'rgba(255,255,255,0.025)'; };
-
-    var chev      = '<span data-chev style="font-size:9px;color:rgba(255,255,255,0.3);flex-shrink:0;transition:transform 0.12s;display:inline-block;">&#9654;</span>';
-    var dot       = '<span style="width:6px;height:6px;border-radius:50%;background:' + dotColor + ';flex-shrink:0;"></span>';
-    var verbSpan  = '<span style="color:rgba(255,255,255,0.85);font-weight:500;flex-shrink:0;">' + escapeHTMLLocal(info.past) + '</span>';
-    var argSpan   = arg
-      ? '<span style="color:rgba(255,255,255,0.55);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1;">' + escapeHTMLLocal(arg) + '</span>'
-      : '<span style="color:rgba(255,255,255,0.32);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1;">' + escapeHTMLLocal(name) + '</span>';
-    var resultSpan = result
-      ? '<span style="color:rgba(255,255,255,0.4);flex-shrink:0;">' + escapeHTMLLocal(result) + '</span>'
-      : '';
-    sum.innerHTML = chev + dot + verbSpan + argSpan + resultSpan;
+      'display:flex;align-items:center;gap:8px;padding:1px 0;' +
+      'font-size:12.5px;line-height:1.6;';
     det.appendChild(sum);
 
-    if (body) {
-      var pre = document.createElement('div');
-      pre.style.cssText =
-        'white-space:pre-wrap;color:rgba(255,255,255,0.55);' +
-        'margin:6px 0 0 14px;padding:8px 10px;' +
-        'background:rgba(255,255,255,0.02);border-left:2px solid rgba(255,255,255,0.08);' +
-        'border-radius:3px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;line-height:1.5;' +
-        'max-height:360px;overflow-y:auto;';
-      pre.textContent = body;
-      det.appendChild(pre);
-    }
     det.addEventListener('toggle', function() {
       var c = sum.querySelector('[data-chev]');
       if (c) c.style.transform = det.open ? 'rotate(90deg)' : 'rotate(0)';
     });
+    // Click only counts as expand when there's something to expand.
+    sum.addEventListener('click', function(e) {
+      if (sum.dataset.hasBody !== '1') e.preventDefault();
+    });
 
     content.appendChild(det);
+    return { det: det, sum: sum };
+  }
+
+  // Append a "live" chip when a tool starts. Returns a handle the
+  // caller stashes; the matching tool_applied/_failed/_rejected calls
+  // updateLiveChip on the same handle so the chip transitions in
+  // place ("Reading file.ts" → "Read file.ts · 12 lines") rather
+  // than stacking a second line.
+  function appendLiveToolChip(streamDiv, name, input) {
+    if (!streamDiv) return null;
+    var shell = buildChipShell(streamDiv);
+    renderChipSummary(shell.sum, name, input, '', 'running');
+    return { det: shell.det, sum: shell.sum, name: name, input: input };
+  }
+
+  function finalizeLiveToolChip(handle, name, input, text, state) {
+    if (!handle || !handle.sum) return;
+    renderChipSummary(handle.sum, name, input || handle.input, text, state);
+    var body = String(text || '');
+    if (body) {
+      // Remove any prior pre in case we're re-finalizing.
+      var existing = handle.det.querySelector('[data-chip-body]');
+      if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
+      var pre = document.createElement('div');
+      pre.setAttribute('data-chip-body', '1');
+      pre.style.cssText =
+        'white-space:pre-wrap;color:rgba(255,255,255,0.55);' +
+        'margin:6px 0 0 16px;padding:8px 10px;' +
+        'background:rgba(255,255,255,0.02);border-left:2px solid rgba(255,255,255,0.08);' +
+        'border-radius:3px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;line-height:1.5;' +
+        'max-height:360px;overflow-y:auto;';
+      pre.textContent = body;
+      handle.det.appendChild(pre);
+    }
+  }
+
+  // Drop-in for the old appendToolBlock — used when a tool result
+  // arrives without a prior tool_started (rare for auto-tier tools,
+  // but covers approval-tier proposes that the server applies in
+  // /chat/continue and emits as a single tool_applied event).
+  function appendToolBlock(streamDiv, name, input, text, state) {
+    if (!streamDiv) return null;
+    var shell = buildChipShell(streamDiv);
+    renderChipSummary(shell.sum, name, input, text, state);
+    var body = String(text || '');
+    if (body) {
+      var pre = document.createElement('div');
+      pre.setAttribute('data-chip-body', '1');
+      pre.style.cssText =
+        'white-space:pre-wrap;color:rgba(255,255,255,0.55);' +
+        'margin:6px 0 0 16px;padding:8px 10px;' +
+        'background:rgba(255,255,255,0.02);border-left:2px solid rgba(255,255,255,0.08);' +
+        'border-radius:3px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;line-height:1.5;' +
+        'max-height:360px;overflow-y:auto;';
+      pre.textContent = body;
+      shell.det.appendChild(pre);
+    }
+    return { det: shell.det, sum: shell.sum, name: name, input: input };
   }
 
   // Compact usage footer rendered after the assistant's reply ends.
@@ -5813,6 +5910,7 @@
     style.id = 'p86-ai-css';
     style.textContent =
       '@keyframes p86-blink { from, to { opacity: 1; } 50% { opacity: 0; } } ' +
+      '@keyframes p86-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.45; transform: scale(0.82); } } ' +
       '@keyframes p86-mic-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.12); } } ' +
       // Cloud emoji bobs gently up + down while the agent is thinking,
       // and the phrase caption fades when it rotates so the user has
