@@ -1078,7 +1078,7 @@ const JOB_TOOLS = [
   },
   {
     name: 'read_skill_packs',
-    description: 'List the admin-editable skill packs that the AI agents load at chat time. Each pack has name, body, agent assignments, alwaysOn flag. Use to recommend new skills, audit existing ones, or answer "what context do I always see?". Auto-tier. NOTE: bodies are TRUNCATED to ~600 chars per pack — call load_skill_pack(name) to fetch the full body of a single pack you intend to actually follow.',
+    description: 'List the admin-editable skill packs registered for this org. Each pack has name, body preview, agent assignments, and anthropic_skill_id. Use to recommend new skills, audit existing ones, or answer "what context do I have available?". Auto-tier. Bodies are truncated to ~600 chars per pack; the full content lives in the Anthropic native Skill registered on the agent and is auto-discovered by description each turn.',
     input_schema: {
       type: 'object',
       additionalProperties: false,
@@ -1173,21 +1173,6 @@ const JOB_TOOLS = [
         }
       },
       required: ['destination']
-    }
-  },
-  {
-    name: 'load_skill_pack',
-    description:
-      'Pull the FULL body of a single named skill pack into your working context. ' +
-      'Use this from the global Ask 86 surface when the user asks about a topic that maps to one of the context-tagged packs (Estimating Playbook for line-item questions, WIP Analyst Playbook for margin/WIP questions, Workspace placement for node-graph questions, etc.) — read_skill_packs to see what is available, then load_skill_pack to pull the one you need. ' +
-      'Auto-tier (no approval). Returns the full body verbatim; treat the loaded pack as binding additional guidance for the rest of the turn.',
-    input_schema: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        name: { type: 'string', description: 'Exact pack name (case-sensitive). Get this from read_skill_packs.' }
-      },
-      required: ['name']
     }
   },
   {
@@ -1776,29 +1761,9 @@ async function buildEstimateContext(estimateId, includePhotos, aiPhaseOverride, 
   renderSection(stableLines, 'ag_web_research', sectionOverrides);
   stableLines.push('');
 
-  // Skill packs — manifest only. Every pack matching agent + context
-  // ships as a single name + one-line description. 86 calls
-  // load_skill_pack({name}) to pull the body on demand. The `alwaysOn`
-  // flag is no longer consulted at runtime — see commit history.
-  const triggerCtx = {
-    entity_type: 'estimate',
-    group_count: alternates.length,
-    has_lead: !!blob.lead_id,
-    has_client: !!blob.client_id
-  };
-  const skillManifest = await loadSkillManifestFor('job', triggerCtx, organization && organization.id);
-  if (skillManifest.length) {
-    // Dynamic block (/86/chat) — manifest only. ~30 tokens per pack
-    // instead of 250–830. 86 calls load_skill_pack({name:"..."}) to
-    // fetch a full body when starting a relevant kind of work.
-    lines.unshift(
-      '',
-      '# Available skill packs (call load_skill_pack({name}) to read a full body)',
-      'These are situational playbooks your admin maintains. Read the descriptions, call load_skill_pack when you start a kind of work that matches — e.g. pull "Pricing Benchmark Loop" before pricing materials, "Group Discipline" before working with multiple groups. Don\'t pre-load everything; load on demand.',
-      ...skillManifest.map(s => '- **' + s.name + '** — ' + (s.description || '(no description)')),
-      ''
-    );
-  }
+  // Skill packs ship as native Anthropic Skills registered on the
+  // agent — the runtime auto-discovers them by description each turn.
+  // No system-prompt manifest, no load_skill_pack round-trip.
 
   // Tone — overridable via section_id `ag_tone`. See SECTION_DEFAULTS.
   renderSection(stableLines, 'ag_tone', sectionOverrides);
@@ -1850,7 +1815,7 @@ async function buildEstimateContext(estimateId, includePhotos, aiPhaseOverride, 
     ],
     photoBlocks: photoBlocks,
     aiPhase: aiPhase,
-    packsLoaded: skillBlocks.map(s => s.name)
+    packsLoaded: []
   };
 }
 
@@ -1896,7 +1861,6 @@ const PLAN_MODE_ALLOWED_JOB_TOOLS = new Set([
   'read_recent_conversations',
   'read_conversation_detail',
   'read_skill_packs',
-  'load_skill_pack',
   'read_jobs',
   'read_users',
   'read_clients',
@@ -4122,19 +4086,8 @@ async function buildJobContext(jobId, clientContext, aiPhase, organization) {
   lines.push('');
   renderSection(lines, 'job_web_research', jobSectionOverrides);
 
-  // Skill packs — manifest only (was eager-loading full bodies every
-  // turn — for job context that was ~3,500 tokens including the 9.5k-
-  // char WIP Analyst Playbook). 86 calls load_skill_pack({name}) on
-  // demand when starting a kind of work that maps to a pack.
-  const jobManifest = await loadSkillManifestFor('job', { entity_type: 'job' }, organization && organization.id);
-  if (jobManifest.length) {
-    lines.push('');
-    lines.push('# Available skill packs (call load_skill_pack({name}) to read a full body)');
-    lines.push('Situational playbooks your admin maintains. Pull "WIP Analyst Playbook" before doing margin/WIP analysis, "QB cost → node mapping" before reconciling cost lines, etc. Load on demand — don\'t pre-load everything.');
-    jobManifest.forEach(function(s) {
-      lines.push('- **' + s.name + '** — ' + (s.description || '(no description)'));
-    });
-  }
+  // Skill packs ship as native Anthropic Skills registered on the
+  // agent — the runtime auto-discovers them by description each turn.
 
   // ── Active mode block ──────────────────────────────────────────
   // Mirrors 86's plan/build pattern. Server-side tool filtering is the
@@ -4171,7 +4124,7 @@ async function buildJobContext(jobId, clientContext, aiPhase, organization) {
     system: lines.join('\n'),
     photoBlocks: cascadePhotoBlocks,
     aiPhase: aiPhase,
-    packsLoaded: jobManifest.map(s => s.name)
+    packsLoaded: []
   };
 }
 
@@ -4800,19 +4753,6 @@ setInterval(() => {
 }, 10 * 60 * 1000).unref();
 
 const CLIENT_TOOLS = [
-  {
-    name: 'load_skill_pack',
-    tier: 'auto',
-    description:
-      'Pull the FULL body of a named skill pack listed in your turn-context "Available skill packs" manifest. Call this when starting a kind of work that maps to a pack — e.g. "Customer Directory Hygiene" before auditing the directory. Don\'t pre-load everything; load on demand. Auto-tier.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        name: { type: 'string', description: 'Exact pack name from the manifest.' }
-      },
-      required: ['name']
-    }
-  },
   {
     name: 'create_property',
     tier: 'auto',
@@ -5540,24 +5480,8 @@ async function buildClientDirectoryContext(organization) {
   // Skill packs — manifest only. HR can call load_skill_pack({name})
   // to pull a body on demand. The `alwaysOn` flag is no longer
   // consulted at runtime.
-  // 'cra' was the old HR agent_key — packs may still target it for
-  // back-compat; we also surface 'job'-targeted packs since 86 absorbed
-  // HR's role and any pack tagged for the client surface is relevant.
-  const craManifest = await loadSkillManifestFor('cra', { entity_type: 'client' }, organization && organization.id);
-  const jobClientManifest = await loadSkillManifestFor('job', { entity_type: 'client' }, organization && organization.id);
-  const _seenManifest = new Set();
-  const mergedClientManifest = [...craManifest, ...jobClientManifest].filter(m => {
-    if (_seenManifest.has(m.name)) return false;
-    _seenManifest.add(m.name);
-    return true;
-  });
-  if (mergedClientManifest.length) {
-    out.push('');
-    out.push('# Available skill packs (call load_skill_pack({name}) to read a full body)');
-    mergedClientManifest.forEach(s => {
-      out.push('- **' + s.name + '** — ' + (s.description || '(no description)'));
-    });
-  }
+  // Skill packs ship as native Anthropic Skills registered on the
+  // agent — the runtime auto-discovers them by description each turn.
 
   out.push('# Directory snapshot (' + rows.length + ' clients)');
   out.push('');
@@ -5636,7 +5560,7 @@ async function buildClientDirectoryContext(organization) {
       { type: 'text', text: '\n\n' + out.join('\n') }
     ],
     totalClients: rows.length,
-    packsLoaded: mergedClientManifest.map(s => s.name)
+    packsLoaded: []
   };
 }
 
@@ -5797,7 +5721,7 @@ const STAFF_TOOLS = [
     name: 'propose_skill_pack_add',
     tier: 'approval',
     description:
-      'Propose creating a new admin-editable skill pack. Skill packs are situational instruction blocks that 86 loads on-demand via load_skill_pack({name}) — they do NOT auto-load every turn anymore. Only call this AFTER read_skill_packs to confirm no name collision. ' +
+      'Propose creating a new admin-editable skill pack. Skill packs are situational instruction blocks that, once approved, are mirrored to Anthropic native Skills and auto-discovered by the runtime when the description matches the current turn. Only call this AFTER read_skill_packs to confirm no name collision. ' +
       'Every pack must specify both `agents` AND `contexts`. `agents` is who can see it in the manifest. `contexts` is the entity surfaces where the manifest entry appears. Pick narrowly so the manifest stays readable. ' +
       'Approval-required so the user vets the wording before it lands.',
     input_schema: {
@@ -5805,7 +5729,7 @@ const STAFF_TOOLS = [
       additionalProperties: false,
       properties: {
         name: { type: 'string', description: 'Short, unique title (e.g., "Trex decking spec reference"). Must not collide with an existing pack.' },
-        body: { type: 'string', description: 'The skill content. Markdown allowed. Pack body is only seen when 86 explicitly calls load_skill_pack({name}), so write it as guidance for THAT moment — not as if it always rides along.' },
+        body: { type: 'string', description: 'The skill content. Markdown allowed. The body is registered as a native Anthropic Skill and surfaced by the runtime when the description matches — write it as standalone guidance for the moment it activates.' },
         agents: { type: 'array', items: { type: 'string', enum: ['cra', 'job'] }, description: 'Which agents see this pack in their manifest. "job" for 86, "cra" for HR.' },
         contexts: {
           type: 'array',
@@ -5856,36 +5780,6 @@ const STAFF_TOOLS = [
       required: ['name', 'rationale']
     }
   },
-  {
-    name: 'propose_skill_pack_mirror',
-    tier: 'approval',
-    description:
-      'Propose mirroring a local skill pack to Anthropic native Skills. Packages the pack body as a SKILL.md, uploads via beta.skills.create, and persists the returned skill_id back onto the pack so the admin UI shows a "Synced" badge and the registered agents can reference it natively. Local-pack injection at chat time continues unchanged — mirroring is additive. Approval-required since uploads count against Anthropic-side skill quota.',
-    input_schema: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        name:      { type: 'string', description: 'Existing pack name (must match exactly).' },
-        rationale: { type: 'string', description: 'One short sentence shown on the approval card explaining why mirroring this pack is worth the upload.' }
-      },
-      required: ['name', 'rationale']
-    }
-  },
-  {
-    name: 'propose_skill_pack_unmirror',
-    tier: 'approval',
-    description:
-      'Propose deleting the Anthropic-side mirror of a local skill pack. Drops the anthropic_skill_id from the local pack and DELETEs the skill on Anthropic. The local pack body is unaffected — pack still loads into the system prompt at chat time. Use when re-syncing a stale mirror or when a pack should no longer be a native skill.',
-    input_schema: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        name:      { type: 'string', description: 'Existing pack name (must match exactly). The pack must currently be mirrored.' },
-        rationale: { type: 'string', description: 'One short sentence shown on the approval card explaining why removing the mirror is the right call.' }
-      },
-      required: ['name', 'rationale']
-    }
-  }
 ];
 
 // Phase 3 — parallel work / sub-agent fan-out for 86.
@@ -6159,11 +6053,9 @@ async function buildStaffContext() {
   stable.push('  • `read_subs(q?, trade?, status?, with_expiring_certs?, limit?)` — subcontractor directory with cert expiry. Use to surface paperwork-expiring subs, list subs by trade, or confirm a named sub is active. with_expiring_certs=true for compliance audits.');
   stable.push('  • `read_lead_pipeline(q?, status?, market?, salesperson_email?, limit?)` — leads list + always-included status rollup ($ counts per status). Use for "what does our pipeline look like?", spotting deal-source patterns, or seeing which markets are hot.');
   stable.push('Propose tools (approval-required — user clicks Approve/Reject on a card):');
-  stable.push('  • `propose_skill_pack_add(name, body, agents, contexts, rationale)` — add a new skill pack (on-demand only; agents call load_skill_pack({name}) when relevant). agents=["cra","job"]. contexts is REQUIRED — narrow scope (["estimate"], ["job"], etc.).');
+  stable.push('  • `propose_skill_pack_add(name, body, agents, contexts, rationale)` — add a new skill pack. On approval the pack is auto-mirrored to Anthropic native Skills; the agent auto-discovers it by description on the next sync. agents=["cra","job"]. contexts is REQUIRED — narrow scope (["estimate"], ["job"], etc.).');
   stable.push('  • `propose_skill_pack_edit(name, new_name?, new_body?, agents?, contexts?, rationale)` — change an existing pack. body edits replace the whole body. contexts replaces the existing scope.');
-  stable.push('  • `propose_skill_pack_delete(name, rationale)` — remove a pack entirely.');
-  stable.push('  • `propose_skill_pack_mirror(name, rationale)` — mirror a pack to Anthropic native Skills (uploads SKILL.md via beta.skills.create). Local injection at chat time keeps running unchanged; mirroring is additive. After approval, the pack shows a Synced badge in the admin UI and registered agents can reference the skill_id natively. Re-register the affected agents (Admin → Agents → Bootstrap) so the new id flows into their Anthropic-side definition.');
-  stable.push('  • `propose_skill_pack_unmirror(name, rationale)` — delete the Anthropic-side mirror only. Local pack body is preserved and continues to load at chat time. Use to retire a mirror or before re-mirroring after a body edit.');
+  stable.push('  • `propose_skill_pack_delete(name, rationale)` — remove a pack entirely (also deletes the Anthropic-side mirror).');
   stable.push('');
   renderSection(stable, 'cos_how_to_work', cosSectionOverrides);
   stable.push('');
@@ -6630,45 +6522,11 @@ async function execStaffTool(name, input, ctx) {
         const body = String(s.body || '');
         if (body) {
           lines.push('  ```');
-          lines.push('  ' + (body.length > 600 ? body.slice(0, 600) + ' [...truncated — call load_skill_pack to fetch the full body]' : body).split('\n').join('\n  '));
+          lines.push('  ' + (body.length > 600 ? body.slice(0, 600) + ' [...truncated — the full body is registered as a native Anthropic Skill and is auto-discovered by description]' : body).split('\n').join('\n  '));
           lines.push('  ```');
         }
       }
       return lines.join('\n');
-    }
-
-    case 'load_skill_pack': {
-      const wantName = String((input && input.name) || '').trim();
-      if (!wantName) return 'name parameter is required.';
-      const userId = ctx && ctx.userId;
-      const orgRow = userId
-        ? (await pool.query('SELECT organization_id FROM users WHERE id = $1', [userId])).rows[0]
-        : null;
-      const orgId = orgRow && orgRow.organization_id;
-      if (!orgId) return 'No organization scope — cannot load skill pack.';
-      const r = await pool.query(
-        `SELECT name, body, agents, contexts
-           FROM org_skill_packs
-          WHERE organization_id = $1 AND archived_at IS NULL AND name = $2
-          LIMIT 1`,
-        [orgId, wantName]
-      );
-      if (!r.rows.length) {
-        const known = (await pool.query(
-          `SELECT name FROM org_skill_packs WHERE organization_id = $1 AND archived_at IS NULL`,
-          [orgId]
-        )).rows.map(x => x.name).join(', ');
-        return 'No skill pack named "' + wantName + '". Known packs: ' + (known || '(none)');
-      }
-      const pack = r.rows[0];
-      const body = String(pack.body || '').trim();
-      if (!body) return 'Pack "' + wantName + '" has an empty body.';
-      const meta = [];
-      if (Array.isArray(pack.agents) && pack.agents.length) meta.push('agents=' + pack.agents.join(','));
-      if (Array.isArray(pack.contexts) && pack.contexts.length) meta.push('contexts=' + pack.contexts.join(','));
-      const header = meta.length ? ' (' + meta.join(', ') + ')' : '';
-      return '# ' + pack.name + header + '\n\n' + body +
-        '\n\n— end of pack body. Treat the above as binding additional guidance for THIS turn (you loaded it on demand; it is NOT auto-loaded going forward).';
     }
 
     case 'read_materials': {
@@ -7109,21 +6967,42 @@ async function execStaffApprovalTool(name, input, ctx) {
       if (badContexts.length) {
         throw new Error('Unknown context(s): ' + badContexts.join(', ') + '. Valid contexts: ' + VALID_PACK_CONTEXTS.join(', '));
       }
+      const anthropic = getAnthropic();
+      if (!anthropic) throw new Error('ANTHROPIC_API_KEY not set. All packs must mirror to Anthropic native Skills.');
       const orgId = await resolveOrgIdFromCtx(ctx);
+      let insertedId = null;
       try {
-        await pool.query(
+        const ins = await pool.query(
           `INSERT INTO org_skill_packs (organization_id, name, body, agents, contexts)
-           VALUES ($1, $2, $3, $4::jsonb, $5::jsonb)`,
+           VALUES ($1, $2, $3, $4::jsonb, $5::jsonb)
+           RETURNING *`,
           [orgId, input.name, input.body, JSON.stringify(input.agents), JSON.stringify(input.contexts)]
         );
+        const pack = ins.rows[0];
+        insertedId = pack.id;
+        const md = buildSkillMarkdownForMirror(pack);
+        const slug = slugifyMirrorName(pack.name);
+        const file = await toFile(Buffer.from(md, 'utf8'), slug + '/SKILL.md', { type: 'text/markdown' });
+        const created = await anthropic.beta.skills.create({
+          display_title: (pack.name || 'Project 86 skill').slice(0, 200),
+          files: [file]
+        });
+        await pool.query(
+          `UPDATE org_skill_packs SET anthropic_skill_id = $1, updated_at = NOW() WHERE id = $2`,
+          [created.id, pack.id]
+        );
+        return 'Added skill pack "' + input.name + '" → agents=' + input.agents.join(',') +
+          ', contexts=' + input.contexts.join(',') + '. Mirrored to Anthropic (' + created.id + '); the agent will auto-discover it on next sync.';
       } catch (e) {
+        if (insertedId) {
+          try { await pool.query(`DELETE FROM org_skill_packs WHERE id = $1`, [insertedId]); }
+          catch (rollbackErr) { console.error('[propose_skill_pack_add rollback] failed:', rollbackErr); }
+        }
         if (e && e.code === '23505') {
           throw new Error('A skill pack named "' + input.name + '" already exists for this organization. Use propose_skill_pack_edit to modify it.');
         }
         throw e;
       }
-      return 'Added skill pack "' + input.name + '" → agents=' + input.agents.join(',') +
-        ', contexts=' + input.contexts.join(',') + '. Available on demand via load_skill_pack({name:"' + input.name + '"}).';
     }
     case 'propose_skill_pack_edit': {
       if (!input || !input.name) throw new Error('name is required');
@@ -7176,79 +7055,80 @@ async function execStaffApprovalTool(name, input, ctx) {
       }
       if (!updates.length) return 'No changes specified for "' + input.name + '".';
       updates.push('updated_at = NOW()');
-      await pool.query(
+      const updRes = await pool.query(
         `UPDATE org_skill_packs SET ${updates.join(', ')}
-          WHERE organization_id = $1 AND name = $2`,
+          WHERE organization_id = $1 AND name = $2
+          RETURNING *`,
         params
       );
-      return 'Edited skill pack "' + input.name + '": ' + changes.join('; ');
+      const updated = updRes.rows[0];
+
+      const contentChanged = (input.new_body != null && input.new_body !== pack.body)
+        || (input.new_name && input.new_name !== pack.name);
+      if (contentChanged) {
+        const anthropic = getAnthropic();
+        if (!anthropic) {
+          await pool.query(
+            `UPDATE org_skill_packs SET name = $1, body = $2, updated_at = NOW() WHERE id = $3`,
+            [pack.name, pack.body, pack.id]
+          );
+          throw new Error('ANTHROPIC_API_KEY not set — edit rolled back. Packs must stay in sync with Anthropic.');
+        }
+        try {
+          const md = buildSkillMarkdownForMirror(updated);
+          const slug = slugifyMirrorName(updated.name);
+          const file = await toFile(Buffer.from(md, 'utf8'), slug + '/SKILL.md', { type: 'text/markdown' });
+          if (updated.anthropic_skill_id) {
+            await anthropic.beta.skills.versions.create(updated.anthropic_skill_id, { files: [file] });
+          } else {
+            const created = await anthropic.beta.skills.create({
+              display_title: (updated.name || 'Project 86 skill').slice(0, 200),
+              files: [file]
+            });
+            await pool.query(
+              `UPDATE org_skill_packs SET anthropic_skill_id = $1 WHERE id = $2`,
+              [created.id, updated.id]
+            );
+          }
+        } catch (mirrorErr) {
+          await pool.query(
+            `UPDATE org_skill_packs SET name = $1, body = $2, updated_at = NOW() WHERE id = $3`,
+            [pack.name, pack.body, pack.id]
+          );
+          throw new Error('Mirror to Anthropic failed; local edit rolled back: ' + (mirrorErr.message || 'unknown'));
+        }
+      }
+      return 'Edited skill pack "' + input.name + '": ' + changes.join('; ') + (contentChanged ? ' (re-mirrored to Anthropic).' : '');
     }
     case 'propose_skill_pack_delete': {
       if (!input || !input.name) throw new Error('name is required');
       const orgId = await resolveOrgIdFromCtx(ctx);
-      // Soft delete via archived_at — preserves history; UNIQUE
-      // constraint on (organization_id, name) means re-adding with
-      // the same name later requires hard-delete (separate flow).
-      const r = await pool.query(
-        `UPDATE org_skill_packs SET archived_at = NOW()
-          WHERE organization_id = $1 AND name = $2 AND archived_at IS NULL
-          RETURNING id`,
+      // Snapshot first so we know the Anthropic skill_id to clean up.
+      const snap = await pool.query(
+        `SELECT id, name, anthropic_skill_id FROM org_skill_packs
+          WHERE organization_id = $1 AND name = $2 AND archived_at IS NULL`,
         [orgId, input.name]
       );
-      if (!r.rows.length) throw new Error('No skill pack named "' + input.name + '"');
-      return 'Deleted skill pack "' + input.name + '" (soft-archived).';
-    }
-    case 'propose_skill_pack_mirror': {
-      if (!input || !input.name) throw new Error('name is required');
-      const anthropic = getAnthropic();
-      if (!anthropic) throw new Error('ANTHROPIC_API_KEY not set on this deployment.');
-      const orgId = await resolveOrgIdFromCtx(ctx);
-      const r = await pool.query(
-        `SELECT * FROM org_skill_packs WHERE organization_id = $1 AND name = $2 AND archived_at IS NULL`,
-        [orgId, input.name]
-      );
-      if (!r.rows.length) throw new Error('No skill pack named "' + input.name + '"');
-      const pack = r.rows[0];
+      if (!snap.rows.length) throw new Error('No skill pack named "' + input.name + '"');
+      const pack = snap.rows[0];
+
+      // Best-effort Anthropic-side delete. If it fails we still scrub
+      // locally — orphan Anthropic skills are easier to clean up than
+      // a divergent local-only pack.
       if (pack.anthropic_skill_id) {
-        return 'Skill pack "' + input.name + '" is already mirrored (' + pack.anthropic_skill_id + ').';
+        const anthropic = getAnthropic();
+        if (anthropic) {
+          try { await anthropic.beta.skills.delete(pack.anthropic_skill_id); }
+          catch (e) { console.warn('[propose_skill_pack_delete] Anthropic-side delete failed:', e.message || e); }
+        }
       }
-      const md = buildSkillMarkdownForMirror(pack);
-      const slug = slugifyMirrorName(pack.name);
-      const file = await toFile(Buffer.from(md, 'utf8'), slug + '/SKILL.md', { type: 'text/markdown' });
-      const created = await anthropic.beta.skills.create({
-        display_title: (pack.name || 'Project 86 skill').slice(0, 200),
-        files: [file]
-      });
+
       await pool.query(
-        `UPDATE org_skill_packs SET anthropic_skill_id = $1, updated_at = NOW()
-          WHERE organization_id = $2 AND name = $3`,
-        [created.id, orgId, input.name]
+        `UPDATE org_skill_packs SET archived_at = NOW(), anthropic_skill_id = NULL
+          WHERE id = $1`,
+        [pack.id]
       );
-      return 'Mirrored skill pack "' + input.name + '" to Anthropic native Skills (' + created.id + '). Sync the agent so the new skill_id is referenced server-side.';
-    }
-    case 'propose_skill_pack_unmirror': {
-      if (!input || !input.name) throw new Error('name is required');
-      const anthropic = getAnthropic();
-      if (!anthropic) throw new Error('ANTHROPIC_API_KEY not set on this deployment.');
-      const orgId = await resolveOrgIdFromCtx(ctx);
-      const r = await pool.query(
-        `SELECT * FROM org_skill_packs WHERE organization_id = $1 AND name = $2 AND archived_at IS NULL`,
-        [orgId, input.name]
-      );
-      if (!r.rows.length) throw new Error('No skill pack named "' + input.name + '"');
-      const pack = r.rows[0];
-      if (!pack.anthropic_skill_id) {
-        return 'Skill pack "' + input.name + '" is not currently mirrored.';
-      }
-      const priorId = pack.anthropic_skill_id;
-      try { await anthropic.beta.skills.delete(priorId); }
-      catch (e) { /* swallow — proceed to local scrub */ }
-      await pool.query(
-        `UPDATE org_skill_packs SET anthropic_skill_id = NULL, updated_at = NOW()
-          WHERE organization_id = $1 AND name = $2`,
-        [orgId, input.name]
-      );
-      return 'Removed Anthropic mirror for "' + input.name + '" (was ' + priorId + '). Local pack body is unchanged.';
+      return 'Deleted skill pack "' + input.name + '" (local soft-archive + Anthropic mirror removed).';
     }
     // Phase 5 — proactive watching writes (approval-tier).
     case 'propose_watch_create': {
@@ -7429,19 +7309,8 @@ async function buildIntakeContext(userId, organization) {
   lines.push('Photos staged this turn: ' + n + (n ? ' (in scope for attach_pending_photos:true on propose_create_lead)' : ''));
 
   // Skill packs — manifest only (was eager-loading full bodies).
-  // 86 calls load_skill_pack({name}) on demand when a pack maps to
-  // the work he's doing.
-  try {
-    const intakeManifest = await loadSkillManifestFor('job', { entity_type: 'intake' }, organization && organization.id);
-    if (intakeManifest.length) {
-      lines.push('');
-      lines.push('# Available skill packs (call load_skill_pack({name}) to read a full body)');
-      lines.push('Situational playbooks tagged for the intake flow. Load on demand when starting work that maps to one.');
-      intakeManifest.forEach(s => {
-        lines.push('- **' + s.name + '** — ' + (s.description || '(no description)'));
-      });
-    }
-  } catch (e) { /* defensive — intake still works without packs */ }
+  // Skill packs ship as native Anthropic Skills registered on the
+  // agent — the runtime auto-discovers them by description each turn.
 
   return { system: lines.join('\n') };
 }
@@ -9006,8 +8875,6 @@ const ALLOWED_AUTO_TIER_TOOLS = new Set([
   // chips. Pure lookups, no mutation.
   'read_existing_clients',
   'read_existing_leads',
-  // Dynamic skill loading — global Ask 86 pulls a pack on-demand
-  'load_skill_pack',
   // Field tools listing — chip-style auto-apply so 86 can scan
   // existing tools before proposing a new one.
   'read_field_tools',
@@ -9194,12 +9061,7 @@ async function buildAsk86Context() {
   stable.push('  • `read_metrics(range)` — agent-usage metrics (turns, tokens, cost) for last 7d / 30d.');
   stable.push('  • `read_recent_conversations(range, entity_type?, limit?)` — list recent agent conversations.');
   stable.push('  • `read_conversation_detail(key)` — full message log of a specific conversation.');
-  stable.push('  • `read_skill_packs()` — list all skill packs (names + truncated bodies).');
-  stable.push('  • `load_skill_pack(name)` — pull the FULL body of a single named pack into your turn. Call this when the user\'s question maps to a context-tagged pack:');
-  stable.push('      - Estimating / line-item / pricing question → load "Estimating Playbook" (and "Pricing Benchmark Loop" / "Group Discipline" / "Cross-Group Awareness" as relevant).');
-  stable.push('      - WIP / margin / change-order / QB-mapping question → load "WIP Analyst Playbook" or "QB cost to node mapping".');
-  stable.push('      - Node-graph / workspace question → load "Workspace placement and wiring discipline".');
-  stable.push('      - Lead / client-link question → load "Lead/Client Linking".');
+  stable.push('  • `read_skill_packs()` — list all skill packs registered for this org (names + truncated bodies + Anthropic skill_ids). Use for self-introspection; the full bodies are live as native Anthropic Skills and the runtime auto-surfaces them by description.');
   stable.push('  • `web_search` — pricing, code references, product specs, supplier research.');
   stable.push('  • `navigate({ destination, entity_id? })` — take the user to a page or entity. Use when they say "go to", "open", "show me", "take me to". Destinations: home / leads / estimates / clients / subs / schedule / wip / insights / admin, or job / estimate / lead with entity_id. When the user references an entity by name or number, call read_jobs / read_clients / read_past_estimates first to resolve the id, THEN navigate.');
   stable.push('  Live reference sheets (job-number lookup, WIP report, etc.) are auto-injected below — use them for company-data answers without burning a tool call.');
@@ -9208,7 +9070,7 @@ async function buildAsk86Context() {
   stable.push('  You CAN make changes from this surface:');
   stable.push('  • `propose_create_lead` — capture a new lead in one shot. ALWAYS call `read_existing_clients` first to dedupe; if the client exists, pass its id as `existing_client_id`. Same flow as the dedicated intake panel.');
   stable.push('  • HR client tools — `create_property`, `create_parent_company`, `update_client_field`, `link_property_to_parent`, `rename_client`, `change_property_parent`, `merge_clients`, `split_client_into_parent_and_property`, `attach_business_card_to_client`. Use these inline so the user does not have to open the HR panel for routine directory work.');
-  stable.push('  • Skill-pack changes — `propose_skill_pack_add` / `_edit` / `_delete` / `_mirror` / `_unmirror`. Approval-tier; the user vets every prompt-shaping change.');
+  stable.push('  • Skill-pack changes — `propose_skill_pack_add` / `_edit` / `_delete`. Approval-tier; the user vets every prompt-shaping change. Mirroring to Anthropic native Skills happens automatically on approval.');
   stable.push('');
   stable.push('# What lives on the per-entity panels (not here)');
   stable.push('  Tools that operate on a SPECIFIC open entity — `propose_add_line_item`, `propose_update_line_item`, `set_phase_pct_complete`, `set_node_value`, `wire_nodes`, `create_node`, etc. — are NOT in the global Ask 86 tool list because they require the entity\'s editor / graph to be open client-side. If the user asks to "add a line to estimate X" or "tweak phase Y on job Z", point them at the right entity panel and offer to draft the exact wording they should paste in.');
@@ -9217,12 +9079,9 @@ async function buildAsk86Context() {
   stable.push('# Tone');
   stable.push('  Concise. Construction trade vocabulary welcome. Lead with the answer, not the framing. If the user\'s question would be better answered inside a specific entity\'s AI panel, say so up front so they don\'t spin their wheels here.');
 
-  // Ask 86 doesn't auto-load any context-tagged skill packs by default
-  // — entity_type='ask86' won't match estimate/job/intake-tagged packs.
-  // That's intentional: in the global surface, 86 reads what packs are
-  // available via read_skill_packs and pulls them in via load_skill_pack
-  // only when relevant to the user's question. Saves tokens on every
-  // turn that doesn't need a specific playbook.
+  // Skill packs live as native Anthropic Skills registered on the
+  // agent. The runtime auto-discovers them by description each turn —
+  // no system-prompt manifest, no load_skill_pack round-trip needed.
   return {
     system: [
       { type: 'text', text: stable.join('\n'), cache_control: { type: 'ephemeral' } }
@@ -9243,7 +9102,7 @@ function ask86Tools() {
     'read_subs', 'read_lead_pipeline',
     'read_materials', 'read_purchase_history',
     'read_metrics', 'read_recent_conversations', 'read_conversation_detail',
-    'read_skill_packs', 'load_skill_pack',
+    'read_skill_packs',
     'read_past_estimates', 'read_past_estimate_lines', 'read_leads',
     // DOM navigation — client-side dispatch. Without this, the model
     // on the Ask 86 surface doesn't know it can switch tabs / open
@@ -9897,9 +9756,7 @@ router.post('/86/chat/continue', requireAuth, requireOrg, async (req, res) => {
         catch (e) { summary = 'Error: ' + (e.message || 'failed'); isError = true; }
       } else if (r.name === 'propose_skill_pack_add'
               || r.name === 'propose_skill_pack_edit'
-              || r.name === 'propose_skill_pack_delete'
-              || r.name === 'propose_skill_pack_mirror'
-              || r.name === 'propose_skill_pack_unmirror') {
+              || r.name === 'propose_skill_pack_delete') {
         // Skill-pack mutations (formerly CoS-only — 86 owns these
         // now that the staff agent is being absorbed). Same handler
         // as the legacy /staff/chat/continue path.

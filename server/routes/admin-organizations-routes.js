@@ -56,6 +56,31 @@ function buildPackSkillMd(pack) {
   ].join('\n');
 }
 
+// Upload a pack as a new Anthropic native Skill. Throws on failure;
+// caller is responsible for rolling back any local DB state if the
+// mirror doesn't land. We never want a local-only pack to exist.
+async function uploadPackAsNewSkill(anthropic, pack) {
+  const md = buildPackSkillMd(pack);
+  const slug = slugifyPackName(pack.name);
+  const file = await toFile(Buffer.from(md, 'utf8'), slug + '/SKILL.md', { type: 'text/markdown' });
+  return anthropic.beta.skills.create({
+    display_title: String(pack.name || 'Project 86 skill').slice(0, 200),
+    files: [file]
+  });
+}
+
+// Upload a new version of an existing Anthropic Skill. Used on pack
+// edits so the skill_id stays stable (registered agents keep working)
+// while the content rolls forward to the latest version.
+async function uploadPackAsNewVersion(anthropic, skillId, pack) {
+  const md = buildPackSkillMd(pack);
+  const slug = slugifyPackName(pack.name);
+  const file = await toFile(Buffer.from(md, 'utf8'), slug + '/SKILL.md', { type: 'text/markdown' });
+  return anthropic.beta.skills.versions.create(skillId, {
+    files: [file]
+  });
+}
+
 // Helper: confirm the caller is allowed to act on the requested
 // organization id. Today: must match their own org (no cross-org
 // access yet — when platform-admin role lands, that role can pass
@@ -239,6 +264,9 @@ router.post('/:id/skill-packs', requireAuth, requireOrg, requireCapability('ROLE
     if (badAgents.length) {
       return res.status(400).json({ error: 'Unknown agent(s): ' + badAgents.join(', ') + '. Valid: ' + VALID_PACK_AGENTS.join(', ') });
     }
+    const anthropic = getAnthropic();
+    if (!anthropic) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not set. Cannot create pack — all packs must be mirrored to Anthropic native Skills.' });
+    let insertedId = null;
     try {
       const ins = await pool.query(
         `INSERT INTO org_skill_packs (
@@ -256,8 +284,23 @@ router.post('/:id/skill-packs', requireAuth, requireOrg, requireCapability('ROLE
           JSON.stringify((b.triggers && typeof b.triggers === 'object') ? b.triggers : {})
         ]
       );
-      res.json({ skill_pack: ins.rows[0] });
+      const pack = ins.rows[0];
+      insertedId = pack.id;
+      const created = await uploadPackAsNewSkill(anthropic, pack);
+      const upd = await pool.query(
+        `UPDATE org_skill_packs SET anthropic_skill_id = $1, updated_at = NOW()
+           WHERE id = $2 RETURNING *`,
+        [created.id, pack.id]
+      );
+      res.json({ skill_pack: upd.rows[0] });
     } catch (e) {
+      // Roll back the local insert so no local-only pack survives.
+      // Hard-delete (not soft) because the row never went live —
+      // it shouldn't reappear in archived listings.
+      if (insertedId) {
+        try { await pool.query(`DELETE FROM org_skill_packs WHERE id = $1`, [insertedId]); }
+        catch (rollbackErr) { console.error('[skill-pack create rollback] failed:', rollbackErr); }
+      }
       if (e && e.code === '23505') {
         return res.status(409).json({ error: 'A skill pack named "' + b.name + '" already exists in this organization.' });
       }
@@ -315,6 +358,20 @@ router.put('/:id/skill-packs/:packId', requireAuth, requireOrg, requireCapabilit
     }
     if (!updates.length) return res.status(400).json({ error: 'No editable fields supplied' });
     updates.push('updated_at = NOW()');
+
+    // Snapshot the pre-edit row so we can re-mirror with the new
+    // content and detect what actually changed.
+    const before = await pool.query(
+      `SELECT * FROM org_skill_packs WHERE organization_id = $1 AND id = $2 AND archived_at IS NULL`,
+      [targetId, packId]
+    );
+    if (!before.rows.length) return res.status(404).json({ error: 'Pack not found' });
+    const prev = before.rows[0];
+
+    const contentChanged = (typeof b.body === 'string' && b.body !== prev.body)
+      || (typeof b.name === 'string' && b.name.trim() !== prev.name)
+      || (typeof b.description === 'string' && b.description !== prev.description);
+
     try {
       const r = await pool.query(
         `UPDATE org_skill_packs SET ${updates.join(', ')}
@@ -323,7 +380,53 @@ router.put('/:id/skill-packs/:packId', requireAuth, requireOrg, requireCapabilit
         params
       );
       if (!r.rows.length) return res.status(404).json({ error: 'Pack not found' });
-      res.json({ skill_pack: r.rows[0] });
+      const updated = r.rows[0];
+
+      // Re-mirror to Anthropic if the SKILL.md content changed.
+      // Stable skill_id is preserved via the versions API so registered
+      // agents don't need to be re-registered after every edit.
+      if (contentChanged && updated.anthropic_skill_id) {
+        const anthropic = getAnthropic();
+        if (!anthropic) {
+          // Roll back the local update — a divergent pack is worse
+          // than a failed edit.
+          await pool.query(
+            `UPDATE org_skill_packs SET name = $1, body = $2, description = $3, updated_at = NOW()
+               WHERE id = $4`,
+            [prev.name, prev.body, prev.description, packId]
+          );
+          return res.status(503).json({ error: 'ANTHROPIC_API_KEY not set. Edit rolled back — packs must stay in sync with Anthropic.' });
+        }
+        try {
+          await uploadPackAsNewVersion(anthropic, updated.anthropic_skill_id, updated);
+        } catch (mirrorErr) {
+          await pool.query(
+            `UPDATE org_skill_packs SET name = $1, body = $2, description = $3, updated_at = NOW()
+               WHERE id = $4`,
+            [prev.name, prev.body, prev.description, packId]
+          );
+          console.error('[skill-pack edit] mirror failed; rolled back local edit:', mirrorErr);
+          return res.status(502).json({ error: 'Failed to mirror edit to Anthropic: ' + (mirrorErr.message || 'unknown') + '. Local edit rolled back.' });
+        }
+      } else if (contentChanged && !updated.anthropic_skill_id) {
+        // Pack exists locally but never mirrored (shouldn't happen
+        // post-migration). Try to mirror as a fresh skill.
+        const anthropic = getAnthropic();
+        if (anthropic) {
+          try {
+            const created = await uploadPackAsNewSkill(anthropic, updated);
+            await pool.query(
+              `UPDATE org_skill_packs SET anthropic_skill_id = $1 WHERE id = $2`,
+              [created.id, packId]
+            );
+            updated.anthropic_skill_id = created.id;
+          } catch (mirrorErr) {
+            console.error('[skill-pack edit] late-mirror failed:', mirrorErr);
+            return res.status(502).json({ error: 'Failed to mirror pack to Anthropic: ' + (mirrorErr.message || 'unknown') });
+          }
+        }
+      }
+      res.json({ skill_pack: updated });
     } catch (e) {
       if (e && e.code === '23505') {
         return res.status(409).json({ error: 'A skill pack with that name already exists in this organization.' });
@@ -343,8 +446,32 @@ router.delete('/:id/skill-packs/:packId', requireAuth, requireOrg, requireCapabi
     const targetId = assertOrgScope(req, req.params.id);
     const packId = Number(req.params.packId);
     if (!Number.isFinite(packId)) return res.status(400).json({ error: 'Invalid packId' });
+
+    // Snapshot first so we know the Anthropic skill_id to clean up.
+    const snap = await pool.query(
+      `SELECT id, name, anthropic_skill_id FROM org_skill_packs
+        WHERE organization_id = $1 AND id = $2 AND archived_at IS NULL`,
+      [targetId, packId]
+    );
+    if (!snap.rows.length) return res.status(404).json({ error: 'Pack not found' });
+    const pack = snap.rows[0];
+
+    // Delete the Anthropic-side mirror first. If it fails (e.g.
+    // already deleted upstream), proceed with local soft-delete
+    // rather than leaving an orphaned local pack.
+    if (pack.anthropic_skill_id) {
+      const anthropic = getAnthropic();
+      if (anthropic) {
+        try {
+          await anthropic.beta.skills.delete(pack.anthropic_skill_id);
+        } catch (delErr) {
+          console.warn('[skill-pack delete] Anthropic-side delete failed (continuing local delete):', delErr.message || delErr);
+        }
+      }
+    }
+
     const r = await pool.query(
-      `UPDATE org_skill_packs SET archived_at = NOW()
+      `UPDATE org_skill_packs SET archived_at = NOW(), anthropic_skill_id = NULL
         WHERE organization_id = $1 AND id = $2 AND archived_at IS NULL
         RETURNING id, name`,
       [targetId, packId]
