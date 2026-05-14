@@ -1095,6 +1095,20 @@ const JOB_TOOLS = [
     }
   },
   {
+    name: 'search_my_sessions',
+    description:
+      'Search the current user\'s prior chat sessions for relevant past conversations. Use when the user references something you discussed previously ("you mentioned this last week", "what did we decide about Job RV2018?") or when you think prior context would help answer the current question. Searches labels, summaries, and message bodies; returns up to 10 matches with snippets. Auto-tier (no approval). Sessions are per-user — you only see the current user\'s history.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        query: { type: 'string', description: 'Search terms — substring match across labels, summaries, and message bodies. Use the same words the user used; you don\'t need to be clever.' },
+        limit: { type: 'integer', description: 'Optional cap on results. Default 10, max 30.', minimum: 1, maximum: 30 }
+      },
+      required: ['query']
+    }
+  },
+  {
     name: 'read_active_lines',
     description:
       'Return the full line-by-line detail of the active group on an estimate: section header rows, cost-side line items with description / qty / unit / unit_cost / markup / line_id, plus subgroup roll-ups. Use when you need to propose an edit, audit an estimate, or compute totals. ' +
@@ -1869,6 +1883,7 @@ const PLAN_MODE_ALLOWED_JOB_TOOLS = new Set([
   'read_recent_conversations',
   'read_conversation_detail',
   'read_skill_packs',
+  'search_my_sessions',
   'read_jobs',
   'read_users',
   'read_clients',
@@ -6771,6 +6786,71 @@ async function execStaffTool(name, input, ctx) {
       return lines.join('\n');
     }
 
+    case 'search_my_sessions': {
+      // Cross-session memory: lets 86 reference work from prior chat
+      // threads when the user invokes something he discussed before.
+      // Scoped strictly to ctx.userId — the agent never sees another
+      // user's history. Matches labels + summaries + message bodies
+      // and returns short snippets so 86 can decide whether to follow
+      // up with a more specific question or pull the user back into
+      // the original session.
+      const userId = ctx && ctx.userId;
+      if (!userId) return 'No user context — cannot search sessions.';
+      const q = String((input && input.query) || '').trim();
+      if (!q) return 'query is required.';
+      const limit = Math.min(30, Math.max(1, parseInt((input && input.limit), 10) || 10));
+      const pattern = '%' + q.replace(/[\\%_]/g, m => '\\' + m) + '%';
+
+      const meta = await pool.query(
+        `SELECT s.id, s.label, s.summary, s.entity_type, s.entity_id,
+                s.last_used_at, s.turn_count, NULL::text AS snippet
+           FROM ai_sessions s
+          WHERE s.user_id = $1
+            AND s.archived_at IS NULL
+            AND (s.label ILIKE $2 OR s.summary ILIKE $2)
+          ORDER BY s.pinned DESC, s.last_used_at DESC
+          LIMIT $3`,
+        [userId, pattern, limit]
+      );
+      const msgs = await pool.query(
+        `WITH matches AS (
+           SELECT s.id AS session_id, s.label, s.summary, s.entity_type, s.entity_id,
+                  s.last_used_at, s.turn_count, m.content AS snippet,
+                  ROW_NUMBER() OVER (PARTITION BY s.id ORDER BY m.created_at ASC) AS rn
+             FROM ai_sessions s
+             JOIN ai_messages m
+               ON m.user_id = s.user_id
+              AND m.entity_type = s.entity_type
+              AND COALESCE(m.estimate_id, '') = COALESCE(s.entity_id, '')
+            WHERE s.user_id = $1 AND s.archived_at IS NULL AND m.content ILIKE $2
+         )
+         SELECT session_id AS id, label, summary, entity_type, entity_id,
+                last_used_at, turn_count, substr(snippet, 1, 200) AS snippet
+           FROM matches WHERE rn = 1
+          ORDER BY last_used_at DESC LIMIT $3`,
+        [userId, pattern, limit]
+      );
+
+      const seen = new Set();
+      const merged = [];
+      [...msgs.rows, ...meta.rows].forEach(r => {
+        if (seen.has(r.id)) return;
+        seen.add(r.id);
+        merged.push(r);
+      });
+      if (!merged.length) return 'No prior sessions matched "' + q + '".';
+      const lines = ['Found ' + merged.length + ' session(s) matching "' + q + '":'];
+      merged.slice(0, limit).forEach(r => {
+        const label = r.label || ('Session ' + r.id);
+        const ctxStr = r.entity_id ? r.entity_type + ' ' + r.entity_id : r.entity_type;
+        const when = r.last_used_at ? new Date(r.last_used_at).toISOString().slice(0, 10) : '?';
+        lines.push('• [' + r.id + '] "' + label + '" (' + ctxStr + ', last used ' + when + ', ' + (r.turn_count || 0) + ' turns)');
+        if (r.summary) lines.push('    summary: ' + r.summary);
+        if (r.snippet) lines.push('    match: ' + String(r.snippet).replace(/\s+/g, ' ').slice(0, 180));
+      });
+      return lines.join('\n');
+    }
+
     case 'read_materials': {
       // Same query shape as the GET /api/materials endpoint that 86\'s
       // client-side applier hits — kept inline rather than HTTP-loop
@@ -9107,6 +9187,7 @@ const ALLOWED_AUTO_TIER_TOOLS = new Set([
   'read_recent_conversations',
   'read_conversation_detail',
   'read_skill_packs',
+  'search_my_sessions',
   // HR directory reads — let 86 do who/where/what lookups inline
   'read_jobs',
   'read_users',
@@ -9344,7 +9425,7 @@ function ask86Tools() {
     'read_subs', 'read_lead_pipeline',
     'read_materials', 'read_purchase_history',
     'read_metrics', 'read_recent_conversations', 'read_conversation_detail',
-    'read_skill_packs',
+    'read_skill_packs', 'search_my_sessions',
     'read_past_estimates', 'read_past_estimate_lines', 'read_leads',
     // DOM navigation — client-side dispatch. Without this, the model
     // on the Ask 86 surface doesn't know it can switch tabs / open
