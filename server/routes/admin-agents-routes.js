@@ -1825,36 +1825,22 @@ async function collectSkillsFor(agentKey, organization) {
 // migration expands these (e.g. enabling bash/read on 86 for QB
 // cost line analysis).
 function builtinToolsetFor(agentKey) {
-  // Built-in toolset by role:
+  // Built-in toolset — full toolkit for every agent. The sandboxed
+  // per-session container has no path to our DB / API / R2 / user
+  // data, so bash / write / edit can only touch the scratch
+  // filesystem (which now also contains the agent's mounted Skills).
+  // Letting 86 draft scratch docs, run quick computations, and chase
+  // multi-file skill content earns its keep without weakening the
+  // propose_* approval flow that gates real mutations.
   //
-  //   86 (job)         → web_search, web_fetch, read, glob, grep
-  //                      Web research + read access to mounted skill
-  //                      files. Native Anthropic Skills attached to
-  //                      this agent ship as folders with SKILL.md +
-  //                      helper files; the runtime requires `read`
-  //                      to be enabled to surface them at all. glob
-  //                      and grep let 86 traverse multi-file skills
-  //                      when one is auto-loaded. bash / write / edit
-  //                      stay off — task agents mutate state through
-  //                      the propose_* approval flow, not by
-  //                      scripting around it.
+  // Built-ins available via agent_toolset_20260401:
+  //   web_search, web_fetch    — research
+  //   read, glob, grep         — read mounted skill files / scratch
+  //   bash, write, edit        — sandbox scratch pad
   //
-  //   CoS              → full toolkit (every built-in on)
-  //                      The meta-overseer can write scratch files
-  //                      and read them back, so the broader filesystem
-  //                      tools earn their keep here.
-  //
-  // Tools run in a sandboxed per-session container — no path to our
-  // DB / API / R2 / user data regardless of which subset is on.
-  if (agentKey === 'staff') {
-    return [{ type: 'agent_toolset_20260401', default_config: { enabled: true } }];
-  }
-  const opt = function(name) { return { name: name, enabled: true }; };
-  return [{
-    type: 'agent_toolset_20260401',
-    default_config: { enabled: false },
-    configs: ['web_search', 'web_fetch', 'read', 'glob', 'grep'].map(opt)
-  }];
+  // Custom Project-86 tools (91 today) and native Anthropic Skills
+  // (12 today) ride alongside via customToolsFor / collectSkillsFor.
+  return [{ type: 'agent_toolset_20260401', default_config: { enabled: true } }];
 }
 
 // Resolve the Project 86-side custom tools for an agent. Goes through the
