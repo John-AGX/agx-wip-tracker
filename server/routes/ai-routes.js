@@ -9972,6 +9972,11 @@ router.post('/86/chat', requireAuth, requireOrg, async (req, res) => {
       userId: req.user.id,
       organization: req.organization
     });
+    // ai_messages.estimate_id is NOT NULL on the legacy schema. Older
+    // general-session rows might still have entity_id=null in
+    // ai_sessions (pre-fix); coalesce to 'global' at every insert so
+    // the chat path never trips the constraint.
+    const sessionEntityId = session.entity_id || 'global';
 
     // Persist the user's message under the resolved session's keys.
     // estimate_id is the legacy column name for "entity_id" on
@@ -9983,7 +9988,7 @@ router.post('/86/chat', requireAuth, requireOrg, async (req, res) => {
       [
         userMsgId,
         session.entity_type,
-        session.entity_id,
+        sessionEntityId,
         req.user.id, userMessage, additionalImages.length,
         uploadedBlocks.length ? JSON.stringify(uploadedBlocks) : null
       ]
@@ -10032,7 +10037,7 @@ router.post('/86/chat', requireAuth, requireOrg, async (req, res) => {
                                     cache_creation_input_tokens, cache_read_input_tokens,
                                     tool_use_count, tool_uses)
            VALUES ($1, $2, $3, $4, 'assistant', $5, $6, $7, $8, $9, $10, $11, $12)`,
-          [aMsgId, session.entity_type, session.entity_id, req.user.id, text || '', MODEL,
+          [aMsgId, session.entity_type, sessionEntityId, req.user.id, text || '', MODEL,
            (usage && usage.input_tokens) || null,
            (usage && usage.output_tokens) || null,
            (usage && usage.cache_creation_input_tokens) || null,
@@ -10110,6 +10115,10 @@ router.post('/86/chat/continue', requireAuth, requireOrg, async (req, res) => {
       res.write('data: [DONE]\n\n');
       return res.end();
     }
+    // Coalesce to the legacy 'global' sentinel — older general
+    // sessions still have entity_id=null in ai_sessions and
+    // ai_messages.estimate_id is NOT NULL.
+    const sessionEntityId = session.entity_id || 'global';
 
     // Build tool_result events for each approval, applying server-side
     // any approval-tier propose_* tools the same way the per-entity
@@ -10184,7 +10193,7 @@ router.post('/86/chat/continue', requireAuth, requireOrg, async (req, res) => {
         `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content, model,
                                   tool_use_count, tool_uses)
          VALUES ($1, $2, $3, $4, 'user', $5, $6, $7, $8)`,
-        [continueMsgId, session.entity_type, session.entity_id, req.user.id,
+        [continueMsgId, session.entity_type, sessionEntityId, req.user.id,
          '[tool_results: ' + approvalSummary.map(a =>
            (a.approved ? '✓ ' : '✗ ') + a.name +
            (a.applied_summary ? ' — ' + a.applied_summary.slice(0, 80) : '')
@@ -10215,7 +10224,7 @@ router.post('/86/chat/continue', requireAuth, requireOrg, async (req, res) => {
                                     cache_creation_input_tokens, cache_read_input_tokens,
                                     tool_use_count, tool_uses)
            VALUES ($1, $2, $3, $4, 'assistant', $5, $6, $7, $8, $9, $10, $11, $12)`,
-          [aMsgId, session.entity_type, session.entity_id, req.user.id, text || '', MODEL,
+          [aMsgId, session.entity_type, sessionEntityId, req.user.id, text || '', MODEL,
            (usage && usage.input_tokens) || null,
            (usage && usage.output_tokens) || null,
            (usage && usage.cache_creation_input_tokens) || null,

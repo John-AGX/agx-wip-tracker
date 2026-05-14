@@ -1254,6 +1254,15 @@ async function initSchema() {
        END
      WHERE label IS NULL;
 
+    -- Heal any pre-sidebar general-session rows that have entity_id=NULL.
+    -- The chat path keys ai_messages.estimate_id by the session's
+    -- entity_id, and ai_messages.estimate_id is NOT NULL — so a session
+    -- with entity_id=NULL would 500 every chat turn. 'global' is the
+    -- legacy sentinel the original /86/chat code used.
+    UPDATE ai_sessions
+       SET entity_id = 'global'
+     WHERE entity_type = 'general' AND entity_id IS NULL;
+
     -- Batch jobs — wraps Anthropic's Batches API for proactive
     -- analyses (currently nightly 86 audits across active jobs).
     -- Each row tracks one submitted batch + its lifecycle.
