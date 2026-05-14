@@ -7096,35 +7096,60 @@ async function execStaffTool(name, input, ctx) {
     }
 
     case 'read_clients': {
+      // Search the clients directory. Replaced the broken SQL that
+      // referenced a non-existent clients.contact_name column — the
+      // actual schema uses first_name + last_name, plus a separate
+      // community_name and company_name. Also widened the LIKE to
+      // cover parent name + community name so 86 can find a property
+      // via the HOA or community label, not just the row's own name.
       const q = (input && input.q || '').trim();
       const limit = Math.max(1, Math.min(100, Number(input && input.limit) || 20));
-      const where = [];
-      const params = [];
-      let p = 1;
+      let r;
       if (q) {
-        where.push('(c.name ILIKE $' + p + ' OR c.contact_name ILIKE $' + p + ' OR c.city ILIKE $' + p + ')');
-        params.push('%' + q + '%');
-        p++;
+        const like = '%' + q.replace(/[\\%_]/g, m => '\\' + m) + '%';
+        r = await pool.query(
+          `SELECT c.id, c.name, c.parent_client_id, c.city, c.state,
+                  c.first_name, c.last_name, c.email, c.phone,
+                  c.company_name, c.community_name, c.client_type,
+                  p.name AS parent_name,
+                  (SELECT COUNT(*)::int FROM client_notes n WHERE n.client_id = c.id) AS note_count
+             FROM clients c
+             LEFT JOIN clients p ON p.id = c.parent_client_id
+            WHERE c.name ILIKE $1
+               OR p.name ILIKE $1
+               OR c.community_name ILIKE $1
+               OR c.company_name ILIKE $1
+               OR c.city ILIKE $1
+               OR c.first_name ILIKE $1
+               OR c.last_name ILIKE $1
+            ORDER BY (c.name ILIKE $1) DESC, lower(c.name)
+            LIMIT $2`,
+          [like, limit]
+        );
+      } else {
+        r = await pool.query(
+          `SELECT c.id, c.name, c.parent_client_id, c.city, c.state,
+                  c.first_name, c.last_name, c.email, c.phone,
+                  c.company_name, c.community_name, c.client_type,
+                  p.name AS parent_name,
+                  (SELECT COUNT(*)::int FROM client_notes n WHERE n.client_id = c.id) AS note_count
+             FROM clients c
+             LEFT JOIN clients p ON p.id = c.parent_client_id
+            ORDER BY lower(c.name)
+            LIMIT $1`,
+          [limit]
+        );
       }
-      params.push(limit);
-      const r = await pool.query(
-        `SELECT c.id, c.name, c.parent_client_id, c.city, c.state, c.contact_name, c.phone,
-                p.name AS parent_name,
-                (SELECT COUNT(*)::int FROM client_notes n WHERE n.client_id = c.id) AS note_count
-           FROM clients c
-           LEFT JOIN clients p ON p.id = c.parent_client_id
-          ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
-          ORDER BY lower(c.name)
-          LIMIT $${p}`,
-        params
-      );
       if (!r.rows.length) return q ? 'No clients matched "' + q + '".' : 'No clients in directory.';
       const out = ['Found ' + r.rows.length + ' client' + (r.rows.length === 1 ? '' : 's') + ':'];
       for (const c of r.rows) {
+        const contact = [c.first_name, c.last_name].filter(Boolean).join(' ');
         out.push('- ' + c.name + ' [id=' + c.id + ']' +
           (c.parent_name ? ' (under ' + c.parent_name + ')' : '') +
+          (c.client_type ? ' · ' + c.client_type : '') +
           (c.city ? ' · ' + c.city + (c.state ? ', ' + c.state : '') : '') +
-          (c.contact_name ? ' · ' + c.contact_name : '') +
+          (contact ? ' · contact: ' + contact : '') +
+          (c.phone ? ' · ' + c.phone : '') +
           (c.note_count ? ' · ' + c.note_count + ' note' + (c.note_count === 1 ? '' : 's') : ''));
       }
       return out.join('\n');
@@ -9939,11 +9964,24 @@ router.post('/86/chat', requireAuth, requireOrg, async (req, res) => {
     }
 
     // Build the per-turn user message. <turn_context> (per-entity
-    // snapshot) comes first if present, then the page-context tag
-    // (where the user is in the app), then the actual message text.
+    // snapshot) comes first if present, then live reference sheets
+    // (SharePoint / Google Sheets refreshed every 15 min — job
+    // numbers, WIP report, etc. that 86 needs across every surface),
+    // then the page-context tag (where the user is in the app), then
+    // the actual message text.
     const pageBlock = renderPageContextBlock(currentContext);
+    let referenceLinksBlock = '';
+    try {
+      const adminAgents = require('./admin-agents-routes');
+      if (typeof adminAgents.buildReferenceLinksBlock === 'function') {
+        referenceLinksBlock = await adminAgents.buildReferenceLinksBlock();
+      }
+    } catch (e) {
+      console.warn('[/86/chat] reference-links injection skipped:', e.message);
+    }
     const turnTextParts = [];
     if (turnContextText) turnTextParts.push('<turn_context>\n' + turnContextText + '\n</turn_context>');
+    if (referenceLinksBlock && referenceLinksBlock.trim()) turnTextParts.push(referenceLinksBlock);
     if (pageBlock) turnTextParts.push(pageBlock);
     turnTextParts.push(userMessage);
     const turnText = turnTextParts.join('\n\n');
