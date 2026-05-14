@@ -797,6 +797,7 @@
        // hairline matches the main site header. Trimmed vertical
        // padding 12px → 7px so the header sits ~10px shorter.
       '<div style="padding:7px 14px;border-bottom:1px solid rgba(34,211,238,0.35);background:linear-gradient(135deg,#0f172a 0%,#1e293b 100%);display:flex;align-items:center;gap:10px;">' +
+        '<button id="ai-sidebar-toggle" title="Sessions" aria-label="Open sessions sidebar" style="background:rgba(255,255,255,0.08);color:#fff;border:1px solid rgba(255,255,255,0.15);border-radius:6px;width:30px;height:30px;font-size:16px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;line-height:1;">&#x2630;</button>' +
         '<button id="ai-close" title="Close (Esc)" style="background:rgba(255,255,255,0.12);color:#fff;border:1px solid rgba(255,255,255,0.2);border-radius:6px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:6px;">&rarr; Close</button>' +
         '<div class="p86-ai-title" style="font-size:14px;font-weight:700;color:#fff;flex:1;text-align:right;">&#x2728; AI Assistant</div>' +
         // AG phase pill — single-icon dropdown. Visible only in estimate
@@ -865,14 +866,52 @@
             '<button id="ai-send" type="button" title="Send (Enter)" aria-label="Send" style="background:linear-gradient(135deg,#4f8cff,#34d399);border:0;color:#fff;width:30px;height:30px;border-radius:50%;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;font-size:15px;padding:0;transition:transform 0.12s, opacity 0.12s;">' + (typeof p86Icon === 'function' ? p86Icon('composer-send') : '&#x2191;') + '</button>' +
           '</div>' +
         '</div>' +
-      '</div>';
+      '</div>' +
+      // Sessions sidebar — overlay that slides in from the left edge
+      // of the panel. Lists the user's recent sessions (one Anthropic
+      // agent, many user-pickable conversation threads, like Claude
+      // Code's left rail). Hidden by default; opens via the hamburger
+      // button in the header. Closes when a session is picked or the
+      // user taps outside.
+      '<div id="ai-sessions-sidebar" aria-hidden="true" style="position:absolute;top:0;bottom:0;left:0;width:78%;max-width:340px;background:linear-gradient(180deg,#0c1220 0%,#0f172a 100%);border-right:1px solid rgba(34,211,238,0.18);box-shadow:6px 0 22px rgba(0,0,0,0.5);z-index:5;display:flex;flex-direction:column;transform:translateX(-100%);transition:transform 0.22s ease;">' +
+        '<div style="padding:10px 12px;border-bottom:1px solid rgba(255,255,255,0.08);display:flex;align-items:center;gap:8px;">' +
+          '<button id="ai-sidebar-new" type="button" title="Start a new chat" style="flex:1;background:rgba(79,140,255,0.15);color:#dbeafe;border:1px solid rgba(79,140,255,0.4);border-radius:8px;padding:8px 12px;font-size:12px;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;">' +
+            '<span style="font-size:16px;line-height:1;">+</span><span>New chat</span>' +
+          '</button>' +
+          '<button id="ai-sidebar-close" type="button" title="Close sidebar" aria-label="Close sidebar" style="background:rgba(255,255,255,0.08);color:#ccc;border:1px solid rgba(255,255,255,0.15);border-radius:6px;width:30px;height:30px;font-size:14px;cursor:pointer;">&times;</button>' +
+        '</div>' +
+        '<div style="padding:8px 12px;border-bottom:1px solid rgba(255,255,255,0.05);">' +
+          '<input id="ai-sidebar-search" type="search" placeholder="Search sessions…" ' +
+            'style="width:100%;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:6px 10px;color:#fff;font-size:12px;outline:none;box-sizing:border-box;" />' +
+        '</div>' +
+        '<div id="ai-sidebar-list" style="flex:1;overflow-y:auto;padding:6px 0;font-size:12px;color:#e6e6e6;">' +
+          '<div style="padding:14px;color:#888;font-style:italic;">Loading…</div>' +
+        '</div>' +
+      '</div>' +
+      // Click-outside scrim — covers the panel body when the sidebar is
+      // open so a tap outside the sidebar closes it without selecting
+      // a message accidentally.
+      '<div id="ai-sidebar-scrim" style="position:absolute;top:0;right:0;bottom:0;left:0;background:rgba(0,0,0,0.35);z-index:4;display:none;"></div>';
     document.body.appendChild(panel);
 
     // Wire interactions
     panel.querySelector('#ai-close').onclick = close;
     panel.querySelector('#ai-clear').onclick = clearConversation;
     panel.querySelector('#ai-send').onclick = onSend;
+    panel.querySelector('#ai-sidebar-new').onclick = sidebarStartNewChat;
+    panel.querySelector('#ai-sidebar-close').onclick = closeSidebar;
+    panel.querySelector('#ai-sidebar-scrim').onclick = closeSidebar;
+    var searchInput = panel.querySelector('#ai-sidebar-search');
+    if (searchInput) {
+      var _searchTimer = null;
+      searchInput.oninput = function() {
+        if (_searchTimer) clearTimeout(_searchTimer);
+        var q = searchInput.value;
+        _searchTimer = setTimeout(function() { runSidebarSearch(q); }, 180);
+      };
+    }
     wireAIPanelResizer(panel);
+    panel.querySelector('#ai-sidebar-toggle').onclick = openSidebar;
     var trustBtn = panel.querySelector('#ai-trust');
     if (trustBtn) trustBtn.onclick = function(e) {
       e.stopPropagation();
@@ -1044,6 +1083,11 @@
     }
     if (!requiresEntity) entityId = '__global__';
     var panel = ensurePanel();
+    // Prefetch the session list once per panel lifetime so auto-anchor
+    // has data to work with on the first navigation. Subsequent opens
+    // skip the fetch (cached); the sidebar's own open handler refreshes
+    // on demand.
+    if (!_sessionListLoaded) fetchSessions();
     // Lead-intake mode forces a fresh conversation EVERY open. The
     // server-side already archives any prior intake session on the
     // first /chat call; we mirror that on the client so any leftover
@@ -1058,6 +1102,17 @@
       // accidentally surface another estimate's renders.
       _autoPdfCache = {};
       _autoPdfPromises = {};
+      // Auto-switch the sidebar's current session to whatever the
+      // user just navigated to. If a session already exists for this
+      // (user, entity), we'll resume it; otherwise the server will
+      // mint a fresh one on the next chat send. Either way, clear
+      // any previously-picked session so the auto-anchor takes over.
+      var anchorableTypes = ['estimate', 'job', 'lead', 'intake'];
+      if (anchorableTypes.indexOf(entityType) >= 0 && entityId && entityId !== '__global__') {
+        autoAnchorToEntity(entityType, entityId);
+      } else if (entityType === 'ask86' || entityType === 'client' || entityType === 'staff') {
+        autoAnchorToGeneral();
+      }
       // Intake = no history (fresh session every open). Other modes
       // load their conversation from ai_messages so close + reopen
       // keeps the thread.
@@ -1330,6 +1385,438 @@
       _messages = [];
       renderMessages();
     });
+  }
+
+  // ──────────────────────────────────────────────────────────────
+  // Sessions sidebar (multi-session chat threads, like Claude Code's
+  // left rail). One Anthropic agent — many user-pickable threads per
+  // user. Functions below handle: open/close, load the list, render
+  // rows grouped by recency, pick a session, start a new chat,
+  // rename / pin / archive, search.
+  // ──────────────────────────────────────────────────────────────
+
+  // The currently active session id. null = the server's auto-anchor
+  // logic resolves it on each send (default behavior when the user
+  // hasn't picked a session explicitly).
+  var _currentSessionId = null;
+  var _sessionList = [];
+  var _sessionListLoaded = false;
+
+  function openSidebar() {
+    var sidebar = document.getElementById('ai-sessions-sidebar');
+    var scrim = document.getElementById('ai-sidebar-scrim');
+    if (!sidebar || !scrim) return;
+    sidebar.style.transform = 'translateX(0)';
+    sidebar.setAttribute('aria-hidden', 'false');
+    scrim.style.display = 'block';
+    // Refresh the list each time the sidebar opens so freshly-created
+    // sessions (e.g. an auto-anchored job session from another tab)
+    // show up immediately. Cheap — one indexed query per open.
+    fetchSessions();
+  }
+
+  function closeSidebar() {
+    var sidebar = document.getElementById('ai-sessions-sidebar');
+    var scrim = document.getElementById('ai-sidebar-scrim');
+    if (!sidebar || !scrim) return;
+    sidebar.style.transform = 'translateX(-100%)';
+    sidebar.setAttribute('aria-hidden', 'true');
+    scrim.style.display = 'none';
+  }
+
+  function fetchSessions() {
+    if (!window.p86Api || !window.p86Api.get) return;
+    window.p86Api.get('/api/ai/sessions').then(function(resp) {
+      _sessionList = (resp && resp.sessions) || [];
+      _sessionListLoaded = true;
+      renderSessionList(_sessionList);
+    }).catch(function(err) {
+      var host = document.getElementById('ai-sidebar-list');
+      if (host) host.innerHTML = '<div style="padding:14px;color:#fbbf24;font-style:italic;">Failed to load sessions: ' +
+        escapeHTML(err && err.message || 'unknown error') + '</div>';
+    });
+  }
+
+  function relativeTime(iso) {
+    if (!iso) return '';
+    var now = Date.now();
+    var t = new Date(iso).getTime();
+    if (!Number.isFinite(t)) return '';
+    var diff = Math.max(0, now - t);
+    var mins = Math.floor(diff / 60000);
+    if (mins < 1) return 'just now';
+    if (mins < 60) return mins + 'm';
+    var hrs = Math.floor(mins / 60);
+    if (hrs < 24) return hrs + 'h';
+    var days = Math.floor(hrs / 24);
+    if (days < 7) return days + 'd';
+    var weeks = Math.floor(days / 7);
+    if (weeks < 5) return weeks + 'w';
+    return Math.floor(days / 30) + 'mo';
+  }
+
+  // Group sessions into recency buckets for the sidebar. Pinned
+  // float to a dedicated first group. The rest fall into Today /
+  // Yesterday / This week / Earlier based on last_used_at.
+  function bucketSessions(rows) {
+    var now = Date.now();
+    var dayMs = 24 * 60 * 60 * 1000;
+    var startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+    var startToday = startOfToday.getTime();
+    var startYday = startToday - dayMs;
+    var startWeek = startToday - 7 * dayMs;
+
+    var groups = {
+      pinned: [], today: [], yesterday: [], week: [], earlier: []
+    };
+    rows.forEach(function(r) {
+      if (r.pinned) { groups.pinned.push(r); return; }
+      var t = new Date(r.last_used_at).getTime();
+      if (!Number.isFinite(t)) { groups.earlier.push(r); return; }
+      if (t >= startToday) groups.today.push(r);
+      else if (t >= startYday) groups.yesterday.push(r);
+      else if (t >= startWeek) groups.week.push(r);
+      else groups.earlier.push(r);
+    });
+    return groups;
+  }
+
+  function entityIcon(entityType) {
+    switch (String(entityType || '')) {
+      case 'job':       return '📋'; // 📋
+      case 'estimate':  return '💰'; // 💰
+      case 'lead':      return '🌱'; // 🌱
+      case 'intake':    return '📝'; // 📝
+      case 'client':    return '🏢'; // 🏢
+      case 'general':   return '💬'; // 💬
+      default:          return '💬';
+    }
+  }
+
+  function renderSessionList(rows) {
+    var host = document.getElementById('ai-sidebar-list');
+    if (!host) return;
+    if (!rows.length) {
+      host.innerHTML = '<div style="padding:14px;color:#888;font-style:italic;">No sessions yet. Click "New chat" to start one.</div>';
+      return;
+    }
+    var groups = bucketSessions(rows);
+    var html = '';
+    function renderGroup(label, items) {
+      if (!items.length) return;
+      html += '<div style="padding:8px 12px 4px 12px;font-size:10px;text-transform:uppercase;letter-spacing:0.05em;color:#6b7280;">' + escapeHTML(label) + '</div>';
+      items.forEach(function(r) {
+        var active = (_currentSessionId === r.id);
+        var rowStyle =
+          'display:flex;align-items:flex-start;gap:8px;padding:8px 12px;cursor:pointer;border-left:3px solid transparent;transition:background 0.12s;' +
+          (active ? 'background:rgba(79,140,255,0.15);border-left-color:#4f8cff;' : '');
+        var pinnedBadge = r.pinned ? '<span style="margin-left:4px;font-size:10px;" title="Pinned">⭐</span>' : '';
+        var turnBadge = r.turn_count
+          ? '<span style="font-size:10px;color:#6b7280;margin-left:6px;">' + r.turn_count + 't</span>'
+          : '';
+        var sub = r.summary
+          ? escapeHTML(String(r.summary).slice(0, 80))
+          : (r.entity_id ? escapeHTML(String(r.entity_type) + ' · ' + r.entity_id) : 'No messages yet');
+        html += '<div data-session-id="' + r.id + '" class="ai-session-row" style="' + rowStyle + '" ' +
+                  'onmouseenter="this.style.background=\'' + (active ? 'rgba(79,140,255,0.22)' : 'rgba(255,255,255,0.04)') + '\'" ' +
+                  'onmouseleave="this.style.background=\'' + (active ? 'rgba(79,140,255,0.15)' : 'transparent') + '\'">' +
+          '<span style="font-size:16px;line-height:1.3;">' + entityIcon(r.entity_type) + '</span>' +
+          '<div style="flex:1;min-width:0;">' +
+            '<div style="display:flex;align-items:baseline;gap:6px;">' +
+              '<div style="flex:1;min-width:0;color:#e6e6e6;font-weight:500;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' +
+                escapeHTML(r.label || ('Session ' + r.id)) + pinnedBadge +
+              '</div>' +
+              '<span style="font-size:10px;color:#6b7280;flex-shrink:0;">' + escapeHTML(relativeTime(r.last_used_at)) + '</span>' +
+            '</div>' +
+            '<div style="font-size:11px;color:#9ca3af;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + sub + turnBadge + '</div>' +
+          '</div>' +
+        '</div>';
+      });
+    }
+    renderGroup('Pinned', groups.pinned);
+    renderGroup('Today', groups.today);
+    renderGroup('Yesterday', groups.yesterday);
+    renderGroup('This week', groups.week);
+    renderGroup('Earlier', groups.earlier);
+    host.innerHTML = html;
+
+    // Wire row clicks + right-click menu. Use event delegation so we
+    // don't re-bind on every render.
+    Array.from(host.querySelectorAll('.ai-session-row')).forEach(function(row) {
+      row.onclick = function() {
+        var sid = parseInt(row.getAttribute('data-session-id'), 10);
+        if (Number.isFinite(sid)) pickSession(sid);
+      };
+      row.oncontextmenu = function(e) {
+        e.preventDefault();
+        var sid = parseInt(row.getAttribute('data-session-id'), 10);
+        if (Number.isFinite(sid)) openSessionMenu(sid, e.clientX, e.clientY);
+      };
+    });
+  }
+
+  // Resolve a session row to its entity_id + entity_type so we can
+  // re-render the panel header (and the messages key for history).
+  function pickSession(sessionId) {
+    var row = _sessionList.find(function(s) { return s.id === sessionId; });
+    if (!row) return;
+    _currentSessionId = sessionId;
+    // Re-render the session list so the new active row gets highlighted.
+    renderSessionList(_sessionList);
+    closeSidebar();
+    // Load history for this session and refresh the message pane.
+    if (window.p86Api && window.p86Api.get) {
+      window.p86Api.get('/api/ai/86/messages?session_id=' + sessionId).then(function(resp) {
+        _messages = (resp && resp.messages) || [];
+        renderMessages();
+      }).catch(function() {
+        _messages = [];
+        renderMessages();
+      });
+    }
+    // Update the panel title to reflect the selected session.
+    var titleEl = document.querySelector('#p86-ai-panel .p86-ai-title');
+    if (titleEl) titleEl.textContent = row.label || ('Session ' + sessionId);
+  }
+
+  function sidebarStartNewChat() {
+    if (!window.p86Api || !window.p86Api.post) return;
+    // Default new chats to "general" so they don't anchor to whatever
+    // entity the user happens to be looking at. Entity-anchored
+    // sessions get created automatically by the server's auto-anchor
+    // when the user chats on that entity's page.
+    window.p86Api.post('/api/ai/sessions', { entity_type: 'general', label: 'New chat' }).then(function(resp) {
+      var s = resp && resp.session;
+      if (!s) return;
+      _sessionList.unshift(s);
+      _currentSessionId = s.id;
+      _messages = [];
+      renderMessages();
+      renderSessionList(_sessionList);
+      closeSidebar();
+      var titleEl = document.querySelector('#p86-ai-panel .p86-ai-title');
+      if (titleEl) titleEl.textContent = s.label || 'New chat';
+    }).catch(function(err) {
+      alert('Could not start new chat: ' + (err && err.message || 'unknown error'));
+    });
+  }
+
+  function openSessionMenu(sessionId, x, y) {
+    var row = _sessionList.find(function(s) { return s.id === sessionId; });
+    if (!row) return;
+    // Strip any previous menu instance.
+    var prev = document.getElementById('ai-session-context-menu');
+    if (prev) prev.remove();
+    var menu = document.createElement('div');
+    menu.id = 'ai-session-context-menu';
+    menu.style.cssText = 'position:fixed;left:' + x + 'px;top:' + y + 'px;background:#1a2230;border:1px solid rgba(255,255,255,0.18);border-radius:8px;padding:4px;font-size:12px;z-index:1000;box-shadow:0 6px 16px rgba(0,0,0,0.5);min-width:160px;';
+    function item(label, onClick) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.style.cssText = 'display:block;width:100%;text-align:left;background:transparent;border:0;color:#e6e6e6;padding:6px 10px;cursor:pointer;border-radius:6px;font-size:12px;';
+      b.onmouseenter = function() { b.style.background = 'rgba(255,255,255,0.06)'; };
+      b.onmouseleave = function() { b.style.background = 'transparent'; };
+      b.onclick = function() { menu.remove(); onClick(); };
+      menu.appendChild(b);
+    }
+    item('Rename…', function() { renameSession(sessionId); });
+    item(row.pinned ? 'Unpin' : 'Pin to top', function() { togglePin(sessionId, !row.pinned); });
+    item('Export to Markdown', function() { exportSession(sessionId); });
+    item(row.archived_at ? 'Unarchive' : 'Archive', function() { toggleArchive(sessionId, !row.archived_at); });
+    item('Delete…', function() { deleteSession(sessionId); });
+    document.body.appendChild(menu);
+    // Close on outside click. setTimeout so the click that opened the
+    // menu doesn't immediately dismiss it.
+    setTimeout(function() {
+      document.addEventListener('click', function onDoc() {
+        menu.remove();
+        document.removeEventListener('click', onDoc);
+      });
+    }, 0);
+  }
+
+  function renameSession(sessionId) {
+    var row = _sessionList.find(function(s) { return s.id === sessionId; });
+    if (!row) return;
+    var next = prompt('Rename session:', row.label || '');
+    if (next == null) return;
+    var trimmed = String(next).trim();
+    if (!trimmed) return;
+    window.p86Api.patch('/api/ai/sessions/' + sessionId, { label: trimmed }).then(function(resp) {
+      if (resp && resp.session) {
+        Object.assign(row, resp.session);
+        renderSessionList(_sessionList);
+        if (_currentSessionId === sessionId) {
+          var titleEl = document.querySelector('#p86-ai-panel .p86-ai-title');
+          if (titleEl) titleEl.textContent = row.label;
+        }
+      }
+    }).catch(function(err) {
+      alert('Rename failed: ' + (err && err.message || 'unknown'));
+    });
+  }
+
+  function togglePin(sessionId, pin) {
+    window.p86Api.patch('/api/ai/sessions/' + sessionId, { pinned: !!pin }).then(function(resp) {
+      var row = _sessionList.find(function(s) { return s.id === sessionId; });
+      if (row && resp && resp.session) Object.assign(row, resp.session);
+      renderSessionList(_sessionList);
+    });
+  }
+
+  function toggleArchive(sessionId, archived) {
+    window.p86Api.patch('/api/ai/sessions/' + sessionId, { archived: !!archived }).then(function() {
+      // Refetch — archived rows drop out of the default list.
+      fetchSessions();
+    });
+  }
+
+  function deleteSession(sessionId) {
+    var row = _sessionList.find(function(s) { return s.id === sessionId; });
+    var label = row && row.label || ('Session ' + sessionId);
+    if (!confirm('Permanently delete "' + label + '"? This removes the Anthropic-side session too. Your local message history stays.')) return;
+    window.p86Api.del('/api/ai/sessions/' + sessionId).then(function() {
+      _sessionList = _sessionList.filter(function(s) { return s.id !== sessionId; });
+      if (_currentSessionId === sessionId) _currentSessionId = null;
+      renderSessionList(_sessionList);
+    }).catch(function(err) {
+      alert('Delete failed: ' + (err && err.message || 'unknown'));
+    });
+  }
+
+  function exportSession(sessionId) {
+    // POST returns markdown directly; we just navigate to it so the
+    // browser handles the file download via Content-Disposition.
+    var form = document.createElement('form');
+    form.method = 'POST';
+    form.action = '/api/ai/sessions/' + sessionId + '/export';
+    form.style.display = 'none';
+    var input = document.createElement('input');
+    input.type = 'hidden';
+    input.name = 'format';
+    input.value = 'markdown';
+    form.appendChild(input);
+    document.body.appendChild(form);
+    form.submit();
+    document.body.removeChild(form);
+  }
+
+  function runSidebarSearch(q) {
+    q = String(q || '').trim();
+    if (!q) {
+      // Empty query → restore the normal list.
+      renderSessionList(_sessionList);
+      return;
+    }
+    window.p86Api.get('/api/ai/sessions/search?q=' + encodeURIComponent(q)).then(function(resp) {
+      var results = (resp && resp.results) || [];
+      var host = document.getElementById('ai-sidebar-list');
+      if (!host) return;
+      if (!results.length) {
+        host.innerHTML = '<div style="padding:14px;color:#888;font-style:italic;">No matches for "' + escapeHTML(q) + '".</div>';
+        return;
+      }
+      var html = '<div style="padding:8px 12px 4px 12px;font-size:10px;text-transform:uppercase;letter-spacing:0.05em;color:#6b7280;">Results (' + results.length + ')</div>';
+      results.forEach(function(r) {
+        var snippet = r.snippet ? '<div style="font-size:11px;color:#9ca3af;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escapeHTML(r.snippet) + '</div>' : '';
+        html += '<div data-session-id="' + r.id + '" class="ai-session-row" style="display:flex;align-items:flex-start;gap:8px;padding:8px 12px;cursor:pointer;">' +
+          '<span style="font-size:16px;line-height:1.3;">' + entityIcon(r.entity_type) + '</span>' +
+          '<div style="flex:1;min-width:0;">' +
+            '<div style="color:#e6e6e6;font-weight:500;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escapeHTML(r.label || ('Session ' + r.id)) + '</div>' +
+            snippet +
+          '</div>' +
+        '</div>';
+      });
+      host.innerHTML = html;
+      Array.from(host.querySelectorAll('.ai-session-row')).forEach(function(row) {
+        row.onclick = function() {
+          var sid = parseInt(row.getAttribute('data-session-id'), 10);
+          if (Number.isFinite(sid)) pickSession(sid);
+        };
+      });
+    }).catch(function() { /* leave list as-is on transient failures */ });
+  }
+
+  // Expose current session id to the chat send path so it can include
+  // session_id in /86/chat requests. Returns null when the user hasn't
+  // picked one yet — server-side auto-anchor resolves the right session
+  // from current_context in that case.
+  function getCurrentSessionId() { return _currentSessionId; }
+
+  // Auto-anchor: when the user navigates between entities (Job A →
+  // Job B), find or create the session for that entity and switch the
+  // sidebar's current pick. Done client-side after fetchSessions
+  // returns so we don't slam the server with an extra round-trip per
+  // navigation. If the session doesn't exist locally, we leave
+  // _currentSessionId null — the next chat send will auto-create one
+  // via the server's resolveSessionForChat.
+  function autoAnchorToEntity(entityType, entityId) {
+    var previous = _currentSessionId;
+    // Look for an existing session in the cached list first to avoid
+    // a network round-trip on every navigation.
+    var match = _sessionList.find(function(s) {
+      return !s.archived_at && s.entity_type === entityType &&
+        String(s.entity_id) === String(entityId);
+    });
+    if (match) {
+      if (_currentSessionId !== match.id) {
+        _currentSessionId = match.id;
+        showSessionSwitchToast(match.label || (entityType + ' ' + entityId));
+        renderSessionList(_sessionList);
+      }
+      return;
+    }
+    // No cached match. Refresh the list (cheap) so a session created
+    // in another tab gets picked up — and if there's still no match,
+    // null the current session so the server auto-anchors fresh.
+    if (!_sessionListLoaded) {
+      fetchSessions();
+      return;
+    }
+    _currentSessionId = null;
+    if (previous !== null) {
+      // We just dropped a previously-active session because the user
+      // navigated to a new entity. Subtle toast so the user knows the
+      // session changed without it feeling intrusive.
+      showSessionSwitchToast('New ' + entityType + ' chat');
+    }
+  }
+
+  function autoAnchorToGeneral() {
+    var general = _sessionList.find(function(s) {
+      return !s.archived_at && s.entity_type === 'general';
+    });
+    if (general) {
+      if (_currentSessionId !== general.id) {
+        _currentSessionId = general.id;
+        showSessionSwitchToast('General');
+        renderSessionList(_sessionList);
+      }
+    } else {
+      _currentSessionId = null;
+    }
+  }
+
+  // Toast that fades in / out at the top of the panel. ~2 seconds.
+  // Doesn't block anything — pure FYI ("you switched contexts").
+  function showSessionSwitchToast(sessionLabel) {
+    var panel = document.getElementById('p86-ai-panel');
+    if (!panel) return;
+    var prev = panel.querySelector('#ai-session-switch-toast');
+    if (prev) prev.remove();
+    var toast = document.createElement('div');
+    toast.id = 'ai-session-switch-toast';
+    toast.style.cssText = 'position:absolute;top:54px;left:50%;transform:translateX(-50%);background:rgba(15,23,42,0.95);color:#dbeafe;border:1px solid rgba(79,140,255,0.4);border-radius:8px;padding:8px 14px;font-size:12px;z-index:6;box-shadow:0 4px 14px rgba(0,0,0,0.4);opacity:0;transition:opacity 0.18s;display:flex;align-items:center;gap:8px;';
+    toast.innerHTML = '<span style="font-size:13px;">&#x21BB;</span>' +
+      '<span>Switched to <strong>' + escapeHTML(sessionLabel) + '</strong></span>';
+    panel.appendChild(toast);
+    requestAnimationFrame(function() { toast.style.opacity = '1'; });
+    setTimeout(function() {
+      toast.style.opacity = '0';
+      setTimeout(function() { toast.remove(); }, 220);
+    }, 2000);
   }
 
   function clearConversation() {
@@ -1739,6 +2226,12 @@
         bodyImages = bodyImages.concat(autoImages);
       }
       if (bodyImages.length) body.additional_images = bodyImages.slice(0, 18);
+      // Pin the active sidebar session, if any. Without it the server
+      // auto-resolves from current_context — fine for the very first
+      // turn but undesirable after the user has explicitly picked a
+      // session from the sidebar.
+      var sid = getCurrentSessionId();
+      if (sid) body.session_id = sid;
       streamFromEndpoint(apiBase() + '/chat', body);
     });
   }
@@ -4028,6 +4521,12 @@
       // the user just approving a request_build_mode card.
       body.aiPhase = getJobAIPhase(_entityId);
     }
+    // Tie the approval continuation to the same session the proposing
+    // turn ran in. Without this, switching sidebar rows between a
+    // proposal and its approval would post the tool_results to the
+    // wrong session.
+    var sid = getCurrentSessionId();
+    if (sid) body.session_id = sid;
     streamFromEndpoint(apiBase() + '/chat/continue', body);
   }
 

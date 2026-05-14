@@ -2997,6 +2997,89 @@ function isStaleToolUseIdError(e) {
 // entity_type, entity_id, user_id) tuple. Caller swaps the active
 // session id and retries. Conversation history is lost (sessions are
 // per-conversation server-side state) but ai_messages stays intact.
+// Background label generator — fires after the first turn finishes
+// on a session whose summary is still null. One short Anthropic call
+// produces both a concise label (2-6 words) AND a one-line summary,
+// then writes both back to ai_sessions. Errors swallowed: a missing
+// auto-label is a sidebar polish issue, not a chat blocker.
+//
+// Cost: ~one extra cheap call per new session (haiku for this would
+// be ideal but we use the same client for simplicity). Triggered
+// exclusively on the first user+assistant exchange so sessions don't
+// re-bill on every turn.
+async function maybeGenerateSessionLabel(sessionId) {
+  try {
+    const sRes = await pool.query(`SELECT * FROM ai_sessions WHERE id = $1`, [sessionId]);
+    if (!sRes.rows.length) return;
+    const session = sRes.rows[0];
+    if (session.summary) return; // already have a summary; don't overwrite
+
+    // Load the first user + assistant exchange. We summarize from text
+    // only — image content is dropped because it would blow up the
+    // prompt for no quality gain on a label task.
+    const mRes = await pool.query(
+      `SELECT role, content FROM ai_messages
+         WHERE user_id = $1
+           AND entity_type = $2
+           AND COALESCE(estimate_id, '') = COALESCE($3, '')
+         ORDER BY created_at ASC
+         LIMIT 4`,
+      [session.user_id, session.entity_type, session.entity_id]
+    );
+    if (mRes.rows.length < 2) return; // need at least one exchange
+
+    const anthropic = getAnthropic();
+    if (!anthropic) return;
+
+    const exchange = mRes.rows
+      .map(m => (m.role === 'user' ? 'User: ' : 'Assistant: ') +
+        (typeof m.content === 'string' ? m.content : JSON.stringify(m.content)).slice(0, 800))
+      .join('\n\n');
+
+    const result = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 200,
+      messages: [{
+        role: 'user',
+        content:
+          'Given this conversation excerpt, output JSON with exactly two fields:\n' +
+          '  "label": a 2-6 word title (no quotes, no period)\n' +
+          '  "summary": one short sentence describing what the conversation is about (under 90 chars)\n' +
+          'Output ONLY the JSON object, nothing else.\n\n---\n\n' + exchange
+      }]
+    });
+    const text = result && Array.isArray(result.content)
+      ? result.content.map(b => b.type === 'text' ? b.text : '').join('')
+      : '';
+    if (!text) return;
+    const match = text.match(/\{[\s\S]*\}/);
+    if (!match) return;
+    let parsed;
+    try { parsed = JSON.parse(match[0]); } catch (_) { return; }
+    const label = parsed.label && String(parsed.label).slice(0, 200);
+    const summary = parsed.summary && String(parsed.summary).slice(0, 500);
+    if (!label && !summary) return;
+
+    // Only overwrite the label if the existing one is a placeholder
+    // (auto-anchor used the entity name/id). Anything the user
+    // explicitly renamed stays. The placeholder pattern is "Type id"
+    // or "Type <number>" — distinct from descriptive labels which
+    // tend to be longer with multiple lower-case words.
+    const isPlaceholder = !session.label ||
+      /^(Job|Estimate|Lead|Intake|General|Client)( [A-Za-z0-9_\-]+)?$/.test(session.label);
+
+    await pool.query(
+      `UPDATE ai_sessions
+          SET label = CASE WHEN $1::boolean THEN COALESCE($2, label) ELSE label END,
+              summary = COALESCE($3, summary)
+        WHERE id = $4`,
+      [isPlaceholder, label || null, summary || null, sessionId]
+    );
+  } catch (e) {
+    console.warn('[maybeGenerateSessionLabel] failed for session', sessionId, ':', e.message);
+  }
+}
+
 // Archive the active v2 ai_sessions row for one (agent, entity, user)
 // tuple AND archive the Anthropic-side session so the next chat turn
 // creates a fresh session. Called from the DELETE /messages handlers
@@ -9873,6 +9956,17 @@ router.post('/86/chat', requireAuth, requireOrg, async (req, res) => {
            toolUseCount,
            toolUses ? JSON.stringify(toolUses) : null]
         );
+
+        // Background auto-label: on the very first exchange (the
+        // user message we just inserted was turn 1, and this is
+        // the corresponding assistant reply), kick off a label /
+        // summary generator. setImmediate so it runs after this
+        // response is fully flushed.
+        if (session._freshlyCreated || session.turn_count <= 1) {
+          setImmediate(() => {
+            maybeGenerateSessionLabel(session.id).catch(() => {});
+          });
+        }
       }
     });
   } catch (e) {

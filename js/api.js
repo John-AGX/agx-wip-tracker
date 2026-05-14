@@ -407,7 +407,7 @@
   };
 
   window.p86Api = {
-    get: get, put: put, post: post, del: del,
+    get: get, put: put, post: post, del: del, patch: patch,
     jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai, materials: materials, qbCosts: qbCosts, subs: subsApi, schedule: schedule, adminSms: adminSms, messages: messages, weather: weather,
     isOffline: isOffline,
     isAuthenticated: function() { return !!getToken() && !isOffline(); }
