@@ -381,6 +381,49 @@
     return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
 
+  // Copy-to-clipboard handler for fenced code blocks. Bound to the
+  // copy button via inline onclick="p86CopyCodeBlock(this)" emitted
+  // by renderMarkdown above. Walks to the sibling <code>, grabs its
+  // textContent (which excludes button noise because <code> is a
+  // separate element), and writes to the clipboard. Brief "Copied!"
+  // flash confirms it worked; falls back to a quiet failure with a
+  // tooltip change if the clipboard API is unavailable (older mobile
+  // browsers, insecure context).
+  window.p86CopyCodeBlock = function(btn) {
+    if (!btn) return;
+    var wrap = btn.parentElement;
+    var codeEl = wrap && wrap.querySelector('pre code');
+    var text = codeEl ? codeEl.textContent : (wrap && wrap.querySelector('pre') ? wrap.querySelector('pre').textContent : '');
+    if (!text) return;
+    var originalHTML = btn.innerHTML;
+    var done = function() {
+      btn.innerHTML = '✓ Copied';
+      setTimeout(function() { btn.innerHTML = originalHTML; }, 1400);
+    };
+    var failed = function() {
+      btn.innerHTML = '✗ Failed';
+      setTimeout(function() { btn.innerHTML = originalHTML; }, 1400);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, failed);
+    } else {
+      // Fallback for older browsers / insecure context — execCommand path.
+      try {
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        var ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+        ok ? done() : failed();
+      } catch (e) {
+        failed();
+      }
+    }
+  };
+
   // ── Client context for Job mode ──────────────────────────────
   // Bundles the node-graph snapshot (localStorage) plus an aggregated
   // QB cost summary (parsed from workspace sheets named
@@ -621,9 +664,23 @@
   function renderMarkdown(text) {
     if (!text) return '';
     var html = escapeHTMLLocal(text);
-    // Code blocks (triple backtick)
+    // Code blocks (triple backtick). Wraps each block in a relative
+    // container with a copy-to-clipboard button pinned top-right — matches
+    // the Claude.ai / ChatGPT code-block UX. The inner <code> element
+    // gives us a stable textContent target for the copy handler that
+    // ignores button noise. The onclick handler delegates to
+    // window.p86CopyCodeBlock (defined below) so this raw HTML string
+    // can wire up the interaction without setting up event listeners
+    // after innerHTML assignment.
     html = html.replace(/```([\s\S]*?)```/g, function(_, code) {
-      return '<pre style="background:rgba(255,255,255,0.06);padding:8px 10px;border-radius:6px;overflow-x:auto;font-size:11px;font-family:SF Mono,Consolas,monospace;margin:6px 0;max-width:100%;box-sizing:border-box;">' + code.trim() + '</pre>';
+      var trimmed = code.trim();
+      return '<div class="p86-codeblock" style="position:relative;margin:6px 0;max-width:100%;">' +
+        '<button type="button" class="p86-codeblock-copy" onclick="p86CopyCodeBlock(this)" title="Copy" aria-label="Copy code" ' +
+          'style="position:absolute;top:5px;right:5px;background:rgba(255,255,255,0.08);color:#cbd5e1;border:1px solid rgba(255,255,255,0.12);border-radius:5px;padding:3px 7px;font-size:10px;cursor:pointer;line-height:1.2;font-family:inherit;opacity:0.7;transition:opacity 0.15s, background 0.15s;" ' +
+          'onmouseenter="this.style.opacity=1;this.style.background=\'rgba(255,255,255,0.14)\'" ' +
+          'onmouseleave="this.style.opacity=0.7;this.style.background=\'rgba(255,255,255,0.08)\'">📋 Copy</button>' +
+        '<pre style="background:rgba(255,255,255,0.06);padding:8px 36px 8px 10px;border-radius:6px;overflow-x:auto;font-size:11px;font-family:SF Mono,Consolas,monospace;margin:0;max-width:100%;box-sizing:border-box;"><code>' + trimmed + '</code></pre>' +
+      '</div>';
     });
     // Inline code
     html = html.replace(/`([^`]+)`/g, '<code style="background:rgba(255,255,255,0.08);padding:1px 5px;border-radius:3px;font-family:SF Mono,Consolas,monospace;font-size:0.9em;">$1</code>');
