@@ -6107,15 +6107,24 @@ const WATCH_TOOLS = [
 // Build the SKILL.md body for one local pack. Mirrors the helper of
 // the same name in admin-agents-routes.js so CoS-driven mirrors and
 // admin-button mirrors produce byte-identical uploads.
+function slugifyMirrorName(s) {
+  return String(s || 'skill')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 64) || 'skill';
+}
+
 function buildSkillMarkdownForMirror(pack) {
-  const name = (pack.name || 'Project 86 skill').replace(/[\r\n]/g, ' ');
+  const slug = slugifyMirrorName(pack.name);
+  const human = (pack.name || 'Project 86 skill').replace(/[\r\n]/g, ' ');
   const desc = (pack.replaces_section
     ? 'Section override for ' + pack.replaces_section
-    : (pack.category ? 'Category: ' + pack.category : name)
+    : (pack.category ? 'Category: ' + pack.category : human)
   ).replace(/[\r\n]/g, ' ');
   return [
     '---',
-    'name: ' + name,
+    'name: ' + slug,
     'description: ' + desc,
     '---',
     '',
@@ -7204,7 +7213,8 @@ async function execStaffApprovalTool(name, input, ctx) {
         return 'Skill pack "' + input.name + '" is already mirrored (' + pack.anthropic_skill_id + ').';
       }
       const md = buildSkillMarkdownForMirror(pack);
-      const file = await toFile(Buffer.from(md, 'utf8'), 'skill/SKILL.md', { type: 'text/markdown' });
+      const slug = slugifyMirrorName(pack.name);
+      const file = await toFile(Buffer.from(md, 'utf8'), slug + '/SKILL.md', { type: 'text/markdown' });
       const created = await anthropic.beta.skills.create({
         display_title: (pack.name || 'Project 86 skill').slice(0, 200),
         files: [file]

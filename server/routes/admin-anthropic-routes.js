@@ -88,19 +88,20 @@ router.post('/skills', requireAuth, requireCapability('ROLES_MANAGE'), async (re
     // frontmatter blocks already in the body pass through unchanged
     // — we only wrap if no frontmatter is detected.
     const description = String(body.description || displayTitle).replace(/[\r\n]/g, ' ').slice(0, 1024);
+    const slug = String(displayTitle).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64) || 'skill';
     const hasFrontmatter = /^---\s*\n/.test(md);
     const skillMd = hasFrontmatter
       ? md
       : [
           '---',
-          'name: ' + displayTitle.replace(/[\r\n]/g, ' '),
+          'name: ' + slug,
           'description: ' + description,
           '---',
           '',
           md
         ].join('\n');
 
-    const file = await toFile(Buffer.from(skillMd, 'utf8'), 'skill/SKILL.md', { type: 'text/markdown' });
+    const file = await toFile(Buffer.from(skillMd, 'utf8'), slug + '/SKILL.md', { type: 'text/markdown' });
     const created = await anthropic.beta.skills.create({
       display_title: displayTitle,
       files: [file]

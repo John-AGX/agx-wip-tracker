@@ -764,15 +764,24 @@ const { toFile } = require('@anthropic-ai/sdk');
 // loading runtime can decide when to fetch the skill body. We include
 // both even though our current pack model doesn't separate them — the
 // pack name doubles as the description for now.
+function slugifySkillName(s) {
+  return String(s || 'skill')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 64) || 'skill';
+}
+
 function buildSkillMarkdown(pack) {
-  const name = (pack.name || 'Project 86 skill').replace(/[\r\n]/g, ' ');
+  const slug = slugifySkillName(pack.name);
+  const human = (pack.name || 'Project 86 skill').replace(/[\r\n]/g, ' ');
   const desc = (pack.replaces_section
     ? 'Section override for ' + pack.replaces_section
-    : (pack.category ? 'Category: ' + pack.category : name)
+    : (pack.category ? 'Category: ' + pack.category : human)
   ).replace(/[\r\n]/g, ' ');
   const lines = [
     '---',
-    'name: ' + name,
+    'name: ' + slug,
     'description: ' + desc,
     '---',
     '',
@@ -805,7 +814,8 @@ router.post('/skills/sync-all-to-anthropic', requireAuth, requireCapability('ROL
       }
       try {
         const md = buildSkillMarkdown(pack);
-        const file = await toFile(Buffer.from(md, 'utf8'), 'skill/SKILL.md', { type: 'text/markdown' });
+        const slug = slugifySkillName(pack.name);
+        const file = await toFile(Buffer.from(md, 'utf8'), slug + '/SKILL.md', { type: 'text/markdown' });
         const created = await anthropic.beta.skills.create({
           display_title: (pack.name || 'Project 86 skill').slice(0, 200),
           files: [file]
@@ -860,7 +870,8 @@ router.post('/skills/:idx/sync-to-anthropic', requireAuth, requireCapability('RO
 
     const pack = skills[idx];
     const md = buildSkillMarkdown(pack);
-    const file = await toFile(Buffer.from(md, 'utf8'), 'skill/SKILL.md', { type: 'text/markdown' });
+    const slug = slugifySkillName(pack.name);
+    const file = await toFile(Buffer.from(md, 'utf8'), slug + '/SKILL.md', { type: 'text/markdown' });
     const created = await anthropic.beta.skills.create({
       display_title: (pack.name || 'Project 86 skill').slice(0, 200),
       files: [file]

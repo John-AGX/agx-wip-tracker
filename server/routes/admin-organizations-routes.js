@@ -35,12 +35,20 @@ function getAnthropic() {
 // Build a SKILL.md body for a pack. Mirrors buildSkillMarkdownForMirror
 // in ai-routes.js so admin-button mirrors produce byte-identical
 // uploads to CoS-driven ones (legacy code path).
+function slugifyPackName(s) {
+  return String(s || 'skill')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 64) || 'skill';
+}
+
 function buildPackSkillMd(pack) {
-  const name = String(pack.name || 'Project 86 skill').replace(/[\r\n]/g, ' ');
+  const slug = slugifyPackName(pack.name);
   const desc = String(pack.description || pack.name || 'skill pack').replace(/[\r\n]/g, ' ');
   return [
     '---',
-    'name: ' + name,
+    'name: ' + slug,
     'description: ' + desc,
     '---',
     '',
@@ -528,7 +536,8 @@ router.post('/:id/skill-packs/mirror-all',
       for (const pack of packs) {
         try {
           const md = buildPackSkillMd(pack);
-          const file = await toFile(Buffer.from(md, 'utf8'), 'skill/SKILL.md', { type: 'text/markdown' });
+          const slug = slugifyPackName(pack.name);
+          const file = await toFile(Buffer.from(md, 'utf8'), slug + '/SKILL.md', { type: 'text/markdown' });
           const created = await anthropic.beta.skills.create({
             display_title: String(pack.name || 'Project 86 skill').slice(0, 200),
             files: [file]
