@@ -528,7 +528,7 @@ router.post('/:id/skill-packs/mirror-all',
       for (const pack of packs) {
         try {
           const md = buildPackSkillMd(pack);
-          const file = await toFile(Buffer.from(md, 'utf8'), 'SKILL.md', { type: 'text/markdown' });
+          const file = await toFile(Buffer.from(md, 'utf8'), 'skill/SKILL.md', { type: 'text/markdown' });
           const created = await anthropic.beta.skills.create({
             display_title: String(pack.name || 'Project 86 skill').slice(0, 200),
             files: [file]

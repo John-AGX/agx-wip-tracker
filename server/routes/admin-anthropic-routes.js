@@ -100,7 +100,7 @@ router.post('/skills', requireAuth, requireCapability('ROLES_MANAGE'), async (re
           md
         ].join('\n');
 
-    const file = await toFile(Buffer.from(skillMd, 'utf8'), 'SKILL.md', { type: 'text/markdown' });
+    const file = await toFile(Buffer.from(skillMd, 'utf8'), 'skill/SKILL.md', { type: 'text/markdown' });
     const created = await anthropic.beta.skills.create({
       display_title: displayTitle,
       files: [file]

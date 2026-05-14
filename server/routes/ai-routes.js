@@ -7204,7 +7204,7 @@ async function execStaffApprovalTool(name, input, ctx) {
         return 'Skill pack "' + input.name + '" is already mirrored (' + pack.anthropic_skill_id + ').';
       }
       const md = buildSkillMarkdownForMirror(pack);
-      const file = await toFile(Buffer.from(md, 'utf8'), 'SKILL.md', { type: 'text/markdown' });
+      const file = await toFile(Buffer.from(md, 'utf8'), 'skill/SKILL.md', { type: 'text/markdown' });
       const created = await anthropic.beta.skills.create({
         display_title: (pack.name || 'Project 86 skill').slice(0, 200),
         files: [file]
