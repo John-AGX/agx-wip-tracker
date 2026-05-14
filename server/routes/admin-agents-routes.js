@@ -1825,25 +1825,24 @@ async function collectSkillsFor(agentKey, organization) {
 // migration expands these (e.g. enabling bash/read on 86 for QB
 // cost line analysis).
 function builtinToolsetFor(agentKey) {
-  // Phase 3 — built-in toolset is split by role:
+  // Built-in toolset by role:
   //
-  //   AG  / 86 / HR  → web_search, web_fetch
-  //                      Pure web research. No filesystem tools —
-  //                      read / glob / grep operate on the per-
-  //                      session container's filesystem, which is
-  //                      empty unless we mount files (we don't).
-  //                      Exposing dead tools just confuses the
-  //                      model into trying them and stalling.
-  //                      No bash / write / edit either; task agents
-  //                      mutate state through the propose_*
-  //                      approval flow, not by scripting around it.
+  //   86 (job)         → web_search, web_fetch, read, glob, grep
+  //                      Web research + read access to mounted skill
+  //                      files. Native Anthropic Skills attached to
+  //                      this agent ship as folders with SKILL.md +
+  //                      helper files; the runtime requires `read`
+  //                      to be enabled to surface them at all. glob
+  //                      and grep let 86 traverse multi-file skills
+  //                      when one is auto-loaded. bash / write / edit
+  //                      stay off — task agents mutate state through
+  //                      the propose_* approval flow, not by
+  //                      scripting around it.
   //
   //   CoS              → full toolkit (every built-in on)
   //                      The meta-overseer can write scratch files
-  //                      and then read them back, so the filesystem
-  //                      tools earn their keep. bash + write + edit
-  //                      let CoS investigate issues, draft skill-
-  //                      pack edits, and run aggregate analyses.
+  //                      and read them back, so the broader filesystem
+  //                      tools earn their keep here.
   //
   // Tools run in a sandboxed per-session container — no path to our
   // DB / API / R2 / user data regardless of which subset is on.
@@ -1854,7 +1853,7 @@ function builtinToolsetFor(agentKey) {
   return [{
     type: 'agent_toolset_20260401',
     default_config: { enabled: false },
-    configs: ['web_search', 'web_fetch'].map(opt)
+    configs: ['web_search', 'web_fetch', 'read', 'glob', 'grep'].map(opt)
   }];
 }
 
