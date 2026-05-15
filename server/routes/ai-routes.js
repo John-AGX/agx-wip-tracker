@@ -4239,18 +4239,59 @@ async function buildJobContext(jobId, clientContext, aiPhase, organization) {
     lines.push('');
   }
 
-  // Cost-side detail — top cost-line subs by amount, capped so we don't
-  // blow context. Group by phase / building when meaningful.
-  if (subs.length) {
-    const sortedSubs = subs.slice().sort((a, b) => Number(b.amount || 0) - Number(a.amount || 0));
-    const top = sortedSubs.slice(0, 20);
-    lines.push('# Top cost lines (' + top.length + ' of ' + subs.length + ' shown)');
-    top.forEach(s => {
-      const amt = fmtMoney(s.amount || 0);
-      const label = s.vendor || s.description || s.name || '(unlabeled)';
-      lines.push('- ' + amt + ' ' + label);
-    });
-    lines.push('');
+  // Cost-side detail — top vendors by total dollars posted from
+  // qb_cost_lines for this job. The old code read job.subs and tried
+  // to pull .amount/.vendor off sub-directory records that don't
+  // have those fields (subs use .name / .contractAmt / .billedToDate),
+  // so every row rendered as "$0 <sub-name>" regardless of what was
+  // actually posted. Now groups the real QB cost lines by vendor,
+  // sums amount, sorts desc, top 20. Includes ALL lines (linked AND
+  // unlinked to graph nodes) — many lines on real jobs haven't been
+  // wired yet, and silently filtering them out would hide cost.
+  try {
+    const cl = await pool.query(
+      `SELECT COALESCE(NULLIF(TRIM(vendor), ''), '(no vendor)') AS vendor,
+              SUM(amount)::numeric(12,2) AS total,
+              COUNT(*)::int AS line_count,
+              SUM(CASE WHEN linked_node_id IS NULL THEN 1 ELSE 0 END)::int AS unlinked_count
+         FROM qb_cost_lines
+        WHERE job_id = $1
+        GROUP BY 1
+        ORDER BY total DESC
+        LIMIT 20`,
+      [jobId]
+    );
+    if (cl.rows.length) {
+      const grandTotal = cl.rows.reduce((s, r) => s + Number(r.total || 0), 0);
+      lines.push('# Top cost lines (top ' + cl.rows.length + ' vendors by spend)');
+      lines.push('- Grand total across shown vendors: ' + fmtMoney(grandTotal));
+      cl.rows.forEach(r => {
+        const amt = fmtMoney(Number(r.total || 0));
+        const unlinkedNote = r.unlinked_count > 0
+          ? ' · ' + r.unlinked_count + '/' + r.line_count + ' unlinked'
+          : '';
+        lines.push('- ' + amt + ' ' + r.vendor + ' (' + r.line_count + ' line' + (r.line_count === 1 ? '' : 's') + unlinkedNote + ')');
+      });
+      lines.push('');
+    } else if (subs.length) {
+      // No QB cost lines imported yet, but subs are configured —
+      // surface the contract-amount view so 86 at least sees the
+      // intended sub structure. Label clearly as contracts (not
+      // actuals) so it isn\'t mistaken for posted spend.
+      const sortedSubs = subs.slice().sort((a, b) => Number(b.contractAmt || b.amount || 0) - Number(a.contractAmt || a.amount || 0));
+      const top = sortedSubs.slice(0, 20);
+      lines.push('# Sub contracts (' + top.length + ' of ' + subs.length + ' shown)');
+      lines.push('- No QB cost lines imported for this job yet. Showing sub contract amounts instead — these are NOT posted actuals.');
+      top.forEach(s => {
+        const amt = fmtMoney(s.contractAmt || s.amount || 0);
+        const label = s.name || s.vendor || s.description || '(unlabeled)';
+        const billed = (s.billedToDate || s.billed) ? ' · billed ' + fmtMoney(s.billedToDate || s.billed) : '';
+        lines.push('- ' + amt + ' ' + label + billed);
+      });
+      lines.push('');
+    }
+  } catch (e) {
+    console.warn('[buildJobContext] qb_cost_lines rollup failed:', e.message);
   }
 
   // Invoices — billing posture
