@@ -5931,12 +5931,29 @@
   }
 
   function processFile(entry, file) {
-    var supportsAttach = (_entityType === 'estimate' || _entityType === 'job' || _entityType === 'lead') && _entityId && _entityId !== '__global__';
+    var entityAttach = (_entityType === 'estimate' || _entityType === 'job' || _entityType === 'lead') && _entityId && _entityId !== '__global__';
+    // Off-entity surfaces (Ask 86, intake, client, staff) attach to
+    // the current user's personal My Files bucket
+    // (entity_type='user', entity_id=user.id). Same server pipeline:
+    // extractAttachmentText reads spreadsheets / docs, populates
+    // extracted_text, and 86 reads the content via the existing
+    // read_attachment_text tool. Nothing gets dumped into the
+    // composer — the file IS the attachment.
+    var attachType = entityAttach ? _entityType : 'user';
+    var attachId = entityAttach ? _entityId : null;
+    if (!entityAttach) {
+      var u = (window.p86Auth && window.p86Auth.getUser && window.p86Auth.getUser()) || null;
+      attachId = u && u.id != null ? String(u.id) : null;
+    }
+    var supportsAttach = !!(attachType && attachId);
+    entry.attachEntityType = attachType;
+    entry.attachEntityId = attachId;
     var jobs = [];
-    // 1. Persist to entity attachments where it makes sense.
+    // 1. Persist to attachments — entity bucket on entity surfaces,
+    //    user's My Files bucket on global Ask 86 / intake / client.
     if (supportsAttach && window.p86Api && window.p86Api.attachments) {
       jobs.push(
-        window.p86Api.attachments.upload(_entityType, _entityId, file).then(function(res) {
+        window.p86Api.attachments.upload(attachType, attachId, file).then(function(res) {
           var att = res.attachment || res;
           entry.attachmentId = att.id;
           entry.viewUrl = att.web_url || att.original_url || null;
@@ -5962,42 +5979,20 @@
       }).catch(function(err) {
         entry.uploadError = err.message || 'Image read failed';
       }));
-    } else if (entry.kind === 'sheet') {
-      // Spreadsheet — on entity surfaces (job/estimate/lead) the file
-      // uploads to the attachments table above; the server's
-      // extractAttachmentText reads the cells into
-      // attachments.extracted_text and 86 fetches them via the
-      // read_attachment_text tool. NO markdown gets pasted into the
-      // composer — the file IS the attachment, not its text content.
-      // Off-entity surfaces (Ask 86 / intake / client / staff) have
-      // nowhere to attach to, so we parse client-side and insert the
-      // markdown table as a fallback ONLY in that case.
-      if (!supportsAttach) {
-        jobs.push(parseSheetToMarkdown(file).then(function(md) {
-          if (!md) return;
-          entry.sheetMarkdown = md;
-          var heading = '\n\n**' + entry.filename + '**\n\n';
-          var input = document.getElementById('ai-input');
-          if (input) {
-            var text = heading + md + '\n';
-            var start = (typeof input.selectionStart === 'number') ? input.selectionStart : input.value.length;
-            var end   = (typeof input.selectionEnd === 'number') ? input.selectionEnd : input.value.length;
-            input.value = input.value.slice(0, start) + text + input.value.slice(end);
-            var pos = start + text.length;
-            try { input.setSelectionRange(pos, pos); } catch (_) {}
-            input.focus();
-            try { input.dispatchEvent(new Event('input', { bubbles: true })); } catch (_) {}
-          }
-        }).catch(function(err) {
-          entry.uploadError = err.message || 'Spreadsheet parse failed';
-        }));
-      }
-      // On entity surfaces the upload above is enough — 86 reads
-      // the text via read_attachment_text on the next turn.
-    } else if (entry.kind === 'doc') {
-      // Word doc / plain text — just the upload path. Server extracts
-      // text on upload; 86 reads it via read_attachment_text. Nothing
-      // to render client-side.
+    } else if (entry.kind === 'sheet' || entry.kind === 'doc') {
+      // Spreadsheet / Word doc / plain text — pure attachment flow.
+      // The upload above (entity bucket on job/estimate/lead, user's
+      // My Files bucket on global Ask 86) runs extractAttachmentText
+      // server-side; cell text / paragraph text lands in
+      // attachments.extracted_text. 86 reads it on the next turn via
+      // the existing read_attachment_text tool. Nothing client-side
+      // to render — the file IS the attachment, not its text dumped
+      // into the composer.
+      //
+      // (Earlier versions of this branch parsed sheets to markdown
+      // and inserted into the composer when there was no entity to
+      // attach to. That's no longer needed — global Ask 86 now
+      // attaches to the user's personal files bucket.)
     }
     Promise.all(jobs).then(function() {
       entry.status = entry.uploadError ? 'error' : 'ready';
