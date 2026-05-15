@@ -3033,14 +3033,24 @@
   var _batchJobId = null;      // when drilled into a single batch's results
 
   // ──────────────────────── Organization admin tab ─────────────────
-  // Two stacked sections: (1) Identity — name/description/identity_body
-  // editor that drives 86's composed system prompt; (2) Skill Packs —
-  // CRUD for org_skill_packs. Both read/write through the new
-  // /api/admin/organizations endpoints. Save → sync the managed
-  // agent so changes reach Anthropic.
+  // Four inner pill-tabs: Identity (system-prompt body), Company KB
+  // (org-wide files), Skill Packs (load_skill_pack body library), MCP
+  // Connectors (Phase 6 external tool reach). Each tab renders its
+  // own fieldset only — keeps the long scroll under control.
   var _orgDraft = null;          // currently-loaded organization row (clone)
   var _orgPacksDraft = null;     // currently-loaded org_skill_packs rows (clones)
   var _orgPacksDirty = new Set();// pack ids with unsaved changes
+
+  var ORG_TABS = [
+    { key: 'identity', label: '\u{1FAAA} Identity',     desc: 'Company name + the prose composed into 86\'s system prompt. After saving, click Sync managed agent to push to Anthropic.' },
+    { key: 'kb',       label: '\u{1F4DA} Company KB',   desc: 'Org-wide reference files every user can read; only admins upload. 86 searches these via search_org_kb.' },
+    { key: 'packs',    label: '\u{1F9E0} Skill Packs',  desc: 'On-demand instruction blocks. 86 sees the list and calls load_skill_pack({name}) when one maps to the work.' },
+    { key: 'mcp',      label: '\u{1F50C} MCP Connectors', desc: 'External tool reach via Model Context Protocol (Gmail, Calendar, QuickBooks, custom). Registers on next sync.' }
+  ];
+
+  var _orgActiveTab = (function() {
+    try { return sessionStorage.getItem('agx_org_tab') || 'identity'; } catch (e) { return 'identity'; }
+  })();
 
   function renderAdminOrganization() {
     var host = document.getElementById('admin-organization-content');
@@ -3057,26 +3067,79 @@
       _orgPacksDirty = new Set();
       host.innerHTML = renderOrgHTML();
       attachOrgHandlers();
-      loadOrgMcpServers();
     }).catch(function(err) {
       host.innerHTML = '<div style="color:#e74c3c;padding:14px 0;">Failed to load organization: ' + escapeHTML(err.message || 'unknown') + '</div>';
     });
   }
   window.renderAdminOrganization = renderAdminOrganization;
 
-  function renderOrgHTML() {
-    var o = _orgDraft || {};
-    var packs = _orgPacksDraft || [];
-    return ''
-      + '<div style="margin:0 0 14px 0;padding:12px 14px;background:rgba(79,140,255,0.05);border:1px solid rgba(79,140,255,0.20);border-radius:8px;font-size:12px;line-height:1.55;color:var(--text-dim,#aaa);">'
-      +   '<div style="font-weight:600;color:#4f8cff;margin-bottom:4px;">&#x1F3E2; Organization settings</div>'
-      +   'Each tenant in Project 86 has its own identity, skill packs, and managed Anthropic agent. '
-      +   '<strong>Identity</strong> below feeds into 86\'s composed system prompt at registration / sync time. '
-      +   '<strong>Skill packs</strong> are on-demand instruction blocks 86 calls via load_skill_pack({name}).'
-      + '</div>'
+  // Sync any in-flight edits on the currently-rendered tab into the
+  // in-memory drafts before swapping tabs, so unsaved changes survive
+  // the re-render. No-op on tabs whose inputs aren't in the DOM.
+  function syncOrgFromInputs() {
+    var nameEl = document.getElementById('org-name');
+    if (nameEl && _orgDraft) {
+      _orgDraft.name = nameEl.value;
+      var descEl = document.getElementById('org-description');
+      if (descEl) _orgDraft.description = descEl.value;
+      var idEl = document.getElementById('org-identity-body');
+      if (idEl) _orgDraft.identity_body = idEl.value;
+    }
+    if (_orgPacksDraft && document.querySelector('[data-org-pack-idx]')) {
+      _orgPacksDraft.forEach(function(_, idx) { syncPackFromInputs(idx); });
+    }
+  }
 
-      // ── Identity ──
-      + '<fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:14px;margin-bottom:18px;">'
+  function switchOrgTab(key) {
+    if (!ORG_TABS.some(function(t) { return t.key === key; })) return;
+    syncOrgFromInputs();
+    _orgActiveTab = key;
+    try { sessionStorage.setItem('agx_org_tab', key); } catch (e) { /* ignore */ }
+    var host = document.getElementById('admin-organization-content');
+    if (host) {
+      host.innerHTML = renderOrgHTML();
+      attachOrgHandlers();
+    }
+  }
+  window.switchOrgTab = switchOrgTab;
+
+  function renderOrgHTML() {
+    if (!ORG_TABS.some(function(t) { return t.key === _orgActiveTab; })) {
+      _orgActiveTab = 'identity';
+    }
+    var activeTab = ORG_TABS.find(function(t) { return t.key === _orgActiveTab; });
+
+    // Pill-style tab strip — same pattern as Admin → Templates.
+    var tabsHTML = '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px;border-bottom:1px solid var(--border,#333);padding-bottom:10px;">';
+    ORG_TABS.forEach(function(tab) {
+      var isActive = (tab.key === _orgActiveTab);
+      var bg = isActive ? 'rgba(79,140,255,0.18)' : 'transparent';
+      var border = isActive ? '#4f8cff' : 'var(--border,#333)';
+      var color = isActive ? '#fff' : 'var(--text-dim,#888)';
+      tabsHTML += '<button onclick="switchOrgTab(\'' + tab.key + '\')" ' +
+        'style="padding:6px 14px;border:1px solid ' + border + ';border-radius:18px;background:' + bg + ';color:' + color + ';font-size:12px;font-weight:600;cursor:pointer;">' +
+        tab.label +
+      '</button>';
+    });
+    tabsHTML += '</div>';
+
+    var hintHTML = activeTab && activeTab.desc
+      ? '<p style="margin:0 0 14px 0;color:var(--text-dim,#888);font-size:12px;line-height:1.55;">' + activeTab.desc + '</p>'
+      : '';
+
+    var bodyHTML = '';
+    if (_orgActiveTab === 'identity')  bodyHTML = renderOrgIdentityHTML();
+    else if (_orgActiveTab === 'kb')   bodyHTML = renderOrgKBTabHTML();
+    else if (_orgActiveTab === 'packs') bodyHTML = renderOrgPacksTabHTML();
+    else if (_orgActiveTab === 'mcp')  bodyHTML = renderOrgMcpTabHTML();
+
+    return tabsHTML + hintHTML + bodyHTML;
+  }
+
+  function renderOrgIdentityHTML() {
+    var o = _orgDraft || {};
+    return ''
+      + '<fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:14px;">'
       +   '<legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Identity</legend>'
       +   '<div style="display:grid;grid-template-columns:120px 1fr;gap:10px 12px;align-items:center;font-size:12px;">'
       +     '<label>Slug</label>'
@@ -3091,7 +3154,7 @@
       +     '</label>'
       +     '<textarea id="org-identity-body" rows="16" style="width:100%;font-family:\'SF Mono\',ui-monospace,monospace;font-size:12px;line-height:1.5;resize:vertical;" placeholder="# About the company you serve&#10;You are working for ___ &mdash; describe their industry, standards, market, customer hierarchy here.">' + escapeHTML(o.identity_body || '') + '</textarea>'
       +     '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:6px;line-height:1.5;">'
-      +       'This text appears in 86\'s registered system prompt right after the platform-identity baseline. Use it to define the COMPANY\'S identity (standards, markets, customer hierarchy) — not 86\'s identity. After saving, click <strong>Sync managed agent</strong> to push the new system prompt to Anthropic so 86 picks it up on the next chat.'
+      +       'This text appears in 86\'s registered system prompt right after the platform-identity baseline. Use it to define the COMPANY\'S identity (standards, markets, customer hierarchy) — not 86\'s identity.'
       +     '</div>'
       +   '</div>'
       +   '<div style="display:flex;gap:8px;margin-top:14px;align-items:center;">'
@@ -3100,17 +3163,13 @@
       +     '<button class="ee-btn primary" onclick="saveOrgIdentity()">&#x1F4BE; Save identity</button>'
       +     '<button class="ee-btn" onclick="syncOrgAgent()" title="Push the updated identity_body + skill packs to the registered Anthropic agent" style="background:linear-gradient(135deg,#4f8cff,#7c3aed);color:#fff;border:none;font-weight:600;">&#x1F4E1; Sync managed agent</button>'
       +   '</div>'
-      + '</fieldset>'
+      + '</fieldset>';
+  }
 
-      // ── Company knowledge base (org-wide files) ──
-      // Admin-curated bucket every user can READ. Feeds 86\'s
-      // search_org_kb tool so the agent has cross-org doc access
-      // (proposal templates, brand assets, SOPs, master pricing).
-      + '<fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:14px;margin-bottom:18px;">'
+  function renderOrgKBTabHTML() {
+    return ''
+      + '<fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:14px;">'
       +   '<legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Company knowledge base</legend>'
-      +   '<p style="margin:0 0 12px 0;font-size:12px;color:var(--text-dim,#888);line-height:1.55;">'
-      +     'Org-wide reference files — every user in this org can read; only admins can upload. 86 searches these (along with everyone\'s personal My Files and every job/estimate/lead attachment) via the search_org_kb tool. Upload your master proposal templates, brand kit, SOPs, vendor price lists, or anything else 86 should know about company-wide.'
-      +   '</p>'
       +   '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">'
       +     '<button class="ee-btn primary" onclick="document.getElementById(\'org-kb-file-input\').click();">&#x1F4C2; Upload to company KB</button>'
       +     '<input type="file" id="org-kb-file-input" multiple style="display:none;" accept="image/*,application/pdf,.xlsx,.xls,.xlsm,.csv,.tsv,.docx,.doc,.txt,.md" />'
@@ -3118,29 +3177,28 @@
       +     '<button class="ee-btn secondary" onclick="refreshOrgKB()">Refresh</button>'
       +   '</div>'
       +   '<div id="org-kb-list" style="font-size:12px;color:var(--text-dim,#888);font-style:italic;">Loading company files…</div>'
-      + '</fieldset>'
+      + '</fieldset>';
+  }
 
-      // ── Skill packs ──
+  function renderOrgPacksTabHTML() {
+    var packs = _orgPacksDraft || [];
+    return ''
       + '<fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:14px;">'
       +   '<legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Skill packs (' + packs.length + ')</legend>'
-      +   '<p style="margin:0 0 12px 0;font-size:12px;color:var(--text-dim,#888);line-height:1.55;">'
-      +     'On-demand instruction blocks. 86 sees the list of pack names in his per-turn manifest and calls <code>load_skill_pack({name})</code> to pull a body when a pack maps to the work he\'s doing. No always-on injection.'
-      +   '</p>'
       +   '<div id="org-packs-list">' + renderOrgPacksHTML() + '</div>'
       +   '<div style="display:flex;gap:8px;margin-top:14px;align-items:center;">'
       +     '<span id="org-packs-status" style="flex:1;font-size:11px;color:var(--text-dim,#888);"></span>'
       +     '<button class="ee-btn secondary" onclick="addOrgPack()">&#x2795; New pack</button>'
       +     '<button class="ee-btn primary" onclick="saveOrgPacks()">&#x1F4BE; Save changed packs</button>'
       +   '</div>'
-      + '</fieldset>'
+      + '</fieldset>';
+  }
 
-      // ── MCP connectors (Phase 6) ──
-      + '<fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:14px;margin-top:18px;">'
+  function renderOrgMcpTabHTML() {
+    return ''
+      + '<fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:14px;">'
       +   '<legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">MCP connectors</legend>'
-      +   '<p style="margin:0 0 12px 0;font-size:12px;color:var(--text-dim,#888);line-height:1.55;">'
-      +     'External tool reach via Model Context Protocol — Gmail, Calendar, QuickBooks, Slack, custom MCP servers. Each entry is one MCP server URL plus an optional bearer token. Added servers register on the next <strong>Sync managed agent</strong>; once registered, 86 can call the server\'s tools natively.'
-      +   '</p>'
-      +   '<div id="org-mcp-list">' + '<div style="font-size:11px;color:var(--text-dim,#666);font-style:italic;">Loading connectors…</div>' + '</div>'
+      +   '<div id="org-mcp-list"><div style="font-size:11px;color:var(--text-dim,#666);font-style:italic;">Loading connectors…</div></div>'
       +   '<div style="display:flex;gap:8px;margin-top:14px;align-items:center;">'
       +     '<span id="org-mcp-status" style="flex:1;font-size:11px;color:var(--text-dim,#888);"></span>'
       +     '<button class="ee-btn secondary" onclick="openMcpServerModal()">&#x2795; Add connector</button>'
@@ -3399,12 +3457,16 @@
   }
 
   function attachOrgHandlers() {
-    wireOrgKBUpload();
-    // Kick off the initial KB list fetch once the org row is loaded.
-    refreshOrgKB();
-    // Mark identity inputs as dirty on change (visual only — actual save
-    // is on the button click). Light touch — no state tracking yet.
+    // Tab-aware: each section's wiring only fires when its DOM is mounted.
+    if (_orgActiveTab === 'kb') {
+      wireOrgKBUpload();
+      refreshOrgKB();
+    }
+    if (_orgActiveTab === 'mcp') {
+      loadOrgMcpServers();
+    }
     // Pack inputs: mark the row's id dirty when any field changes.
+    // No-op when the packs tab isn't rendered.
     document.querySelectorAll('[data-org-pack-idx]').forEach(function(row) {
       var idx = Number(row.getAttribute('data-org-pack-idx'));
       var pack = _orgPacksDraft && _orgPacksDraft[idx];
