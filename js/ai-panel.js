@@ -1200,12 +1200,15 @@
     // fires from the editor side.
     var pill = document.getElementById('p86-ai-phase-pill');
     if (pill) {
-      // Phase pill is dual-purpose now — visible in BOTH estimate (AG)
-      // and job (Elle) mode. The visible icon and dropdown menu adapt
-      // based on which agent owns the phase. Estimate mode reads/writes
-      // the estimate's persisted aiPhase via estimateEditorAPI; job
-      // mode reads/writes Elle's per-job phase from localStorage.
-      var pillVisible = isEstimateMode() || isJobMode();
+      // Phase pill (Plan / Build toggle) is retired. The talk-through
+      // tier now handles per-change approval inline — every propose_*
+      // mutation surfaces as an Approve / Reject row under 86\'s prose,
+      // so the per-job "Plan = read-only / Build = write-enabled"
+      // gate it used to provide is redundant. Force hidden across all
+      // surfaces (estimate, job, node graph, ask86). The
+      // refreshPhaseChip() shim still exists for any caller that
+      // reaches in; it just no-ops now.
+      var pillVisible = false;
       if (pillVisible) {
         pill.style.display = 'inline-block';
         var phase, agentLabel, planDesc, buildDesc;
