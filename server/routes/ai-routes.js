@@ -691,9 +691,12 @@ const JOB_TOOLS = [
     name: 'wire_nodes',
     description:
       'Connect two nodes in the cost-flow graph (from output port of source → input port of target). ' +
-      'Use when audit findings list a disconnected node and the right parent is obvious from context ' +
-      '(e.g., a sub node that should flow into a phase node). Both ids MUST exist in the # Node graph block. ' +
-      'Default ports are 0 unless the user specified another port.',
+      'Use when audit findings list a disconnected node and the right parent is obvious from context. Both ids MUST exist in the # Node graph block. ' +
+      'Default ports are 0 unless the user specified another port.\n\n' +
+      'Recommended topologies for cost flow:\n' +
+      '  • inv → po → sub → phase (legacy): sub fans cost to every wired phase. Use ONLY when one PO/sub maps 1:1 to one phase. With multiple phases it double-counts the sub accrued on every phase — fix with set_wire_alloc_pct on each sub→phase wire so they sum to 100, OR migrate to the direct pattern below.\n' +
+      '  • inv → po → phase (recommended for multi-phase contracts): wire each PO directly to the phase(s) it covers. If one PO spans multiple phases, add a wire from the PO to each phase and use set_wire_alloc_pct to split (e.g. 60/40). The sub node stays as a contact-record label; cost flows through the PO→phase edges, not through sub→phase.\n' +
+      'When you switch a PO from PO→sub→phase to PO→phase direct, also detach the sub→phase wires (or set their allocPct=0) so the same dollars don\'t get summed twice.',
     input_schema: {
       type: 'object',
       additionalProperties: false,
@@ -1022,15 +1025,17 @@ const JOB_TOOLS = [
   {
     name: 'set_wire_alloc_pct',
     description:
-      'Set the allocation percent on a single graph wire — i.e. how much of the source\'s revenue/value flows along this wire. Used to fix the COATINGS-allocates-14.3%-to-each-of-7-buildings type setup when the PM wants a different split (e.g. COATINGS is mostly for B1 and only a sliver goes to B7).\n' +
-      'allocPct sums across all outgoing wires from a source should generally equal 100; the engine uses raw percentages but the rollup math gets weird if a source has 200% allocated. Confirm the sum after each change.',
+      'Set the allocation percent on a single graph wire — how much of the source\'s value flows along this wire. Two patterns use this:\n' +
+      '  1. Revenue split: t2 / co → t1 building wires apportion phase revenue across buildings (e.g. COATINGS is mostly for B1 and only a sliver to B7).\n' +
+      '  2. Cost split: po → t2 phase and sub → t2 phase wires apportion the contract / sub accrual across phases when a single PO or sub serves more than one phase. Set this when one PO covers multiple phases — without it the engine sums the FULL accrued on every phase (the doubling pattern audited on j5).\n' +
+      'allocPct sums across all outgoing wires from a source should equal 100; the engine accepts other values but the rollup misreads if a source has 200% allocated. Confirm the sum after each change.',
     input_schema: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        from_node_id: { type: 'string', description: 'Source t2 / co node id.' },
-        to_node_id:   { type: 'string', description: 'Target node id (typically a t1 building).' },
-        alloc_pct:    { type: 'number', minimum: 0, maximum: 100, description: 'New allocation percent (0–100). 100 = 100% of source\'s value flows along this wire.' },
+        from_node_id: { type: 'string', description: 'Source node id — t2 / co for revenue split, po / sub for cost split.' },
+        to_node_id:   { type: 'string', description: 'Target node id — t1 for revenue split, t2 (phase) for cost split.' },
+        alloc_pct:    { type: 'number', minimum: 0, maximum: 100, description: 'New allocation percent (0–100). 100 = 100% of source flows along this wire.' },
         rationale:    { type: 'string', description: 'One short sentence — why this split.' }
       },
       required: ['from_node_id', 'to_node_id', 'alloc_pct', 'rationale']

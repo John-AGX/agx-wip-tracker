@@ -396,6 +396,13 @@ function getActual(n){
       if(fn.type==='co'){
         var share = getT2ShareToT1(fn, n.id);
         v += getActual(fn) * share;
+      } else if(fn.type==='po' || fn.type==='sub'){
+        // PO / sub can fan out to multiple phases. Honor the wire's
+        // allocPct so each phase only sees its share — otherwise a
+        // sub wired to N phases double-counts the same dollars at
+        // every one of them. allocPct=100 (or undefined) keeps the
+        // legacy behavior; lower values apportion across phases.
+        v += getActual(fn) * (_alloc(w) / 100);
       } else {
         v += getActual(fn);
       }
@@ -409,6 +416,8 @@ function getActual(n){
       if(fn.type==='t2' || fn.type==='co'){
         var share = getT2ShareToT1(fn, n.id);
         v += getActual(fn) * share;
+      } else if(fn.type==='po' || fn.type==='sub'){
+        v += getActual(fn) * (_alloc(w) / 100);
       } else {
         v += getActual(fn);
       }
@@ -416,6 +425,16 @@ function getActual(n){
   }
   _compA[n.id] = false;
   return v;
+}
+
+// Read a wire's allocation percent for cost-side fan-out. Defaults to
+// 100 when undefined so existing 1-to-1 graphs behave exactly as
+// before. The cost engine uses this for PO→phase and sub→phase wires
+// so a contract that serves multiple phases is apportioned rather
+// than double-summed at every destination.
+function _alloc(w){
+  if(!w) return 100;
+  return (w.allocPct != null) ? Number(w.allocPct) || 0 : 100;
 }
 
 // Find weighted-average pctComplete across all ancestor T1/T2 phases.
@@ -725,6 +744,13 @@ function getAccrued(n){
       if(fn.type==='co'){
         var share = getT2ShareToT1(fn, n.id);
         v += getAccrued(fn) * share;
+      } else if(fn.type==='po' || fn.type==='sub'){
+        // Same allocation rule as getActual — a PO or sub wired to
+        // multiple phases apportions its accrued by wire.allocPct.
+        // Without this, every phase fed by the sub used to see the
+        // full sub accrued, which was the double-up the j5 audit
+        // surfaced.
+        v += getAccrued(fn) * (_alloc(w) / 100);
       } else {
         v += getAccrued(fn);
       }
@@ -737,6 +763,8 @@ function getAccrued(n){
       if(fn.type==='t2' || fn.type==='co'){
         var share = getT2ShareToT1(fn, n.id);
         v += getAccrued(fn) * share;
+      } else if(fn.type==='po' || fn.type==='sub'){
+        v += getAccrued(fn) * (_alloc(w) / 100);
       } else {
         v += getAccrued(fn);
       }
