@@ -868,7 +868,7 @@
             '<button id="ai-attach" type="button" title="Attach file (image or PDF)" aria-label="Attach file" class="ai-tool-btn" style="font-size:18px;">' + (typeof p86Icon === 'function' ? p86Icon('composer-attach') : '&#x002B;') + '</button>' +
             '<button id="ai-camera" type="button" title="Take a photo" aria-label="Take a photo" class="ai-tool-btn" style="font-size:18px;">' + (typeof p86Icon === 'function' ? p86Icon('composer-camera') : '&#x1F4F7;') + '</button>' +
             '<button id="ai-mic" type="button" title="Dictate (voice → text)" aria-label="Dictate" class="ai-tool-btn" style="font-size:18px;">' + (typeof p86Icon === 'function' ? p86Icon('composer-mic') : '&#x1F3A4;') + '</button>' +
-            '<input id="ai-file-input" type="file" accept="image/*,application/pdf" multiple style="display:none;" />' +
+            '<input id="ai-file-input" type="file" accept="image/*,application/pdf,.xlsx,.xls,.xlsm,.csv,.tsv,.docx,.doc,.txt,.md,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/msword,text/plain" multiple style="display:none;" />' +
             '<input id="ai-camera-input" type="file" accept="image/*" capture="environment" style="display:none;" />' +
             '<div style="flex:1;"></div>' +
             '<button id="ai-send" type="button" title="Send (Enter)" aria-label="Send" style="background:linear-gradient(135deg,#4f8cff,#34d399);border:0;color:#fff;width:30px;height:30px;border-radius:50%;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;font-size:15px;padding:0;transition:transform 0.12s, opacity 0.12s;">' + (typeof p86Icon === 'function' ? p86Icon('composer-send') : '&#x2191;') + '</button>' +
@@ -5899,13 +5899,24 @@
       var ext = (file.name.split('.').pop() || '').toLowerCase();
       var isPdf = file.type === 'application/pdf' || ext === 'pdf';
       var isImage = !!(file.type && file.type.indexOf('image/') === 0) || /^(jpe?g|png|gif|webp|heic)$/.test(ext);
-      if (!isPdf && !isImage) {
-        alert('Unsupported file type: ' + file.name + '. Use an image or PDF.');
+      // Spreadsheets + Word docs — the server's attachment pipeline
+      // already runs extractAttachmentText on these, so once they're
+      // uploaded the cell / paragraph text lands in
+      // attachments.extracted_text and 86 reads it via the existing
+      // read_attachment_text tool. On the global Ask 86 surface
+      // (no entity to attach to), processFile parses client-side
+      // and inserts the cells as a markdown table at the caret.
+      var isSheet = /^(xlsx|xls|xlsm|csv|tsv)$/i.test(ext) ||
+        /spreadsheetml|ms-excel|comma-separated-values|tab-separated-values/i.test(file.type || '');
+      var isDoc   = /^(docx|doc|txt|md|rtf)$/i.test(ext) ||
+        /wordprocessingml|msword|^text\//.test(file.type || '');
+      if (!isPdf && !isImage && !isSheet && !isDoc) {
+        alert('Unsupported file type: ' + file.name + '. Use an image, PDF, spreadsheet (.xlsx/.csv), or Word doc.');
         return;
       }
       var entry = {
         id: 'pa_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
-        kind: isPdf ? 'pdf' : 'image',
+        kind: isPdf ? 'pdf' : isImage ? 'image' : isSheet ? 'sheet' : 'doc',
         filename: file.name,
         sizeBytes: file.size,
         status: 'processing',
@@ -5951,10 +5962,110 @@
       }).catch(function(err) {
         entry.uploadError = err.message || 'Image read failed';
       }));
+    } else if (entry.kind === 'sheet') {
+      // Spreadsheet — parse client-side via SheetJS so we can insert
+      // the cells as a markdown table into the composer. On entity
+      // surfaces the file ALSO uploaded to attachments above (server
+      // extracts text into extracted_text for read_attachment_text);
+      // the inline insert is so the user sees the data right away
+      // and 86 reads it on THIS turn without a tool round-trip.
+      jobs.push(parseSheetToMarkdown(file).then(function(md) {
+        if (md) {
+          entry.sheetMarkdown = md;
+          // Drop a heading + the table into the composer so it lands
+          // in the next outgoing turn. The user can edit before send.
+          var heading = '\n\n**' + entry.filename + '**\n\n';
+          var input = document.getElementById('ai-input');
+          if (input) {
+            var text = heading + md + '\n';
+            var start = (typeof input.selectionStart === 'number') ? input.selectionStart : input.value.length;
+            var end   = (typeof input.selectionEnd === 'number') ? input.selectionEnd : input.value.length;
+            input.value = input.value.slice(0, start) + text + input.value.slice(end);
+            var pos = start + text.length;
+            try { input.setSelectionRange(pos, pos); } catch (_) {}
+            input.focus();
+            try { input.dispatchEvent(new Event('input', { bubbles: true })); } catch (_) {}
+          }
+        }
+      }).catch(function(err) {
+        entry.uploadError = err.message || 'Spreadsheet parse failed';
+      }));
+    } else if (entry.kind === 'doc') {
+      // Word doc / plain text — no client-side parse, but the server
+      // will extract text when the attachment lands and 86 can fetch
+      // it via read_attachment_text. Nothing to do here besides the
+      // upload above; status flips to ready on completion.
     }
     Promise.all(jobs).then(function() {
       entry.status = entry.uploadError ? 'error' : 'ready';
       renderAttachmentsStrip();
+    });
+  }
+
+  // Load SheetJS on demand and render the first sheet (or all sheets,
+  // if multiple) of an xlsx/csv/tsv file as a markdown table. Reuses
+  // the same lazy-load pattern job-costs-import.js uses so a fresh
+  // boot still pulls the library when the user first attaches a sheet.
+  function ensureXLSXLib() {
+    return new Promise(function(resolve, reject) {
+      if (typeof window.XLSX !== 'undefined') return resolve(window.XLSX);
+      var existing = document.querySelector('script[data-xlsx-loader="1"]');
+      if (existing) {
+        existing.addEventListener('load', function() { resolve(window.XLSX); });
+        existing.addEventListener('error', function() { reject(new Error('Failed to load spreadsheet library')); });
+        return;
+      }
+      var s = document.createElement('script');
+      s.src = 'https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js';
+      s.dataset.xlsxLoader = '1';
+      s.onload = function() { resolve(window.XLSX); };
+      s.onerror = function() { reject(new Error('Failed to load spreadsheet library')); };
+      document.head.appendChild(s);
+    });
+  }
+
+  function parseSheetToMarkdown(file) {
+    return ensureXLSXLib().then(function(XLSX) {
+      return file.arrayBuffer().then(function(buf) {
+        var wb = XLSX.read(new Uint8Array(buf), { type: 'array' });
+        var parts = [];
+        wb.SheetNames.forEach(function(name) {
+          var sheet = wb.Sheets[name];
+          if (!sheet) return;
+          // sheet_to_json with header: 1 gives a 2D array; trim trailing
+          // empty rows + columns so we don\'t insert a huge sparse table.
+          var rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', blankrows: false });
+          while (rows.length && rows[rows.length - 1].every(function(c) { return c === '' || c == null; })) rows.pop();
+          if (!rows.length) return;
+          var maxCol = 0;
+          rows.forEach(function(r) { if (r.length > maxCol) maxCol = r.length; });
+          // Trim columns that are empty across every row.
+          while (maxCol > 0 && rows.every(function(r) { return (r[maxCol - 1] == null || r[maxCol - 1] === ''); })) maxCol--;
+          if (maxCol === 0) return;
+          var trimmed = rows.map(function(r) {
+            var out = [];
+            for (var i = 0; i < maxCol; i++) {
+              var v = r[i];
+              if (v == null) v = '';
+              v = String(v).trim().replace(/\s+/g, ' ').replace(/\|/g, '\\|');
+              out.push(v);
+            }
+            return out;
+          });
+          var header = trimmed[0];
+          var sep = header.map(function() { return '---'; });
+          var lines = [
+            wb.SheetNames.length > 1 ? '_Sheet: ' + name + '_' : '',
+            '| ' + header.join(' | ') + ' |',
+            '| ' + sep.join(' | ') + ' |'
+          ].filter(Boolean);
+          for (var i = 1; i < trimmed.length; i++) {
+            lines.push('| ' + trimmed[i].join(' | ') + ' |');
+          }
+          parts.push(lines.join('\n'));
+        });
+        return parts.join('\n\n');
+      });
     });
   }
 
