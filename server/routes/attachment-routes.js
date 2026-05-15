@@ -486,6 +486,14 @@ router.post('/:entityType/:entityId',
         req.body.include_in_proposal === '1'
       ));
 
+      // Optional folder — same sanitize rules as the PUT/move handlers.
+      // Falls back to the column default ('general') when absent.
+      let folder = 'general';
+      if (req.body && typeof req.body.folder === 'string' && req.body.folder.trim()) {
+        folder = req.body.folder.trim().slice(0, 60).toLowerCase()
+          .replace(/[^a-z0-9 _\-]/g, '').replace(/\s+/g, '-') || 'general';
+      }
+
       const ins = await pool.query(
         `INSERT INTO attachments
          (id, entity_type, entity_id, filename, mime_type, size_bytes,
@@ -493,8 +501,8 @@ router.post('/:entityType/:entityId',
           thumb_url, web_url, original_url,
           thumb_key, web_key, original_key,
           position, uploaded_by, extracted_text, extracted_text_at,
-          markup_of, include_in_proposal)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+          markup_of, include_in_proposal, folder)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
          RETURNING *`,
         [
           id, entityType, entityId,
@@ -503,7 +511,7 @@ router.post('/:entityType/:entityId',
           thumbUrl, webUrl, originalUrl,
           thumbKey, webKey, originalKey,
           position, req.user.id, extractedText, extractedAt,
-          markupOf, includeInProposal
+          markupOf, includeInProposal, folder
         ]
       );
       res.json({ ok: true, attachment: ins.rows[0] });

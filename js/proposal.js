@@ -66,6 +66,25 @@ function cellValue(v, type = 's') {
   return { t: 's', v: v || '' };
 }
 
+// Save a copy of an exported proposal/estimate to the current user's
+// My Files / Proposals folder so 86 can find it later via search_my_kb.
+// Best-effort: never blocks or alerts on the download path.
+function saveProposalCopyToMyFiles(blob, filename) {
+  try {
+    var user = (window.p86Auth && window.p86Auth.getUser && window.p86Auth.getUser()) || null;
+    var uid = user && user.id;
+    if (!uid) return;
+    if (!window.p86Api || !window.p86Api.attachments || !window.p86Api.attachments.upload) return;
+    var file = new File([blob], filename, { type: blob.type || 'application/octet-stream' });
+    window.p86Api.attachments.upload('user', String(uid), file, { folder: 'proposals' })
+      .catch(function(err) {
+        console.warn('[proposal] save-to-MyFiles failed:', err && err.message);
+      });
+  } catch (e) {
+    console.warn('[proposal] save-to-MyFiles threw:', e && e.message);
+  }
+}
+
 // ============================================================================
 // EXPORT ESTIMATE FUNCTION
 // ============================================================================
@@ -422,14 +441,16 @@ function exportEstimate(estId) {
   // === Generate and download ===
   wb.xlsx.writeBuffer().then(function(buffer) {
     const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const filename = (estimate.title || 'P86_Estimate') + ' - Lead Report.xlsx';
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = (estimate.title || 'P86_Estimate') + ' - Lead Report.xlsx';
+    a.download = filename;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+    saveProposalCopyToMyFiles(blob, filename);
   });
 }
 
@@ -584,6 +605,15 @@ function generateProposal(estId) {
   newWindow.document.write(html);
   newWindow.document.close();
   setTimeout(() => { newWindow.print(); }, 500);
+
+  // Save a copy to My Files / Proposals so 86 can search it later.
+  try {
+    const htmlBlob = new Blob([html], { type: 'text/html' });
+    const filename = (estimate.title || 'P86_Estimate') + ' - Proposal.html';
+    saveProposalCopyToMyFiles(htmlBlob, filename);
+  } catch (e) {
+    console.warn('[generateProposal] save-copy failed:', e && e.message);
+  }
 }
 
 // ============================================================================

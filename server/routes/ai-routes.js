@@ -1116,7 +1116,7 @@ const JOB_TOOLS = [
   {
     name: 'search_my_kb',
     description:
-      'Search the current user\'s personal knowledge base (their "My Files" bucket). Returns up to 20 matching attachments with filename, folder, mime, size, and a snippet of extracted text. Use when the user references a personal doc ("the spreadsheet I uploaded last week", "the photo I pasted into chat yesterday") or when you think their personal files would help answer the current request. Auto-tier (no approval). Scope: ctx.userId only — never another user\'s files. Call read_attachment_text({attachment_id}) to fetch the full body.',
+      'Search every file the current user has uploaded — across all buckets (My Files, plus anything they attached to a job, estimate, lead, client, or sub). Returns up to 20 matches with filename, where the file lives (entity_type + id), folder, mime, size, and a snippet of extracted text. Use when the user references something they uploaded ("the spreadsheet I uploaded last week", "the proposal I just exported", "the photo I attached to the Latitude job"). Auto-tier (no approval). Scope: uploaded_by = ctx.userId — never another user\'s files. Call read_attachment_text({attachment_id}) to fetch the full body.',
     input_schema: {
       type: 'object',
       additionalProperties: false,
@@ -7010,9 +7010,12 @@ async function execStaffTool(name, input, ctx) {
     }
 
     case 'search_my_kb': {
-      // Personal knowledge base = the caller\'s My Files bucket
-      // (attachments WHERE entity_type='user' AND entity_id=userId).
-      // Matches against filename + extracted_text. ctx.userId scope.
+      // Personal knowledge base = every attachment the caller has
+      // uploaded, across every bucket (user / job / estimate / lead /
+      // client / sub). Matches against filename + extracted_text.
+      // Scoped by uploaded_by = ctx.userId. Cross-tenant access is
+      // blocked implicitly because uploads outside the user's org
+      // would never have uploaded_by set to them.
       const userId = ctx && ctx.userId;
       if (!userId) return 'No user context — cannot search personal KB.';
       const q = String((input && input.query) || '').trim();
@@ -7020,26 +7023,29 @@ async function execStaffTool(name, input, ctx) {
       const limit = Math.min(50, Math.max(1, parseInt((input && input.limit), 10) || 20));
       const pattern = '%' + q.replace(/[\\%_]/g, m => '\\' + m) + '%';
       const r = await pool.query(
-        `SELECT id, filename, mime_type, size_bytes, folder, created_at,
+        `SELECT id, filename, mime_type, size_bytes, folder,
+                entity_type, entity_id, created_at,
                 substr(COALESCE(extracted_text, ''), 1, 220) AS snippet,
                 (extracted_text ILIKE $2) AS body_match,
                 (filename ILIKE $2)       AS name_match
            FROM attachments
-          WHERE entity_type = 'user'
-            AND entity_id = $1
+          WHERE uploaded_by = $1
             AND (filename ILIKE $2 OR extracted_text ILIKE $2)
           ORDER BY created_at DESC
           LIMIT $3`,
         [String(userId), pattern, limit]
       );
       if (!r.rows.length) return 'No personal-KB files matched "' + q + '".';
-      const lines = ['Found ' + r.rows.length + ' file(s) in your personal KB matching "' + q + '":'];
+      const lines = ['Found ' + r.rows.length + ' file(s) you have uploaded matching "' + q + '":'];
       r.rows.forEach(row => {
         const folder = row.folder ? ' · ' + row.folder : '';
         const size = row.size_bytes ? ' · ' + Math.round(row.size_bytes / 1024) + ' KB' : '';
         const mime = row.mime_type ? ' · ' + row.mime_type : '';
+        const ctxStr = row.entity_type && row.entity_id
+          ? ' · in ' + row.entity_type + ' ' + row.entity_id
+          : (row.entity_type ? ' · in ' + row.entity_type : '');
         const where = (row.name_match && !row.body_match) ? 'filename match' : 'content match';
-        lines.push('• [' + row.id + '] ' + row.filename + folder + mime + size + ' — ' + where);
+        lines.push('• [' + row.id + '] ' + row.filename + folder + mime + size + ctxStr + ' — ' + where);
         if (row.snippet && row.body_match) {
           lines.push('    "' + String(row.snippet).replace(/\s+/g, ' ').slice(0, 180) + '"');
         }
