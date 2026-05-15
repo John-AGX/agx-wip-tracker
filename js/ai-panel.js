@@ -5728,15 +5728,46 @@
     }
     fileInput.onchange = function(e) { handleSelectedFiles(e.target.files); };
 
-    // Clipboard paste — pull image data out of paste events and route
-    // through the same handleSelectedFiles pipeline as the + button.
-    // Clipboard images come in with an empty/generic filename ("image.png"),
-    // so we rename them to "pasted-YYYY-MM-DD_HH-MM-SS.<ext>" before
-    // upload — that way the attachment list reads as a meaningful audit
-    // trail of when each screenshot was dropped in.
+    // Clipboard paste — three cases to distinguish, in order:
+    //
+    //   1. TEXT + IMAGE (Excel / Google Sheets / Numbers) — apps copy
+    //      a preview PNG alongside the cell data. The OLD handler grabbed
+    //      the PNG and dropped the text, which made "paste an Excel
+    //      sheet into the chat" come through as a fuzzy screenshot.
+    //      Now we prefer the text; tab-separated content gets reformatted
+    //      as a markdown table so 86 reads it as data, not as prose.
+    //   2. IMAGE-ONLY (screenshot tool, Snipping Tool, etc.) — attach
+    //      as a photo, same flow as the + composer button.
+    //   3. PLAIN TEXT — let the browser's default paste run; the text
+    //      lands in the textarea normally.
     function handlePaste(e) {
       if (!e || !e.clipboardData) return;
-      var items = e.clipboardData.items;
+      var cb = e.clipboardData;
+      var items = cb.items;
+      // Read text + html up front so we can decide what to do without
+      // consuming an image item we'd otherwise need.
+      var plain = '';
+      var html  = '';
+      try { plain = cb.getData('text/plain') || ''; } catch (_) {}
+      try { html  = cb.getData('text/html')  || ''; } catch (_) {}
+
+      // Detect spreadsheet content. Sheets / Excel always emit a TSV
+      // in text/plain (tabs between cells, newlines between rows) AND
+      // a <table> in text/html. If either signal is present, treat
+      // this as a paste of tabular data — never as an image.
+      var isTSV = /\t/.test(plain) && /\n/.test(plain);
+      var isHtmlTable = /<table[\s>]/i.test(html);
+      if (isTSV || isHtmlTable) {
+        e.preventDefault();
+        e.stopPropagation();
+        var md = isTSV ? tsvToMarkdownTable(plain) : htmlTableToMarkdown(html);
+        if (md) insertAtCursor(textInput, md);
+        else if (plain) insertAtCursor(textInput, plain);
+        return;
+      }
+
+      // Image-only path. Walk items for image blobs; skip if any text
+      // sneaks through (handled above already).
       if (!items || !items.length) return;
       var pastedFiles = [];
       for (var i = 0; i < items.length; i++) {
@@ -5752,33 +5783,105 @@
             d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) +
             '_' + pad(d.getHours()) + '-' + pad(d.getMinutes()) + '-' + pad(d.getSeconds());
           var name = 'pasted-' + stamp + '.' + ext;
-          // File constructor lets us rename a blob in one shot. Falls back
-          // to assigning the renamed blob through the original path if File
-          // isn't constructible (very old browsers — Chrome / Edge / Safari
-          // / Firefox have all supported it for years).
           try {
             pastedFiles.push(new File([blob], name, { type: blob.type || item.type }));
           } catch (err) {
-            // Fallback: tag the blob with a name property so handleSelectedFiles
-            // can read it. handleSelectedFiles uses file.name and file.type.
             blob.name = name;
             pastedFiles.push(blob);
           }
         }
       }
       if (pastedFiles.length) {
-        // Suppress the textarea's default paste handling so a "Pasted image"
-        // placeholder string doesn't end up inside the message body.
         e.preventDefault();
-        // Stop the event from bubbling up to the pill listener — without
-        // this, both handlers would fire and the same image would be
-        // attached twice (the AI then sees doubles and sometimes returns
-        // an empty response).
         e.stopPropagation();
         handleSelectedFiles(pastedFiles);
       }
-      // If no images were on the clipboard we let the default text-paste
-      // run normally — typical Ctrl+V of copied text is unaffected.
+      // Otherwise let the browser's default paste run.
+    }
+
+    // Insert text at the textarea's caret + push the caret past the
+    // inserted block. Preserves any text the user typed before/after.
+    function insertAtCursor(el, text) {
+      if (!el) return;
+      var start = (typeof el.selectionStart === 'number') ? el.selectionStart : el.value.length;
+      var end   = (typeof el.selectionEnd === 'number') ? el.selectionEnd : el.value.length;
+      var before = el.value.slice(0, start);
+      var after  = el.value.slice(end);
+      el.value = before + text + after;
+      var pos = start + text.length;
+      try { el.setSelectionRange(pos, pos); } catch (_) {}
+      el.focus();
+      // Trigger the auto-grow handler that's normally bound on input.
+      try { el.dispatchEvent(new Event('input', { bubbles: true })); } catch (_) {}
+    }
+
+    // Convert a clipboard TSV blob (Excel / Sheets default) to a small
+    // markdown table 86 reads cleanly. Headers come from the first
+    // row; if the first row looks like data (all numeric or short)
+    // we still treat it as headers — clipboards never tell us
+    // otherwise, and a header row is the common case.
+    function tsvToMarkdownTable(tsv) {
+      if (!tsv) return '';
+      // Excel sometimes wraps cells with quotes when they contain
+      // newlines; we don't attempt full CSV parsing here — just
+      // strip surrounding double quotes per cell. The common case
+      // (single-line cells) round-trips cleanly.
+      var rows = tsv.replace(/\r/g, '').split('\n')
+        .filter(function(r) { return r.length > 0; })
+        .map(function(r) {
+          return r.split('\t').map(function(c) {
+            c = c.trim();
+            if (c.length >= 2 && c.charAt(0) === '"' && c.charAt(c.length - 1) === '"') {
+              c = c.slice(1, -1).replace(/""/g, '"');
+            }
+            // Pipes break markdown tables; escape them.
+            return c.replace(/\|/g, '\\|');
+          });
+        });
+      if (!rows.length || !rows[0].length) return '';
+      // Pad short rows with empty cells so the table renders square.
+      var colCount = rows.reduce(function(m, r) { return Math.max(m, r.length); }, 0);
+      rows.forEach(function(r) { while (r.length < colCount) r.push(''); });
+      var header = rows[0];
+      var sep    = header.map(function() { return '---'; });
+      var lines  = [
+        '| ' + header.join(' | ') + ' |',
+        '| ' + sep.join(' | ') + ' |'
+      ];
+      for (var i = 1; i < rows.length; i++) {
+        lines.push('| ' + rows[i].join(' | ') + ' |');
+      }
+      return lines.join('\n');
+    }
+
+    // Convert a clipboard <table> blob to markdown. Light-weight parser
+    // — picks up text content from <th>/<td>, ignores nested elements.
+    // Falls back to '' on parse failure so the caller can try TSV.
+    function htmlTableToMarkdown(html) {
+      try {
+        var doc = new DOMParser().parseFromString(html, 'text/html');
+        var table = doc.querySelector('table');
+        if (!table) return '';
+        var rows = Array.from(table.querySelectorAll('tr')).map(function(tr) {
+          return Array.from(tr.querySelectorAll('th, td')).map(function(cell) {
+            var txt = (cell.textContent || '').trim().replace(/\s+/g, ' ');
+            return txt.replace(/\|/g, '\\|');
+          });
+        }).filter(function(r) { return r.length > 0; });
+        if (!rows.length) return '';
+        var colCount = rows.reduce(function(m, r) { return Math.max(m, r.length); }, 0);
+        rows.forEach(function(r) { while (r.length < colCount) r.push(''); });
+        var header = rows[0];
+        var sep    = header.map(function() { return '---'; });
+        var lines  = [
+          '| ' + header.join(' | ') + ' |',
+          '| ' + sep.join(' | ') + ' |'
+        ];
+        for (var i = 1; i < rows.length; i++) {
+          lines.push('| ' + rows[i].join(' | ') + ' |');
+        }
+        return lines.join('\n');
+      } catch (_) { return ''; }
     }
 
     if (textInput) textInput.addEventListener('paste', handlePaste);
