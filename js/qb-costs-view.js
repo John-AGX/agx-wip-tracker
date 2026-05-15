@@ -45,7 +45,13 @@
     sortBy: 'date',  // 'date' | 'vendor' | 'account' | 'amount'
     sortDir: 'desc', // 'asc' | 'desc'
     selected: (typeof Set === 'function') ? new Set() : null,
-    embedTarget: null
+    embedTarget: null,
+    // Cached graph nodes for the current job. Populated lazily from
+    // either the live engine, the server, or localStorage. Used by
+    // the link picker so the user doesn\'t see "No nodes in this
+    // job\'s graph yet." when the workspace hasn\'t been opened in
+    // this browser tab.
+    nodesCache: { jobId: null, nodes: [] }
   };
 
   function isSelected(id) {
@@ -224,6 +230,12 @@
     // Track the latest embed target so filter/search/link callbacks
     // can re-render into the same place rather than the right pane.
     _state.embedTarget = customTarget || null;
+    // Warm the graph-node cache from the server so the link picker
+    // has data even when the user hasn\'t opened the Workspace tab
+    // in this session (the previous localStorage-only lookup was the
+    // bug behind "no node exists on the graph to link to" on a job
+    // that DID have wired nodes — see getNodesForJob comments).
+    prefetchGraphNodes(jobId);
 
     var allLines = getLinesForJob(jobId);
     var nodes = getNodesForJob(jobId);
@@ -576,14 +588,61 @@
     return '<td' + clsAttr + ' style="' + s + '">' + escapeHTML(text) + '</td>';
   }
 
+  // Resolve graph nodes for a job using whichever source is freshest.
+  // The link-picker was always reading 'p86-nodegraphs' from
+  // localStorage, but the engine writes to 'agx-nodegraphs' (legacy
+  // key never renamed) AND the authoritative copy lives in the
+  // server's node_graphs table. On a fresh tab — or a different
+  // browser / device — neither localStorage key is populated, so
+  // the picker showed "No nodes in this job\'s graph yet." even
+  // though the user had wired up nodes previously.
+  //
+  // Order of preference:
+  //   1. Live engine (NG.nodes()) if it\'s loaded for THIS job —
+  //      catches in-session edits before they\'ve been flushed.
+  //   2. _state.nodesCache populated by prefetchGraphNodes() (server).
+  //   3. localStorage under either the legacy 'agx-nodegraphs' key
+  //      or the post-rebrand 'p86-nodegraphs' key.
   function getNodesForJob(jobId) {
+    if (!jobId) return [];
+    // 1. Live engine
     try {
-      var graphs = JSON.parse(localStorage.getItem('p86-nodegraphs') || '{}');
-      var g = graphs[jobId];
-      return (g && Array.isArray(g.nodes)) ? g.nodes : [];
-    } catch (e) {
-      return [];
+      if (window.NG && typeof NG.job === 'function' && typeof NG.nodes === 'function') {
+        if (NG.job() === jobId) {
+          var liveNodes = NG.nodes();
+          if (Array.isArray(liveNodes) && liveNodes.length) return liveNodes;
+        }
+      }
+    } catch (e) { /* fall through */ }
+    // 2. Server prefetch cache
+    if (_state.nodesCache.jobId === jobId && Array.isArray(_state.nodesCache.nodes) && _state.nodesCache.nodes.length) {
+      return _state.nodesCache.nodes;
     }
+    // 3. localStorage — try both keys.
+    var keys = ['agx-nodegraphs', 'p86-nodegraphs'];
+    for (var k = 0; k < keys.length; k++) {
+      try {
+        var graphs = JSON.parse(localStorage.getItem(keys[k]) || '{}');
+        var g = graphs[jobId];
+        if (g && Array.isArray(g.nodes) && g.nodes.length) return g.nodes;
+      } catch (e) { /* try next key */ }
+    }
+    return [];
+  }
+
+  // Pull the job\'s node graph from the server and stash it in
+  // _state.nodesCache. Fire-and-forget; resolves silently. Called
+  // when renderJobQBCosts mounts so the picker has nodes even if the
+  // user never opened the Workspace tab in this session.
+  function prefetchGraphNodes(jobId) {
+    if (!jobId) return;
+    if (_state.nodesCache.jobId === jobId && Array.isArray(_state.nodesCache.nodes) && _state.nodesCache.nodes.length) return;
+    if (!window.p86Api || !window.p86Api.get) return;
+    window.p86Api.get('/api/jobs/' + encodeURIComponent(jobId) + '/graph').then(function(resp) {
+      var g = resp && resp.graph;
+      var nodes = (g && Array.isArray(g.nodes)) ? g.nodes : [];
+      _state.nodesCache = { jobId: jobId, nodes: nodes };
+    }).catch(function() { /* best-effort */ });
   }
 
   // ── Filter handlers ──────────────────────────────────────────
@@ -670,7 +729,28 @@
       return n.type !== 'note' && n.type !== 'wip';
     });
     if (!nodes.length) {
-      alert('No nodes in this job\'s graph yet. Open the Workspace tab to build the graph first, then come back to assign.');
+      // Cache miss — re-fetch from the server before giving up. The
+      // user may have hit the picker before the panel\'s opening
+      // prefetch resolved (or this is the first time the panel
+      // opened in a tab that never loaded the Workspace).
+      var jid = _state.jobId;
+      if (window.p86Api && window.p86Api.get) {
+        window.p86Api.get('/api/jobs/' + encodeURIComponent(jid) + '/graph').then(function(resp) {
+          var g = resp && resp.graph;
+          var serverNodes = (g && Array.isArray(g.nodes)) ? g.nodes : [];
+          _state.nodesCache = { jobId: jid, nodes: serverNodes };
+          if (serverNodes.length) {
+            // Reopen the picker now that we have nodes.
+            openNodePicker(headerText, summaryText, onPick);
+          } else {
+            alert('No nodes in this job\'s graph yet. Open the Workspace tab to build the graph first, then come back to assign.');
+          }
+        }).catch(function() {
+          alert('No nodes in this job\'s graph yet. Open the Workspace tab to build the graph first, then come back to assign.');
+        });
+      } else {
+        alert('No nodes in this job\'s graph yet. Open the Workspace tab to build the graph first, then come back to assign.');
+      }
       return;
     }
 
