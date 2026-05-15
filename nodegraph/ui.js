@@ -379,29 +379,37 @@ function renderNodes(){
           var totalAlloc=phaseWires.reduce(function(s,pw){
             return s + (pw.wire.allocPct!=null?Number(pw.wire.allocPct)||0:100);
           }, 0);
-          h+='<div style="padding:6px 10px 6px;border-top:1px solid var(--ng-border2);">';
+          h+='<div class="ng-po-linked-section" style="padding:6px 10px 8px;border-top:1px solid var(--ng-border2);">';
           h+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">';
-          h+='<span style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#8b90a5;">Linked Phases</span>';
+          h+='<span style="font-size:9px;text-transform:uppercase;letter-spacing:0.5px;color:#8b90a5;font-weight:600;">Linked Phases</span>';
           var allocOk = phaseWires.length===0 || Math.abs(totalAlloc-100)<0.5;
           if(phaseWires.length){
-            h+='<span style="font-size:9px;color:'+(allocOk?'#6a7090':'#fbbf24')+';font-family:\'Courier New\',monospace;" title="'+(allocOk?'Allocation totals 100%':'Allocation does not sum to 100% — phase rollups will under/over count')+'">'+totalAlloc.toFixed(0)+'%</span>';
+            h+='<span class="ng-po-alloc-badge" style="font-size:10px;color:'+(allocOk?'#6a7090':'#fbbf24')+';font-family:\'Courier New\',monospace;font-weight:600;" title="'+(allocOk?'Allocation totals 100%':'Allocation does not sum to 100% — phase rollups will under/over count')+'">'+totalAlloc.toFixed(0)+'%</span>';
           }
           h+='</div>';
           if(!phaseWires.length){
-            h+='<div style="font-size:10px;color:#6a7090;font-style:italic;padding:2px 0 4px;">No phases linked yet. Cost still flows via the sub. Add a phase here to split this PO across phases.</div>';
+            h+='<div style="font-size:11px;color:#6a7090;font-style:italic;padding:2px 0 6px;line-height:1.4;">No phases linked yet. Cost still flows via the sub. Add a phase to split this PO across phases.</div>';
           } else {
+            // Scroll the rows when many phases get linked so the
+            // node body doesn\'t grow off-screen. ~5 rows visible at
+            // once; user scrolls inside the section for the rest.
+            h+='<div class="ng-po-linked-rows" style="max-height:160px;overflow-y:auto;margin:0 -2px;padding:0 2px;">';
             phaseWires.forEach(function(pw){
               var pname=(pw.phase.label||pw.phase.type).split(' › ')[0].trim().slice(0,40);
               var pa=pw.wire.allocPct!=null?Number(pw.wire.allocPct):100;
-              h+='<div style="display:flex;align-items:center;gap:6px;padding:2px 0;font-size:10px;color:#c4c9db;">';
+              h+='<div style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:11px;color:#c4c9db;">';
               h+='<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">\u{1F4CB} '+pname+'</span>';
-              h+='<input class="ng-po-alloc" type="number" min="0" max="100" step="1" value="'+pa.toFixed(0)+'" data-from="'+n.id+'" data-to="'+pw.phase.id+'" style="width:42px;background:rgba(255,255,255,0.04);border:1px solid var(--ng-border2);color:#fff;border-radius:3px;padding:2px 4px;font-family:\'Courier New\',monospace;font-size:10px;text-align:right;" title="Allocation % to this phase" />';
-              h+='<span style="color:#6a7090;font-size:9px;">%</span>';
-              h+='<span class="ng-po-unlink" data-from="'+n.id+'" data-to="'+pw.phase.id+'" title="Unlink phase" style="cursor:pointer;color:#f87171;padding:0 4px;">✖</span>';
+              h+='<input class="ng-po-alloc" type="number" min="0" max="100" step="1" value="'+pa.toFixed(0)+'" data-from="'+n.id+'" data-to="'+pw.phase.id+'" style="width:48px;background:rgba(255,255,255,0.04);border:1px solid var(--ng-border2);color:#fff;border-radius:3px;padding:2px 4px;font-family:\'Courier New\',monospace;font-size:11px;text-align:right;" title="Allocation % to this phase" />';
+              h+='<span style="color:#6a7090;font-size:10px;">%</span>';
+              h+='<span class="ng-po-unlink" data-from="'+n.id+'" data-to="'+pw.phase.id+'" title="Unlink phase" style="cursor:pointer;color:#f87171;padding:2px 6px;border-radius:3px;font-size:11px;">✖</span>';
               h+='</div>';
             });
+            h+='</div>';
           }
-          h+='<div class="ng-po-link-add" data-po-node="'+n.id+'" title="Link this PO to a phase" style="cursor:pointer;color:#4f8cff;font-size:10px;padding:3px 0 0 0;display:inline-block;">+ Link phase</div>';
+          // "+ Link phase" affordance — now a real button so it\'s
+          // obviously clickable at any zoom level. Sits below the
+          // (potentially scrolling) rows.
+          h+='<button class="ng-po-link-add" type="button" data-po-node="'+n.id+'" title="Link this PO to a phase" style="margin-top:6px;cursor:pointer;background:rgba(79,140,255,0.12);color:#7da8ff;border:1px dashed rgba(79,140,255,0.4);border-radius:4px;padding:4px 10px;font-size:11px;font-weight:500;font-family:inherit;">+ Link phase</button>';
           h+='</div>';
         }
       }
@@ -1520,13 +1528,11 @@ function initEvents(){
     // this job that aren't already linked from this PO.
     var poLinkAdd = e.target.closest('.ng-po-link-add');
     if(poLinkAdd){
+      e.preventDefault();
       e.stopPropagation();
       var poId = poLinkAdd.getAttribute('data-po-node');
       var poN  = E.findNode(poId);
       if(!poN) return;
-      var jid = E.job();
-      // Candidate phases: every t2 node on this job that isn't already
-      // wired from this PO. Sorted alphabetically by label.
       var alreadyWired = {};
       E.wires().forEach(function(w){
         if(w.fromNode === poId){
@@ -1538,30 +1544,54 @@ function initEvents(){
         return nd.type === 't2' && !alreadyWired[nd.id];
       }).sort(function(a, b){ return (a.label || '').localeCompare(b.label || ''); });
       if(!candidates.length){
-        alert('No more phases to link — every t2 phase on this job is already wired from this PO. Drop a new phase onto the graph first if you need to.');
+        alert('No more phases to link — every phase on this job is already wired from this PO. Drop a new phase onto the graph first if you need to.');
         return;
       }
-      // Tiny dropdown picker rendered next to the click target.
+      // Tiny dropdown picker rendered next to the click target. Lives
+      // in document.body so the canvas's transform / overflow:hidden
+      // doesn\'t clip it. Position is computed in viewport coords from
+      // getBoundingClientRect (already post-transform).
       var prev = document.getElementById('ng-po-link-picker');
       if(prev) prev.remove();
       var pick = document.createElement('div');
       pick.id = 'ng-po-link-picker';
+      // Clamp to the viewport so the picker doesn\'t spill off-screen
+      // when the user opens it near the right or bottom edge.
       var rect = poLinkAdd.getBoundingClientRect();
+      var pickW = 240, pickMaxH = 320;
+      var pickLeft = Math.max(8, Math.min(window.innerWidth - pickW - 8, Math.round(rect.left)));
+      var pickTop  = Math.round(rect.bottom + 4);
+      if(pickTop + pickMaxH > window.innerHeight - 8){
+        // Flip above the trigger when there\'s no room below.
+        pickTop = Math.max(8, Math.round(rect.top - pickMaxH - 4));
+      }
       pick.style.cssText =
-        'position:fixed;left:' + Math.round(rect.left) + 'px;top:' + Math.round(rect.bottom + 4) + 'px;' +
-        'background:#0f172a;border:1px solid rgba(255,255,255,0.18);border-radius:6px;' +
-        'padding:4px;z-index:99999;max-height:260px;overflow-y:auto;min-width:200px;' +
-        'box-shadow:0 8px 22px rgba(0,0,0,0.55);font-family:inherit;';
+        'position:fixed;left:' + pickLeft + 'px;top:' + pickTop + 'px;' +
+        'background:#0f172a;border:1px solid rgba(255,255,255,0.22);border-radius:8px;' +
+        'padding:6px;z-index:99999;max-height:' + pickMaxH + 'px;overflow-y:auto;width:' + pickW + 'px;' +
+        'box-shadow:0 12px 28px rgba(0,0,0,0.6);font-family:inherit;';
+      // Heading row so the picker reads as a UI element, not a stray
+      // floating list.
+      var hdr = document.createElement('div');
+      hdr.style.cssText = 'font-size:9px;text-transform:uppercase;letter-spacing:0.5px;color:#8b90a5;font-weight:600;padding:2px 6px 6px;border-bottom:1px solid rgba(255,255,255,0.06);margin-bottom:4px;';
+      hdr.textContent = 'Pick a phase to link';
+      pick.appendChild(hdr);
       candidates.forEach(function(c){
         var btn = document.createElement('div');
-        btn.textContent = c.label || c.type;
-        btn.style.cssText = 'padding:6px 10px;cursor:pointer;color:#e6e6e6;font-size:12px;border-radius:4px;';
+        btn.textContent = (c.label || c.type).split(' › ')[0];
+        btn.style.cssText = 'padding:7px 10px;cursor:pointer;color:#e6e6e6;font-size:12px;border-radius:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
         btn.onmouseenter = function(){ btn.style.background = 'rgba(255,255,255,0.06)'; };
         btn.onmouseleave = function(){ btn.style.background = 'transparent'; };
-        btn.onclick = function(){
-          // Add the wire with allocPct that auto-balances against any
-          // existing linked phases. If this is the only link, default
-          // to 100; otherwise split the remainder equally.
+        // Bind on mousedown — the canvas\'s mousedown handler does a
+        // pan-start; using mousedown here with stopPropagation makes
+        // the pick fire BEFORE the canvas can intercept. Click would
+        // race with the outside-click dismiss (it fires after a
+        // mousedown→mouseup pair, by which time the dismiss handler
+        // could have already removed the picker on the closing
+        // mousedown).
+        btn.onmousedown = function(ev){
+          ev.preventDefault();
+          ev.stopPropagation();
           var existing = E.wires().filter(function(w){
             if(w.fromNode !== poId) return false;
             var t = E.findNode(w.toNode);
@@ -1569,24 +1599,41 @@ function initEvents(){
           });
           var defaultPct = 100;
           if(existing.length){
-            // Re-balance equally across (existing + this new one).
             var share = 100 / (existing.length + 1);
             existing.forEach(function(w){ w.allocPct = share; });
             defaultPct = share;
           }
           E.wires().push({ fromNode: poId, fromPort: 0, toNode: c.id, toPort: 0, allocPct: defaultPct });
-          pick.remove();
+          cleanup();
           render();
         };
         pick.appendChild(btn);
       });
+      // Swallow mousedown anywhere INSIDE the picker so the outside-
+      // close handler doesn\'t fire when the user scrolls or clicks
+      // the heading.
+      pick.addEventListener('mousedown', function(ev){ ev.stopPropagation(); });
       document.body.appendChild(pick);
-      // Dismiss on next outside click.
+      // Outside-click dismiss + ESC. mousedown beats click so the
+      // canvas pan doesn\'t start before we close, and ESC works
+      // even when focus is elsewhere.
+      function cleanup(){
+        try { pick.remove(); } catch(_) {}
+        document.removeEventListener('mousedown', onDoc, true);
+        document.removeEventListener('keydown', onKey, true);
+      }
+      function onDoc(ev){
+        if(pick.contains(ev.target)) return;
+        cleanup();
+      }
+      function onKey(ev){
+        if(ev.key === 'Escape'){ ev.preventDefault(); cleanup(); }
+      }
+      // Use capture so the listener fires before the canvas handlers
+      // and we can dismiss without the canvas seeing the click.
       setTimeout(function(){
-        document.addEventListener('click', function onDoc(){
-          pick.remove();
-          document.removeEventListener('click', onDoc);
-        });
+        document.addEventListener('mousedown', onDoc, true);
+        document.addEventListener('keydown', onKey, true);
       }, 0);
       return;
     }
