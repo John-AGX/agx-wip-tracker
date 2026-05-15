@@ -206,6 +206,15 @@
                             <div class="header-popover-role" id="avatar-menu-role">&mdash;</div>
                         </div>
                         <button type="button" id="account-btn" class="header-popover-item">&#x2699; My Account &amp; Notifications</button>
+                        <!-- Org Settings — routes to the Admin tab (Organization
+                             subtab by default). Visible only to roles with
+                             admin-tier capabilities; hidden for plain PMs and
+                             field crew via the data-cap attribute. -->
+                        <button type="button" id="org-settings-btn" class="header-popover-item"
+                                data-cap="USERS_MANAGE ROLES_MANAGE ADMIN_METRICS SYSTEM_ADMIN"
+                                onclick="if (typeof window.switchTab === 'function') { window.switchTab('admin'); if (typeof window.switchAdminSubTab === 'function') window.switchAdminSubTab('organization'); }">
+                            &#x1F3E2; Org Settings
+                        </button>
                         <button type="button" id="theme-toggle" class="theme-toggle header-popover-item" title="Toggle light/dark mode"><span id="theme-toggle-label">Light / Dark mode</span></button>
                         <button type="button" id="logout-btn"  class="header-popover-item">&#x21AA; Logout</button>
                     </div>
@@ -1000,24 +1009,39 @@
                     </div>
                 </div>
 
-                <!-- ADMIN TAB (admin-only, populated by js/admin.js) -->
+                <!-- ADMIN TAB (admin-only, populated by js/admin.js)
+                     Tab order groups the sub-tabs by concern:
+                       People & access   → Users, Roles, Job Assignments
+                       Org settings      → Organization, Templates, Email, SMS
+                       Catalog           → Materials
+                       AI                → Agents
+                       Observability     → Metrics
+                       Platform (sysadm) → ⚙ System (right-most, hidden unless
+                                            the user has SYSTEM_ADMIN)
+                     The avatar-menu "Org Settings" link drops the user into
+                     the Organization sub-tab so everything org-scoped is
+                     immediately adjacent. -->
                 <div id="admin" class="tab-content" data-admin-only style="display:none;">
                     <div class="ws-right-tabs">
+                        <!-- People & access -->
                         <button class="ws-right-tab active" data-admin-subtab="users" data-p86-icon="clients" onclick="switchAdminSubTab('users')">Users</button>
-                        <button class="ws-right-tab" data-admin-subtab="jobs" data-p86-icon="wip" onclick="switchAdminSubTab('jobs')">Job Assignments</button>
-                        <button class="ws-right-tab" data-admin-subtab="metrics" data-p86-icon="insights" onclick="switchAdminSubTab('metrics')">Metrics</button>
                         <button class="ws-right-tab" data-admin-subtab="roles" data-p86-icon="admin" onclick="switchAdminSubTab('roles')">Roles</button>
-                        <button class="ws-right-tab" data-admin-subtab="templates" data-p86-icon="estimates" onclick="switchAdminSubTab('templates')">Templates</button>
-                        <button class="ws-right-tab" data-admin-subtab="materials" data-p86-icon="materials" onclick="switchAdminSubTab('materials')">Materials</button>
-                        <button class="ws-right-tab" data-admin-subtab="email" data-p86-icon="envelope" onclick="switchAdminSubTab('email')">Email</button>
-                        <!-- Email Templates moved INTO the Templates sub-tab as a 3rd inner tab.
-                             The pane div below stays for back-compat (no current callers) but
-                             is unused — the inner Templates → Email tab renders into a fresh
-                             #admin-subtab-email-templates that lives inside the templates pane. -->
-
-                        <button class="ws-right-tab" data-admin-subtab="agents" data-p86-icon="discord" onclick="switchAdminSubTab('agents')">Agents</button>
+                        <button class="ws-right-tab" data-admin-subtab="jobs" data-p86-icon="wip" onclick="switchAdminSubTab('jobs')">Job Assignments</button>
+                        <!-- Org settings cluster -->
                         <button class="ws-right-tab" data-admin-subtab="organization" data-p86-icon="briefcase" onclick="switchAdminSubTab('organization')">Organization</button>
+                        <button class="ws-right-tab" data-admin-subtab="templates" data-p86-icon="estimates" onclick="switchAdminSubTab('templates')">Templates</button>
+                        <button class="ws-right-tab" data-admin-subtab="email" data-p86-icon="envelope" onclick="switchAdminSubTab('email')">Email</button>
                         <button class="ws-right-tab" data-admin-subtab="sms" data-p86-icon="conversations" onclick="switchAdminSubTab('sms')">SMS</button>
+                        <!-- Catalog -->
+                        <button class="ws-right-tab" data-admin-subtab="materials" data-p86-icon="materials" onclick="switchAdminSubTab('materials')">Materials</button>
+                        <!-- AI / Agents -->
+                        <button class="ws-right-tab" data-admin-subtab="agents" data-p86-icon="discord" onclick="switchAdminSubTab('agents')">Agents</button>
+                        <!-- Observability -->
+                        <button class="ws-right-tab" data-admin-subtab="metrics" data-p86-icon="insights" onclick="switchAdminSubTab('metrics')">Metrics</button>
+                        <!-- (Email Templates render inside the Templates sub-tab as a 3rd inner tab.
+                             The legacy #admin-subtab-email-templates pane below stays for back-compat
+                             but is unused.) -->
+
                         <!-- System Admin sub-tab — visible ONLY to users with the
                              SYSTEM_ADMIN capability (platform owner). JS sets
                              display:inline-flex on /me load when the cap is
