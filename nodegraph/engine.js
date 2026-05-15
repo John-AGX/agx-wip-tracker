@@ -379,7 +379,16 @@ function getActual(n){
   }
   else if(n.type==='sub'){
     wires.forEach(function(w){
-      if(w.toNode===n.id){ var fn=findNode(w.fromNode); if(fn) v += getActual(fn); }
+      if(w.toNode!==n.id) return;
+      var fn=findNode(w.fromNode); if(!fn) return;
+      // PO with its own direct phase wires routes cost through those
+      // wires, not through this sub. Without this skip, the sub's
+      // accrued / actual would double-count the same dollars on every
+      // phase that the sub fans out to. The sub still shows the PO
+      // visually under it, but the cost flow lives on the po→phase
+      // edges.
+      if(fn.type === 'po' && _poHasDirectPhaseWires(fn)) return;
+      v += getActual(fn);
     });
   }
   else if(n.type==='co'){
@@ -435,6 +444,21 @@ function getActual(n){
 function _alloc(w){
   if(!w) return 100;
   return (w.allocPct != null) ? Number(w.allocPct) || 0 : 100;
+}
+
+// True when a PO has at least one outgoing wire to a t2 phase node.
+// When this is the case, the sub the PO sits under MUST NOT include
+// that PO in its own actual/accrued rollup — the PO's cost flows
+// directly through po→phase wires (with allocPct) and would double-
+// count otherwise. POs without direct phase wires keep the legacy
+// behavior of routing through the sub.
+function _poHasDirectPhaseWires(po){
+  if(!po || po.type !== 'po') return false;
+  return wires.some(function(w){
+    if(w.fromNode !== po.id) return false;
+    var t = findNode(w.toNode);
+    return t && t.type === 't2';
+  });
 }
 
 // Find weighted-average pctComplete across all ancestor T1/T2 phases.
@@ -729,7 +753,12 @@ function getAccrued(n){
   }
   else if(n.type==='sub'){
     wires.forEach(function(w){
-      if(w.toNode===n.id){ var fn=findNode(w.fromNode); if(fn) v += getAccrued(fn); }
+      if(w.toNode!==n.id) return;
+      var fn=findNode(w.fromNode); if(!fn) return;
+      // Same skip as getActual — PO with direct phase wires bypasses
+      // the sub for cost flow so the dollars aren't counted twice.
+      if(fn.type === 'po' && _poHasDirectPhaseWires(fn)) return;
+      v += getAccrued(fn);
     });
   }
   else if(n.type==='co'){

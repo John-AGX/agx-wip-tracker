@@ -364,6 +364,46 @@ function renderNodes(){
         h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Contract <span style="color:#8899cc;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(poContract)+'</span></div>';
         h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Invoiced <span style="color:#34d399;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(poInv)+'</span></div>';
         h+='</div>';
+
+        // Linked phases — direct po→phase wires with allocPct split.
+        // This is the new cost-routing pattern: the PO stays attached
+        // to its sub (relationship), and the cost is apportioned to
+        // one or more phases here. Sums across rows should equal 100.
+        if(!n.collapsed){
+          var phaseWires=[];
+          E.wires().forEach(function(w){
+            if(w.fromNode!==n.id) return;
+            var tgt=E.findNode(w.toNode);
+            if(tgt && tgt.type==='t2') phaseWires.push({wire:w, phase:tgt});
+          });
+          var totalAlloc=phaseWires.reduce(function(s,pw){
+            return s + (pw.wire.allocPct!=null?Number(pw.wire.allocPct)||0:100);
+          }, 0);
+          h+='<div style="padding:6px 10px 6px;border-top:1px solid var(--ng-border2);">';
+          h+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">';
+          h+='<span style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#8b90a5;">Linked Phases</span>';
+          var allocOk = phaseWires.length===0 || Math.abs(totalAlloc-100)<0.5;
+          if(phaseWires.length){
+            h+='<span style="font-size:9px;color:'+(allocOk?'#6a7090':'#fbbf24')+';font-family:\'Courier New\',monospace;" title="'+(allocOk?'Allocation totals 100%':'Allocation does not sum to 100% — phase rollups will under/over count')+'">'+totalAlloc.toFixed(0)+'%</span>';
+          }
+          h+='</div>';
+          if(!phaseWires.length){
+            h+='<div style="font-size:10px;color:#6a7090;font-style:italic;padding:2px 0 4px;">No phases linked yet. Cost still flows via the sub. Add a phase here to split this PO across phases.</div>';
+          } else {
+            phaseWires.forEach(function(pw){
+              var pname=(pw.phase.label||pw.phase.type).split(' › ')[0].trim().slice(0,40);
+              var pa=pw.wire.allocPct!=null?Number(pw.wire.allocPct):100;
+              h+='<div style="display:flex;align-items:center;gap:6px;padding:2px 0;font-size:10px;color:#c4c9db;">';
+              h+='<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">\u{1F4CB} '+pname+'</span>';
+              h+='<input class="ng-po-alloc" type="number" min="0" max="100" step="1" value="'+pa.toFixed(0)+'" data-from="'+n.id+'" data-to="'+pw.phase.id+'" style="width:42px;background:rgba(255,255,255,0.04);border:1px solid var(--ng-border2);color:#fff;border-radius:3px;padding:2px 4px;font-family:\'Courier New\',monospace;font-size:10px;text-align:right;" title="Allocation % to this phase" />';
+              h+='<span style="color:#6a7090;font-size:9px;">%</span>';
+              h+='<span class="ng-po-unlink" data-from="'+n.id+'" data-to="'+pw.phase.id+'" title="Unlink phase" style="cursor:pointer;color:#f87171;padding:0 4px;">✖</span>';
+              h+='</div>';
+            });
+          }
+          h+='<div class="ng-po-link-add" data-po-node="'+n.id+'" title="Link this PO to a phase" style="cursor:pointer;color:#4f8cff;font-size:10px;padding:3px 0 0 0;display:inline-block;">+ Link phase</div>';
+          h+='</div>';
+        }
       }
       h+='</div>';
     }
@@ -1462,6 +1502,94 @@ function initEvents(){
       wpInp.addEventListener('mousedown',function(ev){ev.stopPropagation();});
       return;
     }
+    // PO → phase: unlink one phase from a PO. Removes the wire and
+    // re-renders so the Linked Phases section + the canvas update.
+    var poUnlink = e.target.closest('.ng-po-unlink');
+    if(poUnlink){
+      e.stopPropagation();
+      var fromId = poUnlink.getAttribute('data-from');
+      var toId   = poUnlink.getAttribute('data-to');
+      var ws = E.wires();
+      for(var wi = ws.length - 1; wi >= 0; wi--){
+        if(ws[wi].fromNode === fromId && ws[wi].toNode === toId) ws.splice(wi, 1);
+      }
+      render();
+      return;
+    }
+    // PO → phase: open the "+ Link phase" picker. Shows phases on
+    // this job that aren't already linked from this PO.
+    var poLinkAdd = e.target.closest('.ng-po-link-add');
+    if(poLinkAdd){
+      e.stopPropagation();
+      var poId = poLinkAdd.getAttribute('data-po-node');
+      var poN  = E.findNode(poId);
+      if(!poN) return;
+      var jid = E.job();
+      // Candidate phases: every t2 node on this job that isn't already
+      // wired from this PO. Sorted alphabetically by label.
+      var alreadyWired = {};
+      E.wires().forEach(function(w){
+        if(w.fromNode === poId){
+          var tgt = E.findNode(w.toNode);
+          if(tgt && tgt.type === 't2') alreadyWired[tgt.id] = true;
+        }
+      });
+      var candidates = E.nodes().filter(function(nd){
+        return nd.type === 't2' && !alreadyWired[nd.id];
+      }).sort(function(a, b){ return (a.label || '').localeCompare(b.label || ''); });
+      if(!candidates.length){
+        alert('No more phases to link — every t2 phase on this job is already wired from this PO. Drop a new phase onto the graph first if you need to.');
+        return;
+      }
+      // Tiny dropdown picker rendered next to the click target.
+      var prev = document.getElementById('ng-po-link-picker');
+      if(prev) prev.remove();
+      var pick = document.createElement('div');
+      pick.id = 'ng-po-link-picker';
+      var rect = poLinkAdd.getBoundingClientRect();
+      pick.style.cssText =
+        'position:fixed;left:' + Math.round(rect.left) + 'px;top:' + Math.round(rect.bottom + 4) + 'px;' +
+        'background:#0f172a;border:1px solid rgba(255,255,255,0.18);border-radius:6px;' +
+        'padding:4px;z-index:99999;max-height:260px;overflow-y:auto;min-width:200px;' +
+        'box-shadow:0 8px 22px rgba(0,0,0,0.55);font-family:inherit;';
+      candidates.forEach(function(c){
+        var btn = document.createElement('div');
+        btn.textContent = c.label || c.type;
+        btn.style.cssText = 'padding:6px 10px;cursor:pointer;color:#e6e6e6;font-size:12px;border-radius:4px;';
+        btn.onmouseenter = function(){ btn.style.background = 'rgba(255,255,255,0.06)'; };
+        btn.onmouseleave = function(){ btn.style.background = 'transparent'; };
+        btn.onclick = function(){
+          // Add the wire with allocPct that auto-balances against any
+          // existing linked phases. If this is the only link, default
+          // to 100; otherwise split the remainder equally.
+          var existing = E.wires().filter(function(w){
+            if(w.fromNode !== poId) return false;
+            var t = E.findNode(w.toNode);
+            return t && t.type === 't2';
+          });
+          var defaultPct = 100;
+          if(existing.length){
+            // Re-balance equally across (existing + this new one).
+            var share = 100 / (existing.length + 1);
+            existing.forEach(function(w){ w.allocPct = share; });
+            defaultPct = share;
+          }
+          E.wires().push({ fromNode: poId, fromPort: 0, toNode: c.id, toPort: 0, allocPct: defaultPct });
+          pick.remove();
+          render();
+        };
+        pick.appendChild(btn);
+      });
+      document.body.appendChild(pick);
+      // Dismiss on next outside click.
+      setTimeout(function(){
+        document.addEventListener('click', function onDoc(){
+          pick.remove();
+          document.removeEventListener('click', onDoc);
+        });
+      }, 0);
+      return;
+    }
     // Create PO scoped to a sub's target phase/CO/T1
     var subAddPO=e.target.closest('.ng-sub-add-po');
     if(subAddPO){
@@ -1647,6 +1775,38 @@ function initEvents(){
   });
   canvasEl.addEventListener('input',function(e){
     var t=e.target;
+    // PO → phase allocation slider: write back to the wire and
+    // re-render so the rollup numbers + the "totals 100%" badge
+    // update live as the user types.
+    if(t.tagName==='INPUT' && t.classList && t.classList.contains('ng-po-alloc')){
+      var fromId = t.getAttribute('data-from');
+      var toId   = t.getAttribute('data-to');
+      var w = E.wires().find(function(w){ return w.fromNode === fromId && w.toNode === toId; });
+      if(w){
+        var raw = parseFloat(t.value);
+        if(!Number.isFinite(raw)) raw = 0;
+        w.allocPct = Math.max(0, Math.min(100, raw));
+        E.resetComp();
+        E.saveGraph();
+        // Update the percent badge in this PO's section without a
+        // full render — re-rendering every keystroke would lose
+        // input focus.
+        var section = t.closest('div[style*="border-top"]');
+        if(section){
+          var sumPct = 0;
+          var inputs = section.querySelectorAll('.ng-po-alloc');
+          inputs.forEach(function(inp){ sumPct += parseFloat(inp.value) || 0; });
+          var badge = section.parentElement && section.parentElement.querySelector('span[title*="Allocation"]');
+          if(badge){
+            badge.textContent = sumPct.toFixed(0) + '%';
+            var ok = Math.abs(sumPct - 100) < 0.5;
+            badge.style.color = ok ? '#6a7090' : '#fbbf24';
+            badge.title = ok ? 'Allocation totals 100%' : 'Allocation does not sum to 100% — phase rollups will under/over count';
+          }
+        }
+      }
+      return;
+    }
     if(t.tagName==='INPUT'&&t.dataset.node){
       var n=E.findNode(t.dataset.node);
       if(!n) return;
