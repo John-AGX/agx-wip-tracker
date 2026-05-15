@@ -179,10 +179,12 @@ const upload = multer({
 function readCapForEntity(entityType) {
   if (entityType === 'estimate') return 'ESTIMATES_VIEW';
   if (entityType === 'client')   return 'ESTIMATES_VIEW';
-  if (entityType === 'job')      return 'JOBS_VIEW';
-  // Subs are part of the jobs/back-office surface — anyone with job-edit
-  // rights can see the subcontractor directory + their certificates.
-  if (entityType === 'sub')      return 'JOBS_VIEW';
+  // Job reads accept either the all-jobs view cap or the assigned-only
+  // cap. Returning a space-separated list is the convention used in
+  // report-routes / qb-cost-routes — see requireDynamicCapability below
+  // for the OR-match logic.
+  if (entityType === 'job')      return 'JOBS_VIEW_ALL JOBS_VIEW_ASSIGNED JOBS_EDIT_ANY JOBS_EDIT_OWN';
+  if (entityType === 'sub')      return 'JOBS_VIEW_ALL JOBS_VIEW_ASSIGNED JOBS_EDIT_ANY JOBS_EDIT_OWN';
   // Personal-files bucket. Capability is universal so authenticated
   // users can land on their own folder; the ownership check below
   // (ensureUserAttachmentOwner) enforces "only you can see your own".
@@ -192,10 +194,15 @@ function readCapForEntity(entityType) {
 function writeCapForEntity(entityType) {
   if (entityType === 'estimate') return 'ESTIMATES_EDIT';
   if (entityType === 'client')   return 'ESTIMATES_EDIT';
-  if (entityType === 'job')      return 'JOBS_EDIT';
-  // Sub uploads (cert PDFs) require the same job-edit capability that
-  // sub-routes.js uses for create/update — keeps the perm story coherent.
-  if (entityType === 'sub')      return 'JOBS_EDIT_ANY';
+  // Job writes — JOBS_EDIT was never a real capability (only _ANY and
+  // _OWN exist), so the prior single-cap lookup 403'd for every user
+  // and broke .xlsx / .docx / generic file uploads attached to a job
+  // chat. Accept either edit-tier cap; per-job ownership is enforced
+  // upstream by the canEdit() helper in job-routes for the row itself.
+  if (entityType === 'job')      return 'JOBS_EDIT_ANY JOBS_EDIT_OWN';
+  // Sub uploads (cert PDFs) — same shape; allow OWN-tier too because
+  // PMs who own a job often handle their sub paperwork.
+  if (entityType === 'sub')      return 'JOBS_EDIT_ANY JOBS_EDIT_OWN';
   // Same owner-only model as the read side.
   if (entityType === 'user')     return '__owner__';
   return 'LEADS_EDIT';
@@ -211,7 +218,9 @@ function ensureUserAttachmentOwner(req, entityId) {
 }
 
 // Hand-rolled cap check since the cap depends on a path param. Mirrors
-// the requireCapability middleware in server/auth.js.
+// the requireCapability middleware in server/auth.js — and like the
+// OR-style usage in report-routes / qb-cost-routes, accepts a single
+// cap OR a space-separated list. ANY match passes.
 const { hasCapability } = require('../auth');
 function requireDynamicCapability(getCap) {
   return async function(req, res, next) {
@@ -231,7 +240,14 @@ function requireDynamicCapability(getCap) {
         }
         return next();
       }
-      const ok = await hasCapability(req.user, cap);
+      // Split on whitespace so "JOBS_VIEW_ALL JOBS_VIEW_ASSIGNED" reads
+      // as "any of these grants access". Single-cap callers still work
+      // because the split yields a one-element array.
+      const caps = String(cap).split(/\s+/).filter(Boolean);
+      let ok = false;
+      for (const c of caps) {
+        if (await hasCapability(req.user, c)) { ok = true; break; }
+      }
       if (!ok) return res.status(403).json({ error: 'Forbidden' });
       next();
     } catch (e) {
