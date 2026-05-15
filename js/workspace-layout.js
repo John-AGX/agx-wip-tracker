@@ -968,15 +968,23 @@
       if (!jid) return alert('Open a job first.');
       if (window.p86JobAudit) window.p86JobAudit.open(jid);
     });
-    // Ask 86 — opens the chat panel scoped to the current job so the
-    // user can talk-through wiring fixes (audit findings, PO→phase
-    // links, sub-cost splits) right from the graph instead of
-    // bouncing to the floating widget.
+    // Ask 86 — opens the GLOBAL 86 surface (same one the floating
+    // badge mounts in index.html: p86AI.open({entityType:'ask86'})).
+    // This used to call openJobAI() which scopes to the current job;
+    // the user wants the unified global 86 here so the chat session
+    // is the same one as the rest of the app (sidebar / cross-session
+    // memory / talk-through). The page-context block 86 receives on
+    // each turn already names the active job, so 86 still knows what
+    // graph you\'re looking at — without forking into a job-pinned
+    // session.
     var askAIBtn = document.getElementById('ngAskAIBtn');
     if (askAIBtn) askAIBtn.addEventListener('click', function() {
-      var jid = (window.appState && appState.currentJobId) || null;
-      if (!jid) return alert('Open a job first.');
-      if (typeof window.openJobAI === 'function') window.openJobAI();
+      if (window.p86AI && typeof window.p86AI.open === 'function') {
+        window.p86AI.open({ entityType: 'ask86' });
+      } else if (typeof window.openJobAI === 'function') {
+        // Fallback only — older bundle without p86AI.open exposed.
+        window.openJobAI();
+      }
     });
     _toolbarWired = true;
   }
