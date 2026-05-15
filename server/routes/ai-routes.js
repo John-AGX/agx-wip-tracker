@@ -1227,6 +1227,49 @@ const JOB_TOOLS = [
     }
   },
   {
+    name: 'propose_link_job_to_client',
+    description:
+      'Link one job to a client record. Use when read_jobs flags a job without a client link, or when the user mentions which client a job belongs to. Stores client_id on the job\'s data blob (data.clientId). Server-applied on approval — no client-side editor needed. Talk-through tier: describe which job → which client in prose, end with "Approve?", and the client commits the link without a separate card.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        job_id:    { type: 'string', description: 'Job id from read_jobs.' },
+        client_id: { type: 'string', description: 'Client id from read_clients.' },
+        rationale: { type: 'string', description: 'One short sentence — how you identified the match.' }
+      },
+      required: ['job_id', 'client_id', 'rationale']
+    }
+  },
+  {
+    name: 'propose_bulk_link_jobs_to_clients',
+    description:
+      'Link many jobs to clients in one approval. Use after read_jobs surfaces a batch of unlinked jobs and you can match them to clients by name / property / community. Talk-through tier: list every job → client mapping in prose first, end with "Approve?", and the client commits all of them in one click. Up to 100 links per call.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        links: {
+          type: 'array',
+          maxItems: 100,
+          description: 'One entry per job→client mapping.',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              job_id:    { type: 'string' },
+              client_id: { type: 'string' },
+              note:      { type: 'string', description: 'Optional one-line reason this match holds.' }
+            },
+            required: ['job_id', 'client_id']
+          }
+        },
+        rationale: { type: 'string', description: 'One short paragraph — how you grouped these matches.' }
+      },
+      required: ['links', 'rationale']
+    }
+  },
+  {
     name: 'read_users',
     description: 'List Project 86 staff users (PMs, admins, corporate) with name, email, role, active status. Use to answer "who\'s the PM on this job", "is X still on staff", "who can I assign this to". Auto-tier.',
     input_schema: {
@@ -4781,6 +4824,24 @@ router.post('/v2/jobs/:id/chat/continue',
             isError = true;
             res.write('data: ' + JSON.stringify({ tool_failed: { id: r.tool_use_id, name: r.name, input: r.input, error: summary } }) + '\n\n');
           }
+        } else if (r.name === 'propose_link_job_to_client') {
+          try {
+            summary = await execLinkJobToClient(r.input || {});
+            res.write('data: ' + JSON.stringify({ tool_applied: { id: r.tool_use_id, name: r.name, input: r.input, summary } }) + '\n\n');
+          } catch (e) {
+            summary = 'Error: ' + (e.message || 'failed');
+            isError = true;
+            res.write('data: ' + JSON.stringify({ tool_failed: { id: r.tool_use_id, name: r.name, input: r.input, error: summary } }) + '\n\n');
+          }
+        } else if (r.name === 'propose_bulk_link_jobs_to_clients') {
+          try {
+            summary = await execBulkLinkJobsToClients(r.input || {});
+            res.write('data: ' + JSON.stringify({ tool_applied: { id: r.tool_use_id, name: r.name, input: r.input, summary } }) + '\n\n');
+          } catch (e) {
+            summary = 'Error: ' + (e.message || 'failed');
+            isError = true;
+            res.write('data: ' + JSON.stringify({ tool_failed: { id: r.tool_use_id, name: r.name, input: r.input, error: summary } }) + '\n\n');
+          }
         } else if (r.name === 'propose_create_field_tool'
                 || r.name === 'propose_update_field_tool'
                 || r.name === 'propose_delete_field_tool') {
@@ -8022,6 +8083,87 @@ async function execProposeCreateLead(input, userId) {
   return 'Created lead "' + t + '" id=' + leadId + createdClientNote + photoNote;
 }
 
+// ─── Job → Client linkage (server-applied) ────────────────────────────
+//
+// Both helpers mutate jobs.data.clientId in place. data is JSONB; we
+// patch only the single key with jsonb_set so any other in-flight
+// edits on the same row don't clobber each other. Returns a string
+// summary that 86 sees as the tool result.
+
+async function execLinkJobToClient(input) {
+  const jobId = String(input.job_id || '').trim();
+  const clientId = String(input.client_id || '').trim();
+  if (!jobId) throw new Error('job_id is required');
+  if (!clientId) throw new Error('client_id is required');
+
+  // Verify the client exists — silently linking to a stale id would
+  // pollute downstream reads with broken pointers.
+  const c = await pool.query('SELECT id, name FROM clients WHERE id = $1', [clientId]);
+  if (!c.rows.length) throw new Error('client_id "' + clientId + '" does not exist');
+  const clientName = c.rows[0].name;
+
+  const j = await pool.query(
+    `UPDATE jobs
+        SET data = jsonb_set(COALESCE(data, '{}'::jsonb), '{clientId}', to_jsonb($2::text), true),
+            updated_at = NOW()
+      WHERE id = $1
+      RETURNING data->>'jobNumber' AS job_number, data->>'title' AS title`,
+    [jobId, clientId]
+  );
+  if (!j.rows.length) throw new Error('job_id "' + jobId + '" does not exist');
+  const r = j.rows[0];
+  const jobLabel = r.job_number ? ('job ' + r.job_number) : ('job ' + jobId);
+  const titlePart = r.title ? ' "' + r.title + '"' : '';
+  return 'Linked ' + jobLabel + titlePart + ' to client "' + clientName + '" (' + clientId + ').';
+}
+
+async function execBulkLinkJobsToClients(input) {
+  const links = Array.isArray(input.links) ? input.links : [];
+  if (!links.length) throw new Error('links is required and must be non-empty');
+  if (links.length > 100) throw new Error('Up to 100 links per call. Got ' + links.length + '.');
+
+  // Validate every job_id + client_id up front so we either land the
+  // whole batch or none of it. Partial-success would leave the user
+  // unsure which mappings stuck.
+  const jobIds = [...new Set(links.map(l => String(l.job_id || '')))].filter(Boolean);
+  const clientIds = [...new Set(links.map(l => String(l.client_id || '')))].filter(Boolean);
+  if (!jobIds.length || !clientIds.length) throw new Error('links must include job_id and client_id on every entry');
+
+  const jr = await pool.query(`SELECT id FROM jobs WHERE id = ANY($1::text[])`, [jobIds]);
+  const knownJobs = new Set(jr.rows.map(r => r.id));
+  const missingJobs = jobIds.filter(id => !knownJobs.has(id));
+  if (missingJobs.length) throw new Error('Unknown job_id(s): ' + missingJobs.slice(0, 5).join(', ') + (missingJobs.length > 5 ? ' (+' + (missingJobs.length - 5) + ' more)' : ''));
+
+  const cr = await pool.query(`SELECT id, name FROM clients WHERE id = ANY($1::text[])`, [clientIds]);
+  const clientNameById = new Map(cr.rows.map(r => [r.id, r.name]));
+  const missingClients = clientIds.filter(id => !clientNameById.has(id));
+  if (missingClients.length) throw new Error('Unknown client_id(s): ' + missingClients.slice(0, 5).join(', ') + (missingClients.length > 5 ? ' (+' + (missingClients.length - 5) + ' more)' : ''));
+
+  // Apply in one transaction so a mid-batch crash doesn't leave a
+  // partial state. Each UPDATE patches just the clientId key.
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    for (const link of links) {
+      await client.query(
+        `UPDATE jobs
+            SET data = jsonb_set(COALESCE(data, '{}'::jsonb), '{clientId}', to_jsonb($2::text), true),
+                updated_at = NOW()
+          WHERE id = $1`,
+        [String(link.job_id), String(link.client_id)]
+      );
+    }
+    await client.query('COMMIT');
+  } catch (e) {
+    try { await client.query('ROLLBACK'); } catch (_) {}
+    throw e;
+  } finally {
+    client.release();
+  }
+
+  return 'Linked ' + links.length + ' job' + (links.length === 1 ? '' : 's') + ' to clients.';
+}
+
 // Handler for the three subtask tools. Called from make86OnCustomToolUse
 // when 86 emits spawn_subtask / await_subtasks / subtask_status.
 //
@@ -9145,6 +9287,24 @@ router.post('/v2/intake/chat/continue',
             isError = true;
             res.write('data: ' + JSON.stringify({ tool_failed: { id: d.tool_use_id, name: d.name, input: d.input, error: summary } }) + '\n\n');
           }
+        } else if (d.name === 'propose_link_job_to_client') {
+          try {
+            summary = await execLinkJobToClient(d.input || {});
+            res.write('data: ' + JSON.stringify({ tool_applied: { id: d.tool_use_id, name: d.name, input: d.input, summary } }) + '\n\n');
+          } catch (e) {
+            summary = 'Error: ' + (e.message || 'failed');
+            isError = true;
+            res.write('data: ' + JSON.stringify({ tool_failed: { id: d.tool_use_id, name: d.name, input: d.input, error: summary } }) + '\n\n');
+          }
+        } else if (d.name === 'propose_bulk_link_jobs_to_clients') {
+          try {
+            summary = await execBulkLinkJobsToClients(d.input || {});
+            res.write('data: ' + JSON.stringify({ tool_applied: { id: d.tool_use_id, name: d.name, input: d.input, summary } }) + '\n\n');
+          } catch (e) {
+            summary = 'Error: ' + (e.message || 'failed');
+            isError = true;
+            res.write('data: ' + JSON.stringify({ tool_failed: { id: d.tool_use_id, name: d.name, input: d.input, error: summary } }) + '\n\n');
+          }
         } else {
           summary = d.applied_summary || 'User approved.';
           res.write('data: ' + JSON.stringify({ tool_applied: { id: d.tool_use_id, name: d.name, input: d.input, summary } }) + '\n\n');
@@ -9256,7 +9416,11 @@ const TALK_THROUGH_TOOLS = new Set([
   'propose_add_client_note',
   // Lead creation — routine intake action, no structured form needed
   // when 86 talks the user through the values in prose first.
-  'propose_create_lead'
+  'propose_create_lead',
+  // Job → client linkage (server-applied). Bookkeeping fix-up; 86
+  // talks through the mappings and the inline Approve commits them.
+  'propose_link_job_to_client',
+  'propose_bulk_link_jobs_to_clients'
 ]);
 function tierFor(toolName) {
   return TALK_THROUGH_TOOLS.has(toolName) ? 'talk_through' : 'approval';
@@ -10241,6 +10405,12 @@ router.post('/86/chat/continue', requireAuth, requireOrg, async (req, res) => {
         summary = r.reject_reason || 'User rejected this proposal.';
       } else if (r.name === 'propose_create_lead') {
         try { summary = await execProposeCreateLead(r.input || {}, req.user.id); }
+        catch (e) { summary = 'Error: ' + (e.message || 'failed'); isError = true; }
+      } else if (r.name === 'propose_link_job_to_client') {
+        try { summary = await execLinkJobToClient(r.input || {}); }
+        catch (e) { summary = 'Error: ' + (e.message || 'failed'); isError = true; }
+      } else if (r.name === 'propose_bulk_link_jobs_to_clients') {
+        try { summary = await execBulkLinkJobsToClients(r.input || {}); }
         catch (e) { summary = 'Error: ' + (e.message || 'failed'); isError = true; }
       } else if (r.name === 'propose_create_field_tool'
               || r.name === 'propose_update_field_tool'

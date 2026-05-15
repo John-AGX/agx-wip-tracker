@@ -3219,6 +3219,16 @@
     propose_bulk_delete_lines: true
   };
 
+  // Tools the SERVER applies on /chat/continue regardless of which
+  // panel the user is on. applyTool returns '' for these — no
+  // client-side mutation; the matching execLinkJobToClient /
+  // execBulkLinkJobsToClients handler runs on the continue request
+  // and the real summary flows back as the tool_result.
+  var SERVER_APPLIED_PROPOSE_TOOLS = {
+    propose_link_job_to_client: true,
+    propose_bulk_link_jobs_to_clients: true
+  };
+
   function applyTool(tu) {
     // Navigation is a pure client-side side effect — handle before
     // entity-mode dispatch so it works the same from Ask 86, job,
@@ -3227,6 +3237,10 @@
     if (tu.name === 'navigate') {
       return Promise.resolve(_navigate(tu.input));
     }
+    // Server-applied job→client links — same shape regardless of
+    // which surface the user is on. The server applies the mutation
+    // when the talk-through bundle commits to /chat/continue.
+    if (SERVER_APPLIED_PROPOSE_TOOLS[tu.name]) return '';
     if (isClientMode() || isStaffMode() || isIntakeMode() || isAsk86Mode()) {
       // Ask 86 special-case: when the user has the estimate editor
       // open and 86 proposes a line-item / section / group edit, the
