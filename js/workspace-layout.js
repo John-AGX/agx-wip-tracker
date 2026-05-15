@@ -968,6 +968,16 @@
       if (!jid) return alert('Open a job first.');
       if (window.p86JobAudit) window.p86JobAudit.open(jid);
     });
+    // Ask 86 — opens the chat panel scoped to the current job so the
+    // user can talk-through wiring fixes (audit findings, PO→phase
+    // links, sub-cost splits) right from the graph instead of
+    // bouncing to the floating widget.
+    var askAIBtn = document.getElementById('ngAskAIBtn');
+    if (askAIBtn) askAIBtn.addEventListener('click', function() {
+      var jid = (window.appState && appState.currentJobId) || null;
+      if (!jid) return alert('Open a job first.');
+      if (typeof window.openJobAI === 'function') window.openJobAI();
+    });
     _toolbarWired = true;
   }
 
