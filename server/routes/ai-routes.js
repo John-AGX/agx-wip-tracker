@@ -1114,6 +1114,35 @@ const JOB_TOOLS = [
     }
   },
   {
+    name: 'search_my_kb',
+    description:
+      'Search the current user\'s personal knowledge base (their "My Files" bucket). Returns up to 20 matching attachments with filename, folder, mime, size, and a snippet of extracted text. Use when the user references a personal doc ("the spreadsheet I uploaded last week", "the photo I pasted into chat yesterday") or when you think their personal files would help answer the current request. Auto-tier (no approval). Scope: ctx.userId only — never another user\'s files. Call read_attachment_text({attachment_id}) to fetch the full body.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        query: { type: 'string', description: 'Search terms. Matches against filename + extracted_text content (case-insensitive substring).' },
+        limit: { type: 'integer', description: 'Optional cap on results. Default 20, max 50.', minimum: 1, maximum: 50 }
+      },
+      required: ['query']
+    }
+  },
+  {
+    name: 'search_org_kb',
+    description:
+      'Search the COMPANY knowledge base — every file uploaded across the org. Includes the company-files bucket (admin-curated org-wide docs: brand assets, SOPs, master pricing, template proposals) AND every user\'s personal "My Files" bucket AND every job/estimate/lead attachment. Use when the user asks anything that might be covered by an existing doc anywhere ("do we have a template for X?", "find the latest insurance cert", "what did Steve write on the Wimbledon scope?"). Returns up to 20 matches with filename, where it lives (which user / job / estimate), mime, size, and a snippet. Auto-tier. Scope: caller\'s organization only (cross-tenant access blocked). Call read_attachment_text({attachment_id}) for the full body.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        query: { type: 'string', description: 'Search terms. Matches against filename + extracted_text content (case-insensitive substring).' },
+        limit: { type: 'integer', description: 'Optional cap on results. Default 20, max 50.', minimum: 1, maximum: 50 },
+        scope: { type: 'string', enum: ['all', 'org_bucket', 'user_buckets', 'entity_buckets'], description: 'Which slice of the KB to search. "all" (default) covers every bucket. "org_bucket" = company-curated files only. "user_buckets" = every user\'s My Files. "entity_buckets" = job/estimate/lead/client/sub attachments.' }
+      },
+      required: ['query']
+    }
+  },
+  {
     name: 'read_active_lines',
     description:
       'Return the full line-by-line detail of the active group on an estimate: section header rows, cost-side line items with description / qty / unit / unit_cost / markup / line_id, plus subgroup roll-ups. Use when you need to propose an edit, audit an estimate, or compute totals. ' +
@@ -1932,6 +1961,8 @@ const PLAN_MODE_ALLOWED_JOB_TOOLS = new Set([
   'read_conversation_detail',
   'read_skill_packs',
   'search_my_sessions',
+  'search_my_kb',
+  'search_org_kb',
   'read_jobs',
   'read_users',
   'read_clients',
@@ -6978,6 +7009,122 @@ async function execStaffTool(name, input, ctx) {
       return lines.join('\n');
     }
 
+    case 'search_my_kb': {
+      // Personal knowledge base = the caller\'s My Files bucket
+      // (attachments WHERE entity_type='user' AND entity_id=userId).
+      // Matches against filename + extracted_text. ctx.userId scope.
+      const userId = ctx && ctx.userId;
+      if (!userId) return 'No user context — cannot search personal KB.';
+      const q = String((input && input.query) || '').trim();
+      if (!q) return 'query is required.';
+      const limit = Math.min(50, Math.max(1, parseInt((input && input.limit), 10) || 20));
+      const pattern = '%' + q.replace(/[\\%_]/g, m => '\\' + m) + '%';
+      const r = await pool.query(
+        `SELECT id, filename, mime_type, size_bytes, folder, created_at,
+                substr(COALESCE(extracted_text, ''), 1, 220) AS snippet,
+                (extracted_text ILIKE $2) AS body_match,
+                (filename ILIKE $2)       AS name_match
+           FROM attachments
+          WHERE entity_type = 'user'
+            AND entity_id = $1
+            AND (filename ILIKE $2 OR extracted_text ILIKE $2)
+          ORDER BY created_at DESC
+          LIMIT $3`,
+        [String(userId), pattern, limit]
+      );
+      if (!r.rows.length) return 'No personal-KB files matched "' + q + '".';
+      const lines = ['Found ' + r.rows.length + ' file(s) in your personal KB matching "' + q + '":'];
+      r.rows.forEach(row => {
+        const folder = row.folder ? ' · ' + row.folder : '';
+        const size = row.size_bytes ? ' · ' + Math.round(row.size_bytes / 1024) + ' KB' : '';
+        const mime = row.mime_type ? ' · ' + row.mime_type : '';
+        const where = (row.name_match && !row.body_match) ? 'filename match' : 'content match';
+        lines.push('• [' + row.id + '] ' + row.filename + folder + mime + size + ' — ' + where);
+        if (row.snippet && row.body_match) {
+          lines.push('    "' + String(row.snippet).replace(/\s+/g, ' ').slice(0, 180) + '"');
+        }
+      });
+      lines.push('');
+      lines.push('Call read_attachment_text({attachment_id}) on any [id] above to read the full body.');
+      return lines.join('\n');
+    }
+
+    case 'search_org_kb': {
+      // Org-wide knowledge base = every attachment in the caller\'s
+      // organization. Cross-tenant access blocked: we resolve the
+      // caller\'s organization_id and only return rows where the
+      // file\'s owning user, job, estimate, lead, etc. belongs to
+      // that org.
+      const userId = ctx && ctx.userId;
+      if (!userId) return 'No user context — cannot search company KB.';
+      const q = String((input && input.query) || '').trim();
+      if (!q) return 'query is required.';
+      const limit = Math.min(50, Math.max(1, parseInt((input && input.limit), 10) || 20));
+      const scope = String((input && input.scope) || 'all');
+      const pattern = '%' + q.replace(/[\\%_]/g, m => '\\' + m) + '%';
+
+      // Resolve org from users table — JWT carries it but ctx may not.
+      const orgRes = await pool.query(`SELECT organization_id FROM users WHERE id = $1`, [userId]);
+      const orgId = orgRes.rows[0] && orgRes.rows[0].organization_id;
+      if (!orgId) return 'No organization scope — cannot search company KB.';
+
+      // entity_type filter per scope.
+      let entityTypeWhere = '';
+      const params = [String(orgId), pattern, limit];
+      if (scope === 'org_bucket')       entityTypeWhere = `AND a.entity_type = 'org' AND a.entity_id = $1`;
+      else if (scope === 'user_buckets') entityTypeWhere = `AND a.entity_type = 'user' AND u_owner.organization_id = $1`;
+      else if (scope === 'entity_buckets') entityTypeWhere = `AND a.entity_type IN ('job','estimate','lead','client','sub')`;
+      // 'all' (default) keeps everything; org-id filter still applies via joins.
+
+      // The query unions in the org filter through whichever join is
+      // available for the row\'s entity_type. Rows without a clear
+      // org link (legacy data) are dropped to avoid cross-tenant leaks.
+      const r = await pool.query(
+        `SELECT a.id, a.filename, a.mime_type, a.size_bytes, a.folder,
+                a.entity_type, a.entity_id, a.uploaded_by, a.created_at,
+                substr(COALESCE(a.extracted_text, ''), 1, 220) AS snippet,
+                (a.extracted_text ILIKE $2) AS body_match,
+                (a.filename ILIKE $2)       AS name_match,
+                u_owner.name AS owner_name,
+                u_owner.organization_id AS owner_org_id,
+                j.id AS job_id_check,
+                e.id AS est_id_check
+           FROM attachments a
+           LEFT JOIN users u_owner ON u_owner.id = a.uploaded_by
+           LEFT JOIN jobs   j ON a.entity_type = 'job'      AND j.id = a.entity_id
+           LEFT JOIN estimates e ON a.entity_type = 'estimate' AND e.id = a.entity_id
+          WHERE (a.filename ILIKE $2 OR a.extracted_text ILIKE $2)
+            ${entityTypeWhere}
+            AND (
+              (a.entity_type = 'org'  AND a.entity_id = $1)
+              OR (a.entity_type = 'user' AND u_owner.organization_id = $1)
+              OR (a.entity_type IN ('job','estimate','lead','client','sub')
+                  AND u_owner.organization_id = $1)
+            )
+          ORDER BY a.created_at DESC
+          LIMIT $3`,
+        params
+      );
+      if (!r.rows.length) return 'No company-KB files matched "' + q + '".';
+      const lines = ['Found ' + r.rows.length + ' file(s) in the company KB matching "' + q + '":'];
+      r.rows.forEach(row => {
+        let where;
+        if      (row.entity_type === 'org')  where = 'company files';
+        else if (row.entity_type === 'user') where = (row.owner_name ? row.owner_name + '\'s' : 'a user\'s') + ' personal files';
+        else where = row.entity_type + ' ' + row.entity_id;
+        const folder = row.folder ? ' / ' + row.folder : '';
+        const size = row.size_bytes ? ' · ' + Math.round(row.size_bytes / 1024) + ' KB' : '';
+        const hit = (row.name_match && !row.body_match) ? 'filename match' : 'content match';
+        lines.push('• [' + row.id + '] ' + row.filename + ' (' + where + folder + ')' + size + ' — ' + hit);
+        if (row.snippet && row.body_match) {
+          lines.push('    "' + String(row.snippet).replace(/\s+/g, ' ').slice(0, 180) + '"');
+        }
+      });
+      lines.push('');
+      lines.push('Call read_attachment_text({attachment_id}) on any [id] above to read the full body.');
+      return lines.join('\n');
+    }
+
     case 'read_materials': {
       // Same query shape as the GET /api/materials endpoint that 86\'s
       // client-side applier hits — kept inline rather than HTTP-loop
@@ -9488,6 +9635,8 @@ const ALLOWED_AUTO_TIER_TOOLS = new Set([
   'read_conversation_detail',
   'read_skill_packs',
   'search_my_sessions',
+  'search_my_kb',
+  'search_org_kb',
   // HR directory reads — let 86 do who/where/what lookups inline
   'read_jobs',
   'read_users',
@@ -9725,7 +9874,7 @@ function ask86Tools() {
     'read_subs', 'read_lead_pipeline',
     'read_materials', 'read_purchase_history',
     'read_metrics', 'read_recent_conversations', 'read_conversation_detail',
-    'read_skill_packs', 'search_my_sessions',
+    'read_skill_packs', 'search_my_sessions', 'search_my_kb', 'search_org_kb',
     'read_past_estimates', 'read_past_estimate_lines', 'read_leads',
     // DOM navigation — client-side dispatch. Without this, the model
     // on the Ask 86 surface doesn't know it can switch tabs / open

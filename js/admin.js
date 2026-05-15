@@ -3102,6 +3102,24 @@
       +   '</div>'
       + '</fieldset>'
 
+      // ── Company knowledge base (org-wide files) ──
+      // Admin-curated bucket every user can READ. Feeds 86\'s
+      // search_org_kb tool so the agent has cross-org doc access
+      // (proposal templates, brand assets, SOPs, master pricing).
+      + '<fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:14px;margin-bottom:18px;">'
+      +   '<legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Company knowledge base</legend>'
+      +   '<p style="margin:0 0 12px 0;font-size:12px;color:var(--text-dim,#888);line-height:1.55;">'
+      +     'Org-wide reference files — every user in this org can read; only admins can upload. 86 searches these (along with everyone\'s personal My Files and every job/estimate/lead attachment) via the search_org_kb tool. Upload your master proposal templates, brand kit, SOPs, vendor price lists, or anything else 86 should know about company-wide.'
+      +   '</p>'
+      +   '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">'
+      +     '<button class="ee-btn primary" onclick="document.getElementById(\'org-kb-file-input\').click();">&#x1F4C2; Upload to company KB</button>'
+      +     '<input type="file" id="org-kb-file-input" multiple style="display:none;" accept="image/*,application/pdf,.xlsx,.xls,.xlsm,.csv,.tsv,.docx,.doc,.txt,.md" />'
+      +     '<span id="org-kb-status" style="flex:1;font-size:11px;color:var(--text-dim,#888);"></span>'
+      +     '<button class="ee-btn secondary" onclick="refreshOrgKB()">Refresh</button>'
+      +   '</div>'
+      +   '<div id="org-kb-list" style="font-size:12px;color:var(--text-dim,#888);font-style:italic;">Loading company files…</div>'
+      + '</fieldset>'
+
       // ── Skill packs ──
       + '<fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:14px;">'
       +   '<legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Skill packs (' + packs.length + ')</legend>'
@@ -3295,7 +3313,95 @@
     }).join('');
   }
 
+  // ── Company knowledge base — org-wide attachment bucket ──
+  // entity_type='org', entity_id=organizations.id. Every authed user
+  // in the tenant can read; only admin-tier caps can upload (gated
+  // server-side by writeCapForEntity('org')). 86 picks up these
+  // files automatically via the search_org_kb tool.
+  function refreshOrgKB() {
+    var listEl = document.getElementById('org-kb-list');
+    if (!listEl) return;
+    if (!_orgDraft || _orgDraft.id == null) {
+      listEl.innerHTML = '<div style="color:#fbbf24;font-style:italic;">Organization not loaded yet.</div>';
+      return;
+    }
+    listEl.innerHTML = '<div style="color:var(--text-dim,#888);font-style:italic;">Loading…</div>';
+    window.p86Api.attachments.list('org', String(_orgDraft.id)).then(function(resp) {
+      var rows = (resp && resp.attachments) || [];
+      if (!rows.length) {
+        listEl.innerHTML = '<div style="padding:14px 0;color:var(--text-dim,#888);font-style:italic;line-height:1.5;">No company files yet. Upload the first one above — anything 86 should know about the company (proposal templates, brand assets, SOPs, vendor master price lists) belongs here.</div>';
+        return;
+      }
+      var html = '<div style="display:flex;flex-direction:column;gap:4px;font-family:inherit;">';
+      rows.forEach(function(a) {
+        var size = a.size_bytes ? ' · ' + Math.round(a.size_bytes / 1024) + ' KB' : '';
+        var when = a.created_at ? new Date(a.created_at).toLocaleDateString() : '';
+        html += '<div style="display:flex;align-items:center;gap:8px;padding:6px 8px;background:rgba(255,255,255,0.02);border:1px solid var(--border,#2a2e3a);border-radius:6px;font-size:12px;">' +
+          '<span style="flex:1;color:var(--text,#e6e6e6);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">\u{1F4C4} ' + escapeHTML(a.filename) + '</span>' +
+          '<span style="color:var(--text-dim,#888);font-size:11px;">' + escapeHTML(a.mime_type || '') + size + ' · ' + escapeHTML(when) + '</span>' +
+          '<a href="' + escapeAttr(a.original_url || ('/api/attachments/raw/' + a.id)) + '" target="_blank" rel="noopener" style="color:#4f8cff;text-decoration:none;font-size:11px;">open</a>' +
+          '<button type="button" onclick="deleteOrgKBFile(\'' + escapeAttr(a.id) + '\')" style="background:transparent;border:none;color:#f87171;cursor:pointer;font-size:14px;padding:0 4px;" title="Delete">&times;</button>' +
+          '</div>';
+      });
+      html += '</div>';
+      listEl.innerHTML = html;
+    }).catch(function(err) {
+      listEl.innerHTML = '<div style="color:#e74c3c;padding:10px 0;">Failed to load company files: ' + escapeHTML(err.message || 'unknown') + '</div>';
+    });
+  }
+  window.refreshOrgKB = refreshOrgKB;
+
+  function deleteOrgKBFile(attachmentId) {
+    if (!confirm('Remove this file from the company knowledge base?')) return;
+    window.p86Api.attachments.remove(attachmentId).then(function() {
+      refreshOrgKB();
+    }).catch(function(err) {
+      alert('Delete failed: ' + (err.message || 'unknown'));
+    });
+  }
+  window.deleteOrgKBFile = deleteOrgKBFile;
+
+  // Wire the upload input (rendered inside renderOrgHTML). Triggered
+  // by the "Upload to company KB" button via document.click.
+  function wireOrgKBUpload() {
+    var input = document.getElementById('org-kb-file-input');
+    if (!input || input.dataset.wired === '1') return;
+    input.dataset.wired = '1';
+    input.addEventListener('change', function(ev) {
+      var files = ev.target.files;
+      if (!files || !files.length) return;
+      if (!_orgDraft || _orgDraft.id == null) {
+        alert('Organization not loaded — cannot upload.');
+        return;
+      }
+      var statusEl = document.getElementById('org-kb-status');
+      var done = 0, failed = 0;
+      var total = files.length;
+      function tick() {
+        if (statusEl) statusEl.textContent = 'Uploaded ' + done + ' / ' + total + (failed ? ' · ' + failed + ' failed' : '');
+        if (done + failed === total) {
+          setTimeout(function() {
+            if (statusEl) statusEl.textContent = '';
+            refreshOrgKB();
+          }, 600);
+        }
+      }
+      Array.from(files).forEach(function(file) {
+        window.p86Api.attachments.upload('org', String(_orgDraft.id), file).then(function() {
+          done++; tick();
+        }).catch(function() {
+          failed++; tick();
+        });
+      });
+      // Clear the input so the same file can be re-selected if needed.
+      ev.target.value = '';
+    });
+  }
+
   function attachOrgHandlers() {
+    wireOrgKBUpload();
+    // Kick off the initial KB list fetch once the org row is loaded.
+    refreshOrgKB();
     // Mark identity inputs as dirty on change (visual only — actual save
     // is on the button click). Light touch — no state tracking yet.
     // Pack inputs: mark the row's id dirty when any field changes.

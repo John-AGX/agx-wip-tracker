@@ -159,7 +159,13 @@ const MAX_FILE_BYTES = 50 * 1024 * 1024; // 50MB — fits most drawings, big PDF
 // 'user' represents the personal-files folder per user. The entity_id
 // for a user-type attachment is the stringified users.id of the owner;
 // only that user (or an admin) can read/write rows in their bucket.
-const VALID_ENTITY_TYPES = new Set(['lead', 'estimate', 'client', 'job', 'sub', 'user']);
+//
+// 'org' is the company-wide knowledge base — accessible to every user
+// in the organization for reads; admin-tier capability gates writes.
+// The entity_id for an org-type attachment is the stringified
+// organizations.id; uploads here become part of the org-wide context
+// that 86's search_org_kb tool draws from.
+const VALID_ENTITY_TYPES = new Set(['lead', 'estimate', 'client', 'job', 'sub', 'user', 'org']);
 
 // Lightweight MIME detection — sharp only handles raster images, so
 // anything outside this set bypasses the resize pipeline.
@@ -189,6 +195,11 @@ function readCapForEntity(entityType) {
   // users can land on their own folder; the ownership check below
   // (ensureUserAttachmentOwner) enforces "only you can see your own".
   if (entityType === 'user')     return '__owner__';
+  // Org-wide knowledge base — every authenticated user in the org
+  // can READ the company files; per-row org_id scoping (enforced by
+  // ensureOrgAttachmentScope below) keeps tenants isolated. Writes
+  // are gated separately by writeCapForEntity.
+  if (entityType === 'org')      return '__org_member__';
   return 'LEADS_VIEW';
 }
 function writeCapForEntity(entityType) {
@@ -205,6 +216,10 @@ function writeCapForEntity(entityType) {
   if (entityType === 'sub')      return 'JOBS_EDIT_ANY JOBS_EDIT_OWN';
   // Same owner-only model as the read side.
   if (entityType === 'user')     return '__owner__';
+  // Company knowledge base — admin-tier only. Plain users can READ
+  // (via the __org_member__ sentinel on the read side) but the
+  // bucket is curated by admins so it doesn\'t accumulate noise.
+  if (entityType === 'org')      return 'USERS_MANAGE ROLES_MANAGE SYSTEM_ADMIN';
   return 'LEADS_EDIT';
 }
 
@@ -215,6 +230,18 @@ function ensureUserAttachmentOwner(req, entityId) {
   if (!req.user) return false;
   if (isAdminish(req.user)) return true;
   return String(entityId) === String(req.user.id);
+}
+
+// Org-bucket scope gate. The entity_id for an 'org' attachment is the
+// organizations.id; this guard makes sure the caller is a member of
+// THAT specific org (cross-tenant access blocked even for non-admins
+// who somehow obtained another org\'s id). System admins bypass.
+function ensureOrgAttachmentScope(req, entityId) {
+  if (!req.user) return false;
+  if (req.user.role === 'system_admin') return true;
+  const callerOrg = req.user.organization_id;
+  if (!callerOrg) return false;
+  return String(entityId) === String(callerOrg);
 }
 
 // Hand-rolled cap check since the cap depends on a path param. Mirrors
@@ -237,6 +264,15 @@ function requireDynamicCapability(getCap) {
           if (!ensureUserAttachmentOwner(req, entityId)) {
             return res.status(403).json({ error: 'Forbidden' });
           }
+        }
+        return next();
+      }
+      // Org-member sentinel — used by the company knowledge base
+      // (entity_type='org') on the READ side. Any authenticated user
+      // whose organization matches the entity_id is allowed.
+      if (cap === '__org_member__') {
+        if (!ensureOrgAttachmentScope(req, req.params.entityId)) {
+          return res.status(403).json({ error: 'Forbidden' });
         }
         return next();
       }
