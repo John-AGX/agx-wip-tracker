@@ -5963,17 +5963,19 @@
         entry.uploadError = err.message || 'Image read failed';
       }));
     } else if (entry.kind === 'sheet') {
-      // Spreadsheet — parse client-side via SheetJS so we can insert
-      // the cells as a markdown table into the composer. On entity
-      // surfaces the file ALSO uploaded to attachments above (server
-      // extracts text into extracted_text for read_attachment_text);
-      // the inline insert is so the user sees the data right away
-      // and 86 reads it on THIS turn without a tool round-trip.
-      jobs.push(parseSheetToMarkdown(file).then(function(md) {
-        if (md) {
+      // Spreadsheet — on entity surfaces (job/estimate/lead) the file
+      // uploads to the attachments table above; the server's
+      // extractAttachmentText reads the cells into
+      // attachments.extracted_text and 86 fetches them via the
+      // read_attachment_text tool. NO markdown gets pasted into the
+      // composer — the file IS the attachment, not its text content.
+      // Off-entity surfaces (Ask 86 / intake / client / staff) have
+      // nowhere to attach to, so we parse client-side and insert the
+      // markdown table as a fallback ONLY in that case.
+      if (!supportsAttach) {
+        jobs.push(parseSheetToMarkdown(file).then(function(md) {
+          if (!md) return;
           entry.sheetMarkdown = md;
-          // Drop a heading + the table into the composer so it lands
-          // in the next outgoing turn. The user can edit before send.
           var heading = '\n\n**' + entry.filename + '**\n\n';
           var input = document.getElementById('ai-input');
           if (input) {
@@ -5986,15 +5988,16 @@
             input.focus();
             try { input.dispatchEvent(new Event('input', { bubbles: true })); } catch (_) {}
           }
-        }
-      }).catch(function(err) {
-        entry.uploadError = err.message || 'Spreadsheet parse failed';
-      }));
+        }).catch(function(err) {
+          entry.uploadError = err.message || 'Spreadsheet parse failed';
+        }));
+      }
+      // On entity surfaces the upload above is enough — 86 reads
+      // the text via read_attachment_text on the next turn.
     } else if (entry.kind === 'doc') {
-      // Word doc / plain text — no client-side parse, but the server
-      // will extract text when the attachment lands and 86 can fetch
-      // it via read_attachment_text. Nothing to do here besides the
-      // upload above; status flips to ready on completion.
+      // Word doc / plain text — just the upload path. Server extracts
+      // text on upload; 86 reads it via read_attachment_text. Nothing
+      // to render client-side.
     }
     Promise.all(jobs).then(function() {
       entry.status = entry.uploadError ? 'error' : 'ready';
