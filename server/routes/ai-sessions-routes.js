@@ -20,7 +20,7 @@
 
 const express = require('express');
 const { pool } = require('../db');
-const { requireAuth } = require('../auth');
+const { requireAuth, requireOrg } = require('../auth');
 
 const router = express.Router();
 
@@ -185,20 +185,19 @@ router.get('/:id', requireAuth, async (req, res) => {
 //   when we want a placeholder row that gets bound on first turn.
 //   Default is `anchor: true` (create immediately).
 // ──────────────────────────────────────────────────────────────────
-router.post('/', requireAuth, async (req, res) => {
+router.post('/', requireAuth, requireOrg, async (req, res) => {
   try {
     const b = req.body || {};
     const entityType = String(b.entity_type || 'general').trim();
     const entityId = b.entity_id ? String(b.entity_id) : null;
     const label = b.label ? String(b.label).slice(0, 200) : null;
 
-    if (!req.organization && !b._allow_no_org) {
-      // ai-routes requires org for agent lookup; the auth middleware
-      // attaches it for org-scoped users. Plain-auth (admin) users
-      // also have an org. Defensive null check just in case.
+    // requireOrg guarantees req.organization is set; bare-minimum
+    // defensive check in case the middleware chain ever skips ahead.
+    const organization = req.organization;
+    if (!organization) {
       return res.status(400).json({ error: 'Organization required to create session' });
     }
-    const organization = req.organization;
 
     const ai = aiRoutes();
     // Delegate Anthropic-side session creation to the existing helper.
@@ -404,7 +403,7 @@ router.post('/:id/export', requireAuth, async (req, res) => {
 //   Useful when the user wants to explore a "what if" tangent
 //   without polluting the main thread.
 // ──────────────────────────────────────────────────────────────────
-router.post('/:id/branch', requireAuth, async (req, res) => {
+router.post('/:id/branch', requireAuth, requireOrg, async (req, res) => {
   try {
     const sid = parseInt(req.params.id, 10);
     if (!Number.isFinite(sid)) return res.status(400).json({ error: 'Invalid session id' });
@@ -419,7 +418,7 @@ router.post('/:id/branch', requireAuth, async (req, res) => {
     );
     if (!sr.rows.length) return res.status(404).json({ error: 'Session not found' });
     const parent = sr.rows[0];
-    if (!req.organization) return res.status(400).json({ error: 'Organization required' });
+    // requireOrg guarantees req.organization is set.
 
     // Load history up through the branch point so the new session
     // starts with the same context. We can't transplant Anthropic-side
