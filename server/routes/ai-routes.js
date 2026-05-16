@@ -7884,34 +7884,6 @@ function make86OnCustomToolUse(userId, parentSession) {
   }
 
   return async function (tu) {
-    // Phase 3 — subtask fan-out tools. Run inline (no approval card)
-    // because the user already approved the top-level 86 turn that
-    // chose to fan out. parentSession is required (null = called from
-    // a subtask, where spawn/await/status are rejected upstream).
-    // Phase 4 — memory tools. Auto-tier, no parent session needed
-    // (memories are per-user/org, not per-session).
-    if (tu.name === 'remember' || tu.name === 'recall' || tu.name === 'list_memories' || tu.name === 'forget') {
-      try {
-        const summary = await execMemoryTool(tu.name, tu.input || {}, { userId });
-        return { tier: 'auto', summary };
-      } catch (e) {
-        return { tier: 'auto', error: 'Memory tool error: ' + (e.message || 'unknown') };
-      }
-    }
-    // Phase 5 — watch READS (auto-tier). The WRITES
-    // (propose_watch_create / propose_watch_archive) fall through to
-    // the default approval-tier path so they surface as approval cards.
-    if (tu.name === 'list_watches' || tu.name === 'read_recent_watch_runs') {
-      try {
-        const summary = await execWatchTool(tu.name, tu.input || {}, { userId });
-        return { tier: 'auto', summary };
-      } catch (e) {
-        return { tier: 'auto', error: 'Watch tool error: ' + (e.message || 'unknown') };
-      }
-    }
-    // Subtask tools removed — Phase 3 fan-out was retired in favor of
-    // native parallel tool calls within a single session.
-
     // Auto-tier: any tool in ALLOWED_AUTO_TIER_TOOLS executes inline
     // and returns its summary to the model. Mirrors the /exec-tool
     // HTTP dispatcher exactly so the V2-session path (this handler)
@@ -7940,6 +7912,10 @@ function make86OnCustomToolUse(userId, parentSession) {
           result = await execFieldToolRead(name, input);
         } else if (CLIENT_EXECUTOR_TOOLS.has(name)) {
           result = await execClientTool(name, input);
+        } else if (MEMORY_EXECUTOR_TOOLS.has(name)) {
+          result = await execMemoryTool(name, input, { userId });
+        } else if (WATCH_EXECUTOR_TOOLS.has(name)) {
+          result = await execWatchTool(name, input, { userId });
         } else {
           result = await execStaffTool(name, input, { userId });
         }
@@ -8402,7 +8378,13 @@ const ALLOWED_AUTO_TIER_TOOLS = new Set([
   'search_reference_sheet',
   // Lazy-loaded line-item detail — compact roll-ups ship in
   // turn_context for dense estimates; 86 pulls full lines on demand.
-  'read_active_lines'
+  'read_active_lines',
+  // Phase 4 — long-term semantic memory tools (executor: execMemoryTool).
+  'remember', 'recall', 'list_memories', 'forget',
+  // Phase 5 — proactive watch READS (executor: execWatchTool). The
+  // WRITES (propose_watch_create / propose_watch_archive) stay
+  // approval-tier and surface as cards.
+  'list_watches', 'read_recent_watch_runs'
 ]);
 // Tools whose executor lives in execClientTool (HR's directory reads)
 // rather than execStaffTool. The dispatcher routes by name.
@@ -8412,6 +8394,10 @@ const CLIENT_EXECUTOR_TOOLS = new Set(['read_jobs', 'read_users', 'read_wip_summ
 const INTAKE_EXECUTOR_TOOLS = new Set(['read_existing_clients', 'read_existing_leads']);
 // Tools whose executor lives in execFieldToolRead.
 const FIELD_TOOLS_EXECUTOR_TOOLS = new Set(['read_field_tools']);
+// Phase 4 — memory tools route to execMemoryTool.
+const MEMORY_EXECUTOR_TOOLS = new Set(['remember', 'recall', 'list_memories', 'forget']);
+// Phase 5 — watch READS route to execWatchTool (writes stay approval-tier).
+const WATCH_EXECUTOR_TOOLS = new Set(['list_watches', 'read_recent_watch_runs']);
 router.post('/exec-tool', requireAuth, requireCapability('ESTIMATES_VIEW'), async (req, res) => {
   try {
     const name = req.body && req.body.name;
