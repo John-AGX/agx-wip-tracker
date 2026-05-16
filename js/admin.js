@@ -1077,15 +1077,51 @@
   //
   // The events table + global defaults read/write app_settings('email')
   // via /api/email/settings; toggles are saved as the user clicks.
-  // Templates live in a separate sub-tab — see renderAdminEmailTemplates.
+  // Phase C consolidation: Templates now live as an inner pill on this
+  // sub-tab rather than in Admin → Templates → Email. Both pieces back
+  // to app_settings so the move is pure UI.
   var _emailSettings = null;   // last-loaded settings blob (mutated as user edits)
   var _emailEvents = [];       // EVENTS catalog merged with current settings
+  var _emailView = (function() {
+    try { return sessionStorage.getItem('agx_email_view') || 'settings'; } catch (e) { return 'settings'; }
+  })();
+
+  window.switchEmailView = function(view) {
+    _emailView = (view === 'templates') ? 'templates' : 'settings';
+    try { sessionStorage.setItem('agx_email_view', _emailView); } catch (e) { /* ignore */ }
+    renderAdminEmail();
+  };
+
+  function renderEmailInnerPills() {
+    function pill(key, label) {
+      var isActive = (_emailView === key);
+      var bg = isActive ? 'rgba(79,140,255,0.18)' : 'transparent';
+      var border = isActive ? '#4f8cff' : 'var(--border,#333)';
+      var color = isActive ? '#fff' : 'var(--text-dim,#888)';
+      return '<button onclick="switchEmailView(\'' + key + '\')" ' +
+        'style="padding:6px 14px;border:1px solid ' + border + ';border-radius:18px;background:' + bg + ';color:' + color + ';font-size:12px;font-weight:600;cursor:pointer;">' +
+        label +
+      '</button>';
+    }
+    return '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px;border-bottom:1px solid var(--border,#333);padding-bottom:10px;">' +
+      pill('settings', '⚙ Settings') +
+      pill('templates', '📧 Templates') +
+    '</div>';
+  }
 
   function renderAdminEmail() {
     if (!isAdmin()) return;
     var pane = document.getElementById('admin-subtab-email');
     if (!pane) return;
-    pane.innerHTML =
+
+    if (_emailView === 'templates') {
+      pane.innerHTML = renderEmailInnerPills() +
+        '<div id="admin-subtab-email-templates"></div>';
+      renderAdminEmailTemplates();
+      return;
+    }
+
+    pane.innerHTML = renderEmailInnerPills() +
       '<div style="display:flex;flex-direction:column;gap:18px;">' +
         // Provider status banner.
         '<div id="email-config-status" class="card" style="padding:14px 16px;font-size:13px;color:var(--text-dim,#888);">' +
@@ -2129,14 +2165,14 @@
     } catch (e) { return 'proposal'; }
   })();
 
-  // Skills moved to its own home on Admin → Agents → Skills (the AI
-  // agents page owns skill packs now). Email Templates moved IN here
-  // since they share the "edit a template the system uses" mental
-  // model with Proposal + BT Export.
+  // Skills moved to its own home on Admin → Agents → Skills.
+  // Email Templates moved OUT of here in the audit consolidation —
+  // they now live as an inner pill on the Email sub-tab so the
+  // settings + templates surfaces share one home (both back to
+  // app_settings under the hood).
   var TEMPLATES_TABS = [
     { key: 'proposal', label: '📄 Proposal',  desc: 'Header, letter body, exclusions, signature.' },
-    { key: 'bt',       label: '📊 BT Export', desc: 'Buildertrend cost-category mapping.' },
-    { key: 'email',    label: '📧 Email',     desc: 'Per-event email subject + HTML body templates.' }
+    { key: 'bt',       label: '📊 BT Export', desc: 'Buildertrend cost-category mapping.' }
   ];
 
   function switchTemplatesTab(key) {
@@ -2229,44 +2265,35 @@
     });
     tabsHTML += '</div>';
 
+    // _templatesActiveTab can still hold 'email' on sessionStorage
+    // entries written before the consolidation. Coerce to 'proposal'
+    // (the default) so the dispatch always hits a live branch.
+    if (_templatesActiveTab !== 'proposal' && _templatesActiveTab !== 'bt') {
+      _templatesActiveTab = 'proposal';
+    }
     var contentHTML = '';
     if (_templatesActiveTab === 'proposal') {
       contentHTML = renderProposalTemplateHTML();
     } else if (_templatesActiveTab === 'bt') {
       contentHTML = renderBTMappingHTML();
-    } else if (_templatesActiveTab === 'email') {
-      // Placeholder — renderAdminEmailTemplates writes into
-      // #admin-subtab-email-templates after innerHTML is assigned below.
-      contentHTML = '<div id="admin-subtab-email-templates"></div>';
     }
 
     var tabHint = activeTab && activeTab.desc
       ? '<p style="margin:0 0 12px 0;color:var(--text-dim,#888);font-size:12px;">' + activeTab.desc + '</p>'
       : '';
 
-    // Save All footer applies to proposal + bt — email templates have
-    // their own per-template save flow inside renderAdminEmailTemplates,
-    // so hide the global footer when the email tab is active.
-    var showSaveAllFooter = (_templatesActiveTab !== 'email');
     pane.innerHTML =
       tabsHTML +
       tabHint +
       '<div id="tpl-tab-content">' + contentHTML + '</div>' +
-      (showSaveAllFooter
-        ? '<div class="action-buttons" style="margin-top:14px;border-top:1px solid var(--border,#333);padding-top:14px;">' +
-            '<button class="primary" onclick="saveAdminTemplate()">&#x1F4BE; Save All</button>' +
-            '<button class="secondary" onclick="renderAdminTemplates()">Discard Changes</button>' +
-            '<span id="tpl-status" style="margin-left:14px;color:var(--text-dim,#888);font-size:12px;align-self:center;"></span>' +
-          '</div>'
-        : '');
-
-    // Email tab body is rendered into the placeholder div by the
-    // existing renderAdminEmailTemplates function (it targets
-    // #admin-subtab-email-templates). Just call it after innerHTML
-    // is set so the element exists.
-    if (_templatesActiveTab === 'email') {
-      renderAdminEmailTemplates();
-    }
+      '<div class="action-buttons" style="margin-top:14px;border-top:1px solid var(--border,#333);padding-top:14px;">' +
+        '<button class="primary" onclick="saveAdminTemplate()">&#x1F4BE; Save All</button>' +
+        '<button class="secondary" onclick="renderAdminTemplates()">Discard Changes</button>' +
+        '<span id="tpl-status" style="margin-left:14px;color:var(--text-dim,#888);font-size:12px;align-self:center;"></span>' +
+      '</div>' +
+      '<div style="margin-top:14px;padding:10px 14px;background:rgba(79,140,255,0.05);border:1px solid rgba(79,140,255,0.15);border-radius:6px;font-size:11px;color:var(--text-dim,#aaa);">' +
+        '📧 Email templates moved to <strong style="color:var(--text,#fff);">Admin → Email → Templates</strong> in the audit consolidation. The data is unchanged; only the home is different.' +
+      '</div>';
 
     // Wire textarea blur to sync edits into the in-memory draft so reordering
     // (which re-renders the list) doesn't clobber unsaved text.
