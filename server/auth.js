@@ -1,6 +1,6 @@
 const jwt = require('jsonwebtoken');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'agx-wip-tracker-dev-secret-change-in-prod';
+const JWT_SECRET = process.env.JWT_SECRET || 'project86-dev-secret-change-in-prod';
 const TOKEN_EXPIRY = '7d';
 
 // Canonical list of capability keys, with display metadata. The server uses

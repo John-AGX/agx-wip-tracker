@@ -9,7 +9,7 @@
 # Usage:
 #
 #   1. Get your auth token from the running app:
-#        - Log into agx-wip-tracker-production.up.railway.app
+#        - Log into project86.net (or the Railway preview URL)
 #        - Open browser devtools (F12) -> Console
 #        - Paste:  copy(localStorage.getItem('p86-auth-token'))
 #        - The token is now in your clipboard.
@@ -28,7 +28,7 @@ param(
     [Parameter(Mandatory=$true)]
     [string]$Token,
 
-    [string]$ApiBase = 'https://agx-wip-tracker-production.up.railway.app',
+    [string]$ApiBase = 'https://project86.net',
 
     [string]$Vendor = 'home_depot'
 )

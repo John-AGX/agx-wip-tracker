@@ -3157,14 +3157,132 @@
       +       'This text appears in 86\'s registered system prompt right after the platform-identity baseline. Use it to define the COMPANY\'S identity (standards, markets, customer hierarchy) — not 86\'s identity.'
       +     '</div>'
       +   '</div>'
-      +   '<div style="display:flex;gap:8px;margin-top:14px;align-items:center;">'
-      +     '<span id="org-identity-status" style="flex:1;font-size:11px;color:var(--text-dim,#888);"></span>'
+      +   '<div style="display:flex;gap:8px;margin-top:14px;align-items:center;flex-wrap:wrap;">'
+      +     '<span id="org-identity-status" style="flex:1;font-size:11px;color:var(--text-dim,#888);min-width:120px;"></span>'
       +     '<button class="ee-btn secondary" onclick="renderAdminOrganization()">Discard</button>'
+      +     '<button class="ee-btn" onclick="auditAgentRegistry()" title="Cross-reference local managed_agent_registry with the Anthropic-side state; flag stale rows + offer to archive them. Pre-unification agents (\'agx-estimates\', \'cra\', \'staff\') show up here." style="background:rgba(251,191,36,0.18);color:#fbbf24;border:1px solid rgba(251,191,36,0.4);font-weight:600;">&#x1F50D; Audit agents</button>'
       +     '<button class="ee-btn primary" onclick="saveOrgIdentity()">&#x1F4BE; Save identity</button>'
       +     '<button class="ee-btn" onclick="syncOrgAgent()" title="Push the updated identity_body + skill packs to the registered Anthropic agent" style="background:linear-gradient(135deg,#4f8cff,#7c3aed);color:#fff;border:none;font-weight:600;">&#x1F4E1; Sync managed agent</button>'
       +   '</div>'
       + '</fieldset>';
   }
+
+  // Audit modal — pulls /api/admin/agents/managed/audit, renders one
+  // row per registered agent with flags, and exposes a Kill button on
+  // any row that's stale (wrong agent_key, archived on the Anthropic
+  // side, name doesn't match the unified-86 pattern, etc.).
+  window.auditAgentRegistry = function() {
+    var modal = document.createElement('div');
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:9999;';
+    modal.innerHTML =
+      '<div style="background:var(--bg,#1a1a1a);border:1px solid var(--border,#333);border-radius:10px;padding:20px;max-width:920px;width:96%;max-height:80vh;overflow-y:auto;">' +
+        '<div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:14px;">' +
+          '<div style="font-size:15px;font-weight:600;color:var(--text,#fff);">&#x1F50D; Managed agent registry audit</div>' +
+          '<button class="ee-btn ghost" id="audit-modal-close" style="padding:4px 10px;">Close</button>' +
+        '</div>' +
+        '<p style="margin:0 0 14px 0;font-size:12px;color:var(--text-dim,#888);line-height:1.55;">' +
+          'Cross-references every <code>managed_agent_registry</code> row with its Anthropic-side state. ' +
+          'Flagged rows are pre-unification leftovers (anything not <code>agent_key=\'job\'</code>, archived Anthropic agents, names that don\'t match the unified pattern). ' +
+          'Killing a row archives the Anthropic-side agent and deletes the local row — traffic against the old agent_id stops billing immediately.' +
+        '</p>' +
+        '<div id="audit-modal-body" style="font-size:12px;color:var(--text-dim,#aaa);font-style:italic;">Loading audit…</div>' +
+      '</div>';
+    document.body.appendChild(modal);
+    modal.querySelector('#audit-modal-close').addEventListener('click', function() {
+      try { document.body.removeChild(modal); } catch (_) {}
+    });
+
+    window.p86Api.get('/api/admin/agents/managed/audit').then(function(resp) {
+      var body = modal.querySelector('#audit-modal-body');
+      if (!body) return;
+      var rows = (resp && resp.rows) || [];
+      var summary = (resp && resp.summary) || {};
+      if (!rows.length) {
+        body.innerHTML = '<div style="color:var(--text-dim,#888);">No agents registered.</div>';
+        return;
+      }
+      var summaryHTML =
+        '<div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:14px;padding:10px 12px;background:rgba(255,255,255,0.02);border:1px solid var(--border,#333);border-radius:6px;font-size:11px;">' +
+          '<div><strong style="color:var(--text,#fff);">' + (summary.total || 0) + '</strong> total</div>' +
+          '<div><strong style="color:' + (summary.flagged ? '#fbbf24' : '#34d399') + ';">' + (summary.flagged || 0) + '</strong> flagged</div>' +
+          (summary.stale ? '<div><span style="color:#f87171;">' + summary.stale + ' stale_agent_key</span></div>' : '') +
+          (summary.archived ? '<div><span style="color:#f87171;">' + summary.archived + ' anthropic_archived</span></div>' : '') +
+          (summary.missing ? '<div><span style="color:#f87171;">' + summary.missing + ' anthropic_missing</span></div>' : '') +
+          (summary.off_pattern ? '<div><span style="color:#fbbf24;">' + summary.off_pattern + ' name_off_pattern</span></div>' : '') +
+        '</div>';
+      var rowsHTML = rows.map(function(r) {
+        var isFlagged = (r.flags || []).length > 0;
+        var border = isFlagged ? 'rgba(248,113,113,0.4)' : 'var(--border,#333)';
+        var bg = isFlagged ? 'rgba(248,113,113,0.04)' : 'rgba(255,255,255,0.01)';
+        var nameLine = r.anthropic && r.anthropic.name
+          ? '<span style="color:var(--text,#e6e6e6);font-weight:600;">' + escapeHTML(r.anthropic.name) + '</span>'
+          : '<span style="color:var(--text-dim,#666);font-style:italic;">(no Anthropic state)</span>';
+        var orgLine = r.org_name || r.org_slug
+          ? '<span style="color:var(--text-dim,#aaa);">' + escapeHTML(r.org_name || r.org_slug) + ' · org_id=' + r.organization_id + '</span>'
+          : '<span style="color:#f87171;">no organization_id</span>';
+        var flagsHTML = (r.flags || []).map(function(f) {
+          var color = (f === 'name_off_pattern') ? '#fbbf24' : '#f87171';
+          return '<span style="display:inline-block;padding:1px 6px;margin-right:4px;border-radius:8px;background:rgba(248,113,113,0.12);color:' + color + ';font-size:10px;font-weight:600;font-family:\'SF Mono\',monospace;">' + escapeHTML(f) + '</span>';
+        }).join('');
+        var stats = '';
+        if (r.local) {
+          stats = '<span style="color:var(--text-dim,#666);font-size:10px;">' +
+            'model=' + escapeHTML(r.local.model || '?') +
+            ' · tools=' + (r.local.tool_count || 0) +
+            ' · skills=' + (r.local.skill_count || 0) +
+          '</span>';
+        }
+        var killBtn = isFlagged
+          ? '<button class="ee-btn" data-kill-agent="' + escapeAttr(r.agent_key) + '" data-kill-org="' + escapeAttr(String(r.organization_id || '')) + '" style="background:rgba(248,113,113,0.18);color:#f87171;border:1px solid rgba(248,113,113,0.4);font-weight:600;font-size:11px;padding:4px 10px;">&#x1F480; Kill</button>'
+          : '<span style="font-size:10px;color:#34d399;text-transform:uppercase;letter-spacing:0.5px;font-weight:600;">OK</span>';
+        return '<div style="border:1px solid ' + border + ';background:' + bg + ';border-radius:6px;padding:10px 12px;margin-bottom:8px;">' +
+          '<div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;">' +
+            '<span style="font-family:\'SF Mono\',monospace;font-size:11px;color:var(--text-dim,#aaa);background:rgba(255,255,255,0.04);padding:1px 6px;border-radius:4px;">' + escapeHTML(r.agent_key || '?') + '</span>' +
+            nameLine +
+            '<span style="flex:1;"></span>' +
+            killBtn +
+          '</div>' +
+          '<div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;font-size:11px;">' + orgLine + '</div>' +
+          (flagsHTML ? '<div style="margin-bottom:4px;">' + flagsHTML + '</div>' : '') +
+          (r.expected_name && r.anthropic && r.anthropic.name && r.expected_name !== r.anthropic.name
+            ? '<div style="font-size:10px;color:var(--text-dim,#666);margin-bottom:4px;font-family:\'SF Mono\',monospace;">expected: "' + escapeHTML(r.expected_name) + '"</div>'
+            : '') +
+          (r.anthropic_agent_id
+            ? '<div style="font-family:\'SF Mono\',monospace;font-size:10px;color:var(--text-dim,#666);">' + escapeHTML(r.anthropic_agent_id) + '</div>'
+            : '') +
+          (stats ? '<div style="margin-top:4px;">' + stats + '</div>' : '') +
+        '</div>';
+      }).join('');
+
+      body.innerHTML = summaryHTML + rowsHTML;
+
+      // Wire kill buttons. Each click confirms, then POSTs to /audit/kill
+      // and refreshes the modal.
+      body.querySelectorAll('[data-kill-agent]').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          var agentKey = btn.getAttribute('data-kill-agent');
+          var orgId = btn.getAttribute('data-kill-org');
+          if (!agentKey || !orgId) { alert('Missing agent_key or organization_id'); return; }
+          if (!confirm('Archive the Anthropic agent for ' + agentKey + '/' + orgId + ' and delete the local registry row?\n\nThis stops it from billing immediately. Cannot be undone.')) return;
+          btn.disabled = true;
+          btn.textContent = 'Killing…';
+          window.p86Api.post('/api/admin/agents/managed/audit/kill', {
+            agent_key: agentKey, organization_id: Number(orgId), archive_anthropic: true
+          }).then(function() {
+            try { document.body.removeChild(modal); } catch (_) {}
+            window.auditAgentRegistry();
+          }).catch(function(err) {
+            alert('Kill failed: ' + (err && err.message || 'unknown'));
+            btn.disabled = false;
+            btn.textContent = '\u{1F480} Kill';
+          });
+        });
+      });
+    }).catch(function(err) {
+      var body = modal.querySelector('#audit-modal-body');
+      if (body) body.innerHTML = '<div style="color:#f87171;">Audit failed: ' + escapeHTML(err.message || 'unknown') + '</div>';
+    });
+  };
 
   function renderOrgKBTabHTML() {
     return ''

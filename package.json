@@ -1,7 +1,7 @@
 {
-  "name": "agx-wip-tracker",
+  "name": "project86",
   "version": "1.0.0",
-  "description": "AGX Central Florida - WIP Tracker & ERP",
+  "description": "Project 86 — construction ERP (WIP tracker, estimating, intake, AI ops)",
   "main": "server/index.js",
   "scripts": {
     "start": "node server/index.js",
