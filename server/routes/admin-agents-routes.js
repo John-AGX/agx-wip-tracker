@@ -1101,7 +1101,7 @@ router.get('/preview-prompt', requireAuth, requireCapability('ROLES_MANAGE'), as
         ? toolList.filter(t => [
             'web_search', 'read_workspace_sheet_full', 'read_qb_cost_lines',
             'read_materials', 'read_purchase_history', 'read_subs',
-            'read_building_breakdown', 'read_job_pct_audit', 'request_build_mode'
+            'read_building_breakdown', 'read_job_pct_audit', 'request_edit_mode'
           ].indexOf(t.name) !== -1)
         : toolList;
       toolNames = filtered.map(t => t.name);

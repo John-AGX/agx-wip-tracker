@@ -970,14 +970,14 @@ const JOB_TOOLS = [
     }
   },
   {
-    name: 'request_build_mode',
+    name: 'request_edit_mode',
     description:
-      'Ask the PM\'s permission to switch from Plan mode to Build mode so you can write changes ' +
+      'Ask the PM\'s permission to switch from Plan mode to Edit mode so you can write changes ' +
       '(set_phase_pct_complete, set_phase_field, set_node_value, assign_qb_line, etc.). Use this ' +
       'in Plan mode whenever your analysis surfaces an action you\'d need to take but can\'t — ' +
       'e.g. "B1 has cost data but pctComplete=0, want me to set it to 100%?" or "131 QB lines are ' +
       'unlinked, want me to wire them to their nodes?". The PM gets an approval card listing your ' +
-      'planned actions; on approve, the panel flips to Build mode and your next turn opens with ' +
+      'planned actions; on approve, the panel flips to Edit mode and your next turn opens with ' +
       'full write access. Do NOT call this for trivial questions or when the PM hasn\'t asked for ' +
       'a change — it\'s for moments where Plan mode is actively blocking productive work.',
     input_schema: {
@@ -991,7 +991,7 @@ const JOB_TOOLS = [
         planned_actions: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Bullet list of the specific writes you intend to make if granted Build mode. Each line: action + target. Example: ["Set B1 pctComplete to 100%", "Set B2 pctComplete to 100%", "Assign 14 unlinked Home Depot lines to materials sub-node"]. The PM uses this to decide whether to grant access.'
+          description: 'Bullet list of the specific writes you intend to make if granted Edit mode. Each line: action + target. Example: ["Set B1 pctComplete to 100%", "Set B2 pctComplete to 100%", "Assign 14 unlinked Home Depot lines to materials sub-node"]. The PM uses this to decide whether to grant access.'
         }
       },
       required: ['reason', 'planned_actions']
@@ -2026,9 +2026,9 @@ function filterToolsForPhase(tools, phase) {
 }
 
 // Plan-mode allowlist for 86 (job side). Read tools + the
-// request_build_mode tool stay; every write tool is removed so the
+// request_edit_mode tool stay; every write tool is removed so the
 // model literally cannot mutate WIP data while the PM is in analysis
-// mode. The PM grants write access by approving a request_build_mode
+// mode. The PM grants write access by approving a request_edit_mode
 // card or flipping the phase pill manually.
 const PLAN_MODE_ALLOWED_JOB_TOOLS = new Set([
   'read_workspace_sheet_full',
@@ -2038,7 +2038,7 @@ const PLAN_MODE_ALLOWED_JOB_TOOLS = new Set([
   'read_subs',
   'read_building_breakdown',
   'read_job_pct_audit',
-  'request_build_mode',
+  'request_edit_mode',
   // CoS + HR read tools surfaced on 86 — pure introspection / lookup,
   // safe to keep available in plan mode.
   'read_metrics',
@@ -3651,7 +3651,7 @@ async function buildJobContext(jobId, clientContext, aiPhase, organization, opts
   // client-side flag that auto-fires whitelisted line tools without
   // approval cards). Legacy 'build' is coerced to 'edit'. Defaults to
   // 'plan' so 86 starts as an analyst until the PM grants write access
-  // via the phase pill or the request_build_mode tool.
+  // via the phase pill or the request_edit_mode tool.
   aiPhase = (aiPhase === 'plan') ? 'plan' : 'edit';
   // Pull the job + the related data the bulk-save serializes alongside it.
   const jobRes = await pool.query('SELECT id, owner_id, data FROM jobs WHERE id = $1', [jobId]);
@@ -4162,7 +4162,7 @@ async function buildJobContext(jobId, clientContext, aiPhase, organization, opts
     lines.push('You are in **Plan mode** — read-only analysis. Every write tool (set_phase_pct_complete, set_phase_field, set_node_value, assign_qb_line, create_node, delete_node) has been removed from your tool list this turn, so you literally cannot call them.');
     lines.push('In Plan mode you SHOULD:');
     lines.push('  - Run reads, audit data, surface gaps and risks, propose what changes WOULD fix them.');
-    lines.push('  - When your analysis surfaces an action you\'d need to take but can\'t (e.g. "B1 has cost data but pctComplete=0"), call `request_build_mode` with a short rationale + the bullet list of writes you\'d make. The PM gets an approval card; on approve, the next turn opens with full write access.');
+    lines.push('  - When your analysis surfaces an action you\'d need to take but can\'t (e.g. "B1 has cost data but pctComplete=0"), call `request_edit_mode` with a short rationale + the bullet list of writes you\'d make. The PM gets an approval card; on approve, the next turn opens with full write access.');
     lines.push('  - Do NOT write the planned actions out as fake tool calls or as placeholder JSON. Just describe them in prose so the user can decide.');
   } else {
     lines.push('# CURRENT MODE: BUILD');

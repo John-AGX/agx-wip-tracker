@@ -3044,7 +3044,7 @@
   var ORG_TABS = [
     { key: 'identity', label: '\u{1FAAA} Identity',     desc: 'Company name + the prose composed into 86\'s system prompt. After saving, click Sync managed agent to push to Anthropic.' },
     { key: 'kb',       label: '\u{1F4DA} Company KB',   desc: 'Org-wide reference files every user can read; only admins upload. 86 searches these via search_org_kb.' },
-    { key: 'packs',    label: '\u{1F9E0} Skill Packs',  desc: 'On-demand instruction blocks. 86 sees the list and calls load_skill_pack({name}) when one maps to the work.' },
+    { key: 'packs',    label: '\u{1F9E0} Section Playbooks',  desc: 'On-demand instruction blocks. 86 sees the list and calls load_skill_pack({name}) when one maps to the work. (Distinct from the "Skills" tab inside Admin → Agents, which manages native Anthropic Skills attached to the managed agent.)' },
     { key: 'mcp',      label: '\u{1F50C} MCP Connectors', desc: 'External tool reach via Model Context Protocol (Gmail, Calendar, QuickBooks, custom). Registers on next sync.' }
   ];
 
@@ -3160,9 +3160,11 @@
       +   '<div style="display:flex;gap:8px;margin-top:14px;align-items:center;flex-wrap:wrap;">'
       +     '<span id="org-identity-status" style="flex:1;font-size:11px;color:var(--text-dim,#888);min-width:120px;"></span>'
       +     '<button class="ee-btn secondary" onclick="renderAdminOrganization()">Discard</button>'
-      +     '<button class="ee-btn" onclick="auditAgentRegistry()" title="Cross-reference local managed_agent_registry with the Anthropic-side state; flag stale rows + offer to archive them. Pre-unification agents (\'agx-estimates\', \'cra\', \'staff\') show up here." style="background:rgba(251,191,36,0.18);color:#fbbf24;border:1px solid rgba(251,191,36,0.4);font-weight:600;">&#x1F50D; Audit agents</button>'
       +     '<button class="ee-btn primary" onclick="saveOrgIdentity()">&#x1F4BE; Save identity</button>'
       +     '<button class="ee-btn" onclick="syncOrgAgent()" title="Push the updated identity_body + skill packs to the registered Anthropic agent" style="background:linear-gradient(135deg,#4f8cff,#7c3aed);color:#fff;border:none;font-weight:600;">&#x1F4E1; Sync managed agent</button>'
+      +   '</div>'
+      +   '<div style="margin-top:10px;font-size:11px;color:var(--text-dim,#888);">'
+      +     'Looking to audit stale Anthropic-side agents (pre-unification leftovers)? That cross-tenant tool now lives in Admin → System → Anthropic Resources.'
       +   '</div>'
       + '</fieldset>';
   }
@@ -3302,12 +3304,12 @@
     var packs = _orgPacksDraft || [];
     return ''
       + '<fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:14px;">'
-      +   '<legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Skill packs (' + packs.length + ')</legend>'
+      +   '<legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Section Playbooks (' + packs.length + ')</legend>'
       +   '<div id="org-packs-list">' + renderOrgPacksHTML() + '</div>'
       +   '<div style="display:flex;gap:8px;margin-top:14px;align-items:center;">'
       +     '<span id="org-packs-status" style="flex:1;font-size:11px;color:var(--text-dim,#888);"></span>'
-      +     '<button class="ee-btn secondary" onclick="addOrgPack()">&#x2795; New pack</button>'
-      +     '<button class="ee-btn primary" onclick="saveOrgPacks()">&#x1F4BE; Save changed packs</button>'
+      +     '<button class="ee-btn secondary" onclick="addOrgPack()">&#x2795; New playbook</button>'
+      +     '<button class="ee-btn primary" onclick="saveOrgPacks()">&#x1F4BE; Save changes</button>'
       +   '</div>'
       + '</fieldset>';
   }
@@ -3900,13 +3902,23 @@
     // expects, then calling its loader. This is intentionally a thin
     // wrapper so the source-of-truth code stays in one place.
     setTimeout(function() {
-      host.innerHTML = '<div id="anthropic-resources-mount">' +
-        '<div id="managed-agents-panel" style="margin-bottom:16px;"></div>' +
-        '<div id="agent-skill-assignments-panel" style="margin-bottom:16px;"></div>' +
-        '<div id="anthropic-skills-panel" style="margin-bottom:16px;"></div>' +
-        '<div id="anthropic-files-panel" style="margin-bottom:16px;"></div>' +
-        '<div id="anthropic-batches-panel" style="margin-bottom:16px;"></div>' +
-      '</div>';
+      host.innerHTML =
+        // Audit & Kill Stale Agents header — moved from Org → Identity in
+        // the system-restructuring pass since cross-tenant registry
+        // state is a platform tool, not an org-settings tool.
+        '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px;padding:10px 14px;background:rgba(251,191,36,0.06);border:1px solid rgba(251,191,36,0.25);border-radius:8px;">' +
+          '<div style="font-size:12px;color:var(--text-dim,#bbb);line-height:1.5;">' +
+            '<strong style="color:#fbbf24;">Registry audit</strong> — cross-references managed_agent_registry with the Anthropic-side state. Flags stale rows (pre-unification agent_keys, archived agents, name-pattern mismatches) and lets you kill them safely.' +
+          '</div>' +
+          '<button class="ee-btn" onclick="auditAgentRegistry()" style="background:rgba(251,191,36,0.18);color:#fbbf24;border:1px solid rgba(251,191,36,0.4);font-weight:600;white-space:nowrap;">&#x1F50D; Audit agents</button>' +
+        '</div>' +
+        '<div id="anthropic-resources-mount">' +
+          '<div id="managed-agents-panel" style="margin-bottom:16px;"></div>' +
+          '<div id="agent-skill-assignments-panel" style="margin-bottom:16px;"></div>' +
+          '<div id="anthropic-skills-panel" style="margin-bottom:16px;"></div>' +
+          '<div id="anthropic-files-panel" style="margin-bottom:16px;"></div>' +
+          '<div id="anthropic-batches-panel" style="margin-bottom:16px;"></div>' +
+        '</div>';
       if (typeof loadManagedAgents === 'function') loadManagedAgents();
       if (typeof loadAgentSkillAssignments === 'function') loadAgentSkillAssignments();
       if (typeof loadAnthropicSkills === 'function') loadAnthropicSkills();

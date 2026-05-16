@@ -82,13 +82,13 @@ router.post('/elle-audit', requireAuth, requireCapability('ROLES_MANAGE'), async
         // in the loop reviewing the proposed writes.
         const ctx = await aiInternals.buildJobContext(j.id, '', 'plan');
         // Plan-mode tool filter must match what production uses on
-        // a real Plan-mode chat turn — read tools + request_build_mode.
+        // a real Plan-mode chat turn — read tools + request_edit_mode.
         // The exact list is duplicated from ai-routes for now; kept in
         // sync by hand. (Future: expose filterToolsForJobPhase via internals.)
         const planTools = tools.filter(t => [
           'web_search', 'read_workspace_sheet_full', 'read_qb_cost_lines',
           'read_materials', 'read_purchase_history', 'read_subs',
-          'read_building_breakdown', 'read_job_pct_audit', 'request_build_mode'
+          'read_building_breakdown', 'read_job_pct_audit', 'request_edit_mode'
         ].indexOf(t.name) !== -1);
         requests.push({
           custom_id: j.id,

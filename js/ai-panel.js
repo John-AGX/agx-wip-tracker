@@ -263,7 +263,7 @@
   // ── 86 (job-mode) AI phase: plan / edit / auto ───────────────────
   // Per-job, per-user state stored in localStorage. Default = 'plan'
   // so 86 starts as an analyst (no surprise mutations). The PM flips
-  // the pill manually or by approving a request_build_mode card.
+  // the pill manually or by approving a request_edit_mode card.
   //
   // Legacy 'build' values are coerced to 'edit' on read so existing
   // localStorage entries keep working without a one-time migration.
@@ -2140,7 +2140,7 @@
     set_phase_pct_complete:       'Drafting % complete update…',
     set_phase_field:              'Drafting phase edit…',
     set_phase_buildingId:         'Drafting phase relink…',
-    request_build_mode:           'Requesting Build mode…',
+    request_edit_mode:            'Requesting Edit mode…',
     // Client / HR proposals
     create_parent_company:        'Drafting parent company…',
     rename_client:                'Drafting client rename…',
@@ -3596,14 +3596,12 @@
     // mutation.
     if (tu.name === 'propose_create_lead') return '';
     switch (tu.name) {
-      case 'request_build_mode': {
-        // Tool name is `request_build_mode` for back-compat with the
-        // server schema, but it actually flips the phase to 'edit'
-        // (Edit mode in the new naming). Approval = the PM grants 86
-        // write access for this job; the next chat turn (and the
-        // /chat/continue right after this approval) will see the
-        // full tool list. Returns a summary the model receives so it
-        // knows it can now run its planned actions.
+      case 'request_edit_mode': {
+        // Approval flips the per-job aiPhase to 'edit'. The next
+        // chat turn (and the /chat/continue right after this
+        // approval) will see the full tool list. Returns a summary
+        // the model receives so it knows it can now run its planned
+        // actions.
         var actions = Array.isArray(input.planned_actions) ? input.planned_actions : [];
         setJobAIPhase(_entityId, 'edit');
         return 'Edit mode granted by the PM. You may now run the ' +
@@ -4906,7 +4904,7 @@
       var ctx = buildJobClientContext();
       if (ctx) body.clientContext = ctx;
       // Reflect the current phase — picks up a phase flip caused by
-      // the user just approving a request_build_mode card.
+      // the user just approving a request_edit_mode card.
       body.aiPhase = getJobAIPhase(_entityId);
     }
     // Tie the approval continuation to the same session the proposing
@@ -4926,7 +4924,7 @@
     var n = String(toolName || '');
     if (/^(propose_add|create_|attach_|wire_)/i.test(n)) return 'add';
     if (/^(propose_delete|delete_|merge_|split_|unsync)/i.test(n)) return 'remove';
-    if (/^(request_build_mode|propose_link|propose_toggle|propose_switch)/i.test(n)) return 'flow';
+    if (/^(request_edit_mode|propose_link|propose_toggle|propose_switch)/i.test(n)) return 'flow';
     return 'edit';
   }
   function cardChromeFor(kind) {
