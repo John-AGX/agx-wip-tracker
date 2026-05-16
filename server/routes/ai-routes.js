@@ -6200,69 +6200,12 @@ const STAFF_TOOLS = [
   },
 ];
 
-// Phase 3 — parallel work / sub-agent fan-out for 86.
-//
-// 86 calls spawn_subtask to kick off a child Anthropic session that
-// runs on the same per-org managed agent but with its own isolated
-// context window. Then await_subtasks blocks until the listed children
-// reach a terminal state and returns their results. subtask_status is
-// the non-blocking peek for progress UI.
-//
-// Recursion is capped at depth 1 (a subtask cannot itself spawn
-// subtasks) — enforced in the spawn_subtask handler. The concurrency
-// cap is enforced there too: MAX_CONCURRENT_SUBTASKS per parent.
-//
-// All three are tier:auto: 86 should be able to fan out without an
-// approval card. Cost rolls up via the ai_subtasks.input_tokens /
-// output_tokens columns so admins can see fan-out spend per parent
-// session.
-const SUBTASK_TOOLS = [
-  {
-    name: 'spawn_subtask',
-    tier: 'auto',
-    description:
-      'Fan out a child agent session to work on one piece of a larger task in parallel. The child runs on the same Project 86 brain (same tools, same skill packs) but in its own isolated context — so spawning four subtasks to review four estimates is faster and cleaner than reviewing them one after another in this session. Returns a subtask_id immediately; call await_subtasks (or subtask_status) to collect the result. Use this when the work splits into N independent pieces (per-estimate review, per-sub outreach, per-job margin check). Do NOT use it for one-shot questions you can answer directly — the overhead is not free.',
-    input_schema: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        title:           { type: 'string', description: 'Short label shown in the chat UI under the parent turn (e.g. "Review estimate EST-0042"). Keep under 60 chars.' },
-        prompt:          { type: 'string', description: 'The full self-contained instruction for the child. Include every detail the child needs — it does NOT see this conversation. Treat it like briefing a fresh teammate.' },
-        expected_output: { type: 'string', description: 'Optional one-line description of what the parent expects back (e.g. "JSON with {margin_pct, flag_reason}"). Helps the child format its reply.' }
-      },
-      required: ['title', 'prompt']
-    }
-  },
-  {
-    name: 'await_subtasks',
-    tier: 'auto',
-    description:
-      'Block until every listed subtask reaches a terminal state (completed, failed, or canceled) and return their results. Pass the subtask_ids returned by spawn_subtask. The call returns when all are done — there is no partial-result mode. Use this as the gather step after a fan-out.',
-    input_schema: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        subtask_ids:     { type: 'array', items: { type: 'string' }, minItems: 1, description: 'IDs returned by spawn_subtask. All must belong to this session.' },
-        timeout_seconds: { type: 'integer', minimum: 5, maximum: 600, description: 'Max time to wait. Default 300 (5 min). On timeout, any still-running subtasks are returned with status="running" — you can call await_subtasks again to keep waiting.' }
-      },
-      required: ['subtask_ids']
-    }
-  },
-  {
-    name: 'subtask_status',
-    tier: 'auto',
-    description:
-      'Non-blocking peek at one or more subtasks. Returns current status + (if terminal) the result/error for each. Useful for showing progress without committing to wait — but for the final gather, await_subtasks is simpler.',
-    input_schema: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        subtask_ids: { type: 'array', items: { type: 'string' }, minItems: 1, description: 'IDs returned by spawn_subtask.' }
-      },
-      required: ['subtask_ids']
-    }
-  }
-];
+// Phase 3 (RETIRED) — subtask fan-out has been removed. Native
+// parallel tool calls within a single session cover the same use
+// cases (parallel reads, parallel proposals) without the extra
+// cache_creation hit each child session costs. The ai_subtasks
+// table is kept for historical rollups but is no longer written.
+const SUBTASK_TOOLS = [];
 
 // Phase 4 — long-term semantic memory tools.
 //
@@ -8344,159 +8287,15 @@ async function execBulkLinkJobsToClients(input) {
   return 'Linked ' + links.length + ' job' + (links.length === 1 ? '' : 's') + ' to clients.';
 }
 
-// Handler for the three subtask tools. Called from make86OnCustomToolUse
-// when 86 emits spawn_subtask / await_subtasks / subtask_status.
-//
-// ctx = { parentSession (full ai_sessions row), userId }.
-// Returns a string summary fed back to 86 as the tool result.
-const MAX_CONCURRENT_SUBTASKS_PER_PARENT = 4;
+// Phase 3 subtask fan-out is RETIRED. The execSubtaskTool dispatcher
+// and formatSubtaskBundle helper were ~150 lines that spawned child
+// Anthropic sessions for parallel work. Native parallel tool calls
+// within a single session cover the same use cases at a fraction of
+// the cost (one cache hit, multiple reads/proposals in one turn).
+// The ai_subtasks table is preserved for historical rollups but is
+// no longer written.
 
-async function execSubtaskTool(name, input, ctx) {
-  const { parentSession, userId } = ctx;
-
-  if (name === 'spawn_subtask') {
-    const title = String(input.title || '').trim();
-    const prompt = String(input.prompt || '').trim();
-    if (!title) throw new Error('title is required (short label for the subtask card).');
-    if (!prompt) throw new Error('prompt is required (the self-contained instruction for the child).');
-    if (prompt.length > 8000) throw new Error('prompt too long (max 8000 chars). Tighten the briefing.');
-
-    // Concurrency cap: count currently pending/running subtasks for this parent.
-    const inflight = await pool.query(
-      `SELECT COUNT(*)::int AS n FROM ai_subtasks
-        WHERE parent_session_id = $1 AND status IN ('pending','running')`,
-      [parentSession.id]
-    );
-    if (inflight.rows[0].n >= MAX_CONCURRENT_SUBTASKS_PER_PARENT) {
-      throw new Error(
-        'Concurrency cap reached (' + MAX_CONCURRENT_SUBTASKS_PER_PARENT +
-        ' running subtasks). Wait for some to finish via await_subtasks before spawning more.'
-      );
-    }
-
-    // Resolve org from parent's user (parents always live under one org).
-    const orgRow = await pool.query(`SELECT organization_id FROM users WHERE id = $1`, [userId]);
-    const orgId = orgRow.rows[0] && orgRow.rows[0].organization_id;
-    if (!orgId) throw new Error('Parent user has no organization — cannot spawn subtask.');
-
-    const subId = 'sub_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
-    let fullPrompt = prompt;
-    if (input.expected_output) {
-      fullPrompt += '\n\n[Expected output format: ' + String(input.expected_output).slice(0, 500) + ']';
-    }
-
-    await pool.query(
-      `INSERT INTO ai_subtasks (id, parent_session_id, organization_id, user_id, agent_key, depth, title, prompt, status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending')`,
-      [subId, parentSession.id, orgId, userId, parentSession.agent_key, 1, title.slice(0, 200), fullPrompt]
-    );
-
-    // Kick off the runner — fire and forget. The await_subtasks tool
-    // (or the UI poll) picks up the result later.
-    setImmediate(() => {
-      runSubtaskInBackground(subId).catch(err => {
-        console.error('[subtask] background runner crashed for', subId, err);
-      });
-    });
-
-    return {
-      summary: 'Spawned subtask ' + subId + ' (title: "' + title + '"). Status: pending. Call await_subtasks({subtask_ids:["' + subId + '"]}) to gather the result.',
-      meta: { kind: 'subtask_spawned', subtask_id: subId, title: title }
-    };
-  }
-
-  if (name === 'subtask_status' || name === 'await_subtasks') {
-    const ids = Array.isArray(input.subtask_ids) ? input.subtask_ids.map(String) : [];
-    if (!ids.length) throw new Error('subtask_ids must be a non-empty array.');
-
-    // Scope check: every id must belong to this parent session.
-    const owned = await pool.query(
-      `SELECT id FROM ai_subtasks WHERE id = ANY($1) AND parent_session_id = $2`,
-      [ids, parentSession.id]
-    );
-    if (owned.rows.length !== ids.length) {
-      throw new Error('One or more subtask_ids do not belong to this session.');
-    }
-
-    const isAwait = (name === 'await_subtasks');
-    const timeoutMs = isAwait ? Math.max(5, Math.min(600, Number(input.timeout_seconds) || 300)) * 1000 : 0;
-    const deadline = Date.now() + timeoutMs;
-    const TERMINAL = new Set(['completed', 'failed', 'canceled']);
-
-    while (true) {
-      const r = await pool.query(
-        `SELECT id, title, status, result, error,
-                input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
-                started_at, finished_at
-           FROM ai_subtasks
-          WHERE id = ANY($1)`,
-        [ids]
-      );
-      const rows = r.rows;
-      const allDone = rows.every(row => TERMINAL.has(row.status));
-      if (allDone || !isAwait || Date.now() >= deadline) {
-        return {
-          summary: formatSubtaskBundle(rows),
-          meta: {
-            kind: 'subtask_resolved',
-            subtask_ids: rows.map(row => row.id),
-            statuses: rows.map(row => ({ id: row.id, status: row.status }))
-          }
-        };
-      }
-      // Sleep 1s between polls. Cheap; subtask runs are usually 10s–2min.
-      await new Promise(resolve => setTimeout(resolve, 1000));
-    }
-  }
-
-  throw new Error('Unknown subtask tool: ' + name);
-}
-
-function formatSubtaskBundle(rows) {
-  if (!rows.length) return 'No subtasks found.';
-
-  // Auto-summary header when N>2 subtasks — gives 86 a one-glance roll
-  // up before the per-subtask blocks. Counts statuses and totals tokens
-  // so the parent agent doesn't have to re-derive them from the bodies.
-  let header = '';
-  if (rows.length > 2) {
-    const buckets = { completed: 0, failed: 0, canceled: 0, running: 0, pending: 0 };
-    let totalIn = 0, totalOut = 0;
-    rows.forEach(row => {
-      buckets[row.status] = (buckets[row.status] || 0) + 1;
-      totalIn += Number(row.input_tokens) || 0;
-      totalOut += Number(row.output_tokens) || 0;
-    });
-    const statusParts = [];
-    if (buckets.completed) statusParts.push(buckets.completed + ' completed');
-    if (buckets.failed) statusParts.push(buckets.failed + ' failed');
-    if (buckets.canceled) statusParts.push(buckets.canceled + ' canceled');
-    if (buckets.running) statusParts.push(buckets.running + ' still running');
-    if (buckets.pending) statusParts.push(buckets.pending + ' pending');
-    header =
-      '── SUBTASK BUNDLE (' + rows.length + ' total) ──\n' +
-      statusParts.join(', ') + ' · ' +
-      (totalIn + totalOut) + ' tokens spent (in:' + totalIn + ' out:' + totalOut + ')\n\n';
-  }
-
-  const lines = rows.map(row => {
-    const tokens = (row.input_tokens || 0) + (row.output_tokens || 0);
-    const head = '── ' + row.id + ' [' + row.status + '] "' + (row.title || '(no title)') + '" · ' + tokens + ' tokens';
-    if (row.status === 'completed') {
-      return head + '\n' + (row.result || '(no result text)');
-    }
-    if (row.status === 'failed') {
-      return head + '\nFAILED: ' + (row.error || 'unknown error');
-    }
-    if (row.status === 'canceled') {
-      return head + '\nCANCELED' + (row.error ? ': ' + row.error : '');
-    }
-    return head + '\n(still ' + row.status + ' — call await_subtasks or subtask_status again)';
-  });
-  return header + lines.join('\n\n');
-}
-
-// Phase 4 — memory tool handler. Same shape as execSubtaskTool: called
+// Phase 4 — memory tool handler. Called
 // from make86OnCustomToolUse when 86 emits remember/recall/list_memories/forget.
 // ctx = { userId }; org resolved from the user's row. Returns the
 // summary string fed back to 86.
@@ -8781,23 +8580,9 @@ function make86OnCustomToolUse(userId, parentSession) {
         return { tier: 'auto', error: 'Watch tool error: ' + (e.message || 'unknown') };
       }
     }
-    if (tu.name === 'spawn_subtask' || tu.name === 'await_subtasks' || tu.name === 'subtask_status') {
-      if (!parentSession || !parentSession.id) {
-        return { tier: 'auto', error: 'spawn_subtask requires a parent session — this code path was reached without one. Report this to the admin.' };
-      }
-      try {
-        const out = await execSubtaskTool(tu.name, tu.input || {}, { parentSession, userId });
-        // out is { summary, meta? } — structured shape carries the
-        // subtask_id(s) so the client can render dedicated cards
-        // without parsing the summary string.
-        if (out && typeof out === 'object' && typeof out.summary === 'string') {
-          return { tier: 'auto', summary: out.summary, meta: out.meta || null };
-        }
-        return { tier: 'auto', summary: String(out || 'Done.') };
-      } catch (e) {
-        return { tier: 'auto', error: 'Subtask tool error: ' + (e.message || 'unknown') };
-      }
-    }
+    // Subtask tools removed — Phase 3 fan-out was retired in favor of
+    // native parallel tool calls within a single session.
+
     // Auto-tier: any tool in ALLOWED_AUTO_TIER_TOOLS executes inline
     // and returns its summary to the model. Mirrors the /exec-tool
     // HTTP dispatcher exactly so the V2-session path (this handler)
@@ -8842,168 +8627,18 @@ function make86OnCustomToolUse(userId, parentSession) {
   };
 }
 
-// ─── Phase 3: subtask runner ──────────────────────────────────────────
-//
-// runSubtaskInBackground spawns a child Anthropic session to work on
-// one self-contained piece of a larger task, then archives the session
-// when the result is captured. Child sessions:
-//   - Run on the same per-org managed agent as the parent (same tool
-//     manifest, same composed system prompt).
-//   - Only auto-tier tools execute. Approval-tier tools (propose_*,
-//     update_*, etc.) return an error to the child, because there is
-//     no UI watching to approve.
-//   - Cannot themselves spawn subtasks (depth cap enforced by the
-//     spawn_subtask tool handler, not here).
-//
-// The runner does NOT stream to a client — it writes the final result
-// into ai_subtasks.result on completion and ai_subtasks.error on
-// failure. The parent's await_subtasks tool polls the row.
-//
-// Concurrency: the spawn_subtask handler enforces MAX_CONCURRENT per
-// parent. This runner doesn't gate; it just runs whatever was kicked
-// off.
+// ─── Background-agent runner (used only by Phase 5 watches now) ────
+// Phase 3 subtask fan-out is retired; driveBgAgentTurn is the
+// non-streaming Sessions driver that watch fires reuse. The turn cap
+// and per-fire token budget below are shared with the watch path.
 
-const MAX_SUBTASK_TURNS = 30;            // Safety cap to prevent runaway tool loops
-const SUBTASK_BUDGET_TOKENS = 300000;    // Per-subtask token budget — fail-stop above this
-
-async function runSubtaskInBackground(subtaskId) {
-  const anthropic = getAnthropic();
-  if (!anthropic) {
-    await pool.query(
-      `UPDATE ai_subtasks SET status = 'failed', error = $2, finished_at = NOW() WHERE id = $1`,
-      [subtaskId, 'ANTHROPIC_API_KEY not configured on this deployment.']
-    );
-    return;
-  }
-
-  // Look up the subtask + parent session in one go so we have org + user.
-  const lookup = await pool.query(
-    `SELECT s.*, ps.agent_key AS parent_agent_key, ps.entity_type AS parent_entity_type
-       FROM ai_subtasks s
-       JOIN ai_sessions ps ON ps.id = s.parent_session_id
-       WHERE s.id = $1`,
-    [subtaskId]
-  );
-  if (!lookup.rows.length) return;
-  const sub = lookup.rows[0];
-
-  // Resolve org row (full record needed for ensureManagedAgent).
-  const orgRow = await pool.query(`SELECT * FROM organizations WHERE id = $1`, [sub.organization_id]);
-  const organization = orgRow.rows[0];
-  if (!organization) {
-    await pool.query(
-      `UPDATE ai_subtasks SET status = 'failed', error = $2, finished_at = NOW() WHERE id = $1`,
-      [subtaskId, 'Parent organization not found.']
-    );
-    return;
-  }
-
-  // Mark running. Race-safe: only flip from 'pending'.
-  const flip = await pool.query(
-    `UPDATE ai_subtasks
-        SET status = 'running', started_at = NOW()
-      WHERE id = $1 AND status = 'pending'
-      RETURNING id`,
-    [subtaskId]
-  );
-  if (!flip.rows.length) return; // Already picked up by another worker.
-
-  let childSessionId = null;
-  try {
-    const adminAgents = require('./admin-agents-routes');
-    const env = await adminAgents.ensureManagedEnvironment();
-    const agent = await adminAgents.ensureManagedAgent(sub.agent_key, organization);
-
-    // Brand-new child session. One-shot — archived in `finally`.
-    const created = await anthropic.beta.sessions.create({
-      agent: agent.anthropic_agent_id,
-      environment_id: env.anthropic_environment_id,
-      title: 'Project 86 subtask · ' + organization.slug + ' · ' + (sub.title || sub.id).slice(0, 60)
-    });
-    childSessionId = created.id;
-
-    await pool.query(
-      `UPDATE ai_subtasks SET anthropic_session_id = $2, anthropic_agent_id = $3 WHERE id = $1`,
-      [subtaskId, childSessionId, agent.anthropic_agent_id]
-    );
-
-    // Tool callback: reuse 86's auto-exec, but convert approval-tier
-    // attempts into errors (no UI to approve in a subtask).
-    // No parentSession — subtasks can't fan out further; the wrapper
-    // below rejects spawn/await/status before they reach this callback.
-    const base86Callback = make86OnCustomToolUse(sub.user_id, null);
-    const subtaskCallback = async (tu) => {
-      // Recursion block: subtasks can't spawn subtasks (depth cap).
-      if (tu.name === 'spawn_subtask' || tu.name === 'await_subtasks' || tu.name === 'subtask_status') {
-        return { tier: 'auto', error: 'Subtasks cannot spawn or await their own subtasks (recursion limit 1).' };
-      }
-      const decision = await base86Callback(tu);
-      if (decision && decision.tier === 'approval') {
-        return {
-          tier: 'auto',
-          error: 'Tool "' + tu.name + '" is approval-tier and cannot run in a subtask. Subtasks only execute read-only / auto-tier tools. Summarize the change you would propose in your reply instead.'
-        };
-      }
-      return decision;
-    };
-
-    // Build the initial user.message. Prefix with a short framing so
-    // the child knows it's a subtask and should return a clean final
-    // reply (no chit-chat, no questions back to the user).
-    const prompt =
-      '[You are running as a Project 86 subtask — a child agent session ' +
-      'spawned by the main 86 to work on one self-contained piece of a ' +
-      'larger task in parallel. Do the work, then reply with ONE final ' +
-      'message containing the result. No conversational filler.]\n\n' +
-      String(sub.prompt || '');
-
-    const result = await driveSubtaskTurn({
-      anthropic,
-      sessionId: childSessionId,
-      eventsToSend: [{ type: 'user.message', content: [{ type: 'text', text: prompt }] }],
-      onCustomToolUse: subtaskCallback
-    });
-
-    await pool.query(
-      `UPDATE ai_subtasks
-          SET status = $2, result = $3, error = $4,
-              input_tokens = COALESCE(input_tokens,0) + $5,
-              output_tokens = COALESCE(output_tokens,0) + $6,
-              cache_creation_tokens = COALESCE(cache_creation_tokens,0) + $7,
-              cache_read_tokens = COALESCE(cache_read_tokens,0) + $8,
-              finished_at = NOW()
-        WHERE id = $1`,
-      [
-        subtaskId,
-        result.error ? 'failed' : 'completed',
-        result.text || null,
-        result.error || null,
-        result.usage.input_tokens || 0,
-        result.usage.output_tokens || 0,
-        result.usage.cache_creation_input_tokens || 0,
-        result.usage.cache_read_input_tokens || 0
-      ]
-    );
-  } catch (e) {
-    console.error('[subtask] runner failed for', subtaskId, e);
-    await pool.query(
-      `UPDATE ai_subtasks
-          SET status = 'failed', error = $2, finished_at = NOW()
-        WHERE id = $1`,
-      [subtaskId, (e && e.message) || 'Subtask runner error']
-    );
-  } finally {
-    if (childSessionId) {
-      try { await anthropic.beta.sessions.archive(childSessionId); }
-      catch (_) { /* best-effort cleanup */ }
-    }
-  }
-}
+const MAX_SUBTASK_TURNS = 30;            // Safety cap to prevent runaway tool loops (kept name for back-compat with watch code)
+const SUBTASK_BUDGET_TOKENS = 300000;    // Per-fire token budget — fail-stop above this
 
 // Non-streaming version of runV2SessionStream — just drives a Sessions
 // turn to completion, collects assistant text + token usage, and
-// returns. No SSE, no nudge logic, no stuck-session recovery (subtasks
-// run against brand-new sessions so there's nothing to recover).
+// returns. No SSE, no nudge logic, no stuck-session recovery (each
+// fire opens a fresh session).
 //
 // Returns { text, usage, error? } where usage = { input_tokens,
 // output_tokens, cache_creation_input_tokens, cache_read_input_tokens }.
@@ -10161,33 +9796,8 @@ function renderPageContextBlock(ctx) {
   return lines.join('\n');
 }
 
-// Phase 3b — subtask polling endpoint for the chat UI. Returns the
-// status + cumulative tokens of one or more subtasks. Scoped: the
-// caller can only read subtasks they spawned (user_id match) so
-// cross-user polling is impossible. Returns 200 with an empty array
-// when none of the ids resolve (rather than 404) so the client poll
-// loop can degrade gracefully without surfacing an error chip.
-router.get('/subtasks', requireAuth, async (req, res) => {
-  try {
-    const idsParam = String(req.query.ids || '').trim();
-    if (!idsParam) return res.json({ subtasks: [] });
-    const ids = idsParam.split(',').map(s => s.trim()).filter(Boolean).slice(0, 40);
-    if (!ids.length) return res.json({ subtasks: [] });
-    const r = await pool.query(
-      `SELECT id, title, status, result, error,
-              input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
-              started_at, finished_at, created_at
-         FROM ai_subtasks
-        WHERE id = ANY($1) AND user_id = $2
-        ORDER BY created_at ASC`,
-      [ids, req.user.id]
-    );
-    res.json({ subtasks: r.rows });
-  } catch (e) {
-    console.error('GET /subtasks error:', e);
-    res.status(500).json({ error: e.message });
-  }
-});
+// Phase 3 subtask polling endpoint removed — fan-out is retired.
+router.get('/subtasks', requireAuth, (req, res) => res.json({ subtasks: [], retired: true }));
 
 router.get('/86/messages', requireAuth, async (req, res) => {
   try {
@@ -10718,11 +10328,10 @@ module.exports.internals = {
   jobTools:      () => [...WEB_TOOLS, ...JOB_TOOLS, ...INTAKE_TOOLS.map(({ tier, ...t }) => t)],
   clientTools:   () => [...WEB_TOOLS, ...CLIENT_TOOLS.map(({ tier, ...t }) => t)],
   staffTools:    () => [...WEB_TOOLS, ...STAFF_TOOLS.map(({ tier, ...t }) => t)],
-  // Phase 3 — sub-agent / parallel work tools. Exposed as a separate
-  // bucket so customToolsFor can union them into the 'job' agent's
-  // registered tool set without polluting the staff/CRA/estimate
-  // contexts (which never spawn subtasks).
-  subtaskTools:  () => SUBTASK_TOOLS.map(({ tier, ...t }) => t),
+  // Phase 3 subtask tools removed — fan-out replaced by native parallel
+  // tool calls within a single session. Export kept as () => [] so any
+  // sibling module still calling it doesn't crash mid-migration.
+  subtaskTools:  () => [],
   // Phase 4 — long-term semantic memory tools.
   memoryTools:   () => MEMORY_TOOLS.map(({ tier, ...t }) => t),
   // Phase 5 — proactive watching tools (3 of 4 are auto; the writes

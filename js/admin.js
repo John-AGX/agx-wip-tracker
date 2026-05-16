@@ -4116,9 +4116,7 @@
     window.p86Api.get('/api/admin/agents/metrics?range=' + _agentsRange).then(function(resp) {
       var a86 = resp && resp.agent86;
       if (a86) {
-        host.innerHTML = render86MetricsCard(a86) +
-          '<div id="subtasks-recent-mount" style="margin-top:18px;"></div>';
-        loadSubtasksRecent();
+        host.innerHTML = render86MetricsCard(a86);
         return;
       }
       // Legacy fallback if a stale server lacks the rich payload.
@@ -4128,9 +4126,7 @@
       } else {
         host.innerHTML = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px;">' +
           agents.map(renderAgentMetricsCard).join('') +
-        '</div>' +
-        '<div id="subtasks-recent-mount" style="margin-top:18px;"></div>';
-        loadSubtasksRecent();
+        '</div>';
       }
     }).catch(function(err) {
       host.innerHTML = '<div style="color:#e74c3c;font-size:12px;padding:20px 0;">Failed: ' + escapeHTML(err.message || 'unknown') + '</div>';
@@ -4177,7 +4173,6 @@
       modelRows = '<div style="font-size:11px;color:var(--text-dim,#666);font-style:italic;">No assistant turns yet.</div>';
     }
 
-    var sub = a.subtasks || {};
     var mem = a.memory || {};
     var wch = a.watches || {};
     var mcp = a.mcp_servers || {};
@@ -4242,19 +4237,8 @@
         '</div>' +
       '</div>' +
 
-      // ── Section: Phase 3 / 4 / 5 / 6 capability summary
+      // ── Section: capability summary (Phase 4 / 5 / 6)
       '<div style="border-top:1px solid var(--border,#333);padding-top:14px;display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;">' +
-        '<div>' +
-          '<div style="font-size:11px;font-weight:600;color:#a5b4fc;margin-bottom:4px;">&#x1F500; Sub-agent fan-out</div>' +
-          '<div style="font-size:11px;color:var(--text-dim,#aaa);line-height:1.55;">' +
-            (sub.total || 0) + ' spawned · ' +
-            (sub.completed || 0) + ' completed · ' +
-            (sub.failed || 0) + ' failed · ' +
-            (sub.in_flight || 0) + ' in flight<br>' +
-            '<span style="color:var(--text-dim,#666);">Spend: ' + tokFmt((sub.input_tokens || 0) + (sub.output_tokens || 0)) + ' tokens' +
-            (sub.cost_usd != null ? ' · $' + sub.cost_usd.toFixed(2) : '') + '</span>' +
-          '</div>' +
-        '</div>' +
         '<div>' +
           '<div style="font-size:11px;font-weight:600;color:#fbbf24;margin-bottom:4px;">&#x1F9E0; Long-term memory</div>' +
           '<div style="font-size:11px;color:var(--text-dim,#aaa);line-height:1.55;">' +
@@ -4297,71 +4281,8 @@
     '</div>';
   }
 
-  // Phase 3b — recent subtasks under the agent metrics cards.
-  // Lightweight: rollup line + scrollable table of recent rows. Renders
-  // only when there's at least one subtask row in the window.
-  function loadSubtasksRecent() {
-    var mount = document.getElementById('subtasks-recent-mount');
-    if (!mount) return;
-    mount.innerHTML = '<div style="font-size:11px;color:var(--text-dim,#666);font-style:italic;">Loading subtasks…</div>';
-    window.p86Api.get('/api/admin/agents/subtasks/recent?range=' + _agentsRange + '&limit=50')
-      .then(function(resp) {
-        var rows = (resp && resp.subtasks) || [];
-        var rollup = (resp && resp.rollup) || {};
-        if (!rows.length) {
-          mount.innerHTML =
-            '<div style="border:1px dashed var(--border,#333);border-radius:8px;padding:14px;color:var(--text-dim,#777);font-size:12px;">' +
-              '<strong style="color:var(--text,#fff);">Sub-agent fan-out</strong> — no subtasks spawned in this window. ' +
-              '86 can call <code>spawn_subtask</code> to split work into parallel children. Once it does, runs will appear here.' +
-            '</div>';
-          return;
-        }
-        var totalTokens = (Number(rollup.input_tokens) || 0) + (Number(rollup.output_tokens) || 0);
-        var summary =
-          '<div style="font-size:14px;font-weight:600;color:var(--text,#fff);margin-bottom:6px;">Sub-agent fan-out</div>' +
-          '<div style="font-size:12px;color:var(--text-dim,#aaa);margin-bottom:10px;">' +
-            (rollup.total || 0) + ' subtasks · ' +
-            (rollup.completed || 0) + ' completed · ' +
-            (rollup.failed || 0) + ' failed · ' +
-            (rollup.in_flight || 0) + ' in flight · ' +
-            tokFmt(totalTokens) + ' tokens spent' +
-          '</div>';
-        var tableRows = rows.map(function(r) {
-          var dur = r.duration_seconds != null ? r.duration_seconds + 's' : '—';
-          var statusColor = (
-            r.status === 'completed' ? '#34d399' :
-            r.status === 'failed' ? '#f87171' :
-            r.status === 'running' ? '#fbbf24' :
-            r.status === 'pending' ? '#a5b4fc' : '#9ca3af'
-          );
-          var tokens = (Number(r.input_tokens) || 0) + (Number(r.output_tokens) || 0);
-          return '<tr>' +
-            '<td style="font-family:\'SF Mono\',monospace;font-size:11px;">' + escapeHTML(r.id) + '</td>' +
-            '<td>' + escapeHTML(r.title || '—') + '</td>' +
-            '<td><span style="color:' + statusColor + ';">' + escapeHTML(r.status) + '</span></td>' +
-            '<td>' + escapeHTML(r.parent_entity_type || '—') +
-              (r.parent_entity_id ? ' / ' + escapeHTML(r.parent_entity_id) : '') + '</td>' +
-            '<td>' + escapeHTML(r.spawned_by_name || r.spawned_by_email || '—') + '</td>' +
-            '<td style="text-align:right;">' + tokFmt(tokens) + '</td>' +
-            '<td style="text-align:right;">' + escapeHTML(dur) + '</td>' +
-          '</tr>';
-        }).join('');
-        mount.innerHTML = summary +
-          '<div class="table-container" style="max-height:360px;overflow-y:auto;">' +
-            '<table style="font-size:12px;">' +
-              '<thead><tr>' +
-                '<th>ID</th><th>Title</th><th>Status</th><th>Parent context</th>' +
-                '<th>Spawned by</th>' +
-                '<th style="text-align:right;">Tokens</th>' +
-                '<th style="text-align:right;">Duration</th>' +
-              '</tr></thead>' +
-              '<tbody>' + tableRows + '</tbody>' +
-            '</table>' +
-          '</div>';
-      }).catch(function(err) {
-        mount.innerHTML = '<div style="color:#e74c3c;font-size:12px;">Subtasks load failed: ' + escapeHTML(err.message || 'unknown') + '</div>';
-      });
-  }
+  // Phase 3 subtask widget removed — fan-out is via native parallel
+  // tool calls within one session now, no separate runs to display.
 
   function renderAgentMetricsCard(a) {
     var totalCost = (a.models || []).reduce(function(s, m) { return s + (m.cost_usd || 0); }, 0);

@@ -163,21 +163,10 @@ router.get('/metrics',
     `;
     const modelRes = await pool.query(modelSql, [ENTITY_TYPES_FOR_86]);
 
-    // Phase 3 — subtask rollup for this org.
-    const subtaskSql = `
-      SELECT
-        COUNT(*)::int                                        AS total,
-        COUNT(*) FILTER (WHERE status = 'completed')::int    AS completed,
-        COUNT(*) FILTER (WHERE status = 'failed')::int       AS failed,
-        COUNT(*) FILTER (WHERE status IN ('pending','running'))::int AS in_flight,
-        COALESCE(SUM(input_tokens),  0)::bigint              AS input_tokens,
-        COALESCE(SUM(output_tokens), 0)::bigint              AS output_tokens
-      FROM ai_subtasks
-      WHERE organization_id = $1
-        AND created_at >= NOW() - INTERVAL '${range}'
-    `;
-    const subtaskRes = await pool.query(subtaskSql, [orgId]);
-    const sub = subtaskRes.rows[0] || {};
+    // Phase 3 subtask rollup retired — fan-out replaced by native
+    // parallel tool calls within one session. The ai_subtasks table
+    // is preserved for historical reads but no longer populated.
+    const sub = { total: 0, completed: 0, failed: 0, in_flight: 0, input_tokens: 0, output_tokens: 0 };
 
     // Phase 4 — memory counts (active + recently saved).
     const memorySql = `
@@ -236,7 +225,7 @@ router.get('/metrics',
       cost_usd: costFor(r.model, r.input_tokens, r.output_tokens)
     }));
     const totalCost = models.reduce((s, m) => s + (m.cost_usd || 0), 0);
-    const subtaskCost = costFor('claude-opus-4-7', sub.input_tokens, sub.output_tokens);
+    const subtaskCost = 0; // Phase 3 subtasks retired — fan-out replaced by native parallel tool calls.
     const watchCost = costFor('claude-opus-4-7', watchRuns.input_tokens, watchRuns.output_tokens);
 
     const cacheReads = Number(agg.cache_read_tokens || 0);
@@ -324,59 +313,12 @@ router.get('/metrics',
   }
 });
 
-// GET /api/admin/agents/conversations?range=7d|30d&entity_type=&user_id=&limit=
-//
-// Phase 3b — admin observability for sub-agent fan-out. Lists recent
-// subtasks across the org with parent-session context, status, token
-// cost, and duration. Scoped to the caller's org via requireOrg so
-// system admins still see only their own org's data — cross-org rollup
-// belongs under the System Admin tab if/when we surface it.
+// Subtask fan-out retired — endpoint kept as a stable 410 so any
+// admin UI that still polls it gets a clean answer.
 router.get('/subtasks/recent',
-  requireAuth, requireCapability('ROLES_MANAGE'), require('../auth').requireOrg,
-  async (req, res) => {
-  try {
-    const range = (req.query.range === '30d') ? '30 days' : '7 days';
-    const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 50));
-    const r = await pool.query(`
-      SELECT s.id, s.title, s.status, s.agent_key, s.depth,
-             s.input_tokens, s.output_tokens,
-             s.cache_creation_tokens, s.cache_read_tokens,
-             s.started_at, s.finished_at, s.created_at,
-             s.error,
-             ps.entity_type AS parent_entity_type,
-             ps.entity_id   AS parent_entity_id,
-             u.name         AS spawned_by_name,
-             u.email        AS spawned_by_email,
-             EXTRACT(EPOCH FROM (s.finished_at - s.started_at))::int AS duration_seconds
-        FROM ai_subtasks s
-        JOIN ai_sessions ps ON ps.id = s.parent_session_id
-        JOIN users u ON u.id = s.user_id
-       WHERE s.organization_id = $1
-         AND s.created_at >= NOW() - INTERVAL '${range}'
-       ORDER BY s.created_at DESC
-       LIMIT $2
-    `, [req.organization.id, limit]);
-
-    // Rollup: counts + total spend, useful for the header.
-    const rollup = await pool.query(`
-      SELECT
-        COUNT(*)::int                                     AS total,
-        COUNT(*) FILTER (WHERE status = 'completed')::int AS completed,
-        COUNT(*) FILTER (WHERE status = 'failed')::int    AS failed,
-        COUNT(*) FILTER (WHERE status IN ('pending','running'))::int AS in_flight,
-        COALESCE(SUM(input_tokens), 0)::bigint            AS input_tokens,
-        COALESCE(SUM(output_tokens), 0)::bigint           AS output_tokens
-        FROM ai_subtasks
-       WHERE organization_id = $1
-         AND created_at >= NOW() - INTERVAL '${range}'
-    `, [req.organization.id]);
-
-    res.json({ subtasks: r.rows, rollup: rollup.rows[0], range });
-  } catch (e) {
-    console.error('GET /admin/agents/subtasks/recent error:', e);
-    res.status(500).json({ error: e.message });
-  }
-});
+  requireAuth, requireCapability('ROLES_MANAGE'),
+  (req, res) => res.json({ subtasks: [], rollup: {}, range: '7 days', retired: true })
+);
 
 // Lists recent conversations grouped by (entity_type, estimate_id,
 // user_id). Each row carries the most recent activity timestamp,
@@ -1864,12 +1806,12 @@ function customToolsFor(agentKey) {
     //   - jobTools       (phase pct, node graph, COs, POs, invoices)
     //   - clientTools    (HR client + property + sub mutations)
     //   - staffTools     (skill pack mutations + introspection reads)
-    //   - subtaskTools   (Phase 3: spawn_subtask / await_subtasks /
-    //                     subtask_status — parallel fan-out)
     //   - memoryTools    (Phase 4: remember / recall / list_memories /
     //                     forget — cross-session memory)
     //   - watchTools     (Phase 5: propose_watch_create / list_watches /
     //                     read_recent_watch_runs / propose_watch_archive)
+    // Phase 3 subtaskTools removed — native parallel tool calls within
+    // one session cover the same use cases without per-child cache hits.
     // Deduped by name; first occurrence wins (estimate-first order).
     // INTAKE_TOOLS are already spread into jobTools().
     const seen = new Set();
@@ -1879,7 +1821,6 @@ function customToolsFor(agentKey) {
       ...aiInternals.jobTools(),
       ...aiInternals.clientTools(),
       ...aiInternals.staffTools(),
-      ...aiInternals.subtaskTools(),
       ...aiInternals.memoryTools(),
       ...aiInternals.watchTools()
     ].forEach(t => {

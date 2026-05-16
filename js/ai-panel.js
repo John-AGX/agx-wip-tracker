@@ -2089,10 +2089,6 @@
     propose_skill_pack_add:       'Drafting skill pack…',
     propose_skill_pack_edit:      'Drafting skill pack edit…',
     propose_skill_pack_delete:    'Drafting skill pack removal…',
-    // Phase 3 — sub-agent fan-out
-    spawn_subtask:                'Spawning helper agent…',
-    await_subtasks:               'Waiting on helper agents…',
-    subtask_status:               'Checking helper status…',
     // Phase 4 — long-term memory
     remember:                     'Saving to memory…',
     recall:                       'Searching memory…',
@@ -2371,11 +2367,6 @@
     var brainYoga = startBrainYoga(streamDiv);
     var chipsAppended = 0; // tracks tool_applied/tool_failed/tool_rejected count
     var turnUsage = null;  // captured from `done` event; rendered as a dim footer
-    // Phase 3b — subtask fan-out. Map of subtask_id → DOM card so
-    // spawn_subtask renders the card once, and await_subtasks /
-    // status reuse the existing element on resolution. pollCtx drives
-    // the live-poll loop; stopped on terminal-all or abort.
-    var subtaskCtx = { cards: {}, timer: null, stop: null };
     // The most-recent live tool chip. tool_started creates one;
     // tool_applied / _failed / _rejected updates it IN PLACE rather
     // than appending a second chip. Mirrors Claude Code's behavior:
@@ -2423,37 +2414,10 @@
           brainYoga.override(label, true);
           scrollToBottom();
         } else if (payload.tool_applied) {
-          // Phase 3b — subtask tools render a dedicated live-polling
-          // card instead of the generic chip. spawn_subtask creates
-          // the card; await_subtasks / subtask_status update the
-          // matching cards in place using the resolved rows.
-          var meta = payload.tool_applied.meta;
-          if (meta && meta.kind === 'subtask_spawned' && meta.subtask_id) {
-            appendSubtaskCard(streamDiv, meta.subtask_id, meta.title, subtaskCtx.cards);
-            startSubtaskPolling(subtaskCtx);
-            chipsAppended++;
-            brainYoga.override('Got it. Thinking…', false);
-            scrollToBottom();
-            return; // skip the default chip render
-          }
-          if (meta && meta.kind === 'subtask_resolved' && Array.isArray(meta.subtask_ids)) {
-            // Pull the freshly resolved rows so cards reflect the
-            // final state without waiting for the next poll tick.
-            fetch('/api/ai/subtasks?ids=' + encodeURIComponent(meta.subtask_ids.join(',')), {
-              headers: authHeaders()
-            }).then(function(r) { return r.ok ? r.json() : null; })
-              .then(function(data) {
-                if (!data || !Array.isArray(data.subtasks)) return;
-                data.subtasks.forEach(function(row) {
-                  var card = subtaskCtx.cards[row.id];
-                  if (card) updateSubtaskCard(card, row);
-                });
-              }).catch(function() {});
-            chipsAppended++;
-            brainYoga.override('Got it. Thinking…', false);
-            scrollToBottom();
-            return;
-          }
+          // Phase 3 subtask cards retired — no special meta handling
+          // for spawn_subtask / await_subtasks / subtask_status. Fan-out
+          // is done via native parallel tool calls in one session now,
+          // so each tool_applied just renders the standard live chip.
           // Server-side auto-tier tool finished. If we already have a
           // live chip from the preceding tool_started, transition it
           // in place; otherwise append a fresh chip.
@@ -4563,133 +4527,10 @@
   // tools that already executed during the stream (read_*,
   // self_diagnose, etc.) so the user sees what fired without
   // needing an approval card.
-  // Phase 3b — dedicated subtask card. Rendered when 86 calls
-  // spawn_subtask; the card lives under the parent's stream and
-  // live-polls /api/ai/subtasks until the child reaches a terminal
-  // state. cards is a {id: element} map kept across spawns within
-  // one parent turn so await_subtasks doesn't make duplicates.
-  function appendSubtaskCard(streamDiv, subtaskId, title, cardsMap) {
-    if (!streamDiv) return null;
-    if (cardsMap && cardsMap[subtaskId]) return cardsMap[subtaskId];
-    var content = streamDiv.querySelector('[data-stream-content]') || streamDiv;
-    var card = document.createElement('div');
-    card.setAttribute('data-subtask-id', subtaskId);
-    card.style.cssText =
-      'margin-top:8px;padding:8px 10px;border:1px solid rgba(99,102,241,0.25);' +
-      'background:rgba(99,102,241,0.06);border-radius:6px;font-size:11.5px;line-height:1.5;' +
-      'font-family:ui-monospace,SFMono-Regular,Menlo,monospace;';
-    card.innerHTML =
-      '<div style="display:flex;align-items:baseline;gap:6px;">' +
-        '<span data-st-glyph style="color:#a5b4fc;flex-shrink:0;">⏳</span>' +
-        '<span style="color:#818cf8;font-weight:600;">subtask</span>' +
-        '<span style="color:var(--text-dim,#888);">' + escapeHTMLLocal(subtaskId) + '</span>' +
-        '<span data-st-status style="color:var(--text-dim,#777);margin-left:auto;font-size:10px;">pending</span>' +
-      '</div>' +
-      '<div style="margin-left:14px;margin-top:2px;color:var(--text,#cbd5e1);">' + escapeHTMLLocal(title || '(no title)') + '</div>' +
-      '<div data-st-meta style="margin-left:14px;margin-top:2px;color:var(--text-dim,#777);font-size:10px;display:none;"></div>' +
-      '<div data-st-result style="display:none;margin-left:14px;margin-top:6px;"></div>';
-    content.appendChild(card);
-    if (cardsMap) cardsMap[subtaskId] = card;
-    return card;
-  }
-
-  // Update one subtask card with a row from /api/ai/subtasks. Idempotent —
-  // safe to call repeatedly with the same row. Once status is terminal,
-  // the card body is populated with the result/error and the status badge
-  // freezes.
-  function updateSubtaskCard(card, row) {
-    if (!card || !row) return;
-    var glyphEl = card.querySelector('[data-st-glyph]');
-    var statusEl = card.querySelector('[data-st-status]');
-    var metaEl = card.querySelector('[data-st-meta]');
-    var resultEl = card.querySelector('[data-st-result]');
-    var s = row.status;
-    if (statusEl) statusEl.textContent = s;
-    if (glyphEl) {
-      if (s === 'pending') { glyphEl.textContent = '⏳'; glyphEl.style.color = '#a5b4fc'; }
-      else if (s === 'running') { glyphEl.textContent = '⟳'; glyphEl.style.color = '#fbbf24'; }
-      else if (s === 'completed') { glyphEl.textContent = '✓'; glyphEl.style.color = '#34d399'; }
-      else if (s === 'failed') { glyphEl.textContent = '✗'; glyphEl.style.color = '#f87171'; }
-      else if (s === 'canceled') { glyphEl.textContent = '⊘'; glyphEl.style.color = '#a3a3a3'; }
-    }
-    var tokens = (Number(row.input_tokens) || 0) + (Number(row.output_tokens) || 0);
-    if (metaEl) {
-      if (tokens > 0) {
-        metaEl.style.display = '';
-        metaEl.textContent = (tokens >= 1000 ? (tokens / 1000).toFixed(1) + 'k' : String(tokens)) + ' tokens';
-      } else {
-        metaEl.style.display = 'none';
-      }
-    }
-    if (resultEl) {
-      var body = '';
-      if (s === 'completed') body = row.result || '';
-      else if (s === 'failed') body = row.error || 'Failed.';
-      else if (s === 'canceled') body = row.error || 'Canceled.';
-      if (body) {
-        resultEl.style.display = '';
-        // Collapse long bodies inside <details>; mirror the appendToolBlock
-        // pattern so the chat panel stays readable.
-        if (body.length > 200 || body.split('\n').length > 3) {
-          var det = document.createElement('details');
-          var sum = document.createElement('summary');
-          sum.style.cssText = 'cursor:pointer;color:var(--text-dim,#777);font-size:10.5px;list-style:none;';
-          var firstLine = body.split('\n').find(function(l) { return l.trim(); }) || '';
-          sum.textContent = firstLine.replace(/^#+\s*/, '').slice(0, 90) + (body.length > 90 ? '  …' : '');
-          var pre = document.createElement('div');
-          pre.style.cssText = 'white-space:pre-wrap;color:var(--text-dim,#9aa0a6);margin-top:4px;padding:6px 8px;background:rgba(0,0,0,0.15);border-left:2px solid rgba(99,102,241,0.3);border-radius:2px;';
-          pre.textContent = body;
-          det.appendChild(sum);
-          det.appendChild(pre);
-          resultEl.innerHTML = '';
-          resultEl.appendChild(det);
-        } else {
-          resultEl.innerHTML = '';
-          var inline = document.createElement('div');
-          inline.style.cssText = 'white-space:pre-wrap;color:var(--text-dim,#9aa0a6);font-size:11px;';
-          inline.textContent = body;
-          resultEl.appendChild(inline);
-        }
-      }
-    }
-  }
-
-  // Live-poll the subtasks endpoint every 2s while at least one tracked
-  // card is non-terminal. Auto-stops when all tracked subtasks reach a
-  // terminal state. ctx.cards is the {id: element} map populated by
-  // appendSubtaskCard. ctx.timer is the setInterval handle, kept on the
-  // ctx so the caller can clear() from outside (e.g. on abort).
-  function startSubtaskPolling(ctx) {
-    if (ctx.timer) return;
-    var TERMINAL = { completed: 1, failed: 1, canceled: 1 };
-    function tick() {
-      var ids = Object.keys(ctx.cards || {});
-      if (!ids.length) { stop(); return; }
-      var pending = ids.filter(function(id) {
-        var c = ctx.cards[id];
-        var statusEl = c && c.querySelector('[data-st-status]');
-        var s = statusEl ? statusEl.textContent : 'pending';
-        return !TERMINAL[s];
-      });
-      if (!pending.length) { stop(); return; }
-      fetch('/api/ai/subtasks?ids=' + encodeURIComponent(pending.join(',')), {
-        headers: authHeaders()
-      }).then(function(r) {
-        if (!r.ok) return null;
-        return r.json();
-      }).then(function(data) {
-        if (!data || !Array.isArray(data.subtasks)) return;
-        data.subtasks.forEach(function(row) {
-          var card = ctx.cards[row.id];
-          if (card) updateSubtaskCard(card, row);
-        });
-      }).catch(function() { /* poll best-effort */ });
-    }
-    function stop() { clearInterval(ctx.timer); ctx.timer = null; }
-    ctx.stop = stop;
-    ctx.timer = setInterval(tick, 2000);
-    setTimeout(tick, 100); // First tick fast so pending → running flips quickly.
-  }
+  // Phase 3 subtask cards retired — fan-out is via native parallel
+  // tool calls within one session now. The card-rendering / polling
+  // helpers (appendSubtaskCard, updateSubtaskCard, startSubtaskPolling)
+  // were removed; the standard live-chip path handles every tool use.
 
   // Verb / past-tense / arg / result helpers for the Claude-Code-style
   // tool chip. The chip is one short monospace line: a colored dot,
@@ -4723,7 +4564,6 @@
     if (/^merge_/.test(name))         return { verb: 'Merging',   past: 'Merged'   };
     if (/^split_/.test(name))         return { verb: 'Splitting', past: 'Split'    };
     if (/^wire_/.test(name))          return { verb: 'Wiring',    past: 'Wired'    };
-    if (/^spawn_/.test(name))         return { verb: 'Spawning',  past: 'Spawned'  };
     if (/^remember|^recall|^forget/.test(name)) return { verb: 'Memory', past: 'Memory' };
     return { verb: 'Tool', past: 'Used' };
   }
