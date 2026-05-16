@@ -443,15 +443,29 @@
   // the AI panel header (rendered by ai-panel.js) — these helpers stay
   // here because the editor owns the estimate state.
   // ──────────────────────────────────────────────────────────────────
+  // Three-way mode (since the Plan/Build → Plan/Edit/Auto rename):
+  //   plan  — read-only: 86 can discuss but propose_* tools are filtered
+  //           off server-side.
+  //   edit  — approval cards for every propose_* (legacy 'build' value
+  //           is auto-coerced to 'edit' for back-compat).
+  //   auto  — same server-side tools as edit, but the client auto-clicks
+  //           Approve for whitelisted estimate-line tools so simple
+  //           "build the lines" workflows skip the per-card friction.
   function getEstimateAIPhase() {
     var est = getEstimate();
-    return (est && est.aiPhase === 'plan') ? 'plan' : 'build';
+    if (!est) return 'edit';
+    if (est.aiPhase === 'plan') return 'plan';
+    if (est.aiPhase === 'auto') return 'auto';
+    // Legacy 'build' rows + any unrecognized value coerce to 'edit'.
+    return 'edit';
   }
 
   function setEstimateAIPhase(phase) {
     var est = getEstimate();
     if (!est) return;
-    var nextPhase = phase === 'plan' ? 'plan' : 'build';
+    var nextPhase =
+      phase === 'plan' ? 'plan' :
+      phase === 'auto' ? 'auto' : 'edit';
     if (est.aiPhase === nextPhase) return;
     est.aiPhase = nextPhase;
     debouncedSave();

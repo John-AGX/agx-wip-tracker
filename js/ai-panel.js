@@ -89,6 +89,12 @@
       '<line x1="12" y1="19.5" x2="12" y2="20.5"/>' +
       '<line x1="15" y1="19.5" x2="15" y2="20.5"/>' +
     '</svg>';
+  // Auto mode = lightning bolt (instant-apply). Same stroke vocabulary
+  // as the other two so the pill switcher reads consistently.
+  var SVG_AUTO_ICON =
+    '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      '<path d="M13 2 L4 14 H11 L10 22 L20 9 H13 Z"/>' +
+    '</svg>';
 
   // Phase 1b/1c — when the server flips AGENT_MODE_47=agents, the AG
   // estimating chat routes to the Sessions-backed /v2 endpoint. The
@@ -224,22 +230,58 @@
     return '/api/ai/86';
   }
 
-  // ── 86 (job-mode) Plan/Build phase ───────────────────────────────
-  // Per-job, per-user state stored in localStorage. Default = 'plan' so
-  // 86 starts as an analyst (no surprise mutations) — the PM grants
-  // write access by approving a request_build_mode card or flipping
-  // the phase pill manually.
+  // Tools the Auto-mode auto-commit fires for. Scoped to ESTIMATE
+  // line edits + scope wording — the most common workflow where
+  // user says "build it" and 86 emits N proposals in one shot. Group
+  // restructuring, relationship changes, client mutations, lead
+  // creation, and skill-pack edits all keep their per-card approval
+  // even in Auto mode.
+  var AUTO_EXEC_TOOLS = new Set([
+    'propose_add_line_item',
+    'propose_update_line_item',
+    'propose_delete_line_item',
+    'propose_bulk_update_lines',
+    'propose_bulk_delete_lines',
+    'propose_add_section',
+    'propose_update_section',
+    'propose_delete_section',
+    'propose_update_scope'
+  ]);
+
+  // Resolve the current entity's AI phase (plan / edit / auto). Reads
+  // from estimate-editor for estimate mode, from per-job localStorage
+  // for job mode, otherwise defaults to 'edit'. Used by the Auto-mode
+  // auto-commit branch in finalizeTalkThroughBubble.
+  function getCurrentAIPhase() {
+    if (isEstimateMode() && window.estimateEditorAPI && window.estimateEditorAPI.getAIPhase) {
+      return window.estimateEditorAPI.getAIPhase();
+    }
+    if (isJobMode()) return getJobAIPhase(_entityId);
+    return 'edit';
+  }
+
+  // ── 86 (job-mode) AI phase: plan / edit / auto ───────────────────
+  // Per-job, per-user state stored in localStorage. Default = 'plan'
+  // so 86 starts as an analyst (no surprise mutations). The PM flips
+  // the pill manually or by approving a request_build_mode card.
+  //
+  // Legacy 'build' values are coerced to 'edit' on read so existing
+  // localStorage entries keep working without a one-time migration.
   function getJobPhaseKey(jobId) { return 'p86-elle-phase-' + (jobId || ''); }
   function getJobAIPhase(jobId) {
     if (!jobId) return 'plan';
     try {
       var v = localStorage.getItem(getJobPhaseKey(jobId));
-      return v === 'build' ? 'build' : 'plan';
+      if (v === 'plan') return 'plan';
+      if (v === 'auto') return 'auto';
+      return 'edit'; // covers 'build', 'edit', null, anything else
     } catch (e) { return 'plan'; }
   }
   function setJobAIPhase(jobId, phase) {
     if (!jobId) return;
-    var p = phase === 'build' ? 'build' : 'plan';
+    var p =
+      phase === 'plan' ? 'plan' :
+      phase === 'auto' ? 'auto' : 'edit';
     try { localStorage.setItem(getJobPhaseKey(jobId), p); } catch (e) { /* private mode etc. */ }
     refreshModeSpecificUI();
   }
@@ -1204,47 +1246,64 @@
     // fires from the editor side.
     var pill = document.getElementById('p86-ai-phase-pill');
     if (pill) {
-      // Phase pill (Plan / Build toggle) is retired. The talk-through
-      // tier now handles per-change approval inline — every propose_*
-      // mutation surfaces as an Approve / Reject row under 86\'s prose,
-      // so the per-job "Plan = read-only / Build = write-enabled"
-      // gate it used to provide is redundant. Force hidden across all
-      // surfaces (estimate, job, node graph, ask86). The
-      // refreshPhaseChip() shim still exists for any caller that
-      // reaches in; it just no-ops now.
-      var pillVisible = false;
+      // Phase pill is now a 3-state toggle (Plan / Edit / Auto). Each
+      // surface (estimate, job) carries its own per-entity state; the
+      // ask86 / staff / intake surfaces aren't entity-bound so the
+      // pill stays hidden for them. Plan = no propose_* tools at all,
+      // Edit = approve every propose_* via talk-through Approve/Reject,
+      // Auto = auto-commit estimate-line tools, approval cards for the
+      // rest (see AUTO_EXEC_TOOLS).
+      var pillVisible = isEstimateMode() || isJobMode();
       if (pillVisible) {
         pill.style.display = 'inline-block';
-        var phase, agentLabel, planDesc, buildDesc;
+        var phase;
         if (isEstimateMode()) {
           phase = (window.estimateEditorAPI && window.estimateEditorAPI.getAIPhase)
-            ? window.estimateEditorAPI.getAIPhase() : 'build';
-          agentLabel = '86';
-          planDesc = '86 discusses scope without proposing line items';
-          buildDesc = '86 proposes line items + edits';
+            ? window.estimateEditorAPI.getAIPhase() : 'edit';
         } else {
           phase = getJobAIPhase(_entityId);
-          agentLabel = '86';
-          planDesc = '86 analyzes WIP without writing changes';
-          buildDesc = 'Elle proposes edits to WIP, phases, and graph';
         }
+        var planDesc  = isEstimateMode()
+          ? '86 discusses scope without proposing line items.'
+          : '86 analyzes WIP without writing changes.';
+        var editDesc  = isEstimateMode()
+          ? '86 proposes line items + edits; approve each before applying.'
+          : '86 proposes WIP / phase / graph edits; approve each.';
+        var autoDesc  = 'Estimate-line proposals (add / update / delete lines + sections) apply automatically; everything else still requires approval.';
+        var modes = [
+          { key: 'plan',  label: 'Plan',  desc: planDesc },
+          { key: 'edit',  label: 'Edit',  desc: editDesc },
+          { key: 'auto',  label: 'Auto',  desc: autoDesc }
+        ];
+        var active = modes.find(function(m) { return m.key === phase; }) || modes[1];
         var toggleBtn = document.getElementById('p86-ai-phase-toggle');
         var iconEl = pill.querySelector('[data-phase-icon]');
         if (toggleBtn && iconEl) {
+          var fallbackForPhase = phase === 'plan' ? SVG_PLAN_ICON
+            : phase === 'auto' ? SVG_AUTO_ICON
+            : SVG_BUILD_ICON;
+          var iconKey = phase === 'plan' ? 'plan-mode' : (phase === 'auto' ? 'auto-mode' : 'build-mode');
           iconEl.innerHTML = (typeof p86Icon === 'function')
-            ? p86Icon(phase === 'plan' ? 'plan-mode' : 'build-mode')
-            : (phase === 'plan' ? SVG_PLAN_ICON : SVG_BUILD_ICON);
-          toggleBtn.title = phase === 'plan'
-            ? 'Plan mode — ' + planDesc + '. Click to switch to Build.'
-            : 'Build mode — ' + buildDesc + '. Click to switch to Plan.';
+            ? p86Icon(iconKey)
+            : fallbackForPhase;
+          toggleBtn.title = active.label + ' mode — ' + active.desc;
         }
         var menu = document.getElementById('p86-ai-phase-menu');
         if (menu) {
           var planSvg  = (typeof p86Icon === 'function') ? p86Icon('plan-mode')  : SVG_PLAN_ICON;
-          var buildSvg = (typeof p86Icon === 'function') ? p86Icon('build-mode') : SVG_BUILD_ICON;
-          var alt = phase === 'plan'
-            ? { key: 'build', svg: buildSvg, label: 'Build', desc: buildDesc }
-            : { key: 'plan',  svg: planSvg,  label: 'Plan',  desc: planDesc };
+          var editSvg  = (typeof p86Icon === 'function') ? p86Icon('build-mode') : SVG_BUILD_ICON;
+          var autoSvg  = (typeof p86Icon === 'function') ? p86Icon('auto-mode')  : SVG_AUTO_ICON;
+          // Render every non-active option in the menu so the user
+          // can pick any of the other two phases in one click.
+          var alts = modes
+            .filter(function(m) { return m.key !== phase; })
+            .map(function(m) {
+              return { key: m.key, svg: m.key === 'plan' ? planSvg : m.key === 'auto' ? autoSvg : editSvg, label: m.label, desc: m.desc };
+            });
+          // Keep the existing var name `alt` referencing the first
+          // option so the trust-section conditional below still works
+          // and the option-pick button wiring continues.
+          var alt = alts[0];
           // Trust toggles section — visible only in job mode + Build
           // phase. (Plan mode never auto-applies anything; estimate
           // mode has no trust toggles since AG only proposes
@@ -1252,7 +1311,10 @@
           // in localStorage under p86-ai-trust:job, so changes here
           // persist across reloads.
           var trustSectionHtml = '';
-          var showTrust = isJobMode() && phase === 'build';
+          // Trust toggles are job-side per-tool auto-apply. Visible in
+          // Edit and Auto (both allow writes); hidden in Plan (no
+          // writes happen anyway).
+          var showTrust = isJobMode() && (phase === 'edit' || phase === 'auto');
           if (showTrust) {
             trustSectionHtml =
               '<div style="margin:6px 6px 4px;border-top:1px solid rgba(255,255,255,0.08);padding-top:8px;">' +
@@ -1275,26 +1337,25 @@
                 }).join('') +
               '</div>';
           }
-          // Reset menu width: narrow for AG / plan mode, wider for the
-          // trust toggles so the labels don't wrap awkwardly.
-          menu.style.minWidth = showTrust ? '280px' : '160px';
+          // 3-state menu: list every option that isn't the current
+          // phase. Width sized for two options + optional trust panel.
+          menu.style.minWidth = showTrust ? '280px' : '200px';
           menu.style.whiteSpace = showTrust ? 'normal' : 'nowrap';
-          menu.innerHTML =
-            '<button type="button" data-ai-phase-pick="' + alt.key + '" ' +
+          var altsHtml = alts.map(function(opt) {
+            return '<button type="button" data-ai-phase-pick="' + opt.key + '" ' +
               'style="display:flex;align-items:center;gap:10px;width:100%;background:transparent;border:none;color:#fff;padding:8px 10px;border-radius:6px;cursor:pointer;text-align:left;font-family:inherit;font-size:12px;box-sizing:border-box;" ' +
               'onmouseenter="this.style.background=\'rgba(255,255,255,0.08)\'" ' +
               'onmouseleave="this.style.background=\'transparent\'">' +
-              '<span style="display:inline-flex;align-items:center;line-height:0;">' + alt.svg + '</span>' +
+              '<span style="display:inline-flex;align-items:center;line-height:0;">' + opt.svg + '</span>' +
               '<span style="display:flex;flex-direction:column;gap:1px;">' +
-                '<span style="font-weight:600;">Switch to ' + alt.label + '</span>' +
-                '<span style="font-size:10px;color:rgba(255,255,255,0.55);font-weight:400;">' + alt.desc + '</span>' +
+                '<span style="font-weight:600;">Switch to ' + opt.label + '</span>' +
+                '<span style="font-size:10px;color:rgba(255,255,255,0.55);font-weight:400;">' + opt.desc + '</span>' +
               '</span>' +
-            '</button>' +
-            trustSectionHtml;
-          var pickBtn = menu.querySelector('[data-ai-phase-pick]');
-          if (pickBtn) {
+            '</button>';
+          }).join('');
+          menu.innerHTML = altsHtml + trustSectionHtml;
+          menu.querySelectorAll('[data-ai-phase-pick]').forEach(function(pickBtn) {
             pickBtn.onclick = function(e) {
-              // Don't close-on-click for trust checkboxes inside the menu
               if (e.target && e.target.closest && e.target.closest('[data-trust-tool]')) return;
               var key = pickBtn.getAttribute('data-ai-phase-pick');
               if (isEstimateMode() && window.setEstimateAIPhase) {
@@ -1304,7 +1365,7 @@
               }
               closeAIPhaseMenu();
             };
-          }
+          });
           // Wire trust checkboxes — stop propagation so clicking a
           // checkbox doesn't bubble up and trigger the "Switch to X"
           // button's click handler.
@@ -1336,9 +1397,9 @@
         // 86's notice changes wording in Plan mode so the user sees a
         // clear cue that 86 won't propose line items right now.
         var phaseN = (window.estimateEditorAPI && window.estimateEditorAPI.getAIPhase)
-          ? window.estimateEditorAPI.getAIPhase() : 'build';
+          ? window.estimateEditorAPI.getAIPhase() : 'edit';
         if (phaseN === 'plan') {
-          noticeEl.textContent = '🗺️ Plan mode — I\'ll think through scope with you and ask questions, but I won\'t propose line items until you flip to 🔨 Build.';
+          noticeEl.textContent = '🗺️ Plan mode — I\'ll think through scope with you and ask questions, but I won\'t propose line items until you flip to ✏️ Edit or ⚡ Auto.';
         } else {
           noticeEl.textContent = 'I\'m 86 — your operator. I draft scopes, add/edit/delete line items and sections, run pricing math, and pull from photos / catalogs / web search as needed. Every change shows as a card with Approve / Reject before it lands.';
         }
@@ -3078,9 +3139,46 @@
   // prose, no per-tool cards. 86's text IS the plan; the toolUses
   // carry the structured mutations behind the scenes. Approve applies
   // every tool in the bundle in one shot.
+  //
+  // Auto-mode short-circuit: when the current entity's aiPhase is
+  // 'auto' AND every proposed tool is in AUTO_EXEC_TOOLS (estimate
+  // line edits + scope wording), skip the Approve/Reject row entirely
+  // and commit the whole bundle immediately. Renders a terse audit
+  // line ("✓ Auto-applied N changes") so the user sees what landed.
   function finalizeTalkThroughBubble(streamDiv, assistantText, toolUses, pendingContent) {
     var contentEl = streamDiv && streamDiv.querySelector('[data-stream-content]');
     if (contentEl) contentEl.innerHTML = renderMarkdown(assistantText || '');
+
+    // Auto-commit branch — check BEFORE building the approve/reject UI.
+    var allAutoSafe = toolUses.length > 0 &&
+      toolUses.every(function(tu) { return AUTO_EXEC_TOOLS.has(tu.name); });
+    if (getCurrentAIPhase() === 'auto' && allAutoSafe) {
+      var marker = document.createElement('div');
+      marker.style.cssText =
+        'margin-top:10px;padding:6px 0;font-size:11px;color:rgba(255,255,255,0.45);' +
+        'border-top:1px solid rgba(255,255,255,0.06);';
+      var autoResponses = toolUses.map(function(tu) {
+        var summary = '';
+        var applyError = null;
+        try { summary = applyTool(tu); }
+        catch (e) { applyError = e && (e.message || String(e)) || 'apply failed'; }
+        var resp = {
+          tool_use_id: tu.id, name: tu.name, input: tu.input,
+          approved: !applyError,
+          applied_summary: summary
+        };
+        if (applyError) resp.apply_error = applyError;
+        return resp;
+      });
+      var anyError = autoResponses.some(function(r) { return r.apply_error; });
+      marker.textContent = anyError
+        ? '⚠ Auto-mode: ' + (toolUses.length - autoResponses.filter(function(r){return r.apply_error;}).length) + ' applied, ' +
+          autoResponses.filter(function(r){return r.apply_error;}).length + ' failed'
+        : '⚡ Auto-applied ' + toolUses.length + ' change' + (toolUses.length === 1 ? '' : 's');
+      (contentEl || streamDiv).appendChild(marker);
+      continueAfterProposals(pendingContent, autoResponses);
+      return;
+    }
 
     var row = document.createElement('div');
     row.setAttribute('data-talk-through-row', '1');
@@ -3499,15 +3597,16 @@
     if (tu.name === 'propose_create_lead') return '';
     switch (tu.name) {
       case 'request_build_mode': {
-        // Special tool: not a write to job data, just a phase flip.
-        // Approval = the PM grants 86 Build mode for this job. The
-        // next chat turn (and the /chat/continue right after this
-        // approval) will send aiPhase='build', re-opening the full
-        // tool list. Returns a summary the model receives so it knows
-        // it can now run its planned actions.
+        // Tool name is `request_build_mode` for back-compat with the
+        // server schema, but it actually flips the phase to 'edit'
+        // (Edit mode in the new naming). Approval = the PM grants 86
+        // write access for this job; the next chat turn (and the
+        // /chat/continue right after this approval) will see the
+        // full tool list. Returns a summary the model receives so it
+        // knows it can now run its planned actions.
         var actions = Array.isArray(input.planned_actions) ? input.planned_actions : [];
-        setJobAIPhase(_entityId, 'build');
-        return 'Build mode granted by the PM. You may now run the ' +
+        setJobAIPhase(_entityId, 'edit');
+        return 'Edit mode granted by the PM. You may now run the ' +
           (actions.length ? actions.length + ' planned action' + (actions.length === 1 ? '' : 's') : 'requested writes') +
           '. Each one still goes through its own approval card.';
       }

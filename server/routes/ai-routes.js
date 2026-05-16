@@ -1969,7 +1969,7 @@ async function buildEstimateContext(estimateId, includePhotos, aiPhaseOverride, 
   if (aiPhaseOverride === 'build' || aiPhaseOverride === 'plan') {
     aiPhase = aiPhaseOverride;
   } else {
-    aiPhase = blob.aiPhase === 'plan' ? 'plan' : 'build';
+    aiPhase = blob.aiPhase === 'plan' ? 'plan' : 'edit';
   }
 
   // Inject the active-mode block last in the dynamic context so the
@@ -3646,13 +3646,13 @@ async function buildJobContext(jobId, clientContext, aiPhase, organization, opts
   // by id when it actually needs to see one. The photo MANIFEST (ids,
   // filenames, sizes) always renders so 86 knows what's available.
   const includePhotos = !!(opts && opts.includePhotos);
-  // aiPhase: 'plan' (read-only analysis, no writes) | 'build' (full
-  // tool access). Defaults to 'plan' for 86 — she's an analyst, so
-  // the safer default is no surprise mutations until the PM explicitly
-  // grants build access via the request_build_mode tool or the phase
-  // pill. The caller forwards this to filterToolsForJobPhase to drop
-  // every write tool from the request when phase==='plan'.
-  aiPhase = aiPhase === 'build' ? 'build' : 'plan';
+  // aiPhase: 'plan' (read-only analysis, no writes) | 'edit' | 'auto'
+  // (full tool access, identical on the server — 'auto' is a
+  // client-side flag that auto-fires whitelisted line tools without
+  // approval cards). Legacy 'build' is coerced to 'edit'. Defaults to
+  // 'plan' so 86 starts as an analyst until the PM grants write access
+  // via the phase pill or the request_build_mode tool.
+  aiPhase = (aiPhase === 'plan') ? 'plan' : 'edit';
   // Pull the job + the related data the bulk-save serializes alongside it.
   const jobRes = await pool.query('SELECT id, owner_id, data FROM jobs WHERE id = $1', [jobId]);
   if (!jobRes.rows.length) throw new Error('Job not found');
@@ -8805,7 +8805,13 @@ router.post('/86/chat', requireAuth, requireOrg, async (req, res) => {
     // explicitly signals plan we want write-tools available. The per-
     // estimate Plan/Build toggle still wins (handled in
     // buildEstimateContext when the override below is not supplied).
-    const cctxAiPhase    = (currentContext && currentContext.aiPhase) === 'plan' ? 'plan' : 'build';
+    // Map the client's per-entity phase ('plan' | 'edit' | 'auto') to
+    // the server tool filter: only 'plan' filters propose_* tools off;
+    // 'edit' and 'auto' both get the full tool set. 'auto' is purely
+    // a client-side flag that auto-fires whitelisted line tools without
+    // surfacing approval cards — the server doesn't need to know.
+    // Legacy 'build' coerces to 'edit'.
+    const cctxAiPhase    = (currentContext && currentContext.aiPhase) === 'plan' ? 'plan' : 'edit';
     const cctxClientCtx  = (currentContext && currentContext.clientContext) || null;
 
     let extraPhotoBlocks = []; // photos pulled from the entity itself (job WIP, estimate, lead)
