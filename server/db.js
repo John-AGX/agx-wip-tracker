@@ -118,12 +118,13 @@ async function initSchema() {
     --   - tracks a mirror to native Anthropic Skills via anthropic_skill_id
     --   - soft-deletes via archived_at so name conflicts don't bite
     --     after a pack is removed
-    -- The runtime reads this table via loadSkillManifestFor (manifest
-    -- only — bodies are pulled on demand via load_skill_pack). The
+    -- Packs are mirrored to native Anthropic Skills (anthropic_skill_id)
+    -- and the agent auto-discovers them by description each turn —
+    -- no in-prompt manifest, no load_skill_pack round-trip. The
     -- legacy app_settings.agent_skills row stays in place because
     -- loadSectionOverridesFor still uses it for replaces_section
-    -- packs — those are a different concept (system-prompt patches,
-    -- not loadable packs).
+    -- packs (system-prompt patches, distinct from these on-demand
+    -- packs).
     CREATE TABLE IF NOT EXISTS org_skill_packs (
       id SERIAL PRIMARY KEY,
       organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,

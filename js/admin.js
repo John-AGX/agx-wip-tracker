@@ -4262,9 +4262,10 @@
     });
   }
 
-  // Phase-1 unified 86 card — one wide block with sections for activity,
-  // tokens & cache, surface mix, tools used, sub-agent fan-out (Phase 3),
-  // memory (Phase 4), watches (Phase 5), MCP connectors (Phase 6).
+  // Unified 86 metrics card — one wide block with sections for activity,
+  // tokens & cache, surface mix, tools used, memory (Phase 4), watches
+  // (Phase 5), MCP connectors (Phase 6). Phase 3 sub-agent fan-out was
+  // retired; only those capability sections remain.
   function render86MetricsCard(a) {
     var t = a.tokens || {};
     var cacheRatioPct = (t.cache_hit_ratio || 0) * 100;

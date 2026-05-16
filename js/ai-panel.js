@@ -1,21 +1,25 @@
-// AI estimating-assistant panel — slide-in right rail attached to the
-// estimate editor. Read-only Q&A: it knows the estimate's full context
-// (server-side) but cannot modify the estimate. Per-user chat history.
+// AI assistant panel — slide-in right rail for the unified 86 agent.
+// Same panel renders on every surface (estimate / job / intake /
+// client / ask86); a current_context object on each chat request
+// tells 86 which entity (if any) is open.
 //
 // Wire-up:
-//   - Estimate editor calls window.p86AI.toggle() / .open(estimateId)
-//   - On open, we GET /api/ai/estimates/:id/messages to load history
-//   - User submits → POST /api/ai/estimates/:id/chat (SSE), we stream the
-//     assistant's reply into a live message bubble
+//   - Open via window.p86AI.toggle() / .open({ entityType, entityId })
+//   - GET /api/ai/86/messages?session_id=N loads history for a session
+//   - POST /api/ai/86/chat streams the response over SSE
+//
+// Legacy per-entity endpoints (/api/ai/estimates/:id/chat,
+// /api/ai/jobs/:id/chat, /api/ai/v2/*, /api/ai/intake/*) are retired
+// and return 410. apiBase() always returns '/api/ai/86'.
 (function() {
   'use strict';
 
   var _open = false;
-  // Generalized entity binding — the panel works against estimates today
-  // and jobs as of Phase 2B. _entityType decides which API base path the
-  // chat hits ('estimate' → /api/ai/estimates/:id, 'job' → /api/ai/jobs/:id)
-  // and which features are available (estimate has photos + write tools,
-  // job is read-only / no photos for now).
+  // _entityType records which surface the panel is bound to (estimate
+  // / job / intake / client / ask86 / staff). It rides on every chat
+  // request as current_context.entity_type so 86 can build the
+  // appropriate per-turn snapshot — but the endpoint is always
+  // /api/ai/86 regardless.
   var _entityType = 'estimate';
   var _entityId = null;
   var _estimateId = null; // legacy alias kept so existing call sites keep working
@@ -6234,9 +6238,9 @@
   // conversation. Pages that want the leads list to refresh after a
   // new lead lands can register window.refreshLeadsAfterAI.
   window.openIntakeAI = function() {
-    // Intake runs through 86 now — gate on agent_mode_job, not
-    // a separate intake flag. The /v2/intake/* routes still exist
-    // for this entry point but they call into 86's managed agent.
+    // Intake runs through 86 via /api/ai/86/chat with
+    // entity_type='intake' — the old /v2/intake/* routes have been
+    // retired (410 Gone).
     var u = (window.p86Auth && window.p86Auth.getUser) ? window.p86Auth.getUser() : null;
     var enabled = !!(u && u.feature_flags && u.feature_flags.agent_mode_job === 'agents');
     if (!enabled) {
