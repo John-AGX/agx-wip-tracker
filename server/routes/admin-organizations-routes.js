@@ -221,7 +221,7 @@ router.get('/:id/skill-packs', requireAuth, requireOrg, requireCapability('ROLES
   try {
     const targetId = assertOrgScope(req, req.params.id);
     const r = await pool.query(
-      `SELECT id, name, body, description, agents, contexts, category, triggers,
+      `SELECT id, name, body, description, agents, category, triggers,
               anthropic_skill_id, created_at, updated_at
          FROM org_skill_packs
         WHERE organization_id = $1 AND archived_at IS NULL
@@ -240,8 +240,9 @@ const VALID_PACK_AGENTS = ['job']; // post-unification, only 'job' targets a rea
 
 // POST /api/admin/organizations/:id/skill-packs — create a pack.
 // Body: { name, body, description?, agents?, category?, triggers? }
-// `contexts` is accepted for back-compat but ignored — 86 reasons over
-// every pack's description on every turn via native Anthropic Skills.
+// (The `contexts` field was retired with the native-skills migration
+//  and the column dropped — 86 reasons over each pack's description
+//  on every turn instead of using a surface filter.)
 router.post('/:id/skill-packs', requireAuth, requireOrg, requireCapability('ROLES_MANAGE'), async (req, res) => {
   try {
     const targetId = assertOrgScope(req, req.params.id);
@@ -333,9 +334,7 @@ router.put('/:id/skill-packs/:packId', requireAuth, requireOrg, requireCapabilit
       updates.push('agents = $' + p++ + '::jsonb');
       params.push(JSON.stringify(b.agents));
     }
-    // `contexts` is accepted in the body for back-compat but no longer
-    // written — 86 reasons over every pack's description via native
-    // Anthropic Skills instead of a surface filter.
+    // (`contexts` field retired with the native-skills migration; column dropped.)
     if (typeof b.category === 'string') {
       updates.push('category = $' + p++);
       params.push(b.category || null);

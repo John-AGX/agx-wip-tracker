@@ -3045,6 +3045,7 @@
     { key: 'identity', label: '\u{1FAAA} Identity',     desc: 'Company name + the prose composed into 86\'s system prompt. After saving, click Sync managed agent to push to Anthropic.' },
     { key: 'kb',       label: '\u{1F4DA} Company KB',   desc: 'Org-wide reference files every user can read; only admins upload. 86 searches these via search_org_kb.' },
     { key: 'packs',    label: '\u{1F9E0} Section Playbooks',  desc: 'On-demand instruction blocks. 86 sees the list and calls load_skill_pack({name}) when one maps to the work. (Distinct from the "Skills" tab inside Admin → Agents, which manages native Anthropic Skills attached to the managed agent.)' },
+    { key: 'refs',     label: '\u{1F4D1} Reference Links', desc: 'Live SharePoint / Google Sheets URLs the company exposes to 86 (Job Numbers, Short Names, WIP report). Each sheet refreshes every 15 min. Lookup-mode is the default; flip a sheet to Inline if 86 should always have its rows in context.' },
     { key: 'mcp',      label: '\u{1F50C} MCP Connectors', desc: 'External tool reach via Model Context Protocol (Gmail, Calendar, QuickBooks, custom). Registers on next sync.' }
   ];
 
@@ -3131,6 +3132,7 @@
     if (_orgActiveTab === 'identity')  bodyHTML = renderOrgIdentityHTML();
     else if (_orgActiveTab === 'kb')   bodyHTML = renderOrgKBTabHTML();
     else if (_orgActiveTab === 'packs') bodyHTML = renderOrgPacksTabHTML();
+    else if (_orgActiveTab === 'refs') bodyHTML = renderOrgRefsTabHTML();
     else if (_orgActiveTab === 'mcp')  bodyHTML = renderOrgMcpTabHTML();
 
     return tabsHTML + hintHTML + bodyHTML;
@@ -3322,6 +3324,21 @@
       +   '<div style="display:flex;gap:8px;margin-top:14px;align-items:center;">'
       +     '<span id="org-mcp-status" style="flex:1;font-size:11px;color:var(--text-dim,#888);"></span>'
       +     '<button class="ee-btn secondary" onclick="openMcpServerModal()">&#x2795; Add connector</button>'
+      +   '</div>'
+      + '</fieldset>';
+  }
+
+  // Phase D — Reference Links inner pill on the Organization tab.
+  // The view is rendered on demand by `renderReferenceLinksView` (shared
+  // with the legacy Agents-tab spot) into `#org-ref-links-host` after
+  // mount. This shell just lays out the container; attachOrgHandlers
+  // calls the renderer when the user lands on this pill.
+  function renderOrgRefsTabHTML() {
+    return ''
+      + '<fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:14px;">'
+      +   '<legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Reference Links</legend>'
+      +   '<div id="org-ref-links-host">'
+      +     '<div style="font-size:12px;color:var(--text-dim,#888);font-style:italic;padding:14px 0;">Loading reference links…</div>'
       +   '</div>'
       + '</fieldset>';
   }
@@ -3573,6 +3590,11 @@
     }
     if (_orgActiveTab === 'mcp') {
       loadOrgMcpServers();
+    }
+    if (_orgActiveTab === 'refs') {
+      // Reuse the legacy Agents-tab renderer; the underlying table is
+      // org-scoped (Phase D) so both surfaces show the same data.
+      renderReferenceLinksView('org-ref-links-host');
     }
     // Pack inputs: mark the row's id dirty when any field changes.
     // No-op when the packs tab isn't rendered.
@@ -3989,8 +4011,13 @@
   // the agents see in their system prompt. Each row shows last-fetch
   // status + row count + lets the admin refresh / preview / edit /
   // delete. New rows kick off an immediate background fetch.
-  function renderReferenceLinksView() {
-    var host = document.getElementById('agents-content');
+  //
+  // Renders into a host id — defaults to 'agents-content' (the legacy
+  // Agents sub-tab home). Phase D added 'org-ref-links-host' for the
+  // new Organization → Reference Links inner pill. Either host gets
+  // the same payload since the underlying table is now org-scoped.
+  function renderReferenceLinksView(hostId) {
+    var host = document.getElementById(hostId || 'agents-content');
     if (!host) return;
     host.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;font-style:italic;padding:20px 0;">Loading reference links…</div>';
     window.p86Api.get('/api/admin/agents/reference-links').then(function(resp) {

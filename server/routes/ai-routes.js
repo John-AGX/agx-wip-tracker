@@ -2633,8 +2633,10 @@ async function composedAgentSystem(agentKey, baseline, org) {
     // admin-agents-routes.js).
     try {
       const adminAgents = require('./admin-agents-routes');
-      if (typeof adminAgents.buildReferenceLinksBlock === 'function') {
-        const refBlock = await adminAgents.buildReferenceLinksBlock();
+      if (typeof adminAgents.buildReferenceLinksBlock === 'function' && org && org.id) {
+        // Phase D: per-org reference links — pass the org id so the
+        // composed prompt only carries this tenant's inline sheets.
+        const refBlock = await adminAgents.buildReferenceLinksBlock(org.id);
         if (refBlock && refBlock.trim()) {
           parts.push(refBlock.trim());
         }
@@ -5984,6 +5986,16 @@ async function execStaffTool(name, input, ctx) {
       // We do a per-line substring scan because the volumes are
       // small (hundreds of rows per sheet) and a real FTS index
       // would be overkill.
+      //
+      // Phase D made the table org-scoped. The user calling 86 has
+      // a JWT-resolved userId on ctx; resolve their org and filter
+      // so 86 only sees its own tenant's reference sheets.
+      const userId = ctx && ctx.userId;
+      if (!userId) return 'search_reference_sheet: no user context — cannot scope to organization.';
+      const orgRow = await pool.query('SELECT organization_id FROM users WHERE id = $1', [userId]);
+      const orgId = orgRow.rows[0] && orgRow.rows[0].organization_id;
+      if (!orgId) return 'search_reference_sheet: user is not associated with an organization.';
+
       const q = String((input && input.query) || '').trim();
       const sheetTitleFilter = String((input && input.sheet_title) || '').trim().toLowerCase();
       const limit = Math.min(50, Math.max(1, parseInt((input && input.limit), 10) || 20));
@@ -5991,9 +6003,9 @@ async function execStaffTool(name, input, ctx) {
       const sql =
         "SELECT title, description, last_fetched_text, last_fetched_row_count, inject_mode " +
         "FROM agent_reference_links " +
-        "WHERE enabled = TRUE AND last_fetch_status = 'ok' AND last_fetched_text IS NOT NULL " +
+        "WHERE organization_id = $1 AND enabled = TRUE AND last_fetch_status = 'ok' AND last_fetched_text IS NOT NULL " +
         "ORDER BY created_at ASC";
-      const r = await pool.query(sql);
+      const r = await pool.query(sql, [orgId]);
       if (!r.rows.length) {
         return 'No reference sheets configured. Admin can wire one up under Admin → Agents → Reference Links.';
       }

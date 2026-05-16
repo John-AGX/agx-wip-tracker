@@ -2302,13 +2302,16 @@ async function refreshLinkRow(row) {
   }
 }
 
-// GET /api/admin/agents/reference-links — list all
-router.get('/reference-links', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+// GET /api/admin/agents/reference-links — list THIS org's reference
+// links only. Phase D moved the table org-scoped; without the filter
+// every admin would see every tenant's SharePoint URLs.
+router.get('/reference-links', requireAuth, requireCapability('ROLES_MANAGE'), require('../auth').requireOrg, async (req, res) => {
   try {
     const r = await pool.query(
-      'SELECT id, title, url, description, enabled, max_rows, last_fetched_at, ' +
+      'SELECT id, title, url, description, enabled, max_rows, inject_mode, last_fetched_at, ' +
       '       last_fetch_status, last_fetch_error, last_fetched_row_count, created_at, updated_at ' +
-      'FROM agent_reference_links ORDER BY created_at ASC'
+      'FROM agent_reference_links WHERE organization_id = $1 ORDER BY created_at ASC',
+      [req.organization.id]
     );
     res.json({ links: r.rows });
   } catch (e) {
@@ -2318,16 +2321,16 @@ router.get('/reference-links', requireAuth, requireCapability('ROLES_MANAGE'), a
 });
 
 // POST /api/admin/agents/reference-links — create (and trigger first fetch)
-router.post('/reference-links', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+router.post('/reference-links', requireAuth, requireCapability('ROLES_MANAGE'), require('../auth').requireOrg, async (req, res) => {
   try {
     const { title, url, description, enabled, maxRows, injectMode } = req.body || {};
     if (!title || !url) return res.status(400).json({ error: 'title and url are required' });
     const mode = (injectMode === 'inline') ? 'inline' : 'lookup';
     const id = 'rl_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
     const r = await pool.query(
-      'INSERT INTO agent_reference_links (id, title, url, description, enabled, max_rows, inject_mode) ' +
-      'VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *',
-      [id, title, url, description || null, enabled !== false, parseInt(maxRows, 10) || 200, mode]
+      'INSERT INTO agent_reference_links (id, organization_id, title, url, description, enabled, max_rows, inject_mode) ' +
+      'VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *',
+      [id, req.organization.id, title, url, description || null, enabled !== false, parseInt(maxRows, 10) || 200, mode]
     );
     // Fire and forget the initial fetch — UI shows last_fetch_status
     // and the user can hit /refresh manually if they want to wait for
@@ -2351,13 +2354,18 @@ router.post('/reference-links', requireAuth, requireCapability('ROLES_MANAGE'), 
 });
 
 // PATCH /api/admin/agents/reference-links/:id — update fields
-router.patch('/reference-links/:id', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+router.patch('/reference-links/:id', requireAuth, requireCapability('ROLES_MANAGE'), require('../auth').requireOrg, async (req, res) => {
   try {
     const id = req.params.id;
     const { title, url, description, enabled, maxRows, injectMode } = req.body || {};
     // Snapshot the prior row so we can detect a mode flip (lookup<->inline)
     // — those are the only edits that require an agent re-sync.
-    const before = await pool.query('SELECT inject_mode, enabled FROM agent_reference_links WHERE id = $1', [id]);
+    // Scope check: the row must belong to the caller's org.
+    const before = await pool.query(
+      'SELECT inject_mode, enabled FROM agent_reference_links WHERE id = $1 AND organization_id = $2',
+      [id, req.organization.id]
+    );
+    if (!before.rows.length) return res.status(404).json({ error: 'not found' });
     const priorMode = before.rows[0] && before.rows[0].inject_mode;
     const priorEnabled = before.rows[0] && before.rows[0].enabled;
     const fields = [];
@@ -2375,9 +2383,10 @@ router.patch('/reference-links/:id', requireAuth, requireCapability('ROLES_MANAG
     if (!fields.length) return res.status(400).json({ error: 'no fields to update' });
     fields.push('updated_at = NOW()');
     values.push(id);
+    values.push(req.organization.id);
     const r = await pool.query(
       'UPDATE agent_reference_links SET ' + fields.join(', ') +
-      ' WHERE id = $' + n + ' RETURNING *',
+      ' WHERE id = $' + n + ' AND organization_id = $' + (n + 1) + ' RETURNING *',
       values
     );
     if (!r.rowCount) return res.status(404).json({ error: 'not found' });
@@ -2409,9 +2418,12 @@ router.patch('/reference-links/:id', requireAuth, requireCapability('ROLES_MANAG
 });
 
 // DELETE /api/admin/agents/reference-links/:id
-router.delete('/reference-links/:id', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+router.delete('/reference-links/:id', requireAuth, requireCapability('ROLES_MANAGE'), require('../auth').requireOrg, async (req, res) => {
   try {
-    const r = await pool.query('DELETE FROM agent_reference_links WHERE id = $1', [req.params.id]);
+    const r = await pool.query(
+      'DELETE FROM agent_reference_links WHERE id = $1 AND organization_id = $2',
+      [req.params.id, req.organization.id]
+    );
     if (!r.rowCount) return res.status(404).json({ error: 'not found' });
     res.json({ ok: true });
   } catch (e) {
@@ -2422,9 +2434,12 @@ router.delete('/reference-links/:id', requireAuth, requireCapability('ROLES_MANA
 
 // POST /api/admin/agents/reference-links/:id/refresh — force re-fetch
 // and wait for the result so the user sees the new status inline.
-router.post('/reference-links/:id/refresh', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+router.post('/reference-links/:id/refresh', requireAuth, requireCapability('ROLES_MANAGE'), require('../auth').requireOrg, async (req, res) => {
   try {
-    const r = await pool.query('SELECT * FROM agent_reference_links WHERE id = $1', [req.params.id]);
+    const r = await pool.query(
+      'SELECT * FROM agent_reference_links WHERE id = $1 AND organization_id = $2',
+      [req.params.id, req.organization.id]
+    );
     if (!r.rowCount) return res.status(404).json({ error: 'not found' });
     const result = await refreshLinkRow(r.rows[0]);
     const updated = await pool.query('SELECT * FROM agent_reference_links WHERE id = $1', [req.params.id]);
@@ -2438,12 +2453,12 @@ router.post('/reference-links/:id/refresh', requireAuth, requireCapability('ROLE
 // GET /api/admin/agents/reference-links/:id/preview — return the
 // rendered text + parsed sheets so the admin can verify column
 // matches before letting agents see it.
-router.get('/reference-links/:id/preview', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+router.get('/reference-links/:id/preview', requireAuth, requireCapability('ROLES_MANAGE'), require('../auth').requireOrg, async (req, res) => {
   try {
     const r = await pool.query(
       'SELECT id, title, last_fetched_text, last_fetch_status, last_fetched_row_count, last_fetched_at ' +
-      'FROM agent_reference_links WHERE id = $1',
-      [req.params.id]
+      'FROM agent_reference_links WHERE id = $1 AND organization_id = $2',
+      [req.params.id, req.organization.id]
     );
     if (!r.rowCount) return res.status(404).json({ error: 'not found' });
     res.json({ link: r.rows[0] });
@@ -2458,7 +2473,13 @@ router.get('/reference-links/:id/preview', requireAuth, requireCapability('ROLES
 // or '' if there are none / all are stale failures. Trimmed to a
 // reasonable cap so a runaway sheet doesn't blow the model context.
 const REF_LINKS_PROMPT_CAP = 60000; // ~15k tokens of reference data
-async function buildReferenceLinksBlock() {
+//
+// Phase D made reference links org-scoped. Callers (composedAgentSystem
+// in ai-routes.js, the resync sweep below) MUST pass organizationId so
+// the inline block reflects the right tenant. Passing null returns ''
+// (defensive — never leak another org's sheets into a composed prompt).
+async function buildReferenceLinksBlock(organizationId) {
+  if (!organizationId) return '';
   try {
     // Only inject_mode='inline' rows ride along in the registered
     // system prompt. 'lookup' rows are reachable via the
@@ -2468,9 +2489,10 @@ async function buildReferenceLinksBlock() {
     const r = await pool.query(
       "SELECT title, last_fetched_text, last_fetched_at, last_fetch_status " +
       "FROM agent_reference_links " +
-      "WHERE enabled = TRUE AND inject_mode = 'inline' " +
+      "WHERE organization_id = $1 AND enabled = TRUE AND inject_mode = 'inline' " +
       "  AND last_fetch_status = 'ok' AND last_fetched_text IS NOT NULL " +
-      "ORDER BY created_at ASC"
+      "ORDER BY created_at ASC",
+      [organizationId]
     );
     if (!r.rowCount) return '';
     let out = '\n\n# Live reference sheets\n\n' +

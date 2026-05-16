@@ -132,7 +132,6 @@ async function initSchema() {
       body TEXT NOT NULL,
       description TEXT NOT NULL DEFAULT '',
       agents JSONB NOT NULL DEFAULT '["job"]'::jsonb,    -- agent_keys this pack targets
-      contexts JSONB NOT NULL DEFAULT '[]'::jsonb,       -- entity surfaces (estimate/job/intake/ask86/client)
       category TEXT,
       triggers JSONB NOT NULL DEFAULT '{}'::jsonb,       -- conditional load rules
       anthropic_skill_id TEXT,                           -- when mirrored to native Anthropic Skills
@@ -145,6 +144,11 @@ async function initSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_org_skill_packs_org
       ON org_skill_packs(organization_id) WHERE archived_at IS NULL;
+    -- The contexts JSONB column was retired with the native-skills
+    -- migration. Drop it on existing deployments — idempotent. Any
+    -- legacy SELECT references in older code were removed in the
+    -- system-audit cleanup, so this is safe.
+    ALTER TABLE org_skill_packs DROP COLUMN IF EXISTS contexts;
 
     -- One-shot migration: copy non-replaces_section packs from the
     -- legacy app_settings.agent_skills row into org_skill_packs under
@@ -1188,6 +1192,36 @@ async function initSchema() {
     ALTER TABLE agent_reference_links
       ADD COLUMN IF NOT EXISTS inject_mode TEXT NOT NULL DEFAULT 'lookup'
         CHECK (inject_mode IN ('inline', 'lookup'));
+
+    -- Phase D — reference links go org-scoped so the table is correct
+    -- for the multi-tenant case from day one (today AGX is the only
+    -- tenant; bootstrap row gets backfilled to that org). Without this
+    -- a future second tenant would inherit the first tenant's
+    -- SharePoint URLs. Idempotent: ADD COLUMN IF NOT EXISTS + a
+    -- conditional UPDATE that only fires while rows are still NULL.
+    ALTER TABLE agent_reference_links
+      ADD COLUMN IF NOT EXISTS organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE;
+    DO $migrate_ref_links_org$
+    DECLARE
+      bootstrap_org_id INTEGER;
+    BEGIN
+      -- Pick the lowest-id non-archived org as the backfill target.
+      -- On a single-tenant deploy that is AGX; on a fresh deploy with
+      -- no orgs yet there's nothing to backfill (the column stays NULL
+      -- until the admin assigns the row to a tenant).
+      SELECT id INTO bootstrap_org_id
+        FROM organizations
+       WHERE archived_at IS NULL
+       ORDER BY id ASC LIMIT 1;
+      IF bootstrap_org_id IS NOT NULL THEN
+        UPDATE agent_reference_links
+           SET organization_id = bootstrap_org_id
+         WHERE organization_id IS NULL;
+      END IF;
+    END
+    $migrate_ref_links_org$;
+    CREATE INDEX IF NOT EXISTS idx_agent_reference_links_org
+      ON agent_reference_links(organization_id) WHERE organization_id IS NOT NULL;
 
     -- (Migration block for the legacy estimator-agent retirement was
     -- originally here, but it referenced ai_sessions which is created
