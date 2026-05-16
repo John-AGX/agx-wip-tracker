@@ -161,9 +161,13 @@ async function initSchema() {
     BEGIN
       SELECT id INTO agx_id FROM organizations WHERE slug = 'agx';
       IF agx_id IS NULL THEN RETURN; END IF;
+      -- Phase E retired the contexts column; the one-shot pack-copy
+      -- migration below no longer references it (legacy 'contexts'
+      -- value from app_settings.agent_skills is dropped on the way
+      -- across — packs always loaded for the 'job' agent now).
       INSERT INTO org_skill_packs (
         organization_id, name, body, description,
-        agents, contexts, category, triggers, anthropic_skill_id
+        agents, category, triggers, anthropic_skill_id
       )
       SELECT
         agx_id,
@@ -171,7 +175,6 @@ async function initSchema() {
         COALESCE(pack->>'body', ''),
         COALESCE(pack->>'description', ''),
         COALESCE(pack->'agents', '["job"]'::jsonb),
-        COALESCE(pack->'contexts', '[]'::jsonb),
         pack->>'category',
         COALESCE(pack->'triggers', '{}'::jsonb),
         pack->>'anthropic_skill_id'
