@@ -2105,6 +2105,155 @@ router.get('/managed', requireAuth, requireCapability('ROLES_MANAGE'), async (re
   }
 });
 
+// GET /api/admin/agents/managed/audit
+//   Cross-references every managed_agent_registry row with the
+//   Anthropic-side state and flags anything off-spec. Used to hunt
+//   for stale per-tenant agents that survived the unified-86
+//   migration (pre-unification each surface had its own agent_key —
+//   'estimates', 'cra', 'staff' — but only 'job' should exist now).
+//
+//   Flags returned:
+//     stale_agent_key       — agent_key isn't 'job' (legacy registry row)
+//     anthropic_archived    — Anthropic-side agent is archived
+//     anthropic_missing     — agent_id is stale (retrieve returned 404)
+//     name_off_pattern      — Anthropic agent name doesn't match
+//                             "Project 86 JOB · <org name|slug>"
+//     no_org                — registry row has no organization_id
+//
+//   Pure read — does not modify either side. Use the existing
+//   DELETE /managed/:agentKey to clean up flagged rows (or the new
+//   /managed/audit/kill endpoint below to also archive the
+//   Anthropic-side agent in one shot).
+router.get('/managed/audit', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+  try {
+    const anthropic = getAnthropic();
+    const r = await pool.query(
+      `SELECT r.agent_key, r.organization_id, r.anthropic_agent_id,
+              r.model, r.tool_count, r.skill_count, r.registered_at, r.updated_at,
+              o.slug AS org_slug, o.name AS org_name
+         FROM managed_agent_registry r
+         LEFT JOIN organizations o ON o.id = r.organization_id
+        ORDER BY r.organization_id, r.agent_key`
+    );
+    const rows = [];
+    for (const row of r.rows) {
+      const flags = [];
+      if (row.agent_key !== 'job') flags.push('stale_agent_key');
+      if (!row.organization_id) flags.push('no_org');
+      const expectedName = 'Project 86 ' + (row.agent_key || '').toUpperCase() + ' · ' + (row.org_name || row.org_slug || '');
+      let anthropicState = null;
+      if (anthropic && row.anthropic_agent_id) {
+        try {
+          const a = await anthropic.beta.agents.retrieve(row.anthropic_agent_id);
+          anthropicState = {
+            name: a.name,
+            description: a.description ? a.description.slice(0, 120) : null,
+            archived_at: a.archived_at || null,
+            version: a.version,
+            updated_at: a.updated_at
+          };
+          if (a.archived_at) flags.push('anthropic_archived');
+          if (a.name && a.name !== expectedName) flags.push('name_off_pattern');
+        } catch (e) {
+          if (e && e.status === 404) flags.push('anthropic_missing');
+          anthropicState = { error: e.message || String(e) };
+        }
+      } else if (!anthropic) {
+        anthropicState = { skipped: 'no ANTHROPIC_API_KEY' };
+      }
+      rows.push({
+        agent_key: row.agent_key,
+        organization_id: row.organization_id,
+        org_slug: row.org_slug,
+        org_name: row.org_name,
+        anthropic_agent_id: row.anthropic_agent_id,
+        local: {
+          model: row.model,
+          tool_count: row.tool_count,
+          skill_count: row.skill_count,
+          registered_at: row.registered_at,
+          updated_at: row.updated_at
+        },
+        anthropic: anthropicState,
+        expected_name: expectedName,
+        flags
+      });
+    }
+    const summary = {
+      total: rows.length,
+      flagged: rows.filter(r => r.flags.length).length,
+      stale: rows.filter(r => r.flags.includes('stale_agent_key')).length,
+      archived: rows.filter(r => r.flags.includes('anthropic_archived')).length,
+      missing: rows.filter(r => r.flags.includes('anthropic_missing')).length,
+      off_pattern: rows.filter(r => r.flags.includes('name_off_pattern')).length
+    };
+    res.json({ summary, rows });
+  } catch (e) {
+    console.error('GET /api/admin/agents/managed/audit error:', e);
+    res.status(500).json({ error: 'Server error: ' + (e.message || 'unknown') });
+  }
+});
+
+// POST /api/admin/agents/managed/audit/kill
+//   Body: { agent_key: string, organization_id: number, archive_anthropic?: boolean }
+//   Removes one (agent_key, organization_id) registry row. If
+//   archive_anthropic is true (default), also archives the
+//   Anthropic-side agent so any session token cached against that
+//   agent_id stops working — the only reliable way to stop a stale
+//   agent from continuing to bill.
+router.post('/managed/audit/kill', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+  try {
+    const b = req.body || {};
+    const agentKey = String(b.agent_key || '').toLowerCase().trim();
+    const orgId = b.organization_id != null ? Number(b.organization_id) : null;
+    const archiveAnthropic = b.archive_anthropic !== false; // default true
+    if (!agentKey) return res.status(400).json({ error: 'agent_key is required' });
+    if (orgId == null || !Number.isFinite(orgId)) return res.status(400).json({ error: 'organization_id is required (integer)' });
+
+    const r = await pool.query(
+      `SELECT anthropic_agent_id FROM managed_agent_registry
+        WHERE agent_key = $1 AND organization_id = $2`,
+      [agentKey, orgId]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'No registry row for ' + agentKey + '/' + orgId });
+    const agentId = r.rows[0].anthropic_agent_id;
+
+    let archived = false;
+    if (archiveAnthropic && agentId) {
+      try {
+        const anthropic = getAnthropic();
+        if (anthropic) {
+          await anthropic.beta.agents.archive(agentId);
+          archived = true;
+        }
+      } catch (e) {
+        // 404 means it's already gone — fine. Any other error means
+        // the local row got deleted but the Anthropic-side agent is
+        // still live; surface that loudly so the admin can finish
+        // the cleanup manually.
+        if (e && e.status !== 404) {
+          console.warn('[managed/audit/kill] archive failed for', agentId, ':', e.message);
+        }
+      }
+    }
+
+    await pool.query(
+      `DELETE FROM managed_agent_registry WHERE agent_key = $1 AND organization_id = $2`,
+      [agentKey, orgId]
+    );
+    res.json({
+      ok: true,
+      agent_key: agentKey,
+      organization_id: orgId,
+      freed_anthropic_agent_id: agentId,
+      anthropic_archived: archived
+    });
+  } catch (e) {
+    console.error('POST /managed/audit/kill error:', e);
+    res.status(500).json({ error: 'Server error: ' + (e.message || 'unknown') });
+  }
+});
+
 // ──────────────────────────────────────────────────────────────────
 // Phase 1b — Managed Environment bootstrap
 //
@@ -2366,19 +2515,96 @@ async function buildReferenceLinksBlock() {
 // minutes if it's enabled. Runs only on the route's import (the
 // server's main module loads this once at boot).
 const REFRESH_INTERVAL_MS = 15 * 60 * 1000;
+
+// In-memory hash of the last-synced composed system prompt per
+// agent. When backgroundRefreshAll picks up new reference-links
+// content, we recompute composedAgentSystem and only push to
+// Anthropic when the hash changed. Cleared on process restart —
+// first cycle after boot re-syncs every org once, then steady state
+// is no-ops until content actually moves.
+const _lastSystemPromptHash = new Map(); // anthropic_agent_id → sha1
+function _sha1(s) {
+  return require('crypto').createHash('sha1').update(String(s || ''), 'utf8').digest('hex');
+}
+
+// Re-sync every org's registered managed agent IF the composed
+// system prompt (which now includes the reference-links block) has
+// drifted since the last push. Called after backgroundRefreshAll
+// completes so admins don't have to manually click "Sync managed
+// agent" to pick up new SharePoint data.
+async function resyncDriftedAgents() {
+  const anthropic = getAnthropic();
+  if (!anthropic) return; // No key on this deployment — skip silently.
+  const aiInternals = require('./ai-routes-internals');
+  if (!aiInternals || typeof aiInternals.composedAgentSystem !== 'function') return;
+  try {
+    const r = await pool.query(
+      `SELECT r.agent_key, r.organization_id, r.anthropic_agent_id,
+              o.id AS org_id, o.slug, o.name, o.description, o.identity_body
+         FROM managed_agent_registry r
+         JOIN organizations o ON o.id = r.organization_id
+        WHERE r.anthropic_agent_id IS NOT NULL
+          AND r.agent_key = 'job'`
+    );
+    for (const row of r.rows) {
+      try {
+        const baseline = AGENT_SYSTEM_BASELINE[row.agent_key];
+        if (!baseline) continue;
+        const org = {
+          id: row.org_id, slug: row.slug, name: row.name,
+          description: row.description, identity_body: row.identity_body
+        };
+        const composed = await aiInternals.composedAgentSystem(row.agent_key, baseline, org);
+        const newHash = _sha1(composed);
+        const prevHash = _lastSystemPromptHash.get(row.anthropic_agent_id);
+        if (prevHash === newHash) continue; // No drift — no sync needed.
+        const remote = await anthropic.beta.agents.retrieve(row.anthropic_agent_id);
+        if (remote.archived_at) {
+          // Don't auto-recreate archived agents from a background tick;
+          // admin's sync-all endpoint handles that.
+          continue;
+        }
+        await anthropic.beta.agents.update(row.anthropic_agent_id, {
+          version: remote.version,
+          system: composed
+        });
+        _lastSystemPromptHash.set(row.anthropic_agent_id, newHash);
+        console.log('[reference-links] resynced agent', row.anthropic_agent_id,
+          '— composed system prompt drifted (' + composed.length + ' chars)');
+      } catch (e) {
+        console.warn('[reference-links] resync failed for', row.anthropic_agent_id, ':', e && e.message);
+      }
+    }
+  } catch (e) {
+    console.warn('[reference-links] resyncDriftedAgents outer error:', e && e.message);
+  }
+}
+
 async function backgroundRefreshAll() {
   try {
     const r = await pool.query(
       'SELECT * FROM agent_reference_links WHERE enabled = TRUE'
     );
+    let anyRefreshed = false;
     for (const row of r.rows) {
       // Skip rows we already refreshed within the window.
       if (row.last_fetched_at) {
         const age = Date.now() - new Date(row.last_fetched_at).getTime();
         if (age < REFRESH_INTERVAL_MS) continue;
       }
-      try { await refreshLinkRow(row); }
-      catch (e) { console.warn('[reference-links] bg refresh failed for ' + row.id + ':', e.message); }
+      try {
+        await refreshLinkRow(row);
+        anyRefreshed = true;
+      } catch (e) { console.warn('[reference-links] bg refresh failed for ' + row.id + ':', e.message); }
+    }
+    // If we actually pulled any new data — OR if this is the boot
+    // tick and the hash map is still empty — sweep the agents and
+    // re-sync any whose composed prompt has drifted. The boot case
+    // matters because the cached system prompt on Anthropic might
+    // be days old (last admin click), so we want to land fresh
+    // reference data on session 1 after a deploy.
+    if (anyRefreshed || _lastSystemPromptHash.size === 0) {
+      await resyncDriftedAgents();
     }
   } catch (e) {
     console.warn('[reference-links] backgroundRefreshAll outer error:', e.message);

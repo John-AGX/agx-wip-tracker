@@ -26,6 +26,46 @@ const { storage } = require('../storage');
 
 const router = express.Router();
 
+// ── Legacy chat endpoints — dead-routed to the unified /86/chat ─────
+// Pre-unification the app had per-surface chat endpoints (estimate, job,
+// client, staff, intake) that each opened their own Anthropic session
+// with a full system prompt and tool list. The unified /86/chat path
+// serves every surface now via the managed-agent V2 sessions API; the
+// per-surface paths just duplicated the token spend (every visit paid
+// system + tools cache_creation independently). No client code calls
+// these any more (confirmed by grep). Return 410 Gone so any stale
+// client tab surfaces the issue loudly instead of silently double-
+// billing. Delete the dead handler bodies further down the file in a
+// follow-up sweep — the early router.use below short-circuits them so
+// the inline definitions never see a request.
+const LEGACY_CHAT_PATHS = [
+  '/estimates/:id/chat',
+  '/estimates/:id/chat/continue',
+  '/v2/estimates/:id/chat',
+  '/v2/estimates/:id/chat/continue',
+  '/jobs/:id/chat',
+  '/jobs/:id/chat/continue',
+  '/v2/jobs/:id/chat',
+  '/v2/jobs/:id/chat/continue',
+  '/clients/chat',
+  '/clients/chat/continue',
+  '/staff/chat',
+  '/staff/chat/continue',
+  '/v2/intake/chat',
+  '/v2/intake/chat/continue'
+];
+for (const p of LEGACY_CHAT_PATHS) {
+  router.post(p, (req, res) => {
+    console.warn('[legacy-chat] blocked POST ' + req.originalUrl +
+      ' — caller should use /api/ai/86/chat instead');
+    res.status(410).json({
+      error: 'This endpoint is retired. Use POST /api/ai/86/chat with current_context describing the surface (estimate / job / intake / client / staff / ask86).',
+      gone: true,
+      replacement: '/api/ai/86/chat'
+    });
+  });
+}
+
 // Lazy SDK init — reads ANTHROPIC_API_KEY on first request rather than at
 // module-load time. This is more robust against Railway's deploy timing:
 // if the env var was set after the build started, a module-level capture
@@ -2422,28 +2462,12 @@ async function runStream({ anthropic, res, system, messages, persistAssistantTex
     endWithDone();
   }
 
-  // Append the live reference-sheets block (job numbers, WIP report,
-  // etc. — pulled from SharePoint by admin-agents-routes' background
-  // refresher) onto the dynamic part of the system prompt. Lives
-  // AFTER any cache_control breakpoints so the cached prefix isn't
-  // invalidated when accounting updates a sheet. Best-effort: a DB
-  // failure here just means agents skip the block, no error to the
-  // user.
-  try {
-    const adminAgents = require('./admin-agents-routes');
-    if (typeof adminAgents.buildReferenceLinksBlock === 'function') {
-      const refBlock = await adminAgents.buildReferenceLinksBlock();
-      if (refBlock && refBlock.trim()) {
-        if (Array.isArray(system)) {
-          system = system.concat([{ type: 'text', text: refBlock }]);
-        } else if (typeof system === 'string') {
-          system = system + '\n\n' + refBlock;
-        }
-      }
-    }
-  } catch (e) {
-    console.warn('[ai] reference-links injection skipped:', e.message);
-  }
+  // Reference-links block (job numbers, WIP report, etc.) is now baked
+  // INTO the registered agent's system prompt via composedAgentSystem.
+  // The 15-min SharePoint refresher re-syncs the agent only when
+  // content changes, so the block is on the cached prefix and the
+  // model sees it for free on every turn. Removed the per-turn
+  // injection that used to cost ~15k cache_creation tokens here.
 
   let assistantText = '';
   let finalContent = null;
@@ -2836,6 +2860,28 @@ async function composedAgentSystem(agentKey, baseline, org) {
     if (sectionLines.length) {
       parts.push('# Estimating playbook\n\n' + sectionLines.join('\n'));
     }
+
+    // Reference-links block (SharePoint / Google Sheets refreshed every
+    // 15 min into agent_reference_links.last_fetched_text). PRE-FIX:
+    // this was injected into every user.message turn, costing ~15k
+    // cache_creation tokens per turn (no cache hit because it landed
+    // AFTER the user-message cache breakpoint). POST-FIX: bake it into
+    // the agent's registered system prompt so Anthropic caches it.
+    // The 15-min refresh tick re-syncs the agent only when the content
+    // has actually changed (see syncAgentIfReferenceChanged in
+    // admin-agents-routes.js).
+    try {
+      const adminAgents = require('./admin-agents-routes');
+      if (typeof adminAgents.buildReferenceLinksBlock === 'function') {
+        const refBlock = await adminAgents.buildReferenceLinksBlock();
+        if (refBlock && refBlock.trim()) {
+          parts.push(refBlock.trim());
+        }
+      }
+    } catch (e) {
+      console.warn('[composedAgentSystem] reference-links injection skipped:', e.message);
+    }
+
     return parts.join('\n\n');
   } catch (e) {
     console.warn('[composedAgentSystem] failed, falling back to bare baseline:', e.message);
@@ -5933,24 +5979,10 @@ async function buildClientDirectoryContext(organization) {
     }
   }
 
-  // Reference sheets (job numbers, client short names, WIP report,
-  // etc. — pulled from SharePoint/Google Drive by admin-agents-routes'
-  // background refresher every 15 min). Job numbers + short names are
-  // critical for HR's dedup/match work, so this gets appended to the
-  // dynamic snapshot the same way runStream does it for 86. Best-effort:
-  // a DB failure here just means HR sees no reference block, no error
-  // surfaces to the user.
-  try {
-    const adminAgents = require('./admin-agents-routes');
-    if (typeof adminAgents.buildReferenceLinksBlock === 'function') {
-      const refBlock = await adminAgents.buildReferenceLinksBlock();
-      // refBlock already starts with its own \n\n header, so push it
-      // verbatim without extra blank-line padding.
-      if (refBlock && refBlock.trim()) out.push(refBlock);
-    }
-  } catch (e) {
-    console.warn('[ai] HR reference-links injection skipped:', e.message);
-  }
+  // Reference sheets (job numbers, client short names, WIP report)
+  // are now baked into the registered agent system prompt via
+  // composedAgentSystem — the per-turn injection that used to live
+  // here was double-billing those tokens on every HR turn.
 
   return {
     system: [
@@ -10340,24 +10372,17 @@ router.post('/86/chat', requireAuth, requireOrg, async (req, res) => {
     }
 
     // Build the per-turn user message. <turn_context> (per-entity
-    // snapshot) comes first if present, then live reference sheets
-    // (SharePoint / Google Sheets refreshed every 15 min — job
-    // numbers, WIP report, etc. that 86 needs across every surface),
-    // then the page-context tag (where the user is in the app), then
-    // the actual message text.
+    // snapshot) comes first if present, then the page-context tag
+    // (where the user is in the app), then the actual message text.
+    // Reference sheets (SharePoint / Google Sheets — job numbers,
+    // WIP report, client short names) are now baked into the
+    // registered agent system prompt via composedAgentSystem, so
+    // Anthropic caches them and they cost zero tokens per turn.
+    // The 15-min refresh tick re-syncs the agent only when content
+    // changes (see syncAgentIfReferenceChanged).
     const pageBlock = renderPageContextBlock(currentContext);
-    let referenceLinksBlock = '';
-    try {
-      const adminAgents = require('./admin-agents-routes');
-      if (typeof adminAgents.buildReferenceLinksBlock === 'function') {
-        referenceLinksBlock = await adminAgents.buildReferenceLinksBlock();
-      }
-    } catch (e) {
-      console.warn('[/86/chat] reference-links injection skipped:', e.message);
-    }
     const turnTextParts = [];
     if (turnContextText) turnTextParts.push('<turn_context>\n' + turnContextText + '\n</turn_context>');
-    if (referenceLinksBlock && referenceLinksBlock.trim()) turnTextParts.push(referenceLinksBlock);
     if (pageBlock) turnTextParts.push(pageBlock);
     turnTextParts.push(userMessage);
     const turnText = turnTextParts.join('\n\n');
