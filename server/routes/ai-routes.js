@@ -8396,11 +8396,23 @@ const ALLOWED_AUTO_TIER_TOOLS = new Set([
   // Phase 5 — proactive watch READS (executor: execWatchTool). The
   // WRITES (propose_watch_create / propose_watch_archive) stay
   // approval-tier and surface as cards.
-  'list_watches', 'read_recent_watch_runs'
+  'list_watches', 'read_recent_watch_runs',
+  // Client-directory write tools that are explicitly tier:'auto' in
+  // their tool definitions. Routed through execClientToolWithCtx
+  // (executor needs userId for tools that write attributable rows).
+  // Without these in the allowlist, 86 fired them on the global
+  // surface → runtime fell through to {tier:'approval'} → N approval
+  // cards → session went into requires_action → next turn triggered
+  // stuck-session recovery → archive+recreate → fresh session amnesia
+  // (the "no prior turn" symptom). Now they actually run inline.
+  'update_client_field', 'create_property', 'link_property_to_parent'
 ]);
-// Tools whose executor lives in execClientTool (HR's directory reads)
-// rather than execStaffTool. The dispatcher routes by name.
-const CLIENT_EXECUTOR_TOOLS = new Set(['read_jobs', 'read_users', 'read_wip_summary']);
+// Tools whose executor lives in execClientTool (client-directory
+// reads and tier:'auto' writes — see ALLOWED_AUTO_TIER_TOOLS above).
+const CLIENT_EXECUTOR_TOOLS = new Set([
+  'read_jobs', 'read_users', 'read_wip_summary',
+  'update_client_field', 'create_property', 'link_property_to_parent'
+]);
 // Tools whose executor lives in execIntakeRead (intake-side dedup
 // against existing clients / leads before creating a new one).
 const INTAKE_EXECUTOR_TOOLS = new Set(['read_existing_clients', 'read_existing_leads']);
