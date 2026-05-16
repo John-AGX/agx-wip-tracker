@@ -2457,23 +2457,42 @@ async function buildReferenceLinksBlock() {
 // server's main module loads this once at boot).
 const REFRESH_INTERVAL_MS = 15 * 60 * 1000;
 
-// In-memory hash of the last-synced composed system prompt per
-// agent. When backgroundRefreshAll picks up new reference-links
-// content, we recompute composedAgentSystem and only push to
-// Anthropic when the hash changed. Cleared on process restart —
-// first cycle after boot re-syncs every org once, then steady state
-// is no-ops until content actually moves.
-const _lastSystemPromptHash = new Map(); // anthropic_agent_id → sha1
+// Per-agent state we track to decide whether the background refresh
+// tick should push a fresh system prompt to Anthropic. Each entry
+// holds the SHA1 of the LAST prompt we pushed and the TIMESTAMP we
+// pushed it. Cleared on process restart — first cycle after boot
+// pushes once, then we throttle.
+//
+// Why throttle: every anthropic.beta.agents.update bumps the agent
+// version, which invalidates Anthropic's per-agent prompt cache.
+// Sessions opened (or resumed after the 5-min TTL) AFTER the bump
+// pay full cache_creation tokens on the next turn. At Opus 4.7 cache_
+// creation rates (~$6.25/M) and a ~300K-token system prompt, one
+// unnecessary resync costs ~$1.89. SharePoint refresh ticks every
+// 15 min, but the meaningful content rarely moves intra-day —
+// without a throttle we were burning $9–18/day on cache invalidation.
+const _lastSyncState = new Map(); // anthropic_agent_id → { hash, syncedAt }
+
+// Re-sync only after at least this much wall-clock time AND a real
+// content change. Six hours captures any morning vs end-of-day
+// SharePoint update; finer granularity is rarely worth the cache cost.
+const MIN_RESYNC_INTERVAL_MS = 6 * 60 * 60 * 1000;
+// Also gate by content-magnitude — sub-2% byte changes are almost
+// always whitespace / timestamp noise from the SharePoint fetcher.
+// Bypassed on the very first sync per agent (boot case).
+const MIN_DRIFT_RATIO = 0.02;
+
 function _sha1(s) {
   return require('crypto').createHash('sha1').update(String(s || ''), 'utf8').digest('hex');
 }
 
 // Re-sync every org's registered managed agent IF the composed
-// system prompt (which now includes the reference-links block) has
-// drifted since the last push. Called after backgroundRefreshAll
-// completes so admins don't have to manually click "Sync managed
-// agent" to pick up new SharePoint data.
-async function resyncDriftedAgents() {
+// system prompt has drifted meaningfully since the last push. Called
+// after backgroundRefreshAll completes — pre-throttle this was
+// hitting the Anthropic agent every 15 min, busting the prompt
+// cache. Now it's gated by both content delta + a 6-hour minimum
+// interval, so a typical day sees 0–4 syncs instead of ~96.
+async function resyncDriftedAgents(force) {
   const anthropic = getAnthropic();
   if (!anthropic) return; // No key on this deployment — skip silently.
   const aiInternals = require('./ai-routes-internals');
@@ -2497,8 +2516,34 @@ async function resyncDriftedAgents() {
         };
         const composed = await aiInternals.composedAgentSystem(row.agent_key, baseline, org);
         const newHash = _sha1(composed);
-        const prevHash = _lastSystemPromptHash.get(row.anthropic_agent_id);
-        if (prevHash === newHash) continue; // No drift — no sync needed.
+        const prev = _lastSyncState.get(row.anthropic_agent_id);
+
+        // Decision logic, in order:
+        //   1. Force=true (e.g. admin clicked Sync now): always push.
+        //   2. No prior sync this process: push (boot case).
+        //   3. Hash identical: skip (no content change at all).
+        //   4. < 6 hours since last push: skip (throttle).
+        //   5. Tiny drift (<2% byte change): skip (whitespace noise).
+        //   6. Real drift, throttle window passed: push.
+        if (!force && prev) {
+          if (prev.hash === newHash) continue;
+          if (Date.now() - prev.syncedAt < MIN_RESYNC_INTERVAL_MS) {
+            console.log('[reference-links] skipping resync of', row.anthropic_agent_id,
+              '— throttled (last sync ' + Math.round((Date.now() - prev.syncedAt) / 60000) + 'min ago)');
+            continue;
+          }
+          // Crude drift magnitude: ratio of byte-length delta to the larger size.
+          // Sub-2% is almost certainly noise; bigger means content actually moved.
+          const sizeDelta = Math.abs(composed.length - (prev.size || composed.length));
+          const drift = composed.length ? sizeDelta / composed.length : 1;
+          if (drift < MIN_DRIFT_RATIO) {
+            // Same logical content; treat as the same sync to avoid a
+            // re-check next tick.
+            _lastSyncState.set(row.anthropic_agent_id, { hash: newHash, syncedAt: prev.syncedAt, size: composed.length });
+            continue;
+          }
+        }
+
         const remote = await anthropic.beta.agents.retrieve(row.anthropic_agent_id);
         if (remote.archived_at) {
           // Don't auto-recreate archived agents from a background tick;
@@ -2509,9 +2554,10 @@ async function resyncDriftedAgents() {
           version: remote.version,
           system: composed
         });
-        _lastSystemPromptHash.set(row.anthropic_agent_id, newHash);
+        _lastSyncState.set(row.anthropic_agent_id, { hash: newHash, syncedAt: Date.now(), size: composed.length });
         console.log('[reference-links] resynced agent', row.anthropic_agent_id,
-          '— composed system prompt drifted (' + composed.length + ' chars)');
+          '— composed system prompt drifted (' + composed.length + ' chars)' +
+          (force ? ' [forced]' : ''));
       } catch (e) {
         console.warn('[reference-links] resync failed for', row.anthropic_agent_id, ':', e && e.message);
       }
@@ -2544,7 +2590,11 @@ async function backgroundRefreshAll() {
     // matters because the cached system prompt on Anthropic might
     // be days old (last admin click), so we want to land fresh
     // reference data on session 1 after a deploy.
-    if (anyRefreshed || _lastSystemPromptHash.size === 0) {
+    // Only call the resync sweep when we actually pulled new
+    // reference-link data OR we haven't synced anything yet this
+    // process (boot case). resyncDriftedAgents itself enforces the
+    // 6-hour + 2% drift throttle.
+    if (anyRefreshed || _lastSyncState.size === 0) {
       await resyncDriftedAgents();
     }
   } catch (e) {
@@ -2957,6 +3007,13 @@ router.post('/managed/sync-all',
           skills: skills,
           tools: toolList
         });
+
+        // Record this manual sync against the throttle map so the
+        // 15-min background tick doesn't immediately re-sync if its
+        // drift detector also trips. Without this the admin's Sync
+        // button + the auto-resync could double-push and rebuild
+        // cache twice.
+        _lastSyncState.set(agentId, { hash: _sha1(composedSystem), syncedAt: Date.now(), size: composedSystem.length });
 
         await pool.query(
           `UPDATE managed_agent_registry
