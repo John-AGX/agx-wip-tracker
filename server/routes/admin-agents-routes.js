@@ -2320,13 +2320,14 @@ router.get('/reference-links', requireAuth, requireCapability('ROLES_MANAGE'), a
 // POST /api/admin/agents/reference-links — create (and trigger first fetch)
 router.post('/reference-links', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
   try {
-    const { title, url, description, enabled, maxRows } = req.body || {};
+    const { title, url, description, enabled, maxRows, injectMode } = req.body || {};
     if (!title || !url) return res.status(400).json({ error: 'title and url are required' });
+    const mode = (injectMode === 'inline') ? 'inline' : 'lookup';
     const id = 'rl_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
     const r = await pool.query(
-      'INSERT INTO agent_reference_links (id, title, url, description, enabled, max_rows) ' +
-      'VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
-      [id, title, url, description || null, enabled !== false, parseInt(maxRows, 10) || 200]
+      'INSERT INTO agent_reference_links (id, title, url, description, enabled, max_rows, inject_mode) ' +
+      'VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *',
+      [id, title, url, description || null, enabled !== false, parseInt(maxRows, 10) || 200, mode]
     );
     // Fire and forget the initial fetch — UI shows last_fetch_status
     // and the user can hit /refresh manually if they want to wait for
@@ -2334,6 +2335,14 @@ router.post('/reference-links', requireAuth, requireCapability('ROLES_MANAGE'), 
     refreshLinkRow(r.rows[0]).catch(function (err) {
       console.warn('[reference-links] initial fetch failed for ' + id + ':', err.message);
     });
+    // If this new sheet is set to inline, it'll show up in the
+    // composed system prompt — force a resync so the agent picks
+    // it up on the next chat without waiting for the throttle.
+    if (mode === 'inline') {
+      resyncDriftedAgents(true).catch(function (err) {
+        console.warn('[reference-links] force-sync after POST failed:', err && err.message);
+      });
+    }
     res.json({ link: r.rows[0] });
   } catch (e) {
     console.error('POST /reference-links error:', e);
@@ -2345,7 +2354,12 @@ router.post('/reference-links', requireAuth, requireCapability('ROLES_MANAGE'), 
 router.patch('/reference-links/:id', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
   try {
     const id = req.params.id;
-    const { title, url, description, enabled, maxRows } = req.body || {};
+    const { title, url, description, enabled, maxRows, injectMode } = req.body || {};
+    // Snapshot the prior row so we can detect a mode flip (lookup<->inline)
+    // — those are the only edits that require an agent re-sync.
+    const before = await pool.query('SELECT inject_mode, enabled FROM agent_reference_links WHERE id = $1', [id]);
+    const priorMode = before.rows[0] && before.rows[0].inject_mode;
+    const priorEnabled = before.rows[0] && before.rows[0].enabled;
     const fields = [];
     const values = [];
     let n = 1;
@@ -2354,6 +2368,10 @@ router.patch('/reference-links/:id', requireAuth, requireCapability('ROLES_MANAG
     if (description !== undefined) { fields.push('description = $' + (n++));  values.push(description); }
     if (enabled     !== undefined) { fields.push('enabled = $' + (n++));      values.push(!!enabled); }
     if (maxRows     !== undefined) { fields.push('max_rows = $' + (n++));     values.push(parseInt(maxRows, 10) || 200); }
+    if (injectMode  !== undefined) {
+      const mode = (injectMode === 'inline') ? 'inline' : 'lookup';
+      fields.push('inject_mode = $' + (n++)); values.push(mode);
+    }
     if (!fields.length) return res.status(400).json({ error: 'no fields to update' });
     fields.push('updated_at = NOW()');
     values.push(id);
@@ -2367,6 +2385,20 @@ router.patch('/reference-links/:id', requireAuth, requireCapability('ROLES_MANAG
     if (url !== undefined) {
       refreshLinkRow(r.rows[0]).catch(function (err) {
         console.warn('[reference-links] re-fetch after URL change failed for ' + id + ':', err.message);
+      });
+    }
+    // Detect changes that affect the composed system prompt — mode
+    // flip, or enabling/disabling an inline sheet. Force-sync so the
+    // change lands on Anthropic immediately instead of waiting for
+    // the next 6h throttle window.
+    const newMode = r.rows[0].inject_mode;
+    const newEnabled = r.rows[0].enabled;
+    const modeFlip = (injectMode !== undefined) && (priorMode !== newMode);
+    const inlineEnableToggle = (enabled !== undefined) && (priorEnabled !== newEnabled) &&
+      (priorMode === 'inline' || newMode === 'inline');
+    if (modeFlip || inlineEnableToggle) {
+      resyncDriftedAgents(true).catch(function (err) {
+        console.warn('[reference-links] force-sync after PATCH failed:', err && err.message);
       });
     }
     res.json({ link: r.rows[0] });
@@ -2428,10 +2460,16 @@ router.get('/reference-links/:id/preview', requireAuth, requireCapability('ROLES
 const REF_LINKS_PROMPT_CAP = 60000; // ~15k tokens of reference data
 async function buildReferenceLinksBlock() {
   try {
+    // Only inject_mode='inline' rows ride along in the registered
+    // system prompt. 'lookup' rows are reachable via the
+    // search_reference_sheet tool. Default for new rows is 'lookup'
+    // so an empty result here just means no sheets are pinned to
+    // every turn — exactly the cost-conscious default.
     const r = await pool.query(
       "SELECT title, last_fetched_text, last_fetched_at, last_fetch_status " +
       "FROM agent_reference_links " +
-      "WHERE enabled = TRUE AND last_fetch_status = 'ok' AND last_fetched_text IS NOT NULL " +
+      "WHERE enabled = TRUE AND inject_mode = 'inline' " +
+      "  AND last_fetch_status = 'ok' AND last_fetched_text IS NOT NULL " +
       "ORDER BY created_at ASC"
     );
     if (!r.rowCount) return '';

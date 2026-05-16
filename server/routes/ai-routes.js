@@ -1183,6 +1183,22 @@ const JOB_TOOLS = [
     }
   },
   {
+    name: 'search_reference_sheet',
+    description:
+      'Search live reference workbooks the admin has wired up to Project 86 — typically the Job Numbers sheet, Client Short Names sheet, WIP report, master pricing, etc. These are SharePoint / Google Drive XLSX files refreshed every ~15 min. Most rows are kept out of your system prompt to save tokens; call this whenever a user mentions a job number, a community / client short name, or anything else that would map to a row in one of these sheets and you need the canonical id. ' +
+      'No args: returns the list of available sheets with row counts. With a query: substring-scans every enabled sheet and returns the matching rows. Auto-tier (no approval).',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        query: { type: 'string', description: 'Substring to find. Case-insensitive. Matches per-line so a job number lookup ("RV2024") or community name ("Latitude") returns the relevant row(s).' },
+        sheet_title: { type: 'string', description: 'Optional — restrict the search to one sheet by exact title (case-insensitive). Use the title field from the no-arg listing.' },
+        limit: { type: 'integer', description: 'Optional cap on returned rows. Default 20, max 50.', minimum: 1, maximum: 50 }
+      },
+      required: []
+    }
+  },
+  {
     name: 'read_active_lines',
     description:
       'Return the full line-by-line detail of the active group on an estimate: section header rows, cost-side line items with description / qty / unit / unit_cost / markup / line_id, plus subgroup roll-ups. Use when you need to propose an edit, audit an estimate, or compute totals. ' +
@@ -1208,6 +1224,20 @@ const JOB_TOOLS = [
       properties: {
         attachment_id: { type: 'string', description: 'The id from the manifest entry (### [source] filename · id=... line in turn_context).' },
         max_chars: { type: 'integer', minimum: 500, maximum: 200000, description: 'Cap the response. Default 60000 (~15k tokens). Lower this for big specs you only need to skim.' }
+      },
+      required: ['attachment_id']
+    }
+  },
+  {
+    name: 'view_attachment_image',
+    description:
+      'Pull the actual pixels of one attached IMAGE so you can analyze it visually. Use when the user asks about visual conditions (paint color, damage extent, framing detail, photo-based scope verification) and the relevant photo is in the per-turn attachments manifest. Returns the image inline as vision content in this tool result. Auto-tier. ' +
+      'Only call this for images you actually need to see — each image costs vision tokens. The estimate / job manifest lists every attached photo with its id; pull the specific one that matches the user\'s question rather than every photo.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        attachment_id: { type: 'string', description: 'The id from the manifest entry (e.g. att_xxx). Must be an image attachment.' }
       },
       required: ['attachment_id']
     }
@@ -1771,9 +1801,22 @@ async function buildEstimateContext(estimateId, includePhotos, aiPhaseOverride, 
     lines.push('');
   }
 
-  if (photoBlocks.length) {
+  // Photo manifest — always lists IDs so 86 can call view_attachment_image
+  // even when the photos aren't auto-attached inline (the default).
+  if (photoRows.length) {
     lines.push('# Photos');
-    lines.push(`${photoBlocks.length} photo(s) attached below — analyze them when relevant to the user's question.`);
+    lines.push(photoRows.length + ' photo' + (photoRows.length === 1 ? '' : 's') + ' attached to this estimate' +
+      (blob.lead_id ? ' (and linked lead)' : '') + '. ' +
+      (photoBlocks.length
+        ? photoBlocks.length + ' shown inline as vision content below.'
+        : 'Call `view_attachment_image({attachment_id})` on the specific one you need to actually see — each image costs vision tokens, so pull only what the question requires.'));
+    photoRows.slice(0, 24).forEach(p => {
+      const sz = p.size_bytes ? Math.round(p.size_bytes / 1024) + ' KB' : '?';
+      lines.push('  - [' + p.id + '] ' + (p.filename || '(unnamed)') + ' · ' + (p.source || 'estimate') + ' · ' + sz);
+    });
+    if (photoRows.length > 24) {
+      lines.push('  - … and ' + (photoRows.length - 24) + ' more.');
+    }
     lines.push('');
   }
 
@@ -2861,6 +2904,17 @@ async function composedAgentSystem(agentKey, baseline, org) {
       parts.push('# Estimating playbook\n\n' + sectionLines.join('\n'));
     }
 
+    // On-demand reference data — lookup-mode sheets and attachment
+    // images don't ride along every turn. This short note tells 86
+    // about the tools so it knows to reach for them instead of
+    // pretending the data doesn't exist.
+    parts.push(
+      '# On-demand reference data\n\n' +
+      '- **Reference sheets** (Job Numbers, Client Short Names, WIP, etc.) live in `search_reference_sheet`. Call it whenever the user mentions a job number, community name, or anything else that would map to a row in those sheets. With no args it lists the available sheets; with `query` it substring-scans them. Use it BEFORE guessing an id.\n' +
+      '- **Attachment images** are listed in the per-turn manifest (filename + id + size). They are NOT auto-attached as vision tokens — call `view_attachment_image({attachment_id})` only on the specific photo you need to actually look at. Each image costs vision tokens; pull just what the question requires.\n' +
+      '- **Document bodies** stay out of the manifest preview past 200 chars — call `read_attachment_text({attachment_id})` for the full PDF / Excel / Word body.'
+    );
+
     // Reference-links block (SharePoint / Google Sheets refreshed every
     // 15 min into agent_reference_links.last_fetched_text). PRE-FIX:
     // this was injected into every user.message turn, costing ~15k
@@ -3527,10 +3581,19 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
                 // QUEUE the result; flushed in batch at session.status_idle.
                 // See pendingAutoResults comment above for why we don't
                 // call events.send here.
+                //
+                // Structured `blocks` (e.g. view_attachment_image returning
+                // an image + text label) ride through as the content array
+                // verbatim. The Sessions API's user.custom_tool_result
+                // content field mirrors Messages API tool_result and
+                // accepts text + image blocks.
+                const resultContent = (!isError && Array.isArray(decision.blocks) && decision.blocks.length)
+                  ? decision.blocks
+                  : [{ type: 'text', text: summary }];
                 pendingAutoResults.push({
                   type: 'user.custom_tool_result',
                   custom_tool_use_id: tu.id,
-                  content: [{ type: 'text', text: summary }],
+                  content: resultContent,
                   is_error: isError || undefined
                 });
                 break; // continue iterating; results flush on idle
@@ -4027,7 +4090,13 @@ function computeJobWIP(job, jobBuildings, jobPhases, jobChangeOrders, jobSubs, j
 // localStorage; QB cost lines aren't in the DB until Phase 2).
 // Fields used: { nodeGraph: { nodes, wires }, qbCosts: { total,
 // byCategory, lineCount, mostRecentImport, samples[] } }
-async function buildJobContext(jobId, clientContext, aiPhase, organization) {
+async function buildJobContext(jobId, clientContext, aiPhase, organization, opts) {
+  // opts.includePhotos (default false) — when true, the cascade photos
+  // are tokenized inline as vision blocks. Default is false so the
+  // per-turn user.message stays small; 86 calls view_attachment_image
+  // by id when it actually needs to see one. The photo MANIFEST (ids,
+  // filenames, sizes) always renders so 86 knows what's available.
+  const includePhotos = !!(opts && opts.includePhotos);
   // aiPhase: 'plan' (read-only analysis, no writes) | 'build' (full
   // tool access). Defaults to 'plan' for 86 — she's an analyst, so
   // the safer default is no surprise mutations until the PM explicitly
@@ -4081,13 +4150,21 @@ async function buildJobContext(jobId, clientContext, aiPhase, organization) {
     console.warn('[buildJobContext] attachment cascade failed (non-fatal):', e && e.message);
   }
   const cascadePhotoBlocks = [];
+  const cascadePhotoManifest = []; // {source, filename, id, size} — always built
   const cascadeDocs = [];
   for (const a of linkedAtts) {
     if (a.mime_type && a.mime_type.startsWith('image/') && a.thumb_key) {
-      // Cap at 12 cascade photos so we don't blow the per-turn vision
-      // budget — newer first since linkedAtts is ordered job → lead →
-      // estimate (job's own photos are most relevant).
-      if (cascadePhotoBlocks.length < 12) {
+      // Always record in the manifest so 86 sees photos exist and can
+      // call view_attachment_image({attachment_id}) on the specific one
+      // it needs. Cap inline vision blocks at 12 for the rare turns
+      // where the caller opted into auto-attach (opts.includePhotos).
+      cascadePhotoManifest.push({
+        source: a.source,
+        filename: a.filename,
+        id: a.id,
+        size: a.size_bytes
+      });
+      if (includePhotos && cascadePhotoBlocks.length < 12) {
         try {
           const blk = await loadPhotoAsBlock(a);
           if (blk) cascadePhotoBlocks.push(blk);
@@ -4153,9 +4230,20 @@ async function buildJobContext(jobId, clientContext, aiPhase, organization) {
       });
       if (cascadeDocs.length > 12) lines.push('- … and ' + (cascadeDocs.length - 12) + ' more');
     }
-    if (cascadePhotoBlocks.length) {
+    if (cascadePhotoManifest.length) {
       lines.push('## Photos');
-      lines.push('- ' + cascadePhotoBlocks.length + ' photo' + (cascadePhotoBlocks.length === 1 ? '' : 's') + ' visible inline this turn (most-recent first by job → lead → estimate priority).');
+      lines.push('- ' + cascadePhotoManifest.length + ' photo' + (cascadePhotoManifest.length === 1 ? '' : 's') +
+        ' attached to this job (priority: job → lead → estimate). ' +
+        (includePhotos
+          ? cascadePhotoBlocks.length + ' shown inline as vision content below.'
+          : 'Call `view_attachment_image({attachment_id})` on the specific one you need to actually see. The manifest below shows ids.'));
+      cascadePhotoManifest.slice(0, 24).forEach(p => {
+        const sz = p.size ? Math.round(p.size / 1024) + ' KB' : '?';
+        lines.push('  - [' + p.id + '] ' + (p.filename || '(unnamed)') + ' · ' + p.source + ' · ' + sz);
+      });
+      if (cascadePhotoManifest.length > 24) {
+        lines.push('  - … and ' + (cascadePhotoManifest.length - 24) + ' more (ask for them by name if needed).');
+      }
     }
     lines.push('');
   }
@@ -6705,6 +6793,109 @@ async function execStaffTool(name, input, ctx) {
         'Call read_attachment_text again with a larger max_chars or a smaller chunk if you need the rest.]';
     }
 
+    case 'view_attachment_image': {
+      // Pull the pixels of one attached image as a vision content
+      // block. Returns a STRUCTURED result (object with `blocks`) so
+      // make86OnCustomToolUse / runV2SessionStream can forward it as
+      // tool_result content with image + text blocks instead of the
+      // default plain-text result. See the runV2SessionStream branch
+      // that consumes `decision.blocks` for the wire format.
+      const attachmentId = String((input && input.attachment_id) || '').trim();
+      if (!attachmentId) return 'view_attachment_image: attachment_id is required.';
+      const r = await pool.query(
+        `SELECT id, filename, entity_type, entity_id, mime_type, size_bytes,
+                web_key, anthropic_file_id
+           FROM attachments WHERE id = $1`,
+        [attachmentId]
+      );
+      if (!r.rows.length) return 'No attachment with id ' + attachmentId + '.';
+      const row = r.rows[0];
+      if (!row.mime_type || !row.mime_type.startsWith('image/')) {
+        return 'Attachment "' + (row.filename || attachmentId) + '" is not an image (mime=' +
+          (row.mime_type || 'unknown') + '). Use read_attachment_text for documents.';
+      }
+      try {
+        const imgBlock = await loadPhotoAsBlock(row);
+        if (!imgBlock) {
+          return 'Could not load image bytes for ' + attachmentId + ' — the underlying file may be missing or unreadable.';
+        }
+        const sizeKb = row.size_bytes ? Math.round(row.size_bytes / 1024) + ' KB' : '?';
+        return {
+          blocks: [
+            imgBlock,
+            { type: 'text', text: 'Image: ' + (row.filename || attachmentId) + ' (' + row.entity_type + ', ' + sizeKb + ')' }
+          ]
+        };
+      } catch (e) {
+        return 'Failed to load image ' + attachmentId + ': ' + (e && e.message || 'unknown');
+      }
+    }
+
+    case 'search_reference_sheet': {
+      // Live reference workbook search — Job Numbers, Client Short
+      // Names, etc. The sheet rows are stored as one big text blob
+      // in agent_reference_links.last_fetched_text (markdown table /
+      // newline-delimited rows depending on the SharePoint renderer).
+      // We do a per-line substring scan because the volumes are
+      // small (hundreds of rows per sheet) and a real FTS index
+      // would be overkill.
+      const q = String((input && input.query) || '').trim();
+      const sheetTitleFilter = String((input && input.sheet_title) || '').trim().toLowerCase();
+      const limit = Math.min(50, Math.max(1, parseInt((input && input.limit), 10) || 20));
+
+      const sql =
+        "SELECT title, description, last_fetched_text, last_fetched_row_count, inject_mode " +
+        "FROM agent_reference_links " +
+        "WHERE enabled = TRUE AND last_fetch_status = 'ok' AND last_fetched_text IS NOT NULL " +
+        "ORDER BY created_at ASC";
+      const r = await pool.query(sql);
+      if (!r.rows.length) {
+        return 'No reference sheets configured. Admin can wire one up under Admin → Agents → Reference Links.';
+      }
+
+      // No query → list available sheets.
+      if (!q) {
+        const lines = ['Reference sheets available (' + r.rows.length + '):'];
+        for (const row of r.rows) {
+          lines.push('• "' + row.title + '" — ' + (row.last_fetched_row_count || '?') + ' rows · mode=' + row.inject_mode +
+            (row.description ? '\n    ' + row.description : ''));
+        }
+        lines.push('');
+        lines.push('Call search_reference_sheet({query: "..."}) to find rows. Add sheet_title to restrict to one sheet.');
+        return lines.join('\n');
+      }
+
+      // Query path — per-line substring scan across every (optionally one) sheet.
+      const needle = q.toLowerCase();
+      const out = [];
+      let totalMatches = 0;
+      for (const row of r.rows) {
+        if (sheetTitleFilter && row.title.toLowerCase() !== sheetTitleFilter) continue;
+        const body = String(row.last_fetched_text || '');
+        if (!body) continue;
+        const lines = body.split('\n');
+        const hits = [];
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          if (line.toLowerCase().indexOf(needle) >= 0) {
+            hits.push(line.trim());
+            if (hits.length >= limit) break;
+          }
+        }
+        if (hits.length) {
+          totalMatches += hits.length;
+          out.push('## ' + row.title + ' (' + hits.length + ' match' + (hits.length === 1 ? '' : 'es') + ')');
+          out.push(...hits.map(h => '  ' + h));
+          out.push('');
+        }
+      }
+      if (!totalMatches) {
+        const scopeNote = sheetTitleFilter ? ' in sheet "' + sheetTitleFilter + '"' : '';
+        return 'No rows matching "' + q + '"' + scopeNote + '. Try a shorter substring or call with no args to see the available sheets.';
+      }
+      return out.join('\n');
+    }
+
     case 'self_diagnose': {
       // Pull recent assistant turns where tool_uses were emitted, plus
       // any /chat/continue approval traces. Stitches them into a
@@ -8604,16 +8795,29 @@ function make86OnCustomToolUse(userId, parentSession) {
         return { tier: 'auto', summary: note };
       }
       try {
-        let summary;
+        let result;
         if (INTAKE_EXECUTOR_TOOLS.has(name)) {
-          summary = await execIntakeRead(name, input);
+          result = await execIntakeRead(name, input);
         } else if (FIELD_TOOLS_EXECUTOR_TOOLS.has(name)) {
-          summary = await execFieldToolRead(name, input);
+          result = await execFieldToolRead(name, input);
         } else if (CLIENT_EXECUTOR_TOOLS.has(name)) {
-          summary = await execClientTool(name, input);
+          result = await execClientTool(name, input);
         } else {
-          summary = await execStaffTool(name, input, { userId });
+          result = await execStaffTool(name, input, { userId });
         }
+        // Structured result with `blocks` (e.g. view_attachment_image
+        // returns an image block + text label). Pass it through so
+        // runV2SessionStream forwards the content blocks verbatim on
+        // the user.custom_tool_result event. Dedupe cache stores a
+        // short summary string for repeat-detection — we don't want
+        // to re-encode the image into base64 every dedupe lookup.
+        if (result && typeof result === 'object' && Array.isArray(result.blocks)) {
+          const textPart = result.blocks.find(b => b && b.type === 'text');
+          const summary = textPart && textPart.text ? textPart.text : '[image attached]';
+          dedupeCache.set(k, summary);
+          return { tier: 'auto', summary, blocks: result.blocks };
+        }
+        const summary = result;
         dedupeCache.set(k, summary);
         return { tier: 'auto', summary };
       } catch (e) {
@@ -9279,6 +9483,15 @@ const ALLOWED_AUTO_TIER_TOOLS = new Set([
   // Lazy-loaded attachment body — manifest carries preview only;
   // 86 pulls the full text on demand. Auto-tier (pure read).
   'read_attachment_text',
+  // Lazy-loaded attachment IMAGE — pulls the actual pixels of one
+  // photo as a vision block in the tool_result. The executor returns
+  // a structured { blocks: [...] } shape that runV2SessionStream
+  // forwards as content on the user.custom_tool_result event.
+  'view_attachment_image',
+  // Live reference workbook search — Job Numbers, Short Names, etc.
+  // Rows are kept out of the system prompt by default (inject_mode
+  // 'lookup'); this tool is how 86 hits them.
+  'search_reference_sheet',
   // Lazy-loaded line-item detail — compact roll-ups ship in
   // turn_context for dense estimates; 86 pulls full lines on demand.
   'read_active_lines'
@@ -9497,6 +9710,7 @@ function ask86Tools() {
     'read_materials', 'read_purchase_history',
     'read_metrics', 'read_recent_conversations', 'read_conversation_detail',
     'read_skill_packs', 'search_my_sessions', 'search_my_kb', 'search_org_kb',
+    'search_reference_sheet', 'view_attachment_image', 'read_attachment_text',
     'read_past_estimates', 'read_past_estimate_lines', 'read_leads',
     // DOM navigation — client-side dispatch. Without this, the model
     // on the Ask 86 surface doesn't know it can switch tabs / open
@@ -9938,10 +10152,15 @@ router.post('/86/chat', requireAuth, requireOrg, async (req, res) => {
         // as cache_creation every turn for no benefit. Always-on
         // skill packs are merged INTO the dynamic block by
         // buildEstimateContext for the same reason.
+        // includePhotos:false — photos are reachable via the
+        // view_attachment_image tool by id. The manifest still
+        // lists every photo so 86 knows what's available.
         const ctx = await buildEstimateContext(cctxEntityId, false, cctxAiPhase, req.organization);
         turnContextText = ctxDynamicText(ctx.system);
         if (Array.isArray(ctx.photoBlocks)) extraPhotoBlocks = ctx.photoBlocks;
       } else if (cctxEntityType === 'job' && cctxEntityId) {
+        // opts.includePhotos defaults to false in buildJobContext now,
+        // so this call passes no opts and gets the cheap path.
         const ctx = await buildJobContext(cctxEntityId, cctxClientCtx, cctxAiPhase, req.organization);
         turnContextText = ctxDynamicText(ctx.system);
         if (Array.isArray(ctx.photoBlocks)) extraPhotoBlocks = ctx.photoBlocks;

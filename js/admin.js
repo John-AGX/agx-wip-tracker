@@ -4082,6 +4082,16 @@
             '</div></div>' +
           '<div><label style="font-size:11px;font-weight:600;color:var(--text-dim,#888);">Description (shown to agents)</label>' +
             '<textarea id="refLink_description" rows="2" placeholder="What\'s in this sheet? When should agents look here?" style="width:100%;padding:7px 10px;background:var(--input-bg);color:var(--text);border:1px solid var(--border);border-radius:6px;">' + escapeHTML(l.description || '') + '</textarea></div>' +
+          '<div><label style="font-size:11px;font-weight:600;color:var(--text-dim,#888);">Mode</label>' +
+            '<select id="refLink_injectMode" style="width:100%;padding:7px 10px;background:var(--input-bg);color:var(--text);border:1px solid var(--border);border-radius:6px;font-size:12px;">' +
+              '<option value="lookup"' + ((l.inject_mode || 'lookup') === 'lookup' ? ' selected' : '') + '>Lookup-only — 86 fetches rows on demand via search_reference_sheet (recommended)</option>' +
+              '<option value="inline"' + ((l.inject_mode || 'lookup') === 'inline' ? ' selected' : '') + '>Inline — every row baked into the system prompt (always cached, expensive on rebuilds)</option>' +
+            '</select>' +
+            '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:4px;line-height:1.4;">' +
+              '<strong>Lookup-only</strong> keeps the prompt small — use for sheets with hundreds of rows. ' +
+              '<strong>Inline</strong> for tiny cheat sheets (a dozen rows) you want 86 to always see. ' +
+              'Saving a mode change auto-syncs the managed agent.' +
+            '</div></div>' +
           '<div style="display:flex;gap:14px;">' +
             '<div style="flex:1;"><label style="font-size:11px;font-weight:600;color:var(--text-dim,#888);">Max rows</label>' +
               '<input type="number" id="refLink_maxRows" value="' + (l.max_rows || 200) + '" min="10" max="2000" style="width:100%;padding:7px 10px;background:var(--input-bg);color:var(--text);border:1px solid var(--border);border-radius:6px;" /></div>' +
@@ -4108,7 +4118,8 @@
       url: document.getElementById('refLink_url').value.trim(),
       description: document.getElementById('refLink_description').value.trim(),
       enabled: document.getElementById('refLink_enabled').checked,
-      maxRows: parseInt(document.getElementById('refLink_maxRows').value, 10) || 200
+      maxRows: parseInt(document.getElementById('refLink_maxRows').value, 10) || 200,
+      injectMode: document.getElementById('refLink_injectMode').value === 'inline' ? 'inline' : 'lookup'
     };
     if (!payload.title || !payload.url) {
       alert('Title and URL are required.');

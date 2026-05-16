@@ -1177,6 +1177,16 @@ async function initSchema() {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
     CREATE INDEX IF NOT EXISTS idx_agent_reference_links_enabled ON agent_reference_links(enabled);
+    -- inject_mode controls whether the sheet's body rides inline in the
+    -- registered agent system prompt (always cached, fast lookup but
+    -- expensive on cache rebuilds) or stays out-of-band and is reached
+    -- on demand via the search_reference_sheet tool. Default 'lookup'
+    -- so adding a new sheet doesn't bloat every turn's prompt; admins
+    -- opt specific sheets into 'inline' from the editor when they
+    -- want always-on visibility (typically tiny cheat sheets).
+    ALTER TABLE agent_reference_links
+      ADD COLUMN IF NOT EXISTS inject_mode TEXT NOT NULL DEFAULT 'lookup'
+        CHECK (inject_mode IN ('inline', 'lookup'));
 
     -- (Migration block for the legacy estimator-agent retirement was
     -- originally here, but it referenced ai_sessions which is created
