@@ -2011,7 +2011,7 @@ async function loadSkillManifestFor(agentKey, triggerCtx, organizationId) {
   }
   try {
     const { rows } = await pool.query(
-      `SELECT name, body, description, agents, contexts, triggers
+      `SELECT name, body, description, agents, triggers
          FROM org_skill_packs
         WHERE organization_id = $1
           AND archived_at IS NULL
@@ -2020,7 +2020,6 @@ async function loadSkillManifestFor(agentKey, triggerCtx, organizationId) {
     );
     return rows
       .filter(s => s && Array.isArray(s.agents) && s.agents.indexOf(agentKey) >= 0 && s.body)
-      .filter(s => packContextsPass(s.contexts, triggerCtx))
       .filter(s => packTriggersPass(s.triggers, triggerCtx))
       .map(s => {
         let desc = (s.description || '').toString().trim();
@@ -2031,29 +2030,13 @@ async function loadSkillManifestFor(agentKey, triggerCtx, organizationId) {
         }
         return {
           name: s.name || '(untitled skill)',
-          description: desc,
-          contexts: Array.isArray(s.contexts) ? s.contexts : []
+          description: desc
         };
       });
   } catch (e) {
     console.error('loadSkillManifestFor error:', e);
     return [];
   }
-}
-
-// Match a pack's `contexts` array against the current turn's entity_type.
-// A missing or empty contexts array means "load everywhere" (legacy /
-// global packs). Once set, the pack only loads when the current
-// entity_type is in the list. This is what makes 86 context-aware:
-// estimate-only packs don't burn tokens during a WIP turn, etc.
-//
-// Recognized entity_types for 86: 'estimate', 'job', 'intake', 'ask86'.
-// Recognized for HR: 'client'. CoS: 'staff'.
-function packContextsPass(contexts, ctx) {
-  if (!Array.isArray(contexts) || contexts.length === 0) return true;
-  const et = ctx && ctx.entity_type;
-  if (!et) return true; // caller didn't supply entity_type — be permissive
-  return contexts.indexOf(et) >= 0;
 }
 
 // Evaluate a pack's triggers object against the current turn's context.
@@ -6137,7 +6120,6 @@ const STAFF_TOOLS = [
     tier: 'approval',
     description:
       'Propose creating a new admin-editable skill pack. Skill packs are situational instruction blocks that, once approved, are mirrored to Anthropic native Skills and auto-discovered by the runtime when the description matches the current turn. Only call this AFTER read_skill_packs to confirm no name collision. ' +
-      'Every pack must specify both `agents` AND `contexts`. `agents` is who can see it in the manifest. `contexts` is the entity surfaces where the manifest entry appears. Pick narrowly so the manifest stays readable. ' +
       'Approval-required so the user vets the wording before it lands.',
     input_schema: {
       type: 'object',
@@ -6146,22 +6128,16 @@ const STAFF_TOOLS = [
         name: { type: 'string', description: 'Short, unique title (e.g., "Trex decking spec reference"). Must not collide with an existing pack.' },
         body: { type: 'string', description: 'The skill content. Markdown allowed. The body is registered as a native Anthropic Skill and surfaced by the runtime when the description matches — write it as standalone guidance for the moment it activates.' },
         agents: { type: 'array', items: { type: 'string', enum: ['cra', 'job'] }, description: 'Which agents see this pack in their manifest. "job" for 86, "cra" for HR.' },
-        contexts: {
-          type: 'array',
-          items: { type: 'string', enum: ['estimate', 'job', 'intake', 'ask86', 'client'] },
-          description: 'Which entity surfaces show this pack in the manifest. PICK NARROWLY. Estimating playbooks → ["estimate"]. WIP/job-mapping → ["job"]. Lead dedup → ["intake"]. HR ops → ["client"].'
-        },
         rationale: { type: 'string', description: 'One short sentence shown on the approval card explaining why this pack is worth keeping.' }
       },
-      required: ['name', 'body', 'agents', 'contexts', 'rationale']
+      required: ['name', 'body', 'agents', 'rationale']
     }
   },
   {
     name: 'propose_skill_pack_edit',
     tier: 'approval',
     description:
-      'Propose editing an existing skill pack. Pass the exact name from read_skill_packs and only the fields you want to change. Body edits replace the entire body — pass the full new content, not a diff. ' +
-      'NOTE: `contexts` (the entity surfaces this pack appears on in the manifest) is editable here — use it to narrow an over-scoped legacy pack. Approval-required so the user vets every change to a prompt-shaping artifact.',
+      'Propose editing an existing skill pack. Pass the exact name from read_skill_packs and only the fields you want to change. Body edits replace the entire body — pass the full new content, not a diff. Approval-required so the user vets every change to a prompt-shaping artifact.',
     input_schema: {
       type: 'object',
       additionalProperties: false,
@@ -6170,11 +6146,6 @@ const STAFF_TOOLS = [
         new_name: { type: 'string', description: 'Optional rename.' },
         new_body: { type: 'string', description: 'Optional replacement body. Pass the full new content.' },
         agents: { type: 'array', items: { type: 'string', enum: ['cra', 'job'] }, description: 'Optional updated agent assignment. job=86, cra=HR.' },
-        contexts: {
-          type: 'array',
-          items: { type: 'string', enum: ['estimate', 'job', 'intake', 'ask86', 'client'] },
-          description: 'Optional updated context scope. Pass the full new array — replaces the existing contexts list.'
-        },
         rationale: { type: 'string', description: 'One short sentence shown on the approval card explaining the change.' }
       },
       required: ['name', 'rationale']
@@ -6468,8 +6439,8 @@ async function buildStaffContext() {
   stable.push('  • `read_subs(q?, trade?, status?, with_expiring_certs?, limit?)` — subcontractor directory with cert expiry. Use to surface paperwork-expiring subs, list subs by trade, or confirm a named sub is active. with_expiring_certs=true for compliance audits.');
   stable.push('  • `read_lead_pipeline(q?, status?, market?, salesperson_email?, limit?)` — leads list + always-included status rollup ($ counts per status). Use for "what does our pipeline look like?", spotting deal-source patterns, or seeing which markets are hot.');
   stable.push('Propose tools (approval-required — user clicks Approve/Reject on a card):');
-  stable.push('  • `propose_skill_pack_add(name, body, agents, contexts, rationale)` — add a new skill pack. On approval the pack is auto-mirrored to Anthropic native Skills; the agent auto-discovers it by description on the next sync. agents=["cra","job"]. contexts is REQUIRED — narrow scope (["estimate"], ["job"], etc.).');
-  stable.push('  • `propose_skill_pack_edit(name, new_name?, new_body?, agents?, contexts?, rationale)` — change an existing pack. body edits replace the whole body. contexts replaces the existing scope.');
+  stable.push('  • `propose_skill_pack_add(name, body, agents, rationale)` — add a new skill pack. On approval the pack is auto-mirrored to Anthropic native Skills; the agent auto-discovers it by description on the next sync. agents=["cra","job"].');
+  stable.push('  • `propose_skill_pack_edit(name, new_name?, new_body?, agents?, rationale)` — change an existing pack. body edits replace the whole body.');
   stable.push('  • `propose_skill_pack_delete(name, rationale)` — remove a pack entirely (also deletes the Anthropic-side mirror).');
   stable.push('');
   renderSection(stable, 'cos_how_to_work', cosSectionOverrides);
@@ -6922,7 +6893,7 @@ async function execStaffTool(name, input, ctx) {
       const orgId = orgRow && orgRow.organization_id;
       if (!orgId) return 'No organization scope — cannot read skill packs.';
       const r = await pool.query(
-        `SELECT name, body, description, agents, contexts
+        `SELECT name, body, description, agents
            FROM org_skill_packs
           WHERE organization_id = $1 AND archived_at IS NULL
           ORDER BY id ASC`,
@@ -6932,8 +6903,7 @@ async function execStaffTool(name, input, ctx) {
       const lines = ['Skill packs (' + r.rows.length + '):'];
       for (const s of r.rows) {
         const agents = Array.isArray(s.agents) ? s.agents.join(',') : '(none)';
-        const ctxs = Array.isArray(s.contexts) && s.contexts.length ? s.contexts.join(',') : 'all';
-        lines.push('• "' + (s.name || '(untitled)') + '" → agents=' + agents + ', contexts=' + ctxs);
+        lines.push('• "' + (s.name || '(untitled)') + '" → agents=' + agents);
         const body = String(s.body || '');
         if (body) {
           lines.push('  ```');
@@ -7572,7 +7542,6 @@ async function execStaffTool(name, input, ctx) {
 // Approval-tier executor for skill-pack mutations. Reads + writes the
 // per-tenant org_skill_packs table. Caller passes ctx={userId} so we
 // can resolve the right organization.
-const VALID_PACK_CONTEXTS = ['estimate', 'job', 'intake', 'ask86', 'client'];
 async function resolveOrgIdFromCtx(ctx) {
   const userId = ctx && ctx.userId;
   if (!userId) throw new Error('Skill-pack mutation requires a user context (call from /api/ai/exec-tool).');
@@ -7587,23 +7556,16 @@ async function execStaffApprovalTool(name, input, ctx) {
     case 'propose_skill_pack_add': {
       if (!input || !input.name || !input.body) throw new Error('name and body are required');
       if (!Array.isArray(input.agents) || !input.agents.length) throw new Error('agents must be a non-empty array');
-      if (!Array.isArray(input.contexts) || !input.contexts.length) {
-        throw new Error('contexts must be a non-empty array — pick the narrowest scope (e.g. ["estimate"] for an estimating playbook).');
-      }
-      const badContexts = input.contexts.filter(c => !VALID_PACK_CONTEXTS.includes(c));
-      if (badContexts.length) {
-        throw new Error('Unknown context(s): ' + badContexts.join(', ') + '. Valid contexts: ' + VALID_PACK_CONTEXTS.join(', '));
-      }
       const anthropic = getAnthropic();
       if (!anthropic) throw new Error('ANTHROPIC_API_KEY not set. All packs must mirror to Anthropic native Skills.');
       const orgId = await resolveOrgIdFromCtx(ctx);
       let insertedId = null;
       try {
         const ins = await pool.query(
-          `INSERT INTO org_skill_packs (organization_id, name, body, agents, contexts)
-           VALUES ($1, $2, $3, $4::jsonb, $5::jsonb)
+          `INSERT INTO org_skill_packs (organization_id, name, body, agents)
+           VALUES ($1, $2, $3, $4::jsonb)
            RETURNING *`,
-          [orgId, input.name, input.body, JSON.stringify(input.agents), JSON.stringify(input.contexts)]
+          [orgId, input.name, input.body, JSON.stringify(input.agents)]
         );
         const pack = ins.rows[0];
         insertedId = pack.id;
@@ -7619,7 +7581,7 @@ async function execStaffApprovalTool(name, input, ctx) {
           [created.id, pack.id]
         );
         return 'Added skill pack "' + input.name + '" → agents=' + input.agents.join(',') +
-          ', contexts=' + input.contexts.join(',') + '. Mirrored to Anthropic (' + created.id + '); the agent will auto-discover it on next sync.';
+          '. Mirrored to Anthropic (' + created.id + '); the agent will auto-discover it on next sync.';
       } catch (e) {
         if (insertedId) {
           try { await pool.query(`DELETE FROM org_skill_packs WHERE id = $1`, [insertedId]); }
@@ -7666,19 +7628,6 @@ async function execStaffApprovalTool(name, input, ctx) {
         params.push(JSON.stringify(input.agents));
         p++;
         changes.push('agents → ' + input.agents.join(','));
-      }
-      if (Array.isArray(input.contexts)) {
-        if (!input.contexts.length) {
-          throw new Error('contexts cannot be set to empty — pass a non-empty array or omit the field entirely.');
-        }
-        const badContexts = input.contexts.filter(c => !VALID_PACK_CONTEXTS.includes(c));
-        if (badContexts.length) {
-          throw new Error('Unknown context(s): ' + badContexts.join(', ') + '. Valid: ' + VALID_PACK_CONTEXTS.join(', '));
-        }
-        updates.push('contexts = $' + p + '::jsonb');
-        params.push(JSON.stringify(input.contexts));
-        p++;
-        changes.push('contexts → ' + input.contexts.join(','));
       }
       if (!updates.length) return 'No changes specified for "' + input.name + '".';
       updates.push('updated_at = NOW()');

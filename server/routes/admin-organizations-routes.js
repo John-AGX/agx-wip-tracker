@@ -236,11 +236,12 @@ router.get('/:id/skill-packs', requireAuth, requireOrg, requireCapability('ROLES
   }
 });
 
-const VALID_PACK_CONTEXTS = ['estimate', 'job', 'intake', 'ask86', 'client'];
 const VALID_PACK_AGENTS = ['job']; // post-unification, only 'job' targets a real agent
 
 // POST /api/admin/organizations/:id/skill-packs — create a pack.
-// Body: { name, body, description?, agents?, contexts, category?, triggers? }
+// Body: { name, body, description?, agents?, category?, triggers? }
+// `contexts` is accepted for back-compat but ignored — 86 reasons over
+// every pack's description on every turn via native Anthropic Skills.
 router.post('/:id/skill-packs', requireAuth, requireOrg, requireCapability('ROLES_MANAGE'), async (req, res) => {
   try {
     const targetId = assertOrgScope(req, req.params.id);
@@ -250,14 +251,6 @@ router.post('/:id/skill-packs', requireAuth, requireOrg, requireCapability('ROLE
     }
     if (!b.body || typeof b.body !== 'string') {
       return res.status(400).json({ error: 'body is required' });
-    }
-    const contexts = Array.isArray(b.contexts) ? b.contexts : [];
-    if (!contexts.length) {
-      return res.status(400).json({ error: 'contexts must be a non-empty array. Valid: ' + VALID_PACK_CONTEXTS.join(', ') });
-    }
-    const badCtx = contexts.filter(c => !VALID_PACK_CONTEXTS.includes(c));
-    if (badCtx.length) {
-      return res.status(400).json({ error: 'Unknown context(s): ' + badCtx.join(', ') });
     }
     const agents = Array.isArray(b.agents) && b.agents.length ? b.agents : ['job'];
     const badAgents = agents.filter(a => !VALID_PACK_AGENTS.includes(a) && a !== 'cra'); // 'cra' tolerated as legacy
@@ -270,8 +263,8 @@ router.post('/:id/skill-packs', requireAuth, requireOrg, requireCapability('ROLE
     try {
       const ins = await pool.query(
         `INSERT INTO org_skill_packs (
-            organization_id, name, body, description, agents, contexts, category, triggers
-         ) VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7, $8::jsonb)
+            organization_id, name, body, description, agents, category, triggers
+         ) VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7::jsonb)
          RETURNING *`,
         [
           targetId,
@@ -279,7 +272,6 @@ router.post('/:id/skill-packs', requireAuth, requireOrg, requireCapability('ROLE
           b.body,
           (typeof b.description === 'string') ? b.description : '',
           JSON.stringify(agents),
-          JSON.stringify(contexts),
           (typeof b.category === 'string' && b.category) ? b.category : null,
           JSON.stringify((b.triggers && typeof b.triggers === 'object') ? b.triggers : {})
         ]
@@ -341,13 +333,9 @@ router.put('/:id/skill-packs/:packId', requireAuth, requireOrg, requireCapabilit
       updates.push('agents = $' + p++ + '::jsonb');
       params.push(JSON.stringify(b.agents));
     }
-    if (Array.isArray(b.contexts)) {
-      if (!b.contexts.length) return res.status(400).json({ error: 'contexts cannot be empty' });
-      const bad = b.contexts.filter(c => !VALID_PACK_CONTEXTS.includes(c));
-      if (bad.length) return res.status(400).json({ error: 'Unknown context(s): ' + bad.join(', ') });
-      updates.push('contexts = $' + p++ + '::jsonb');
-      params.push(JSON.stringify(b.contexts));
-    }
+    // `contexts` is accepted in the body for back-compat but no longer
+    // written — 86 reasons over every pack's description via native
+    // Anthropic Skills instead of a surface filter.
     if (typeof b.category === 'string') {
       updates.push('category = $' + p++);
       params.push(b.category || null);

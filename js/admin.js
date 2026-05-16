@@ -3335,7 +3335,6 @@
     }
     return packs.map(function(p, idx) {
       var agents = Array.isArray(p.agents) ? p.agents : [];
-      var contexts = Array.isArray(p.contexts) ? p.contexts : [];
       var isDirty = _orgPacksDirty.has(p.id || ('new:' + idx));
       var dirtyBadge = isDirty
         ? '<span style="display:inline-block;padding:1px 6px;border-radius:8px;background:rgba(251,191,36,0.15);color:#fbbf24;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;">Unsaved</span>'
@@ -3352,19 +3351,9 @@
         +   '</div>'
         +   '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;font-size:11px;color:var(--text-dim,#aaa);">'
         +     '<div><label style="display:block;margin-bottom:3px;">Description</label>'
-        +       '<input type="text" data-pack-field="description" value="' + escapeAttr(p.description || '') + '" placeholder="Short label shown in the per-turn manifest" /></div>'
+        +       '<input type="text" data-pack-field="description" value="' + escapeAttr(p.description || '') + '" placeholder="One line — 86 reasons over this to decide when to load the pack" /></div>'
         +     '<div><label style="display:block;margin-bottom:3px;">Category</label>'
         +       '<input type="text" data-pack-field="category" value="' + escapeAttr(p.category || '') + '" placeholder="(optional)" /></div>'
-        +   '</div>'
-        +   '<div style="display:flex;gap:16px;margin-bottom:8px;font-size:11px;color:var(--text-dim,#aaa);">'
-        +     '<div><label style="display:block;margin-bottom:3px;">Contexts (which surfaces show this in the manifest)</label>'
-        +       ['estimate','job','intake','ask86','client'].map(function(c) {
-                var checked = contexts.indexOf(c) >= 0 ? 'checked' : '';
-                return '<label style="display:inline-flex;align-items:center;gap:3px;margin-right:10px;cursor:pointer;text-transform:none;font-weight:400;letter-spacing:normal;">'
-                  + '<input type="checkbox" data-pack-context="' + c + '" ' + checked + ' style="margin:0;" /> ' + c
-                  + '</label>';
-              }).join('')
-        +     '</div>'
         +   '</div>'
         +   '<textarea data-pack-field="body" rows="6" style="width:100%;font-family:\'SF Mono\',ui-monospace,monospace;font-size:12px;line-height:1.5;resize:vertical;" placeholder="Pack body — what 86 sees when he calls load_skill_pack on this pack.">' + escapeHTML(p.body || '') + '</textarea>'
         + '</div>';
@@ -3480,7 +3469,7 @@
           row.style.borderColor = 'rgba(251,191,36,0.4)';
         }
       }
-      row.querySelectorAll('input[data-pack-field], textarea[data-pack-field], input[data-pack-context]').forEach(function(el) {
+      row.querySelectorAll('input[data-pack-field], textarea[data-pack-field]').forEach(function(el) {
         el.addEventListener('input', markDirty);
         el.addEventListener('change', markDirty);
       });
@@ -3495,10 +3484,6 @@
     pack.body = (row.querySelector('[data-pack-field="body"]') || {}).value || '';
     pack.description = (row.querySelector('[data-pack-field="description"]') || {}).value || '';
     pack.category = (row.querySelector('[data-pack-field="category"]') || {}).value || null;
-    pack.contexts = [];
-    row.querySelectorAll('[data-pack-context]').forEach(function(el) {
-      if (el.checked) pack.contexts.push(el.getAttribute('data-pack-context'));
-    });
     // agents stays as-is for now — UI doesn't expose it (always 'job').
     if (!Array.isArray(pack.agents) || !pack.agents.length) pack.agents = ['job'];
     return pack;
@@ -3542,7 +3527,7 @@
   window.addOrgPack = function() {
     if (!_orgPacksDraft) _orgPacksDraft = [];
     _orgPacksDraft.push({
-      id: null, name: '', body: '', description: '', agents: ['job'], contexts: ['estimate'], category: null, triggers: {}
+      id: null, name: '', body: '', description: '', agents: ['job'], category: null, triggers: {}
     });
     _orgPacksDirty.add('new:' + (_orgPacksDraft.length - 1));
     document.getElementById('org-packs-list').innerHTML = renderOrgPacksHTML();
@@ -3590,7 +3575,7 @@
       var pack = _orgPacksDraft[idx];
       var payload = {
         name: pack.name, body: pack.body, description: pack.description || '',
-        agents: pack.agents, contexts: pack.contexts, category: pack.category || null,
+        agents: pack.agents, category: pack.category || null,
         triggers: pack.triggers || {}
       };
       if (pack.id) {
@@ -5799,7 +5784,7 @@
         '</div>' +
         '<div id="agent-skill-assignments-panel" style="margin-bottom:18px;"></div>' +
         '<details style="margin-top:14px;border-top:1px solid var(--border,#333);padding-top:12px;">' +
-          '<summary style="cursor:pointer;font-size:13px;font-weight:600;color:var(--text,#fff);">Local skill packs (' + _skillsDraft.skills.length + ' — on-demand only, edit body / agents / contexts here)</summary>' +
+          '<summary style="cursor:pointer;font-size:13px;font-weight:600;color:var(--text,#fff);">Local skill packs (' + _skillsDraft.skills.length + ' — on-demand only, edit body / agents here)</summary>' +
           '<p style="margin:10px 0 12px 0;font-size:11px;color:var(--text-dim,#888);line-height:1.55;">' +
             'Reusable instruction blocks stored locally. Each pack appears in the per-turn manifest by name + description; 86 / HR call <code>load_skill_pack({name})</code> to pull the full body when starting a kind of work that maps to it. No always-on injection. ' +
             'You can also mirror packs to native Anthropic Skills with the per-pack &#x1F310; button so the same content is available via Anthropic\'s platform mechanism.' +
