@@ -3675,8 +3675,41 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
             // sequentially while the stream is mid-flight left the
             // session believing the tool_use ids were still blocked.
             if (pendingAutoResults.length && stopType === 'requires_action') {
+              // ID-mismatch fix: the event.id we captured from
+              // agent.custom_tool_use isn't always the same id the
+              // session reports in stop_reason.event_ids for matching
+              // user.custom_tool_result events. Observed from the
+              // Windermere stall logs: pendingAutoResults=4 sent, but
+              // events seen: {user.custom_tool_result:1} — only ONE of
+              // our 4 ids matched a blocked tool_use, the others were
+              // silently dropped, leaving 3 ids permanently blocked.
+              // The stall-recovery branch DOES resolve correctly
+              // because it uses blockedEventIds (the canonical session
+              // ids) directly. So substitute the captured ids with the
+              // blocked ones positionally before flushing.
+              const capturedIds = pendingAutoResults.map(e => e.custom_tool_use_id);
+              const allMatch = capturedIds.length === blockedEventIds.length &&
+                               capturedIds.every(id => blockedEventIds.indexOf(id) >= 0);
+              if (!allMatch && blockedEventIds.length === pendingAutoResults.length) {
+                console.warn('[v2-stream] tool_use_id mismatch — substituting captured ids',
+                  'with blockedEventIds positionally for', sessionId,
+                  'captured:', JSON.stringify(capturedIds),
+                  'blocked:',  JSON.stringify(blockedEventIds));
+                pendingAutoResults.forEach((evt, i) => {
+                  evt.custom_tool_use_id = blockedEventIds[i];
+                });
+              } else if (!allMatch) {
+                // Count divergence — we have N results but M blocked
+                // ids. Don't risk positional substitution since the
+                // pairing is ambiguous. Flush as captured and let the
+                // stall-recovery branch clean up any unresolved ids.
+                console.warn('[v2-stream] tool_use_id mismatch with count divergence — flushing as captured',
+                  'captured:', JSON.stringify(capturedIds),
+                  'blocked:',  JSON.stringify(blockedEventIds));
+              }
               console.log('[v2-stream] flushing', pendingAutoResults.length,
-                'auto-tier tool_result(s) for', sessionId);
+                'auto-tier tool_result(s) for', sessionId,
+                'ids_sending:', JSON.stringify(pendingAutoResults.map(e => e.custom_tool_use_id)));
               nextEventsToSend = pendingAutoResults.slice();
               // CRITICAL: clear the queue after capturing. Without this,
               // a subsequent batch of auto-tier tools (e.g. 86 fires 3
