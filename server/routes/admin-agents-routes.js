@@ -1818,27 +1818,35 @@ async function collectSkillsFor(agentKey, organization) {
   return out;
 }
 
-// Built-in toolset configuration per agent key. Conservative defaults —
-// only enable what's clearly useful for that role. Phase 3 of the
-// migration expands these (e.g. enabling bash/read on 86 for QB
-// cost line analysis).
+// Built-in toolset configuration per agent key. The toolset
+// (agent_toolset_20260401) bundles 8 Anthropic-managed tools that
+// every Managed Agent gets access to:
+//   web_search, web_fetch  — used by 86 for pricing / vendor lookups
+//   read, glob, grep       — file reads (likely needed for native
+//                            skill content loading from the
+//                            session container)
+//   bash, write, edit      — sandbox scratch (NOT used — 86's
+//                            writes go through custom propose_*
+//                            tools, not file-system edits)
+//
+// Each tool's schema rides in the agent's cached prompt and gets
+// billed via cache_read on every fresh-session first turn. The
+// prompt-audit on 2026-05-17 (commit a4ed4f0) showed the full
+// toolset accounts for several thousand tokens of cache_read; we
+// explicitly disable the 3 unused tools (bash / write / edit) to
+// shrink the cached blob without breaking native skill loading.
+// Read / glob / grep stay enabled because they may be how the
+// session loads skill bodies on-demand.
 function builtinToolsetFor(agentKey) {
-  // Built-in toolset — full toolkit for every agent. The sandboxed
-  // per-session container has no path to our DB / API / R2 / user
-  // data, so bash / write / edit can only touch the scratch
-  // filesystem (which now also contains the agent's mounted Skills).
-  // Letting 86 draft scratch docs, run quick computations, and chase
-  // multi-file skill content earns its keep without weakening the
-  // propose_* approval flow that gates real mutations.
-  //
-  // Built-ins available via agent_toolset_20260401:
-  //   web_search, web_fetch    — research
-  //   read, glob, grep         — read mounted skill files / scratch
-  //   bash, write, edit        — sandbox scratch pad
-  //
-  // Custom Project-86 tools (91 today) and native Anthropic Skills
-  // (12 today) ride alongside via customToolsFor / collectSkillsFor.
-  return [{ type: 'agent_toolset_20260401', default_config: { enabled: true } }];
+  return [{
+    type: 'agent_toolset_20260401',
+    default_config: { enabled: true },
+    configs: [
+      { name: 'bash',  enabled: false },
+      { name: 'write', enabled: false },
+      { name: 'edit',  enabled: false }
+    ]
+  }];
 }
 
 // Resolve the Project 86-side custom tools for an agent. Goes through the
