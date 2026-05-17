@@ -2786,6 +2786,99 @@ async function composedAgentSystem(agentKey, baseline, org) {
   }
 }
 
+// Diagnostic mirror of composedAgentSystem — returns a per-part
+// breakdown { total_chars, total_joined_chars, parts: [{name,
+// chars}] } instead of a joined string. Used by the admin
+// prompt-audit endpoint so the registered system prompt's
+// composition is observable without re-implementing the
+// composition logic in two places. Any update to composedAgentSystem
+// MUST also update this function or the audit numbers drift.
+async function composedAgentSystemBreakdown(agentKey, baseline, org) {
+  const parts = [];
+  function record(name, text) {
+    if (!text) return;
+    parts.push({ name: name, chars: String(text).length });
+  }
+  if (agentKey !== 'job') {
+    record('baseline (legacy passthrough)', baseline);
+    return _finalizeBreakdown(parts);
+  }
+  try {
+    record('baseline', baseline);
+    if (org && org.identity_body && org.identity_body.trim()) {
+      record('org.identity_body', String(org.identity_body).trim());
+    }
+    const sectionOverrides = await loadSectionOverridesFor('job');
+    const sectionIds = [
+      'ag_identity',
+      'ag_estimate_structure',
+      'ag_role',
+      'ag_tools',
+      'ag_slotting',
+      'ag_pricing',
+      'ag_auto_reads',
+      'ag_web_research',
+      'ag_tone',
+      'job_role',
+      'job_web_research'
+    ];
+    let playbookText = '';
+    for (const id of sectionIds) {
+      const buf = [];
+      renderSection(buf, id, sectionOverrides);
+      const sectionText = buf.join('\n');
+      // Record EACH section individually so the admin can see
+      // which one is the biggest contributor. The composed string
+      // groups them under a single "# Estimating playbook" heading
+      // for the model, but the audit cares about per-section size.
+      record('section: ' + id, sectionText);
+      if (sectionText) playbookText += sectionText + '\n';
+    }
+    // The "# Estimating playbook" heading wrapper is a constant
+    // ~25 chars when sections exist; record so the breakdown sums
+    // match composedAgentSystem's actual output.
+    if (playbookText) record('playbook heading wrapper', '# Estimating playbook\n\n');
+
+    const onDemandRefNote =
+      '# On-demand reference data\n\n' +
+      '- **Reference sheets** (Job Numbers, Client Short Names, WIP, etc.) live in `search_reference_sheet`. Call it whenever the user mentions a job number, community name, or anything else that would map to a row in those sheets. With no args it lists the available sheets; with `query` it substring-scans them. Use it BEFORE guessing an id.\n' +
+      '- **Attachment images** are listed in the per-turn manifest (filename + id + size). They are NOT auto-attached as vision tokens — call `view_attachment_image({attachment_id})` only on the specific photo you need to actually look at. Each image costs vision tokens; pull just what the question requires.\n' +
+      '- **Document bodies** stay out of the manifest preview past 200 chars — call `read_attachment_text({attachment_id})` for the full PDF / Excel / Word body.';
+    record('on-demand reference note', onDemandRefNote);
+
+    try {
+      const adminAgents = require('./admin-agents-routes');
+      if (typeof adminAgents.buildReferenceLinksBlock === 'function' && org && org.id) {
+        const refBlock = await adminAgents.buildReferenceLinksBlock(org.id);
+        if (refBlock && refBlock.trim()) {
+          record('reference-links block (inline rows)', refBlock.trim());
+        }
+      }
+    } catch (e) {
+      // Match composedAgentSystem's defensive skip.
+    }
+  } catch (e) {
+    // Match composedAgentSystem's defensive fallback — the audit
+    // surfaces an error part so the admin sees the failure mode.
+    record('error: composition failed', String(e && e.message || e));
+  }
+  return _finalizeBreakdown(parts);
+}
+
+function _finalizeBreakdown(parts) {
+  let totalChars = 0;
+  for (const p of parts) totalChars += p.chars;
+  // composedAgentSystem joins parts with '\n\n' — account for the
+  // separator chars so total_joined_chars matches the actual
+  // registered prompt size to within a byte or two.
+  const sepChars = parts.length > 1 ? (parts.length - 1) * 2 : 0;
+  return {
+    total_chars: totalChars,
+    total_joined_chars: totalChars + sepChars,
+    parts: parts
+  };
+}
+
 // Look up or create the long-lived Session for one (agent, entity,
 // user) tuple. Race-safe via the unique partial index on ai_sessions.
 // `organization` is the full org row; required as of Phase 2c so the
@@ -9918,6 +10011,9 @@ module.exports.internals = {
   // for 'job' so the prose is cached on the Anthropic agent rather
   // than re-shipped through every user.message. Directory / CoS pass through.
   composedAgentSystem,
+  // Diagnostic counterpart to composedAgentSystem — returns the
+  // per-part char breakdown for the admin prompt-audit endpoint.
+  composedAgentSystemBreakdown,
   estimateTools: () => [...WEB_TOOLS, ...ESTIMATE_TOOLS],
   // 86 (job-side) inherits the intake tools too so 86 can capture
   // a new lead from any context — not just the dedicated intake

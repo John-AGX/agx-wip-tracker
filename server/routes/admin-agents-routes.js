@@ -2191,6 +2191,133 @@ router.get('/managed/audit', requireAuth, requireCapability('ROLES_MANAGE'), asy
   }
 });
 
+// GET /api/admin/agents/managed/prompt-audit
+//   Returns the byte+token breakdown of the registered agent's
+//   system prompt + tool schemas + reference-links table state.
+//   First-turn cache_read on a fresh session pulls the full
+//   composed prompt + tool schemas through Anthropic's cache; this
+//   endpoint shows exactly which slice is biggest so trims can be
+//   measured before/after.
+//
+//   Query params:
+//     org_id   (optional, defaults to req.organization.id)
+//     agent_key (optional, defaults to 'job')
+//
+//   Response shape: see plan file.
+router.get('/managed/prompt-audit', requireAuth, requireCapability('ROLES_MANAGE'), require('../auth').requireOrg, async (req, res) => {
+  try {
+    const aiInternals = require('./ai-routes-internals');
+    if (!aiInternals || typeof aiInternals.composedAgentSystemBreakdown !== 'function') {
+      return res.status(503).json({ error: 'ai-routes internals (composedAgentSystemBreakdown) not available' });
+    }
+    const agentKey = String(req.query.agent_key || 'job').toLowerCase().trim();
+    const orgId = req.query.org_id != null
+      ? Number(req.query.org_id)
+      : (req.organization && req.organization.id);
+    if (!orgId || !Number.isFinite(orgId)) return res.status(400).json({ error: 'org_id required' });
+
+    // Resolve the org row + baseline so the breakdown reflects what
+    // the registered agent actually has cached.
+    const orgRes = await pool.query('SELECT * FROM organizations WHERE id = $1', [orgId]);
+    if (!orgRes.rowCount) return res.status(404).json({ error: 'organization not found' });
+    const org = orgRes.rows[0];
+    const baseline = AGENT_SYSTEM_BASELINE[agentKey];
+    if (!baseline) return res.status(400).json({ error: 'unknown agent_key: ' + agentKey });
+
+    // 1. Composed system prompt — per-part breakdown.
+    const breakdown = await aiInternals.composedAgentSystemBreakdown(agentKey, baseline, org);
+    const composedSystem = {
+      total_chars: breakdown.total_joined_chars,
+      total_tokens_estimate: Math.round(breakdown.total_joined_chars / 4),
+      breakdown: breakdown.parts.map(p => ({
+        name: p.name,
+        chars: p.chars,
+        tokens: Math.round(p.chars / 4)
+      }))
+    };
+
+    // 2. Tool schemas — the union registered on the agent. Each
+    //    tool's JSON.stringify length is a tight upper bound on its
+    //    schema bytes; tokens are estimated at chars/4 to match the
+    //    composed-system estimator.
+    const customTools = customToolsFor(agentKey);
+    const toolSchemaSizes = customTools.map(t => ({
+      name: t && t.name,
+      schema_chars: JSON.stringify(t || {}).length
+    }));
+    const toolSchemaTotalChars = toolSchemaSizes.reduce((sum, t) => sum + t.schema_chars, 0);
+    toolSchemaSizes.sort((a, b) => b.schema_chars - a.schema_chars);
+    const tools = {
+      count: customTools.length,
+      total_schema_chars: toolSchemaTotalChars,
+      total_tokens_estimate: Math.round(toolSchemaTotalChars / 4),
+      by_size_top_10: toolSchemaSizes.slice(0, 10)
+    };
+
+    // 3. Reference links — what's inline vs lookup, and char size
+    //    per inline row so the admin can flip the biggest ones.
+    const refRes = await pool.query(
+      `SELECT title, inject_mode, last_fetch_status,
+              COALESCE(OCTET_LENGTH(last_fetched_text), 0) AS chars,
+              last_fetched_at
+         FROM agent_reference_links
+        WHERE organization_id = $1 AND enabled = TRUE
+        ORDER BY chars DESC NULLS LAST`,
+      [orgId]
+    );
+    const inlineRows = refRes.rows.filter(r => r.inject_mode === 'inline');
+    const lookupRows = refRes.rows.filter(r => r.inject_mode !== 'inline');
+    const inlineTotalChars = inlineRows.reduce((sum, r) => sum + Number(r.chars || 0), 0);
+    const referenceLinks = {
+      inline_count: inlineRows.length,
+      lookup_count: lookupRows.length,
+      inline_total_chars: inlineTotalChars,
+      inline_total_tokens_estimate: Math.round(inlineTotalChars / 4),
+      by_title: refRes.rows.map(r => ({
+        title: r.title,
+        inject_mode: r.inject_mode,
+        last_fetch_status: r.last_fetch_status,
+        chars: Number(r.chars || 0),
+        tokens: Math.round(Number(r.chars || 0) / 4),
+        last_fetched_at: r.last_fetched_at
+      }))
+    };
+
+    // 4. Grand-total floor — what every fresh session pays via
+    //    cache_read on the first turn.
+    const grandTotalChars = composedSystem.total_chars + tools.total_schema_chars;
+    const firstTurnFloor = {
+      note: 'This is what Anthropic caches on the registered agent. Every fresh session pays this read on its first turn via cache_read. Reduce by trimming the biggest contributors below.',
+      composed_system_tokens: composedSystem.total_tokens_estimate,
+      tool_schema_tokens: tools.total_tokens_estimate,
+      grand_total_tokens: Math.round(grandTotalChars / 4)
+    };
+
+    // 5. Find the registered Anthropic agent id for context.
+    const regRes = await pool.query(
+      `SELECT anthropic_agent_id, model, tool_count, skill_count, updated_at
+         FROM managed_agent_registry
+        WHERE agent_key = $1 AND organization_id = $2`,
+      [agentKey, orgId]
+    );
+    const registered = regRes.rows[0] || null;
+
+    res.json({
+      agent_key: agentKey,
+      organization_id: orgId,
+      anthropic_agent_id: registered ? registered.anthropic_agent_id : null,
+      registered_at: registered ? registered.updated_at : null,
+      composed_system: composedSystem,
+      tools: tools,
+      reference_links: referenceLinks,
+      first_turn_floor: firstTurnFloor
+    });
+  } catch (e) {
+    console.error('GET /api/admin/agents/managed/prompt-audit error:', e);
+    res.status(500).json({ error: 'Server error: ' + (e.message || 'unknown') });
+  }
+});
+
 // POST /api/admin/agents/managed/audit/kill
 //   Body: { agent_key: string, organization_id: number, archive_anthropic?: boolean }
 //   Removes one (agent_key, organization_id) registry row. If
