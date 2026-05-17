@@ -758,7 +758,7 @@ router.post('/skills/sync-all-to-anthropic', requireAuth, requireCapability('ROL
       try {
         const md = buildSkillMarkdown(pack);
         const slug = slugifySkillName(pack.name);
-        const file = await toFile(Buffer.from(md, 'utf8'), slug + '/SKILL.md', { type: 'text/markdown' });
+        const file = await toFile(Buffer.from(md, 'utf8'), 'SKILL.md', { type: 'text/markdown' });
         const created = await anthropic.beta.skills.create({
           display_title: (pack.name || 'Project 86 skill').slice(0, 200),
           files: [file]
@@ -814,7 +814,7 @@ router.post('/skills/:idx/sync-to-anthropic', requireAuth, requireCapability('RO
     const pack = skills[idx];
     const md = buildSkillMarkdown(pack);
     const slug = slugifySkillName(pack.name);
-    const file = await toFile(Buffer.from(md, 'utf8'), slug + '/SKILL.md', { type: 'text/markdown' });
+    const file = await toFile(Buffer.from(md, 'utf8'), 'SKILL.md', { type: 'text/markdown' });
     const created = await anthropic.beta.skills.create({
       display_title: (pack.name || 'Project 86 skill').slice(0, 200),
       files: [file]

@@ -2232,28 +2232,51 @@ async function loadSectionOverridesFor(agentKey) {
     const { rows } = await pool.query(
       `SELECT value FROM app_settings WHERE key = 'agent_skills'`
     );
-    if (!rows.length) return {};
+    if (!rows.length) return { __mirroredSections: new Set() };
     const cfg = rows[0].value || {};
     const skills = Array.isArray(cfg.skills) ? cfg.skills : [];
     const result = {};
+    // Sections whose source pack has already been mirrored as a
+    // native Anthropic Skill. renderSection skips those entirely so
+    // the system prompt doesn't double-ship content the agent now
+    // auto-discovers via Anthropic's Skills mechanism. Set is empty
+    // until section-override packs (replaces_section) start being
+    // mirrored — the current mirror-all path only handles on-demand
+    // packs in org_skill_packs.
+    const mirroredSections = new Set();
     skills.forEach(s => {
-      if (!s || !s.replaces_section || !s.body) return;
+      if (!s || !s.replaces_section) return;
       if (!Array.isArray(s.agents) || s.agents.indexOf(agentKey) < 0) return;
+      if (s.anthropic_skill_id) {
+        mirroredSections.add(s.replaces_section);
+        return;
+      }
+      if (!s.body) return;
       // Last write wins if two packs target the same section. Admin UI
       // should warn before saving such a config.
       result[s.replaces_section] = s.body;
     });
+    // Smuggle the mirrored set through on a special key so the
+    // function signature stays a plain { section_id: body } map for
+    // existing callers that only consume bodies.
+    result.__mirroredSections = mirroredSections;
     return result;
   } catch (e) {
     console.error('loadSectionOverridesFor error:', e);
-    return {};
+    return { __mirroredSections: new Set() };
   }
 }
 
 // Append a named section to the stable-prefix lines array. Uses an
-// override body if one exists, otherwise the default from SECTION_DEFAULTS.
-// No-op if neither exists (defensive).
+// override body if one exists, otherwise the default from
+// SECTION_DEFAULTS. Skips entirely when the section's source pack
+// has been mirrored to a native Anthropic Skill — the agent
+// auto-discovers the skill at chat time, so re-shipping the body
+// here would just double-bill the tokens. No-op if neither exists.
 function renderSection(stableLines, sectionId, overrides) {
+  if (overrides && overrides.__mirroredSections && overrides.__mirroredSections.has(sectionId)) {
+    return;
+  }
   const override = overrides && overrides[sectionId];
   if (override) { stableLines.push(override); return; }
   const def = SECTION_DEFAULTS[sectionId];
@@ -6963,7 +6986,7 @@ async function execStaffApprovalTool(name, input, ctx) {
         insertedId = pack.id;
         const md = buildSkillMarkdownForMirror(pack);
         const slug = slugifyMirrorName(pack.name);
-        const file = await toFile(Buffer.from(md, 'utf8'), slug + '/SKILL.md', { type: 'text/markdown' });
+        const file = await toFile(Buffer.from(md, 'utf8'), 'SKILL.md', { type: 'text/markdown' });
         const created = await anthropic.beta.skills.create({
           display_title: (pack.name || 'Project 86 skill').slice(0, 200),
           files: [file]
@@ -7045,7 +7068,7 @@ async function execStaffApprovalTool(name, input, ctx) {
         try {
           const md = buildSkillMarkdownForMirror(updated);
           const slug = slugifyMirrorName(updated.name);
-          const file = await toFile(Buffer.from(md, 'utf8'), slug + '/SKILL.md', { type: 'text/markdown' });
+          const file = await toFile(Buffer.from(md, 'utf8'), 'SKILL.md', { type: 'text/markdown' });
           if (updated.anthropic_skill_id) {
             await anthropic.beta.skills.versions.create(updated.anthropic_skill_id, { files: [file] });
           } else {

@@ -62,7 +62,7 @@ function buildPackSkillMd(pack) {
 async function uploadPackAsNewSkill(anthropic, pack) {
   const md = buildPackSkillMd(pack);
   const slug = slugifyPackName(pack.name);
-  const file = await toFile(Buffer.from(md, 'utf8'), slug + '/SKILL.md', { type: 'text/markdown' });
+  const file = await toFile(Buffer.from(md, 'utf8'), 'SKILL.md', { type: 'text/markdown' });
   return anthropic.beta.skills.create({
     display_title: String(pack.name || 'Project 86 skill').slice(0, 200),
     files: [file]
@@ -75,7 +75,7 @@ async function uploadPackAsNewSkill(anthropic, pack) {
 async function uploadPackAsNewVersion(anthropic, skillId, pack) {
   const md = buildPackSkillMd(pack);
   const slug = slugifyPackName(pack.name);
-  const file = await toFile(Buffer.from(md, 'utf8'), slug + '/SKILL.md', { type: 'text/markdown' });
+  const file = await toFile(Buffer.from(md, 'utf8'), 'SKILL.md', { type: 'text/markdown' });
   return anthropic.beta.skills.versions.create(skillId, {
     files: [file]
   });
@@ -683,7 +683,7 @@ router.post('/:id/skill-packs/mirror-all',
         try {
           const md = buildPackSkillMd(pack);
           const slug = slugifyPackName(pack.name);
-          const file = await toFile(Buffer.from(md, 'utf8'), slug + '/SKILL.md', { type: 'text/markdown' });
+          const file = await toFile(Buffer.from(md, 'utf8'), 'SKILL.md', { type: 'text/markdown' });
           const created = await anthropic.beta.skills.create({
             display_title: String(pack.name || 'Project 86 skill').slice(0, 200),
             files: [file]
