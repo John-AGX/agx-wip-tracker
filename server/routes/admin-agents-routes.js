@@ -1819,30 +1819,35 @@ async function collectSkillsFor(agentKey, organization) {
 }
 
 // Built-in toolset configuration per agent key. The toolset
-// (agent_toolset_20260401) bundles 8 Anthropic-managed tools that
-// every Managed Agent gets access to:
-//   web_search, web_fetch  — used by 86 for pricing / vendor lookups
+// (agent_toolset_20260401) bundles 8 Anthropic-managed tools:
+//   web_search, web_fetch  — research (active for pricing / vendor
+//                            lookups)
 //   read, glob, grep       — file reads (likely needed for native
 //                            skill content loading from the
 //                            session container)
-//   bash, write, edit      — sandbox scratch (NOT used — 86's
-//                            writes go through custom propose_*
-//                            tools, not file-system edits)
+//   bash                   — sandbox shell. Useful for ad-hoc math,
+//                            parsing structured uploads, takeoff
+//                            arithmetic. Kept enabled per user
+//                            decision 2026-05-17 — value of
+//                            occasional script-driven compute
+//                            outweighs the ~2k cached schema cost.
+//   write, edit            — sandbox file CRUD. Disabled — 86's
+//                            persistent writes all go through
+//                            custom propose_* tools; the sandbox
+//                            filesystem disappears at end of
+//                            session, so there's no upside to
+//                            caching these schemas every turn.
 //
 // Each tool's schema rides in the agent's cached prompt and gets
 // billed via cache_read on every fresh-session first turn. The
-// prompt-audit on 2026-05-17 (commit a4ed4f0) showed the full
-// toolset accounts for several thousand tokens of cache_read; we
-// explicitly disable the 3 unused tools (bash / write / edit) to
-// shrink the cached blob without breaking native skill loading.
-// Read / glob / grep stay enabled because they may be how the
-// session loads skill bodies on-demand.
+// prompt-audit on 2026-05-17 (commit a4ed4f0) confirmed disabling
+// unused tools shrinks first-turn cost; read/glob/grep stay on so
+// native skill loading isn't broken.
 function builtinToolsetFor(agentKey) {
   return [{
     type: 'agent_toolset_20260401',
     default_config: { enabled: true },
     configs: [
-      { name: 'bash',  enabled: false },
       { name: 'write', enabled: false },
       { name: 'edit',  enabled: false }
     ]
