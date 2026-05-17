@@ -321,6 +321,61 @@ router.get('/subtasks/recent',
   (req, res) => res.json({ subtasks: [], rollup: {}, range: '7 days', retired: true })
 );
 
+// Unified-86 Phase 6 — per-user-thread observability.
+//   GET /api/admin/agents/user-threads
+//
+// Lists every active session_kind='user_thread' row for this org's
+// users, with usage and compaction stats. Designed for the admin
+// "Threads" tile (future UI) but works fine as a curl-able JSON
+// endpoint while we validate Phase 4's cutover. Empty result is
+// expected when UNIFIED_86_USER_THREAD=on hasn't been flipped yet
+// — no user-threads exist until the flag mints them on first chat.
+//
+// Fields per row:
+//   id, anthropic_session_id  — DB id + Anthropic-side session id
+//   user_id, user_email       — who owns the thread
+//   created_at                — when the thread was minted
+//   last_used_at              — most recent chat turn
+//   last_compacted_at         — most recent compact-2026-01-12 event
+//                                (NULL until the thread crosses the
+//                                ~150k input-token threshold)
+//   turn_count                — running counter maintained by /86/chat
+//   total_cost_usd            — running per-thread cost
+//   age_hours, idle_hours     — derived from created_at / last_used_at
+router.get('/user-threads',
+  requireAuth, requireCapability('ROLES_MANAGE'), require('../auth').requireOrg,
+  async (req, res) => {
+    try {
+      const orgId = req.organization.id;
+      const r = await pool.query(
+        `SELECT
+            s.id,
+            s.anthropic_session_id,
+            s.user_id,
+            u.email AS user_email,
+            s.created_at,
+            s.last_used_at,
+            s.last_compacted_at,
+            s.turn_count,
+            s.total_cost_usd,
+            EXTRACT(EPOCH FROM (NOW() - s.created_at))   / 3600 AS age_hours,
+            EXTRACT(EPOCH FROM (NOW() - s.last_used_at)) / 3600 AS idle_hours
+           FROM ai_sessions s
+           JOIN users u ON u.id = s.user_id
+          WHERE s.session_kind = 'user_thread'
+            AND s.archived_at IS NULL
+            AND u.organization_id = $1
+          ORDER BY s.last_used_at DESC`,
+        [orgId]
+      );
+      res.json({ threads: r.rows });
+    } catch (e) {
+      console.error('GET /api/admin/agents/user-threads error:', e);
+      res.status(500).json({ error: e.message || 'Server error' });
+    }
+  }
+);
+
 // Lists recent conversations grouped by (entity_type, estimate_id,
 // user_id). Each row carries the most recent activity timestamp,
 // turn count, total tokens, and the entity's display title (looked up
