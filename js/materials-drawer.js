@@ -28,6 +28,9 @@
   var _expandedRowId = null; // material_id of the row whose inline-add form is open
   var _activeSubgroup = 'materials'; // default filter chip
   var _favoritesOnly = false; // Phase 2 — Favorites filter chip toggle
+  var _multiSelect = false;   // Phase 3 — multi-select mode toggle
+  var _selectedIds = new Set(); // Phase 3 — material ids checked for bulk-add
+  var _confirming = false;    // Phase 3 — true while the confirm grid is showing
 
   // Subgroup chips — the catalog's agx_subgroup column holds these
   // values. Defaults to 'materials' since that's 95%+ of catalog rows
@@ -137,13 +140,17 @@
       '<aside class="md-panel" role="dialog" aria-label="Materials Catalog">' +
         '<header class="md-header">' +
           '<div class="md-title">&#x1F9F1; Materials Catalog</div>' +
-          '<button class="md-close" data-md-close aria-label="Close">&#x2715;</button>' +
+          '<div class="md-header-actions">' +
+            '<button class="md-multi-toggle" data-md-multi aria-pressed="false" title="Toggle multi-select for bulk-add">&#x2713; Multi-select</button>' +
+            '<button class="md-close" data-md-close aria-label="Close">&#x2715;</button>' +
+          '</div>' +
         '</header>' +
         '<div class="md-search-row">' +
           '<input class="md-search" type="text" placeholder="Search description, SKU, or category…" autocomplete="off" />' +
         '</div>' +
         '<div class="md-chips" role="tablist"></div>' +
         '<div class="md-results" role="list"></div>' +
+        '<div class="md-tray" data-md-tray hidden></div>' +
         '<footer class="md-footer">' +
           '<span class="md-footer-hint" data-md-target-hint>Adding to: —</span>' +
         '</footer>' +
@@ -155,6 +162,21 @@
     });
     var searchInput = root.querySelector('.md-search');
     searchInput.addEventListener('input', onSearchInput);
+    // Multi-select toggle (Phase 3). Flipping it on shows checkboxes
+    // on every row + reveals the bottom tray; flipping off clears
+    // selection.
+    var multiBtn = root.querySelector('[data-md-multi]');
+    multiBtn.addEventListener('click', function() {
+      _multiSelect = !_multiSelect;
+      if (!_multiSelect) {
+        _selectedIds.clear();
+        _confirming = false;
+      }
+      multiBtn.setAttribute('aria-pressed', _multiSelect ? 'true' : 'false');
+      multiBtn.classList.toggle('active', _multiSelect);
+      renderResults();
+      renderTray();
+    });
     // Chip strip — subgroup filters + a Favorites toggle (Phase 2).
     var chips = root.querySelector('.md-chips');
     SUBGROUPS.forEach(function(g) {
@@ -169,6 +191,8 @@
         });
         _expandedRowId = null;
         runSearch();
+        refreshTargetHint();
+        renderTray();
       });
       chips.appendChild(btn);
     });
@@ -212,6 +236,7 @@
     _isOpen = true;
     try { localStorage.setItem(TOGGLE_KEY, '1'); } catch (e) {}
     refreshTargetHint();
+    renderTray();
     // First-open search — empty query, fetches top results in the
     // active subgroup so the user sees something useful immediately.
     runSearch();
@@ -295,26 +320,41 @@
         '" aria-pressed="' + (fav ? 'true' : 'false') + '">' +
         (fav ? '&#x2605;' : '&#x2606;') +
         '</button>';
-      return '<div class="md-row' + (expanded ? ' expanded' : '') + '" data-mid="' + m.id + '">' +
-        '<div class="md-row-main">' +
-          '<div class="md-row-desc">' + escapeHTML(m.description || '(no description)') +
-            (m.sku ? '<span class="md-sku">SKU ' + escapeHTML(m.sku) + '</span>' : '') +
+      // Phase 3 — checkbox visible only in multi-select mode. The
+      // single-add "+ Add" button hides while multi-select is on so
+      // the user has one clear way to act on a row.
+      var checked = _selectedIds.has(m.id);
+      var checkboxHtml = _multiSelect
+        ? '<label class="md-check"><input type="checkbox" data-check="' + m.id + '"' +
+            (checked ? ' checked' : '') + ' /></label>'
+        : '';
+      var addBtnHtml = _multiSelect
+        ? ''
+        : '<button class="md-add-btn" data-add="' + m.id + '">' + (expanded ? 'Cancel' : '+ Add') + '</button>';
+      return '<div class="md-row' + (expanded ? ' expanded' : '') +
+          (checked ? ' selected' : '') + '" data-mid="' + m.id + '">' +
+        (checkboxHtml ? '<div class="md-row-check">' + checkboxHtml + '</div>' : '') +
+        '<div class="md-row-body">' +
+          '<div class="md-row-main">' +
+            '<div class="md-row-desc">' + escapeHTML(m.description || '(no description)') +
+              (m.sku ? '<span class="md-sku">SKU ' + escapeHTML(m.sku) + '</span>' : '') +
+            '</div>' +
+            '<div class="md-row-meta">' +
+              (m.unit ? escapeHTML(m.unit) + ' · ' : '') +
+              'last ' + fmtMoney(m.last_unit_price) +
+              ' · avg ' + fmtMoney(m.avg_unit_price) +
+              ' · ' + fmtDate(m.last_seen) +
+              ' · ' + (m.purchase_count || 0) + 'x' +
+              (m.category ? ' · ' + escapeHTML(m.category) : '') +
+            '</div>' +
           '</div>' +
-          '<div class="md-row-meta">' +
-            (m.unit ? escapeHTML(m.unit) + ' · ' : '') +
-            'last ' + fmtMoney(m.last_unit_price) +
-            ' · avg ' + fmtMoney(m.avg_unit_price) +
-            ' · ' + fmtDate(m.last_seen) +
-            ' · ' + (m.purchase_count || 0) + 'x' +
-            (m.category ? ' · ' + escapeHTML(m.category) : '') +
+          '<div class="md-row-actions">' +
+            starHtml +
+            onBadge +
+            addBtnHtml +
           '</div>' +
+          addFormHtml +
         '</div>' +
-        '<div class="md-row-actions">' +
-          starHtml +
-          onBadge +
-          '<button class="md-add-btn" data-add="' + m.id + '">' + (expanded ? 'Cancel' : '+ Add') + '</button>' +
-        '</div>' +
-        addFormHtml +
       '</div>';
     }).join('');
     el.innerHTML = html;
@@ -345,6 +385,19 @@
         var material = _lastResults.find(function(x) { return x.id === mid; });
         if (!material) return;
         toggleFavorite(material, btn);
+      });
+    });
+    // Wire multi-select checkboxes — Phase 3.
+    el.querySelectorAll('[data-check]').forEach(function(cb) {
+      cb.addEventListener('change', function() {
+        var mid = Number(cb.dataset.check);
+        if (cb.checked) _selectedIds.add(mid);
+        else _selectedIds.delete(mid);
+        // Toggle the .selected class on the parent row without a full
+        // re-render so the user doesn't lose scroll position.
+        var row = cb.closest('.md-row');
+        if (row) row.classList.toggle('selected', cb.checked);
+        renderTray();
       });
     });
     // Wire form submits inside any expanded row.
@@ -436,6 +489,139 @@
   // editor stamps newLine.sourceMaterialId so favorites / recently-
   // used / "already on estimate" can correlate without falling back
   // to fuzzy description matching.
+
+  // ──────────────────────────────────────────────────────────────────
+  // Bulk-add tray (Phase 3). Sticky strip above the footer that shows
+  // selection count + the active target + an "Add all" button. Hidden
+  // when multi-select is off OR no items are selected. The confirm
+  // step opens a per-row qty grid in place of the search results so
+  // the user can tweak qty before committing.
+  // ──────────────────────────────────────────────────────────────────
+  function renderTray() {
+    if (!_drawerEl) return;
+    var tray = _drawerEl.querySelector('[data-md-tray]');
+    if (!tray) return;
+    if (!_multiSelect || _selectedIds.size === 0) {
+      tray.hidden = true;
+      tray.innerHTML = '';
+      return;
+    }
+    tray.hidden = false;
+    var groupName = window.estimateEditorAPI &&
+                    window.estimateEditorAPI.activeAlternateName &&
+                    window.estimateEditorAPI.activeAlternateName();
+    var sectionLabel = SUBGROUP_TO_SECTION[_activeSubgroup] || 'Materials & Supplies';
+    tray.innerHTML =
+      '<div class="md-tray-info">' +
+        '<strong>' + _selectedIds.size + '</strong> selected' +
+        (groupName ? ' · ' + escapeHTML(groupName) + ' → ' + escapeHTML(sectionLabel) : ' · (no estimate open)') +
+      '</div>' +
+      '<div class="md-tray-actions">' +
+        '<button class="md-tray-clear" data-tray-clear>Clear</button>' +
+        '<button class="md-tray-add" data-tray-add' + (groupName ? '' : ' disabled') + '>Add all &rarr;</button>' +
+      '</div>';
+    var clearBtn = tray.querySelector('[data-tray-clear]');
+    if (clearBtn) clearBtn.addEventListener('click', function() {
+      _selectedIds.clear();
+      _confirming = false;
+      renderResults();
+      renderTray();
+    });
+    var addBtn = tray.querySelector('[data-tray-add]');
+    if (addBtn) addBtn.addEventListener('click', openConfirmGrid);
+  }
+
+  // Confirmation step — replace the search results with a stripped-
+  // down grid of just the selected items so the user can set qty per
+  // row before commit. Per spec: descriptions/prices are read-only at
+  // this stage; qty is required (defaults blank, must be filled).
+  function openConfirmGrid() {
+    _confirming = true;
+    var resultsEl = _drawerEl.querySelector('.md-results');
+    var selected = _lastResults.filter(function(m) { return _selectedIds.has(m.id); });
+    // The user may have selected rows that scrolled out of the
+    // current search result set if they filtered/searched between
+    // selections. For Phase 3 MVP we only confirm what's currently
+    // in _lastResults; out-of-frame selections are dropped quietly
+    // (rare in practice — the typical bulk flow selects 3-10 visible
+    // rows). A future enhancement could cache full row data per id.
+    var html = '<div class="md-confirm">' +
+      '<div class="md-confirm-head">Set qty for each line, then Add all. Unit + price come from the catalog row; edit them in the estimate after if needed.</div>' +
+      selected.map(function(m) {
+        return '<div class="md-confirm-row" data-confirm-mid="' + m.id + '">' +
+          '<div class="md-confirm-desc">' + escapeHTML(m.description || '(no description)') +
+            '<span class="md-confirm-meta">' +
+              (m.unit || 'ea') + ' · ' + fmtMoney(m.last_unit_price) +
+            '</span>' +
+          '</div>' +
+          '<input class="md-confirm-qty" type="number" step="any" min="0" placeholder="qty" />' +
+        '</div>';
+      }).join('') +
+      '<div class="md-confirm-actions">' +
+        '<button class="md-confirm-cancel" data-confirm-cancel>&larr; Back</button>' +
+        '<button class="md-confirm-submit" data-confirm-submit>Add ' + selected.length + ' line(s)</button>' +
+      '</div>' +
+    '</div>';
+    resultsEl.innerHTML = html;
+    resultsEl.querySelector('[data-confirm-cancel]').addEventListener('click', function() {
+      _confirming = false;
+      renderResults();
+    });
+    resultsEl.querySelector('[data-confirm-submit]').addEventListener('click', submitBulkAdd);
+    var firstQty = resultsEl.querySelector('.md-confirm-qty');
+    if (firstQty) firstQty.focus();
+  }
+
+  function submitBulkAdd() {
+    if (!window.estimateEditorAPI || typeof window.estimateEditorAPI.applyBulkAddLineItems !== 'function') {
+      alert('Estimate editor isn\'t available — open an estimate first.');
+      return;
+    }
+    var rows = Array.from(_drawerEl.querySelectorAll('.md-confirm-row'));
+    var sectionName = SUBGROUP_TO_SECTION[_activeSubgroup] || 'Materials & Supplies';
+    var lines = [];
+    var missingQty = 0;
+    rows.forEach(function(row) {
+      var mid = Number(row.dataset.confirmMid);
+      var material = _lastResults.find(function(x) { return x.id === mid; });
+      if (!material) return;
+      var qtyEl = row.querySelector('.md-confirm-qty');
+      var qty = parseFloat(qtyEl.value);
+      if (!isFinite(qty) || qty <= 0) {
+        missingQty++;
+        qtyEl.classList.add('md-error');
+        return;
+      }
+      qtyEl.classList.remove('md-error');
+      lines.push({
+        description: material.description,
+        qty: qty,
+        unit: material.unit || 'ea',
+        unit_cost: material.last_unit_price != null ? Number(material.last_unit_price) : 0,
+        section_name: sectionName,
+        source_material_id: material.id
+      });
+    });
+    if (missingQty > 0) {
+      alert(missingQty + ' line(s) need a qty before adding.');
+      return;
+    }
+    try {
+      window.estimateEditorAPI.applyBulkAddLineItems(lines);
+      _selectedIds.clear();
+      _confirming = false;
+      _multiSelect = false;
+      var multiBtn = _drawerEl.querySelector('[data-md-multi]');
+      if (multiBtn) {
+        multiBtn.setAttribute('aria-pressed', 'false');
+        multiBtn.classList.remove('active');
+      }
+      renderResults();
+      renderTray();
+    } catch (e) {
+      alert('Bulk add failed: ' + (e.message || 'unknown'));
+    }
+  }
 
   // ──────────────────────────────────────────────────────────────────
   // Favorites toggle (Phase 2). Optimistic update: flip the row's

@@ -2479,6 +2479,110 @@
       border-top: 1px solid var(--border, #333);
       font-size: 11px; color: var(--text-dim, #888);
     }
+    /* Multi-select header button + checkbox cell on rows (Phase 3) */
+    #materials-drawer-root .md-header-actions {
+      display: flex; align-items: center; gap: 6px;
+    }
+    #materials-drawer-root .md-multi-toggle {
+      background: transparent;
+      border: 1px solid var(--border, #333);
+      color: var(--text-dim, #aaa);
+      padding: 3px 8px; border-radius: 4px;
+      font-size: 11px; cursor: pointer;
+    }
+    #materials-drawer-root .md-multi-toggle:hover { background: rgba(255,255,255,0.05); color: var(--text, #fff); }
+    #materials-drawer-root .md-multi-toggle.active {
+      background: rgba(79,140,255,0.18);
+      border-color: rgba(79,140,255,0.6);
+      color: #4f8cff;
+    }
+    #materials-drawer-root .md-row {
+      display: flex; align-items: stretch;
+    }
+    #materials-drawer-root .md-row-check {
+      display: flex; align-items: center; padding-right: 8px;
+    }
+    #materials-drawer-root .md-row-check input { transform: scale(1.2); cursor: pointer; }
+    #materials-drawer-root .md-row-body { flex: 1; }
+    #materials-drawer-root .md-row.selected {
+      background: rgba(79,140,255,0.10);
+      border-color: rgba(79,140,255,0.45);
+    }
+    /* Bulk tray (Phase 3) */
+    #materials-drawer-root .md-tray {
+      padding: 10px 14px;
+      border-top: 1px solid rgba(79,140,255,0.4);
+      background: rgba(79,140,255,0.08);
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 10px;
+    }
+    #materials-drawer-root .md-tray[hidden] { display: none; }
+    #materials-drawer-root .md-tray-info { font-size: 12px; color: var(--text, #fff); }
+    #materials-drawer-root .md-tray-info strong { color: #4f8cff; }
+    #materials-drawer-root .md-tray-actions { display: flex; gap: 6px; }
+    #materials-drawer-root .md-tray-clear {
+      background: transparent; border: 1px solid var(--border, #333);
+      color: var(--text-dim, #aaa); padding: 4px 10px; border-radius: 4px;
+      font-size: 11px; cursor: pointer;
+    }
+    #materials-drawer-root .md-tray-clear:hover { background: rgba(255,255,255,0.06); }
+    #materials-drawer-root .md-tray-add {
+      background: linear-gradient(135deg, #4f8cff, #8b5cf6);
+      border: none; color: #fff;
+      padding: 5px 14px; border-radius: 5px;
+      font-size: 12px; font-weight: 600; cursor: pointer;
+    }
+    #materials-drawer-root .md-tray-add:hover { filter: brightness(1.1); }
+    #materials-drawer-root .md-tray-add:disabled { opacity: 0.4; cursor: not-allowed; filter: none; }
+    /* Confirm grid (Phase 3) */
+    #materials-drawer-root .md-confirm {
+      padding: 8px;
+    }
+    #materials-drawer-root .md-confirm-head {
+      font-size: 11px; color: var(--text-dim, #888);
+      padding: 4px 8px 10px; line-height: 1.4;
+    }
+    #materials-drawer-root .md-confirm-row {
+      display: flex; align-items: center; gap: 10px;
+      padding: 8px 10px;
+      border: 1px solid var(--border, #2a2a3a);
+      border-radius: 6px; margin-bottom: 6px;
+      background: rgba(255,255,255,0.02);
+    }
+    #materials-drawer-root .md-confirm-desc {
+      flex: 1; font-size: 12px; color: var(--text, #fff);
+    }
+    #materials-drawer-root .md-confirm-meta {
+      display: block; font-size: 10px; color: var(--text-dim, #888); margin-top: 2px;
+    }
+    #materials-drawer-root .md-confirm-qty {
+      width: 80px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid var(--border, #333);
+      border-radius: 4px;
+      color: var(--text, #fff);
+      padding: 5px 7px;
+      font-size: 12px;
+    }
+    #materials-drawer-root .md-confirm-qty:focus { outline: none; border-color: rgba(79,140,255,0.85); }
+    #materials-drawer-root .md-confirm-qty.md-error { border-color: rgba(248, 113, 113, 0.7); }
+    #materials-drawer-root .md-confirm-actions {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 10px; padding: 10px 4px 4px;
+    }
+    #materials-drawer-root .md-confirm-cancel {
+      background: transparent; border: 1px solid var(--border, #333);
+      color: var(--text-dim, #aaa); padding: 5px 12px; border-radius: 4px;
+      font-size: 12px; cursor: pointer;
+    }
+    #materials-drawer-root .md-confirm-cancel:hover { background: rgba(255,255,255,0.05); }
+    #materials-drawer-root .md-confirm-submit {
+      background: linear-gradient(135deg, #4f8cff, #8b5cf6);
+      border: none; color: #fff;
+      padding: 6px 16px; border-radius: 5px;
+      font-size: 12px; font-weight: 600; cursor: pointer;
+    }
+    #materials-drawer-root .md-confirm-submit:hover { filter: brightness(1.1); }
     /* Light-mode tweaks for the drawer */
     body.light-mode #materials-drawer-root .md-panel { background: #fff; border-left-color: #e5e7eb; }
     body.light-mode #materials-drawer-root .md-row { background: #fafafa; border-color: #e5e7eb; }

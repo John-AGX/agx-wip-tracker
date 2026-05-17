@@ -1871,10 +1871,41 @@
       appData.estimateLines.push(newLine);
     }
 
+    // _silent skips the save + re-render so a bulk caller can fire
+    // N line inserts in a tight loop and finalize once at the end.
+    // The Materials Catalog Drawer's bulk-add path passes this flag
+    // and calls debouncedSave + renderLineItems once after the loop.
+    if (!input || !input._silent) {
+      debouncedSave();
+      renderLineItems();
+      renderTotals();
+    }
+    return 'Added line: "' + newLine.description + '" — qty ' + newLine.qty + ' ' + newLine.unit + ' @ $' + newLine.unitCost.toFixed(2);
+  }
+
+  // Materials Catalog Drawer phase 3 — bulk add. Loops applyAddLineItem
+  // with _silent:true so we don't re-render or save N times, then
+  // finalizes with a single save + render. Returns the list of
+  // summary strings for the caller to surface in the UI.
+  function applyBulkAddLineItems(lines) {
+    if (!Array.isArray(lines) || !lines.length) return [];
+    var summaries = [];
+    var errors = [];
+    lines.forEach(function(spec) {
+      try {
+        summaries.push(applyAddLineItem(Object.assign({ _silent: true }, spec || {})));
+      } catch (e) {
+        errors.push((spec && spec.description) || 'unknown' + ': ' + (e.message || 'failed'));
+      }
+    });
+    // Single save + render after the whole batch lands.
     debouncedSave();
     renderLineItems();
     renderTotals();
-    return 'Added line: "' + newLine.description + '" — qty ' + newLine.qty + ' ' + newLine.unit + ' @ $' + newLine.unitCost.toFixed(2);
+    if (errors.length) {
+      summaries.push('— ' + errors.length + ' failed: ' + errors.join('; '));
+    }
+    return summaries;
   }
 
   function applyAddSection(input) {
@@ -2291,6 +2322,7 @@
     // sync with the editor's pill.
     getAIPhase: getEstimateAIPhase,
     applyAddLineItem: applyAddLineItem,
+    applyBulkAddLineItems: applyBulkAddLineItems,
     applyAddSection: applyAddSection,
     applyUpdateScope: applyUpdateScope,
     applyDeleteLine: applyDeleteLine,
