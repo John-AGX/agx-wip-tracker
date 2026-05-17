@@ -1290,6 +1290,27 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_ai_sessions_last_used
       ON ai_sessions(last_used_at DESC);
 
+    -- Unified-86 Phase 4a — one rolling session per user instead of
+    -- one per (user, entity_type, entity_id). session_kind discrimin-
+    -- ates between new user-thread rows ('user_thread') and pre-
+    -- cutover rows ('legacy_partitioned'); the resolver picks the
+    -- right shape and the sidebar can group them visually (legacy
+    -- rows collapse under an "Archive" header). last_compacted_at
+    -- records the last server-side compaction event so the resolver
+    -- knows when to trigger the next one (~150k input tokens
+    -- threshold). Both columns are idempotent ADDs with safe defaults
+    -- — existing rows backfill to 'legacy_partitioned' / NULL on
+    -- migration, no data rewrite needed.
+    ALTER TABLE ai_sessions ADD COLUMN IF NOT EXISTS session_kind TEXT NOT NULL DEFAULT 'legacy_partitioned';
+    ALTER TABLE ai_sessions ADD COLUMN IF NOT EXISTS last_compacted_at TIMESTAMPTZ;
+    -- Fast lookup of "the user-thread for this user" — used by the
+    -- new resolveSessionForChat path. archived_at filter so
+    -- abandoned threads (manual delete, stuck-session recovery)
+    -- don't shadow the active one.
+    CREATE INDEX IF NOT EXISTS idx_ai_sessions_user_thread
+      ON ai_sessions(user_id, last_used_at DESC)
+      WHERE session_kind = 'user_thread' AND archived_at IS NULL;
+
     -- Backfill labels for pre-sidebar rows so the sidebar UI doesn't
     -- show blank labels on existing sessions. "General" for the
     -- catch-all (entity_type='86' historically meant the global

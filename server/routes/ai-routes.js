@@ -2882,7 +2882,7 @@ function autoLabelFromContext(entityType, entityId, ctx) {
   return (cap + ' ' + entityId).slice(0, 200);
 }
 
-async function createFreshAiSession({ agentKey, entityType, entityId, userId, organization }) {
+async function createFreshAiSession({ agentKey, entityType, entityId, userId, organization, sessionKind }) {
   const adminAgents = require('./admin-agents-routes');
   const env = await adminAgents.ensureManagedEnvironment();
   // Per-org Anthropic agent — ensureManagedAgent looks up by
@@ -2891,19 +2891,31 @@ async function createFreshAiSession({ agentKey, entityType, entityId, userId, or
   const agent = await adminAgents.ensureManagedAgent(agentKey, organization);
   const anthropic = getAnthropic();
 
+  // Phase 4a — session_kind discriminates user-thread vs legacy
+  // partitioned. Defaults to 'legacy_partitioned' so existing
+  // callers preserve today's behavior; the new resolveSessionForChat
+  // user-thread path passes 'user_thread' explicitly.
+  const kind = sessionKind === 'user_thread' ? 'user_thread' : 'legacy_partitioned';
+  // Title varies by kind so Anthropic-side debugging is easier — a
+  // user-thread is one rolling Anthropic session across every panel,
+  // so the title shouldn't pin to a single entity.
+  const title = kind === 'user_thread'
+    ? 'Project 86 · ' + organization.slug + ' / user ' + userId + ' (rolling)'
+    : 'Project 86 ' + agentKey + ' · ' + organization.slug + ' / ' + entityType + ' / ' + (entityId || 'global') + ' (user ' + userId + ')';
+
   const created = await anthropic.beta.sessions.create({
     agent: agent.anthropic_agent_id,
     environment_id: env.anthropic_environment_id,
-    title: 'Project 86 ' + agentKey + ' · ' + organization.slug + ' / ' + entityType + ' / ' + (entityId || 'global') + ' (user ' + userId + ')'
+    title
   });
 
   try {
     const inserted = await pool.query(
       `INSERT INTO ai_sessions
-         (agent_key, entity_type, entity_id, user_id, anthropic_session_id, anthropic_agent_id)
-       VALUES ($1, $2, $3, $4, $5, $6)
+         (agent_key, entity_type, entity_id, user_id, anthropic_session_id, anthropic_agent_id, session_kind)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING *`,
-      [agentKey, entityType, entityId, userId, created.id, agent.anthropic_agent_id]
+      [agentKey, entityType, entityId, userId, created.id, agent.anthropic_agent_id, kind]
     );
     return inserted.rows[0];
   } catch (e) {
