@@ -81,14 +81,22 @@ function getAnthropic() {
   if (!key) return null;
   // Recreate the client if the key changed (rare, but possible on rotation).
   // Default headers opt every request into the beta features we
-  // depend on: files-api-2025-04-14 unlocks {source:{type:'file',
-  // file_id:'...'}} image blocks so the chat path can reference
-  // pre-uploaded photos by id instead of re-base64-encoding the bytes
-  // every turn.
+  // depend on:
+  //   - files-api-2025-04-14 unlocks {source:{type:'file',file_id:'…'}}
+  //     image blocks so the chat path can reference pre-uploaded
+  //     photos by id instead of re-base64-encoding the bytes every
+  //     turn.
+  //   - compact-2026-01-12 enables server-side session compaction.
+  //     Once a session's context approaches the trigger threshold
+  //     (~150k input tokens by default) Anthropic auto-summarizes
+  //     earlier turns server-side and the rolling user-thread can
+  //     run indefinitely without context-window blow-up. Phase 4c
+  //     of the unified-86 cutover relies on this — without it, a
+  //     long-lived user-thread session would die at ~1M tokens.
   if (!_anthropicClient || _anthropicKey !== key) {
     _anthropicClient = new Anthropic({
       apiKey: key,
-      defaultHeaders: { 'anthropic-beta': 'files-api-2025-04-14' }
+      defaultHeaders: { 'anthropic-beta': 'files-api-2025-04-14,compact-2026-01-12' }
     });
     _anthropicKey = key;
   }
@@ -3470,6 +3478,29 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
                 cache_creation_input_tokens: event.model_usage.cache_creation_input_tokens,
                 cache_read_input_tokens: event.model_usage.cache_read_input_tokens
               };
+            }
+            break;
+          }
+          case 'session.compaction_complete':
+          case 'session.compacted': {
+            // Anthropic server-side compaction (compact-2026-01-12)
+            // just summarized earlier turns. Stamp the row so the
+            // sidebar / admin UI can show "last compacted N ago" and
+            // observability dashboards can alert when a long thread
+            // hasn't compacted recently. Defensive on event name —
+            // both shapes are documented variants depending on SDK
+            // version. Non-fatal on UPDATE failure (the actual
+            // compaction already happened server-side).
+            console.log('[v2-stream] compaction event:', event.type, 'session', sessionId);
+            try {
+              await pool.query(
+                `UPDATE ai_sessions
+                    SET last_compacted_at = NOW()
+                  WHERE id = $1`,
+                [session.id]
+              );
+            } catch (e) {
+              console.warn('[v2-stream] last_compacted_at update failed:', e.message);
             }
             break;
           }
