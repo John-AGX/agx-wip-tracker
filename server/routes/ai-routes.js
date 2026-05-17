@@ -3391,17 +3391,28 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
       // entire client directory, etc.) routinely exceed that — chunk
       // sequentially. The session processes chunks in order, so
       // tool_result ordering is preserved.
-      const EVENTS_PER_SEND = 50;
+      //
+      // EVENTS_PER_SEND=1: observed bug — when events.send is called
+      // with a body { events: [N items] } where N>1 and ALL items
+      // are user.custom_tool_result, Anthropic only processes the
+      // FIRST item. Subsequent tool_results stay permanently blocked,
+      // the model can't proceed, undici body-timeout eventually
+      // kills the stream after 5min. Two separate Windermere runs
+      // showed the same pattern: send 3 results, only the first id
+      // resolves, the other 2 stay blocked. A mixed batch
+      // (2 results + 1 user.message) DID work, so the bug is
+      // specific to batched-tool_results-only. Workaround: send each
+      // event as its own events.send call. Adds ~100-500ms per
+      // event of latency; for typical 1-5 tool_use turns that's a
+      // few seconds, well below the previous 5-min hang.
+      const EVENTS_PER_SEND = 1;
       try {
         for (let i = 0; i < eventsForThisOpen.length; i += EVENTS_PER_SEND) {
           const chunk = eventsForThisOpen.slice(i, i + EVENTS_PER_SEND);
           await anthropic.beta.sessions.events.send(sessionId, { events: chunk });
-          if (eventsForThisOpen.length > EVENTS_PER_SEND) {
-            console.log('[v2-stream] sent chunk', (i / EVENTS_PER_SEND) + 1,
-              '(' + chunk.length + ' event(s)) to', sessionId);
-          }
         }
-        console.log('[v2-stream] sent', eventsForThisOpen.length, 'event(s) to', sessionId);
+        console.log('[v2-stream] sent', eventsForThisOpen.length, 'event(s) to', sessionId,
+          '(serial single-event sends)');
       } catch (e) {
         if (isStuckSessionError(e) && !freshlyCreated) {
           // In-place recovery FIRST: parse the blocked sevt_* ids out
@@ -3731,10 +3742,13 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
                   pendingToolUses.length, 'approval card(s) for', sessionId,
                   'ids_sending:', JSON.stringify(pendingAutoResults.map(e => e.custom_tool_use_id)));
                 try {
-                  const EVENTS_PER_SEND = 50;
-                  for (let i = 0; i < pendingAutoResults.length; i += EVENTS_PER_SEND) {
+                  // One events.send per tool_result — batched tool_result-
+                  // only payloads only get the first item processed by
+                  // Anthropic (same bug observed in openStreamAndSend's
+                  // batched send). Serial single-event calls work.
+                  for (const evt of pendingAutoResults) {
                     await anthropic.beta.sessions.events.send(sessionId, {
-                      events: pendingAutoResults.slice(i, i + EVENTS_PER_SEND)
+                      events: [evt]
                     });
                   }
                   autoResultsFlushedThisTurn = true;
