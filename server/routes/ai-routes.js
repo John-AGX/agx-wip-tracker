@@ -2554,6 +2554,16 @@ async function saveAssistantMessage({ estimateId, userId, text, usage, packsLoad
 
 const FLAG_AGENT_MODE_47 = (process.env.AGENT_MODE_47 || '').toLowerCase() === 'agents';
 
+// Unified-86 Phase 4b — feature flag for the one-session-per-user
+// resolver. When 'on', resolveSessionForChat returns the user's
+// single rolling user-thread instead of partitioning by entity. The
+// flag stays OFF until each environment has been observed for a
+// boot cycle with Phase 4a's schema migration; flipping it on
+// requires no code change. Existing legacy_partitioned sessions
+// stay readable for sidebar / replay; only NEW turns go to the
+// user-thread once the flag is on.
+const FLAG_UNIFIED_USER_THREAD = (process.env.UNIFIED_86_USER_THREAD || '').toLowerCase() === 'on';
+
 // Three of our four context builders return `system` as an array of
 // TextBlockParam objects (with cache_control on the first block);
 // buildJobContext returns it as a plain string. The v2 path embeds
@@ -2799,6 +2809,45 @@ async function resolveSessionForChat({ sessionId, currentContext, userId, organi
       // Fall through to auto-anchor — a stale session_id (archived /
       // deleted upstream) shouldn't 500 the request.
     }
+  }
+
+  // Unified-86 Phase 4b — when the user-thread flag is on, every chat
+  // turn lands on the user's single rolling Anthropic session
+  // regardless of which panel they're on. entity_type / entity_id
+  // come per-turn from <turn_context> so the model knows WHICH
+  // surface the user is on, but the conversation history is one
+  // continuous thread. Legacy partitioned sessions still resolve via
+  // explicit sessionId (sidebar resume) so historic threads stay
+  // accessible.
+  if (FLAG_UNIFIED_USER_THREAD) {
+    const ut = await pool.query(
+      `SELECT * FROM ai_sessions
+         WHERE user_id = $1
+           AND session_kind = 'user_thread'
+           AND archived_at IS NULL
+         ORDER BY last_used_at DESC
+         LIMIT 1`,
+      [userId]
+    );
+    if (ut.rows.length) return ut.rows[0];
+
+    // First chat turn since the flag flipped on for this user — mint
+    // the rolling thread. entity_type stays 'general' / entity_id
+    // 'global' on the row so the ai_messages.estimate_id NOT NULL
+    // constraint is satisfied; the per-turn current_context carries
+    // the actual surface to the model via <turn_context>.
+    const fresh = await createFreshAiSession({
+      agentKey: 'job',
+      entityType: 'general',
+      entityId: 'global',
+      userId,
+      organization,
+      sessionKind: 'user_thread'
+    });
+    await pool.query(`UPDATE ai_sessions SET label = '86' WHERE id = $1`, [fresh.id]);
+    fresh.label = '86';
+    fresh._freshlyCreated = true;
+    return fresh;
   }
 
   const ctxType = currentContext && currentContext.entity_type;
@@ -9146,14 +9195,30 @@ router.post('/86/chat', requireAuth, requireOrg, async (req, res) => {
     // Persist the user's message under the resolved session's keys.
     // estimate_id is the legacy column name for "entity_id" on
     // ai_messages — kept as-is to avoid a wider migration.
+    //
+    // Unified-86 Phase 4b — when the resolved session is a user-thread
+    // (one rolling Anthropic session for the user), the session's
+    // own entity_type is 'general' / entity_id 'global'. The real
+    // per-turn surface lives in currentContext. Record THAT on
+    // ai_messages so per-surface analytics, deep-link routing, and
+    // replay accuracy keep working. Legacy partitioned sessions
+    // continue to use the session values (entity_type matches by
+    // construction).
+    const isUserThread = session.session_kind === 'user_thread';
+    const turnEntityType = isUserThread
+      ? (cctxEntityType || session.entity_type)
+      : session.entity_type;
+    const turnEntityId = isUserThread
+      ? (cctxEntityId ? String(cctxEntityId) : sessionEntityId)
+      : sessionEntityId;
     const userMsgId = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
     await pool.query(
       `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content, photos_included, inline_image_blocks)
        VALUES ($1, $2, $3, $4, 'user', $5, $6, $7::jsonb)`,
       [
         userMsgId,
-        session.entity_type,
-        sessionEntityId,
+        turnEntityType,
+        turnEntityId,
         req.user.id, userMessage, additionalImages.length,
         uploadedBlocks.length ? JSON.stringify(uploadedBlocks) : null
       ]
@@ -9202,7 +9267,7 @@ router.post('/86/chat', requireAuth, requireOrg, async (req, res) => {
                                     cache_creation_input_tokens, cache_read_input_tokens,
                                     tool_use_count, tool_uses)
            VALUES ($1, $2, $3, $4, 'assistant', $5, $6, $7, $8, $9, $10, $11, $12)`,
-          [aMsgId, session.entity_type, sessionEntityId, req.user.id, text || '', MODEL,
+          [aMsgId, turnEntityType, turnEntityId, req.user.id, text || '', MODEL,
            (usage && usage.input_tokens) || null,
            (usage && usage.output_tokens) || null,
            (usage && usage.cache_creation_input_tokens) || null,
