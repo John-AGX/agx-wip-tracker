@@ -3159,7 +3159,8 @@ async function archiveActiveAiSession({ agentKey, entityType, entityId, userId }
 }
 
 async function recoverStuckSession({ anthropic, sessionRow }) {
-  console.warn('[v2-stream] recovering stuck session', sessionRow.anthropic_session_id);
+  console.warn('[v2-stream] recovering stuck session', sessionRow.anthropic_session_id,
+               '(kind=' + (sessionRow.session_kind || 'legacy_partitioned') + ')');
   try { await anthropic.beta.sessions.archive(sessionRow.anthropic_session_id); }
   catch (e) { console.warn('Archive of stuck session failed (non-fatal):', e && e.message); }
   await pool.query('UPDATE ai_sessions SET archived_at = NOW() WHERE id = $1', [sessionRow.id]);
@@ -3178,13 +3179,30 @@ async function recoverStuckSession({ anthropic, sessionRow }) {
     throw new Error('Cannot recover stuck session: user ' + sessionRow.user_id + ' has no organization.');
   }
 
-  return createFreshAiSession({
+  // Unified-86 Phase 4d — preserve session_kind across recovery so a
+  // stuck user-thread becomes a fresh user-thread (not a legacy
+  // partitioned row). Without this, recovery would silently demote
+  // the user back to the per-entity session shape and the next chat
+  // turn would carve a new entity-anchored thread instead of
+  // continuing the rolling user-thread. Server-side compaction
+  // (compact-2026-01-12, Phase 4c) is the steady-state guard against
+  // token bloat; this archive+recreate is the last-resort hatch when
+  // a session ends up genuinely wedged in requires_action.
+  const fresh = await createFreshAiSession({
     agentKey: sessionRow.agent_key,
     entityType: sessionRow.entity_type,
     entityId: sessionRow.entity_id,
     userId: sessionRow.user_id,
-    organization
+    organization,
+    sessionKind: sessionRow.session_kind === 'user_thread' ? 'user_thread' : undefined
   });
+
+  // The Anthropic-side history is gone, but ai_messages rows are
+  // intact — so user-visible continuity (sidebar transcript, replay,
+  // memory recall) survives. Short-term mid-conversation context
+  // (last few turns) is what gets lost; the memory tool covers any
+  // durable facts the model wanted to keep.
+  return fresh;
 }
 
 async function runV2SessionStream({ anthropic, res, session, eventsToSend, persistAssistantText, onCustomToolUse, freshlyCreated }) {
