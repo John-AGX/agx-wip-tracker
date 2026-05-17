@@ -931,6 +931,20 @@ async function initSchema() {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_materials_natural_key
       ON materials(vendor, lower(raw_description));
 
+    -- Materials Catalog Drawer phase 2 — per-user starred materials.
+    -- Lets PMs pin frequent SKUs so the drawer surfaces them at the
+    -- top of the empty-search state and via the Favorites filter
+    -- chip. Composite PK doubles as the unique constraint so
+    -- POST /favorite is idempotent (ON CONFLICT DO NOTHING).
+    CREATE TABLE IF NOT EXISTS user_material_favorites (
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      material_id INTEGER NOT NULL REFERENCES materials(id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (user_id, material_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_user_material_favorites_user
+      ON user_material_favorites(user_id, created_at DESC);
+
     -- Per-purchase rows kept for audit + price-history queries. Lets us
     -- re-run aggregates after admins fix descriptions, and lets AG
     -- answer "when did we last buy this?" with a date.

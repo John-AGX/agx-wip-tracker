@@ -27,6 +27,7 @@
   var _lastResults = [];
   var _expandedRowId = null; // material_id of the row whose inline-add form is open
   var _activeSubgroup = 'materials'; // default filter chip
+  var _favoritesOnly = false; // Phase 2 — Favorites filter chip toggle
 
   // Subgroup chips — the catalog's agx_subgroup column holds these
   // values. Defaults to 'materials' since that's 95%+ of catalog rows
@@ -154,7 +155,7 @@
     });
     var searchInput = root.querySelector('.md-search');
     searchInput.addEventListener('input', onSearchInput);
-    // Chip strip.
+    // Chip strip — subgroup filters + a Favorites toggle (Phase 2).
     var chips = root.querySelector('.md-chips');
     SUBGROUPS.forEach(function(g) {
       var btn = document.createElement('button');
@@ -163,7 +164,7 @@
       btn.dataset.subgroup = g.value;
       btn.addEventListener('click', function() {
         _activeSubgroup = g.value;
-        chips.querySelectorAll('.md-chip').forEach(function(c) {
+        chips.querySelectorAll('.md-chip[data-subgroup]').forEach(function(c) {
           c.classList.toggle('active', c.dataset.subgroup === _activeSubgroup);
         });
         _expandedRowId = null;
@@ -171,6 +172,20 @@
       });
       chips.appendChild(btn);
     });
+    // Spacer + Favorites toggle (sits right of the subgroup chips so
+    // the user reads it as a separate axis from the subgroup filter).
+    var favChip = document.createElement('button');
+    favChip.className = 'md-chip md-chip-fav' + (_favoritesOnly ? ' active' : '');
+    favChip.innerHTML = '&#x2605; Favorites';
+    favChip.dataset.fav = '1';
+    favChip.title = 'Show only materials you\'ve starred';
+    favChip.addEventListener('click', function() {
+      _favoritesOnly = !_favoritesOnly;
+      favChip.classList.toggle('active', _favoritesOnly);
+      _expandedRowId = null;
+      runSearch();
+    });
+    chips.appendChild(favChip);
 
     _drawerEl = root;
     return root;
@@ -237,6 +252,7 @@
     var url = '/api/materials?limit=50';
     if (q) url += '&q=' + encodeURIComponent(q);
     if (_activeSubgroup) url += '&subgroup=' + encodeURIComponent(_activeSubgroup);
+    if (_favoritesOnly) url += '&favorites_only=1';
 
     var fetchOpts = { credentials: 'include' };
     fetch(url, fetchOpts)
@@ -267,6 +283,18 @@
         : '';
       var expanded = _expandedRowId === m.id;
       var addFormHtml = expanded ? renderAddForm(m) : '';
+      // Phase 2 — star icon. Filled when this row is favorited for
+      // the current user; click toggles via POST/DELETE. The is_favorited
+      // field is set by the server's LEFT JOIN against
+      // user_material_favorites; we mirror the value here so the UI
+      // doesn't need to re-fetch after toggling.
+      var fav = !!m.is_favorited;
+      var starHtml = '<button class="md-star' + (fav ? ' active' : '') +
+        '" data-star="' + m.id + '" title="' +
+        (fav ? 'Unstar' : 'Star — keep this SKU pinned in your Favorites') +
+        '" aria-pressed="' + (fav ? 'true' : 'false') + '">' +
+        (fav ? '&#x2605;' : '&#x2606;') +
+        '</button>';
       return '<div class="md-row' + (expanded ? ' expanded' : '') + '" data-mid="' + m.id + '">' +
         '<div class="md-row-main">' +
           '<div class="md-row-desc">' + escapeHTML(m.description || '(no description)') +
@@ -282,6 +310,7 @@
           '</div>' +
         '</div>' +
         '<div class="md-row-actions">' +
+          starHtml +
           onBadge +
           '<button class="md-add-btn" data-add="' + m.id + '">' + (expanded ? 'Cancel' : '+ Add') + '</button>' +
         '</div>' +
@@ -306,6 +335,16 @@
             if (qty) qty.focus();
           }, 10);
         }
+      });
+    });
+    // Wire star clicks — Phase 2 favorites toggle.
+    el.querySelectorAll('[data-star]').forEach(function(btn) {
+      btn.addEventListener('click', function(ev) {
+        ev.stopPropagation();
+        var mid = Number(btn.dataset.star);
+        var material = _lastResults.find(function(x) { return x.id === mid; });
+        if (!material) return;
+        toggleFavorite(material, btn);
       });
     });
     // Wire form submits inside any expanded row.
@@ -393,13 +432,42 @@
     }
   }
 
-  // Note: applyAddLineItem doesn't accept a source_material_id field
-  // today — it just uses the keys it recognizes. The JSONB save loop
-  // would drop unknown keys unless we wire them through. Phase 2 adds
-  // the field properly; for Phase 1 it's a no-op pass-through and we
-  // accept that the very first drawer-added lines won't have the
-  // material_id stored. The "already on estimate" detector falls back
-  // to description matching either way.
+  // applyAddLineItem accepts source_material_id as of Phase 2 — the
+  // editor stamps newLine.sourceMaterialId so favorites / recently-
+  // used / "already on estimate" can correlate without falling back
+  // to fuzzy description matching.
+
+  // ──────────────────────────────────────────────────────────────────
+  // Favorites toggle (Phase 2). Optimistic update: flip the row's
+  // is_favorited and re-render immediately, then hit the server. On
+  // failure, revert and surface a console warn (not fatal — the next
+  // search round-trip will reconcile state).
+  // ──────────────────────────────────────────────────────────────────
+  function toggleFavorite(material, btn) {
+    var wasFav = !!material.is_favorited;
+    var nextFav = !wasFav;
+    material.is_favorited = nextFav;
+    btn.classList.toggle('active', nextFav);
+    btn.innerHTML = nextFav ? '★' : '☆';
+    btn.setAttribute('aria-pressed', nextFav ? 'true' : 'false');
+    btn.title = nextFav ? 'Unstar' : 'Star — keep this SKU pinned in your Favorites';
+
+    var url = '/api/materials/' + encodeURIComponent(material.id) + '/favorite';
+    var method = nextFav ? 'POST' : 'DELETE';
+    fetch(url, { method: method, credentials: 'include' })
+      .then(function(r) {
+        if (!r.ok) throw new Error('Favorite toggle failed (' + r.status + ')');
+        return r.json();
+      })
+      .catch(function(err) {
+        // Revert the optimistic update.
+        material.is_favorited = wasFav;
+        btn.classList.toggle('active', wasFav);
+        btn.innerHTML = wasFav ? '★' : '☆';
+        btn.setAttribute('aria-pressed', wasFav ? 'true' : 'false');
+        console.warn('[MaterialsDrawer] favorite toggle failed:', err.message);
+      });
+  }
 
   // ──────────────────────────────────────────────────────────────────
   // Public API + boot.

@@ -2387,6 +2387,31 @@
       display: flex; align-items: center; justify-content: flex-end; gap: 8px;
       margin-top: 6px;
     }
+    /* Star button — Phase 2 favorites toggle on each row */
+    #materials-drawer-root .md-star {
+      background: transparent; border: none; cursor: pointer;
+      padding: 2px 4px; font-size: 16px; line-height: 1;
+      color: var(--text-dim, #666);
+      transition: color 0.12s;
+      margin-right: auto; /* push to the far left of the actions row */
+    }
+    #materials-drawer-root .md-star:hover { color: #fbbf24; }
+    #materials-drawer-root .md-star.active { color: #fbbf24; }
+    /* Favorites chip in the chip strip — keeps a visual separator
+       from the subgroup filters via a thin left border. */
+    #materials-drawer-root .md-chip.md-chip-fav {
+      margin-left: 4px;
+      border-left: 2px solid rgba(255,255,255,0.10);
+      padding-left: 10px;
+    }
+    #materials-drawer-root .md-chip.md-chip-fav.active {
+      background: rgba(251, 191, 36, 0.18);
+      border-color: rgba(251, 191, 36, 0.7);
+      color: #fbbf24;
+    }
+    body.light-mode #materials-drawer-root .md-chip.md-chip-fav {
+      border-left-color: rgba(0,0,0,0.10);
+    }
     #materials-drawer-root .md-on-badge {
       font-size: 10px; color: #4f8cff;
       background: rgba(79,140,255,0.15);

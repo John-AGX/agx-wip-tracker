@@ -1835,6 +1835,13 @@
       unitCost: num(input.unit_cost),
       markup: (input.markup_pct == null || input.markup_pct === '') ? '' : num(input.markup_pct)
     };
+    // Materials Catalog Drawer (Phase 2) — when the line came from a
+    // catalog row, stamp the source material id so favorites /
+    // recently-used / "already on estimate" can correlate later
+    // without falling back to fuzzy description matching.
+    if (input.source_material_id != null) {
+      newLine.sourceMaterialId = input.source_material_id;
+    }
 
     if (sectionId) {
       // Same insertion logic as addEstimateLineFromEditor: walk forward to

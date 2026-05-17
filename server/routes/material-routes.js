@@ -224,41 +224,124 @@ router.get('/', requireAuth, requireCapability('ESTIMATES_VIEW'), async (req, re
     const q = (req.query.q || '').trim();
     const subgroup = (req.query.subgroup || '').trim();
     const showHidden = req.query.show_hidden === '1';
+    const favoritesOnly = req.query.favorites_only === '1';
     const limit = Math.min(parseInt(req.query.limit || '200', 10) || 200, 1000);
 
     const category = (req.query.category || '').trim();
     const where = [];
     const params = [];
     let p = 1;
-    if (!showHidden) where.push('is_hidden = false');
-    if (subgroup) { where.push('agx_subgroup = $' + p++); params.push(subgroup); }
-    if (category) { where.push('category = $' + p++); params.push(category); }
+    if (!showHidden) where.push('m.is_hidden = false');
+    if (subgroup) { where.push('m.agx_subgroup = $' + p++); params.push(subgroup); }
+    if (category) { where.push('m.category = $' + p++); params.push(category); }
     if (q) {
       // Simple ILIKE match for now — gin index will get used when we move
       // to to_tsvector @@ plainto_tsquery later. Catalog should stay
       // small enough that ILIKE is fine.
-      where.push('(description ILIKE $' + p + ' OR raw_description ILIKE $' + p + ' OR sku ILIKE $' + p + ')');
+      where.push('(m.description ILIKE $' + p + ' OR m.raw_description ILIKE $' + p + ' OR m.sku ILIKE $' + p + ')');
       params.push('%' + q + '%');
       p++;
     }
+    // Materials Catalog Drawer phase 2 — favorites filter chip. Inner-
+    // joins-by-filter through the LEFT JOIN below: f.user_id is the
+    // foreign key, so requiring it non-null restricts to rows the
+    // current user has starred.
+    if (favoritesOnly) {
+      where.push('f.user_id IS NOT NULL');
+    }
+    // Phase 2 — every row carries is_favorited so the drawer can
+    // render the star state without a second round-trip. LEFT JOIN
+    // keyed by the current user keeps the cardinality stable (one
+    // row per material, regardless of favorite state).
+    params.push(req.user.id);
+    const userIdParam = p++;
     const whereClause = where.length ? 'WHERE ' + where.join(' AND ') : '';
     params.push(limit);
+    const limitParam = p++;
     const { rows } = await pool.query(
-      `SELECT id, vendor, sku, description, raw_description,
-              hd_department, hd_class, hd_subclass, agx_subgroup, category, unit,
-              last_unit_price, avg_unit_price, min_unit_price, max_unit_price,
-              total_qty, purchase_count, first_seen, last_seen,
-              is_hidden, manual_override, notes, updated_at
-       FROM materials
+      `SELECT m.id, m.vendor, m.sku, m.description, m.raw_description,
+              m.hd_department, m.hd_class, m.hd_subclass, m.agx_subgroup, m.category, m.unit,
+              m.last_unit_price, m.avg_unit_price, m.min_unit_price, m.max_unit_price,
+              m.total_qty, m.purchase_count, m.first_seen, m.last_seen,
+              m.is_hidden, m.manual_override, m.notes, m.updated_at,
+              (f.user_id IS NOT NULL) AS is_favorited
+       FROM materials m
+       LEFT JOIN user_material_favorites f
+         ON f.material_id = m.id AND f.user_id = $${userIdParam}
        ${whereClause}
-       ORDER BY purchase_count DESC, last_seen DESC NULLS LAST
-       LIMIT $${p}`,
+       ORDER BY (f.user_id IS NOT NULL) DESC,
+                m.purchase_count DESC,
+                m.last_seen DESC NULLS LAST
+       LIMIT $${limitParam}`,
       params
     );
     const totalQ = await pool.query('SELECT COUNT(*)::int AS c FROM materials');
     res.json({ materials: rows, totalInDb: totalQ.rows[0].c });
   } catch (e) {
     console.error('GET /api/materials error:', e);
+    res.status(500).json({ error: e.message || 'Server error' });
+  }
+});
+
+// ──────────────────────────────────────────────────────────────────
+// Materials Catalog Drawer phase 2 — per-user favorites.
+//   POST /api/materials/:id/favorite    — pin a SKU
+//   DELETE /api/materials/:id/favorite  — unpin
+//   GET /api/materials/favorites        — list pinned material_ids
+//                                          (drawer uses GET / with
+//                                          favorites_only=1 for full
+//                                          rows; this is a thin id
+//                                          list for cache-warming /
+//                                          quick reconciliation)
+// All gated on ESTIMATES_VIEW since the drawer is part of the
+// estimating workflow. Composite-key INSERT is idempotent via
+// ON CONFLICT DO NOTHING.
+// ──────────────────────────────────────────────────────────────────
+
+router.post('/:id/favorite', requireAuth, requireCapability('ESTIMATES_VIEW'), async (req, res) => {
+  try {
+    const materialId = parseInt(req.params.id, 10);
+    if (!Number.isFinite(materialId)) return res.status(400).json({ error: 'invalid material id' });
+    await pool.query(
+      `INSERT INTO user_material_favorites (user_id, material_id)
+       VALUES ($1, $2)
+       ON CONFLICT (user_id, material_id) DO NOTHING`,
+      [req.user.id, materialId]
+    );
+    res.json({ ok: true, material_id: materialId, is_favorited: true });
+  } catch (e) {
+    console.error('POST /api/materials/:id/favorite error:', e);
+    res.status(500).json({ error: e.message || 'Server error' });
+  }
+});
+
+router.delete('/:id/favorite', requireAuth, requireCapability('ESTIMATES_VIEW'), async (req, res) => {
+  try {
+    const materialId = parseInt(req.params.id, 10);
+    if (!Number.isFinite(materialId)) return res.status(400).json({ error: 'invalid material id' });
+    await pool.query(
+      `DELETE FROM user_material_favorites WHERE user_id = $1 AND material_id = $2`,
+      [req.user.id, materialId]
+    );
+    res.json({ ok: true, material_id: materialId, is_favorited: false });
+  } catch (e) {
+    console.error('DELETE /api/materials/:id/favorite error:', e);
+    res.status(500).json({ error: e.message || 'Server error' });
+  }
+});
+
+router.get('/favorites', requireAuth, requireCapability('ESTIMATES_VIEW'), async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT material_id, created_at
+         FROM user_material_favorites
+        WHERE user_id = $1
+        ORDER BY created_at DESC`,
+      [req.user.id]
+    );
+    res.json({ favorites: rows });
+  } catch (e) {
+    console.error('GET /api/materials/favorites error:', e);
     res.status(500).json({ error: e.message || 'Server error' });
   }
 });
