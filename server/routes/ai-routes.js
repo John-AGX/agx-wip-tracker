@@ -3224,12 +3224,83 @@ async function recoverStuckSession({ anthropic, sessionRow }) {
     sessionKind: sessionRow.session_kind === 'user_thread' ? 'user_thread' : undefined
   });
 
+  // Seeded-recreate (Windermere fix): the new Anthropic session has
+  // zero conversation history, so the resumed turn loses ALL prior
+  // context. Without a seed, 86 sees only the user's incoming
+  // message ("yeah go ahead") with no idea what to "go ahead" with
+  // — it fires a probe tool, gets nothing useful, and the model
+  // ends up explaining the amnesia to the user ("the chat session
+  // was reset between turns"). Pull the last few turns from
+  // ai_messages (which survive the archive) and inject them as a
+  // synthetic <conversation_recap> user.message BEFORE the caller's
+  // openStreamAndSend pushes the actual incoming events. Best-
+  // effort — seeding failures don't abort recovery, they just mean
+  // 86 starts cold (the prior behavior).
+  try {
+    await seedRecoveredSession(anthropic, fresh, sessionRow);
+  } catch (e) {
+    console.warn('[recoverStuckSession] seeding failed (non-fatal):', e && e.message);
+  }
+
   // The Anthropic-side history is gone, but ai_messages rows are
   // intact — so user-visible continuity (sidebar transcript, replay,
-  // memory recall) survives. Short-term mid-conversation context
-  // (last few turns) is what gets lost; the memory tool covers any
-  // durable facts the model wanted to keep.
+  // memory recall) survives. With the recap seed above, short-term
+  // mid-conversation context also survives for the next turn.
   return fresh;
+}
+
+// Pull the last N user+assistant turns from ai_messages for this
+// user and inject them as a single <conversation_recap> user.message
+// on the fresh Anthropic session. The recap is one event; the
+// model processes it alongside whatever the caller queues next
+// (the user's actual incoming turn), so the model has both the
+// recap context AND the new question when it composes its
+// response. Cross-entity by design — the user may have moved
+// between surfaces in the prior session, and recovery preserves
+// the conversation as a whole, not just the active surface.
+async function seedRecoveredSession(anthropic, freshSession, oldSessionRow) {
+  const TURN_LIMIT = 6;
+  const r = await pool.query(
+    `SELECT role, content, entity_type, estimate_id
+       FROM ai_messages
+      WHERE user_id = $1
+        AND role IN ('user', 'assistant')
+        AND content IS NOT NULL
+        AND TRIM(content) != ''
+      ORDER BY created_at DESC
+      LIMIT $2`,
+    [oldSessionRow.user_id, TURN_LIMIT]
+  );
+  if (!r.rows.length) {
+    console.log('[recoverStuckSession] no prior turns to seed; fresh session starts cold');
+    return;
+  }
+  const turns = r.rows.reverse();
+  const recapLines = turns.map(t => {
+    const role = t.role === 'user' ? 'User' : '86';
+    // Cap each turn at 1500 chars so a recap of 6 detailed turns
+    // doesn't blow past ~10k tokens. The cache will catch this
+    // content on the next turn anyway; we just need ENOUGH context
+    // for 86 to know what's being discussed.
+    const text = (t.content || '').slice(0, 1500);
+    const surfaceTag = t.entity_type && t.entity_type !== 'general'
+      ? ' [' + t.entity_type + (t.estimate_id && t.estimate_id !== 'global' ? ':' + t.estimate_id : '') + ']'
+      : '';
+    return role + surfaceTag + ': ' + text;
+  });
+  const recap =
+    '<conversation_recap>\n' +
+    'Your previous Anthropic session was archived and recreated mid-conversation (the prior session got stuck in requires_action). Here are the last ' + turns.length + ' turns of our conversation for context. The user\'s actual NEXT message follows in a separate event — resume from where we left off without explaining the session reset to the user.\n\n' +
+    recapLines.join('\n\n---\n\n') +
+    '\n</conversation_recap>';
+  await anthropic.beta.sessions.events.send(freshSession.anthropic_session_id, {
+    events: [{
+      type: 'user.message',
+      content: [{ type: 'text', text: recap }]
+    }]
+  });
+  console.log('[recoverStuckSession] seeded fresh session', freshSession.anthropic_session_id,
+              'with', turns.length, 'recap turns (' + recap.length + ' chars)');
 }
 
 async function runV2SessionStream({ anthropic, res, session, eventsToSend, persistAssistantText, onCustomToolUse, freshlyCreated }) {
