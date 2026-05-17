@@ -274,10 +274,22 @@
     var q = (_drawerEl.querySelector('.md-search').value || '').trim();
     resultsEl.innerHTML = '<div class="md-empty">Loading…</div>';
 
-    var url = '/api/materials?limit=50';
-    if (q) url += '&q=' + encodeURIComponent(q);
-    if (_activeSubgroup) url += '&subgroup=' + encodeURIComponent(_activeSubgroup);
-    if (_favoritesOnly) url += '&favorites_only=1';
+    // Phase 4 — empty-search default state shows what the PM has
+    // recently put on an estimate (via the drawer or any other path
+    // that stamps sourceMaterialId). Bypasses GET /api/materials when
+    // the user hasn't typed anything AND isn't filtering favorites;
+    // server falls back to its own purchase_count DESC ordering if
+    // the per-user recent list is empty.
+    var url;
+    var isRecentDefault = !q && !_favoritesOnly && _activeSubgroup === 'materials';
+    if (isRecentDefault) {
+      url = '/api/materials/recent?limit=25';
+    } else {
+      url = '/api/materials?limit=50';
+      if (q) url += '&q=' + encodeURIComponent(q);
+      if (_activeSubgroup) url += '&subgroup=' + encodeURIComponent(_activeSubgroup);
+      if (_favoritesOnly) url += '&favorites_only=1';
+    }
 
     var fetchOpts = { credentials: 'include' };
     fetch(url, fetchOpts)
@@ -287,6 +299,19 @@
       })
       .then(function(payload) {
         _lastResults = Array.isArray(payload.materials) ? payload.materials : [];
+        // If the recent-list came back empty, fall back to the
+        // popular-most list so the drawer never opens to an empty
+        // state. Common on the FIRST drawer open for a user (no
+        // drawer-sourced lines yet).
+        if (isRecentDefault && _lastResults.length === 0) {
+          fetch('/api/materials?limit=50&subgroup=materials', fetchOpts)
+            .then(function(r2) { return r2.ok ? r2.json() : { materials: [] }; })
+            .then(function(p2) {
+              _lastResults = Array.isArray(p2.materials) ? p2.materials : [];
+              renderResults();
+            });
+          return;
+        }
         renderResults();
       })
       .catch(function(err) {

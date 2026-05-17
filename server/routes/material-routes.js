@@ -330,6 +330,63 @@ router.delete('/:id/favorite', requireAuth, requireCapability('ESTIMATES_VIEW'),
   }
 });
 
+// GET /api/materials/recent — materials this user has recently put on
+// an estimate. Derived from estimates.data->'lines' (JSONB blob)
+// where the user owns the estimate and any line carries a
+// sourceMaterialId — only drawer-added (or sourced) lines since the
+// catalog correlation column was added in Phase 2 of the drawer.
+// Used by the drawer's empty-search default state so the next time
+// the PM opens the drawer they see what they reach for most.
+//
+// Limit defaults to 25 (small enough for a comfortable scroll-free
+// list); window defaults to the last 30 days. Returns the same row
+// shape as GET / so the drawer can drop these into its result list
+// without a different render path.
+router.get('/recent', requireAuth, requireCapability('ESTIMATES_VIEW'), async (req, res) => {
+  try {
+    const days = Math.max(1, Math.min(180, parseInt(req.query.days || '30', 10) || 30));
+    const limit = Math.max(1, Math.min(100, parseInt(req.query.limit || '25', 10) || 25));
+    // Walk every estimate owned by this user touched within the
+    // window, extract every line that has a sourceMaterialId, group
+    // by material id, sort by recency + count. The CTE keeps the
+    // jsonb_array_elements explode out of the SELECT so the LEFT
+    // JOIN on materials is a clean equality join.
+    const { rows } = await pool.query(
+      `WITH recent_uses AS (
+         SELECT
+           (line->>'sourceMaterialId')::int AS material_id,
+           COUNT(*) AS use_count,
+           MAX(e.updated_at)  AS last_used_at
+         FROM estimates e,
+              LATERAL jsonb_array_elements(COALESCE(e.data->'lines', '[]'::jsonb)) line
+         WHERE e.owner_id = $1
+           AND e.updated_at >= NOW() - ($2 || ' days')::interval
+           AND (line->>'sourceMaterialId') IS NOT NULL
+           AND (line->>'sourceMaterialId') ~ '^[0-9]+$'
+         GROUP BY (line->>'sourceMaterialId')::int
+       )
+       SELECT m.id, m.vendor, m.sku, m.description, m.raw_description,
+              m.hd_department, m.hd_class, m.hd_subclass, m.agx_subgroup, m.category, m.unit,
+              m.last_unit_price, m.avg_unit_price, m.min_unit_price, m.max_unit_price,
+              m.total_qty, m.purchase_count, m.first_seen, m.last_seen,
+              m.is_hidden, m.manual_override, m.notes, m.updated_at,
+              (f.user_id IS NOT NULL) AS is_favorited,
+              r.use_count, r.last_used_at
+         FROM recent_uses r
+         JOIN materials m ON m.id = r.material_id AND m.is_hidden = false
+         LEFT JOIN user_material_favorites f
+           ON f.material_id = m.id AND f.user_id = $1
+        ORDER BY r.last_used_at DESC, r.use_count DESC
+        LIMIT $3`,
+      [req.user.id, String(days), limit]
+    );
+    res.json({ materials: rows });
+  } catch (e) {
+    console.error('GET /api/materials/recent error:', e);
+    res.status(500).json({ error: e.message || 'Server error' });
+  }
+});
+
 router.get('/favorites', requireAuth, requireCapability('ESTIMATES_VIEW'), async (req, res) => {
   try {
     const { rows } = await pool.query(

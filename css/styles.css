@@ -2590,3 +2590,25 @@
     body.light-mode #materials-drawer-root .md-search,
     body.light-mode #materials-drawer-root .md-form input,
     body.light-mode #materials-drawer-root .md-form select { background: #fff; }
+
+    /* Mobile drawer (Phase 4) — full-width modal at narrow widths so
+       the PM can still use it on a phone in the field. Below 768px
+       the side-drawer aesthetic gives up too much horizontal space
+       to be usable, so we go edge-to-edge with a top close button. */
+    @media (max-width: 768px) {
+      #materials-drawer-root .md-panel {
+        width: 100vw; max-width: 100vw;
+      }
+      #materials-drawer-root .md-form-grid {
+        grid-template-columns: 1fr 1fr;
+      }
+      #materials-drawer-root .md-form-grid label.md-form-section {
+        grid-column: span 2;
+      }
+      #materials-drawer-root .md-row-meta {
+        font-size: 10px;
+      }
+      #materials-drawer-root .md-header { padding: 12px 12px; }
+      #materials-drawer-root .md-search-row { padding: 8px 12px 4px; }
+      #materials-drawer-root .md-chips { padding: 4px 12px 8px; }
+    }
