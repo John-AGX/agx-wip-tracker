@@ -901,6 +901,7 @@
                                         <button class="primary" onclick="addEstimateLineFromEditor()">&#x2795; Line Item</button>
                                         <button class="secondary" onclick="addEstimateSectionFromEditor()">&#x2795; Subgroup</button>
                                         <button class="ghost" onclick="addStandardSectionsFromEditor()" title="Add the four BT-aligned subgroups (Materials / Labor / GC / Subs)">&#x2795; Standard Subgroups</button>
+                                        <button class="ghost" onclick="window.MaterialsDrawer && window.MaterialsDrawer.toggle()" title="Search the materials catalog (real Project 86 purchase history) and drop lines into the active group">&#x1F9F1; Materials Catalog</button>
                                         <button class="ghost" onclick="window.openScopeModal && window.openScopeModal()" title="Open the scope of work as a quick-edit popup" style="margin-left:auto;">&#x1F4DD; Scope</button>
                                     </div>
                                     <div id="ee-lines-container"></div>
@@ -2346,6 +2347,7 @@
     <script src="js/estimates.js?v=36b"></script>
     <script src="js/proposal.js?v=24b"></script>
     <script src="js/estimate-editor.js?v=39b"></script>
+    <script src="js/materials-drawer.js?v=1"></script>
     <script src="js/estimate-preview.js?v=12b"></script>
     <script src="js/bt-export.js?v=6b"></script>
     <script src="js/ai-panel.js?v=101s"></script>
