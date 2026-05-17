@@ -3283,6 +3283,19 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
     'by calling your next tool (e.g. propose_create_lead) or by replying ' +
     'to the user. Do not re-run the prior reads with the same arguments.';
 
+  // Silent-stop recovery state — fires when auto-tier tools ran and
+  // flushed their results successfully, but the resumed turn produced
+  // NO text and went straight to terminal idle. Different from the
+  // `stalled` recovery above (which fires on requires_action stalls
+  // BEFORE any tools complete). Capped at 1 per turn so a model that
+  // simply refuses to summarize doesn't burn endless API calls.
+  const MAX_SILENT_STOP_NUDGES = 1;
+  let silentStopNudges = 0;
+  let autoResultsFlushedThisTurn = false;
+  const SILENT_STOP_NUDGE_TEXT =
+    'The tool results above completed successfully. Please summarize ' +
+    'them in one or two sentences for the user before ending your turn.';
+
   // Helper to (re)open stream + send events. Stuck-state recovery is
   // skipped for sessions we know are brand-new (Fix 2): /chat handlers
   // that just ran archiveActiveAiSession + createFreshAiSession pass
@@ -3602,6 +3615,10 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
               // "tool_use_id … does not match any custom_tool_use event
               // in this session" because the earlier ids are gone.
               pendingAutoResults.length = 0;
+              // Flag the turn so the post-stream check at the bottom can
+              // detect "auto-results flushed, but the resumed turn
+              // produced no text" → fire the silent-stop nudge once.
+              autoResultsFlushedThisTurn = true;
               stallNudgeQueued = true; // signals "reopen stream"
               break; // exit switch; post-switch check exits for-await
             }
@@ -3776,12 +3793,67 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
       }
     } catch (e) {
       console.error('Session stream iteration error:', e);
+      // Fix 1 diagnostic — capture end-of-stream state for the silent-
+      // stop debug story. We log on both the catch path and the normal-
+      // exit path below so Railway tail-logs always include enough
+      // context to tell model-decision from stream-anomaly.
+      console.log('[v2-stream] iteration-catch end state',
+        'session', sessionId,
+        'session_id_db:', session && session.id,
+        'session_kind:', session && session.session_kind,
+        'assistantTextLen:', assistantText.length,
+        'pendingToolUses:', pendingToolUses.length,
+        'pendingAutoResults:', pendingAutoResults.length,
+        'nudgeAttempts:', nudgeAttempts,
+        'silentStopNudges:', silentStopNudges,
+        'autoResultsFlushedThisTurn:', autoResultsFlushedThisTurn,
+        'events:', JSON.stringify(eventCounts));
       send({ error: e.message || 'Stream failed' });
       endWithDone();
       return;
     }
 
     if (!stallNudgeQueued) {
+      // Fix 2 — silent-stop recovery. If we already flushed auto-tier
+      // tool_results this turn AND the resumed turn produced zero
+      // text AND no approval-tier tools are pending, the model fell
+      // silent post-results. That's the "Used N tools but didn't
+      // produce a summary" symptom in the client UI. Nudge once with
+      // an explicit "summarize the tool results" user.message and
+      // reopen the stream. Capped at MAX_SILENT_STOP_NUDGES so a
+      // model that just refuses doesn't drive endless API calls.
+      const silentStop =
+        autoResultsFlushedThisTurn &&
+        assistantText.length === 0 &&
+        pendingToolUses.length === 0;
+      if (silentStop && silentStopNudges < MAX_SILENT_STOP_NUDGES) {
+        silentStopNudges++;
+        console.warn('[v2-stream] silent-stop detected on', sessionId,
+          '— nudging for summary (attempt', silentStopNudges,
+          'of', MAX_SILENT_STOP_NUDGES + ')');
+        nextEventsToSend = [{
+          type: 'user.message',
+          content: [{ type: 'text', text: SILENT_STOP_NUDGE_TEXT }]
+        }];
+        stallNudgeQueued = true;
+        continue; // loop back, reopen stream with the summary nudge
+      }
+
+      // Fix 1 diagnostic — log the FINAL state of every terminal
+      // exit (silent-stop, model-end, network-drop). One log line
+      // per turn keeps Railway tails scannable.
+      console.log('[v2-stream] terminal end',
+        'session', sessionId,
+        'session_id_db:', session && session.id,
+        'session_kind:', session && session.session_kind,
+        'assistantTextLen:', assistantText.length,
+        'pendingToolUses:', pendingToolUses.length,
+        'pendingAutoResults:', pendingAutoResults.length,
+        'nudgeAttempts:', nudgeAttempts,
+        'silentStopNudges:', silentStopNudges,
+        'autoResultsFlushedThisTurn:', autoResultsFlushedThisTurn,
+        'events:', JSON.stringify(eventCounts));
+
       // Stream ended without idle (rare — abort, network drop). Close
       // out so the client gets [DONE] instead of a hung response.
       endWithDone();
@@ -8734,9 +8806,35 @@ const SURFACE_PRIMARY_WRITES = {
 // bound writes — estimate-mutation tools (need an open estimate) and
 // job-mutation tools (need an open job). Off-surface client / intake /
 // staff writes are intentionally NOT gated.
+//
+// IMPORTANT: this list is INTENTIONALLY narrower than
+// SURFACE_PRIMARY_WRITES — the hint and the gate serve different
+// jobs. SURFACE_PRIMARY_WRITES is informational ("here's what's
+// primary for this surface"); TOOL_REQUIRED_ENTITY is enforcement
+// ("you cannot fire this without an active entity_id"). Some tools
+// (like request_edit_mode) are primary on estimate but legitimately
+// fire from job/ask86 — they request a mode flip, they don't write
+// to the entity. Listing only writes that DEMAND an entity_id keeps
+// the gate from false-positive-blocking legitimate cross-surface
+// invocations.
 const TOOL_REQUIRED_ENTITY = new Map();
-for (const n of SURFACE_PRIMARY_WRITES.estimate) TOOL_REQUIRED_ENTITY.set(n, 'estimate');
-for (const n of SURFACE_PRIMARY_WRITES.job)      TOOL_REQUIRED_ENTITY.set(n, 'job');
+const ESTIMATE_REQUIRED = [
+  'propose_add_line_item', 'propose_update_line_item', 'propose_remove_line_item',
+  'propose_move_line_item', 'propose_add_section', 'propose_remove_section',
+  'propose_rename_section', 'propose_set_scope', 'propose_set_estimate_field',
+  'propose_add_client_note'
+  // request_edit_mode INTENTIONALLY EXCLUDED — it's read-like (proposes
+  // a mode flip, doesn't mutate the entity) and listed in
+  // PLAN_MODE_ALLOWED_JOB_TOOLS so 86 fires it legitimately from the
+  // job surface too. Gating it would return a structured error and
+  // confuse the model into the silent-stop path.
+];
+const JOB_REQUIRED = [
+  'set_phase_pct_complete', 'set_phase_field', 'set_node_value',
+  'wire_nodes', 'create_node', 'set_phase_buildingId', 'propose_change_order'
+];
+for (const n of ESTIMATE_REQUIRED) TOOL_REQUIRED_ENTITY.set(n, 'estimate');
+for (const n of JOB_REQUIRED)      TOOL_REQUIRED_ENTITY.set(n, 'job');
 
 // Render the <available_tools> hint block. Returns '' when there's
 // no surface (Ask 86 with no entity) — the model already sees the
