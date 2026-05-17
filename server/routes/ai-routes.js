@@ -161,6 +161,28 @@ function effortClause(agentKey) {
   return { effort: eff };
 }
 
+// Unified-86 Phase 5 — adaptive thinking lets the model self-moderate
+// reasoning depth per turn rather than burning a fixed `effort` for
+// every request. Cheaper on chit-chat, deeper on hard problems, same
+// quality ceiling. Returns the partial payload {thinking: {...}} so
+// callers spread it alongside other turn config; null when the
+// current model doesn't support adaptive thinking. Opus 4.7
+// additionally supports display:"summarized" so a collapsed
+// thinking-summary streams to the UI — that's what the panel can
+// render as a disclosure. Older Opus / Sonnet variants get plain
+// adaptive thinking with no display variant (Phase 5b/UI work can
+// hook the summary stream once we're on 4.7).
+const ADAPTIVE_THINKING_SUPPORTED = new Set([
+  'claude-opus-4-5', 'claude-opus-4-6', 'claude-opus-4-7', 'claude-sonnet-4-6'
+]);
+function thinkingClause() {
+  if (!ADAPTIVE_THINKING_SUPPORTED.has(MODEL)) return null;
+  if (MODEL === 'claude-opus-4-7') {
+    return { thinking: { type: 'adaptive', display: 'summarized' } };
+  }
+  return { thinking: { type: 'adaptive' } };
+}
+
 // Bumped from 2000 → 8000 because multi-section audit/summary
 // responses (e.g. "Top 5 Actions" tables with rationale per row)
 // were hitting the 2000 cap and truncating mid-cell. Sonnet 4.6
@@ -2466,13 +2488,18 @@ async function runStream({ anthropic, res, system, messages, persistAssistantTex
       ]
     : toolList;
   const _effort = effortClause(agentKey);
-  const stream = anthropic.messages.stream(Object.assign({
-    model: MODEL,
-    max_tokens: MAX_TOKENS,
-    system: system,
-    tools: cachedTools,
-    messages: messages
-  }, _effort ? { output_config: _effort } : {}));
+  const _thinking = thinkingClause();
+  const stream = anthropic.messages.stream(Object.assign(
+    {
+      model: MODEL,
+      max_tokens: MAX_TOKENS,
+      system: system,
+      tools: cachedTools,
+      messages: messages
+    },
+    _effort ? { output_config: _effort } : {},
+    _thinking || {}
+  ));
 
   stream.on('text', (delta) => {
     assistantText += delta;
