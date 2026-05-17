@@ -2557,6 +2557,55 @@ function ctxDynamicText(systemArr) {
   return (last && last.type === 'text' && typeof last.text === 'string') ? last.text : '';
 }
 
+// Single per-turn context dispatcher — Phase 1 of the unified-86
+// cutover. Routes to the existing per-entity builders so behavior is
+// byte-identical to the prior if/else cascade at the /86/chat call
+// site. The function-hoisted async builders are defined later in
+// this module; that's fine because this dispatcher only runs at
+// request time.
+//
+// Args (named bag for readable call sites):
+//   entityType:    'estimate' | 'job' | 'intake' | 'client' | 'staff' | 'admin' | falsy
+//   entityId:      string | number (only required for estimate / job)
+//   clientContext: optional client snapshot passed to buildJobContext
+//   aiPhase:       'plan' | 'edit' (write-tools gated when 'plan')
+//   userId:        req.user.id — required by buildIntakeContext
+//   organization:  req.organization — required by every builder
+//
+// Returns: { turnContextText: string, photoBlocks: Array }
+//   turnContextText is the dynamic (last) block from the builder's
+//   `system` array, ready to wrap in <turn_context>. photoBlocks is
+//   the per-entity image bucket (only estimate / job / intake set it).
+async function buildTurnContext({ entityType, entityId, clientContext, aiPhase, userId, organization }) {
+  let turnContextText = '';
+  let photoBlocks = [];
+  if (entityType === 'estimate' && entityId) {
+    const ctx = await buildEstimateContext(entityId, false, aiPhase, organization);
+    turnContextText = ctxDynamicText(ctx.system);
+    if (Array.isArray(ctx.photoBlocks)) photoBlocks = ctx.photoBlocks;
+  } else if (entityType === 'job' && entityId) {
+    const ctx = await buildJobContext(entityId, clientContext, aiPhase, organization);
+    turnContextText = ctxDynamicText(ctx.system);
+    if (Array.isArray(ctx.photoBlocks)) photoBlocks = ctx.photoBlocks;
+  } else if (entityType === 'intake') {
+    const ctx = await buildIntakeContext(userId, organization);
+    turnContextText = ctxDynamicText(ctx.system);
+    if (Array.isArray(ctx.photoBlocks)) photoBlocks = ctx.photoBlocks;
+  } else if (entityType === 'client') {
+    const ctx = await buildClientDirectoryContext(organization);
+    turnContextText = ctxDynamicText(ctx.system);
+  } else if (entityType === 'staff' || entityType === 'admin') {
+    // Admin / Chief-of-Staff context. 86 absorbed the CoS role; this
+    // path stays so admin surfaces still get the metrics-aware system.
+    const ctx = await buildStaffContext();
+    turnContextText = ctxDynamicText(ctx.system);
+  }
+  // No matching entity (e.g. Ask 86 with no entity) → empty turn
+  // context. The composed agent system + the page_context block
+  // carry enough on their own.
+  return { turnContextText, photoBlocks };
+}
+
 // Compose the full system prompt for an agent at registration / sync
 // time. For 'job' (86): baseline identity + the SECTION_DEFAULTS
 // playbook (ag_identity, ag_estimate_structure, ag_role, ag_tools,
@@ -8846,48 +8895,32 @@ router.post('/86/chat', requireAuth, requireOrg, async (req, res) => {
 
     let extraPhotoBlocks = []; // photos pulled from the entity itself (job WIP, estimate, lead)
 
+    // Phase 1 of the unified-86 cutover: single dispatcher that routes
+    // to the per-entity context builders. Byte-identical to the prior
+    // if/else cascade — same calls, same args, same outputs. Future
+    // phases collapse the builders themselves into one, but this entry
+    // point gives every surface a single seam to swap.
+    //
+    // ctxDynamicText (not ctxSystemToText) — only the per-turn dynamic
+    // block ships in the user.message. The stable SECTION_DEFAULTS
+    // playbook is baked into the registered Anthropic agent system
+    // prompt via composedAgentSystem, so duplicating it through
+    // user.message would just bill it as cache_creation every turn.
+    // Always-on skill packs are merged INTO the dynamic block by each
+    // builder for the same reason. Photos are reachable via the
+    // view_attachment_image tool by id; the manifest still lists every
+    // photo so 86 knows what's available without bloating each turn.
     try {
-      if (cctxEntityType === 'estimate' && cctxEntityId) {
-        // 2nd arg is includePhotos (boolean) — photos attached this
-        // turn already flow inline via additional_images, and the
-        // estimate's existing photos are surfaced on demand by the
-        // per-entity tools, so don't bloat every turn with them.
-        // 3rd arg is the per-turn phase override; Ask 86 surfaces
-        // default to 'build' (see cctxAiPhase above) so propose_*
-        // tools are available unless the user has explicitly flipped
-        // the per-estimate Plan toggle and the panel relayed that.
-        // ctxDynamicText (not ctxSystemToText) — only the per-turn
-        // dynamic block ships in the user.message. The stable
-        // SECTION_DEFAULTS playbook is baked into the registered
-        // Anthropic agent's system prompt via composedAgentSystem,
-        // so duplicating it through user.message would just bill it
-        // as cache_creation every turn for no benefit. Always-on
-        // skill packs are merged INTO the dynamic block by
-        // buildEstimateContext for the same reason.
-        // includePhotos:false — photos are reachable via the
-        // view_attachment_image tool by id. The manifest still
-        // lists every photo so 86 knows what's available.
-        const ctx = await buildEstimateContext(cctxEntityId, false, cctxAiPhase, req.organization);
-        turnContextText = ctxDynamicText(ctx.system);
-        if (Array.isArray(ctx.photoBlocks)) extraPhotoBlocks = ctx.photoBlocks;
-      } else if (cctxEntityType === 'job' && cctxEntityId) {
-        // opts.includePhotos defaults to false in buildJobContext now,
-        // so this call passes no opts and gets the cheap path.
-        const ctx = await buildJobContext(cctxEntityId, cctxClientCtx, cctxAiPhase, req.organization);
-        turnContextText = ctxDynamicText(ctx.system);
-        if (Array.isArray(ctx.photoBlocks)) extraPhotoBlocks = ctx.photoBlocks;
-      } else if (cctxEntityType === 'intake') {
-        const ctx = await buildIntakeContext(req.user.id, req.organization);
-        turnContextText = ctxDynamicText(ctx.system);
-        if (Array.isArray(ctx.photoBlocks)) extraPhotoBlocks = ctx.photoBlocks;
-      } else if (cctxEntityType === 'client') {
-        const ctx = await buildClientDirectoryContext(req.organization);
-        turnContextText = ctxDynamicText(ctx.system);
-      } else if (cctxEntityType === 'staff' || cctxEntityType === 'admin') {
-        // Admin context — 86 absorbed the CoS role.
-        const ctx = await buildStaffContext();
-        turnContextText = ctxDynamicText(ctx.system);
-      }
+      const turnCtx = await buildTurnContext({
+        entityType:    cctxEntityType,
+        entityId:      cctxEntityId,
+        clientContext: cctxClientCtx,
+        aiPhase:       cctxAiPhase,
+        userId:        req.user.id,
+        organization:  req.organization,
+      });
+      turnContextText  = turnCtx.turnContextText;
+      extraPhotoBlocks = turnCtx.photoBlocks;
     } catch (e) {
       console.warn('[/86/chat] per-entity context build skipped:', e.message);
     }
@@ -9240,6 +9273,10 @@ module.exports.ensureAiSession      = ensureAiSession;
 module.exports.archiveActiveAiSession = archiveActiveAiSession;
 module.exports.getAnthropic         = getAnthropic;
 module.exports.internals = {
+  // Phase 1 of the unified-86 cutover — single per-turn dispatcher.
+  // New code should prefer this; the per-entity builders below stay
+  // exported for admin prompt-preview tooling and the eval harness.
+  buildTurnContext,
   buildEstimateContext,
   buildJobContext,
   buildClientDirectoryContext,
