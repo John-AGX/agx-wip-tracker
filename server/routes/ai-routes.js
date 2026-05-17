@@ -2603,6 +2603,22 @@ async function buildTurnContext({ entityType, entityId, clientContext, aiPhase, 
   // No matching entity (e.g. Ask 86 with no entity) → empty turn
   // context. The composed agent system + the page_context block
   // carry enough on their own.
+
+  // Phase 2 — append <available_tools> hint AFTER the per-entity
+  // snapshot so it's the last thing the model reads inside the turn
+  // context. Empty for surfaces without a primary-write set (e.g.
+  // Ask 86 / 'general'); the model falls back to the full registered
+  // tool list. Defined surfaces ('staff' and 'admin' both map to the
+  // staff write set here because the dispatcher above already routes
+  // both entity_types through buildStaffContext).
+  const hintSurface = (entityType === 'admin') ? 'staff' : entityType;
+  const availableBlock = renderAvailableToolsBlock(hintSurface);
+  if (availableBlock) {
+    turnContextText = turnContextText
+      ? turnContextText + '\n\n' + availableBlock
+      : availableBlock;
+  }
+
   return { turnContextText, photoBlocks };
 }
 
@@ -7950,6 +7966,29 @@ function make86OnCustomToolUse(userId, parentSession) {
   }
 
   return async function (tu) {
+    // Phase 2 — entity-bound write gate. The agent has ~50 tools
+    // registered; if it misfires (calls propose_add_line_item when
+    // no estimate is open, set_phase_pct_complete with no job in
+    // context, etc.), return a structured tool_result error in-band
+    // so the model self-corrects instead of executing against the
+    // wrong / null entity. Only entity-bound writes are gated
+    // (TOOL_REQUIRED_ENTITY map); cross-surface writes (client-
+    // directory, intake create, skill packs) intentionally pass.
+    const requiredEntity = TOOL_REQUIRED_ENTITY.get(tu.name);
+    if (requiredEntity) {
+      const activeEntity = parentSession && parentSession.entity_type;
+      const activeId     = parentSession && parentSession.entity_id;
+      const matches      = (activeEntity === requiredEntity) && !!activeId;
+      if (!matches) {
+        return {
+          tier: 'auto',
+          error: 'Tool "' + tu.name + '" requires an active ' + requiredEntity +
+                 ' surface (with ' + requiredEntity + '_id) but the current turn is on "' +
+                 (activeEntity || 'no entity') + '". Use a cross-surface tool, or ask the user to open the ' +
+                 requiredEntity + ' first.'
+        };
+      }
+    }
     // Auto-tier: any tool in ALLOWED_AUTO_TIER_TOOLS executes inline
     // and returns its summary to the model. Mirrors the /exec-tool
     // HTTP dispatcher exactly so the V2-session path (this handler)
@@ -8476,6 +8515,84 @@ const FIELD_TOOLS_EXECUTOR_TOOLS = new Set(['read_field_tools']);
 const MEMORY_EXECUTOR_TOOLS = new Set(['remember', 'recall', 'list_memories', 'forget']);
 // Phase 5 — watch READS route to execWatchTool (writes stay approval-tier).
 const WATCH_EXECUTOR_TOOLS = new Set(['list_watches', 'read_recent_watch_runs']);
+
+// ════════════════════════════════════════════════════════════════════
+// Unified-86 Phase 2 — surface-aware tool availability
+// ════════════════════════════════════════════════════════════════════
+// The managed agent is registered with one big UNION of every Project
+// 86 tool (~50). Per-turn we give 86 two pieces of context to keep its
+// search space tight:
+//
+// 1. <available_tools> hint inside <turn_context> — names the writes
+//    that are PRIMARY for the active surface. Reads, memory, watches,
+//    web search, navigation, attachment lookups stay implicitly
+//    available regardless of surface; only PRIMARY WRITES are listed
+//    so the model focuses without losing access to anything.
+//
+// 2. Hard gate in make86OnCustomToolUse — when the model fires a write
+//    tool that requires a specific entity (estimate-id or job-id) but
+//    none is open in the active turn, return a structured tool_result
+//    error in-band instead of executing. The model self-corrects.
+//
+// Cross-surface writes (client-directory mutations, intake create,
+// skill-pack proposals, watch writes) are NOT gated — the model
+// legitimately fires them from anywhere ("add a property under PAC"
+// works whether the user is on Ask 86, an estimate, or the directory
+// panel). Only entity-bound writes are tied down.
+
+// Map of surface (entity_type) -> primary WRITE tool names.
+// Used both for the per-turn <available_tools> hint and as the
+// source of truth for which surfaces a tool "belongs to".
+const SURFACE_PRIMARY_WRITES = {
+  estimate: [
+    'propose_add_line_item', 'propose_update_line_item', 'propose_remove_line_item',
+    'propose_move_line_item', 'propose_add_section', 'propose_remove_section',
+    'propose_rename_section', 'propose_set_scope', 'propose_set_estimate_field',
+    'propose_add_client_note', 'request_edit_mode'
+  ],
+  job: [
+    'set_phase_pct_complete', 'set_phase_field', 'set_node_value',
+    'wire_nodes', 'create_node', 'set_phase_buildingId', 'propose_change_order'
+  ],
+  intake: [
+    'propose_create_lead'
+  ],
+  client: [
+    'create_property', 'create_parent_company', 'update_client_field',
+    'link_property_to_parent', 'rename_client', 'change_property_parent',
+    'merge_clients', 'split_client_into_parent_and_property',
+    'attach_business_card_to_client'
+  ],
+  staff: [
+    'propose_skill_pack_add', 'propose_skill_pack_edit', 'propose_skill_pack_delete',
+    'propose_skill_pack_mirror', 'propose_skill_pack_unmirror',
+    'propose_watch_create', 'propose_watch_archive'
+  ]
+};
+
+// Strict-gate map: tool name -> required entity_type. ONLY the entity-
+// bound writes — estimate-mutation tools (need an open estimate) and
+// job-mutation tools (need an open job). Off-surface client / intake /
+// staff writes are intentionally NOT gated.
+const TOOL_REQUIRED_ENTITY = new Map();
+for (const n of SURFACE_PRIMARY_WRITES.estimate) TOOL_REQUIRED_ENTITY.set(n, 'estimate');
+for (const n of SURFACE_PRIMARY_WRITES.job)      TOOL_REQUIRED_ENTITY.set(n, 'job');
+
+// Render the <available_tools> hint block. Returns '' when there's
+// no surface (Ask 86 with no entity) — the model already sees the
+// full tool list registered on the agent; absence of a hint means
+// "use anything appropriate to the user's request".
+function renderAvailableToolsBlock(entityType) {
+  const writes = SURFACE_PRIMARY_WRITES[entityType];
+  if (!Array.isArray(writes) || !writes.length) return '';
+  return [
+    '<available_tools surface="' + entityType + '">',
+    'Primary write tools for this surface (reads, memory, watches, web search, navigation, and attachment lookups remain available everywhere):',
+    ...writes.map(n => '  - ' + n),
+    '</available_tools>'
+  ].join('\n');
+}
+
 router.post('/exec-tool', requireAuth, requireCapability('ESTIMATES_VIEW'), async (req, res) => {
   try {
     const name = req.body && req.body.name;
