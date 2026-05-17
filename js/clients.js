@@ -407,8 +407,8 @@
   }
 
   // ──────────────────────────────────────────────────────────────────
-  // Manual merge — pick a survivor, fold the other in. Mirrors the
-  // CRA's merge_clients tool but driven from the UI. Server endpoint
+  // Manual merge — pick a survivor, fold the other in. Mirrors 86's
+  // merge_clients tool (directory surface) but driven from the UI. Server endpoint
   // doesn't exist as a one-off yet, so we do it via two PUT/DELETE
   // calls plus children/leads reparenting client-side. Safer to add a
   // proper /api/clients/merge endpoint later, but this works today.
@@ -774,13 +774,13 @@
         ? resp.client.agent_notes
         : [];
       if (!notes.length) {
-        listEl.innerHTML = '<div style="font-size:12px;color:var(--text-dim,#888);font-style:italic;">No agent notes yet. Notes added here auto-inject into AG and HR system prompts on every future turn that touches this client.</div>';
+        listEl.innerHTML = '<div style="font-size:12px;color:var(--text-dim,#888);font-style:italic;">No agent notes yet. Notes added here auto-inject into 86\'s system prompt on every future turn that touches this client.</div>';
         return;
       }
       listEl.innerHTML = notes.map(function(n) {
         var badge = '';
-        if (n.source_agent === 'ag')       badge = '<span style="display:inline-block;background:rgba(79,140,255,0.15);color:#4f8cff;font-size:10px;padding:1px 6px;border-radius:3px;font-weight:600;margin-right:6px;">AG</span>';
-        else if (n.source_agent === 'cra') badge = '<span style="display:inline-block;background:rgba(167,139,250,0.18);color:#a78bfa;font-size:10px;padding:1px 6px;border-radius:3px;font-weight:600;margin-right:6px;">HR</span>';
+        if (n.source_agent === 'ag')       badge = '<span style="display:inline-block;background:rgba(79,140,255,0.15);color:#4f8cff;font-size:10px;padding:1px 6px;border-radius:3px;font-weight:600;margin-right:6px;">86</span>';
+        else if (n.source_agent === 'cra') badge = '<span style="display:inline-block;background:rgba(167,139,250,0.18);color:#a78bfa;font-size:10px;padding:1px 6px;border-radius:3px;font-weight:600;margin-right:6px;">86</span>';
         else                               badge = '<span style="display:inline-block;background:rgba(180,180,180,0.14);color:var(--text-dim,#888);font-size:10px;padding:1px 6px;border-radius:3px;font-weight:600;margin-right:6px;">USER</span>';
         var when = '';
         if (n.created_at) {

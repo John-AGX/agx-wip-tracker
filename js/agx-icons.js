@@ -172,12 +172,12 @@
     '👷': 'subs',        // 1F477 construction worker
     '📄': 'attachments', // 1F4C4 page facing up (po)
     // Project 86 — agent header + admin sub-tab swaps. Replaces the
-    // emoji glyphs in the AI panel title (86 / HR / CoS) and the
+    // emoji glyphs in the AI panel title (86 / Directory / CoS) and the
     // Admin → Agents sub-tab strip (Metrics /
     // Conversations / Evals / Skills / Prompt Preview / Batch /
     // Anthropic).
     '📊': 'chart-bar',         // 1F4CA bar chart (86 analyst, Metrics tab)
-    '🤝': 'clients',           // 1F91D handshake (HR — reuses two-people glyph)
+    '🤝': 'clients',           // 1F91D handshake (Directory — two-people glyph)
     '🧲': 'funnel',            // 1F9F2 magnet (Intake — funnel concept)
     '🎩': 'briefcase',         // 1F3A9 top hat (CoS executive)
     '💬': 'conversations',     // 1F4AC speech balloon

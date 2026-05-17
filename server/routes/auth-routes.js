@@ -67,7 +67,7 @@ router.get('/me', requireAuth, async (req, res) => {
     // Phase 2 — same flip for 86 (jobs). Independent ramp so AG
     // telemetry can prove the Sessions path before 86 moves over.
     agent_mode_job: (process.env.AGENT_MODE_86 || '').toLowerCase() === 'agents' ? 'agents' : 'legacy',
-    // Phase 2 — same flip for HR (clients) and CoS (staff). All four
+    // Phase 2 — same flip for the directory surface (clients) and CoS (staff). All four
     // ramp independently; production stays on v1 until each env var
     // flips.
     agent_mode_cra:   (process.env.AGENT_MODE_HR   || '').toLowerCase() === 'agents' ? 'agents' : 'legacy',

@@ -105,7 +105,7 @@
     var u = (window.p86Auth && window.p86Auth.getUser) ? window.p86Auth.getUser() : null;
     return !!(u && u.feature_flags && u.feature_flags.agent_mode_ag === 'agents');
   }
-  // Phase 2 — same gating for 86 (jobs), HR (clients), and CoS
+  // Phase 2 — same gating for 86 (jobs), 86 directory (clients), and CoS
   // (staff). Independent flags so each agent ramps separately on its
   // own telemetry before flipping.
   function isJobAgentMode() {
@@ -396,11 +396,11 @@
     { label: 'Add a property',           prompt: 'Walk me through adding a new property. Ask which parent management company first (search existing parents in the directory). Then collect property name, property_address, on-site CAM name + email + phone, market, and gate code if any. Use create_property to apply.' }
   ];
   var STAFF_PRESETS = [
-    { label: 'How is 86 doing this week?',   prompt: 'Pull last 7d metrics for 86 and HR and tell me what stands out. Then surface the 3 most active conversations so I can spot-check.' },
+    { label: 'How is 86 doing this week?',   prompt: 'Pull last 7d metrics across every 86 surface (estimate, job, intake, ask, directory) and tell me what stands out. Then surface the 3 most active conversations so I can spot-check.' },
     { label: 'Audit 86 search usage',        prompt: 'Of 86\'s recent conversations, how often did web_search get invoked? Pull a few examples and summarize what 86 was searching for. If a pattern emerges (e.g., the same product specs over and over), propose a new skill pack that bakes in the answer so 86 stops searching.' },
-    { label: 'Audit & clean skill packs',    prompt: 'Read all skill packs. For each, tell me whether the wording is tight, whether it overlaps with another, and whether it\'s being applied to the right agents. If anything is stale, propose a skill_pack_edit or skill_pack_delete with rationale.' },
-    { label: 'Most expensive conversations', prompt: 'Show me the 5 most token-expensive conversations in the last 30 days across all agents. For the top one, drill in and summarize what happened. If you spot a recurring waste pattern (e.g., 86 re-asking the same thing every turn), propose a skill pack that fixes it.' },
-    { label: 'Where is HR being used?',      prompt: 'How is HR being used? Is it actually getting traction or is it sitting idle? Pull recent HR (entity_type=client) conversations and characterize the work. If a pattern emerges that could shift from per-turn instruction to a skill pack, propose it.' }
+    { label: 'Audit & clean skill packs',    prompt: 'Read all skill packs. For each, tell me whether the wording is tight, whether it overlaps with another, and whether it\'s being applied to the right surface. If anything is stale, propose a skill_pack_edit or skill_pack_delete with rationale.' },
+    { label: 'Most expensive conversations', prompt: 'Show me the 5 most token-expensive conversations in the last 30 days across every 86 surface. For the top one, drill in and summarize what happened. If you spot a recurring waste pattern (e.g., 86 re-asking the same thing every turn), propose a skill pack that fixes it.' },
+    { label: 'Is the directory surface earning its keep?', prompt: 'Pull recent client-directory conversations (entity_type=client) and characterize the work. Is the directory surface getting traction or sitting idle? If a pattern emerges that could shift from per-turn instruction to a skill pack, propose it.' }
   ];
   // Ask 86 (global, no entity) — general-purpose prompts the user
   // might run from anywhere in the app. Deliberately broad: no
@@ -1388,7 +1388,7 @@
     if (trustBtn) trustBtn.style.display = 'none';
     var noticeEl = document.querySelector('#p86-ai-panel #ai-notice');
     if (noticeEl) {
-      if (isJobMode()) noticeEl.textContent = 'I\'m 86 — Project 86\'s operator. Estimating, scope, line items, leads, WIP, margin, schedule, the node graph — I do all of it. HR keeps the rolodex (clients, jobs, subs, users) clean for me. I propose changes; you approve before they land.';
+      if (isJobMode()) noticeEl.textContent = 'I\'m 86 — Project 86\'s operator. Estimating, scope, line items, leads, WIP, margin, schedule, the node graph, and the customer directory (clients, jobs, subs, users) — I do all of it. I propose changes; you approve before they land.';
       else if (isClientMode()) noticeEl.textContent = 'Client directory mode — I can split parent+property compounds, link unparented properties, capture durable client notes, propose mutations. Same brain as everywhere else, scoped to your directory snapshot.';
       else if (isStaffMode()) noticeEl.textContent = 'Admin mode — I see cross-agent metrics, recent conversations, and your skill packs. I can propose skill-pack edits when a workflow should be standardized. Same brain as everywhere else, scoped to the admin snapshot.';
       else if (isIntakeMode()) noticeEl.textContent = 'New lead intake — I\'m 86. Tell me what the lead is (property name, scope, salesperson) and drop any photos. I\'ll dedupe against existing clients/leads, propose the new lead for your approval, and tee up the estimate.';
@@ -2078,8 +2078,8 @@
     'Tying loose ends…'
   ];
   // Tool name → friendlier verb fragment for the caption when a tool
-  // is mid-flight. Used both for auto-tier (HR/CoS/AG read tools that
-  // execute server-side and resume the stream) and for approval-tier
+  // is mid-flight. Used both for auto-tier (directory/CoS/86 read tools
+  // that execute server-side and resume the stream) and for approval-tier
   // proposals (the moment the model emits the tool_use, before the
   // approval card lands). Falls back to the raw tool name when no
   // friendly verb is registered.
@@ -2141,7 +2141,7 @@
     set_phase_field:              'Drafting phase edit…',
     set_phase_buildingId:         'Drafting phase relink…',
     request_edit_mode:            'Requesting Edit mode…',
-    // Client / HR proposals
+    // Client-directory proposals
     create_parent_company:        'Drafting parent company…',
     rename_client:                'Drafting client rename…',
     change_property_parent:       'Drafting parent change…',
@@ -2674,7 +2674,7 @@
     // Estimate-side reads
     read_past_estimates: true,
     read_past_estimate_lines: true,
-    // HR / cross-agent reads (now exposed on Ask 86 too)
+    // Client-directory + cross-surface reads (now exposed on Ask 86 too)
     read_clients: true,
     read_leads: true,
     read_jobs: true,
@@ -3329,10 +3329,10 @@
         // approval — there's no client-side mutation to perform.
         // - Intake & Ask 86: propose_create_lead runs via
         //   execProposeCreateLead on the matching /chat/continue.
-        // - Ask 86: also dispatches HR client mutations
+        // - Ask 86: also dispatches client-directory mutations
         //   (create_property, update_client_field, etc.) through
-        //   execClientToolWithCtx in /ask86/chat/continue.
-        // - Client mode (HR) + Staff (CoS): same shape.
+        //   execClientDirectoryToolWithCtx in /ask86/chat/continue.
+        // - Client-directory mode + Staff (CoS): same shape.
         return '';
       }
     }
@@ -3403,8 +3403,9 @@
     read_leads: true,
     read_past_estimate_lines: true,
     read_past_estimates: true,
-    // Cross-agent reads (CoS introspection + HR directory lookups) —
-    // server routes them to execStaffTool / execClientTool as needed.
+    // Cross-domain reads (CoS introspection + client-directory lookups)
+    // — server routes them to execStaffTool / execClientDirectoryTool
+    // as needed.
     read_metrics: true,
     read_recent_conversations: true,
     read_conversation_detail: true,
@@ -5042,7 +5043,7 @@
       detail = '<div style="font-size:13px;color:var(--text,#fff);background:rgba(255,255,255,0.04);padding:8px 10px;border-radius:4px;border-left:2px solid #fbbf24;">' +
           escapeHTMLLocal(input.body || '') +
         '</div>' +
-        '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:6px;">Auto-injects into AG and HR system prompts on every future turn touching this client.</div>' +
+        '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:6px;">Auto-injects into 86\'s system prompt on every future turn touching this client.</div>' +
         (input.client_id ? '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:2px;font-family:monospace;">client: ' + escapeHTMLLocal(input.client_id) + '</div>' : '');
     } else if (tu.name === 'propose_skill_pack_add') {
       heading = '&#x1F9E0; Add skill pack';
@@ -5496,7 +5497,7 @@
   //              chip in pill with view link, AI sees it via context
   //     pdf    → upload to entity attachments AND render pages client-side
   //              into _pendingImages so the AI can read them as vision
-  //   client (HR — customer relations)
+  //   client (directory mode — customer relations)
   //     image  → no persistence (no client_id chosen yet); send as
   //              one-shot inline vision image so the AI can read e.g.
   //              a business card. Future tool will let the agent attach

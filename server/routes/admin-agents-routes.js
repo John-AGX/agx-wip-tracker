@@ -41,17 +41,18 @@ const MODEL_COSTS = {
 // them. Front-end UIs that want SVG icons render them inline via
 // p86Icon() at the call site.
 // Display labels keyed by AGENT IDENTITY, not entity_type. 86 is one
-// Phase 1 collapsed every agent identity into the unified 86. HR and
-// Chief of Staff used to live here as separate buckets; both folded
-// in. Anything still landing in 'hr' / 'staff' rows from old data
-// rolls up to '86' via ENTITY_TYPE_TO_AGENT_SQL below.
+// Phase 1 collapsed every agent identity into the unified 86. The
+// former directory agent (HR) and Chief of Staff used to live here as
+// separate buckets; both folded in. Anything still landing in 'hr' /
+// 'staff' rows from old data rolls up to '86' via
+// ENTITY_TYPE_TO_AGENT_SQL below.
 const AGENT_LABELS = {
   '86': '86'
 };
 
 // Map raw entity_type values in ai_messages to a logical agent
 // identity. Post-Phase-1, every entity_type that used to split into
-// HR or Chief of Staff (client / staff) folds back into the single
+// the directory surface or Chief of Staff (client / staff) folds back into the single
 // unified 86 identity. Kept as a SQL CASE generator + a JS helper so
 // the metrics aggregation and any client-side rollup stay in sync.
 const ENTITY_TYPE_TO_AGENT_SQL = `
@@ -86,7 +87,7 @@ router.get('/metrics',
     const range = (req.query.range === '30d') ? '30 days' : '7 days';
     const orgId = req.organization.id;
 
-    // Phase 1 unified HR + Chief of Staff into 86 — every entity_type
+    // Phase 1 unified the directory surface + Chief of Staff into 86 — every entity_type
     // below now feeds the single 86 agent. The card UI surfaces one
     // big metrics block with a "by surface" breakdown inside.
     const ENTITY_TYPES_FOR_86 = ['estimate', 'job', 'intake', 'ask86', '86', 'client', 'staff'];
@@ -111,7 +112,7 @@ router.get('/metrics',
     const agg = aggRes.rows[0] || {};
 
     // Surface breakdown — how 86 is being used: estimate panel vs
-    // job WIP vs intake vs ask86 vs older HR (client) / CoS (staff)
+    // job WIP vs intake vs ask86 vs older directory (client) / CoS (staff)
     // entry points. Useful for spotting which workflows actually drive
     // usage.
     const surfaceSql = `
@@ -562,7 +563,7 @@ function getAnthropic() {
 
 // GET /api/admin/agents/config — returns the live agent runtime config
 // (model + effort) the server is using. Read straight from the same
-// internals that production 86 / HR consult on every chat turn,
+// internals that production 86 (every surface) consults on every chat turn,
 // so a non-null effort or non-default model here means the env vars
 // genuinely took effect on this deployment. Surfaced as a "Server
 // config" badge on the Agents page so the user can verify env flips
@@ -1113,7 +1114,7 @@ router.get('/preview-prompt', requireAuth, requireCapability('ROLES_MANAGE'), as
       systemBlocks = ctx.system;
       toolNames = aiInternals.clientTools().map(t => t.name);
       entityLabel = 'Client directory (system-wide)';
-      // After the HR→86 absorb, client-context packs are tagged
+      // After the directory→86 absorb, client-context packs are tagged
       // agent='job'. Old packs still tagged 'cra' show up too —
       // Phase 1c retargeted them in the DB but we accept both keys
       // here for any lingering legacy rows.
@@ -1472,7 +1473,7 @@ router.post('/conversations/:key/replay', requireAuth, requireCapability('ROLES_
 
     // Build the system context for whichever agent owned the original
     // conversation. Replays estimates and jobs against 86 (the unified
-    // operator), client threads against HR, staff threads against
+    // operator), client threads against the directory surface, staff threads against
     // the Chief of Staff.
     //
     // For estimate replays, attach photo blocks to the last user message
@@ -1600,8 +1601,8 @@ router.post('/conversations/:key/replay', requireAuth, requireCapability('ROLES_
 const AGENT_SYSTEM_BASELINE = {
   // 86 — the ONE operator agent for Project 86. Serves every surface
   // (per-job WIP chat, per-estimate editor, lead intake, Ask 86 global).
-  // Same identity, same tool union (estimating + job + intake + HR
-  // client mutations), same continuous memory.
+  // Same identity, same tool union (estimating + job + intake +
+  // client-directory mutations), same continuous memory.
   //
   // The legacy 'ag' agent_key (former separate estimator persona) is
   // retired. The DB migration in server/db.js renames any 'ag' rows
@@ -1611,7 +1612,7 @@ const AGENT_SYSTEM_BASELINE = {
   // truth: 86's identity, never the old separate persona).
   job:   'You are 86 — Project 86\'s operator agent. Project 86 is a SaaS platform for construction businesses. You serve as the SINGLE agent across every surface of the app — same brain whether you\'re on the global Ask 86 panel, a per-job WIP chat, a per-estimate editor, the lead-intake flow, the client directory, or admin context. There is no separate HR or Chief of Staff agent; you handle all of it.\n\nThe SPECIFIC COMPANY you\'re working for is appended below in the "About the company you serve" block — that section names the tenant, their industry / market / customer hierarchy / pricing standards. Those standards define how THAT company operates; they do NOT define who you are. You are 86 (the platform agent). The tenant is the company you currently work for.\n\n# Your scope\n  Range across the whole company you serve: revenue, cost, production, WIP, change orders, QB cost data, the node graph, margin trends, billing patterns, schedule slip, estimating, lead intake, client directory hygiene, skill-pack curation. You DRAFT estimates yourself (line items, sections, groups, pricing, scope edits). You CAPTURE leads yourself. You maintain the client directory yourself (split parent+property compounds, validate addresses, capture durable client notes). You curate your own skill packs via propose_skill_pack_* tools when you spot patterns worth standardizing. When the user asks to "go work on X," use the navigate tool to take them there, then keep working.\n\n# Per-turn context\n  Every user turn carries data appropriate to the surface — a job WIP snapshot when the conversation is job-scoped, lead context when handling intake, an estimate snapshot when working in the editor, a client directory snapshot when on the clients page, or a <page_context> block on the global Ask 86 surface telling you which page the user is on. Always reason about WHY a number is what it is. When estimating, anchor labor + sub costs to past-estimate history; price materials from real purchase data over training-data guesses.\n\n# Tone\n  Concise. Construction trade vocabulary welcome. Lead with the answer. Do not announce hand-offs to "other agents" — there are no other agents. You ARE the agent that does the work.',
 
-  // Legacy 'cra' (HR) and 'staff' (Chief of Staff) baselines have been
+  // Legacy 'cra' (directory) and 'staff' (Chief of Staff) baselines have been
   // retired. 86 absorbs both roles. These keys remain only as null
   // back-compat shims so any old `managed_agent_registry` row pointing
   // at 'cra' or 'staff' resolves to 86's baseline at sync time, and
@@ -1635,7 +1636,7 @@ AGENT_SYSTEM_BASELINE.cra = AGENT_SYSTEM_BASELINE.job;
 AGENT_SYSTEM_BASELINE.staff = AGENT_SYSTEM_BASELINE.job;
 
 // Convert one of our local tool definitions (the ESTIMATE_TOOLS /
-// JOB_TOOLS / CLIENT_TOOLS / STAFF_TOOLS shape) into Anthropic's
+// JOB_TOOLS / ClientDirectoryTools / STAFF_TOOLS shape) into Anthropic's
 // BetaManagedAgentsCustomToolParams shape.
 //
 // Constraints the managed-agents schema enforces (vs the looser
@@ -1796,7 +1797,7 @@ function customToolsFor(agentKey) {
   let tools = [];
   if (agentKey === 'job' || agentKey === 'ag' || agentKey === 'cra' || agentKey === 'staff') {
     // ONE 86 — the managed `job` agent serves every surface. The
-    // legacy 'cra' (HR) and 'staff' (CoS) agent_keys resolve to the
+    // legacy 'cra' (directory) and 'staff' (CoS) agent_keys resolve to the
     // same tool union so any stale registry row points at the unified
     // 86 brain at sync time. Once those rows are deleted via
     // /managed/<key>/delete, this branch only fires for 'job'.
@@ -1804,7 +1805,7 @@ function customToolsFor(agentKey) {
     // Tools = UNION of every tool 86 uses anywhere:
     //   - estimateTools  (line items, sections, groups, scope edits)
     //   - jobTools       (phase pct, node graph, COs, POs, invoices)
-    //   - clientTools    (HR client + property + sub mutations)
+    //   - clientTools    (client-directory + property + sub mutations)
     //   - staffTools     (skill pack mutations + introspection reads)
     //   - memoryTools    (Phase 4: remember / recall / list_memories /
     //                     forget — cross-session memory)

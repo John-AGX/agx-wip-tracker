@@ -124,8 +124,8 @@ router.put('/:id', requireAuth, requireCapability('ESTIMATES_EDIT'), async (req,
 
 // ──────────────────────────────────────────────────────────────────
 // Agent notes — small, structured bullets that get auto-injected into
-// AI agent system prompts (AG, CRA) when their work touches this
-// client. Both the user and the AI agents (with approval) can write
+// 86's system prompt (estimate / job / directory surfaces) when 86's
+// work touches this client. Both the user and 86 (with approval) can write
 // these. Stored on clients.agent_notes as a JSONB array.
 //
 // Shape:

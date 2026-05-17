@@ -326,17 +326,18 @@ async function initSchema() {
     -- existing data isn't lost; it's no longer surfaced or written by the app.
     ALTER TABLE clients ADD COLUMN IF NOT EXISTS salutation TEXT;
 
-    -- Short name = the QuickBooks short name / abbreviation HR uses to match
-    -- clients to AGX's bookkeeping records (e.g. "PAC" for "Preferred
-    -- Apartment Communities", "FSR" for "FirstService Residential"). Sourced
-    -- from the live job-numbers + short-names reference sheet HR consults,
+    -- Short name = the QuickBooks short name / abbreviation 86 (in
+    -- directory mode) uses to match clients to AGX's bookkeeping records
+    -- (e.g. "PAC" for "Preferred Apartment Communities", "FSR" for
+    -- "FirstService Residential"). Sourced from the live job-numbers +
+    -- short-names reference sheet 86 consults,
     -- and used downstream as the community label on proposal exports.
     ALTER TABLE clients ADD COLUMN IF NOT EXISTS short_name TEXT;
 
     -- Agent notes — accumulated free-form facts about how to handle this
-    -- client, written by either the user or one of the AI agents (CRA, AG)
-    -- and auto-injected into agent system prompts on every turn that
-    -- touches this client. Examples: "PAC always wants 15% materials
+    -- client, written by either the user or 86 (across surfaces) and
+    -- auto-injected into 86's system prompt on every turn that touches
+    -- this client. Examples: "PAC always wants 15% materials
     -- markup, not 20%", "Wimbledon Greens proposals must include the gate
     -- code in the cover page", "FSR billing prefers a single combined
     -- invoice per property — don't split by group".

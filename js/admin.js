@@ -2393,16 +2393,18 @@
   }
 
   // ==================== AGENT SKILLS (sub-section of Templates tab) ====================
-  // Admin-editable prompt extensions loaded into the in-app AI agents
-  // (AG = estimating, CRA = customer relations) at chat time. Each skill
+  // Admin-editable prompt extensions loaded into 86 at chat time
+  // (per-surface via the agent_key tags: 'job' for general 86, 'cra'
+  // for the directory surface, 'staff' for CoS). Each skill
   // has a name, free-form body, agents it applies to, and an alwaysOn
   // flag. v1 only honors alwaysOn = true — when on, the skill is appended
   // to that agent's system prompt on every turn.
   // Note: agentKey 'cra' kept for backward compat with skill packs that
-  // already reference it. Display label is HR; the underlying agent
-  // Active agents in Project 86 today:
+  // already reference it — it now tags the client-directory surface
+  // (still 86, just a different surface).
+  // Active surfaces in Project 86 today:
   //   job  → 86 (the unified operator — estimating + WIP + intake + Ask 86)
-  //   cra  → HR (clients, jobs, subs, users — 86's data steward)
+  //   cra  → 86 in client-directory mode (clients, jobs, subs, users)
   //   staff → Chief of Staff (meta — observes/tunes 86)
   // 86 is the unified operator agent (Phase 1). Legacy keys ('ag',
   // 'intake', 'cra', 'staff') were retired and migrated to 'job';
@@ -3041,7 +3043,7 @@
   window.moveExclusion = moveExclusion;
 
   // ==================== ADMIN AGENTS ====================
-  // Observability surface for the in-app AI agents (AG, WIP, CRA).
+  // Observability surface for 86 (all surfaces) + CoS.
   // Three sub-views:
   //   1. Metrics — last 7d / 30d aggregate per agent (turns, tokens,
   //      cost, tool uses, model mix).
@@ -4541,9 +4543,8 @@
       rows.forEach(function(c) {
         // Per-conversation row labels. 86 is one agent across every
         // surface; the surface name is shown as a hint in parens for
-        // diagnostic purposes (which panel the conversation came
-        // from) but the agent identity is always "86" unless it's HR.
-        var agentLabel = c.entity_type === 'client'   ? '🤝 HR'
+        // diagnostic purposes (which panel the conversation came from).
+        var agentLabel = c.entity_type === 'client'   ? '🤝 86 · directory'
                        : c.entity_type === 'staff'    ? '🎩 CoS'
                        : c.entity_type === 'estimate' ? '🧬 86 · estimate'
                        : c.entity_type === 'job'      ? '🧬 86 · job'
@@ -5853,7 +5854,7 @@
   // fetchOverridableSections() before the skills editor renders so the
   // "Replaces section" dropdown can show options + descriptions.
   // Keys are the canonical agent ids used everywhere in the system:
-  // job (86 — estimating + WIP + intake + Ask 86), cra (HR), staff
+  // job (86 — estimating + WIP + intake + Ask 86), cra (86 directory), staff
   // (Chief of Staff). The 'ag' key is kept as a back-compat slot in
   // case any stale section override is still tagged with it; for new
   // overrides, target 'job' (the unified 86).
@@ -5875,7 +5876,7 @@
     // legacy local-pack editor mounted as a collapsed <details> at the
     // bottom for back-compat editing. Local packs are NOT injected into
     // any /86/chat path anymore — they only show up as on-demand
-    // manifest entries that 86 / HR pull via load_skill_pack({name}).
+    // manifest entries that 86 pulls via load_skill_pack({name}).
     Promise.all([
       window.p86Api.settings.get('agent_skills'),
       fetchOverridableSections()
@@ -5903,7 +5904,7 @@
         '<details style="margin-top:14px;border-top:1px solid var(--border,#333);padding-top:12px;">' +
           '<summary style="cursor:pointer;font-size:13px;font-weight:600;color:var(--text,#fff);">Local skill packs (' + _skillsDraft.skills.length + ' — on-demand only, edit body / agents here)</summary>' +
           '<p style="margin:10px 0 12px 0;font-size:11px;color:var(--text-dim,#888);line-height:1.55;">' +
-            'Reusable instruction blocks stored locally. Each pack appears in the per-turn manifest by name + description; 86 / HR call <code>load_skill_pack({name})</code> to pull the full body when starting a kind of work that maps to it. No always-on injection. ' +
+            'Reusable instruction blocks stored locally. Each pack appears in the per-turn manifest by name + description; 86 calls <code>load_skill_pack({name})</code> to pull the full body when starting a kind of work that maps to it. No always-on injection. ' +
             'You can also mirror packs to native Anthropic Skills with the per-pack &#x1F310; button so the same content is available via Anthropic\'s platform mechanism.' +
           '</p>' +
           '<div id="agents-skills-body">' + renderAgentSkillsHTML() + '</div>' +

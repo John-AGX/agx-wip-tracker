@@ -129,7 +129,7 @@ const EFFORT = (process.env.AI_EFFORT || '').trim().toLowerCase();
 // higher thinking budgets; line-item / intake turns don't. Each
 // env var is optional; missing → falls back to AI_EFFORT.
 //   AI_EFFORT_JOB   86 (operator — estimating + intake + WIP)
-//   AI_EFFORT_CRA   HR (data steward)
+//   AI_EFFORT_CRA   86 directory surface (legacy "cra" key)
 //   AI_EFFORT_STAFF Chief of Staff
 // (Legacy AI_EFFORT_AG still honored as a fallback for AI_EFFORT_JOB
 //  in case anyone still has it set in their Railway env vars — drop
@@ -296,7 +296,7 @@ const ESTIMATE_TOOLS = [
   },
   {
     name: 'propose_add_client_note',
-    description: 'Propose appending a durable, agent-readable note to the linked client. Notes auto-inject into 86 and HR system prompts on every future turn touching this client, so they compound knowledge across sessions. Only call when you\'ve learned something the user told you that should outlive this conversation — pricing preferences, billing quirks, gate codes, scope rules, contact preferences. NEVER call for facts already in the client record (name, address, salesperson) or for ephemeral state (current weather, today\'s schedule). Only available when the estimate is linked to a client (see context above); skipped otherwise.',
+    description: 'Propose appending a durable, agent-readable note to the linked client. Notes auto-inject into 86\'s system prompt on every future turn touching this client (estimate, job, or directory surface), so they compound knowledge across sessions. Only call when you\'ve learned something the user told you that should outlive this conversation — pricing preferences, billing quirks, gate codes, scope rules, contact preferences. NEVER call for facts already in the client record (name, address, salesperson) or for ephemeral state (current weather, today\'s schedule). Only available when the estimate is linked to a client (see context above); skipped otherwise.',
     input_schema: {
       type: 'object',
       properties: {
@@ -1085,13 +1085,14 @@ const JOB_TOOLS = [
   },
 
   // ──────────────────────────────────────────────────────────────────
-  // Cross-agent read tools — added when 86 took on full team scope.
+  // Cross-surface read tools — added when 86 took on full company scope.
   // CoS-side: introspection (metrics / conversations / skill packs).
-  // HR-side: directory lookups (jobs / users). Mutation tools from
-  // CoS (propose_skill_pack_*) and HR (create_property, etc.) are NOT
-  // in this list — those still flow through the dedicated CoS / HR
-  // panels via approval cards. This expansion gives 86 read scope
-  // across the team without bouncing the user to another panel.
+  // Client-directory side: directory lookups (jobs / users). Mutation
+  // tools from CoS (propose_skill_pack_*) and the directory surface
+  // (create_property, etc.) are NOT in this list — those still flow
+  // through the dedicated CoS / Directory panels via approval cards.
+  // This expansion gives 86 read scope across every surface without
+  // bouncing the user.
   // ──────────────────────────────────────────────────────────────────
   {
     name: 'read_metrics',
@@ -2039,7 +2040,7 @@ const PLAN_MODE_ALLOWED_JOB_TOOLS = new Set([
   'read_building_breakdown',
   'read_job_pct_audit',
   'request_edit_mode',
-  // CoS + HR read tools surfaced on 86 — pure introspection / lookup,
+  // CoS + directory read tools surfaced on 86 — pure introspection / lookup,
   // safe to keep available in plan mode.
   'read_metrics',
   'read_recent_conversations',
@@ -2150,7 +2151,7 @@ const SECTION_DEFAULTS = {
     description: "When 86 should use web search on the job / WIP surface. Tighter cap than estimating since most answers are in the WIP / QB data already.",
     body: '# Web research (web_search tool) — job / WIP context\nYou have a web_search tool. Use it sparingly on the job side — most answers are already in the WIP snapshot, change orders, QB cost lines, and node graph above. Good reasons to search:\n  • Look up a recurring vendor name to figure out what trade/category they serve when the QB account label is ambiguous (e.g., "is ACME Supply Co a roofing supplier or a general lumberyard?").\n  • Confirm a sub\'s scope or licensing when categorizing their cost lines.\n  • Look up a product/material SKU charged to the job when the PM asks "what did we buy here?".\nDo NOT search for Project 86-internal financial questions, margin math, or anything answered by the data above. Cap at ~2 searches per turn.'
   },
-  // Phase 1 deleted the legacy 'cra' (HR) and 'staff' (Chief of Staff)
+  // Phase 1 collapsed the legacy 'cra' (directory) and 'staff' (Chief of Staff)
   // agents. Their section bodies below (hr_* and cos_*) are now DEAD:
   //   - agent='cra' / agent='staff' never match the unified 'job' key,
   //     so composedAgentSystem skips them
@@ -2185,39 +2186,39 @@ const SECTION_DEFAULTS = {
   },
   hr_dedup_rules: {
     agent: 'cra',
-    description: 'Rules HR uses to detect duplicate client entries. Tighten or loosen depending on how aggressive merging should be.',
+    description: 'Rules 86 uses (in directory mode) to detect duplicate client entries. Tighten or loosen depending on how aggressive merging should be.',
     body: '# Duplicate-detection rules\nTreat as the same client (propose merge) when ANY of these match:\n  • Same email on community_manager AND it is a property-level email (not a generic billing@ inbox)\n  • Same property_address (street + city)\n  • Same phone number after normalizing formatting (strip parens/dashes/spaces)\n  • Names differ only by: case, leading/trailing whitespace, "Inc"/"LLC"/"LLC."/"L.L.C.", "Inc." vs "Incorporated", trailing "HOA" / "Owners Association" / "Condo Assoc.", curly vs straight apostrophe, em-dash vs hyphen, &amp; vs "and"\n  • Names where one is an abbreviation expansion of the other (PAC ↔ Preferred Apartment Communities)\nWhen you see a parent name with multiple spelling variants across the directory, rename them to the canonical form (the most common / formal version).'
   },
   hr_behavior: {
     agent: 'cra',
-    description: "How HR should batch tool calls and run audits. Edit to make HR more conservative or more aggressive.",
+    description: "How 86 should batch tool calls and run audits in directory mode. Edit to make directory work more conservative or more aggressive.",
     body: '# Behavior rules\n  • Prefer linking a new property under an EXISTING parent over creating a new parent. Always scan the directory below for a fuzzy parent match BEFORE calling create_parent_company.\n  • Be efficient. Chain auto-tier tools (create_property, link_property_to_parent, update_client_field) in batches with no preamble. The system applies them in order; results stream back as ✓ chips.\n  • Group related approval-tier changes in ONE batch so the user can approve in bulk via the bulk-approve button.\n  • When you spot a property whose stored company_name points at an EXISTING parent in the directory, you do not need to ask — link it via link_property_to_parent (auto-tier).\n  • When you spot a flat client whose name is a clear parent+property compound, propose split_client_into_parent_and_property. If the parent already exists, pass existing_parent_id so we reuse instead of duplicating.\n  • When merging duplicates, ALWAYS pick the row with more populated fields as keep_client_id and fold the sparser row in.\n  • After a batch of changes, give the user a one-line summary in plain text. Skip narration — they want results, not commentary.\n  • If asked to "run a full audit": work the directory in this order — (1) split obvious parent+property compounds, (2) link unparented children to existing parents, (3) merge clear duplicates, (4) flag (in chat, no tool call) the rest as ambiguous for the user to decide on.'
   },
   hr_web_research: {
     agent: 'cra',
-    description: "How aggressive HR should be with web search (high — directory data is often stale).",
-    body: '# Web research (web_search tool)\nYou have a web_search tool. The HR role is the highest-value place to use it — Central-FL property management is constantly reorganizing, and the directory often has stale or ambiguous data. Good reasons to search:\n  • Confirm a parent-company / property relationship before linking (e.g., "Is Solace Tampa managed by PAC or by Bainbridge?" — search the property name + "managed by").\n  • Find the current canonical name for a parent company before renaming variants (e.g., "Preferred Apartment Communities" merged with another entity — look up the current corporate name).\n  • Look up a property\'s physical address when only the community name is known and we need to populate property_address.\n  • Find a property\'s on-site CAM or maintenance manager from a public LinkedIn / management-company website / apartments.com listing when we have a name but no email/phone.\n  • Resolve abbreviation ambiguity — "RPM" could be RPM Living OR a regional smaller firm. Search before guessing.\nCap at ~3 searches per turn. When a search result drives a propose_* call, include a brief source citation in the rationale shown on the approval card so the user can audit.'
+    description: "How aggressive 86 should be with web search in directory mode (high — directory data is often stale).",
+    body: '# Web research (web_search tool)\nYou have a web_search tool. Client-directory work is the highest-value place to use it — Central-FL property management is constantly reorganizing, and the directory often has stale or ambiguous data. Good reasons to search:\n  • Confirm a parent-company / property relationship before linking (e.g., "Is Solace Tampa managed by PAC or by Bainbridge?" — search the property name + "managed by").\n  • Find the current canonical name for a parent company before renaming variants (e.g., "Preferred Apartment Communities" merged with another entity — look up the current corporate name).\n  • Look up a property\'s physical address when only the community name is known and we need to populate property_address.\n  • Find a property\'s on-site CAM or maintenance manager from a public LinkedIn / management-company website / apartments.com listing when we have a name but no email/phone.\n  • Resolve abbreviation ambiguity — "RPM" could be RPM Living OR a regional smaller firm. Search before guessing.\nCap at ~3 searches per turn. When a search result drives a propose_* call, include a brief source citation in the rationale shown on the approval card so the user can audit.'
   },
   hr_tool_tiers: {
     agent: 'cra',
-    description: 'HR tool list with auto vs approval tier annotation. Edit only when adding/removing tools in code.',
-    body: '# Tool tiers — system handles the gating, you just call\n  AUTO (applies immediately, model continues in same turn):\n    create_property, update_client_field, link_property_to_parent,\n    read_jobs, read_users\n  APPROVAL (user clicks Approve/Reject before applying):\n    create_parent_company, rename_client, change_property_parent,\n    merge_clients, split_client_into_parent_and_property, delete_client,\n    attach_business_card_to_client\n\n## Cross-directory reads (your data-steward scope)\n  • `read_jobs(q?, status?, limit?)` — fuzzy lookup against the jobs directory. Returns the identity card: jobNumber, title, client (linked or text), status, address, PM. Use for "who is [job number]" / "what address is [job]" / "what jobs is [client] running". NOT for financials.\n  • `read_users(q?, role?, active_only?, limit?)` — Project 86 staff directory. Returns name, email, role, active flag. Use for "who\'s the PM" / "is X still active" / "who can I assign this to".'
+    description: 'Directory-mode tool list with auto vs approval tier annotation. Edit only when adding/removing tools in code.',
+    body: '# Tool tiers — system handles the gating, you just call\n  AUTO (applies immediately, model continues in same turn):\n    create_property, update_client_field, link_property_to_parent,\n    read_jobs, read_users\n  APPROVAL (user clicks Approve/Reject before applying):\n    create_parent_company, rename_client, change_property_parent,\n    merge_clients, split_client_into_parent_and_property, delete_client,\n    attach_business_card_to_client\n\n## Cross-directory reads (your directory scope)\n  • `read_jobs(q?, status?, limit?)` — fuzzy lookup against the jobs directory. Returns the identity card: jobNumber, title, client (linked or text), status, address, PM. Use for "who is [job number]" / "what address is [job]" / "what jobs is [client] running". NOT for financials.\n  • `read_users(q?, role?, active_only?, limit?)` — Project 86 staff directory. Returns name, email, role, active flag. Use for "who\'s the PM" / "is X still active" / "who can I assign this to".'
   },
   hr_photos: {
     agent: 'cra',
-    description: "Workflow when the user uploads a business card photo. Edit to change how aggressively HR auto-creates entries.",
+    description: "Workflow when the user uploads a business card photo. Edit to change how aggressively 86 auto-creates directory entries.",
     body: '# Photos / business cards\nWhen the user uploads a photo (visible to you in this turn as an inline image):\n  1. READ it. If it\'s a business card, extract: name, title, company, email, phone, address.\n  2. MATCH to an existing client. Compare the extracted name/email/phone/company against the directory below. If the company on the card matches a parent management company and the title implies the cardholder is a CAM/manager at a property, look for that property under the parent. If the property does not exist yet, propose create_property.\n  3. UPDATE missing fields on the matched client (community_manager / cm_email / cm_phone / first_name / last_name / etc.) via update_client_field — auto-tier, just call.\n  4. PROPOSE attach_business_card_to_client to save the photo to that client\'s attachments. Include a caption like "Business card — Jane Smith, CAM at Solace Tampa". Approval-tier — user confirms the match.\nOnly call attach_business_card_to_client ONCE per uploaded card — the image is consumed from the pending bucket.'
   },
   // ──── Chief of Staff (system-wide observability agent) ───────────
   cos_three_agents: {
     agent: 'staff',
-    description: "Description of the in-app agent team (86 operator, HR data steward). Edit when the architecture changes.",
-    body: '# The agent team\n  • **86 — the operator.** Project 86\'s primary agent. Range across everything that involves *thinking about the work*: lead intake, estimating (line items, sections, scope, materials, web search, photos, PDF takeoffs), proposals, WIP analysis, change orders, the node graph, margin and schedule reasoning. The user goes to 86 first for almost anything. Single canonical agent_key is "job"; display name is 86. Sessions from the "🧲 New Lead with AI" button run as 86 with entity_type=\'intake\'; estimate AI panels run as 86 with entity_type=\'estimate\'; WIP/job panels run as 86 with entity_type=\'job\'.\n  • **HR — the data steward.** 86\'s assistant for everything *who/where/what*: clients (directory, agent notes, dedupe, parent/property hierarchy, CAM contacts), jobs (name, jobNumber, client linkage, location/address — the identity card, NOT the financial side), subs/vendors (directory, compliance, craft research), users (directory lookups, role notes). HR PROPOSES changes; 86 or the user APPROVES before they apply. Internal entity_type is "client", skill-pack agentKey is "cra"; display name is HR.\n  • **You — Chief of Staff.** The meta-agent. You observe 86 and HR, audit conversations when something looks off, and propose skill-pack edits (add / edit / delete / mirror to Anthropic native Skills) for the user to approve. You don\'t do the work; you tune the team doing the work.\nAll active agents log into ai_messages (different entity_type values). The former standalone Intake and Estimator agents have been retired — their roles are consolidated into 86, which is now the single operator agent across every surface.'
+    description: "Description of the in-app AI: 86 (single agent, multi-surface) plus you (CoS observer). Edit when the architecture changes.",
+    body: '# The agent\n  • **86 — the only operator.** Project 86\'s single AI agent. 86 is the same brain everywhere; the *surface* (entity_type) changes what tools and context are wired in. Surfaces: estimate (line items, sections, scope, materials, photos, PDF takeoffs), job (WIP analysis, change orders, the node graph, margin and schedule reasoning), intake (lead capture, dedupe, salesperson tagging), ask (global ask-anything from anywhere in the app), client (the directory — clients, parent/property hierarchy, CAM contacts, business-card capture). Canonical agent_key is "job" (with "cra" still recognized for back-compat on historical directory rows); display name is always 86. Sessions from the "🧲 New Lead with AI" button run as 86/intake; estimate AI panels run as 86/estimate; WIP/job panels run as 86/job; "Ask 86 · Directory" runs as 86/client.\n  • **You — Chief of Staff.** The meta-agent. You observe 86 across all surfaces, audit conversations when something looks off, and propose skill-pack edits (add / edit / delete / mirror to Anthropic native Skills) for the admin to approve. You don\'t do the work; you tune the agent doing the work.\nAll active surfaces log into ai_messages (different entity_type values). The former standalone Intake, Estimator, and HR (directory) agents have been retired — every role is consolidated into 86, which is now the single operator agent across every surface.'
   },
   cos_how_to_work: {
     agent: 'staff',
     description: "How Chief of Staff should approach analysis tasks. Edit to make CoS more or less proactive about proposing changes.",
-    body: '# How to work\n- Default to data first. When asked "how is 86 doing?" (or HR), call `read_metrics` and report concrete numbers, not opinions.\n- Drill before generalizing. If you spot something odd in metrics, pull recent conversations and inspect a few before proposing a theory.\n- When citing a conversation, include the user and the entity title so the admin can locate it.\n- When proposing a skill pack, write tight, specific instructions — every always-on pack costs tokens on every turn forever. Propose deletions of stale ones too. After body edits, propose `propose_skill_pack_unmirror` then `propose_skill_pack_mirror` so the Anthropic-side native skill picks up the new content (mirror is a one-way upload — re-mirroring after an edit requires unmirror first).\n- **Always close the loop with a brief summary after a tool runs.** When an approval-tier tool (skill pack add/edit/delete/mirror/unmirror) executes, you receive its result as a tool_result block. Respond with a one- or two-sentence confirmation of what happened and what (if anything) the user should do next (e.g., "Mirror landed at skill_xyz — re-register the affected agents via Admin → Agents → Bootstrap so the new id flows into their Anthropic-side definition."). NEVER end a turn with a tool_result and no follow-up text — the panel renders an empty turn as "(no response)" which looks broken.\n- Be candid about limits. You can\'t replay conversations directly from your tools (the admin runs replays manually from Admin → Agents → Conversations → 🔁 Replay), but you can suggest exact replay parameters (model, effort, system_prefix) when a question would benefit from one.\n- Skip the assistant filler. The admin is technical; lead with the answer.'
+    body: '# How to work\n- Default to data first. When asked "how is 86 doing?" (or how a specific surface is doing), call `read_metrics` and report concrete numbers, not opinions.\n- Drill before generalizing. If you spot something odd in metrics, pull recent conversations and inspect a few before proposing a theory.\n- When citing a conversation, include the user and the entity title so the admin can locate it.\n- When proposing a skill pack, write tight, specific instructions — every always-on pack costs tokens on every turn forever. Propose deletions of stale ones too. After body edits, propose `propose_skill_pack_unmirror` then `propose_skill_pack_mirror` so the Anthropic-side native skill picks up the new content (mirror is a one-way upload — re-mirroring after an edit requires unmirror first).\n- **Always close the loop with a brief summary after a tool runs.** When an approval-tier tool (skill pack add/edit/delete/mirror/unmirror) executes, you receive its result as a tool_result block. Respond with a one- or two-sentence confirmation of what happened and what (if anything) the user should do next (e.g., "Mirror landed at skill_xyz — re-register the affected agents via Admin → Agents → Bootstrap so the new id flows into their Anthropic-side definition."). NEVER end a turn with a tool_result and no follow-up text — the panel renders an empty turn as "(no response)" which looks broken.\n- Be candid about limits. You can\'t replay conversations directly from your tools (the admin runs replays manually from Admin → Agents → Conversations → 🔁 Replay), but you can suggest exact replay parameters (model, effort, system_prefix) when a question would benefit from one.\n- Skip the assistant filler. The admin is technical; lead with the answer.'
   },
   cos_tone: {
     agent: 'staff',
@@ -2837,7 +2838,7 @@ async function createFreshAiSession({ agentKey, entityType, entityId, userId, or
 // (user message and/or tool results), translate session events to the
 // existing v1 SSE shape, and persist the assistant text on terminal
 // idle. Stream-first then send — see managed-agents-events.md.
-// `onCustomToolUse` is an optional callback for the HR / CoS auto-tier
+// `onCustomToolUse` is an optional callback for the directory / CoS auto-tier
 // pattern. It receives `{ id, name, input }` and returns one of:
 //   { tier: 'auto', summary: 'text' }    — auto-execute succeeded; we
 //                                            send the summary back to
@@ -3100,7 +3101,7 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
 
     if (Array.isArray(eventsForThisOpen) && eventsForThisOpen.length) {
       // Anthropic's events.send endpoint caps at 50 events per call.
-      // Auto-tier batches (HR running update_client_field across an
+      // Auto-tier batches (86 running update_client_field across an
       // entire client directory, etc.) routinely exceed that — chunk
       // sequentially. The session processes chunks in order, so
       // tool_result ordering is preserved.
@@ -3264,7 +3265,7 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
             // approval card or the tool_applied result lands. Fires for
             // every agent regardless of whether onCustomToolUse is set.
             send({ tool_started: { id: tu.id, name: tu.name } });
-            // HR / CoS / 86 auto-tier path: callback decides whether we
+            // Directory / CoS / 86 auto-tier path: callback decides whether we
             // execute server-side (and resume the session in-stream) or
             // collect for user approval (default behavior).
             if (typeof onCustomToolUse === 'function') {
@@ -4180,7 +4181,7 @@ async function buildJobContext(jobId, clientContext, aiPhase, organization, opts
     lines.push('Buildings store ONLY {id, jobId, name, budget, address}. They do NOT have materials / labor / sub / equipment dollar fields — those live on phase records (which carry buildingId). There is no `set_building_field` tool because the cost data lives one layer down. To "set materials cost on B1," update the phase under B1 with `set_phase_field`, OR allocate via the relevant cost-bucket node with `set_node_value`.');
   }
 
-  // Job side stays plain — single string. Lower volume than 86/HR so
+  // Job side stays plain — single string. Lower volume than estimate / directory so
   // the marginal caching benefit isn't worth the structural complexity.
   // photoBlocks now includes the cascade-rolled-up images from
   // job + lead + estimate (Phase 2). The /v2/jobs/:id/chat handler
@@ -4438,7 +4439,7 @@ setInterval(() => {
   }
 }, 10 * 60 * 1000).unref();
 
-const CLIENT_TOOLS = [
+const ClientDirectoryTools = [
   {
     name: 'create_property',
     tier: 'auto',
@@ -4594,7 +4595,7 @@ const CLIENT_TOOLS = [
   {
     name: 'add_client_note',
     tier: 'approval',
-    description: 'Append a short, durable fact about how to handle this client to their agent notes. These notes auto-inject into 86 (estimating) and HR (this — customer relations) system prompts on every future turn that touches the client, so they compound knowledge across sessions. Good notes: "PAC always wants 15% materials markup, not 20%", "Wimbledon Greens proposals must include the gate code on the cover page", "FSR billing prefers a single combined invoice per property — don\'t split by group", "Solace Tampa has a strict noise window (8a-5p) — note it in scope". Bad notes: anything ephemeral ("user is on PTO this week"), anything personal, anything that would already be obvious from the client record. Approval-required so the user vets the wording before it lands. Cap one note per call — call multiple times in parallel for multiple notes.',
+    description: 'Append a short, durable fact about how to handle this client to their agent notes. These notes auto-inject into 86\'s system prompt on every future turn that touches the client (estimate, job, or directory surface), so they compound knowledge across sessions. Good notes: "PAC always wants 15% materials markup, not 20%", "Wimbledon Greens proposals must include the gate code on the cover page", "FSR billing prefers a single combined invoice per property — don\'t split by group", "Solace Tampa has a strict noise window (8a-5p) — note it in scope". Bad notes: anything ephemeral ("user is on PTO this week"), anything personal, anything that would already be obvious from the client record. Approval-required so the user vets the wording before it lands. Cap one note per call — call multiple times in parallel for multiple notes.',
     input_schema: {
       type: 'object',
       properties: {
@@ -4605,14 +4606,14 @@ const CLIENT_TOOLS = [
       required: ['client_id', 'body', 'rationale']
     }
   },
-  // ── HR scope expansion (2026-05) ─────────────────────────────────
-  // HR is now Project 86's data steward — clients (existing role)
-  // PLUS jobs (identity card: name, jobNumber, client linkage,
-  // address) and users (directory lookups). These two read tools
-  // give HR enough awareness to answer "who's the PM on RV2041",
-  // "what's the address for Wimbledon Greens", "is Calvin still
-  // active". Job/user mutations are deferred to a future commit
-  // (HR proposes; 86 or the user approves).
+  // ── Directory-surface scope expansion (2026-05) ──────────────────
+  // 86 on the directory surface is the data steward — clients (the
+  // historical role) PLUS jobs (identity card: name, jobNumber,
+  // client linkage, address) and users (directory lookups). These
+  // two read tools give the directory surface enough awareness to
+  // answer "who's the PM on RV2041", "what's the address for
+  // Wimbledon Greens", "is Calvin still active". Job/user mutations
+  // are deferred to a future commit (86 proposes; user approves).
   {
     name: 'read_jobs',
     tier: 'auto',
@@ -4659,7 +4660,7 @@ const CLIENT_EDITABLE_FIELDS = new Set([
 // the chat loop turns the error into a tool_result with `is_error: true`
 // so the model can recover (apologize / try a different tool).
 // ──────────────────────────────────────────────────────────────────
-async function execClientTool(name, input) {
+async function execClientDirectoryTool(name, input) {
   switch (name) {
     case 'create_property': {
       if (!input.name || !input.parent_client_id) throw new Error('name and parent_client_id are required');
@@ -4813,13 +4814,13 @@ async function execClientTool(name, input) {
     }
     case 'attach_business_card_to_client': {
       // Note: the userId is needed to find the right pending bucket.
-      // We pass it via execClientTool's options arg (added below).
-      throw new Error('attach_business_card_to_client must be invoked via execClientToolWithCtx');
+      // We pass it via execClientDirectoryTool's options arg (added below).
+      throw new Error('attach_business_card_to_client must be invoked via execClientDirectoryToolWithCtx');
     }
     case 'add_client_note': {
       // Like the business-card tool, this needs userId for audit trail
-      // (created_by_user_id). Routed through execClientToolWithCtx.
-      throw new Error('add_client_note must be invoked via execClientToolWithCtx');
+      // (created_by_user_id). Routed through execClientDirectoryToolWithCtx.
+      throw new Error('add_client_note must be invoked via execClientDirectoryToolWithCtx');
     }
     case 'read_jobs': {
       const q = String(input.q || '').trim().toLowerCase();
@@ -5033,7 +5034,7 @@ async function execClientTool(name, input) {
 // Wrapper that adds context (userId, storage) for tools that need it
 // (attach_business_card_to_client, add_client_note). Falls through to
 // the stateless executor for everything else.
-async function execClientToolWithCtx(name, input, ctx) {
+async function execClientDirectoryToolWithCtx(name, input, ctx) {
   if (name === 'add_client_note') {
     if (!input.client_id || !input.body) throw new Error('client_id and body are required');
     const body = String(input.body).trim();
@@ -5058,7 +5059,7 @@ async function execClientToolWithCtx(name, input, ctx) {
     return `Added note to "${exists.rows[0].name}": "${body.slice(0, 80)}${body.length > 80 ? '…' : ''}".`;
   }
   if (name !== 'attach_business_card_to_client') {
-    return execClientTool(name, input);
+    return execClientDirectoryTool(name, input);
   }
   const userId = ctx && ctx.userId;
   if (!userId) throw new Error('userId required for attach_business_card_to_client');
@@ -5112,7 +5113,7 @@ async function execClientToolWithCtx(name, input, ctx) {
 }
 
 function isClientToolAutoTier(name) {
-  const t = CLIENT_TOOLS.find(t => t.name === name);
+  const t = ClientDirectoryTools.find(t => t.name === name);
   return !!(t && t.tier === 'auto');
 }
 
@@ -5136,11 +5137,12 @@ async function buildClientDirectoryContext(organization) {
   }
   const flatTopLevel = parents.filter(p => !childrenByParent.has(p.id));
 
-  // Build CRA's prompt as two blocks like 86: stable playbook (cached
-  // prefix) + dynamic directory snapshot (refreshed each turn).
+  // Build the directory-surface prompt as two blocks like 86 elsewhere:
+  // stable playbook (cached prefix) + dynamic directory snapshot
+  // (refreshed each turn).
   const stable = [];
   const out = []; // dynamic directory snapshot
-  stable.push('You are HR, Project 86\'s customer relations agent — the dedicated assistant for keeping Project 86\' customer directory clean, accurate, and properly structured. You understand the property-management industry in Central Florida and you take pride in a tidy, hierarchical, dedupe-clean directory. (Yes, "HR" — your name is a small Project 86 inside joke; the role is customer relations, not human resources.)');
+  stable.push('You are 86, Project 86\'s operator, working in Client Directory mode — keeping the customer directory clean, accurate, and properly structured. You understand the property-management industry in Central Florida and you take pride in a tidy, hierarchical, dedupe-clean directory.');
   stable.push('');
   // Section overrides — admin-editable named blocks.
   const hrSectionOverrides = await loadSectionOverridesFor('cra');
@@ -5163,7 +5165,7 @@ async function buildClientDirectoryContext(organization) {
   renderSection(stable, 'hr_photos', hrSectionOverrides);
   stable.push('');
 
-  // Skill packs — manifest only. HR can call load_skill_pack({name})
+  // Skill packs — manifest only. 86 can call load_skill_pack({name})
   // to pull a body on demand. The `alwaysOn` flag is no longer
   // consulted at runtime.
   // Skill packs ship as native Anthropic Skills registered on the
@@ -5173,8 +5175,8 @@ async function buildClientDirectoryContext(organization) {
   out.push('');
 
   // Pre-existing agent notes — short list of every client that has at
-  // least one note, with their notes inline. Lets CRA reference them
-  // when proposing changes ("PAC has a 15% materials note from 86, do
+  // least one note, with their notes inline. Lets 86 reference them
+  // when proposing changes ("PAC has a 15% materials note from before, do
   // you want me to copy that to the new sub-property?").
   const withNotes = rows.filter(r => Array.isArray(r.agent_notes) && r.agent_notes.length);
   if (withNotes.length) {
@@ -5224,7 +5226,7 @@ async function buildClientDirectoryContext(organization) {
   // Reference sheets (job numbers, client short names, WIP report)
   // are now baked into the registered agent system prompt via
   // composedAgentSystem — the per-turn injection that used to live
-  // here was double-billing those tokens on every HR turn.
+  // here was double-billing those tokens on every directory-surface turn.
 
   return {
     system: [
@@ -5242,17 +5244,19 @@ async function buildClientDirectoryContext(organization) {
 // ══════════════════════════════════════════════════════════════════════
 // Chief of Staff agent
 // ══════════════════════════════════════════════════════════════════════
-// A meta-agent that observes the three task agents (86 / WIP / CRA),
-// reads their metrics + recent conversations, and (in later versions)
-// proposes skill-pack improvements based on observed failure patterns
-// or recurring user requests.
+// A meta-agent that observes 86 across all its surfaces (estimate,
+// job, intake, ask, directory), reads its metrics + recent
+// conversations, and (in later versions) proposes skill-pack
+// improvements based on observed failure patterns or recurring user
+// requests.
 //
 // V1 is read-only — only auto-tier read tools, no proposes. The user
-// asks "how is 86 doing this week?" or "what does CRA usually search
-// for?" and the agent answers by calling read tools and synthesizing.
+// asks "how is 86 doing this week?" or "what does the directory
+// surface usually search for?" and the agent answers by calling read
+// tools and synthesizing.
 //
 // Reuses the same ai_messages table for history, partitioned by
-// entity_type='staff'. Like CRA, there's no entity_id — the agent is
+// entity_type='staff'. Like the directory surface, there's no entity_id — the agent is
 // global, scoped per user. estimate_id stores the literal sentinel
 // 'global'.
 // ══════════════════════════════════════════════════════════════════════
@@ -5262,7 +5266,7 @@ const STAFF_TOOLS = [
     name: 'read_metrics',
     tier: 'auto',
     description:
-      'Read aggregate AI-agent usage metrics for the requested window. Returns per-agent (86 / 86 / HR) totals: turns, conversations, unique users, tool uses, photos attached, tokens in/out, model mix, and estimated cost in USD. Use this to answer "how much is 86 being used?", "what does 86 cost us?", "is anyone using HR?" types of questions.',
+      'Read aggregate AI usage metrics for the requested window. Returns per-surface (86/estimate, 86/job, 86/intake, 86/ask, 86/directory) totals: turns, conversations, unique users, tool uses, photos attached, tokens in/out, model mix, and estimated cost in USD. Use this to answer "how much is 86 being used?", "what does 86 cost us?", "is anyone using the directory surface?" types of questions.',
     input_schema: {
       type: 'object',
       additionalProperties: false,
@@ -5306,7 +5310,7 @@ const STAFF_TOOLS = [
     name: 'read_skill_packs',
     tier: 'auto',
     description:
-      'List the admin-editable skill packs that the AI agents load at chat time. Each pack has a name, body (instructions), agent assignments (which of 86 / HR load it — internal key for HR is "cra" for back-compat), and an alwaysOn flag. Use this to recommend new skills, audit existing ones for staleness, or answer "what context does 86 always see?".',
+      'List the admin-editable skill packs that 86 loads at chat time. Each pack has a name, body (instructions), agent assignments (which surface — "job" for 86 generally, "cra" for the directory surface — load it), and an alwaysOn flag. Use this to recommend new skills, audit existing ones for staleness, or answer "what context does 86 always see?".',
     input_schema: {
       type: 'object',
       additionalProperties: false,
@@ -5394,7 +5398,7 @@ const STAFF_TOOLS = [
       properties: {
         name: { type: 'string', description: 'Short, unique title (e.g., "Trex decking spec reference"). Must not collide with an existing pack.' },
         body: { type: 'string', description: 'The skill content. Markdown allowed. The body is registered as a native Anthropic Skill and surfaced by the runtime when the description matches — write it as standalone guidance for the moment it activates.' },
-        agents: { type: 'array', items: { type: 'string', enum: ['cra', 'job'] }, description: 'Which agents see this pack in their manifest. "job" for 86, "cra" for HR.' },
+        agents: { type: 'array', items: { type: 'string', enum: ['cra', 'job'] }, description: 'Which surface sees this pack in its manifest. "job" for 86 generally, "cra" for the client-directory surface.' },
         rationale: { type: 'string', description: 'One short sentence shown on the approval card explaining why this pack is worth keeping.' }
       },
       required: ['name', 'body', 'agents', 'rationale']
@@ -5412,7 +5416,7 @@ const STAFF_TOOLS = [
         name: { type: 'string', description: 'Existing pack name (must match exactly).' },
         new_name: { type: 'string', description: 'Optional rename.' },
         new_body: { type: 'string', description: 'Optional replacement body. Pass the full new content.' },
-        agents: { type: 'array', items: { type: 'string', enum: ['cra', 'job'] }, description: 'Optional updated agent assignment. job=86, cra=HR.' },
+        agents: { type: 'array', items: { type: 'string', enum: ['cra', 'job'] }, description: 'Optional updated surface assignment. job=86, cra=86 directory surface.' },
         rationale: { type: 'string', description: 'One short sentence shown on the approval card explaining the change.' }
       },
       required: ['name', 'rationale']
@@ -5632,7 +5636,7 @@ function isStaffToolAutoTier(name) {
 // current week as a second block (refreshed each turn).
 async function buildStaffContext() {
   const stable = [];
-  stable.push('You are the Chief of Staff for Project 86\'s in-app AI agents — 86 (estimating), 86 (WIP analyst), and HR (customer relations). Your user is the Project 86 admin / owner. Your job is to observe how the three agents are being used, surface trends and anomalies, audit specific conversations on request, and propose skill-pack improvements based on what you see.');
+  stable.push('You are the Chief of Staff for Project 86\'s in-app AI — a single agent named 86 that runs every surface (estimating, WIP, intake, ask, client directory). Your user is the Project 86 admin / owner. Your job is to observe how 86 is being used across those surfaces, surface trends and anomalies, audit specific conversations on request, and propose skill-pack improvements based on what you see.');
   stable.push('');
   // Section overrides — admin-editable named blocks for Chief of Staff.
   const cosSectionOverrides = await loadSectionOverridesFor('staff');
@@ -5670,7 +5674,7 @@ async function buildStaffContext() {
     `);
     if (r.rows.length) {
       liveLines.push('# Live snapshot (last 7 days, assistant turns)');
-      const labelMap = { estimate: '86', job: '86', client: 'HR', staff: 'Chief of Staff (you)' };
+      const labelMap = { estimate: '86 (estimate)', job: '86 (job)', client: '86 (directory)', staff: 'Chief of Staff (you)' };
       r.rows.forEach(row => {
         liveLines.push('  • ' + (labelMap[row.entity_type] || row.entity_type) + ': ' + Number(row.turns) + ' turns');
       });
@@ -5716,7 +5720,7 @@ async function execStaffTool(name, input, ctx) {
       `;
       const r = await pool.query(aggSql);
       const out = [];
-      const labels = { estimate: '86 (estimate)', job: '86 (job/WIP)', client: 'HR (client)' };
+      const labels = { estimate: '86 (estimate)', job: '86 (job/WIP)', client: '86 (directory)' };
       const all = ['estimate', 'job', 'client'];
       const byType = new Map(r.rows.map(row => [row.entity_type, row]));
       out.push('Metrics for last ' + range + ':');
@@ -7131,11 +7135,12 @@ function makeAgOnCustomToolUse() {
   };
 }
 
-// HR (clients) — POST /api/ai/v2/clients/chat
+// Directory surface (clients) — POST /api/ai/v2/clients/chat
 // ════════════════════════════════════════════════════════════════════
-// LEAD INTAKE — fifth agent, fresh session per panel open
+// LEAD INTAKE — separate surface, fresh session per panel open
 //
-// Distinct from HR/86/Elle/CoS: each /v2/intake/chat call archives
+// Distinct from directory / job / estimate / CoS surfaces: each
+// /v2/intake/chat call archives
 // any prior intake session for this user and starts a brand-new
 // Anthropic session. There's no persistent history surface — once
 // the user creates a lead (or closes the panel), the conversation is
@@ -7148,7 +7153,7 @@ function makeAgOnCustomToolUse() {
 // ════════════════════════════════════════════════════════════════════
 
 // Per-user pending image bucket scoped to intake. Separate from the
-// HR business-card bucket so a stale HR upload can't accidentally
+// directory-surface business-card bucket so a stale directory upload can't accidentally
 // land on a lead, and vice-versa.
 const _intakeImageBuckets = new Map();
 
@@ -7923,7 +7928,7 @@ function make86OnCustomToolUse(userId, parentSession) {
         } else if (FIELD_TOOLS_EXECUTOR_TOOLS.has(name)) {
           result = await execFieldToolRead(name, input);
         } else if (CLIENT_EXECUTOR_TOOLS.has(name)) {
-          result = await execClientTool(name, input);
+          result = await execClientDirectoryTool(name, input);
         } else if (MEMORY_EXECUTOR_TOOLS.has(name)) {
           result = await execMemoryTool(name, input, { userId });
         } else if (WATCH_EXECUTOR_TOOLS.has(name)) {
@@ -8287,7 +8292,7 @@ function startWatchScheduler() {
 // Auth: ESTIMATES_VIEW (the cap PMs running 86 sessions already have).
 // The tools themselves are read-only — no mutation paths here.
 // 86 now inherits CoS-side introspection reads (metrics, conversations,
-// skill packs) and HR-side directory reads (jobs, users) so a single
+// skill packs) and directory-side reads (jobs, users) so a single
 // chat with 86 can answer "how am I doing" / "who's on this job" / etc.
 // without bouncing the user to a different agent panel. Mutation tools
 // (propose_skill_pack_*, create_property, etc.) are kept off this auto-
@@ -8359,7 +8364,7 @@ const ALLOWED_AUTO_TIER_TOOLS = new Set([
   'search_my_sessions',
   'search_my_kb',
   'search_org_kb',
-  // HR directory reads — let 86 do who/where/what lookups inline
+  // Directory reads — let 86 do who/where/what lookups inline
   'read_jobs',
   'read_users',
   // Company-wide WIP roll-up (financial aggregate across all jobs)
@@ -8398,7 +8403,7 @@ const ALLOWED_AUTO_TIER_TOOLS = new Set([
   // approval-tier and surface as cards.
   'list_watches', 'read_recent_watch_runs',
   // Client-directory write tools that are explicitly tier:'auto' in
-  // their tool definitions. Routed through execClientToolWithCtx
+  // their tool definitions. Routed through execClientDirectoryToolWithCtx
   // (executor needs userId for tools that write attributable rows).
   // Without these in the allowlist, 86 fired them on the global
   // surface → runtime fell through to {tier:'approval'} → N approval
@@ -8407,7 +8412,7 @@ const ALLOWED_AUTO_TIER_TOOLS = new Set([
   // (the "no prior turn" symptom). Now they actually run inline.
   'update_client_field', 'create_property', 'link_property_to_parent'
 ]);
-// Tools whose executor lives in execClientTool (client-directory
+// Tools whose executor lives in execClientDirectoryTool (client-directory
 // reads and tier:'auto' writes — see ALLOWED_AUTO_TIER_TOOLS above).
 const CLIENT_EXECUTOR_TOOLS = new Set([
   'read_jobs', 'read_users', 'read_wip_summary',
@@ -8434,7 +8439,7 @@ router.post('/exec-tool', requireAuth, requireCapability('ESTIMATES_VIEW'), asyn
     } else if (FIELD_TOOLS_EXECUTOR_TOOLS.has(name)) {
       summary = await execFieldToolRead(name, input);
     } else if (CLIENT_EXECUTOR_TOOLS.has(name)) {
-      summary = await execClientTool(name, input);
+      summary = await execClientDirectoryTool(name, input);
     } else {
       summary = await execStaffTool(name, input, { userId: req.user.id });
     }
@@ -8471,7 +8476,7 @@ function sectionsForAgent(agentKey) {
 // On approval, the lead is INSERTed into `leads` and any photos
 // staged in the per-session pending bucket move to leads attachments.
 //
-// The two read tools mirror HR's directory tools but are scoped to
+// The two read tools mirror the directory surface's tools but are scoped to
 // what intake actually needs: dedupe checks against existing clients
 // + recent leads at the same property.
 // ══════════════════════════════════════════════════════════════════════
@@ -8572,7 +8577,7 @@ async function buildAsk86Context() {
   stable.push('');
   stable.push('# Your scope');
   stable.push('  You are the company\'s primary AI surface. You take questions about anything — leads, estimates, jobs, WIP, margins, the team, costs — and either answer directly or point the user at the right entity panel for deeper work.');
-  stable.push('  HR (the data steward) and Chief of Staff (the auditor) are your sub-specialists; you can read across their domains via the tools below, and the user can open their dedicated panels when they want to talk to those agents directly.');
+  stable.push('  The Chief of Staff (the auditor) is your sub-specialist for admin metrics + skill-pack stewardship; you can read across that domain via the tools below, and the admin can open the dedicated CoS panel directly. Your client-directory powers (dedupe, hierarchy, business cards) are also available from here — no separate agent.');
   stable.push('');
   stable.push('# Tools available here');
   stable.push('  ## Read tools (auto-execute, no approval)');
@@ -8594,7 +8599,7 @@ async function buildAsk86Context() {
   stable.push('# Mutation tools you have here');
   stable.push('  You CAN make changes from this surface:');
   stable.push('  • `propose_create_lead` — capture a new lead in one shot. ALWAYS call `read_existing_clients` first to dedupe; if the client exists, pass its id as `existing_client_id`. Same flow as the dedicated intake panel.');
-  stable.push('  • HR client tools — `create_property`, `create_parent_company`, `update_client_field`, `link_property_to_parent`, `rename_client`, `change_property_parent`, `merge_clients`, `split_client_into_parent_and_property`, `attach_business_card_to_client`. Use these inline so the user does not have to open the HR panel for routine directory work.');
+  stable.push('  • Client-directory tools — `create_property`, `create_parent_company`, `update_client_field`, `link_property_to_parent`, `rename_client`, `change_property_parent`, `merge_clients`, `split_client_into_parent_and_property`, `attach_business_card_to_client`. Use these inline so the user does not have to open the Directory panel for routine work.');
   stable.push('  • Skill-pack changes — `propose_skill_pack_add` / `_edit` / `_delete`. Approval-tier; the user vets every prompt-shaping change. Mirroring to Anthropic native Skills happens automatically on approval.');
   stable.push('');
   stable.push('# What lives on the per-entity panels (not here)');
@@ -8622,7 +8627,7 @@ async function buildAsk86Context() {
 // those, the user opens the entity panel where the mutation belongs.
 function ask86Tools() {
   const wanted = new Set([
-    // Reads — cross-agent (CoS introspection + HR directory)
+    // Reads — cross-surface (CoS introspection + client directory)
     'read_jobs', 'read_users', 'read_clients',
     'read_subs', 'read_lead_pipeline',
     'read_materials', 'read_purchase_history',
@@ -8637,10 +8642,11 @@ function ask86Tools() {
   ]);
   const fromJob = JOB_TOOLS.filter(t => wanted.has(t.name));
   const intake  = INTAKE_TOOLS.map(({ tier, ...t }) => t);
-  const client  = CLIENT_TOOLS.map(({ tier, ...t }) => t);
+  const client  = ClientDirectoryTools.map(({ tier, ...t }) => t);
   // Dedupe — read_clients / read_jobs / read_users etc. live in
-  // both JOB_TOOLS (cross-agent reads added when 86 took the team
-  // scope) and CLIENT_TOOLS / INTAKE_TOOLS (HR-side originals).
+  // both JOB_TOOLS (cross-surface reads added when 86 took the full
+  // company scope) and ClientDirectoryTools / INTAKE_TOOLS (directory-
+  // surface originals).
   // Anthropic's API rejects requests with duplicate tool names
   // ("tools: Tool names must be unique"), which surfaced as empty
   // responses on the Ask 86 panel. First entry wins.
@@ -9097,7 +9103,7 @@ router.post('/86/chat/continue', requireAuth, requireOrg, async (req, res) => {
     // Build tool_result events for each approval, applying server-side
     // any approval-tier propose_* tools the same way the per-entity
     // panels do. propose_create_lead routes through execProposeCreateLead;
-    // HR client mutations route through execClientToolWithCtx; estimate
+    // Client-directory mutations route through execClientDirectoryToolWithCtx; estimate
     // / job entity writes echo the client-supplied applied_summary
     // (those were applied client-side by the editor's tool dispatcher).
     const eventsToSend = [];
@@ -9135,8 +9141,8 @@ router.post('/86/chat/continue', requireAuth, requireOrg, async (req, res) => {
         // as the legacy /staff/chat/continue path.
         try { summary = await execStaffApprovalTool(r.name, r.input || {}, { userId: req.user.id }); }
         catch (e) { summary = 'Error: ' + (e.message || 'failed'); isError = true; }
-      } else if (CLIENT_TOOLS.some(t => t.name === r.name)) {
-        try { summary = await execClientToolWithCtx(r.name, r.input || {}, { userId: req.user.id }); }
+      } else if (ClientDirectoryTools.some(t => t.name === r.name)) {
+        try { summary = await execClientDirectoryToolWithCtx(r.name, r.input || {}, { userId: req.user.id }); }
         catch (e) { summary = 'Error: ' + (e.message || 'failed'); isError = true; }
       } else {
         summary = r.applied_summary || 'User approved. Change applied.';
@@ -9243,7 +9249,7 @@ module.exports.internals = {
   // Compose the full system prompt for an agent at registration / sync
   // time — appends the SECTION_DEFAULTS playbook to the bare baseline
   // for 'job' so the prose is cached on the Anthropic agent rather
-  // than re-shipped through every user.message. HR / CoS pass through.
+  // than re-shipped through every user.message. Directory / CoS pass through.
   composedAgentSystem,
   estimateTools: () => [...WEB_TOOLS, ...ESTIMATE_TOOLS],
   // 86 (job-side) inherits the intake tools too so 86 can capture
@@ -9251,7 +9257,7 @@ module.exports.internals = {
   // panel. Tier markers are stripped (the runtime onCustomToolUse
   // callback decides auto vs approval at call time).
   jobTools:      () => [...WEB_TOOLS, ...JOB_TOOLS, ...INTAKE_TOOLS.map(({ tier, ...t }) => t)],
-  clientTools:   () => [...WEB_TOOLS, ...CLIENT_TOOLS.map(({ tier, ...t }) => t)],
+  clientTools:   () => [...WEB_TOOLS, ...ClientDirectoryTools.map(({ tier, ...t }) => t)],
   staffTools:    () => [...WEB_TOOLS, ...STAFF_TOOLS.map(({ tier, ...t }) => t)],
   // Phase 3 subtask tools removed — fan-out replaced by native parallel
   // tool calls within a single session. Export kept as () => [] so any
