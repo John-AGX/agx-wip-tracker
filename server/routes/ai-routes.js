@@ -7442,7 +7442,38 @@ async function execStaffApprovalTool(name, input, ctx) {
           const slug = slugifyMirrorName(updated.name);
           const file = await toFile(Buffer.from(md, 'utf8'), 'SKILL.md', { type: 'text/markdown' });
           if (updated.anthropic_skill_id) {
-            await anthropic.beta.skills.versions.create(updated.anthropic_skill_id, { files: [file] });
+            try {
+              await anthropic.beta.skills.versions.create(updated.anthropic_skill_id, { files: [file] });
+            } catch (versionErr) {
+              // Auto-heal: the local pack's anthropic_skill_id may
+              // point at a skill that no longer exists on Anthropic's
+              // side (deleted via console, archived, created under a
+              // rotated key, etc.). 404 / not_found_error means the
+              // pointer is stale — recover by creating a fresh skill
+              // and updating the local pointer. The user sees a clean
+              // success, not a mirror-rolled-back error. Other failure
+              // modes (400 / 403 / network) bubble up to the outer
+              // catch and trigger the rollback with the improved
+              // error surface from Fix 1 below.
+              const vStatus = versionErr.status || versionErr.statusCode;
+              const vCode = versionErr.error && (
+                versionErr.error.type
+                || (versionErr.error.error && versionErr.error.error.type)
+              );
+              const isStale = vStatus === 404 || vCode === 'not_found_error';
+              if (!isStale) throw versionErr;
+              console.warn('[propose_skill_pack_edit] stale anthropic_skill_id',
+                updated.anthropic_skill_id, 'for pack', updated.name,
+                '— recreating');
+              const recreated = await anthropic.beta.skills.create({
+                display_title: (updated.name || 'Project 86 skill').slice(0, 200),
+                files: [file]
+              });
+              await pool.query(
+                `UPDATE org_skill_packs SET anthropic_skill_id = $1 WHERE id = $2`,
+                [recreated.id, updated.id]
+              );
+            }
           } else {
             const created = await anthropic.beta.skills.create({
               display_title: (updated.name || 'Project 86 skill').slice(0, 200),
@@ -7454,11 +7485,36 @@ async function execStaffApprovalTool(name, input, ctx) {
             );
           }
         } catch (mirrorErr) {
+          // Fix 1 — surface the actual Anthropic error so future
+          // failures are immediately diagnose-able. The Anthropic SDK
+          // puts structured detail on .status / .error / .headers; we
+          // log all of it and embed the useful bits in the user-facing
+          // message so the model (and the user, via the chat surface)
+          // see something more useful than "mirror failed".
+          const sdkStatus = mirrorErr.status || mirrorErr.statusCode;
+          const sdkCode = mirrorErr.error && (
+            mirrorErr.error.type
+            || (mirrorErr.error.error && mirrorErr.error.error.type)
+          );
+          const sdkDetail = mirrorErr.error && (
+            (mirrorErr.error.error && mirrorErr.error.error.message)
+            || mirrorErr.error.message
+          );
+          const reqId = mirrorErr.headers && mirrorErr.headers['request-id'];
+          console.error('[propose_skill_pack_edit] mirror to Anthropic failed',
+            'pack:', updated.name,
+            'skill_id:', updated.anthropic_skill_id,
+            'status:', sdkStatus,
+            'code:', sdkCode,
+            'detail:', sdkDetail || mirrorErr.message,
+            'request_id:', reqId);
           await pool.query(
             `UPDATE org_skill_packs SET name = $1, body = $2, updated_at = NOW() WHERE id = $3`,
             [pack.name, pack.body, pack.id]
           );
-          throw new Error('Mirror to Anthropic failed; local edit rolled back: ' + (mirrorErr.message || 'unknown'));
+          const reason = sdkDetail || mirrorErr.message || 'unknown';
+          const codeTag = sdkCode ? ' [' + sdkCode + ']' : '';
+          throw new Error('Mirror to Anthropic failed' + codeTag + '; local edit rolled back: ' + reason);
         }
       }
       return 'Edited skill pack "' + input.name + '": ' + changes.join('; ') + (contentChanged ? ' (re-mirrored to Anthropic).' : '');
