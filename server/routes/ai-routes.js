@@ -3707,24 +3707,69 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
                   'captured:', JSON.stringify(capturedIds),
                   'blocked:',  JSON.stringify(blockedEventIds));
               }
-              console.log('[v2-stream] flushing', pendingAutoResults.length,
-                'auto-tier tool_result(s) for', sessionId,
-                'ids_sending:', JSON.stringify(pendingAutoResults.map(e => e.custom_tool_use_id)));
-              nextEventsToSend = pendingAutoResults.slice();
-              // CRITICAL: clear the queue after capturing. Without this,
-              // a subsequent batch of auto-tier tools (e.g. 86 fires 3
-              // reads, idles, flushes, then fires a 4th read on the
-              // next round) would re-flush ALL prior results — including
-              // ones the session already resolved. Anthropic 400s with
-              // "tool_use_id … does not match any custom_tool_use event
-              // in this session" because the earlier ids are gone.
-              pendingAutoResults.length = 0;
-              // Flag the turn so the post-stream check at the bottom can
-              // detect "auto-results flushed, but the resumed turn
-              // produced no text" → fire the silent-stop nudge once.
-              autoResultsFlushedThisTurn = true;
-              stallNudgeQueued = true; // signals "reopen stream"
-              break; // exit switch; post-switch check exits for-await
+              if (pendingToolUses.length > 0) {
+                // MIXED TURN — the model emitted both auto-tier AND
+                // approval-tier tool_uses in one response. Flush the
+                // auto-tier results inline (no stream reopen) so the
+                // session has them on file, then FALL THROUGH to the
+                // approval-card emission path below. The session
+                // sits in requires_action on the approval-tier ids
+                // until /chat/continue arrives with the user's
+                // decision — same path approval-only turns already
+                // use today.
+                //
+                // Without this branch, reopening the stream would
+                // wait indefinitely for the model to respond to the
+                // 4 of 5 tool_results we just sent; the 5th (approval-
+                // tier) is still blocked, so the model can't act,
+                // and undici's body timeout (~5min) eventually
+                // kills the stream with UND_ERR_BODY_TIMEOUT. The
+                // Windermere "yeah go ahead" hang reproduced
+                // exactly this case.
+                console.log('[v2-stream] mixed turn — auto-flushing',
+                  pendingAutoResults.length, 'result(s) and surfacing',
+                  pendingToolUses.length, 'approval card(s) for', sessionId,
+                  'ids_sending:', JSON.stringify(pendingAutoResults.map(e => e.custom_tool_use_id)));
+                try {
+                  const EVENTS_PER_SEND = 50;
+                  for (let i = 0; i < pendingAutoResults.length; i += EVENTS_PER_SEND) {
+                    await anthropic.beta.sessions.events.send(sessionId, {
+                      events: pendingAutoResults.slice(i, i + EVENTS_PER_SEND)
+                    });
+                  }
+                  autoResultsFlushedThisTurn = true;
+                } catch (e) {
+                  console.warn('[v2-stream] mixed-turn auto-flush send failed (non-fatal):',
+                    e && e.message);
+                }
+                pendingAutoResults.length = 0;
+                // Fall through — do NOT set stallNudgeQueued, do NOT
+                // break out of the switch. The approval-card emission
+                // block later in this same case runs naturally.
+              } else {
+                // PURE AUTO-TIER — existing behavior. Queue results
+                // for the next openStreamAndSend call and reopen
+                // the stream so the model can produce its end-of-
+                // turn response.
+                console.log('[v2-stream] flushing', pendingAutoResults.length,
+                  'auto-tier tool_result(s) for', sessionId,
+                  'ids_sending:', JSON.stringify(pendingAutoResults.map(e => e.custom_tool_use_id)));
+                nextEventsToSend = pendingAutoResults.slice();
+                // CRITICAL: clear the queue after capturing. Without this,
+                // a subsequent batch of auto-tier tools (e.g. 86 fires 3
+                // reads, idles, flushes, then fires a 4th read on the
+                // next round) would re-flush ALL prior results — including
+                // ones the session already resolved. Anthropic 400s with
+                // "tool_use_id … does not match any custom_tool_use event
+                // in this session" because the earlier ids are gone.
+                pendingAutoResults.length = 0;
+                // Flag the turn so the post-stream check at the bottom can
+                // detect "auto-results flushed, but the resumed turn
+                // produced no text" → fire the silent-stop nudge once.
+                autoResultsFlushedThisTurn = true;
+                stallNudgeQueued = true; // signals "reopen stream"
+                break; // exit switch; post-switch check exits for-await
+              }
             }
 
             // Stall-recovery branch: the agent thought, ran no
