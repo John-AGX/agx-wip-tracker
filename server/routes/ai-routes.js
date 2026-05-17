@@ -225,17 +225,17 @@ const WEB_TOOLS = [
 const ESTIMATE_TOOLS = [
   {
     name: 'propose_add_line_item',
-    description: 'Propose adding a single cost-side line item to the active group. The user will see your proposal as a card with Approve / Reject buttons before anything lands in the estimate. Use multiple parallel calls to propose several lines at once. ALWAYS supply section_name pointing at one of the four standard subgroups — never let a line fall to the bottom uncategorized.',
+    description: 'Propose a single cost-side line item to the active group. Approval card. Fire multiple in parallel for batches. ALWAYS pass section_name — uncategorized lines break the BT export.',
     input_schema: {
       type: 'object',
       properties: {
-        description: { type: 'string', description: 'What the line item is — short, specific, trade-style ("8d common nails, 5lb box" not "fasteners").' },
-        qty: { type: 'number', description: 'Quantity. Must be a positive number.' },
-        unit: { type: 'string', description: 'Unit of measure (ea, sf, lf, hr, cy, ton, lot, etc.).' },
-        unit_cost: { type: 'number', description: 'Project 86 cost per unit, NOT client price. Markup is applied separately.' },
-        markup_pct: { type: 'number', description: 'Optional per-line markup % override. Omit to inherit the subgroup header\'s markup (the standard case).' },
-        section_name: { type: 'string', description: 'REQUIRED in practice — the subgroup to slot the line under. Use a case-insensitive substring of one of the four standard subgroup names: "Materials & Supplies Costs" (any physical material, hardware, finish, fastener, paint, lumber, fixture, supply), "Direct Labor" (Project 86 crew hours — anything our own crew physically does), "General Conditions" (mobilization, dump fees, permits, supervision, equipment rental, signage, port-a-john), "Subcontractors Costs" (any scope handed off to another company — paint sub, roof sub, tile sub, etc.). If a custom subgroup exists from a previous user request, you can match it by substring instead. NEVER omit this — uncategorized lines confuse the BT export.' },
-        rationale: { type: 'string', description: 'One short sentence explaining why this item is needed. Shown on the approval card.' }
+        description: { type: 'string', description: 'Short trade-style description ("8d common nails, 5lb box" not "fasteners").' },
+        qty: { type: 'number', description: 'Positive number.' },
+        unit: { type: 'string', description: 'ea, sf, lf, hr, cy, ton, lot, etc.' },
+        unit_cost: { type: 'number', description: 'AGX cost per unit (NOT client price). Markup applied separately.' },
+        markup_pct: { type: 'number', description: 'Per-line markup % override. Omit to inherit subgroup default.' },
+        section_name: { type: 'string', description: 'Subgroup to slot under. Case-insensitive substring of one of: "Materials & Supplies Costs", "Direct Labor", "General Conditions", "Subcontractors Costs". Custom subgroups match by substring too. NEVER omit.' },
+        rationale: { type: 'string', description: 'One sentence — shown on the approval card.' }
       },
       required: ['description', 'qty', 'unit', 'unit_cost', 'section_name', 'rationale']
     }
@@ -255,14 +255,14 @@ const ESTIMATE_TOOLS = [
   },
   {
     name: 'propose_add_section',
-    description: 'Propose adding a NEW custom subgroup header to the active group. ⚠ Use this ONLY when the user explicitly asks for a custom subgroup ("add a Stair Tread Repairs section under Materials" — no, slot lines into the existing Materials subgroup; "add a separate subgroup for change-order work" — yes, that\'s a real custom subgroup). 99% of the time you should be slotting line items into the FOUR EXISTING standard subgroups (Materials / Labor / GC / Subs) via propose_add_line_item with section_name set. Markup is set per estimate by the user after costs are confirmed — do not apply default markup percentages. Omit markup_pct (or pass 0) and let the user dial it in.',
+    description: 'Propose a NEW custom subgroup. Only when the user explicitly asks for one — 99% of the time, slot lines into the four standard subgroups (Materials / Labor / GC / Subs) via propose_add_line_item.section_name instead. Omit markup_pct (or pass 0); the user sets markup per estimate.',
     input_schema: {
       type: 'object',
       properties: {
-        name: { type: 'string', description: 'Section name (e.g., "Stair Tread Replacement").' },
-        bt_category: { type: 'string', enum: ['materials', 'labor', 'gc', 'sub'], description: 'Optional BT cost category mapping. Omit if the section is not one of the four standard cost buckets.' },
-        markup_pct: { type: 'number', description: 'Section markup %. Lines under this header inherit it. Markup is set per estimate by the user after costs are confirmed — do not apply default percentages. Omit (or pass 0) to leave it for the user to set manually.' },
-        rationale: { type: 'string', description: 'One short sentence explaining why this section is needed.' }
+        name: { type: 'string', description: 'Section name.' },
+        bt_category: { type: 'string', enum: ['materials', 'labor', 'gc', 'sub'], description: 'Optional BT cost category. Omit if not one of the four standard buckets.' },
+        markup_pct: { type: 'number', description: 'Section markup %. Omit (or 0) to let the user set it.' },
+        rationale: { type: 'string', description: 'One sentence.' }
       },
       required: ['name', 'rationale']
     }
@@ -691,15 +691,7 @@ const JOB_TOOLS = [
   },
   {
     name: 'create_node',
-    description:
-      'Create a new node on the cost-flow graph. Use when the user asks to build out structure ' +
-      '("add 8 T1 buildings", "create a Materials node for the porch") or when an audit finding ' +
-      'requires a node that doesn\'t exist yet. The engine automatically creates the matching ' +
-      'data record for structural types (t1=building, t2=phase, co=change order, po=purchase ' +
-      'order, inv=invoice) — you don\'t need to supply ids. ' +
-      'Multi-node restructures: fire create_node multiple times in a single turn — each card ' +
-      'auto-applies if the user has trusted "Create node", otherwise they\'ll bulk-approve. ' +
-      'For multi-node restructures, follow up with wire_nodes calls to connect them.',
+    description: 'Create a node on the cost-flow graph. Engine auto-creates data records for structural types (t1/t2/co/po/inv) — no ids needed. Fire multiple in parallel for multi-node restructures, then wire_nodes to connect.',
     input_schema: {
       type: 'object',
       additionalProperties: false,
@@ -851,10 +843,7 @@ const JOB_TOOLS = [
   },
   {
     name: 'create_po',
-    description:
-      'Create a new purchase order on the active job. Use when the user describes a sub commitment ("$25k to ABC Drywall for B1 hang and finish") and there\'s no existing PO record, or when the playbook\'s QB→PO→Invoice chain rule requires a PO that\'s missing. ' +
-      'Required: vendor + amount. Strongly preferred: poNumber, description, date (defaults to today). ' +
-      'subId is auto-resolved from vendor when the name matches a row in the subs directory; pass it explicitly only if you already know the id from the # Subs block.',
+    description: 'Create a PO on the active job. Required: vendor + amount. Preferred: poNumber, description, date. subId auto-resolves from vendor name against the subs directory.',
     input_schema: {
       type: 'object',
       additionalProperties: false,
@@ -1001,28 +990,13 @@ const JOB_TOOLS = [
   },
   {
     name: 'request_edit_mode',
-    description:
-      'Ask the PM\'s permission to switch from Plan mode to Edit mode so you can write changes ' +
-      '(set_phase_pct_complete, set_phase_field, set_node_value, assign_qb_line, etc.). Use this ' +
-      'in Plan mode whenever your analysis surfaces an action you\'d need to take but can\'t — ' +
-      'e.g. "B1 has cost data but pctComplete=0, want me to set it to 100%?" or "131 QB lines are ' +
-      'unlinked, want me to wire them to their nodes?". The PM gets an approval card listing your ' +
-      'planned actions; on approve, the panel flips to Edit mode and your next turn opens with ' +
-      'full write access. Do NOT call this for trivial questions or when the PM hasn\'t asked for ' +
-      'a change — it\'s for moments where Plan mode is actively blocking productive work.',
+    description: 'Ask the PM to flip Plan → Edit mode so you can write (set_phase_*, set_node_value, assign_qb_line, etc.). Use only when analysis surfaces an action you can\'t take in Plan mode. NOT for trivial questions.',
     input_schema: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        reason: {
-          type: 'string',
-          description: '1–2 sentences summarizing why you need write access. Shown on the approval card. Be specific: "I want to update the % complete on 5 buildings to match what you just told me," not "I want to make changes."'
-        },
-        planned_actions: {
-          type: 'array',
-          items: { type: 'string' },
-          description: 'Bullet list of the specific writes you intend to make if granted Edit mode. Each line: action + target. Example: ["Set B1 pctComplete to 100%", "Set B2 pctComplete to 100%", "Assign 14 unlinked Home Depot lines to materials sub-node"]. The PM uses this to decide whether to grant access.'
-        }
+        reason: { type: 'string', description: '1–2 specific sentences shown on the approval card. Concrete: "Update %complete on 5 buildings to match what you just told me," not "I want to make changes."' },
+        planned_actions: { type: 'array', items: { type: 'string' }, description: 'Bullet list of intended writes. Each line: action + target.' }
       },
       required: ['reason', 'planned_actions']
     }
@@ -1095,12 +1069,8 @@ const JOB_TOOLS = [
     }
   },
   {
+    description: 'Set %allocation on a single graph wire — what fraction of the source flows along it. Used for revenue split (t2/co → t1 building) and cost split (po/sub → t2 phase when one source covers multiple phases). Sum across outgoing wires should equal 100.',
     name: 'set_wire_alloc_pct',
-    description:
-      'Set the allocation percent on a single graph wire — how much of the source\'s value flows along this wire. Two patterns use this:\n' +
-      '  1. Revenue split: t2 / co → t1 building wires apportion phase revenue across buildings (e.g. COATINGS is mostly for B1 and only a sliver to B7).\n' +
-      '  2. Cost split: po → t2 phase and sub → t2 phase wires apportion the contract / sub accrual across phases when a single PO or sub serves more than one phase. Set this when one PO covers multiple phases — without it the engine sums the FULL accrued on every phase (the doubling pattern audited on j5).\n' +
-      'allocPct sums across all outgoing wires from a source should equal 100; the engine accepts other values but the rollup misreads if a source has 200% allocated. Confirm the sum after each change.',
     input_schema: {
       type: 'object',
       additionalProperties: false,
@@ -1202,8 +1172,7 @@ const JOB_TOOLS = [
   },
   {
     name: 'search_org_kb',
-    description:
-      'Search the COMPANY knowledge base — every file uploaded across the org. Includes the company-files bucket (admin-curated org-wide docs: brand assets, SOPs, master pricing, template proposals) AND every user\'s personal "My Files" bucket AND every job/estimate/lead attachment. Use when the user asks anything that might be covered by an existing doc anywhere ("do we have a template for X?", "find the latest insurance cert", "what did Steve write on the Wimbledon scope?"). Returns up to 20 matches with filename, where it lives (which user / job / estimate), mime, size, and a snippet. Auto-tier. Scope: caller\'s organization only (cross-tenant access blocked). Call read_attachment_text({attachment_id}) for the full body.',
+    description: 'Search the whole company knowledge base — org-curated files + every user\'s My Files + all entity attachments. Returns up to 20 matches (filename, location, mime, snippet). Auto-tier, org-scoped. Use read_attachment_text({attachment_id}) for full bodies.',
     input_schema: {
       type: 'object',
       additionalProperties: false,
@@ -1301,18 +1270,7 @@ const JOB_TOOLS = [
   },
   {
     name: 'navigate',
-    description:
-      'Take the user to a specific page or entity in the app. Auto-tier — applies immediately, no approval card. ' +
-      'Use this when the user asks to "go to", "open", "show me", or "switch to" something. ' +
-      'Destinations: home (dashboard), leads, estimates, clients, subs (sub-tabs of the Estimates section), ' +
-      'schedule, wip, insights, tools (field tools — calculators/lookups), admin (top-level tabs). ' +
-      'For specific entities, use job / estimate / lead and pass entity_id. ' +
-      '**CRITICAL: entity_id must be the ROW id (e.g. "j5", "j_1778251182669"), NOT the human-readable ' +
-      'jobNumber (e.g. "RV2001"). Passing the jobNumber opens an empty page because the route does ' +
-      'not look up by display number.** When the user references a job by jobNumber or a client by name, ' +
-      'ALWAYS call read_jobs / read_clients first to resolve the row id, then pass that id to navigate. ' +
-      'Example: user says "open RV2001" -> first read_jobs({q:"RV2001"}) returns id "j5" -> ' +
-      'navigate({destination:"job", entity_id:"j5"}).',
+    description: 'Take the user to a page or entity. Auto-tier. CRITICAL: entity_id must be the ROW id (e.g. "j5"), NOT the display jobNumber ("RV2001"). When the user references a job/client by name or jobNumber, call read_jobs/read_clients FIRST to resolve the id, then navigate.',
     input_schema: {
       type: 'object',
       additionalProperties: false,
@@ -6034,8 +5992,7 @@ const MEMORY_TOOLS = [
   {
     name: 'remember',
     tier: 'auto',
-    description:
-      'Save a cross-session memory so you can recall it on future turns and future days. Use when the user states a preference ("always show margin as percent"), a per-client quirk ("Solace Tampa has a 4pm delivery cutoff"), a decision ("we standardized on PT 2x4s for porch framing"), or any other fact that should outlive the current conversation. Topic is the short retrieval key — pick something specific you would later search for. Body is the full content. If the same topic exists, it is OVERWRITTEN — use this to update stale memories rather than stacking near-duplicates.',
+    description: 'Save a cross-session memory. Use for user preferences, per-client quirks, decisions, or any fact that should outlive this conversation. Same topic OVERWRITES — use to update, not stack duplicates.',
     input_schema: {
       type: 'object',
       additionalProperties: false,
@@ -9267,46 +9224,41 @@ const INTAKE_TOOLS = [
   {
     name: 'propose_create_lead',
     tier: 'approval',
-    description:
-      'Create a new lead in the Project 86 leads table. Use either existing_client_id (preferred — found via read_existing_clients) or new_client to create a client first. Always include a thorough notes field summarizing what the user described AND your photo interpretation if photos were uploaded. set attach_pending_photos:true when photos are in the chat — they\'ll move from the temp bucket onto the new lead\'s attachments on approval.',
+    description: 'Create a new lead. Pass existing_client_id (preferred — from read_existing_clients) OR new_client. Include thorough notes + attach_pending_photos:true if photos were uploaded this chat.',
     input_schema: {
       type: 'object',
       properties: {
-        title:           { type: 'string', description: 'Lead title — what the project is. E.g. "Door replacement — Unit 12B", "Exterior soft-wash 5 surfaces". Required.' },
-        existing_client_id: { type: 'string', description: 'Existing clients.id matched via read_existing_clients. Use this when the property/company is already in the directory. Mutually exclusive with new_client.' },
+        title:           { type: 'string', description: 'What the project is. Required.' },
+        existing_client_id: { type: 'string', description: 'clients.id from read_existing_clients. Mutually exclusive with new_client.' },
         new_client: {
           type: 'object',
-          description: 'Inline client to create alongside the lead. Use ONLY when read_existing_clients returned no match. Mutually exclusive with existing_client_id.',
+          description: 'Create a new client alongside the lead. Use only when read_existing_clients returned no match.',
           properties: {
-            name:           { type: 'string', description: 'Client name — for a property under a parent management firm, this is the property name (e.g. "Solace Timacuan"). For a standalone homeowner, their full name.' },
-            parent_client_id: { type: 'string', description: 'Optional. clients.id of an existing PARENT client (e.g. PAC, Greystar) when this is a managed property under that firm.' },
-            client_type:    { type: 'string', description: '"Property" / "Property Mgmt" / "Homeowner" / "Commercial". Match the existing directory conventions.' },
+            name:           { type: 'string', description: 'Property name (for managed properties) or full name (homeowner).' },
+            parent_client_id: { type: 'string', description: 'Optional. Existing parent clients.id (PAC, Greystar, etc.) when this is a managed property.' },
+            client_type:    { type: 'string', description: 'Property / Property Mgmt / Homeowner / Commercial.' },
             email:          { type: 'string' },
             phone:          { type: 'string' },
-            address:        { type: 'string', description: 'Mailing or billing address (street + city + state if known).' }
+            address:        { type: 'string', description: 'Mailing/billing address.' }
           }
         },
-        // Property location (where the work is)
         street_address:  { type: 'string', description: 'Property/job-site street address.' },
         city:            { type: 'string' },
         state:           { type: 'string', description: 'Two-letter state code.' },
         zip:             { type: 'string' },
-        property_name:   { type: 'string', description: 'Property / community name when distinct from the client (e.g. "Solace Timacuan", "The Esplanade").' },
-        market:          { type: 'string', description: 'Market region — Tampa / Orlando / etc.' },
+        property_name:   { type: 'string', description: 'Property / community name when distinct from the client.' },
+        market:          { type: 'string', description: 'Tampa / Orlando / etc.' },
         gate_code:       { type: 'string' },
-        // Project metadata
-        project_type:    { type: 'string', enum: ['Renovation', 'Service & Repair', 'Work Order'], description: 'Map to one of the three Project 86 values.' },
-        source:          { type: 'string', description: 'Where the lead came from (e.g. "Buildertrend", "PM referral", "PAC direct").' },
-        salesperson_id:  { type: 'string', description: 'Optional. users.id of the Project 86 salesperson on this lead.' },
-        // Estimated revenue
-        estimated_revenue_low:  { type: 'number', description: 'Low end of est. revenue range in $.' },
-        estimated_revenue_high: { type: 'number', description: 'High end. Set both equal for a single number.' },
-        confidence:      { type: 'integer', description: '0–100 confidence the lead will close.' },
-        projected_sale_date: { type: 'string', description: 'YYYY-MM-DD when the user expects to close.' },
-        // Notes — capture EVERYTHING the user said + photo summary
-        notes:           { type: 'string', description: 'Full free-form notes. Capture the user\'s description verbatim plus your photo interpretation ("uploaded 3 photos: 36-inch fiberglass entry door with 2 sidelights, weathered jamb, no visible rot on threshold"). Worth being thorough — these notes drive 86\'s estimate later.' },
-        attach_pending_photos: { type: 'boolean', description: 'Set true when photos were uploaded in this chat. The handler will move them from the per-session temp bucket onto leads.<new_id>.attachments on approval.' },
-        rationale:       { type: 'string', description: 'One short sentence — why you\'re proposing this lead now (mostly used for audit on review).' }
+        project_type:    { type: 'string', enum: ['Renovation', 'Service & Repair', 'Work Order'] },
+        source:          { type: 'string', description: 'Where the lead came from (Buildertrend / PM referral / etc.).' },
+        salesperson_id:  { type: 'string', description: 'Optional users.id of the AGX salesperson.' },
+        estimated_revenue_low:  { type: 'number', description: 'Low end of est. revenue ($).' },
+        estimated_revenue_high: { type: 'number', description: 'High end. Equal to low for a single number.' },
+        confidence:      { type: 'integer', description: '0–100 close confidence.' },
+        projected_sale_date: { type: 'string', description: 'YYYY-MM-DD.' },
+        notes:           { type: 'string', description: 'User\'s description + your photo interpretation. Thorough notes drive the later estimate.' },
+        attach_pending_photos: { type: 'boolean', description: 'true when photos were uploaded this chat — they move from the temp bucket onto the new lead on approval.' },
+        rationale:       { type: 'string', description: 'One sentence — why propose this lead now.' }
       },
       required: ['title', 'rationale']
     }
