@@ -3407,12 +3407,32 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
       // few seconds, well below the previous 5-min hang.
       const EVENTS_PER_SEND = 1;
       try {
+        let totalAcked = 0;
         for (let i = 0; i < eventsForThisOpen.length; i += EVENTS_PER_SEND) {
           const chunk = eventsForThisOpen.slice(i, i + EVENTS_PER_SEND);
-          await anthropic.beta.sessions.events.send(sessionId, { events: chunk });
+          // Capture the response — Anthropic returns
+          // { data: [...successfully sent events] }. If a tool_result
+          // was silently rejected we should see fewer items in data
+          // than we sent. Critical diagnostic for the "send 4, only
+          // 1 lands" bug we've been chasing.
+          const resp = await anthropic.beta.sessions.events.send(sessionId, { events: chunk });
+          const ackCount = (resp && Array.isArray(resp.data)) ? resp.data.length : 0;
+          totalAcked += ackCount;
+          if (ackCount !== chunk.length) {
+            console.warn('[v2-stream] send partial-ack on', sessionId,
+              '— sent', chunk.length, 'event(s) but Anthropic acked', ackCount,
+              '· request:', JSON.stringify(chunk.map(e => ({
+                type: e.type,
+                custom_tool_use_id: e.custom_tool_use_id,
+                content_chars: Array.isArray(e.content)
+                  ? e.content.reduce((sum, b) => sum + (b && b.text ? b.text.length : 0), 0)
+                  : 0
+              }))) +
+              ' · ack:', JSON.stringify(resp && resp.data ? resp.data.map(d => ({ type: d.type, id: d.id })) : null));
+          }
         }
         console.log('[v2-stream] sent', eventsForThisOpen.length, 'event(s) to', sessionId,
-          '(serial single-event sends)');
+          '(serial single-event sends, Anthropic acked', totalAcked + ')');
       } catch (e) {
         if (isStuckSessionError(e) && !freshlyCreated) {
           // In-place recovery FIRST: parse the blocked sevt_* ids out
