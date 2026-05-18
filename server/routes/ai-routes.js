@@ -4110,12 +4110,15 @@ async function buildJobContext(jobId, clientContext, aiPhase, organization, opts
   // 'plan' so 86 starts as an analyst until the PM grants write access
   // via the phase pill or the request_edit_mode tool.
   aiPhase = (aiPhase === 'plan') ? 'plan' : 'edit';
-  // Router-mode is the default — strip heavy analytical sections
-  // (WIP snapshot, structure, node graph, workspace sheets, QB cost
-  // data) from the Principal's turn_context. The Principal sees job
-  // identity + photos + attachments + notes; PM staff fetches the
-  // analytical data via its own tools inside the handoff sub-session.
-  const slimForRouter = true;
+  // Slim-vs-full toggle. Default = slim (router-mode for the Principal).
+  // When execHandoffToStaff invokes us to build context for the 86-pm
+  // sub-session, it passes opts.slimForRouter=false so the staff sees
+  // the FULL WIP snapshot + structure + node graph + QB cost data.
+  // Without that, the staff received the Principal's slim banner
+  // ("JUST HANDOFF") meant for the Principal — confusing prose that
+  // told the staff to do something it can't do, producing empty
+  // responses.
+  const slimForRouter = !(opts && opts.slimForRouter === false);
   // Pull the job + the related data the bulk-save serializes alongside it.
   const jobRes = await pool.query('SELECT id, owner_id, data FROM jobs WHERE id = $1', [jobId]);
   if (!jobRes.rows.length) throw new Error('Job not found');
@@ -8745,14 +8748,47 @@ async function execHandoffToStaff(toolName, input, ctx) {
   const adminAgents = require('./admin-agents-routes');
   const env = await adminAgents.ensureManagedEnvironment();
 
-  // Build the user.message body — request + the same turn_context the
-  // Principal saw + optional explicit surface context from the call.
-  // Order: turn_context first (the data), then the Principal's request
-  // (what to do with the data), then explicit context (anything the
-  // Principal wants to add beyond the snapshot).
+  // Build the user.message body. The staff gets a FULL surface
+  // snapshot — NOT the Principal's slim "JUST HANDOFF" version. The
+  // Principal's turn_context is shaped for routing (analytical data
+  // stripped + handoff prose); forwarding it to a staff confused the
+  // PM into reading instructions meant for the Principal ("your job
+  // is to ROUTE", "those tools aren't in your list") and producing
+  // empty responses.
+  //
+  // Per-staff data assembly: invoke the entity-specific context
+  // builder with slimForRouter=false so the staff sees the same data
+  // the Principal WOULD have seen pre-slim — WIP snapshot, structure,
+  // node graph, QB cost data for PM; full directory for Directory;
+  // etc. Falls back to the Principal's turnContextText only when the
+  // handoff didn't include a usable entity id.
   const parts = [];
-  if (ctx.turnContextText && typeof ctx.turnContextText === 'string' && ctx.turnContextText.trim()) {
-    parts.push('Context the Principal saw this turn (the same per-turn snapshot you would have seen if invoked directly on this surface):\n\n' + ctx.turnContextText.trim());
+  let staffContextText = '';
+  try {
+    if (input.job_id && (staffKey === '86-pm' || staffKey === '86-scheduler')) {
+      const jobCtx = await buildJobContext(String(input.job_id), null, 'edit', organization, { slimForRouter: false });
+      if (jobCtx && typeof jobCtx.system === 'string') staffContextText = jobCtx.system;
+    } else if (input.estimate_id && staffKey === '86-estimator') {
+      const estCtx = await buildEstimateContext(String(input.estimate_id), false, 'edit', organization);
+      if (estCtx && Array.isArray(estCtx.system)) {
+        // buildEstimateContext returns { system: [cachedPrefix, dynamicBlock] }
+        staffContextText = estCtx.system.map(b => (b && b.text) || '').join('\n\n').trim();
+      }
+    } else if (staffKey === '86-directory') {
+      const dirCtx = await buildClientDirectoryContext(organization);
+      if (dirCtx && Array.isArray(dirCtx.system)) {
+        staffContextText = dirCtx.system.map(b => (b && b.text) || '').join('\n\n').trim();
+      }
+    }
+  } catch (e) {
+    console.warn('[execHandoffToStaff] per-staff context build failed for', staffKey, '—', e.message,
+      '— falling back to Principal turn_context');
+  }
+  if (!staffContextText && ctx.turnContextText && typeof ctx.turnContextText === 'string' && ctx.turnContextText.trim()) {
+    staffContextText = ctx.turnContextText.trim();
+  }
+  if (staffContextText) {
+    parts.push('# Surface snapshot (the same data the Principal sees on this surface, full — not the Principal\'s router-mode slim view):\n\n' + staffContextText);
   }
   parts.push('---\nRequest from the Principal:\n' + (String(input.request || '').trim() || '(no request body)'));
   if (input.estimate_id) parts.push('Active estimate id: ' + String(input.estimate_id));
