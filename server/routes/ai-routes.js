@@ -4298,6 +4298,21 @@ async function buildJobContext(jobId, clientContext, aiPhase, organization, opts
   // 'plan' so 86 starts as an analyst until the PM grants write access
   // via the phase pill or the request_edit_mode tool.
   aiPhase = (aiPhase === 'plan') ? 'plan' : 'edit';
+  // Phase S7 nuclear-option — when the router platform is on, strip the
+  // heavy analytical sections (WIP snapshot, structure, node graph,
+  // workspace sheets, QB cost data) from the Principal's turn_context.
+  // The Principal kept analyzing the data directly because it had the
+  // data — the model's "be helpful" instinct overrode every routing
+  // hint we tried. With these sections gated off, the Principal can
+  // see job identity but physically can't synthesize an audit without
+  // delegating to handoff_to_pm. The PM staff has the read tools
+  // (read_workspace_sheet_full, read_qb_cost_lines, etc.) to fetch
+  // the same data on demand inside its sub-session.
+  let slimForRouter = false;
+  try {
+    const adminAgents = require('./admin-agents-routes');
+    slimForRouter = !!adminAgents.PLATFORM_FLAG;
+  } catch (_) { /* default to false on require error */ }
   // Pull the job + the related data the bulk-save serializes alongside it.
   const jobRes = await pool.query('SELECT id, owner_id, data FROM jobs WHERE id = $1', [jobId]);
   if (!jobRes.rows.length) throw new Error('Job not found');
@@ -4448,6 +4463,13 @@ async function buildJobContext(jobId, clientContext, aiPhase, organization, opts
     lines.push('');
   }
 
+  // Phase S7 nuclear-option gate — heavy analytical sections (WIP
+  // snapshot through QB cost data) only ship when the platform flag
+  // is OFF. In router mode, the Principal sees identity + photos +
+  // attachments + notes + mode — no financials, no structure, no
+  // node graph, no QB lines. The PM staff fetches all of this via
+  // its own tools after handoff_to_pm.
+  if (!slimForRouter) {
   lines.push('# WIP snapshot');
   lines.push('## Income');
   lines.push('- Contract (as-sold): ' + fmtMoney(wip.contractIncome));
@@ -4788,6 +4810,18 @@ async function buildJobContext(jobId, clientContext, aiPhase, organization, opts
       }
       lines.push('');
     }
+  }
+
+  } // <-- close the `if (!slimForRouter)` block opened above WIP snapshot
+
+  // Router-mode hint: explicitly tell 86 the analytics are absent on
+  // purpose, point at the staff. Without this prose the model might
+  // try to call read tools to reconstruct the data itself; we want it
+  // to handoff instead.
+  if (slimForRouter) {
+    lines.push('# Analytical data INTENTIONALLY OMITTED on this surface');
+    lines.push('The WIP snapshot, structure, node graph, workspace sheets, and QB cost data are NOT in this turn_context. That is by design — your job here is to ROUTE. If the user is asking for an audit, margin analysis, WIP review, billing audit, or any synthesis across the missing data: emit `handoff_to_pm` immediately. The PM staff has full access to all of it via its own read tools and the WIP-analyst playbook in its system. Trying to answer without the data will produce wrong numbers. Trying to call read tools yourself to reconstruct the snapshot is also wrong — those tools are no longer in your list. JUST HANDOFF.');
+    lines.push('');
   }
 
   if (job.notes) {
