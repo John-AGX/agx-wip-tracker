@@ -8977,16 +8977,6 @@ function make86OnCustomToolUse(userId, parentSession, turnContextText) {
 const MAX_SUBTASK_TURNS = 30;            // Safety cap to prevent runaway tool loops (kept name for back-compat with watch code)
 const SUBTASK_BUDGET_TOKENS = 300000;    // Per-fire token budget — fail-stop above this
 
-// In-memory ring buffer for handoff diagnostics. Reset on server
-// restart; capped at 20 entries. Query via GET
-// /api/admin/agents/handoff-debug-log.
-const HANDOFF_DEBUG_BUFFER = [];
-const HANDOFF_DEBUG_MAX = 20;
-function recordHandoffDebug(entry) {
-  HANDOFF_DEBUG_BUFFER.push(Object.assign({ recorded_at: new Date().toISOString() }, entry));
-  while (HANDOFF_DEBUG_BUFFER.length > HANDOFF_DEBUG_MAX) HANDOFF_DEBUG_BUFFER.shift();
-}
-
 // Non-streaming version of runV2SessionStream — just drives a Sessions
 // turn to completion, collects assistant text + token usage, and
 // returns. No SSE, no nudge logic, no stuck-session recovery (each
@@ -9004,12 +8994,9 @@ async function driveSubtaskTurn({ anthropic, sessionId, eventsToSend, onCustomTo
   };
   let turnCount = 0;
   let nextEvents = eventsToSend;
-  // Diagnostic counters for the handoff-empty-response bug. Logged
-  // at each iteration's idle break + at function return so we can
-  // see which events the staff session actually emits.
-  const eventCounts = {};
-  const idleStopReasons = [];
-  const agentMessageBlockShapes = [];
+  // Track the last idle's stop_reason across iterations; the
+  // stall-recovery branch keys on it (requires_action vs end_turn).
+  let lastIdleStopReason = null;
 
   while (turnCount < MAX_SUBTASK_TURNS) {
     turnCount++;
@@ -9051,13 +9038,9 @@ async function driveSubtaskTurn({ anthropic, sessionId, eventsToSend, onCustomTo
 
     try {
       for await (const event of stream) {
-        eventCounts[event.type] = (eventCounts[event.type] || 0) + 1;
         switch (event.type) {
           case 'agent.message': {
             const blocks = Array.isArray(event.content) ? event.content : [];
-            // Diagnostic: capture block shapes so we can see what's
-            // actually arriving (text? thinking? tool_use? custom?)
-            agentMessageBlockShapes.push(blocks.map(b => b && (b.type + (b.text ? '(' + b.text.length + 'c)' : ''))).join(','));
             for (const b of blocks) {
               if (b && b.type === 'text' && typeof b.text === 'string') {
                 turnText += b.text;
@@ -9095,13 +9078,11 @@ async function driveSubtaskTurn({ anthropic, sessionId, eventsToSend, onCustomTo
           }
           case 'session.error': {
             const msg = (event.error && event.error.message) || 'Session error';
-            console.log('[handoff-debug] session.error', sessionId, 'turn=' + turnCount, 'msg=' + msg);
             return { text: collectedText + turnText, usage: aggUsage, error: msg };
           }
           case 'session.status_idle': {
             idleSeen = true;
-            const stopType = event.stop_reason && event.stop_reason.type;
-            idleStopReasons.push(stopType || 'unknown');
+            lastIdleStopReason = (event.stop_reason && event.stop_reason.type) || null;
             // Capture the canonical tool_use ids the session expects
             // results for. Used below to remap pendingResults.
             const ids = (event.stop_reason && Array.isArray(event.stop_reason.event_ids))
@@ -9114,35 +9095,10 @@ async function driveSubtaskTurn({ anthropic, sessionId, eventsToSend, onCustomTo
         if (idleSeen) break;
       }
     } catch (e) {
-      console.log('[handoff-debug] stream iter threw', sessionId, 'turn=' + turnCount, 'err=' + (e.message || e));
       return { text: collectedText + turnText, usage: aggUsage, error: 'Subtask stream iteration failed: ' + (e.message || 'unknown') };
     }
 
     collectedText += turnText;
-
-    // Per-iteration trace so we can see whether the staff is emitting
-    // text via agent.message, or only firing tools, or going silent
-    // entirely.
-    console.log('[handoff-debug] iter', sessionId, 'turn=' + turnCount,
-      'event_counts=' + JSON.stringify(eventCounts),
-      'agent_msg_blocks=' + JSON.stringify(agentMessageBlockShapes),
-      'turn_text_len=' + turnText.length,
-      'pending_results=' + pendingResults.length,
-      'idle_stop_reasons=' + JSON.stringify(idleStopReasons),
-      'usage_in=' + aggUsage.input_tokens,
-      'usage_out=' + aggUsage.output_tokens);
-    recordHandoffDebug({
-      phase: 'iter',
-      session_id: sessionId,
-      turn: turnCount,
-      event_counts: Object.assign({}, eventCounts),
-      agent_msg_blocks: agentMessageBlockShapes.slice(),
-      turn_text_len: turnText.length,
-      pending_results: pendingResults.length,
-      idle_stop_reasons: idleStopReasons.slice(),
-      usage_in: aggUsage.input_tokens,
-      usage_out: aggUsage.output_tokens
-    });
 
     // Token-budget fail-stop. Prevents a runaway tool loop from
     // burning unbounded spend if the model misbehaves.
@@ -9160,8 +9116,7 @@ async function driveSubtaskTurn({ anthropic, sessionId, eventsToSend, onCustomTo
       //       the same here, driveSubtaskTurn returned text='' on
       //       requires_action sessions that were just waiting for
       //       one more tool_result.
-      const latestIdle = idleStopReasons[idleStopReasons.length - 1];
-      const stalled = latestIdle === 'requires_action' &&
+      const stalled = lastIdleStopReason === 'requires_action' &&
                       turnText.length === 0 &&
                       blockedEventIds.length > 0 &&
                       turnCount < MAX_SUBTASK_TURNS;
@@ -9171,15 +9126,8 @@ async function driveSubtaskTurn({ anthropic, sessionId, eventsToSend, onCustomTo
         // as auto-satisfying the still-pending tool_use ids; the
         // model resumes and (usually) produces text on the next
         // iteration.
-        console.log('[handoff-debug] stall-recovery', sessionId,
-          'turn=' + turnCount,
-          'blocked_ids=' + JSON.stringify(blockedEventIds));
-        recordHandoffDebug({
-          phase: 'stall-recovery',
-          session_id: sessionId,
-          turn: turnCount,
-          blocked_event_ids: blockedEventIds.slice()
-        });
+        console.log('[subtask] stall-recovery on', sessionId,
+          'turn=' + turnCount, 'blocked_ids=' + blockedEventIds.length);
         nextEvents = blockedEventIds.map(id => ({
           type: 'user.custom_tool_result',
           custom_tool_use_id: id,
@@ -9188,10 +9136,6 @@ async function driveSubtaskTurn({ anthropic, sessionId, eventsToSend, onCustomTo
         continue;
       }
       // Clean exit — return whatever text we collected.
-      console.log('[handoff-debug] return-no-tools', sessionId, 'turn=' + turnCount,
-        'collected_text_len=' + collectedText.length,
-        'latest_idle_stop=' + latestIdle,
-        'event_counts=' + JSON.stringify(eventCounts));
       return { text: collectedText, usage: aggUsage };
     }
 
@@ -9207,33 +9151,14 @@ async function driveSubtaskTurn({ anthropic, sessionId, eventsToSend, onCustomTo
     const allMatch = capturedIds.length === blockedEventIds.length &&
                      capturedIds.every(id => blockedEventIds.indexOf(id) >= 0);
     if (!allMatch && blockedEventIds.length === pendingResults.length) {
-      console.log('[handoff-debug] tool_use_id mismatch — substituting positionally',
-        'session=' + sessionId, 'turn=' + turnCount,
-        'captured=' + JSON.stringify(capturedIds),
-        'blocked=' + JSON.stringify(blockedEventIds));
       pendingResults.forEach((evt, i) => { evt.custom_tool_use_id = blockedEventIds[i]; });
-    } else if (!allMatch) {
-      console.log('[handoff-debug] tool_use_id mismatch with count divergence — flushing as captured',
-        'session=' + sessionId, 'turn=' + turnCount,
-        'captured=' + JSON.stringify(capturedIds),
-        'blocked=' + JSON.stringify(blockedEventIds));
     }
-    recordHandoffDebug({
-      phase: 'remap',
-      session_id: sessionId,
-      turn: turnCount,
-      captured_ids: capturedIds,
-      blocked_event_ids: blockedEventIds.slice(),
-      remapped: !allMatch && blockedEventIds.length === pendingResults.length
-    });
-
     // Tool results to feed back; loop with them as the next events.
     nextEvents = pendingResults;
   }
 
-  console.log('[handoff-debug] turn-cap-hit', sessionId, 'turns=' + turnCount,
-    'collected_text_len=' + collectedText.length,
-    'event_counts=' + JSON.stringify(eventCounts));
+  console.warn('[subtask] turn-cap-hit on', sessionId, 'turns=' + turnCount,
+    'collected_text_len=' + collectedText.length);
   return { text: collectedText, usage: aggUsage, error: 'Subtask hit turn cap (' + MAX_SUBTASK_TURNS + '). Likely a tool loop.' };
 }
 
@@ -10507,7 +10432,6 @@ module.exports.createFreshAiSession = createFreshAiSession;
 module.exports.ensureAiSession      = ensureAiSession;
 module.exports.archiveActiveAiSession = archiveActiveAiSession;
 module.exports.getAnthropic         = getAnthropic;
-module.exports.HANDOFF_DEBUG_BUFFER  = HANDOFF_DEBUG_BUFFER;
 module.exports.internals = {
   // Phase 1 of the unified-86 cutover — single per-turn dispatcher.
   // New code should prefer this; the per-entity builders below stay
