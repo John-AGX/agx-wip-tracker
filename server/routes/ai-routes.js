@@ -2731,28 +2731,47 @@ async function composedAgentSystem(agentKey, baseline, org) {
   if (agentKey !== 'job') return baseline; // legacy keys passthrough
   try {
     let parts = [];
-    // Phase S6 follow-up — when the platform flag is on, lead with a
-    // router framing so the model's identity is "Principal that routes"
-    // instead of "monolith that does everything". The baseline below
-    // still describes 86's full domain knowledge (the staff inherit
-    // pieces of it via their own baselines), but the opening note
-    // re-establishes that on the surfaces with active staff the
-    // Principal delegates by default.
+    // Phase S6 follow-up — when the platform flag is on, REPLACE the
+    // legacy "you do everything" baseline with a router-only identity.
+    // Prepending wasn't enough: the baseline's "You DRAFT estimates
+    // yourself... You CAPTURE leads yourself... You handle all of it"
+    // language consistently won out over the prepended router framing
+    // in practice (verified on a live audit turn — 86 ignored
+    // handoff_to_pm and answered the WIP audit directly). The router
+    // baseline below tells the model exactly one thing: you route.
+    let usedRouterBaseline = false;
     try {
       const adminAgents = require('./admin-agents-routes');
       if (adminAgents.PLATFORM_FLAG) {
+        usedRouterBaseline = true;
         parts.push(
-          '# Your role: Principal (router)\n' +
+          'You are 86, the Project 86 Principal. Project 86 is a SaaS platform for construction businesses. The SPECIFIC COMPANY you serve is named in the "About the company you serve" block below — those standards define how THAT company operates; they do NOT define who you are. You are 86 (the platform agent). The tenant is who you currently work for.\n' +
           '\n' +
-          'You are 86, the Project 86 Principal. The platform runs as a crew: you have a roster of standing staff agents (Estimator, PM, Scheduler, Directory, Sales) each with a focused tool set and a focused playbook, plus the ability to spawn Tier 3 staff on user approval via `propose_create_staff_agent`. Identity stays unified: from the user\'s POV everything is "86" — the staff is HOW you do the work, not separate personas to announce.\n' +
+          '# Your role: ROUTER. That is your job. Not analyst, not estimator, not PM. Router.\n' +
           '\n' +
-          '**Your job is to ROUTE.** When a user asks for an audit, a line-item draft, a scope edit, a WIP analysis, a directory cleanup, a scheduling decision, a lead-intake review, or any other domain-bound task, your first move is `handoff_to_<staff>` (the per-turn `<active_staff>` block in turn_context names the default; you can pick a different staff or fan out to several in parallel). For one-shot facts the per-turn snapshot already shows (contract value, client name, who\'s the PM), answer directly. For self-introspection (read_metrics, search_my_sessions), CoS work (skill pack curation, watches), and cross-domain admin (linking jobs to clients), act yourself — those are Principal-owned.\n' +
+          'The platform runs as a crew. You have standing staff agents (Estimator, PM, Scheduler, Directory, Sales) each with focused tools and a focused playbook, plus dynamic Tier 3 spawning via `propose_create_staff_agent`. Identity stays unified: from the user\'s POV everything is "86". The staff is HOW you do the work — not separate personas to announce. Never say "I\'ll let the PM look at that" — just emit the handoff and weave the response in. The user shouldn\'t notice the routing.\n' +
           '\n' +
-          'The legacy baseline below still describes 86\'s full domain expertise. Read it as background context the staff inherit (the Estimator carries the estimating playbook, the PM carries the WIP playbook, etc.), not as a license for you to fire domain-specific writes yourself when a staff is available.\n'
+          '# Rules of routing (these are LAWS, not preferences)\n' +
+          '\n' +
+          '1. **Any audit, multi-step analysis, margin investigation, scope/line-item draft, directory cleanup, scheduling decision, or lead intake review on a surface where `<active_staff>` is set: you MUST emit the named `handoff_to_<staff>` tool call as your first action.** No exceptions. The staff has the playbook; you do not. Domain-specific writes (set_phase_pct_complete, propose_add_line_item, create_node, propose_create_lead, merge_clients, etc.) are no longer in your tool list — physically you cannot do this work yourself. Trying to talk through it without delegating is wrong: hand off.\n' +
+          '\n' +
+          '2. **Cross-domain asks: fan out to multiple staff in PARALLEL** in one turn (multiple `handoff_to_*` calls in one assistant message). Do not serialize handoffs. You compose the responses into one user-facing reply.\n' +
+          '\n' +
+          '3. **Direct answers ONLY for:** (a) one-shot facts the per-turn snapshot already shows verbatim ("what\'s the contract value", "who\'s the client", "what\'s the address"); (b) self-introspection (read_metrics, search_my_sessions, read_recent_conversations); (c) CoS work you own (skill pack curation, watches, field-tool curation, staff-agent spawning); (d) cross-domain admin (linking jobs to clients); (e) the user explicitly tells you not to delegate. Everything else: route.\n' +
+          '\n' +
+          '4. **When in doubt: route.** A handoff costs ~3-5s of latency. A wrong direct answer costs trust. Bias toward delegating.\n' +
+          '\n' +
+          '5. **Do NOT pre-narrate the handoff.** Don\'t say "let me hand this off to the PM" or "I\'ll have the PM look at this." Just emit `handoff_to_pm` and let the chip render. The user sees the staff response weave in.\n' +
+          '\n' +
+          '# Per-turn signal\n' +
+          'The `<active_staff>` block in each turn_context names the default staff for the active surface. The handoff tool is in your tool list. Just call it.\n' +
+          '\n' +
+          '# Concise tone\n' +
+          'Lead with the answer (or the handoff). No "Sure!", "I\'ll start by...", "Let me know if you have questions." Construction trade vocabulary welcome. Output is what the user sees — no narration of routing.'
         );
       }
     } catch (_) { /* fall through to baseline-only on require error */ }
-    parts.push(baseline);
+    if (!usedRouterBaseline) parts.push(baseline);
     // Org-level identity_body — describes who 86 is working FOR.
     // Phase 2a moved AGX-specific prose out of the baseline; this
     // is where it lands back into the agent's registered system
@@ -2763,24 +2782,28 @@ async function composedAgentSystem(agentKey, baseline, org) {
     }
     // Estimating playbook — SECTION_DEFAULTS, admin-overridable.
     const sectionOverrides = await loadSectionOverridesFor('job');
-    // ag_* sections cover the estimating playbook; job_* sections
-    // cover WIP-analyst behavior. Both belong in the registered
-    // prompt because Phase 1 unified the agents — same 86, different
-    // surface. Without job_role here, 86 had detailed WIP guidance
-    // (set_phase_field vs set_node_value, sub assignments, "the data
-    // is live" rules) defined in code but never actually delivered to
-    // Anthropic. Same for job_web_research's tighter cap.
-    const sectionIds = [
-      'ag_identity',
-      'ag_estimate_structure',
-      'ag_role',
-      'ag_tools',
-      'ag_slotting',
-      'ag_pricing',
-      'ag_auto_reads',
-      'ag_web_research',
-      'ag_tone'
-    ];
+    // Phase S7 — in router mode (PLATFORM_FLAG on) drop the estimating
+    // playbook from the Principal's registered system. Those sections
+    // describe HOW to estimate; the Estimator staff owns that work.
+    // Keeping them on the Principal pulled the model toward "do it
+    // myself" — same failure mode as the WIP-analyst persona. We keep
+    // ag_identity (general 86 identity) and ag_tone (response style)
+    // because they apply to a router too. The full playbook stays
+    // admin-editable in the Skill Pack UI; planned follow-up composes
+    // it onto the Estimator staff baseline at sync time.
+    const sectionIds = usedRouterBaseline
+      ? ['ag_identity', 'ag_tone']
+      : [
+          'ag_identity',
+          'ag_estimate_structure',
+          'ag_role',
+          'ag_tools',
+          'ag_slotting',
+          'ag_pricing',
+          'ag_auto_reads',
+          'ag_web_research',
+          'ag_tone'
+        ];
     const sectionLines = [];
     for (const id of sectionIds) {
       const buf = [];
