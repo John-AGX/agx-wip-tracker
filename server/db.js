@@ -1151,6 +1151,45 @@ async function initSchema() {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
+    -- Project 86 Agent Platform — Phase S2 (Crew scaffolding)
+    --
+    -- Declarative SPEC for every staff agent the platform supports.
+    -- managed_agent_registry holds the per-tenant Anthropic-side id;
+    -- THIS table answers "what staff agents exist and what's each
+    -- one's job, tool set, and routing role?"
+    --
+    -- Tier 1 row = the Principal (86 itself). Tier 2 = standing
+    -- staff seeded at boot (Estimator, PM, Scheduler, Directory,
+    -- Sales, Books, Subs, Proposal, CoS — but only the ones we've
+    -- actually built). Tier 3 = dynamic agents 86 spawns via
+    -- propose_create_staff_agent on user approval.
+    --
+    -- The tool_keys array lists the names of custom tools this staff
+    -- agent should have attached at registration. routing_hints is
+    -- the principal's LangGraph-style guide for when to delegate
+    -- to this staff. archived_at lets us retire a dynamic agent
+    -- without losing the audit trail (Anthropic-side agent stays
+    -- archivable via managed_agent_registry separately).
+    CREATE TABLE IF NOT EXISTS staff_agents (
+      id SERIAL PRIMARY KEY,
+      organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE,
+      agent_key TEXT NOT NULL,                             -- e.g. '86-estimator', '86-pm', '86-sub-compliance'
+      display_name TEXT NOT NULL,                          -- e.g. '86 · Estimator'
+      tier INTEGER NOT NULL DEFAULT 2,                     -- 1 principal / 2 standing / 3 dynamic
+      role_card TEXT NOT NULL DEFAULT '',                  -- one-paragraph job description (read by principal)
+      system_prompt TEXT,                                  -- optional override of the default baseline
+      tool_keys JSONB NOT NULL DEFAULT '[]'::jsonb,        -- array of custom tool names
+      skill_pack_ids JSONB NOT NULL DEFAULT '[]'::jsonb,   -- array of org_skill_packs.id values
+      trigger_rules JSONB NOT NULL DEFAULT '{}'::jsonb,    -- cron / event / on-demand-only
+      routing_hints JSONB NOT NULL DEFAULT '{}'::jsonb,    -- principal's guide for "when to delegate here"
+      spawned_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      spawned_by TEXT,                                     -- 'system' (Tier 2 seed) or user_id (Tier 3 approval)
+      archived_at TIMESTAMPTZ,
+      UNIQUE (organization_id, agent_key)
+    );
+    CREATE INDEX IF NOT EXISTS idx_staff_agents_org ON staff_agents(organization_id) WHERE archived_at IS NULL;
+    CREATE INDEX IF NOT EXISTS idx_staff_agents_tier ON staff_agents(tier) WHERE archived_at IS NULL;
+
     -- Phase 2 native-skills assignment — per-agent attachment of
     -- native Anthropic Skills (skill_id values from beta.skills.create).
     -- Replaces the legacy "scan app_settings.agent_skills for packs

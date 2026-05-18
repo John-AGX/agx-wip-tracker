@@ -1681,7 +1681,17 @@ const AGENT_SYSTEM_BASELINE = {
   // be resolved against managed_agent_registry. customToolsFor still
   // has a dead-code 'ag' branch; pointing it at 86's baseline ensures
   // nothing surfaces an old persona if it ever does fire.
-  ag:    null // resolved at lookup time to AGENT_SYSTEM_BASELINE.job
+  ag:    null, // resolved at lookup time to AGENT_SYSTEM_BASELINE.job
+
+  // Project 86 Agent Platform — Phase S2 (Crew scaffolding).
+  // Staff agent baselines. Each is a focused specialist invoked
+  // by the Principal (86) via handoff_to_<staff> tools. Staff
+  // never see the user directly; they receive a request string
+  // from the Principal, work in an isolated sub-session, and
+  // return a structured response that the Principal weaves into
+  // the user-facing conversation. Identity stays "86" from the
+  // user's POV — the staff is how 86 gets specialist help.
+  '86-estimator': 'You are 86 · Estimator — Project 86\'s estimating specialist. You receive requests from the Principal (also "86" — same identity, just routing). Your scope is line items, sections, groups, scope text, pricing benchmarks, and BT-export prep. You draft estimates with discipline: line items slot into the four standard subgroups (Materials & Supplies Costs, Direct Labor, General Conditions, Subcontractors Costs); markup is set per estimate by the user after costs are confirmed; pricing follows the catalog → web → trade-knowledge fallback chain.\n\nThe Principal will pass you a request and (when relevant) an estimate id + active group id. Read the per-turn snapshot for the actual line + group state. Return a structured response: a short prose summary of what you did, plus any tool_use blocks for proposed changes (the Principal will surface these as approval cards to the user).\n\nDo NOT speak directly to the user. Do NOT narrate your decision-making in the first person ("I think..."); just deliver the work. The Principal owns the conversation tone.'
 };
 // Resolve the back-compat aliases after the literal initializer runs.
 // Every retired agent_key now resolves to 86's baseline so a stale
@@ -1891,7 +1901,31 @@ function customToolsFor(agentKey) {
       ...aiInternals.clientTools(),
       ...aiInternals.staffTools(),
       ...aiInternals.memoryTools(),
-      ...aiInternals.watchTools()
+      ...aiInternals.watchTools(),
+      // P86 Crew handoff tools — only present when P86_STAFF_AGENTS=on
+      // (handoffTools() returns [] otherwise so the model never sees
+      // them on a deployment that hasn't seeded the staff_agents rows).
+      ...(aiInternals.handoffTools ? aiInternals.handoffTools() : [])
+    ].forEach(t => {
+      if (!t || !t.name || seen.has(t.name)) return;
+      seen.add(t.name);
+      merged.push(t);
+    });
+    tools = merged;
+  } else if (agentKey === '86-estimator') {
+    // Project 86 Agent Platform — Phase S2.
+    // The Estimator staff agent's focused tool set: estimating
+    // domain only. Memory tools come along so the Estimator can
+    // recall durable facts the Principal has stamped (pricing
+    // preferences, client quirks, etc.). No client-directory /
+    // job-WIP / intake / skill-pack tools — those are other
+    // staff's domains, and the Principal handles cross-domain
+    // composition by fanning out to multiple staff in one turn.
+    const seen = new Set();
+    const merged = [];
+    [
+      ...aiInternals.estimateTools(),
+      ...aiInternals.memoryTools()
     ].forEach(t => {
       if (!t || !t.name || seen.has(t.name)) return;
       seen.add(t.name);
@@ -1994,6 +2028,116 @@ async function ensureManagedAgent(agentKey, organization) {
     skill_count: skills.length
   };
 }
+
+// ──────────────────────────────────────────────────────────────────
+// Project 86 Agent Platform — Phase S2 (Crew scaffolding)
+// ──────────────────────────────────────────────────────────────────
+
+// Canonical "standing staff" — the Tier 2 agents seeded for every
+// org when the platform flag is on. Phase S2 ships ONE entry
+// (Estimator) end-to-end as the foundation pilot. S3 expands this
+// list to PM / Scheduler / Directory / Sales / etc.
+//
+// Each entry mirrors the staff_agents table schema. Adding a row
+// here makes the agent available org-wide; the seed helper below
+// upserts the spec into the DB and triggers ensureManagedAgent to
+// register the Anthropic-side agent.
+const STANDING_STAFF_SPECS = [
+  {
+    agent_key: '86-estimator',
+    display_name: '86 · Estimator',
+    tier: 2,
+    role_card: 'Senior estimator. Owns line items, sections, groups, scope text, pricing benchmarks, and BT-export prep. Receives requests from the Principal via handoff and returns proposed estimate changes for user approval.',
+    tool_keys: [], // populated from customToolsFor at register time
+    routing_hints: {
+      surfaces: ['estimate'],
+      trigger_phrases: ['add line', 'add scope', 'price this', 'bid', 'estimate', 'subgroup', 'line item']
+    }
+  }
+];
+
+const PLATFORM_FLAG = (process.env.P86_STAFF_AGENTS || '').toLowerCase() === 'on';
+
+// Seed the standing-staff spec rows for this org and (if the flag
+// is on) register their Anthropic-side agents via ensureManagedAgent.
+// Idempotent — re-running on an org that already has the rows is a
+// no-op for the DB upsert, and ensureManagedAgent itself short-
+// circuits when the registry row already exists.
+//
+// Called from the platform-bootstrap admin endpoint and the
+// per-org first-boot path. Returns the list of staff_agents rows
+// (now persisted) so callers can attach skills, surface to the UI,
+// etc.
+async function seedStandingStaffAgents(organization) {
+  if (!organization || !organization.id) {
+    throw new Error('seedStandingStaffAgents requires an organization row');
+  }
+  const seeded = [];
+  for (const spec of STANDING_STAFF_SPECS) {
+    // Upsert the spec row.
+    const insert = await pool.query(
+      `INSERT INTO staff_agents
+         (organization_id, agent_key, display_name, tier, role_card,
+          tool_keys, routing_hints, spawned_by)
+       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, 'system')
+       ON CONFLICT (organization_id, agent_key) DO UPDATE
+         SET display_name = EXCLUDED.display_name,
+             tier         = EXCLUDED.tier,
+             role_card    = EXCLUDED.role_card,
+             routing_hints= EXCLUDED.routing_hints
+       RETURNING *`,
+      [
+        organization.id,
+        spec.agent_key,
+        spec.display_name,
+        spec.tier,
+        spec.role_card,
+        JSON.stringify(spec.tool_keys || []),
+        JSON.stringify(spec.routing_hints || {})
+      ]
+    );
+    seeded.push(insert.rows[0]);
+
+    // When the platform flag is ON, also register the Anthropic-side
+    // agent. Without the flag, the spec row exists but the Principal
+    // has no handoff target — useful for staging the spec changes
+    // before flipping the flag to actually delegate work.
+    if (PLATFORM_FLAG) {
+      try {
+        await ensureManagedAgent(spec.agent_key, organization);
+      } catch (e) {
+        console.warn('[seedStandingStaffAgents] register failed for',
+          spec.agent_key, organization.slug || organization.id, ':', e && e.message);
+      }
+    }
+  }
+  return seeded;
+}
+
+// POST /api/admin/agents/staff/seed
+//   Trigger seedStandingStaffAgents for the caller's organization.
+//   Use after first deploy (or after adding a new spec) so the
+//   staff_agents table reflects the canonical roster.
+router.post('/staff/seed', requireAuth, requireCapability('ROLES_MANAGE'), require('../auth').requireOrg, async (req, res) => {
+  try {
+    const seeded = await seedStandingStaffAgents(req.organization);
+    res.json({
+      ok: true,
+      organization_id: req.organization.id,
+      platform_flag: PLATFORM_FLAG,
+      seeded_count: seeded.length,
+      seeded: seeded.map(s => ({
+        agent_key: s.agent_key,
+        display_name: s.display_name,
+        tier: s.tier,
+        spawned_at: s.spawned_at
+      }))
+    });
+  } catch (e) {
+    console.error('POST /api/admin/agents/staff/seed error:', e);
+    res.status(500).json({ error: 'Server error: ' + (e.message || 'unknown') });
+  }
+});
 
 // POST /api/admin/agents/managed/reregister?key=ag|job|cra|staff
 //   Force a fresh agents.create + replace the local registry row.
@@ -3502,4 +3646,10 @@ module.exports = router;
 module.exports.ensureManagedAgent = ensureManagedAgent;
 module.exports.ensureManagedEnvironment = ensureManagedEnvironment;
 module.exports.buildReferenceLinksBlock = buildReferenceLinksBlock;
+// Project 86 Agent Platform (S2) — exposed so ai-routes.js can
+// read the canonical staff roster when registering handoff tools
+// on the Principal.
+module.exports.STANDING_STAFF_SPECS = STANDING_STAFF_SPECS;
+module.exports.seedStandingStaffAgents = seedStandingStaffAgents;
+module.exports.PLATFORM_FLAG = PLATFORM_FLAG;
 module.exports.collectMcpServersFor = collectMcpServersFor;

@@ -6128,6 +6128,31 @@ const WATCH_TOOLS = [
   }
 ];
 
+// ────────────────────────────────────────────────────────────────────
+// P86 Crew Agent Platform — Phase S2.3
+// Handoff tools — the Principal (86) delegates a chunk of work to a
+// standing-staff specialist (Estimator first, more in S3). The staff
+// agent runs in an isolated sub-session, returns text + structured
+// proposals, and the Principal composes them into the user-facing
+// conversation. From the user's POV identity is still "86".
+// ────────────────────────────────────────────────────────────────────
+const HANDOFF_TOOLS = [
+  {
+    name: 'handoff_to_estimator',
+    description: 'Delegate an estimating task to 86 · Estimator. The Estimator runs in an isolated sub-session with the estimating toolset and returns prose findings plus proposed line/section/group changes for the user to approve. Use for: drafting line items at scale, restructuring scope/sections, pricing-strategy reasoning, BT-export prep, multi-line review. You (the Principal) still own the conversation — weave the Estimator response into your reply.',
+    tier: 'auto',
+    input_schema: {
+      type: 'object',
+      properties: {
+        request: { type: 'string', description: 'What the Estimator should do — one paragraph, written for a specialist (assume estimating vocabulary).' },
+        estimate_id: { type: 'string', description: 'Estimate id from turn_context. Optional if no specific estimate is active.' },
+        context: { type: 'string', description: 'Extra context the staff agent needs that is NOT already in turn_context — e.g. user constraints, prior decisions in this conversation.' }
+      },
+      required: ['request']
+    }
+  }
+];
+
 // Build the SKILL.md body for one local pack. Mirrors the helper of
 // the same name in admin-agents-routes.js so CoS-driven mirrors and
 // admin-button mirrors produce byte-identical uploads.
@@ -8465,6 +8490,138 @@ async function execWatchTool(name, input, ctx) {
   throw new Error('Unknown watch read tool: ' + name);
 }
 
+// ────────────────────────────────────────────────────────────────────
+// P86 Crew Agent Platform — Phase S2.3
+// Map handoff_to_<staff> tool names to their staff_agents.agent_key.
+// Add a new entry when a new standing staff agent ships.
+// ────────────────────────────────────────────────────────────────────
+const STAFF_AGENT_KEY_BY_HANDOFF = new Map([
+  ['handoff_to_estimator', '86-estimator']
+]);
+
+// execHandoffToStaff — Principal calls this when the model emits a
+// `handoff_to_<staff>` tool. We open a fresh sub-session against the
+// staff agent for THIS org, send the request as a user.message,
+// drain the stream until idle, collect the staff's text, archive the
+// sub-session, and return text to the Principal as the tool_result.
+//
+// The staff agent runs inside its own session — its tool calls fire
+// against the SAME make86 dispatcher (we reuse make86OnCustomToolUse
+// with a scope guard to prevent recursive handoff loops). Approval-
+// tier writes inside the staff session bubble back to the Principal
+// as text in the form "I would propose X" instead of surfacing as
+// approval cards directly — Phase S2 keeps approvals on the
+// Principal's session so the user sees one card stream.
+//
+// ctx = { userId, principalSessionId } — userId resolves the org;
+// principalSessionId is captured for the staff session title.
+async function execHandoffToStaff(toolName, input, ctx) {
+  const staffKey = STAFF_AGENT_KEY_BY_HANDOFF.get(toolName);
+  if (!staffKey) throw new Error('Unknown handoff tool: ' + toolName);
+
+  const anthropic = getAnthropic();
+  if (!anthropic) throw new Error('ANTHROPIC_API_KEY not configured.');
+
+  const { userId } = ctx;
+  const orgRow = await pool.query(
+    `SELECT o.* FROM organizations o
+       JOIN users u ON u.organization_id = o.id
+      WHERE u.id = $1`,
+    [userId]
+  );
+  const organization = orgRow.rows[0];
+  if (!organization) throw new Error('User has no organization — cannot delegate to staff.');
+
+  // Resolve the staff agent's Anthropic-side id. Lazy register if the
+  // platform flag is on but the agent hasn't been registered yet.
+  let regRow = await pool.query(
+    `SELECT anthropic_agent_id FROM managed_agent_registry
+      WHERE agent_key = $1 AND organization_id = $2`,
+    [staffKey, organization.id]
+  );
+  if (!regRow.rows.length) {
+    const adminAgents = require('./admin-agents-routes');
+    if (!adminAgents.PLATFORM_FLAG) {
+      throw new Error('P86_STAFF_AGENTS flag is off — handoff to ' + staffKey + ' is staged but not registered.');
+    }
+    try {
+      await adminAgents.ensureManagedAgent(staffKey, organization);
+    } catch (e) {
+      throw new Error('Could not register staff agent ' + staffKey + ': ' + (e.message || 'unknown'));
+    }
+    regRow = await pool.query(
+      `SELECT anthropic_agent_id FROM managed_agent_registry
+        WHERE agent_key = $1 AND organization_id = $2`,
+      [staffKey, organization.id]
+    );
+    if (!regRow.rows.length) throw new Error('Staff agent registration did not persist: ' + staffKey);
+  }
+  const staffAgentId = regRow.rows[0].anthropic_agent_id;
+
+  const adminAgents = require('./admin-agents-routes');
+  const env = await adminAgents.ensureManagedEnvironment();
+
+  // Build the user.message body — request + optional surface context.
+  const parts = [];
+  parts.push(String(input.request || '').trim() || '(no request body)');
+  if (input.estimate_id) parts.push('Active estimate id: ' + String(input.estimate_id));
+  if (input.context) parts.push('Context from the Principal:\n' + String(input.context));
+  const messageBody = parts.join('\n\n');
+
+  // Open the staff sub-session.
+  let sessionId = null;
+  try {
+    const created = await anthropic.beta.sessions.create({
+      agent: staffAgentId,
+      environment_id: env.anthropic_environment_id,
+      title: 'P86 handoff · ' + staffKey + ' · ' + new Date().toISOString().slice(0, 19)
+    });
+    sessionId = created.id;
+  } catch (e) {
+    throw new Error('Could not open staff sub-session: ' + (e.message || 'unknown'));
+  }
+
+  // Reuse make86's tool dispatcher inside the staff session, but:
+  //   - reject nested handoff_to_* (one-level fan-out only in S2)
+  //   - convert approval-tier proposals to text so they don't try to
+  //     render cards from inside a sub-session
+  // parentSession is threaded from the Principal so the staff inherits
+  // the active entity (estimate/job) for the entity-bound write gate.
+  const baseCallback = make86OnCustomToolUse(userId, ctx.parentSession || null);
+  const staffCallback = async (tu) => {
+    if (STAFF_AGENT_KEY_BY_HANDOFF.has(tu.name)) {
+      return { tier: 'auto', error: 'Nested handoff blocked — staff agents do not fan out to other staff in Phase S2. Return your recommendation to the Principal as text instead.' };
+    }
+    const decision = await baseCallback(tu);
+    if (decision && decision.tier === 'approval') {
+      return {
+        tier: 'auto',
+        error: 'Tool "' + tu.name + '" is approval-tier. Describe the proposed change as text in your response — the Principal will surface the approval card to the user.'
+      };
+    }
+    return decision;
+  };
+
+  const result = await driveSubtaskTurn({
+    anthropic,
+    sessionId,
+    eventsToSend: [{ type: 'user.message', content: [{ type: 'text', text: messageBody }] }],
+    onCustomToolUse: staffCallback
+  });
+
+  // Best-effort archive — staff sub-sessions are stateless; don't keep
+  // them sitting in the active list.
+  try {
+    await anthropic.beta.sessions.update(sessionId, { status: 'archived' });
+  } catch (_) { /* non-fatal */ }
+
+  if (result.error) {
+    return '[' + staffKey + ' handoff error] ' + result.error +
+      (result.text ? '\n\nPartial response:\n' + result.text : '');
+  }
+  return result.text || '(staff agent returned no text)';
+}
+
 function make86OnCustomToolUse(userId, parentSession) {
   // Per-request dedupe cache. Scoped to ONE /86/chat (or /chat/continue)
   // call — closes over this Map. If the model calls e.g.
@@ -8519,7 +8676,7 @@ function make86OnCustomToolUse(userId, parentSession) {
     // read_materials / etc. on the unified /86 chat path were all
     // returning {tier:'approval'} — never executing — and the model
     // saw no result, concluding "no match" on real searches.
-    if (ALLOWED_AUTO_TIER_TOOLS.has(tu.name)) {
+    if (ALLOWED_AUTO_TIER_TOOLS.has(tu.name) || STAFF_AGENT_KEY_BY_HANDOFF.has(tu.name)) {
       const name = tu.name;
       const input = tu.input || {};
       const k = dedupeKey(name, input);
@@ -8532,7 +8689,13 @@ function make86OnCustomToolUse(userId, parentSession) {
       }
       try {
         let result;
-        if (INTAKE_EXECUTOR_TOOLS.has(name)) {
+        if (STAFF_AGENT_KEY_BY_HANDOFF.has(name)) {
+          // P86 Crew handoff — delegate to a standing-staff agent in a
+          // sub-session and return its prose response to the Principal.
+          // Thread parentSession through so the staff inherits the
+          // same entity context (active estimate/job) as the Principal.
+          result = await execHandoffToStaff(name, input, { userId, parentSession });
+        } else if (INTAKE_EXECUTOR_TOOLS.has(name)) {
           result = await execIntakeRead(name, input);
         } else if (FIELD_TOOLS_EXECUTOR_TOOLS.has(name)) {
           result = await execFieldToolRead(name, input);
@@ -9983,6 +10146,16 @@ module.exports.internals = {
   // Phase 5 — proactive watching tools (3 of 4 are auto; the writes
   // are approval-tier and surface as cards).
   watchTools:    () => WATCH_TOOLS.map(({ tier, ...t }) => t),
+  // P86 Crew — Phase S2.3. Principal-only handoff tools. The Principal
+  // calls handoff_to_<staff> with a request; we delegate to the staff
+  // agent's sub-session and return its response. Only attach when the
+  // P86_STAFF_AGENTS flag is on; otherwise the staff agent isn't
+  // registered on Anthropic and the call would fail.
+  handoffTools: () => {
+    const adminAgents = require('./admin-agents-routes');
+    if (!adminAgents.PLATFORM_FLAG) return [];
+    return HANDOFF_TOOLS.map(({ tier, ...t }) => t);
+  },
   defaultModel: () => MODEL,
   maxTokens: () => MAX_TOKENS,
   // Resolve the effort string for a given model. Caller passes the
