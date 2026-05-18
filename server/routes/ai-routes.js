@@ -8994,6 +8994,12 @@ async function driveSubtaskTurn({ anthropic, sessionId, eventsToSend, onCustomTo
   };
   let turnCount = 0;
   let nextEvents = eventsToSend;
+  // Diagnostic counters for the handoff-empty-response bug. Logged
+  // at each iteration's idle break + at function return so we can
+  // see which events the staff session actually emits.
+  const eventCounts = {};
+  const idleStopReasons = [];
+  const agentMessageBlockShapes = [];
 
   while (turnCount < MAX_SUBTASK_TURNS) {
     turnCount++;
@@ -9024,9 +9030,13 @@ async function driveSubtaskTurn({ anthropic, sessionId, eventsToSend, onCustomTo
 
     try {
       for await (const event of stream) {
+        eventCounts[event.type] = (eventCounts[event.type] || 0) + 1;
         switch (event.type) {
           case 'agent.message': {
             const blocks = Array.isArray(event.content) ? event.content : [];
+            // Diagnostic: capture block shapes so we can see what's
+            // actually arriving (text? thinking? tool_use? custom?)
+            agentMessageBlockShapes.push(blocks.map(b => b && (b.type + (b.text ? '(' + b.text.length + 'c)' : ''))).join(','));
             for (const b of blocks) {
               if (b && b.type === 'text' && typeof b.text === 'string') {
                 turnText += b.text;
@@ -9064,20 +9074,36 @@ async function driveSubtaskTurn({ anthropic, sessionId, eventsToSend, onCustomTo
           }
           case 'session.error': {
             const msg = (event.error && event.error.message) || 'Session error';
+            console.log('[handoff-debug] session.error', sessionId, 'turn=' + turnCount, 'msg=' + msg);
             return { text: collectedText + turnText, usage: aggUsage, error: msg };
           }
           case 'session.status_idle': {
             idleSeen = true;
+            const stopType = event.stop_reason && event.stop_reason.type;
+            idleStopReasons.push(stopType || 'unknown');
             break;
           }
         }
         if (idleSeen) break;
       }
     } catch (e) {
+      console.log('[handoff-debug] stream iter threw', sessionId, 'turn=' + turnCount, 'err=' + (e.message || e));
       return { text: collectedText + turnText, usage: aggUsage, error: 'Subtask stream iteration failed: ' + (e.message || 'unknown') };
     }
 
     collectedText += turnText;
+
+    // Per-iteration trace so we can see whether the staff is emitting
+    // text via agent.message, or only firing tools, or going silent
+    // entirely.
+    console.log('[handoff-debug] iter', sessionId, 'turn=' + turnCount,
+      'event_counts=' + JSON.stringify(eventCounts),
+      'agent_msg_blocks=' + JSON.stringify(agentMessageBlockShapes),
+      'turn_text_len=' + turnText.length,
+      'pending_results=' + pendingResults.length,
+      'idle_stop_reasons=' + JSON.stringify(idleStopReasons),
+      'usage_in=' + aggUsage.input_tokens,
+      'usage_out=' + aggUsage.output_tokens);
 
     // Token-budget fail-stop. Prevents a runaway tool loop from
     // burning unbounded spend if the model misbehaves.
@@ -9087,6 +9113,9 @@ async function driveSubtaskTurn({ anthropic, sessionId, eventsToSend, onCustomTo
 
     if (pendingResults.length === 0) {
       // No tool calls this turn — assistant text is the final reply.
+      console.log('[handoff-debug] return-no-tools', sessionId, 'turn=' + turnCount,
+        'collected_text_len=' + collectedText.length,
+        'event_counts=' + JSON.stringify(eventCounts));
       return { text: collectedText, usage: aggUsage };
     }
 
@@ -9094,6 +9123,9 @@ async function driveSubtaskTurn({ anthropic, sessionId, eventsToSend, onCustomTo
     nextEvents = pendingResults;
   }
 
+  console.log('[handoff-debug] turn-cap-hit', sessionId, 'turns=' + turnCount,
+    'collected_text_len=' + collectedText.length,
+    'event_counts=' + JSON.stringify(eventCounts));
   return { text: collectedText, usage: aggUsage, error: 'Subtask hit turn cap (' + MAX_SUBTASK_TURNS + '). Likely a tool loop.' };
 }
 
