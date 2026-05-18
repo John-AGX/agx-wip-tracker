@@ -3125,6 +3125,20 @@ router.post('/fresh-org-reset', requireAuth, requireCapability('ROLES_MANAGE'), 
   }
 });
 
+// GET /api/admin/agents/handoff-debug-log
+//   Returns the in-memory ring buffer of diagnostic entries from
+//   driveSubtaskTurn. Used to debug handoff-empty-response bugs
+//   without grepping Railway logs. Resets on server restart.
+router.get('/handoff-debug-log', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+  try {
+    const ai = require('./ai-routes');
+    const buf = (ai && ai.HANDOFF_DEBUG_BUFFER) || [];
+    res.json({ count: buf.length, entries: buf.slice() });
+  } catch (e) {
+    res.status(500).json({ error: 'Server error: ' + (e.message || 'unknown') });
+  }
+});
+
 // GET /api/admin/agents/managed/prompt-audit
 //   Returns the byte+token breakdown of the registered agent's
 //   system prompt + tool schemas + reference-links table state.

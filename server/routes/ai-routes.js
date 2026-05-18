@@ -8977,6 +8977,16 @@ function make86OnCustomToolUse(userId, parentSession, turnContextText) {
 const MAX_SUBTASK_TURNS = 30;            // Safety cap to prevent runaway tool loops (kept name for back-compat with watch code)
 const SUBTASK_BUDGET_TOKENS = 300000;    // Per-fire token budget — fail-stop above this
 
+// In-memory ring buffer for handoff diagnostics. Reset on server
+// restart; capped at 20 entries. Query via GET
+// /api/admin/agents/handoff-debug-log.
+const HANDOFF_DEBUG_BUFFER = [];
+const HANDOFF_DEBUG_MAX = 20;
+function recordHandoffDebug(entry) {
+  HANDOFF_DEBUG_BUFFER.push(Object.assign({ recorded_at: new Date().toISOString() }, entry));
+  while (HANDOFF_DEBUG_BUFFER.length > HANDOFF_DEBUG_MAX) HANDOFF_DEBUG_BUFFER.shift();
+}
+
 // Non-streaming version of runV2SessionStream — just drives a Sessions
 // turn to completion, collects assistant text + token usage, and
 // returns. No SSE, no nudge logic, no stuck-session recovery (each
@@ -9104,6 +9114,18 @@ async function driveSubtaskTurn({ anthropic, sessionId, eventsToSend, onCustomTo
       'idle_stop_reasons=' + JSON.stringify(idleStopReasons),
       'usage_in=' + aggUsage.input_tokens,
       'usage_out=' + aggUsage.output_tokens);
+    recordHandoffDebug({
+      phase: 'iter',
+      session_id: sessionId,
+      turn: turnCount,
+      event_counts: Object.assign({}, eventCounts),
+      agent_msg_blocks: agentMessageBlockShapes.slice(),
+      turn_text_len: turnText.length,
+      pending_results: pendingResults.length,
+      idle_stop_reasons: idleStopReasons.slice(),
+      usage_in: aggUsage.input_tokens,
+      usage_out: aggUsage.output_tokens
+    });
 
     // Token-budget fail-stop. Prevents a runaway tool loop from
     // burning unbounded spend if the model misbehaves.
@@ -10388,6 +10410,7 @@ module.exports.createFreshAiSession = createFreshAiSession;
 module.exports.ensureAiSession      = ensureAiSession;
 module.exports.archiveActiveAiSession = archiveActiveAiSession;
 module.exports.getAnthropic         = getAnthropic;
+module.exports.HANDOFF_DEBUG_BUFFER  = HANDOFF_DEBUG_BUFFER;
 module.exports.internals = {
   // Phase 1 of the unified-86 cutover — single per-turn dispatcher.
   // New code should prefer this; the per-entity builders below stay
