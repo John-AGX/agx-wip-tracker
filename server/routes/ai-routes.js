@@ -9022,10 +9022,14 @@ async function driveSubtaskTurn({ anthropic, sessionId, eventsToSend, onCustomTo
 
     if (Array.isArray(nextEvents) && nextEvents.length) {
       try {
-        const EVENTS_PER_SEND = 50;
-        for (let i = 0; i < nextEvents.length; i += EVENTS_PER_SEND) {
+        // Tool-result events MUST send one-at-a-time. Batched sends
+        // get partial-ack from Anthropic (only the first event is
+        // processed), leaving subsequent tool_use ids permanently
+        // blocked. Principal's runV2SessionStream has the same fix.
+        // user.message events are also fine sent serially.
+        for (const evt of nextEvents) {
           await anthropic.beta.sessions.events.send(sessionId, {
-            events: nextEvents.slice(i, i + EVENTS_PER_SEND)
+            events: [evt]
           });
         }
       } catch (e) {
@@ -9037,6 +9041,13 @@ async function driveSubtaskTurn({ anthropic, sessionId, eventsToSend, onCustomTo
     const pendingResults = [];
     let turnText = '';
     let idleSeen = false;
+    // Captured from session.status_idle's stop_reason.event_ids — the
+    // CANONICAL ids the session expects on user.custom_tool_result.
+    // These often differ from the event.id we captured on
+    // agent.custom_tool_use; that mismatch is why the staff session
+    // was silently dropping tool results and never producing text.
+    // Principal's runV2SessionStream has the same fix.
+    let blockedEventIds = [];
 
     try {
       for await (const event of stream) {
@@ -9091,6 +9102,12 @@ async function driveSubtaskTurn({ anthropic, sessionId, eventsToSend, onCustomTo
             idleSeen = true;
             const stopType = event.stop_reason && event.stop_reason.type;
             idleStopReasons.push(stopType || 'unknown');
+            // Capture the canonical tool_use ids the session expects
+            // results for. Used below to remap pendingResults.
+            const ids = (event.stop_reason && Array.isArray(event.stop_reason.event_ids))
+              ? event.stop_reason.event_ids
+              : [];
+            if (ids.length) blockedEventIds = ids;
             break;
           }
         }
@@ -9140,6 +9157,38 @@ async function driveSubtaskTurn({ anthropic, sessionId, eventsToSend, onCustomTo
         'event_counts=' + JSON.stringify(eventCounts));
       return { text: collectedText, usage: aggUsage };
     }
+
+    // ID-mismatch remap. The agent.custom_tool_use event's `id` field
+    // is often NOT the same id the session expects on
+    // user.custom_tool_result — the canonical ids live on the idle
+    // event's stop_reason.event_ids. Without this remap, Anthropic
+    // silently drops most/all of our tool results; the session stays
+    // requires_action; the model keeps re-emitting tool_use calls;
+    // and no text ever flows. Principal's runV2SessionStream has the
+    // same fix.
+    const capturedIds = pendingResults.map(e => e.custom_tool_use_id);
+    const allMatch = capturedIds.length === blockedEventIds.length &&
+                     capturedIds.every(id => blockedEventIds.indexOf(id) >= 0);
+    if (!allMatch && blockedEventIds.length === pendingResults.length) {
+      console.log('[handoff-debug] tool_use_id mismatch — substituting positionally',
+        'session=' + sessionId, 'turn=' + turnCount,
+        'captured=' + JSON.stringify(capturedIds),
+        'blocked=' + JSON.stringify(blockedEventIds));
+      pendingResults.forEach((evt, i) => { evt.custom_tool_use_id = blockedEventIds[i]; });
+    } else if (!allMatch) {
+      console.log('[handoff-debug] tool_use_id mismatch with count divergence — flushing as captured',
+        'session=' + sessionId, 'turn=' + turnCount,
+        'captured=' + JSON.stringify(capturedIds),
+        'blocked=' + JSON.stringify(blockedEventIds));
+    }
+    recordHandoffDebug({
+      phase: 'remap',
+      session_id: sessionId,
+      turn: turnCount,
+      captured_ids: capturedIds,
+      blocked_event_ids: blockedEventIds.slice(),
+      remapped: !allMatch && blockedEventIds.length === pendingResults.length
+    });
 
     // Tool results to feed back; loop with them as the next events.
     nextEvents = pendingResults;
