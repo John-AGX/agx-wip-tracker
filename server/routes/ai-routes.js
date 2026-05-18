@@ -2664,33 +2664,29 @@ async function buildTurnContext({ entityType, entityId, clientContext, aiPhase, 
   //      panel without an entity sets '86-scheduler' itself).
   //   2. Surface default from STAFF_HINT_BY_SURFACE (entity_type).
   //   3. None — Principal picks freely.
-  // Only ship the block when the platform flag is on; otherwise
-  // there are no staff agents to hint about.
-  const adminAgents = require('./admin-agents-routes');
-  if (adminAgents.PLATFORM_FLAG) {
-    const resolvedHint = (activeStaffHint && typeof activeStaffHint === 'string')
-      ? activeStaffHint.trim()
-      : (STAFF_HINT_BY_SURFACE[entityType] || null);
-    if (resolvedHint && STAFF_AGENT_KEY_BY_HANDOFF) {
-      // Validate the hint matches a real handoff target before shipping.
-      const handoffTool = 'handoff_to_' + resolvedHint.replace(/^86-/, '');
-      const isKnown = STAFF_AGENT_KEY_BY_HANDOFF.has(handoffTool);
-      if (isKnown) {
-        const block = '<active_staff>\n' +
-          'Surface: ' + (entityType || 'global') + '\n' +
-          'Default delegate: ' + resolvedHint + '  (via `' + handoffTool + '`)\n' +
-          '\n' +
-          '**ROUTING RULE — your actual job on this turn.**\n' +
-          'You are the Principal. Your role is to ROUTE, not to do the staff\'s work. Any audit, multi-step analysis, line-item draft, scope review, WIP-margin investigation, dedup check, directory cleanup, scheduling question, or other domain-bound task on this surface MUST start with `' + handoffTool + '` (or another handoff_to_* if the ask actually fits a different staff better, including handoff_to_dynamic_staff for Tier 3 agents).\n' +
-          '\n' +
-          'Reply directly ONLY for: (a) one-shot facts the turn_context above already shows ("what\'s the contract value?", "who\'s the client?"), (b) the user explicitly asking you to delegate elsewhere or NOT to delegate, (c) trivial conversational ack/redirect.\n' +
-          '\n' +
-          'Cross-domain asks: fan out to multiple staff in PARALLEL (multiple handoff_to_* in one turn) — do not serialize. You weave the staff responses into a single reply to the user. Identity stays "86" from the user\'s POV; the staff is how you do the work, not a separate persona to announce.\n' +
-          '</active_staff>';
-        turnContextText = turnContextText
-          ? turnContextText + '\n\n' + block
-          : block;
-      }
+  // Router mode is the default — always emit when a known staff resolves.
+  const resolvedHint = (activeStaffHint && typeof activeStaffHint === 'string')
+    ? activeStaffHint.trim()
+    : (STAFF_HINT_BY_SURFACE[entityType] || null);
+  if (resolvedHint && STAFF_AGENT_KEY_BY_HANDOFF) {
+    // Validate the hint matches a real handoff target before shipping.
+    const handoffTool = 'handoff_to_' + resolvedHint.replace(/^86-/, '');
+    const isKnown = STAFF_AGENT_KEY_BY_HANDOFF.has(handoffTool);
+    if (isKnown) {
+      const block = '<active_staff>\n' +
+        'Surface: ' + (entityType || 'global') + '\n' +
+        'Default delegate: ' + resolvedHint + '  (via `' + handoffTool + '`)\n' +
+        '\n' +
+        '**ROUTING RULE — your actual job on this turn.**\n' +
+        'You are the Principal. Your role is to ROUTE, not to do the staff\'s work. Any audit, multi-step analysis, line-item draft, scope review, WIP-margin investigation, dedup check, directory cleanup, scheduling question, or other domain-bound task on this surface MUST start with `' + handoffTool + '` (or another handoff_to_* if the ask actually fits a different staff better, including handoff_to_dynamic_staff for Tier 3 agents).\n' +
+        '\n' +
+        'Reply directly ONLY for: (a) one-shot facts the turn_context above already shows ("what\'s the contract value?", "who\'s the client?"), (b) the user explicitly asking you to delegate elsewhere or NOT to delegate, (c) trivial conversational ack/redirect.\n' +
+        '\n' +
+        'Cross-domain asks: fan out to multiple staff in PARALLEL (multiple handoff_to_* in one turn) — do not serialize. You weave the staff responses into a single reply to the user. Identity stays "86" from the user\'s POV; the staff is how you do the work, not a separate persona to announce.\n' +
+        '</active_staff>';
+      turnContextText = turnContextText
+        ? turnContextText + '\n\n' + block
+        : block;
     }
   }
 
@@ -2730,48 +2726,11 @@ async function composedAgentSystem(agentKey, baseline, org) {
   }
   if (agentKey !== 'job') return baseline; // legacy keys passthrough
   try {
-    let parts = [];
-    // Phase S6 follow-up — when the platform flag is on, REPLACE the
-    // legacy "you do everything" baseline with a router-only identity.
-    // Prepending wasn't enough: the baseline's "You DRAFT estimates
-    // yourself... You CAPTURE leads yourself... You handle all of it"
-    // language consistently won out over the prepended router framing
-    // in practice (verified on a live audit turn — 86 ignored
-    // handoff_to_pm and answered the WIP audit directly). The router
-    // baseline below tells the model exactly one thing: you route.
-    let usedRouterBaseline = false;
-    try {
-      const adminAgents = require('./admin-agents-routes');
-      if (adminAgents.PLATFORM_FLAG) {
-        usedRouterBaseline = true;
-        parts.push(
-          'You are 86, the Project 86 Principal. Project 86 is a SaaS platform for construction businesses. The SPECIFIC COMPANY you serve is named in the "About the company you serve" block below — those standards define how THAT company operates; they do NOT define who you are. You are 86 (the platform agent). The tenant is who you currently work for.\n' +
-          '\n' +
-          '# Your role: ROUTER. That is your job. Not analyst, not estimator, not PM. Router.\n' +
-          '\n' +
-          'The platform runs as a crew. You have standing staff agents (Estimator, PM, Scheduler, Directory, Sales) each with focused tools and a focused playbook, plus dynamic Tier 3 spawning via `propose_create_staff_agent`. Identity stays unified: from the user\'s POV everything is "86". The staff is HOW you do the work — not separate personas to announce. Never say "I\'ll let the PM look at that" — just emit the handoff and weave the response in. The user shouldn\'t notice the routing.\n' +
-          '\n' +
-          '# Rules of routing (these are LAWS, not preferences)\n' +
-          '\n' +
-          '1. **Any audit, multi-step analysis, margin investigation, scope/line-item draft, directory cleanup, scheduling decision, or lead intake review on a surface where `<active_staff>` is set: you MUST emit the named `handoff_to_<staff>` tool call as your first action.** No exceptions. The staff has the playbook; you do not. Domain-specific writes (set_phase_pct_complete, propose_add_line_item, create_node, propose_create_lead, merge_clients, etc.) are no longer in your tool list — physically you cannot do this work yourself. Trying to talk through it without delegating is wrong: hand off.\n' +
-          '\n' +
-          '2. **Cross-domain asks: fan out to multiple staff in PARALLEL** in one turn (multiple `handoff_to_*` calls in one assistant message). Do not serialize handoffs. You compose the responses into one user-facing reply.\n' +
-          '\n' +
-          '3. **Direct answers ONLY for:** (a) one-shot facts the per-turn snapshot already shows verbatim ("what\'s the contract value", "who\'s the client", "what\'s the address"); (b) self-introspection (read_metrics, search_my_sessions, read_recent_conversations); (c) CoS work you own (skill pack curation, watches, field-tool curation, staff-agent spawning); (d) cross-domain admin (linking jobs to clients); (e) the user explicitly tells you not to delegate. Everything else: route.\n' +
-          '\n' +
-          '4. **When in doubt: route.** A handoff costs ~3-5s of latency. A wrong direct answer costs trust. Bias toward delegating.\n' +
-          '\n' +
-          '5. **Do NOT pre-narrate the handoff.** Don\'t say "let me hand this off to the PM" or "I\'ll have the PM look at this." Just emit `handoff_to_pm` and let the chip render. The user sees the staff response weave in.\n' +
-          '\n' +
-          '# Per-turn signal\n' +
-          'The `<active_staff>` block in each turn_context names the default staff for the active surface. The handoff tool is in your tool list. Just call it.\n' +
-          '\n' +
-          '# Concise tone\n' +
-          'Lead with the answer (or the handoff). No "Sure!", "I\'ll start by...", "Let me know if you have questions." Construction trade vocabulary welcome. Output is what the user sees — no narration of routing.'
-        );
-      }
-    } catch (_) { /* fall through to baseline-only on require error */ }
-    if (!usedRouterBaseline) parts.push(baseline);
+    // Router mode is the default — the baseline string IS the router
+    // baseline (no more "you do everything" legacy prose, no
+    // PLATFORM_FLAG conditional). Anything Principal-specific lives
+    // in AGENT_SYSTEM_BASELINE['job'].
+    let parts = [baseline];
     // Org-level identity_body — describes who 86 is working FOR.
     // Phase 2a moved AGX-specific prose out of the baseline; this
     // is where it lands back into the agent's registered system
@@ -2782,28 +2741,11 @@ async function composedAgentSystem(agentKey, baseline, org) {
     }
     // Estimating playbook — SECTION_DEFAULTS, admin-overridable.
     const sectionOverrides = await loadSectionOverridesFor('job');
-    // Phase S7 — in router mode (PLATFORM_FLAG on) drop the estimating
-    // playbook from the Principal's registered system. Those sections
-    // describe HOW to estimate; the Estimator staff owns that work.
-    // Keeping them on the Principal pulled the model toward "do it
-    // myself" — same failure mode as the WIP-analyst persona. We keep
-    // ag_identity (general 86 identity) and ag_tone (response style)
-    // because they apply to a router too. The full playbook stays
-    // admin-editable in the Skill Pack UI; planned follow-up composes
-    // it onto the Estimator staff baseline at sync time.
-    const sectionIds = usedRouterBaseline
-      ? ['ag_identity', 'ag_tone']
-      : [
-          'ag_identity',
-          'ag_estimate_structure',
-          'ag_role',
-          'ag_tools',
-          'ag_slotting',
-          'ag_pricing',
-          'ag_auto_reads',
-          'ag_web_research',
-          'ag_tone'
-        ];
+    // Router-mode Principal: only universal-identity and tone sections.
+    // The estimating / WIP / directory playbooks live in their staff
+    // baselines (admin-agents-routes.js AGENT_SYSTEM_BASELINE), not
+    // on the Principal.
+    const sectionIds = ['ag_identity', 'ag_tone'];
     const sectionLines = [];
     for (const id of sectionIds) {
       const buf = [];
@@ -4298,21 +4240,12 @@ async function buildJobContext(jobId, clientContext, aiPhase, organization, opts
   // 'plan' so 86 starts as an analyst until the PM grants write access
   // via the phase pill or the request_edit_mode tool.
   aiPhase = (aiPhase === 'plan') ? 'plan' : 'edit';
-  // Phase S7 nuclear-option — when the router platform is on, strip the
-  // heavy analytical sections (WIP snapshot, structure, node graph,
-  // workspace sheets, QB cost data) from the Principal's turn_context.
-  // The Principal kept analyzing the data directly because it had the
-  // data — the model's "be helpful" instinct overrode every routing
-  // hint we tried. With these sections gated off, the Principal can
-  // see job identity but physically can't synthesize an audit without
-  // delegating to handoff_to_pm. The PM staff has the read tools
-  // (read_workspace_sheet_full, read_qb_cost_lines, etc.) to fetch
-  // the same data on demand inside its sub-session.
-  let slimForRouter = false;
-  try {
-    const adminAgents = require('./admin-agents-routes');
-    slimForRouter = !!adminAgents.PLATFORM_FLAG;
-  } catch (_) { /* default to false on require error */ }
+  // Router-mode is the default — strip heavy analytical sections
+  // (WIP snapshot, structure, node graph, workspace sheets, QB cost
+  // data) from the Principal's turn_context. The Principal sees job
+  // identity + photos + attachments + notes; PM staff fetches the
+  // analytical data via its own tools inside the handoff sub-session.
+  const slimForRouter = true;
   // Pull the job + the related data the bulk-save serializes alongside it.
   const jobRes = await pool.query('SELECT id, owner_id, data FROM jobs WHERE id = $1', [jobId]);
   if (!jobRes.rows.length) throw new Error('Job not found');
@@ -4407,12 +4340,12 @@ async function buildJobContext(jobId, clientContext, aiPhase, organization, opts
   const wip = computeJobWIP(job, buildings, phases, changeOrders, subs, invoices);
 
   const lines = [];
-  // Phase S6 follow-up — the WIP-analyst persona moved to the 86-pm
-  // staff agent. On the Principal's job surface, this header just
-  // anchors the surface; the routing rule comes from <active_staff>
-  // below and (when P86_STAFF_AGENTS=on) tells 86 to handoff_to_pm
-  // for analysis. Keeping a short surface label so the model knows
-  // which entity is in focus without re-claiming the analyst role.
+  // The WIP-analyst persona lives on the 86-pm staff agent. On the
+  // Principal's job surface, this header anchors the surface; the
+  // routing rule in the <active_staff> block below tells 86 to
+  // handoff_to_pm for analysis. Keep a short surface label so the
+  // model knows which entity is in focus without re-claiming the
+  // analyst role.
   lines.push('## Job surface — read the snapshot below for one-shot facts. For audits, margin analysis, or any multi-step WIP work, route to handoff_to_pm.');
   lines.push('');
   lines.push('# Job');
@@ -8006,9 +7939,6 @@ async function execStaffApprovalTool(name, input, ctx) {
         throw new Error('agent_key collides with a standing staff agent — pick a different key');
       }
       const adminAgents = require('./admin-agents-routes');
-      if (!adminAgents.PLATFORM_FLAG) {
-        throw new Error('P86_STAFF_AGENTS flag is off — set it on the deployment to enable spawning.');
-      }
       const orgId = await resolveOrgIdFromCtx(ctx);
       const orgRow = await pool.query('SELECT * FROM organizations WHERE id = $1', [orgId]);
       const organization = orgRow.rows[0];
@@ -8928,9 +8858,6 @@ async function execHandoffToStaff(toolName, input, ctx) {
   );
   if (!regRow.rows.length) {
     const adminAgents = require('./admin-agents-routes');
-    if (!adminAgents.PLATFORM_FLAG) {
-      throw new Error('P86_STAFF_AGENTS flag is off — handoff to ' + staffKey + ' is staged but not registered.');
-    }
     try {
       await adminAgents.ensureManagedAgent(staffKey, organization);
     } catch (e) {
@@ -10559,16 +10486,11 @@ module.exports.internals = {
   // Phase 5 — proactive watching tools (3 of 4 are auto; the writes
   // are approval-tier and surface as cards).
   watchTools:    () => WATCH_TOOLS.map(({ tier, ...t }) => t),
-  // P86 Crew — Phase S2.3. Principal-only handoff tools. The Principal
-  // calls handoff_to_<staff> with a request; we delegate to the staff
-  // agent's sub-session and return its response. Only attach when the
-  // P86_STAFF_AGENTS flag is on; otherwise the staff agent isn't
-  // registered on Anthropic and the call would fail.
-  handoffTools: () => {
-    const adminAgents = require('./admin-agents-routes');
-    if (!adminAgents.PLATFORM_FLAG) return [];
-    return HANDOFF_TOOLS.map(({ tier, ...t }) => t);
-  },
+  // P86 Crew handoff tools. The Principal calls handoff_to_<staff>
+  // with a request; we delegate to the staff agent's sub-session and
+  // return its response. Always present in router mode (which is the
+  // default and only mode).
+  handoffTools: () => HANDOFF_TOOLS.map(({ tier, ...t }) => t),
   defaultModel: () => MODEL,
   maxTokens: () => MAX_TOKENS,
   // Resolve the effort string for a given model. Caller passes the

@@ -1902,89 +1902,65 @@ function customToolsFor(agentKey, opts) {
   // / web_fetch through the built-in toolset above instead.
   let tools = [];
   if (agentKey === 'job' || agentKey === 'ag' || agentKey === 'cra' || agentKey === 'staff') {
-    // Phase S6 follow-up — Principal becomes a router.
-    //
-    // When P86_STAFF_AGENTS=on, the Principal's tool list is the SLIM
-    // router set: handoffs + light routing reads + CoS introspection +
-    // memory + watches + skill-pack curation + dynamic spawning +
-    // self-diagnose + navigation. All domain-specific writes
-    // (line items, WIP cascades, client mutations, intake creates)
-    // moved to their staff agents. The Principal sees the staff list
-    // via handoff_to_* and routes incoming work — it does NOT do the
-    // domain work directly.
-    //
-    // When the flag is OFF (legacy / single-agent mode), the Principal
-    // still gets the full union so existing deployments don't break.
-    const PLATFORM_ON = PLATFORM_FLAG;
+    // Principal = router. Slim toolset: handoffs + light routing reads
+    // + CoS introspection + memory + watches + skill-pack curation +
+    // dynamic spawning + self-diagnose + navigation. All domain-specific
+    // writes (line items, WIP cascades, client mutations, intake creates)
+    // live on the staff agents. The Principal sees the staff list via
+    // handoff_to_* and routes incoming work; it does NOT do the domain
+    // work directly.
+    const ROUTER_TOOL_NAMES = new Set([
+      // Light routing reads — Principal needs these to know which
+      // staff to delegate to. Heavy reads (read_active_lines,
+      // read_qb_cost_lines, read_workspace_sheet_full, etc.) live
+      // on the staff agents.
+      'read_jobs', 'read_clients', 'read_leads', 'read_lead_pipeline',
+      'read_existing_clients', 'read_existing_leads',
+      'read_users', 'read_wip_summary',
+      // CoS introspection — Principal owns self-awareness.
+      'read_metrics', 'read_recent_conversations', 'read_conversation_detail',
+      'read_skill_packs', 'search_my_sessions', 'search_my_kb', 'search_org_kb',
+      'read_field_tools', 'self_diagnose',
+      // Reference + attachment lookups (cross-surface, light).
+      'search_reference_sheet', 'read_attachment_text', 'view_attachment_image',
+      // Navigation — Principal sends the user to the right surface.
+      'navigate',
+      // Memory — cross-session recall.
+      'remember', 'recall', 'list_memories', 'forget',
+      // Watches — Principal owns proactive monitoring.
+      'list_watches', 'read_recent_watch_runs',
+      'propose_watch_create', 'propose_watch_archive',
+      // Skill-pack curation — Principal evolves its own brain.
+      'propose_skill_pack_add', 'propose_skill_pack_edit', 'propose_skill_pack_delete',
+      // Field-tool curation — same idea, for proposed custom tools.
+      'propose_create_field_tool', 'propose_update_field_tool', 'propose_delete_field_tool',
+      // Cross-domain admin (touches jobs + clients; lives on Principal).
+      'propose_link_job_to_client', 'propose_bulk_link_jobs_to_clients',
+      // Spawn — Principal proposes new Tier 3 agents.
+      'propose_create_staff_agent'
+    ]);
     const seen = new Set();
     const merged = [];
-    if (PLATFORM_ON) {
-      const ROUTER_TOOL_NAMES = new Set([
-        // Light routing reads — Principal needs these to know which
-        // staff to delegate to. Heavy reads (read_active_lines,
-        // read_qb_cost_lines, read_workspace_sheet_full, etc.) moved
-        // to their staff agents.
-        'read_jobs', 'read_clients', 'read_leads', 'read_lead_pipeline',
-        'read_existing_clients', 'read_existing_leads',
-        'read_users', 'read_wip_summary',
-        // CoS introspection — Principal owns self-awareness.
-        'read_metrics', 'read_recent_conversations', 'read_conversation_detail',
-        'read_skill_packs', 'search_my_sessions', 'search_my_kb', 'search_org_kb',
-        'read_field_tools', 'self_diagnose',
-        // Reference + attachment lookups (cross-surface, light).
-        'search_reference_sheet', 'read_attachment_text', 'view_attachment_image',
-        // Navigation — Principal sends the user to the right surface.
-        'navigate',
-        // Memory — cross-session recall.
-        'remember', 'recall', 'list_memories', 'forget',
-        // Watches — Principal owns proactive monitoring.
-        'list_watches', 'read_recent_watch_runs',
-        'propose_watch_create', 'propose_watch_archive',
-        // Skill-pack curation — Principal evolves its own brain.
-        'propose_skill_pack_add', 'propose_skill_pack_edit', 'propose_skill_pack_delete',
-        // Field-tool curation — same idea, for proposed custom tools.
-        'propose_create_field_tool', 'propose_update_field_tool', 'propose_delete_field_tool',
-        // Cross-domain admin (touches jobs + clients; lives on Principal).
-        'propose_link_job_to_client', 'propose_bulk_link_jobs_to_clients',
-        // Spawn — Principal proposes new Tier 3 agents.
-        'propose_create_staff_agent'
-      ]);
-      // Pull from the same source pools, but filter by name allowlist.
-      [
-        ...aiInternals.estimateTools(),
-        ...aiInternals.jobTools(),
-        ...aiInternals.clientTools(),
-        ...aiInternals.staffTools(),
-        ...aiInternals.memoryTools(),
-        ...aiInternals.watchTools()
-      ].forEach(t => {
-        if (!t || !t.name || seen.has(t.name)) return;
-        if (!ROUTER_TOOL_NAMES.has(t.name)) return;
-        seen.add(t.name);
-        merged.push(t);
-      });
-      // Handoffs are ALWAYS in the Principal's router set when the
-      // platform is on — that's literally the point of the slim.
-      (aiInternals.handoffTools ? aiInternals.handoffTools() : []).forEach(t => {
-        if (!t || !t.name || seen.has(t.name)) return;
-        seen.add(t.name);
-        merged.push(t);
-      });
-    } else {
-      // Legacy (flag-off) — full union, original Phase 2 behavior.
-      [
-        ...aiInternals.estimateTools(),
-        ...aiInternals.jobTools(),
-        ...aiInternals.clientTools(),
-        ...aiInternals.staffTools(),
-        ...aiInternals.memoryTools(),
-        ...aiInternals.watchTools()
-      ].forEach(t => {
-        if (!t || !t.name || seen.has(t.name)) return;
-        seen.add(t.name);
-        merged.push(t);
-      });
-    }
+    [
+      ...aiInternals.estimateTools(),
+      ...aiInternals.jobTools(),
+      ...aiInternals.clientTools(),
+      ...aiInternals.staffTools(),
+      ...aiInternals.memoryTools(),
+      ...aiInternals.watchTools()
+    ].forEach(t => {
+      if (!t || !t.name || seen.has(t.name)) return;
+      if (!ROUTER_TOOL_NAMES.has(t.name)) return;
+      seen.add(t.name);
+      merged.push(t);
+    });
+    // Handoffs are always in the Principal's router set — that's the
+    // point of the slim.
+    (aiInternals.handoffTools ? aiInternals.handoffTools() : []).forEach(t => {
+      if (!t || !t.name || seen.has(t.name)) return;
+      seen.add(t.name);
+      merged.push(t);
+    });
     tools = merged;
   } else if (agentKey === '86-estimator') {
     // Project 86 Agent Platform — Phase S2.
@@ -2275,10 +2251,9 @@ const STANDING_STAFF_SPECS = [
   }
 ];
 
-const PLATFORM_FLAG = (process.env.P86_STAFF_AGENTS || '').toLowerCase() === 'on';
-
-// Seed the standing-staff spec rows for this org and (if the flag
-// is on) register their Anthropic-side agents via ensureManagedAgent.
+// Seed the standing-staff spec rows for this org and register their
+// Anthropic-side agents via ensureManagedAgent. Router mode is the
+// default; the legacy P86_STAFF_AGENTS env-flag gate has been removed.
 // Idempotent — re-running on an org that already has the rows is a
 // no-op for the DB upsert, and ensureManagedAgent itself short-
 // circuits when the registry row already exists.
@@ -2317,17 +2292,13 @@ async function seedStandingStaffAgents(organization) {
     );
     seeded.push(insert.rows[0]);
 
-    // When the platform flag is ON, also register the Anthropic-side
-    // agent. Without the flag, the spec row exists but the Principal
-    // has no handoff target — useful for staging the spec changes
-    // before flipping the flag to actually delegate work.
-    if (PLATFORM_FLAG) {
-      try {
-        await ensureManagedAgent(spec.agent_key, organization);
-      } catch (e) {
-        console.warn('[seedStandingStaffAgents] register failed for',
-          spec.agent_key, organization.slug || organization.id, ':', e && e.message);
-      }
+    // Always register the Anthropic-side staff agent. Router mode is
+    // the default; the Principal needs the handoff targets to exist.
+    try {
+      await ensureManagedAgent(spec.agent_key, organization);
+    } catch (e) {
+      console.warn('[seedStandingStaffAgents] register failed for',
+        spec.agent_key, organization.slug || organization.id, ':', e && e.message);
     }
   }
   return seeded;
@@ -2343,7 +2314,6 @@ router.post('/staff/seed', requireAuth, requireCapability('ROLES_MANAGE'), requi
     res.json({
       ok: true,
       organization_id: req.organization.id,
-      platform_flag: PLATFORM_FLAG,
       seeded_count: seeded.length,
       seeded: seeded.map(s => ({
         agent_key: s.agent_key,
@@ -3888,5 +3858,4 @@ module.exports.buildReferenceLinksBlock = buildReferenceLinksBlock;
 // on the Principal.
 module.exports.STANDING_STAFF_SPECS = STANDING_STAFF_SPECS;
 module.exports.seedStandingStaffAgents = seedStandingStaffAgents;
-module.exports.PLATFORM_FLAG = PLATFORM_FLAG;
 module.exports.collectMcpServersFor = collectMcpServersFor;
