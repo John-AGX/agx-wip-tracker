@@ -4665,14 +4665,17 @@ async function buildJobContext(jobId, clientContext, aiPhase, organization, opts
   }
 
   if (clientContext && Array.isArray(clientContext.workspaceSheets) && clientContext.workspaceSheets.length) {
-    lines.push('# Workspace sheets — populated previews (' + clientContext.workspaceSheets.length + ')');
-    lines.push('Each preview is rendered as `<row>: A=val · B=val · …` (1-indexed rows, A–Z columns). Use these to answer "what phases / scope items / line items do I have in my workspace?" — pull data directly from these previews. The default preview window is 100 rows × 26 cols; if a sheet is bigger the heading reads "preview truncated" and you should call `read_workspace_sheet_full` to fetch the rest.');
+    // Phase S5 — populated sheets: heading + size only. The inline
+    // previews used to ship up to 100 rows × 26 cols per sheet, which
+    // for a power user with many sheets was ~5-15k tokens per turn
+    // that the model mostly didn't read. Now we list what's there and
+    // the model calls `read_workspace_sheet_full` for the bodies on
+    // demand (auto-tier, no approval card).
+    lines.push('# Workspace sheets — populated (' + clientContext.workspaceSheets.length + ')');
+    lines.push('Each populated sheet listed with its dimensions. To read its contents call `read_workspace_sheet_full({ sheet_name })` — auto-applies, returns the full sheet text. Sheet names below match exactly; pass them verbatim.');
     clientContext.workspaceSheets.forEach(function(s) {
-      lines.push('');
-      var hint = s.cellCount === 0 ? ', empty in this session' : (s.truncated ? ', preview truncated' : '');
-      lines.push('## "' + s.name + '" (' + s.totalRows + ' rows × ' + s.totalCols + ' cols' + hint + ')');
-      if (s.preview) lines.push(s.preview);
-      else lines.push('(no populated cells)');
+      var hint = s.cellCount === 0 ? ' · empty in this session' : '';
+      lines.push('- "' + s.name + '" (' + s.totalRows + ' rows × ' + s.totalCols + ' cols' + hint + ')');
     });
     lines.push('');
   }
@@ -5694,14 +5697,23 @@ function isClientToolAutoTier(name) {
 // Build the directory snapshot Claude reads as context. Capped per
 // parent so a huge directory doesn't blow the prompt window.
 async function buildClientDirectoryContext(organization) {
+  // Phase S5 — top-N-by-recency cap. The directory snapshot used to
+  // ship every client inline; for an org with hundreds of clients
+  // that's ~3-6k tokens per turn that mostly aren't relevant. Now we
+  // ship the top-50 parents by updated_at + their children, plus a
+  // hint telling 86 to call read_clients(query) for full search.
+  // Clients with agent_notes always render in full (high-value, low-
+  // cost, the model needs them to honor durable facts).
+  const PARENT_RECENCY_CAP = 50;
+
   const { rows } = await pool.query(
     `SELECT id, name, short_name, parent_client_id, client_type, company_name, community_name,
             community_manager, cm_email, cm_phone, market, property_address,
-            city, state, zip, email, phone, agent_notes
+            city, state, zip, email, phone, agent_notes, updated_at
      FROM clients ORDER BY COALESCE(parent_client_id, id), name`
   );
   const byId = new Map(rows.map(r => [r.id, r]));
-  const parents = rows.filter(r => !r.parent_client_id);
+  const allParents = rows.filter(r => !r.parent_client_id);
   const childrenByParent = new Map();
   for (const r of rows) {
     if (r.parent_client_id) {
@@ -5709,6 +5721,23 @@ async function buildClientDirectoryContext(organization) {
       childrenByParent.get(r.parent_client_id).push(r);
     }
   }
+  // Sort parents by max(self.updated_at, max child updated_at) — most-
+  // recently-touched parent subtree first. Inline subtree freshness so
+  // a parent whose property was just edited surfaces even when the
+  // parent row itself is stale.
+  function parentRecency(p) {
+    let max = p.updated_at ? new Date(p.updated_at).getTime() : 0;
+    const kids = childrenByParent.get(p.id) || [];
+    for (const k of kids) {
+      const t = k.updated_at ? new Date(k.updated_at).getTime() : 0;
+      if (t > max) max = t;
+    }
+    return max;
+  }
+  const sortedParents = [...allParents].sort((a, b) => parentRecency(b) - parentRecency(a));
+  const truncated = sortedParents.length > PARENT_RECENCY_CAP;
+  const parents = truncated ? sortedParents.slice(0, PARENT_RECENCY_CAP) : sortedParents;
+  const omittedParentCount = truncated ? sortedParents.length - parents.length : 0;
   const flatTopLevel = parents.filter(p => !childrenByParent.has(p.id));
 
   // Build the directory-surface prompt as two blocks like 86 elsewhere:
@@ -5745,7 +5774,10 @@ async function buildClientDirectoryContext(organization) {
   // Skill packs ship as native Anthropic Skills registered on the
   // agent — the runtime auto-discovers them by description each turn.
 
-  out.push('# Directory snapshot (' + rows.length + ' clients)');
+  out.push('# Directory snapshot (' + rows.length + ' clients total' + (truncated ? '; showing top ' + parents.length + ' parent subtrees by recency' : '') + ')');
+  if (truncated) {
+    out.push('NOTE: ' + omittedParentCount + ' parent subtree(s) omitted from this snapshot to keep per-turn context small. Use `read_clients({ query })` to search the full directory by name / short_name / address when the user asks about a client you don\'t see below.');
+  }
   out.push('');
 
   // Pre-existing agent notes — short list of every client that has at
