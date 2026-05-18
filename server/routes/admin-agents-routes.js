@@ -2757,6 +2757,326 @@ router.get('/managed/audit', requireAuth, requireCapability('ROLES_MANAGE'), asy
   }
 });
 
+// ════════════════════════════════════════════════════════════════════
+// Fresh-org reset — wipe ALL 86-related state for an org and rebuild
+// from scratch. Business data (clients, leads, estimates, jobs,
+// attachments) stays. Everything 86-related — managed agents on
+// Anthropic, native skills, skill packs, memories, watches, sessions,
+// message history, field tools, staff_agents specs — gets wiped.
+//
+// After the reset, POST /staff/seed re-registers the 5 standing staff
+// with their new focused baselines, and the first /86/chat lazily
+// registers a fresh Principal via ensureManagedAgent('job').
+//
+// Idempotent — re-running on an already-clean org yields zero counts.
+// ════════════════════════════════════════════════════════════════════
+
+// Helper — archive all Anthropic sessions for an org's users, then
+// hard-delete the local ai_sessions rows.
+async function archiveAllAnthropicSessionsForOrg(orgId, opts) {
+  const { dryRun = false, archiveAnthropic = true } = opts || {};
+  const anthropic = archiveAnthropic ? getAnthropic() : null;
+  const sel = await pool.query(
+    `SELECT s.id, s.anthropic_session_id, s.user_id
+       FROM ai_sessions s
+       JOIN users u ON u.id = s.user_id
+      WHERE u.organization_id = $1
+        AND s.anthropic_session_id IS NOT NULL`,
+    [orgId]
+  );
+  const sessions = sel.rows;
+  const errors = [];
+  let archivedCount = 0;
+  if (!dryRun && anthropic) {
+    for (const s of sessions) {
+      try {
+        await anthropic.beta.sessions.archive(s.anthropic_session_id);
+        archivedCount++;
+      } catch (e) {
+        const status = e.status || e.statusCode;
+        if (status === 404 || status === 410) { archivedCount++; continue; }
+        errors.push({ session_id: s.id, anthropic_id: s.anthropic_session_id, error: e.message || 'unknown' });
+      }
+    }
+  }
+  let localDeleted = 0;
+  if (!dryRun) {
+    const del = await pool.query(
+      `DELETE FROM ai_sessions
+        WHERE user_id IN (SELECT id FROM users WHERE organization_id = $1)`,
+      [orgId]
+    );
+    localDeleted = del.rowCount || 0;
+  } else {
+    const c = await pool.query(
+      `SELECT COUNT(*)::int AS n FROM ai_sessions
+        WHERE user_id IN (SELECT id FROM users WHERE organization_id = $1)`,
+      [orgId]
+    );
+    localDeleted = c.rows[0].n;
+  }
+  return { candidate_anthropic_sessions: sessions.length, archived: archivedCount, local_deleted: localDeleted, errors };
+}
+
+// Helper — archive all Anthropic agents for an org, then hard-delete
+// local managed_agent_registry + staff_agents + managed_agent_skills.
+async function archiveAllManagedAgentsForOrg(orgId, opts) {
+  const { dryRun = false, archiveAnthropic = true } = opts || {};
+  const anthropic = archiveAnthropic ? getAnthropic() : null;
+  const sel = await pool.query(
+    `SELECT agent_key, anthropic_agent_id
+       FROM managed_agent_registry
+      WHERE organization_id = $1`,
+    [orgId]
+  );
+  const regRows = sel.rows;
+  const agentKeys = regRows.map(r => r.agent_key);
+  const errors = [];
+  let archivedCount = 0;
+  if (!dryRun && anthropic) {
+    for (const r of regRows) {
+      try {
+        await anthropic.beta.agents.archive(r.anthropic_agent_id);
+        archivedCount++;
+      } catch (e) {
+        const status = e.status || e.statusCode;
+        if (status === 404 || status === 410) { archivedCount++; continue; }
+        errors.push({ agent_key: r.agent_key, anthropic_id: r.anthropic_agent_id, error: e.message || 'unknown' });
+      }
+    }
+  }
+  let localDeleted = 0;
+  let staffSpecsDeleted = 0;
+  let skillLinksDeleted = 0;
+  if (!dryRun) {
+    if (agentKeys.length) {
+      // managed_agent_skills has no organization_id; key on the
+      // agent_keys we just collected.
+      const linkDel = await pool.query(
+        `DELETE FROM managed_agent_skills WHERE agent_key = ANY($1::text[])`,
+        [agentKeys]
+      );
+      skillLinksDeleted = linkDel.rowCount || 0;
+    }
+    const specDel = await pool.query(
+      `DELETE FROM staff_agents WHERE organization_id = $1`,
+      [orgId]
+    );
+    staffSpecsDeleted = specDel.rowCount || 0;
+    const regDel = await pool.query(
+      `DELETE FROM managed_agent_registry WHERE organization_id = $1`,
+      [orgId]
+    );
+    localDeleted = regDel.rowCount || 0;
+  } else {
+    const c1 = await pool.query(
+      `SELECT COUNT(*)::int AS n FROM managed_agent_registry WHERE organization_id = $1`,
+      [orgId]
+    );
+    localDeleted = c1.rows[0].n;
+    const c2 = await pool.query(
+      `SELECT COUNT(*)::int AS n FROM staff_agents WHERE organization_id = $1`,
+      [orgId]
+    );
+    staffSpecsDeleted = c2.rows[0].n;
+    if (agentKeys.length) {
+      const c3 = await pool.query(
+        `SELECT COUNT(*)::int AS n FROM managed_agent_skills WHERE agent_key = ANY($1::text[])`,
+        [agentKeys]
+      );
+      skillLinksDeleted = c3.rows[0].n;
+    }
+  }
+  return {
+    candidate_anthropic_agents: regRows.length,
+    archived: archivedCount,
+    registry_deleted: localDeleted,
+    staff_specs_deleted: staffSpecsDeleted,
+    skill_links_deleted: skillLinksDeleted,
+    errors
+  };
+}
+
+// Helper — delete all Anthropic-mirrored native skills for an org,
+// then hard-delete local org_skill_packs rows.
+async function archiveAllSkillsForOrg(orgId, opts) {
+  const { dryRun = false, archiveAnthropic = true } = opts || {};
+  const anthropic = archiveAnthropic ? getAnthropic() : null;
+  const sel = await pool.query(
+    `SELECT id, anthropic_skill_id, name
+       FROM org_skill_packs
+      WHERE organization_id = $1`,
+    [orgId]
+  );
+  const packs = sel.rows;
+  const errors = [];
+  let archivedCount = 0;
+  if (!dryRun && anthropic) {
+    for (const p of packs.filter(r => r.anthropic_skill_id)) {
+      try {
+        // Prefer .delete (hard remove); fall back to .archive if the
+        // SDK / API path differs.
+        if (typeof anthropic.beta.skills.delete === 'function') {
+          await anthropic.beta.skills.delete(p.anthropic_skill_id);
+        } else if (typeof anthropic.beta.skills.archive === 'function') {
+          await anthropic.beta.skills.archive(p.anthropic_skill_id);
+        }
+        archivedCount++;
+      } catch (e) {
+        const status = e.status || e.statusCode;
+        if (status === 404 || status === 410) { archivedCount++; continue; }
+        errors.push({ pack_id: p.id, name: p.name, anthropic_id: p.anthropic_skill_id, error: e.message || 'unknown' });
+      }
+    }
+  }
+  let localDeleted = 0;
+  if (!dryRun) {
+    const del = await pool.query(
+      `DELETE FROM org_skill_packs WHERE organization_id = $1`,
+      [orgId]
+    );
+    localDeleted = del.rowCount || 0;
+  } else {
+    const c = await pool.query(
+      `SELECT COUNT(*)::int AS n FROM org_skill_packs WHERE organization_id = $1`,
+      [orgId]
+    );
+    localDeleted = c.rows[0].n;
+  }
+  return { candidate_anthropic_skills: packs.filter(r => r.anthropic_skill_id).length, archived: archivedCount, local_deleted: localDeleted, errors };
+}
+
+// POST /api/admin/agents/fresh-org-reset
+//   Body: { organization_id, dry_run?: false, archive_anthropic_side?: true }
+//   Wipes ALL 86-related state for the org and returns a structured
+//   summary per step. NOT wrapped in a Postgres transaction (Anthropic
+//   API calls can't be rolled back; a long PG transaction over
+//   50+ HTTP calls would hold locks unsafely). Best-effort per step
+//   with structured error reporting; idempotent retry recovers from
+//   partial failures.
+router.post('/fresh-org-reset', requireAuth, requireCapability('ROLES_MANAGE'), require('../auth').requireOrg, async (req, res) => {
+  const t0 = Date.now();
+  const orgId = Number((req.body && req.body.organization_id) || (req.organization && req.organization.id));
+  const dryRun = !!(req.body && req.body.dry_run);
+  const archiveAnthropic = (req.body && req.body.archive_anthropic_side !== false);
+  if (!Number.isFinite(orgId)) {
+    return res.status(400).json({ error: 'organization_id required' });
+  }
+  // Caller must be operating within the org being reset (no cross-org)
+  if (req.organization && req.organization.id !== orgId) {
+    return res.status(403).json({ error: 'Cannot reset a different organization than the one you are logged into.' });
+  }
+
+  // Advisory lock — reject concurrent resets and concurrent /86/chat
+  // racing the reset. Lock key derived from orgId so different orgs
+  // can reset in parallel.
+  const lockKey = 0x86 * 1000000 + orgId; // deterministic int from orgId
+  let locked = false;
+  try {
+    const lk = await pool.query(`SELECT pg_try_advisory_lock($1) AS got`, [lockKey]);
+    locked = !!(lk.rows[0] && lk.rows[0].got);
+    if (!locked) {
+      return res.status(409).json({ error: 'Another reset is in progress for this organization. Try again in a few seconds.' });
+    }
+
+    const steps = [];
+    const logStep = (name, payload) => {
+      const entry = Object.assign({ name }, payload);
+      steps.push(entry);
+      console.log('[fresh-org-reset]', 'org=' + orgId, 'step=' + name, 'dry_run=' + dryRun,
+        'count=' + (payload.local_deleted || payload.deleted_count || payload.archived || 0),
+        'errors=' + ((payload.errors && payload.errors.length) || 0));
+    };
+
+    // 1. Anthropic sessions first — sessions reference agents.
+    logStep('archive_anthropic_sessions',
+      await archiveAllAnthropicSessionsForOrg(orgId, { dryRun, archiveAnthropic }));
+
+    // 2. Anthropic agents (+ staff_agents + managed_agent_skills rows).
+    logStep('archive_managed_agents',
+      await archiveAllManagedAgentsForOrg(orgId, { dryRun, archiveAnthropic }));
+
+    // 3. Anthropic skills (+ org_skill_packs rows).
+    logStep('archive_skills',
+      await archiveAllSkillsForOrg(orgId, { dryRun, archiveAnthropic }));
+
+    // 4. Local-only wipes: memories, watches+runs, subtasks, ref links,
+    //    message history. All keyed on organization_id directly except
+    //    ai_messages (JOIN through users).
+    const localWipe = async (label, sql, params) => {
+      if (dryRun) {
+        const countSql = sql.replace(/^DELETE FROM\s+(\w+)/i, 'SELECT COUNT(*)::int AS n FROM $1');
+        const c = await pool.query(countSql, params);
+        return { deleted_count: c.rows[0].n };
+      } else {
+        const r = await pool.query(sql, params);
+        return { deleted_count: r.rowCount || 0 };
+      }
+    };
+
+    logStep('delete_ai_memories',
+      await localWipe('ai_memories',
+        `DELETE FROM ai_memories WHERE organization_id = $1`, [orgId]));
+
+    logStep('delete_ai_watch_runs',
+      await localWipe('ai_watch_runs',
+        `DELETE FROM ai_watch_runs WHERE organization_id = $1`, [orgId]));
+
+    logStep('delete_ai_watches',
+      await localWipe('ai_watches',
+        `DELETE FROM ai_watches WHERE organization_id = $1`, [orgId]));
+
+    logStep('delete_ai_subtasks',
+      await localWipe('ai_subtasks',
+        `DELETE FROM ai_subtasks WHERE organization_id = $1`, [orgId]));
+
+    logStep('delete_agent_reference_links',
+      await localWipe('agent_reference_links',
+        `DELETE FROM agent_reference_links WHERE organization_id = $1`, [orgId]));
+
+    logStep('delete_ai_messages',
+      await localWipe('ai_messages',
+        `DELETE FROM ai_messages WHERE user_id IN (SELECT id FROM users WHERE organization_id = $1)`, [orgId]));
+
+    // 5. field_tools is a GLOBAL table (no organization_id). Only
+    //    safe to wipe when this org is the sole tenant. Guard hard.
+    if (orgId === 1) {
+      // Skip auto-wipe of field_tools entirely — it's global and the
+      // user said field tools stays as a Principal affordance. Existing
+      // rows persist; users can manually wipe via DELETE
+      // /api/admin/field-tools/:id if desired.
+      logStep('skip_field_tools',
+        { note: 'field_tools is a global table; not wiped by org reset', deleted_count: 0 });
+    } else {
+      logStep('skip_field_tools',
+        { note: 'orgId !== 1 — field_tools is global, would affect other tenants', deleted_count: 0 });
+    }
+
+    const elapsed_ms = Date.now() - t0;
+    const total_archived = steps.reduce((s, x) => s + (x.archived || 0), 0);
+    const total_deleted = steps.reduce((s, x) => s + (x.local_deleted || x.deleted_count || 0), 0);
+
+    res.json({
+      ok: true,
+      organization_id: orgId,
+      dry_run: dryRun,
+      archive_anthropic_side: archiveAnthropic,
+      elapsed_ms,
+      total_anthropic_archives: total_archived,
+      total_local_deletes: total_deleted,
+      steps
+    });
+  } catch (e) {
+    console.error('POST /api/admin/agents/fresh-org-reset error:', e);
+    res.status(500).json({ error: 'Server error: ' + (e.message || 'unknown') });
+  } finally {
+    if (locked) {
+      try { await pool.query(`SELECT pg_advisory_unlock($1)`, [lockKey]); }
+      catch (_) {}
+    }
+  }
+});
+
 // GET /api/admin/agents/managed/prompt-audit
 //   Returns the byte+token breakdown of the registered agent's
 //   system prompt + tool schemas + reference-links table state.
