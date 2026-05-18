@@ -217,6 +217,31 @@
     return Object.keys(ctx).length ? ctx : null;
   }
 
+  // Phase S4 — pick the staff agent the Principal should default-
+  // delegate to, given a pageCtx from getCurrentPageContext. Returns
+  // a staff agent_key (e.g. '86-pm') or null when no clear default
+  // applies (Ask 86 on an arbitrary page — let the Principal pick).
+  // The server has its own fallback for entity_types; this covers the
+  // entity-less cases (Schedule, global directory page).
+  function resolveActiveStaffHint(pageCtx) {
+    if (!pageCtx) return null;
+    var et = pageCtx.entity_type || '';
+    if (et === 'estimate') return '86-estimator';
+    if (et === 'job')      return '86-pm';
+    if (et === 'intake')   return '86-sales';
+    if (et === 'lead')     return '86-sales';
+    if (et === 'client')   return '86-directory';
+    // No entity — fall back to URL/tab. /schedule has no entity but
+    // is unambiguously the Scheduler's surface.
+    var url = String(pageCtx.url || '');
+    var page = String(pageCtx.page || '').toLowerCase();
+    if (/^\/schedule/.test(url) || page === 'schedule') return '86-scheduler';
+    if (/^\/clients/.test(url)  || page === 'clients')  return '86-directory';
+    if (/^\/leads/.test(url)    || page === 'leads')    return '86-sales';
+    if (/^\/wip/.test(url)      || page === 'wip')      return '86-pm';
+    return null;
+  }
+
   // History reads + clear always hit the v1 messages paths regardless
   // of which chat version is active. ai_messages is shared (same DB
   // rows whether v1 or v2 produced them), so there's no /v2/.../messages
@@ -2385,6 +2410,14 @@
         // prompt shaping AND the tool gate (write tools off in plan).
         pageCtx.aiPhase = getJobAIPhase(_entityId);
       }
+      // Phase S4 — active_staff_hint. Tell the Principal which staff
+      // agent to default-delegate to based on which panel the user is on.
+      // The server has its own surface→staff fallback for entity_types,
+      // but the frontend covers cases the server can't see (Ask 86 on a
+      // /schedule or /clients page where there's no entity but the
+      // staff is clearly indicated).
+      var staffHint = resolveActiveStaffHint(pageCtx);
+      if (staffHint) pageCtx.active_staff_hint = staffHint;
       body.current_context = pageCtx;
     }
     // Combine one-shot images: pre-existing handoff (PDF viewer) + composer.

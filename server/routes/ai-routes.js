@@ -2602,7 +2602,21 @@ function ctxDynamicText(systemArr) {
 //   turnContextText is the dynamic (last) block from the builder's
 //   `system` array, ready to wrap in <turn_context>. photoBlocks is
 //   the per-entity image bucket (only estimate / job / intake set it).
-async function buildTurnContext({ entityType, entityId, clientContext, aiPhase, userId, organization }) {
+// Phase S4 — surface→staff mapping. When the user is on a specific
+// chat panel, default-route any delegation toward the matching staff
+// agent. The Principal can still override (e.g. on a job-WIP turn
+// "audit the budgeting on this" might handoff_to_estimator instead of
+// handoff_to_pm), but the hint sets the gravity well.
+const STAFF_HINT_BY_SURFACE = {
+  estimate: '86-estimator',
+  job:      '86-pm',
+  intake:   '86-sales',
+  client:   '86-directory',
+  schedule: '86-scheduler'
+  // 'staff' / 'admin' / 'ask86' → no default hint (Principal decides)
+};
+
+async function buildTurnContext({ entityType, entityId, clientContext, aiPhase, userId, organization, activeStaffHint }) {
   let turnContextText = '';
   let photoBlocks = [];
   if (entityType === 'estimate' && entityId) {
@@ -2643,6 +2657,35 @@ async function buildTurnContext({ entityType, entityId, clientContext, aiPhase, 
     turnContextText = turnContextText
       ? turnContextText + '\n\n' + availableBlock
       : availableBlock;
+  }
+
+  // Phase S4 — staff-hint block. Resolve in priority order:
+  //   1. Explicit activeStaffHint from the client (e.g. a schedule
+  //      panel without an entity sets '86-scheduler' itself).
+  //   2. Surface default from STAFF_HINT_BY_SURFACE (entity_type).
+  //   3. None — Principal picks freely.
+  // Only ship the block when the platform flag is on; otherwise
+  // there are no staff agents to hint about.
+  const adminAgents = require('./admin-agents-routes');
+  if (adminAgents.PLATFORM_FLAG) {
+    const resolvedHint = (activeStaffHint && typeof activeStaffHint === 'string')
+      ? activeStaffHint.trim()
+      : (STAFF_HINT_BY_SURFACE[entityType] || null);
+    if (resolvedHint && STAFF_AGENT_KEY_BY_HANDOFF) {
+      // Validate the hint matches a real handoff target before shipping.
+      const handoffTool = 'handoff_to_' + resolvedHint.replace(/^86-/, '');
+      const isKnown = STAFF_AGENT_KEY_BY_HANDOFF.has(handoffTool);
+      if (isKnown) {
+        const block = '<active_staff>\n' +
+          'Surface: ' + (entityType || 'global') + '\n' +
+          'Default-delegate to: ' + resolvedHint + '  (via `' + handoffTool + '`)\n' +
+          'When the user\'s ask falls in this staff\'s domain, prefer delegating to them over firing specialist tools yourself. Cross-domain asks: fan out to multiple staff or pick the closest fit. You still own the conversation — weave their responses into your reply.\n' +
+          '</active_staff>';
+        turnContextText = turnContextText
+          ? turnContextText + '\n\n' + block
+          : block;
+      }
+    }
   }
 
   return { turnContextText, photoBlocks };
@@ -9773,6 +9816,11 @@ router.post('/86/chat', requireAuth, requireOrg, async (req, res) => {
     // Legacy 'build' coerces to 'edit'.
     const cctxAiPhase    = (currentContext && currentContext.aiPhase) === 'plan' ? 'plan' : 'edit';
     const cctxClientCtx  = (currentContext && currentContext.clientContext) || null;
+    // Phase S4 — active_staff_hint flows from the client and tells the
+    // Principal which staff agent to default-delegate to. Falls back to
+    // the surface→staff map in buildTurnContext when absent.
+    const cctxStaffHint  = (currentContext && typeof currentContext.active_staff_hint === 'string')
+      ? currentContext.active_staff_hint.trim() : null;
 
     let extraPhotoBlocks = []; // photos pulled from the entity itself (job WIP, estimate, lead)
 
@@ -9793,12 +9841,13 @@ router.post('/86/chat', requireAuth, requireOrg, async (req, res) => {
     // photo so 86 knows what's available without bloating each turn.
     try {
       const turnCtx = await buildTurnContext({
-        entityType:    cctxEntityType,
-        entityId:      cctxEntityId,
-        clientContext: cctxClientCtx,
-        aiPhase:       cctxAiPhase,
-        userId:        req.user.id,
-        organization:  req.organization,
+        entityType:      cctxEntityType,
+        entityId:        cctxEntityId,
+        clientContext:   cctxClientCtx,
+        aiPhase:         cctxAiPhase,
+        userId:          req.user.id,
+        organization:    req.organization,
+        activeStaffHint: cctxStaffHint
       });
       turnContextText  = turnCtx.turnContextText;
       extraPhotoBlocks = turnCtx.photoBlocks;
