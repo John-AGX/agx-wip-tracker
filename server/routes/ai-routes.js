@@ -6200,6 +6200,36 @@ const WATCH_TOOLS = [
       },
       required: ['id', 'rationale']
     }
+  },
+  // ────────────────────────────────────────────────────────────────────
+  // P86 Crew Agent Platform — Phase S6
+  // Dynamic Tier 3 staff spawning. The Principal proposes a new staff
+  // agent (with a focused role + tool subset); on user approval the
+  // applier inserts a staff_agents row, registers the Anthropic agent,
+  // and re-syncs the Principal so the new handoff_to_<key> surfaces.
+  //
+  // Tool template inheritance — for v1 the new agent inherits its tool
+  // set from a standing staff "template" (estimator/pm/scheduler/
+  // directory/sales). The Principal picks the template that best fits
+  // the new role's domain. Full custom tool_keys come in a later phase.
+  // ────────────────────────────────────────────────────────────────────
+  {
+    name: 'propose_create_staff_agent',
+    tier: 'approval',
+    description:
+      'Propose creating a new Tier 3 staff agent. Surfaces an approval card; on approval the server inserts a staff_agents row, registers the new agent on Anthropic, attaches the same tool template as the inherits_from staff, and re-syncs the Principal so handoff_to_<key> works. Use when the user asks for a dedicated agent for a recurring task ("I do sub-compliance checks every week — can we have an agent for that?") or when you notice a pattern that justifies one. Naming convention: agent_key must start with "86-" and use lowercase letters / digits / dashes.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        agent_key:      { type: 'string', description: 'Stable identifier. Must start with "86-" and contain only lowercase letters, digits, and dashes. Example: "86-sub-compliance".' },
+        display_name:   { type: 'string', description: 'Human-readable name shown on approval cards and admin UI. Example: "86 · Sub Compliance".' },
+        role_card:      { type: 'string', description: 'One-paragraph description of the agent\'s job — what it owns, what it returns, how it differs from existing staff. Read by the Principal at delegation time.' },
+        inherits_from:  { type: 'string', enum: ['86-estimator', '86-pm', '86-scheduler', '86-directory', '86-sales'], description: 'Which standing staff agent\'s tool set to inherit. Pick the closest match to the new role\'s domain.' },
+        rationale:      { type: 'string', description: 'Why this agent should exist (shown on the approval card). 1-2 sentences.' }
+      },
+      required: ['agent_key', 'display_name', 'role_card', 'inherits_from', 'rationale']
+    }
   }
 ];
 
@@ -6279,6 +6309,20 @@ const HANDOFF_TOOLS = [
         context: { type: 'string', description: 'Extra context Sales needs beyond turn_context.' }
       },
       required: ['request']
+    }
+  },
+  {
+    name: 'handoff_to_dynamic_staff',
+    description: 'P86 Crew Phase S6 — delegate to a Tier 3 (dynamically-spawned) staff agent by its agent_key. Use this for any staff agent NOT covered by the dedicated handoffs above (estimator/pm/scheduler/directory/sales). The target agent_key must already exist in staff_agents (created via propose_create_staff_agent on a prior approved turn). If you\'re not sure which dynamic agents exist, call list_memories or just remember from a prior turn; mismatches return an error you can recover from.',
+    tier: 'auto',
+    input_schema: {
+      type: 'object',
+      properties: {
+        agent_key: { type: 'string', description: 'The Tier 3 staff agent_key, e.g. "86-sub-compliance". Must match a row in staff_agents for this org.' },
+        request:   { type: 'string', description: 'What the staff should do — one paragraph, written for that specialist.' },
+        context:   { type: 'string', description: 'Extra context the staff needs beyond turn_context.' }
+      },
+      required: ['agent_key', 'request']
     }
   }
 ];
@@ -7817,6 +7861,81 @@ async function execStaffApprovalTool(name, input, ctx) {
       if (!r.rows.length) throw new Error('No active watch found with id ' + input.id);
       return 'Archived watch ' + input.id + ' ("' + r.rows[0].name + '"). It will not fire again.';
     }
+    case 'propose_create_staff_agent': {
+      // P86 Crew Phase S6 — spawn a new Tier 3 staff agent on approval.
+      // Inserts the staff_agents row, registers the Anthropic agent,
+      // re-registers the Principal so the new handoff_to_<key> shows
+      // up in its tool list. Inheritance from a standing staff means
+      // the new agent reuses an already-vetted tool subset for v1.
+      if (!input || !input.agent_key || !input.display_name || !input.role_card || !input.inherits_from) {
+        throw new Error('agent_key, display_name, role_card, and inherits_from are all required');
+      }
+      const keyPattern = /^86-[a-z0-9-]+$/;
+      if (!keyPattern.test(input.agent_key)) {
+        throw new Error('agent_key must match /^86-[a-z0-9-]+$/ (lowercase, starts with "86-")');
+      }
+      const validParents = ['86-estimator', '86-pm', '86-scheduler', '86-directory', '86-sales'];
+      if (!validParents.includes(input.inherits_from)) {
+        throw new Error('inherits_from must be one of: ' + validParents.join(', '));
+      }
+      if (input.agent_key === input.inherits_from || validParents.includes(input.agent_key)) {
+        throw new Error('agent_key collides with a standing staff agent — pick a different key');
+      }
+      const adminAgents = require('./admin-agents-routes');
+      if (!adminAgents.PLATFORM_FLAG) {
+        throw new Error('P86_STAFF_AGENTS flag is off — set it on the deployment to enable spawning.');
+      }
+      const orgId = await resolveOrgIdFromCtx(ctx);
+      const orgRow = await pool.query('SELECT * FROM organizations WHERE id = $1', [orgId]);
+      const organization = orgRow.rows[0];
+      if (!organization) throw new Error('Organization row not found.');
+
+      // 1. Insert spec. Mark spawned_by with the proposing user.
+      let insertedId = null;
+      try {
+        const ins = await pool.query(
+          `INSERT INTO staff_agents
+             (organization_id, agent_key, display_name, tier, role_card,
+              tool_keys, routing_hints, spawned_by)
+           VALUES ($1, $2, $3, 3, $4, $5::jsonb, $6::jsonb, $7)
+           RETURNING id`,
+          [
+            orgId, input.agent_key, input.display_name, input.role_card,
+            JSON.stringify({ inherits_from: input.inherits_from }),
+            JSON.stringify({ trigger_phrases: [] }),
+            ctx.userId ? String(ctx.userId) : 'system'
+          ]
+        );
+        insertedId = ins.rows[0].id;
+      } catch (e) {
+        if (e && e.code === '23505') {
+          throw new Error('A staff agent with agent_key="' + input.agent_key + '" already exists for this org.');
+        }
+        throw e;
+      }
+
+      // 2. Register the new agent on Anthropic. Inherits tools + system
+      //    baseline from the parent template via AGENT_SYSTEM_BASELINE
+      //    + customToolsFor lookup, both of which consult the spec row.
+      try {
+        await adminAgents.ensureManagedAgent(input.agent_key, organization);
+      } catch (e) {
+        // Roll back the spec row so we don't leave a dangling
+        // unregistered agent.
+        await pool.query('DELETE FROM staff_agents WHERE id = $1', [insertedId]).catch(() => {});
+        throw new Error('Could not register Anthropic agent: ' + (e.message || 'unknown'));
+      }
+
+      // The Principal reaches Tier 3 agents via the generic
+      // `handoff_to_dynamic_staff({ agent_key, request, context })`
+      // tool — same flow as the dedicated handoffs, just with the
+      // target resolved at call time from staff_agents. No Principal
+      // re-sync needed; the new agent is reachable immediately.
+      return 'Spawned staff agent "' + input.display_name + '" (agent_key=' +
+        input.agent_key + ', inherits ' + input.inherits_from + ' tool set). ' +
+        'Reachable now via `handoff_to_dynamic_staff({ agent_key: "' + input.agent_key +
+        '", request: "..." })`.';
+    }
     default:
       throw new Error('Unknown approval-tier staff tool: ' + name);
   }
@@ -8650,7 +8769,17 @@ const STAFF_AGENT_KEY_BY_HANDOFF = new Map([
 // ctx = { userId, principalSessionId } — userId resolves the org;
 // principalSessionId is captured for the staff session title.
 async function execHandoffToStaff(toolName, input, ctx) {
-  const staffKey = STAFF_AGENT_KEY_BY_HANDOFF.get(toolName);
+  // Phase S6 — resolve the target staff key in priority order:
+  //   1. Static map (handoff_to_estimator/pm/scheduler/directory/sales).
+  //   2. Generic handoff_to_dynamic_staff — agent_key in input.
+  let staffKey = STAFF_AGENT_KEY_BY_HANDOFF.get(toolName);
+  if (!staffKey && toolName === 'handoff_to_dynamic_staff') {
+    staffKey = (input && typeof input.agent_key === 'string') ? input.agent_key.trim() : null;
+    if (!staffKey) throw new Error('handoff_to_dynamic_staff requires an agent_key in input.');
+    if (!/^86-[a-z0-9-]+$/.test(staffKey)) {
+      throw new Error('agent_key must match /^86-[a-z0-9-]+$/');
+    }
+  }
   if (!staffKey) throw new Error('Unknown handoff tool: ' + toolName);
 
   const anthropic = getAnthropic();
@@ -8810,7 +8939,8 @@ function make86OnCustomToolUse(userId, parentSession) {
     // read_materials / etc. on the unified /86 chat path were all
     // returning {tier:'approval'} — never executing — and the model
     // saw no result, concluding "no match" on real searches.
-    if (ALLOWED_AUTO_TIER_TOOLS.has(tu.name) || STAFF_AGENT_KEY_BY_HANDOFF.has(tu.name)) {
+    const isHandoff = STAFF_AGENT_KEY_BY_HANDOFF.has(tu.name) || tu.name === 'handoff_to_dynamic_staff';
+    if (ALLOWED_AUTO_TIER_TOOLS.has(tu.name) || isHandoff) {
       const name = tu.name;
       const input = tu.input || {};
       const k = dedupeKey(name, input);
@@ -8823,11 +8953,13 @@ function make86OnCustomToolUse(userId, parentSession) {
       }
       try {
         let result;
-        if (STAFF_AGENT_KEY_BY_HANDOFF.has(name)) {
-          // P86 Crew handoff — delegate to a standing-staff agent in a
-          // sub-session and return its prose response to the Principal.
-          // Thread parentSession through so the staff inherits the
-          // same entity context (active estimate/job) as the Principal.
+        if (STAFF_AGENT_KEY_BY_HANDOFF.has(name) || name === 'handoff_to_dynamic_staff') {
+          // P86 Crew handoff — delegate to a staff agent in a sub-session
+          // and return its prose response to the Principal. Thread
+          // parentSession through so the staff inherits the same
+          // entity context (active estimate/job) as the Principal.
+          // handoff_to_dynamic_staff resolves the target agent_key
+          // from input at call time (Tier 3 spawned agents).
           result = await execHandoffToStaff(name, input, { userId, parentSession });
         } else if (INTAKE_EXECUTOR_TOOLS.has(name)) {
           result = await execIntakeRead(name, input);
@@ -10146,10 +10278,14 @@ router.post('/86/chat/continue', requireAuth, requireOrg, async (req, res) => {
         catch (e) { summary = 'Error: ' + (e.message || 'failed'); isError = true; }
       } else if (r.name === 'propose_skill_pack_add'
               || r.name === 'propose_skill_pack_edit'
-              || r.name === 'propose_skill_pack_delete') {
+              || r.name === 'propose_skill_pack_delete'
+              || r.name === 'propose_watch_archive'
+              || r.name === 'propose_create_staff_agent') {
         // Skill-pack mutations (formerly CoS-only — 86 owns these
         // now that the staff agent is being absorbed). Same handler
         // as the legacy /staff/chat/continue path.
+        // P86 Crew Phase S6 — propose_create_staff_agent uses the
+        // same approval-applier dispatcher.
         try { summary = await execStaffApprovalTool(r.name, r.input || {}, { userId: req.user.id }); }
         catch (e) { summary = 'Error: ' + (e.message || 'failed'); isError = true; }
       } else if (ClientDirectoryTools.some(t => t.name === r.name)) {

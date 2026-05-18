@@ -1874,9 +1874,29 @@ function builtinToolsetFor(agentKey) {
 
 // Resolve the Project 86-side custom tools for an agent. Goes through the
 // internals export from ai-routes so we don't duplicate definitions.
-function customToolsFor(agentKey) {
+// Returns true iff agentKey has its own dedicated branch in
+// customToolsFor below. Used by the Tier 3 inherit-from path to
+// detect "fall through to parent template" cases.
+function agentKeyHasOwnBranch(agentKey) {
+  return (
+    agentKey === 'job' || agentKey === 'ag' ||
+    agentKey === 'cra' || agentKey === 'staff' ||
+    agentKey === '86-estimator' ||
+    agentKey === '86-pm' || agentKey === '86-scheduler' ||
+    agentKey === '86-directory' || agentKey === '86-sales'
+  );
+}
+
+function customToolsFor(agentKey, opts) {
   const aiInternals = require('./ai-routes-internals');
   if (!aiInternals) return [];
+  // Phase S6 — Tier 3 (dynamic) staff agents inherit the tool set of
+  // a standing staff via opts.inheritFromKey. Callers (ensureManagedAgent
+  // for dynamic keys) pass the parent template; we recurse on it so the
+  // dynamic agent reuses an already-vetted, focused tool subset.
+  if (opts && opts.inheritFromKey && !agentKeyHasOwnBranch(agentKey)) {
+    return customToolsFor(opts.inheritFromKey);
+  }
   // estimateTools / jobTools / clientTools / staffTools each include
   // the WEB_TOOLS prefix; strip those because we configure web_search
   // / web_fetch through the built-in toolset above instead.
@@ -2056,10 +2076,36 @@ async function collectMcpServersFor(organization) {
 async function ensureManagedAgent(agentKey, organization) {
   const anthropic = getAnthropic();
   if (!anthropic) throw new Error('ANTHROPIC_API_KEY not set on this deployment.');
-  const baseline = AGENT_SYSTEM_BASELINE[agentKey];
-  if (!baseline) throw new Error('Unknown agent key: ' + agentKey);
   if (!organization || !organization.id) {
     throw new Error('ensureManagedAgent requires an organization row (Phase 2c — every agent is per-tenant now).');
+  }
+
+  // Phase S6 — Tier 3 dynamic agents don't have a literal entry in
+  // AGENT_SYSTEM_BASELINE. Look up the spec row and build a baseline
+  // from role_card + the inherits_from template's system prompt.
+  let baseline = AGENT_SYSTEM_BASELINE[agentKey];
+  let inheritFromKey = null;
+  if (!baseline) {
+    const specRes = await pool.query(
+      `SELECT role_card, system_prompt, routing_hints, tier, archived_at
+         FROM staff_agents
+        WHERE agent_key = $1 AND organization_id = $2`,
+      [agentKey, organization.id]
+    );
+    const spec = specRes.rows[0];
+    if (!spec || spec.archived_at) {
+      throw new Error('Unknown agent key: ' + agentKey + ' (no static baseline and no live staff_agents row).');
+    }
+    inheritFromKey = (spec.routing_hints && spec.routing_hints.inherits_from) || null;
+    if (inheritFromKey) {
+      const parentBaseline = AGENT_SYSTEM_BASELINE[inheritFromKey] || '';
+      baseline = (spec.system_prompt && spec.system_prompt.trim()) ||
+        'You are ' + agentKey + ' — a Project 86 Tier 3 staff agent spawned for: ' + (spec.role_card || '(no role card)') + '\n\n' +
+        'You receive requests from the Principal (also "86"). Behave like your parent template (' + inheritFromKey + '): focused on your domain, do NOT speak directly to the user, return structured findings or proposals for the Principal to weave into the conversation.\n\n' +
+        '--- Parent template baseline ---\n' + parentBaseline;
+    } else {
+      throw new Error('Tier 3 staff agent ' + agentKey + ' has no inherits_from in routing_hints — cannot build baseline.');
+    }
   }
 
   const existing = await pool.query(
@@ -2073,7 +2119,7 @@ async function ensureManagedAgent(agentKey, organization) {
   const aiInternals = require('./ai-routes-internals');
   const model = aiInternals && aiInternals.defaultModel ? aiInternals.defaultModel() : 'claude-sonnet-4-6';
   const skills = await collectSkillsFor(agentKey, organization);
-  const customTools = customToolsFor(agentKey);
+  const customTools = customToolsFor(agentKey, inheritFromKey ? { inheritFromKey } : undefined);
   const builtinTools = builtinToolsetFor(agentKey);
   const mcpServers = await collectMcpServersFor(organization);
 
@@ -2277,8 +2323,12 @@ router.post('/staff/seed', requireAuth, requireCapability('ROLES_MANAGE'), requi
 router.post('/managed/reregister', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
   try {
     const key = String(req.query.key || '').toLowerCase();
-    if (!['ag', 'job', 'cra', 'staff'].includes(key)) {
-      return res.status(400).json({ error: 'key must be ag | job | cra | staff' });
+    // Phase S2/S3 — staff_agents keys are also valid (their baselines
+    // live in AGENT_SYSTEM_BASELINE).
+    const legacyKeys = ['ag', 'job', 'cra', 'staff'];
+    const liveStaffKeys = STANDING_STAFF_SPECS.map(s => s.agent_key);
+    if (!legacyKeys.includes(key) && !liveStaffKeys.includes(key)) {
+      return res.status(400).json({ error: 'key must be one of: ' + legacyKeys.concat(liveStaffKeys).join(', ') });
     }
     const anthropic = getAnthropic();
     if (!anthropic) throw new Error('ANTHROPIC_API_KEY not set on this deployment.');
@@ -3164,8 +3214,11 @@ setInterval(backgroundRefreshAll, REFRESH_INTERVAL_MS);
 router.get('/managed/:agentKey/anthropic-state', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
   try {
     const agentKey = String(req.params.agentKey || '').toLowerCase();
-    if (!['ag', 'job', 'cra', 'staff'].includes(agentKey)) {
-      return res.status(400).json({ error: 'agentKey must be ag | job | cra | staff' });
+    // Phase S2/S3 — staff_agents keys are also valid sync targets.
+    const legacyKeys = ['ag', 'job', 'cra', 'staff'];
+    const liveStaffKeys = STANDING_STAFF_SPECS.map(s => s.agent_key);
+    if (!legacyKeys.includes(agentKey) && !liveStaffKeys.includes(agentKey)) {
+      return res.status(400).json({ error: 'agentKey must be one of: ' + legacyKeys.concat(liveStaffKeys).join(', ') });
     }
     const anthropic = getAnthropic();
     if (!anthropic) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not set on this deployment.' });
@@ -3284,8 +3337,11 @@ router.post('/managed/:agentKey/sync',
   async (req, res) => {
   try {
     const agentKey = String(req.params.agentKey || '').toLowerCase();
-    if (!['ag', 'job', 'cra', 'staff'].includes(agentKey)) {
-      return res.status(400).json({ error: 'agentKey must be ag | job | cra | staff' });
+    // Phase S2/S3 — staff_agents keys are also valid sync targets.
+    const legacyKeys = ['ag', 'job', 'cra', 'staff'];
+    const liveStaffKeys = STANDING_STAFF_SPECS.map(s => s.agent_key);
+    if (!legacyKeys.includes(agentKey) && !liveStaffKeys.includes(agentKey)) {
+      return res.status(400).json({ error: 'agentKey must be one of: ' + legacyKeys.concat(liveStaffKeys).join(', ') });
     }
     const anthropic = getAnthropic();
     if (!anthropic) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not set on this deployment.' });
