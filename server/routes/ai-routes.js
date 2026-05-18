@@ -2678,8 +2678,14 @@ async function buildTurnContext({ entityType, entityId, clientContext, aiPhase, 
       if (isKnown) {
         const block = '<active_staff>\n' +
           'Surface: ' + (entityType || 'global') + '\n' +
-          'Default-delegate to: ' + resolvedHint + '  (via `' + handoffTool + '`)\n' +
-          'When the user\'s ask falls in this staff\'s domain, prefer delegating to them over firing specialist tools yourself. Cross-domain asks: fan out to multiple staff or pick the closest fit. You still own the conversation — weave their responses into your reply.\n' +
+          'Default delegate: ' + resolvedHint + '  (via `' + handoffTool + '`)\n' +
+          '\n' +
+          '**ROUTING RULE — your actual job on this turn.**\n' +
+          'You are the Principal. Your role is to ROUTE, not to do the staff\'s work. Any audit, multi-step analysis, line-item draft, scope review, WIP-margin investigation, dedup check, directory cleanup, scheduling question, or other domain-bound task on this surface MUST start with `' + handoffTool + '` (or another handoff_to_* if the ask actually fits a different staff better, including handoff_to_dynamic_staff for Tier 3 agents).\n' +
+          '\n' +
+          'Reply directly ONLY for: (a) one-shot facts the turn_context above already shows ("what\'s the contract value?", "who\'s the client?"), (b) the user explicitly asking you to delegate elsewhere or NOT to delegate, (c) trivial conversational ack/redirect.\n' +
+          '\n' +
+          'Cross-domain asks: fan out to multiple staff in PARALLEL (multiple handoff_to_* in one turn) — do not serialize. You weave the staff responses into a single reply to the user. Identity stays "86" from the user\'s POV; the staff is how you do the work, not a separate persona to announce.\n' +
           '</active_staff>';
         turnContextText = turnContextText
           ? turnContextText + '\n\n' + block
@@ -2701,9 +2707,52 @@ async function buildTurnContext({ entityType, entityId, clientContext, aiPhase, 
 // cache_creation tokens per turn. Admins changing a section override
 // or baseline need to POST /managed/sync-all to push the new system.
 async function composedAgentSystem(agentKey, baseline, org) {
+  // Phase S6 follow-up — the 86-pm staff agent inherits the WIP-analyst
+  // playbook (job_role + job_web_research) that used to live on the
+  // Principal. Compose them onto its baseline so the staff knows how
+  // to read the WIP snapshot, what mismatches to flag, set_phase_field
+  // vs set_node_value discipline, the right web_search posture, etc.
+  if (agentKey === '86-pm') {
+    try {
+      const overrides = await loadSectionOverridesFor('job');
+      const parts = [baseline];
+      const buf = [];
+      renderSection(buf, 'job_role', overrides);
+      if (buf.length) parts.push(buf.join('\n'));
+      const buf2 = [];
+      renderSection(buf2, 'job_web_research', overrides);
+      if (buf2.length) parts.push(buf2.join('\n'));
+      return parts.join('\n\n');
+    } catch (e) {
+      console.warn('[composedAgentSystem 86-pm] section compose failed:', e.message);
+      return baseline;
+    }
+  }
   if (agentKey !== 'job') return baseline; // legacy keys passthrough
   try {
-    let parts = [baseline];
+    let parts = [];
+    // Phase S6 follow-up — when the platform flag is on, lead with a
+    // router framing so the model's identity is "Principal that routes"
+    // instead of "monolith that does everything". The baseline below
+    // still describes 86's full domain knowledge (the staff inherit
+    // pieces of it via their own baselines), but the opening note
+    // re-establishes that on the surfaces with active staff the
+    // Principal delegates by default.
+    try {
+      const adminAgents = require('./admin-agents-routes');
+      if (adminAgents.PLATFORM_FLAG) {
+        parts.push(
+          '# Your role: Principal (router)\n' +
+          '\n' +
+          'You are 86, the Project 86 Principal. The platform runs as a crew: you have a roster of standing staff agents (Estimator, PM, Scheduler, Directory, Sales) each with a focused tool set and a focused playbook, plus the ability to spawn Tier 3 staff on user approval via `propose_create_staff_agent`. Identity stays unified: from the user\'s POV everything is "86" — the staff is HOW you do the work, not separate personas to announce.\n' +
+          '\n' +
+          '**Your job is to ROUTE.** When a user asks for an audit, a line-item draft, a scope edit, a WIP analysis, a directory cleanup, a scheduling decision, a lead-intake review, or any other domain-bound task, your first move is `handoff_to_<staff>` (the per-turn `<active_staff>` block in turn_context names the default; you can pick a different staff or fan out to several in parallel). For one-shot facts the per-turn snapshot already shows (contract value, client name, who\'s the PM), answer directly. For self-introspection (read_metrics, search_my_sessions), CoS work (skill pack curation, watches), and cross-domain admin (linking jobs to clients), act yourself — those are Principal-owned.\n' +
+          '\n' +
+          'The legacy baseline below still describes 86\'s full domain expertise. Read it as background context the staff inherit (the Estimator carries the estimating playbook, the PM carries the WIP playbook, etc.), not as a license for you to fire domain-specific writes yourself when a staff is available.\n'
+        );
+      }
+    } catch (_) { /* fall through to baseline-only on require error */ }
+    parts.push(baseline);
     // Org-level identity_body — describes who 86 is working FOR.
     // Phase 2a moved AGX-specific prose out of the baseline; this
     // is where it lands back into the agent's registered system
@@ -2730,9 +2779,7 @@ async function composedAgentSystem(agentKey, baseline, org) {
       'ag_pricing',
       'ag_auto_reads',
       'ag_web_research',
-      'ag_tone',
-      'job_role',
-      'job_web_research'
+      'ag_tone'
     ];
     const sectionLines = [];
     for (const id of sectionIds) {
@@ -2819,9 +2866,7 @@ async function composedAgentSystemBreakdown(agentKey, baseline, org) {
       'ag_pricing',
       'ag_auto_reads',
       'ag_web_research',
-      'ag_tone',
-      'job_role',
-      'job_web_research'
+      'ag_tone'
     ];
     let playbookText = '';
     for (const id of sectionIds) {
@@ -4324,7 +4369,13 @@ async function buildJobContext(jobId, clientContext, aiPhase, organization, opts
   const wip = computeJobWIP(job, buildings, phases, changeOrders, subs, invoices);
 
   const lines = [];
-  lines.push('You are 86, Project 86\'s WIP analyst. Project 86 = a Central-Florida construction-services platform, a Central Florida construction services company. The PM is working on the job below — help them spot margin issues, missing change orders, billing gaps, and progress risks. (Your name is a nod to Lisa.)');
+  // Phase S6 follow-up — the WIP-analyst persona moved to the 86-pm
+  // staff agent. On the Principal's job surface, this header just
+  // anchors the surface; the routing rule comes from <active_staff>
+  // below and (when P86_STAFF_AGENTS=on) tells 86 to handoff_to_pm
+  // for analysis. Keeping a short surface label so the model knows
+  // which entity is in focus without re-claiming the analyst role.
+  lines.push('## Job surface — read the snapshot below for one-shot facts. For audits, margin analysis, or any multi-step WIP work, route to handoff_to_pm.');
   lines.push('');
   lines.push('# Job');
   lines.push('- Title: ' + (job.title || job.jobName || '(untitled)'));
@@ -4722,12 +4773,13 @@ async function buildJobContext(jobId, clientContext, aiPhase, organization, opts
     lines.push('');
   }
 
-  // Section overrides for 86. Loaded once and used at named anchor
-  // points so admins can edit instructions without code changes.
-  const jobSectionOverrides = await loadSectionOverridesFor('job');
-  renderSection(lines, 'job_role', jobSectionOverrides);
-  lines.push('');
-  renderSection(lines, 'job_web_research', jobSectionOverrides);
+  // Phase S6 follow-up — job_role + job_web_research sections moved
+  // to the 86-pm staff agent's registered system. The Principal no
+  // longer renders the WIP-analyst playbook on every job-surface
+  // turn (it was ~1.5k tokens of "you are the analyst" framing that
+  // overrode the active_staff hint). Audits and analysis go through
+  // handoff_to_pm now; that staff carries the playbook in its own
+  // baseline.
 
   // Skill packs ship as native Anthropic Skills registered on the
   // agent — the runtime auto-discovers them by description each turn.
@@ -7729,10 +7781,25 @@ async function execStaffApprovalTool(name, input, ctx) {
                 versionErr.error.type
                 || (versionErr.error.error && versionErr.error.error.type)
               );
-              const isStale = vStatus === 404 || vCode === 'not_found_error';
+              // The Anthropic API rejects versions.create with a 400
+              // "SKILL.md file must be exactly in the top-level folder."
+              // when the underlying skill was created in a way the
+              // current validator considers malformed (legacy upload
+              // structure, manual console edits, etc.). The fix is the
+              // same as the 404 case: recreate the skill from scratch
+              // and update our local pointer. Without this branch, the
+              // edit ping-pongs forever — every retry hits the same
+              // legacy skill_id and gets the same 400.
+              const vMsg = (versionErr.error && (
+                (versionErr.error.error && versionErr.error.error.message)
+                || versionErr.error.message
+              )) || versionErr.message || '';
+              const isStructureMismatch = /top-level folder/i.test(vMsg);
+              const isStale = vStatus === 404 || vCode === 'not_found_error' || isStructureMismatch;
               if (!isStale) throw versionErr;
-              console.warn('[propose_skill_pack_edit] stale anthropic_skill_id',
+              console.warn('[propose_skill_pack_edit] anthropic_skill_id',
                 updated.anthropic_skill_id, 'for pack', updated.name,
+                'unusable —', isStructureMismatch ? 'structure mismatch' : 'stale/404',
                 '— recreating');
               const recreated = await anthropic.beta.skills.create({
                 display_title: (updated.name || 'Project 86 skill').slice(0, 200),
@@ -8824,11 +8891,20 @@ async function execHandoffToStaff(toolName, input, ctx) {
   const adminAgents = require('./admin-agents-routes');
   const env = await adminAgents.ensureManagedEnvironment();
 
-  // Build the user.message body — request + optional surface context.
+  // Build the user.message body — request + the same turn_context the
+  // Principal saw + optional explicit surface context from the call.
+  // Order: turn_context first (the data), then the Principal's request
+  // (what to do with the data), then explicit context (anything the
+  // Principal wants to add beyond the snapshot).
   const parts = [];
-  parts.push(String(input.request || '').trim() || '(no request body)');
+  if (ctx.turnContextText && typeof ctx.turnContextText === 'string' && ctx.turnContextText.trim()) {
+    parts.push('Context the Principal saw this turn (the same per-turn snapshot you would have seen if invoked directly on this surface):\n\n' + ctx.turnContextText.trim());
+  }
+  parts.push('---\nRequest from the Principal:\n' + (String(input.request || '').trim() || '(no request body)'));
   if (input.estimate_id) parts.push('Active estimate id: ' + String(input.estimate_id));
-  if (input.context) parts.push('Context from the Principal:\n' + String(input.context));
+  if (input.job_id)      parts.push('Active job id: ' + String(input.job_id));
+  if (input.client_id)   parts.push('Active client id: ' + String(input.client_id));
+  if (input.context)     parts.push('Extra context from the Principal:\n' + String(input.context));
   const messageBody = parts.join('\n\n');
 
   // Open the staff sub-session.
@@ -8885,7 +8961,7 @@ async function execHandoffToStaff(toolName, input, ctx) {
   return result.text || '(staff agent returned no text)';
 }
 
-function make86OnCustomToolUse(userId, parentSession) {
+function make86OnCustomToolUse(userId, parentSession, turnContextText) {
   // Per-request dedupe cache. Scoped to ONE /86/chat (or /chat/continue)
   // call — closes over this Map. If the model calls e.g.
   // read_materials({q:"PT 2x4"}) twice in the same turn (which it
@@ -8956,11 +9032,14 @@ function make86OnCustomToolUse(userId, parentSession) {
         if (STAFF_AGENT_KEY_BY_HANDOFF.has(name) || name === 'handoff_to_dynamic_staff') {
           // P86 Crew handoff — delegate to a staff agent in a sub-session
           // and return its prose response to the Principal. Thread
-          // parentSession through so the staff inherits the same
-          // entity context (active estimate/job) as the Principal.
+          // parentSession + turnContextText through so the staff sees
+          // the SAME entity context + WIP/estimate/directory snapshot
+          // the Principal saw this turn. Without turnContextText the
+          // staff would have to re-fetch the snapshot via its own
+          // tools — wasteful when the Principal already has it cached.
           // handoff_to_dynamic_staff resolves the target agent_key
           // from input at call time (Tier 3 spawned agents).
-          result = await execHandoffToStaff(name, input, { userId, parentSession });
+          result = await execHandoffToStaff(name, input, { userId, parentSession, turnContextText });
         } else if (INTAKE_EXECUTOR_TOOLS.has(name)) {
           result = await execIntakeRead(name, input);
         } else if (FIELD_TOOLS_EXECUTOR_TOOLS.has(name)) {
@@ -10134,8 +10213,9 @@ router.post('/86/chat', requireAuth, requireOrg, async (req, res) => {
       eventsToSend: [{ type: 'user.message', content: userContent }],
       // Same auto-tier handler that the per-entity panels use — gives
       // 86 chip-style read_existing_clients / _leads + intake reads
-      // anywhere in the app.
-      onCustomToolUse: make86OnCustomToolUse(req.user.id, session),
+      // anywhere in the app. Pass turnContextText so handoff_to_*
+      // forwards the same snapshot to the staff sub-session.
+      onCustomToolUse: make86OnCustomToolUse(req.user.id, session, turnContextText),
       // When ensureAiSession just minted this session (first /86/chat
       // for the user, or a stuck-session recovery upstream), skip the
       // archive-and-retry recovery path inside runV2SessionStream —

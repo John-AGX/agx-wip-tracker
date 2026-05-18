@@ -1902,43 +1902,89 @@ function customToolsFor(agentKey, opts) {
   // / web_fetch through the built-in toolset above instead.
   let tools = [];
   if (agentKey === 'job' || agentKey === 'ag' || agentKey === 'cra' || agentKey === 'staff') {
-    // ONE 86 — the managed `job` agent serves every surface. The
-    // legacy 'cra' (directory) and 'staff' (CoS) agent_keys resolve to the
-    // same tool union so any stale registry row points at the unified
-    // 86 brain at sync time. Once those rows are deleted via
-    // /managed/<key>/delete, this branch only fires for 'job'.
+    // Phase S6 follow-up — Principal becomes a router.
     //
-    // Tools = UNION of every tool 86 uses anywhere:
-    //   - estimateTools  (line items, sections, groups, scope edits)
-    //   - jobTools       (phase pct, node graph, COs, POs, invoices)
-    //   - clientTools    (client-directory + property + sub mutations)
-    //   - staffTools     (skill pack mutations + introspection reads)
-    //   - memoryTools    (Phase 4: remember / recall / list_memories /
-    //                     forget — cross-session memory)
-    //   - watchTools     (Phase 5: propose_watch_create / list_watches /
-    //                     read_recent_watch_runs / propose_watch_archive)
-    // Phase 3 subtaskTools removed — native parallel tool calls within
-    // one session cover the same use cases without per-child cache hits.
-    // Deduped by name; first occurrence wins (estimate-first order).
-    // INTAKE_TOOLS are already spread into jobTools().
+    // When P86_STAFF_AGENTS=on, the Principal's tool list is the SLIM
+    // router set: handoffs + light routing reads + CoS introspection +
+    // memory + watches + skill-pack curation + dynamic spawning +
+    // self-diagnose + navigation. All domain-specific writes
+    // (line items, WIP cascades, client mutations, intake creates)
+    // moved to their staff agents. The Principal sees the staff list
+    // via handoff_to_* and routes incoming work — it does NOT do the
+    // domain work directly.
+    //
+    // When the flag is OFF (legacy / single-agent mode), the Principal
+    // still gets the full union so existing deployments don't break.
+    const PLATFORM_ON = PLATFORM_FLAG;
     const seen = new Set();
     const merged = [];
-    [
-      ...aiInternals.estimateTools(),
-      ...aiInternals.jobTools(),
-      ...aiInternals.clientTools(),
-      ...aiInternals.staffTools(),
-      ...aiInternals.memoryTools(),
-      ...aiInternals.watchTools(),
-      // P86 Crew handoff tools — only present when P86_STAFF_AGENTS=on
-      // (handoffTools() returns [] otherwise so the model never sees
-      // them on a deployment that hasn't seeded the staff_agents rows).
-      ...(aiInternals.handoffTools ? aiInternals.handoffTools() : [])
-    ].forEach(t => {
-      if (!t || !t.name || seen.has(t.name)) return;
-      seen.add(t.name);
-      merged.push(t);
-    });
+    if (PLATFORM_ON) {
+      const ROUTER_TOOL_NAMES = new Set([
+        // Light routing reads — Principal needs these to know which
+        // staff to delegate to. Heavy reads (read_active_lines,
+        // read_qb_cost_lines, read_workspace_sheet_full, etc.) moved
+        // to their staff agents.
+        'read_jobs', 'read_clients', 'read_leads', 'read_lead_pipeline',
+        'read_existing_clients', 'read_existing_leads',
+        'read_users', 'read_wip_summary',
+        // CoS introspection — Principal owns self-awareness.
+        'read_metrics', 'read_recent_conversations', 'read_conversation_detail',
+        'read_skill_packs', 'search_my_sessions', 'search_my_kb', 'search_org_kb',
+        'read_field_tools', 'self_diagnose',
+        // Reference + attachment lookups (cross-surface, light).
+        'search_reference_sheet', 'read_attachment_text', 'view_attachment_image',
+        // Navigation — Principal sends the user to the right surface.
+        'navigate',
+        // Memory — cross-session recall.
+        'remember', 'recall', 'list_memories', 'forget',
+        // Watches — Principal owns proactive monitoring.
+        'list_watches', 'read_recent_watch_runs',
+        'propose_watch_create', 'propose_watch_archive',
+        // Skill-pack curation — Principal evolves its own brain.
+        'propose_skill_pack_add', 'propose_skill_pack_edit', 'propose_skill_pack_delete',
+        // Field-tool curation — same idea, for proposed custom tools.
+        'propose_create_field_tool', 'propose_update_field_tool', 'propose_delete_field_tool',
+        // Cross-domain admin (touches jobs + clients; lives on Principal).
+        'propose_link_job_to_client', 'propose_bulk_link_jobs_to_clients',
+        // Spawn — Principal proposes new Tier 3 agents.
+        'propose_create_staff_agent'
+      ]);
+      // Pull from the same source pools, but filter by name allowlist.
+      [
+        ...aiInternals.estimateTools(),
+        ...aiInternals.jobTools(),
+        ...aiInternals.clientTools(),
+        ...aiInternals.staffTools(),
+        ...aiInternals.memoryTools(),
+        ...aiInternals.watchTools()
+      ].forEach(t => {
+        if (!t || !t.name || seen.has(t.name)) return;
+        if (!ROUTER_TOOL_NAMES.has(t.name)) return;
+        seen.add(t.name);
+        merged.push(t);
+      });
+      // Handoffs are ALWAYS in the Principal's router set when the
+      // platform is on — that's literally the point of the slim.
+      (aiInternals.handoffTools ? aiInternals.handoffTools() : []).forEach(t => {
+        if (!t || !t.name || seen.has(t.name)) return;
+        seen.add(t.name);
+        merged.push(t);
+      });
+    } else {
+      // Legacy (flag-off) — full union, original Phase 2 behavior.
+      [
+        ...aiInternals.estimateTools(),
+        ...aiInternals.jobTools(),
+        ...aiInternals.clientTools(),
+        ...aiInternals.staffTools(),
+        ...aiInternals.memoryTools(),
+        ...aiInternals.watchTools()
+      ].forEach(t => {
+        if (!t || !t.name || seen.has(t.name)) return;
+        seen.add(t.name);
+        merged.push(t);
+      });
+    }
     tools = merged;
   } else if (agentKey === '86-estimator') {
     // Project 86 Agent Platform — Phase S2.
