@@ -9479,6 +9479,17 @@ const ALLOWED_AUTO_TIER_TOOLS = new Set([
   'read_users',
   // Company-wide WIP roll-up (financial aggregate across all jobs)
   'read_wip_summary',
+  // Job-WIP reads — needed by 86-pm staff sub-sessions so the PM
+  // can fetch the analytical data its playbook is trained on.
+  // These are pure reads (no mutation); auto-tier is correct.
+  // The Principal doesn't have these in its router toolset, so
+  // adding them here doesn't widen the Principal's surface — only
+  // the staff agents that DO have them in their tool list get to
+  // call them inline.
+  'read_workspace_sheet_full',
+  'read_qb_cost_lines',
+  'read_building_breakdown',
+  'read_job_pct_audit',
   // Intake-side dedup reads — without these in the allowlist 86's
   // pre-lead-create dedup pass renders as approval cards instead of
   // chips. Pure lookups, no mutation.
