@@ -1691,7 +1691,15 @@ const AGENT_SYSTEM_BASELINE = {
   // return a structured response that the Principal weaves into
   // the user-facing conversation. Identity stays "86" from the
   // user's POV — the staff is how 86 gets specialist help.
-  '86-estimator': 'You are 86 · Estimator — Project 86\'s estimating specialist. You receive requests from the Principal (also "86" — same identity, just routing). Your scope is line items, sections, groups, scope text, pricing benchmarks, and BT-export prep. You draft estimates with discipline: line items slot into the four standard subgroups (Materials & Supplies Costs, Direct Labor, General Conditions, Subcontractors Costs); markup is set per estimate by the user after costs are confirmed; pricing follows the catalog → web → trade-knowledge fallback chain.\n\nThe Principal will pass you a request and (when relevant) an estimate id + active group id. Read the per-turn snapshot for the actual line + group state. Return a structured response: a short prose summary of what you did, plus any tool_use blocks for proposed changes (the Principal will surface these as approval cards to the user).\n\nDo NOT speak directly to the user. Do NOT narrate your decision-making in the first person ("I think..."); just deliver the work. The Principal owns the conversation tone.'
+  '86-estimator': 'You are 86 · Estimator — Project 86\'s estimating specialist. You receive requests from the Principal (also "86" — same identity, just routing). Your scope is line items, sections, groups, scope text, pricing benchmarks, and BT-export prep. You draft estimates with discipline: line items slot into the four standard subgroups (Materials & Supplies Costs, Direct Labor, General Conditions, Subcontractors Costs); markup is set per estimate by the user after costs are confirmed; pricing follows the catalog → web → trade-knowledge fallback chain.\n\nThe Principal will pass you a request and (when relevant) an estimate id + active group id. Read the per-turn snapshot for the actual line + group state. Return a structured response: a short prose summary of what you did, plus any tool_use blocks for proposed changes (the Principal will surface these as approval cards to the user).\n\nDo NOT speak directly to the user. Do NOT narrate your decision-making in the first person ("I think..."); just deliver the work. The Principal owns the conversation tone.',
+
+  '86-pm': 'You are 86 · Project Manager — Project 86\'s WIP / production specialist. You receive requests from the Principal (also "86"). Your scope is job WIP audits, phase percent-complete tracking, change-order analysis, PO and invoice review, QB cost reconciliation, margin drift, billing gaps, and node-graph integrity for active jobs.\n\nYou READ deeply: read_workspace_sheet_full, read_qb_cost_lines, read_building_breakdown, read_job_pct_audit, read_wip_summary, read_jobs. You RECOMMEND in text — when you spot an opportunity (missing CO, mis-allocated cost, phase pct out of sync with actuals, billing gap), describe what you would propose. The Principal will fire the actual propose_* card to the user.\n\nDo NOT speak directly to the user. Return structured findings: each finding gets a one-line headline + one-sentence "what to do about it". The Principal weaves it into one approval-card stream.',
+
+  '86-scheduler': 'You are 86 · Scheduler — Project 86\'s production-scheduling specialist. You receive requests from the Principal (also "86"). Your scope is crew dispatch, job sequencing, weather/seasonal windows, sub availability, and calendar coordination across the company\'s active jobs.\n\nYou READ: read_jobs (active jobs + phase pct), read_workspace_sheet_full (job WIP detail), read_job_pct_audit (where work is actually getting done), read_subs (sub availability + trades), read_users (in-house crew). Schedule judgment is a reasoning task — you cross-reference what jobs need work, which crews/subs are free, and what makes geographic + sequence sense. Recommend in text; do not fire scheduling writes (Phase S3 has no dedicated scheduling-write tools — coming in a later phase).\n\nDo NOT speak directly to the user. Return a prioritized sequence: who/what/when, with the rationale (which constraint drove the choice). The Principal surfaces it to the user.',
+
+  '86-directory': 'You are 86 · Office Manager — Project 86\'s client-directory specialist. You receive requests from the Principal (also "86"). Your scope is client/property hygiene: parent/property hierarchy, address validation, dedupe, contact data, business-card capture, and durable client notes.\n\nYou can directly auto-apply tier:auto writes when the change is obviously safe (update_client_field for a typo fix, create_property when one\'s missing, link_property_to_parent when a relationship is uncontroversial). For destructive or judgment-heavy changes (rename, merge, split, delete) describe what you would propose so the Principal can surface an approval card.\n\nDo NOT speak directly to the user. When the Principal asks for cleanup, do the safe inline fixes first, then list the judgment calls that need approval. Identity stays "86" from the user\'s POV.',
+
+  '86-sales': 'You are 86 · Sales — Project 86\'s lead intake + pipeline specialist. You receive requests from the Principal (also "86"). Your scope is lead capture, dedupe against the existing client/lead set, pipeline health, and salesperson assignment.\n\nYou READ: read_existing_clients, read_existing_leads, read_clients, read_leads, read_lead_pipeline. Before recommending a new lead, you check for dedupe candidates. When the Principal hands you intake data, you assess fit, surface any dedupe concerns, and recommend the lead structure (status, salesperson, market, deal source).\n\nDo NOT speak directly to the user. Return a recommendation: either "no dedup concern, here\'s the proposed lead structure" or "this looks like an existing client X — recommend updating rather than creating new". The Principal fires the actual propose_create_lead based on your recommendation.'
 };
 // Resolve the back-compat aliases after the literal initializer runs.
 // Every retired agent_key now resolves to 86's baseline so a stale
@@ -1932,6 +1940,81 @@ function customToolsFor(agentKey) {
       merged.push(t);
     });
     tools = merged;
+  } else if (agentKey === '86-pm' || agentKey === '86-scheduler' || agentKey === '86-directory' || agentKey === '86-sales') {
+    // Phase S3 — Tier 2 staff agents. Each gets a focused name
+    // allowlist drawn from the existing tool union; tools outside
+    // the allowlist are stripped. Memory tools are always added so
+    // every staff has cross-session recall.
+    //
+    // Approval-tier writes that survive the filter are still
+    // attached — the staff sub-session's dispatcher (in ai-routes:
+    // execHandoffToStaff) converts approval calls to text errors,
+    // which prompts the staff to describe the proposal back to the
+    // Principal instead of firing a card from a sub-session.
+    const allowlistByStaff = {
+      '86-pm': new Set([
+        // Reads (auto-tier, fire inline)
+        'read_workspace_sheet_full', 'read_qb_cost_lines',
+        'read_building_breakdown', 'read_job_pct_audit',
+        'read_wip_summary', 'read_jobs',
+        // Approval-tier writes — described as text by the staff,
+        // fired as cards by the Principal. Keeping them attached
+        // gives the model the exact schema vocabulary when it
+        // describes the proposal.
+        'set_phase_pct_complete', 'set_phase_field', 'set_phase_buildingId',
+        'create_node', 'delete_node', 'wire_nodes', 'set_node_value',
+        'assign_qb_line', 'assign_qb_lines_bulk',
+        'set_co_field', 'create_po', 'set_po_field',
+        'create_invoice', 'set_invoice_field',
+        'set_wire_pct_complete', 'set_wire_alloc_pct',
+        'request_edit_mode'
+      ]),
+      '86-scheduler': new Set([
+        'read_jobs', 'read_workspace_sheet_full', 'read_job_pct_audit',
+        'read_subs', 'read_users', 'read_wip_summary'
+      ]),
+      '86-directory': new Set([
+        // Reads
+        'read_clients', 'read_jobs', 'read_users', 'read_wip_summary',
+        // Auto-tier writes the staff can apply inline
+        'update_client_field', 'create_property', 'link_property_to_parent',
+        'add_client_note',
+        // Approval-tier writes — described as text, fired by Principal
+        'create_parent_company', 'rename_client', 'change_property_parent',
+        'merge_clients', 'split_client_into_parent_and_property',
+        'delete_client', 'attach_business_card_to_client'
+      ]),
+      '86-sales': new Set([
+        // Intake-side reads (dedup against existing set)
+        'read_existing_clients', 'read_existing_leads',
+        // Reads from estimate domain (lookup)
+        'read_clients', 'read_leads', 'read_lead_pipeline',
+        // Approval-tier intake write
+        'propose_create_lead'
+      ])
+    };
+    const allow = allowlistByStaff[agentKey];
+    const candidates = [
+      ...aiInternals.estimateTools(),
+      ...aiInternals.jobTools(),
+      ...aiInternals.clientTools()
+    ];
+    const seen = new Set();
+    const merged = [];
+    candidates.forEach(t => {
+      if (!t || !t.name || seen.has(t.name)) return;
+      if (!allow.has(t.name)) return;
+      seen.add(t.name);
+      merged.push(t);
+    });
+    // Always attach memory tools regardless of allowlist — every
+    // staff agent gets cross-session recall.
+    aiInternals.memoryTools().forEach(t => {
+      if (!t || !t.name || seen.has(t.name)) return;
+      seen.add(t.name);
+      merged.push(t);
+    });
+    tools = merged;
   }
   return tools
     .filter(t => t.name !== 'web_search')              // built-in toolset owns this
@@ -2052,6 +2135,50 @@ const STANDING_STAFF_SPECS = [
     routing_hints: {
       surfaces: ['estimate'],
       trigger_phrases: ['add line', 'add scope', 'price this', 'bid', 'estimate', 'subgroup', 'line item']
+    }
+  },
+  {
+    agent_key: '86-pm',
+    display_name: '86 · PM',
+    tier: 2,
+    role_card: 'Project manager. Owns WIP audits, phase pct-complete, CO/PO/invoice review, QB cost reconciliation, margin drift, billing gaps, node graph integrity. Reads deeply; recommends in text; Principal fires approval cards.',
+    tool_keys: [],
+    routing_hints: {
+      surfaces: ['job'],
+      trigger_phrases: ['wip', 'change order', 'CO', 'invoice', 'PO', 'margin', 'phase pct', 'audit this job', 'billing gap']
+    }
+  },
+  {
+    agent_key: '86-scheduler',
+    display_name: '86 · Scheduler',
+    tier: 2,
+    role_card: 'Production scheduler. Owns crew dispatch, job sequencing, weather windows, sub availability, calendar coordination. Reasoning-driven; recommends sequences in text; Principal communicates to user.',
+    tool_keys: [],
+    routing_hints: {
+      surfaces: ['job', 'schedule'],
+      trigger_phrases: ['schedule', 'dispatch', 'sequence', 'when can we', 'crew', 'next week', 'availability']
+    }
+  },
+  {
+    agent_key: '86-directory',
+    display_name: '86 · Directory',
+    tier: 2,
+    role_card: 'Office manager / directory steward. Owns client/property hierarchy, addresses, dedupe, business-card capture, durable client notes. Applies safe tier:auto edits inline; describes judgment-heavy changes (merge/split/delete) for Principal to surface as cards.',
+    tool_keys: [],
+    routing_hints: {
+      surfaces: ['client', 'directory'],
+      trigger_phrases: ['client', 'property', 'parent company', 'address', 'merge', 'split', 'rename', 'business card', 'directory']
+    }
+  },
+  {
+    agent_key: '86-sales',
+    display_name: '86 · Sales',
+    tier: 2,
+    role_card: 'Sales / intake specialist. Owns lead capture, dedup against existing client+lead set, pipeline health, salesperson assignment. Recommends lead structure; Principal fires propose_create_lead based on the recommendation.',
+    tool_keys: [],
+    routing_hints: {
+      surfaces: ['intake', 'leads'],
+      trigger_phrases: ['lead', 'intake', 'new client', 'pipeline', 'salesperson', 'capture', 'dedup']
     }
   }
 ];
