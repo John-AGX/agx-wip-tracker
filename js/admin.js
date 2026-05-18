@@ -5337,10 +5337,19 @@
     host.innerHTML = panelHeader('Managed Agents', '🤖') + '<div style="font-size:12px;color:var(--text-dim,#888);font-style:italic;">Loading…</div>';
     window.p86Api.get('/api/admin/agents/managed').then(function(resp) {
       var rows = (resp && resp.agents) || [];
-      // Intake is no longer a separate managed agent — 86 owns the
-      // lead-intake flow. Only four agents register on the Anthropic side.
-      var labels = { job: '86 (unified operator agent — every surface)' };
-      var activeKeys = ['job'];
+      // Phase S2/S3 — Principal ('job') plus the standing staff agents
+      // registered by /staff/seed. New staff_agents.agent_keys must be
+      // added here so the admin UI doesn't mark them as "stale" and
+      // offer a Delete button next to them.
+      var labels = {
+        job:             '86 (unified operator agent — every surface)',
+        '86-estimator':  '86 · Estimator (staff: estimating specialist)',
+        '86-pm':         '86 · PM (staff: WIP / production)',
+        '86-scheduler':  '86 · Scheduler (staff: crew dispatch / sequencing)',
+        '86-directory':  '86 · Directory (staff: client hygiene)',
+        '86-sales':      '86 · Sales (staff: lead intake / pipeline)'
+      };
+      var activeKeys = ['job', '86-estimator', '86-pm', '86-scheduler', '86-directory', '86-sales'];
       var registered = {};
       rows.forEach(function(r) { registered[r.agent_key] = r; });
       // Stale rows — registered keys that aren't in the current set

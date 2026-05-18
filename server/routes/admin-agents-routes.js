@@ -2416,10 +2416,18 @@ router.get('/managed/audit', requireAuth, requireCapability('ROLES_MANAGE'), asy
          LEFT JOIN organizations o ON o.id = r.organization_id
         ORDER BY r.organization_id, r.agent_key`
     );
+    // Phase S2/S3 — keys recognized as live. The Principal ('job')
+    // plus the standing staff_agents seeded via /staff/seed. Anything
+    // else (e.g. legacy 'cra'/'staff'/'ag', or a future retired key)
+    // gets the stale_agent_key flag.
+    const liveAgentKeys = new Set([
+      'job',
+      ...STANDING_STAFF_SPECS.map(s => s.agent_key)
+    ]);
     const rows = [];
     for (const row of r.rows) {
       const flags = [];
-      if (row.agent_key !== 'job') flags.push('stale_agent_key');
+      if (!liveAgentKeys.has(row.agent_key)) flags.push('stale_agent_key');
       if (!row.organization_id) flags.push('no_org');
       const expectedName = 'Project 86 ' + (row.agent_key || '').toUpperCase() + ' · ' + (row.org_name || row.org_slug || '');
       let anthropicState = null;
