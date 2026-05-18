@@ -9151,9 +9151,46 @@ async function driveSubtaskTurn({ anthropic, sessionId, eventsToSend, onCustomTo
     }
 
     if (pendingResults.length === 0) {
-      // No tool calls this turn — assistant text is the final reply.
+      // No new tool calls this turn. Two possibilities:
+      //   (a) Clean end_turn — model emitted text and stopped. Done.
+      //   (b) Stall — session is still in requires_action waiting on
+      //       tool_results we already sent (Anthropic partial-ack
+      //       drops some sends, leaving ids permanently blocked).
+      //       The Principal handles this via stall-recovery; without
+      //       the same here, driveSubtaskTurn returned text='' on
+      //       requires_action sessions that were just waiting for
+      //       one more tool_result.
+      const latestIdle = idleStopReasons[idleStopReasons.length - 1];
+      const stalled = latestIdle === 'requires_action' &&
+                      turnText.length === 0 &&
+                      blockedEventIds.length > 0 &&
+                      turnCount < MAX_SUBTASK_TURNS;
+      if (stalled) {
+        // Send "Continue." tool_results for every blocked id to
+        // unblock the session, then loop. Anthropic accepts these
+        // as auto-satisfying the still-pending tool_use ids; the
+        // model resumes and (usually) produces text on the next
+        // iteration.
+        console.log('[handoff-debug] stall-recovery', sessionId,
+          'turn=' + turnCount,
+          'blocked_ids=' + JSON.stringify(blockedEventIds));
+        recordHandoffDebug({
+          phase: 'stall-recovery',
+          session_id: sessionId,
+          turn: turnCount,
+          blocked_event_ids: blockedEventIds.slice()
+        });
+        nextEvents = blockedEventIds.map(id => ({
+          type: 'user.custom_tool_result',
+          custom_tool_use_id: id,
+          content: [{ type: 'text', text: 'Continue — return your analysis as text now. The previous tool_use turn timed out partway; just summarize what you found and recommend next steps.' }]
+        }));
+        continue;
+      }
+      // Clean exit — return whatever text we collected.
       console.log('[handoff-debug] return-no-tools', sessionId, 'turn=' + turnCount,
         'collected_text_len=' + collectedText.length,
+        'latest_idle_stop=' + latestIdle,
         'event_counts=' + JSON.stringify(eventCounts));
       return { text: collectedText, usage: aggUsage };
     }
