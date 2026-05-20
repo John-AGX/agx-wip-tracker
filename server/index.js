@@ -43,6 +43,7 @@ const adminOrganizationsRoutes = require('./routes/admin-organizations-routes');
 const smsRoutes = require('./routes/sms-routes');
 const reportRoutes = require('./routes/report-routes');
 const fieldToolsRoutes = require('./routes/field-tools-routes');
+const payloadRoutes = require('./routes/payload-routes');
 const { storage } = require('./storage');
 
 const app = express();
@@ -74,6 +75,10 @@ app.use('/api/jobs', jobRoutes);
 // the router preserves :jobId from this prefix).
 app.use('/api/jobs/:jobId/reports', reportRoutes);
 app.use('/api/field-tools', fieldToolsRoutes);
+// Payload DSL routes — list, file download, reject, apply, CSV import.
+// Mounted before the broad /api/ai handler so /api/payloads claims its
+// namespace without ambiguity.
+app.use('/api/payloads', payloadRoutes);
 app.use('/api/estimates', estimateRoutes);
 app.use('/api/roles', roleRoutes);
 app.use('/api/clients', clientRoutes);

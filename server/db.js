@@ -1616,6 +1616,143 @@ async function initSchema() {
       ON ai_watch_runs (status)
       WHERE status IN ('pending','running');
 
+    -- Extend ai_watches for agent-based watchers (Payload DSL v1).
+    -- kind='rule' is the legacy SQL-condition watch; kind='agent' is a
+    -- new LLM-driven scan where the watch-runner spins up a one-shot
+    -- session against agent_key, injects an incremental scope (entities
+    -- modified since last_scan_at), and the agent emits payload files
+    -- with source='watcher_<agent_key>' via emit_payload_file. model +
+    -- schedule_hours let admins tune cost/cadence per watcher.
+    ALTER TABLE ai_watches ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'rule';
+    ALTER TABLE ai_watches ADD COLUMN IF NOT EXISTS agent_key TEXT;
+    ALTER TABLE ai_watches ADD COLUMN IF NOT EXISTS scope_filter JSONB;
+    ALTER TABLE ai_watches ADD COLUMN IF NOT EXISTS last_scan_at TIMESTAMPTZ;
+    ALTER TABLE ai_watches ADD COLUMN IF NOT EXISTS model TEXT DEFAULT 'haiku';
+    ALTER TABLE ai_watches ADD COLUMN IF NOT EXISTS schedule_hours INTEGER DEFAULT 12;
+    CREATE INDEX IF NOT EXISTS idx_ai_watches_kind
+      ON ai_watches (kind, next_fire_at)
+      WHERE enabled AND archived_at IS NULL;
+
+    -- payloads — Project 86 Payload DSL (v1).
+    -- A payload is a single typed "work order" file 86 (or a background
+    -- watcher) produces. The .p86.json file_content holds targets[] +
+    -- ops + metadata; the user drags it into the universal dropbox in
+    -- the AI panel to apply, and the server-side decoder dispatches each
+    -- target.ops to existing write routes within a single PG transaction.
+    --
+    -- source tracks who emitted it. '86' for the Principal (sync user
+    -- turn); 'watcher_<agent_key>' for background watchers; 'watch_rule'
+    -- for legacy rule-based watches that produce payloads; 'csv_import',
+    -- 'qb_sync', 'manual' for non-LLM sources. Single read endpoint with
+    -- a source filter feeds the sidebar Payloads + admin audit view.
+    --
+    -- user_id is nullable so watcher-emitted payloads can land at org
+    -- scope (any user in the org can review). Principal-emitted payloads
+    -- always have a user_id (the user whose chat turn produced it).
+    --
+    -- targets is the denormalized array of {entity_type, entity_id} for
+    -- indexed queries ("show me every payload touching this estimate").
+    -- file_content holds the complete bundle including ops.
+    --
+    -- status lifecycle: ready → applied | rejected | expired | failed.
+    -- No proposed/pending split — the file IS the proposal; drag is the
+    -- commit. expired flips automatically after 7 days; rejected is the
+    -- user explicitly dismissing.
+    --
+    -- expires_at is checked at apply time too, so a stale ready payload
+    -- can't be dragged weeks later.
+    CREATE TABLE IF NOT EXISTS payloads (
+      id TEXT PRIMARY KEY,
+      organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      session_id BIGINT REFERENCES ai_sessions(id) ON DELETE SET NULL,
+      parent_message_id TEXT REFERENCES ai_messages(id) ON DELETE SET NULL,
+      source TEXT NOT NULL,
+      emitting_agent_key TEXT,
+      filename TEXT NOT NULL,
+      file_content JSONB NOT NULL,
+      targets JSONB NOT NULL,
+      title TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      rationale TEXT,
+      template_id TEXT,
+      status TEXT NOT NULL DEFAULT 'ready',
+      applied_at TIMESTAMPTZ,
+      apply_summary TEXT,
+      apply_error TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      expires_at TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '7 days')
+    );
+    CREATE INDEX IF NOT EXISTS idx_payloads_session
+      ON payloads (session_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_payloads_user_status
+      ON payloads (user_id, status, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_payloads_org_status
+      ON payloads (organization_id, status, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_payloads_expiry
+      ON payloads (expires_at)
+      WHERE status = 'ready';
+    CREATE INDEX IF NOT EXISTS idx_payloads_targets_gin
+      ON payloads USING gin (targets jsonb_path_ops);
+    CREATE INDEX IF NOT EXISTS idx_payloads_source
+      ON payloads (organization_id, source, created_at DESC);
+
+    -- payload_templates — user-pinnable recurring payloads ("recipes").
+    -- A user (or 86 on the user's behalf) pins an applied payload as a
+    -- template: ops_template carries the bundle with {{placeholder}}
+    -- markers in fields that vary by use; parameters describes the
+    -- expected placeholder names + types + descriptions. The recipe
+    -- modal collects values, and the clone endpoint produces a concrete
+    -- payload row.
+    --
+    -- description carries the "when to use + gotchas" wisdom that lives
+    -- with the recipe (replaces what would have been agent_notes — see
+    -- the v1 plan for the deduplication rationale).
+    --
+    -- is_pinned controls sidebar visibility; use_count + last_used_at
+    -- power the "most-used recipes first" ordering. Soft delete via
+    -- archived; unique (org, name) only enforced for non-archived rows
+    -- so a recipe name can be reused after the prior version is retired.
+    CREATE TABLE IF NOT EXISTS payload_templates (
+      id TEXT PRIMARY KEY,
+      organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      created_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      name TEXT NOT NULL,
+      description TEXT,
+      icon TEXT,
+      parameters JSONB NOT NULL DEFAULT '[]'::jsonb,
+      ops_template JSONB NOT NULL,
+      origin_payload_id TEXT REFERENCES payloads(id) ON DELETE SET NULL,
+      is_pinned BOOLEAN NOT NULL DEFAULT false,
+      pinned_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      use_count INTEGER NOT NULL DEFAULT 0,
+      last_used_at TIMESTAMPTZ,
+      archived BOOLEAN NOT NULL DEFAULT false,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_templates_unique_name
+      ON payload_templates (organization_id, name)
+      WHERE archived = false;
+    CREATE INDEX IF NOT EXISTS idx_templates_pinned
+      ON payload_templates (organization_id, is_pinned DESC, last_used_at DESC NULLS LAST)
+      WHERE archived = false;
+
+    -- Backfill the FK on payloads.template_id once payload_templates
+    -- exists. Done as an ALTER (not in the CREATE TABLE above) to avoid
+    -- a chicken-and-egg dependency on the table creation order during
+    -- idempotent init.
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.table_constraints
+        WHERE constraint_name = 'payloads_template_id_fkey'
+      ) THEN
+        ALTER TABLE payloads
+          ADD CONSTRAINT payloads_template_id_fkey
+          FOREIGN KEY (template_id) REFERENCES payload_templates(id) ON DELETE SET NULL;
+      END IF;
+    END$$;
+
     -- org_mcp_servers — Phase 6 (MCP connectors). Per-tenant external
     -- tool reach: Gmail, Google Calendar, QuickBooks, Slack, etc.
     -- Each row is one MCP server URL the tenant has provisioned (either
