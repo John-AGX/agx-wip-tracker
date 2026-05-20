@@ -920,6 +920,25 @@
       '<div id="ai-messages" style="flex:1;overflow-y:auto;overflow-x:hidden;min-width:0;padding:18px 18px;display:flex;flex-direction:column;gap:14px;font-size:13px;color:var(--text,#e6e6e6);background-image:radial-gradient(circle, rgba(255,140,80,0.18) 1px, transparent 1px);background-size:14px 14px;"></div>' +
       // Preset prompts
       '<div id="ai-presets" style="padding:8px 12px;border-top:1px solid var(--border,#333);display:flex;flex-wrap:wrap;gap:6px;background:rgba(255,255,255,0.02);"></div>' +
+      // Universal payload dropbox + CSV upload entrypoint. The dropbox
+      // is the single commit gate for any .p86.json payload (Principal
+      // -emitted, watcher-emitted, or CSV-converted). Always visible
+      // while the panel is open. PayloadDropbox.mount() renders into
+      // #p86-dropbox-slot at panel-open time.
+      '<div id="p86-payload-strip" style="padding:6px 12px 4px 12px;display:flex;align-items:stretch;gap:8px;border-top:1px solid rgba(255,255,255,0.04);background:rgba(255,255,255,0.015);">' +
+        '<div id="p86-dropbox-slot" style="flex:1;min-width:0;"></div>' +
+        '<div id="p86-csv-upload-wrap" style="display:flex;align-items:center;gap:4px;">' +
+          '<select id="p86-csv-entity-type" title="Entity type for CSV import" style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.10);color:#e6e6e6;border-radius:6px;font-size:11px;padding:4px 6px;cursor:pointer;">' +
+            '<option value="lead">Leads</option>' +
+            '<option value="client">Clients</option>' +
+            '<option value="estimate">Estimate lines</option>' +
+          '</select>' +
+          '<input id="p86-csv-file" type="file" accept=".csv,text/csv" style="display:none;" />' +
+          '<button id="p86-csv-upload-btn" type="button" title="Upload CSV → payload (C14)" style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.10);color:#e6e6e6;border-radius:6px;padding:6px 10px;font-size:11px;cursor:pointer;display:inline-flex;align-items:center;gap:5px;">' +
+            '<span style="font-size:13px;line-height:1;">📤</span><span>CSV</span>' +
+          '</button>' +
+        '</div>' +
+      '</div>' +
       // Input row. Photos are auto-included via the entity's attachments
       // and inline uploads via the + composer button — no separate toggle
       // needed.
@@ -971,8 +990,43 @@
                 ' onfocus="this.style.borderColor=\'rgba(79,140,255,0.35)\';this.style.background=\'rgba(255,255,255,0.05)\'"' +
                 ' onblur="this.style.borderColor=\'rgba(255,255,255,0.06)\';this.style.background=\'rgba(255,255,255,0.03)\'" />' +
             '</div>' +
-            '<div id="ai-sidebar-list" style="flex:1;overflow-y:auto;padding:2px 0 10px 0;font-size:12px;color:#e6e6e6;">' +
-              '<div style="padding:14px;color:rgba(255,255,255,0.35);font-size:11.5px;">Loading sessions…</div>' +
+            // Scrollable region containing three stacked sections:
+            // Chats (existing sessions), Payloads (new), Recipes (new).
+            // Flex:1 + overflow live here so the whole stack scrolls
+            // together as one column.
+            '<div id="ai-sidebar-scroll" style="flex:1;overflow-y:auto;padding:2px 0 10px 0;font-size:12px;color:#e6e6e6;">' +
+              '<div id="ai-sidebar-list">' +
+                '<div style="padding:14px;color:rgba(255,255,255,0.35);font-size:11.5px;">Loading sessions…</div>' +
+              '</div>' +
+              // Payloads section — list of ready/applied payload files
+              // (Principal-emitted and watcher-emitted) for this user
+              // and org. Collapsible header; populated by
+              // refreshPayloadsSidebar().
+              '<div id="ai-sidebar-payloads-section" style="margin-top:8px;border-top:1px solid rgba(255,255,255,0.05);padding-top:4px;">' +
+                '<div id="ai-sidebar-payloads-header" style="padding:10px 12px 6px 12px;display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none;">' +
+                  '<span class="p86-caret" style="font-size:10px;opacity:0.5;transition:transform 0.15s;display:inline-block;">▼</span>' +
+                  '<span style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:rgba(255,255,255,0.35);">Payloads</span>' +
+                  '<span id="ai-sidebar-payloads-count" style="font-size:10px;color:rgba(255,255,255,0.30);"></span>' +
+                  '<div style="flex:1;"></div>' +
+                  '<button id="ai-sidebar-payloads-refresh" type="button" title="Refresh" aria-label="Refresh payloads" style="background:transparent;border:none;color:rgba(255,255,255,0.4);cursor:pointer;font-size:11px;padding:0 2px;">↻</button>' +
+                '</div>' +
+                '<div id="ai-sidebar-payloads-list" style="padding:0 6px 4px 6px;">' +
+                  '<div style="padding:8px 12px;color:rgba(255,255,255,0.30);font-size:11px;">No payloads yet.</div>' +
+                '</div>' +
+              '</div>' +
+              // Recipes section — pinned/recent templates. Empty in C2;
+              // populated in C11. Header visible now so the UX is
+              // discoverable.
+              '<div id="ai-sidebar-recipes-section" style="margin-top:4px;border-top:1px solid rgba(255,255,255,0.05);padding-top:4px;">' +
+                '<div id="ai-sidebar-recipes-header" style="padding:10px 12px 6px 12px;display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none;">' +
+                  '<span class="p86-caret" style="font-size:10px;opacity:0.5;transition:transform 0.15s;display:inline-block;">▼</span>' +
+                  '<span style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:rgba(255,255,255,0.35);">Recipes ⭐</span>' +
+                  '<span id="ai-sidebar-recipes-count" style="font-size:10px;color:rgba(255,255,255,0.30);"></span>' +
+                '</div>' +
+                '<div id="ai-sidebar-recipes-list" style="padding:0 6px 4px 6px;">' +
+                  '<div style="padding:8px 12px;color:rgba(255,255,255,0.30);font-size:11px;">Pin payloads as recipes (C11).</div>' +
+                '</div>' +
+              '</div>' +
             '</div>' +
           '</div>' +
         '</div>' +
@@ -996,6 +1050,61 @@
     }
     wireAIPanelResizer(panel);
     panel.querySelector('#ai-sidebar-toggle').onclick = toggleSidebar;
+
+    // ─────────────────────────────────────────────────────────────
+    // Payload DSL wiring (C2).
+    //
+    // Mount the universal dropbox in the strip above the input, wire
+    // the sidebar Payloads + Recipes collapse + refresh handlers,
+    // hook the CSV upload button (POSTs to /from-csv; 501 until C14),
+    // and register an SSE listener for emit_payload_file events.
+    // ─────────────────────────────────────────────────────────────
+    try {
+      var dropboxSlot = panel.querySelector('#p86-dropbox-slot');
+      if (dropboxSlot && window.PayloadDropbox && typeof window.PayloadDropbox.mount === 'function') {
+        window.PayloadDropbox.mount(dropboxSlot);
+      }
+    } catch (e) { console.warn('[ai-panel] PayloadDropbox mount failed:', e); }
+    var payloadsHeader = panel.querySelector('#ai-sidebar-payloads-header');
+    if (payloadsHeader) {
+      payloadsHeader.addEventListener('click', function() {
+        togglePanelSection('payloads');
+      });
+    }
+    var recipesHeader = panel.querySelector('#ai-sidebar-recipes-header');
+    if (recipesHeader) {
+      recipesHeader.addEventListener('click', function() {
+        togglePanelSection('recipes');
+      });
+    }
+    var refreshBtn = panel.querySelector('#ai-sidebar-payloads-refresh');
+    if (refreshBtn) {
+      refreshBtn.addEventListener('click', function(ev) {
+        ev.stopPropagation();
+        refreshPayloadsSidebar();
+      });
+    }
+    var csvBtn = panel.querySelector('#p86-csv-upload-btn');
+    var csvInput = panel.querySelector('#p86-csv-file');
+    var csvType = panel.querySelector('#p86-csv-entity-type');
+    if (csvBtn && csvInput) {
+      csvBtn.addEventListener('click', function() { csvInput.click(); });
+      csvInput.addEventListener('change', function() {
+        var f = csvInput.files && csvInput.files[0];
+        if (!f) return;
+        uploadCsvAsPayload(f, csvType && csvType.value || 'lead');
+        csvInput.value = '';
+      });
+    }
+    // Listen for cross-component signals so the sidebar updates when a
+    // payload is applied (badge flip) or a fresh ready-payload arrives
+    // mid-session (re-fetch).
+    document.addEventListener('p86:payload-applied', function(ev) {
+      refreshPayloadsSidebar();
+    });
+    document.addEventListener('p86:payload-ready', function(ev) {
+      refreshPayloadsSidebar();
+    });
     var trustBtn = panel.querySelector('#ai-trust');
     if (trustBtn) trustBtn.onclick = function(e) {
       e.stopPropagation();
@@ -1231,6 +1340,14 @@
     // Photos toggle and proposal cards only make sense on the estimate
     // side. Hide / disable them when running against a job.
     refreshModeSpecificUI();
+    // Pull the latest payloads into the sidebar each time the panel
+    // opens so the user sees fresh ready/applied state. Apply persisted
+    // collapse state for Payloads + Recipes sections.
+    try {
+      applyPanelSectionVisual('payloads', getPanelSectionOpen('payloads'));
+      applyPanelSectionVisual('recipes',  getPanelSectionOpen('recipes'));
+      refreshPayloadsSidebar();
+    } catch (e) { console.warn('[ai-panel] payload sidebar init failed:', e); }
     setTimeout(function() {
       var inp = document.getElementById('ai-input');
       if (inp) inp.focus();
@@ -1725,6 +1842,228 @@
     // Update the panel title to reflect the selected session.
     var titleEl = document.querySelector('#p86-ai-panel .p86-ai-title');
     if (titleEl) titleEl.textContent = row.label || ('Session ' + sessionId);
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Payload DSL — sidebar Payloads / Recipes section helpers (C2).
+  // ─────────────────────────────────────────────────────────────
+
+  // Collapse state for the sidebar's Payloads + Recipes sections.
+  // localStorage so the user's choice survives reload. Default to
+  // open ('1') so the sections are discoverable on first sight.
+  function getPanelSectionOpen(key) {
+    try {
+      var v = localStorage.getItem('p86-sidebar-' + key);
+      return v === null ? true : v === '1';
+    } catch (_) { return true; }
+  }
+  function setPanelSectionOpen(key, val) {
+    try { localStorage.setItem('p86-sidebar-' + key, val ? '1' : '0'); } catch (_) {}
+  }
+  function togglePanelSection(key) {
+    var open = !getPanelSectionOpen(key);
+    setPanelSectionOpen(key, open);
+    applyPanelSectionVisual(key, open);
+  }
+  function applyPanelSectionVisual(key, open) {
+    var listId = key === 'payloads' ? 'ai-sidebar-payloads-list' :
+                 key === 'recipes'  ? 'ai-sidebar-recipes-list'  : null;
+    var headerId = key === 'payloads' ? 'ai-sidebar-payloads-header' :
+                   key === 'recipes'  ? 'ai-sidebar-recipes-header'  : null;
+    if (!listId || !headerId) return;
+    var list = document.getElementById(listId);
+    var caret = document.querySelector('#' + headerId + ' .p86-caret');
+    if (list) list.style.display = open ? '' : 'none';
+    if (caret) caret.style.transform = open ? 'rotate(0deg)' : 'rotate(-90deg)';
+  }
+
+  // Fetch the latest payloads for the user/org and re-render the
+  // sidebar Payloads section. Called on panel open, after applies,
+  // and when a fresh emit_payload_file arrives via SSE.
+  var _payloadsList = [];
+  function refreshPayloadsSidebar() {
+    if (!window.p86Api || !window.p86Api.get) return;
+    var host = document.getElementById('ai-sidebar-payloads-list');
+    var countEl = document.getElementById('ai-sidebar-payloads-count');
+    if (host) host.innerHTML = '<div style="padding:8px 12px;color:rgba(255,255,255,0.30);font-size:11px;">Loading…</div>';
+    window.p86Api.get('/api/payloads?limit=50')
+      .then(function(resp) {
+        _payloadsList = (resp && resp.payloads) || [];
+        renderPayloadsSidebar();
+        if (countEl) {
+          var ready = _payloadsList.filter(function(p) { return p.status === 'ready'; }).length;
+          countEl.textContent = ready ? '(' + ready + ' ready)' : '';
+        }
+      })
+      .catch(function(err) {
+        if (host) host.innerHTML = '<div style="padding:8px 12px;color:#fbbf24;font-size:11px;">Failed to load: ' +
+          escapeHTML(err && err.message || 'unknown error') + '</div>';
+      });
+  }
+
+  function renderPayloadsSidebar() {
+    var host = document.getElementById('ai-sidebar-payloads-list');
+    if (!host) return;
+    if (!_payloadsList.length) {
+      host.innerHTML = '<div style="padding:8px 12px;color:rgba(255,255,255,0.30);font-size:11px;">No payloads yet.</div>';
+      return;
+    }
+    // Group: Ready first, then Applied (last 7d), then everything else.
+    var groups = { ready: [], applied: [], other: [] };
+    _payloadsList.forEach(function(p) {
+      if (p.status === 'ready') groups.ready.push(p);
+      else if (p.status === 'applied') groups.applied.push(p);
+      else groups.other.push(p);
+    });
+    var html = '';
+    function renderGroup(label, items, color) {
+      if (!items.length) return;
+      html += '<div style="padding:6px 12px 3px 12px;font-size:9.5px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:' + color + ';">' +
+        escapeHTML(label) + ' (' + items.length + ')</div>';
+      items.forEach(function(p) {
+        var icon = p.source && p.source.indexOf('watcher_') === 0 ? '🤖' :
+                   p.source === 'csv_import' ? '📥' :
+                   p.source === 'qb_sync'    ? '📒' :
+                   '📄';
+        var statusIcon = p.status === 'applied'  ? '✓' :
+                         p.status === 'rejected' ? '×' :
+                         p.status === 'expired'  ? '⏳' :
+                         p.status === 'failed'   ? '✗' : '';
+        var statusColor = p.status === 'applied'  ? '#7ee2a5' :
+                          p.status === 'failed'   ? '#ffb4ad' :
+                          p.status === 'rejected' ? 'rgba(255,255,255,0.4)' :
+                          'rgba(255,255,255,0.6)';
+        var draggable = p.status === 'ready' ? 'draggable="true"' : '';
+        html +=
+          '<div class="p86-sidebar-payload" data-payload-id="' + escapeHTML(p.id) + '" ' + draggable + ' ' +
+          'style="display:flex;align-items:center;gap:8px;padding:6px 12px;margin:1px 6px;border-radius:6px;cursor:' + (p.status === 'ready' ? 'grab' : 'pointer') + ';transition:background 0.12s;" ' +
+          'onmouseenter="this.style.background=\'rgba(255,255,255,0.05)\'" ' +
+          'onmouseleave="this.style.background=\'transparent\'">' +
+            '<span style="font-size:13px;line-height:1;flex-shrink:0;">' + icon + '</span>' +
+            '<div style="flex:1;min-width:0;overflow:hidden;">' +
+              '<div style="font-size:11.5px;color:rgba(255,255,255,0.85);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTML(p.title || p.filename || p.id) + '</div>' +
+              '<div style="font-size:10px;color:rgba(255,255,255,0.40);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTML(p.summary || '') + '</div>' +
+            '</div>' +
+            (statusIcon ? '<span style="font-size:10px;color:' + statusColor + ';flex-shrink:0;">' + statusIcon + '</span>' : '') +
+          '</div>';
+      });
+    }
+    renderGroup('Ready', groups.ready, 'rgba(155,188,255,0.85)');
+    renderGroup('Applied', groups.applied, 'rgba(126,226,165,0.65)');
+    renderGroup('Other', groups.other, 'rgba(255,255,255,0.32)');
+    host.innerHTML = html;
+    // Wire drag for ready rows AND click for all (opens preview drawer).
+    host.querySelectorAll('.p86-sidebar-payload').forEach(function(row) {
+      var pid = row.dataset.payloadId;
+      var payload = _payloadsList.find(function(x) { return x.id === pid; });
+      if (!payload) return;
+      if (payload.status === 'ready') {
+        row.addEventListener('dragstart', function(ev) {
+          try {
+            ev.dataTransfer.setData('application/x-p86-payload-id', payload.id);
+            ev.dataTransfer.setData('application/x-p86-payload', JSON.stringify({
+              payload_id: payload.id, filename: payload.filename, targets: payload.targets,
+            }));
+            ev.dataTransfer.effectAllowed = 'copy';
+            document.dispatchEvent(new CustomEvent('p86:payload-drag-start', {
+              detail: { payload_id: payload.id, filename: payload.filename, targets: payload.targets }
+            }));
+          } catch (e) { /* swallow */ }
+        });
+        row.addEventListener('dragend', function() {
+          document.dispatchEvent(new CustomEvent('p86:payload-drag-end'));
+        });
+      }
+      row.addEventListener('click', function() { openPayloadPreviewDrawer(payload); });
+    });
+  }
+
+  // Lightweight preview drawer — re-uses the artifact renderer in a
+  // modal overlay. Click outside or press Esc to close.
+  function openPayloadPreviewDrawer(payload) {
+    if (!window.PayloadArtifact || typeof window.PayloadArtifact.render !== 'function') {
+      console.warn('[ai-panel] PayloadArtifact not loaded');
+      return;
+    }
+    // Fetch the full row (list response excludes file_content).
+    var url = '/api/payloads/' + encodeURIComponent(payload.id);
+    if (!window.p86Api || !window.p86Api.get) return;
+    window.p86Api.get(url).then(function(resp) {
+      var full = (resp && resp.payload) || payload;
+      var overlay = document.createElement('div');
+      overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:9999;display:flex;align-items:center;justify-content:center;padding:24px;';
+      overlay.addEventListener('click', function(ev) { if (ev.target === overlay) overlay.remove(); });
+      var modal = document.createElement('div');
+      modal.style.cssText = 'background:var(--surface,#0f0f1e);border:1px solid rgba(255,255,255,0.12);border-radius:12px;max-width:560px;width:100%;max-height:80vh;overflow:auto;padding:16px 18px;';
+      var closeBtn = document.createElement('button');
+      closeBtn.textContent = '×';
+      closeBtn.style.cssText = 'float:right;background:transparent;border:none;color:rgba(255,255,255,0.6);font-size:20px;line-height:1;cursor:pointer;padding:0 4px;';
+      closeBtn.onclick = function() { overlay.remove(); };
+      modal.appendChild(closeBtn);
+      var heading = document.createElement('div');
+      heading.style.cssText = 'font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:rgba(255,255,255,0.45);margin-bottom:10px;';
+      heading.textContent = 'Payload preview';
+      modal.appendChild(heading);
+      window.PayloadArtifact.render(full, modal);
+      overlay.appendChild(modal);
+      document.body.appendChild(overlay);
+      var escHandler = function(ev) { if (ev.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', escHandler); } };
+      document.addEventListener('keydown', escHandler);
+    }).catch(function(err) {
+      window.alert('Could not load payload: ' + (err && err.message || err));
+    });
+  }
+
+  // CSV → payload upload. Hits /api/payloads/from-csv with multipart
+  // form data + entity_type. Returns 501 until C14 — we surface the
+  // server's response so the user can see when the dispatcher is live.
+  function uploadCsvAsPayload(file, entityType) {
+    if (!file) return;
+    var form = new FormData();
+    form.append('file', file);
+    form.append('entity_type', entityType || 'lead');
+    fetch('/api/payloads/from-csv', {
+      method: 'POST',
+      credentials: 'include',
+      body: form,
+    }).then(function(r) {
+      return r.json().then(function(b) { return { status: r.status, body: b }; }).catch(function() { return { status: r.status, body: {} }; });
+    }).then(function(res) {
+      if (res.status === 501) {
+        window.alert('CSV → payload converter lands in C14. (Server returned 501.)');
+        return;
+      }
+      if (res.status >= 400) {
+        window.alert('CSV upload failed: ' + (res.body && res.body.error || ('HTTP ' + res.status)));
+        return;
+      }
+      // Success path (post-C14): refresh the sidebar so the new payload
+      // shows up under Ready immediately.
+      refreshPayloadsSidebar();
+    }).catch(function(err) {
+      window.alert('CSV upload error: ' + (err && err.message || err));
+    });
+  }
+
+  // Dev helper — pushes a synthetic payload row into the local list so
+  // the visual loop can be exercised end-to-end without a real emit.
+  // Window-exposed for console use: window.p86AI.injectFixturePayload({...}).
+  function injectFixturePayload(fixture) {
+    var p = Object.assign({
+      id: 'pl_fixture_' + Date.now(),
+      filename: 'Estimate.S0000-Fixture.' + (new Date().toISOString().slice(0,10)) + '.p86.json',
+      title: 'Fixture payload',
+      summary: '1 fixture target',
+      rationale: 'Local dev fixture for the C2 visual loop',
+      source: '86',
+      status: 'ready',
+      targets: [{ entity_type: 'estimate', entity_id: 'fixture', ops: { field_updates: { note: 'fixture' } } }],
+      created_at: new Date().toISOString(),
+      file_content: null,
+    }, fixture || {});
+    _payloadsList.unshift(p);
+    renderPayloadsSidebar();
+    return p;
   }
 
   function sidebarStartNewChat() {
@@ -6345,7 +6684,13 @@
     isOpen: function() { return _open; },
     // Re-render the AG header + notice when the editor's Plan/Build
     // pill flips. Cheap call (just two DOM text writes).
-    refreshPhaseChip: function() { try { refreshModeSpecificUI(); } catch (e) {} }
+    refreshPhaseChip: function() { try { refreshModeSpecificUI(); } catch (e) {} },
+    // Payload DSL hooks (C2). injectFixturePayload pushes a synthetic
+    // row into the sidebar for visual testing without a real emit; the
+    // sidebar refresh is exposed so other modules (e.g., post-apply
+    // surface listeners) can force a re-pull.
+    injectFixturePayload: function(fixture) { return injectFixturePayload(fixture); },
+    refreshPayloadsSidebar: function() { return refreshPayloadsSidebar(); }
   };
 
   // Sticky-header shim mirroring openEstimateAI() — finds the active job id
