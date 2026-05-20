@@ -2851,6 +2851,42 @@
           brainYoga.override(label, true);
           scrollToBottom();
         } else if (payload.tool_applied) {
+          // Payload DSL — emit_payload_file lands here with meta
+          // carrying the full file_content. Render a dedicated file
+          // artifact in the message stream AND refresh the sidebar
+          // Payloads section so the user can find it later.
+          if (payload.tool_applied.name === 'emit_payload_file' &&
+              payload.tool_applied.meta &&
+              payload.tool_applied.meta.kind === 'emit_payload_file' &&
+              window.PayloadArtifact &&
+              typeof window.PayloadArtifact.render === 'function') {
+            try {
+              var pl = {
+                id: payload.tool_applied.meta.payload_id,
+                filename: payload.tool_applied.meta.filename,
+                title: payload.tool_applied.meta.title,
+                summary: payload.tool_applied.meta.summary,
+                rationale: payload.tool_applied.meta.rationale,
+                targets: payload.tool_applied.meta.targets,
+                source: payload.tool_applied.meta.source || '86',
+                status: payload.tool_applied.meta.status || 'ready',
+                file_content: payload.tool_applied.meta.file_content,
+              };
+              window.PayloadArtifact.render(pl, streamDiv);
+            } catch (e) {
+              console.error('[ai-panel] failed to render payload artifact:', e);
+            }
+            // Refresh sidebar so the file shows up under Ready.
+            if (typeof refreshPayloadsSidebar === 'function') {
+              try { refreshPayloadsSidebar(); } catch (_) {}
+            }
+            // Resume brain yoga and skip the live-chip path — the file
+            // artifact is the visible affordance, not a chip.
+            brainYoga.override('Got it. Thinking…', false);
+            chipsAppended++;
+            scrollToBottom();
+            return;
+          }
           // Phase 3 subtask cards retired — no special meta handling
           // for spawn_subtask / await_subtasks / subtask_status. Fan-out
           // is done via native parallel tool calls in one session now,

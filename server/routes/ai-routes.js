@@ -6242,6 +6242,111 @@ const HANDOFF_TOOLS = [
   }
 ];
 
+// ──────────────────────────────────────────────────────────────────
+// PAYLOAD_TOOLS — Project 86 Payload DSL (v1).
+//
+// The Principal's ONLY write primitive. Every mutation 86 wants to
+// make — field update, line item edit, phase change, lead create,
+// graph topology op — gets bundled into a `.p86.json` payload file
+// via this single tool call. The user drags the file into the
+// universal dropbox to apply.
+//
+// The handler (in make86OnCustomToolUse) validates ops against
+// payload-dispatcher's PAYLOAD_OPS_SCHEMAS, inserts a payloads row
+// with status='ready', and returns meta so the SSE tool_applied event
+// can render the file artifact in the chat. See plan §emit_payload_file.
+//
+// The format spec (per-entity_type ops vocabulary, $new_id refs,
+// recipe usage, ambiguity discipline) lives in the `86-payload-drafter`
+// native Anthropic Skill, registered on the Principal agent. C4 wires
+// the tool; C8 migrates the format spec into a Skill body (right now
+// the spec is inline in the Principal baseline).
+// ──────────────────────────────────────────────────────────────────
+const PAYLOAD_TOOLS = [
+  {
+    name: 'emit_payload_file',
+    description:
+      'Emit a .p86.json payload file with fully-resolved targets and ops. ' +
+      'This is your ONE write primitive — use it for every field update, ' +
+      'line item change, phase update, lead create, etc. The user reviews ' +
+      'the resulting file artifact in chat and drags it into the universal ' +
+      'dropbox to apply. Plan in conversation first; emit ONE file per turn. ' +
+      'Resolve target entity_ids via reads before emitting. ' +
+      'Per-entity_type op vocabulary: ' +
+      'client: {op,fields,notes}. ' +
+      'estimate: {op,scope,field_updates,sections,groups,line_adds,line_edits,line_deletes}. ' +
+      'job: {field_updates,phase_updates,node_values,wire_updates,qb_assignments,change_orders,purchase_orders,invoices,notes,graph}. ' +
+      'lead: {op,fields,notes}. ' +
+      'schedule: {blocks}. ' +
+      'system: {skill_pack_ops,watch_ops,field_tool_ops,staff_agent_ops}. ' +
+      'Cross-entity refs ($new_id syntax) resolve at apply time. ' +
+      'Do NOT pre-narrate the file.',
+    tier: 'auto',
+    input_schema: {
+      type: 'object',
+      required: ['targets', 'title', 'summary'],
+      properties: {
+        targets: {
+          type: 'array',
+          minItems: 1,
+          description:
+            'Array of {entity_type, entity_id?, entity_display?, entity_metadata?, ops}. ' +
+            'entity_id is required for updates; use a $new_<name> placeholder for creates ' +
+            'that other targets in the same bundle reference. entity_display + entity_metadata ' +
+            'render in the file preview so the user can sanity-check before dropping.',
+          items: {
+            type: 'object',
+            required: ['entity_type', 'ops'],
+            properties: {
+              entity_type: {
+                type: 'string',
+                enum: ['estimate', 'job', 'lead', 'client', 'schedule', 'system'],
+              },
+              entity_id: {
+                type: 'string',
+                description: 'Real id for updates, or $new_<name> placeholder for creates referenced elsewhere in this bundle. Omit for one-off creates.',
+              },
+              entity_display: {
+                type: 'string',
+                description: 'Human-readable identifier ("HOA Deck Repair — Sterling HOA, 123 Main"). Shown in the file preview for the user safety check.',
+              },
+              entity_metadata: {
+                type: 'object',
+                description: 'last_modified, modified_by, summary_value — surfaced in the preview card.',
+              },
+              ops: {
+                type: 'object',
+                description: 'Per-entity_type op vocabulary. See tool description for the full keys.',
+              },
+            },
+          },
+        },
+        title: {
+          type: 'string',
+          description: 'Short imperative title ("Add 3 gal paint to HOA Deck Repair"). Shows above the filename in chat.',
+        },
+        summary: {
+          type: 'string',
+          description: 'One-line summary of what the file does ("1 line item added across 1 estimate").',
+        },
+        rationale: {
+          type: 'string',
+          description: 'Why this payload, why now. Captures reasoning for future audit + recipe pinning.',
+        },
+        template_ref: {
+          type: 'object',
+          description: 'Set when the payload was generated from a pinned recipe. Tracks lineage for analytics.',
+          properties: {
+            template_id: { type: 'string' },
+            template_name: { type: 'string' },
+            parameters: { type: 'object' },
+          },
+        },
+      },
+    },
+  },
+];
+
 // Build the SKILL.md body for one local pack. Mirrors the helper of
 // the same name in admin-agents-routes.js so CoS-driven mirrors and
 // admin-button mirrors produce byte-identical uploads.
@@ -8851,6 +8956,149 @@ async function execHandoffToStaff(toolName, input, ctx) {
   return result.text || '(staff agent returned no text)';
 }
 
+// ──────────────────────────────────────────────────────────────────
+// execEmitPayloadFile — handle the Principal's emit_payload_file tool
+// inline. Validates ops against PAYLOAD_OPS_SCHEMAS, generates a
+// filename, INSERTs a payloads row with status='ready', and returns
+// a meta-bearing summary the SSE handler forwards to the chat panel
+// so the file artifact renders in the message bubble.
+//
+// Session metadata sets `source`: for sync Principal turns it's '86';
+// for background-watcher turns (C10) the session metadata carries
+// 'watcher_<agent_key>' which the runner injects on session.create.
+// ──────────────────────────────────────────────────────────────────
+async function execEmitPayloadFile(tu, ctx) {
+  try {
+    const payloadDispatcher = require('../services/payload-dispatcher');
+    const input = tu.input || {};
+    const targets = Array.isArray(input.targets) ? input.targets : [];
+    const title = String(input.title || '').slice(0, 280);
+    const summary = String(input.summary || '').slice(0, 1000);
+    const rationale = input.rationale ? String(input.rationale).slice(0, 4000) : null;
+    const templateRef = input.template_ref || null;
+
+    if (!targets.length) {
+      return { tier: 'auto', error: 'emit_payload_file requires at least one target' };
+    }
+    if (!title) {
+      return { tier: 'auto', error: 'emit_payload_file requires a title' };
+    }
+    if (!summary) {
+      return { tier: 'auto', error: 'emit_payload_file requires a summary' };
+    }
+
+    // Validate each target's ops up front so the model gets an actionable
+    // error instead of a row that fails at apply time. validateOps
+    // throws on unknown keys / blocked fields / unsupported entity types.
+    for (const t of targets) {
+      if (!t || !t.entity_type) {
+        return { tier: 'auto', error: 'Each target requires entity_type' };
+      }
+      try {
+        payloadDispatcher.validateOps(t.entity_type, t.ops || {});
+      } catch (err) {
+        return {
+          tier: 'auto',
+          error: `Invalid ops on ${t.entity_type} target: ${err.message}`,
+        };
+      }
+    }
+
+    // source: '86' on the Principal sync path; background watchers go
+    // through a different session-create flow (see agent-watch-runner
+    // in C10) that injects a source override into ctx.
+    const source = ctx && ctx.payloadSource ? ctx.payloadSource : '86';
+    const emittingAgentKey = ctx && ctx.emittingAgentKey ? ctx.emittingAgentKey : 'job';
+
+    // Build the .p86.json file_content blob. Mirrors what GET /file
+    // returns to the client + what the dropbox parses on OS file drop.
+    const fileContent = {
+      version: 1,
+      targets,
+      title,
+      summary,
+      rationale,
+      template_ref: templateRef,
+      emitted_at: new Date().toISOString(),
+      source,
+      emitting_agent_key: emittingAgentKey,
+    };
+
+    const id = payloadDispatcher.newPayloadId();
+    const filename = payloadDispatcher.generateFilename(targets, title);
+    fileContent.id = id;
+    fileContent.filename = filename;
+
+    // Resolve org + session ids from the parent context. parentSession
+    // here is the ai_sessions row the model is responding inside; we
+    // bind the payload to it so the sidebar restore-on-refresh can
+    // re-render the artifact under the right message bubble.
+    const orgId = (ctx && ctx.parentSession && ctx.parentSession.organization_id) ||
+                  (ctx && ctx.organizationId) || null;
+    const sessionId = (ctx && ctx.parentSession && ctx.parentSession.id) || null;
+
+    // INSERT the payloads row. user_id is the user driving the chat;
+    // watcher emits will pass null via a future overload. organization_id
+    // is required (NOT NULL). If we don't have it (shouldn't happen on
+    // the /86/chat path), bail out with a structured error so the model
+    // sees the failure and can retry instead of silently dropping.
+    if (!orgId) {
+      return {
+        tier: 'auto',
+        error: 'emit_payload_file: parent session has no organization_id; ' +
+               'cannot persist the payload',
+      };
+    }
+
+    await pool.query(
+      `INSERT INTO payloads
+         (id, organization_id, user_id, session_id, source, emitting_agent_key,
+          filename, file_content, targets, title, summary, rationale)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11, $12)`,
+      [
+        id, orgId, ctx.userId || null, sessionId, source, emittingAgentKey,
+        filename,
+        JSON.stringify(fileContent),
+        JSON.stringify(targets),
+        title, summary, rationale,
+      ]
+    );
+
+    // The summary string is what the model reads back as the tool's
+    // result. Keep it terse so it doesn't bloat the conversation.
+    // The full file_content goes through meta to the SSE handler →
+    // renderer in ai-panel.js.
+    const summaryForModel =
+      `Emitted payload file ${filename} — ${targets.length} target(s). ` +
+      `User can drag it into the AI panel dropbox to apply, or click ` +
+      `Preview for a dry-run diff. Do not narrate this — the file ` +
+      `artifact is already visible in chat.`;
+
+    return {
+      tier: 'auto',
+      summary: summaryForModel,
+      // meta: forwarded by runV2SessionStream on the SSE tool_applied
+      // event. The panel's SSE handler keys on tu.name to push the
+      // payload into the message bubble + sidebar Payloads section.
+      meta: {
+        kind: 'emit_payload_file',
+        payload_id: id,
+        filename,
+        title,
+        summary,
+        rationale,
+        targets,
+        source,
+        file_content: fileContent,
+        status: 'ready',
+      },
+    };
+  } catch (err) {
+    console.error('[ai-routes] execEmitPayloadFile failed:', err && err.stack || err);
+    return { tier: 'auto', error: 'Failed to emit payload: ' + (err.message || 'unknown') };
+  }
+}
+
 function make86OnCustomToolUse(userId, parentSession, turnContextText) {
   // Per-request dedupe cache. Scoped to ONE /86/chat (or /chat/continue)
   // call — closes over this Map. If the model calls e.g.
@@ -8895,6 +9143,13 @@ function make86OnCustomToolUse(userId, parentSession, turnContextText) {
                  requiredEntity + ' first.'
         };
       }
+    }
+    // ── Payload DSL — emit_payload_file lands here BEFORE the rest of
+    // the auto-tier dispatch because its result shape is special: we
+    // INSERT a payloads row inline and surface meta the SSE handler
+    // forwards to the panel so the file artifact renders in chat.
+    if (tu.name === 'emit_payload_file') {
+      return await execEmitPayloadFile(tu, { userId, parentSession });
     }
     // Auto-tier: any tool in ALLOWED_AUTO_TIER_TOOLS executes inline
     // and returns its summary to the model. Mirrors the /exec-tool
@@ -9419,6 +9674,11 @@ function tierFor(toolName) {
 }
 
 const ALLOWED_AUTO_TIER_TOOLS = new Set([
+  // Project 86 Payload DSL — 86's ONE write primitive. Validates +
+  // INSERTs a payloads row inline so the file artifact appears in
+  // chat immediately. Auto-tier because the commit gate is the user
+  // dragging the file into the dropbox, not an approval card.
+  'emit_payload_file',
   // 86's existing read tools (already routed to execStaffTool below)
   'read_materials',
   'read_purchase_history',
@@ -10471,8 +10731,14 @@ module.exports.internals = {
   // P86 Crew handoff tools. The Principal calls handoff_to_<staff>
   // with a request; we delegate to the staff agent's sub-session and
   // return its response. Always present in router mode (which is the
-  // default and only mode).
+  // default and only mode). NOTE: deletion of sync handoff machinery
+  // lands in C7 — this exporter then returns [] but stays callable.
   handoffTools: () => HANDOFF_TOOLS.map(({ tier, ...t }) => t),
+  // Project 86 Payload DSL — the Principal's ONE write tool. Handled
+  // inline by execEmitPayloadFile in make86OnCustomToolUse; the meta
+  // it returns rides the SSE tool_applied event so the file artifact
+  // renders in chat. Always present.
+  payloadTools: () => PAYLOAD_TOOLS.map(({ tier, ...t }) => t),
   defaultModel: () => MODEL,
   maxTokens: () => MAX_TOKENS,
   // Resolve the effort string for a given model. Caller passes the

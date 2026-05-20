@@ -33,24 +33,6 @@ const dispatcher = require('../services/payload-dispatcher');
 const router = express.Router();
 
 // ──────────────────────────────────────────────────────────────────
-// PAYLOAD_OPS_SCHEMAS — per-entity_type ops vocabulary.
-//
-// Skeleton placeholder for C1. Real shapes land in C3 (client +
-// estimate) and C5 (job + lead + schedule + system). Both
-// make86OnCustomToolUse (emit-time) and the apply dispatcher
-// (apply-time) import this constant so validation is single-source.
-// ──────────────────────────────────────────────────────────────────
-const PAYLOAD_OPS_SCHEMAS = Object.freeze({
-  // Filled in C3+
-  estimate: null,
-  job: null,
-  client: null,
-  lead: null,
-  schedule: null,
-  system: null,
-});
-
-// ──────────────────────────────────────────────────────────────────
 // COMPATIBILITY TABLE — which entity_types a payload can target.
 // Skeleton; refined as dispatchers come online.
 // ──────────────────────────────────────────────────────────────────
@@ -75,37 +57,10 @@ const VALID_SOURCES = new Set([
   'manual',
 ]);
 
-// ──────────────────────────────────────────────────────────────────
-// Filename generator — see plan §filename rules.
-//
-// single-target: `{EntityType}.{IdOrRef}-{ShortName}.{YYYY-MM-DD}.p86.json`
-// multi-target:  `Multi-{N}.{shortdesc}.{YYYY-MM-DD}.p86.json`
-//
-// Collisions get a -2, -3, etc. suffix per-user. Caller is responsible
-// for passing a sanitized short_name (CamelCase, alphanumeric, ≤24 chars).
-// ──────────────────────────────────────────────────────────────────
-function sanitizeShortName(s, maxLen = 24) {
-  if (!s) return 'Unnamed';
-  // Strip non-alphanumeric, collapse whitespace, CamelCase from words.
-  const parts = String(s).replace(/[^A-Za-z0-9\s]/g, ' ').trim().split(/\s+/);
-  const camel = parts.map((p) => p.charAt(0).toUpperCase() + p.slice(1).toLowerCase()).join('');
-  return camel.slice(0, maxLen) || 'Unnamed';
-}
-
-function generateFilename(targets, title) {
-  const date = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
-  if (Array.isArray(targets) && targets.length === 1) {
-    const t = targets[0];
-    const entityType = String(t.entity_type || 'unknown')
-      .charAt(0).toUpperCase() + String(t.entity_type || 'unknown').slice(1).toLowerCase();
-    const idRef = String(t.entity_id || 'NEW').slice(0, 24).replace(/[^A-Za-z0-9_-]/g, '');
-    const shortName = sanitizeShortName(t.entity_display || title || 'Untitled');
-    return `${entityType}.${idRef}-${shortName}.${date}.p86.json`;
-  }
-  const n = Array.isArray(targets) ? targets.length : 0;
-  const shortDesc = sanitizeShortName(title || 'Bundle');
-  return `Multi-${n}.${shortDesc}.${date}.p86.json`;
-}
+// Filename helpers live in payload-dispatcher (single source). Re-
+// exported from this module so /from-csv, the watch emitter, and the
+// QB-sync emitter all use the same generator. Plan §filename rules.
+const { generateFilename, sanitizeShortName, newPayloadId } = dispatcher;
 
 // ──────────────────────────────────────────────────────────────────
 // GET /api/payloads
@@ -399,7 +354,5 @@ module.exports.internals = {
   VALID_SOURCES,
   generateFilename,
   sanitizeShortName,
-  // Legacy placeholder export so any importer still grabbing the
-  // skeleton constant gets the real schemas now.
-  _legacy_PAYLOAD_OPS_SCHEMAS_PLACEHOLDER: PAYLOAD_OPS_SCHEMAS,
+  newPayloadId,
 };

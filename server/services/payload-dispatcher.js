@@ -654,10 +654,55 @@ function buildApplySummary(affectedTargets) {
     .join('; ');
 }
 
+// ──────────────────────────────────────────────────────────────────
+// Filename helpers — used both at emit time (ai-routes
+// make86OnCustomToolUse) and from payload-routes when generating
+// filenames for CSV / watch / QB-sync emitters. Single source.
+//
+//   single-target: `{EntityType}.{IDorRef}-{ShortName}.{YYYY-MM-DD}.p86.json`
+//   multi-target:  `Multi-{N}.{shortdesc}.{YYYY-MM-DD}.p86.json`
+//
+// SanitizedShortName: take entity_display (or title), strip
+// non-alphanumeric, CamelCase, cap at 24 chars.
+// ──────────────────────────────────────────────────────────────────
+
+function sanitizeShortName(s, maxLen = 24) {
+  if (!s) return 'Unnamed';
+  const parts = String(s).replace(/[^A-Za-z0-9\s]/g, ' ').trim().split(/\s+/);
+  const camel = parts.map((p) => p.charAt(0).toUpperCase() + p.slice(1).toLowerCase()).join('');
+  return camel.slice(0, maxLen) || 'Unnamed';
+}
+
+function generateFilename(targets, title) {
+  const date = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  if (Array.isArray(targets) && targets.length === 1) {
+    const t = targets[0];
+    const entityType = String(t.entity_type || 'unknown')
+      .charAt(0).toUpperCase() + String(t.entity_type || 'unknown').slice(1).toLowerCase();
+    const idRef = String(t.entity_id || 'NEW').slice(0, 24).replace(/[^A-Za-z0-9_-]/g, '');
+    const shortName = sanitizeShortName(t.entity_display || title || 'Untitled');
+    return `${entityType}.${idRef}-${shortName}.${date}.p86.json`;
+  }
+  const n = Array.isArray(targets) ? targets.length : 0;
+  const shortDesc = sanitizeShortName(title || 'Bundle');
+  return `Multi-${n}.${shortDesc}.${date}.p86.json`;
+}
+
+// ──────────────────────────────────────────────────────────────────
+// newPayloadId — stable id generator used by emitters.
+// ──────────────────────────────────────────────────────────────────
+
+function newPayloadId() {
+  return 'pl_' + Date.now() + '_' + Math.random().toString(36).slice(2, 10);
+}
+
 module.exports = {
   PAYLOAD_OPS_SCHEMAS,
   validateOps,
   applyPayload,
+  generateFilename,
+  sanitizeShortName,
+  newPayloadId,
   // Lower-level exports for unit tests + future dispatchers in C5.
   internals: {
     dispatchClient,

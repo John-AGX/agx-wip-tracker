@@ -1711,6 +1711,16 @@ const AGENT_SYSTEM_BASELINE = {
     '  • Navigation — `navigate` when the user asks to "go work on X" or "open Y".',
     '  • Reference + attachment lookups — search_reference_sheet, read_attachment_text, view_attachment_image for cross-surface light needs.',
     '',
+    '',
+    '# Writes — the Payload DSL',
+    'You do NOT mutate the system directly. The ONLY write primitive you have is `emit_payload_file`. When the user needs ANY change — a field update, a line item edit, a phase % change, a new lead, a graph node, a client merge, a CO, a PO — you do NOT call `set_phase_*`, `propose_update_*`, `create_node`, etc. (those tools are retired). Instead you read the relevant context, resolve target entity_ids, and emit ONE `emit_payload_file` call that bundles all the work into a `.p86.json` file. The user sees the file artifact in chat, reviews the targets + ops + rationale, and drags it into the universal dropbox to apply.',
+    '',
+    'Payload file shape: `targets: [{entity_type, entity_id, entity_display, entity_metadata, ops}], title, summary, rationale, template_ref?`. Per-entity_type `ops` vocabulary: `client:{op,fields,notes}`, `estimate:{op,scope,field_updates,sections,groups,line_adds,line_edits,line_deletes}`, `job:{field_updates,phase_updates,node_values,wire_updates,qb_assignments,change_orders,purchase_orders,invoices,notes,graph}`, `lead:{op,fields,notes}`, `schedule:{blocks}`, `system:{skill_pack_ops,watch_ops,field_tool_ops,staff_agent_ops}`. Use `$new_<name>` placeholder ids for entities you create that other targets reference; refs resolve at apply time.',
+    '',
+    'Resolve targets BEFORE emitting: read the relevant directory / job / estimate first so each target carries a real entity_id plus entity_display + entity_metadata (last_modified, modified_by, summary_value) for the user safety check. When the user\'s reference is ambiguous (e.g., "the HOA estimate" matches several), ASK in chat — do NOT guess.',
+    '',
+    'ONE file per turn. The file IS the proposal — do NOT pre-narrate it ("I\'ll create a payload..."). Just emit it and let the chat artifact speak.',
+    '',
     '# Tone',
     'Lead with the answer (or the handoff). No "Sure!", "I\'ll start by...", "Let me know if you have any questions." Construction trade vocabulary welcome. Output is what the user sees — no narration of routing.'
   ].join('\n'),
@@ -2193,7 +2203,13 @@ function customToolsFor(agentKey, opts) {
       // Cross-domain admin (touches jobs + clients; lives on Principal).
       'propose_link_job_to_client', 'propose_bulk_link_jobs_to_clients',
       // Spawn — Principal proposes new Tier 3 agents.
-      'propose_create_staff_agent'
+      'propose_create_staff_agent',
+      // Project 86 Payload DSL — Principal's ONE write primitive. All
+      // mutations (field updates, line items, phase changes, lead
+      // creates, structural ops, platform writes) flow through this
+      // tool, which emits a .p86.json file the user drags into the
+      // universal dropbox. See plan: payloads as universal write protocol.
+      'emit_payload_file'
     ]);
     const seen = new Set();
     const merged = [];
@@ -2203,7 +2219,11 @@ function customToolsFor(agentKey, opts) {
       ...aiInternals.clientTools(),
       ...aiInternals.staffTools(),
       ...aiInternals.memoryTools(),
-      ...aiInternals.watchTools()
+      ...aiInternals.watchTools(),
+      // Payload DSL tools — emit_payload_file lives here. Included in
+      // the candidate set so the ROUTER_TOOL_NAMES allowlist gates it
+      // alongside everything else.
+      ...(aiInternals.payloadTools ? aiInternals.payloadTools() : [])
     ].forEach(t => {
       if (!t || !t.name || seen.has(t.name)) return;
       if (!ROUTER_TOOL_NAMES.has(t.name)) return;
