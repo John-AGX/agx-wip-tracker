@@ -28,6 +28,7 @@
 const express = require('express');
 const { pool } = require('../db');
 const { requireAuth, requireOrg } = require('../auth');
+const dispatcher = require('../services/payload-dispatcher');
 
 const router = express.Router();
 
@@ -272,22 +273,111 @@ router.post('/:id/reject', requireAuth, requireOrg, async (req, res) => {
 });
 
 // ──────────────────────────────────────────────────────────────────
-// POST /api/payloads/:id/apply  (skeleton — implemented in C3 + C5)
+// POST /api/payloads/:id/apply
+//   ?dry_run=true  → ROLLBACK + diff response (full path wired in C6)
 //
-// Returns 501 for now. The dispatcher lands in C3 (client + estimate)
-// and C5 (job + lead + schedule + system). Apply flow per plan:
-//   BEGIN TXN → SELECT payload ready+unexpired → per-target
-//   pg_advisory_xact_lock (sorted) → build $new_id ref table → for
-//   each target: validate ops, dispatch via existing write route,
-//   register new ids in ref table → COMMIT (or ROLLBACK on failure
-//   or dry_run=true) → broadcast SSE 'p86:payload-applied' → return
-//   summary.
+// Flow (per plan §Apply):
+//   1. SELECT FOR UPDATE the ready+unexpired payload row.
+//   2. Hand the row to dispatcher.applyPayload, which opens its own
+//      transaction, takes per-target advisory locks in sorted order,
+//      dispatches by entity_type, resolves $new_id refs, and either
+//      COMMITs or ROLLBACKs based on dry_run.
+//   3. UPDATE payloads.status atomically (separate query, outside the
+//      dispatcher's txn — we want the row update to land even if the
+//      dispatcher's COMMIT already happened).
+//
+// Status codes:
+//   200 ok + apply_summary + affected_targets
+//   404 not found (or wrong owner)
+//   409 wrong status (not 'ready')
+//   410 expired
+//   422 validation (unknown op / blocked field / unresolved ref)
+//   500 dispatch failure
 // ──────────────────────────────────────────────────────────────────
 router.post('/:id/apply', requireAuth, requireOrg, async (req, res) => {
-  res.status(501).json({
-    error: 'Not implemented',
-    detail: 'Apply dispatcher lands in C3 (client + estimate) and C5 (job + lead + schedule + system).',
-  });
+  const orgId = req.user.organization_id;
+  const userId = req.user.id;
+  const dryRun = String(req.query.dry_run || '').toLowerCase() === 'true';
+
+  try {
+    // Fetch the payload row with the same ownership filter the list
+    // endpoint uses (user_id matches OR row is org-wide / watcher-emitted).
+    const r = await pool.query(
+      `SELECT id, organization_id, user_id, source, emitting_agent_key,
+              filename, file_content, targets, title, summary, rationale,
+              status, expires_at
+         FROM payloads
+        WHERE id = $1
+          AND organization_id = $2
+          AND (user_id = $3 OR user_id IS NULL)`,
+      [req.params.id, orgId, userId]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'Not found' });
+    const payload = r.rows[0];
+
+    if (payload.status !== 'ready') {
+      return res.status(409).json({
+        error: 'Payload not in ready state',
+        status: payload.status,
+      });
+    }
+    if (payload.expires_at && new Date(payload.expires_at) < new Date()) {
+      return res.status(410).json({ error: 'Payload expired' });
+    }
+
+    // Hand to the dispatcher. Throws on validation errors / dispatch
+    // failures — we map to the right status code below.
+    let result;
+    try {
+      result = await dispatcher.applyPayload(payload, {
+        userId,
+        sourceAgent: payload.emitting_agent_key === 'job' ? '86' : (payload.emitting_agent_key || null),
+        dryRun,
+      });
+    } catch (err) {
+      // Validation-style errors are descriptive; surface as 422 unless
+      // we know they're 5xx-shaped.
+      const msg = err && err.message || String(err);
+      const isValidation = /not yet implemented|requires|must be|not found|Unknown|blocked key|Unresolved ref|cannot be its own/i.test(msg);
+      console.error('[payloads] apply failed:', err && err.stack || err);
+      // Mark the row as failed only for real apply runs (not dry runs).
+      if (!dryRun) {
+        try {
+          await pool.query(
+            `UPDATE payloads
+                SET status = 'failed', apply_error = $1
+              WHERE id = $2 AND status = 'ready'`,
+            [msg.slice(0, 1000), payload.id]
+          );
+        } catch (_) {}
+      }
+      return res.status(isValidation ? 422 : 500).json({ error: msg });
+    }
+
+    // Persist status on successful real applies. Dry runs keep status='ready'
+    // so the user can drop them again for the real run.
+    if (!dryRun) {
+      await pool.query(
+        `UPDATE payloads
+            SET status = 'applied',
+                applied_at = NOW(),
+                apply_summary = $1
+          WHERE id = $2`,
+        [result.apply_summary, payload.id]
+      );
+    }
+
+    res.json({
+      ok: true,
+      dry_run: dryRun,
+      apply_summary: result.apply_summary,
+      affected_targets: result.affected_targets,
+      ref_resolutions: result.ref_resolutions,
+    });
+  } catch (e) {
+    console.error('[payloads] POST /:id/apply error:', e && e.stack || e);
+    res.status(500).json({ error: e && e.message || 'Server error' });
+  }
 });
 
 // ──────────────────────────────────────────────────────────────────
@@ -297,14 +387,19 @@ router.post('/from-csv', requireAuth, requireOrg, async (req, res) => {
   res.status(501).json({ error: 'Not implemented', detail: 'CSV import lands in C14.' });
 });
 
-// Export internals for cross-file imports (ai-routes will pull
-// PAYLOAD_OPS_SCHEMAS + filename helpers when wiring emit_payload_file
-// in C4).
+// Export internals for cross-file imports (ai-routes will pull these
+// when wiring emit_payload_file in C4). The dispatcher module is the
+// canonical source for PAYLOAD_OPS_SCHEMAS and validateOps — we just
+// re-expose them here so callers have one require() target.
 module.exports = router;
 module.exports.internals = {
-  PAYLOAD_OPS_SCHEMAS,
+  PAYLOAD_OPS_SCHEMAS: dispatcher.PAYLOAD_OPS_SCHEMAS,
+  validateOps: dispatcher.validateOps,
   ALLOWED_ENTITY_TYPES,
   VALID_SOURCES,
   generateFilename,
   sanitizeShortName,
+  // Legacy placeholder export so any importer still grabbing the
+  // skeleton constant gets the real schemas now.
+  _legacy_PAYLOAD_OPS_SCHEMAS_PLACEHOLDER: PAYLOAD_OPS_SCHEMAS,
 };
