@@ -26,11 +26,20 @@
 // admin audit endpoint land in later commits.
 
 const express = require('express');
+const multer = require('multer');
 const { pool } = require('../db');
 const { requireAuth, requireOrg } = require('../auth');
 const dispatcher = require('../services/payload-dispatcher');
+const csvConverter = require('../services/csv-payload-converter');
 
 const router = express.Router();
+
+// 10MB cap on CSV uploads. RAM-only — files are parsed inline, not
+// persisted to disk.
+const csvUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+});
 
 // ──────────────────────────────────────────────────────────────────
 // COMPATIBILITY TABLE — which entity_types a payload can target.
@@ -337,11 +346,74 @@ router.post('/:id/apply', requireAuth, requireOrg, async (req, res) => {
 });
 
 // ──────────────────────────────────────────────────────────────────
-// POST /api/payloads/from-csv  (skeleton — implemented in C14)
+// POST /api/payloads/from-csv  (C14)
+//   multipart upload: field 'file' = the CSV, field 'entity_type' =
+//   'lead' | 'client' (more later). Returns the new payload row's
+//   id + filename + target_count + any per-row csv_errors so the
+//   client can surface them before the user drags the payload in.
+//
+//   Status mapping:
+//     200 ok + payload metadata
+//     400 invalid (no file, no entity_type, etc.)
+//     422 csv parse / validation failure with detail message
+//     413 file too big (handled by multer at the middleware level)
+//     500 anything else
 // ──────────────────────────────────────────────────────────────────
-router.post('/from-csv', requireAuth, requireOrg, async (req, res) => {
-  res.status(501).json({ error: 'Not implemented', detail: 'CSV import lands in C14.' });
-});
+router.post('/from-csv',
+  requireAuth, requireOrg,
+  csvUpload.single('file'),
+  async (req, res) => {
+    try {
+      if (!req.file || !req.file.buffer) {
+        return res.status(400).json({ error: 'multipart "file" field is required' });
+      }
+      const entityType = (req.body && req.body.entity_type || '').trim().toLowerCase();
+      if (!entityType) return res.status(400).json({ error: '"entity_type" field is required' });
+
+      let built;
+      try {
+        built = await csvConverter.convertCsvToPayload(req.file.buffer, entityType, {
+          organizationId: req.user.organization_id,
+          userId: req.user.id,
+        });
+      } catch (err) {
+        return res.status(422).json({ error: err.message || String(err) });
+      }
+
+      // Persist the payload row so the sidebar Payloads section picks it up.
+      await pool.query(
+        `INSERT INTO payloads
+           (id, organization_id, user_id, source, emitting_agent_key,
+            filename, file_content, targets, title, summary, rationale)
+         VALUES ($1, $2, $3, 'csv_import', NULL, $4, $5::jsonb, $6::jsonb, $7, $8, $9)`,
+        [
+          built.payload_id,
+          req.user.organization_id,
+          req.user.id,
+          built.filename,
+          JSON.stringify(built.file_content),
+          JSON.stringify(built.targets),
+          built.title,
+          built.summary,
+          built.rationale,
+        ]
+      );
+
+      res.json({
+        ok: true,
+        payload_id: built.payload_id,
+        filename: built.filename,
+        target_count: built.target_count,
+        csv_errors: built.csv_errors,
+        title: built.title,
+        summary: built.summary,
+      });
+    } catch (e) {
+      console.error('[payloads] POST /from-csv error:', e && e.stack || e);
+      res.status(500).json({ error: e && e.message || 'Server error' });
+    }
+  }
+);
 
 // ──────────────────────────────────────────────────────────────────
 // Recipes (C11) — payload_templates table CRUD.
