@@ -2552,31 +2552,18 @@ async function buildTurnContext({ entityType, entityId, clientContext, aiPhase, 
   //      panel without an entity sets '86-scheduler' itself).
   //   2. Surface default from STAFF_HINT_BY_SURFACE (entity_type).
   //   3. None — Principal picks freely.
-  // Router mode is the default — always emit when a known staff resolves.
+  // C7 — sync handoff routing retired. The Principal owns all sync
+  // work now (with domain Skills loaded on demand); staff agents run
+  // as async background watchers (C10) whose findings show up as
+  // payloads in the sidebar. The legacy <active_staff> block told
+  // the model to fire handoff_to_* on every domain turn; that
+  // directive no longer applies. resolvedHint is still computed
+  // below as a hook for the future (e.g., per-surface Skill
+  // suggestions), but no routing block is emitted.
   const resolvedHint = (activeStaffHint && typeof activeStaffHint === 'string')
     ? activeStaffHint.trim()
     : (STAFF_HINT_BY_SURFACE[entityType] || null);
-  if (resolvedHint && STAFF_AGENT_KEY_BY_HANDOFF) {
-    // Validate the hint matches a real handoff target before shipping.
-    const handoffTool = 'handoff_to_' + resolvedHint.replace(/^86-/, '');
-    const isKnown = STAFF_AGENT_KEY_BY_HANDOFF.has(handoffTool);
-    if (isKnown) {
-      const block = '<active_staff>\n' +
-        'Surface: ' + (entityType || 'global') + '\n' +
-        'Default delegate: ' + resolvedHint + '  (via `' + handoffTool + '`)\n' +
-        '\n' +
-        '**ROUTING RULE — your actual job on this turn.**\n' +
-        'You are the Principal. Your role is to ROUTE, not to do the staff\'s work. Any audit, multi-step analysis, line-item draft, scope review, WIP-margin investigation, dedup check, directory cleanup, scheduling question, or other domain-bound task on this surface MUST start with `' + handoffTool + '` (or another handoff_to_* if the ask actually fits a different staff better, including handoff_to_dynamic_staff for Tier 3 agents).\n' +
-        '\n' +
-        'Reply directly ONLY for: (a) one-shot facts the turn_context above already shows ("what\'s the contract value?", "who\'s the client?"), (b) the user explicitly asking you to delegate elsewhere or NOT to delegate, (c) trivial conversational ack/redirect.\n' +
-        '\n' +
-        'Cross-domain asks: fan out to multiple staff in PARALLEL (multiple handoff_to_* in one turn) — do not serialize. You weave the staff responses into a single reply to the user. Identity stays "86" from the user\'s POV; the staff is how you do the work, not a separate persona to announce.\n' +
-        '</active_staff>';
-      turnContextText = turnContextText
-        ? turnContextText + '\n\n' + block
-        : block;
-    }
-  }
+  void resolvedHint; // intentionally unused post-C7
 
   return { turnContextText, photoBlocks };
 }
@@ -8801,9 +8788,41 @@ const STAFF_AGENT_KEY_BY_HANDOFF = new Map([
 // ctx = { userId, principalSessionId } — userId resolves the org;
 // principalSessionId is captured for the staff session title.
 async function execHandoffToStaff(toolName, input, ctx) {
-  // Phase S6 — resolve the target staff key in priority order:
-  //   1. Static map (handoff_to_estimator/pm/scheduler/directory/sales).
-  //   2. Generic handoff_to_dynamic_staff — agent_key in input.
+  // C7 — sync handoff machinery RETIRED.
+  //
+  // The Payload DSL eliminated the need for sync staff handoffs:
+  //   - Writes are unified into emit_payload_file on the Principal.
+  //   - Staff agents survive as async background watchers (see C10:
+  //     agent-watch-runner) that emit their findings as payloads
+  //     into the user's sidebar queue.
+  //   - Domain reasoning that used to require a handoff now happens
+  //     in the Principal session, with the relevant playbook Skill
+  //     loaded on demand (server-side cached, not per-turn cost).
+  //
+  // This function would normally fire a sub-session against a staff
+  // agent. The Principal's tool surface no longer includes any
+  // handoff_to_* tools (see admin-agents-routes customToolsFor), so
+  // this code path should never be reached on a re-registered agent.
+  // If an Anthropic-side agent registered BEFORE the C7 cutover
+  // still has handoff tools cached and the model fires one, we
+  // return a clear retirement message so the model self-corrects.
+  //
+  // Full body deletion (and removal of driveSubtaskTurn + staffCallback
+  // + marker bubbling + stall recovery + ID remap) lands in C17 once
+  // the new architecture has been exercised in production for a few
+  // days without regressions.
+  console.warn(
+    '[handoffs] retired execHandoffToStaff invoked for tool=' + toolName +
+    ' — agent registration likely stale; re-register via /managed/reregister.'
+  );
+  return (
+    'Sync handoffs to staff agents are retired. The Principal owns all ' +
+    'sync work now; staff agents run as background watchers (you\'ll see ' +
+    'their findings as payloads in the sidebar). To make changes, emit a ' +
+    'payload file via emit_payload_file instead of handing off.'
+  );
+  // Unreachable. Kept until C17 so any cross-reference still resolves.
+  // eslint-disable-next-line no-unreachable
   let staffKey = STAFF_AGENT_KEY_BY_HANDOFF.get(toolName);
   if (!staffKey && toolName === 'handoff_to_dynamic_staff') {
     staffKey = (input && typeof input.agent_key === 'string') ? input.agent_key.trim() : null;
@@ -10728,12 +10747,15 @@ module.exports.internals = {
   // Phase 5 — proactive watching tools (3 of 4 are auto; the writes
   // are approval-tier and surface as cards).
   watchTools:    () => WATCH_TOOLS.map(({ tier, ...t }) => t),
-  // P86 Crew handoff tools. The Principal calls handoff_to_<staff>
-  // with a request; we delegate to the staff agent's sub-session and
-  // return its response. Always present in router mode (which is the
-  // default and only mode). NOTE: deletion of sync handoff machinery
-  // lands in C7 — this exporter then returns [] but stays callable.
-  handoffTools: () => HANDOFF_TOOLS.map(({ tier, ...t }) => t),
+  // C7 — sync handoffs RETIRED. The Principal no longer fans out to
+  // staff sub-sessions; staff agents are repurposed as async
+  // background watchers (C10). The exporter stays callable (admin
+  // tooling may still reference it) but always returns an empty
+  // array so the Principal's tool surface excludes handoff_to_*.
+  // The HANDOFF_TOOLS array literal stays in source until C17 — it's
+  // unreachable but kept so cross-references still resolve while we
+  // exercise the new architecture in production.
+  handoffTools: () => [],
   // Project 86 Payload DSL — the Principal's ONE write tool. Handled
   // inline by execEmitPayloadFile in make86OnCustomToolUse; the meta
   // it returns rides the SSE tool_applied event so the file artifact
