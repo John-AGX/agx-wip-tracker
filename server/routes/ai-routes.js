@@ -9445,6 +9445,188 @@ async function driveSubtaskTurn({ anthropic, sessionId, eventsToSend, onCustomTo
 //
 // runWatchFire(watchRunId) is the unit of work; the scheduler creates
 // one ai_watch_runs row per due watch and enqueues a fire.
+//
+// C10 — agent-kind watches go through runAgentWatchFire below. The
+// rule-kind path (legacy) stays in runWatchFire after the dispatch
+// branch. The two paths share the ai_watch_runs row lifecycle so
+// admin tooling, audit, and the scheduler's CAS-update advancement
+// don't fork.
+
+// runAgentWatchFire — invokes a staff agent in watcher mode.
+//
+// Flow:
+//   1. Lookup the managed agent (86-pm / 86-estimator / etc.) for this org
+//   2. Build an incremental scope hint from watch.last_scan_at + scope_filter
+//   3. Create a one-shot Anthropic session against the staff agent;
+//      session.metadata carries source='watcher_<agent_key>' so
+//      execEmitPayloadFile stamps the payload row correctly.
+//   4. Drive one turn with a scoped prompt. The agent invokes its
+//      domain Skill (loaded server-side via C8), reads scope, and emits
+//      one emit_payload_file per finding. Those calls fall through to
+//      make86OnCustomToolUse → execEmitPayloadFile → INSERT payloads.
+//   5. Archive the session, update watch.last_scan_at, mark the run
+//      completed.
+//
+// Approval-tier tools are auto-rejected with a text error (same as
+// the legacy runWatchFire path) so the agent can't fire propose_*
+// from a background context.
+async function runAgentWatchFire(watchRunId, row) {
+  const anthropic = getAnthropic();
+  if (!anthropic) {
+    await pool.query(
+      `UPDATE ai_watch_runs SET status='failed', error=$2, finished_at=NOW() WHERE id=$1`,
+      [watchRunId, 'ANTHROPIC_API_KEY not configured.']
+    );
+    return;
+  }
+
+  const agentKey = row.watch_agent_key;
+  if (!agentKey || !/^86-[a-z0-9-]+$/.test(agentKey)) {
+    await pool.query(
+      `UPDATE ai_watch_runs SET status='failed', error=$2, finished_at=NOW() WHERE id=$1`,
+      [watchRunId, 'agent-kind watch requires a valid agent_key like 86-pm']
+    );
+    return;
+  }
+
+  const orgRow = await pool.query(`SELECT * FROM organizations WHERE id = $1`, [row.watch_org_id]);
+  const organization = orgRow.rows[0];
+  if (!organization) {
+    await pool.query(
+      `UPDATE ai_watch_runs SET status='failed', error=$2, finished_at=NOW() WHERE id=$1`,
+      [watchRunId, 'Watch organization not found.']
+    );
+    return;
+  }
+
+  const flip = await pool.query(
+    `UPDATE ai_watch_runs SET status='running', started_at=NOW()
+      WHERE id=$1 AND status='pending' RETURNING id`,
+    [watchRunId]
+  );
+  if (!flip.rows.length) return;
+
+  let sessionId = null;
+  try {
+    const adminAgents = require('./admin-agents-routes');
+    const env = await adminAgents.ensureManagedEnvironment();
+    const agent = await adminAgents.ensureManagedAgent(agentKey, organization);
+
+    const created = await anthropic.beta.sessions.create({
+      agent: agent.anthropic_agent_id,
+      environment_id: env.anthropic_environment_id,
+      title: 'P86 watcher · ' + organization.slug + ' · ' + agentKey + ' · ' +
+             (row.watch_name || '').slice(0, 40),
+    });
+    sessionId = created.id;
+    await pool.query(`UPDATE ai_watch_runs SET anthropic_session_id=$2 WHERE id=$1`, [watchRunId, sessionId]);
+
+    // Build the scoped prompt — describes what to scan and surfaces
+    // last_scan_at as an incremental hint. The scope_filter JSONB
+    // carries entity-type-specific narrowing the watch creator (or
+    // future admin UI) supplied. The agent baselines (C9) tell the
+    // watcher to invoke its skill, read scope, and emit per finding.
+    const lastScanAt = row.watch_last_scan_at || null;
+    const scopeFilter = row.watch_scope_filter || null;
+    const promptParts = [
+      '[Background watcher invocation. You are running on a scheduled fire — there is no user in the conversation. Read your domain scope, identify findings worth surfacing, and emit one emit_payload_file per actionable finding. The user will see the resulting files in their sidebar Payloads section and decide whether to apply each one.]',
+      '',
+      'agent_key: ' + agentKey,
+      'last_scan_at: ' + (lastScanAt ? new Date(lastScanAt).toISOString() : 'never (first scan)'),
+    ];
+    if (scopeFilter) {
+      promptParts.push('scope_filter: ' + JSON.stringify(scopeFilter));
+    }
+    if (row.watch_prompt) {
+      promptParts.push('');
+      promptParts.push('watch_prompt:');
+      promptParts.push(String(row.watch_prompt));
+    }
+    const prompt = promptParts.join('\n');
+
+    // Base callback — the standard make86OnCustomToolUse handler.
+    // Wrap to: (a) inject payloadSource so execEmitPayloadFile stamps
+    // the payload row with source='watcher_<agent_key>', and (b)
+    // reject approval-tier tools (background context — no user
+    // available to click cards).
+    const baseCallback = make86OnCustomToolUse(row.user_id || null, {
+      // parentSession-shaped object — only the fields execEmitPayloadFile
+      // actually reads. We thread the org id and a synthetic session id
+      // (null is fine; payload rows then have session_id=null which is
+      // schema-correct).
+      organization_id: organization.id,
+      id: null,
+    }, '');
+    const watcherCallback = async (tu) => {
+      if (tu.name === 'emit_payload_file') {
+        // Hand the tool input to execEmitPayloadFile directly so we
+        // can inject payloadSource + emittingAgentKey for the row.
+        return await execEmitPayloadFile(tu, {
+          userId: row.user_id || null,
+          parentSession: { organization_id: organization.id, id: null },
+          payloadSource: 'watcher_' + agentKey,
+          emittingAgentKey: agentKey,
+        });
+      }
+      if (tu.name === 'spawn_subtask' || tu.name === 'await_subtasks' || tu.name === 'subtask_status') {
+        return { tier: 'auto', error: 'Watcher invocations cannot spawn subtasks.' };
+      }
+      const decision = await baseCallback(tu);
+      if (decision && decision.tier === 'approval') {
+        return {
+          tier: 'auto',
+          error: 'Tool "' + tu.name + '" is approval-tier and cannot run inside a background watcher. Emit emit_payload_file instead so the user can review.',
+        };
+      }
+      return decision;
+    };
+
+    const result = await driveSubtaskTurn({
+      anthropic,
+      sessionId,
+      eventsToSend: [{ type: 'user.message', content: [{ type: 'text', text: prompt }] }],
+      onCustomToolUse: watcherCallback,
+    });
+
+    // Stamp last_scan_at on the watch row so the next fire's
+    // incremental hint reflects this run.
+    await pool.query(
+      `UPDATE ai_watches SET last_scan_at = NOW() WHERE id = $1`,
+      [row.watch_id]
+    );
+
+    await pool.query(
+      `UPDATE ai_watch_runs SET
+         status = $2, result = $3, error = $4,
+         input_tokens = COALESCE(input_tokens,0) + $5,
+         output_tokens = COALESCE(output_tokens,0) + $6,
+         cache_creation_tokens = COALESCE(cache_creation_tokens,0) + $7,
+         cache_read_tokens = COALESCE(cache_read_tokens,0) + $8,
+         finished_at = NOW()
+       WHERE id = $1`,
+      [
+        watchRunId,
+        result.error ? 'failed' : 'completed',
+        result.text || null,
+        result.error || null,
+        (result.usage && result.usage.input_tokens) || 0,
+        (result.usage && result.usage.output_tokens) || 0,
+        (result.usage && result.usage.cache_creation_input_tokens) || 0,
+        (result.usage && result.usage.cache_read_input_tokens) || 0,
+      ]
+    );
+  } catch (e) {
+    console.error('[watch] agent-runner failed for', watchRunId, e);
+    await pool.query(
+      `UPDATE ai_watch_runs SET status='failed', error=$2, finished_at=NOW() WHERE id=$1`,
+      [watchRunId, (e && e.message) || 'Agent watcher runner error']
+    );
+  } finally {
+    if (sessionId) {
+      try { await anthropic.beta.sessions.archive(sessionId); } catch (_) {}
+    }
+  }
+}
 
 async function runWatchFire(watchRunId) {
   const anthropic = getAnthropic();
@@ -9458,7 +9640,10 @@ async function runWatchFire(watchRunId) {
 
   const lookup = await pool.query(
     `SELECT r.*, w.prompt AS watch_prompt, w.name AS watch_name,
-            w.created_by_user_id AS user_id, w.organization_id AS watch_org_id
+            w.created_by_user_id AS user_id, w.organization_id AS watch_org_id,
+            w.kind AS watch_kind, w.agent_key AS watch_agent_key,
+            w.scope_filter AS watch_scope_filter, w.last_scan_at AS watch_last_scan_at,
+            w.model AS watch_model
        FROM ai_watch_runs r
        JOIN ai_watches w ON w.id = r.watch_id
       WHERE r.id = $1`,
@@ -9466,6 +9651,14 @@ async function runWatchFire(watchRunId) {
   );
   if (!lookup.rows.length) return;
   const row = lookup.rows[0];
+
+  // C10 — agent-kind watches dispatch to a different runner. The legacy
+  // (rule-kind) path below stays unchanged for back-compat.
+  if (row.watch_kind === 'agent') {
+    return runAgentWatchFire(watchRunId, row).catch(err => {
+      console.error('[watch] agent-runner failed for', watchRunId, err);
+    });
+  }
 
   const orgRow = await pool.query(`SELECT * FROM organizations WHERE id = $1`, [row.watch_org_id]);
   const organization = orgRow.rows[0];

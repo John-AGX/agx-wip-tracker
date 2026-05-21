@@ -1043,6 +1043,71 @@ router.post('/p86/install-skills', requireAuth, requireCapability('ROLES_MANAGE'
   }
 });
 
+// POST /api/admin/agents/p86/install-watchers
+//   Seeds the 5 agent-based background watchers for the caller's org
+//   (C10). Each row points at a staff agent_key + sets schedule_hours,
+//   model='haiku', and an empty scope_filter (the agent decides what to
+//   scan based on last_scan_at). next_fire_at is set to NOW() + 1h so
+//   nothing fires immediately on install — admins have time to disable
+//   any that they don't want.
+//
+//   Idempotent: re-running skips watches with a duplicate (organization,
+//   name) AND archived_at IS NULL via ON CONFLICT DO NOTHING on the
+//   existing UNIQUE (organization_id, name) partial index path. (The
+//   existing ai_watches table doesn't have that index; we dedup
+//   manually here by SELECT-then-INSERT.)
+router.post('/p86/install-watchers', requireAuth, requireCapability('ROLES_MANAGE'), require('../auth').requireOrg, async (req, res) => {
+  try {
+    const orgId = req.organization.id;
+    const userId = req.user.id;
+    const cadence = 'daily';
+    const timeOfDayUtc = '12:00';
+
+    const watchers = [
+      { name: '86-pm-scanner',        agent_key: '86-pm',        description: 'PM watcher — scans WIP / change orders / QB / node graphs for drift' },
+      { name: '86-estimator-scanner', agent_key: '86-estimator', description: 'Estimator watcher — scans estimate scope + line slotting + pricing anomalies' },
+      { name: '86-directory-scanner', agent_key: '86-directory', description: 'Directory watcher — scans clients for dedup, hierarchy, missing fields' },
+      { name: '86-scheduler-scanner', agent_key: '86-scheduler', description: 'Scheduler watcher — scans jobs + schedule + subs + weather for dispatch gaps' },
+      { name: '86-sales-scanner',     agent_key: '86-sales',     description: 'Sales watcher — scans leads pipeline for stale rows + conversion gaps' },
+    ];
+
+    const summary = [];
+    for (const w of watchers) {
+      const dup = await pool.query(
+        `SELECT id FROM ai_watches
+          WHERE organization_id = $1 AND name = $2 AND archived_at IS NULL`,
+        [orgId, w.name]
+      );
+      if (dup.rows.length) {
+        summary.push({ name: w.name, status: 'reused', id: dup.rows[0].id });
+        continue;
+      }
+      const id = 'watch_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+      await pool.query(
+        `INSERT INTO ai_watches
+           (id, organization_id, created_by_user_id, name, description,
+            cadence, time_of_day_utc, prompt, enabled, kind, agent_key,
+            scope_filter, model, schedule_hours, next_fire_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true, 'agent', $9, $10, 'haiku', 12, NOW() + INTERVAL '1 hour')`,
+        [
+          id, orgId, userId,
+          w.name, w.description,
+          cadence, timeOfDayUtc,
+          'Scan your domain scope and emit emit_payload_file per finding.',
+          w.agent_key,
+          null, // empty scope_filter — agent uses last_scan_at + its own judgment
+        ]
+      );
+      summary.push({ name: w.name, status: 'created', id });
+    }
+
+    res.json({ ok: true, summary });
+  } catch (e) {
+    console.error('POST /api/admin/agents/p86/install-watchers error:', e);
+    res.status(500).json({ error: 'Server error: ' + (e.message || 'unknown') });
+  }
+});
+
 // POST /api/admin/agents/skills/run-all-evals
 //   Runs every saved AI eval against the current live config and
 //   returns a summary { eval_id, name, passed, duration_ms, error? }.
