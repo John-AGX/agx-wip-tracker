@@ -938,6 +938,111 @@ router.post('/skills/:idx/unsync-from-anthropic', requireAuth, requireCapability
   }
 });
 
+// POST /api/admin/agents/p86/install-skills
+//   Project 86 Payload DSL — registers the 6 native Anthropic Skills
+//   that back the new architecture (C8). Idempotent: existing skills
+//   matching the display_title are reused; missing ones get
+//   beta.skills.create'd. Each skill is then linked to its target
+//   managed_agent_key via managed_agent_skills (ON CONFLICT DO NOTHING)
+//   so the next /managed/:agentKey/sync picks them up via
+//   collectSkillsFor.
+//
+//   Returns a per-skill summary:
+//     [{ slug, agent_key, display_title, status: 'created'|'reused'|'linked', skill_id }]
+//
+//   The 6 skills are:
+//     job             → p86-payload-drafter
+//     86-pm           → p86-pm-wip-playbook
+//     86-estimator    → p86-estimator-structure-playbook
+//     86-directory    → p86-directory-hierarchy-playbook
+//     86-scheduler    → p86-scheduler-dispatch-playbook
+//     86-sales        → p86-sales-intake-playbook
+router.post('/p86/install-skills', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+  try {
+    const anthropic = getAnthropic();
+    if (!anthropic) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not set on this deployment.' });
+    const { SKILL_DEFINITIONS } = require('../services/p86-skill-bodies');
+
+    // List existing Anthropic skills once so we can reuse by display_title.
+    // Anthropic Skills are account-wide (not org-scoped on the platform
+    // side), so this list reflects every skill the org has uploaded.
+    // Page through up to 200 — well above the ~13 we expect to see.
+    let existingSkills = [];
+    try {
+      const page = await anthropic.beta.skills.list({ limit: 200 });
+      existingSkills = (page && page.data) || [];
+    } catch (e) {
+      console.warn('[p86/install-skills] list failed; will assume none exist:', e.message);
+    }
+    const byTitle = new Map(existingSkills.map((s) => [s.display_title, s]));
+
+    const summary = [];
+    for (const def of SKILL_DEFINITIONS) {
+      let skillId = null;
+      let status = null;
+
+      const existing = byTitle.get(def.display_title);
+      if (existing && existing.id) {
+        skillId = existing.id;
+        status = 'reused';
+      } else {
+        // Build SKILL.md with frontmatter (matches the helper in
+        // admin-anthropic-routes.js POST /skills).
+        const md = [
+          '---',
+          'name: ' + def.slug,
+          'description: ' + (def.description || def.display_title).replace(/[\r\n]/g, ' ').slice(0, 1024),
+          '---',
+          '',
+          def.body || '',
+        ].join('\n');
+        const file = await toFile(Buffer.from(md, 'utf8'), 'SKILL.md', { type: 'text/markdown' });
+        try {
+          const created = await anthropic.beta.skills.create({
+            display_title: def.display_title,
+            files: [file],
+          });
+          skillId = created.id;
+          status = 'created';
+        } catch (e) {
+          summary.push({
+            slug: def.slug,
+            agent_key: def.agent_key,
+            display_title: def.display_title,
+            status: 'failed',
+            error: e.message || String(e),
+          });
+          continue;
+        }
+      }
+
+      // Link the skill to its target managed agent. The runtime
+      // collector (collectSkillsFor) pulls these on the next sync.
+      // PRIMARY KEY (agent_key, skill_id) makes ON CONFLICT a no-op.
+      await pool.query(
+        `INSERT INTO managed_agent_skills (agent_key, skill_id, position, enabled)
+         VALUES ($1, $2, $3, true)
+         ON CONFLICT (agent_key, skill_id) DO UPDATE
+            SET enabled = true, position = EXCLUDED.position`,
+        [def.agent_key, skillId, 0]
+      );
+
+      summary.push({
+        slug: def.slug,
+        agent_key: def.agent_key,
+        display_title: def.display_title,
+        status,
+        skill_id: skillId,
+      });
+    }
+
+    res.json({ ok: true, summary });
+  } catch (e) {
+    console.error('POST /api/admin/agents/p86/install-skills error:', e);
+    res.status(500).json({ error: 'Server error: ' + (e.message || 'unknown') });
+  }
+});
+
 // POST /api/admin/agents/skills/run-all-evals
 //   Runs every saved AI eval against the current live config and
 //   returns a summary { eval_id, name, passed, duration_ms, error? }.
