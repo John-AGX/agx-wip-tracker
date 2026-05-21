@@ -3853,8 +3853,17 @@ router.get('/managed/:agentKey/anthropic-state', requireAuth, requireCapability(
     const remoteAgent = await anthropic.beta.agents.retrieve(row.anthropic_agent_id);
 
     // Build what the local code WOULD register so we can flag drift.
-    // Pull the registry row's organization so collectSkillsFor can
-    // include the org's mirrored org_skill_packs in the local count.
+    // CRITICAL: this must mirror the SYNC payload exactly, otherwise
+    // the diff fires false-positives on every successful sync.
+    // The sync (POST /managed/:agentKey/sync, ~line 4015) computes:
+    //   name:        'Project 86 ' + KEY + ' · ' + (org.name || org.slug)
+    //   description: (org.description || baseline).slice(0, 200)
+    //   system:      composedAgentSystem(agentKey, baseline, org)
+    // Drift detection prior to 2026-05-21 used the raw baseline for
+    // both system + description and dropped the org name suffix —
+    // every fresh sync immediately showed "3-4 fields drift" because
+    // the comparator was computing different inputs than the
+    // canonical push path.
     const baseline = AGENT_SYSTEM_BASELINE[agentKey] || '';
     const aiInternals = require('./ai-routes-internals');
     const localModel = aiInternals && aiInternals.defaultModel ? aiInternals.defaultModel() : 'claude-sonnet-4-6';
@@ -3868,9 +3877,23 @@ router.get('/managed/:agentKey/anthropic-state', requireAuth, requireCapability(
     const localBuiltin = builtinToolsetFor(agentKey);
     const localToolCount = localCustom.length + localBuiltin.length;
     const localSkillCount = localSkills.length;
-    const localSystem = baseline;
-    const localName = 'Project 86 ' + agentKey.toUpperCase();
-    const localDescription = baseline.slice(0, 200);
+    // System prompt: compose with org overlays so the comparator
+    // matches what's actually sent on sync. composedAgentSystem may
+    // return a string or fall back to the baseline if it isn't
+    // available (test paths). Both branches are awaited.
+    let localSystem = baseline;
+    if (aiInternals && aiInternals.composedAgentSystem) {
+      try {
+        const composed = await aiInternals.composedAgentSystem(agentKey, baseline, localOrg);
+        if (typeof composed === 'string' && composed.length) localSystem = composed;
+      } catch (e) {
+        console.warn('[anthropic-state] composedAgentSystem failed; falling back to baseline:', e.message);
+      }
+    }
+    const orgLabel = localOrg ? (localOrg.name || localOrg.slug || '') : '';
+    const localName = 'Project 86 ' + agentKey.toUpperCase() + (orgLabel ? (' · ' + orgLabel) : '');
+    const localDescriptionSource = (localOrg && localOrg.description) ? localOrg.description : baseline;
+    const localDescription = (localDescriptionSource || '').slice(0, 200);
 
     // Drift signals — anything where the Anthropic-side value clearly
     // diverges from what we'd push now. Models on Anthropic can be a
