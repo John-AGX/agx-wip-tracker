@@ -35,6 +35,9 @@
     containerActive:
       'border-color:rgba(79,140,255,0.65);background:rgba(79,140,255,0.10);' +
       'color:#cfdcff;',
+    containerActivePreview:
+      'border-color:rgba(155,89,242,0.65);background:rgba(155,89,242,0.10);' +
+      'color:#d6b9ff;',
     containerApplying:
       'border-color:rgba(255,255,255,0.30);background:rgba(255,255,255,0.05);' +
       'color:rgba(255,255,255,0.85);',
@@ -49,34 +52,44 @@
     dismissBtn:
       'background:transparent;border:none;color:inherit;opacity:0.55;cursor:pointer;' +
       'font-size:14px;line-height:1;padding:0 2px;',
+    modeToggle:
+      'background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.14);' +
+      'color:#e6e6e6;border-radius:5px;font-size:10.5px;padding:3px 7px;cursor:pointer;' +
+      'transition:background 0.12s, border-color 0.12s;flex-shrink:0;',
+    modeToggleActive:
+      'background:rgba(155,89,242,0.20);border-color:rgba(155,89,242,0.55);color:#d6b9ff;',
   };
 
   function setState(el, state, message) {
+    const previewMode = el.dataset.previewMode === '1';
     const base = STYLES.container;
     let extra = '';
-    if (state === 'active')   extra = STYLES.containerActive;
-    if (state === 'applying') extra = STYLES.containerApplying;
-    if (state === 'applied')  extra = STYLES.containerApplied;
-    if (state === 'failed')   extra = STYLES.containerFailed;
+    if (state === 'active') {
+      extra = previewMode ? STYLES.containerActivePreview : STYLES.containerActive;
+    } else if (state === 'applying') extra = STYLES.containerApplying;
+    else if (state === 'applied')    extra = STYLES.containerApplied;
+    else if (state === 'failed')     extra = STYLES.containerFailed;
     el.style.cssText = base + extra;
     const labelEl = el.querySelector('.p86-dropbox-label');
     const iconEl  = el.querySelector('.p86-dropbox-icon');
     const dismissEl = el.querySelector('.p86-dropbox-dismiss');
     if (state === 'idle') {
       iconEl.textContent = '📦';
-      labelEl.textContent = message || 'Drop a payload here to apply';
+      labelEl.textContent = message || (previewMode
+        ? 'Drop a payload to preview (dry run — no changes)'
+        : 'Drop a payload here to apply');
       if (dismissEl) dismissEl.style.display = 'none';
     } else if (state === 'active') {
-      iconEl.textContent = '📦';
-      labelEl.textContent = message || 'Drop to apply';
+      iconEl.textContent = previewMode ? '🔍' : '📦';
+      labelEl.textContent = message || (previewMode ? 'Drop to preview' : 'Drop to apply');
       if (dismissEl) dismissEl.style.display = 'none';
     } else if (state === 'applying') {
       iconEl.textContent = '⏳';
-      labelEl.textContent = message || 'Applying payload…';
+      labelEl.textContent = message || (previewMode ? 'Previewing…' : 'Applying payload…');
       if (dismissEl) dismissEl.style.display = 'none';
     } else if (state === 'applied') {
       iconEl.textContent = '✓';
-      labelEl.textContent = message || 'Applied';
+      labelEl.textContent = message || (previewMode ? 'Preview ready' : 'Applied');
       if (dismissEl) dismissEl.style.display = '';
     } else if (state === 'failed') {
       iconEl.textContent = '✗';
@@ -87,16 +100,18 @@
   }
 
   async function applyPayload(payloadId, dropbox) {
+    const previewMode = dropbox.dataset.previewMode === '1';
     setState(dropbox, 'applying');
     try {
-      const r = await fetch(
-        '/api/payloads/' + encodeURIComponent(payloadId) + '/apply',
-        { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' } }
-      );
+      const url = '/api/payloads/' + encodeURIComponent(payloadId) + '/apply' +
+                  (previewMode ? '?dry_run=true' : '');
+      const r = await fetch(url, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+      });
       const body = await r.json().catch(() => ({}));
       if (!r.ok) {
-        // 501 is the C2 placeholder while the apply dispatcher is being
-        // built in C3+. Show a calm message instead of a scary error.
         if (r.status === 501) {
           setState(dropbox, 'failed', 'Apply dispatcher not yet implemented (501).');
         } else if (r.status === 410) {
@@ -105,10 +120,19 @@
           setState(dropbox, 'failed', 'Payload already used.');
         } else if (r.status === 404) {
           setState(dropbox, 'failed', 'Payload not found.');
+        } else if (r.status === 422) {
+          setState(dropbox, 'failed', body.error || 'Validation failed');
         } else {
           setState(dropbox, 'failed', body.error || ('Apply failed: HTTP ' + r.status));
         }
         scheduleReset(dropbox, 8000);
+        return;
+      }
+      if (previewMode) {
+        // Show the diff in a modal instead of touching anything.
+        showPreviewModal(body, payloadId);
+        setState(dropbox, 'applied', 'Preview rendered — payload still ready');
+        scheduleReset(dropbox, 6000);
         return;
       }
       const summary = body.apply_summary || ('Applied ' + (body.affected_targets || []).length + ' target(s).');
@@ -131,6 +155,115 @@
       setState(dropbox, 'failed', err && err.message || 'Apply failed');
       scheduleReset(dropbox, 8000);
     }
+  }
+
+  // ───────────────────────────────────────────────────────────────
+  // Preview modal — renders the dry-run diff returned by
+  // /apply?dry_run=true. Shows per-target summary + change list +
+  // ref resolutions (when $new_id refs were used).
+  // ───────────────────────────────────────────────────────────────
+  function showPreviewModal(body, payloadId) {
+    const overlay = document.createElement('div');
+    overlay.style.cssText =
+      'position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:9999;' +
+      'display:flex;align-items:center;justify-content:center;padding:24px;';
+    overlay.addEventListener('click', (ev) => { if (ev.target === overlay) overlay.remove(); });
+
+    const modal = document.createElement('div');
+    modal.style.cssText =
+      'background:var(--surface,#0f0f1e);border:1px solid rgba(155,89,242,0.35);' +
+      'border-radius:12px;max-width:640px;width:100%;max-height:80vh;overflow:auto;' +
+      'padding:18px 20px;color:#e6e6e6;font-size:13px;line-height:1.5;';
+
+    const closeBtn = document.createElement('button');
+    closeBtn.textContent = '×';
+    closeBtn.style.cssText =
+      'float:right;background:transparent;border:none;color:rgba(255,255,255,0.6);' +
+      'font-size:22px;line-height:1;cursor:pointer;padding:0 4px;';
+    closeBtn.onclick = () => overlay.remove();
+    modal.appendChild(closeBtn);
+
+    const heading = document.createElement('div');
+    heading.style.cssText =
+      'font-size:11px;text-transform:uppercase;letter-spacing:0.06em;' +
+      'color:#d6b9ff;margin-bottom:4px;';
+    heading.textContent = '🔍 Dry-run preview';
+    modal.appendChild(heading);
+
+    const title = document.createElement('div');
+    title.style.cssText = 'font-size:14px;font-weight:600;color:#fff;margin-bottom:12px;';
+    title.textContent = body.apply_summary || 'No changes';
+    modal.appendChild(title);
+
+    const note = document.createElement('div');
+    note.style.cssText =
+      'background:rgba(155,89,242,0.10);border:1px solid rgba(155,89,242,0.25);' +
+      'border-radius:6px;padding:8px 10px;font-size:11.5px;color:#d6b9ff;margin-bottom:14px;';
+    note.textContent = 'No changes were applied. The payload is still ready — drag again with Preview off to commit.';
+    modal.appendChild(note);
+
+    const list = document.createElement('div');
+    list.style.cssText = 'display:flex;flex-direction:column;gap:10px;';
+    const targets = body.affected_targets || [];
+    if (!targets.length) {
+      const empty = document.createElement('div');
+      empty.style.cssText = 'color:rgba(255,255,255,0.45);font-size:12px;';
+      empty.textContent = 'No affected targets returned.';
+      list.appendChild(empty);
+    } else {
+      targets.forEach((t, i) => {
+        const row = document.createElement('div');
+        row.style.cssText =
+          'border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:10px 12px;' +
+          'background:rgba(255,255,255,0.02);';
+        const head = document.createElement('div');
+        head.style.cssText = 'font-size:12px;color:rgba(255,255,255,0.85);font-weight:600;';
+        head.textContent = '#' + (i + 1) + '  ' + (t.entity_type || '?') +
+                          (t.entity_id ? '  ' + t.entity_id : '');
+        row.appendChild(head);
+        if (t.summary) {
+          const s = document.createElement('div');
+          s.style.cssText = 'font-size:12px;color:rgba(255,255,255,0.72);margin-top:4px;';
+          s.textContent = t.summary;
+          row.appendChild(s);
+        }
+        if (Array.isArray(t.changes) && t.changes.length) {
+          const c = document.createElement('ul');
+          c.style.cssText =
+            'margin:6px 0 0 0;padding-left:18px;font-size:11.5px;color:rgba(255,255,255,0.60);';
+          t.changes.forEach((ch) => {
+            const li = document.createElement('li');
+            li.textContent = ch;
+            c.appendChild(li);
+          });
+          row.appendChild(c);
+        }
+        list.appendChild(row);
+      });
+    }
+    modal.appendChild(list);
+
+    if (body.ref_resolutions && Object.keys(body.ref_resolutions).length) {
+      const refHead = document.createElement('div');
+      refHead.style.cssText =
+        'margin-top:14px;font-size:11px;text-transform:uppercase;' +
+        'letter-spacing:0.06em;color:rgba(255,255,255,0.40);';
+      refHead.textContent = 'Ref resolutions';
+      modal.appendChild(refHead);
+      const refTbl = document.createElement('div');
+      refTbl.style.cssText =
+        'font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;' +
+        'color:rgba(255,255,255,0.65);margin-top:4px;';
+      refTbl.textContent = Object.entries(body.ref_resolutions)
+        .map(([k, v]) => k + ' → ' + v).join('\n');
+      refTbl.style.whiteSpace = 'pre-wrap';
+      modal.appendChild(refTbl);
+    }
+
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+    const esc = (ev) => { if (ev.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', esc); } };
+    document.addEventListener('keydown', esc);
   }
 
   function scheduleReset(dropbox, ms) {
@@ -204,7 +337,29 @@
     el.innerHTML =
       '<div class="p86-dropbox-icon" style="' + STYLES.icon + '">📦</div>' +
       '<div class="p86-dropbox-label" style="' + STYLES.label + '">Drop a payload here to apply</div>' +
+      '<button type="button" class="p86-dropbox-preview-toggle" style="' + STYLES.modeToggle + '" ' +
+        'title="Toggle preview mode (dry-run — show diff without applying)">🔍 Preview</button>' +
       '<button type="button" class="p86-dropbox-dismiss" style="' + STYLES.dismissBtn + ';display:none;" title="Dismiss">&times;</button>';
+
+    // Preview-mode toggle — drops while ON trigger ?dry_run=true and
+    // surface a diff modal. Mode persists across drops until clicked off.
+    el.dataset.previewMode = '0';
+    const toggleBtn = el.querySelector('.p86-dropbox-preview-toggle');
+    if (toggleBtn) {
+      toggleBtn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        const next = el.dataset.previewMode === '1' ? '0' : '1';
+        el.dataset.previewMode = next;
+        if (next === '1') {
+          toggleBtn.style.cssText = STYLES.modeToggle + STYLES.modeToggleActive;
+          toggleBtn.textContent = '🔍 Preview ON';
+        } else {
+          toggleBtn.style.cssText = STYLES.modeToggle;
+          toggleBtn.textContent = '🔍 Preview';
+        }
+        setState(el, 'idle');
+      });
+    }
 
     el.querySelector('.p86-dropbox-dismiss').addEventListener('click', (ev) => {
       ev.stopPropagation();
