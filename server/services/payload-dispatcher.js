@@ -619,14 +619,63 @@ function applyEstimateGroups(data, groupOps) {
   }
 }
 
+// Resolve a section header row by its id (subgroup_id from 86). The
+// estimate's data.lines mixes "section header" rows (section ===
+// '__section_header__') and real line rows. Headers carry the section
+// NAME in their `description` and the BT export category in
+// `btCategory`. When 86 adds a line to subgroup_id=<header_id>, the
+// new line must copy those onto itself so the editor renders it under
+// the right subgroup.
+function findSubgroupHeader(lines, subgroupId) {
+  if (!subgroupId || !Array.isArray(lines)) return null;
+  return lines.find(
+    (l) => l && l.id === subgroupId && l.section === '__section_header__'
+  ) || null;
+}
+
+// Map section names to BT export categories. The four standard
+// subgroups all have a canonical btCategory; anything else falls
+// through to 'other' (the BT export coalesces these into General
+// Conditions on the proposal).
+const BT_CATEGORY_BY_SECTION_NAME = {
+  'Materials & Supplies': 'materials',
+  'Materials': 'materials',
+  'Direct Labor': 'labor',
+  'Labor': 'labor',
+  'General Conditions': 'gc',
+  'Subcontractors': 'sub',
+  'Subcontractors Costs': 'sub',
+  'Subs': 'sub',
+};
+
 function applyLineAdds(data, lineAdds) {
   const lines = ensureArray(data, 'lines');
   for (const add of lineAdds) {
+    // Resolve which subgroup this line belongs to. Three input
+    // shapes 86 might send (we accept all three for back-compat):
+    //   1. subgroup_id  — header row id ("s<est>_<n>"). Look up the
+    //                     header and copy its section name + btCategory.
+    //   2. section      — direct section name ("Materials & Supplies").
+    //   3. section_name — legacy alias for `section`.
+    let sectionName = add.section || add.section_name || null;
+    let btCategory  = add.btCategory || add.bt_category || null;
+    if (add.subgroup_id) {
+      const header = findSubgroupHeader(lines, add.subgroup_id);
+      if (header) {
+        sectionName = sectionName || header.description || null;
+        btCategory  = btCategory  || header.btCategory  || null;
+      }
+    }
+    if (!btCategory && sectionName) {
+      btCategory = BT_CATEGORY_BY_SECTION_NAME[sectionName] || 'other';
+    }
+
     const row = {
       id: add.line_id || newLineId(),
       estimateId: data.id,
-      section_name: add.section_name || null,
-      group_id: add.group_id || null,
+      alternateId: add.alternateId || add.group_id || 'alt_default',
+      section: sectionName,
+      btCategory: btCategory,
       description: add.description || '',
       qty: add.qty != null ? Number(add.qty) : 0,
       unit: add.unit || '',
