@@ -286,6 +286,7 @@ router.post('/:id/apply', requireAuth, requireOrg, async (req, res) => {
     try {
       result = await dispatcher.applyPayload(payload, {
         userId,
+        organizationId: orgId,
         sourceAgent: payload.emitting_agent_key === 'job' ? '86' : (payload.emitting_agent_key || null),
         dryRun,
       });
