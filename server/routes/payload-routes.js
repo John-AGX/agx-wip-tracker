@@ -416,6 +416,126 @@ router.post('/from-csv',
 );
 
 // ──────────────────────────────────────────────────────────────────
+// GET /api/admin/payloads/audit  (C16)
+//   Org-wide audit view. Returns every payload in the caller's org
+//   regardless of user_id, with filters by source, target_entity,
+//   user_id, status, date range.
+//
+//   Auth: requireAuth + requireOrg + ROLES_MANAGE (admin-only).
+//
+//   Mounted at /api/admin/payloads/audit via server/index.js as a
+//   separate sub-router (see exports at bottom of this file). The
+//   sub-router exists so the auth gate is enforced at mount time —
+//   the regular /api/payloads endpoints only need requireAuth + the
+//   "your own or watcher" ownership filter, which would be too loose
+//   for an admin-audit endpoint.
+// ──────────────────────────────────────────────────────────────────
+
+const adminRouter = express.Router();
+const { requireCapability } = require('../auth');
+
+adminRouter.get('/audit',
+  requireAuth, requireOrg, requireCapability('ROLES_MANAGE'),
+  async (req, res) => {
+    try {
+      const orgId = req.user.organization_id;
+      const limit = Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 100));
+      const offset = Math.max(0, parseInt(req.query.offset, 10) || 0);
+      const status = typeof req.query.status === 'string' ? req.query.status : null;
+      const source = typeof req.query.source === 'string' ? req.query.source : null;
+      const userIdFilter = req.query.user_id ? parseInt(req.query.user_id, 10) : null;
+      const targetEntity = typeof req.query.target_entity === 'string' ? req.query.target_entity : null;
+      const since = req.query.since ? new Date(req.query.since) : null;
+      const until = req.query.until ? new Date(req.query.until) : null;
+
+      const conds = ['p.organization_id = $1'];
+      const args = [orgId];
+
+      if (status)        { args.push(status); conds.push(`p.status = $${args.length}`); }
+      if (source)        { args.push(source); conds.push(`p.source = $${args.length}`); }
+      if (userIdFilter)  { args.push(userIdFilter); conds.push(`p.user_id = $${args.length}`); }
+      if (since)         { args.push(since); conds.push(`p.created_at >= $${args.length}`); }
+      if (until)         { args.push(until); conds.push(`p.created_at <= $${args.length}`); }
+      if (targetEntity) {
+        const [eType, eId] = targetEntity.split(':');
+        if (eType && eId) {
+          args.push(JSON.stringify([{ entity_type: eType, entity_id: eId }]));
+          conds.push(`p.targets @> $${args.length}::jsonb`);
+        }
+      }
+
+      args.push(limit);
+      const limitParam = `$${args.length}`;
+      args.push(offset);
+      const offsetParam = `$${args.length}`;
+
+      // LEFT JOIN users so the audit table can show who emitted /
+      // owns each payload. Watcher rows have user_id IS NULL so the
+      // join surfaces null name + a synthetic "watcher" label below.
+      const r = await pool.query(
+        `SELECT p.id, p.source, p.emitting_agent_key, p.filename,
+                p.title, p.summary, p.rationale, p.targets,
+                p.status, p.applied_at, p.apply_summary, p.apply_error,
+                p.created_at, p.expires_at, p.session_id, p.template_id,
+                p.user_id, u.name AS user_name, u.email AS user_email
+           FROM payloads p
+           LEFT JOIN users u ON u.id = p.user_id
+          WHERE ${conds.join(' AND ')}
+          ORDER BY p.created_at DESC
+          LIMIT ${limitParam} OFFSET ${offsetParam}`,
+        args
+      );
+
+      // Total count for pagination — separate query so the main
+      // SELECT can streaming-friendly LIMIT without scanning the
+      // whole table.
+      const countArgs = args.slice(0, args.length - 2);
+      const countR = await pool.query(
+        `SELECT COUNT(*)::int AS total FROM payloads p WHERE ${conds.join(' AND ')}`,
+        countArgs
+      );
+
+      res.json({
+        payloads: r.rows,
+        total: countR.rows[0].total,
+        limit,
+        offset,
+      });
+    } catch (e) {
+      console.error('[admin/payloads] GET /audit error:', e && e.stack || e);
+      res.status(500).json({ error: 'Server error' });
+    }
+  }
+);
+
+// GET /api/admin/payloads/audit/summary
+//   Rollup counts grouped by source + status. Cheap query, used by
+//   the admin tab to show "X applied, Y ready, Z expired across N
+//   sources" headline numbers.
+adminRouter.get('/audit/summary',
+  requireAuth, requireOrg, requireCapability('ROLES_MANAGE'),
+  async (req, res) => {
+    try {
+      const orgId = req.user.organization_id;
+      const r = await pool.query(
+        `SELECT source, status, COUNT(*)::int AS n,
+                COALESCE(SUM(jsonb_array_length(targets)), 0)::int AS total_targets
+           FROM payloads
+          WHERE organization_id = $1
+            AND created_at > NOW() - INTERVAL '30 days'
+          GROUP BY source, status
+          ORDER BY source, status`,
+        [orgId]
+      );
+      res.json({ rollup: r.rows });
+    } catch (e) {
+      console.error('[admin/payloads] GET /audit/summary error:', e && e.stack || e);
+      res.status(500).json({ error: 'Server error' });
+    }
+  }
+);
+
+// ──────────────────────────────────────────────────────────────────
 // Recipes (C11) — payload_templates table CRUD.
 //
 // A recipe is a payload_templates row holding a name + description +
@@ -655,6 +775,7 @@ recipeRouter.delete('/:id', requireAuth, requireOrg, async (req, res) => {
 // re-expose them here so callers have one require() target.
 module.exports = router;
 module.exports.recipes = recipeRouter;
+module.exports.admin = adminRouter;
 module.exports.internals = {
   PAYLOAD_OPS_SCHEMAS: dispatcher.PAYLOAD_OPS_SCHEMAS,
   validateOps: dispatcher.validateOps,
