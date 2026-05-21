@@ -9039,20 +9039,37 @@ async function execEmitPayloadFile(tu, ctx) {
     // here is the ai_sessions row the model is responding inside; we
     // bind the payload to it so the sidebar restore-on-refresh can
     // re-render the artifact under the right message bubble.
-    const orgId = (ctx && ctx.parentSession && ctx.parentSession.organization_id) ||
-                  (ctx && ctx.organizationId) || null;
+    //
+    // ai_sessions doesn't carry organization_id as a column — it's
+    // keyed by user_id and the org comes through the users join. So
+    // the priority order is:
+    //   1. ctx.organizationId (passed explicitly by callers that have it,
+    //      e.g. watcher invocations)
+    //   2. ctx.parentSession.organization_id (rare; some callers stuff
+    //      the org row into the session via spread)
+    //   3. SELECT FROM users via ctx.userId (canonical fallback for the
+    //      /86/chat path — req.user.id is always present there)
+    let orgId = (ctx && ctx.organizationId) ||
+                (ctx && ctx.parentSession && ctx.parentSession.organization_id) ||
+                null;
     const sessionId = (ctx && ctx.parentSession && ctx.parentSession.id) || null;
 
-    // INSERT the payloads row. user_id is the user driving the chat;
-    // watcher emits will pass null via a future overload. organization_id
-    // is required (NOT NULL). If we don't have it (shouldn't happen on
-    // the /86/chat path), bail out with a structured error so the model
-    // sees the failure and can retry instead of silently dropping.
+    if (!orgId && ctx && ctx.userId) {
+      try {
+        const r = await pool.query('SELECT organization_id FROM users WHERE id = $1', [ctx.userId]);
+        if (r.rows.length && r.rows[0].organization_id) {
+          orgId = r.rows[0].organization_id;
+        }
+      } catch (e) {
+        console.warn('[execEmitPayloadFile] org lookup via users failed:', e.message);
+      }
+    }
+
     if (!orgId) {
       return {
         tier: 'auto',
-        error: 'emit_payload_file: parent session has no organization_id; ' +
-               'cannot persist the payload',
+        error: 'emit_payload_file: could not resolve organization_id from ' +
+               'the parent context. Confirm the user is signed in to a tenant.',
       };
     }
 
