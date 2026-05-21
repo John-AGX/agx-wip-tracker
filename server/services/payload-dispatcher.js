@@ -139,9 +139,14 @@ const PAYLOAD_OPS_SCHEMAS = Object.freeze({
     allowedTopKeys: new Set(['blocks']),
   },
   system: {
-    // watch_ops: [{op:'create'|'archive', watch_id?, name, cadence, time_of_day_utc, prompt, agent_key?, model?, schedule_hours?, kind?}]
-    // skill_pack_ops, field_tool_ops, staff_agent_ops — v2
-    allowedTopKeys: new Set(['watch_ops', 'skill_pack_ops', 'field_tool_ops', 'staff_agent_ops']),
+    // watch_ops: [{op:'create'|'archive', watch_id?, name, cadence, ...}]
+    // skill_pack_ops: [{op:'add'|'edit'|'delete', pack_id?, fields:{name, body, description?, agents?, category?, triggers?}}]
+    // field_tool_ops: [{op:'create'|'edit'|'delete', tool_id?, fields:{name, description?, category?, html_body}}]
+    // link_ops: [{op:'link_job_to_client', job_id, client_id} | {op:'link_property_to_parent', property_id, parent_client_id}]
+    // staff_agent_ops: deferred (needs Anthropic SDK calls)
+    allowedTopKeys: new Set([
+      'watch_ops', 'skill_pack_ops', 'field_tool_ops', 'link_ops', 'staff_agent_ops',
+    ]),
   },
 });
 
@@ -255,14 +260,11 @@ function validateOps(entityType, ops) {
     }
   }
   if (entityType === 'system') {
-    for (const k of ['watch_ops', 'skill_pack_ops', 'field_tool_ops', 'staff_agent_ops']) {
+    for (const k of ['watch_ops', 'skill_pack_ops', 'field_tool_ops', 'link_ops', 'staff_agent_ops']) {
       if (ops[k] != null && !Array.isArray(ops[k])) {
         throw new Error(`system.ops.${k} must be an array`);
       }
     }
-    // For v1 only watch_ops is dispatch-implemented. The rest validate
-    // shape but the dispatcher throws "not yet implemented" so the
-    // model knows the op is recognized but the executor isn't ready.
   }
 }
 
@@ -1138,18 +1140,180 @@ async function dispatchSystem(dbClient, target, refTable, ctx) {
   const ops = target.ops || {};
   resolveRefsInOps(ops, refTable);
 
-  // v1: only watch_ops are dispatch-implemented.
-  for (const k of ['skill_pack_ops', 'field_tool_ops', 'staff_agent_ops']) {
-    if (Array.isArray(ops[k]) && ops[k].length) {
-      throw new Error(
-        `system.ops.${k} not yet implemented — use the propose_${k.replace(/_ops$/, '')} ` +
-        `approval-card tool for now (will fold into payload in v2).`
-      );
-    }
+  // staff_agent_ops still pending — requires Anthropic SDK calls
+  // (beta.agents.create/update/archive). The propose_create_staff_agent
+  // tool remains on the Principal until that lands.
+  if (Array.isArray(ops.staff_agent_ops) && ops.staff_agent_ops.length) {
+    throw new Error(
+      'system.ops.staff_agent_ops not yet implemented — Anthropic-side ' +
+      'agent registration needs the beta.agents.* API path. Use the ' +
+      'propose_create_staff_agent approval-card tool for now.'
+    );
   }
 
   const created = [];
   const archived = [];
+  const updated = [];
+
+  // skill_pack_ops — CRUD on org_skill_packs.
+  // Shape: [{op:'add'|'edit'|'delete', pack_id?, fields:{name, body, description?, agents?, category?, triggers?}}]
+  if (Array.isArray(ops.skill_pack_ops) && ops.skill_pack_ops.length) {
+    const orgId = (ctx && ctx.organizationId) || null;
+    if (!orgId) throw new Error('skill_pack_ops requires organization context');
+    for (const sp of ops.skill_pack_ops) {
+      if (!sp || !sp.op) throw new Error('skill_pack_ops[].op required');
+      if (sp.op === 'add') {
+        const f = sp.fields || {};
+        if (!f.name) throw new Error('skill_pack_ops add requires fields.name');
+        if (!f.body) throw new Error('skill_pack_ops add requires fields.body');
+        const r = await dbClient.query(
+          `INSERT INTO org_skill_packs
+             (organization_id, name, body, description, agents, category, triggers)
+           VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7::jsonb)
+           ON CONFLICT (organization_id, name) DO UPDATE
+             SET body = EXCLUDED.body,
+                 description = EXCLUDED.description,
+                 agents = EXCLUDED.agents,
+                 category = EXCLUDED.category,
+                 triggers = EXCLUDED.triggers,
+                 archived_at = NULL,
+                 updated_at = NOW()
+           RETURNING id`,
+          [
+            orgId, f.name, f.body, f.description || '',
+            JSON.stringify(f.agents || ['job']),
+            f.category || null,
+            JSON.stringify(f.triggers || {}),
+          ]
+        );
+        created.push({ kind: 'skill_pack', id: r.rows[0].id, name: f.name });
+      } else if (sp.op === 'edit') {
+        if (!sp.pack_id) throw new Error('skill_pack_ops edit requires pack_id');
+        const sets = [];
+        const vals = [];
+        const f = sp.fields || {};
+        let p = 1;
+        if (f.name !== undefined)        { sets.push(`name = $${p++}`); vals.push(f.name); }
+        if (f.body !== undefined)        { sets.push(`body = $${p++}`); vals.push(f.body); }
+        if (f.description !== undefined) { sets.push(`description = $${p++}`); vals.push(f.description); }
+        if (f.agents !== undefined)      { sets.push(`agents = $${p++}::jsonb`); vals.push(JSON.stringify(f.agents)); }
+        if (f.category !== undefined)    { sets.push(`category = $${p++}`); vals.push(f.category); }
+        if (f.triggers !== undefined)    { sets.push(`triggers = $${p++}::jsonb`); vals.push(JSON.stringify(f.triggers)); }
+        if (!sets.length) continue;
+        sets.push('updated_at = NOW()');
+        vals.push(sp.pack_id);
+        vals.push(orgId);
+        const r = await dbClient.query(
+          `UPDATE org_skill_packs SET ${sets.join(', ')}
+             WHERE id = $${p++} AND organization_id = $${p}`,
+          vals
+        );
+        if (!r.rowCount) throw new Error(`skill_pack ${sp.pack_id} not found in this org`);
+        updated.push({ kind: 'skill_pack', id: sp.pack_id });
+      } else if (sp.op === 'delete') {
+        if (!sp.pack_id) throw new Error('skill_pack_ops delete requires pack_id');
+        const r = await dbClient.query(
+          `UPDATE org_skill_packs SET archived_at = NOW(), updated_at = NOW()
+             WHERE id = $1 AND organization_id = $2 AND archived_at IS NULL`,
+          [sp.pack_id, orgId]
+        );
+        if (!r.rowCount) throw new Error(`skill_pack ${sp.pack_id} not found or already archived`);
+        archived.push({ kind: 'skill_pack', id: sp.pack_id });
+      } else {
+        throw new Error(`skill_pack_ops[].op must be add|edit|delete, got: ${sp.op}`);
+      }
+    }
+  }
+
+  // field_tool_ops — CRUD on field_tools.
+  // Shape: [{op:'create'|'edit'|'delete', tool_id?, fields:{name, description?, category?, html_body}}]
+  if (Array.isArray(ops.field_tool_ops) && ops.field_tool_ops.length) {
+    for (const ft of ops.field_tool_ops) {
+      if (!ft || !ft.op) throw new Error('field_tool_ops[].op required');
+      if (ft.op === 'create') {
+        const f = ft.fields || {};
+        if (!f.name)      throw new Error('field_tool_ops create requires fields.name');
+        if (!f.html_body) throw new Error('field_tool_ops create requires fields.html_body');
+        const id = ft.tool_id && !isRef(ft.tool_id)
+          ? ft.tool_id
+          : ('tool_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8));
+        await dbClient.query(
+          `INSERT INTO field_tools (id, name, description, category, html_body, created_by)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [id, f.name, f.description || null, f.category || null, f.html_body, ctx.userId || null]
+        );
+        if (isRef(ft.tool_id)) refTable[ft.tool_id] = id;
+        created.push({ kind: 'field_tool', id, name: f.name });
+      } else if (ft.op === 'edit') {
+        const id = resolveRef(ft.tool_id, refTable);
+        if (!id) throw new Error('field_tool_ops edit requires tool_id');
+        const f = ft.fields || {};
+        const sets = [];
+        const vals = [];
+        let p = 1;
+        if (f.name        !== undefined) { sets.push(`name = $${p++}`);        vals.push(f.name); }
+        if (f.description !== undefined) { sets.push(`description = $${p++}`); vals.push(f.description); }
+        if (f.category    !== undefined) { sets.push(`category = $${p++}`);    vals.push(f.category); }
+        if (f.html_body   !== undefined) { sets.push(`html_body = $${p++}`);   vals.push(f.html_body); }
+        if (!sets.length) continue;
+        sets.push('updated_at = NOW()');
+        vals.push(id);
+        const r = await dbClient.query(
+          `UPDATE field_tools SET ${sets.join(', ')} WHERE id = $${p}`,
+          vals
+        );
+        if (!r.rowCount) throw new Error(`field_tool ${id} not found`);
+        updated.push({ kind: 'field_tool', id });
+      } else if (ft.op === 'delete') {
+        const id = resolveRef(ft.tool_id, refTable);
+        if (!id) throw new Error('field_tool_ops delete requires tool_id');
+        const r = await dbClient.query('DELETE FROM field_tools WHERE id = $1', [id]);
+        if (!r.rowCount) throw new Error(`field_tool ${id} not found`);
+        archived.push({ kind: 'field_tool', id });
+      } else {
+        throw new Error(`field_tool_ops[].op must be create|edit|delete, got: ${ft.op}`);
+      }
+    }
+  }
+
+  // link_ops — cross-entity linkage. Currently supports:
+  //   - link_job_to_client: {op:'link_job_to_client', job_id, client_id}
+  //   - link_property_to_parent: {op:'link_property_to_parent', property_id, parent_client_id}
+  if (Array.isArray(ops.link_ops) && ops.link_ops.length) {
+    for (const lk of ops.link_ops) {
+      if (!lk || !lk.op) throw new Error('link_ops[].op required');
+      if (lk.op === 'link_job_to_client') {
+        const jobId = resolveRef(lk.job_id, refTable);
+        const clientId = resolveRef(lk.client_id, refTable);
+        if (!jobId || !clientId) throw new Error('link_job_to_client requires job_id + client_id');
+        // Jobs store linked client_id inside the data JSONB blob.
+        const jr = await dbClient.query('SELECT data FROM jobs WHERE id = $1', [jobId]);
+        if (!jr.rows.length) throw new Error(`job ${jobId} not found`);
+        const data = jr.rows[0].data || {};
+        data.client_id = clientId;
+        await dbClient.query(
+          'UPDATE jobs SET data = $1, updated_at = NOW() WHERE id = $2',
+          [JSON.stringify(data), jobId]
+        );
+        updated.push({ kind: 'job_client_link', job_id: jobId, client_id: clientId });
+      } else if (lk.op === 'link_property_to_parent') {
+        const propId = resolveRef(lk.property_id, refTable);
+        const parentId = resolveRef(lk.parent_client_id, refTable);
+        if (!propId || !parentId) throw new Error('link_property_to_parent requires property_id + parent_client_id');
+        if (propId === parentId) throw new Error('A client cannot be its own parent');
+        const pc = await dbClient.query('SELECT id FROM clients WHERE id = $1', [parentId]);
+        if (!pc.rows.length) throw new Error(`parent client ${parentId} not found`);
+        const r = await dbClient.query(
+          'UPDATE clients SET parent_client_id = $1, updated_at = NOW() WHERE id = $2',
+          [parentId, propId]
+        );
+        if (!r.rowCount) throw new Error(`property ${propId} not found`);
+        updated.push({ kind: 'property_parent_link', property_id: propId, parent_client_id: parentId });
+      } else {
+        throw new Error(`link_ops[].op unsupported: ${lk.op}`);
+      }
+    }
+  }
 
   if (Array.isArray(ops.watch_ops)) {
     const orgId = (ctx && ctx.organizationId) || null;
@@ -1199,14 +1363,15 @@ async function dispatchSystem(dbClient, target, refTable, ctx) {
   }
 
   const parts = [];
-  if (created.length) parts.push(`+${created.length} watch(es)`);
+  if (created.length)  parts.push(`+${created.length} created`);
+  if (updated.length)  parts.push(`~${updated.length} updated`);
   if (archived.length) parts.push(`-${archived.length} archived`);
 
   return {
     entity_type: 'system',
     entity_id: target.entity_id || null,
     op: 'multi',
-    created, archived,
+    created, archived, updated,
     summary: `System: ${parts.join(', ') || 'no-op'}`,
   };
 }

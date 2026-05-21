@@ -1849,13 +1849,18 @@ const AGENT_SYSTEM_BASELINE = {
     '',
     '# Principal-owned work',
     '  • Memory — remember / recall / list_memories / forget for durable cross-session facts the user shares.',
-    '  • Watches — list_watches / read_recent_watch_runs / propose_watch_create / propose_watch_archive for scheduled background monitoring.',
-    '  • Skill pack curation — propose_skill_pack_add / _edit / _delete to evolve the platform\'s prompt playbooks.',
-    '  • Field-tool curation — propose_create_field_tool / _update / _delete for custom UI tools the field team uses.',
-    '  • Cross-domain admin — propose_link_job_to_client / propose_bulk_link_jobs_to_clients.',
+    '  • Watch reads — list_watches / read_recent_watch_runs to inspect scheduled background monitoring. WATCH CREATE/ARCHIVE = emit_payload_file with entity_type=\'system\' and ops.watch_ops.',
     '  • Self-introspection — read_metrics / read_recent_conversations / read_conversation_detail / search_my_sessions / read_skill_packs / self_diagnose.',
     '  • Navigation — `navigate` when the user asks to "go work on X" or "open Y".',
     '  • Reference + attachment lookups — search_reference_sheet, read_attachment_text, view_attachment_image for cross-surface light needs.',
+    '  • Tier 3 agent spawn — propose_create_staff_agent stays as an approval card (rare; pending payload migration).',
+    '',
+    'Platform writes (skill pack curation, field tool curation, watch create/archive, cross-domain links) ALL flow through emit_payload_file with entity_type=\'system\' and the appropriate ops keys:',
+    '  • skill_pack_ops: [{op:\'add\'|\'edit\'|\'delete\', pack_id?, fields:{name, body, description?, agents?, category?, triggers?}}]',
+    '  • field_tool_ops: [{op:\'create\'|\'edit\'|\'delete\', tool_id?, fields:{name, description?, category?, html_body}}]',
+    '  • watch_ops: [{op:\'create\'|\'archive\', watch_id?, name, cadence, time_of_day_utc, prompt, agent_key?, kind?, model?, schedule_hours?}]',
+    '  • link_ops: [{op:\'link_job_to_client\', job_id, client_id}] OR [{op:\'link_property_to_parent\', property_id, parent_client_id}]',
+    'You no longer have a propose_link / propose_skill_pack / propose_*_field_tool / propose_watch_create tool. Use emit_payload_file with the system ops above.',
     '',
     '',
     '# Writes — the Payload DSL',
@@ -2197,10 +2202,10 @@ function customToolsFor(agentKey, opts) {
     // handoff_to_* and routes incoming work; it does NOT do the domain
     // work directly.
     const ROUTER_TOOL_NAMES = new Set([
-      // Light routing reads — Principal needs these to know which
-      // staff to delegate to. Heavy reads (read_active_lines,
-      // read_qb_cost_lines, read_workspace_sheet_full, etc.) live
-      // on the staff agents.
+      // Light routing reads — Principal needs these to resolve target
+      // entity_ids before emitting a payload, and to answer one-shot
+      // factual questions. Heavy domain reads live on the staff
+      // watchers (which run async via the C10 watch-runner).
       'read_jobs', 'read_clients', 'read_leads', 'read_lead_pipeline',
       'read_existing_clients', 'read_existing_leads',
       'read_users', 'read_wip_summary',
@@ -2214,22 +2219,23 @@ function customToolsFor(agentKey, opts) {
       'navigate',
       // Memory — cross-session recall.
       'remember', 'recall', 'list_memories', 'forget',
-      // Watches — Principal owns proactive monitoring.
+      // Watches — list + recent runs are reads. Creation/archival flows
+      // through emit_payload_file with system.watch_ops (implemented C5)
+      // so list_watches / read_recent_watch_runs stay as the only
+      // tool-level access; everything else is payload-driven.
       'list_watches', 'read_recent_watch_runs',
-      'propose_watch_create', 'propose_watch_archive',
-      // Skill-pack curation — Principal evolves its own brain.
-      'propose_skill_pack_add', 'propose_skill_pack_edit', 'propose_skill_pack_delete',
-      // Field-tool curation — same idea, for proposed custom tools.
-      'propose_create_field_tool', 'propose_update_field_tool', 'propose_delete_field_tool',
-      // Cross-domain admin (touches jobs + clients; lives on Principal).
-      'propose_link_job_to_client', 'propose_bulk_link_jobs_to_clients',
-      // Spawn — Principal proposes new Tier 3 agents.
+      // Tier 3 spawn — kept as an approval-card tool until system
+      // .staff_agent_ops implements the Anthropic SDK calls
+      // (beta.agents.create + agent registration). Rare operation.
       'propose_create_staff_agent',
       // Project 86 Payload DSL — Principal's ONE write primitive. All
-      // mutations (field updates, line items, phase changes, lead
-      // creates, structural ops, platform writes) flow through this
-      // tool, which emits a .p86.json file the user drags into the
-      // universal dropbox. See plan: payloads as universal write protocol.
+      // mutations now flow through this: field updates, line items,
+      // phase changes, lead creates, structural client ops, AND
+      // platform writes (watches, skill packs, field tools, links)
+      // via the `system` entity_type with the appropriate _ops vocab.
+      // Implemented system entity_type sub-ops:
+      //   watch_ops (C5), skill_pack_ops (C18), field_tool_ops (C18),
+      //   link_ops (C18). staff_agent_ops still pending.
       'emit_payload_file'
     ]);
     const seen = new Set();
