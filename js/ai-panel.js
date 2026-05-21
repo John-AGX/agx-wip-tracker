@@ -1105,6 +1105,11 @@
     document.addEventListener('p86:payload-ready', function(ev) {
       refreshPayloadsSidebar();
     });
+    // Recipe pin / unpin / archive / clone all dispatch p86:recipe-changed.
+    document.addEventListener('p86:recipe-changed', function() {
+      refreshRecipesSidebar();
+      refreshPayloadsSidebar(); // a clone produces a new ready payload
+    });
     var trustBtn = panel.querySelector('#ai-trust');
     if (trustBtn) trustBtn.onclick = function(e) {
       e.stopPropagation();
@@ -1347,6 +1352,7 @@
       applyPanelSectionVisual('payloads', getPanelSectionOpen('payloads'));
       applyPanelSectionVisual('recipes',  getPanelSectionOpen('recipes'));
       refreshPayloadsSidebar();
+      refreshRecipesSidebar();
     } catch (e) { console.warn('[ai-panel] payload sidebar init failed:', e); }
     setTimeout(function() {
       var inp = document.getElementById('ai-input');
@@ -2043,6 +2049,127 @@
     }).catch(function(err) {
       window.alert('CSV upload error: ' + (err && err.message || err));
     });
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Recipes sidebar (C11) — list, pin/unpin, clone, archive.
+  // ─────────────────────────────────────────────────────────────
+  var _recipesList = [];
+  function refreshRecipesSidebar() {
+    if (!window.p86Api || !window.p86Api.get) return;
+    var host = document.getElementById('ai-sidebar-recipes-list');
+    var countEl = document.getElementById('ai-sidebar-recipes-count');
+    if (host) host.innerHTML = '<div style="padding:8px 12px;color:rgba(255,255,255,0.30);font-size:11px;">Loading…</div>';
+    window.p86Api.get('/api/recipes?limit=100').then(function(resp) {
+      _recipesList = (resp && resp.recipes) || [];
+      renderRecipesSidebar();
+      if (countEl) {
+        var pinned = _recipesList.filter(function(r) { return r.is_pinned; }).length;
+        countEl.textContent = _recipesList.length
+          ? '(' + _recipesList.length + (pinned ? ', ' + pinned + ' pinned' : '') + ')'
+          : '';
+      }
+    }).catch(function(err) {
+      if (host) host.innerHTML = '<div style="padding:8px 12px;color:#fbbf24;font-size:11px;">Failed: ' +
+        escapeHTML(err && err.message || 'unknown error') + '</div>';
+    });
+  }
+
+  function renderRecipesSidebar() {
+    var host = document.getElementById('ai-sidebar-recipes-list');
+    if (!host) return;
+    if (!_recipesList.length) {
+      host.innerHTML = '<div style="padding:8px 12px;color:rgba(255,255,255,0.30);font-size:11px;">No recipes yet. Click 📌 Pin as Recipe on any payload to save it here.</div>';
+      return;
+    }
+    var html = '';
+    _recipesList.forEach(function(r) {
+      var icon = r.icon || '⭐';
+      var useCount = r.use_count || 0;
+      html +=
+        '<div class="p86-sidebar-recipe" data-recipe-id="' + escapeHTML(r.id) + '" draggable="true" ' +
+        'style="display:flex;align-items:center;gap:8px;padding:6px 12px;margin:1px 6px;border-radius:6px;cursor:grab;transition:background 0.12s;" ' +
+        'onmouseenter="this.style.background=\'rgba(255,255,255,0.05)\'" ' +
+        'onmouseleave="this.style.background=\'transparent\'">' +
+          '<span style="font-size:13px;line-height:1;flex-shrink:0;">' + (r.is_pinned ? '⭐' : '○') + '</span>' +
+          '<div style="flex:1;min-width:0;overflow:hidden;">' +
+            '<div style="font-size:11.5px;color:rgba(255,255,255,0.85);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTML(r.name || r.id) + '</div>' +
+            '<div style="font-size:10px;color:rgba(255,255,255,0.40);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' +
+              (useCount ? (useCount + ' use' + (useCount === 1 ? '' : 's') + ' · ') : '') +
+              escapeHTML(r.description || '') +
+            '</div>' +
+          '</div>' +
+        '</div>';
+    });
+    host.innerHTML = html;
+    host.querySelectorAll('.p86-sidebar-recipe').forEach(function(row) {
+      var rid = row.dataset.recipeId;
+      var recipe = _recipesList.find(function(x) { return x.id === rid; });
+      if (!recipe) return;
+      // Drag — into chat input (C12) OR directly into the dropbox.
+      row.addEventListener('dragstart', function(ev) {
+        try {
+          ev.dataTransfer.setData('application/x-p86-recipe-id', recipe.id);
+          ev.dataTransfer.setData('application/x-p86-recipe', JSON.stringify({
+            recipe_id: recipe.id, name: recipe.name, description: recipe.description,
+          }));
+          ev.dataTransfer.effectAllowed = 'copy';
+        } catch (e) { /* swallow */ }
+      });
+      // Click — open a small popover with Use / Pin / Archive options.
+      row.addEventListener('click', function(ev) {
+        ev.stopPropagation();
+        openRecipeMenu(recipe, ev.clientX, ev.clientY);
+      });
+    });
+  }
+
+  function openRecipeMenu(recipe, x, y) {
+    var prev = document.getElementById('p86-recipe-context-menu');
+    if (prev) prev.remove();
+    var menu = document.createElement('div');
+    menu.id = 'p86-recipe-context-menu';
+    menu.style.cssText =
+      'position:fixed;left:' + x + 'px;top:' + y + 'px;background:#1a2230;' +
+      'border:1px solid rgba(255,255,255,0.18);border-radius:8px;padding:4px;' +
+      'font-size:12px;z-index:10000;box-shadow:0 6px 16px rgba(0,0,0,0.5);min-width:180px;';
+    function item(label, onClick) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.style.cssText =
+        'display:block;width:100%;text-align:left;background:transparent;border:0;' +
+        'color:#e6e6e6;padding:6px 10px;cursor:pointer;border-radius:6px;font-size:12px;';
+      b.onmouseenter = function() { b.style.background = 'rgba(255,255,255,0.06)'; };
+      b.onmouseleave = function() { b.style.background = 'transparent'; };
+      b.onclick = function() { menu.remove(); onClick(); };
+      menu.appendChild(b);
+    }
+    item('🧪 Use — generate a payload', function() {
+      window.p86Api.post('/api/recipes/' + encodeURIComponent(recipe.id) + '/clone', {})
+        .then(function() {
+          refreshPayloadsSidebar();
+        })
+        .catch(function(err) {
+          window.alert('Clone failed: ' + (err && err.message || err));
+        });
+    });
+    item(recipe.is_pinned ? '☆ Unpin' : '⭐ Pin to top', function() {
+      window.p86Api.post('/api/recipes/' + encodeURIComponent(recipe.id) + '/pin', { pinned: !recipe.is_pinned })
+        .then(function() { refreshRecipesSidebar(); })
+        .catch(function(err) { window.alert('Pin toggle failed: ' + (err && err.message || err)); });
+    });
+    item('🗑 Archive', function() {
+      if (!window.confirm('Archive "' + recipe.name + '"? (soft delete — can be restored from admin)')) return;
+      window.p86Api.del('/api/recipes/' + encodeURIComponent(recipe.id))
+        .then(function() { refreshRecipesSidebar(); })
+        .catch(function(err) { window.alert('Archive failed: ' + (err && err.message || err)); });
+    });
+    document.body.appendChild(menu);
+    var dismiss = function(ev) {
+      if (!menu.contains(ev.target)) { menu.remove(); document.removeEventListener('click', dismiss); }
+    };
+    setTimeout(function() { document.addEventListener('click', dismiss); }, 50);
   }
 
   // Dev helper — pushes a synthetic payload row into the local list so
@@ -6726,7 +6853,8 @@
     // sidebar refresh is exposed so other modules (e.g., post-apply
     // surface listeners) can force a re-pull.
     injectFixturePayload: function(fixture) { return injectFixturePayload(fixture); },
-    refreshPayloadsSidebar: function() { return refreshPayloadsSidebar(); }
+    refreshPayloadsSidebar: function() { return refreshPayloadsSidebar(); },
+    refreshRecipesSidebar: function() { return refreshRecipesSidebar(); }
   };
 
   // Sticky-header shim mirroring openEstimateAI() — finds the active job id

@@ -79,6 +79,9 @@ app.use('/api/field-tools', fieldToolsRoutes);
 // Mounted before the broad /api/ai handler so /api/payloads claims its
 // namespace without ambiguity.
 app.use('/api/payloads', payloadRoutes);
+// Recipes (payload_templates CRUD) — sub-router exported from
+// payload-routes.js so the dispatcher + recipe code stay co-located.
+app.use('/api/recipes', payloadRoutes.recipes);
 app.use('/api/estimates', estimateRoutes);
 app.use('/api/roles', roleRoutes);
 app.use('/api/clients', clientRoutes);

@@ -281,11 +281,32 @@
       a.remove();
     }, { title: 'Download .p86.json' }));
 
-    // Pin-as-Recipe is wired in C11. Show the button now so the UX is
-    // discoverable; clicks just toast for now.
-    actions.appendChild(btn('📌 Pin as Recipe', () => {
-      window.alert('Pin as Recipe lands in C11.');
-    }, { title: 'Save this payload as a reusable recipe (C11)' }));
+    // Pin-as-Recipe — POST /api/recipes with payload_id. Prompts the
+    // user for a recipe name (defaults to the payload title). Server
+    // saves the bundle as a template; the sidebar Recipes section
+    // refreshes via the p86:recipe-changed event so the new pin
+    // shows up immediately.
+    actions.appendChild(btn('📌 Pin as Recipe', async () => {
+      const defaultName = payload.title || payload.filename || 'Recipe';
+      const name = window.prompt('Recipe name:', defaultName);
+      if (name == null) return; // user cancelled
+      const trimmed = String(name).trim();
+      if (!trimmed) return;
+      try {
+        const r = await fetch('/api/recipes', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ payload_id: payload.id, name: trimmed }),
+        });
+        const body = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(body.error || ('HTTP ' + r.status));
+        // Refresh sidebar so the new recipe shows up under Recipes.
+        document.dispatchEvent(new CustomEvent('p86:recipe-changed'));
+      } catch (err) {
+        window.alert('Pin failed: ' + (err && err.message || err));
+      }
+    }, { title: 'Save this payload as a reusable recipe' }));
 
     // Reject is wired now — POST /api/payloads/:id/reject is live.
     if ((payload.status || 'ready') === 'ready') {

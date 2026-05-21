@@ -343,11 +343,246 @@ router.post('/from-csv', requireAuth, requireOrg, async (req, res) => {
   res.status(501).json({ error: 'Not implemented', detail: 'CSV import lands in C14.' });
 });
 
+// ──────────────────────────────────────────────────────────────────
+// Recipes (C11) — payload_templates table CRUD.
+//
+// A recipe is a payload_templates row holding a name + description +
+// ops_template (the bundle structure to clone) + parameters (an array
+// describing what the user/agent should fill in on each use). Recipes
+// surface in the AI panel sidebar; the user can drag them into chat
+// (C12) to feed them to 86 as context.
+//
+// In v1, parameter extraction is intentionally minimal: when a payload
+// is pinned, we save the bundle verbatim with parameters=[]. Future
+// versions can detect placeholder fields (entity_id values starting
+// with $, ops fields the agent typically varies per use) and prompt
+// the user for the parameterization shape.
+// ──────────────────────────────────────────────────────────────────
+
+// Mounted under /api/recipes via server/index.js as a separate
+// sub-router (see below). Definitions live here so the dispatcher and
+// payload helpers stay co-located with the recipe routes that produce
+// payloads via clone.
+
+const recipeRouter = express.Router();
+
+// GET /api/recipes
+//   List org's pinned + recent templates. Default sort: pinned first,
+//   then last_used_at desc, then created_at desc.
+recipeRouter.get('/', requireAuth, requireOrg, async (req, res) => {
+  try {
+    const orgId = req.user.organization_id;
+    const limit = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 100));
+    const r = await pool.query(
+      `SELECT id, name, description, icon, parameters, is_pinned,
+              use_count, last_used_at, created_at, origin_payload_id
+         FROM payload_templates
+        WHERE organization_id = $1 AND archived = false
+        ORDER BY is_pinned DESC, last_used_at DESC NULLS LAST, created_at DESC
+        LIMIT $2`,
+      [orgId, limit]
+    );
+    res.json({ recipes: r.rows });
+  } catch (e) {
+    console.error('[recipes] GET / error:', e && e.stack || e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /api/recipes
+//   Pin an applied payload as a recipe. Body: { payload_id, name?,
+//   description?, icon? }. Defaults to the payload's title for name.
+//   The current bundle structure (file_content.targets) becomes the
+//   ops_template; parameters[] starts empty.
+recipeRouter.post('/', requireAuth, requireOrg, async (req, res) => {
+  try {
+    const orgId = req.user.organization_id;
+    const userId = req.user.id;
+    const { payload_id, name, description, icon } = req.body || {};
+    if (!payload_id) return res.status(400).json({ error: 'payload_id is required' });
+
+    const pr = await pool.query(
+      `SELECT id, title, summary, file_content, targets
+         FROM payloads
+        WHERE id = $1 AND organization_id = $2 AND (user_id = $3 OR user_id IS NULL)`,
+      [payload_id, orgId, userId]
+    );
+    if (!pr.rows.length) return res.status(404).json({ error: 'Payload not found' });
+    const payload = pr.rows[0];
+
+    const recipeName = (name || payload.title || 'Recipe').slice(0, 200);
+    const recipeDescription = (description || payload.summary || '').slice(0, 2000);
+    const recipeIcon = icon || '📄';
+
+    // Idempotency: if a non-archived recipe with the same name exists
+    // for this org, return it instead of creating a duplicate.
+    const dup = await pool.query(
+      `SELECT id FROM payload_templates
+        WHERE organization_id = $1 AND name = $2 AND archived = false`,
+      [orgId, recipeName]
+    );
+    if (dup.rows.length) {
+      return res.json({ ok: true, status: 'reused', id: dup.rows[0].id, name: recipeName });
+    }
+
+    const id = 'tpl_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+    // ops_template carries the payload's full bundle so clone can
+    // reproduce it verbatim (or, in a future version, with placeholder
+    // substitution). file_content includes targets + meta; we strip
+    // emitted_at + id so clones don't carry stale metadata.
+    const opsTemplate = Object.assign({}, payload.file_content || {});
+    delete opsTemplate.id;
+    delete opsTemplate.filename;
+    delete opsTemplate.emitted_at;
+
+    await pool.query(
+      `INSERT INTO payload_templates
+         (id, organization_id, created_by_user_id, name, description, icon,
+          parameters, ops_template, origin_payload_id, is_pinned, pinned_by_user_id)
+       VALUES ($1, $2, $3, $4, $5, $6, '[]'::jsonb, $7::jsonb, $8, true, $3)`,
+      [
+        id, orgId, userId,
+        recipeName, recipeDescription, recipeIcon,
+        JSON.stringify(opsTemplate),
+        payload.id,
+      ]
+    );
+
+    res.json({ ok: true, status: 'created', id, name: recipeName });
+  } catch (e) {
+    console.error('[recipes] POST / error:', e && e.stack || e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /api/recipes/:id/pin
+//   Toggle is_pinned. Body: { pinned: bool } (default toggles).
+recipeRouter.post('/:id/pin', requireAuth, requireOrg, async (req, res) => {
+  try {
+    const orgId = req.user.organization_id;
+    const userId = req.user.id;
+    const desired = typeof req.body.pinned === 'boolean' ? req.body.pinned : null;
+    const r = await pool.query(
+      `UPDATE payload_templates
+          SET is_pinned = COALESCE($3, NOT is_pinned),
+              pinned_by_user_id = CASE
+                WHEN COALESCE($3, NOT is_pinned) = true THEN $4
+                ELSE pinned_by_user_id
+              END
+        WHERE id = $1 AND organization_id = $2 AND archived = false
+        RETURNING id, is_pinned`,
+      [req.params.id, orgId, desired, userId]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'Recipe not found' });
+    res.json({ ok: true, recipe: r.rows[0] });
+  } catch (e) {
+    console.error('[recipes] POST /:id/pin error:', e && e.stack || e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /api/recipes/:id/clone
+//   Produce a fresh payload from a template. Body: { parameter_values? }.
+//   v1: parameters[] is empty, so this just copies ops_template into a
+//   new payload row with status='ready'. Future versions substitute
+//   {{placeholder}} markers using parameter_values.
+recipeRouter.post('/:id/clone', requireAuth, requireOrg, async (req, res) => {
+  try {
+    const orgId = req.user.organization_id;
+    const userId = req.user.id;
+    const dispatcher = require('../services/payload-dispatcher');
+
+    const r = await pool.query(
+      `SELECT id, name, description, ops_template
+         FROM payload_templates
+        WHERE id = $1 AND organization_id = $2 AND archived = false`,
+      [req.params.id, orgId]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'Recipe not found' });
+    const tpl = r.rows[0];
+    const opsTemplate = tpl.ops_template || {};
+    const targets = Array.isArray(opsTemplate.targets) ? opsTemplate.targets : [];
+    if (!targets.length) {
+      return res.status(422).json({ error: 'Recipe has no targets to clone' });
+    }
+
+    const payloadId = dispatcher.newPayloadId();
+    const title = opsTemplate.title || tpl.name;
+    const summary = opsTemplate.summary || tpl.description || '';
+    const rationale = (opsTemplate.rationale || '') +
+      (opsTemplate.rationale ? '\n\n' : '') +
+      'Generated from recipe: ' + tpl.name;
+    const filename = dispatcher.generateFilename(targets, title);
+    const fileContent = Object.assign({}, opsTemplate, {
+      id: payloadId,
+      filename,
+      title,
+      summary,
+      rationale,
+      template_ref: {
+        template_id: tpl.id,
+        template_name: tpl.name,
+        parameters: req.body && req.body.parameter_values || {},
+      },
+      emitted_at: new Date().toISOString(),
+      source: 'manual',
+      emitting_agent_key: null,
+    });
+
+    await pool.query(
+      `INSERT INTO payloads
+         (id, organization_id, user_id, source, emitting_agent_key,
+          filename, file_content, targets, title, summary, rationale, template_id)
+       VALUES ($1, $2, $3, 'manual', NULL, $4, $5::jsonb, $6::jsonb, $7, $8, $9, $10)`,
+      [
+        payloadId, orgId, userId,
+        filename,
+        JSON.stringify(fileContent),
+        JSON.stringify(targets),
+        title, summary, rationale,
+        tpl.id,
+      ]
+    );
+
+    await pool.query(
+      `UPDATE payload_templates
+          SET use_count = use_count + 1, last_used_at = NOW()
+        WHERE id = $1`,
+      [tpl.id]
+    );
+
+    res.json({ ok: true, payload_id: payloadId, filename });
+  } catch (e) {
+    console.error('[recipes] POST /:id/clone error:', e && e.stack || e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// DELETE /api/recipes/:id — soft-archive a recipe.
+recipeRouter.delete('/:id', requireAuth, requireOrg, async (req, res) => {
+  try {
+    const orgId = req.user.organization_id;
+    const r = await pool.query(
+      `UPDATE payload_templates
+          SET archived = true, is_pinned = false
+        WHERE id = $1 AND organization_id = $2 AND archived = false
+        RETURNING id`,
+      [req.params.id, orgId]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'Recipe not found' });
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[recipes] DELETE /:id error:', e && e.stack || e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // Export internals for cross-file imports (ai-routes will pull these
 // when wiring emit_payload_file in C4). The dispatcher module is the
 // canonical source for PAYLOAD_OPS_SCHEMAS and validateOps — we just
 // re-expose them here so callers have one require() target.
 module.exports = router;
+module.exports.recipes = recipeRouter;
 module.exports.internals = {
   PAYLOAD_OPS_SCHEMAS: dispatcher.PAYLOAD_OPS_SCHEMAS,
   validateOps: dispatcher.validateOps,
