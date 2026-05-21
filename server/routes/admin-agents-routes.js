@@ -2149,30 +2149,38 @@ async function collectSkillsFor(agentKey, organization) {
 // Each enabled tool's schema rides in the agent's cached prompt and
 // gets billed via cache_read on every fresh-session first turn.
 //
-// 2026-05-21 — per "as efficient as possible" mandate, we now
-// invert the default to enabled=false and only opt back IN the tools
-// that 86 actually uses in chat:
-//   • web_search + web_fetch — the Estimator and Sales agents use
-//     these for pricing research and vendor lookups. Custom tools
-//     (search_reference_sheet, read_attachment_text) cover the rest.
-//   • read/glob/grep — sandbox filesystem ops. 86's chat agents
-//     don't read sandbox files; native Anthropic Skills load via the
-//     skills field on the agent (not via filesystem reads). Disabled.
-//   • bash — sandbox shell. Useful for ad-hoc math but the schema is
-//     ~500-800 tokens and 86 has emit_payload_file for math-aware
-//     proposals. Disabled.
-//   • write/edit — sandbox file CRUD. Disabled (was already).
+// 2026-05-21 — per "as efficient as possible" mandate, we inverted
+// the default to enabled=false and only opted back IN the tools that
+// 86 actually uses. RE-AMENDED later the same day after Anthropic
+// rejected new sessions with:
+//   "Missing required tool: skills require the read tool to be usable
+//    (enabled and not always_deny) on the session's agent_toolset"
+// Turns out the Anthropic runtime uses the toolset's read/glob/grep
+// to LOAD skill content into the session — not just for ad-hoc
+// sandbox file ops as my earlier comment guessed. Any agent with
+// linked Skills (which is all 6 of ours post-C8) must have read
+// enabled or session.create fails at the gate.
 //
-// Trade-off: if a future workflow needs filesystem reads or bash
-// math, opt back in individually. The 2026-05-17 prompt-audit
-// confirmed each disabled tool saves real first-turn cache cost.
+// Final enabled set:
+//   • web_search + web_fetch — Estimator + Sales research / vendor
+//     pricing lookups.
+//   • read + glob + grep      — REQUIRED by Anthropic for skill
+//     content loading. Disabling them breaks /86/chat session
+//     creation entirely.
+// Final disabled set:
+//   • bash    — sandbox shell. Math-aware proposals route through
+//     emit_payload_file. ~500-800 tokens saved per agent.
+//   • write   — sandbox file CRUD. Persistent writes go through
+//     emit_payload_file. Sandbox is throwaway anyway.
+//   • edit    — same as write.
 function builtinToolsetFor(agentKey) {
   return [{
     type: 'agent_toolset_20260401',
-    default_config: { enabled: false },
+    default_config: { enabled: true },
     configs: [
-      { name: 'web_search', enabled: true },
-      { name: 'web_fetch',  enabled: true },
+      { name: 'bash',  enabled: false },
+      { name: 'write', enabled: false },
+      { name: 'edit',  enabled: false },
     ]
   }];
 }
