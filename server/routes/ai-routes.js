@@ -6236,6 +6236,68 @@ const HANDOFF_TOOLS = [];
 // the tool; C8 migrates the format spec into a Skill body (right now
 // the spec is inline in the Principal baseline).
 // ──────────────────────────────────────────────────────────────────
+// ──────────────────────────────────────────────────────────────────
+// READ_TOOLS — universal read surface (C18). Two tools replace ~15
+// narrow read_* tools.
+//
+// read_entity(entity_type, id, depth, include) — by-id lookup with
+// configurable depth + include slots. Use when you know the exact
+// entity. depth='summary' returns headline fields, 'full' returns
+// the complete record, 'audit' returns derived comparisons.
+//
+// search_entities(entity_type, filter, limit) — by-filter list/search.
+// Use when you don't have an id and need to find one (e.g., "the HOA
+// deck repair estimate").
+//
+// Both delegate to the existing narrow handlers inside execStaffTool
+// (the narrow handlers stay in place for back-compat). The agents
+// only see these two consolidated tools — the narrow names are
+// removed from the customToolsFor allowlists.
+// ──────────────────────────────────────────────────────────────────
+const READ_TOOLS = [
+  {
+    name: 'read_entity',
+    description:
+      'Read one entity by id with configurable depth + include slots. ' +
+      'Use this when you know the entity_id. For finding ids by name or filter, use search_entities. ' +
+      'Supported entity_types: job (depth: summary|full|audit; include: workspace_sheet|qb_cost_lines|building_breakdown), ' +
+      'estimate (depth: summary|full|audit; include: lines|compare), ' +
+      'client (depth: summary|full), lead (depth: summary|full), pipeline (id=\'leads\' for funnel rollup).',
+    tier: 'auto',
+    input_schema: {
+      type: 'object',
+      required: ['entity_type', 'id'],
+      properties: {
+        entity_type: { type: 'string', enum: ['job', 'estimate', 'client', 'lead', 'pipeline'] },
+        id: { type: 'string' },
+        depth: { type: 'string', enum: ['summary', 'full', 'audit'] },
+        include: { type: 'array', items: { type: 'string' } },
+      },
+    },
+  },
+  {
+    name: 'search_entities',
+    description:
+      'List/search entities by free-text filter. Returns up to `limit` light rows. ' +
+      'Use this when you don\'t know the exact id and need to find one before emitting a payload. ' +
+      'Supported entity_types: job, client, lead, user, estimate, material, sub, business_card.',
+    tier: 'auto',
+    input_schema: {
+      type: 'object',
+      required: ['entity_type'],
+      properties: {
+        entity_type: {
+          type: 'string',
+          enum: ['job', 'client', 'lead', 'user', 'estimate', 'material', 'sub', 'business_card'],
+        },
+        filter: { type: 'string', description: 'Free-text filter (case-insensitive substring on the canonical name field).' },
+        status: { type: 'string', description: 'Optional status filter (entity_types that have one).' },
+        limit: { type: 'integer', minimum: 1, maximum: 100 },
+      },
+    },
+  },
+];
+
 const PAYLOAD_TOOLS = [
   {
     name: 'emit_payload_file',
@@ -6415,11 +6477,177 @@ async function buildStaffContext() {
 
 // Read-tool executor. Inlines the same logic the admin REST endpoints
 // use so we don't have to round-trip through HTTP.
+// ── Consolidated read dispatcher (C18) ───────────────────────────
+// Two universal tools (read_entity + search_entities) replace ~15
+// narrow read_* tools the agents used to carry. The narrow handlers
+// stay in execStaffTool below for back-compat (anything still
+// calling them by name continues to work); the agents just no longer
+// see the narrow names in their tool surface.
+//
+// Mapping (read_entity → narrow handler):
+//   entity_type='job', id=X:
+//     depth='summary'                       → read_jobs filtered to id
+//     include=['workspace_sheet']           → read_workspace_sheet_full
+//     include=['qb_cost_lines']             → read_qb_cost_lines
+//     include=['building_breakdown']        → read_building_breakdown
+//     depth='audit'                         → read_job_pct_audit
+//   entity_type='estimate', id=X:
+//     include=['lines'] or depth='full'     → read_active_lines
+//     depth='audit' or include=['compare']  → read_past_estimate_lines
+//   entity_type='client', id=X:
+//     depth='summary'/'full' (via SELECT)
+//   entity_type='lead', id=X:
+//     depth='summary'/'full' (via SELECT)
+//   entity_type='pipeline', id='leads':
+//     read_lead_pipeline
+//
+// Mapping (search_entities → narrow handler):
+//   entity_type='job'     → read_jobs
+//   entity_type='client'  → read_clients
+//   entity_type='lead'    → read_leads
+//   entity_type='user'    → read_users
+//   entity_type='estimate'→ read_past_estimates
+//   entity_type='material'→ read_materials
+//   entity_type='sub'     → read_subs
+async function execConsolidatedRead(name, input, ctx) {
+  const inp = input || {};
+
+  if (name === 'search_entities') {
+    const et = String(inp.entity_type || '').toLowerCase();
+    const filter = inp.filter || inp.q || '';
+    const limit = inp.limit;
+    switch (et) {
+      case 'job':      return execStaffTool('read_jobs',     { q: filter, status: inp.status, limit }, ctx);
+      case 'client':   return execStaffTool('read_clients',  { q: filter, limit }, ctx);
+      case 'lead':     return execStaffTool('read_leads',    { q: filter, status: inp.status, limit }, ctx);
+      case 'user':     return execStaffTool('read_users',    { q: filter, limit }, ctx);
+      case 'estimate': return execStaffTool('read_past_estimates', { q: filter, limit }, ctx);
+      case 'material': return execStaffTool('read_materials',{ q: filter, limit }, ctx);
+      case 'sub':      return execStaffTool('read_subs',     { q: filter, limit }, ctx);
+      case 'business_card':
+        return execStaffTool('read_existing_clients', { q: filter, limit }, ctx);
+      default:
+        return 'search_entities: unsupported entity_type "' + et + '". Supported: job, client, lead, user, estimate, material, sub.';
+    }
+  }
+
+  // read_entity (by id)
+  const et = String(inp.entity_type || '').toLowerCase();
+  const id = inp.id || inp.entity_id;
+  const depth = String(inp.depth || 'summary').toLowerCase();
+  const includes = Array.isArray(inp.include)
+    ? inp.include.map((s) => String(s).toLowerCase())
+    : [];
+
+  if (et === 'job') {
+    if (!id) return 'read_entity(job) requires id';
+    if (includes.indexOf('qb_cost_lines') !== -1) {
+      return execStaffTool('read_qb_cost_lines', { jobId: id }, ctx);
+    }
+    if (includes.indexOf('building_breakdown') !== -1 || includes.indexOf('buildings') !== -1) {
+      return execStaffTool('read_building_breakdown', { jobId: id }, ctx);
+    }
+    if (depth === 'audit' || includes.indexOf('audit') !== -1) {
+      return execStaffTool('read_job_pct_audit', { jobId: id }, ctx);
+    }
+    if (depth === 'full' || includes.indexOf('workspace_sheet') !== -1) {
+      return execStaffTool('read_workspace_sheet_full', { jobId: id }, ctx);
+    }
+    // summary — use search filter on id
+    return execStaffTool('read_jobs', { q: id, limit: 1 }, ctx);
+  }
+  if (et === 'estimate') {
+    if (!id) return 'read_entity(estimate) requires id';
+    if (depth === 'full' || includes.indexOf('lines') !== -1) {
+      return execStaffTool('read_active_lines', { estimate_id: id }, ctx);
+    }
+    if (depth === 'audit' || includes.indexOf('compare') !== -1) {
+      return execStaffTool('read_past_estimate_lines', { estimate_id: id }, ctx);
+    }
+    return execStaffTool('read_past_estimates', { q: id, limit: 1 }, ctx);
+  }
+  if (et === 'client') {
+    if (!id) return 'read_entity(client) requires id';
+    const r = await pool.query('SELECT * FROM clients WHERE id = $1', [id]);
+    if (!r.rows.length) return 'Client not found: ' + id;
+    const c = r.rows[0];
+    if (depth === 'full' || includes.length) {
+      const notes = Array.isArray(c.agent_notes) ? c.agent_notes : [];
+      const propsRes = await pool.query(
+        'SELECT id, name, property_address FROM clients WHERE parent_client_id = $1',
+        [id]
+      );
+      const lines = [];
+      lines.push('Client: ' + (c.name || '(unnamed)') + '  [' + id + ']');
+      lines.push('Type: ' + (c.client_type || '?') + '  | Status: ' + (c.activation_status || '?'));
+      if (c.parent_client_id) lines.push('Parent: ' + c.parent_client_id);
+      if (c.email)            lines.push('Email: ' + c.email);
+      if (c.phone)            lines.push('Phone: ' + c.phone);
+      if (c.property_address) lines.push('Site: ' + c.property_address);
+      if (c.market)           lines.push('Market: ' + c.market);
+      if (c.community_manager) lines.push('CAM: ' + c.community_manager + (c.cm_email ? ' <' + c.cm_email + '>' : ''));
+      if (propsRes.rows.length) {
+        lines.push('\nProperties (' + propsRes.rows.length + '):');
+        propsRes.rows.forEach((p) => { lines.push('  • ' + p.name + (p.property_address ? ' — ' + p.property_address : '')); });
+      }
+      if (notes.length) {
+        lines.push('\nAgent notes (' + notes.length + '):');
+        notes.slice(-5).forEach((n) => { lines.push('  • ' + (n.body || '').slice(0, 200)); });
+      }
+      return lines.join('\n');
+    }
+    // summary
+    return [
+      'Client: ' + (c.name || '(unnamed)') + '  [' + id + ']',
+      'Type: ' + (c.client_type || '?') + '  | Status: ' + (c.activation_status || '?'),
+      c.market ? 'Market: ' + c.market : null,
+    ].filter(Boolean).join('\n');
+  }
+  if (et === 'lead') {
+    if (!id) return 'read_entity(lead) requires id';
+    const r = await pool.query(
+      'SELECT l.*, c.name AS client_name, u.name AS salesperson_name ' +
+      'FROM leads l ' +
+      'LEFT JOIN clients c ON c.id = l.client_id ' +
+      'LEFT JOIN users u   ON u.id = l.salesperson_id ' +
+      'WHERE l.id = $1',
+      [id]
+    );
+    if (!r.rows.length) return 'Lead not found: ' + id;
+    const l = r.rows[0];
+    const lines = [];
+    lines.push('Lead: ' + (l.title || '(untitled)') + '  [' + id + ']');
+    lines.push('Status: ' + (l.status || '?') + '  | Source: ' + (l.source || '—') + '  | Market: ' + (l.market || '—'));
+    if (l.client_name) lines.push('Client: ' + l.client_name + ' (' + l.client_id + ')');
+    if (l.salesperson_name) lines.push('Salesperson: ' + l.salesperson_name);
+    if (l.street_address || l.city) lines.push('Address: ' + [l.street_address, l.city, l.state, l.zip].filter(Boolean).join(', '));
+    if (l.property_name) lines.push('Property: ' + l.property_name);
+    if (l.estimated_revenue_high) lines.push('Est revenue: $' + l.estimated_revenue_low + ' — $' + l.estimated_revenue_high);
+    if (depth === 'full' && l.notes) lines.push('\nNotes:\n' + String(l.notes).slice(0, 2000));
+    return lines.join('\n');
+  }
+  if (et === 'pipeline') {
+    return execStaffTool('read_lead_pipeline', inp, ctx);
+  }
+
+  return 'read_entity: unsupported entity_type "' + et + '". Supported: job, estimate, client, lead, pipeline.';
+}
+
 async function execStaffTool(name, input, ctx) {
   // ctx is optional — currently only self_diagnose uses ctx.userId
   // (it needs to scope the introspection to the calling user). Other
   // tools ignore it. Callers that have a user handy should pass
   // { userId } so future tools can opt in without signature churn.
+
+  // ── Consolidated read surface (C18) ────────────────────────────
+  // The agents see two universal read tools (read_entity,
+  // search_entities) instead of ~15 narrow ones. These dispatchers
+  // route to the existing case-handlers internally — no new SQL,
+  // no behavior change, just a tighter tool surface for the model.
+  if (name === 'read_entity' || name === 'search_entities') {
+    return execConsolidatedRead(name, input, ctx);
+  }
+
   switch (name) {
     case 'read_metrics': {
       const range = (input && input.range === '30d') ? '30 days' : '7 days';
@@ -9890,6 +10118,11 @@ function tierFor(toolName) {
 }
 
 const ALLOWED_AUTO_TIER_TOOLS = new Set([
+  // C18 — universal read surface. Replaces ~15 narrow reads via two
+  // tools (read_entity + search_entities). Routed through
+  // execConsolidatedRead → existing narrow handlers.
+  'read_entity',
+  'search_entities',
   // Project 86 Payload DSL — 86's ONE write primitive. Validates +
   // INSERTs a payloads row inline so the file artifact appears in
   // chat immediately. Auto-tier because the commit gate is the user
@@ -11006,6 +11239,10 @@ module.exports.internals = {
   // it returns rides the SSE tool_applied event so the file artifact
   // renders in chat. Always present.
   payloadTools: () => PAYLOAD_TOOLS.map(({ tier, ...t }) => t),
+  // C18 — universal read surface. read_entity + search_entities
+  // dispatch through execConsolidatedRead to the existing narrow
+  // handlers (no behavior change, just a tighter tool surface).
+  readTools: () => READ_TOOLS.map(({ tier, ...t }) => t),
   defaultModel: () => MODEL,
   maxTokens: () => MAX_TOKENS,
   // Resolve the effort string for a given model. Caller passes the

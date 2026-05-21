@@ -1845,7 +1845,11 @@ const AGENT_SYSTEM_BASELINE = {
     'Identity stays "86" — never mention staff agents to the user. The staff is HOW the system observes itself in the background; from the user\'s POV everything you do is just "86".',
     '',
     '# Your read surface',
-    'Job WIP, estimate structure + line items, client directory, lead pipeline, schedule entries, QB cost lines, attachments, reference sheet, memory recall, self-introspection. When a domain task needs deeper context, use the relevant `read_*` tool first, then reason.',
+    'Two universal reads cover most lookups:',
+    '  • `read_entity(entity_type, id, depth?, include?)` — by-id lookup. Pass depth=\'summary\' (default) for headline fields, \'full\' for the complete record, \'audit\' for derived comparisons. Use include=[\'workspace_sheet\'|\'qb_cost_lines\'|\'building_breakdown\'|\'lines\'|\'compare\'] to pull related collections in one call.',
+    '  • `search_entities(entity_type, filter?, status?, limit?)` — by-filter list. Use when you don\'t have an id yet (e.g., "the HOA deck repair estimate" → search_entities(\'estimate\', filter:\'HOA deck\')).',
+    'Supported entity_types: job, estimate, client, lead, user, pipeline (for funnel rollups), material, sub, business_card. Always RESOLVE TARGETS via these reads before emitting a payload so each target carries a real entity_id + entity_display metadata.',
+    'Also available: read_wip_summary (cross-job rollup), read_metrics + self_diagnose (CoS introspection), search_my_kb / search_org_kb / search_my_sessions (knowledge base), search_reference_sheet, read_attachment_text, view_attachment_image. Memory: remember/recall/list_memories/forget. Watches: list_watches/read_recent_watch_runs.',
     '',
     '# Principal-owned work',
     '  • Memory — remember / recall / list_memories / forget for durable cross-session facts the user shares.',
@@ -2202,17 +2206,16 @@ function customToolsFor(agentKey, opts) {
     // handoff_to_* and routes incoming work; it does NOT do the domain
     // work directly.
     const ROUTER_TOOL_NAMES = new Set([
-      // Light routing reads — Principal needs these to resolve target
-      // entity_ids before emitting a payload, and to answer one-shot
-      // factual questions. Heavy domain reads live on the staff
-      // watchers (which run async via the C10 watch-runner).
-      'read_jobs', 'read_clients', 'read_leads', 'read_lead_pipeline',
-      'read_existing_clients', 'read_existing_leads',
-      'read_users', 'read_wip_summary',
-      // CoS introspection — Principal owns self-awareness.
-      'read_metrics', 'read_recent_conversations', 'read_conversation_detail',
-      'read_skill_packs', 'search_my_sessions', 'search_my_kb', 'search_org_kb',
-      'read_field_tools', 'self_diagnose',
+      // C18 — universal read surface. 2 tools replace ~15 narrow reads.
+      'read_entity',          // by-id lookup (job, estimate, client, lead, pipeline)
+      'search_entities',      // by-filter search (job, client, lead, user, estimate, material, sub)
+      // Domain-specific reads that don't fit the universal shape
+      'read_wip_summary',     // company-wide WIP rollup (cross-entity)
+      'read_metrics',         // CoS-side metrics rollup
+      'self_diagnose',        // platform health introspection
+      // CoS knowledge base + session history — search-style, kept lean
+      'search_my_sessions', 'search_my_kb', 'search_org_kb',
+      'read_recent_conversations', 'read_conversation_detail',
       // Reference + attachment lookups (cross-surface, light).
       'search_reference_sheet', 'read_attachment_text', 'view_attachment_image',
       // Navigation — Principal sends the user to the right surface.
@@ -2220,22 +2223,12 @@ function customToolsFor(agentKey, opts) {
       // Memory — cross-session recall.
       'remember', 'recall', 'list_memories', 'forget',
       // Watches — list + recent runs are reads. Creation/archival flows
-      // through emit_payload_file with system.watch_ops (implemented C5)
-      // so list_watches / read_recent_watch_runs stay as the only
-      // tool-level access; everything else is payload-driven.
+      // through emit_payload_file with system.watch_ops.
       'list_watches', 'read_recent_watch_runs',
       // Tier 3 spawn — kept as an approval-card tool until system
-      // .staff_agent_ops implements the Anthropic SDK calls
-      // (beta.agents.create + agent registration). Rare operation.
+      // .staff_agent_ops implements the Anthropic SDK calls.
       'propose_create_staff_agent',
-      // Project 86 Payload DSL — Principal's ONE write primitive. All
-      // mutations now flow through this: field updates, line items,
-      // phase changes, lead creates, structural client ops, AND
-      // platform writes (watches, skill packs, field tools, links)
-      // via the `system` entity_type with the appropriate _ops vocab.
-      // Implemented system entity_type sub-ops:
-      //   watch_ops (C5), skill_pack_ops (C18), field_tool_ops (C18),
-      //   link_ops (C18). staff_agent_ops still pending.
+      // Project 86 Payload DSL — Principal's ONE write primitive.
       'emit_payload_file'
     ]);
     const seen = new Set();
@@ -2250,7 +2243,9 @@ function customToolsFor(agentKey, opts) {
       // Payload DSL tools — emit_payload_file lives here. Included in
       // the candidate set so the ROUTER_TOOL_NAMES allowlist gates it
       // alongside everything else.
-      ...(aiInternals.payloadTools ? aiInternals.payloadTools() : [])
+      ...(aiInternals.payloadTools ? aiInternals.payloadTools() : []),
+      // C18 — universal read surface (read_entity + search_entities).
+      ...(aiInternals.readTools ? aiInternals.readTools() : [])
     ].forEach(t => {
       if (!t || !t.name || seen.has(t.name)) return;
       if (!ROUTER_TOOL_NAMES.has(t.name)) return;
@@ -2285,37 +2280,28 @@ function customToolsFor(agentKey, opts) {
     // payload DSL is the only write primitive a watcher can fire, and the
     // payload row gets stamped source='watcher_<agent_key>' so the user
     // sees who emitted what in the sidebar Payloads list.
+    // C18 — staff watchers all use the consolidated read surface
+    // (read_entity + search_entities) plus a tiny set of domain-
+    // specific reads that don't fit the universal shape. The narrow
+    // domain handlers still exist in execStaffTool; the consolidated
+    // tools route to them so this is purely a tool-surface shrink.
     const allowlistByStaff = {
       '86-estimator': new Set([
-        // Estimate scope + line reads + reference lookups
-        'read_active_lines', 'read_past_estimate_lines', 'read_past_estimates',
-        'read_materials', 'read_purchase_history',
-        'read_jobs', 'read_clients', 'read_leads', 'read_lead_pipeline',
-        'read_attachment_text',
+        'read_entity', 'search_entities',
+        'read_purchase_history',           // pricing history (cross-entity analytics)
+        'read_attachment_text',            // sometimes needed for spec/scope PDFs
       ]),
-      '86-pm': new Set([
-        // WIP / production / QB reads
-        'read_workspace_sheet_full', 'read_qb_cost_lines',
-        'read_building_breakdown', 'read_job_pct_audit',
-        'read_wip_summary', 'read_jobs',
-      ]),
-      '86-scheduler': new Set([
-        'read_jobs', 'read_workspace_sheet_full', 'read_job_pct_audit',
-        'read_subs', 'read_users', 'read_wip_summary',
-      ]),
-      '86-directory': new Set([
-        'read_clients', 'read_jobs', 'read_users', 'read_wip_summary',
-      ]),
-      '86-sales': new Set([
-        'read_existing_clients', 'read_existing_leads',
-        'read_clients', 'read_leads', 'read_lead_pipeline',
-      ]),
+      '86-pm':        new Set(['read_entity', 'search_entities', 'read_wip_summary']),
+      '86-scheduler': new Set(['read_entity', 'search_entities', 'read_wip_summary']),
+      '86-directory': new Set(['read_entity', 'search_entities', 'read_wip_summary']),
+      '86-sales':     new Set(['read_entity', 'search_entities']),
     };
     const allow = allowlistByStaff[agentKey];
     const candidates = [
       ...aiInternals.estimateTools(),
       ...aiInternals.jobTools(),
       ...aiInternals.clientTools(),
+      ...(aiInternals.readTools ? aiInternals.readTools() : []),
     ];
     const seen = new Set();
     const merged = [];
