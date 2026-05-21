@@ -2222,31 +2222,49 @@ function customToolsFor(agentKey, opts) {
     // live on the staff agents. The Principal sees the staff list via
     // handoff_to_* and routes incoming work; it does NOT do the domain
     // work directly.
+    // C19 — minimum viable tool surface. The user asked for "as
+    // efficient as possible" and noted the previous 22 tools were
+    // bloat. Most of what was there was admin / introspection
+    // tooling that has no place in a chat agent. Pruned to just the
+    // ten tools 86 actually needs to do day-to-day work for the
+    // user — write/read/lookup/remember.
+    //
+    // What was removed and why:
+    //   read_wip_summary      → covered by search_entities('job',
+    //                            status:'active') + read_entity
+    //                            (depth:'audit', include:[...]).
+    //   read_metrics          → admin diagnostics. Hit /api/admin/
+    //                            agents/managed/audit instead.
+    //   self_diagnose         → same — admin tool. Direct endpoint.
+    //   search_my_sessions    → admin-style chat-history search. Not
+    //   read_recent_           used by typical user requests; left it
+    //   conversations          cached on every agent turn for zero
+    //   read_conversation_     value.
+    //   detail
+    //   search_my_kb          → consolidated into `recall` (which
+    //   search_org_kb           queries memories org-wide by default).
+    //   list_watches          → admin tool (watches are configured
+    //   read_recent_watch_runs   via emit_payload_file system.watch_ops
+    //                            now anyway).
+    //   propose_create_staff_  → very rare operation; run via direct
+    //     agent                   admin endpoint when needed.
+    //
+    // Net: 22 → 11 custom tools (+1 builtin toolset wrapper = 12 total).
+    // System prompt + tool schemas drop another ~5-6K tokens per turn.
     const ROUTER_TOOL_NAMES = new Set([
-      // C18 — universal read surface. 2 tools replace ~15 narrow reads.
-      'read_entity',          // by-id lookup (job, estimate, client, lead, pipeline)
-      'search_entities',      // by-filter search (job, client, lead, user, estimate, material, sub)
-      // Domain-specific reads that don't fit the universal shape
-      'read_wip_summary',     // company-wide WIP rollup (cross-entity)
-      'read_metrics',         // CoS-side metrics rollup
-      'self_diagnose',        // platform health introspection
-      // CoS knowledge base + session history — search-style, kept lean
-      'search_my_sessions', 'search_my_kb', 'search_org_kb',
-      'read_recent_conversations', 'read_conversation_detail',
-      // Reference + attachment lookups (cross-surface, light).
-      'search_reference_sheet', 'read_attachment_text', 'view_attachment_image',
-      // Navigation — Principal sends the user to the right surface.
-      'navigate',
-      // Memory — cross-session recall.
+      // ── Reads (3) ──
+      'read_entity',           // by-id lookup (job/estimate/client/lead/pipeline)
+      'search_entities',       // by-filter search (any entity_type)
+      'search_reference_sheet',// live SharePoint reference data
+      // ── Attachments (2) ──
+      'read_attachment_text',  // read PDFs/Word the user uploads
+      'view_attachment_image', // look at photos
+      // ── Memory (4) ──
       'remember', 'recall', 'list_memories', 'forget',
-      // Watches — list + recent runs are reads. Creation/archival flows
-      // through emit_payload_file with system.watch_ops.
-      'list_watches', 'read_recent_watch_runs',
-      // Tier 3 spawn — kept as an approval-card tool until system
-      // .staff_agent_ops implements the Anthropic SDK calls.
-      'propose_create_staff_agent',
-      // Project 86 Payload DSL — Principal's ONE write primitive.
-      'emit_payload_file'
+      // ── Navigation (1) ──
+      'navigate',
+      // ── The ONE write (1) ──
+      'emit_payload_file',
     ]);
     const seen = new Set();
     const merged = [];
