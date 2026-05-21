@@ -903,6 +903,14 @@
       '<div id="ai-notice" style="padding:8px 14px;background:rgba(79,140,255,0.08);border-bottom:1px solid var(--border,#333);font-size:11px;color:var(--text-dim,#aaa);">' +
         'Read-only — I see your estimate and photos but cannot change anything. Apply suggestions by hand.' +
       '</div>' +
+      // Universal payload dropbox — top of the panel, full-width
+      // below the header/notice. Slimmer than the v1 strip so it
+      // stays present without crowding the chat. CSV import lives
+      // in the sidebar Payloads section header (📤 button).
+      '<div id="p86-payload-strip" style="padding:6px 12px;border-bottom:1px solid rgba(255,255,255,0.05);background:rgba(255,255,255,0.015);">' +
+        '<div id="p86-dropbox-slot" style="width:100%;"></div>' +
+        '<input id="p86-csv-file" type="file" accept=".csv,text/csv" style="display:none;" />' +
+      '</div>' +
       // Body wrapper — flex ROW so the sidebar can live as a real
       // left-rail column next to the chat content rather than as an
       // overlay. Width animates between 0 (collapsed) and a fixed
@@ -920,21 +928,8 @@
       '<div id="ai-messages" style="flex:1;overflow-y:auto;overflow-x:hidden;min-width:0;padding:18px 18px;display:flex;flex-direction:column;gap:14px;font-size:13px;color:var(--text,#e6e6e6);background-image:radial-gradient(circle, rgba(255,140,80,0.18) 1px, transparent 1px);background-size:14px 14px;"></div>' +
       // Preset prompts
       '<div id="ai-presets" style="padding:8px 12px;border-top:1px solid var(--border,#333);display:flex;flex-wrap:wrap;gap:6px;background:rgba(255,255,255,0.02);"></div>' +
-      // Universal payload dropbox — the single commit gate for any
-      // .p86.json file (Principal-emitted, watcher-emitted, recipe-
-      // cloned, or CSV-converted). Full-width strip — no longer
-      // sharing real estate with anything else. The dropbox itself
-      // (PayloadDropbox.mount) renders the tank/turret animation in
-      // #p86-dropbox-slot.
-      //
-      // CSV upload moved to the sidebar Payloads section (+ Bulk
-      // Import button → modal). It was confusing to have it next to
-      // the dropbox because it created the false impression that the
-      // dropbox was surface-aware.
-      '<div id="p86-payload-strip" style="padding:8px 12px;border-top:1px solid rgba(255,255,255,0.04);background:rgba(255,255,255,0.015);">' +
-        '<div id="p86-dropbox-slot" style="width:100%;"></div>' +
-        '<input id="p86-csv-file" type="file" accept=".csv,text/csv" style="display:none;" />' +
-      '</div>' +
+      // (Payload dropbox moved up — now lives directly below the
+      //  notice strip, full-width, slim. See #p86-payload-strip above.)
       // Input row. Photos are auto-included via the entity's attachments
       // and inline uploads via the + composer button — no separate toggle
       // needed.

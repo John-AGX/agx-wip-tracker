@@ -33,16 +33,16 @@
       .p86-tank-host {
         position: relative;
         width: 100%;
-        min-height: 64px;
-        padding: 10px 14px;
+        min-height: 32px;
+        padding: 4px 10px;
         display: flex;
         align-items: center;
-        gap: 14px;
+        gap: 10px;
         background: linear-gradient(180deg, rgba(255,255,255,0.015) 0%, rgba(255,255,255,0.04) 100%);
-        border: 1.5px dashed rgba(255,255,255,0.18);
-        border-radius: 10px;
+        border: 1px dashed rgba(255,255,255,0.18);
+        border-radius: 6px;
         color: rgba(255,255,255,0.78);
-        font-size: 12.5px;
+        font-size: 11.5px;
         user-select: none;
         transition: border-color 0.18s, background 0.18s, transform 0.18s;
         overflow: hidden;
@@ -76,8 +76,8 @@
 
       .p86-tank-svg {
         flex-shrink: 0;
-        width: 72px;
-        height: 44px;
+        width: 48px;
+        height: 28px;
         overflow: visible;
       }
       .p86-tank-turret-group {
@@ -106,26 +106,27 @@
 
       .p86-tank-shell {
         position: absolute;
-        left: 78px;  /* approximate barrel tip in host coordinates */
-        top: 30px;
-        width: 10px;
-        height: 4px;
+        left: 56px;  /* approximate barrel tip — adjusted for slim 48x28 tank */
+        top: 50%;
+        width: 8px;
+        height: 3px;
+        margin-top: -1px;
         background: linear-gradient(90deg, #ffcc66 0%, #ff8833 100%);
         border-radius: 2px;
-        box-shadow: 0 0 6px rgba(255,200,80,0.8);
+        box-shadow: 0 0 5px rgba(255,200,80,0.8);
         opacity: 0;
         pointer-events: none;
       }
       .p86-tank-host[data-state="applying"] .p86-tank-shell {
-        animation: p86-shell-fly 0.6s ease-out;
+        animation: p86-shell-fly 0.55s ease-out;
       }
 
       .p86-tank-explosion {
         position: absolute;
-        right: 10px;
+        right: 8px;
         top: 50%;
-        width: 18px;
-        height: 18px;
+        width: 14px;
+        height: 14px;
         border-radius: 50%;
         border: 2px solid rgba(255,200,80,0.9);
         background: rgba(255,140,80,0.30);
@@ -140,22 +141,28 @@
       .p86-tank-label-block {
         flex: 1;
         min-width: 0;
-        line-height: 1.35;
+        line-height: 1.2;
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+        overflow: hidden;
       }
       .p86-tank-title {
-        font-size: 11.5px;
+        font-size: 10.5px;
         font-weight: 600;
-        letter-spacing: 0.04em;
+        letter-spacing: 0.05em;
         text-transform: uppercase;
         opacity: 0.85;
+        flex-shrink: 0;
       }
       .p86-tank-sub {
-        font-size: 11.5px;
-        opacity: 0.70;
-        margin-top: 2px;
+        font-size: 11px;
+        opacity: 0.65;
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
+        flex: 1;
+        min-width: 0;
       }
 
       .p86-tank-mode-toggle {
@@ -163,11 +170,12 @@
         background: rgba(255,255,255,0.06);
         border: 1px solid rgba(255,255,255,0.14);
         color: #e6e6e6;
-        border-radius: 5px;
-        font-size: 10.5px;
-        padding: 4px 9px;
+        border-radius: 4px;
+        font-size: 9.5px;
+        padding: 2px 7px;
         cursor: pointer;
         transition: background 0.12s, border-color 0.12s;
+        letter-spacing: 0.04em;
       }
       .p86-tank-mode-toggle.is-on {
         background: rgba(155,89,242,0.20);
