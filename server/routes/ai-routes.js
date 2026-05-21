@@ -10536,6 +10536,54 @@ router.post('/86/chat', requireAuth, requireOrg, async (req, res) => {
       console.warn('[/86/chat] per-entity context build skipped:', e.message);
     }
 
+    // Drag-into-chat recipe context (C12). When the user drops a
+    // recipe file from the sidebar onto the chat input, the client
+    // attaches { recipe_id, name } in attached_recipe. We pull the
+    // recipe's ops_template and inject it as a reference block in
+    // turn_context so 86 can use it as scaffolding when drafting the
+    // next payload. Failures are non-fatal — the user can re-ask if
+    // the lookup misses.
+    const attachedRecipe = req.body && req.body.attached_recipe;
+    if (attachedRecipe && attachedRecipe.recipe_id) {
+      try {
+        const orgId = req.organization && req.organization.id;
+        const rcp = await pool.query(
+          `SELECT id, name, description, ops_template, parameters
+             FROM payload_templates
+            WHERE id = $1 AND organization_id = $2 AND archived = false`,
+          [attachedRecipe.recipe_id, orgId]
+        );
+        if (rcp.rows.length) {
+          const r = rcp.rows[0];
+          // Compact preview of the template so the model has the
+          // structure without a wall of JSON in every continuation.
+          const ops = (r.ops_template && r.ops_template.targets) || [];
+          const block = [
+            '<attached_recipe>',
+            'name: ' + (r.name || 'recipe'),
+            'description: ' + (r.description || ''),
+            'targets: ' + JSON.stringify(ops, null, 2),
+            'instructions: When drafting the next payload, model it on this recipe — same target shape and ops vocabulary, with the entity_ids and field values updated to fit the user\'s current request. If parameters[] is non-empty, fill them from the request. Set template_ref:{template_id, template_name, parameters} on the emit so the lineage is preserved.',
+            'parameters: ' + JSON.stringify(r.parameters || [], null, 2),
+            '</attached_recipe>'
+          ].join('\n');
+          turnContextText = turnContextText
+            ? turnContextText + '\n\n' + block
+            : block;
+          // Bump use_count + last_used_at so the sidebar surfaces
+          // frequently-used recipes first. Fire-and-forget.
+          pool.query(
+            `UPDATE payload_templates SET use_count = use_count + 1, last_used_at = NOW() WHERE id = $1`,
+            [r.id]
+          ).catch(() => {});
+        } else {
+          console.warn('[/86/chat] attached_recipe.recipe_id not found:', attachedRecipe.recipe_id);
+        }
+      } catch (e) {
+        console.warn('[/86/chat] attached_recipe inject failed:', e.message);
+      }
+    }
+
     // Auto-attach uploaded photos to whichever entity is open (best-
     // effort — failures don't block the chat from sending).
     if (additionalImages.length) {

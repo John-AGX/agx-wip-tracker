@@ -1096,6 +1096,49 @@
         csvInput.value = '';
       });
     }
+    // Drag-into-chat for recipes (C12). The input pill accepts a
+    // recipe drag from the sidebar and stages it as the next message's
+    // attached_recipe context. Visual cue: the pill border turns
+    // accent on dragover.
+    var pill = panel.querySelector('#ai-input-pill');
+    if (pill) {
+      pill.addEventListener('dragenter', function(ev) {
+        if (ev.dataTransfer && Array.from(ev.dataTransfer.types || []).indexOf('application/x-p86-recipe-id') !== -1) {
+          ev.preventDefault();
+          pill.style.borderColor = 'rgba(255,200,80,0.55)';
+        }
+      });
+      pill.addEventListener('dragover', function(ev) {
+        if (ev.dataTransfer && Array.from(ev.dataTransfer.types || []).indexOf('application/x-p86-recipe-id') !== -1) {
+          ev.preventDefault();
+          try { ev.dataTransfer.dropEffect = 'copy'; } catch (_) {}
+        }
+      });
+      pill.addEventListener('dragleave', function(ev) {
+        if (ev.target !== pill) return;
+        pill.style.borderColor = '';
+      });
+      pill.addEventListener('drop', function(ev) {
+        pill.style.borderColor = '';
+        try {
+          var metaJson = ev.dataTransfer.getData('application/x-p86-recipe');
+          var recipeId = ev.dataTransfer.getData('application/x-p86-recipe-id');
+          if (!recipeId && !metaJson) return;
+          ev.preventDefault();
+          var meta = metaJson ? JSON.parse(metaJson) : {};
+          setAttachedRecipe({
+            recipe_id: meta.recipe_id || recipeId,
+            name: meta.name || 'Recipe',
+          });
+          // Focus the input so the user can type the request right away.
+          var inp = panel.querySelector('#ai-input');
+          if (inp) inp.focus();
+        } catch (e) {
+          console.warn('[ai-panel] recipe drop failed:', e);
+        }
+      });
+    }
+
     // Listen for cross-component signals so the sidebar updates when a
     // payload is applied (badge flip) or a fresh ready-payload arrives
     // mid-session (re-fetch).
@@ -2914,8 +2957,65 @@
       // session from the sidebar.
       var sid = getCurrentSessionId();
       if (sid) body.session_id = sid;
+      // Recipe attached via drag-into-chat (C12). The server-side
+      // /86/chat handler reads attached_recipe and injects the
+      // template's ops_template into the turn context so 86 can
+      // reference its shape when drafting a payload. The chip is
+      // cleared after one turn — explicit attach per turn.
+      if (_attachedRecipe) {
+        body.attached_recipe = {
+          recipe_id: _attachedRecipe.recipe_id,
+          name: _attachedRecipe.name,
+        };
+        clearAttachedRecipe();
+      }
       streamFromEndpoint(apiBase() + '/chat', body);
     });
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Attached recipe (C12) — chip rendered above the input pill.
+  // Set when the user drops a recipe from the sidebar onto the
+  // chat input area. Cleared after the next message sends.
+  // ─────────────────────────────────────────────────────────────
+  var _attachedRecipe = null;
+  function setAttachedRecipe(meta) {
+    _attachedRecipe = meta;
+    renderAttachedRecipeChip();
+  }
+  function clearAttachedRecipe() {
+    _attachedRecipe = null;
+    renderAttachedRecipeChip();
+  }
+  function renderAttachedRecipeChip() {
+    var strip = document.getElementById('ai-attachments-strip');
+    if (!strip) return;
+    // Remove any prior recipe chip.
+    var prior = strip.querySelector('[data-attached-recipe]');
+    if (prior) prior.remove();
+    if (!_attachedRecipe) {
+      // Hide strip if no chips remaining.
+      if (!strip.children.length) strip.style.display = 'none';
+      return;
+    }
+    var chip = document.createElement('div');
+    chip.setAttribute('data-attached-recipe', '1');
+    chip.style.cssText =
+      'display:inline-flex;align-items:center;gap:6px;background:rgba(255,200,80,0.10);' +
+      'border:1px solid rgba(255,200,80,0.30);border-radius:6px;padding:3px 8px;' +
+      'font-size:11px;color:#ffd28a;';
+    chip.innerHTML =
+      '<span style="font-size:12px;">⭐</span>' +
+      '<span style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' +
+      'Recipe: ' + escapeHTML(_attachedRecipe.name || _attachedRecipe.recipe_id) +
+      '</span>' +
+      '<button type="button" title="Remove" style="background:transparent;border:none;color:inherit;opacity:0.55;cursor:pointer;font-size:13px;line-height:1;padding:0 2px;">×</button>';
+    chip.querySelector('button').onclick = function(ev) {
+      ev.stopPropagation();
+      clearAttachedRecipe();
+    };
+    strip.style.display = 'flex';
+    strip.appendChild(chip);
   }
 
   // Shared streaming runner — used by sendMessage (initial turn) and by
