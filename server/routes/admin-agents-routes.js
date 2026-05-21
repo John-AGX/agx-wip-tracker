@@ -2136,34 +2136,37 @@ async function collectSkillsFor(agentKey, organization) {
 // (agent_toolset_20260401) bundles 8 Anthropic-managed tools:
 //   web_search, web_fetch  — research (active for pricing / vendor
 //                            lookups)
-//   read, glob, grep       — file reads (likely needed for native
-//                            skill content loading from the
-//                            session container)
-//   bash                   — sandbox shell. Useful for ad-hoc math,
-//                            parsing structured uploads, takeoff
-//                            arithmetic. Kept enabled per user
-//                            decision 2026-05-17 — value of
-//                            occasional script-driven compute
-//                            outweighs the ~2k cached schema cost.
-//   write, edit            — sandbox file CRUD. Disabled — 86's
-//                            persistent writes all go through
-//                            custom propose_* tools; the sandbox
-//                            filesystem disappears at end of
-//                            session, so there's no upside to
-//                            caching these schemas every turn.
+//   read, glob, grep       — sandbox-filesystem file reads
+//   bash                   — sandbox shell
+//   write, edit            — sandbox file CRUD
 //
-// Each tool's schema rides in the agent's cached prompt and gets
-// billed via cache_read on every fresh-session first turn. The
-// prompt-audit on 2026-05-17 (commit a4ed4f0) confirmed disabling
-// unused tools shrinks first-turn cost; read/glob/grep stay on so
-// native skill loading isn't broken.
+// Each enabled tool's schema rides in the agent's cached prompt and
+// gets billed via cache_read on every fresh-session first turn.
+//
+// 2026-05-21 — per "as efficient as possible" mandate, we now
+// invert the default to enabled=false and only opt back IN the tools
+// that 86 actually uses in chat:
+//   • web_search + web_fetch — the Estimator and Sales agents use
+//     these for pricing research and vendor lookups. Custom tools
+//     (search_reference_sheet, read_attachment_text) cover the rest.
+//   • read/glob/grep — sandbox filesystem ops. 86's chat agents
+//     don't read sandbox files; native Anthropic Skills load via the
+//     skills field on the agent (not via filesystem reads). Disabled.
+//   • bash — sandbox shell. Useful for ad-hoc math but the schema is
+//     ~500-800 tokens and 86 has emit_payload_file for math-aware
+//     proposals. Disabled.
+//   • write/edit — sandbox file CRUD. Disabled (was already).
+//
+// Trade-off: if a future workflow needs filesystem reads or bash
+// math, opt back in individually. The 2026-05-17 prompt-audit
+// confirmed each disabled tool saves real first-turn cache cost.
 function builtinToolsetFor(agentKey) {
   return [{
     type: 'agent_toolset_20260401',
-    default_config: { enabled: true },
+    default_config: { enabled: false },
     configs: [
-      { name: 'write', enabled: false },
-      { name: 'edit',  enabled: false }
+      { name: 'web_search', enabled: true },
+      { name: 'web_fetch',  enabled: true },
     ]
   }];
 }
