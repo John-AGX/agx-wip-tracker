@@ -2565,6 +2565,50 @@ async function buildTurnContext({ entityType, entityId, clientContext, aiPhase, 
     : (STAFF_HINT_BY_SURFACE[entityType] || null);
   void resolvedHint; // intentionally unused post-C7
 
+  // C13 — forward-momentum apply events.
+  //
+  // After the user drags a payload into the dropbox and it applies,
+  // we want 86's next turn to acknowledge what just happened. The
+  // SSE broadcast already updates open surfaces; the model also gets
+  // the signal via this <recent_applied_payloads> block, which lists
+  // up to 5 payloads applied by this user in the last 10 minutes.
+  // Lets 86 say "noticed phase 5 fixed — phase 6 has the same pattern,
+  // want me to draft a follow-up?" without the user having to re-prompt.
+  if (userId) {
+    try {
+      const recent = await pool.query(
+        `SELECT id, filename, title, summary, applied_at, apply_summary, targets
+           FROM payloads
+          WHERE user_id = $1
+            AND status = 'applied'
+            AND applied_at > NOW() - INTERVAL '10 minutes'
+          ORDER BY applied_at DESC
+          LIMIT 5`,
+        [userId]
+      );
+      if (recent.rows.length) {
+        const lines = ['<recent_applied_payloads>'];
+        lines.push(
+          'The user just dragged these payload files into the dropbox. Each was applied successfully. Reference them when relevant — e.g., if the user asks a follow-up that builds on what just changed, you can acknowledge the prior change and propose the next step without making them restate context. Do NOT re-narrate what they applied unless they ask; the file artifacts are still visible in the chat.'
+        );
+        recent.rows.forEach((r, i) => {
+          const ago = Math.round((Date.now() - new Date(r.applied_at).getTime()) / 1000);
+          lines.push(
+            '  ' + (i + 1) + '. ' + (r.title || r.filename) +
+            '  (' + ago + 's ago)  — ' + (r.apply_summary || r.summary || '')
+          );
+        });
+        lines.push('</recent_applied_payloads>');
+        const block = lines.join('\n');
+        turnContextText = turnContextText
+          ? turnContextText + '\n\n' + block
+          : block;
+      }
+    } catch (e) {
+      console.warn('[buildTurnContext] recent_applied_payloads inject failed:', e.message);
+    }
+  }
+
   return { turnContextText, photoBlocks };
 }
 
