@@ -3896,9 +3896,20 @@ router.get('/managed/:agentKey/anthropic-state', requireAuth, requireCapability(
     const localDescription = (localDescriptionSource || '').slice(0, 200);
 
     // Drift signals — anything where the Anthropic-side value clearly
-    // diverges from what we'd push now. Models on Anthropic can be a
-    // full object (BetaManagedAgentsModelConfig) so unwrap .model.
-    const remoteModel = (remoteAgent.model && (remoteAgent.model.model || remoteAgent.model)) || '';
+    // diverges from what we'd push now. Models on Anthropic can be
+    // returned as a structured object:
+    //   • Older shape: 'claude-opus-4-7'                          (bare string)
+    //   • Mid shape:   { model: 'claude-opus-4-7' }               (legacy unwrap)
+    //   • Current shape (2026-05+): { id: 'claude-opus-4-7',
+    //                                  speed: 'standard' }         (BetaManagedAgentsModelConfig)
+    // Unwrap all three so a sync against the current API doesn't
+    // false-positive on a model-shape mismatch.
+    let remoteModel = '';
+    if (typeof remoteAgent.model === 'string') {
+      remoteModel = remoteAgent.model;
+    } else if (remoteAgent.model && typeof remoteAgent.model === 'object') {
+      remoteModel = remoteAgent.model.id || remoteAgent.model.model || '';
+    }
     const remoteSkillCount = Array.isArray(remoteAgent.skills) ? remoteAgent.skills.length : 0;
     const remoteToolCount = Array.isArray(remoteAgent.tools) ? remoteAgent.tools.length : 0;
     const remoteSystem = remoteAgent.system || '';
