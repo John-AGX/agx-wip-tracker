@@ -920,24 +920,20 @@
       '<div id="ai-messages" style="flex:1;overflow-y:auto;overflow-x:hidden;min-width:0;padding:18px 18px;display:flex;flex-direction:column;gap:14px;font-size:13px;color:var(--text,#e6e6e6);background-image:radial-gradient(circle, rgba(255,140,80,0.18) 1px, transparent 1px);background-size:14px 14px;"></div>' +
       // Preset prompts
       '<div id="ai-presets" style="padding:8px 12px;border-top:1px solid var(--border,#333);display:flex;flex-wrap:wrap;gap:6px;background:rgba(255,255,255,0.02);"></div>' +
-      // Universal payload dropbox + CSV upload entrypoint. The dropbox
-      // is the single commit gate for any .p86.json payload (Principal
-      // -emitted, watcher-emitted, or CSV-converted). Always visible
-      // while the panel is open. PayloadDropbox.mount() renders into
-      // #p86-dropbox-slot at panel-open time.
-      '<div id="p86-payload-strip" style="padding:6px 12px 4px 12px;display:flex;align-items:stretch;gap:8px;border-top:1px solid rgba(255,255,255,0.04);background:rgba(255,255,255,0.015);">' +
-        '<div id="p86-dropbox-slot" style="flex:1;min-width:0;"></div>' +
-        '<div id="p86-csv-upload-wrap" style="display:flex;align-items:center;gap:4px;">' +
-          '<select id="p86-csv-entity-type" title="Entity type for CSV import" style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.10);color:#e6e6e6;border-radius:6px;font-size:11px;padding:4px 6px;cursor:pointer;">' +
-            '<option value="lead">Leads</option>' +
-            '<option value="client">Clients</option>' +
-            '<option value="estimate">Estimate lines</option>' +
-          '</select>' +
-          '<input id="p86-csv-file" type="file" accept=".csv,text/csv" style="display:none;" />' +
-          '<button id="p86-csv-upload-btn" type="button" title="Upload CSV → payload (C14)" style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.10);color:#e6e6e6;border-radius:6px;padding:6px 10px;font-size:11px;cursor:pointer;display:inline-flex;align-items:center;gap:5px;">' +
-            '<span style="font-size:13px;line-height:1;">📤</span><span>CSV</span>' +
-          '</button>' +
-        '</div>' +
+      // Universal payload dropbox — the single commit gate for any
+      // .p86.json file (Principal-emitted, watcher-emitted, recipe-
+      // cloned, or CSV-converted). Full-width strip — no longer
+      // sharing real estate with anything else. The dropbox itself
+      // (PayloadDropbox.mount) renders the tank/turret animation in
+      // #p86-dropbox-slot.
+      //
+      // CSV upload moved to the sidebar Payloads section (+ Bulk
+      // Import button → modal). It was confusing to have it next to
+      // the dropbox because it created the false impression that the
+      // dropbox was surface-aware.
+      '<div id="p86-payload-strip" style="padding:8px 12px;border-top:1px solid rgba(255,255,255,0.04);background:rgba(255,255,255,0.015);">' +
+        '<div id="p86-dropbox-slot" style="width:100%;"></div>' +
+        '<input id="p86-csv-file" type="file" accept=".csv,text/csv" style="display:none;" />' +
       '</div>' +
       // Input row. Photos are auto-included via the entity's attachments
       // and inline uploads via the + composer button — no separate toggle
@@ -1008,6 +1004,7 @@
                   '<span style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:rgba(255,255,255,0.35);">Payloads</span>' +
                   '<span id="ai-sidebar-payloads-count" style="font-size:10px;color:rgba(255,255,255,0.30);"></span>' +
                   '<div style="flex:1;"></div>' +
+                  '<button id="ai-sidebar-payloads-bulk" type="button" title="Bulk import from CSV" aria-label="Bulk CSV import" style="background:transparent;border:none;color:rgba(255,255,255,0.5);cursor:pointer;font-size:11px;padding:0 4px;">📤 CSV</button>' +
                   '<button id="ai-sidebar-payloads-refresh" type="button" title="Refresh" aria-label="Refresh payloads" style="background:transparent;border:none;color:rgba(255,255,255,0.4);cursor:pointer;font-size:11px;padding:0 2px;">↻</button>' +
                 '</div>' +
                 '<div id="ai-sidebar-payloads-list" style="padding:0 6px 4px 6px;">' +
@@ -1084,16 +1081,26 @@
         refreshPayloadsSidebar();
       });
     }
-    var csvBtn = panel.querySelector('#p86-csv-upload-btn');
+    // CSV upload via the sidebar Payloads section header (+ Bulk).
+    // Opens a small modal that lets the user pick entity_type and
+    // file, then POSTs to /from-csv. Hidden #p86-csv-file input is
+    // kept in the DOM so the modal can trigger it.
     var csvInput = panel.querySelector('#p86-csv-file');
-    var csvType = panel.querySelector('#p86-csv-entity-type');
-    if (csvBtn && csvInput) {
-      csvBtn.addEventListener('click', function() { csvInput.click(); });
+    var bulkBtn = panel.querySelector('#ai-sidebar-payloads-bulk');
+    if (bulkBtn) {
+      bulkBtn.addEventListener('click', function(ev) {
+        ev.stopPropagation();
+        openBulkImportModal();
+      });
+    }
+    if (csvInput) {
       csvInput.addEventListener('change', function() {
         var f = csvInput.files && csvInput.files[0];
         if (!f) return;
-        uploadCsvAsPayload(f, csvType && csvType.value || 'lead');
+        var et = csvInput.dataset.entityType || 'lead';
+        uploadCsvAsPayload(f, et);
         csvInput.value = '';
+        csvInput.dataset.entityType = '';
       });
     }
     // Drag-into-chat for recipes (C12). The input pill accepts a
@@ -2063,9 +2070,55 @@
     });
   }
 
+  // Bulk-import modal — opens from the sidebar Payloads section
+  // "📤 CSV" button. Replaces the old inline CSV widget that lived
+  // next to the dropbox (which was confusing because it looked
+  // surface-aware). Modal flow: pick entity_type, pick file, upload.
+  function openBulkImportModal() {
+    var prev = document.getElementById('p86-bulk-import-modal');
+    if (prev) prev.remove();
+    var overlay = document.createElement('div');
+    overlay.id = 'p86-bulk-import-modal';
+    overlay.style.cssText =
+      'position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:9999;' +
+      'display:flex;align-items:center;justify-content:center;padding:24px;';
+    overlay.addEventListener('click', function(ev) {
+      if (ev.target === overlay) overlay.remove();
+    });
+    var modal = document.createElement('div');
+    modal.style.cssText =
+      'background:var(--surface,#0f0f1e);border:1px solid rgba(255,255,255,0.12);' +
+      'border-radius:12px;max-width:480px;width:100%;padding:20px 22px;color:#e6e6e6;font-size:13px;';
+    modal.innerHTML =
+      '<div style="font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:rgba(255,255,255,0.45);margin-bottom:6px;">Bulk import</div>' +
+      '<div style="font-size:15px;font-weight:600;color:#fff;margin-bottom:14px;">CSV → Payload</div>' +
+      '<div style="font-size:12px;color:rgba(255,255,255,0.65);margin-bottom:14px;line-height:1.5;">Upload a CSV file. Each row becomes one create-op target in a new payload. The payload lands in the sidebar Payloads → Ready section; drag it into the dropbox to apply all rows atomically.</div>' +
+      '<label style="display:block;font-size:11px;color:rgba(255,255,255,0.6);margin-bottom:4px;">Entity type</label>' +
+      '<select id="p86-bulk-entity-type" style="width:100%;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.10);color:#e6e6e6;border-radius:6px;font-size:13px;padding:8px 10px;margin-bottom:14px;">' +
+        '<option value="lead">Leads</option>' +
+        '<option value="client">Clients</option>' +
+      '</select>' +
+      '<div style="display:flex;gap:8px;justify-content:flex-end;">' +
+        '<button id="p86-bulk-cancel" type="button" style="background:transparent;border:1px solid rgba(255,255,255,0.15);color:#e6e6e6;border-radius:6px;padding:7px 14px;font-size:12px;cursor:pointer;">Cancel</button>' +
+        '<button id="p86-bulk-go" type="button" style="background:rgba(79,140,255,0.20);border:1px solid rgba(79,140,255,0.40);color:#cfdcff;border-radius:6px;padding:7px 14px;font-size:12px;cursor:pointer;font-weight:600;">Choose file…</button>' +
+      '</div>';
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+    modal.querySelector('#p86-bulk-cancel').onclick = function() { overlay.remove(); };
+    modal.querySelector('#p86-bulk-go').onclick = function() {
+      var et = modal.querySelector('#p86-bulk-entity-type').value;
+      var input = document.getElementById('p86-csv-file');
+      if (input) {
+        input.dataset.entityType = et;
+        input.click();
+      }
+      overlay.remove();
+    };
+  }
+
   // CSV → payload upload. Hits /api/payloads/from-csv with multipart
-  // form data + entity_type. Returns 501 until C14 — we surface the
-  // server's response so the user can see when the dispatcher is live.
+  // form data + entity_type. Backend converter (C14) parses each row
+  // into a create-op target.
   function uploadCsvAsPayload(file, entityType) {
     if (!file) return;
     var form = new FormData();
