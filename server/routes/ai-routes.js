@@ -2443,7 +2443,19 @@ const FLAG_AGENT_MODE_47 = (process.env.AGENT_MODE_47 || '').toLowerCase() === '
 // requires no code change. Existing legacy_partitioned sessions
 // stay readable for sidebar / replay; only NEW turns go to the
 // user-thread once the flag is on.
-const FLAG_UNIFIED_USER_THREAD = (process.env.UNIFIED_86_USER_THREAD || '').toLowerCase() === 'on';
+// Unified user-thread mode — every chat anywhere in the app lands on
+// the user's ONE rolling Anthropic session. Surface context comes in
+// per-turn via <turn_context>; the conversation history is continuous
+// regardless of which panel the user opened from.
+//
+// 2026-05-21 — flipped default ON. The off-by-default mode minted a
+// new session for every entity context (open the estimate → new
+// session; click an Ask 86 button → another new session), which the
+// user surfaced as "every time I close the chat it opens a new
+// session." Setting UNIFIED_86_USER_THREAD=off explicitly opts back
+// out for any debugging needs.
+const FLAG_UNIFIED_USER_THREAD =
+  (process.env.UNIFIED_86_USER_THREAD || 'on').toLowerCase() !== 'off';
 
 // Three of our four context builders return `system` as an array of
 // TextBlockParam objects (with cache_control on the first block);
@@ -10922,12 +10934,31 @@ router.post('/86/chat', requireAuth, requireOrg, async (req, res) => {
     // Track activity + turn counter so the sidebar can order by
     // recency and show "12 turns" badges. last_used_at is what the
     // sidebar's pinned-then-recent sort keys on.
+    //
+    // Auto-title (2026-05-21): on the FIRST user message of a
+    // session whose label is still generic ('New chat', '86', or
+    // empty), derive a title from the user's first 60 chars. Keeps
+    // the sidebar useful instead of showing N rows of "New chat".
+    // Real summaries can be regenerated server-side later via an
+    // LLM pass; this is the cheap-and-good version.
+    const GENERIC_LABELS = new Set(['New chat', '86', '', null]);
+    const isFirstTurn = session.turn_count === 0 || session.turn_count == null;
+    const labelIsGeneric = GENERIC_LABELS.has(session.label);
+    let derivedLabel = null;
+    if (isFirstTurn && labelIsGeneric && userMessage) {
+      derivedLabel = String(userMessage)
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 60);
+      if (derivedLabel.length === 60) derivedLabel += '…';
+    }
     await pool.query(
       `UPDATE ai_sessions
           SET last_used_at = NOW(),
-              turn_count = turn_count + 1
+              turn_count = turn_count + 1,
+              label = COALESCE($2, label)
         WHERE id = $1`,
-      [session.id]
+      [session.id, derivedLabel]
     );
 
     await runV2SessionStream({
