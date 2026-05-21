@@ -6187,91 +6187,34 @@ const WATCH_TOOLS = [
 // proposals, and the Principal composes them into the user-facing
 // conversation. From the user's POV identity is still "86".
 // ────────────────────────────────────────────────────────────────────
-const HANDOFF_TOOLS = [
-  {
-    name: 'handoff_to_estimator',
-    description: 'Delegate an estimating task to 86 · Estimator. The Estimator runs in an isolated sub-session with the estimating toolset and returns prose findings plus proposed line/section/group changes for the user to approve. Use for: drafting line items at scale, restructuring scope/sections, pricing-strategy reasoning, BT-export prep, multi-line review. You (the Principal) still own the conversation — weave the Estimator response into your reply.',
-    tier: 'auto',
-    input_schema: {
-      type: 'object',
-      properties: {
-        request: { type: 'string', description: 'What the Estimator should do — one paragraph, written for a specialist (assume estimating vocabulary).' },
-        estimate_id: { type: 'string', description: 'Estimate id from turn_context. Optional if no specific estimate is active.' },
-        context: { type: 'string', description: 'Extra context the staff agent needs that is NOT already in turn_context — e.g. user constraints, prior decisions in this conversation.' }
-      },
-      required: ['request']
-    }
-  },
-  {
-    name: 'handoff_to_pm',
-    description: 'Delegate a WIP / production analysis to 86 · PM. The PM runs in an isolated sub-session with deep job-WIP reads (workspace sheet, QB cost lines, building breakdown, pct audit) and returns structured findings: margin drift, billing gaps, missing COs, mis-allocated cost, phase-pct/actuals mismatch. Use for: "audit this job", margin investigations, billing reviews, change-order analysis, WIP roll-up reasoning. PM recommends in text; you (the Principal) fire the actual propose_* cards.',
-    tier: 'auto',
-    input_schema: {
-      type: 'object',
-      properties: {
-        request: { type: 'string', description: 'What the PM should investigate — one paragraph, written for a specialist (WIP / construction-accounting vocabulary).' },
-        job_id: { type: 'string', description: 'Job id from turn_context. Optional for cross-job audits.' },
-        context: { type: 'string', description: 'Extra context the PM needs beyond turn_context.' }
-      },
-      required: ['request']
-    }
-  },
-  {
-    name: 'handoff_to_scheduler',
-    description: 'Delegate a scheduling / dispatch question to 86 · Scheduler. The Scheduler reads jobs + sub availability + crew capacity and returns a prioritized sequence: who/what/when with the rationale. Use for: "when can we start X", crew dispatch, job sequencing, sub-availability questions, weather-window calls. No scheduling-write tools yet — recommendations come back as text for you to relay or act on.',
-    tier: 'auto',
-    input_schema: {
-      type: 'object',
-      properties: {
-        request: { type: 'string', description: 'The scheduling question — include constraints (deadline, weather, crew preferences) if known.' },
-        job_id: { type: 'string', description: 'Job id if the question is job-specific. Optional.' },
-        context: { type: 'string', description: 'Extra context the Scheduler needs beyond turn_context.' }
-      },
-      required: ['request']
-    }
-  },
-  {
-    name: 'handoff_to_directory',
-    description: 'Delegate a client-directory cleanup to 86 · Directory. The Directory staff can apply tier:auto fixes inline (typo updates, missing-property creation, link-to-parent) and describes judgment-heavy changes (merge, split, rename, delete) in text for you to surface as cards. Use for: "clean up this client", parent/property hierarchy fixes, address validation, dedupe checks, business-card capture follow-through.',
-    tier: 'auto',
-    input_schema: {
-      type: 'object',
-      properties: {
-        request: { type: 'string', description: 'What needs cleaning up — be specific (which client/property, what looks wrong).' },
-        client_id: { type: 'string', description: 'Client id from turn_context. Optional.' },
-        context: { type: 'string', description: 'Extra context the Directory staff needs beyond turn_context.' }
-      },
-      required: ['request']
-    }
-  },
-  {
-    name: 'handoff_to_sales',
-    description: 'Delegate lead intake / pipeline analysis to 86 · Sales. The Sales staff dedup-checks against the existing client + lead set, recommends lead structure (status, salesperson, market, deal source), and surfaces pipeline-health observations. Use for: capturing a new lead from messy intake data, pipeline reviews, "is this a duplicate" checks, salesperson assignment reasoning. Sales recommends; you (the Principal) fire propose_create_lead based on the recommendation.',
-    tier: 'auto',
-    input_schema: {
-      type: 'object',
-      properties: {
-        request: { type: 'string', description: 'The intake or pipeline question — include the raw intake data if it\'s a new-lead capture.' },
-        context: { type: 'string', description: 'Extra context Sales needs beyond turn_context.' }
-      },
-      required: ['request']
-    }
-  },
-  {
-    name: 'handoff_to_dynamic_staff',
-    description: 'P86 Crew Phase S6 — delegate to a Tier 3 (dynamically-spawned) staff agent by its agent_key. Use this for any staff agent NOT covered by the dedicated handoffs above (estimator/pm/scheduler/directory/sales). The target agent_key must already exist in staff_agents (created via propose_create_staff_agent on a prior approved turn). If you\'re not sure which dynamic agents exist, call list_memories or just remember from a prior turn; mismatches return an error you can recover from.',
-    tier: 'auto',
-    input_schema: {
-      type: 'object',
-      properties: {
-        agent_key: { type: 'string', description: 'The Tier 3 staff agent_key, e.g. "86-sub-compliance". Must match a row in staff_agents for this org.' },
-        request:   { type: 'string', description: 'What the staff should do — one paragraph, written for that specialist.' },
-        context:   { type: 'string', description: 'Extra context the staff needs beyond turn_context.' }
-      },
-      required: ['agent_key', 'request']
-    }
-  }
-];
+// C17 — HANDOFF_TOOLS array literal deleted. Sync handoffs were
+// retired in C7; the exporter handoffTools() returns [] and nothing
+// else in the codebase references this array. The five tool
+// definitions (handoff_to_estimator/pm/scheduler/directory/sales +
+// handoff_to_dynamic_staff) live in git history at commit 14ccb73
+// if anyone needs the schemas back.
+//
+// What's intentionally KEPT (still callable, but unreachable on
+// freshly-registered Principal agents):
+//   - STAFF_AGENT_KEY_BY_HANDOFF map — still referenced by
+//     make86OnCustomToolUse for cached agents that might fire
+//     stale handoff_to_* tools before they get re-registered.
+//   - execHandoffToStaff function — stubbed in C7 to return a
+//     retirement message so stale-cached fires self-correct
+//     instead of crashing.
+// Both will go away in a follow-up once production confirms no
+// cached agent is firing handoff_to_* anymore (check via
+// /api/admin/agents/managed/audit for non-zero tool_count on
+// handoff_to_* across all 'job' rows after sync-all).
+
+// HANDOFF_TOOLS export removed from the internals exporter; this
+// const stays as an empty back-compat shim only because some admin
+// tooling outside this repo may dereference module.exports.internals
+// for the array shape. New callers should use payloadTools() instead.
+const HANDOFF_TOOLS = [];
+
+// (~85 lines of original handoff_to_* tool schemas deleted here.
+//  See git@14ccb73 for the pre-cleanup definitions if needed.)
 
 // ──────────────────────────────────────────────────────────────────
 // PAYLOAD_TOOLS — Project 86 Payload DSL (v1).
