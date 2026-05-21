@@ -986,8 +986,7 @@ router.post('/p86/install-skills', requireAuth, requireCapability('ROLES_MANAGE'
         skillId = existing.id;
         status = 'reused';
       } else {
-        // Build SKILL.md with frontmatter (matches the helper in
-        // admin-anthropic-routes.js POST /skills).
+        // Build SKILL.md with frontmatter.
         const md = [
           '---',
           'name: ' + def.slug,
@@ -996,7 +995,14 @@ router.post('/p86/install-skills', requireAuth, requireCapability('ROLES_MANAGE'
           '',
           def.body || '',
         ].join('\n');
-        const file = await toFile(Buffer.from(md, 'utf8'), 'SKILL.md', { type: 'text/markdown' });
+        // Anthropic Skills API updated 2026-05-14 → present: requires
+        // SKILL.md to be uploaded with an explicit top-level folder
+        // path. The slug doubles as the folder name. Without the
+        // folder prefix the API returns
+        // "SKILL.md file must be exactly in the top-level folder."
+        const folderName = def.slug;
+        const filePath = folderName + '/SKILL.md';
+        const file = await toFile(Buffer.from(md, 'utf8'), filePath, { type: 'text/markdown' });
         try {
           const created = await anthropic.beta.skills.create({
             display_title: def.display_title,
