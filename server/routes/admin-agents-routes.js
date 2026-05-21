@@ -2261,96 +2261,75 @@ function customToolsFor(agentKey, opts) {
     // unreachable stubs until C17 cleanup confirms nothing else
     // depends on them.
     tools = merged;
-  } else if (agentKey === '86-estimator') {
-    // Project 86 Agent Platform — Phase S2.
-    // The Estimator staff agent's focused tool set: estimating
-    // domain only. Memory tools come along so the Estimator can
-    // recall durable facts the Principal has stamped (pricing
-    // preferences, client quirks, etc.). No client-directory /
-    // job-WIP / intake / skill-pack tools — those are other
-    // staff's domains, and the Principal handles cross-domain
-    // composition by fanning out to multiple staff in one turn.
-    const seen = new Set();
-    const merged = [];
-    [
-      ...aiInternals.estimateTools(),
-      ...aiInternals.memoryTools()
-    ].forEach(t => {
-      if (!t || !t.name || seen.has(t.name)) return;
-      seen.add(t.name);
-      merged.push(t);
-    });
-    tools = merged;
-  } else if (agentKey === '86-pm' || agentKey === '86-scheduler' || agentKey === '86-directory' || agentKey === '86-sales') {
-    // Phase S3 — Tier 2 staff agents. Each gets a focused name
-    // allowlist drawn from the existing tool union; tools outside
-    // the allowlist are stripped. Memory tools are always added so
-    // every staff has cross-session recall.
+  } else if (
+    agentKey === '86-estimator' || agentKey === '86-pm' ||
+    agentKey === '86-scheduler' || agentKey === '86-directory' ||
+    agentKey === '86-sales'
+  ) {
+    // C9/C10 — staff agents run ONLY as async background watchers
+    // (the C10 watch-runner invokes them on a 12h cron). Sync handoffs
+    // are retired (C7). So each staff's tool surface needs just:
+    //   • Domain-scoped reads — enough to scan its slice of the data
+    //   • emit_payload_file — to surface findings as draggable payloads
+    //   • Memory tools — cross-session recall the watcher uses to
+    //     remember what it flagged on a prior run
     //
-    // Approval-tier writes that survive the filter are still
-    // attached — the staff sub-session's dispatcher (in ai-routes:
-    // execHandoffToStaff) converts approval calls to text errors,
-    // which prompts the staff to describe the proposal back to the
-    // Principal instead of firing a card from a sub-session.
+    // Everything else (set_*, propose_* setters, create_node, merge_clients,
+    // attach_business_card_to_client, etc.) is RETIRED from staff. The
+    // payload DSL is the only write primitive a watcher can fire, and the
+    // payload row gets stamped source='watcher_<agent_key>' so the user
+    // sees who emitted what in the sidebar Payloads list.
     const allowlistByStaff = {
+      '86-estimator': new Set([
+        // Estimate scope + line reads + reference lookups
+        'read_active_lines', 'read_past_estimate_lines', 'read_past_estimates',
+        'read_materials', 'read_purchase_history',
+        'read_jobs', 'read_clients', 'read_leads', 'read_lead_pipeline',
+        'read_attachment_text',
+      ]),
       '86-pm': new Set([
-        // Reads (auto-tier, fire inline)
+        // WIP / production / QB reads
         'read_workspace_sheet_full', 'read_qb_cost_lines',
         'read_building_breakdown', 'read_job_pct_audit',
         'read_wip_summary', 'read_jobs',
-        // Approval-tier writes — described as text by the staff,
-        // fired as cards by the Principal. Keeping them attached
-        // gives the model the exact schema vocabulary when it
-        // describes the proposal.
-        'set_phase_pct_complete', 'set_phase_field', 'set_phase_buildingId',
-        'create_node', 'delete_node', 'wire_nodes', 'set_node_value',
-        'assign_qb_line', 'assign_qb_lines_bulk',
-        'set_co_field', 'create_po', 'set_po_field',
-        'create_invoice', 'set_invoice_field',
-        'set_wire_pct_complete', 'set_wire_alloc_pct',
-        'request_edit_mode'
       ]),
       '86-scheduler': new Set([
         'read_jobs', 'read_workspace_sheet_full', 'read_job_pct_audit',
-        'read_subs', 'read_users', 'read_wip_summary'
+        'read_subs', 'read_users', 'read_wip_summary',
       ]),
       '86-directory': new Set([
-        // Reads
         'read_clients', 'read_jobs', 'read_users', 'read_wip_summary',
-        // Auto-tier writes the staff can apply inline
-        'update_client_field', 'create_property', 'link_property_to_parent',
-        'add_client_note',
-        // Approval-tier writes — described as text, fired by Principal
-        'create_parent_company', 'rename_client', 'change_property_parent',
-        'merge_clients', 'split_client_into_parent_and_property',
-        'delete_client', 'attach_business_card_to_client'
       ]),
       '86-sales': new Set([
-        // Intake-side reads (dedup against existing set)
         'read_existing_clients', 'read_existing_leads',
-        // Reads from estimate domain (lookup)
         'read_clients', 'read_leads', 'read_lead_pipeline',
-        // Approval-tier intake write
-        'propose_create_lead'
-      ])
+      ]),
     };
     const allow = allowlistByStaff[agentKey];
     const candidates = [
       ...aiInternals.estimateTools(),
       ...aiInternals.jobTools(),
-      ...aiInternals.clientTools()
+      ...aiInternals.clientTools(),
     ];
     const seen = new Set();
     const merged = [];
-    candidates.forEach(t => {
+    candidates.forEach((t) => {
       if (!t || !t.name || seen.has(t.name)) return;
       if (!allow.has(t.name)) return;
       seen.add(t.name);
       merged.push(t);
     });
-    // Always attach memory tools regardless of allowlist — every
-    // staff agent gets cross-session recall.
-    aiInternals.memoryTools().forEach(t => {
+    // emit_payload_file — staff watchers' ONE write primitive. The
+    // agent-watch-runner injects payloadSource='watcher_<agent_key>'
+    // when the tool fires, so the resulting payload row stamps the
+    // right source in the sidebar.
+    (aiInternals.payloadTools ? aiInternals.payloadTools() : []).forEach((t) => {
+      if (!t || !t.name || seen.has(t.name)) return;
+      seen.add(t.name);
+      merged.push(t);
+    });
+    // Memory tools — every staff has cross-session recall.
+    aiInternals.memoryTools().forEach((t) => {
       if (!t || !t.name || seen.has(t.name)) return;
       seen.add(t.name);
       merged.push(t);
