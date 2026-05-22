@@ -1143,9 +1143,37 @@
 
     // Listen for cross-component signals so the sidebar updates when a
     // payload is applied (badge flip) or a fresh ready-payload arrives
-    // mid-session (re-fetch).
+    // mid-session (re-fetch). Also dispatch entity-surface refreshes
+    // based on affected_targets so the UI reflects the new data without
+    // a manual page reload.
     document.addEventListener('p86:payload-applied', function(ev) {
       refreshPayloadsSidebar();
+      try {
+        var targets = (ev && ev.detail && ev.detail.affected_targets) || [];
+        var types = {};
+        targets.forEach(function(t) { if (t && t.entity_type) types[t.entity_type] = true; });
+
+        // Lead changes — refresh the leads cache + list view.
+        if (types.lead && typeof window.reloadLeadsCache === 'function') {
+          try { window.reloadLeadsCache(); } catch (e) { console.warn('[payload-applied] reloadLeadsCache failed:', e); }
+        }
+        // Client changes — refresh the clients cache.
+        if (types.client && typeof window.reloadClientsCache === 'function') {
+          try { window.reloadClientsCache(); } catch (e) { console.warn('[payload-applied] reloadClientsCache failed:', e); }
+        }
+        // Job or estimate changes — re-hydrate appData (jobs +
+        // estimates + qb cost lines + subs) and re-render every
+        // surface. p86ReloadAllData handles the render fan-out.
+        if ((types.job || types.estimate) && typeof window.p86ReloadAllData === 'function') {
+          try { window.p86ReloadAllData(); } catch (e) { console.warn('[payload-applied] p86ReloadAllData failed:', e); }
+        }
+        // Schedule changes — repaint the schedule grid.
+        if (types.schedule && typeof window.renderSchedule === 'function') {
+          try { window.renderSchedule(); } catch (e) { console.warn('[payload-applied] renderSchedule failed:', e); }
+        }
+      } catch (e) {
+        console.warn('[payload-applied] surface refresh dispatch failed:', e);
+      }
     });
     document.addEventListener('p86:payload-ready', function(ev) {
       refreshPayloadsSidebar();
@@ -1329,8 +1357,12 @@
     // Prefetch the session list once per panel lifetime so auto-anchor
     // has data to work with on the first navigation. Subsequent opens
     // skip the fetch (cached); the sidebar's own open handler refreshes
-    // on demand.
-    if (!_sessionListLoaded) fetchSessions();
+    // on demand. Returns a Promise so we can defer the anchor step
+    // until the list is loaded — otherwise the first open after a
+    // page refresh runs autoAnchor against an empty _sessionList,
+    // fails to find a match, and the panel opens with no session
+    // restored (next /chat send creates a brand-new one).
+    var sessionsPromise = _sessionListLoaded ? Promise.resolve() : fetchSessions();
     // Lead-intake mode forces a fresh conversation EVERY open. The
     // server-side already archives any prior intake session on the
     // first /chat call; we mirror that on the client so any leftover
@@ -1351,23 +1383,30 @@
       // mint a fresh one on the next chat send. Either way, clear
       // any previously-picked session so the auto-anchor takes over.
       var anchorableTypes = ['estimate', 'job', 'lead', 'intake'];
-      if (anchorableTypes.indexOf(entityType) >= 0 && entityId && entityId !== '__global__') {
-        autoAnchorToEntity(entityType, entityId);
-      } else if (entityType === 'ask86' || entityType === 'client' || entityType === 'staff') {
-        autoAnchorToGeneral();
-      }
       // Intake = no history (fresh session every open). Other modes
       // load their conversation from ai_messages so close + reopen
-      // keeps the thread.
+      // keeps the thread. anchor + history both depend on the session
+      // list being loaded, so they run inside sessionsPromise.then.
       if (entityType === 'intake') {
-        // Arm the start_new flag — first /chat after this open will
-        // tell the server to archive the prior intake session and
-        // create a brand-new one. Cleared after that first send so
-        // subsequent turns reuse the session.
         _intakeFreshPending = true;
         renderMessages();
+        if (anchorableTypes.indexOf(entityType) >= 0 && entityId && entityId !== '__global__') {
+          sessionsPromise.then(function() {
+            autoAnchorToEntity(entityType, entityId);
+          });
+        }
       } else {
-        loadHistory();
+        sessionsPromise.then(function() {
+          if (anchorableTypes.indexOf(entityType) >= 0 && entityId && entityId !== '__global__') {
+            autoAnchorToEntity(entityType, entityId);
+          } else if (entityType === 'ask86' || entityType === 'client' || entityType === 'staff') {
+            autoAnchorToGeneral();
+          }
+          // Now that _currentSessionId is anchored (or confirmed null),
+          // load the conversation. loadHistory uses session_id when set,
+          // entity-based lookup when not.
+          loadHistory();
+        });
       }
       // Fire-and-forget: pre-render scanned PDFs in the background so
       // the cache is warm by the time the user hits send. No awaits — if
@@ -1650,15 +1689,25 @@
     if (!_entityId || !window.p86Api) return;
     var box = document.getElementById('ai-messages');
     if (box) box.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;">Loading…</div>';
-    fetch(messagesApiBase() + '/messages', {
-      headers: authHeaders()
-    }).then(function(r) { return r.json(); }).then(function(res) {
-      _messages = res.messages || [];
-      renderMessages();
-    }).catch(function() {
-      _messages = [];
-      renderMessages();
-    });
+    // When a session is anchored, scope the history fetch to that
+    // session so we get the right thread for entity-bound chats
+    // (lead/job/estimate). Without session_id the endpoint falls back
+    // to entity_type='86' (the legacy global thread) which is empty
+    // for entity-bound sessions — that's why the UI looked like a
+    // fresh chat after refresh / sidebar-click.
+    var url = messagesApiBase() + '/messages';
+    if (_currentSessionId != null) {
+      url += '?session_id=' + encodeURIComponent(_currentSessionId);
+    }
+    fetch(url, { headers: authHeaders() })
+      .then(function(r) { return r.json(); })
+      .then(function(res) {
+        _messages = res.messages || [];
+        renderMessages();
+      }).catch(function() {
+        _messages = [];
+        renderMessages();
+      });
   }
 
   // ──────────────────────────────────────────────────────────────
@@ -1730,8 +1779,8 @@
   }
 
   function fetchSessions() {
-    if (!window.p86Api || !window.p86Api.get) return;
-    window.p86Api.get('/api/ai/sessions').then(function(resp) {
+    if (!window.p86Api || !window.p86Api.get) return Promise.resolve();
+    return window.p86Api.get('/api/ai/sessions').then(function(resp) {
       _sessionList = (resp && resp.sessions) || [];
       _sessionListLoaded = true;
       renderSessionList(_sessionList);

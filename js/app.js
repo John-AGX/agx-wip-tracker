@@ -240,6 +240,13 @@
             startDailySnapshotScheduler();
         }
 
+        // Expose loadData globally so cross-module reload triggers (e.g.
+        // the payload-applied handler in ai-panel.js) can re-hydrate
+        // jobs + estimates + qb cost lines + subs from the server in
+        // one call. Returns a Promise that resolves once the re-render
+        // cycle completes.
+        window.p86ReloadAllData = loadData;
+
         // Fires daily snapshots for every Live job. Two trigger paths:
         //   1) On app load — catch-up if today's snapshot is missing for any
         //      Live job. Runs after a small delay to let async loadData finish.
@@ -1496,10 +1503,10 @@
             var authed = window.p86Api && window.p86Api.isAuthenticated();
             if (!authed) {
                 _serverLoadComplete = true;
-                return;
+                return Promise.resolve();
             }
             _serverLoadInFlight = true;
-            Promise.all([
+            return Promise.all([
                 window.p86Api.jobs.list(),
                 window.p86Api.estimates.list(),
                 // QB cost lines now persist server-side. Read all of
