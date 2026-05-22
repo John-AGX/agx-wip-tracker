@@ -43,10 +43,17 @@ router.get('/', requireAuth, async (req, res) => {
   try {
     const includeArchived = req.query.include_archived === '1';
     const limit = Math.min(200, Math.max(10, parseInt(req.query.limit, 10) || 100));
+    // Added session_kind + last_compacted_at so the sidebar can show
+    // "user-thread (rolling)" badges and "last compacted Xh ago"
+    // diagnostics. Compaction (compact-2026-01-12 beta) fires
+    // automatically server-side when context approaches the 150K
+    // token trigger; surfacing last_compacted_at lets us monitor
+    // whether long-lived rolling sessions are actually compacting.
     const r = await pool.query(
       `SELECT id, anthropic_session_id, label, summary, entity_type, entity_id,
               pinned, turn_count, total_cost_usd, effort_override,
-              created_at, last_used_at, archived_at
+              created_at, last_used_at, archived_at,
+              session_kind, last_compacted_at
          FROM ai_sessions
         WHERE user_id = $1
           AND ($2::boolean OR archived_at IS NULL)
@@ -58,6 +65,55 @@ router.get('/', requireAuth, async (req, res) => {
   } catch (e) {
     console.error('GET /api/ai/sessions error:', e);
     res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ──────────────────────────────────────────────────────────────────
+// POST /api/ai/sessions/:id/compact
+//   Manually trigger Anthropic-side compaction on a session.
+//
+//   Compaction usually fires automatically once a session approaches
+//   the trigger threshold (~150K input tokens). This endpoint lets an
+//   admin force it early — useful for testing the round-trip and for
+//   shrinking a long-lived session before it gets unwieldy.
+//
+//   Calls anthropic.beta.sessions.compact(session_id) when available;
+//   if the SDK shape changes the endpoint surfaces the error so we
+//   can fix it without crashing the chat path.
+// ──────────────────────────────────────────────────────────────────
+router.post('/:id/compact', requireAuth, async (req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT id, anthropic_session_id, label, session_kind, last_compacted_at
+         FROM ai_sessions
+        WHERE id = $1 AND user_id = $2`,
+      [req.params.id, req.user.id]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'Session not found' });
+    const session = r.rows[0];
+    if (!session.anthropic_session_id) {
+      return res.status(400).json({ error: 'Session has no Anthropic-side id (legacy partitioned row)' });
+    }
+    const ai = aiRoutes().getAnthropic && aiRoutes().getAnthropic();
+    if (!ai) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not configured' });
+    // Try the SDK's compact method — shape varies between minor
+    // versions. Falls back to a direct POST if the helper is missing.
+    let compactResp = null;
+    if (ai.beta && ai.beta.sessions && typeof ai.beta.sessions.compact === 'function') {
+      compactResp = await ai.beta.sessions.compact(session.anthropic_session_id);
+    } else {
+      return res.status(501).json({
+        error: 'beta.sessions.compact not exposed on this SDK version. Update @anthropic-ai/sdk or wait for the next auto-fire.',
+      });
+    }
+    await pool.query(
+      `UPDATE ai_sessions SET last_compacted_at = NOW() WHERE id = $1`,
+      [session.id]
+    );
+    res.json({ ok: true, session_id: session.id, anthropic_session_id: session.anthropic_session_id, response: compactResp });
+  } catch (e) {
+    console.error('POST /api/ai/sessions/:id/compact error:', e && e.stack || e);
+    res.status(500).json({ error: 'Compaction failed: ' + (e.message || 'unknown') });
   }
 });
 

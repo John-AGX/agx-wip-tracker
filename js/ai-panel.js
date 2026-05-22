@@ -1821,13 +1821,22 @@
             ? 'background:rgba(79,140,255,0.14);'
             : '');
         var pinnedMark = r.pinned ? ' <span style="font-size:10px;opacity:0.7;" title="Pinned">⭐</span>' : '';
+        var rollingMark = r.session_kind === 'user_thread'
+          ? ' <span style="font-size:9px;background:rgba(79,140,255,0.18);color:#9bbcff;border-radius:3px;padding:1px 5px;letter-spacing:0.04em;text-transform:uppercase;" title="Rolling thread — every chat surface lands here">rolling</span>'
+          : '';
+        var compactedMark = r.last_compacted_at
+          ? ' <span style="font-size:9px;opacity:0.55;" title="Last compacted ' + escapeAttr(r.last_compacted_at) + '">📦 ' + escapeHTML(relativeTime(r.last_compacted_at)) + '</span>'
+          : '';
         // Sub-line: ONLY summary if we have one, otherwise nothing.
         // The redundant "estimate · e1778..." trail was noise — the
         // entity is already conveyed by the icon and the label.
         var subLine = '';
         if (r.summary) {
           subLine = '<div style="font-size:11px;color:rgba(255,255,255,0.45);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px;">' +
-            escapeHTML(String(r.summary).slice(0, 80)) + '</div>';
+            escapeHTML(String(r.summary).slice(0, 80)) + compactedMark + '</div>';
+        } else if (r.last_compacted_at) {
+          subLine = '<div style="font-size:11px;color:rgba(255,255,255,0.45);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px;">' +
+            compactedMark + '</div>';
         }
         var turnsRight = r.turn_count
           ? '<span style="font-size:10px;color:rgba(255,255,255,0.32);">' + r.turn_count + '</span>'
@@ -1838,7 +1847,7 @@
           '<span style="font-size:15px;line-height:1;flex-shrink:0;width:18px;text-align:center;opacity:0.85;">' + entityIcon(r.entity_type) + '</span>' +
           '<div style="flex:1;min-width:0;">' +
             '<div style="color:rgba(255,255,255,0.92);font-weight:500;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.3;">' +
-              escapeHTML(r.label || ('Session ' + r.id)) + pinnedMark +
+              escapeHTML(r.label || ('Session ' + r.id)) + pinnedMark + rollingMark +
             '</div>' +
             subLine +
           '</div>' +
