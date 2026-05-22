@@ -164,7 +164,10 @@ function validateOps(entityType, ops) {
   }
   for (const k of Object.keys(ops)) {
     if (!schema.allowedTopKeys.has(k)) {
-      throw new Error(`Unknown op key '${k}' for entity_type=${entityType}`);
+      const allowedList = [...schema.allowedTopKeys].sort().join(', ');
+      throw new Error(
+        `Unknown op key '${k}' for entity_type=${entityType}. Allowed top-level op keys: ${allowedList}.`
+      );
     }
   }
   // Per-entity sanity:
@@ -173,10 +176,13 @@ function validateOps(entityType, ops) {
       throw new Error('client.ops.fields must be an object');
     }
     if (ops.fields) {
-      for (const k of Object.keys(ops.fields)) {
-        if (!CLIENT_EDITABLE_FIELDS.has(k)) {
-          throw new Error(`client.ops.fields contains non-editable column '${k}'`);
-        }
+      const bad = Object.keys(ops.fields).filter(k => !CLIENT_EDITABLE_FIELDS.has(k));
+      if (bad.length) {
+        const validList = [...CLIENT_EDITABLE_FIELDS].sort().join(', ');
+        throw new Error(
+          `client.ops.fields contains non-editable column(s): ${bad.map(k => `'${k}'`).join(', ')}. ` +
+          `Valid client fields are: ${validList}.`
+        );
       }
     }
     if (ops.notes && !Array.isArray(ops.notes)) {
@@ -232,13 +238,18 @@ function validateOps(entityType, ops) {
       throw new Error('lead.ops.fields must be an object');
     }
     if (ops.fields) {
-      for (const k of Object.keys(ops.fields)) {
-        if (!LEAD_EDITABLE_FIELDS.has(k)) {
-          throw new Error(`lead.ops.fields contains non-editable column '${k}'`);
-        }
+      const bad = Object.keys(ops.fields).filter(k => !LEAD_EDITABLE_FIELDS.has(k));
+      if (bad.length) {
+        const validList = [...LEAD_EDITABLE_FIELDS].sort().join(', ');
+        throw new Error(
+          `lead.ops.fields contains non-editable column(s): ${bad.map(k => `'${k}'`).join(', ')}. ` +
+          `Valid lead fields are: ${validList}. ` +
+          `Contact info (name/email/phone) lives on the client, not the lead — link via client_id.`
+        );
       }
       if (ops.fields.status && !LEAD_VALID_STATUSES.has(ops.fields.status)) {
-        throw new Error(`lead.ops.fields.status invalid: '${ops.fields.status}'`);
+        const validStatuses = [...LEAD_VALID_STATUSES].sort().join(', ');
+        throw new Error(`lead.ops.fields.status invalid: '${ops.fields.status}'. Valid statuses: ${validStatuses}.`);
       }
     }
     if (ops.notes && !Array.isArray(ops.notes)) {
