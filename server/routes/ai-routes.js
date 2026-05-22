@@ -2189,6 +2189,30 @@ async function runStream({ anthropic, res, system, messages, persistAssistantTex
     endWithDone();
   }
 
+  // Premature-close diagnostics — same hook as runV2SessionStream. Fires
+  // when the client / proxy closes the TCP connection before we sent
+  // [DONE]. Otherwise the failure is invisible server-side.
+  res.on('close', function onResClose() {
+    if (!_ended) {
+      try {
+        console.warn('[runStream] client-closed before [DONE]',
+          'agent:', agentKey,
+          'ended_flag:', _ended,
+          'writableEnded:', res.writableEnded,
+          'writableFinished:', res.writableFinished,
+          'assistantTextLen:', (assistantText || '').length);
+      } catch (_) {}
+    }
+  });
+  res.on('error', function onResError(err) {
+    try {
+      console.warn('[runStream] response socket error',
+        'agent:', agentKey,
+        'code:', err && err.code,
+        'message:', err && err.message);
+    } catch (_) {}
+  });
+
   // Reference-links block (job numbers, WIP report, etc.) is now baked
   // INTO the registered agent's system prompt via composedAgentSystem.
   // The 15-min SharePoint refresher re-syncs the agent only when
@@ -3113,6 +3137,39 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
     try { res.write('data: [DONE]\n\n'); } catch (e) {}
     try { res.end(); } catch (e) {}
   }
+
+  // Premature-close diagnostics — fires when the client or an
+  // intermediary (Cloudflare, Railway edge, browser) closes the TCP
+  // connection BEFORE the server emitted [DONE]. Without this hook the
+  // failure is invisible server-side: the for-await loop just ends with
+  // no more events, no exception, and the SSE response goes silent —
+  // the client renders "Error: network error" with no diagnostic trail.
+  // The corresponding client-side handler (js/ai-panel.js readSSEStream
+  // catch) now records any received {error,...} payload, but a true
+  // mid-stream drop produces neither — these log lines are the only
+  // forensic record. See plan @ memoized-inventing-mountain.md.
+  res.on('close', function onResClose() {
+    if (!_ended) {
+      try {
+        console.warn('[v2-stream] client-closed before [DONE]',
+          'session_id:', sessionId,
+          'session_db_id:', session && session.id,
+          'ended_flag:', _ended,
+          'writableEnded:', res.writableEnded,
+          'writableFinished:', res.writableFinished);
+      } catch (_) { /* never let logging crash the close handler */ }
+    }
+  });
+  res.on('error', function onResError(err) {
+    // Socket-level errors (ECONNRESET, EPIPE). Same forensic intent —
+    // we just need the trail.
+    try {
+      console.warn('[v2-stream] response socket error',
+        'session_id:', sessionId,
+        'code:', err && err.code,
+        'message:', err && err.message);
+    } catch (_) {}
+  });
 
   // Resolve the session id, recovering once if the prior session is
   // stuck waiting on tool responses. We have to attempt the events.send

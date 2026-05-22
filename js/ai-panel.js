@@ -3135,6 +3135,13 @@
     var brainYoga = startBrainYoga(streamDiv);
     var chipsAppended = 0; // tracks tool_applied/tool_failed/tool_rejected count
     var turnUsage = null;  // captured from `done` event; rendered as a dim footer
+    // Most-recent server-emitted {error,...} payload. Captured by the
+    // SSE handler so the .catch below can distinguish a clean
+    // server-emitted error (already rendered to contentEl) from a true
+    // mid-stream TCP/proxy drop (fetch rejects with .message="network
+    // error" and we never received any structured payload). On a drop
+    // we render a clearer message so the user knows to retry.
+    var lastServerError = null;
     // The most-recent live tool chip. tool_started creates one;
     // tool_applied / _failed / _rejected updates it IN PLACE rather
     // than appending a second chip. Mirrors Claude Code's behavior:
@@ -3300,6 +3307,7 @@
             window.refreshClientsAfterAI();
           }
         } else if (payload.error) {
+          lastServerError = String(payload.error);
           if (contentEl) contentEl.innerHTML = '<span style="color:#f87171;">' + escapeHTMLLocal(payload.error) + '</span>';
         }
       });
@@ -3375,9 +3383,37 @@
       _abortController = null;
       if (err && err.name === 'AbortError') {
         if (streamDiv && streamDiv.parentNode) streamDiv.parentNode.removeChild(streamDiv);
-      } else {
-        if (contentEl) contentEl.innerHTML = '<span style="color:#f87171;">Error: ' + escapeHTMLLocal(err.message || 'unknown') + '</span>';
+        return;
       }
+      // If the server already emitted a structured {error,...} event
+      // before the catch fired, contentEl already shows it — don't
+      // clobber that with a generic "Error: network error" wrapper.
+      if (lastServerError) return;
+
+      // True mid-stream drop: fetch rejects with .message="network
+      // error" when the body reader can't read more bytes (TCP reset,
+      // proxy abort, browser network loss). The bare "Error: network
+      // error" string is meaningless to the user — render a friendlier
+      // message that tells them what to do.
+      var rawMsg = (err && err.message) || 'unknown';
+      var isStreamDrop = /^network error$/i.test(rawMsg);
+      var displayMsg = isStreamDrop
+        ? 'Connection dropped before the response finished. The server may not have logged this. Hit Send again to retry.'
+        : 'Error: ' + rawMsg;
+      if (contentEl) {
+        contentEl.innerHTML = '<span style="color:#f87171;">' + escapeHTMLLocal(displayMsg) + '</span>';
+      }
+      // Diagnostic logging so the next failure leaves a trail in the
+      // browser console even if it doesn't surface server-side.
+      try {
+        console.warn('[ai-panel] chat stream rejected',
+          'message:', rawMsg,
+          'name:', err && err.name,
+          'isStreamDrop:', isStreamDrop,
+          'assistantTextLen:', (assistantText || '').length,
+          'pendingToolUses:', pendingToolUses.length,
+          'chipsAppended:', chipsAppended);
+      } catch (_) {}
     });
   }
 
