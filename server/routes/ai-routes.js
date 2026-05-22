@@ -990,7 +990,7 @@ const JOB_TOOLS = [
   },
   {
     name: 'request_edit_mode',
-    description: 'Ask the PM to flip Plan → Edit mode so you can write (set_phase_*, set_node_value, assign_qb_line, etc.). Use only when analysis surfaces an action you can\'t take in Plan mode. NOT for trivial questions.',
+    description: 'Ask the PM to flip Plan → Build mode so writes (via emit_payload_file) become enabled on this session. Use only when analysis surfaces an action you can\'t take in Plan mode. NOT for trivial questions.',
     input_schema: {
       type: 'object',
       additionalProperties: false,
@@ -1618,7 +1618,7 @@ async function buildEstimateContext(estimateId, includePhotos, aiPhaseOverride, 
 
   if (alternates.length > 1) {
     lines.push('# Groups on this estimate');
-    lines.push('Project 86 organizes a multi-scope estimate into Groups (e.g., Deck 1, Deck 2, Roof, Optional Adds). Each group carries its own scope and its own line items. The proposal total = sum of every INCLUDED group; groups marked `excluded` are not priced or shown to the client. Use propose_switch_active_group / propose_add_group to operate on a different group.');
+    lines.push('Project 86 organizes a multi-scope estimate into Groups (e.g., Deck 1, Deck 2, Roof, Optional Adds). Each group carries its own scope and its own line items. The proposal total = sum of every INCLUDED group; groups marked `excluded` are not priced or shown to the client. To switch the active group or add a new one, emit a payload with estimate ops `groups: [{op:\'switch_active\'|\'add\', ...}]`.');
     alternates.forEach(a => {
       const isActive = a.id === blob.activeAlternateId;
       const isExcluded = !!a.excludeFromTotal;
@@ -1968,17 +1968,15 @@ async function buildEstimateContext(estimateId, includePhotos, aiPhaseOverride, 
   if (aiPhase === 'plan') {
     lines.push('');
     lines.push('# CURRENT MODE: PLAN');
-    lines.push('The user has set this estimate to **Plan mode**. They are still thinking through scope, materials, sequencing — not ready for line-item proposals yet.');
+    lines.push('The user has set this estimate to **Plan mode**. They are still thinking through scope, materials, sequencing — not ready for line-item changes yet.');
     lines.push('In Plan mode you SHOULD:');
-    lines.push('  - Discuss scope, ask clarifying questions, surface gotchas, suggest considerations.');
-    lines.push('  - Use `propose_update_scope` to capture the scope of work as the conversation evolves — that\'s a planning activity, not an estimate edit.');
-    lines.push('  - Use `propose_add_client_note` for durable facts the user shares.');
+    lines.push('  - Discuss scope, ask clarifying questions, raise gotchas, suggest considerations.');
     lines.push('  - Use `web_search` for spec lookups, code references, supplier research.');
-    lines.push('In Plan mode you MUST NOT propose line items, sections, or any other estimate edits — those tools have been removed from your tool list this turn so you literally cannot call them. Don\'t apologize, don\'t hint at line items, don\'t pre-format what you would have proposed; just keep planning. When the user is ready to build, they\'ll flip the mode switch.');
+    lines.push('In Plan mode you MUST NOT emit an `emit_payload_file` — the payload tool is removed from your tool list this turn so you literally cannot call it. Don\'t apologize, don\'t pre-format what you would have written; just keep planning. When the user is ready to build, they flip the mode switch.');
   } else {
     lines.push('');
     lines.push('# CURRENT MODE: BUILD');
-    lines.push('The user is in Build mode — propose line items, sections, scope updates, and edits as your tools allow. Default behavior.');
+    lines.push('The user is in Build mode — write changes via `emit_payload_file` as the conversation calls for them. The user drags the resulting file into the dropbox to apply.');
   }
 
   return {
@@ -2497,19 +2495,12 @@ function ctxDynamicText(systemArr) {
 //   turnContextText is the dynamic (last) block from the builder's
 //   `system` array, ready to wrap in <turn_context>. photoBlocks is
 //   the per-entity image bucket (only estimate / job / intake set it).
-// Phase S4 — surface→staff mapping. When the user is on a specific
-// chat panel, default-route any delegation toward the matching staff
-// agent. The Principal can still override (e.g. on a job-WIP turn
-// "audit the budgeting on this" might handoff_to_estimator instead of
-// handoff_to_pm), but the hint sets the gravity well.
-const STAFF_HINT_BY_SURFACE = {
-  estimate: '86-estimator',
-  job:      '86-pm',
-  intake:   '86-sales',
-  client:   '86-directory',
-  schedule: '86-scheduler'
-  // 'staff' / 'admin' / 'ask86' → no default hint (Principal decides)
-};
+// (Retired 2026-05-21 — STAFF_HINT_BY_SURFACE mapped page contexts
+// to a default staff agent for sync handoff routing. Sync handoffs
+// are gone; staff agents run only as async watchers. The export
+// stays as an empty object so any stragglers reading it find no
+// hints rather than crashing.)
+const STAFF_HINT_BY_SURFACE = {};
 
 async function buildTurnContext({ entityType, entityId, clientContext, aiPhase, userId, organization, activeStaffHint }) {
   let turnContextText = '';
@@ -2530,47 +2521,33 @@ async function buildTurnContext({ entityType, entityId, clientContext, aiPhase, 
     const ctx = await buildClientDirectoryContext(organization);
     turnContextText = ctxDynamicText(ctx.system);
   } else if (entityType === 'staff' || entityType === 'admin') {
-    // Admin / Chief-of-Staff context. 86 absorbed the CoS role; this
-    // path stays so admin surfaces still get the metrics-aware system.
+    // Admin context — only the live metrics snapshot is added to the
+    // turn. 86's baseline carries identity; there is no separate
+    // "admin agent" or "CoS surface".
     const ctx = await buildStaffContext();
     turnContextText = ctxDynamicText(ctx.system);
   }
-  // No matching entity (e.g. Ask 86 with no entity) → empty turn
-  // context. The composed agent system + the page_context block
-  // carry enough on their own.
+  // No matching entity (e.g. a global chat with no entity in focus) →
+  // empty turn context. The composed agent system + the page_context
+  // block carry enough on their own.
 
-  // Phase 2 — append <available_tools> hint AFTER the per-entity
-  // snapshot so it's the last thing the model reads inside the turn
-  // context. Empty for surfaces without a primary-write set (e.g.
-  // Ask 86 / 'general'); the model falls back to the full registered
-  // tool list. Defined surfaces ('staff' and 'admin' both map to the
-  // staff write set here because the dispatcher above already routes
-  // both entity_types through buildStaffContext).
-  const hintSurface = (entityType === 'admin') ? 'staff' : entityType;
-  const availableBlock = renderAvailableToolsBlock(hintSurface);
+  // Append <available_tools> hint after the per-entity snapshot so it's
+  // the last thing the model reads inside the turn context. Empty when
+  // no primary-write set is registered for this entity_type; the model
+  // falls back to its full registered tool list. ('admin' and 'staff'
+  // both route through buildStaffContext, so we coerce 'admin' to the
+  // shared 'staff' hint key for the available-tools block.)
+  const hintKey = (entityType === 'admin') ? 'staff' : entityType;
+  const availableBlock = renderAvailableToolsBlock(hintKey);
   if (availableBlock) {
     turnContextText = turnContextText
       ? turnContextText + '\n\n' + availableBlock
       : availableBlock;
   }
-
-  // Phase S4 — staff-hint block. Resolve in priority order:
-  //   1. Explicit activeStaffHint from the client (e.g. a schedule
-  //      panel without an entity sets '86-scheduler' itself).
-  //   2. Surface default from STAFF_HINT_BY_SURFACE (entity_type).
-  //   3. None — Principal picks freely.
-  // C7 — sync handoff routing retired. The Principal owns all sync
-  // work now (with domain Skills loaded on demand); staff agents run
-  // as async background watchers (C10) whose findings show up as
-  // payloads in the sidebar. The legacy <active_staff> block told
-  // the model to fire handoff_to_* on every domain turn; that
-  // directive no longer applies. resolvedHint is still computed
-  // below as a hook for the future (e.g., per-surface Skill
-  // suggestions), but no routing block is emitted.
-  const resolvedHint = (activeStaffHint && typeof activeStaffHint === 'string')
-    ? activeStaffHint.trim()
-    : (STAFF_HINT_BY_SURFACE[entityType] || null);
-  void resolvedHint; // intentionally unused post-C7
+  // Phase S4 staff-hint resolution retired. Sync handoffs are gone;
+  // the activeStaffHint argument is accepted for back-compat with
+  // legacy callers but no routing block is emitted from it.
+  void activeStaffHint;
 
   // C13 — forward-momentum apply events.
   //
@@ -5665,33 +5642,24 @@ async function buildClientDirectoryContext(organization) {
   const omittedParentCount = truncated ? sortedParents.length - parents.length : 0;
   const flatTopLevel = parents.filter(p => !childrenByParent.has(p.id));
 
-  // Build the directory-surface prompt as two blocks like 86 elsewhere:
-  // stable playbook (cached prefix) + dynamic directory snapshot
-  // (refreshed each turn).
+  // Directory turn context — dynamic snapshot only. Identity + tone
+  // live in 86's baseline; the section-overlay renders below are
+  // admin-editable knobs that no-op when no override is configured.
+  // (Pre-2026-05-21 this function shipped a 1500-token "You are 86
+  // in Client Directory mode…" preamble on every directory chat turn,
+  // which duplicated the baseline AND leaked "mode" vocabulary.)
   const stable = [];
   const out = []; // dynamic directory snapshot
-  stable.push('You are 86, Project 86\'s operator, working in Client Directory mode — keeping the customer directory clean, accurate, and properly structured. You understand the property-management industry in Central Florida and you take pride in a tidy, hierarchical, dedupe-clean directory.');
-  stable.push('');
-  // Section overrides — admin-editable named blocks.
   const hrSectionOverrides = await loadSectionOverridesFor('cra');
   renderSection(stable, 'hr_about_agx', hrSectionOverrides);
-  stable.push('');
   renderSection(stable, 'hr_hierarchy', hrSectionOverrides);
-  stable.push('');
   renderSection(stable, 'hr_field_semantics', hrSectionOverrides);
-  stable.push('');
   renderSection(stable, 'hr_bt_patterns', hrSectionOverrides);
-  stable.push('');
   renderSection(stable, 'hr_dedup_rules', hrSectionOverrides);
-  stable.push('');
   renderSection(stable, 'hr_behavior', hrSectionOverrides);
-  stable.push('');
   renderSection(stable, 'hr_web_research', hrSectionOverrides);
-  stable.push('');
   renderSection(stable, 'hr_tool_tiers', hrSectionOverrides);
-  stable.push('');
   renderSection(stable, 'hr_photos', hrSectionOverrides);
-  stable.push('');
 
   // Skill packs — manifest only. 86 can call load_skill_pack({name})
   // to pull a body on demand. The `alwaysOn` flag is no longer
@@ -6399,35 +6367,13 @@ function isStaffToolAutoTier(name) {
 // tools rolled into one cached block; a slim live snapshot of the
 // current week as a second block (refreshed each turn).
 async function buildStaffContext() {
-  const stable = [];
-  stable.push('You are the Chief of Staff for Project 86\'s in-app AI — a single agent named 86 that runs every surface (estimating, WIP, intake, ask, client directory). Your user is the Project 86 admin / owner. Your job is to observe how 86 is being used across those surfaces, surface trends and anomalies, audit specific conversations on request, and propose skill-pack improvements based on what you see.');
-  stable.push('');
-  // Section overrides — admin-editable named blocks for Chief of Staff.
-  const cosSectionOverrides = await loadSectionOverridesFor('staff');
-  renderSection(stable, 'cos_three_agents', cosSectionOverrides);
-  stable.push('');
-  stable.push('# Your tools');
-  stable.push('Read tools (auto-apply, no approval):');
-  stable.push('  • `read_metrics(range)` — per-agent aggregate stats for last 7d or 30d. Default range is 7d.');
-  stable.push('  • `read_recent_conversations(range, entity_type?, limit?)` — recent conversation list with rollup numbers.');
-  stable.push('  • `read_conversation_detail(key)` — full message log of one conversation. Pass the `key` from read_recent_conversations.');
-  stable.push('  • `read_skill_packs()` — admin-editable instruction packs the agents load each turn.');
-  stable.push('  • `read_materials(q?, subgroup?, category?, limit?)` — query Project 86\'s materials catalog (Home Depot purchase history, etc.). Same tool 86 uses for line-item pricing. Use it to answer "do we have a price book?", spot patterns in what 86 should be searching, or audit whether 86 quotes are catalog-backed.');
-  stable.push('  • `read_purchase_history(material_id?, q?, days?, job_name?, limit?)` — receipt-level material purchase rows. Use to spot pricing trends, find jobs that used a SKU, or audit whether 86\'s quoted prices match what Project 86 actually paid recently.');
-  stable.push('  • `read_subs(q?, trade?, status?, with_expiring_certs?, limit?)` — subcontractor directory with cert expiry. Use to surface paperwork-expiring subs, list subs by trade, or confirm a named sub is active. with_expiring_certs=true for compliance audits.');
-  stable.push('  • `read_lead_pipeline(q?, status?, market?, salesperson_email?, limit?)` — leads list + always-included status rollup ($ counts per status). Use for "what does our pipeline look like?", spotting deal-source patterns, or seeing which markets are hot.');
-  stable.push('Propose tools (approval-required — user clicks Approve/Reject on a card):');
-  stable.push('  • `propose_skill_pack_add(name, body, agents, rationale)` — add a new skill pack. On approval the pack is auto-mirrored to Anthropic native Skills; the agent auto-discovers it by description on the next sync. agents=["cra","job"].');
-  stable.push('  • `propose_skill_pack_edit(name, new_name?, new_body?, agents?, rationale)` — change an existing pack. body edits replace the whole body.');
-  stable.push('  • `propose_skill_pack_delete(name, rationale)` — remove a pack entirely (also deletes the Anthropic-side mirror).');
-  stable.push('');
-  renderSection(stable, 'cos_how_to_work', cosSectionOverrides);
-  stable.push('');
-  renderSection(stable, 'cos_tone', cosSectionOverrides);
-
-  // Live snapshot for the current week so the agent has cheap baseline
-  // numbers without spending a tool call. Best-effort — failures degrade
-  // silently, the agent will still call read_metrics if it needs detail.
+  // 2026-05-21 — Chief-of-Staff prose retired. Architecture is one
+  // agent (86) reachable from any page; there is no separate "CoS
+  // surface" with a different identity. Identity + tone live in 86's
+  // baseline. The only thing the staff/admin entity_type adds to the
+  // turn is a cheap live metrics snapshot so the model can answer
+  // usage questions without burning a tool call. Failures degrade
+  // silently — the model will call read_metrics if it needs detail.
   const liveLines = [];
   try {
     const r = await pool.query(`
@@ -6437,20 +6383,18 @@ async function buildStaffContext() {
        GROUP BY entity_type
     `);
     if (r.rows.length) {
-      liveLines.push('# Live snapshot (last 7 days, assistant turns)');
-      const labelMap = { estimate: '86 (estimate)', job: '86 (job)', client: '86 (directory)', staff: 'Chief of Staff (you)' };
+      liveLines.push('# Recent assistant activity (last 7 days)');
       r.rows.forEach(row => {
-        liveLines.push('  • ' + (labelMap[row.entity_type] || row.entity_type) + ': ' + Number(row.turns) + ' turns');
+        liveLines.push('  • ' + row.entity_type + ': ' + Number(row.turns) + ' turns');
       });
-      liveLines.push('Use `read_metrics` for full breakdowns (tokens, cost, model mix, conversations).');
+      liveLines.push('Call `read_metrics` for full breakdowns (tokens, cost, model mix, conversations).');
     }
-  } catch (e) { /* ignore — agent will call read_metrics if needed */ }
+  } catch (e) { /* ignore */ }
 
   return {
-    system: [
-      { type: 'text', text: stable.join('\n'), cache_control: { type: 'ephemeral' } },
-      { type: 'text', text: '\n\n' + (liveLines.length ? liveLines.join('\n') : '_(No agent activity recorded in the last 7 days.)_') }
-    ]
+    system: liveLines.length
+      ? [{ type: 'text', text: liveLines.join('\n'), cache_control: { type: 'ephemeral' } }]
+      : []
   };
 }
 
@@ -8276,7 +8220,7 @@ async function buildIntakeContext(userId, organization) {
   // photos as inline content blocks; this is just a numeric hint.
   const bucket = _intakeImageBuckets.get(userId);
   const n = bucket && bucket.images ? bucket.images.length : 0;
-  lines.push('Photos staged this turn: ' + n + (n ? ' (in scope for attach_pending_photos:true on propose_create_lead)' : ''));
+  lines.push('Photos staged this turn: ' + n + (n ? ' (will attach to the lead created by the next emit_payload_file)' : ''));
 
   // Skill packs — manifest only (was eager-loading full bodies).
   // Skill packs ship as native Anthropic Skills registered on the
@@ -9005,168 +8949,18 @@ async function execHandoffToStaff(toolName, input, ctx) {
   // + marker bubbling + stall recovery + ID remap) lands in C17 once
   // the new architecture has been exercised in production for a few
   // days without regressions.
-  console.warn(
-    '[handoffs] retired execHandoffToStaff invoked for tool=' + toolName +
-    ' — agent registration likely stale; re-register via /managed/reregister.'
-  );
+  // C17 cleanup — full body deletion of the retired sync-handoff
+  // sub-session machinery (~140 lines: context build, session open,
+  // staffCallback, driveSubtaskTurn invocation, archive). Original
+  // body preserved at commit 1faff1a. The shim above returns the
+  // retirement message; any model that fires a stale handoff_to_*
+  // tool self-corrects and emits emit_payload_file instead.
+  void toolName; void input; void ctx;
+  console.warn('[handoffs] retired execHandoffToStaff invoked — agent registration likely stale; re-register via /managed/reregister.');
   return (
-    'Sync handoffs to staff agents are retired. The Principal owns all ' +
-    'sync work now; staff agents run as background watchers (you\'ll see ' +
-    'their findings as payloads in the sidebar). To make changes, emit a ' +
-    'payload file via emit_payload_file instead of handing off.'
+    'Sync handoffs to staff agents are retired. To make changes, emit a ' +
+    'payload file via emit_payload_file instead.'
   );
-  // Unreachable. Kept until C17 so any cross-reference still resolves.
-  // eslint-disable-next-line no-unreachable
-  let staffKey = STAFF_AGENT_KEY_BY_HANDOFF.get(toolName);
-  if (!staffKey && toolName === 'handoff_to_dynamic_staff') {
-    staffKey = (input && typeof input.agent_key === 'string') ? input.agent_key.trim() : null;
-    if (!staffKey) throw new Error('handoff_to_dynamic_staff requires an agent_key in input.');
-    if (!/^86-[a-z0-9-]+$/.test(staffKey)) {
-      throw new Error('agent_key must match /^86-[a-z0-9-]+$/');
-    }
-  }
-  if (!staffKey) throw new Error('Unknown handoff tool: ' + toolName);
-
-  const anthropic = getAnthropic();
-  if (!anthropic) throw new Error('ANTHROPIC_API_KEY not configured.');
-
-  const { userId } = ctx;
-  const orgRow = await pool.query(
-    `SELECT o.* FROM organizations o
-       JOIN users u ON u.organization_id = o.id
-      WHERE u.id = $1`,
-    [userId]
-  );
-  const organization = orgRow.rows[0];
-  if (!organization) throw new Error('User has no organization — cannot delegate to staff.');
-
-  // Resolve the staff agent's Anthropic-side id. Lazy register if the
-  // platform flag is on but the agent hasn't been registered yet.
-  let regRow = await pool.query(
-    `SELECT anthropic_agent_id FROM managed_agent_registry
-      WHERE agent_key = $1 AND organization_id = $2`,
-    [staffKey, organization.id]
-  );
-  if (!regRow.rows.length) {
-    const adminAgents = require('./admin-agents-routes');
-    try {
-      await adminAgents.ensureManagedAgent(staffKey, organization);
-    } catch (e) {
-      throw new Error('Could not register staff agent ' + staffKey + ': ' + (e.message || 'unknown'));
-    }
-    regRow = await pool.query(
-      `SELECT anthropic_agent_id FROM managed_agent_registry
-        WHERE agent_key = $1 AND organization_id = $2`,
-      [staffKey, organization.id]
-    );
-    if (!regRow.rows.length) throw new Error('Staff agent registration did not persist: ' + staffKey);
-  }
-  const staffAgentId = regRow.rows[0].anthropic_agent_id;
-
-  const adminAgents = require('./admin-agents-routes');
-  const env = await adminAgents.ensureManagedEnvironment();
-
-  // Build the user.message body. The staff gets a FULL surface
-  // snapshot — NOT the Principal's slim "JUST HANDOFF" version. The
-  // Principal's turn_context is shaped for routing (analytical data
-  // stripped + handoff prose); forwarding it to a staff confused the
-  // PM into reading instructions meant for the Principal ("your job
-  // is to ROUTE", "those tools aren't in your list") and producing
-  // empty responses.
-  //
-  // Per-staff data assembly: invoke the entity-specific context
-  // builder with slimForRouter=false so the staff sees the same data
-  // the Principal WOULD have seen pre-slim — WIP snapshot, structure,
-  // node graph, QB cost data for PM; full directory for Directory;
-  // etc. Falls back to the Principal's turnContextText only when the
-  // handoff didn't include a usable entity id.
-  const parts = [];
-  let staffContextText = '';
-  try {
-    if (input.job_id && (staffKey === '86-pm' || staffKey === '86-scheduler')) {
-      const jobCtx = await buildJobContext(String(input.job_id), null, 'edit', organization, { slimForRouter: false });
-      if (jobCtx && typeof jobCtx.system === 'string') staffContextText = jobCtx.system;
-    } else if (input.estimate_id && staffKey === '86-estimator') {
-      const estCtx = await buildEstimateContext(String(input.estimate_id), false, 'edit', organization);
-      if (estCtx && Array.isArray(estCtx.system)) {
-        // buildEstimateContext returns { system: [cachedPrefix, dynamicBlock] }
-        staffContextText = estCtx.system.map(b => (b && b.text) || '').join('\n\n').trim();
-      }
-    } else if (staffKey === '86-directory') {
-      const dirCtx = await buildClientDirectoryContext(organization);
-      if (dirCtx && Array.isArray(dirCtx.system)) {
-        staffContextText = dirCtx.system.map(b => (b && b.text) || '').join('\n\n').trim();
-      }
-    }
-  } catch (e) {
-    console.warn('[execHandoffToStaff] per-staff context build failed for', staffKey, '—', e.message,
-      '— falling back to Principal turn_context');
-  }
-  if (!staffContextText && ctx.turnContextText && typeof ctx.turnContextText === 'string' && ctx.turnContextText.trim()) {
-    staffContextText = ctx.turnContextText.trim();
-  }
-  if (staffContextText) {
-    parts.push('# Surface snapshot (the same data the Principal sees on this surface, full — not the Principal\'s router-mode slim view):\n\n' + staffContextText);
-  }
-  parts.push('---\nRequest from the Principal:\n' + (String(input.request || '').trim() || '(no request body)'));
-  if (input.estimate_id) parts.push('Active estimate id: ' + String(input.estimate_id));
-  if (input.job_id)      parts.push('Active job id: ' + String(input.job_id));
-  if (input.client_id)   parts.push('Active client id: ' + String(input.client_id));
-  if (input.context)     parts.push('Extra context from the Principal:\n' + String(input.context));
-  const messageBody = parts.join('\n\n');
-
-  // Open the staff sub-session.
-  let sessionId = null;
-  try {
-    const created = await anthropic.beta.sessions.create({
-      agent: staffAgentId,
-      environment_id: env.anthropic_environment_id,
-      title: 'P86 handoff · ' + staffKey + ' · ' + new Date().toISOString().slice(0, 19)
-    });
-    sessionId = created.id;
-  } catch (e) {
-    throw new Error('Could not open staff sub-session: ' + (e.message || 'unknown'));
-  }
-
-  // Reuse make86's tool dispatcher inside the staff session, but:
-  //   - reject nested handoff_to_* (one-level fan-out only in S2)
-  //   - convert approval-tier proposals to text so they don't try to
-  //     render cards from inside a sub-session
-  // parentSession is threaded from the Principal so the staff inherits
-  // the active entity (estimate/job) for the entity-bound write gate.
-  const baseCallback = make86OnCustomToolUse(userId, ctx.parentSession || null);
-  const staffCallback = async (tu) => {
-    if (STAFF_AGENT_KEY_BY_HANDOFF.has(tu.name)) {
-      return { tier: 'auto', error: 'Nested handoff blocked — staff agents do not fan out to other staff in Phase S2. Return your recommendation to the Principal as text instead.' };
-    }
-    const decision = await baseCallback(tu);
-    if (decision && decision.tier === 'approval') {
-      return {
-        tier: 'auto',
-        error: 'Tool "' + tu.name + '" is approval-tier. Describe the proposed change as text in your response — the Principal will surface the approval card to the user.'
-      };
-    }
-    return decision;
-  };
-
-  const result = await driveSubtaskTurn({
-    anthropic,
-    sessionId,
-    eventsToSend: [{ type: 'user.message', content: [{ type: 'text', text: messageBody }] }],
-    onCustomToolUse: staffCallback
-  });
-
-  // Best-effort archive — staff sub-sessions are stateless; don't keep
-  // them sitting in the active list.
-  try {
-    await anthropic.beta.sessions.update(sessionId, { status: 'archived' });
-  } catch (_) { /* non-fatal */ }
-
-  if (result.error) {
-    return '[' + staffKey + ' handoff error] ' + result.error +
-      (result.text ? '\n\nPartial response:\n' + result.text : '');
-  }
-  return result.text || '(staff agent returned no text)';
 }
 
 // ──────────────────────────────────────────────────────────────────
@@ -10427,108 +10221,13 @@ const INTAKE_TOOLS = [
   }
 ];
 
-// ──────────────────────────────────────────────────────────────────
-// Global "Ask 86" — entity-less chat surface backed by 86 (the
-// operator). Reachable from a header button anywhere in the app
-// so users can ask 86 anything without first navigating to a job
-// or estimate. Persisted per-user (entity_type='ask86', entity_id
-// is fixed at 'global'); only web_search + the auto-injected
-// reference sheets are available — no entity-mutating tools since
-// there's no entity to mutate.
-//
-// Tools surface intentionally narrow for v1: this is a "talk to 86
-// as a general-purpose helper" surface, not a place to propose
-// concrete edits. If a user asks 86 to make a change, 86 should
-// direct them to open the relevant entity's AI panel.
-// ──────────────────────────────────────────────────────────────────
-async function buildAsk86Context() {
-  const stable = [];
-  stable.push('You are 86, Project 86\'s lead operator agent. Project 86 is a Central-Florida construction-services platform (painting, deck repair, roofing, exterior services for HOAs and apartment communities). The user is talking to you from the global "Ask 86" surface — there is NO specific entity (estimate / job / client / lead) attached to this conversation.');
-  stable.push('');
-  stable.push('# Your scope');
-  stable.push('  You are the company\'s primary AI surface. You take questions about anything — leads, estimates, jobs, WIP, margins, the team, costs — and either answer directly or point the user at the right entity panel for deeper work.');
-  stable.push('  The Chief of Staff (the auditor) is your sub-specialist for admin metrics + skill-pack stewardship; you can read across that domain via the tools below, and the admin can open the dedicated CoS panel directly. Your client-directory powers (dedupe, hierarchy, business cards) are also available from here — no separate agent.');
-  stable.push('');
-  stable.push('# Tools available here');
-  stable.push('  ## Read tools (auto-execute, no approval)');
-  stable.push('  • `read_jobs(q?, status?, limit?)` — job directory lookup (jobNumber, title, client, address, PM).');
-  stable.push('  • `read_users(q?, role?, active_only?, limit?)` — staff directory lookup.');
-  stable.push('  • `read_clients(q?, limit?)` — client directory lookup.');
-  stable.push('  • `read_subs(q?, trade?, status?, with_expiring_certs?, limit?)` — subcontractor directory.');
-  stable.push('  • `read_lead_pipeline(q?, status?, market?, salesperson_email?, limit?)` — leads + pipeline rollup.');
-  stable.push('  • `read_materials(q?, subgroup?, category?, limit?)` — material catalog (with last-paid pricing).');
-  stable.push('  • `read_purchase_history(material_id?, q?, days?, job_name?, limit?)` — receipt-level material rows.');
-  stable.push('  • `read_metrics(range)` — agent-usage metrics (turns, tokens, cost) for last 7d / 30d.');
-  stable.push('  • `read_recent_conversations(range, entity_type?, limit?)` — list recent agent conversations.');
-  stable.push('  • `read_conversation_detail(key)` — full message log of a specific conversation.');
-  stable.push('  • `read_skill_packs()` — list all skill packs registered for this org (names + truncated bodies + Anthropic skill_ids). Use for self-introspection; the full bodies are live as native Anthropic Skills and the runtime auto-surfaces them by description.');
-  stable.push('  • `web_search` — pricing, code references, product specs, supplier research.');
-  stable.push('  • `navigate({ destination, entity_id? })` — take the user to a page or entity. Use when they say "go to", "open", "show me", "take me to". Destinations: home / leads / estimates / clients / subs / schedule / wip / insights / admin, or job / estimate / lead with entity_id. When the user references an entity by name or number, call read_jobs / read_clients / read_past_estimates first to resolve the id, THEN navigate.');
-  stable.push('  Live reference sheets (job-number lookup, WIP report, etc.) are auto-injected below — use them for company-data answers without burning a tool call.');
-  stable.push('');
-  stable.push('# Mutation tools you have here');
-  stable.push('  You CAN make changes from this surface:');
-  stable.push('  • `propose_create_lead` — capture a new lead in one shot. ALWAYS call `read_existing_clients` first to dedupe; if the client exists, pass its id as `existing_client_id`. Same flow as the dedicated intake panel.');
-  stable.push('  • Client-directory tools — `create_property`, `create_parent_company`, `update_client_field`, `link_property_to_parent`, `rename_client`, `change_property_parent`, `merge_clients`, `split_client_into_parent_and_property`, `attach_business_card_to_client`. Use these inline so the user does not have to open the Directory panel for routine work.');
-  stable.push('  • Skill-pack changes — `propose_skill_pack_add` / `_edit` / `_delete`. Approval-tier; the user vets every prompt-shaping change. Mirroring to Anthropic native Skills happens automatically on approval.');
-  stable.push('');
-  stable.push('# What lives on the per-entity panels (not here)');
-  stable.push('  Tools that operate on a SPECIFIC open entity — `propose_add_line_item`, `propose_update_line_item`, `set_phase_pct_complete`, `set_node_value`, `wire_nodes`, `create_node`, etc. — are NOT in the global Ask 86 tool list because they require the entity\'s editor / graph to be open client-side. If the user asks to "add a line to estimate X" or "tweak phase Y on job Z", point them at the right entity panel and offer to draft the exact wording they should paste in.');
-  stable.push('  You also can\'t see a specific job\'s live WIP detail, a specific estimate\'s line items, etc., unless the user supplies them in the conversation. Those live in the per-entity context that the dedicated panel-AIs build. Use `read_jobs` / `read_clients` / `read_past_estimates` for the identity-card view from here.');
-  stable.push('');
-  stable.push('# Tone');
-  stable.push('  Concise. Construction trade vocabulary welcome. Lead with the answer, not the framing. If the user\'s question would be better answered inside a specific entity\'s AI panel, say so up front so they don\'t spin their wheels here.');
-
-  // Skill packs live as native Anthropic Skills registered on the
-  // agent. The runtime auto-discovers them by description each turn —
-  // no system-prompt manifest, no load_skill_pack round-trip needed.
-  return {
-    system: [
-      { type: 'text', text: stable.join('\n'), cache_control: { type: 'ephemeral' } }
-    ]
-  };
-}
-
-// Tools available on the global Ask 86 surface. 86 here is the full
-// operator — he can create leads, audit conversations, propose client
-// edits, push skill-pack changes, etc. Entity-scoped mutations
-// (propose_add_line_item, set_phase_pct_complete, etc.) are NOT
-// included since they need an open editor on the client side; for
-// those, the user opens the entity panel where the mutation belongs.
-function ask86Tools() {
-  const wanted = new Set([
-    // Reads — cross-surface (CoS introspection + client directory)
-    'read_jobs', 'read_users', 'read_clients',
-    'read_subs', 'read_lead_pipeline',
-    'read_materials', 'read_purchase_history',
-    'read_metrics', 'read_recent_conversations', 'read_conversation_detail',
-    'read_skill_packs', 'search_my_sessions', 'search_my_kb', 'search_org_kb',
-    'search_reference_sheet', 'view_attachment_image', 'read_attachment_text',
-    'read_past_estimates', 'read_past_estimate_lines', 'read_leads',
-    // DOM navigation — client-side dispatch. Without this, the model
-    // on the Ask 86 surface doesn't know it can switch tabs / open
-    // entities, so "take me to X" prompts come back as empty text.
-    'navigate'
-  ]);
-  const fromJob = JOB_TOOLS.filter(t => wanted.has(t.name));
-  const intake  = INTAKE_TOOLS.map(({ tier, ...t }) => t);
-  const client  = ClientDirectoryTools.map(({ tier, ...t }) => t);
-  // Dedupe — read_clients / read_jobs / read_users etc. live in
-  // both JOB_TOOLS (cross-surface reads added when 86 took the full
-  // company scope) and ClientDirectoryTools / INTAKE_TOOLS (directory-
-  // surface originals).
-  // Anthropic's API rejects requests with duplicate tool names
-  // ("tools: Tool names must be unique"), which surfaced as empty
-  // responses on the Ask 86 panel. First entry wins.
-  const seen = new Set();
-  const merged = [];
-  [...fromJob, ...intake, ...client].forEach(t => {
-    if (!t || !t.name || seen.has(t.name)) return;
-    seen.add(t.name);
-    merged.push(t);
-  });
-  return merged;
-}
+// (Dead — `buildAsk86Context` and `ask86Tools` were the V1 "global
+// Ask 86 surface" wrappers. The architecture pivot collapsed every
+// chat path onto one agent (86) reachable from any page; there is
+// no separate "Ask 86 surface". The /86/chat resolver now routes by
+// entity_type and the model's baseline carries identity. Both
+// helpers were defined but never called by current code — original
+// implementations preserved at commit 1faff1a.)
 
 // Legacy V1 /ask86/* routes — replaced by managed-agents V2 at
 // /api/ai/86/*. Frontend has been migrated; these stubs surface a
@@ -11196,7 +10895,6 @@ module.exports.internals = {
   buildJobContext,
   buildClientDirectoryContext,
   buildStaffContext,
-  buildAsk86Context,
   sectionsForAgent,
   // Compose the full system prompt for an agent at registration / sync
   // time — appends the SECTION_DEFAULTS playbook to the bare baseline

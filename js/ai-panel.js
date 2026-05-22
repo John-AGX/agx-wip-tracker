@@ -421,11 +421,9 @@
     { label: 'Add a property',           prompt: 'Walk me through adding a new property. Ask which parent management company first (search existing parents in the directory). Then collect property name, property_address, on-site CAM name + email + phone, market, and gate code if any. Use create_property to apply.' }
   ];
   var STAFF_PRESETS = [
-    { label: 'How is 86 doing this week?',   prompt: 'Pull last 7d metrics across every 86 surface (estimate, job, intake, ask, directory) and tell me what stands out. Then surface the 3 most active conversations so I can spot-check.' },
-    { label: 'Audit 86 search usage',        prompt: 'Of 86\'s recent conversations, how often did web_search get invoked? Pull a few examples and summarize what 86 was searching for. If a pattern emerges (e.g., the same product specs over and over), propose a new skill pack that bakes in the answer so 86 stops searching.' },
-    { label: 'Audit & clean skill packs',    prompt: 'Read all skill packs. For each, tell me whether the wording is tight, whether it overlaps with another, and whether it\'s being applied to the right surface. If anything is stale, propose a skill_pack_edit or skill_pack_delete with rationale.' },
-    { label: 'Most expensive conversations', prompt: 'Show me the 5 most token-expensive conversations in the last 30 days across every 86 surface. For the top one, drill in and summarize what happened. If you spot a recurring waste pattern (e.g., 86 re-asking the same thing every turn), propose a skill pack that fixes it.' },
-    { label: 'Is the directory surface earning its keep?', prompt: 'Pull recent client-directory conversations (entity_type=client) and characterize the work. Is the directory surface getting traction or sitting idle? If a pattern emerges that could shift from per-turn instruction to a skill pack, propose it.' }
+    { label: 'How is 86 doing this week?',   prompt: 'Pull last 7d metrics across every entity_type (estimate, job, intake, client, schedule, general) and tell me what stands out. Then list the 3 most active conversations so I can spot-check.' },
+    { label: 'Audit 86 search usage',        prompt: 'Of 86\'s recent conversations, how often did web_search get invoked? Pull a few examples and summarize what 86 was searching for. If a pattern emerges (e.g., the same product specs over and over), propose a skill-pack overlay that bakes in the answer so 86 stops searching.' },
+    { label: 'Most expensive conversations', prompt: 'Show me the 5 most token-expensive conversations in the last 30 days. For the top one, drill in and summarize what happened. If you spot a recurring waste pattern (e.g., 86 re-asking the same thing every turn), propose a fix.' }
   ];
   // Ask 86 (global, no entity) — general-purpose prompts the user
   // might run from anywhere in the app. Deliberately broad: no
