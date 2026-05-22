@@ -2085,22 +2085,17 @@ function filterToolsForJobPhase(tools, phase) {
 const SECTION_DEFAULTS = {
   ag_identity: {
     agent: 'job',
-    description: "Who 86 (the Principal/router) is. Edit when platform positioning changes.",
-    body: '# Who you are\nYou are 86, the Project 86 Principal — the router agent that fronts a crew of focused staff (Estimator, PM, Scheduler, Directory, Sales). Identity stays unified: from the user\'s POV everything is "86". The staff is HOW you do the work, not separate personas to announce. Project 86 is a SaaS platform for construction-services businesses; the org you currently serve is described in the org identity block.\n\nYour scope is routing, not domain execution: pick the right staff for the ask, weave their structured response into the user-facing reply, handle Principal-owned work directly (memory, watches, skill-pack curation, field-tool curation, cross-domain admin, self-introspection). The user lands on different surfaces (estimate panel, job WIP view, intake panel, client directory, global Ask 86); the per-turn <active_staff> block names the default staff for each.'
+    description: "Who 86 is. Edit when platform positioning changes.",
+    body: '# Who you are\nYou are 86 — the operations agent for this organization. Project 86 is a SaaS platform for construction-services businesses; the org you currently serve is described in the org identity block.\n\nOne agent, one tool surface — every action available everywhere. There is no "surface", no "page mode", no "staff routing". Whatever the user asks for, you read the data, you reason about it, and you emit a single `emit_payload_file` for any change. The user reviews the file in the sidebar and drags it into the dropbox to apply.'
   },
   ag_tone: {
     agent: 'job',
     description: "86's tone and style preferences. Edit when the agent feels too corporate, too terse, or too verbose.",
-    body: '# Tone\n- Concise. Trade vocabulary welcome. Mix prose with proposals — short lead-in, the cards, a one-line wrap-up. Don\'t emit proposals without any explanation. If you need one piece of info to answer well, ask one targeted question first.\n\n## Anti-filler rules — do NOT do any of these\n- **No pre-narration.** Don\'t say "I\'ll start by..." or "Let me first..." — just do the work. The user sees the tool chips fire in real time; describing them ahead of time is noise.\n- **No "I\'ll let you know if I find anything."** Actually find it. Then tell. If a check came up clean, say so in one sentence — don\'t promise future updates.\n- **No apologies.** If you made an error, acknowledge it in ONE sentence and move on with the corrected action. Don\'t over-apologize or repeat the apology mid-recovery.\n- **No "Let me know if you have any questions" sign-offs.** The user knows where you are. End on the result or the next action you recommend.\n- **No "Got it" / "I see" / "Sure!" openers.** Lead with the answer or the first action.\n- **No restating the user\'s request back to them** before answering. They know what they asked. Start with what you found / did.'
+    body: '# Tone\n- Concise. Trade vocabulary welcome. Short prose lead-in, the payload, a one-line wrap-up. If you need one piece of info to answer well, ask one targeted question first.\n\n## Anti-filler rules — do NOT do any of these\n- **No pre-narration.** Don\'t say "I\'ll start by..." or "Let me first..." — just do the work. The user sees the tool chips fire in real time; describing them ahead of time is noise.\n- **No "I\'ll let you know if I find anything."** Actually find it. Then tell. If a check came up clean, say so in one sentence — don\'t promise future updates.\n- **No apologies.** If you made an error, acknowledge it in ONE sentence and move on with the corrected action.\n- **No "Let me know if you have any questions" sign-offs.** End on the result or the next action you recommend.\n- **No "Got it" / "I see" / "Sure!" openers.** Lead with the answer or the first action.\n- **No restating the user\'s request back to them** before answering. Start with what you found / did.'
   }
-  // The estimating playbook (ag_estimate_structure / ag_role / ag_tools /
-  // ag_slotting / ag_pricing / ag_auto_reads / ag_web_research),
-  // WIP-analyst playbook (job_role / job_web_research), directory
-  // playbook (hr_*), and CoS playbook (cos_*) are now embedded INLINE
-  // in their respective staff agent baselines in admin-agents-routes.js
-  // (86-estimator / 86-pm / 86-directory). The Principal is a router
-  // and doesn't carry domain playbooks; only ag_identity + ag_tone
-  // remain here as admin-editable overlays on the Principal's system.
+  // The Principal carries identity + tone here. Domain heuristics are
+  // not shipped by default — a fresh org has only identity built in.
+  // Custom orgs can add domain overlays via admin-editable section packs.
 };
 
 async function loadSectionOverridesFor(agentKey) {
@@ -4256,14 +4251,8 @@ async function buildJobContext(jobId, clientContext, aiPhase, organization, opts
   const wip = computeJobWIP(job, buildings, phases, changeOrders, subs, invoices);
 
   const lines = [];
-  // The WIP-analyst persona lives on the 86-pm staff agent. On the
-  // Principal's job surface, this header anchors the surface; the
-  // routing rule in the <active_staff> block below tells 86 to
-  // handoff_to_pm for analysis. Keep a short surface label so the
-  // model knows which entity is in focus without re-claiming the
-  // analyst role.
-  lines.push('## Job surface — read the snapshot below for one-shot facts. For audits, margin analysis, or any multi-step WIP work, route to handoff_to_pm.');
-  lines.push('');
+  // Job entity in focus this turn. Snapshot follows. For any write,
+  // emit an `emit_payload_file` targeting this job.
   lines.push('# Job');
   lines.push('- Title: ' + (job.title || job.jobName || '(untitled)'));
   if (job.jobNumber) lines.push('- Job number: ' + job.jobNumber);
@@ -4349,7 +4338,7 @@ async function buildJobContext(jobId, clientContext, aiPhase, organization, opts
   // after a write.
   if (buildings.length || phases.length) {
     lines.push('# Structure (buildings + phases with computed rollups)');
-    lines.push('Format per building: `<name> [<id>]` then 1 line per phase: `• [<phase_id>] <phase_name> · pct=N% · budget=$N · weight=N%`. The "Computed building pct" line at the bottom of each block is the budget-weighted average that drives the WIP page rollup. Use the bracketed phase ids when calling `set_phase_pct_complete` or `set_phase_field`.');
+    lines.push('Format per building: `<name> [<id>]` then 1 line per phase: `• [<phase_id>] <phase_name> · pct=N% · budget=$N · weight=N%`. The "Computed building pct" line at the bottom of each block is the budget-weighted average that drives the WIP page rollup. Use the bracketed phase ids when targeting phase updates via `emit_payload_file` (ops: { phase_updates: [...] }).');
     lines.push('');
 
     // Cap so very large jobs (20+ buildings) don't blow the context.
@@ -4431,13 +4420,13 @@ async function buildJobContext(jobId, clientContext, aiPhase, organization, opts
     lines.push('  – Setting `wire.pctComplete = 100` only affects ONE building\'s graph view (the wire\'s target).');
     lines.push('  – Setting the t1 node\'s own `pctComplete` is a no-op when there are wires; the rollup ignores it.');
     lines.push('');
-    lines.push('When the user says "set B1 to 100%": call `set_phase_pct_complete` with the BUILDING id (e.g. "b1") or t1 node id. The applier cascades to BOTH paths — every incoming t2/co wire gets its `pctComplete` set, AND every phase record with `buildingId=b1` gets its `pctComplete` set. The t1 node\'s own pct is left to the rollup. This is the only call that updates both the WIP page AND the graph in one shot.');
+    lines.push('When the user says "set B1 to 100%": emit a payload with `phase_updates` covering every phase whose buildingId is b1, setting pctComplete=100. The apply path cascades to both the WIP rollup and the graph wires that feed off those phases.');
     lines.push('');
     lines.push('Diagnostic checklist when a building % won\'t move:');
     lines.push('  1. Are there phase records linked to this building? If 0, the legacy rollup will show 0% no matter what you do at the t1 level. (Check the # Structure block.)');
     lines.push('  2. Are there orphan phases that should be linked? (Check the "Orphan phases" subsection above.)');
     lines.push('  3. Are wires set on the graph? If a t2 has a wire to a t1 with `allocPct=0`, that allocation contributes nothing.');
-    lines.push('  4. Did you write to `t1.pctComplete` directly? That field is ignored when wires/phases exist — write to phases or wires instead.');
+    lines.push('  4. Did the payload target `t1.pctComplete` directly? That field is ignored when wires/phases exist — target phases or wires via the payload ops instead.');
     lines.push('');
   }
 
@@ -4543,7 +4532,7 @@ async function buildJobContext(jobId, clientContext, aiPhase, organization, opts
       lines.push('# Node graph (' + nodes.length + ' nodes, ' + wires.length + ' wires)');
       lines.push('**This block is LIVE, not a snapshot.** It\'s rebuilt from the client on every user message AND every tool_use continuation. New nodes the user creates (or that you create via tools) WILL appear in the next turn — never tell the user "I can\'t see new nodes in real-time" or "you need to refresh the session." If a node was just added, it\'s in the list below this turn.');
       lines.push('Each node listed as: `[id=NODE_ID] TYPE "label" | value | %complete | budget`. Types: t1 = building, t2 = phase, sub = subcontractor cost, co = change order, po = purchase order, inv = invoice, wip = WIP rollup, watch = KPI display, note = sticky note.');
-      lines.push('**CRITICAL** — when calling `wire_nodes`, `assign_qb_line`, or any tool that takes a node id, pass the bracketed `id=` value from this list (e.g. `n_5`, NOT `"Painting - B31"`). Labels can include separator characters (›, /, etc.) and will not match. The client falls back to label lookup as a safety net but you should always send the real id.');
+      lines.push('**CRITICAL** — when emitting payload ops that reference a node id (graph wires, qb assignments, node-value updates), pass the bracketed `id=` value from this list (e.g. `n_5`, NOT `"Painting - B31"`). Labels can include separator characters (›, /, etc.) and will not match.');
       var sortedNodes = nodes.slice().sort(function(a, b) { return (a.type || '').localeCompare(b.type || ''); });
       sortedNodes.slice(0, 60).forEach(function(n) {
         var pct = (n.pctComplete != null && n.pctComplete > 0) ? ' | ' + Math.round(n.pctComplete) + '%' : '';
@@ -4663,15 +4652,12 @@ async function buildJobContext(jobId, clientContext, aiPhase, organization, opts
 
   } // <-- close the `if (!slimForRouter)` block opened above WIP snapshot
 
-  // Router-mode hint: explicitly tell 86 the analytics are absent on
-  // purpose, point at the staff. Without this prose the model might
-  // try to call read tools to reconstruct the data itself; we want it
-  // to handoff instead.
-  if (slimForRouter) {
-    lines.push('# Analytical data INTENTIONALLY OMITTED on this surface');
-    lines.push('The WIP snapshot, structure, node graph, workspace sheets, and QB cost data are NOT in this turn_context. That is by design — your job here is to ROUTE. If the user is asking for an audit, margin analysis, WIP review, billing audit, or any synthesis across the missing data: emit `handoff_to_pm` immediately. The PM staff has full access to all of it via its own read tools and the WIP-analyst playbook in its system. Trying to answer without the data will produce wrong numbers. Trying to call read tools yourself to reconstruct the snapshot is also wrong — those tools are no longer in your list. JUST HANDOFF.');
-    lines.push('');
-  }
+  // (Router-mode handoff hint retired 2026-05-21. Staff agents are
+  // background watchers only; there is no sync handoff. If the chat
+  // turn needs analytical data, 86 reads it itself via `read_entity`
+  // / `search_entities` and reasons inline. The slimForRouter flag
+  // is preserved on the signature so legacy callers don't break, but
+  // it no longer changes the prompt shipped to the model.)
 
   if (job.notes) {
     lines.push('# Job notes');
@@ -4690,31 +4676,12 @@ async function buildJobContext(jobId, clientContext, aiPhase, organization, opts
   // Skill packs ship as native Anthropic Skills registered on the
   // agent — the runtime auto-discovers them by description each turn.
 
-  // ── Active mode block ──────────────────────────────────────────
-  // Mirrors 86's plan/build pattern. Server-side tool filtering is the
-  // hard guard; this prompt block is the soft guard so the model
-  // doesn't dangle "I would have done X" — it just adapts.
-  lines.push('');
-  if (aiPhase === 'plan') {
-    lines.push('# CURRENT MODE: PLAN');
-    lines.push('You are in **Plan mode** — read-only analysis. Every write tool (set_phase_pct_complete, set_phase_field, set_node_value, assign_qb_line, create_node, delete_node) has been removed from your tool list this turn, so you literally cannot call them.');
-    lines.push('In Plan mode you SHOULD:');
-    lines.push('  - Run reads, audit data, surface gaps and risks, propose what changes WOULD fix them.');
-    lines.push('  - When your analysis surfaces an action you\'d need to take but can\'t (e.g. "B1 has cost data but pctComplete=0"), call `request_edit_mode` with a short rationale + the bullet list of writes you\'d make. The PM gets an approval card; on approve, the next turn opens with full write access.');
-    lines.push('  - Do NOT write the planned actions out as fake tool calls or as placeholder JSON. Just describe them in prose so the user can decide.');
-  } else {
-    lines.push('# CURRENT MODE: BUILD');
-    lines.push('You are in **Build mode** — full tool access. The PM has explicitly granted writes for this session (or has the panel pinned in Build). Make changes confidently when the data supports them, but every write still goes through the per-tool approval card so the PM can veto.');
-    lines.push('Reminder: prefer one focused edit per tool call (each becomes its own approval card). Building % complete cascades to every phase under that building — call that out in your rationale when you use it.');
-    lines.push('');
-    lines.push('## Authoritative tool list (overrides any older skill-pack guidance)');
-    lines.push('Your live tool list this turn is the source of truth — IGNORE any skill-pack instruction that says you "cannot create nodes" or "must tell the user to drop a node manually." Those are stale. `create_node` and `delete_node` are working tools and you should use them when the situation calls for it (e.g. user asks to add a sub node for a vendor, or asks you to remove an obsolete legacy node). Each one still routes through the approval card so the PM can veto.');
-    lines.push('When you have 5+ QB lines that all map cleanly to nodes, prefer `assign_qb_lines_bulk` (one card) over many individual `assign_qb_line` calls.');
-    lines.push('When a CO has $0 cost loaded but the audit suggests it should have a real number, propose `set_co_field` with field=estimatedCosts — that\'s the canonical fix.');
-    lines.push('');
-    lines.push('## Schema notes (so you don\'t propose tools that can\'t exist)');
-    lines.push('Buildings store ONLY {id, jobId, name, budget, address}. They do NOT have materials / labor / sub / equipment dollar fields — those live on phase records (which carry buildingId). There is no `set_building_field` tool because the cost data lives one layer down. To "set materials cost on B1," update the phase under B1 with `set_phase_field`, OR allocate via the relevant cost-bucket node with `set_node_value`.');
-  }
+  // (Plan/Build mode prose retired 2026-05-21. The old set_phase_*,
+  // set_node_value, assign_qb_line, create_node tools have all been
+  // replaced by the universal emit_payload_file primitive. Mode-
+  // gating now lives at the tool-allowlist layer, not in prompt
+  // prose. aiPhase is still computed for the session record but it
+  // no longer changes the turn context shipped to 86.)
 
   // Job side stays plain — single string. Lower volume than estimate / directory so
   // the marginal caching benefit isn't worth the structural complexity.
