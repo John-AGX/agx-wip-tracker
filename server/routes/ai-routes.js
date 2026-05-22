@@ -1901,45 +1901,14 @@ async function buildEstimateContext(estimateId, includePhotos, aiPhaseOverride, 
     });
   }
 
-  // ─── STABLE PLAYBOOK (cached prefix — legacy direct-API only) ──────
-  // Section overrides loaded first so each named block can be admin-
-  // replaced via a skill pack with `replaces_section` set. See
-  // SECTION_DEFAULTS for the registry.
-  //
-  // IMPORTANT (token cost): for the V2 unified /86/chat path, the
-  // SECTION_DEFAULTS bodies are also baked into AGENT_SYSTEM_BASELINE
-  // via composedAgentSystem() at agent-registration / sync time, so the
-  // registered Anthropic agent already carries them in its persistent
-  // system prompt — and /86/chat skips this stable block when
-  // serializing the turn (see ctxDynamicText). The block is still built
-  // here because legacy /estimates/:id/chat + /v2/estimates/:id/chat
-  // paths use the direct messages API where the system array with
-  // cache_control still gives the 10% cache_read pricing. Once those
-  // legacy paths are retired we can stop building stableLines entirely.
-  const sectionOverrides = await loadSectionOverridesFor('job');
-  renderSection(stableLines, 'ag_identity', sectionOverrides);
-  stableLines.push('');
-  renderSection(stableLines, 'ag_estimate_structure', sectionOverrides);
-  stableLines.push('');
-  renderSection(stableLines, 'ag_role', sectionOverrides);
-  stableLines.push('');
-  renderSection(stableLines, 'ag_tools', sectionOverrides);
-  stableLines.push('');
-  renderSection(stableLines, 'ag_slotting', sectionOverrides);
-  stableLines.push('');
-  renderSection(stableLines, 'ag_pricing', sectionOverrides);
-  stableLines.push('');
-  renderSection(stableLines, 'ag_auto_reads', sectionOverrides);
-  stableLines.push('');
-  renderSection(stableLines, 'ag_web_research', sectionOverrides);
-  stableLines.push('');
-
-  // Skill packs ship as native Anthropic Skills registered on the
-  // agent — the runtime auto-discovers them by description each turn.
-  // No system-prompt manifest, no load_skill_pack round-trip.
-
-  // Tone — overridable via section_id `ag_tone`. See SECTION_DEFAULTS.
-  renderSection(stableLines, 'ag_tone', sectionOverrides);
+  // (Stable playbook block retired 2026-05-22 — was rendering 9 named
+  // section overlays (ag_identity, ag_estimate_structure, ag_role,
+  // ag_tools, ag_slotting, ag_pricing, ag_auto_reads, ag_web_research,
+  // ag_tone). Identity now lives entirely in the agent's registered
+  // baseline; no per-turn re-shipping. stableLines stays as an empty
+  // array so the dual-block system: [stable, dynamic] shape is
+  // preserved for the few legacy direct-API callers that still
+  // expect it.)
 
   // ─── ASSEMBLE ──────────────────────────────────────────────────────
   // System param goes out as an array of two text blocks. The first is
@@ -2066,91 +2035,15 @@ function filterToolsForJobPhase(tools, phase) {
 // pack-trigger evaluation. The functions had zero callers post-
 // migration; deleted in the system audit cleanup.
 
-// ──────────────────────────────────────────────────────────────────
-// Section-override mechanism — admin can replace specific named blocks
-// of the stable prefix without touching code. Each replaceable block
-// has a stable section_id, a default body, and a description for the
-// admin UI. Skill packs with `replaces_section: <id>` substitute their
-// body for that block's default at render time. Falls back to default
-// when no override exists.
-//
-// To add a new replaceable block:
-//   1. Add an entry to SECTION_DEFAULTS below with default body text.
-//   2. In the relevant buildXContext function, replace the inline
-//      stableLines.push(...) calls with renderSection(stableLines,
-//      agentKey, sectionId, overrides).
-// ──────────────────────────────────────────────────────────────────
-const SECTION_DEFAULTS = {
-  ag_identity: {
-    agent: 'job',
-    description: "Who 86 is. Edit when platform positioning changes.",
-    body: '# Who you are\nYou are 86 — the operations agent for this organization. Project 86 is a SaaS platform for construction-services businesses; the org you currently serve is described in the org identity block.\n\nOne agent, one tool surface — every action available everywhere. There is no "surface", no "page mode", no "staff routing". Whatever the user asks for, you read the data, you reason about it, and you emit a single `emit_payload_file` for any change. The user reviews the file in the sidebar and drags it into the dropbox to apply.'
-  },
-  ag_tone: {
-    agent: 'job',
-    description: "86's tone and style preferences. Edit when the agent feels too corporate, too terse, or too verbose.",
-    body: '# Tone\n- Concise. Trade vocabulary welcome. Short prose lead-in, the payload, a one-line wrap-up. If you need one piece of info to answer well, ask one targeted question first.\n\n## Anti-filler rules — do NOT do any of these\n- **No pre-narration.** Don\'t say "I\'ll start by..." or "Let me first..." — just do the work. The user sees the tool chips fire in real time; describing them ahead of time is noise.\n- **No "I\'ll let you know if I find anything."** Actually find it. Then tell. If a check came up clean, say so in one sentence — don\'t promise future updates.\n- **No apologies.** If you made an error, acknowledge it in ONE sentence and move on with the corrected action.\n- **No "Let me know if you have any questions" sign-offs.** End on the result or the next action you recommend.\n- **No "Got it" / "I see" / "Sure!" openers.** Lead with the answer or the first action.\n- **No restating the user\'s request back to them** before answering. Start with what you found / did.'
-  }
-  // The Principal carries identity + tone here. Domain heuristics are
-  // not shipped by default — a fresh org has only identity built in.
-  // Custom orgs can add domain overlays via admin-editable section packs.
-};
-
-async function loadSectionOverridesFor(agentKey) {
-  try {
-    const { rows } = await pool.query(
-      `SELECT value FROM app_settings WHERE key = 'agent_skills'`
-    );
-    if (!rows.length) return { __mirroredSections: new Set() };
-    const cfg = rows[0].value || {};
-    const skills = Array.isArray(cfg.skills) ? cfg.skills : [];
-    const result = {};
-    // Sections whose source pack has already been mirrored as a
-    // native Anthropic Skill. renderSection skips those entirely so
-    // the system prompt doesn't double-ship content the agent now
-    // auto-discovers via Anthropic's Skills mechanism. Set is empty
-    // until section-override packs (replaces_section) start being
-    // mirrored — the current mirror-all path only handles on-demand
-    // packs in org_skill_packs.
-    const mirroredSections = new Set();
-    skills.forEach(s => {
-      if (!s || !s.replaces_section) return;
-      if (!Array.isArray(s.agents) || s.agents.indexOf(agentKey) < 0) return;
-      if (s.anthropic_skill_id) {
-        mirroredSections.add(s.replaces_section);
-        return;
-      }
-      if (!s.body) return;
-      // Last write wins if two packs target the same section. Admin UI
-      // should warn before saving such a config.
-      result[s.replaces_section] = s.body;
-    });
-    // Smuggle the mirrored set through on a special key so the
-    // function signature stays a plain { section_id: body } map for
-    // existing callers that only consume bodies.
-    result.__mirroredSections = mirroredSections;
-    return result;
-  } catch (e) {
-    console.error('loadSectionOverridesFor error:', e);
-    return { __mirroredSections: new Set() };
-  }
-}
-
-// Append a named section to the stable-prefix lines array. Uses an
-// override body if one exists, otherwise the default from
-// SECTION_DEFAULTS. Skips entirely when the section's source pack
-// has been mirrored to a native Anthropic Skill — the agent
-// auto-discovers the skill at chat time, so re-shipping the body
-// here would just double-bill the tokens. No-op if neither exists.
-function renderSection(stableLines, sectionId, overrides) {
-  if (overrides && overrides.__mirroredSections && overrides.__mirroredSections.has(sectionId)) {
-    return;
-  }
-  const override = overrides && overrides[sectionId];
-  if (override) { stableLines.push(override); return; }
-  const def = SECTION_DEFAULTS[sectionId];
-  if (def && def.body) stableLines.push(def.body);
-}
+// (Retired 2026-05-22 — `SECTION_DEFAULTS`, `loadSectionOverridesFor`,
+// and `renderSection` implemented an admin-editable layered prompt
+// where named blocks (`ag_identity`, `ag_tone`, etc.) could be
+// substituted with skill packs carrying `replaces_section: <id>`.
+// Per architecture pivot: one agent, one baseline, no overlays.
+// The baseline string in admin-agents-routes.js is the only
+// identity source. Section packs in `app_settings.agent_skills`
+// are ignored by the runtime; admin UI no longer exposes the
+// editor. The whole machinery is gone — see commit history.)
 
 // Load a photo's web variant from storage and return an Anthropic image
 // content block. Returns null on read failure rather than throwing so a
@@ -2606,77 +2499,30 @@ async function buildTurnContext({ entityType, entityId, clientContext, aiPhase, 
 // cache_creation tokens per turn. Admins changing a section override
 // or baseline need to POST /managed/sync-all to push the new system.
 async function composedAgentSystem(agentKey, baseline, org) {
-  // Staff agents (86-*) get their baseline verbatim — playbooks are
-  // embedded inline in the baseline string (admin-agents-routes.js
-  // AGENT_SYSTEM_BASELINE). No section composition for staff.
+  // 2026-05-22 — section overlay machinery retired. One agent, one
+  // baseline. Layered ag_identity / ag_tone / ag_role / etc. section
+  // composition is gone (`SECTION_DEFAULTS`, `renderSection`,
+  // `loadSectionOverridesFor` all removed). The baseline string IS
+  // the agent's identity. The only org-level concession this function
+  // still makes is:
+  //   1. Append `org.identity_body` (per-tenant "who 86 works FOR" body)
+  //   2. Append the live reference-links block (sheets/sharepoint)
+  // Both are optional; missing → just the baseline ships.
   if (agentKey !== 'job') return baseline;
   try {
-    // Router mode is the default — the baseline string IS the router
-    // baseline (no more "you do everything" legacy prose, no
-    // PLATFORM_FLAG conditional). Anything Principal-specific lives
-    // in AGENT_SYSTEM_BASELINE['job'].
-    let parts = [baseline];
-    // Org-level identity_body — describes who 86 is working FOR.
-    // Phase 2a moved AGX-specific prose out of the baseline; this
-    // is where it lands back into the agent's registered system
-    // prompt. Each tenant's agent registration carries its own
-    // identity_body so the same platform baseline can be re-used.
+    const parts = [baseline];
     if (org && org.identity_body && org.identity_body.trim()) {
       parts.push(String(org.identity_body).trim());
     }
-    // Estimating playbook — SECTION_DEFAULTS, admin-overridable.
-    const sectionOverrides = await loadSectionOverridesFor('job');
-    // Router-mode Principal: only universal-identity and tone sections.
-    // The estimating / WIP / directory playbooks live in their staff
-    // baselines (admin-agents-routes.js AGENT_SYSTEM_BASELINE), not
-    // on the Principal.
-    const sectionIds = ['ag_identity', 'ag_tone'];
-    const sectionLines = [];
-    for (const id of sectionIds) {
-      const buf = [];
-      renderSection(buf, id, sectionOverrides);
-      if (buf.length) {
-        sectionLines.push(...buf, '');
-      }
-    }
-    if (sectionLines.length) {
-      parts.push('# Estimating playbook\n\n' + sectionLines.join('\n'));
-    }
-
-    // On-demand reference data — lookup-mode sheets and attachment
-    // images don't ride along every turn. This short note tells 86
-    // about the tools so it knows to reach for them instead of
-    // pretending the data doesn't exist.
-    parts.push(
-      '# On-demand reference data\n\n' +
-      '- **Reference sheets** (Job Numbers, Client Short Names, WIP, etc.) live in `search_reference_sheet`. Call it whenever the user mentions a job number, community name, or anything else that would map to a row in those sheets. With no args it lists the available sheets; with `query` it substring-scans them. Use it BEFORE guessing an id.\n' +
-      '- **Attachment images** are listed in the per-turn manifest (filename + id + size). They are NOT auto-attached as vision tokens — call `view_attachment_image({attachment_id})` only on the specific photo you need to actually look at. Each image costs vision tokens; pull just what the question requires.\n' +
-      '- **Document bodies** stay out of the manifest preview past 200 chars — call `read_attachment_text({attachment_id})` for the full PDF / Excel / Word body.'
-    );
-
-    // Reference-links block (SharePoint / Google Sheets refreshed every
-    // 15 min into agent_reference_links.last_fetched_text). PRE-FIX:
-    // this was injected into every user.message turn, costing ~15k
-    // cache_creation tokens per turn (no cache hit because it landed
-    // AFTER the user-message cache breakpoint). POST-FIX: bake it into
-    // the agent's registered system prompt so Anthropic caches it.
-    // The 15-min refresh tick re-syncs the agent only when the content
-    // has actually changed (see syncAgentIfReferenceChanged in
-    // admin-agents-routes.js).
     try {
       const adminAgents = require('./admin-agents-routes');
       if (typeof adminAgents.buildReferenceLinksBlock === 'function' && org && org.id) {
-        // Phase D: per-org reference links — pass the org id so the
-        // composed prompt only carries this tenant's inline sheets.
         const refBlock = await adminAgents.buildReferenceLinksBlock(org.id);
-        if (refBlock && refBlock.trim()) {
-          parts.push(refBlock.trim());
-        }
+        if (refBlock && refBlock.trim()) parts.push(refBlock.trim());
       }
     } catch (e) {
       console.warn('[composedAgentSystem] reference-links injection skipped:', e.message);
     }
-
     return parts.join('\n\n');
   } catch (e) {
     console.warn('[composedAgentSystem] failed, falling back to bare baseline:', e.message);
@@ -2685,12 +2531,8 @@ async function composedAgentSystem(agentKey, baseline, org) {
 }
 
 // Diagnostic mirror of composedAgentSystem — returns a per-part
-// breakdown { total_chars, total_joined_chars, parts: [{name,
-// chars}] } instead of a joined string. Used by the admin
-// prompt-audit endpoint so the registered system prompt's
-// composition is observable without re-implementing the
-// composition logic in two places. Any update to composedAgentSystem
-// MUST also update this function or the audit numbers drift.
+// breakdown so the admin prompt-audit endpoint can show what's in the
+// registered system prompt. Mirrors composedAgentSystem's parts list.
 async function composedAgentSystemBreakdown(agentKey, baseline, org) {
   const parts = [];
   function record(name, text) {
@@ -2698,7 +2540,7 @@ async function composedAgentSystemBreakdown(agentKey, baseline, org) {
     parts.push({ name: name, chars: String(text).length });
   }
   if (agentKey !== 'job') {
-    record('baseline (legacy passthrough)', baseline);
+    record('baseline (staff passthrough)', baseline);
     return _finalizeBreakdown(parts);
   }
   try {
@@ -2706,42 +2548,6 @@ async function composedAgentSystemBreakdown(agentKey, baseline, org) {
     if (org && org.identity_body && org.identity_body.trim()) {
       record('org.identity_body', String(org.identity_body).trim());
     }
-    const sectionOverrides = await loadSectionOverridesFor('job');
-    const sectionIds = [
-      'ag_identity',
-      'ag_estimate_structure',
-      'ag_role',
-      'ag_tools',
-      'ag_slotting',
-      'ag_pricing',
-      'ag_auto_reads',
-      'ag_web_research',
-      'ag_tone'
-    ];
-    let playbookText = '';
-    for (const id of sectionIds) {
-      const buf = [];
-      renderSection(buf, id, sectionOverrides);
-      const sectionText = buf.join('\n');
-      // Record EACH section individually so the admin can see
-      // which one is the biggest contributor. The composed string
-      // groups them under a single "# Estimating playbook" heading
-      // for the model, but the audit cares about per-section size.
-      record('section: ' + id, sectionText);
-      if (sectionText) playbookText += sectionText + '\n';
-    }
-    // The "# Estimating playbook" heading wrapper is a constant
-    // ~25 chars when sections exist; record so the breakdown sums
-    // match composedAgentSystem's actual output.
-    if (playbookText) record('playbook heading wrapper', '# Estimating playbook\n\n');
-
-    const onDemandRefNote =
-      '# On-demand reference data\n\n' +
-      '- **Reference sheets** (Job Numbers, Client Short Names, WIP, etc.) live in `search_reference_sheet`. Call it whenever the user mentions a job number, community name, or anything else that would map to a row in those sheets. With no args it lists the available sheets; with `query` it substring-scans them. Use it BEFORE guessing an id.\n' +
-      '- **Attachment images** are listed in the per-turn manifest (filename + id + size). They are NOT auto-attached as vision tokens — call `view_attachment_image({attachment_id})` only on the specific photo you need to actually look at. Each image costs vision tokens; pull just what the question requires.\n' +
-      '- **Document bodies** stay out of the manifest preview past 200 chars — call `read_attachment_text({attachment_id})` for the full PDF / Excel / Word body.';
-    record('on-demand reference note', onDemandRefNote);
-
     try {
       const adminAgents = require('./admin-agents-routes');
       if (typeof adminAgents.buildReferenceLinksBlock === 'function' && org && org.id) {
@@ -2750,12 +2556,8 @@ async function composedAgentSystemBreakdown(agentKey, baseline, org) {
           record('reference-links block (inline rows)', refBlock.trim());
         }
       }
-    } catch (e) {
-      // Match composedAgentSystem's defensive skip.
-    }
+    } catch (e) { /* match composedAgentSystem's defensive skip */ }
   } catch (e) {
-    // Match composedAgentSystem's defensive fallback — the audit
-    // surfaces an error part so the admin sees the failure mode.
     record('error: composition failed', String(e && e.message || e));
   }
   return _finalizeBreakdown(parts);
@@ -5642,24 +5444,11 @@ async function buildClientDirectoryContext(organization) {
   const omittedParentCount = truncated ? sortedParents.length - parents.length : 0;
   const flatTopLevel = parents.filter(p => !childrenByParent.has(p.id));
 
-  // Directory turn context — dynamic snapshot only. Identity + tone
-  // live in 86's baseline; the section-overlay renders below are
-  // admin-editable knobs that no-op when no override is configured.
-  // (Pre-2026-05-21 this function shipped a 1500-token "You are 86
-  // in Client Directory mode…" preamble on every directory chat turn,
-  // which duplicated the baseline AND leaked "mode" vocabulary.)
+  // Directory turn context — dynamic snapshot only. Identity lives in
+  // 86's baseline. (Pre-2026-05-22 this builder rendered nine `hr_*`
+  // section overlays from the now-retired SECTION_DEFAULTS system.)
   const stable = [];
   const out = []; // dynamic directory snapshot
-  const hrSectionOverrides = await loadSectionOverridesFor('cra');
-  renderSection(stable, 'hr_about_agx', hrSectionOverrides);
-  renderSection(stable, 'hr_hierarchy', hrSectionOverrides);
-  renderSection(stable, 'hr_field_semantics', hrSectionOverrides);
-  renderSection(stable, 'hr_bt_patterns', hrSectionOverrides);
-  renderSection(stable, 'hr_dedup_rules', hrSectionOverrides);
-  renderSection(stable, 'hr_behavior', hrSectionOverrides);
-  renderSection(stable, 'hr_web_research', hrSectionOverrides);
-  renderSection(stable, 'hr_tool_tiers', hrSectionOverrides);
-  renderSection(stable, 'hr_photos', hrSectionOverrides);
 
   // Skill packs — manifest only. 86 can call load_skill_pack({name})
   // to pull a body on demand. The `alwaysOn` flag is no longer
@@ -5809,7 +5598,7 @@ const STAFF_TOOLS = [
     name: 'read_skill_packs',
     tier: 'auto',
     description:
-      'List the admin-editable skill packs that 86 loads at chat time. Each pack has a name, body (instructions), agent assignments (which surface — "job" for 86 generally, "cra" for the directory surface — load it), and an alwaysOn flag. Use this to recommend new skills, audit existing ones for staleness, or answer "what context does 86 always see?".',
+      'List the admin-editable skill packs registered for this org. Each pack has a name, body, and agent assignments. Use this for self-introspection or to answer "what context does 86 always see?".',
     input_schema: {
       type: 'object',
       additionalProperties: false,
@@ -6344,10 +6133,7 @@ function slugifyMirrorName(s) {
 function buildSkillMarkdownForMirror(pack) {
   const slug = slugifyMirrorName(pack.name);
   const human = (pack.name || 'Project 86 skill').replace(/[\r\n]/g, ' ');
-  const desc = (pack.replaces_section
-    ? 'Section override for ' + pack.replaces_section
-    : (pack.category ? 'Category: ' + pack.category : human)
-  ).replace(/[\r\n]/g, ' ');
+  const desc = (pack.category ? 'Category: ' + pack.category : human).replace(/[\r\n]/g, ' ');
   return [
     '---',
     'name: ' + slug,
@@ -10122,18 +9908,10 @@ router.post('/exec-tool', requireAuth, requireCapability('ESTIMATES_VIEW'), asyn
 // Internals exposed for sibling modules (eval harness in
 // admin-agents-routes). NOT for general use — these bypass the
 // streaming + auth flow that production 86 depends on.
-// List of admin-overridable named sections per agent. Returned by
-// /api/admin/agents/sections so the skill-pack editor can render a
-// "Replaces section" dropdown with descriptions + default bodies.
-function sectionsForAgent(agentKey) {
-  const out = [];
-  Object.keys(SECTION_DEFAULTS).forEach(id => {
-    const def = SECTION_DEFAULTS[id];
-    if (def && def.agent === agentKey) {
-      out.push({ id, description: def.description || '', body: def.body || '' });
-    }
-  });
-  return out;
+// Retired 2026-05-22 — the section-overlay editor is gone. Returns
+// an empty list so any stale admin caller doesn't 500.
+function sectionsForAgent(_agentKey) {
+  return [];
 }
 
 // ══════════════════════════════════════════════════════════════════════

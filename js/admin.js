@@ -2456,25 +2456,10 @@
           '</label>';
         });
         html += '</div>';
-        // "Replaces section" dropdown — when set, the pack body substitutes
-        // for a named block in the agent's stable prefix instead of being
-        // appended at the end. Options come from the agent(s) checked above.
-        // Show only sections whose .agent matches at least one selected agent.
-        var sectionOpts = '<option value="">(append at end — default)</option>';
-        var seenIds = {};
-        agents.forEach(function(a) {
-          var list = _overridableSections[a] || [];
-          list.forEach(function(s) {
-            if (seenIds[s.id]) return;
-            seenIds[s.id] = true;
-            var sel = (skill.replaces_section === s.id) ? ' selected' : '';
-            sectionOpts += '<option value="' + escapeAttr(s.id) + '"' + sel + '>' + escapeHTML(s.id) + ' — ' + escapeHTML(s.description) + '</option>';
-          });
-        });
-        html += '<div style="margin-bottom:8px;font-size:11px;color:var(--text-dim,#aaa);">' +
-          '<label style="display:block;margin-bottom:3px;text-transform:none !important;letter-spacing:normal !important;font-weight:400 !important;">Replaces section <span style="color:var(--text-dim,#666);">(optional — overrides a named block of the agent\'s stable prefix instead of appending)</span></label>' +
-          '<select data-skill-replaces="' + idx + '" style="width:100%;font-size:12px;padding:5px 8px;font-family:\'SF Mono\',monospace;">' + sectionOpts + '</select>' +
-        '</div>';
+        // (Replaces-section dropdown retired 2026-05-22 — the layered
+        // section-overlay system is gone. Skill packs ship as native
+        // Anthropic Skills only; they no longer substitute for named
+        // blocks of the baseline.)
 
         // Category + Triggers row — categorize packs (purely metadata
         // for organization) and conditionally load via simple triggers.
@@ -2511,18 +2496,14 @@
     _skillsDraft.skills.forEach(function(skill, idx) {
       var nameEl = document.querySelector('[data-skill-name="' + idx + '"]');
       var bodyEl = document.querySelector('[data-skill-body="' + idx + '"]');
-      var replacesEl = document.querySelector('[data-skill-replaces="' + idx + '"]');
       if (nameEl) skill.name = nameEl.value;
       if (bodyEl) skill.body = bodyEl.value;
       // alwaysOn intentionally not read — checkbox removed, runtime
       // doesn't consult the flag anyway. Existing JSONB rows that
-      // still have the field set are harmless.
-      if (replacesEl) {
-        // Empty option = append-at-end mode; clear the field.
-        var v = replacesEl.value || '';
-        if (v) skill.replaces_section = v;
-        else delete skill.replaces_section;
-      }
+      // still have the field set are harmless. `replaces_section`
+      // likewise no longer persisted — the layered overlay system
+      // is retired. Stale values on existing rows are ignored.
+      delete skill.replaces_section;
       var catEl = document.querySelector('[data-skill-category="' + idx + '"]');
       if (catEl) {
         var c = catEl.value || '';
