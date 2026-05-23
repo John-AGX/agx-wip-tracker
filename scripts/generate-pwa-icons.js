@@ -41,19 +41,31 @@ if (!fs.existsSync(OUT_DIR)) fs.mkdirSync(OUT_DIR, { recursive: true });
 
 async function render(name, size, opts) {
   opts = opts || {};
-  const safeZone = opts.maskable ? 0.7 : 0.9; // 70% for maskable, 90% otherwise
+  // Safe-zone padding:
+  //   - maskable: 70% (OS-mask shapes can crop the outer 10-15%)
+  //   - opaque (iOS / Windows): 90% — modest padding for breathing room
+  //   - transparent: 90% — same padding, but compositing on alpha=0
+  const safeZone = opts.maskable ? 0.7 : 0.9;
   const innerSize = Math.round(size * safeZone);
   const inner = await sharp(svgBuffer)
     .resize(innerSize, innerSize, { fit: 'contain', background: BG })
     .png()
     .toBuffer();
 
+  // opaque=true bakes in the dark theme background. Used for
+  // apple-touch-icon (iOS draws white behind transparent icons,
+  // which would put a cyan cube on glaring white — off-brand) and
+  // the maskable variant (needs solid bg so OS mask crops cleanly).
+  // The 192/512 "any" purpose icons stay transparent so Android
+  // launchers can apply their own theming.
+  const opaque = !!(opts.maskable || opts.opaqueBg);
+
   const final = await sharp({
     create: {
       width: size,
       height: size,
       channels: 4,
-      background: opts.maskable ? BG : { r: 0, g: 0, b: 0, alpha: 0 }
+      background: opaque ? BG : { r: 0, g: 0, b: 0, alpha: 0 }
     }
   })
     .composite([{ input: inner, gravity: 'center' }])
@@ -63,17 +75,18 @@ async function render(name, size, opts) {
   const outPath = path.join(OUT_DIR, name);
   fs.writeFileSync(outPath, final);
   const sizeKb = (final.length / 1024).toFixed(1);
-  console.log('  ✓ ' + name + ' (' + size + 'px, ' + sizeKb + ' KB)');
+  console.log('  ✓ ' + name + ' (' + size + 'px, ' + sizeKb + ' KB)' +
+    (opaque ? ' [opaque bg]' : ''));
 }
 
 (async function () {
   console.log('Generating PWA icons from ' + path.relative(ROOT, SRC) + '...');
   await render('favicon-32.png', 32);
-  await render('icon-144.png', 144);
-  await render('apple-touch-icon.png', 180);
-  await render('icon-192.png', 192);
-  await render('icon-512.png', 512);
-  await render('icon-maskable-512.png', 512, { maskable: true });
+  await render('icon-144.png', 144, { opaqueBg: true });        // Windows tile — needs solid bg
+  await render('apple-touch-icon.png', 180, { opaqueBg: true }); // iOS — opaque or you get white bg
+  await render('icon-192.png', 192);                              // Android "any" — transparent OK
+  await render('icon-512.png', 512);                              // Android "any" — transparent OK
+  await render('icon-maskable-512.png', 512, { maskable: true }); // Maskable — bg required, 70% safe-zone
   console.log('Done. Output in ' + path.relative(ROOT, OUT_DIR) + '/');
 })().catch((e) => {
   console.error('Icon generation failed:', e.message);
