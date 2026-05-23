@@ -5539,24 +5539,79 @@
     return { det: det, sum: sum };
   }
 
+  // ─────────────────────────────────────────────────────────────────
+  // Live tool chips — single + grouped (consecutive same-name) variants.
+  //
+  // Single chip: tool_started creates a <details> with a pulsing yellow
+  // dot; matching tool_applied/_failed/_rejected swaps the dot to
+  // green/red/grey and may attach an expandable result body.
+  //
+  // Grouped chip: when a tool_started arrives whose name matches the
+  // PREVIOUSLY-FINALIZED chip, we promote that prior chip to a grouped
+  // layout instead of appending a new <details>. The body becomes a
+  // vertical list of sub-rows (one per call); the summary shows the
+  // running count ("Searched · 5 calls"). Avoids the wall-of-chips
+  // problem when 86 fires N same-name lookups (e.g. batched material
+  // searches before the filters[] feature). Tools that produce
+  // bespoke artifacts (emit_payload_file) never reach this path — they
+  // short-circuit upstream in the SSE handler.
+  // ─────────────────────────────────────────────────────────────────
+
   // Append a "live" chip when a tool starts. Returns a handle the
   // caller stashes; the matching tool_applied/_failed/_rejected calls
-  // updateLiveChip on the same handle so the chip transitions in
+  // finalizeLiveToolChip on the same handle so the chip transitions in
   // place ("Reading file.ts" → "Read file.ts · 12 lines") rather
-  // than stacking a second line.
+  // than stacking a second line. If the previous finalized chip on
+  // this streamDiv has the same tool name, we promote/extend instead
+  // of appending — returns a handle pointing at the grouped chip
+  // with .activeRow set to the new running sub-row.
   function appendLiveToolChip(streamDiv, name, input) {
     if (!streamDiv) return null;
+    // Grouping check — only promote when:
+    //   - there's a prior finalized chip on this stream
+    //   - its tool name matches the new one
+    //   - the prior chip wasn't already an artifact-renderer (e.g.
+    //     emit_payload_file never lands here since it short-circuits
+    //     upstream, but defensive check anyway)
+    var prev = streamDiv._lastChipHandle;
+    if (prev && prev.finalized && prev.name === name && name !== 'emit_payload_file') {
+      return startGroupedSubRow(prev, name, input);
+    }
+    // Fresh single chip.
     var shell = buildChipShell(streamDiv);
     renderChipSummary(shell.sum, name, input, '', 'running');
-    return { det: shell.det, sum: shell.sum, name: name, input: input };
+    var handle = {
+      det: shell.det,
+      sum: shell.sum,
+      name: name,
+      input: input,
+      finalized: false,
+      isGrouped: false,
+      // Set when grouped — points at the <div> holding sub-rows + the
+      // currently-running sub-row element.
+      subRowContainer: null,
+      activeRow: null,
+      count: 0
+    };
+    streamDiv._lastChipHandle = handle;
+    return handle;
   }
 
   function finalizeLiveToolChip(handle, name, input, text, state) {
     if (!handle || !handle.sum) return;
+    if (handle.isGrouped && handle.activeRow) {
+      // Finalize the running sub-row in place.
+      renderGroupedSubRow(handle.activeRow, name, input || handle.input, text, state);
+      handle.count++;
+      handle.activeRow = null;
+      handle.finalized = true;
+      updateGroupedSummary(handle, name, handle.count, state);
+      return;
+    }
+    // Single-chip finalize: same as the original path.
     renderChipSummary(handle.sum, name, input || handle.input, text, state);
     var body = String(text || '');
     if (body) {
-      // Remove any prior pre in case we're re-finalizing.
       var existing = handle.det.querySelector('[data-chip-body]');
       if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
       var pre = document.createElement('div');
@@ -5570,6 +5625,101 @@
       pre.textContent = body;
       handle.det.appendChild(pre);
     }
+    handle.finalized = true;
+    // Stash the args + result on the handle so promoteToGroup (if the
+    // next call hits) can move them into the first sub-row.
+    handle.lastInput = input || handle.input;
+    handle.lastText = body;
+    handle.lastState = state || 'ok';
+  }
+
+  // Promote a previously-single chip to grouped layout. Migrates its
+  // existing body into the first sub-row, then prepares for the next
+  // sub-row to be appended by the caller.
+  function promoteToGroup(handle) {
+    if (handle.isGrouped) return;
+    handle.isGrouped = true;
+    // Build a vertical container for the sub-rows.
+    var container = document.createElement('div');
+    container.setAttribute('data-grouped-subrows', '1');
+    container.style.cssText =
+      'margin:6px 0 0 16px;display:flex;flex-direction:column;gap:3px;';
+    // First sub-row = whatever the chip showed as a single. The
+    // existing [data-chip-body] pre (if any) holds the text; the
+    // summary args came from handle.lastInput.
+    var existingBody = handle.det.querySelector('[data-chip-body]');
+    if (existingBody && existingBody.parentNode) {
+      existingBody.parentNode.removeChild(existingBody);
+    }
+    var firstRow = buildGroupedSubRow(handle.name, handle.lastInput, handle.lastText, handle.lastState || 'ok');
+    container.appendChild(firstRow);
+    handle.subRowContainer = container;
+    handle.det.appendChild(container);
+    handle.count = 1; // the migrated original counts as the first call
+  }
+
+  // Start a new running sub-row inside a (possibly newly-promoted)
+  // group. Returns the same handle (the caller treats it as the
+  // active live chip for the duration of the in-flight tool).
+  function startGroupedSubRow(handle, name, input) {
+    if (!handle.isGrouped) promoteToGroup(handle);
+    var row = buildGroupedSubRow(name, input, '', 'running');
+    handle.subRowContainer.appendChild(row);
+    handle.activeRow = row;
+    handle.finalized = false;
+    updateGroupedSummary(handle, name, handle.count + 1, 'running');
+    return handle;
+  }
+
+  // Build one sub-row element. Looks like a mini chip: small dot,
+  // muted args, optional muted result. Indented under the parent
+  // chip's expanded body.
+  function buildGroupedSubRow(name, input, text, state) {
+    var row = document.createElement('div');
+    row.setAttribute('data-grouped-row', '1');
+    row.style.cssText =
+      'display:flex;align-items:center;gap:6px;font-size:11.5px;' +
+      'line-height:1.5;color:rgba(255,255,255,0.6);';
+    renderGroupedSubRow(row, name, input, text, state);
+    return row;
+  }
+
+  function renderGroupedSubRow(row, name, input, text, state) {
+    var arg = toolChipArg(name, input) || '';
+    var dotColor = state === 'failed' ? '#f87171'
+                 : state === 'rejected' ? '#a3a3a3'
+                 : state === 'running' ? '#fbbf24'
+                 : '#22c55e';
+    var dotStyle = state === 'running' ? ';animation:p86-pulse 1.2s ease-in-out infinite;' : '';
+    var dot = '<span style="width:5px;height:5px;border-radius:50%;background:' + dotColor + ';flex-shrink:0;' + dotStyle + '"></span>';
+    var argHTML = arg
+      ? '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:rgba(255,255,255,0.55);">' + escapeHTMLLocal(arg) + '</span>'
+      : '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1;color:rgba(255,255,255,0.32);">(no args)</span>';
+    var result = state === 'running' ? '' : toolChipResult(name, text, state);
+    var resHTML = result
+      ? '<span style="color:rgba(255,255,255,0.38);flex-shrink:0;">' + escapeHTMLLocal(result) + '</span>'
+      : '';
+    row.innerHTML = dot + argHTML + resHTML;
+  }
+
+  // Update the parent chip's summary to reflect grouped state.
+  // "Searched · 5 calls" rather than the single-chip args+result.
+  function updateGroupedSummary(handle, name, count, state) {
+    var info = toolChipVerb(name);
+    var verbWord = state === 'running' ? info.verb : info.past;
+    var dotColor = state === 'failed' ? '#f87171'
+                 : state === 'rejected' ? '#a3a3a3'
+                 : state === 'running' ? '#fbbf24'
+                 : '#22c55e';
+    var dotStyle = state === 'running' ? ';animation:p86-pulse 1.2s ease-in-out infinite;' : '';
+    var label = count + ' ' + (count === 1 ? 'call' : 'calls');
+    var chev = '<span data-chev style="font-size:9px;color:rgba(255,255,255,0.32);flex-shrink:0;transition:transform 0.12s;display:inline-block;">&#9654;</span>';
+    var dot = '<span style="width:6px;height:6px;border-radius:50%;background:' + dotColor + ';flex-shrink:0;' + dotStyle + '"></span>';
+    var verb = '<span style="color:rgba(255,255,255,0.92);font-weight:600;flex-shrink:0;">' + escapeHTMLLocal(verbWord) + '</span>';
+    var countHTML = '<span style="color:rgba(255,255,255,0.5);flex-shrink:0;">· ' + escapeHTMLLocal(label) + '</span>';
+    handle.sum.innerHTML = chev + dot + verb + countHTML;
+    handle.sum.dataset.hasBody = '1';
+    handle.sum.style.cursor = 'pointer';
   }
 
   // Drop-in for the old appendToolBlock — used when a tool result
