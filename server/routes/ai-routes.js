@@ -3206,14 +3206,24 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
   // flushed their results successfully, but the resumed turn produced
   // NO text and went straight to terminal idle. Different from the
   // `stalled` recovery above (which fires on requires_action stalls
-  // BEFORE any tools complete). Capped at 1 per turn so a model that
-  // simply refuses to summarize doesn't burn endless API calls.
-  const MAX_SILENT_STOP_NUDGES = 1;
+  // BEFORE any tools complete). Capped at 2 per turn so a model that
+  // simply refuses to summarize doesn't burn endless API calls — but
+  // 2 attempts handles the case where the first nudge gets swallowed
+  // by the model firing yet another tool call (which happened in the
+  // 14-tool multi-material estimate request on 2026-05-23). The second
+  // nudge is more directive: "stop tool-calling, summarize NOW or ask
+  // ONE question." Observed: most turns recover on attempt 2.
+  const MAX_SILENT_STOP_NUDGES = 2;
   let silentStopNudges = 0;
   let autoResultsFlushedThisTurn = false;
-  const SILENT_STOP_NUDGE_TEXT =
+  const SILENT_STOP_NUDGE_TEXTS = [
     'The tool results above completed successfully. Please summarize ' +
-    'them in one or two sentences for the user before ending your turn.';
+    'them in one or two sentences for the user before ending your turn.',
+    'STOP calling tools. You have plenty of data above. Write a summary ' +
+    'for the user NOW — one to three sentences. If you genuinely need ' +
+    'more info, ask the user ONE targeted question instead of firing ' +
+    'another tool. Do not emit another tool_use this turn.'
+  ];
 
   // Helper to (re)open stream + send events. Stuck-state recovery is
   // skipped for sessions we know are brand-new (Fix 2): /chat handlers
@@ -3859,12 +3869,14 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
         pendingToolUses.length === 0;
       if (silentStop && silentStopNudges < MAX_SILENT_STOP_NUDGES) {
         silentStopNudges++;
+        const nudgeText = SILENT_STOP_NUDGE_TEXTS[silentStopNudges - 1]
+          || SILENT_STOP_NUDGE_TEXTS[SILENT_STOP_NUDGE_TEXTS.length - 1];
         console.warn('[v2-stream] silent-stop detected on', sessionId,
           '— nudging for summary (attempt', silentStopNudges,
           'of', MAX_SILENT_STOP_NUDGES + ')');
         nextEventsToSend = [{
           type: 'user.message',
-          content: [{ type: 'text', text: SILENT_STOP_NUDGE_TEXT }]
+          content: [{ type: 'text', text: nudgeText }]
         }];
         stallNudgeQueued = true;
         continue; // loop back, reopen stream with the summary nudge
@@ -6071,9 +6083,10 @@ const READ_TOOLS = [
   {
     name: 'search_entities',
     description:
-      'List/search entities by free-text filter. Returns up to `limit` light rows. ' +
+      'List/search entities by free-text filter. Returns up to `limit` light rows per filter. ' +
       'Use this when you don\'t know the exact id and need to find one before emitting a payload. ' +
-      'Supported entity_types: job, client, lead, user, estimate, material, sub, business_card.',
+      'Supported entity_types: job, client, lead, user, estimate, material, sub, business_card. ' +
+      'BATCHING: When you need to look up N items on the same entity_type (e.g. find several materials by keyword for an estimate), pass `filters: ["keyword1", "keyword2", ...]` to run them ALL in one tool call. Results come back grouped per filter. This is ALWAYS preferable to firing N separate search_entities calls.',
     tier: 'auto',
     input_schema: {
       type: 'object',
@@ -6083,9 +6096,15 @@ const READ_TOOLS = [
           type: 'string',
           enum: ['job', 'client', 'lead', 'user', 'estimate', 'material', 'sub', 'business_card'],
         },
-        filter: { type: 'string', description: 'Free-text filter (case-insensitive substring on the canonical name field).' },
+        filter: { type: 'string', description: 'Single free-text filter (case-insensitive substring). Use `filters` for multi-keyword lookups.' },
+        filters: {
+          type: 'array',
+          items: { type: 'string' },
+          maxItems: 12,
+          description: 'Batch mode — array of substring filters (max 12). One tool call replaces N separate searches. Results grouped per filter so you can map outputs to inputs.'
+        },
         status: { type: 'string', description: 'Optional status filter (entity_types that have one).' },
-        limit: { type: 'integer', minimum: 1, maximum: 100 },
+        limit: { type: 'integer', minimum: 1, maximum: 100, description: 'Per-filter row cap. Default 20.' },
       },
     },
   },
@@ -6280,21 +6299,49 @@ async function execConsolidatedRead(name, input, ctx) {
 
   if (name === 'search_entities') {
     const et = String(inp.entity_type || '').toLowerCase();
-    const filter = inp.filter || inp.q || '';
     const limit = inp.limit;
-    switch (et) {
-      case 'job':      return execStaffTool('read_jobs',     { q: filter, status: inp.status, limit }, ctx);
-      case 'client':   return execStaffTool('read_clients',  { q: filter, limit }, ctx);
-      case 'lead':     return execStaffTool('read_leads',    { q: filter, status: inp.status, limit }, ctx);
-      case 'user':     return execStaffTool('read_users',    { q: filter, limit }, ctx);
-      case 'estimate': return execStaffTool('read_past_estimates', { q: filter, limit }, ctx);
-      case 'material': return execStaffTool('read_materials',{ q: filter, limit }, ctx);
-      case 'sub':      return execStaffTool('read_subs',     { q: filter, limit }, ctx);
-      case 'business_card':
-        return execStaffTool('read_existing_clients', { q: filter, limit }, ctx);
-      default:
-        return 'search_entities: unsupported entity_type "' + et + '". Supported: job, client, lead, user, estimate, material, sub.';
+    // Batch mode: if filters[] is an array, run every filter sequentially
+    // against the same narrow dispatcher and return results grouped per
+    // filter. Replaces N separate search_entities tool calls with ONE
+    // round-trip — the dominant turn-latency reducer for multi-material
+    // estimate workflows. Caps at 12 filters per call.
+    const filtersArr = Array.isArray(inp.filters)
+      ? inp.filters.map((s) => String(s || '').trim()).filter(Boolean).slice(0, 12)
+      : null;
+    const singleFilter = inp.filter || inp.q || '';
+
+    function dispatchOne(q) {
+      switch (et) {
+        case 'job':      return execStaffTool('read_jobs',     { q, status: inp.status, limit }, ctx);
+        case 'client':   return execStaffTool('read_clients',  { q, limit }, ctx);
+        case 'lead':     return execStaffTool('read_leads',    { q, status: inp.status, limit }, ctx);
+        case 'user':     return execStaffTool('read_users',    { q, limit }, ctx);
+        case 'estimate': return execStaffTool('read_past_estimates', { q, limit }, ctx);
+        case 'material': return execStaffTool('read_materials',{ q, limit }, ctx);
+        case 'sub':      return execStaffTool('read_subs',     { q, limit }, ctx);
+        case 'business_card':
+          return execStaffTool('read_existing_clients', { q, limit }, ctx);
+        default:
+          return Promise.resolve(
+            'search_entities: unsupported entity_type "' + et + '". Supported: job, client, lead, user, estimate, material, sub.'
+          );
+      }
     }
+
+    if (filtersArr && filtersArr.length) {
+      // Parallel fan-out across the filters so the dominant cost (DB
+      // round-trips) overlaps. Each Promise resolves to the narrow
+      // handler's text output; we wrap into a "## filter: <q>" block.
+      const results = await Promise.all(filtersArr.map((q) => dispatchOne(q)));
+      const blocks = filtersArr.map((q, i) => {
+        const body = String(results[i] || '').trim() || '(no result)';
+        return '## filter: ' + JSON.stringify(q) + '\n' + body;
+      });
+      return 'Batched search_entities (' + et + ', ' + filtersArr.length + ' filter' +
+        (filtersArr.length === 1 ? '' : 's') + '):\n\n' + blocks.join('\n\n');
+    }
+
+    return dispatchOne(singleFilter);
   }
 
   // read_entity (by id)
