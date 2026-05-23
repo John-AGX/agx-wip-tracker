@@ -421,6 +421,7 @@ router.put('/:id', requireAuth, requireCapability('ROLES_MANAGE'), async (req, r
     sets.push('manual_override = true');
     sets.push('updated_at = NOW()');
     params.push(req.params.id);
+    // SAFE: column names iterate the hardcoded `allowed` array above (description / agx_subgroup / category / unit / is_hidden / notes).
     await pool.query(`UPDATE materials SET ${sets.join(', ')} WHERE id = $${p}`, params);
     res.json({ ok: true });
   } catch (e) {

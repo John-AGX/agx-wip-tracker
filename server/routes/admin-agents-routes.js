@@ -1469,6 +1469,7 @@ router.put('/evals/:id', requireAuth, requireCapability('ROLES_MANAGE'), async (
     if (!sets.length) return res.json({ ok: true, unchanged: true });
     sets.push('updated_at = NOW()');
     params.push(req.params.id);
+    // SAFE: column names are hardcoded conditionals above (name / description / fixture / expected_signals); no user-keys loop.
     await pool.query(`UPDATE ai_evals SET ${sets.join(', ')} WHERE id = $${p}`, params);
     res.json({ ok: true });
   } catch (e) {

@@ -619,6 +619,7 @@ router.put('/:id', requireAuth, async (req, res) => {
     }
     if (!sets.length) return res.json({ ok: true, unchanged: true });
     params.push(req.params.id);
+    // SAFE: column names are hardcoded conditionals above (caption / position / include_in_proposal / folder); no user-keys loop.
     await pool.query(`UPDATE attachments SET ${sets.join(', ')} WHERE id = $${p}`, params);
     res.json({ ok: true });
   } catch (e) {

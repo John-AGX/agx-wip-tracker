@@ -82,6 +82,7 @@ router.put('/:name', requireAuth, requireCapability('ROLES_MANAGE'), async (req,
     if (!sets.length) return res.json({ ok: true, unchanged: true });
     sets.push('updated_at = NOW()');
     params.push(req.params.name);
+    // SAFE: column names come from req.body destructuring (label / description / capabilities); never user-key iteration.
     await pool.query(
       `UPDATE roles SET ${sets.join(', ')} WHERE name = $${p}`,
       params

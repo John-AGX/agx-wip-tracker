@@ -324,6 +324,7 @@ router.patch('/:id', requireAuth, async (req, res) => {
 
     if (!sets.length) return res.status(400).json({ error: 'No valid fields supplied' });
 
+    // SAFE: column names are hardcoded conditionals above (summary / pinned / archived_at / effort_override); no user-keys loop.
     const r = await pool.query(
       `UPDATE ai_sessions SET ${sets.join(', ')}
         WHERE id = $1 AND user_id = $2

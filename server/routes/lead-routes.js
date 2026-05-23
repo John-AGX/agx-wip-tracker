@@ -146,6 +146,7 @@ router.put('/:id', requireAuth, requireCapability('LEADS_EDIT'), async (req, res
     if (!sets.length) return res.json({ ok: true, unchanged: true });
     sets.push('updated_at = NOW()');
     params.push(req.params.id);
+    // SAFE: column names sourced from pickEditable(req.body) which iterates the constant EDITABLE_FIELDS allowlist.
     await pool.query(`UPDATE leads SET ${sets.join(', ')} WHERE id = $${p}`, params);
     res.json({ ok: true });
 

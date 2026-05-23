@@ -154,6 +154,7 @@ router.put('/:id', requireAuth, async (req, res) => {
     params.push(id);
 
     try {
+      // SAFE: column names hardcoded above (name / description / category / html_body); no user-keys loop.
       const r = await pool.query(
         `UPDATE field_tools SET ${sets.join(', ')} WHERE id = $${p} RETURNING *`,
         params

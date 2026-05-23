@@ -5052,6 +5052,7 @@ async function execClientDirectoryTool(name, input) {
       if (!sets.length) return `No editable fields supplied for ${exists.rows[0].name}.`;
       sets.push('updated_at = NOW()');
       params.push(input.client_id);
+      // SAFE: column names filtered through CLIENT_EDITABLE_FIELDS.has(k) allowlist above.
       await pool.query(`UPDATE clients SET ${sets.join(', ')} WHERE id = $${p}`, params);
       return `Updated ${Object.keys(input.fields).join(', ')} on ${exists.rows[0].name}.`;
     }
@@ -5109,6 +5110,7 @@ async function execClientDirectoryTool(name, input) {
         if (sets.length) {
           sets.push('updated_at = NOW()');
           params.push(input.keep_client_id);
+          // SAFE: column names iterate constant CLIENT_EDITABLE_FIELDS array above.
           await cli.query(`UPDATE clients SET ${sets.join(', ')} WHERE id = $${p}`, params);
         }
         // Reparent any children of merge_from to keep
@@ -8558,6 +8560,7 @@ async function execFieldToolApproval(name, input, userId) {
     params.push(id);
     let r;
     try {
+      // SAFE: column names hardcoded above (name / description / category / html_body); no user-keys loop.
       r = await pool.query(
         `UPDATE field_tools SET ${sets.join(', ')} WHERE id = $${p} RETURNING id, name`,
         params

@@ -264,6 +264,7 @@ router.patch('/:id',
       if (!sets.length) return res.status(400).json({ error: 'nothing to update' });
       sets.push(`updated_at = NOW()`);
       vals.push(req.params.id);
+      // SAFE: column names come from req.body destructuring (linkedNodeId / memo); never user-key iteration.
       const result = await pool.query(
         `UPDATE qb_cost_lines SET ${sets.join(', ')} WHERE id = $${i} RETURNING *`,
         vals

@@ -114,6 +114,7 @@ router.put('/:id', requireAuth, requireCapability('ESTIMATES_EDIT'), async (req,
     if (!sets.length) return res.json({ ok: true, unchanged: true });
     sets.push('updated_at = NOW()');
     params.push(req.params.id);
+    // SAFE: column names sourced from pickEditable(req.body) which iterates the constant EDITABLE_FIELDS allowlist.
     await pool.query(`UPDATE clients SET ${sets.join(', ')} WHERE id = $${p}`, params);
     res.json({ ok: true });
   } catch (e) {
@@ -299,6 +300,7 @@ router.post('/import', requireAuth, requireCapability('ESTIMATES_EDIT'), async (
             sets.push('updated_at = NOW()');
             params.push(existingId);
             try {
+              // SAFE: column names sourced from pickEditable(row) iterating the constant EDITABLE_FIELDS allowlist.
               await client.query(`UPDATE clients SET ${sets.join(', ')} WHERE id = $${p}`, params);
               updated++;
             } catch (e) {
