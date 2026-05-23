@@ -496,6 +496,17 @@ async function initSchema() {
     -- top of this column. (Phase 4's attachment_folder_grants table
     -- is defined AFTER the subs table further down so its FK resolves
     -- on the first run.)
+    --
+    -- 2026-05-23: the ALTER below was missing from the original Phase 3
+    -- migration — the column was documented in this comment but never
+    -- actually added. /api/attachments/recent, 86's search_my_kb tool,
+    -- and the sub portal routes all SELECT a.folder and were failing
+    -- with "column folder does not exist". Adding it now with the
+    -- intended default so existing rows backfill to 'general'.
+    ALTER TABLE attachments
+      ADD COLUMN IF NOT EXISTS folder TEXT NOT NULL DEFAULT 'general';
+    CREATE INDEX IF NOT EXISTS idx_attachments_entity_folder
+      ON attachments (entity_type, entity_id, folder);
 
     -- Domain rebrand: rewrite attachment URLs from the old
     -- wip-agxco.com host to attachments.project86.net. Existing rows
