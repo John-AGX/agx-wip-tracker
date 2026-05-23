@@ -23,6 +23,7 @@ const { toFile } = require('@anthropic-ai/sdk');
 const { pool } = require('../db');
 const { requireAuth, requireCapability, hasCapability, requireOrg } = require('../auth');
 const { storage } = require('../storage');
+const { aiChatLimiter, aiChatHourlyLimiter } = require('../rate-limit');
 
 const router = express.Router();
 
@@ -10519,7 +10520,7 @@ router.delete('/86/messages', requireAuth, async (req, res) => {
   }
 });
 
-router.post('/86/chat', requireAuth, requireOrg, async (req, res) => {
+router.post('/86/chat', requireAuth, requireOrg, aiChatLimiter, aiChatHourlyLimiter, async (req, res) => {
   const anthropic = getAnthropic();
   if (!anthropic) return res.status(503).json({ error: 'AI assistant is not configured.' });
   if (!FLAG_AGENT_MODE_86) {
@@ -10851,7 +10852,7 @@ router.post('/86/chat', requireAuth, requireOrg, async (req, res) => {
   }
 });
 
-router.post('/86/chat/continue', requireAuth, requireOrg, async (req, res) => {
+router.post('/86/chat/continue', requireAuth, requireOrg, aiChatLimiter, aiChatHourlyLimiter, async (req, res) => {
   const anthropic = getAnthropic();
   if (!anthropic) return res.status(503).json({ error: 'AI assistant is not configured.' });
   if (!FLAG_AGENT_MODE_86) {

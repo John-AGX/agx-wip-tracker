@@ -2,11 +2,12 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const { pool, getOrgById } = require('../db');
 const { signToken, requireAuth, requireRole, resolveUserOrg } = require('../auth');
+const { ipLoginLimiter } = require('../rate-limit');
 
 const router = express.Router();
 
-// POST /api/auth/login
-router.post('/login', async (req, res) => {
+// POST /api/auth/login  (rate-limited: 10/min per IP, see rate-limit.js)
+router.post('/login', ipLoginLimiter, async (req, res) => {
   try {
     const { email, password } = req.body;
     if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
