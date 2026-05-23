@@ -7403,7 +7403,7 @@ async function execStaffTool(name, input, ctx) {
                   c.first_name, c.last_name, c.email, c.phone,
                   c.company_name, c.community_name, c.client_type,
                   p.name AS parent_name,
-                  (SELECT COUNT(*)::int FROM client_notes n WHERE n.client_id = c.id) AS note_count
+                  COALESCE(jsonb_array_length(c.agent_notes), 0) AS note_count
              FROM clients c
              LEFT JOIN clients p ON p.id = c.parent_client_id
             WHERE c.name ILIKE $1
@@ -7423,7 +7423,7 @@ async function execStaffTool(name, input, ctx) {
                   c.first_name, c.last_name, c.email, c.phone,
                   c.company_name, c.community_name, c.client_type,
                   p.name AS parent_name,
-                  (SELECT COUNT(*)::int FROM client_notes n WHERE n.client_id = c.id) AS note_count
+                  COALESCE(jsonb_array_length(c.agent_notes), 0) AS note_count
              FROM clients c
              LEFT JOIN clients p ON p.id = c.parent_client_id
             ORDER BY lower(c.name)
