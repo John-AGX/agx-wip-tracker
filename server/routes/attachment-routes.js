@@ -1015,3 +1015,10 @@ router.post('/extract-text', requireAuth, async (req, res) => {
 });
 
 module.exports = router;
+// Internal helpers exposed for test/ coverage (not for runtime use
+// from other route modules). Audit finding C5.
+module.exports.__internals__ = {
+  sniffMimeFromBytes,
+  sanitizeSvg,
+  mimeFamilyMatches
+};
