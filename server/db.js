@@ -1817,6 +1817,100 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_job_reports_job ON job_reports(job_id, updated_at DESC);
   `);
 
+  // ── Performance indexes: 86's read-tool surface (2026-05-23) ──────
+  // The audit on 2026-05-23 mapped every SQL query 86 hits via its
+  // read tools (read_entity, search_entities, read_clients,
+  // read_leads, read_jobs, read_subs, read_past_estimate_lines,
+  // search_my_sessions, etc.) and identified the missing-index
+  // candidates ranked by impact. This block lands them.
+  //
+  // Two categories:
+  //
+  // 1. ORDER BY updated_at DESC scans on unbounded tables. These hit
+  //    full sequential scans + in-memory sort. Plain B-tree DESC
+  //    index turns them into index scans. Always safe to create.
+  //
+  // 2. ILIKE substring searches (`column ILIKE '%foo%'`). Plain
+  //    B-tree indexes only help with prefix matches (`'foo%'`); for
+  //    internal substrings we need pg_trgm (trigram) GIN indexes,
+  //    which decompose the column into 3-char overlapping shingles
+  //    and index those. Order-of-magnitude speedup on multi-column
+  //    OR-of-ILIKEs (which is exactly what read_clients does across
+  //    7 columns). REQUIRES the pg_trgm extension — if CREATE
+  //    EXTENSION fails (some managed Postgres setups restrict role
+  //    permissions), we log and skip the trigram block. The plain
+  //    B-tree indexes still land.
+  //
+  // All indexes are CREATE INDEX IF NOT EXISTS so re-running is a
+  // no-op on a hot DB.
+
+  // Category 1 — plain B-tree DESC indexes for ORDER BY updated_at.
+  // Safe on any Postgres role; no extension required.
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_leads_updated_at
+      ON leads(updated_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_jobs_updated_at
+      ON jobs(updated_at DESC NULLS LAST);
+
+    CREATE INDEX IF NOT EXISTS idx_estimates_updated_at
+      ON estimates(updated_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_ai_messages_user_entity_created
+      ON ai_messages(user_id, entity_type, created_at DESC);
+  `);
+
+  // Category 2 — pg_trgm GIN indexes. Wrapped in its own try/catch so
+  // a permission failure on CREATE EXTENSION logs a warning and skips
+  // the trigram indexes instead of crashing the schema init. (Railway,
+  // Supabase, Neon all ship with pg_trgm pre-available in their
+  // contrib bundle; most fresh roles can run CREATE EXTENSION on it.
+  // Bare PG installs may need a superuser to enable it first.)
+  try {
+    await pool.query(`CREATE EXTENSION IF NOT EXISTS pg_trgm;`);
+    await pool.query(`
+      -- read_clients ILIKEs 7 columns in an OR chain. Trigram
+      -- indexes on the high-cardinality ones make the OR sargable.
+      CREATE INDEX IF NOT EXISTS idx_clients_name_trgm
+        ON clients USING gin (name gin_trgm_ops);
+      CREATE INDEX IF NOT EXISTS idx_clients_company_name_trgm
+        ON clients USING gin (company_name gin_trgm_ops)
+        WHERE company_name IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS idx_clients_community_name_trgm
+        ON clients USING gin (community_name gin_trgm_ops)
+        WHERE community_name IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS idx_clients_city_trgm
+        ON clients USING gin (city gin_trgm_ops)
+        WHERE city IS NOT NULL;
+
+      -- read_leads ILIKEs title + property_name.
+      CREATE INDEX IF NOT EXISTS idx_leads_title_trgm
+        ON leads USING gin (title gin_trgm_ops)
+        WHERE title IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS idx_leads_property_name_trgm
+        ON leads USING gin (property_name gin_trgm_ops)
+        WHERE property_name IS NOT NULL;
+
+      -- read_subs ILIKEs subs.name + subs.contact_name.
+      CREATE INDEX IF NOT EXISTS idx_subs_name_trgm
+        ON subs USING gin (name gin_trgm_ops);
+      CREATE INDEX IF NOT EXISTS idx_subs_contact_name_trgm
+        ON subs USING gin (contact_name gin_trgm_ops)
+        WHERE contact_name IS NOT NULL;
+
+      -- search_my_sessions ILIKEs ai_sessions.label + summary.
+      CREATE INDEX IF NOT EXISTS idx_ai_sessions_label_trgm
+        ON ai_sessions USING gin (label gin_trgm_ops)
+        WHERE archived_at IS NULL AND label IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS idx_ai_sessions_summary_trgm
+        ON ai_sessions USING gin (summary gin_trgm_ops)
+        WHERE archived_at IS NULL AND summary IS NOT NULL;
+    `);
+    console.log('[db] pg_trgm trigram indexes ready');
+  } catch (e) {
+    console.warn('[db] pg_trgm trigram indexes skipped — ILIKE substring searches will sequential-scan:', e.message);
+  }
+
   // ── Migration: legacy estimator agent retired (agent_key 'ag' → 'job') ──
   // Runs in its own pool.query AFTER the main schema-init template
   // so all referenced tables exist. Idempotent — re-running on a
