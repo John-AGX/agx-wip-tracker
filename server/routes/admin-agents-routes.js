@@ -380,15 +380,21 @@ router.get('/user-threads',
 // user_id). Each row carries the most recent activity timestamp,
 // turn count, total tokens, and the entity's display title (looked up
 // from estimates / jobs / clients depending on entity_type).
-router.get('/conversations', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+router.get('/conversations', requireAuth, require('../auth').requireOrg, requireCapability('ROLES_MANAGE'), async (req, res) => {
   try {
     const range = (req.query.range === '30d') ? '30 days' : '7 days';
     const entityType = req.query.entity_type;
     const userIdFilter = req.query.user_id ? Number(req.query.user_id) : null;
     const limit = Math.max(1, Math.min(500, Number(req.query.limit) || 100));
 
-    const params = [];
-    const conds = [`created_at >= NOW() - INTERVAL '${range}'`];
+    // Tenant isolation: scope ai_messages by user.organization_id.
+    // Audit finding C1 — without this scope, an admin in any org could
+    // read every other org's conversations.
+    const params = [req.organization.id];
+    const conds = [
+      `created_at >= NOW() - INTERVAL '${range}'`,
+      `user_id IN (SELECT id FROM users WHERE organization_id = $1)`
+    ];
     if (entityType) {
       params.push(entityType);
       conds.push(`entity_type = $${params.length}`);
@@ -515,7 +521,7 @@ router.get('/conversations', requireAuth, requireCapability('ROLES_MANAGE'), asy
 // each message to MAX_BODY_BYTES so the response stays snappy on a
 // 200-turn audit thread.
 const MAX_BODY_BYTES = 16 * 1024;
-router.get('/conversations/:key', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+router.get('/conversations/:key', requireAuth, require('../auth').requireOrg, requireCapability('ROLES_MANAGE'), async (req, res) => {
   try {
     const parts = String(req.params.key || '').split('|');
     if (parts.length !== 3) return res.status(400).json({ error: 'Bad key — expected entity_type|entity_id|user_id' });
@@ -523,6 +529,18 @@ router.get('/conversations/:key', requireAuth, requireCapability('ROLES_MANAGE')
     const userId = Number(userIdRaw);
     if (!entityType || !entityId || !Number.isFinite(userId)) {
       return res.status(400).json({ error: 'Bad key — non-numeric user_id or missing parts' });
+    }
+
+    // Tenant isolation: confirm the target user belongs to the
+    // calling admin's org before returning their conversation log.
+    // Audit finding C1 — without this check, the key (entity_type|
+    // entity_id|user_id) could be forged to read any org's threads.
+    const orgCheck = await pool.query(
+      `SELECT 1 FROM users WHERE id = $1 AND organization_id = $2`,
+      [userId, req.organization.id]
+    );
+    if (!orgCheck.rows.length) {
+      return res.status(404).json({ error: 'Conversation not found.' });
     }
 
     const r = await pool.query(

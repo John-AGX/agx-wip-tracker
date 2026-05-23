@@ -15,7 +15,7 @@
 
 const express = require('express');
 const { pool } = require('../db');
-const { requireAuth, requireCapability } = require('../auth');
+const { requireAuth, requireOrg, requireCapability } = require('../auth');
 
 const router = express.Router();
 
@@ -46,17 +46,25 @@ const ELLE_AUDIT_PROMPT =
 //   and != Completed). One batch request per job, all firing in
 //   parallel server-side at the Anthropic Batch API. Half the cost
 //   of synchronous chat; up to 24h to complete (typically faster).
-router.post('/elle-audit', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+router.post('/elle-audit', requireAuth, requireOrg, requireCapability('ROLES_MANAGE'), async (req, res) => {
   try {
     const anthropic = getAnthropic();
     if (!anthropic) return res.status(503).json({ error: 'AI not configured (ANTHROPIC_API_KEY missing).' });
 
     // Resolve the eligible job set. data is JSONB so we filter via
     // jsonb fields rather than a status column.
+    // Tenant isolation: jobs are scoped via owner_id → users.organization_id
+    // since the jobs table has no direct organization_id column. Audit
+    // finding C1 — without this scope, an admin in any org could fire
+    // an audit batch across every org's active jobs.
     const jobsRes = await pool.query(
-      `SELECT id, data FROM jobs
-        WHERE COALESCE(data->>'status', 'New') NOT IN ('Archived', 'Completed')
-        ORDER BY id ASC`
+      `SELECT j.id, j.data
+         FROM jobs j
+         JOIN users u ON u.id = j.owner_id
+        WHERE u.organization_id = $1
+          AND COALESCE(j.data->>'status', 'New') NOT IN ('Archived', 'Completed')
+        ORDER BY j.id ASC`,
+      [req.organization.id]
     );
     if (!jobsRes.rows.length) {
       return res.status(400).json({ error: 'No active jobs to audit.' });
@@ -198,16 +206,21 @@ async function refreshBatchStatus(row) {
 //   state ('submitted' / 'in_progress') so the list refreshes itself
 //   on every view. Heavy poll batches (5+ in flight) could stack up —
 //   if that becomes an issue, gate this behind a query param.
-router.get('/jobs', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+router.get('/jobs', requireAuth, requireOrg, requireCapability('ROLES_MANAGE'), async (req, res) => {
   try {
+    // Tenant isolation: scope batches via submitted_by → users.organization_id.
+    // batch_jobs has no organization_id column (predates multi-tenancy);
+    // the user FK is the only path to org. Audit finding C1.
     const r = await pool.query(
       `SELECT b.id, b.agent, b.kind, b.anthropic_batch_id, b.status, b.request_count,
               b.submitted_at, b.completed_at, b.error,
               u.name AS submitted_by_name, u.email AS submitted_by_email
          FROM batch_jobs b
-         LEFT JOIN users u ON u.id = b.submitted_by
+         JOIN users u ON u.id = b.submitted_by
+        WHERE u.organization_id = $1
         ORDER BY b.submitted_at DESC
-        LIMIT 50`
+        LIMIT 50`,
+      [req.organization.id]
     );
     // Auto-poll non-terminal rows and reflect refreshed status in the
     // response. Sequential to keep polling traffic predictable.
@@ -230,14 +243,16 @@ router.get('/jobs', requireAuth, requireCapability('ROLES_MANAGE'), async (req, 
 //   Returns a single batch + its full results array (per-job audit text).
 //   Auto-polls if non-terminal so opening the detail kicks the
 //   refresh without an explicit click.
-router.get('/jobs/:id', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+router.get('/jobs/:id', requireAuth, requireOrg, requireCapability('ROLES_MANAGE'), async (req, res) => {
   try {
+    // Tenant isolation — see /jobs handler above. Audit C1.
     const r = await pool.query(
       `SELECT b.*, u.name AS submitted_by_name, u.email AS submitted_by_email
          FROM batch_jobs b
-         LEFT JOIN users u ON u.id = b.submitted_by
-        WHERE b.id = $1`,
-      [req.params.id]
+         JOIN users u ON u.id = b.submitted_by
+        WHERE b.id = $1
+          AND u.organization_id = $2`,
+      [req.params.id, req.organization.id]
     );
     if (!r.rows.length) return res.status(404).json({ error: 'Batch not found' });
     let row = r.rows[0];
@@ -269,9 +284,15 @@ router.get('/jobs/:id', requireAuth, requireCapability('ROLES_MANAGE'), async (r
 // POST /api/admin/batch/jobs/:id/refresh
 //   Force-poll one batch. Useful when the admin is impatient or
 //   the auto-poll loop didn't catch a state transition.
-router.post('/jobs/:id/refresh', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+router.post('/jobs/:id/refresh', requireAuth, requireOrg, requireCapability('ROLES_MANAGE'), async (req, res) => {
   try {
-    const r = await pool.query(`SELECT * FROM batch_jobs WHERE id = $1`, [req.params.id]);
+    // Tenant isolation — see /jobs handler above. Audit C1.
+    const r = await pool.query(
+      `SELECT b.* FROM batch_jobs b
+         JOIN users u ON u.id = b.submitted_by
+        WHERE b.id = $1 AND u.organization_id = $2`,
+      [req.params.id, req.organization.id]
+    );
     if (!r.rows.length) return res.status(404).json({ error: 'Batch not found' });
     const updated = await refreshBatchStatus(r.rows[0]);
     res.json({ ok: true, status: updated.status, completed_at: updated.completed_at });

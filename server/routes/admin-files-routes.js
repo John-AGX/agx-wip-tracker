@@ -17,7 +17,7 @@
 
 const express = require('express');
 const { pool } = require('../db');
-const { requireAuth, requireCapability } = require('../auth');
+const { requireAuth, requireOrg, requireCapability } = require('../auth');
 const { uploadAttachmentToAnthropic } = require('../anthropic-files');
 
 const router = express.Router();
@@ -25,9 +25,18 @@ const router = express.Router();
 console.log('[admin-files-routes] mounted at /api/admin/files');
 
 // POST /api/admin/files/upload-attachment/:id
-router.post('/upload-attachment/:id', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+router.post('/upload-attachment/:id', requireAuth, requireOrg, requireCapability('ROLES_MANAGE'), async (req, res) => {
   try {
-    const r = await pool.query('SELECT * FROM attachments WHERE id = $1', [req.params.id]);
+    // Tenant isolation: scope attachment lookup by uploaded_by → users.organization_id.
+    // Attachments without an uploaded_by (rare — only when the uploader user
+    // was hard-deleted) cannot be targeted by an org-scoped admin call;
+    // those need platform-admin tooling. Audit finding C1.
+    const r = await pool.query(
+      `SELECT a.* FROM attachments a
+         JOIN users u ON u.id = a.uploaded_by
+        WHERE a.id = $1 AND u.organization_id = $2`,
+      [req.params.id, req.organization.id]
+    );
     if (!r.rows.length) return res.status(404).json({ error: 'Attachment not found' });
     const att = r.rows[0];
     const fileId = await uploadAttachmentToAnthropic(att);
@@ -43,17 +52,24 @@ router.post('/upload-attachment/:id', requireAuth, requireCapability('ROLES_MANA
 //   anthropic_file_id. Default 25 — keep modest so a single click
 //   doesn't drown the API or the admin's wallet. Sequential to
 //   keep cost predictable.
-router.post('/upload-recent', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+router.post('/upload-recent', requireAuth, requireOrg, requireCapability('ROLES_MANAGE'), async (req, res) => {
   try {
     const limit = Math.max(1, Math.min(200, parseInt((req.body && req.body.limit), 10) || 25));
+    // Tenant isolation: scope by uploaded_by → users.organization_id.
+    // Also: the column is `mime_type` (not `mime`) and `uploaded_at`
+    // (not `created_at`) — the prior query referenced two columns
+    // that don't exist on this table, so the route was a latent bug
+    // alongside the tenant-leak issue. Audit finding C1.
     const r = await pool.query(
-      `SELECT * FROM attachments
-        WHERE web_key IS NOT NULL
-          AND anthropic_file_id IS NULL
-          AND COALESCE(mime, '') LIKE 'image/%'
-        ORDER BY created_at DESC
-        LIMIT $1`,
-      [limit]
+      `SELECT a.* FROM attachments a
+         JOIN users u ON u.id = a.uploaded_by
+        WHERE u.organization_id = $1
+          AND a.web_key IS NOT NULL
+          AND a.anthropic_file_id IS NULL
+          AND COALESCE(a.mime_type, '') LIKE 'image/%'
+        ORDER BY a.uploaded_at DESC
+        LIMIT $2`,
+      [req.organization.id, limit]
     );
     const results = [];
     for (const att of r.rows) {
@@ -74,14 +90,19 @@ router.post('/upload-recent', requireAuth, requireCapability('ROLES_MANAGE'), as
 
 // GET /api/admin/files/stats
 //   Image-attachment summary: how many uploaded to Anthropic vs not.
-router.get('/stats', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+router.get('/stats', requireAuth, requireOrg, requireCapability('ROLES_MANAGE'), async (req, res) => {
   try {
+    // Tenant isolation + correct column name (mime_type, not mime).
+    // Audit finding C1 + latent column bug fix.
     const r = await pool.query(
       `SELECT
-         COUNT(*) FILTER (WHERE web_key IS NOT NULL AND COALESCE(mime,'') LIKE 'image/%') AS total_images,
-         COUNT(*) FILTER (WHERE anthropic_file_id IS NOT NULL) AS uploaded,
-         COUNT(*) FILTER (WHERE web_key IS NOT NULL AND COALESCE(mime,'') LIKE 'image/%' AND anthropic_file_id IS NULL) AS not_uploaded
-         FROM attachments`
+         COUNT(*) FILTER (WHERE a.web_key IS NOT NULL AND COALESCE(a.mime_type,'') LIKE 'image/%') AS total_images,
+         COUNT(*) FILTER (WHERE a.anthropic_file_id IS NOT NULL) AS uploaded,
+         COUNT(*) FILTER (WHERE a.web_key IS NOT NULL AND COALESCE(a.mime_type,'') LIKE 'image/%' AND a.anthropic_file_id IS NULL) AS not_uploaded
+         FROM attachments a
+         JOIN users u ON u.id = a.uploaded_by
+        WHERE u.organization_id = $1`,
+      [req.organization.id]
     );
     const row = r.rows[0] || {};
     res.json({
