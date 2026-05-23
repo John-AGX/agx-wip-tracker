@@ -1,6 +1,35 @@
 const jwt = require('jsonwebtoken');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'project86-dev-secret-change-in-prod';
+// JWT_SECRET MUST be set in every environment. The previous fallback
+// ('project86-dev-secret-change-in-prod') was a fork-the-keys footgun:
+// if env-var drift ever stripped JWT_SECRET in production, every issued
+// token would be signed with a string that lives in the public Git
+// history — anyone could mint admin tokens. Hard-fail at module load
+// instead. The only exemption is NODE_ENV=test, where tests can pass
+// their own secret in by env var or fall back to a fixed test secret.
+const JWT_SECRET = (function () {
+  const envSecret = process.env.JWT_SECRET;
+  if (envSecret && envSecret.length >= 32) return envSecret;
+  if (envSecret && envSecret.length > 0) {
+    // Caller set SOMETHING but it's weak. Refuse rather than silently
+    // accept — a 32+ char random secret is the documented minimum.
+    throw new Error(
+      'JWT_SECRET is set but too short (' + envSecret.length + ' chars). ' +
+      'Use at least 32 characters of random entropy. Generate with: ' +
+      'node -e "console.log(require(\'crypto\').randomBytes(48).toString(\'base64url\'))"'
+    );
+  }
+  if (process.env.NODE_ENV === 'test') {
+    // Unit-test escape valve. Never reached in dev/prod.
+    return 'test-only-secret-' + 'x'.repeat(32);
+  }
+  throw new Error(
+    'JWT_SECRET environment variable is required and was not set. ' +
+    'Refusing to boot with an insecure fallback. ' +
+    'Generate one with: node -e "console.log(require(\'crypto\').randomBytes(48).toString(\'base64url\'))" ' +
+    'and set it in Railway (or your env) before retrying.'
+  );
+})();
 const TOKEN_EXPIRY = '7d';
 
 // Canonical list of capability keys, with display metadata. The server uses
