@@ -2154,27 +2154,30 @@ async function collectSkillsFor(agentKey, organization) {
 // linked Skills (which is all 6 of ours post-C8) must have read
 // enabled or session.create fails at the gate.
 //
-// Final enabled set:
-//   • web_search + web_fetch — Estimator + Sales research / vendor
-//     pricing lookups.
-//   • read + glob + grep      — REQUIRED by Anthropic for skill
-//     content loading. Disabling them breaks /86/chat session
-//     creation entirely.
-// Final disabled set:
-//   • bash    — sandbox shell. Math-aware proposals route through
-//     emit_payload_file. ~500-800 tokens saved per agent.
-//   • write   — sandbox file CRUD. Persistent writes go through
-//     emit_payload_file. Sandbox is throwaway anyway.
-//   • edit    — same as write.
+// 2026-05-22: bash + write + edit re-enabled. The ephemeral sandbox
+// gives 86 a scratch surface mid-turn — write a CSV transform
+// script, edit it, run it via bash, parse the output, draft the
+// resulting payload. The sandbox dies at session end so nothing
+// persists outside of `emit_payload_file` (which remains the only
+// way to write to the real org data), but giving 86 a working
+// space to think in keeps takeoff arithmetic, blended-margin
+// solving, and structured-upload parsing on the model side instead
+// of forcing the user to dictate intermediate steps.
+//
+// Final state: all 8 tools in agent_toolset_20260401 are enabled.
+//   • web_search + web_fetch — research, vendor lookups, code refs
+//   • read + glob + grep     — sandbox file inspection + REQUIRED
+//                              by Anthropic for skill content load
+//   • bash                   — math, CSV/PDF parsing, ad-hoc scripts
+//   • write + edit           — scratch files in the sandbox
+//
+// Persistent writes against org data ALWAYS route through the
+// custom tool emit_payload_file — the sandbox is throwaway.
 function builtinToolsetFor(agentKey) {
   return [{
     type: 'agent_toolset_20260401',
-    default_config: { enabled: true },
-    configs: [
-      { name: 'bash',  enabled: false },
-      { name: 'write', enabled: false },
-      { name: 'edit',  enabled: false },
-    ]
+    default_config: { enabled: true }
+    // No per-tool overrides — every tool in the toolset is enabled.
   }];
 }
 
