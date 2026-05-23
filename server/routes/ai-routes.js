@@ -27,47 +27,15 @@ const { aiChatLimiter, aiChatHourlyLimiter } = require('../rate-limit');
 
 const router = express.Router();
 
-// ── Legacy chat endpoints — dead-routed to the unified /86/chat ─────
-// Pre-unification the app had per-surface chat endpoints (estimate, job,
-// client, staff, intake) that each opened their own Anthropic session
-// with a full system prompt and tool list. The unified /86/chat path
-// serves every surface now via the managed-agent V2 sessions API; the
-// per-surface paths just duplicated the token spend (every visit paid
-// system + tools cache_creation independently). No client code calls
-// these any more (confirmed by grep). Return 410 Gone so any stale
-// client tab surfaces the issue loudly instead of silently double-
-// billing. Delete the dead handler bodies further down the file in a
-// follow-up sweep — the early router.use below short-circuits them so
-// the inline definitions never see a request.
-const LEGACY_CHAT_PATHS = [
-  '/estimates/:id/chat',
-  '/estimates/:id/chat/continue',
-  '/v2/estimates/:id/chat',
-  '/v2/estimates/:id/chat/continue',
-  '/jobs/:id/chat',
-  '/jobs/:id/chat/continue',
-  '/v2/jobs/:id/chat',
-  '/v2/jobs/:id/chat/continue',
-  '/clients/chat',
-  '/clients/chat/continue',
-  '/staff/chat',
-  '/staff/chat/continue',
-  '/v2/intake/chat',
-  '/v2/intake/chat/continue',
-  '/ask86/chat',
-  '/ask86/chat/continue'
-];
-for (const p of LEGACY_CHAT_PATHS) {
-  router.post(p, (req, res) => {
-    console.warn('[legacy-chat] blocked POST ' + req.originalUrl +
-      ' — caller should use /api/ai/86/chat instead');
-    res.status(410).json({
-      error: 'This endpoint is retired. Use POST /api/ai/86/chat with current_context describing the surface (estimate / job / intake / client / staff / ask86).',
-      gone: true,
-      replacement: '/api/ai/86/chat'
-    });
-  });
-}
+// (Retired 2026-05-23 — the 16-path LEGACY_CHAT_PATHS block returning
+// 410 Gone from /estimates/:id/chat, /jobs/:id/chat, /clients/chat,
+// /staff/chat, /v2/intake/chat, /ask86/chat (+ their /continue
+// variants) is deleted. No frontend caller has hit these in months;
+// the unified /api/ai/86/chat path serves every entity context via
+// current_context. Any straggler request now falls through to
+// Express's default 404 — clearer signal than the 410 hand-rolled
+// JSON body for a path that nothing should be calling. Audit
+// finding C4 in memoized-inventing-mountain.md.)
 
 // Lazy SDK init — reads ANTHROPIC_API_KEY on first request rather than at
 // module-load time. This is more robust against Railway's deploy timing:
