@@ -2952,11 +2952,23 @@ function isStaleToolUseIdError(e) {
 // be ideal but we use the same client for simplicity). Triggered
 // exclusively on the first user+assistant exchange so sessions don't
 // re-bill on every turn.
-async function maybeGenerateSessionLabel(sessionId) {
+// Accepts either a sessionId (legacy back-compat) or a session row
+// object (preferred). Passing the row directly avoids a read-after-
+// write race on Postgres setups with replica lag — Railway's
+// managed-Postgres upgrade path puts a replica behind reads, and a
+// SELECT-by-id immediately after the INSERT can return empty.
+// Audit finding B6 (memoized-inventing-mountain.md).
+async function maybeGenerateSessionLabel(sessionOrId) {
   try {
-    const sRes = await pool.query(`SELECT * FROM ai_sessions WHERE id = $1`, [sessionId]);
-    if (!sRes.rows.length) return;
-    const session = sRes.rows[0];
+    let session;
+    if (sessionOrId && typeof sessionOrId === 'object' && sessionOrId.id != null) {
+      session = sessionOrId;
+    } else {
+      const sRes = await pool.query(`SELECT * FROM ai_sessions WHERE id = $1`, [sessionOrId]);
+      if (!sRes.rows.length) return;
+      session = sRes.rows[0];
+    }
+    const sessionId = session.id;
     if (session.summary) return; // already have a summary; don't overwrite
 
     // Load the first user + assistant exchange. We summarize from text
@@ -10940,7 +10952,10 @@ router.post('/86/chat', requireAuth, requireOrg, aiChatLimiter, aiChatHourlyLimi
         // response is fully flushed.
         if (session._freshlyCreated || session.turn_count <= 1) {
           setImmediate(() => {
-            maybeGenerateSessionLabel(session.id).catch(() => {});
+            // Pass the session object directly to avoid a SELECT-by-id
+            // that could miss on a freshly-INSERTed row under replica
+            // lag. See maybeGenerateSessionLabel docs.
+            maybeGenerateSessionLabel(session).catch(() => {});
           });
         }
       }
