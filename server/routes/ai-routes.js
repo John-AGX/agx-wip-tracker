@@ -3177,10 +3177,45 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
   // crashed the Node process and put Railway into a deploy-restart
   // loop. Idempotent writes prevent that.
   let _ended = false;
+  // Track consecutive write failures so we can hard-end the response
+  // after the underlying TCP stream is clearly broken. Pre-fix: the
+  // empty catch blocks swallowed every write failure; subsequent
+  // writes assumed success but actually no-op'd, and the client saw
+  // a frozen chat with no error event delivered. Audit finding B5
+  // (memoized-inventing-mountain.md).
+  let _consecWriteFails = 0;
+  const MAX_CONSEC_WRITE_FAILS = 2;
   function send(payload) {
     if (_ended || res.writableEnded) return;
-    try { res.write('data: ' + JSON.stringify(payload) + '\n\n'); }
-    catch (e) {}
+    try {
+      res.write('data: ' + JSON.stringify(payload) + '\n\n');
+      _consecWriteFails = 0;
+    } catch (e) {
+      _consecWriteFails++;
+      // Log once per failure burst so Railway tails capture the
+      // forensic detail without spamming a hot loop.
+      if (_consecWriteFails === 1) {
+        try {
+          console.warn('[v2-stream] write failed',
+            'session_id:', sessionId,
+            'code:', e && e.code,
+            'message:', e && e.message);
+        } catch (_) {}
+      }
+      // After MAX_CONSEC_WRITE_FAILS, the stream is unrecoverable.
+      // Mark ended so subsequent send/endWithDone calls become
+      // no-ops; force-end the response so Express doesn't keep the
+      // socket dangling.
+      if (_consecWriteFails >= MAX_CONSEC_WRITE_FAILS && !_ended) {
+        _ended = true;
+        try {
+          console.warn('[v2-stream] hard-end after',
+            _consecWriteFails, 'consecutive write failures',
+            'session_id:', sessionId);
+        } catch (_) {}
+        try { res.end(); } catch (_) {}
+      }
+    }
   }
   function endWithDone() {
     if (_ended || res.writableEnded) return;
