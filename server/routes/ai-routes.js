@@ -5266,8 +5266,48 @@ async function execClientDirectoryTool(name, input) {
     case 'delete_client': {
       const r = await pool.query('SELECT name FROM clients WHERE id = $1', [input.client_id]);
       if (!r.rows.length) throw new Error('client_id not found');
-      await pool.query('DELETE FROM clients WHERE id = $1', [input.client_id]);
-      return `Deleted "${r.rows[0].name}".`;
+      // Audit finding B7 (revised): leads.client_id has ON DELETE SET NULL
+      // (FK cascades correctly), but estimates.data->>'clientId' and
+      // jobs.data->>'clientId' are stored inside JSONB blobs without FK
+      // enforcement — a bare DELETE FROM clients leaves dangling references
+      // that surface as "Client (deleted)" ghosts in the leads/estimates
+      // index. Wrap the delete in a transaction that ALSO strips the
+      // clientId key from any estimate/job JSONB referencing this client.
+      const dbClient = await pool.connect();
+      let estClearedCount = 0;
+      let jobClearedCount = 0;
+      try {
+        await dbClient.query('BEGIN');
+        const er = await dbClient.query(
+          `UPDATE estimates SET data = data - 'clientId',
+                                updated_at = NOW()
+            WHERE data->>'clientId' = $1
+            RETURNING id`,
+          [input.client_id]
+        );
+        estClearedCount = er.rowCount;
+        const jr = await dbClient.query(
+          `UPDATE jobs SET data = data - 'clientId',
+                           updated_at = NOW()
+            WHERE data->>'clientId' = $1
+            RETURNING id`,
+          [input.client_id]
+        );
+        jobClearedCount = jr.rowCount;
+        // Now safe to delete the client row — leads.client_id FK and
+        // clients.parent_client_id self-FK both have ON DELETE SET NULL.
+        await dbClient.query('DELETE FROM clients WHERE id = $1', [input.client_id]);
+        await dbClient.query('COMMIT');
+      } catch (e) {
+        try { await dbClient.query('ROLLBACK'); } catch (_) {}
+        dbClient.release();
+        throw e;
+      }
+      dbClient.release();
+      const trailing = [];
+      if (estClearedCount) trailing.push('cleared client link on ' + estClearedCount + ' estimate' + (estClearedCount === 1 ? '' : 's'));
+      if (jobClearedCount) trailing.push('cleared client link on ' + jobClearedCount + ' job' + (jobClearedCount === 1 ? '' : 's'));
+      return `Deleted "${r.rows[0].name}"` + (trailing.length ? ' (' + trailing.join(', ') + ')' : '') + '.';
     }
     case 'attach_business_card_to_client': {
       // Note: the userId is needed to find the right pending bucket.
