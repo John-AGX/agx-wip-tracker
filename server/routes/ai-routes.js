@@ -3181,6 +3181,20 @@ async function seedRecoveredSession(anthropic, freshSession, oldSessionRow) {
               'with', turns.length, 'recap turns (' + recap.length + ' chars)');
 }
 
+// Verbose v2-stream tracing — gated behind DEBUG_V2_STREAM env var.
+// Without the flag, the per-turn state transition logs (open / sent /
+// idle / flush / terminal end / iteration-catch / mixed-turn /
+// compaction event) are suppressed to keep Railway tails scannable.
+// All console.warn and console.error calls remain ungated so real
+// failures still surface. Set DEBUG_V2_STREAM=1 when diagnosing the
+// stream state machine. Audit finding C2 (memoized-inventing-mountain.md).
+const DEBUG_V2_STREAM = process.env.DEBUG_V2_STREAM === '1';
+function vDebug(...args) {
+  if (DEBUG_V2_STREAM) {
+    try { console.log(...args); } catch (_) {}
+  }
+}
+
 async function runV2SessionStream({ anthropic, res, session, eventsToSend, persistAssistantText, onCustomToolUse, freshlyCreated }) {
   // Same idempotency guard as runStream — V2 sessions also fire dual
   // error paths (events.send throw + stream 'error' event) on certain
@@ -3333,7 +3347,7 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
     let stream;
     try {
       stream = await anthropic.beta.sessions.events.stream(sessionId);
-      console.log('[v2-stream] opened', sessionId);
+      vDebug('[v2-stream] opened', sessionId);
     } catch (e) {
       console.error('Session stream open failed:', e);
       send({ error: e.message || 'Failed to open session stream' });
@@ -3387,7 +3401,7 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
               ' · ack:', JSON.stringify(resp && resp.data ? resp.data.map(d => ({ type: d.type, id: d.id })) : null));
           }
         }
-        console.log('[v2-stream] sent', eventsForThisOpen.length, 'event(s) to', sessionId,
+        vDebug('[v2-stream] sent', eventsForThisOpen.length, 'event(s) to', sessionId,
           '(serial single-event sends, Anthropic acked', totalAcked + ')');
       } catch (e) {
         if (isStuckSessionError(e) && !freshlyCreated) {
@@ -3607,7 +3621,7 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
             // both shapes are documented variants depending on SDK
             // version. Non-fatal on UPDATE failure (the actual
             // compaction already happened server-side).
-            console.log('[v2-stream] compaction event:', event.type, 'session', sessionId);
+            vDebug('[v2-stream] compaction event:', event.type, 'session', sessionId);
             try {
               await pool.query(
                 `UPDATE ai_sessions
@@ -3646,7 +3660,7 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
               (event.stop_reason && Array.isArray(event.stop_reason.event_ids))
                 ? event.stop_reason.event_ids
                 : [];
-            console.log('[v2-stream] idle', sessionId, 'stop_reason:', stopType,
+            vDebug('[v2-stream] idle', sessionId, 'stop_reason:', stopType,
               'blocked_event_ids:', JSON.stringify(blockedEventIds),
               'pendingTools:', pendingToolUses.length,
               'pendingAutoResults:', pendingAutoResults.length,
@@ -3713,7 +3727,7 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
                 // kills the stream with UND_ERR_BODY_TIMEOUT. The
                 // Windermere "yeah go ahead" hang reproduced
                 // exactly this case.
-                console.log('[v2-stream] mixed turn — auto-flushing',
+                vDebug('[v2-stream] mixed turn — auto-flushing',
                   pendingAutoResults.length, 'result(s) and surfacing',
                   pendingToolUses.length, 'approval card(s) for', sessionId,
                   'ids_sending:', JSON.stringify(pendingAutoResults.map(e => e.custom_tool_use_id)));
@@ -3741,7 +3755,7 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
                 // for the next openStreamAndSend call and reopen
                 // the stream so the model can produce its end-of-
                 // turn response.
-                console.log('[v2-stream] flushing', pendingAutoResults.length,
+                vDebug('[v2-stream] flushing', pendingAutoResults.length,
                   'auto-tier tool_result(s) for', sessionId,
                   'ids_sending:', JSON.stringify(pendingAutoResults.map(e => e.custom_tool_use_id)));
                 nextEventsToSend = pendingAutoResults.slice();
@@ -3936,7 +3950,7 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
       // stop debug story. We log on both the catch path and the normal-
       // exit path below so Railway tail-logs always include enough
       // context to tell model-decision from stream-anomaly.
-      console.log('[v2-stream] iteration-catch end state',
+      vDebug('[v2-stream] iteration-catch end state',
         'session', sessionId,
         'session_id_db:', session && session.id,
         'session_kind:', session && session.session_kind,
@@ -3983,7 +3997,7 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
       // Fix 1 diagnostic — log the FINAL state of every terminal
       // exit (silent-stop, model-end, network-drop). One log line
       // per turn keeps Railway tails scannable.
-      console.log('[v2-stream] terminal end',
+      vDebug('[v2-stream] terminal end',
         'session', sessionId,
         'session_id_db:', session && session.id,
         'session_kind:', session && session.session_kind,
