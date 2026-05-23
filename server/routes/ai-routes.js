@@ -6363,13 +6363,9 @@ const PAYLOAD_TOOLS = [
 // Build the SKILL.md body for one local pack. Mirrors the helper of
 // the same name in admin-agents-routes.js so CoS-driven mirrors and
 // admin-button mirrors produce byte-identical uploads.
-function slugifyMirrorName(s) {
-  return String(s || 'skill')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 64) || 'skill';
-}
+// slugifyMirrorName retained as a thin alias for the call sites;
+// canonical helper lives in server/util/slugify.js (audit finding C3).
+const { slugify: slugifyMirrorName } = require('../util/slugify');
 
 function buildSkillMarkdownForMirror(pack) {
   const slug = slugifyMirrorName(pack.name);

@@ -762,13 +762,9 @@ const { toFile } = require('@anthropic-ai/sdk');
 // loading runtime can decide when to fetch the skill body. We include
 // both even though our current pack model doesn't separate them — the
 // pack name doubles as the description for now.
-function slugifySkillName(s) {
-  return String(s || 'skill')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 64) || 'skill';
-}
+// slugifySkillName retained as a thin alias for back-compat with the
+// 3 call sites below; canonical helper lives in server/util/slugify.js.
+const { slugify: slugifySkillName } = require('../util/slugify');
 
 function buildSkillMarkdown(pack) {
   const slug = slugifySkillName(pack.name);

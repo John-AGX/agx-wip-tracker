@@ -35,13 +35,9 @@ function getAnthropic() {
 // Build a SKILL.md body for a pack. Mirrors buildSkillMarkdownForMirror
 // in ai-routes.js so admin-button mirrors produce byte-identical
 // uploads to CoS-driven ones (legacy code path).
-function slugifyPackName(s) {
-  return String(s || 'skill')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 64) || 'skill';
-}
+// slugifyPackName retained as a thin alias for the existing call sites;
+// canonical helper lives in server/util/slugify.js (audit finding C3).
+const { slugify: slugifyPackName } = require('../util/slugify');
 
 function buildPackSkillMd(pack) {
   const slug = slugifyPackName(pack.name);
