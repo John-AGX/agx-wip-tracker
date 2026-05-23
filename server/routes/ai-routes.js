@@ -6085,7 +6085,8 @@ const READ_TOOLS = [
     description:
       'List/search entities by free-text filter. Returns up to `limit` light rows per filter. ' +
       'Use this when you don\'t know the exact id and need to find one before emitting a payload. ' +
-      'Supported entity_types: job, client, lead, user, estimate, material, sub, business_card. ' +
+      'Supported entity_types: job, wip, client, lead, user, estimate, material, sub, business_card. ' +
+      'IMPORTANT: For "top producing jobs", "highest backlog", "worst margin" or any ranking question that needs $/% per job, pass entity_type:"wip" (or entity_type:"job" with no filter) — it returns the full WIP rollup with income/cost/margin/backlog/pctComplete per job, sorted by `sort_by`. entity_type:"job" WITH a filter returns the lighter name-lookup result (no metrics). ' +
       'BATCHING: When you need to look up N items on the same entity_type (e.g. find several materials by keyword for an estimate), pass `filters: ["keyword1", "keyword2", ...]` to run them ALL in one tool call. Results come back grouped per filter. This is ALWAYS preferable to firing N separate search_entities calls.',
     tier: 'auto',
     input_schema: {
@@ -6094,7 +6095,7 @@ const READ_TOOLS = [
       properties: {
         entity_type: {
           type: 'string',
-          enum: ['job', 'client', 'lead', 'user', 'estimate', 'material', 'sub', 'business_card'],
+          enum: ['job', 'wip', 'client', 'lead', 'user', 'estimate', 'material', 'sub', 'business_card'],
         },
         filter: { type: 'string', description: 'Single free-text filter (case-insensitive substring). Use `filters` for multi-keyword lookups.' },
         filters: {
@@ -6104,6 +6105,7 @@ const READ_TOOLS = [
           description: 'Batch mode — array of substring filters (max 12). One tool call replaces N separate searches. Results grouped per filter so you can map outputs to inputs.'
         },
         status: { type: 'string', description: 'Optional status filter (entity_types that have one).' },
+        sort_by: { type: 'string', enum: ['backlog', 'contract', 'margin', 'pct_complete'], description: 'Only used when entity_type is "wip" or "job" without a filter. backlog: highest unrecognized revenue. contract: highest total income (= "top producing"). margin: worst JTD margin first. pct_complete: most complete first.' },
         limit: { type: 'integer', minimum: 1, maximum: 100, description: 'Per-filter row cap. Default 20.' },
       },
     },
@@ -6294,6 +6296,35 @@ async function buildStaffContext() {
 //   entity_type='estimate'→ read_past_estimates
 //   entity_type='material'→ read_materials
 //   entity_type='sub'     → read_subs
+// dispatchReadTool — tries every executor that hosts read handlers,
+// falling back on "Unknown staff tool" / "Unknown tool" errors. Read
+// tools historically grew in multiple dispatcher functions
+// (execStaffTool, execClientDirectoryTool, execIntakeRead). When the
+// consolidated read surface (read_entity + search_entities) routed
+// always to execStaffTool, every handler living in the other
+// dispatchers (read_jobs, read_wip_summary, read_users,
+// read_existing_clients, read_existing_leads) failed with
+// "Unknown staff tool: <name>". This wrapper resolves them. Order:
+// execStaffTool → execClientDirectoryTool → execIntakeRead. Each
+// catch is narrow — only "Unknown ... tool: <name>" falls through;
+// real errors (DB, validation) propagate as before.
+async function dispatchReadTool(name, input, ctx) {
+  const isUnknownToolError = (e) =>
+    e && typeof e.message === 'string' &&
+    /^Unknown (?:staff )?tool:\s/.test(e.message);
+  try { return await execStaffTool(name, input, ctx); }
+  catch (e) { if (!isUnknownToolError(e)) throw e; }
+  try { return await execClientDirectoryTool(name, input); }
+  catch (e) { if (!isUnknownToolError(e)) throw e; }
+  // execIntakeRead handles read_existing_clients / read_existing_leads
+  // (it's an if-chain, not a switch — returns undefined for unknowns).
+  const intakeResult = await execIntakeRead(name, input);
+  if (intakeResult !== undefined) return intakeResult;
+  return 'Tool "' + name + '" is registered as a schema but has no executor implementation yet. ' +
+    'Tell the user this read capability is on the roadmap; pick a different approach to answer ' +
+    'their question (different tool, or ask them to navigate to the relevant page).';
+}
+
 async function execConsolidatedRead(name, input, ctx) {
   const inp = input || {};
 
@@ -6309,21 +6340,43 @@ async function execConsolidatedRead(name, input, ctx) {
       ? inp.filters.map((s) => String(s || '').trim()).filter(Boolean).slice(0, 12)
       : null;
     const singleFilter = inp.filter || inp.q || '';
+    // sort_by passes through to read_wip_summary for the "top producing
+    // jobs" workflow. Accepted values: backlog | contract | margin |
+    // pct_complete. Default is backlog when route hits read_wip_summary.
+    const sortBy = inp.sort_by || inp.sortBy || null;
 
     function dispatchOne(q) {
       switch (et) {
-        case 'job':      return execStaffTool('read_jobs',     { q, status: inp.status, limit }, ctx);
-        case 'client':   return execStaffTool('read_clients',  { q, limit }, ctx);
-        case 'lead':     return execStaffTool('read_leads',    { q, status: inp.status, limit }, ctx);
-        case 'user':     return execStaffTool('read_users',    { q, limit }, ctx);
-        case 'estimate': return execStaffTool('read_past_estimates', { q, limit }, ctx);
-        case 'material': return execStaffTool('read_materials',{ q, limit }, ctx);
-        case 'sub':      return execStaffTool('read_subs',     { q, limit }, ctx);
+        case 'job':
+          // No filter → enumerate jobs with full WIP metrics so 86 can
+          // answer "top X producing", "highest backlog", "worst margin"
+          // without a follow-up tool. With a filter → legacy read_jobs
+          // (name/number lookup, no metrics, lighter payload).
+          if (!q) {
+            return dispatchReadTool('read_wip_summary', {
+              status: inp.status,
+              sort_by: sortBy || 'contract',
+              limit
+            }, ctx);
+          }
+          return dispatchReadTool('read_jobs', { q, status: inp.status, limit }, ctx);
+        case 'wip':
+          // Explicit WIP rollup route for when 86 already knows the user
+          // wants metrics. sort_by controls ranking.
+          return dispatchReadTool('read_wip_summary', {
+            status: inp.status, sort_by: sortBy || 'contract', limit
+          }, ctx);
+        case 'client':   return dispatchReadTool('read_clients',  { q, limit }, ctx);
+        case 'lead':     return dispatchReadTool('read_leads',    { q, status: inp.status, limit }, ctx);
+        case 'user':     return dispatchReadTool('read_users',    { q, limit }, ctx);
+        case 'estimate': return dispatchReadTool('read_past_estimates', { q, limit }, ctx);
+        case 'material': return dispatchReadTool('read_materials',{ q, limit }, ctx);
+        case 'sub':      return dispatchReadTool('read_subs',     { q, limit }, ctx);
         case 'business_card':
-          return execStaffTool('read_existing_clients', { q, limit }, ctx);
+          return dispatchReadTool('read_existing_clients', { q, limit }, ctx);
         default:
           return Promise.resolve(
-            'search_entities: unsupported entity_type "' + et + '". Supported: job, client, lead, user, estimate, material, sub.'
+            'search_entities: unsupported entity_type "' + et + '". Supported: job, wip, client, lead, user, estimate, material, sub, business_card.'
           );
       }
     }
@@ -6355,29 +6408,29 @@ async function execConsolidatedRead(name, input, ctx) {
   if (et === 'job') {
     if (!id) return 'read_entity(job) requires id';
     if (includes.indexOf('qb_cost_lines') !== -1) {
-      return execStaffTool('read_qb_cost_lines', { jobId: id }, ctx);
+      return dispatchReadTool('read_qb_cost_lines', { jobId: id }, ctx);
     }
     if (includes.indexOf('building_breakdown') !== -1 || includes.indexOf('buildings') !== -1) {
-      return execStaffTool('read_building_breakdown', { jobId: id }, ctx);
+      return dispatchReadTool('read_building_breakdown', { jobId: id }, ctx);
     }
     if (depth === 'audit' || includes.indexOf('audit') !== -1) {
-      return execStaffTool('read_job_pct_audit', { jobId: id }, ctx);
+      return dispatchReadTool('read_job_pct_audit', { jobId: id }, ctx);
     }
     if (depth === 'full' || includes.indexOf('workspace_sheet') !== -1) {
-      return execStaffTool('read_workspace_sheet_full', { jobId: id }, ctx);
+      return dispatchReadTool('read_workspace_sheet_full', { jobId: id }, ctx);
     }
     // summary — use search filter on id
-    return execStaffTool('read_jobs', { q: id, limit: 1 }, ctx);
+    return dispatchReadTool('read_jobs', { q: id, limit: 1 }, ctx);
   }
   if (et === 'estimate') {
     if (!id) return 'read_entity(estimate) requires id';
     if (depth === 'full' || includes.indexOf('lines') !== -1) {
-      return execStaffTool('read_active_lines', { estimate_id: id }, ctx);
+      return dispatchReadTool('read_active_lines', { estimate_id: id }, ctx);
     }
     if (depth === 'audit' || includes.indexOf('compare') !== -1) {
-      return execStaffTool('read_past_estimate_lines', { estimate_id: id }, ctx);
+      return dispatchReadTool('read_past_estimate_lines', { estimate_id: id }, ctx);
     }
-    return execStaffTool('read_past_estimates', { q: id, limit: 1 }, ctx);
+    return dispatchReadTool('read_past_estimates', { q: id, limit: 1 }, ctx);
   }
   if (et === 'client') {
     if (!id) return 'read_entity(client) requires id';
@@ -6440,10 +6493,20 @@ async function execConsolidatedRead(name, input, ctx) {
     return lines.join('\n');
   }
   if (et === 'pipeline') {
-    return execStaffTool('read_lead_pipeline', inp, ctx);
+    return dispatchReadTool('read_lead_pipeline', inp, ctx);
+  }
+  if (et === 'wip') {
+    // read_entity('wip', sort_by, status, limit) → company-wide WIP
+    // rollup with per-job income/cost/margin. Same handler as
+    // search_entities('wip', ...) — id is ignored when present.
+    return dispatchReadTool('read_wip_summary', {
+      status: inp.status,
+      sort_by: inp.sort_by || inp.sortBy || 'contract',
+      limit: inp.limit
+    }, ctx);
   }
 
-  return 'read_entity: unsupported entity_type "' + et + '". Supported: job, estimate, client, lead, pipeline.';
+  return 'read_entity: unsupported entity_type "' + et + '". Supported: job, wip, estimate, client, lead, pipeline.';
 }
 
 async function execStaffTool(name, input, ctx) {
