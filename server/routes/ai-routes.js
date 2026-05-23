@@ -7688,6 +7688,221 @@ async function execStaffTool(name, input, ctx) {
       return out.join('\n');
     }
 
+    // ── Job-detail reads (implemented 2026-05-23 — previously ghosts) ──
+    // The schemas at lines 955/971/1005/1020 advertise these but the
+    // executor bodies were never written. Restored here so depth='audit'
+    // / depth='full' / include=['qb_cost_lines'/'building_breakdown']
+    // on read_entity('job', id) actually return data instead of the
+    // "no executor implementation yet" fallback.
+
+    case 'read_qb_cost_lines': {
+      const jobId = String(input.jobId || input.job_id || '').trim();
+      if (!jobId) return 'read_qb_cost_lines requires jobId.';
+      const where = ['job_id = $1'];
+      const params = [jobId];
+      let p = 2;
+      if (input.account) { where.push('account ILIKE $' + p); params.push('%' + input.account + '%'); p++; }
+      if (input.vendor)  { where.push('vendor ILIKE $' + p);  params.push('%' + input.vendor + '%');  p++; }
+      if (input.status === 'linked')   where.push('linked_node_id IS NOT NULL');
+      if (input.status === 'unlinked') where.push('linked_node_id IS NULL');
+      if (input.search) {
+        where.push('(vendor ILIKE $' + p + ' OR memo ILIKE $' + p + ' OR account ILIKE $' + p + ' OR klass ILIKE $' + p + ')');
+        params.push('%' + input.search + '%');
+        p++;
+      }
+      const limit = Math.max(1, Math.min(1000, parseInt(input.limit, 10) || 200));
+      params.push(limit);
+      const r = await pool.query(
+        'SELECT id, vendor, txn_date, txn_type, num, account, account_type, klass, memo, amount, ' +
+        '       linked_node_id IS NOT NULL AS linked ' +
+        '  FROM qb_cost_lines ' +
+        ' WHERE ' + where.join(' AND ') +
+        ' ORDER BY txn_date DESC NULLS LAST, vendor ' +
+        ' LIMIT $' + p,
+        params
+      );
+      if (!r.rows.length) return 'No QB cost lines matched for job ' + jobId + '.';
+      const total = r.rows.reduce((s, row) => s + Number(row.amount || 0), 0);
+      const out = ['QB cost lines for job ' + jobId + ' (' + r.rows.length + ' rows, ' + fmtMoney(total) + ' total):'];
+      r.rows.forEach(row => {
+        const date = row.txn_date ? String(row.txn_date).slice(0, 10) : '?';
+        const linkMark = row.linked ? '✓ linked' : '⊘ unlinked';
+        out.push('- ' + date + ' ' + fmtMoney(Number(row.amount || 0)) + ' ' + (row.vendor || '(no vendor)') +
+          ' · ' + (row.account || '?') +
+          (row.memo ? ' · ' + String(row.memo).slice(0, 60) : '') +
+          ' · ' + linkMark);
+      });
+      return out.join('\n');
+    }
+
+    case 'read_building_breakdown': {
+      const jobId = String(input.jobId || input.job_id || '').trim();
+      if (!jobId) return 'read_building_breakdown requires jobId.';
+      const r = await pool.query('SELECT data FROM jobs WHERE id = $1', [jobId]);
+      if (!r.rows.length) return 'Job not found: ' + jobId;
+      const d = r.rows[0].data || {};
+      const buildings = Array.isArray(d.buildings) ? d.buildings : [];
+      const phases    = Array.isArray(d.phases)    ? d.phases    : [];
+      const graph     = d.nodeGraph || {};
+      const nodes     = Array.isArray(graph.nodes) ? graph.nodes : [];
+      const wires     = Array.isArray(graph.wires) ? graph.wires : [];
+
+      // Resolve target: a specific building (b1 record id, or t1 node id)
+      // or fall through to a per-building summary if none given.
+      const targetId = String(input.building_id || '').trim();
+      const buildingsList = targetId
+        ? (function () {
+            let b = buildings.find(x => x.id === targetId);
+            if (!b) {
+              const t1 = nodes.find(n => n.id === targetId && n.type === 't1');
+              if (t1) b = buildings.find(x => x.id === t1.buildingId);
+            }
+            return b ? [b] : [];
+          })()
+        : buildings;
+
+      if (targetId && !buildingsList.length) {
+        return 'No building matched "' + targetId + '" on job ' + jobId + '. Try one of: ' +
+          buildings.map(b => b.id + (b.name ? ' (' + b.name + ')' : '')).join(', ');
+      }
+
+      const blocks = [];
+      for (const b of buildingsList) {
+        const bPhases = phases.filter(ph => ph.buildingId === b.id);
+        const totalBudget = bPhases.reduce((s, ph) => s + Number(ph.phaseBudget || ph.budget || 0), 0);
+        const weightedPct = totalBudget > 0
+          ? bPhases.reduce((s, ph) => s + Number(ph.pctComplete || 0) * Number(ph.phaseBudget || ph.budget || 0), 0) / totalBudget
+          : 0;
+        blocks.push('## ' + (b.name || '(unnamed)') + ' [' + b.id + ']' +
+          (b.budget ? ' · budget ' + fmtMoney(Number(b.budget || 0)) : ''));
+        blocks.push('- Phases: ' + bPhases.length + ' · weighted pct: ' + weightedPct.toFixed(1) + '% · phase-budget sum: ' + fmtMoney(totalBudget));
+        const phaseLimit = targetId ? 100 : 25;
+        bPhases.slice(0, phaseLimit).forEach(ph => {
+          const budget = Number(ph.phaseBudget || ph.budget || 0);
+          const weight = totalBudget > 0 ? (budget / totalBudget * 100) : 0;
+          blocks.push('  • [' + ph.id + '] ' + (ph.name || '(unnamed)') +
+            ' · pct=' + Math.round(Number(ph.pctComplete || 0)) + '%' +
+            ' · budget=' + fmtMoney(budget) +
+            ' · weight=' + weight.toFixed(1) + '%');
+        });
+        if (bPhases.length > phaseLimit) blocks.push('  • …and ' + (bPhases.length - phaseLimit) + ' more');
+
+        // Wires feeding this building (t2/co → t1 with buildingId=b.id).
+        const t1Nodes = nodes.filter(n => n.type === 't1' && n.buildingId === b.id).map(n => n.id);
+        const feedingWires = wires.filter(w => t1Nodes.indexOf(w.to) !== -1);
+        if (feedingWires.length) {
+          blocks.push('### Graph wires feeding this building (' + feedingWires.length + ')');
+          feedingWires.slice(0, 30).forEach(w => {
+            const src = nodes.find(n => n.id === w.from);
+            const srcLabel = src ? (src.type + ' "' + (src.label || '?') + '"') : w.from;
+            blocks.push('  • ' + srcLabel + ' → [' + w.to + '] · allocPct=' + Math.round(Number(w.allocPct || 0)) +
+              '% · pctComplete=' + (w.pctComplete != null ? Math.round(Number(w.pctComplete)) + '%' : '(falls back to source)'));
+          });
+          if (feedingWires.length > 30) blocks.push('  • …and ' + (feedingWires.length - 30) + ' more');
+        }
+        blocks.push('');
+      }
+      return 'Building breakdown for job ' + jobId + ':\n\n' + blocks.join('\n');
+    }
+
+    case 'read_job_pct_audit': {
+      const jobId = String(input.jobId || input.job_id || '').trim();
+      if (!jobId) return 'read_job_pct_audit requires jobId.';
+      const r = await pool.query('SELECT data FROM jobs WHERE id = $1', [jobId]);
+      if (!r.rows.length) return 'Job not found: ' + jobId;
+      const d = r.rows[0].data || {};
+      const buildings = Array.isArray(d.buildings) ? d.buildings : [];
+      const phases    = Array.isArray(d.phases)    ? d.phases    : [];
+      const graph     = d.nodeGraph || {};
+      const nodes     = Array.isArray(graph.nodes) ? graph.nodes : [];
+      const wires     = Array.isArray(graph.wires) ? graph.wires : [];
+      const buildingIds = new Set(buildings.map(b => b.id));
+
+      const orphanPhases = phases.filter(ph => !ph.buildingId || !buildingIds.has(ph.buildingId));
+      const phasesNoBudget = phases.filter(ph => !(Number(ph.phaseBudget || ph.budget) > 0));
+      const buildingsNoPhases = buildings.filter(b => !phases.some(ph => ph.buildingId === b.id));
+      const danglingT1 = nodes.filter(n => n.type === 't1' && (!n.buildingId || !buildingIds.has(n.buildingId)));
+      const staleT1 = nodes.filter(n =>
+        n.type === 't1' &&
+        Number(n.pctComplete || 0) > 0 &&
+        wires.some(w => w.to === n.id)
+      );
+      const zeroAllocWires = wires.filter(w => Number(w.allocPct || 0) === 0);
+
+      const out = ['PCT audit for job ' + jobId + ':'];
+      const sections = [
+        ['Orphan phases (invisible to rollup)', orphanPhases, (p) =>
+          '[' + p.id + '] ' + (p.name || '(unnamed)') +
+          (p.buildingId ? ' · points at deleted building ' + p.buildingId : ' · no buildingId')],
+        ['Dangling t1 nodes (graph t1 with no underlying building record)', danglingT1, (n) =>
+          '[' + n.id + '] ' + (n.label || '(no label)') +
+          (n.buildingId ? ' · buildingId=' + n.buildingId : '')],
+        ['Stale t1 pctComplete (own pct set AND has wired children — value ignored)', staleT1, (n) =>
+          '[' + n.id + '] ' + (n.label || '(no label)') + ' · pct=' + Math.round(Number(n.pctComplete || 0)) + '%'],
+        ['Zero-alloc wires (contribute nothing to rollup)', zeroAllocWires, (w) =>
+          w.from + ' → ' + w.to + ' · allocPct=0'],
+        ['Buildings with no phases (always read 0%)', buildingsNoPhases, (b) =>
+          '[' + b.id + '] ' + (b.name || '(unnamed)')],
+        ['Phases without budget (equal-weighted in rollup; can over/under-count)', phasesNoBudget, (p) =>
+          '[' + p.id + '] ' + (p.name || '(unnamed)')],
+      ];
+      let hasFindings = false;
+      sections.forEach(([title, list, fmt]) => {
+        if (!list.length) return;
+        hasFindings = true;
+        out.push('');
+        out.push('## ' + title + ' (' + list.length + ')');
+        list.slice(0, 25).forEach(item => out.push('- ' + fmt(item)));
+        if (list.length > 25) out.push('- …and ' + (list.length - 25) + ' more');
+      });
+      if (!hasFindings) out.push('✓ No pct-audit issues found.');
+      return out.join('\n');
+    }
+
+    case 'read_workspace_sheet_full': {
+      const jobId = String(input.jobId || input.job_id || '').trim();
+      if (!jobId) return 'read_workspace_sheet_full requires jobId.';
+      const sheetName = String(input.sheet_name || '').trim();
+      if (!sheetName) return 'read_workspace_sheet_full requires sheet_name.';
+      const r = await pool.query('SELECT data FROM jobs WHERE id = $1', [jobId]);
+      if (!r.rows.length) return 'Job not found: ' + jobId;
+      const d = r.rows[0].data || {};
+      const sheets = Array.isArray(d.workspaceSheets) ? d.workspaceSheets : [];
+      // Match: exact → case-insensitive → trimmed lowercase
+      let sheet = sheets.find(s => s.name === sheetName);
+      if (!sheet) sheet = sheets.find(s => String(s.name || '').toLowerCase() === sheetName.toLowerCase());
+      if (!sheet) sheet = sheets.find(s => String(s.name || '').trim().toLowerCase() === sheetName.trim().toLowerCase());
+      if (!sheet) {
+        const available = sheets.map(s => s.name).filter(Boolean).join(', ');
+        return 'Sheet "' + sheetName + '" not found on job ' + jobId + '. Available sheets: ' + (available || '(none)');
+      }
+      const out = ['Sheet: ' + sheet.name];
+      if (Array.isArray(sheet.rows)) {
+        out.push('(' + sheet.rows.length + ' rows)');
+        sheet.rows.forEach((row, i) => {
+          const cells = Array.isArray(row)
+            ? row.map(c => (c == null ? '' : String(c))).join(' | ')
+            : (typeof row === 'object' ? JSON.stringify(row) : String(row));
+          out.push((i + 1) + ': ' + cells);
+        });
+      } else if (sheet.cells && typeof sheet.cells === 'object') {
+        const keys = Object.keys(sheet.cells).sort();
+        out.push('(' + keys.length + ' cells)');
+        keys.forEach(k => out.push(k + ': ' + sheet.cells[k]));
+      } else {
+        // Unknown shape — dump JSON, capped so we don't blow context.
+        out.push(JSON.stringify(sheet, null, 2).slice(0, 8000));
+      }
+      const text = out.join('\n');
+      // Cap total output at ~12k chars so a giant sheet doesn't melt
+      // a turn. The model can ask for a different sheet or a subset
+      // if it needs more.
+      if (text.length > 12000) {
+        return text.slice(0, 12000) + '\n\n…(sheet truncated at 12000 chars — ask for a subset or different sheet)';
+      }
+      return text;
+    }
+
     default:
       throw new Error('Unknown staff tool: ' + name);
   }
