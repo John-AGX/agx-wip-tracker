@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <!-- Pin every relative URL to the site root. Required because the SPA
          router uses pathname routing (/wip/jobs/:id, /admin/roles); without
          this, a hard refresh on a deep link would resolve `js/foo.js`
@@ -11,6 +11,34 @@
          parse. -->
     <base href="/">
     <title>Project 86</title>
+
+    <!-- ── PWA scaffolding (M0) ──────────────────────────────────────
+         Lets users "Add to Home Screen" on iOS + Android, launches the
+         site full-screen with our brand color, and registers a service
+         worker for offline-capable shell caching. See manifest.json
+         and sw.js for the details. -->
+    <link rel="manifest" href="/manifest.json">
+    <meta name="theme-color" content="#0f172a">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Project 86">
+    <link rel="apple-touch-icon" sizes="180x180" href="/images/pwa/apple-touch-icon.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="/images/pwa/favicon-32.png">
+    <link rel="icon" type="image/svg+xml" href="/images/project-86-icon.svg">
+    <script>
+      // Register the service worker after the page has loaded so it
+      // never blocks first-paint. Sw.js itself uses skipWaiting +
+      // clients.claim to take control on first install / activation.
+      // Quietly logs failures — no service worker = web app still
+      // works, just no install affordance + no offline shell.
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', function () {
+          navigator.serviceWorker.register('/sw.js')
+            .then(function (reg) { console.log('[sw] registered, scope:', reg.scope); })
+            .catch(function (err) { console.warn('[sw] register failed:', err.message); });
+        });
+      }
+    </script>
 
     <!-- Brand-rename localStorage migration. One-time copy of every
          legacy-prefixed key (the old brand) to its p86- twin. Runs
