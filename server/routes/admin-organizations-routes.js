@@ -309,6 +309,16 @@ router.put('/:id/skill-packs/:packId', requireAuth, requireOrg, requireCapabilit
     const packId = Number(req.params.packId);
     if (!Number.isFinite(packId)) return res.status(400).json({ error: 'Invalid packId' });
     const b = req.body || {};
+    // Escape hatch: ?skip_mirror=1 updates the local row without re-
+    // mirroring to Anthropic. Use cases:
+    //   - admin maintenance edits where the mirror is broken or the
+    //     Anthropic key is rate-limited
+    //   - bulk edits during a Phase-1 migration where the mirror state
+    //     gets reconciled later via mirror-all
+    // Caveat: the local pack will drift from its Anthropic counterpart
+    // until the next intentional mirror. The admin UI should display
+    // a "drift" badge when local body != last-mirrored content.
+    const skipMirror = req.query && (req.query.skip_mirror === '1' || req.query.skip_mirror === 'true');
     const updates = [];
     const params = [targetId, packId];
     let p = 3;
@@ -372,7 +382,12 @@ router.put('/:id/skill-packs/:packId', requireAuth, requireOrg, requireCapabilit
       // old Anthropic skill, mint a fresh one with the new content,
       // and update our local pointer. The agent picks up the new id
       // on next sync. Failing both paths rolls the local edit back.
-      if (contentChanged && updated.anthropic_skill_id) {
+      //
+      // If skip_mirror is set, both branches below are bypassed and
+      // the local edit ships without touching Anthropic. The body
+      // is now drifted from any existing mirror until a future
+      // mirror-all run reconciles it.
+      if (contentChanged && updated.anthropic_skill_id && !skipMirror) {
         const anthropic = getAnthropic();
         if (!anthropic) {
           await pool.query(
@@ -423,7 +438,7 @@ router.put('/:id/skill-packs/:packId', requireAuth, requireOrg, requireCapabilit
             });
           }
         }
-      } else if (contentChanged && !updated.anthropic_skill_id) {
+      } else if (contentChanged && !updated.anthropic_skill_id && !skipMirror) {
         // Pack exists locally but never mirrored (shouldn't happen
         // post-migration). Try to mirror as a fresh skill.
         const anthropic = getAnthropic();
