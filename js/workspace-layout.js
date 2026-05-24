@@ -1169,6 +1169,18 @@
         var toggleBtn = document.getElementById('wsWorkspaceToggle');
         if (toggleBtn) toggleBtn.classList.remove('active');
       }
+      // Defensive minimize for the floating workspace panel: if a
+      // user opened the floating workspace and the _inWorkspaceMode
+      // teardown above didn't catch it (edge case where the panel
+      // lingered in ws-floating-graph-mode), collapse it into the
+      // folder icon so it doesn't obscure the tab content below.
+      // Audit finding W7b (memoized-inventing-mountain.md).
+      var floatingPanel = document.getElementById('wsFloatingPanel');
+      if (floatingPanel
+          && floatingPanel.classList.contains('ws-floating-graph-mode')
+          && !floatingPanel.classList.contains('ws-floating-folder')) {
+        try { minimizeWorkspace(); } catch (_) { /* don't let UX polish crash tab switching */ }
+      }
       var allPanels = Array.from(rc.children);
       allPanels.forEach(function(p) { if (!p.classList.contains('ws-job-info-details')) p.style.display = 'none'; });
       var target = document.getElementById(targetId);
