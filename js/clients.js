@@ -1141,7 +1141,13 @@
     var roleSelectEl = document.getElementById('users-filter-role');
     if (!listEl) return;
 
-    var users = (window.p86Admin && window.p86Admin.getCachedUsers && window.p86Admin.getCachedUsers()) || [];
+    // Strip system_admin upfront — that's a platform-level role
+    // (Project 86 staff who own the deployment), not part of the
+    // customer org's team phonebook. Filter once and use everywhere
+    // below so the count, role-dropdown options, and rendered rows
+    // all agree.
+    var users = ((window.p86Admin && window.p86Admin.getCachedUsers && window.p86Admin.getCachedUsers()) || [])
+      .filter(function(u) { return u.role !== 'system_admin'; });
 
     // Populate the role-filter dropdown ONCE from the data so it
     // always reflects whatever roles actually exist in the org.
