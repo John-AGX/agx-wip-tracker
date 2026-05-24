@@ -3168,6 +3168,38 @@
         return r.json().then(function(err) { throw new Error(err.error || 'HTTP ' + r.status); });
       }
       return readSSEStream(r, function(payload) {
+        // session_resolved fires FIRST on every chat turn. When the
+        // server redirected our explicit sessionId (legacy_partitioned
+        // → user_thread per the resolveSessionForChat fix), the
+        // server-chosen db_session_id won't match _currentSessionId.
+        // Switch the sidebar's active row + refresh history so the
+        // user sees the actual conversation, not a stale empty
+        // legacy session.
+        if (payload.session_resolved) {
+          try {
+            var resolvedId = payload.session_resolved.db_session_id;
+            if (resolvedId != null && resolvedId !== _currentSessionId) {
+              var prev = _currentSessionId;
+              _currentSessionId = resolvedId;
+              // Refresh the sidebar list so the new session row
+              // (if freshly minted) appears, then re-highlight.
+              if (typeof fetchSessions === 'function') {
+                fetchSessions().then(function() {
+                  if (typeof renderSessionList === 'function' && Array.isArray(_sessionList)) {
+                    renderSessionList(_sessionList);
+                  }
+                });
+              }
+              console.log('[ai-panel] session redirected',
+                'from:', prev, 'to:', resolvedId,
+                'kind:', payload.session_resolved.session_kind,
+                'fresh:', payload.session_resolved.freshly_created);
+            }
+          } catch (e) {
+            console.warn('[ai-panel] session_resolved handler failed:', e);
+          }
+          return;
+        }
         if (payload.delta) {
           assistantText += payload.delta;
           if (contentEl) contentEl.innerHTML = renderMarkdown(assistantText) +

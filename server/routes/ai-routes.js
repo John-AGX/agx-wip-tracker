@@ -3274,6 +3274,28 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
     } catch (_) {}
   });
 
+  // session_resolved — emit FIRST so the client can sync its sidebar
+  // before any text/tool events stream in. Two reasons this matters:
+  //   1. resolveSessionForChat may redirect a legacy_partitioned
+  //      sessionId to the rolling user_thread (see the resolver
+  //      changes in commit 81d76b7). The client's _currentSessionId
+  //      still points at the old session it picked; without this
+  //      event it'd render the response onto the wrong row and the
+  //      user would see "(no response)" on the visible chat while
+  //      the actual reply landed in user_thread.
+  //   2. Freshly-minted sessions (no prior sidebar pick) need the
+  //      DB id surfaced so the next /chat turn can pass it back.
+  send({
+    session_resolved: {
+      db_session_id: session && session.id,
+      session_kind: session && session.session_kind,
+      anthropic_session_id: sessionId,
+      freshly_created: !!freshlyCreated,
+      label: session && session.label,
+    }
+  });
+
+
   // Resolve the session id, recovering once if the prior session is
   // stuck waiting on tool responses. We have to attempt the events.send
   // before opening the stream when we recover, because the original
