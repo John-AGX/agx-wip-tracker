@@ -68,11 +68,11 @@
   // can see it) and replaces the old role-based landings — when a user
   // returns from a fresh tab or after an idle stretch, the summary page
   // gives them a consistent jumping-off point with quick-link cards
-  // into Leads / Estimates / WIP / Schedule / Insights / Subs.
-  // Offline mode still drops straight onto WIP since the local-only
+  // into Leads / Estimates / Jobs / Schedule / Insights / Subs.
+  // Offline mode still drops straight onto Jobs since the local-only
   // path doesn't have the same data behind the summary cards.
   function getLandingTab() {
-    if (isOffline) return 'wip';
+    if (isOffline) return 'jobs';
     return 'summary';
   }
 

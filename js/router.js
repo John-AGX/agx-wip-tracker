@@ -1,4 +1,4 @@
-// Project 86 WIP Tracker — URL Router
+// Project 86 — URL Router
 //
 // Adds pathname-based routing on top of the existing top-level nav
 // functions (switchTab / switchJobSubTab / editJob / etc.) without
@@ -11,10 +11,12 @@
 //   /                                 default landing (login routes here)
 //   /summary                          Summary landing page
 //   /files                            personal Files tab (per-user folder)
-//   /wip                              WIP list
-//   /wip/archived                     archived jobs view
-//   /wip/jobs/:jobId                  job detail (default sub-tab)
-//   /wip/jobs/:jobId/:jobSub          job detail at specific sub-tab
+//   /jobs                             Jobs list (formerly /wip)
+//   /jobs/archived                    archived jobs view
+//   /jobs/:jobId                      job detail (default sub-tab)
+//   /jobs/:jobId/:jobSub              job detail at specific sub-tab
+//   (Backcompat: /wip[/jobs/:id...] still parses to the Jobs section
+//    so older shared links don't 404. New links serialize as /jobs.)
 //   /estimates                        estimates landing (current active sub)
 //   /estimates/:sub                   sub: list | leads
 //   /estimates/leads/:leadId          lead detail view open
@@ -48,9 +50,13 @@
   // doesn't capture it). Keeps URLs from leaking ad-hoc sub-tabs the
   // user might add later without touching the router.
   var KNOWN_JOB_SUBS = [
-    'job-overview', 'job-buildings', 'job-wip',
+    'job-overview', 'job-buildings', 'job-wip-report',
     'job-changeorders', 'job-invoices', 'job-labor', 'job-purchaseorders'
   ];
+  // Legacy sub-tab id → new id. Old shared links / bookmarks using
+  // /jobs/:id/job-wip transparently route to job-wip-report (the new
+  // name for the WIP Report sub-tab inside a job).
+  var LEGACY_JOB_SUB_REMAP = { 'job-wip': 'job-wip-report' };
   var KNOWN_EST_SUBS = ['list', 'leads', 'clients', 'subs'];
   var KNOWN_ADMIN_SUBS = [
     'users', 'roles', 'email', 'templates', 'agents',
@@ -60,7 +66,7 @@
   // TAB_TITLES key); the URL slug for it is '/files' — friendlier and
   // matches the header icon's purpose. parsePath/serializeRoute do the
   // translation.
-  var KNOWN_TOP_TABS = ['summary', 'my-files', 'wip', 'estimates', 'schedule', 'insights', 'admin'];
+  var KNOWN_TOP_TABS = ['summary', 'my-files', 'jobs', 'estimates', 'schedule', 'insights', 'admin'];
 
   // ── URL <-> route object ──────────────────────────────────────
   function parsePath(pathname) {
@@ -70,6 +76,10 @@
     var top = parts[0];
     // URL slug '/files' maps to internal tab id 'my-files'.
     if (top === 'files') top = 'my-files';
+    // Backcompat: old /wip[/...] URLs route to the new Jobs section.
+    // Old shared links and bookmarks keep working; serializeRoute emits
+    // /jobs going forward.
+    if (top === 'wip') top = 'jobs';
     // Pseudo-top-level: /clients[/:id] and /subs[/:id] route into the
     // Estimates tab UI with the matching sub-tab open. The sub-tabs
     // still live under #estimates internally — these URLs are an alias
@@ -87,15 +97,30 @@
     }
     if (KNOWN_TOP_TABS.indexOf(top) === -1) return route;
     route.top = top;
-    if (top === 'wip') {
-      // /wip/jobs/:id[/:sub]  OR  /wip/archived
+    if (top === 'jobs') {
+      // New shape: /jobs/:id[/:sub]
+      // Legacy:    /wip/jobs/:id[/:sub]   (parts[0]='wip' was remapped to 'jobs' above,
+      //                                    but the path segments still read 'jobs' at index 1)
+      //            /jobs/archived  OR  /wip/archived
+      var jobsIdIdx, jobsSubIdx;
       if (parts[1] === 'jobs' && parts[2]) {
-        route.jobId = parts[2];
-        if (parts[3] && KNOWN_JOB_SUBS.indexOf(parts[3]) !== -1) {
-          route.jobSub = parts[3];
-        }
+        // legacy /wip/jobs/:id[/:sub] form
+        jobsIdIdx = 2; jobsSubIdx = 3;
       } else if (parts[1] === 'archived') {
         route.archived = true;
+        jobsIdIdx = null; jobsSubIdx = null;
+      } else if (parts[1]) {
+        // new /jobs/:id[/:sub] form
+        jobsIdIdx = 1; jobsSubIdx = 2;
+      }
+      if (jobsIdIdx != null && parts[jobsIdIdx]) {
+        route.jobId = parts[jobsIdIdx];
+        var sub = parts[jobsSubIdx];
+        if (sub) {
+          // Apply legacy sub-tab remap before allow-list check.
+          if (LEGACY_JOB_SUB_REMAP[sub]) sub = LEGACY_JOB_SUB_REMAP[sub];
+          if (KNOWN_JOB_SUBS.indexOf(sub) !== -1) route.jobSub = sub;
+        }
       }
     } else if (top === 'estimates') {
       // /estimates/edit/:id  OR  /estimates/leads/:id  OR  /estimates/:sub
@@ -140,13 +165,13 @@
 
   function serializeRoute(route) {
     if (!route || !route.top) return '/';
-    if (route.top === 'wip') {
+    if (route.top === 'jobs') {
       if (route.jobId) {
-        return '/wip/jobs/' + encodeURIComponent(route.jobId) +
+        return '/jobs/' + encodeURIComponent(route.jobId) +
           (route.jobSub ? '/' + route.jobSub : '');
       }
-      if (route.archived) return '/wip/archived';
-      return '/wip';
+      if (route.archived) return '/jobs/archived';
+      return '/jobs';
     }
     if (route.top === 'estimates') {
       // Clients and subs surface as their own root paths even though
@@ -196,8 +221,8 @@
     }
     if (!top || KNOWN_TOP_TABS.indexOf(top) === -1) return { top: null };
     var route = { top: top };
-    if (top === 'wip') {
-      var detail = document.getElementById('wip-job-detail-view');
+    if (top === 'jobs') {
+      var detail = document.getElementById('jobs-job-detail-view');
       var jobId = (window.appState && window.appState.currentJobId) || null;
       if (detail && detail.style.display === 'block' && jobId) {
         route.jobId = jobId;
@@ -351,14 +376,14 @@
     function openEntities() {
       replaying = true;
       try {
-        if (route.top === 'wip' && route.jobId && typeof window.editJob === 'function') {
+        if (route.top === 'jobs' && route.jobId && typeof window.editJob === 'function') {
           var origEditJob = window.editJob.__p86RouterOrig || window.editJob;
           origEditJob(route.jobId);
           if (route.jobSub && typeof window.switchJobSubTab === 'function') {
             var origJobSub = window.switchJobSubTab.__p86RouterOrig || window.switchJobSubTab;
             origJobSub(route.jobSub);
           }
-        } else if (route.top === 'wip' && route.archived &&
+        } else if (route.top === 'jobs' && route.archived &&
                    typeof window.showArchivedJobs === 'function') {
           // Open archive view if it isn't already showing. showArchivedJobs
           // is a toggle, so check current state first to avoid closing it.

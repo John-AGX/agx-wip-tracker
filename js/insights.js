@@ -1,7 +1,7 @@
 // Project 86 Insights dashboard — single source of truth.
 //
 // Replaces both an earlier minimal version of this file and a legacy copy
-// of renderInsightsDashboard() that lived in js/wip.js. Pulls Live-only
+// of renderInsightsDashboard() that lived in js/jobs.js. Pulls Live-only
 // jobs from window.appData, merges each job's dailySnapshots[] (new) with
 // any legacy weeklySnapshots[] (daily wins on overlapping dates), and
 // renders:

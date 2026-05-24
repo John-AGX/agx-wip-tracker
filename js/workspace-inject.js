@@ -1,9 +1,9 @@
 // ============================================================
-// Project 86 WIP Tracker — Workspace Injector v2
+// Project 86 — Workspace Injector v2
 // Injects the spreadsheet grid INTO the Job Costs tab,
 // between the description and cost input fields.
 // Does NOT create a separate sub-tab or competing handlers.
-// Load AFTER app.js + wip.js + workspace.js
+// Load AFTER app.js + jobs.js + workspace.js
 // ============================================================
 
 (function () {

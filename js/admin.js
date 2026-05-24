@@ -206,7 +206,7 @@
       // Re-render views that depend on user names so PM-by-owner_id lookups
       // resolve once the cache lands. Each renderer is a no-op if its DOM
       // target isn't visible.
-      if (typeof renderWIPMain === 'function') renderWIPMain();
+      if (typeof renderJobsMain === 'function') renderJobsMain();
       if (typeof renderInsightsDashboard === 'function') renderInsightsDashboard();
       return _users;
     }).catch(function() { return []; });

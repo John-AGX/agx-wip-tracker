@@ -1,4 +1,4 @@
-// Project 86 WIP Tracker - Proposal & Export Module
+// Project 86 — Proposal & Export Module
 // Handles export of estimates, proposal generation, and import of lead reports
 
 // ============================================================================

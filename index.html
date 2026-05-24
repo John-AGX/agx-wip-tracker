@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <!-- Pin every relative URL to the site root. Required because the SPA
-         router uses pathname routing (/wip/jobs/:id, /admin/roles); without
+         router uses pathname routing (/jobs/:id, /admin/roles); without
          this, a hard refresh on a deep link would resolve `js/foo.js`
          against the deep path (e.g., /admin/js/foo.js) which the Express
          catch-all serves as index.html, causing every script to fail to
@@ -72,7 +72,32 @@
     })();
     </script>
 
-    <link rel="stylesheet" href="css/styles.css?v=77">
+    <!-- WIP → Jobs localStorage migration. Same shape as the brand-rename
+         shim above: copy every p86-wip-* key to its p86-jobs-* twin,
+         then delete the source. Runs once on first post-rename load.
+         No-op thereafter. -->
+    <script>
+    (function() {
+      try {
+        var fromPrefix = 'p86-wip-';
+        var toPrefix = 'p86-jobs-';
+        var keys = [];
+        for (var i = 0; i < localStorage.length; i++) {
+          var k = localStorage.key(i);
+          if (k && k.indexOf(fromPrefix) === 0) keys.push(k);
+        }
+        keys.forEach(function(k) {
+          var newKey = toPrefix + k.slice(fromPrefix.length);
+          if (localStorage.getItem(newKey) === null) {
+            localStorage.setItem(newKey, localStorage.getItem(k));
+          }
+          localStorage.removeItem(k);
+        });
+      } catch (e) { /* defensive — quota / private mode etc. */ }
+    })();
+    </script>
+
+    <link rel="stylesheet" href="css/styles.css?v=78">
     <link rel="stylesheet" href="css/workspace-layout.css?v=56b">
     <link rel="stylesheet" href="css/workspace.css?v=37b">
     <link rel="stylesheet" href="css/schedule.css?v=18b">
@@ -181,7 +206,7 @@
                     <button class="tab-btn active" data-tab="estimates" data-est-subtab="leads" data-virtual-tab="leads" data-p86-icon="leads" data-cap="LEADS_VIEW">Leads</button>
                     <button class="tab-btn" data-tab="estimates" data-est-subtab="list" data-virtual-tab="estimates" data-p86-icon="estimates" data-cap="ESTIMATES_VIEW">Estimates</button>
                     <button class="tab-btn" data-tab="schedule" data-p86-icon="schedule">Schedule</button>
-                    <button class="tab-btn" data-tab="wip" data-p86-icon="wip" data-cap="JOBS_VIEW_ALL JOBS_VIEW_ASSIGNED JOBS_EDIT_ANY JOBS_EDIT_OWN">WIP</button>
+                    <button class="tab-btn" data-tab="jobs" data-p86-icon="wip" data-cap="JOBS_VIEW_ALL JOBS_VIEW_ASSIGNED JOBS_EDIT_ANY JOBS_EDIT_OWN">Jobs</button>
                     <button class="tab-btn" data-tab="insights" data-p86-icon="insights" data-cap="INSIGHTS_VIEW">Insights</button>
                     <button class="tab-btn" data-tab="admin" data-p86-icon="admin" data-admin-only style="display:none;">Admin</button>
                 </nav>
@@ -270,16 +295,16 @@
 
         <main>
             <div class="main-inner">
-                <!-- WIP TAB -->
-                <div id="wip" class="tab-content active">
-                    <div id="wip-main-view">
-                        <div class="wip-action-tabs">
-                            <button class="wip-action-tab" onclick="openAddJobModal()">+ Add Job</button>
-                            <button class="wip-action-tab" onclick="document.getElementById('qb-costs-import-file').click()" title="Import a QuickBooks weekly Detailed Job Costs xlsx">&#x1F4E5; Import QB Costs</button>
+                <!-- JOBS TAB -->
+                <div id="jobs" class="tab-content active">
+                    <div id="jobs-main-view">
+                        <div class="jobs-action-tabs">
+                            <button class="jobs-action-tab" onclick="openAddJobModal()">+ Add Job</button>
+                            <button class="jobs-action-tab" onclick="document.getElementById('qb-costs-import-file').click()" title="Import a QuickBooks weekly Detailed Job Costs xlsx">&#x1F4E5; Import QB Costs</button>
                             <input type="file" id="qb-costs-import-file" accept=".xlsx" style="display:none;" onchange="handleQBCostsFile(event)" />
-                            <button class="wip-action-tab" onclick="exportWIPToCSV()">Export CSV</button>
-                            <button class="wip-action-tab" onclick="window.print()">Print Report</button>
-                            <button class="wip-action-tab" onclick="showArchivedJobs()">Archived</button>
+                            <button class="jobs-action-tab" onclick="exportJobsToCSV()">Export CSV</button>
+                            <button class="jobs-action-tab" onclick="window.print()">Print Report</button>
+                            <button class="jobs-action-tab" onclick="showArchivedJobs()">Archived</button>
                             <span class="p86-ask86-mount" style="margin-left:auto;"></span>
                         </div>
 
@@ -348,12 +373,12 @@
 
                     <div id="archived-jobs-list" style="display:none;"></div>
 
-                    <div id="wip-job-detail-view" style="display: none;">
+                    <div id="jobs-job-detail-view" style="display: none;">
                         <div id="job-detail-readonly-banner" style="display:none;background:rgba(251,191,36,0.12);border:1px solid rgba(251,191,36,0.4);color:#fbbf24;padding:10px 14px;border-radius:8px;margin-bottom:14px;font-size:13px;">
                             <strong>View only.</strong> <span id="job-detail-readonly-msg">This job is assigned to another PM. You can review the data but changes won&apos;t save.</span>
                         </div>
                         <div class="job-detail-header">
-                            <button class="secondary small" onclick="backToWIPMain()">&larr; Back to WIP</button>
+                            <button class="secondary small" onclick="backToJobsMain()">&larr; Back to Jobs</button>
                             <div class="job-detail-info">
                                 <div class="job-detail-title" id="job-detail-title"></div>
                                 <div class="job-detail-meta">
@@ -465,7 +490,7 @@
 
                         <div class="sub-tabs">
                             <button class="sub-tab-btn-job active" data-subtab="job-overview" data-p86-icon="insights">Overview</button>
-                            <button class="sub-tab-btn-job" data-subtab="job-wip" data-p86-icon="wip">WIP</button>
+                            <button class="sub-tab-btn-job" data-subtab="job-wip-report" data-p86-icon="wip">WIP Report</button>
                             <button class="sub-tab-btn-job" data-subtab="job-changeorders" data-p86-icon="links">Change Orders</button>
                             <button class="sub-tab-btn-job" data-subtab="job-purchaseorders" data-p86-icon="materials">Purchase Orders</button>
                             <button class="sub-tab-btn-job" data-subtab="job-invoices" data-p86-icon="exports">Invoices</button>
@@ -476,10 +501,12 @@
                         <!-- Job Overview -->
                         <div id="job-overview" class="sub-tab-content-job active"></div>
 
-                        <!-- WIP Tab -->
-                        <div id="job-wip" class="sub-tab-content-job">
+                        <!-- WIP Report Tab — mirrors the accounting WIP Report. Lisa enters
+                             weekly accruals/actuals here; the calculations below line up
+                             with the spreadsheet columns. -->
+                        <div id="job-wip-report" class="sub-tab-content-job">
                             <div class="card" style="margin-bottom: 10px;">
-                                <h3 style="margin-bottom: 6px; font-size: 14px;">WIP Inputs</h3>
+                                <h3 style="margin-bottom: 6px; font-size: 14px;">WIP Report Inputs</h3>
                                 <div class="form-row">
                                     <div class="form-group">
                                         <label style="display:flex;align-items:center;gap:6px;">
@@ -507,10 +534,10 @@
                                         <input type="text" id="wipNotes" placeholder="Weekly notes...">
                                     </div>
                                 </div>
-                                <button onclick="saveWipInputs()" style="margin-top: 10px;">&#x1F4BE; Save WIP</button>
+                                <button onclick="saveWipInputs()" style="margin-top: 10px;">&#x1F4BE; Save WIP Report Entry</button>
                             </div>
                             <div class="card">
-                                <h3 style="margin-bottom: 8px; font-size: 14px;">WIP Calculations</h3>
+                                <h3 style="margin-bottom: 8px; font-size: 14px;">WIP Report Calculations</h3>
                                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
                                     <div>
                                         <h4 style="color: var(--accent); margin-bottom: 4px; font-size: 11px; text-transform: uppercase;">Income</h4>
@@ -839,7 +866,7 @@
                                     <h2 id="ld-title" style="flex:1;min-width:200px;margin:0;font-size:17px;font-weight:600;color:var(--text,#fff);"></h2>
                                     <span id="ld-status-pill"></span>
                                     <button class="ee-btn danger" id="ld-delete-btn" style="display:none;" onclick="deleteLeadFromEditor()" title="Delete this lead (cannot be undone)">&#x1F5D1; Delete</button>
-                                    <button class="ee-btn success" id="ld-convert-btn" style="display:none;" onclick="convertLeadToJob()" data-cap="JOBS_EDIT_ANY JOBS_EDIT_OWN" title="Create a WIP job from this lead">&#x1F3D7; Create Job</button>
+                                    <button class="ee-btn success" id="ld-convert-btn" style="display:none;" onclick="convertLeadToJob()" data-cap="JOBS_EDIT_ANY JOBS_EDIT_OWN" title="Create a job from this lead">&#x1F3D7; Create Job</button>
                                     <button class="ee-btn primary" onclick="submitLeadEditor()" title="Save lead">&#x1F4BE; Save</button>
                                     <span class="p86-ask86-mount"></span>
                                 </div>
@@ -1466,7 +1493,7 @@
             </div>
             <div class="form-group">
                 <label>Phase</label>
-                <select id="phaseType" onchange="handleCustomSelectChange('phaseType', DEFAULT_PHASE_TYPES, 'p86-wip-custom-phases', '-- Select Phase --')"></select>
+                <select id="phaseType" onchange="handleCustomSelectChange('phaseType', DEFAULT_PHASE_TYPES, 'p86-jobs-custom-phases', '-- Select Phase --')"></select>
             </div>
             <div class="form-row">
                 <div class="form-group">
@@ -1495,7 +1522,7 @@
                  and meeting notes. The underlying phase.phaseBudget /
                  phase.asSoldPhaseBudget are still persisted (the WIP
                  rollup reads them) but mirror As-Sold Revenue at save
-                 time — see savePhase() in wip.js. -->
+                 time — see savePhase() in jobs.js. -->
             <div class="form-group">
                 <label>Notes for WIP Meeting</label>
                 <textarea id="phaseNotes" placeholder="Any notes or issues to discuss..."></textarea>
@@ -1533,7 +1560,7 @@
             </div>
             <div class="form-group">
                 <label>Trade</label>
-                <select id="subTrade" onchange="handleCustomSelectChange('subTrade', DEFAULT_SUB_TRADES, 'p86-wip-custom-trades', '-- Select Trade --')"></select>
+                <select id="subTrade" onchange="handleCustomSelectChange('subTrade', DEFAULT_SUB_TRADES, 'p86-jobs-custom-trades', '-- Select Trade --')"></select>
             </div>
             <div class="form-row">
                 <div class="form-group">
@@ -1991,7 +2018,7 @@
           </fieldset>
 
           <!-- Linked-job chip — shown when lead.job_id is set so the user
-               can jump from a sold lead straight to its WIP job. -->
+               can jump from a sold lead straight to its job. -->
           <div id="leadEditor_linkedJob" style="display:none;padding:10px 14px;background:rgba(52,211,153,0.08);border:1px solid rgba(52,211,153,0.3);border-radius:8px;display:none;align-items:center;justify-content:space-between;gap:10px;">
             <div style="display:flex;align-items:center;gap:10px;">
               <span style="color:#34d399;font-size:14px;">&#x2713;</span>
@@ -2371,7 +2398,7 @@
     <script src="js/app.js?v=59c"></script>
     <script src="js/messaging.js?v=1b"></script>
     <script src="js/my-files.js?v=3b"></script>
-    <script src="js/wip.js?v=70i"></script>
+    <script src="js/jobs.js?v=78"></script>
     <script src="js/estimates.js?v=36c"></script>
     <script src="js/proposal.js?v=24b"></script>
     <script src="js/estimate-editor.js?v=42"></script>
@@ -2519,7 +2546,7 @@
          the center. The top tab strip and the floating Ask 86
          badge both hide at the same breakpoint — bottom nav takes
          over as the only navigation surface on phones.
-         WIP / Insights / Admin live behind the More button to
+         Jobs / Insights / Admin live behind the More button to
          keep the bottom rail at exactly 5 slots (any more and
          touch targets get crushed at iPhone width). -->
     <nav id="p86-mobile-nav" class="p86-mobile-nav" aria-label="Primary navigation">
@@ -2551,7 +2578,7 @@
         <span class="p86-mobile-nav-label">More</span>
       </button>
     </nav>
-    <!-- "More" overflow sheet — holds WIP, Insights, Admin behind
+    <!-- "More" overflow sheet — holds Jobs, Insights, Admin behind
          a slide-up panel so the bottom rail stays at 5 slots. -->
     <div id="p86-mobile-more-sheet" class="p86-mobile-more-sheet" hidden>
       <div class="p86-mobile-more-backdrop"
@@ -2559,9 +2586,9 @@
       <div class="p86-mobile-more-panel" role="menu" aria-label="More navigation">
         <button type="button" class="p86-mobile-more-item"
                 data-cap="JOBS_VIEW_ALL JOBS_VIEW_ASSIGNED JOBS_EDIT_ANY JOBS_EDIT_OWN"
-                onclick="window.p86CloseMobileMore&amp;&amp;window.p86CloseMobileMore();if(window.switchTab)window.switchTab('wip');">
+                onclick="window.p86CloseMobileMore&amp;&amp;window.p86CloseMobileMore();if(window.switchTab)window.switchTab('jobs');">
           <span class="p86-mobile-more-icon" data-p86-icon="wip"></span>
-          <span>WIP</span>
+          <span>Jobs</span>
         </button>
         <button type="button" class="p86-mobile-more-item" data-cap="INSIGHTS_VIEW"
                 onclick="window.p86CloseMobileMore&amp;&amp;window.p86CloseMobileMore();if(window.switchTab)window.switchTab('insights');">

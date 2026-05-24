@@ -1,6 +1,6 @@
 // Project 86 QuickBooks weekly Detailed Job Costs importer.
 //
-// Drops a QB "Project costs detail" xlsx into the WIP tracker, parses
+// Drops a QB "Project costs detail" xlsx into Project 86, parses
 // the per-job cost lines, and writes a dated `QB Costs YYYY-MM-DD`
 // sheet to each matched job's workspace. Unmatched job codes can be
 // turned into stub jobs from the preview dialog. Re-importing the
@@ -308,7 +308,7 @@
 
     if (m.unmatched.length) {
       html += '<div style="font-weight:600;margin-bottom:6px;color:var(--text,#fff);font-size:13px;">' +
-        '⚠ Unmatched &mdash; not in WIP tracker yet:' +
+        '⚠ Unmatched &mdash; no matching job yet:' +
         '</div>';
       html += '<div style="border:1px solid var(--border,#333);border-radius:6px;overflow:hidden;margin-bottom:8px;">';
       html += '<table style="width:100%;border-collapse:collapse;font-size:12px;">';
@@ -333,7 +333,7 @@
       });
       html += '</tbody></table></div>';
       html += '<div style="font-size:11px;color:var(--text-dim,#888);margin-bottom:6px;">' +
-        'Stub jobs are created with just the QB code + name so the import can link costs. Fill in the rest from the WIP list afterward.' +
+        'Stub jobs are created with just the QB code + name so the import can link costs. Fill in the rest from the Jobs list afterward.' +
         '</div>';
     }
 
@@ -598,10 +598,10 @@
     }
 
     // If the workspace for the currently-open job got updated, the
-    // user will see the new sheet on next open. Re-rendering the WIP
+    // user will see the new sheet on next open. Re-rendering the Jobs
     // list refreshes any rollup display.
     if (typeof closeModal === 'function') closeModal('qbCostsImportModal');
-    if (typeof renderWIPMain === 'function') renderWIPMain();
+    if (typeof renderJobsMain === 'function') renderJobsMain();
 
     var totalImported = m.matched.reduce(function(s, x) { return s + x.parsed.computedTotal; }, 0);
     alert('Imported ' + m.matched.length + ' job' + (m.matched.length === 1 ? '' : 's') +

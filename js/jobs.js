@@ -1,6 +1,6 @@
-function renderWIPMain() {
+function renderJobsMain() {
             renderJobsTable();
-            calculateWIPSummary();
+            calculateJobsSummary();
         }
 
         // _confirmDelete — shorthand for the "are you sure you want to
@@ -107,7 +107,7 @@ function renderWIPMain() {
         //   3. Stored job.pctComplete as last-resort fallback
         // The middle case caught a real bug: jobs with buildings + unlinked
         // phases were rolling up to 0%, then overwriting the correct stored
-        // value on every WIP main render because pctCompleteManual was false.
+        // value on every Jobs main render because pctCompleteManual was false.
         function calcJobPctComplete(jobId) {
             const buildings = appData.buildings.filter(b => b.jobId === jobId);
             const phases = appData.phases.filter(p => p.jobId === jobId);
@@ -751,7 +751,7 @@ function renderWIPMain() {
             return jobs;
         }
 
-        function calculateWIPSummary() {
+        function calculateJobsSummary() {
             // Tiles follow the active filter — what the user sees in
             // the table below is what the tiles sum / count. Switch
             // the status filter dropdown and the tile values move
@@ -850,7 +850,7 @@ function renderWIPMain() {
             });
 
             jobs.forEach((job, index) => {
-                // The WIP main row used to auto-recalc pctComplete here, but
+                // The Jobs main row used to auto-recalc pctComplete here, but
                 // that runs without the node-graph compute step the detail
                 // view uses, so it produced different values than the metric
                 // strip and would clobber the correct stored value. Now we
@@ -912,11 +912,11 @@ function renderWIPMain() {
             appState.currentStatusFilter = document.getElementById('statusFilter').value;
             appState.currentTypeFilter = document.getElementById('typeFilter').value;
             renderJobsTable();
-            // Tiles follow the filter — see calculateWIPSummary docs
+            // Tiles follow the filter — see calculateJobsSummary docs
             // for the W1 audit context. Without this, the user would
             // change the filter and watch the rows update but the
             // tile totals stay frozen on the prior set.
-            calculateWIPSummary();
+            calculateJobsSummary();
         }
 
         function openAddJobModal() {
@@ -1262,22 +1262,22 @@ function renderWIPMain() {
             appData.jobs.push(job);
             saveData();
             closeModal('addJobModal');
-            renderWIPMain();
+            renderJobsMain();
         }
 
         function editJob(jobId) {
             appState.currentJobId = jobId;
             renderJobDetail(jobId);
-            document.getElementById('wip-main-view').style.display = 'none';
-            document.getElementById('wip-job-detail-view').style.display = 'block';
+            document.getElementById('jobs-main-view').style.display = 'none';
+            document.getElementById('jobs-job-detail-view').style.display = 'block';
             // Persist nav state so a refresh lands back on this job
-            // detail rather than the WIP list root.
+            // detail rather than the Jobs list root.
             if (typeof window.p86NavSave === 'function') window.p86NavSave();
         }
 
-        function backToWIPMain() {
+        function backToJobsMain() {
             // If the node graph is up as a fullscreen overlay, save +
-            // close it before showing the WIP list. The graph is a
+            // close it before showing the Jobs list. The graph is a
             // position:fixed sibling, so without explicitly removing
             // its .active class it would float over the list.
             var ngTab = document.getElementById('nodeGraphTab');
@@ -1287,10 +1287,10 @@ function renderWIPMain() {
                 }
                 ngTab.classList.remove('active');
             }
-            document.getElementById('wip-main-view').style.display = 'block';
-            document.getElementById('wip-job-detail-view').style.display = 'none';
+            document.getElementById('jobs-main-view').style.display = 'block';
+            document.getElementById('jobs-job-detail-view').style.display = 'none';
             appState.currentJobId = null;
-            renderWIPMain();
+            renderJobsMain();
         }
 
         function archiveCurrentJob() {
@@ -1361,7 +1361,7 @@ function renderWIPMain() {
                     console.warn('Server delete failed for ' + jobId + ':', err.message);
                 });
             }
-            backToWIPMain();
+            backToJobsMain();
         }
 
         function toggleEditJobInfo() {
@@ -1466,7 +1466,7 @@ function renderWIPMain() {
             // controls and edit-action buttons, and show the explanatory banner.
             // Also skip auto-calc + saveData below since those would attempt
             // server writes that the user isn't allowed to make.
-            const detailEl = document.getElementById('wip-job-detail-view');
+            const detailEl = document.getElementById('jobs-job-detail-view');
             const readOnly = job._canEdit === false;
             if (detailEl) detailEl.classList.toggle('read-only-mode', readOnly);
             const banner = document.getElementById('job-detail-readonly-banner');
@@ -2596,16 +2596,16 @@ function renderWIPMain() {
                 var ae = document.activeElement;
                 if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' ||
                            ae.tagName === 'SELECT' || ae.isContentEditable)) {
-                    console.log('[wip] cloud-sync re-render deferred — input focused:', ae.tagName);
+                    console.log('[jobs] cloud-sync re-render deferred — input focused:', ae.tagName);
                     return;
                 }
                 if (typeof onApplied === 'function') {
                     try { onApplied(); }
-                    catch (e) { console.warn('[wip] cloud-sync re-render failed:', e); }
+                    catch (e) { console.warn('[jobs] cloud-sync re-render failed:', e); }
                 }
             }).catch(function(e) {
                 _ngCloudSyncInFlight = null;
-                console.warn('[wip] cloud-sync failed:', e && e.message);
+                console.warn('[jobs] cloud-sync failed:', e && e.message);
             });
         }
 
@@ -3422,8 +3422,8 @@ function renderWIPMain() {
 
             populatePhaseTypeSelect();
             if (phase.phase && !Array.from(document.getElementById('phaseType').options).some(o => o.value === phase.phase)) {
-                const c = getCustomItems('p86-wip-custom-phases');
-                if (!c.includes(phase.phase)) { c.push(phase.phase); saveCustomItems('p86-wip-custom-phases', c); populatePhaseTypeSelect(); }
+                const c = getCustomItems('p86-jobs-custom-phases');
+                if (!c.includes(phase.phase)) { c.push(phase.phase); saveCustomItems('p86-jobs-custom-phases', c); populatePhaseTypeSelect(); }
             }
             document.getElementById('phaseType').value = phase.phase || '';
             // As-Sold Revenue is the only dollar field on the phase
@@ -3823,8 +3823,8 @@ function renderWIPMain() {
             updateSubDirectoryHint();
             populateSubTradeSelect();
             if (sub.trade && !Array.from(document.getElementById('subTrade').options).some(o => o.value === sub.trade)) {
-                const c = getCustomItems('p86-wip-custom-trades');
-                if (!c.includes(sub.trade)) { c.push(sub.trade); saveCustomItems('p86-wip-custom-trades', c); populateSubTradeSelect(); }
+                const c = getCustomItems('p86-jobs-custom-trades');
+                if (!c.includes(sub.trade)) { c.push(sub.trade); saveCustomItems('p86-jobs-custom-trades', c); populateSubTradeSelect(); }
             }
             document.getElementById('subTrade').value = sub.trade || '';
             document.getElementById('subContract').value = sub.contractAmt || '';
@@ -3892,23 +3892,23 @@ function renderWIPMain() {
                 saveData();
                 overlay.remove();
                 alert('Closed week ' + dt + ' for ' + count + ' jobs.');
-                renderWIPMain();
+                renderJobsMain();
             });
         }
 
         function showArchivedJobs() {
-            var mainView = document.getElementById('wip-main-view');
+            var mainView = document.getElementById('jobs-main-view');
             var archiveView = document.getElementById('archived-jobs-list');
             if (!mainView || !archiveView) return;
             var showing = archiveView.style.display !== 'none';
             if (showing) {
                 archiveView.style.display = 'none';
                 mainView.style.display = '';
-                document.querySelectorAll('.wip-action-tab').forEach(function(t) { t.classList.remove('active'); });
+                document.querySelectorAll('.jobs-action-tab').forEach(function(t) { t.classList.remove('active'); });
             } else {
                 mainView.style.display = 'none';
                 archiveView.style.display = '';
-                document.querySelectorAll('.wip-action-tab').forEach(function(t) {
+                document.querySelectorAll('.jobs-action-tab').forEach(function(t) {
                     t.classList.toggle('active', t.textContent.trim() === 'Archived');
                 });
                 renderArchivedJobs();
@@ -3925,7 +3925,7 @@ function renderWIPMain() {
 
             var html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">' +
                 '<h2 style="font-size:18px;margin:0;">Archived Jobs (' + archived.length + ')</h2>' +
-                '<button class="wip-action-tab" onclick="showArchivedJobs()" style="font-size:12px;">&larr; Back to WIP</button></div>';
+                '<button class="jobs-action-tab" onclick="showArchivedJobs()" style="font-size:12px;">&larr; Back to Jobs</button></div>';
 
             if (archived.length === 0) {
                 html += '<div class="card" style="padding:30px;text-align:center;color:var(--text-dim);">No archived jobs. Archive a job by setting its status to "Archived" in the job editor.</div>';

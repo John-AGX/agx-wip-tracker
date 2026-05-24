@@ -458,7 +458,7 @@
       tableHtml = '<div style="padding:30px;text-align:center;color:var(--text-dim,#888);background:var(--card-bg,#0f0f1e);border:1px dashed var(--border,#333);border-radius:10px;font-size:13px;">' +
         '<div style="margin-bottom:8px;font-size:24px;">&#x1F4CB;</div>' +
         '<div style="font-weight:600;margin-bottom:4px;">No QB cost data for this job yet</div>' +
-        '<div style="font-size:12px;">Import the weekly Detailed Job Cost xlsx from the WIP page to populate.</div>' +
+        '<div style="font-size:12px;">Import the weekly Detailed Job Cost xlsx from the Jobs page to populate.</div>' +
       '</div>';
     } else if (!lines.length) {
       tableHtml = '<div style="padding:20px;text-align:center;color:var(--text-dim,#888);background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:10px;">' +

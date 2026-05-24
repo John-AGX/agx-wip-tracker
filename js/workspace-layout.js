@@ -1,10 +1,10 @@
 // ============================================================
-// Project 86 WIP Tracker — Layout Restructure v2 (Step 2)
+// Project 86 — Workspace Layout Restructure v2 (Step 2)
 // Two-column layout:
 //   LEFT:  Workspace grid (portrait, always visible)
 //   RIGHT: Compact metrics strip + horizontal tab navigation
 // Job name + key costs in the main header bar
-// Replaces workspace-inject.js — load AFTER app.js + wip.js + workspace.js
+// Replaces workspace-inject.js — load AFTER app.js + jobs.js + workspace.js
 // ============================================================
 
 (function () {
@@ -31,7 +31,7 @@
   // the name but have nothing to do with each other.
   const RIGHT_TABS = [
     { id: 'job-overview',      label: 'Overview',  icon: 'insights' },
-    { id: 'job-wip',           label: 'WIP',       icon: 'wip' },
+    { id: 'job-wip-report',    label: 'WIP Report', icon: 'wip' },
     { id: 'job-qb-costs',      label: 'Detailed',  icon: 'daily-logs' },
     { id: 'job-changeorders',  label: 'CO\'s',     icon: 'links' },
     { id: 'job-purchaseorders',label: 'PO\'s',     icon: 'materials' },
@@ -97,7 +97,7 @@
     if (strip) strip.remove();
 
     // Un-hide original job detail header and elements
-    var detail = document.getElementById("wip-job-detail-view");
+    var detail = document.getElementById("jobs-job-detail-view");
     if (detail) {
       var origHeader = detail.querySelector(".job-detail-header");
       if (origHeader) origHeader.style.display = "";
@@ -211,7 +211,7 @@
 
       var backBtn = document.createElement("button");
       backBtn.className = "jh-back-btn";
-      backBtn.textContent = "\u2190 Back to WIP";
+      backBtn.textContent = "\u2190 Back to Jobs";
       backBtn.addEventListener("click", function() {
         var backLink = detail.querySelector("a[href], button");
         if (backLink) backLink.click();
@@ -348,7 +348,7 @@
     }
   }
   window.refreshHeaderMetrics = refreshHeaderMetrics;
-  // Exposed so switchTab() can force a teardown when navigating away from WIP
+  // Exposed so switchTab() can force a teardown when navigating away from Jobs
   // (Insights / Estimates / Admin). Without this the sticky job-metrics
   // header lingers until the polling loop notices the detail view is hidden.
   window.workspaceLayoutCleanup = cleanup;
@@ -804,7 +804,7 @@
       'job-changeorders': 'renderChangeOrders',
       'job-purchaseorders': 'renderPurchaseOrders',
       'job-invoices': 'renderInvoices',
-      'job-wip': 'renderWipTab',
+      'job-wip-report': 'renderWipTab',
       'job-reports': 'renderJobReports'
     };
     safeRenderTabContent(targetId, target, jobId, renderers[targetId]);
@@ -1102,7 +1102,7 @@
       var allPanels = Array.from(rc.children);
       allPanels.forEach(function(p) { if (!p.classList.contains('ws-job-info-details')) p.style.display = 'none'; });
       var activeTab = document.querySelector('.ws-right-tab.active');
-      var activeId = activeTab ? activeTab.getAttribute('data-panel') : 'job-wip';
+      var activeId = activeTab ? activeTab.getAttribute('data-panel') : 'job-wip-report';
       var target = document.getElementById(activeId);
       if (target) target.style.display = 'block';
       wireTabSwitching();
@@ -1148,7 +1148,7 @@
       'job-changeorders': 'renderChangeOrders',
       'job-purchaseorders': 'renderPurchaseOrders',
       'job-invoices': 'renderInvoices',
-      'job-wip': 'renderWipTab',
+      'job-wip-report': 'renderWipTab',
       'job-reports': 'renderJobReports'
     };
 
@@ -1297,7 +1297,7 @@
   }
 
   function applyLayout() {
-    var detail = document.getElementById("wip-job-detail-view");
+    var detail = document.getElementById("jobs-job-detail-view");
     if (!detail || detail.style.display === "none") return;
     if (_applyingLayout) return;
     _applyingLayout = true;
@@ -1384,7 +1384,7 @@
       _observerBusy = true;
 
       try {
-        var detail = document.getElementById('wip-job-detail-view');
+        var detail = document.getElementById('jobs-job-detail-view');
         var detailVisible = detail && detail.style.display !== 'none';
 
         if (!detailVisible) {

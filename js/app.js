@@ -224,10 +224,10 @@
         }
 
         function populatePhaseTypeSelect() {
-            populateCustomSelect('phaseType', DEFAULT_PHASE_TYPES, 'p86-wip-custom-phases', '-- Select Phase --');
+            populateCustomSelect('phaseType', DEFAULT_PHASE_TYPES, 'p86-jobs-custom-phases', '-- Select Phase --');
         }
         function populateSubTradeSelect() {
-            populateCustomSelect('subTrade', DEFAULT_SUB_TRADES, 'p86-wip-custom-trades', '-- Select Trade --');
+            populateCustomSelect('subTrade', DEFAULT_SUB_TRADES, 'p86-jobs-custom-trades', '-- Select Trade --');
         }
 
         function initializeApp() {
@@ -236,7 +236,7 @@
             seedDataIfNeeded();
             backfillSampleData();
             migrateBudgetFields();
-            renderWIPMain();
+            renderJobsMain();
             startDailySnapshotScheduler();
         }
 
@@ -584,7 +584,7 @@
                     kind: 'Change Order',
                     title: (co.coNumber ? co.coNumber + ' · ' : '') + (co.description || 'Change order'),
                     sub: '',
-                    onClick: "window.switchTab('wip');"
+                    onClick: "window.switchTab('jobs');"
                 });
             });
             feed.sort(function(a, b) { return new Date(b.ts).getTime() - new Date(a.ts).getTime(); });
@@ -632,10 +632,10 @@
                 // Needs Attention row
                 '<div style="font-size:11px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;margin-bottom:8px;">Needs your attention</div>' +
                 '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-bottom:24px;">' +
-                    attentionCard('Overdue Invoices', overdueInv,  '#f87171', "window.switchTab('wip');",   'Past due, unpaid') +
+                    attentionCard('Overdue Invoices', overdueInv,  '#f87171', "window.switchTab('jobs');",   'Past due, unpaid') +
                     attentionCard('Open Leads',       openLeads,   '#22d3ee', leadsClick,                   'New + working') +
                     attentionCard('Pending Estimates', pendingEsts,'#fbbf24', estsClick,                    'Draft / not sent') +
-                    attentionCard('Active Jobs',      activeJobs,  '#34d399', "window.switchTab('wip');",   'Open + in progress') +
+                    attentionCard('Active Jobs',      activeJobs,  '#34d399', "window.switchTab('jobs');",   'Open + in progress') +
                 '</div>' +
 
                 // Two-col main grid:
@@ -973,7 +973,7 @@
             summary:    'Summary',
             estimates:  'Estimates',  // gets refined by switchEstimatesSubTab
             schedule:   'Schedule',
-            wip:        'WIP',
+            jobs:       'Jobs',
             'my-files': 'Files',
             insights:   'Insights',
             admin:      'Admin'
@@ -1015,14 +1015,14 @@
                 ngTab.classList.remove('active');
             }
 
-            // Leaving the WIP tab: tear down any sticky job-detail header
+            // Leaving the Jobs tab: tear down any sticky job-detail header
             // (metrics strip + back button) that workspace-layout.js may have
             // injected, so the Insights/Admin/Estimates pages don't show a
             // stale header from a job the user was just viewing.
-            if (tabName !== 'wip') {
-                var detail = document.getElementById('wip-job-detail-view');
+            if (tabName !== 'jobs') {
+                var detail = document.getElementById('jobs-job-detail-view');
                 if (detail) detail.style.display = 'none';
-                var mainView = document.getElementById('wip-main-view');
+                var mainView = document.getElementById('jobs-main-view');
                 if (mainView) mainView.style.display = '';
                 appState.currentJobId = null;
                 if (typeof window.workspaceLayoutCleanup === 'function') {
@@ -1058,15 +1058,15 @@
                 if (typeof switchAdminSubTab === 'function') switchAdminSubTab('users');
                 else if (typeof renderAdminUsers === 'function') renderAdminUsers();
             } else {
-                // Returning to WIP from another tab: force back to the main job
+                // Returning to Jobs from another tab: force back to the main job
                 // list, even if a job detail was previously open. Without this
                 // reset the detail view stays layered on top and steals clicks.
-                renderWIPMain();
+                renderJobsMain();
                 var archiveView = document.getElementById('archived-jobs-list');
                 if (archiveView) archiveView.style.display = 'none';
-                var mainView = document.getElementById('wip-main-view');
+                var mainView = document.getElementById('jobs-main-view');
                 if (mainView) mainView.style.display = '';
-                var detailView = document.getElementById('wip-job-detail-view');
+                var detailView = document.getElementById('jobs-job-detail-view');
                 if (detailView) detailView.style.display = 'none';
                 appState.currentJobId = null;
             }
@@ -1105,8 +1105,8 @@
                         if (eid) st.estId = eid;
                     }
                 }
-            } else if (top === 'wip') {
-                var dv = document.getElementById('wip-job-detail-view');
+            } else if (top === 'jobs') {
+                var dv = document.getElementById('jobs-job-detail-view');
                 if (dv && dv.style.display === 'block' && appState.currentJobId) {
                     st.jobId = appState.currentJobId;
                 }
@@ -1206,7 +1206,7 @@
                             window.switchEstimatesSubTab('list');
                         }
                         window.editEstimate(st.estId);
-                    } else if (st.top === 'wip' && st.jobId && typeof window.editJob === 'function') {
+                    } else if ((st.top === 'jobs' || st.top === 'wip') && st.jobId && typeof window.editJob === 'function') {
                         window.editJob(st.jobId);
                     }
                 } catch (e) { console.warn('[nav] entity restore failed:', e); }
@@ -1233,7 +1233,7 @@
         // js/workspace-layout.js) can defeat the cascade. The disabled
         // attribute is a hard browser-level block. Safe to call repeatedly.
         function applyReadOnlyButtonGuard() {
-            var detail = document.getElementById('wip-job-detail-view');
+            var detail = document.getElementById('jobs-job-detail-view');
             if (!detail) return;
             var readOnly = detail.classList.contains('read-only-mode');
             // Selector for buttons that should remain interactive in read-only mode.
@@ -1391,13 +1391,13 @@
         // Read all appData sections from localStorage. Used as the offline path
         // and as the fast first-paint cache while the server fetch is in flight.
         function loadFromLocalStorage() {
-            appData.jobs = safeLoadJSON('p86-wip-jobs', []);
-            appData.buildings = safeLoadJSON('p86-wip-buildings', []);
-            appData.phases = safeLoadJSON('p86-wip-phases', []);
-            appData.subs = safeLoadJSON('p86-wip-subs', []);
-            appData.changeOrders = safeLoadJSON('p86-wip-changeorders', []);
-            appData.purchaseOrders = safeLoadJSON('p86-wip-purchaseorders', []);
-            appData.invoices = safeLoadJSON('p86-wip-invoices', []);
+            appData.jobs = safeLoadJSON('p86-jobs-jobs', []);
+            appData.buildings = safeLoadJSON('p86-jobs-buildings', []);
+            appData.phases = safeLoadJSON('p86-jobs-phases', []);
+            appData.subs = safeLoadJSON('p86-jobs-subs', []);
+            appData.changeOrders = safeLoadJSON('p86-jobs-changeorders', []);
+            appData.purchaseOrders = safeLoadJSON('p86-jobs-purchaseorders', []);
+            appData.invoices = safeLoadJSON('p86-jobs-invoices', []);
             appData.estimates = safeLoadJSON('p86-estimates', []);
             appData.estimateLines = safeLoadJSON('p86-estimate-lines', []);
             // estimateAlternates is no longer a flat top-level array — alternates
@@ -1410,13 +1410,13 @@
         }
 
         function writeToLocalStorage() {
-            localStorage.setItem('p86-wip-jobs', JSON.stringify(appData.jobs));
-            localStorage.setItem('p86-wip-buildings', JSON.stringify(appData.buildings));
-            localStorage.setItem('p86-wip-phases', JSON.stringify(appData.phases));
-            localStorage.setItem('p86-wip-subs', JSON.stringify(appData.subs));
-            localStorage.setItem('p86-wip-changeorders', JSON.stringify(appData.changeOrders));
-            localStorage.setItem('p86-wip-purchaseorders', JSON.stringify(appData.purchaseOrders));
-            localStorage.setItem('p86-wip-invoices', JSON.stringify(appData.invoices));
+            localStorage.setItem('p86-jobs-jobs', JSON.stringify(appData.jobs));
+            localStorage.setItem('p86-jobs-buildings', JSON.stringify(appData.buildings));
+            localStorage.setItem('p86-jobs-phases', JSON.stringify(appData.phases));
+            localStorage.setItem('p86-jobs-subs', JSON.stringify(appData.subs));
+            localStorage.setItem('p86-jobs-changeorders', JSON.stringify(appData.changeOrders));
+            localStorage.setItem('p86-jobs-purchaseorders', JSON.stringify(appData.purchaseOrders));
+            localStorage.setItem('p86-jobs-invoices', JSON.stringify(appData.invoices));
             localStorage.setItem('p86-estimates', JSON.stringify(appData.estimates));
             localStorage.setItem('p86-estimate-lines', JSON.stringify(appData.estimateLines));
             // estimateAlternates flat array dropped — see loadFromLocalStorage.
@@ -1527,7 +1527,7 @@
                 // Re-render whatever's visible. Each renderer no-ops if
                 // its DOM target isn't present, so calling them all is
                 // safe regardless of which tab the user is on.
-                if (typeof renderWIPMain === 'function') renderWIPMain();
+                if (typeof renderJobsMain === 'function') renderJobsMain();
                 if (typeof renderEstimatesList === 'function') renderEstimatesList();
                 if (typeof renderInsightsDashboard === 'function') renderInsightsDashboard();
                 if (typeof renderAdminMetrics === 'function') renderAdminMetrics();
@@ -1751,9 +1751,9 @@
             saveData();
         }
 
-        // ==================== WIP MAIN VIEW ====================
-        
-function exportWIPToCSV() {
+        // ==================== JOBS MAIN VIEW ====================
+
+function exportJobsToCSV() {
             alert('Export to CSV');
         }
 

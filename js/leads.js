@@ -124,7 +124,7 @@
       if (!terminal && !isNaN(pd) && pd < Date.now() - 86400000) projColor = '#f87171';
     }
 
-    // WIP-style single-line title: bold title + small inline grey
+    // Single-line title: bold title + small inline grey
     // suffix for location (city, state). No stacked sub-line.
     var titleSuffix = location
       ? '<span style="font-size:11px;color:var(--text-dim,#888);font-weight:normal;margin-left:6px;">' + escapeHTML(location) + '</span>'
@@ -602,7 +602,7 @@
   }
 
   // Show the green "Sold — linked to a job" chip when the lead has a job_id.
-  // Clicking the chip's button jumps to that job's WIP detail view.
+  // Clicking the chip's button jumps to that job's detail view.
   function refreshLinkedJobChip(l) {
     var chip = document.getElementById('leadEditor_linkedJob');
     var labelEl = document.getElementById('leadEditor_linkedJobLabel');
@@ -634,22 +634,22 @@
     btn.style.display = (canEditJobs && (!l || !l.job_id)) ? '' : 'none';
   }
 
-  // Open the WIP job linked to the currently-editing lead.
+  // Open the job linked to the currently-editing lead.
   function openLinkedJobFromLead() {
     var leadId = _currentEditingLeadId;
     var l = _leads.find(function(x) { return x.id === leadId; });
     if (!l || !l.job_id) return;
     closeLeadEditorAny();
     if (typeof window.switchTab === 'function') {
-      window.switchTab('wip');
-      // editJob is defined in wip.js; give the WIP render a tick before opening
+      window.switchTab('jobs');
+      // editJob is defined in jobs.js; give the Jobs render a tick before opening
       setTimeout(function() {
         if (typeof window.editJob === 'function') window.editJob(l.job_id);
       }, 200);
     }
   }
 
-  // Convert the currently-editing lead into a new WIP job. Copies title,
+  // Convert the currently-editing lead into a new job. Copies title,
   // client, project type, market, contract amount (from estimated revenue),
   // and assigns the salesperson as PM/owner. Sets lead.status = 'sold' and
   // lead.job_id = new job id so future opens of the lead show the chip.
@@ -671,9 +671,9 @@
     var clientName = c ? (c.company_name || c.name) : '';
 
     var msg =
-      'Create a new WIP job from this lead?\n\n' +
+      'Create a new job from this lead?\n\n' +
       'This will:\n' +
-      '  • Add a job to WIP with the lead\'s title, client, and project info\n' +
+      '  • Add a job to the Jobs list with the lead\'s title, client, and project info\n' +
       '  • Use Estimated Revenue (high) as the Contract Amount\n' +
       '  • Mark the lead as Sold and link the new job to it\n\n' +
       'You can edit the job number, costs, and other fields after.';
@@ -719,17 +719,17 @@
       l.status = 'sold';
       closeLeadEditorAny();
       reloadLeadsCache();
-      // Hand off to WIP so the user sees the new job
-      if (typeof window.switchTab === 'function') window.switchTab('wip');
+      // Hand off to Jobs so the user sees the new job
+      if (typeof window.switchTab === 'function') window.switchTab('jobs');
       setTimeout(function() {
         if (typeof window.editJob === 'function') window.editJob(jobId);
       }, 250);
     }).catch(function(err) {
       alert('Job created, but linking it back to the lead failed: ' + err.message +
-            '\n\nThe job is in WIP — you can re-link it manually if needed.');
+            '\n\nThe job is in the Jobs list — you can re-link it manually if needed.');
       closeLeadEditorAny();
       reloadLeadsCache();
-      if (typeof window.switchTab === 'function') window.switchTab('wip');
+      if (typeof window.switchTab === 'function') window.switchTab('jobs');
     });
   }
 

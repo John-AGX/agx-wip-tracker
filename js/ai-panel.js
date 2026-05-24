@@ -119,7 +119,7 @@
     // UNIFIED 86 — every surface routes to /api/ai/86. The endpoint
     // accepts current_context describing which entity is open;
     // server-side it loads the appropriate per-turn snapshot (estimate,
-    // job WIP, intake bucket, client directory, admin/CoS metrics). ONE
+    // job, intake bucket, client directory, admin/CoS metrics). ONE
     // conversation thread per user persists across pages.
     return '/api/ai/86';
   }
@@ -159,7 +159,7 @@
     } catch (e) { /* best-effort */ }
 
     // Open job — the most common entity the user has selected. The
-    // jobs tab + workspace + WIP all surface a job via appState.
+    // Jobs tab + workspace all surface a job via appState.
     var openJobId = (window.appState && window.appState.currentJobId) || null;
     if (openJobId) {
       ctx.entity_type = 'job';
@@ -238,7 +238,7 @@
     if (/^\/schedule/.test(url) || page === 'schedule') return '86-scheduler';
     if (/^\/clients/.test(url)  || page === 'clients')  return '86-directory';
     if (/^\/leads/.test(url)    || page === 'leads')    return '86-sales';
-    if (/^\/wip/.test(url)      || page === 'wip')      return '86-pm';
+    if (/^\/(wip|jobs)/.test(url) || page === 'wip' || page === 'jobs') return '86-pm';
     return null;
   }
 
@@ -407,7 +407,7 @@
   ];
   var JOB_PRESETS = [
     { label: 'Audit this job',        prompt: 'Run a full audit of this job. Walk through:\n1. **Node graph connectivity** — list any orphan or disconnected cost nodes, and any phases/buildings that should be wired but aren\'t.\n2. **Missing inputs** — phases without %complete set, buildings without phases, cost nodes without budgets.\n3. **Cost coverage** — compare the QB cost categories against the cost-side nodes in the graph. Call out QB categories with significant spend ($1K+) that don\'t have a matching node, and nodes that have no recorded actual costs.\n4. **Billing posture** — revenue earned vs invoiced; flag under-billing.\n5. **Margin** — as-sold vs revised vs JTD; flag drift > 2 points.\nFormat as a checklist grouped by severity (🔴 needs action, 🟡 worth checking, 🟢 looks fine). Be specific — include node labels, dollar amounts, and category names.' },
-    { label: 'Health check',          prompt: 'Run a quick WIP health check on this job. Margin trend, cost-to-complete sanity, any red flags I should look at first.' },
+    { label: 'Health check',          prompt: 'Run a quick health check on this job. Margin trend, cost-to-complete sanity, any red flags I should look at first.' },
     { label: 'Am I underbilled?',     prompt: 'Compare revenue earned vs. invoiced to date. Am I behind on billing? If so, by how much, and what should I send next?' },
     { label: 'Missing change orders?', prompt: 'Look at the cost lines vs. the original estimated costs. Anything that looks like out-of-scope work that should have been captured as a change order?' },
     { label: 'Margin drift',          prompt: 'Compare as-sold margin, revised margin, and JTD margin. Is the job drifting? What\'s driving the change?' },
@@ -1495,10 +1495,10 @@
         }
         var planDesc  = isEstimateMode()
           ? '86 discusses scope without proposing line items.'
-          : '86 analyzes WIP without writing changes.';
+          : '86 analyzes job data without writing changes.';
         var editDesc  = isEstimateMode()
           ? '86 proposes line items + edits; approve each before applying.'
-          : '86 proposes WIP / phase / graph edits; approve each.';
+          : '86 proposes job / phase / graph edits; approve each.';
         var autoDesc  = 'Estimate-line proposals (add / update / delete lines + sections) apply automatically; everything else still requires approval.';
         var modes = [
           { key: 'plan',  label: 'Plan',  desc: planDesc },
@@ -1618,7 +1618,7 @@
     if (trustBtn) trustBtn.style.display = 'none';
     var noticeEl = document.querySelector('#p86-ai-panel #ai-notice');
     if (noticeEl) {
-      if (isJobMode()) noticeEl.textContent = 'I\'m 86 — Project 86\'s operator. Estimating, scope, line items, leads, WIP, margin, schedule, the node graph, and the customer directory (clients, jobs, subs, users) — I do all of it. I propose changes; you approve before they land.';
+      if (isJobMode()) noticeEl.textContent = 'I\'m 86 — Project 86\'s operator. Estimating, scope, line items, leads, jobs, margin, schedule, the node graph, and the customer directory (clients, jobs, subs, users) — I do all of it. I propose changes; you approve before they land.';
       else if (isClientMode()) noticeEl.textContent = 'Client directory mode — I can split parent+property compounds, link unparented properties, capture durable client notes, propose mutations. Same brain as everywhere else, scoped to your directory snapshot.';
       else if (isStaffMode()) noticeEl.textContent = 'Admin mode — I see cross-agent metrics, recent conversations, and your skill packs. I can propose skill-pack edits when a workflow should be standardized. Same brain as everywhere else, scoped to the admin snapshot.';
       else if (isIntakeMode()) noticeEl.textContent = 'New lead intake — I\'m 86. Tell me what the lead is (property name, scope, salesperson) and drop any photos. I\'ll dedupe against existing clients/leads, propose the new lead for your approval, and tee up the estimate.';
@@ -2700,7 +2700,7 @@
     'Crunching numbers…',
     'Reading the room…',
     'Squinting at receipts…',
-    'Poking the WIP…',
+    'Poking the jobs…',
     'Triangulating…',
     'Asking the catalog…',
     'Cross-referencing…',
@@ -3890,7 +3890,8 @@
         go('estimates'); sub('subs'); mark('subs');
         return 'Switched to the Subs directory.';
       case 'schedule': go('schedule'); return 'Switched to the Schedule.';
-      case 'wip':      go('wip');      return 'Switched to the WIP list.';
+      case 'jobs':
+      case 'wip':      go('jobs');     return 'Switched to the Jobs list.';
       case 'insights': go('insights'); return 'Switched to Insights.';
       case 'tools':
         // Field tools live inside My Files as a virtual "Tools"
@@ -3924,7 +3925,7 @@
             }
           }
         }
-        go('wip');
+        go('jobs');
         if (typeof window.editJob === 'function') window.editJob(entityId);
         return 'Opened job ' + entityId + '.';
       case 'estimate':
@@ -3938,7 +3939,7 @@
         if (typeof window.openEditLeadModal === 'function') window.openEditLeadModal(entityId);
         return 'Opened lead ' + entityId + '.';
       default:
-        return 'navigate: unknown destination "' + dest + '". Valid destinations: home, leads, estimates, clients, subs, schedule, wip, insights, admin, job, estimate, lead.';
+        return 'navigate: unknown destination "' + dest + '". Valid destinations: home, leads, estimates, clients, subs, schedule, jobs, insights, admin, job, estimate, lead.';
     }
   }
 
@@ -7281,7 +7282,7 @@
 
   // Sticky-header shim mirroring openEstimateAI() — finds the active job id
   // from the workspace state and opens the panel against it. Lives here so
-  // wip.js doesn't need to know about p86AI's internals.
+  // jobs.js doesn't need to know about p86AI's internals.
   window.openJobAI = function() {
     var jobId = (window.appState && window.appState.currentJobId) || null;
     if (!jobId) { alert('Open a job first.'); return; }
