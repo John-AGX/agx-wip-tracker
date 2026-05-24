@@ -548,7 +548,58 @@ async function dispatchEstimate(dbClient, target, refTable, ctx) {
       ? target.entity_id
       : ('est_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8));
     const fields = ops.field_updates || {};
-    const blob = { id, ...fields };
+    // Snapshot the linked client's fields into the estimate blob.
+    // Why: when 86 creates an estimate via emit_payload_file with
+    // client_id pointing at an existing directory entry, the frontend
+    // form previously rendered the estimate with empty company /
+    // community / address / manager fields — because no human ever
+    // clicked the client picker to trigger the in-editor snapshot.
+    // Snapshotting at create-time also locks the client's address +
+    // manager + short_name at this moment, so future client edits
+    // don't silently rewrite a sent proposal.
+    const clientId = fields.client_id;
+    let snap = {};
+    if (clientId && typeof clientId === 'string' && !isRef(clientId)) {
+      try {
+        const cr = await dbClient.query(
+          'SELECT name, short_name, company_name, community_name, ' +
+          '       address, property_address, city, state, zip, ' +
+          '       community_manager, cm_email, cm_phone, email, phone, cell ' +
+          '  FROM clients WHERE id = $1',
+          [clientId]
+        );
+        if (cr.rows.length) {
+          const c = cr.rows[0];
+          const propAddr = [c.property_address || c.address, c.city, c.state, c.zip]
+            .filter(Boolean).join(', ');
+          const billAddr = [c.address, c.city, c.state, c.zip]
+            .filter(Boolean).join(', ');
+          snap = {
+            nickName:      c.short_name || '',
+            client:        c.company_name || c.name || '',
+            community:     c.community_name || c.name || '',
+            propertyAddr:  propAddr || '',
+            billingAddr:   billAddr || '',
+            managerName:   c.community_manager || '',
+            managerEmail:  c.cm_email || c.email || '',
+            managerPhone:  c.cm_phone || c.phone || c.cell || '',
+          };
+          // Strip empty strings so they don't override sensible
+          // defaults from 86's field_updates.
+          Object.keys(snap).forEach((k) => { if (!snap[k]) delete snap[k]; });
+        }
+      } catch (e) {
+        // Snapshot is best-effort — if the lookup fails (deleted
+        // client, race, etc.) the estimate still creates with whatever
+        // fields 86 supplied. Don't surface as a payload-level error.
+        console.warn('[payload-dispatcher] client snapshot failed:', e.message);
+      }
+    }
+    // Merge precedence: client snapshot < 86's explicit field_updates.
+    // 86 may already have filled some fields from its own context
+    // (e.g. an estimate that reuses an old job's nickname); those
+    // take precedence over the auto-snapshot.
+    const blob = { id, ...snap, ...fields };
     if (ops.scope !== undefined) blob.scope = ops.scope;
     if (ops.sections) applyEstimateSections(blob, ops.sections);
     if (ops.groups) applyEstimateGroups(blob, ops.groups);
@@ -564,7 +615,7 @@ async function dispatchEstimate(dbClient, target, refTable, ctx) {
       entity_id: id,
       op: 'create',
       created: true,
-      summary: `Created estimate ${blob.name || id}`,
+      summary: `Created estimate ${blob.name || blob.client || id}`,
     };
   }
 

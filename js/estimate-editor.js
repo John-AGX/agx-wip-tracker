@@ -1551,7 +1551,7 @@
           '</div>' +
           '<input type="hidden" id="editEst_clientId" value="' + escapeHTML(est.client_id || '') + '" />' +
           '<input type="hidden" id="editEst_leadId" value="' + escapeHTML(est.lead_id || '') + '" />' +
-          field('Nickname (internal)', 'ee-nickName', est.nickName, { placeholder: 'Short label for internal lists' }) +
+          field('Client Short Name', 'ee-nickName', est.nickName, { placeholder: 'e.g. PAC, Sterling, Greystar — auto-filled from client directory' }) +
           field('Job Type', 'ee-jobType', est.jobType, { options: ['Renovation', 'Service & Repair', 'Work Order'] }) +
           field('Client Company Name', 'ee-client', est.client) +
           field('Community / Property Name', 'ee-community', est.community) +
@@ -1559,7 +1559,6 @@
           field('Client Billing Address', 'ee-billingAddr', est.billingAddr) +
         '</div>' +
         '<div>' +
-          field('Proposal Salutation (Dear ___,)', 'ee-salutation', est.salutation, { placeholder: 'Auto-filled from client; e.g. PAC Team' }) +
           field('Issue / Repair (proposal headline)', 'ee-issue', est.issue, { placeholder: 'e.g. Metal Stair Repairs' }) +
           field('Manager Name', 'ee-managerName', est.managerName) +
           field('Manager Email', 'ee-managerEmail', est.managerEmail, { type: 'email' }) +
@@ -1622,7 +1621,6 @@
       'ee-community': 'community',
       'ee-propertyAddr': 'propertyAddr',
       'ee-billingAddr': 'billingAddr',
-      'ee-salutation': 'salutation',
       'ee-issue': 'issue',
       'ee-managerName': 'managerName',
       'ee-managerEmail': 'managerEmail',
@@ -1672,6 +1670,29 @@
     if (typeof populateEstimateClientPicker === 'function') {
       populateEstimateClientPicker('ee-clientPicker', est.client_id || '');
     }
+    // Retroactive auto-fill — if this estimate has a client_id set but
+    // the derived fields (company / community / addresses / manager)
+    // are empty, run the client snapshot now. Covers two cases:
+    //   1. Estimates created by 86 via emit_payload_file BEFORE the
+    //      server-side snapshot landed — they have client_id but no
+    //      filled fields.
+    //   2. Any estimate where the user wants to re-pull current
+    //      client data (rare; manual edits override).
+    // Only fires when ALL client-derived fields are empty so we don't
+    // clobber user edits.
+    if (est.client_id && !est.client && !est.community && !est.propertyAddr &&
+        !est.managerName && !est.managerEmail && !est.managerPhone) {
+      // Defer so populateEstimateClientPicker has time to set
+      // sel.value before we trigger the change. setTimeout 0 +
+      // dispatchEvent('change') is enough.
+      setTimeout(function() {
+        var sel = document.getElementById('ee-clientPicker');
+        if (sel && sel.value === est.client_id &&
+            typeof window.onEstimateClientPicked === 'function') {
+          window.onEstimateClientPicked('edit');
+        }
+      }, 0);
+    }
   }
 
   // Re-rendering helpers exposed so the client picker's auto-fill writes
@@ -1697,6 +1718,7 @@
           el.dispatchEvent(new Event('change'));
         }
       };
+      setIf('ee-nickName', c.short_name || '');
       setIf('ee-client', c.company_name || c.name || '');
       setIf('ee-community', c.community_name || c.name || '');
       var pAddr = [c.property_address || c.address, c.city, c.state, c.zip].filter(Boolean).join(', ');
@@ -1706,14 +1728,10 @@
       setIf('ee-managerName', c.community_manager || '');
       setIf('ee-managerEmail', c.cm_email || c.email || '');
       setIf('ee-managerPhone', c.cm_phone || c.phone || c.cell || '');
-      // Snapshot the client's salutation onto the estimate so editing the
-      // client later doesn't rewrite a sent proposal. Falls through to
-      // first/last name -> contact name -> client name if salutation is blank.
-      var salutationGuess = c.salutation
-        || ((c.first_name || c.last_name) ? [c.first_name, c.last_name].filter(Boolean).join(' ') : '')
-        || c.community_manager
-        || c.name || '';
-      setIf('ee-salutation', salutationGuess);
+      // Proposal Salutation field was retired 2026-05-24 — no longer
+      // shown in the form and no auto-snapshot. Existing data on the
+      // estimate row is left untouched; estimate-preview.js still
+      // tolerates it being undefined.
       // Update estimate.client_id directly + chips
       var e = getEstimate();
       if (e) { e.client_id = sel.value; debouncedSave(); }
