@@ -38,7 +38,7 @@
     // Browser tab title — refine the generic "Estimates | Project 86"
     // set by switchTab to the active subtab's specific label.
     if (typeof window.setPageTitle === 'function') {
-      var SUBTAB_TITLES = { leads: 'Leads', list: 'Estimates', clients: 'Clients', subs: 'Subs' };
+      var SUBTAB_TITLES = { leads: 'Leads', list: 'Estimates', clients: 'Clients', subs: 'Subs', users: 'Internal Users' };
       window.setPageTitle(SUBTAB_TITLES[name] || 'Estimates');
     }
     if (name === 'leads') {
@@ -70,6 +70,18 @@
       // counts every time they reopen the tab.
       if (typeof renderSubsDirectory === 'function') renderSubsDirectory();
       if (window.p86Subs && typeof window.p86Subs.refresh === 'function') window.p86Subs.refresh();
+    }
+    else if (name === 'users') {
+      // Internal Users directory — read-only coworker phonebook.
+      // Buildertrend-style table; users come from
+      // window.p86Admin.getCachedUsers(). If the cache is empty
+      // (rare — auth.js seeds it on login), trigger a load and
+      // re-render once it lands.
+      var users = (window.p86Admin && window.p86Admin.getCachedUsers && window.p86Admin.getCachedUsers()) || [];
+      if (!users.length && window.p86Admin && typeof window.p86Admin.loadUsersCache === 'function') {
+        window.p86Admin.loadUsersCache().then(function() { renderInternalUsers(); });
+      }
+      renderInternalUsers();
     }
     // Persist nav state so a refresh lands back on this sub-tab
     // rather than the Estimates page's default Leads sub-tab.
@@ -1098,7 +1110,127 @@
     });
   });
 
+  // ==================== INTERNAL USERS DIRECTORY ====================
+  // Read-only coworker phonebook reachable from the header Directory
+  // dropdown. Buildertrend-style table: Name / Role / Status / Email
+  // / Phone. Users come from window.p86Admin.getCachedUsers() which
+  // is loaded on auth + lazy-refreshed when the sub-tab activates.
+  // Search + role + status filters are pure client-side. No write
+  // capabilities here — admins edit users on Admin → Users.
+
+  // Friendlier display labels for the role enum.
+  var USER_ROLE_LABELS = {
+    'system_admin': 'System Admin',
+    'admin':        'Admin',
+    'org_owner':    'Org Owner',
+    'pm':           'Project Manager',
+    'sales':        'Sales',
+    'field':        'Field Crew',
+    'office':       'Office Support',
+    'crew':         'Field Crew',
+    'estimator':    'Estimator'
+  };
+  function prettyUserRole(r) {
+    if (!r) return '—';
+    return USER_ROLE_LABELS[r] || (r.charAt(0).toUpperCase() + r.slice(1).replace(/_/g, ' '));
+  }
+
+  function renderInternalUsers() {
+    var listEl = document.getElementById('users-list');
+    var summaryEl = document.getElementById('users-summary');
+    var roleSelectEl = document.getElementById('users-filter-role');
+    if (!listEl) return;
+
+    var users = (window.p86Admin && window.p86Admin.getCachedUsers && window.p86Admin.getCachedUsers()) || [];
+
+    // Populate the role-filter dropdown ONCE from the data so it
+    // always reflects whatever roles actually exist in the org.
+    if (roleSelectEl && roleSelectEl.options.length <= 1) {
+      var seenRoles = {};
+      users.forEach(function(u) { if (u.role) seenRoles[u.role] = true; });
+      Object.keys(seenRoles).sort().forEach(function(r) {
+        var opt = document.createElement('option');
+        opt.value = r;
+        opt.textContent = prettyUserRole(r);
+        roleSelectEl.appendChild(opt);
+      });
+    }
+
+    // Apply filters.
+    var searchEl = document.getElementById('users-search');
+    var q = (searchEl && searchEl.value || '').trim().toLowerCase();
+    var roleFilter = (roleSelectEl && roleSelectEl.value) || '';
+    var activeFilterEl = document.getElementById('users-filter-active');
+    var activeFilter = activeFilterEl ? activeFilterEl.value : 'active';
+
+    var filtered = users.filter(function(u) {
+      if (activeFilter === 'active' && !u.active) return false;
+      if (activeFilter === 'inactive' && u.active) return false;
+      if (roleFilter && u.role !== roleFilter) return false;
+      if (q) {
+        var hay = (u.name || '') + ' ' + (u.email || '') + ' ' + (u.phone_number || '') + ' ' + prettyUserRole(u.role);
+        if (hay.toLowerCase().indexOf(q) === -1) return false;
+      }
+      return true;
+    });
+
+    // Sort by name (case-insensitive).
+    filtered.sort(function(a, b) {
+      var an = (a.name || a.email || '').toLowerCase();
+      var bn = (b.name || b.email || '').toLowerCase();
+      return an < bn ? -1 : an > bn ? 1 : 0;
+    });
+
+    if (summaryEl) {
+      summaryEl.textContent = filtered.length + ' ' + (filtered.length === 1 ? 'person' : 'people') +
+        (filtered.length !== users.length ? ' (of ' + users.length + ')' : '');
+    }
+
+    if (!filtered.length) {
+      listEl.innerHTML = '<div style="padding:30px;text-align:center;color:var(--text-dim,#888);font-size:13px;">' +
+        (users.length === 0 ? 'No users in the directory yet.' : 'No users match the current filters.') +
+        '</div>';
+      return;
+    }
+
+    // Buildertrend-style table, Project 86 dark styling. Email + phone
+    // cells are clickable links (mailto: / tel:) so a single click
+    // opens the user's email client or starts a call.
+    var head =
+      '<thead>' +
+        '<tr style="text-align:left;border-bottom:1px solid var(--border,#333);color:var(--text-dim,#888);font-size:11px;text-transform:uppercase;letter-spacing:0.4px;">' +
+          '<th style="padding:8px 10px;font-weight:600;">Name</th>' +
+          '<th style="padding:8px 10px;font-weight:600;">Role</th>' +
+          '<th style="padding:8px 10px;font-weight:600;">Status</th>' +
+          '<th style="padding:8px 10px;font-weight:600;">Email</th>' +
+          '<th style="padding:8px 10px;font-weight:600;">Phone</th>' +
+        '</tr>' +
+      '</thead>';
+    var body = filtered.map(function(u) {
+      var roleLbl = escapeHTML(prettyUserRole(u.role));
+      var statusBadge = u.active
+        ? '<span class="badge on-track" style="font-size:10px;">ACTIVE</span>'
+        : '<span class="badge not-started" style="font-size:10px;">INACTIVE</span>';
+      var name = escapeHTML(u.name || u.email || '(no name)');
+      var emailCell = u.email
+        ? '<a href="mailto:' + escapeHTML(u.email) + '" style="color:#4f8cff;text-decoration:none;">' + escapeHTML(u.email) + '</a>'
+        : '<span style="color:var(--text-dim,#666);">—</span>';
+      var phoneCell = u.phone_number
+        ? '<a href="tel:' + escapeHTML(String(u.phone_number).replace(/[^\d+]/g, '')) + '" style="color:#4f8cff;text-decoration:none;">' + escapeHTML(u.phone_number) + '</a>'
+        : '<span style="color:var(--text-dim,#666);">—</span>';
+      return '<tr style="border-bottom:1px solid var(--border,#2a2a36);">' +
+        '<td style="padding:10px;color:var(--text,#fff);font-weight:600;">' + name + '</td>' +
+        '<td style="padding:10px;color:var(--text-dim,#aaa);font-size:12px;">' + roleLbl + '</td>' +
+        '<td style="padding:10px;">' + statusBadge + '</td>' +
+        '<td style="padding:10px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;">' + emailCell + '</td>' +
+        '<td style="padding:10px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;">' + phoneCell + '</td>' +
+      '</tr>';
+    }).join('');
+    listEl.innerHTML = '<table style="width:100%;border-collapse:collapse;">' + head + '<tbody>' + body + '</tbody></table>';
+  }
+
   window.switchEstimatesSubTab = switchEstimatesSubTab;
+  window.renderInternalUsers = renderInternalUsers;
   window.renderClientsList = renderClientsList;
   window.openNewClientModal = openNewClientModal;
   window.openEditClientModal = openEditClientModal;

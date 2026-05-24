@@ -283,11 +283,17 @@
                     </div>
                     <!-- Directory popover — items are routed via the
                          existing tab-switching click handler so the
-                         underlying Estimates → Clients / Subs sub-tabs
-                         still drive the rendering. -->
+                         underlying Estimates → Clients / Subs / Users sub-tabs
+                         still drive the rendering. The class="header-popover-item"
+                         on each button is what gives them the dark-theme
+                         styling — without it they fell back to the
+                         browser's default button rendering, which is why
+                         this dropdown looked bright while every other
+                         header popover was dark. -->
                     <div id="directory-menu" class="header-popover header-directory-menu" role="menu" hidden>
-                        <button type="button" data-tab="estimates" data-est-subtab="clients" data-virtual-tab="clients" data-p86-icon="clients" data-cap="ESTIMATES_VIEW" role="menuitem">Client Contacts</button>
-                        <button type="button" data-tab="estimates" data-est-subtab="subs"    data-virtual-tab="subs"    data-p86-icon="subs"                                 role="menuitem">Subs / Vendors</button>
+                        <button type="button" class="header-popover-item" data-tab="estimates" data-est-subtab="users"   data-virtual-tab="users"   data-p86-icon="users"   role="menuitem">Internal Users</button>
+                        <button type="button" class="header-popover-item" data-tab="estimates" data-est-subtab="subs"    data-virtual-tab="subs"    data-p86-icon="subs"    role="menuitem">Subs / Vendors</button>
+                        <button type="button" class="header-popover-item" data-tab="estimates" data-est-subtab="clients" data-virtual-tab="clients" data-p86-icon="clients" data-cap="ESTIMATES_VIEW" role="menuitem">Client Contacts</button>
                     </div>
                 </div>
             </div>
@@ -820,6 +826,7 @@
                         <button class="ws-right-tab" data-estimates-subtab="list" data-p86-icon="estimates" onclick="switchEstimatesSubTab('list')">Estimates</button>
                         <button class="ws-right-tab" data-estimates-subtab="clients" data-p86-icon="clients" onclick="switchEstimatesSubTab('clients')">Clients</button>
                         <button class="ws-right-tab" data-estimates-subtab="subs" data-p86-icon="subs" onclick="switchEstimatesSubTab('subs')">Subs</button>
+                        <button class="ws-right-tab" data-estimates-subtab="users" data-p86-icon="users" onclick="switchEstimatesSubTab('users')">Internal Users</button>
                     </div>
 
                     <!-- Leads sub-tab -->
@@ -1050,6 +1057,29 @@
                             <button class="ee-btn primary" style="margin-left:auto;font-size:11px;padding:4px 10px;" onclick="window.p86Subs && window.p86Subs.startMigration()">Review &amp; migrate</button>
                         </div>
                         <div id="subs-list"></div>
+                    </div>
+
+                    <!-- Internal Users sub-tab — read-only directory of every
+                         person in the org. Reachable from the header Directory
+                         dropdown so anyone can look up a coworker's email or
+                         phone. Renders via renderInternalUsers() in clients.js;
+                         user data comes from window.p86Admin.getCachedUsers()
+                         which is loaded on auth. Buildertrend-style table:
+                         Name / Role / Status / Email / Phone. -->
+                    <div id="estimates-subtab-users" class="estimates-subtab-content" style="display:none;">
+                        <div class="action-buttons">
+                            <span id="users-summary" style="margin-right:auto;color:var(--text-dim,#888);font-size:12px;"></span>
+                            <input type="text" id="users-search" oninput="renderInternalUsers()" placeholder="Search by name, email, role…" style="min-width:240px;" />
+                            <select id="users-filter-role" onchange="renderInternalUsers()" style="width:auto;min-width:140px;">
+                                <option value="">All roles</option>
+                            </select>
+                            <select id="users-filter-active" onchange="renderInternalUsers()" style="width:auto;min-width:120px;">
+                                <option value="active">Active only</option>
+                                <option value="">All statuses</option>
+                                <option value="inactive">Inactive only</option>
+                            </select>
+                        </div>
+                        <div id="users-list" style="margin-top:12px;"></div>
                     </div>
 
                     <!-- Import result modal — populated after a Buildertrend
@@ -2386,7 +2416,7 @@
     <script src="js/pdf-viewer.js?v=3b"></script>
     <script src="js/admin.js?v=78"></script>
     <script src="js/field-tools.js?v=2b"></script>
-    <script src="js/clients.js?v=16b"></script>
+    <script src="js/clients.js?v=16c"></script>
     <script src="js/subs.js?v=8b"></script>
     <script src="js/job-audit.js?v=3b"></script>
     <script src="js/job-reports.js?v=1b"></script>
@@ -2428,7 +2458,7 @@
     <!-- Project 86 inline-SVG icon helper. Provides window.p86Icon(name, opts)
          — 24 icons from Phosphor (MIT) + Heroicons (MIT). See
          scripts/build-agx-icons.js to regenerate. -->
-    <script src="js/agx-icons.js?v=20b"></script>
+    <script src="js/agx-icons.js?v=20c"></script>
 
     <!-- Node Graph (Beta) -->
     <link rel="stylesheet" href="nodegraph/nodegraph.css?v=90b" />
