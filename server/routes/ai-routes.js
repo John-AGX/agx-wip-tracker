@@ -2674,7 +2674,30 @@ async function resolveSessionForChat({ sessionId, currentContext, userId, organi
            WHERE id = $1 AND user_id = $2 AND archived_at IS NULL`,
         [sid, userId]
       );
-      if (r.rows.length) return r.rows[0];
+      if (r.rows.length) {
+        const picked = r.rows[0];
+        // When unified-user-thread is on, an explicit sessionId from
+        // the sidebar must NOT pin the conversation onto a stale
+        // legacy_partitioned session forever. If the user picked one
+        // for "view history" the sidebar can show it, but new chat
+        // turns should flow into the user's rolling user_thread
+        // session so compaction triggers + context doesn't pile up
+        // for 29+ turns without ever being trimmed. We respect the
+        // explicit pick ONLY when:
+        //   (a) the flag is off, OR
+        //   (b) the picked session IS the user_thread.
+        // Otherwise fall through to the user_thread resolver below.
+        if (!FLAG_UNIFIED_USER_THREAD || picked.session_kind === 'user_thread') {
+          return picked;
+        }
+        // Log once so we can see the redirect happen in Railway.
+        console.log(
+          '[resolve-session] explicit sessionId %d is legacy_partitioned;' +
+          ' redirecting new turn to user_thread (user %d)',
+          picked.id, userId
+        );
+        // fall through
+      }
       // Fall through to auto-anchor — a stale session_id (archived /
       // deleted upstream) shouldn't 500 the request.
     }
