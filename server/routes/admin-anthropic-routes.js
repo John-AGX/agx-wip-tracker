@@ -103,7 +103,10 @@ router.post('/skills', requireAuth, requireCapability('ROLES_MANAGE'), async (re
           md
         ].join('\n');
 
-    const file = await toFile(Buffer.from(skillMd, 'utf8'), 'SKILL.md', { type: 'text/markdown' });
+    // Anthropic Skills API requires SKILL.md inside a top-level folder
+    // (slug/SKILL.md) since the 2026-05-14 update. The slug derived
+    // above doubles as the folder name.
+    const file = await toFile(Buffer.from(skillMd, 'utf8'), slug + '/SKILL.md', { type: 'text/markdown' });
     const created = await anthropic.beta.skills.create({
       display_title: displayTitle,
       files: [file]

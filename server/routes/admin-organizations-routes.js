@@ -55,10 +55,16 @@ function buildPackSkillMd(pack) {
 // Upload a pack as a new Anthropic native Skill. Throws on failure;
 // caller is responsible for rolling back any local DB state if the
 // mirror doesn't land. We never want a local-only pack to exist.
+//
+// Anthropic Skills API requires SKILL.md inside a top-level folder
+// since the 2026-05-14 update — without the folder prefix the API
+// returns "SKILL.md file must be exactly in the top-level folder."
+// The slug doubles as the folder name. See the working pattern in
+// admin-agents-routes.js around line 1019.
 async function uploadPackAsNewSkill(anthropic, pack) {
   const md = buildPackSkillMd(pack);
   const slug = slugifyPackName(pack.name);
-  const file = await toFile(Buffer.from(md, 'utf8'), 'SKILL.md', { type: 'text/markdown' });
+  const file = await toFile(Buffer.from(md, 'utf8'), slug + '/SKILL.md', { type: 'text/markdown' });
   return anthropic.beta.skills.create({
     display_title: String(pack.name || 'Project 86 skill').slice(0, 200),
     files: [file]
@@ -71,7 +77,7 @@ async function uploadPackAsNewSkill(anthropic, pack) {
 async function uploadPackAsNewVersion(anthropic, skillId, pack) {
   const md = buildPackSkillMd(pack);
   const slug = slugifyPackName(pack.name);
-  const file = await toFile(Buffer.from(md, 'utf8'), 'SKILL.md', { type: 'text/markdown' });
+  const file = await toFile(Buffer.from(md, 'utf8'), slug + '/SKILL.md', { type: 'text/markdown' });
   return anthropic.beta.skills.versions.create(skillId, {
     files: [file]
   });
@@ -694,7 +700,9 @@ router.post('/:id/skill-packs/mirror-all',
         try {
           const md = buildPackSkillMd(pack);
           const slug = slugifyPackName(pack.name);
-          const file = await toFile(Buffer.from(md, 'utf8'), 'SKILL.md', { type: 'text/markdown' });
+          // Anthropic Skills API requires SKILL.md inside a top-level
+          // folder (slug/SKILL.md) since the 2026-05-14 update.
+          const file = await toFile(Buffer.from(md, 'utf8'), slug + '/SKILL.md', { type: 'text/markdown' });
           const created = await anthropic.beta.skills.create({
             display_title: String(pack.name || 'Project 86 skill').slice(0, 200),
             files: [file]

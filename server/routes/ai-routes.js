@@ -8174,7 +8174,9 @@ async function execStaffApprovalTool(name, input, ctx) {
         insertedId = pack.id;
         const md = buildSkillMarkdownForMirror(pack);
         const slug = slugifyMirrorName(pack.name);
-        const file = await toFile(Buffer.from(md, 'utf8'), 'SKILL.md', { type: 'text/markdown' });
+        // Anthropic Skills API requires SKILL.md inside a top-level folder
+        // (slug/SKILL.md) since 2026-05-14.
+        const file = await toFile(Buffer.from(md, 'utf8'), slug + '/SKILL.md', { type: 'text/markdown' });
         const created = await anthropic.beta.skills.create({
           display_title: (pack.name || 'Project 86 skill').slice(0, 200),
           files: [file]
@@ -8256,7 +8258,9 @@ async function execStaffApprovalTool(name, input, ctx) {
         try {
           const md = buildSkillMarkdownForMirror(updated);
           const slug = slugifyMirrorName(updated.name);
-          const file = await toFile(Buffer.from(md, 'utf8'), 'SKILL.md', { type: 'text/markdown' });
+          // Anthropic Skills API requires SKILL.md inside a top-level folder
+          // (slug/SKILL.md) since 2026-05-14.
+          const file = await toFile(Buffer.from(md, 'utf8'), slug + '/SKILL.md', { type: 'text/markdown' });
           if (updated.anthropic_skill_id) {
             try {
               await anthropic.beta.skills.versions.create(updated.anthropic_skill_id, { files: [file] });
