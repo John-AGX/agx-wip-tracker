@@ -587,11 +587,18 @@ function renderEstimatesList() {
     const units = ['sqft','lf','ea','hr','ls','sf','sy','cf','cy','gal'];
     let unitOpts = '';
     units.forEach(u => { unitOpts += '<option value="' + u + '"' + (line.unit === u ? ' selected' : '') + '>' + u + '</option>'; });
+    // Numeric inputs use type="text" inputmode="decimal" (not
+    // type="number"). The native number input has documented UX
+    // problems: wheel-scroll silently changes the value mid-edit,
+    // mobile Safari jumps the cursor when reformatting, step
+    // validation rejects partial decimals like "12.", some browsers
+    // strip leading zeros. inputmode="decimal" still triggers the
+    // mobile numeric keypad. recalcEstimateTotals parses via parseFloat.
     row.innerHTML = '<td style="padding:8px;"><input type="text" data-field="description" value="' + escapeHTML(line.description || '') + '" placeholder="Item description" oninput="recalcEstimateTotals()" style="width:100%;"></td>' +
-      '<td style="padding:8px;"><input type="number" data-field="qty" value="' + (line.qty || 1) + '" min="0" step="0.01" oninput="recalcEstimateTotals()" style="width:100%;text-align:center;"></td>' +
+      '<td style="padding:8px;"><input type="text" inputmode="decimal" data-field="qty" value="' + (line.qty || 1) + '" oninput="recalcEstimateTotals()" style="width:100%;text-align:center;"></td>' +
       '<td style="padding:8px;"><select data-field="unit" style="width:100%;">' + unitOpts + '</select></td>' +
-      '<td style="padding:8px;"><input type="number" data-field="unitCost" value="' + (line.unitCost || 0) + '" min="0" step="0.01" oninput="recalcEstimateTotals()" style="width:100%;text-align:right;"></td>' +
-      '<td style="padding:8px;"><input type="number" data-field="markup" value="' + (line.markup || 0) + '" min="0" step="1" oninput="recalcEstimateTotals()" style="width:100%;text-align:center;"></td>' +
+      '<td style="padding:8px;"><input type="text" inputmode="decimal" data-field="unitCost" value="' + (line.unitCost || 0) + '" oninput="recalcEstimateTotals()" style="width:100%;text-align:right;"></td>' +
+      '<td style="padding:8px;"><input type="text" inputmode="decimal" data-field="markup" value="' + (line.markup || 0) + '" oninput="recalcEstimateTotals()" style="width:100%;text-align:center;"></td>' +
       '<td style="padding:8px;text-align:right;color:var(--green);font-weight:bold;"><span data-field="lineTotal">' + formatCurrency(client) + '</span></td>' +
       '<td style="padding:8px;text-align:center;"><button class="estimate-line-delete" onclick="removeEstimateLineRow(\'' + line.id + '\')">X</button></td>';
     return row;

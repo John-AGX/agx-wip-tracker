@@ -1107,7 +1107,14 @@
           (isDollar ? '$' : '%') +
         '</button>' +
         (prefix ? '<span style="font-size:11px;color:var(--text-dim,#888);">' + prefix + '</span>' : '') +
-        '<input type="number" min="0" step="0.5" placeholder="0" value="' + markupVal + '" ' +
+        '<input type="text" inputmode="decimal" placeholder="0" value="' + markupVal + '" ' +
+          // type="text" inputmode="decimal" instead of type="number":
+          // the native number input has UX problems (wheel-scroll
+          // silently changes the value, mobile Safari cursor jump on
+          // reformat, step validation rejects partial decimals).
+          // inputmode="decimal" still gives mobile users the numeric
+          // keypad. JS parsing in updateSectionMarkup handles the
+          // string-shaped value.
           // onchange (not oninput) — updateSectionMarkup re-renders the
           // line items, which destroys this very input. With oninput,
           // every keystroke nuked the input mid-typing and characters
@@ -1168,7 +1175,21 @@
         (opts.align ? 'text-align:' + opts.align + ';' : '') +
         (opts.mono ? 'font-family:\'SF Mono\',monospace;' : '') +
         '"';
-      var typeAttr = opts.type ? 'type="' + opts.type + '"' : 'type="text"';
+      // Numeric fields render as type="text" with inputmode="decimal"
+      // instead of type="number". The native number input has
+      // documented UX problems: wheel-scroll silently changes the
+      // value mid-edit, mobile Safari jumps the cursor when reformatting,
+      // step validation rejects partial decimals like "12.", and
+      // some browsers strip leading zeros. type="text" + inputmode
+      // gives the mobile numeric keypad without any of those quirks;
+      // updateLineField (which fires onchange) parses via num() so the
+      // string-shaped value is converted correctly.
+      var typeAttr;
+      if (opts.type === 'number') {
+        typeAttr = 'type="text" inputmode="decimal"';
+      } else {
+        typeAttr = opts.type ? 'type="' + opts.type + '"' : 'type="text"';
+      }
       return '<div style="flex:' + (opts.flex || '1') + ';padding:4px 6px;">' +
         '<input ' + typeAttr + inputAttrs + ' />' +
       '</div>';

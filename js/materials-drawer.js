@@ -442,9 +442,9 @@
                        SUBGROUP_TO_SECTION[_activeSubgroup];
     return '<form class="md-form" data-form-mid="' + m.id + '">' +
       '<div class="md-form-grid">' +
-        '<label><span>Qty</span><input class="md-form-qty" type="number" step="any" required autofocus /></label>' +
+        '<label><span>Qty</span><input class="md-form-qty" type="text" inputmode="decimal" required autofocus /></label>' +
         '<label><span>Unit</span><input class="md-form-unit" type="text" value="' + escapeHTML(m.unit || 'ea') + '" /></label>' +
-        '<label><span>Unit cost</span><input class="md-form-price" type="number" step="0.01" value="' +
+        '<label><span>Unit cost</span><input class="md-form-price" type="text" inputmode="decimal" value="' +
           (m.last_unit_price != null ? Number(m.last_unit_price).toFixed(2) : '') + '" /></label>' +
       '</div>' +
       '<div class="md-form-grid">' +
@@ -579,7 +579,7 @@
               (m.unit || 'ea') + ' · ' + fmtMoney(m.last_unit_price) +
             '</span>' +
           '</div>' +
-          '<input class="md-confirm-qty" type="number" step="any" min="0" placeholder="qty" />' +
+          '<input class="md-confirm-qty" type="text" inputmode="decimal" placeholder="qty" />' +
         '</div>';
       }).join('') +
       '<div class="md-confirm-actions">' +

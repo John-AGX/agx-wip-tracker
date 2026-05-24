@@ -3037,7 +3037,7 @@ function renderWIPMain() {
                 row.innerHTML =
                     '<span style="flex:1;font-size:13px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTML(p.phase) +
                     ' <span style="font-size:10px;color:' + (p.pctComplete >= 100 ? 'var(--green)' : p.pctComplete >= 50 ? '#f59e0b' : 'var(--text-dim)') + ';">' + (p.pctComplete||0) + '%</span></span>' +
-                    '<input type="number" data-phase-id="' + p.id + '" value="' + asSold + '" step="0.01" style="width:110px;font-size:12px;padding:4px 6px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);text-align:right;" oninput="onPhaseBreakdownInput(this)">' +
+                    '<input type="text" inputmode="decimal" data-phase-id="' + p.id + '" value="' + asSold + '" style="width:110px;font-size:12px;padding:4px 6px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);text-align:right;" oninput="onPhaseBreakdownInput(this)">' +
                     (co ? '<span style="font-size:10px;color:var(--green);white-space:nowrap;">+' + formatCurrency(co) + ' CO</span>' : '') +
                     '<span style="font-size:12px;font-weight:600;color:var(--accent);width:90px;text-align:right;">' + formatCurrency(total) + '</span>' +
                     '<button type="button" onclick="removePhaseFromBreakdown(\'' + p.id + '\')" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:14px;padding:2px 4px;" title="Delete phase">&times;</button>';
@@ -3130,8 +3130,8 @@ function renderWIPMain() {
                     '<span style="flex:1;font-size:13px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' +
                     (co.coNumber ? '<span style="font-size:10px;color:var(--text-dim);margin-right:4px;">' + escapeHTML(co.coNumber) + '</span>' : '') +
                     escapeHTML(co.description || 'CO') + '</span>' +
-                    '<input type="number" data-co-id="' + co.id + '" data-field="income" value="' + inc + '" step="0.01" title="Income (budget add)" style="width:100px;font-size:12px;padding:4px 6px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--green);text-align:right;" oninput="onCOBreakdownInput(this)">' +
-                    '<input type="number" data-co-id="' + co.id + '" data-field="estimatedCosts" value="' + cost + '" step="0.01" title="Estimated cost" style="width:100px;font-size:12px;padding:4px 6px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--yellow);text-align:right;" oninput="onCOBreakdownInput(this)">' +
+                    '<input type="text" inputmode="decimal" data-co-id="' + co.id + '" data-field="income" value="' + inc + '" title="Income (budget add)" style="width:100px;font-size:12px;padding:4px 6px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--green);text-align:right;" oninput="onCOBreakdownInput(this)">' +
+                    '<input type="text" inputmode="decimal" data-co-id="' + co.id + '" data-field="estimatedCosts" value="' + cost + '" title="Estimated cost" style="width:100px;font-size:12px;padding:4px 6px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--yellow);text-align:right;" oninput="onCOBreakdownInput(this)">' +
                     '<button type="button" onclick="removeCOFromBreakdown(\'' + co.id + '\')" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:14px;padding:2px 4px;" title="Delete CO">&times;</button>';
                 rowsEl.appendChild(row);
             });
@@ -3483,7 +3483,7 @@ function renderWIPMain() {
                 html += '<div style="display:flex;gap:10px;align-items:center;">';
                 html += '<input type="text" data-mp-name="' + key + '" value="' + escapeHTML(g.name) + '" style="flex:1;padding:6px 8px;background:var(--input-bg,#0f1117);color:var(--text);border:1px solid var(--border);border-radius:4px;font-size:13px;font-weight:600;" />';
                 html += '<div style="font-size:11px;color:var(--text-dim);white-space:nowrap;">' + count + ' record' + (count > 1 ? 's' : '') + '</div>';
-                html += '<input type="number" data-mp-rev="' + key + '" value="' + totalRev.toFixed(2) + '" step="0.01" style="width:120px;padding:6px 8px;background:var(--input-bg,#0f1117);color:var(--text);border:1px solid var(--border);border-radius:4px;font-size:13px;text-align:right;" title="Total revenue" />';
+                html += '<input type="text" inputmode="decimal" data-mp-rev="' + key + '" value="' + totalRev.toFixed(2) + '" style="width:120px;padding:6px 8px;background:var(--input-bg,#0f1117);color:var(--text);border:1px solid var(--border);border-radius:4px;font-size:13px;text-align:right;" title="Total revenue" />';
                 if (isDup) {
                     html += '<button class="btn btn-primary small" style="padding:5px 10px;font-size:11px;" onclick="mergePhaseGroup(\'' + key + '\')">Merge</button>';
                 } else {
