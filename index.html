@@ -1109,24 +1109,20 @@
                      immediately adjacent. -->
                 <div id="admin" class="tab-content" data-admin-only style="display:none;">
                     <div class="ws-right-tabs">
-                        <!-- People & access -->
+                        <!-- People & access (top-level convenience — user mgmt + RBAC) -->
                         <button class="ws-right-tab active" data-admin-subtab="users" data-p86-icon="clients" onclick="switchAdminSubTab('users')">Users</button>
                         <button class="ws-right-tab" data-admin-subtab="roles" data-p86-icon="admin" onclick="switchAdminSubTab('roles')">Roles</button>
-                        <button class="ws-right-tab" data-admin-subtab="jobs" data-p86-icon="wip" onclick="switchAdminSubTab('jobs')">Job Assignments</button>
-                        <!-- Org settings cluster -->
+                        <!-- Org settings cluster — Templates / Materials / Job Assignments
+                             / Email Templates moved INTO Organization as sub-pills (Phase F).
+                             Old top-level URLs redirect via switchAdminSubTab redirect map. -->
                         <button class="ws-right-tab" data-admin-subtab="organization" data-p86-icon="briefcase" onclick="switchAdminSubTab('organization')">Organization</button>
-                        <button class="ws-right-tab" data-admin-subtab="templates" data-p86-icon="estimates" onclick="switchAdminSubTab('templates')">Templates</button>
-                        <button class="ws-right-tab" data-admin-subtab="email" data-p86-icon="envelope" onclick="switchAdminSubTab('email')">Email</button>
+                        <!-- SMS stays top-level for now — it's a separate audit question
+                             (per-org event toggles vs global Twilio provider config). -->
                         <button class="ws-right-tab" data-admin-subtab="sms" data-p86-icon="conversations" onclick="switchAdminSubTab('sms')">SMS</button>
-                        <!-- Catalog -->
-                        <button class="ws-right-tab" data-admin-subtab="materials" data-p86-icon="materials" onclick="switchAdminSubTab('materials')">Materials</button>
                         <!-- AI / Agents -->
                         <button class="ws-right-tab" data-admin-subtab="agents" data-p86-icon="discord" onclick="switchAdminSubTab('agents')">Agents</button>
                         <!-- Observability -->
                         <button class="ws-right-tab" data-admin-subtab="metrics" data-p86-icon="insights" onclick="switchAdminSubTab('metrics')">Metrics</button>
-                        <!-- (Email Templates render inside the Templates sub-tab as a 3rd inner tab.
-                             The legacy #admin-subtab-email-templates pane below stays for back-compat
-                             but is unused.) -->
 
                         <!-- System Admin sub-tab — visible ONLY to users with the
                              SYSTEM_ADMIN capability (platform owner). JS sets
@@ -1211,48 +1207,15 @@
                         <div id="admin-roles-list" style="display:flex;flex-direction:column;gap:10px;"></div>
                     </div>
 
-                    <!-- Templates sub-tab (proposal boilerplate) -->
-                    <div id="admin-subtab-templates" class="admin-subtab-content" style="display:none;"></div>
-
-                    <!-- Materials catalog sub-tab — built from vendor purchase
-                         history CSVs; AG queries this for line-item proposals -->
-                    <div id="admin-subtab-materials" class="admin-subtab-content" style="display:none;"></div>
-                    <div id="admin-subtab-email" class="admin-subtab-content" style="display:none;"></div>
-                    <!-- Email Templates moved into Admin → Templates → Email.
-                         The id "admin-subtab-email-templates" is now created on
-                         demand by the Templates tab dispatch and consumed by
-                         renderAdminEmailTemplates(). The legacy top-level pane
-                         was removed so the id is unique in the DOM. -->
+                    <!-- Phase F: Templates / Materials / Email / Job Assignments
+                         panes moved INTO the Organization tab as sub-pills.
+                         Their static markup (when needed) is injected inline
+                         by renderOrgHTML in admin.js. -->
                     <div id="admin-subtab-agents" class="admin-subtab-content" style="display:none;"></div>
 
                     <!-- SMS sub-tab — observability for the SMS scheduling agent.
                          Rendered on demand by renderAdminSms() in js/admin.js. -->
                     <div id="admin-subtab-sms" class="admin-subtab-content" style="display:none;"></div>
-
-                    <!-- Job Assignments sub-tab -->
-                    <div id="admin-subtab-jobs" class="admin-subtab-content" style="display:none;">
-                        <div class="action-buttons">
-                            <button onclick="renderAdminJobs()" class="secondary">Refresh</button>
-                        </div>
-                        <p style="margin:12px 0;color:var(--text-dim,#888);font-size:12px;">
-                            Reassign a job's owner from the dropdown. Click <strong>Manage Sharing</strong> to grant additional users edit or view access.
-                        </p>
-                        <div class="table-container">
-                            <table id="admin-jobs-table">
-                                <thead>
-                                    <tr>
-                                        <th>Job</th>
-                                        <th>Client</th>
-                                        <th>Status</th>
-                                        <th>Owner</th>
-                                        <th style="text-align:center;">Shared With</th>
-                                        <th style="text-align:center;">Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="admin-jobs-tbody"></tbody>
-                            </table>
-                        </div>
-                    </div>
                 </div>
 
             </div>
@@ -2414,7 +2377,7 @@
     <script src="js/attachments.js?v=11b"></script>
     <script src="js/markup-viewer.js?v=17b"></script>
     <script src="js/pdf-viewer.js?v=3b"></script>
-    <script src="js/admin.js?v=79"></script>
+    <script src="js/admin.js?v=80"></script>
     <script src="js/field-tools.js?v=2b"></script>
     <script src="js/clients.js?v=16d"></script>
     <script src="js/subs.js?v=8b"></script>

@@ -1032,6 +1032,35 @@
 
   function switchAdminSubTab(name) {
     refreshSystemAdminTabVisibility();
+
+    // Phase F: Templates / Materials / Job Assignments / Email moved
+    // INTO the Organization tab as sub-pills. Old top-level URLs
+    // (/admin/templates, /admin/materials, /admin/jobs, /admin/email)
+    // redirect into Organization with the right sub-pill open, so any
+    // saved nav state / shared deep link still resolves.
+    var ORG_REDIRECTS = {
+      templates: 'templates',
+      materials: 'materials',
+      jobs:      'jobs',
+      // Email's templates lived inside the legacy Templates tab via
+      // _templatesActiveTab = 'email'; mirror that on the new location.
+      email:     'templates',
+      'email-templates': 'templates'
+    };
+    if (ORG_REDIRECTS[name]) {
+      var subPill = ORG_REDIRECTS[name];
+      // For email-* aliases, also set the templates inner tab so the
+      // user lands on the Email pill inside Templates.
+      if (name === 'email' || name === 'email-templates') {
+        _templatesActiveTab = 'email';
+        try { sessionStorage.setItem('agx_templates_tab', 'email'); } catch (e) {}
+      }
+      // Stash the org sub-tab to open, then switch to Organization.
+      _orgActiveTab = subPill;
+      try { sessionStorage.setItem('agx_org_tab', subPill); } catch (e) {}
+      name = 'organization';
+    }
+
     document.querySelectorAll('[data-admin-subtab]').forEach(function(btn) {
       btn.classList.toggle('active', btn.dataset.adminSubtab === name);
     });
@@ -1045,24 +1074,12 @@
     // state. Setting block guarantees the pane shows.
     if (target) target.style.display = 'block';
     if (name === 'users') renderAdminUsers();
-    else if (name === 'jobs') renderAdminJobs();
     else if (name === 'metrics') renderAdminMetrics();
     else if (name === 'roles') renderAdminRoles();
-    else if (name === 'templates') renderAdminTemplates();
-    else if (name === 'materials') renderAdminMaterials();
-    else if (name === 'email') renderAdminEmail();
     else if (name === 'agents') renderAdminAgents();
     else if (name === 'organization') renderAdminOrganization();
     else if (name === 'system') renderAdminSystem();
     else if (name === 'sms') renderAdminSms();
-    // 'email-templates' moved into Templates → Email; if a saved nav state
-    // points at the old top-level tab, reroute to templates.
-    else if (name === 'email-templates') {
-      _templatesActiveTab = 'email';
-      try { sessionStorage.setItem('agx_templates_tab', 'email'); } catch (e) {}
-      switchAdminSubTab('templates');
-      return;
-    }
     // Persist nav state so a refresh lands back on this admin sub-tab.
     if (typeof window.p86NavSave === 'function') window.p86NavSave();
   }
@@ -3248,7 +3265,15 @@
     { key: 'kb',       label: '\u{1F4DA} Company KB',   desc: 'Org-wide reference files every user can read; only admins upload. 86 searches these via search_org_kb.' },
     { key: 'packs',    label: '\u{1F9E0} Section Playbooks',  desc: 'On-demand instruction blocks. 86 sees the list and calls load_skill_pack({name}) when one maps to the work. (Distinct from the "Skills" tab inside Admin → Agents, which manages native Anthropic Skills attached to the managed agent.)' },
     { key: 'refs',     label: '\u{1F4D1} Reference Links', desc: 'Live SharePoint / Google Sheets URLs the company exposes to 86 (Job Numbers, Short Names, WIP report). Each sheet refreshes every 15 min. Lookup-mode is the default; flip a sheet to Inline if 86 should always have its rows in context.' },
-    { key: 'mcp',      label: '\u{1F50C} MCP Connectors', desc: 'External tool reach via Model Context Protocol (Gmail, Calendar, QuickBooks, custom). Registers on next sync.' }
+    { key: 'mcp',      label: '\u{1F50C} MCP Connectors', desc: 'External tool reach via Model Context Protocol (Gmail, Calendar, QuickBooks, custom). Registers on next sync.' },
+    // Phase F additions — features that were previously top-level admin
+    // tabs but back per-org data (the audit found materials, templates,
+    // job assignments, email templates all live in tables scoped or
+    // logically scoped to organization_id). Nesting them here makes the
+    // structure match the data model.
+    { key: 'templates', label: '\u{1F4DD} Templates',    desc: 'Proposal templates + email templates for this org. Buildertrend cost-code mapping is platform-wide and lives in System.' },
+    { key: 'materials', label: '\u{1F9F1} Materials',    desc: 'This org\'s materials catalog — SKUs, average / last / min / max pricing from purchase history.' },
+    { key: 'jobs',      label: '\u{1F4CB} Job Assignments', desc: 'PM / crew / role assignments per job for this org.' }
   ];
 
   var _orgActiveTab = (function() {
@@ -3336,6 +3361,39 @@
     else if (_orgActiveTab === 'packs') bodyHTML = renderOrgPacksTabHTML();
     else if (_orgActiveTab === 'refs') bodyHTML = renderOrgRefsTabHTML();
     else if (_orgActiveTab === 'mcp')  bodyHTML = renderOrgMcpTabHTML();
+    else if (_orgActiveTab === 'templates' || _orgActiveTab === 'materials') {
+      // Phase F nested tabs — these render functions paint into their
+      // OWN panes (#admin-subtab-templates, #admin-subtab-materials).
+      // Inject an empty host div with the right id; the renderer fills it.
+      var hostId = 'admin-subtab-' + _orgActiveTab;
+      bodyHTML = '<div id="' + hostId + '" class="admin-subtab-content" style="display:block;">' +
+        '<div style="color:var(--text-dim,#888);font-style:italic;font-size:12px;padding:20px 0;">Loading…</div>' +
+      '</div>';
+    }
+    else if (_orgActiveTab === 'jobs') {
+      // renderAdminJobs targets #admin-jobs-tbody directly (not a
+      // wrapper pane) — it just writes rows into the tbody. We inject
+      // the full table shell + an Action Buttons row + the tbody it
+      // expects. The legacy top-level pane in index.html is now removed.
+      bodyHTML = '<div id="admin-subtab-jobs" class="admin-subtab-content" style="display:block;">' +
+        '<div class="action-buttons">' +
+          '<button onclick="renderAdminJobs()" class="secondary">Refresh</button>' +
+        '</div>' +
+        '<p style="margin:12px 0;color:var(--text-dim,#888);font-size:12px;">' +
+          "Reassign a job's owner from the dropdown. Click <strong>Manage Sharing</strong> to grant additional users edit or view access." +
+        '</p>' +
+        '<div class="table-container">' +
+          '<table id="admin-jobs-table">' +
+            '<thead><tr>' +
+              '<th>Job</th><th>Client</th><th>Status</th><th>Owner</th>' +
+              '<th style="text-align:center;">Shared With</th>' +
+              '<th style="text-align:center;">Actions</th>' +
+            '</tr></thead>' +
+            '<tbody id="admin-jobs-tbody"></tbody>' +
+          '</table>' +
+        '</div>' +
+      '</div>';
+    }
 
     return tabsHTML + hintHTML + bodyHTML;
   }
@@ -3797,6 +3855,21 @@
       // Reuse the legacy Agents-tab renderer; the underlying table is
       // org-scoped (Phase D) so both surfaces show the same data.
       renderReferenceLinksView('org-ref-links-host');
+    }
+    // Phase F nested tabs — mount existing renderers into the inline
+    // pane stub from renderOrgHTML. Each render function looks for its
+    // own #admin-subtab-X element so we leave the host id intact and
+    // just trigger the renderer. These functions are full-featured —
+    // they do their own data loading + event wiring — so we don't need
+    // to handle them differently from when they were top-level.
+    if (_orgActiveTab === 'templates' && typeof renderAdminTemplates === 'function') {
+      renderAdminTemplates();
+    }
+    if (_orgActiveTab === 'materials' && typeof renderAdminMaterials === 'function') {
+      renderAdminMaterials();
+    }
+    if (_orgActiveTab === 'jobs' && typeof renderAdminJobs === 'function') {
+      renderAdminJobs();
     }
     // Pack inputs: mark the row's id dirty when any field changes.
     // No-op when the packs tab isn't rendered.
