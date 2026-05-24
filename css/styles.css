@@ -2755,3 +2755,111 @@
       #materials-drawer-root .md-search-row { padding: 8px 12px 4px; }
       #materials-drawer-root .md-chips { padding: 4px 12px 8px; }
     }
+
+    /* ──────────────────────────────────────────────────────────────
+       MOBILE VISUAL POLISH — <640px safety net
+       ──────────────────────────────────────────────────────────────
+       The 768px block above already handles tablet-to-phone breaks;
+       this block tightens the layout further for actual phone widths
+       (iPhone 12/13 mini = 375px, Pixel 7 = 412px) where the dense
+       admin/jobs tables and modal forms still feel cramped. */
+    @media (max-width: 640px) {
+
+      /* Action-bar search inputs (#leads-search, #estimates-search,
+         etc.) carry an inline `min-width: 220px` so they don't shrink
+         to nothing on desktop. On phones that min-width pushes them
+         past the row's available space and they end up overlapping
+         the previous control. flex-basis:100% + width:100% wraps the
+         search to its own line; setting min-width:0 lets it actually
+         shrink below the inline 220 floor. The !important is required
+         to beat the inline style attribute on the element. */
+      .action-buttons > input[type="text"],
+      .action-buttons > input[type="search"] {
+        flex: 1 1 100% !important;
+        width: 100% !important;
+        min-width: 0 !important;
+        margin-left: 0 !important;
+        order: 99;        /* push to bottom of wrapped action row */
+      }
+
+      /* Modal density — the 14/18 padding feels generous on a 375px
+         viewport once labels start wrapping. Drop to 10/12 and pull
+         the header font down a notch. The 86vh height cap is kept
+         (the user's still scrolling a long form). */
+      .modal-content {
+        padding: 10px 12px;
+        width: 98%;
+      }
+      .modal-header {
+        font-size: 14px;
+        margin-bottom: 6px;
+        padding-bottom: 6px;
+      }
+      .modal-footer {
+        padding: 8px 10px;
+        gap: 6px;
+        flex-wrap: wrap;
+      }
+
+      /* Header — the 768px block already hides the wordmark and lets
+         the row wrap. Below 640px we tighten the padding and shrink
+         the user-menu cluster so the header takes ~64px instead of
+         ~84px. That's ~20px more visible content area on a 667px
+         iPhone SE viewport. */
+      header {
+        padding: 6px 10px;
+      }
+      .header-content {
+        gap: 4px 8px;
+      }
+      .header-icon-btn,
+      .header-avatar {
+        width: 32px;
+        height: 32px;
+        font-size: 12px;
+      }
+
+      /* Jobs table mobile card view — the 9-column table forces
+         horizontal scroll on every phone. Hide the columns that
+         duplicate info already in the row's primary label (Client,
+         PM, Total Income, % Complete, Gross Profit) and the leading
+         row-counter; keep Job # / Name (col 2), Status (col 5), and
+         Margin % (col 9). Each row stays a single line so the user
+         can scan a long jobs list without scrolling sideways. */
+      #jobs-table th:nth-child(1),
+      #jobs-table td:nth-child(1),
+      #jobs-table th:nth-child(3),
+      #jobs-table td:nth-child(3),
+      #jobs-table th:nth-child(4),
+      #jobs-table td:nth-child(4),
+      #jobs-table th:nth-child(6),
+      #jobs-table td:nth-child(6),
+      #jobs-table th:nth-child(7),
+      #jobs-table td:nth-child(7),
+      #jobs-table th:nth-child(8),
+      #jobs-table td:nth-child(8) {
+        display: none;
+      }
+      #jobs-table th, #jobs-table td {
+        padding: 6px 4px;
+        font-size: 11px;
+      }
+      /* Job # / Name column gets the breathing room reclaimed from
+         the hidden cols — it's the row's primary identifier. */
+      #jobs-table th:nth-child(2),
+      #jobs-table td:nth-child(2) {
+        white-space: normal;
+        word-break: break-word;
+        max-width: 60vw;
+      }
+
+      /* Filter-row labels stack vertically below the table action
+         strip so the two big <select>s (Status, Type) don't crush
+         each other side-by-side. */
+      #jobs-main-view label {
+        flex: 1 1 100%;
+      }
+
+      /* Summary-grid is already single-column at 768px (line 1901);
+         no change needed here. */
+    }

@@ -3034,15 +3034,28 @@ function renderJobsMain() {
                 const total = asSold + co;
                 const row = document.createElement('div');
                 row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--border);';
+                // Accidental-edit gate — row starts locked so the autosave
+                // oninput on the budget input can't fire until the user
+                // taps the row to arm it. Delete button stays clickable
+                // via data-edit-gate-passthrough.
+                row.setAttribute('data-row-edit-gate', '');
+                row.setAttribute('data-editing', 'false');
                 row.innerHTML =
                     '<span style="flex:1;font-size:13px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTML(p.phase) +
                     ' <span style="font-size:10px;color:' + (p.pctComplete >= 100 ? 'var(--green)' : p.pctComplete >= 50 ? '#f59e0b' : 'var(--text-dim)') + ';">' + (p.pctComplete||0) + '%</span></span>' +
                     '<input type="text" inputmode="decimal" data-phase-id="' + p.id + '" value="' + asSold + '" style="width:110px;font-size:12px;padding:4px 6px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);text-align:right;" oninput="onPhaseBreakdownInput(this)">' +
                     (co ? '<span style="font-size:10px;color:var(--green);white-space:nowrap;">+' + formatCurrency(co) + ' CO</span>' : '') +
                     '<span style="font-size:12px;font-weight:600;color:var(--accent);width:90px;text-align:right;">' + formatCurrency(total) + '</span>' +
-                    '<button type="button" onclick="removePhaseFromBreakdown(\'' + p.id + '\')" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:14px;padding:2px 4px;" title="Delete phase">&times;</button>';
+                    '<button type="button" data-edit-gate-passthrough onclick="removePhaseFromBreakdown(\'' + p.id + '\')" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:14px;padding:2px 4px;" title="Delete phase">&times;</button>';
                 rowsEl.appendChild(row);
             });
+
+            // Wire the edit gate once per render. Idempotent — internal
+            // WeakSet de-dupes across renders. Cleared rows lose the
+            // listener naturally when rowsEl.innerHTML is reset.
+            if (window.p86EditGate) {
+                window.p86EditGate.attachRowContainer(rowsEl, '[data-row-edit-gate]');
+            }
 
             updatePhaseBreakdownRemaining();
         }
@@ -3126,15 +3139,22 @@ function renderJobsMain() {
                 const cost = co.estimatedCosts || 0;
                 const row = document.createElement('div');
                 row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--border);';
+                // Accidental-edit gate — locks the income + cost inputs
+                // until the user taps the row. Delete stays clickable.
+                row.setAttribute('data-row-edit-gate', '');
+                row.setAttribute('data-editing', 'false');
                 row.innerHTML =
                     '<span style="flex:1;font-size:13px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' +
                     (co.coNumber ? '<span style="font-size:10px;color:var(--text-dim);margin-right:4px;">' + escapeHTML(co.coNumber) + '</span>' : '') +
                     escapeHTML(co.description || 'CO') + '</span>' +
                     '<input type="text" inputmode="decimal" data-co-id="' + co.id + '" data-field="income" value="' + inc + '" title="Income (budget add)" style="width:100px;font-size:12px;padding:4px 6px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--green);text-align:right;" oninput="onCOBreakdownInput(this)">' +
                     '<input type="text" inputmode="decimal" data-co-id="' + co.id + '" data-field="estimatedCosts" value="' + cost + '" title="Estimated cost" style="width:100px;font-size:12px;padding:4px 6px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--yellow);text-align:right;" oninput="onCOBreakdownInput(this)">' +
-                    '<button type="button" onclick="removeCOFromBreakdown(\'' + co.id + '\')" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:14px;padding:2px 4px;" title="Delete CO">&times;</button>';
+                    '<button type="button" data-edit-gate-passthrough onclick="removeCOFromBreakdown(\'' + co.id + '\')" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:14px;padding:2px 4px;" title="Delete CO">&times;</button>';
                 rowsEl.appendChild(row);
             });
+            if (window.p86EditGate) {
+                window.p86EditGate.attachRowContainer(rowsEl, '[data-row-edit-gate]');
+            }
             updateCOBreakdownTotals(buildingId);
         }
 

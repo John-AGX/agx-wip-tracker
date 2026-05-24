@@ -1061,6 +1061,17 @@
       ta.style.height = 'auto';
       ta.style.height = Math.min(ta.scrollHeight, 180) + 'px';
     });
+
+    // Arm the accidental-edit gate. attachRowContainer is idempotent —
+    // it tracks the container via WeakSet and binds at most one
+    // delegated click handler regardless of how many times the
+    // estimate re-renders. Tap a row to unlock its inputs; tap
+    // elsewhere to re-lock everything. Section header rows are not
+    // gated (they carry inline action buttons that complicate the
+    // tap-to-arm gesture); only line rows carry data-row-edit-gate.
+    if (window.p86EditGate) {
+      window.p86EditGate.attachRowContainer(container, '[data-row-edit-gate]');
+    }
   }
 
   // (Column header row removed — the per-line inputs are self-labeled
@@ -1069,9 +1080,13 @@
   // Drag handle markup shared by section headers + line rows. The HTML5
   // drag-and-drop dance: dragstart records the dragged id, dragover preserves
   // the drop target highlight, drop reorders the array.
+  // data-edit-gate-passthrough keeps the handle clickable even when the
+  // surrounding row is locked by the edit gate — reordering shouldn't
+  // require unlocking a row first.
   function dragHandleHTML(id) {
     return '<div ' +
       'draggable="true" ' +
+      'data-edit-gate-passthrough ' +
       'ondragstart="onLineDragStart(event, \'' + escapeHTML(id) + '\')" ' +
       'ondragend="onLineDragEnd(event)" ' +
       'style="flex:0 0 28px;text-align:center;cursor:grab;color:var(--text-dim,#888);font-size:14px;user-select:none;padding:6px 0;line-height:1;" ' +
@@ -1221,7 +1236,13 @@
     // align-items:flex-start so the row keeps its natural height when
     // the description textarea grows; numeric / readonly cells stay
     // at the top instead of getting stretched vertically.
+    // data-row-edit-gate + data-editing="false" arms the row for the
+    // accidental-edit gate: inputs render flat / non-interactive until
+    // the user taps the row, which sets data-editing="true" and
+    // restores the input chrome. Delete + drag handle stay clickable
+    // via data-edit-gate-passthrough.
     return '<div data-line-id="' + idAttr + '" ' +
+        'data-row-edit-gate data-editing="false" ' +
         'ondragover="onLineDragOver(event)" ondragleave="onLineDragLeave(event)" ' +
         'ondrop="onLineDrop(event, \'' + idAttr + '\')" ' +
         'style="display:flex;align-items:flex-start;border-bottom:1px solid var(--border,#333);">' +
@@ -1233,7 +1254,7 @@
       input('markup', line.markup, { flex: '0 0 90px', type: 'number', align: 'right', mono: true, placeholder: markupPlaceholder }) +
       readOnly(fmtCurrency(ext), '0 0 110px') +
       readOnly(fmtCurrency(clientPrice), '0 0 120px', null, 'ee-line-amount') +
-      '<div style="flex:0 0 36px;text-align:center;padding-top:8px;">' +
+      '<div data-edit-gate-passthrough style="flex:0 0 36px;text-align:center;padding-top:8px;">' +
         '<button class="ee-btn ee-icon-btn danger" onclick="deleteLineFromEditor(\'' + idAttr + '\')" title="Delete line">&#x1F5D1;</button>' +
       '</div>' +
     '</div>';
