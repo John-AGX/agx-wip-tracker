@@ -24,6 +24,23 @@ function renderWIPMain() {
             return Promise.resolve(window.confirm(msg));
         }
 
+        // Format a wire-allocation percentage for display only — the
+        // underlying allocPct stays at full float precision so sums
+        // still equal 100% exactly. Rules:
+        //   - within 0.05 of an integer → render as integer (so 100/7
+        //     drift of `14.285714285405622` and clean `14.285714285714286`
+        //     both display as "14")
+        //   - otherwise → 1 decimal
+        // Without this, raw float concatenation surfaced strings like
+        // "14.285714285714286%" in the building-detail panel. See
+        // memoized-inventing-mountain.md (allocPct UI rounding task).
+        function fmtAllocPct(v) {
+            if (v == null || !isFinite(v)) return '';
+            var rounded = Math.round(v);
+            if (Math.abs(v - rounded) < 0.05) return String(rounded);
+            return v.toFixed(1);
+        }
+
         // Sub assignments are job-level only — building/phase
         // distribution is driven by the node graph. The two
         // ForBuilding helpers still distribute job-level totals
@@ -2383,7 +2400,7 @@ function renderWIPMain() {
                         var p = wp.phase;
                         var pCost = ((p.materials || 0) + (p.labor || 0) + (p.sub || 0) + (p.equipment || 0)) * wp.allocPct / 100;
                         var pColor = p.pctComplete >= 100 ? 'var(--green)' : p.pctComplete >= 50 ? '#f59e0b' : 'var(--text-dim)';
-                        var allocStr = wp.allocPct !== 100 ? ' (' + wp.allocPct + '%)' : '';
+                        var allocStr = wp.allocPct !== 100 ? ' (' + fmtAllocPct(wp.allocPct) + '%)' : '';
                         body += '<button onclick="event.stopPropagation();editPhase(\'' + escapeHTML(p.id) + '\')" style="font-size:10px;padding:3px 8px;border-radius:6px;background:var(--surface);border:1px solid var(--border);white-space:nowrap;cursor:pointer;color:var(--text);">' +
                             escapeHTML(p.phase) + allocStr + ' <b style="color:' + pColor + ';">' + (p.pctComplete || 0) + '%</b> ' + formatCurrency(pCost) + '</button>';
                     });
@@ -2401,7 +2418,7 @@ function renderWIPMain() {
                         const c = item.co;
                         body += '<div onclick="event.stopPropagation();editCO(\'' + escapeHTML(c.id) + '\')" style="cursor:pointer;font-size:11px;padding:4px 8px;background:var(--surface);border:1px solid var(--border);border-radius:4px;display:flex;justify-content:space-between;gap:8px;">' +
                             '<span><b>' + escapeHTML(c.coNumber || 'CO') + '</b> ' + escapeHTML((c.description || '').substring(0, 60)) + '</span>' +
-                            '<span style="color:var(--text-dim);">Inc: <b style="color:var(--green);">' + formatCurrency((c.income || 0) * item.allocPct / 100) + '</b> (' + item.allocPct + '%)</span>' +
+                            '<span style="color:var(--text-dim);">Inc: <b style="color:var(--green);">' + formatCurrency((c.income || 0) * item.allocPct / 100) + '</b> (' + fmtAllocPct(item.allocPct) + '%)</span>' +
                             '</div>';
                     });
                     body += '</div>';
@@ -2457,7 +2474,7 @@ function renderWIPMain() {
             if (type === 'co') {
                 var co = appData.changeOrders.find(function(c) { return c.id === d.id; });
                 if (!co) return '';
-                var allocStr = item.allocPct != null && item.allocPct !== 100 ? ' (' + item.allocPct + '%)' : '';
+                var allocStr = item.allocPct != null && item.allocPct !== 100 ? ' (' + fmtAllocPct(item.allocPct) + '%)' : '';
                 return '<span style="color:var(--text-dim);font-size:10px;">Inc: <b style="color:var(--green);">' + formatCurrency(co.income || 0) + '</b>' + allocStr + ' Cost: <b>' + formatCurrency(co.estimatedCosts || 0) + '</b></span>';
             }
             if (type === 'po') {

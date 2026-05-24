@@ -516,6 +516,21 @@ function getPhaseAllocWires(t2Id){
   });
 }
 
+// Snap a near-integer allocPct to its exact integer, but only when
+// VERY close (within 0.001%). Prevents drift accumulation from
+// repeated manual-edit + rebalance cycles where the manual value
+// stored at limited UI precision (e.g. 14.286) pollutes the auto
+// siblings on the next rebalance. Genuinely fractional shares
+// (100/7 = 14.2857…) stay full-precision so sums equal 100 exactly.
+// Investigated as part of the allocPct drift task in
+// memoized-inventing-mountain.md.
+function snapAllocPct(v){
+  if (v == null || !isFinite(v)) return v;
+  var rounded = Math.round(v);
+  if (Math.abs(v - rounded) < 0.001) return rounded;
+  return v;
+}
+
 // Split freely-available percentage equally across all `_auto` (non-manual) wires.
 // Wires the user has explicitly set (_auto=false) keep their pct; auto wires
 // absorb the remainder (100 - sum-of-manual) equally.
@@ -530,7 +545,7 @@ function rebalancePhaseAllocations(t2Id){
     else manualSum += (w.allocPct || 0);
   });
   if(autoWires.length > 0){
-    var each = Math.max(0, 100 - manualSum) / autoWires.length;
+    var each = snapAllocPct(Math.max(0, 100 - manualSum) / autoWires.length);
     autoWires.forEach(function(w){ w.allocPct = each; });
   }
 }
@@ -554,7 +569,9 @@ function rebalanceCOAllocations(coId){
     else manualSum += (w.allocPct || 0);
   });
   if(autoWires.length > 0){
-    var each = Math.max(0, 100 - manualSum) / autoWires.length;
+    // snapAllocPct kills the drift accumulation; see docs above
+    // rebalancePhaseAllocations.
+    var each = snapAllocPct(Math.max(0, 100 - manualSum) / autoWires.length);
     autoWires.forEach(function(w){ w.allocPct = each; });
   }
 }
