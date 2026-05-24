@@ -754,15 +754,27 @@
     });
   }
 
-  // Edit gates retired from the lead editor (Phase G UX pass) — the
-  // pencil chips felt cluttered on the split-pane layout, and the
-  // accidental-scroll-tap risk they protected against is muted now
-  // that the form body shares the page with a contextual right
-  // column rather than overflowing. Fields are always armed for
-  // editing; Save still commits the whole form atomically.
-  // Function retained as a no-op so existing call sites don't error.
-  function applyLeadFieldsetGates(_unlocked) {
-    // intentional no-op; see comment above
+  // Wire the edit-gate pencil into editable fieldsets on the LEFT
+  // column only — Lead / Address / Sales Pipeline / Site Details /
+  // Notes. The RIGHT column's fieldsets (Map / Photos & Files /
+  // 7-day Forecast) are display-only or have their own dedicated
+  // affordances (the file drop zone, the forecast cards), so they
+  // shouldn't get a pencil. We scope by container: only fieldsets
+  // INSIDE .lead-editor-left receive the gate. The right column's
+  // fieldsets are not direct descendants of .lead-editor-left so
+  // they're naturally excluded.
+  function applyLeadFieldsetGates(unlocked) {
+    if (!window.p86EditGate) return;
+    var formBody = document.getElementById('leadEditor_formBody');
+    if (!formBody) return;
+    // Scope to the left column only. Falls back to the old broad
+    // selector if the split-pane layout isn't mounted (e.g., legacy
+    // modal-only render path) so we don't lose gates entirely.
+    var scope = formBody.querySelector('.lead-editor-left') || formBody;
+    var fieldsets = scope.querySelectorAll('fieldset');
+    for (var i = 0; i < fieldsets.length; i++) {
+      window.p86EditGate.attachSection(fieldsets[i], { startUnlocked: !!unlocked });
+    }
   }
 
   // Open the dedicated #lead-detail-view as a full-page surface
