@@ -1958,6 +1958,163 @@
                 flex-direction: column;
                 align-items: flex-start;
             }
+
+            /* ── Mobile bottom-nav (M1) takeover ─────────────────
+               Below 768px the top tab strip + floating Ask 86 badge
+               are replaced by the fixed bottom navigation bar. The
+               header slims to brand + user-menu only; the bottom
+               nav owns navigation duty. */
+            nav.tabs { display: none !important; }
+            .p86-ask86-badge.floating { display: none !important; }
+            .header-wordmark { display: none; }
+            /* Reserve room at the bottom of the page so content
+               doesn't get hidden behind the fixed nav. 64px nav
+               + iPhone safe-area for the home indicator. */
+            body {
+                padding-bottom: calc(64px + env(safe-area-inset-bottom, 0px));
+            }
+        }
+
+        /* Mobile bottom nav — hidden by default; shown only below
+           768px via the media query below. The block lives outside
+           the 768px @media wrapper because the styles need to apply
+           regardless of width (the nav itself is hidden on desktop
+           via display:none). */
+        .p86-mobile-nav { display: none; }
+
+        @media (max-width: 768px) {
+            .p86-mobile-nav {
+                position: fixed;
+                left: 0; right: 0; bottom: 0;
+                z-index: 150;
+                display: flex;
+                align-items: stretch;
+                justify-content: space-around;
+                background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+                border-top: 1px solid rgba(34, 211, 238, 0.35);
+                padding-bottom: env(safe-area-inset-bottom, 0px);
+                box-shadow: 0 -4px 14px rgba(0, 0, 0, 0.5);
+            }
+            .p86-mobile-nav-btn {
+                flex: 1;
+                min-height: 56px;
+                background: transparent;
+                border: none;
+                color: rgba(255, 255, 255, 0.58);
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                gap: 3px;
+                font-size: 10px;
+                font-weight: 600;
+                letter-spacing: 0.3px;
+                padding: 8px 4px;
+                cursor: pointer;
+                -webkit-tap-highlight-color: transparent;
+                transition: color 0.15s;
+            }
+            .p86-mobile-nav-btn:hover,
+            .p86-mobile-nav-btn:active,
+            .p86-mobile-nav-btn:focus-visible {
+                color: #22d3ee;
+                outline: none;
+            }
+            .p86-mobile-nav-btn.active { color: #22d3ee; }
+            .p86-mobile-nav-icon {
+                width: 22px; height: 22px;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+            }
+            .p86-mobile-nav-icon svg { width: 22px; height: 22px; }
+            .p86-mobile-nav-icon-glyph {
+                font-size: 22px;
+                line-height: 1;
+                color: currentColor;
+            }
+            /* Center "86" button — visually lifted accent. The icon
+               sits in a 48px cyan circle that pops above the bar so
+               86 reads as the primary action even at a glance. The
+               negative margin floats it; the box-shadow gives depth. */
+            .p86-mobile-nav-btn-primary { position: relative; }
+            .p86-mobile-nav-btn-primary .p86-mobile-nav-icon {
+                width: 48px; height: 48px;
+                background: linear-gradient(135deg, #22d3ee 0%, #4f8cff 100%);
+                border-radius: 50%;
+                box-shadow: 0 6px 14px rgba(34, 211, 238, 0.45),
+                            0 2px 6px rgba(0, 0, 0, 0.4);
+                margin-top: -22px;
+                color: #fff;
+            }
+            .p86-mobile-nav-btn-primary .p86-mobile-nav-icon svg {
+                width: 26px; height: 26px;
+                color: #fff;
+            }
+            .p86-mobile-nav-btn-primary .p86-mobile-nav-label {
+                color: #22d3ee;
+                margin-top: -2px;
+            }
+        }
+
+        /* Mobile "More" overflow sheet */
+        .p86-mobile-more-sheet[hidden] { display: none !important; }
+        .p86-mobile-more-sheet {
+            position: fixed;
+            inset: 0;
+            z-index: 200;
+        }
+        .p86-mobile-more-backdrop {
+            position: absolute;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.55);
+            -webkit-backdrop-filter: blur(2px);
+            backdrop-filter: blur(2px);
+            animation: p86mbDropFade 0.18s ease-out;
+        }
+        .p86-mobile-more-panel {
+            position: absolute;
+            left: 0; right: 0;
+            bottom: calc(64px + env(safe-area-inset-bottom, 0px));
+            background: #0f172a;
+            border-top: 1px solid rgba(34, 211, 238, 0.35);
+            padding: 10px 0 14px;
+            display: flex;
+            flex-direction: column;
+            animation: p86mbSheetUp 0.22s ease-out;
+        }
+        .p86-mobile-more-item {
+            background: transparent;
+            border: none;
+            color: rgba(255, 255, 255, 0.9);
+            font-size: 14px;
+            font-weight: 600;
+            padding: 14px 22px;
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            text-align: left;
+            cursor: pointer;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .p86-mobile-more-item:hover,
+        .p86-mobile-more-item:active {
+            background: rgba(34, 211, 238, 0.08);
+        }
+        .p86-mobile-more-icon {
+            width: 22px; height: 22px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            color: #22d3ee;
+        }
+        .p86-mobile-more-icon svg { width: 22px; height: 22px; }
+        @keyframes p86mbDropFade {
+            from { opacity: 0; } to { opacity: 1; }
+        }
+        @keyframes p86mbSheetUp {
+            from { transform: translateY(100%); }
+            to { transform: translateY(0); }
         }
 
         /* PRINT STYLES */

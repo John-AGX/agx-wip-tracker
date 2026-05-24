@@ -2512,5 +2512,112 @@
     </div>
     <script src="nodegraph/engine.js?v=73b"></script>
     <script src="nodegraph/ui.js?v=148b"></script>
+
+    <!-- ── Mobile bottom nav (M1) ─────────────────────────────────
+         Visible only below 768px (CSS-gated). Five-slot layout:
+         4 primary destinations + the prominent Ask 86 button in
+         the center. The top tab strip and the floating Ask 86
+         badge both hide at the same breakpoint — bottom nav takes
+         over as the only navigation surface on phones.
+         WIP / Insights / Admin live behind the More button to
+         keep the bottom rail at exactly 5 slots (any more and
+         touch targets get crushed at iPhone width). -->
+    <nav id="p86-mobile-nav" class="p86-mobile-nav" aria-label="Primary navigation">
+      <button type="button" class="p86-mobile-nav-btn" data-mobile-nav="leads" data-cap="LEADS_VIEW"
+              onclick="if(window.switchTab){window.switchTab('estimates');if(window.switchEstSubTab)window.switchEstSubTab('leads');}">
+        <span class="p86-mobile-nav-icon" data-p86-icon="leads"></span>
+        <span class="p86-mobile-nav-label">Leads</span>
+      </button>
+      <button type="button" class="p86-mobile-nav-btn" data-mobile-nav="estimates" data-cap="ESTIMATES_VIEW"
+              onclick="if(window.switchTab){window.switchTab('estimates');if(window.switchEstSubTab)window.switchEstSubTab('list');}">
+        <span class="p86-mobile-nav-icon" data-p86-icon="estimates"></span>
+        <span class="p86-mobile-nav-label">Estimates</span>
+      </button>
+      <button type="button" class="p86-mobile-nav-btn p86-mobile-nav-btn-primary" data-mobile-nav="ask86"
+              aria-label="Ask 86"
+              onclick="if(window.p86AI&amp;&amp;window.p86AI.open)window.p86AI.open({entityType:'ask86'});">
+        <span class="p86-mobile-nav-icon" data-p86-icon="dna"></span>
+        <span class="p86-mobile-nav-label">86</span>
+      </button>
+      <button type="button" class="p86-mobile-nav-btn" data-mobile-nav="schedule"
+              onclick="if(window.switchTab)window.switchTab('schedule');">
+        <span class="p86-mobile-nav-icon" data-p86-icon="schedule"></span>
+        <span class="p86-mobile-nav-label">Schedule</span>
+      </button>
+      <button type="button" class="p86-mobile-nav-btn" data-mobile-nav="more"
+              aria-label="More navigation options"
+              onclick="if(window.p86OpenMobileMore)window.p86OpenMobileMore();">
+        <span class="p86-mobile-nav-icon p86-mobile-nav-icon-glyph">&#x22EF;</span>
+        <span class="p86-mobile-nav-label">More</span>
+      </button>
+    </nav>
+    <!-- "More" overflow sheet — holds WIP, Insights, Admin behind
+         a slide-up panel so the bottom rail stays at 5 slots. -->
+    <div id="p86-mobile-more-sheet" class="p86-mobile-more-sheet" hidden>
+      <div class="p86-mobile-more-backdrop"
+           onclick="if(window.p86CloseMobileMore)window.p86CloseMobileMore();"></div>
+      <div class="p86-mobile-more-panel" role="menu" aria-label="More navigation">
+        <button type="button" class="p86-mobile-more-item"
+                data-cap="JOBS_VIEW_ALL JOBS_VIEW_ASSIGNED JOBS_EDIT_ANY JOBS_EDIT_OWN"
+                onclick="window.p86CloseMobileMore&amp;&amp;window.p86CloseMobileMore();if(window.switchTab)window.switchTab('wip');">
+          <span class="p86-mobile-more-icon" data-p86-icon="wip"></span>
+          <span>WIP</span>
+        </button>
+        <button type="button" class="p86-mobile-more-item" data-cap="INSIGHTS_VIEW"
+                onclick="window.p86CloseMobileMore&amp;&amp;window.p86CloseMobileMore();if(window.switchTab)window.switchTab('insights');">
+          <span class="p86-mobile-more-icon" data-p86-icon="insights"></span>
+          <span>Insights</span>
+        </button>
+        <button type="button" class="p86-mobile-more-item" data-admin-only style="display:none;"
+                onclick="window.p86CloseMobileMore&amp;&amp;window.p86CloseMobileMore();if(window.switchTab)window.switchTab('admin');">
+          <span class="p86-mobile-more-icon" data-p86-icon="admin"></span>
+          <span>Admin</span>
+        </button>
+      </div>
+    </div>
+    <script>
+      // Mobile More sheet — open / close. Globals so the inline
+      // onclick handlers can reach them without bundling drama.
+      window.p86OpenMobileMore = function () {
+        var el = document.getElementById('p86-mobile-more-sheet');
+        if (el) el.hidden = false;
+      };
+      window.p86CloseMobileMore = function () {
+        var el = document.getElementById('p86-mobile-more-sheet');
+        if (el) el.hidden = true;
+      };
+      // Mirror the top-nav .tab-btn.active class onto the bottom
+      // nav so the right icon highlights as the user navigates.
+      // The top nav's active state is the source of truth — we
+      // observe it via MutationObserver so anything that calls
+      // switchTab() (programmatic, deep-link routing, etc.)
+      // automatically syncs.
+      (function () {
+        function syncMobileNavActive() {
+          var bottomBtns = document.querySelectorAll('.p86-mobile-nav-btn[data-mobile-nav]');
+          bottomBtns.forEach(function (b) { b.classList.remove('active'); });
+          var activeTop = document.querySelector('nav.tabs .tab-btn.active');
+          if (!activeTop) return;
+          var virtual = activeTop.getAttribute('data-virtual-tab')
+                     || activeTop.getAttribute('data-tab');
+          bottomBtns.forEach(function (b) {
+            if (b.getAttribute('data-mobile-nav') === virtual) b.classList.add('active');
+          });
+        }
+        function init() {
+          var topNav = document.querySelector('nav.tabs');
+          if (!topNav) return;
+          new MutationObserver(syncMobileNavActive).observe(topNav, {
+            attributes: true, subtree: true, attributeFilter: ['class']
+          });
+          syncMobileNavActive();
+        }
+        if (document.readyState === 'loading') {
+          document.addEventListener('DOMContentLoaded', init);
+        } else {
+          init();
+        }
+      })();
+    </script>
 </body>
 </html>
