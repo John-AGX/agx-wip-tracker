@@ -296,7 +296,13 @@ function isRef(value) {
 function resolveRef(value, refTable) {
   if (!isRef(value)) return value;
   if (Object.prototype.hasOwnProperty.call(refTable, value)) return refTable[value];
-  throw new Error(`Unresolved ref '${value}' — refs must be created before they're referenced`);
+  throw new Error(
+    `Unresolved ref '${value}'. Declare it as one of:\n` +
+    `  • an earlier TARGET's entity_id with op:'create' (cross-target ref)\n` +
+    `  • an op:'add' section's section_id (intra-target, then reference from groups/line_adds)\n` +
+    `  • an op:'add' group's group_id (intra-target, then reference from line_adds.subgroup_id)\n` +
+    `Refs must be DECLARED before they're REFERENCED.`
+  );
 }
 
 // Walk an ops object and substitute $ref strings in-place. Mutates input.
@@ -472,8 +478,64 @@ function newGroupId() {
   return 'group_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
 }
 
+// Intra-target ref pre-pass for estimates.
+//
+// 86 routinely does this: "create a new group, then add 5 line items
+// into that group" — emitted as ONE estimate target with
+//   ops.groups: [{op:'add', group_id:'$grp_materials', ...}]
+//   ops.line_adds: [{subgroup_id:'$grp_materials', ...}, ...]
+//
+// resolveRefsInOps walks the whole ops tree once at the top of
+// dispatchEstimate. Without this pre-pass, the $grp_materials in
+// line_adds gets resolved BEFORE the groups op executes, throws
+// "Unresolved ref", and the whole payload fails.
+//
+// Pre-pass strategy: walk sections + groups ops first, mint real
+// IDs for any 'add' op whose id is a $ref, register them in
+// refTable. The full resolveRefsInOps pass that runs next then
+// substitutes the same $ref tokens everywhere they appear with
+// the real IDs. The ops themselves are mutated to carry the real
+// IDs, so applyEstimateSections / applyEstimateGroups see the
+// resolved values when they run.
+function preRegisterEstimateRefs(ops, refTable) {
+  if (Array.isArray(ops.sections)) {
+    for (const sop of ops.sections) {
+      if (sop && sop.op === 'add' && isRef(sop.section_id)) {
+        const realId = newSectionId();
+        refTable[sop.section_id] = realId;
+        sop.section_id = realId;
+      }
+    }
+  }
+  if (Array.isArray(ops.groups)) {
+    for (const gop of ops.groups) {
+      if (gop && gop.op === 'add' && isRef(gop.group_id)) {
+        const realId = newGroupId();
+        refTable[gop.group_id] = realId;
+        gop.group_id = realId;
+      }
+    }
+  }
+  // line_adds with explicit line_id $refs — register so subsequent
+  // line_edits / line_deletes can target them in the same target.
+  if (Array.isArray(ops.line_adds)) {
+    for (const la of ops.line_adds) {
+      if (la && isRef(la.line_id)) {
+        const realId = newLineId();
+        refTable[la.line_id] = realId;
+        la.line_id = realId;
+      }
+    }
+  }
+}
+
 async function dispatchEstimate(dbClient, target, refTable, ctx) {
   const ops = target.ops || {};
+  // Register intra-target ref placeholders (groups, sections, lines
+  // created in THIS target that other ops in the same target want to
+  // reference) so resolveRefsInOps can substitute them just like
+  // cross-target refs. See preRegisterEstimateRefs for the why.
+  preRegisterEstimateRefs(ops, refTable);
   resolveRefsInOps(ops, refTable);
 
   const opType = ops.op || (target.entity_id ? 'update' : 'create');
