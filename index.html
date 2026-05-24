@@ -1116,9 +1116,6 @@
                              / Email Templates moved INTO Organization as sub-pills (Phase F).
                              Old top-level URLs redirect via switchAdminSubTab redirect map. -->
                         <button class="ws-right-tab" data-admin-subtab="organization" data-p86-icon="briefcase" onclick="switchAdminSubTab('organization')">Organization</button>
-                        <!-- SMS stays top-level for now — it's a separate audit question
-                             (per-org event toggles vs global Twilio provider config). -->
-                        <button class="ws-right-tab" data-admin-subtab="sms" data-p86-icon="conversations" onclick="switchAdminSubTab('sms')">SMS</button>
                         <!-- AI / Agents -->
                         <button class="ws-right-tab" data-admin-subtab="agents" data-p86-icon="discord" onclick="switchAdminSubTab('agents')">Agents</button>
                         <!-- Observability -->
@@ -1212,10 +1209,6 @@
                          Their static markup (when needed) is injected inline
                          by renderOrgHTML in admin.js. -->
                     <div id="admin-subtab-agents" class="admin-subtab-content" style="display:none;"></div>
-
-                    <!-- SMS sub-tab — observability for the SMS scheduling agent.
-                         Rendered on demand by renderAdminSms() in js/admin.js. -->
-                    <div id="admin-subtab-sms" class="admin-subtab-content" style="display:none;"></div>
                 </div>
 
             </div>
@@ -2377,7 +2370,7 @@
     <script src="js/attachments.js?v=11b"></script>
     <script src="js/markup-viewer.js?v=17b"></script>
     <script src="js/pdf-viewer.js?v=3b"></script>
-    <script src="js/admin.js?v=81"></script>
+    <script src="js/admin.js?v=82"></script>
     <script src="js/field-tools.js?v=2b"></script>
     <script src="js/clients.js?v=16d"></script>
     <script src="js/subs.js?v=8b"></script>

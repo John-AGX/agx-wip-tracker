@@ -1042,6 +1042,7 @@
       templates: 'templates',
       materials: 'materials',
       jobs:      'jobs',
+      sms:       'sms',
       // Email's templates lived inside the legacy Templates tab via
       // _templatesActiveTab = 'email'; mirror that on the new location.
       email:     'templates',
@@ -1079,7 +1080,6 @@
     else if (name === 'agents') renderAdminAgents();
     else if (name === 'organization') renderAdminOrganization();
     else if (name === 'system') renderAdminSystem();
-    else if (name === 'sms') renderAdminSms();
     // Persist nav state so a refresh lands back on this admin sub-tab.
     if (typeof window.p86NavSave === 'function') window.p86NavSave();
   }
@@ -3292,7 +3292,8 @@
     // structure match the data model.
     { key: 'templates', label: '\u{1F4DD} Templates',    desc: 'Proposal templates + email templates for this org. Buildertrend cost-code mapping is platform-wide and lives in System.' },
     { key: 'materials', label: '\u{1F9F1} Materials',    desc: 'This org\'s materials catalog — SKUs, average / last / min / max pricing from purchase history.' },
-    { key: 'jobs',      label: '\u{1F4CB} Job Assignments', desc: 'PM / crew / role assignments per job for this org.' }
+    { key: 'jobs',      label: '\u{1F4CB} Job Assignments', desc: 'PM / crew / role assignments per job for this org.' },
+    { key: 'sms',       label: '\u{1F4F1} SMS',              desc: 'SMS scheduling-agent observability for this org (send log, delivery stats). Global Twilio provider config lives in System.' }
   ];
 
   var _orgActiveTab = (function() {
@@ -3380,9 +3381,9 @@
     else if (_orgActiveTab === 'packs') bodyHTML = renderOrgPacksTabHTML();
     else if (_orgActiveTab === 'refs') bodyHTML = renderOrgRefsTabHTML();
     else if (_orgActiveTab === 'mcp')  bodyHTML = renderOrgMcpTabHTML();
-    else if (_orgActiveTab === 'templates' || _orgActiveTab === 'materials') {
-      // Phase F nested tabs — these render functions paint into their
-      // OWN panes (#admin-subtab-templates, #admin-subtab-materials).
+    else if (_orgActiveTab === 'templates' || _orgActiveTab === 'materials' || _orgActiveTab === 'sms') {
+      // Phase F / G nested tabs — these render functions paint into
+      // their OWN panes (#admin-subtab-templates, -materials, -sms).
       // Inject an empty host div with the right id; the renderer fills it.
       var hostId = 'admin-subtab-' + _orgActiveTab;
       bodyHTML = '<div id="' + hostId + '" class="admin-subtab-content" style="display:block;">' +
@@ -3890,6 +3891,9 @@
     if (_orgActiveTab === 'jobs' && typeof renderAdminJobs === 'function') {
       renderAdminJobs();
     }
+    if (_orgActiveTab === 'sms' && typeof renderAdminSms === 'function') {
+      renderAdminSms();
+    }
     // Pack inputs: mark the row's id dirty when any field changes.
     // No-op when the packs tab isn't rendered.
     document.querySelectorAll('[data-org-pack-idx]').forEach(function(row) {
@@ -4061,6 +4065,12 @@
           '<button class="ws-right-tab' + (_systemView === 'organizations' ? ' active' : '') + '" onclick="switchSystemView(\'organizations\')">&#x1F3E2; Organizations</button>' +
           '<button class="ws-right-tab' + (_systemView === 'metrics' ? ' active' : '') + '" onclick="switchSystemView(\'metrics\')">&#x1F4CA; Cross-org Metrics</button>' +
           '<button class="ws-right-tab' + (_systemView === 'anthropic' ? ' active' : '') + '" onclick="switchSystemView(\'anthropic\')">&#x1F310; Anthropic Resources</button>' +
+          // Phase G: platform-level service config moved here from
+          // their old per-org homes. Email provider (Resend) and SMS
+          // provider (Twilio) are SAAS-wide credentials. Buildertrend
+          // cost-code mapping is platform-wide config in app_settings.
+          '<button class="ws-right-tab' + (_systemView === 'email-provider' ? ' active' : '') + '" onclick="switchSystemView(\'email-provider\')">&#x2709; Email Provider</button>' +
+          '<button class="ws-right-tab' + (_systemView === 'bt-mapping' ? ' active' : '') + '" onclick="switchSystemView(\'bt-mapping\')">&#x1F517; BT Mapping</button>' +
           '<button class="ws-right-tab' + (_systemView === 'settings' ? ' active' : '') + '" onclick="switchSystemView(\'settings\')">&#x1F527; Platform Settings</button>' +
         '</div>' +
       '</div>' +
@@ -4090,6 +4100,8 @@
     if (_systemView === 'organizations') return renderSystemOrganizations(host);
     if (_systemView === 'metrics') return renderSystemMetrics(host);
     if (_systemView === 'anthropic') return renderSystemAnthropic(host);
+    if (_systemView === 'email-provider') return renderSystemEmailProvider(host);
+    if (_systemView === 'bt-mapping') return renderSystemBTMapping(host);
     if (_systemView === 'settings') return renderSystemSettings(host);
   }
 
@@ -4200,10 +4212,90 @@
   };
 
   function renderSystemMetrics(host) {
+    // Cross-org rollup. Today there's a single tenant (AGX) so the
+    // most useful surface is: list each org with a "Open this org's
+    // metrics" button + a quick-glance counter (org count, last
+    // activity stamps). A future iteration adds a server endpoint
+    // that aggregates ai_messages cost across all orgs.
+    host.innerHTML = '<div style="font-style:italic;color:var(--text-dim,#888);padding:14px 0;">Loading orgs…</div>';
+    window.p86Api.get('/api/admin/organizations').then(function(resp) {
+      var orgs = (resp && resp.organizations) || [];
+      var activeOrgs = orgs.filter(function(o) { return !o.archived_at; });
+      var rows = activeOrgs.map(function(o) {
+        return '<tr>' +
+          '<td style="padding:8px 10px;font-family:\'SF Mono\',monospace;font-size:11px;color:var(--text-dim,#aaa);">' + escapeHTML(o.slug) + '</td>' +
+          '<td style="padding:8px 10px;font-weight:600;">' + escapeHTML(o.name) + '</td>' +
+          '<td style="padding:8px 10px;font-size:11px;color:var(--text-dim,#888);white-space:nowrap;">' + new Date(o.created_at).toLocaleDateString() + '</td>' +
+          '<td style="padding:8px 10px;font-size:11px;color:var(--text-dim,#888);text-align:right;">' +
+            '<span style="font-style:italic;">use Admin → Agents → Metrics for now</span>' +
+          '</td>' +
+        '</tr>';
+      }).join('');
+      host.innerHTML =
+        '<div style="display:flex;gap:14px;margin-bottom:14px;">' +
+          '<div style="flex:1 1 160px;min-width:160px;background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:10px;padding:14px 16px;">' +
+            '<div style="font-size:10px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">Active orgs</div>' +
+            '<div style="font-size:20px;font-weight:600;color:var(--text,#fff);">' + activeOrgs.length + '</div>' +
+            '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:4px;">' + orgs.length + ' total (incl. archived)</div>' +
+          '</div>' +
+          '<div style="flex:1 1 160px;min-width:160px;background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:10px;padding:14px 16px;">' +
+            '<div style="font-size:10px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">Cross-org cost rollup</div>' +
+            '<div style="font-size:14px;color:var(--text-dim,#aaa);font-style:italic;">Pending server endpoint</div>' +
+            '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:4px;">Sum ai_messages.cost_usd across orgs</div>' +
+          '</div>' +
+        '</div>' +
+        '<div style="border:1px solid var(--border,#333);border-radius:8px;overflow:hidden;">' +
+          '<table style="width:100%;border-collapse:collapse;font-size:13px;">' +
+            '<thead style="background:rgba(255,255,255,0.03);border-bottom:1px solid var(--border,#333);">' +
+              '<tr>' +
+                '<th style="padding:8px 10px;text-align:left;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-dim,#888);">Slug</th>' +
+                '<th style="padding:8px 10px;text-align:left;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-dim,#888);">Name</th>' +
+                '<th style="padding:8px 10px;text-align:left;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-dim,#888);">Created</th>' +
+                '<th style="padding:8px 10px;text-align:right;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-dim,#888);">Metrics access</th>' +
+              '</tr>' +
+            '</thead>' +
+            '<tbody>' + (rows || '<tr><td colspan="4" style="padding:20px;text-align:center;color:var(--text-dim,#888);">No active orgs.</td></tr>') + '</tbody>' +
+          '</table>' +
+        '</div>';
+    }).catch(function(err) {
+      host.innerHTML = '<div style="color:#e74c3c;padding:14px;">Failed: ' + escapeHTML(err.message || 'unknown') + '</div>';
+    });
+  }
+
+  function renderSystemEmailProvider(host) {
+    // Mounts the existing Email Settings view (renderAdminEmail with
+    // _emailView='settings'). Targets the legacy #admin-subtab-email
+    // pane id which renderAdminEmail still looks for; we inject the
+    // pane here as a hosted container. The Templates inner pill is
+    // hidden in this context — email templates belong to Organization,
+    // and surfacing them here would be confusing.
     host.innerHTML =
-      '<div style="padding:30px;text-align:center;color:var(--text-dim,#888);border:1px dashed var(--border,#333);border-radius:8px;">' +
-        '<div style="font-size:14px;color:var(--text,#fff);margin-bottom:6px;">Cross-org metrics</div>' +
-        '<div style="font-size:12px;line-height:1.6;">Per-tenant chat usage, cost, agent activity, conversation counts.<br>Coming in the next iteration — for now use Admin → Agents → Metrics (scoped to your own org).</div>' +
+      '<div style="margin:0 0 14px 0;padding:10px 14px;background:rgba(167,139,250,0.06);border:1px solid rgba(167,139,250,0.2);border-radius:8px;font-size:11px;color:var(--text-dim,#aaa);">' +
+        'Platform-wide Resend (email) provider config + global event triggers / digest mode / quiet hours. ' +
+        'Per-org email <strong style="color:var(--text,#fff);">templates</strong> live in Organization &rarr; Templates &rarr; Email; per-org event overrides will land there in a future iteration.' +
+      '</div>' +
+      '<div id="admin-subtab-email" class="admin-subtab-content" style="display:block;"></div>';
+    // Force the settings view (not templates) when mounted from System.
+    _emailView = 'settings';
+    try { sessionStorage.setItem('agx_email_view', 'settings'); } catch (e) {}
+    if (typeof renderAdminEmail === 'function') renderAdminEmail();
+  }
+
+  function renderSystemBTMapping(host) {
+    // Mounts the existing BT Mapping renderer (renderBTMappingHTML)
+    // inline. The mapping is platform-wide config in app_settings, so
+    // sitting under System is correct. Save/Discard buttons reuse the
+    // Templates tab's save handler (saveAdminTemplate) since the mapping
+    // is currently saved through the same path.
+    var contentHTML = (typeof renderBTMappingHTML === 'function') ? renderBTMappingHTML() : '<div style="color:#f87171;padding:14px;">Renderer missing — BT mapping view not loaded.</div>';
+    host.innerHTML =
+      '<div style="margin:0 0 14px 0;padding:10px 14px;background:rgba(167,139,250,0.06);border:1px solid rgba(167,139,250,0.2);border-radius:8px;font-size:11px;color:var(--text-dim,#aaa);">' +
+        'Buildertrend cost-code mapping is <strong style="color:var(--text,#fff);">platform-wide</strong>. The mapping translates AGX 4-subgroup line items to BT cost codes when exporting estimates. Stored in <code>app_settings.bt_mapping</code> (not org-scoped).' +
+      '</div>' +
+      '<div id="tpl-tab-content">' + contentHTML + '</div>' +
+      '<div class="action-buttons" style="margin-top:14px;border-top:1px solid var(--border,#333);padding-top:14px;">' +
+        '<button class="primary" onclick="saveAdminTemplate()">\u{1F4BE} Save All</button>' +
+        '<span id="tpl-status" style="margin-left:14px;color:var(--text-dim,#888);font-size:12px;align-self:center;"></span>' +
       '</div>';
   }
 
