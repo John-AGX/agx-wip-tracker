@@ -2880,7 +2880,7 @@
       align-items: stretch;
     }
     .lead-editor-left {
-      gap: 8px !important;  /* override the inline 18px wrapper gap */
+      gap: 6px !important;  /* override the inline 18px wrapper gap */
     }
     @media (max-width: 900px) {
       .lead-editor-split {
@@ -2894,12 +2894,12 @@
        as "tight grid" instead of "loose floating fields". */
 
     #leadEditor_tab_general fieldset {
-      padding: 6px 10px 8px !important;
+      padding: 4px 10px 6px !important;
       background: rgba(255, 255, 255, 0.018);
       margin: 0 !important;
     }
     #leadEditor_tab_general fieldset legend {
-      font-size: 10px !important;
+      font-size: 9.5px !important;
       padding: 0 5px !important;
       margin-left: 4px;
       letter-spacing: 0.6px;
@@ -2908,9 +2908,9 @@
     /* Labels + inputs */
     #leadEditor_tab_general label {
       display: block;
-      font-size: 10.5px;
+      font-size: 10px;
       color: var(--text-dim, #aaa);
-      margin-bottom: 1px;
+      margin-bottom: 0;
       font-weight: 500;
       letter-spacing: 0.2px;
     }
@@ -2923,9 +2923,9 @@
       background: rgba(255, 255, 255, 0.04);
       border: 1px solid var(--border, #333);
       border-radius: 4px;
-      padding: 5px 9px;
+      padding: 4px 8px;
       color: var(--text, #fff);
-      font-size: 13px;
+      font-size: 12px;
       width: 100%;
       box-sizing: border-box;
       transition: border-color 0.12s, background 0.12s;
@@ -2952,8 +2952,8 @@
        those inline values to keep the column tight. */
     #leadEditor_tab_general fieldset > div[style*="grid"],
     #leadEditor_tab_general fieldset > div[style*="form-row"] {
-      gap: 8px !important;
-      margin-top: 6px !important;
+      gap: 6px !important;
+      margin-top: 4px !important;
     }
     /* First row inside a fieldset doesn't need top margin (it sits
        right under the legend). */
