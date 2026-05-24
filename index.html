@@ -97,7 +97,7 @@
     })();
     </script>
 
-    <link rel="stylesheet" href="css/styles.css?v=83">
+    <link rel="stylesheet" href="css/styles.css?v=84">
     <link rel="stylesheet" href="css/workspace-layout.css?v=56b">
     <link rel="stylesheet" href="css/workspace.css?v=37b">
     <link rel="stylesheet" href="css/schedule.css?v=18b">
@@ -2048,6 +2048,17 @@
               </div>
             </fieldset>
 
+            <!-- Estimates panel (compact) — glanceable list of estimates
+                 linked to this lead via estimate.lead_id. Per row: title +
+                 created date + Cost / Price / Margin%. Click opens the
+                 estimate in the same tab via openEstimateFromLead. -->
+            <fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;">
+              <legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">&#x1F4DD; Estimates</legend>
+              <div id="leadEditor_estimatesHost">
+                <div style="font-size:12px;color:var(--text-dim,#888);font-style:italic;padding:8px 0;">No estimates yet.</div>
+              </div>
+            </fieldset>
+
             <!-- Photos & Attachments panel -->
             <fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;">
               <legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">&#x1F4F7; Photos &amp; Files</legend>
@@ -2425,7 +2436,7 @@
     <script src="js/subs.js?v=8b"></script>
     <script src="js/job-audit.js?v=3b"></script>
     <script src="js/job-reports.js?v=1b"></script>
-    <script src="js/leads.js?v=34"></script>
+    <script src="js/leads.js?v=35"></script>
     <script src="js/job-costs-import.js?v=4"></script>
     <script src="js/qb-costs-view.js?v=11"></script>
     <script src="js/insights.js?v=7"></script>

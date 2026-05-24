@@ -765,9 +765,12 @@
 
   function renderLeadEditorRightPanels(lead) {
     var addr = _composeLeadAddress();
+    var leadId = lead && lead.id;
+    // Order matches the DOM: Map -> Estimates -> Photos -> Weather.
     renderLeadMap(addr);
+    renderLeadEstimatesCompact(leadId);
+    renderLeadAttachments(leadId);
     renderLeadWeather(addr);
-    renderLeadAttachments(lead && lead.id);
   }
 
   // ── Blur-save (auto-save on field exit) ──────────────────────
@@ -1221,20 +1224,24 @@
     listEl.innerHTML = linked.map(proposalRowHTML).join('');
   }
 
-  function proposalRowHTML(est) {
-    var allLines = ((window.appData && appData.estimateLines) || []).filter(function(l) { return l.estimateId === est.id; });
-    var baseCost = 0;
-    var markedUp = 0;
-    allLines.forEach(function(l, idx) {
+  // Shared cost / margin math. Returns { baseCost, clientPrice, margin, lineCount }
+  // where margin is the BLENDED markup % across all lines. Reused by:
+  //   - proposalRowHTML (full Estimates tab inside the lead editor)
+  //   - _compactEstimateRowHTML (right-column compact list)
+  // The lookback through section-header markup + estimate.defaultMarkup
+  // fallback mirrors how the estimate editor itself computes blended
+  // markup so this view stays consistent with the editor's reality.
+  function _computeEstimateCostMargin(est) {
+    var lines = ((window.appData && appData.estimateLines) || []).filter(function(l) { return l.estimateId === est.id; });
+    var baseCost = 0, markedUp = 0;
+    lines.forEach(function(l, idx) {
       if (l.section === '__section_header__') return;
       var ext = (Number(l.qty) || 0) * (Number(l.unitCost) || 0);
       baseCost += ext;
-      // Per-line markup, falling back to enclosing section header, then
-      // legacy estimate.defaultMarkup
       var m = (l.markup === '' || l.markup == null) ? null : Number(l.markup);
       if (m == null) {
         for (var i = idx - 1; i >= 0; i--) {
-          var L = allLines[i];
+          var L = lines[i];
           if (L && L.section === '__section_header__') {
             if (L.markup !== '' && L.markup != null) m = Number(L.markup);
             break;
@@ -1245,16 +1252,24 @@
       if (m == null) m = 0;
       markedUp += ext * (1 + m / 100);
     });
-    var blendedMarkup = baseCost > 0 ? (markedUp / baseCost - 1) * 100 : 0;
-    var clientPrice = markedUp;
+    return {
+      baseCost: baseCost,
+      clientPrice: markedUp,
+      margin: baseCost > 0 ? (markedUp / baseCost - 1) * 100 : 0,
+      lineCount: lines.filter(function(l) { return l.section !== '__section_header__'; }).length
+    };
+  }
+
+  function proposalRowHTML(est) {
+    var calc = _computeEstimateCostMargin(est);
     return '<div class="card" style="padding:12px 14px;display:flex;justify-content:space-between;align-items:center;gap:12px;">' +
       '<div style="min-width:0;flex:1;">' +
         '<div style="font-weight:600;font-size:13px;color:var(--text,#fff);">' + escapeHTML(est.title || 'Untitled estimate') + '</div>' +
         '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:3px;">' +
-          'Base ' + fmtCurrencyShort(baseCost) +
-          ' · Markup ' + blendedMarkup.toFixed(1) + '%' +
-          ' · Client ' + fmtCurrencyShort(clientPrice) +
-          ' · ' + allLines.filter(function(l) { return l.section !== '__section_header__'; }).length + ' line' + (allLines.length === 1 ? '' : 's') +
+          'Base ' + fmtCurrencyShort(calc.baseCost) +
+          ' · Markup ' + calc.margin.toFixed(1) + '%' +
+          ' · Client ' + fmtCurrencyShort(calc.clientPrice) +
+          ' · ' + calc.lineCount + ' line' + (calc.lineCount === 1 ? '' : 's') +
         '</div>' +
       '</div>' +
       '<div style="display:flex;gap:6px;flex-shrink:0;">' +
@@ -1262,6 +1277,54 @@
         '<button class="ee-btn secondary" onclick="openEstimateFromLead(\'' + escapeAttr(est.id) + '\', true);">Preview</button>' +
       '</div>' +
     '</div>';
+  }
+
+  // Compact-row version used in the right-column Estimates panel. Same
+  // calc as proposalRowHTML but flatter layout: title + date on one
+  // line, cost/price/margin on a second compact line. Click anywhere
+  // on the row opens the estimate (no separate Edit/Preview buttons —
+  // the full tab still has those).
+  function _compactEstimateRowHTML(est) {
+    var calc = _computeEstimateCostMargin(est);
+    var created = est.created_at ? new Date(est.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+    return '<div onclick="openEstimateFromLead(\'' + escapeAttr(est.id) + '\', false);" ' +
+      'style="cursor:pointer;padding:8px 10px;border:1px solid var(--border,#333);border-radius:6px;margin-bottom:6px;background:rgba(255,255,255,0.02);transition:border-color 0.12s, background 0.12s;" ' +
+      'onmouseover="this.style.borderColor=\'rgba(79,140,255,0.5)\';this.style.background=\'rgba(79,140,255,0.04)\';" ' +
+      'onmouseout="this.style.borderColor=\'var(--border,#333)\';this.style.background=\'rgba(255,255,255,0.02)\';">' +
+      '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;">' +
+        '<div style="font-weight:600;font-size:12.5px;color:var(--text,#fff);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;min-width:0;">' + escapeHTML(est.title || '(untitled)') + '</div>' +
+        '<div style="font-size:10px;color:var(--text-dim,#888);white-space:nowrap;">' + escapeHTML(created) + '</div>' +
+      '</div>' +
+      '<div style="display:flex;gap:10px;margin-top:4px;font-size:10.5px;color:var(--text-dim,#aaa);">' +
+        '<span>Cost <strong style="color:var(--text,#fff);">' + fmtCurrencyShort(calc.baseCost) + '</strong></span>' +
+        '<span>Price <strong style="color:#34d399;">' + fmtCurrencyShort(calc.clientPrice) + '</strong></span>' +
+        '<span>Margin <strong style="color:#4f8cff;">' + calc.margin.toFixed(1) + '%</strong></span>' +
+      '</div>' +
+    '</div>';
+  }
+
+  // Compact list for the right-column Estimates panel. Sorted newest
+  // first by created_at; ties break on est.id so the sort is stable.
+  function renderLeadEstimatesCompact(leadId) {
+    var host = document.getElementById('leadEditor_estimatesHost');
+    if (!host) return;
+    if (!leadId) {
+      host.innerHTML = '<div style="font-size:12px;color:var(--text-dim,#888);font-style:italic;padding:8px 0;">Save the lead first to draft estimates.</div>';
+      return;
+    }
+    var estimates = (window.appData && appData.estimates) || [];
+    var linked = estimates.filter(function(e) { return e.lead_id === leadId; });
+    if (!linked.length) {
+      host.innerHTML = '<div style="font-size:12px;color:var(--text-dim,#888);font-style:italic;padding:8px 0;">No estimates yet. Use the Estimates tab to draft one.</div>';
+      return;
+    }
+    linked.sort(function(a, b) {
+      var ta = a.created_at ? new Date(a.created_at).getTime() : 0;
+      var tb = b.created_at ? new Date(b.created_at).getTime() : 0;
+      if (tb !== ta) return tb - ta;  // newest first
+      return String(b.id || '').localeCompare(String(a.id || ''));  // stable tiebreak
+    });
+    host.innerHTML = linked.map(_compactEstimateRowHTML).join('');
   }
 
   // Navigate from the lead-editor's Estimates tab into the actual
