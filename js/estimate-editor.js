@@ -489,6 +489,28 @@
           '<span>&#x1F465;</span>' + escapeHTML(c.name) +
           (c.community_name && c.community_name !== c.name ? ' · ' + escapeHTML(c.community_name) : '') +
         '</span>';
+      } else {
+        // Client isn't in the local cache yet (estimate was opened
+        // without first visiting Clients) OR the client was deleted.
+        // Mirror the lead-chip pattern below: render a yellow
+        // placeholder NOW so the user knows the linkage exists,
+        // then fetch the client by id and re-render once resolved.
+        // Audit finding W4 — without this fallback the chip silently
+        // disappeared and the user couldn't tell whether the estimate
+        // had a client at all.
+        html += '<span style="display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:14px;background:rgba(251,191,36,0.10);color:var(--yellow,#fbbf24);font-size:11px;font-weight:600;" title="Client id ' + escapeHTML(est.client_id) + ' — not in local cache yet">' +
+          '<span>&#x1F465;</span>Loading client…' +
+        '</span>';
+        if (window.p86Api && window.p86Api.clients && typeof window.p86Api.clients.get === 'function') {
+          window.p86Api.clients.get(est.client_id).then(function(res) {
+            if (res && res.client) {
+              if (window.p86Clients && typeof window.p86Clients.cacheClient === 'function') {
+                window.p86Clients.cacheClient(res.client);
+              }
+              renderHeaderChips();
+            }
+          }).catch(function() { /* client deleted or no perms — leave the "Loading…" placeholder */ });
+        }
       }
     }
     if (est.lead_id) {

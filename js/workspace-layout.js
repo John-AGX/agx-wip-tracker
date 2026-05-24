@@ -803,8 +803,58 @@
       'job-wip': 'renderWipTab',
       'job-reports': 'renderJobReports'
     };
-    var fn = renderers[targetId];
-    if (fn && typeof window[fn] === 'function') window[fn](jobId);
+    safeRenderTabContent(targetId, target, jobId, renderers[targetId]);
+  }
+
+  // Shared helper for both tab-activation paths in this module. Replaces
+  // the pre-fix pattern `if (fn && typeof window[fn] === 'function')
+  // window[fn](jobId);` which silently no-op'd in two failure modes:
+  //   1. Module not loaded → window[fn] is undefined → click does
+  //      nothing, panel shows stale/empty content, no error visible.
+  //   2. Renderer throws mid-execution → exception bubbles to the
+  //      console (maybe) but the user sees a blank panel + no clue.
+  // Audit findings W3 + W7c (memoized-inventing-mountain.md).
+  function safeRenderTabContent(targetId, target, jobId, fn) {
+    if (!fn) return;
+    if (typeof window[fn] !== 'function') {
+      try {
+        console.warn('[workspace-layout] missing renderer:', fn, 'for tab', targetId);
+      } catch (_) {}
+      if (target) {
+        target.innerHTML =
+          '<div style="padding:24px;color:var(--text-dim,#888);font-size:13px;">' +
+          '<strong>This view didn\'t load.</strong><br>' +
+          'The component for this tab (<code>' + escapeAttrText(fn) + '</code>) wasn\'t found. ' +
+          'Try refreshing the page.' +
+          '</div>';
+      }
+      return;
+    }
+    try {
+      window[fn](jobId);
+    } catch (e) {
+      try {
+        console.error('[workspace-layout] renderer threw:', fn, e);
+      } catch (_) {}
+      if (target) {
+        target.innerHTML =
+          '<div style="padding:24px;color:#f87171;font-size:13px;">' +
+          '<strong>This view crashed while loading.</strong><br>' +
+          'Tab: <code>' + escapeAttrText(targetId) + '</code> · Renderer: <code>' + escapeAttrText(fn) + '</code><br>' +
+          '<span style="opacity:0.75;">' + escapeAttrText(e && e.message || String(e)) + '</span>' +
+          '</div>';
+      }
+    }
+  }
+  // Tiny HTML-attr escape for the safeRenderTabContent error blocks.
+  // We can't import a shared helper from here without restructuring;
+  // the inputs are short internal strings.
+  function escapeAttrText(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
   }
 
   // ── Workspace state controls (driven by graph toolbar buttons) ──
@@ -1120,8 +1170,7 @@
       var target = document.getElementById(targetId);
       if (target) target.style.display = 'block';
       if (!jobId) return;
-      var fn = TAB_RENDERERS[targetId];
-      if (fn && typeof window[fn] === 'function') window[fn](jobId);
+      safeRenderTabContent(targetId, target, jobId, TAB_RENDERERS[targetId]);
     }
 
     tabs.forEach(function(tab) {
