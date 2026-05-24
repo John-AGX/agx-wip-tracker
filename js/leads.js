@@ -772,47 +772,91 @@
 
   // ── Blur-save (auto-save on field exit) ──────────────────────
   //
-  // Every editable input/select/textarea in the left column fires a
-  // silent save when it loses focus or its value changes. Saves are
-  // debounced (300ms after last blur) and serialized: if a save is
-  // already in flight, the next blur queues a follow-up after it
-  // returns. The Save button at the top of the editor still works
-  // — it triggers the same submitLeadEditor but in "and close" mode.
+  // Per-field auto-save. When an input/select/textarea in the left
+  // column loses focus or commits a change, we send ONLY that field's
+  // new value to the server, not the whole form.
+  //
+  // Sending the whole form was a footgun: if any unrelated field was
+  // temporarily empty (async re-render mid-blur, race against a
+  // populate*Select that's still loading, etc.) the silent save
+  // would write nulls and overwrite good server data. Per-field
+  // updates eliminate that — a save only touches the field the user
+  // actually edited.
+  //
+  // Each pending field has its own 300ms debounce timer keyed by
+  // field name. Saves serialize globally via _blurSaveInFlight so
+  // we don't pile up concurrent PUTs. We also snapshot each field's
+  // value at focus time and skip the save if the blur value matches
+  // (no actual change → no network call).
 
-  var _blurSaveTimer = null;
+  // DOM element id → leads-record field name. Most are 1:1 with the
+  // id suffix; title is special (id is leadEditor_title_field).
+  function _fieldNameForEl(el) {
+    if (!el || !el.id || el.id.indexOf('leadEditor_') !== 0) return null;
+    var suffix = el.id.slice('leadEditor_'.length);
+    if (suffix === 'title_field') return 'title';
+    if (suffix === 'id') return null;
+    if (suffix === 'confidenceLabel') return null;
+    // Only fields in EDITABLE_FIELDS are persistable.
+    return EDITABLE_FIELDS.indexOf(suffix) >= 0 ? suffix : null;
+  }
+
+  // Per-field debounce timer + in-flight serialization.
+  var _blurSaveTimers = {};
   var _blurSaveInFlight = false;
-  var _blurSaveQueued = false;
+  var _blurSavePending = []; // { name, value } items queued behind an in-flight save
+  var _focusSnapshots = {};  // field name → value captured at focus time
 
-  function submitLeadEditorSilent() {
-    if (_blurSaveInFlight) { _blurSaveQueued = true; return; }
+  function _scheduleFieldSave(name, value) {
+    if (_blurSaveTimers[name]) clearTimeout(_blurSaveTimers[name]);
+    _blurSaveTimers[name] = setTimeout(function() {
+      delete _blurSaveTimers[name];
+      _saveFieldNow(name, value);
+    }, 300);
+  }
+
+  function _saveFieldNow(name, rawValue) {
     var id = (document.getElementById('leadEditor_id') || {}).value;
-    if (!id) return; // new-lead path uses the explicit Save button (need a title first)
+    if (!id) return; // new-lead path uses explicit Save button
+    if (!name) return;
+    if (name === 'title' && !String(rawValue || '').trim()) return; // never save empty title
+    if (_blurSaveInFlight) {
+      // Queue this one — replace any prior pending for the same field
+      // so we don't double-send stale values.
+      _blurSavePending = _blurSavePending.filter(function(p) { return p.name !== name; });
+      _blurSavePending.push({ name: name, value: rawValue });
+      return;
+    }
     var payload = {};
-    EDITABLE_FIELDS.forEach(function(f) {
-      var v = getField(f);
-      payload[f] = v === '' ? null : v;
-    });
-    payload.title = (payload.title || '').trim();
-    if (!payload.title) return; // don't fire a save if title got cleared — let validation kick in on the explicit Save button instead
+    payload[name] = rawValue === '' ? null : rawValue;
     var statusEl = document.getElementById('ld-status-msg');
     if (statusEl) { statusEl.style.color = 'var(--text-dim,#888)'; statusEl.textContent = 'Saving…'; }
     _blurSaveInFlight = true;
     window.p86Api.leads.update(id, payload).then(function() {
       _blurSaveInFlight = false;
-      if (statusEl) { statusEl.style.color = '#34d399'; statusEl.textContent = '✓ Saved'; setTimeout(function() { if (statusEl.textContent === '✓ Saved') statusEl.textContent = ''; }, 1800); }
+      if (statusEl) {
+        statusEl.style.color = '#34d399';
+        statusEl.textContent = '✓ Saved ' + name.replace(/_/g, ' ');
+        setTimeout(function() {
+          if (statusEl.textContent.indexOf('✓ Saved') === 0) statusEl.textContent = '';
+        }, 1800);
+      }
       // Keep local cache fresh so the leads list reflects edits without a reload.
       var idx = _leads.findIndex(function(x) { return x.id === id; });
       if (idx >= 0) _leads[idx] = Object.assign({}, _leads[idx], payload);
-      // If another blur queued a save during this round-trip, run it now.
-      if (_blurSaveQueued) {
-        _blurSaveQueued = false;
-        submitLeadEditorSilent();
+      // Refresh focus snapshot for this field so the next blur compares
+      // against the actually-saved value, not the old one.
+      _focusSnapshots[name] = rawValue;
+      // Drain queued saves (one at a time).
+      if (_blurSavePending.length) {
+        var next = _blurSavePending.shift();
+        _saveFieldNow(next.name, next.value);
       }
     }).catch(function(err) {
       _blurSaveInFlight = false;
       if (statusEl) { statusEl.style.color = '#f87171'; statusEl.textContent = 'Save failed: ' + (err.message || 'unknown'); }
-      // Don't run the queued save on failure — user needs to see the error.
-      _blurSaveQueued = false;
+      // Drop queued saves on failure — user needs to see the error.
+      _blurSavePending = [];
     });
   }
 
@@ -825,19 +869,34 @@
     inputs.forEach(function(el) {
       if (el.dataset.blurSaveBound === '1') return;
       el.dataset.blurSaveBound = '1';
-      // 'change' fires on commit for selects + on blur for text inputs
-      // (when the value differs from focus-time). Also wire 'blur' so
-      // textareas with no change still trip the save if the user
-      // toggles focus around. Debounce both into a single timer.
-      function schedule() {
-        if (_blurSaveTimer) clearTimeout(_blurSaveTimer);
-        _blurSaveTimer = setTimeout(function() {
-          _blurSaveTimer = null;
-          submitLeadEditorSilent();
-        }, 300);
+      var name = _fieldNameForEl(el);
+      if (!name) return;
+      // Snapshot the value at focus so we can diff at blur. Without
+      // this, we'd save unchanged fields too which is wasteful AND
+      // racy (a field could be momentarily empty during a re-render).
+      el.addEventListener('focus', function() {
+        _focusSnapshots[name] = el.value;
+      });
+      function handler() {
+        // Only save if the value actually changed since focus. If the
+        // field was just rendered (no focus event fired), the snapshot
+        // is missing — fall back to comparing against the leads cache.
+        var current = el.value;
+        var snap = _focusSnapshots[name];
+        if (snap == null) {
+          // No snapshot — compare against cached lead. Skip if it
+          // matches; saves go through only for genuine edits.
+          var id = (document.getElementById('leadEditor_id') || {}).value;
+          var cachedLead = id ? _leads.find(function(x) { return x.id === id; }) : null;
+          var cachedVal = cachedLead ? (cachedLead[name] == null ? '' : String(cachedLead[name])) : '';
+          if (String(current) === cachedVal) return;
+        } else if (String(current) === String(snap)) {
+          return;
+        }
+        _scheduleFieldSave(name, current);
       }
-      el.addEventListener('change', schedule);
-      el.addEventListener('blur', schedule);
+      el.addEventListener('change', handler);
+      el.addEventListener('blur', handler);
     });
   }
 
