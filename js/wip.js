@@ -1551,6 +1551,23 @@ function renderWIPMain() {
 
             // Refresh sticky header metrics strip
             if (typeof refreshHeaderMetrics === 'function') refreshHeaderMetrics();
+
+            // Kick off cloud sync of the node graph so building cards
+            // show real wire data even when localStorage didn't have
+            // this job's graph cached. Without this, opening a job on
+            // a fresh device showed "PHASES (0)" on every building
+            // card until the user opened the workspace once. The
+            // re-render only fires if no input is focused (avoids
+            // wiping a user's mid-typing value).
+            ensureNGCloudSynced(jobId, function() {
+                // renderJobOverview internally calls renderJobBuildings
+                // (and any other dependent sub-renders) when buildings
+                // exist, so this single call refreshes the building
+                // cards + the overview chrome.
+                renderJobOverview(jobId);
+                renderWipTab(jobId);
+                if (typeof refreshHeaderMetrics === 'function') refreshHeaderMetrics();
+            });
         }
 
         function renderJobOverview(jobId) {
@@ -2544,6 +2561,52 @@ function renderWIPMain() {
                 try { window.ngPushToJob(); } catch (e) {}
             }
             return true;
+        }
+
+        // Cloud sync the node graph for this job. Pre-fix: cloud sync only
+        // ran from nodegraph/ui.js's mount path, so opening a job whose
+        // graph wasn't in localStorage left the building cards showing
+        // empty wire data ("PHASES (0)") until the user opened the
+        // workspace. After this, renderJobDetail triggers cloud sync
+        // and re-renders the building section ONLY IF no input is
+        // focused — protects users mid-typing from losing their input.
+        // Idempotent: skips when another sync is already in flight for
+        // the same job.
+        var _ngCloudSyncInFlight = null;
+        function ensureNGCloudSynced(jobId, onApplied) {
+            if (typeof NG === 'undefined' || !jobId) return;
+            if (typeof NG.loadGraphFromCloudAndApply !== 'function') return;
+            if (_ngCloudSyncInFlight === jobId) return;
+            _ngCloudSyncInFlight = jobId;
+            NG.loadGraphFromCloudAndApply().then(function(applied) {
+                _ngCloudSyncInFlight = null;
+                if (!applied) return;
+                // Refresh ngPushToJob so per-phase rolled-up costs are
+                // current. Cheap; same call ensureNGComputed makes.
+                if (typeof window.ngPushToJob === 'function') {
+                    try { window.ngPushToJob(); } catch (_) {}
+                }
+                // Guard the re-render against focused inputs. If the
+                // user is mid-typing in any input/textarea (e.g. a
+                // building budget, phase pct, WIP field, wire
+                // allocPct), DO NOT re-render — that would wipe their
+                // input value before they finished. The data is
+                // already updated in memory; next user interaction
+                // re-renders naturally.
+                var ae = document.activeElement;
+                if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' ||
+                           ae.tagName === 'SELECT' || ae.isContentEditable)) {
+                    console.log('[wip] cloud-sync re-render deferred — input focused:', ae.tagName);
+                    return;
+                }
+                if (typeof onApplied === 'function') {
+                    try { onApplied(); }
+                    catch (e) { console.warn('[wip] cloud-sync re-render failed:', e); }
+                }
+            }).catch(function(e) {
+                _ngCloudSyncInFlight = null;
+                console.warn('[wip] cloud-sync failed:', e && e.message);
+            });
         }
 
         function getNodeGraphConnections(type, dataId) {
