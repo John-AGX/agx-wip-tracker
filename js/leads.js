@@ -384,6 +384,13 @@
     var cached = (window.p86Clients && window.p86Clients.getCached && window.p86Clients.getCached()) || [];
     if (cached.length) {
       fillFrom(cached);
+    } else if (window.p86Clients && typeof window.p86Clients.ensureLoaded === 'function') {
+      // Use the canonical loader so the cache gets populated for
+      // downstream consumers (onLeadClientPicked reads getCached()
+      // to copy the picked client's address into the lead's address
+      // fields — without populating the cache here that autofill
+      // silently fails on the first open).
+      window.p86Clients.ensureLoaded().then(fillFrom).catch(function() { fillFrom([]); });
     } else if (window.p86Api && window.p86Api.isAuthenticated()) {
       window.p86Api.clients.list().then(function(res) {
         fillFrom(res.clients || []);
@@ -416,13 +423,13 @@
   // When the client dropdown changes, copy the picked client's address into
   // the lead's project-address fields. User can edit afterward — this is a
   // pre-fill, not a binding.
-  function onLeadClientPicked() {
-    var sel = document.getElementById('leadEditor_client_id');
-    if (!sel || !sel.value) return;
-    var cached = (window.p86Clients && window.p86Clients.getCached && window.p86Clients.getCached()) || [];
-    var c = cached.find(function(x) { return x.id === sel.value; });
+  //
+  // If the clients cache hasn't populated yet (race: user picked a client
+  // before populateClientSelect's API call completed and stashed results),
+  // lazy-load via ensureLoaded and retry. Without this fallback the autofill
+  // silently no-ops on the first pick of a fresh session.
+  function _applyClientAutofill(c) {
     if (!c) return;
-    // Only set fields the user hasn't already filled in
     function setIfEmpty(name, v) {
       var el = document.getElementById('leadEditor_' + name);
       if (el && !el.value && v) el.value = v;
@@ -434,6 +441,31 @@
     setIfEmpty('property_name', c.community_name);
     setIfEmpty('market', c.market);
     setIfEmpty('gate_code', c.gate_code);
+    // Refresh map + weather since the address fields just changed.
+    if (typeof renderLeadMap === 'function') {
+      var addr = _composeLeadAddress();
+      renderLeadMap(addr);
+      renderLeadWeather(addr);
+    }
+  }
+
+  function onLeadClientPicked() {
+    var sel = document.getElementById('leadEditor_client_id');
+    if (!sel || !sel.value) return;
+    var pickedId = sel.value;
+    var cached = (window.p86Clients && window.p86Clients.getCached && window.p86Clients.getCached()) || [];
+    var c = cached.find(function(x) { return x.id === pickedId; });
+    if (c) {
+      _applyClientAutofill(c);
+      return;
+    }
+    // Cache empty — lazy-load and retry once.
+    if (window.p86Clients && typeof window.p86Clients.ensureLoaded === 'function') {
+      window.p86Clients.ensureLoaded().then(function(list) {
+        var c2 = (list || []).find(function(x) { return x.id === pickedId; });
+        if (c2) _applyClientAutofill(c2);
+      }).catch(function() { /* silent — autofill is best-effort */ });
+    }
   }
 
   function openNewLeadModal() {
@@ -497,6 +529,10 @@
     // open + debounced re-fetch when the user edits the address fields.
     renderLeadEditorRightPanels(l);
     wireLeadAddressWatchers();
+    // Auto-save on field blur. Each editable field gets a change
+    // listener that fires submitLeadEditorSilent() with a small debounce
+    // so rapid tab-throughs coalesce into one server hit.
+    wireLeadBlurSave();
     openLeadDetailView();
     // Edit mode — sections render locked so a stray scroll-tap can't
     // mutate a contract amount or an address. User taps the per-
@@ -732,6 +768,77 @@
     renderLeadMap(addr);
     renderLeadWeather(addr);
     renderLeadAttachments(lead && lead.id);
+  }
+
+  // ── Blur-save (auto-save on field exit) ──────────────────────
+  //
+  // Every editable input/select/textarea in the left column fires a
+  // silent save when it loses focus or its value changes. Saves are
+  // debounced (300ms after last blur) and serialized: if a save is
+  // already in flight, the next blur queues a follow-up after it
+  // returns. The Save button at the top of the editor still works
+  // — it triggers the same submitLeadEditor but in "and close" mode.
+
+  var _blurSaveTimer = null;
+  var _blurSaveInFlight = false;
+  var _blurSaveQueued = false;
+
+  function submitLeadEditorSilent() {
+    if (_blurSaveInFlight) { _blurSaveQueued = true; return; }
+    var id = (document.getElementById('leadEditor_id') || {}).value;
+    if (!id) return; // new-lead path uses the explicit Save button (need a title first)
+    var payload = {};
+    EDITABLE_FIELDS.forEach(function(f) {
+      var v = getField(f);
+      payload[f] = v === '' ? null : v;
+    });
+    payload.title = (payload.title || '').trim();
+    if (!payload.title) return; // don't fire a save if title got cleared — let validation kick in on the explicit Save button instead
+    var statusEl = document.getElementById('ld-status-msg');
+    if (statusEl) { statusEl.style.color = 'var(--text-dim,#888)'; statusEl.textContent = 'Saving…'; }
+    _blurSaveInFlight = true;
+    window.p86Api.leads.update(id, payload).then(function() {
+      _blurSaveInFlight = false;
+      if (statusEl) { statusEl.style.color = '#34d399'; statusEl.textContent = '✓ Saved'; setTimeout(function() { if (statusEl.textContent === '✓ Saved') statusEl.textContent = ''; }, 1800); }
+      // Keep local cache fresh so the leads list reflects edits without a reload.
+      var idx = _leads.findIndex(function(x) { return x.id === id; });
+      if (idx >= 0) _leads[idx] = Object.assign({}, _leads[idx], payload);
+      // If another blur queued a save during this round-trip, run it now.
+      if (_blurSaveQueued) {
+        _blurSaveQueued = false;
+        submitLeadEditorSilent();
+      }
+    }).catch(function(err) {
+      _blurSaveInFlight = false;
+      if (statusEl) { statusEl.style.color = '#f87171'; statusEl.textContent = 'Save failed: ' + (err.message || 'unknown'); }
+      // Don't run the queued save on failure — user needs to see the error.
+      _blurSaveQueued = false;
+    });
+  }
+
+  function wireLeadBlurSave() {
+    var formBody = document.getElementById('leadEditor_formBody');
+    if (!formBody) return;
+    // Scope to the editable left column (right column is display-only).
+    var scope = formBody.querySelector('.lead-editor-left') || formBody;
+    var inputs = scope.querySelectorAll('input, select, textarea');
+    inputs.forEach(function(el) {
+      if (el.dataset.blurSaveBound === '1') return;
+      el.dataset.blurSaveBound = '1';
+      // 'change' fires on commit for selects + on blur for text inputs
+      // (when the value differs from focus-time). Also wire 'blur' so
+      // textareas with no change still trip the save if the user
+      // toggles focus around. Debounce both into a single timer.
+      function schedule() {
+        if (_blurSaveTimer) clearTimeout(_blurSaveTimer);
+        _blurSaveTimer = setTimeout(function() {
+          _blurSaveTimer = null;
+          submitLeadEditorSilent();
+        }, 300);
+      }
+      el.addEventListener('change', schedule);
+      el.addEventListener('blur', schedule);
+    });
   }
 
   // Debounced rebuild of map + weather when the address fields change.
