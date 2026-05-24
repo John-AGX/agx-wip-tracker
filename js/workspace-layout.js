@@ -25,6 +25,10 @@
   // the hours/rate trio is now derived from QuickBooks costs through
   // the hourly-burden node, not entered here. Detailed + WIP + the
   // graph itself cover everything that tab used to display.
+  // NOTE for future audits: the `job-qb-costs` tab below (label
+  // "Detailed") is a SEPARATE QuickBooks cost-line viewer, NOT a
+  // re-introduction of the retired Costs tab. They share "cost" in
+  // the name but have nothing to do with each other.
   const RIGHT_TABS = [
     { id: 'job-overview',      label: 'Overview',  icon: 'insights' },
     { id: 'job-wip',           label: 'WIP',       icon: 'wip' },
