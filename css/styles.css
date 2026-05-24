@@ -2867,17 +2867,77 @@
     /* ── Lead editor split-pane layout ─────────────────────────────
        Two-column desktop layout for #leadEditor_tab_general:
        form on the left (1fr, takes remaining space), contextual
-       panels (map / photos / weather) on the right (380px fixed).
+       panels (map / photos / weather) on the right (360px fixed).
        Collapses to a single column below 900px so the right column
-       stacks below the form on tablets / phones. */
+       stacks below the form on tablets / phones.
+       align-items: stretch lets the left column's Notes fieldset
+       grow to match the right column's combined height when the
+       right has more content. */
     .lead-editor-split {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) 380px;
-      gap: 20px;
-      align-items: start;
+      grid-template-columns: minmax(0, 1fr) 360px;
+      gap: 18px;
+      align-items: stretch;
+    }
+    .lead-editor-left {
+      gap: 12px !important;  /* tighter than the inline gap:18px */
     }
     @media (max-width: 900px) {
       .lead-editor-split {
         grid-template-columns: 1fr;
       }
+    }
+
+    /* Lead editor visual polish — bring fieldsets closer to the
+       AGX dark style guide. Padding tightened so labels and inputs
+       don't feel like they're floating in dead space; inputs get a
+       subtle background so they read as discrete fields instead of
+       text on a void. */
+    #leadEditor_tab_general fieldset {
+      padding: 10px 12px 12px !important;
+      background: rgba(255, 255, 255, 0.015);
+    }
+    #leadEditor_tab_general fieldset legend {
+      /* Inset legend so it sits flush against the border line */
+      padding: 0 6px;
+      margin-left: 4px;
+    }
+    #leadEditor_tab_general label {
+      display: block;
+      font-size: 11px;
+      color: var(--text-dim, #aaa);
+      margin-bottom: 3px;
+      font-weight: 500;
+      letter-spacing: 0.2px;
+    }
+    #leadEditor_tab_general input[type="text"],
+    #leadEditor_tab_general input[type="number"],
+    #leadEditor_tab_general input[type="date"],
+    #leadEditor_tab_general input[type="email"],
+    #leadEditor_tab_general select,
+    #leadEditor_tab_general textarea {
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--border, #333);
+      border-radius: 5px;
+      padding: 6px 10px;
+      color: var(--text, #fff);
+      font-size: 13px;
+      width: 100%;
+      box-sizing: border-box;
+      transition: border-color 0.12s, background 0.12s;
+    }
+    #leadEditor_tab_general input:focus,
+    #leadEditor_tab_general select:focus,
+    #leadEditor_tab_general textarea:focus {
+      outline: none;
+      border-color: rgba(79, 140, 255, 0.55);
+      background: rgba(79, 140, 255, 0.06);
+    }
+    #leadEditor_tab_general textarea {
+      font-family: inherit;
+      line-height: 1.4;
+    }
+    #leadEditor_tab_general input[readonly] {
+      background: rgba(255, 255, 255, 0.02);
+      color: var(--text-dim, #aaa);
     }

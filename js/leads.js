@@ -600,25 +600,60 @@
       host.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;padding:10px 0;">No forecast data.</div>';
       return;
     }
-    // Compact card row. Risk-colored top border (matches schedule.js's
-    // .sch-wx-* classes when present; otherwise plain).
+    // Compact 7-card forecast strip. Each card: emoji weather glyph,
+    // day-of-week / date, high/low, precip %. Emoji is picked from
+    // the NWS summary text + precipPct via _weatherEmojiFor() so the
+    // glyph reads naturally without needing a custom icon font.
     var cards = w.days.slice(0, 7).map(function(d) {
       var date = d.date ? new Date(d.date) : null;
       var dow = date ? ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][date.getDay()] : '';
       var mmdd = date ? ((date.getMonth() + 1) + '/' + date.getDate()) : '';
       var hi = (d.tempHigh != null) ? d.tempHigh + '°' : '—';
       var lo = (d.tempLow != null) ? d.tempLow + '°' : '';
-      var precip = d.precipPct ? d.precipPct + '% rain' : '';
+      var precip = d.precipPct ? d.precipPct + '%' : '';
       var border = d.risk === 'high' ? '#f87171' : (d.risk === 'med' ? '#fbbf24' : 'rgba(255,255,255,0.08)');
-      return '<div title="' + escapeAttr(d.summary || '') + '" style="flex:1 1 60px;min-width:60px;padding:6px 4px;background:rgba(255,255,255,0.02);border:1px solid var(--border,#333);border-top:2px solid ' + border + ';border-radius:6px;text-align:center;font-size:11px;">' +
-        '<div style="color:var(--text-dim,#aaa);font-size:10px;text-transform:uppercase;letter-spacing:0.4px;">' + escapeHTML(dow) + '</div>' +
-        '<div style="color:var(--text-dim,#888);font-size:10px;">' + escapeHTML(mmdd) + '</div>' +
-        '<div style="color:var(--text,#fff);font-weight:600;margin-top:4px;">' + escapeHTML(hi) + '</div>' +
+      var emoji = _weatherEmojiFor(d);
+      return '<div title="' + escapeAttr(d.summary || '') + '" style="flex:1 1 60px;min-width:60px;padding:8px 4px 6px;background:rgba(255,255,255,0.02);border:1px solid var(--border,#333);border-top:2px solid ' + border + ';border-radius:6px;text-align:center;font-size:11px;">' +
+        '<div style="color:var(--text-dim,#aaa);font-size:10px;text-transform:uppercase;letter-spacing:0.4px;font-weight:600;">' + escapeHTML(dow) + '</div>' +
+        '<div style="font-size:20px;line-height:1.2;margin:2px 0;">' + emoji + '</div>' +
+        '<div style="color:var(--text,#fff);font-weight:600;">' + escapeHTML(hi) + '</div>' +
         (lo ? '<div style="color:var(--text-dim,#888);font-size:10px;">' + escapeHTML(lo) + '</div>' : '') +
-        (precip ? '<div style="color:#60a5fa;font-size:10px;margin-top:2px;">' + escapeHTML(precip) + '</div>' : '') +
+        (precip ? '<div style="color:#60a5fa;font-size:10px;margin-top:3px;">\u{1F4A7} ' + escapeHTML(precip) + '</div>' : '') +
+        '<div style="color:var(--text-dim,#666);font-size:9px;margin-top:3px;">' + escapeHTML(mmdd) + '</div>' +
       '</div>';
     }).join('');
     host.innerHTML = '<div style="display:flex;gap:4px;flex-wrap:wrap;">' + cards + '</div>';
+  }
+
+  // Map an NWS daily-summary + precip% to a Unicode emoji.
+  // NWS summary phrasing is mostly canonical: "Sunny", "Mostly Sunny",
+  // "Partly Cloudy", "Cloudy", "Showers", "Thunderstorms", "Snow", etc.
+  // We pattern-match a few keywords and fall back to a sun/cloud icon
+  // based on cloud-cover phrasing.
+  function _weatherEmojiFor(d) {
+    var s = String((d && d.summary) || '').toLowerCase();
+    var precip = Number((d && d.precipPct) || 0);
+    // Severe / precip-heavy first so "thunderstorm" wins over generic "cloudy"
+    if (s.indexOf('thunder') !== -1 || s.indexOf('t-storm') !== -1) return '⛈';  // ⛈
+    if (s.indexOf('snow') !== -1 || s.indexOf('flurries') !== -1 || s.indexOf('blizzard') !== -1) return '❄';  // ❄
+    if (s.indexOf('sleet') !== -1 || s.indexOf('freezing') !== -1 || s.indexOf('ice') !== -1) return '\u{1F328}';  // 🌨
+    if (s.indexOf('heavy rain') !== -1 || s.indexOf('downpour') !== -1) return '\u{1F327}';  // 🌧
+    if (s.indexOf('shower') !== -1) return '\u{1F326}';  // 🌦
+    if (s.indexOf('rain') !== -1 || s.indexOf('drizzle') !== -1) return '\u{1F327}';  // 🌧
+    if (s.indexOf('fog') !== -1 || s.indexOf('haze') !== -1 || s.indexOf('mist') !== -1) return '\u{1F32B}';  // 🌫
+    if (s.indexOf('wind') !== -1 || s.indexOf('breezy') !== -1) return '\u{1F32C}';  // 🌬
+    // Cloud cover spectrum. NWS uses: Sunny, Mostly Sunny, Partly Sunny / Partly Cloudy, Mostly Cloudy, Cloudy.
+    if (s.indexOf('sunny') !== -1 && s.indexOf('mostly') === -1 && s.indexOf('partly') === -1) return '☀';  // ☀
+    if (s.indexOf('clear') !== -1) return '☀';  // ☀
+    if (s.indexOf('mostly sunny') !== -1) return '\u{1F324}';  // 🌤
+    if (s.indexOf('partly sunny') !== -1 || s.indexOf('partly cloudy') !== -1) return '⛅';  // ⛅
+    if (s.indexOf('mostly cloudy') !== -1) return '\u{1F325}';  // 🌥
+    if (s.indexOf('cloudy') !== -1 || s.indexOf('overcast') !== -1) return '☁';  // ☁
+    // Precip-pct fallback when summary text doesn't match any keyword.
+    if (precip >= 60) return '\u{1F327}';  // 🌧
+    if (precip >= 30) return '\u{1F326}';  // 🌦
+    if (precip >= 10) return '⛅';  // ⛅
+    return '\u{1F324}';  // 🌤 default mild
   }
 
   function renderLeadAttachments(leadId) {
@@ -719,19 +754,15 @@
     });
   }
 
-  // Wire the edit-gate pencil into every <fieldset> inside the lead
-  // editor's form body. Idempotent — re-calls re-use the existing
-  // pencil and just sync the lock state. Pass `unlocked: true` on
-  // create to leave all sections armed (no need to tap 5 pencils
-  // before typing the first field).
-  function applyLeadFieldsetGates(unlocked) {
-    if (!window.p86EditGate) return;
-    var formBody = document.getElementById('leadEditor_formBody');
-    if (!formBody) return;
-    var fieldsets = formBody.querySelectorAll('fieldset');
-    for (var i = 0; i < fieldsets.length; i++) {
-      window.p86EditGate.attachSection(fieldsets[i], { startUnlocked: !!unlocked });
-    }
+  // Edit gates retired from the lead editor (Phase G UX pass) — the
+  // pencil chips felt cluttered on the split-pane layout, and the
+  // accidental-scroll-tap risk they protected against is muted now
+  // that the form body shares the page with a contextual right
+  // column rather than overflowing. Fields are always armed for
+  // editing; Save still commits the whole form atomically.
+  // Function retained as a no-op so existing call sites don't error.
+  function applyLeadFieldsetGates(_unlocked) {
+    // intentional no-op; see comment above
   }
 
   // Open the dedicated #lead-detail-view as a full-page surface

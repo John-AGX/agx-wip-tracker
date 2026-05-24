@@ -97,7 +97,7 @@
     })();
     </script>
 
-    <link rel="stylesheet" href="css/styles.css?v=81">
+    <link rel="stylesheet" href="css/styles.css?v=82">
     <link rel="stylesheet" href="css/workspace-layout.css?v=56b">
     <link rel="stylesheet" href="css/workspace.css?v=37b">
     <link rel="stylesheet" href="css/schedule.css?v=18b">
@@ -2008,10 +2008,12 @@
             </div>
           </fieldset>
 
-          <!-- Notes -->
-          <fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;">
+          <!-- Notes — takes the rest of the column. flex:1 + min-height:0
+               lets it grow to fill remaining vertical space; the inner
+               textarea expands via height:100% inside a flex column. -->
+          <fieldset class="leadEditor-fieldset leadEditor-fieldset-notes" style="border:1px solid var(--border,#333);border-radius:8px;padding:10px 12px;flex:1 1 auto;min-height:220px;display:flex;flex-direction:column;">
             <legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Notes</legend>
-            <textarea id="leadEditor_notes" rows="4" style="resize:vertical;"></textarea>
+            <textarea id="leadEditor_notes" rows="10" style="resize:vertical;flex:1;min-height:180px;width:100%;"></textarea>
           </fieldset>
 
           <!-- Linked-job chip — shown when lead.job_id is set so the user
@@ -2423,7 +2425,7 @@
     <script src="js/subs.js?v=8b"></script>
     <script src="js/job-audit.js?v=3b"></script>
     <script src="js/job-reports.js?v=1b"></script>
-    <script src="js/leads.js?v=30"></script>
+    <script src="js/leads.js?v=31"></script>
     <script src="js/job-costs-import.js?v=4"></script>
     <script src="js/qb-costs-view.js?v=11"></script>
     <script src="js/insights.js?v=7"></script>
