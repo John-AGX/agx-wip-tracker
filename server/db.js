@@ -186,6 +186,39 @@ async function initSchema() {
     END
     $migrate_packs$;
 
+    -- Org-level always-on memory. Parallel to org_skill_packs, but with
+    -- one critical difference: skill packs are loaded ON DEMAND by
+    -- Anthropic's auto-discovery (description match per turn); memory
+    -- rows are injected into the system prompt on EVERY turn. Use this
+    -- for posture / discipline that should be ambient (Talk-through
+    -- workflow, Change order discipline, AGX house-style estimating
+    -- posture, etc.) — anything where John would be annoyed I didn't
+    -- apply it on a turn where it wasn't named.
+    --
+    -- Trade-off vs identity_body: identity_body is one big text blob
+    -- (a single editable field on organizations); org_memory rows are
+    -- individually editable with sort_order + audit timestamps. Both
+    -- get concatenated into the same system-prompt block at runtime;
+    -- choosing memory rows over identity_body is just an admin-UX call.
+    --
+    -- Sort order lets the admin reorder the blocks (lower = earlier in
+    -- the prompt). archived_at provides soft-delete consistent with
+    -- org_skill_packs. UNIQUE (organization_id, name) prevents
+    -- accidental duplicates.
+    CREATE TABLE IF NOT EXISTS org_memory (
+      id SERIAL PRIMARY KEY,
+      organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      body TEXT NOT NULL,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      archived_at TIMESTAMPTZ,
+      UNIQUE (organization_id, name)
+    );
+    CREATE INDEX IF NOT EXISTS idx_org_memory_org
+      ON org_memory(organization_id, sort_order, created_at) WHERE archived_at IS NULL;
+
     -- Team messaging — per-entity comment threads + (future) DMs.
     -- thread_key conventions:
     --   'job:<id>'      one thread per job (per-job comments)

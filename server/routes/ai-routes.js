@@ -2549,13 +2549,41 @@ async function composedAgentSystem(agentKey, baseline, org) {
   // the agent's identity. The only org-level concession this function
   // still makes is:
   //   1. Append `org.identity_body` (per-tenant "who 86 works FOR" body)
-  //   2. Append the live reference-links block (sheets/sharepoint)
-  // Both are optional; missing → just the baseline ships.
+  //   2. Append the org_memory rows (per-tenant always-on posture blocks)
+  //   3. Append the live reference-links block (sheets/sharepoint)
+  // All are optional; missing → just the baseline ships.
   if (agentKey !== 'job') return baseline;
   try {
     const parts = [baseline];
     if (org && org.identity_body && org.identity_body.trim()) {
       parts.push(String(org.identity_body).trim());
+    }
+    // Org memory rows — concatenated under a single "Working posture"
+    // heading so the model sees them as one coherent block rather than
+    // a fragmented list of bullets. Each row's `name` becomes a `##`
+    // subheading; its `body` follows. Sort by sort_order ASC, then
+    // created_at ASC (stable tie-break). Soft-deleted (archived_at)
+    // rows are skipped. Failure here is non-fatal: log + ship without
+    // memory rather than crash the whole turn.
+    if (org && org.id) {
+      try {
+        const memRes = await pool.query(
+          `SELECT name, body FROM org_memory
+            WHERE organization_id = $1 AND archived_at IS NULL
+            ORDER BY sort_order ASC, created_at ASC`,
+          [org.id]
+        );
+        if (memRes.rows && memRes.rows.length) {
+          const memBlock = ['## Working posture'].concat(
+            memRes.rows.map(function (r) {
+              return '### ' + String(r.name).trim() + '\n' + String(r.body).trim();
+            })
+          ).join('\n\n');
+          parts.push(memBlock);
+        }
+      } catch (e) {
+        console.warn('[composedAgentSystem] org_memory injection skipped:', e.message);
+      }
     }
     try {
       const adminAgents = require('./admin-agents-routes');
@@ -2590,6 +2618,24 @@ async function composedAgentSystemBreakdown(agentKey, baseline, org) {
     record('baseline', baseline);
     if (org && org.identity_body && org.identity_body.trim()) {
       record('org.identity_body', String(org.identity_body).trim());
+    }
+    if (org && org.id) {
+      try {
+        const memRes = await pool.query(
+          `SELECT name, body FROM org_memory
+            WHERE organization_id = $1 AND archived_at IS NULL
+            ORDER BY sort_order ASC, created_at ASC`,
+          [org.id]
+        );
+        if (memRes.rows && memRes.rows.length) {
+          const memBlock = ['## Working posture'].concat(
+            memRes.rows.map(function (r) {
+              return '### ' + String(r.name).trim() + '\n' + String(r.body).trim();
+            })
+          ).join('\n\n');
+          record('org_memory (' + memRes.rows.length + ' rows)', memBlock);
+        }
+      } catch (e) { /* match composedAgentSystem's defensive skip */ }
     }
     try {
       const adminAgents = require('./admin-agents-routes');

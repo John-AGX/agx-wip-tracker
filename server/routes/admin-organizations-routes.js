@@ -716,4 +716,165 @@ router.post('/:id/skill-packs/mirror-all',
     }
 });
 
+// ── Org memory (always-on per-tenant posture blocks) ──────────────
+//
+// Distinct from org_skill_packs (which are loaded on demand by
+// Anthropic's auto-discovery): every non-archived org_memory row is
+// injected into the system prompt on every turn, concatenated under a
+// "## Working posture" header. Use this for posture / discipline that
+// should be ambient — Talk-through workflow, Change order discipline,
+// AGX house-style estimating posture, etc.
+//
+// CRUD shape mirrors skill-packs (same auth, same scope, same soft-
+// delete via archived_at) so the admin UI can model both with the
+// same render pattern.
+//
+//   GET    /:id/memory                       list non-archived rows
+//   POST   /:id/memory                       create
+//   PUT    /:id/memory/:memId                update
+//   DELETE /:id/memory/:memId                soft-delete
+//   POST   /:id/memory/:memId/reorder        change sort_order
+//
+// Reorder takes a target sort_order; the admin UI typically computes
+// "above/below another row" client-side and sends the resulting int.
+
+router.get('/:id/memory', requireAuth, requireOrg, requireCapability('ROLES_MANAGE'), async (req, res) => {
+  try {
+    const targetId = assertOrgScope(req, req.params.id);
+    const r = await pool.query(
+      `SELECT id, name, body, sort_order, created_at, updated_at
+         FROM org_memory
+        WHERE organization_id = $1 AND archived_at IS NULL
+        ORDER BY sort_order ASC, created_at ASC`,
+      [targetId]
+    );
+    res.json({ memory: r.rows });
+  } catch (e) {
+    const status = e.status || 500;
+    console.error('GET /api/admin/organizations/:id/memory error:', e);
+    res.status(status).json({ error: e.message || 'Server error' });
+  }
+});
+
+router.post('/:id/memory', requireAuth, requireOrg, requireCapability('ROLES_MANAGE'), async (req, res) => {
+  try {
+    const targetId = assertOrgScope(req, req.params.id);
+    const b = req.body || {};
+    if (!b.name || typeof b.name !== 'string' || !b.name.trim()) {
+      return res.status(400).json({ error: 'name is required' });
+    }
+    if (!b.body || typeof b.body !== 'string') {
+      return res.status(400).json({ error: 'body is required' });
+    }
+    const sortOrder = Number.isFinite(Number(b.sort_order)) ? Number(b.sort_order) : 0;
+    try {
+      const ins = await pool.query(
+        `INSERT INTO org_memory (organization_id, name, body, sort_order)
+         VALUES ($1, $2, $3, $4)
+         RETURNING id, name, body, sort_order, created_at, updated_at`,
+        [targetId, b.name.trim(), b.body, sortOrder]
+      );
+      res.json({ memory: ins.rows[0] });
+    } catch (e) {
+      if (e && e.code === '23505') {
+        return res.status(409).json({ error: 'A memory entry named "' + b.name + '" already exists in this organization.' });
+      }
+      throw e;
+    }
+  } catch (e) {
+    const status = e.status || 500;
+    console.error('POST /api/admin/organizations/:id/memory error:', e);
+    res.status(status).json({ error: e.message || 'Server error' });
+  }
+});
+
+router.put('/:id/memory/:memId', requireAuth, requireOrg, requireCapability('ROLES_MANAGE'), async (req, res) => {
+  try {
+    const targetId = assertOrgScope(req, req.params.id);
+    const memId = Number(req.params.memId);
+    if (!Number.isFinite(memId)) return res.status(400).json({ error: 'Invalid memId' });
+    const b = req.body || {};
+    // Allowlist mirrors the column set — never push raw keys into SET.
+    // Audit finding B1 — keep the SAFE-by-allowlist comment for the
+    // next reader so they know dynamic-UPDATE is intentional here.
+    const sets = [];
+    const params = [targetId, memId];
+    let p = 3;
+    if (typeof b.name === 'string') {
+      if (!b.name.trim()) return res.status(400).json({ error: 'name cannot be empty' });
+      sets.push('name = $' + p++); params.push(b.name.trim());
+    }
+    if (typeof b.body === 'string') {
+      sets.push('body = $' + p++); params.push(b.body);
+    }
+    if (b.sort_order != null && Number.isFinite(Number(b.sort_order))) {
+      sets.push('sort_order = $' + p++); params.push(Number(b.sort_order));
+    }
+    if (!sets.length) return res.status(400).json({ error: 'No updatable fields supplied' });
+    sets.push('updated_at = NOW()');
+    try {
+      // SAFE: column names come from a fixed allowlist above, not from req.body
+      const upd = await pool.query(
+        `UPDATE org_memory SET ${sets.join(', ')}
+          WHERE organization_id = $1 AND id = $2 AND archived_at IS NULL
+          RETURNING id, name, body, sort_order, created_at, updated_at`,
+        params
+      );
+      if (!upd.rowCount) return res.status(404).json({ error: 'Memory entry not found' });
+      res.json({ memory: upd.rows[0] });
+    } catch (e) {
+      if (e && e.code === '23505') {
+        return res.status(409).json({ error: 'A memory entry with that name already exists in this organization.' });
+      }
+      throw e;
+    }
+  } catch (e) {
+    const status = e.status || 500;
+    console.error('PUT /api/admin/organizations/:id/memory/:memId error:', e);
+    res.status(status).json({ error: e.message || 'Server error' });
+  }
+});
+
+router.delete('/:id/memory/:memId', requireAuth, requireOrg, requireCapability('ROLES_MANAGE'), async (req, res) => {
+  try {
+    const targetId = assertOrgScope(req, req.params.id);
+    const memId = Number(req.params.memId);
+    if (!Number.isFinite(memId)) return res.status(400).json({ error: 'Invalid memId' });
+    const upd = await pool.query(
+      `UPDATE org_memory SET archived_at = NOW(), updated_at = NOW()
+        WHERE organization_id = $1 AND id = $2 AND archived_at IS NULL
+        RETURNING id`,
+      [targetId, memId]
+    );
+    if (!upd.rowCount) return res.status(404).json({ error: 'Memory entry not found' });
+    res.json({ ok: true, archived: memId });
+  } catch (e) {
+    const status = e.status || 500;
+    console.error('DELETE /api/admin/organizations/:id/memory/:memId error:', e);
+    res.status(status).json({ error: e.message || 'Server error' });
+  }
+});
+
+router.post('/:id/memory/:memId/reorder', requireAuth, requireOrg, requireCapability('ROLES_MANAGE'), async (req, res) => {
+  try {
+    const targetId = assertOrgScope(req, req.params.id);
+    const memId = Number(req.params.memId);
+    if (!Number.isFinite(memId)) return res.status(400).json({ error: 'Invalid memId' });
+    const newOrder = Number((req.body && req.body.sort_order) ?? NaN);
+    if (!Number.isFinite(newOrder)) return res.status(400).json({ error: 'sort_order is required (integer)' });
+    const upd = await pool.query(
+      `UPDATE org_memory SET sort_order = $3, updated_at = NOW()
+        WHERE organization_id = $1 AND id = $2 AND archived_at IS NULL
+        RETURNING id, sort_order`,
+      [targetId, memId, newOrder]
+    );
+    if (!upd.rowCount) return res.status(404).json({ error: 'Memory entry not found' });
+    res.json({ ok: true, memory: upd.rows[0] });
+  } catch (e) {
+    const status = e.status || 500;
+    console.error('POST /api/admin/organizations/:id/memory/:memId/reorder error:', e);
+    res.status(status).json({ error: e.message || 'Server error' });
+  }
+});
+
 module.exports = router;
