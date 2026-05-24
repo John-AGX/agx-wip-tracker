@@ -1866,7 +1866,7 @@ const BACKGROUND_WATCHER_BASELINE = [
 
 const AGENT_SYSTEM_BASELINE = {
   // 86 — the ONE operator agent for Project 86. Serves every surface
-  // (per-job WIP chat, per-estimate editor, lead intake, Ask 86 global).
+  // (per-job chat, per-estimate editor, lead intake, Ask 86 global).
   // Same identity, same tool union (estimating + job + intake +
   // client-directory mutations), same continuous memory.
   //

@@ -111,7 +111,7 @@ function certTypeLabel(t) {
 
 var COMMON_FOOTER = (
   '<div style="margin-top:32px;padding-top:16px;border-top:1px solid #e5e7eb;font-size:12px;color:#6b7280;">' +
-    'Project 86 WIP Tracker &middot; <a href="{{appUrl}}" style="color:#4f8cff;text-decoration:none;">{{appUrlHost}}</a><br/>' +
+    'Project 86 &middot; <a href="{{appUrl}}" style="color:#4f8cff;text-decoration:none;">{{appUrlHost}}</a><br/>' +
     'You\'re receiving this because of activity on your Project 86 account. ' +
     'Toggle notifications in <strong>My Account &rarr; Notifications</strong>.' +
   '</div>'
@@ -136,10 +136,10 @@ function shellWrap(title, bodyHtml) {
 var TEMPLATE_SOURCES = {
 
   user_invite: {
-    subject: 'You\'re invited to Project 86 WIP Tracker',
+    subject: 'You\'re invited to Project 86',
     html_body: shellWrap('Welcome to Project 86',
       '<p>Hi {{name}},</p>' +
-      '<p>{{invitedBy}} just created an account for you on the Project 86 WIP Tracker. ' +
+      '<p>{{invitedBy}} just created an account for you on Project 86. ' +
         'You can sign in with the credentials below:</p>' +
       '<table style="width:100%;background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:12px;margin:16px 0;font-family:monospace;font-size:13px;">' +
         '<tr><td style="padding:4px 8px;color:#6b7280;">Email</td><td style="padding:4px 8px;font-weight:600;">{{email}}</td></tr>' +

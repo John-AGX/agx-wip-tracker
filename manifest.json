@@ -1,7 +1,7 @@
 {
   "name": "Project 86",
   "short_name": "P86",
-  "description": "Construction operations: estimates, leads, jobs, WIP, schedule. 86 is your in-app operator.",
+  "description": "Construction operations: leads, estimates, jobs, schedule. 86 is your in-app operator.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

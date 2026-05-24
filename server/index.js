@@ -178,7 +178,7 @@ setRolePool(pool);
 // in production.
 function startServer() {
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`AGX WIP Tracker running on http://localhost:${PORT}`);
+    console.log(`Project 86 running on http://localhost:${PORT}`);
     if (process.env.ADMIN_EMAIL) {
       console.log(`Admin user synced from env: ${process.env.ADMIN_EMAIL}`);
     } else {

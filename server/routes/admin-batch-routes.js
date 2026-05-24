@@ -86,7 +86,7 @@ router.post('/elle-audit', requireAuth, requireOrg, requireCapability('ROLES_MAN
     for (const j of jobsRes.rows) {
       try {
         // aiPhase=plan keeps 86 in read-only mode in batches — we
-        // don't want a batch run mutating WIP data without a human
+        // don't want a batch run mutating job data without a human
         // in the loop reviewing the proposed writes.
         const ctx = await aiInternals.buildJobContext(j.id, '', 'plan');
         // Plan-mode tool filter must match what production uses on
