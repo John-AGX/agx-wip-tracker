@@ -3187,6 +3187,16 @@ function vDebug(...args) {
 }
 
 async function runV2SessionStream({ anthropic, res, session, eventsToSend, persistAssistantText, onCustomToolUse, freshlyCreated }) {
+  // Hoisted ABOVE send/res-handlers/session_resolved emit because all
+  // three reference `sessionId` in their bodies. Pre-hoist, the `let
+  // sessionId` declaration lived at the bottom of the resolver-setup
+  // block (~line 3304) — earlier references hit the temporal dead zone
+  // and threw `ReferenceError: Cannot access 'sessionId' before
+  // initialization` on EVERY turn, which surfaced to the client as
+  // "(no response)". Keep these at the top.
+  let activeSession = session;
+  let sessionId = session.anthropic_session_id;
+
   // Same idempotency guard as runStream — V2 sessions also fire dual
   // error paths (events.send throw + stream 'error' event) on certain
   // failures (credit-balance, stuck sessions, etc.). Without these
@@ -3300,8 +3310,8 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
   // stuck waiting on tool responses. We have to attempt the events.send
   // before opening the stream when we recover, because the original
   // session id is now archived.
-  let activeSession = session;
-  let sessionId = session.anthropic_session_id;
+  // (activeSession + sessionId are hoisted to the top of the function;
+  // see the comment there for why.)
   // Tracks whether we've already tried the non-destructive "resolve
   // the dangling sevt_* ids" recovery on this turn. Prevents looping
   // when the in-place recovery itself triggers another stuck error.
