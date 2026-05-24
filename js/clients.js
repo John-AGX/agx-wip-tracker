@@ -748,6 +748,9 @@
       document.getElementById('clientEditor_title').textContent = 'New Client';
       populateParentSelect(null, null);
       openModal('clientEditorModal');
+      // Create mode — sections open unlocked so the user can fill in
+      // a new client without tapping every pencil first.
+      applyClientFieldsetGates(true);
     });
   }
 
@@ -769,7 +772,22 @@
       // notes since this user's last reload).
       renderAgentNotesPanel(id);
       openModal('clientEditorModal');
+      // Edit mode — sections render locked. Per-section pencil arms
+      // a fieldset for editing; Save commits the whole form.
+      applyClientFieldsetGates(false);
     });
+  }
+
+  // Wire the edit-gate pencil into every <fieldset> inside the client
+  // editor modal. Idempotent. Pass unlocked=true on create.
+  function applyClientFieldsetGates(unlocked) {
+    if (!window.p86EditGate) return;
+    var modal = document.getElementById('clientEditorModal');
+    if (!modal) return;
+    var fieldsets = modal.querySelectorAll('fieldset');
+    for (var i = 0; i < fieldsets.length; i++) {
+      window.p86EditGate.attachSection(fieldsets[i], { startUnlocked: !!unlocked });
+    }
   }
 
   // ──────────────────────────────────────────────────────────────────

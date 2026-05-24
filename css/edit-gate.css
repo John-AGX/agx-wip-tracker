@@ -1,0 +1,129 @@
+/* edit-gate.css — accidental-edit protection layer.
+ *
+ * Two attribute-driven gates wrap form inputs so a stray tap can't
+ * silently mutate a record (and on autosave surfaces, can't silently
+ * commit one). The inputs stay in the DOM — only their interactivity
+ * + chrome changes — so programmatic value= writes from cloud sync
+ * payloads still land normally.
+ *
+ *   Section gate  → <fieldset data-edit-gate="locked|unlocked">
+ *                   Locked: inputs render as flat read-only-looking
+ *                   text. Pencil in the legend toggles to unlocked.
+ *                   Used by the lead/client/sub editors.
+ *
+ *   Row gate      → <div data-row-edit-gate data-editing="true|false">
+ *                   Click any row in a [data-row-edit-gate]-decorated
+ *                   container to unlock that row; clicking outside the
+ *                   container re-locks everything. Used by the
+ *                   estimate line items + job phase/CO breakdowns,
+ *                   where every keystroke autosaves.
+ *
+ * JS wiring lives in js/edit-gate.js. */
+
+/* ------------------------------------------------------------------ */
+/* Section gate                                                       */
+/* ------------------------------------------------------------------ */
+
+/* When locked, strip the input chrome so the field reads like static
+ * text. pointer-events:none blocks taps; the !important on background
+ * + border-color is needed to beat the inline `style="…"` attributes
+ * many of the lead/client/sub editor inputs carry today. */
+[data-edit-gate="locked"] input,
+[data-edit-gate="locked"] textarea,
+[data-edit-gate="locked"] select {
+    pointer-events: none !important;
+    background: transparent !important;
+    border-color: transparent !important;
+    box-shadow: none !important;
+    color: var(--text, #fff);
+    padding-left: 0 !important;
+    cursor: default;
+}
+[data-edit-gate="locked"] input:focus,
+[data-edit-gate="locked"] textarea:focus,
+[data-edit-gate="locked"] select:focus {
+    outline: none;
+}
+/* Range sliders (lead confidence) collapse their thumb when locked
+ * so the disabled state doesn't pretend to be draggable. */
+[data-edit-gate="locked"] input[type="range"] {
+    opacity: 0.4;
+}
+/* Empty inputs would otherwise render as a blank line — em-dash
+ * placeholder via CSS so the user can tell the field exists. */
+[data-edit-gate="locked"] input:placeholder-shown,
+[data-edit-gate="locked"] textarea:placeholder-shown {
+    color: var(--text-dim, #888);
+}
+
+/* ------------------------------------------------------------------ */
+/* Pencil toggle button (legend or row corner)                        */
+/* ------------------------------------------------------------------ */
+
+.edit-gate-toggle {
+    background: transparent;
+    border: 0;
+    color: var(--text-dim, #888);
+    cursor: pointer;
+    padding: 4px;
+    margin-left: 8px;
+    border-radius: 4px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    vertical-align: middle;
+    line-height: 0;
+}
+.edit-gate-toggle:hover {
+    color: var(--text, #fff);
+    background: rgba(255, 255, 255, 0.06);
+}
+.edit-gate-toggle .p86-icon {
+    width: 14px;
+    height: 14px;
+}
+/* When the section/row is unlocked, tint the pencil to the accent so
+ * the user can see at a glance which section is armed. */
+.edit-gate-toggle[aria-pressed="true"] {
+    color: var(--accent, #4f8cff);
+    background: rgba(79, 140, 255, 0.12);
+}
+
+/* ------------------------------------------------------------------ */
+/* Row gate (autosave row tables)                                     */
+/* ------------------------------------------------------------------ */
+
+/* Locked row: inputs flatten the same way as the section gate, plus
+ * the row itself becomes pointer:pointer so the tap-to-unlock affordance
+ * is obvious. */
+[data-row-edit-gate]:not([data-editing="true"]) {
+    cursor: pointer;
+}
+[data-row-edit-gate]:not([data-editing="true"]) input,
+[data-row-edit-gate]:not([data-editing="true"]) textarea,
+[data-row-edit-gate]:not([data-editing="true"]) select {
+    pointer-events: none !important;
+    background: transparent !important;
+    border-color: transparent !important;
+    box-shadow: none !important;
+    cursor: pointer;
+}
+
+/* Unlocked row: subtle blue wash + outline so the user can see which
+ * row is armed at a glance. The outline-offset:-1px keeps it inside
+ * the row's natural border so adjacent rows don't shift. */
+[data-row-edit-gate][data-editing="true"] {
+    background: rgba(79, 140, 255, 0.06);
+    outline: 1px solid rgba(79, 140, 255, 0.35);
+    outline-offset: -1px;
+}
+
+/* Drag handles + delete buttons inside a locked row stay clickable —
+ * reordering and removal shouldn't require unlocking first. Opt in
+ * via the data-edit-gate-passthrough attribute on the element (or any
+ * ancestor inside the row). */
+[data-row-edit-gate] [data-edit-gate-passthrough],
+[data-row-edit-gate] [data-edit-gate-passthrough] * {
+    pointer-events: auto !important;
+    cursor: inherit;
+}

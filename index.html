@@ -101,6 +101,11 @@
     <link rel="stylesheet" href="css/workspace-layout.css?v=56b">
     <link rel="stylesheet" href="css/workspace.css?v=37b">
     <link rel="stylesheet" href="css/schedule.css?v=18b">
+    <!-- Accidental-edit protection layer. Two attribute-driven gates
+         ([data-edit-gate], [data-row-edit-gate]) lock form inputs
+         behind a pencil toggle / row-tap so stray taps can't mutate
+         records. JS wiring lives in js/edit-gate.js. -->
+    <link rel="stylesheet" href="css/edit-gate.css?v=1">
 
 </head>
 <body>
@@ -2372,11 +2377,11 @@
     <script src="js/pdf-viewer.js?v=3b"></script>
     <script src="js/admin.js?v=83"></script>
     <script src="js/field-tools.js?v=2b"></script>
-    <script src="js/clients.js?v=16d"></script>
+    <script src="js/clients.js?v=16e"></script>
     <script src="js/subs.js?v=8b"></script>
     <script src="js/job-audit.js?v=3b"></script>
     <script src="js/job-reports.js?v=1b"></script>
-    <script src="js/leads.js?v=28"></script>
+    <script src="js/leads.js?v=29"></script>
     <script src="js/job-costs-import.js?v=4"></script>
     <script src="js/qb-costs-view.js?v=11"></script>
     <script src="js/insights.js?v=7"></script>
@@ -2415,6 +2420,12 @@
          — 24 icons from Phosphor (MIT) + Heroicons (MIT). See
          scripts/build-agx-icons.js to regenerate. -->
     <script src="js/agx-icons.js?v=20d"></script>
+
+    <!-- Edit-gate helper — section + row gates that block accidental
+         input edits. Must load AFTER agx-icons.js because attachSection
+         calls p86Icon('edit') for the pencil glyph. CSS lives in
+         css/edit-gate.css (already loaded in <head>). -->
+    <script src="js/edit-gate.js?v=1"></script>
 
     <!-- Node Graph (Beta) -->
     <link rel="stylesheet" href="nodegraph/nodegraph.css?v=90b" />

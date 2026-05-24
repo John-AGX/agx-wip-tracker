@@ -459,6 +459,10 @@
       wirePdfDropOnce();
     }
     openModal('leadEditorModal');
+    // Create mode — all section gates open so the user can fill in a
+    // brand-new lead without tapping 5 pencils first. The pencils are
+    // still attached so a sloppy first-pass can be re-locked afterward.
+    applyLeadFieldsetGates(true);
   }
 
   function openEditLeadModal(id) {
@@ -490,6 +494,11 @@
     refreshLinkedJobChip(l);
     refreshConvertJobButton(l);
     openLeadDetailView();
+    // Edit mode — sections render locked so a stray scroll-tap can't
+    // mutate a contract amount or an address. User taps the per-
+    // section pencil to arm a fieldset for editing; Save commits the
+    // whole form regardless of which sections are armed.
+    applyLeadFieldsetGates(false);
     // Live-refresh the detail-view sticky header when the user edits
     // the title or flips the status select. Bound after the form
     // renders so the elements exist; idempotent because we replace
@@ -504,6 +513,21 @@
     }
     if (statusField) {
       statusField.onchange = function() { refreshLeadDetailHeader(); };
+    }
+  }
+
+  // Wire the edit-gate pencil into every <fieldset> inside the lead
+  // editor's form body. Idempotent — re-calls re-use the existing
+  // pencil and just sync the lock state. Pass `unlocked: true` on
+  // create to leave all sections armed (no need to tap 5 pencils
+  // before typing the first field).
+  function applyLeadFieldsetGates(unlocked) {
+    if (!window.p86EditGate) return;
+    var formBody = document.getElementById('leadEditor_formBody');
+    if (!formBody) return;
+    var fieldsets = formBody.querySelectorAll('fieldset');
+    for (var i = 0; i < fieldsets.length; i++) {
+      window.p86EditGate.attachSection(fieldsets[i], { startUnlocked: !!unlocked });
     }
   }
 
