@@ -601,6 +601,19 @@ async function dispatchEstimate(dbClient, target, refTable, ctx) {
     // take precedence over the auto-snapshot.
     const blob = { id, ...snap, ...fields };
     if (ops.scope !== undefined) blob.scope = ops.scope;
+    // Auto-seed a "Base" alternate with the four standard section
+    // headers IF the payload doesn't create an alternate of its own
+    // via ops.groups. Matches what the editor's New Estimate flow
+    // gives the user (estimate-editor.js seeds STANDARD_SECTIONS_PRESET
+    // on first alternate creation). Without this, payload-created
+    // estimates open with NO alternates → 86 has to scramble to
+    // create one, and tends to over-create (one alternate per
+    // section name, which is the wrong data shape).
+    const hasGroupAdd = Array.isArray(ops.groups) &&
+      ops.groups.some((g) => g && g.op === 'add');
+    if (!hasGroupAdd) {
+      applyEstimateGroups(blob, [{ op: 'add', name: 'Base', isDefault: true }]);
+    }
     if (ops.sections) applyEstimateSections(blob, ops.sections);
     if (ops.groups) applyEstimateGroups(blob, ops.groups);
     if (ops.line_adds) applyLineAdds(blob, ops.line_adds);
