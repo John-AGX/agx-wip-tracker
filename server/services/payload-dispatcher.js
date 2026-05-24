@@ -772,6 +772,21 @@ const BT_CATEGORY_BY_SECTION_NAME = {
   'Subs': 'sub',
 };
 
+// Normalize an incoming line-input object to the canonical field
+// names the estimate editor reads. 86 (and the docs) say
+// `unit_cost` / `markup_pct`, but the editor renders from `unitCost`
+// and `markup` — without this normalization, payload-added lines
+// showed up at $0.00 with no markup because the JSONB blob carried
+// keys the UI doesn't read. Accept every common variant 86 might
+// emit (snake_case, camelCase, the catalog's `unit_price`) and
+// always emit canonical camelCase to the row.
+function pickNum(obj, keys) {
+  for (const k of keys) {
+    if (obj[k] != null && obj[k] !== '') return Number(obj[k]);
+  }
+  return null;
+}
+
 function applyLineAdds(data, lineAdds) {
   const lines = ensureArray(data, 'lines');
   for (const add of lineAdds) {
@@ -794,6 +809,17 @@ function applyLineAdds(data, lineAdds) {
       btCategory = BT_CATEGORY_BY_SECTION_NAME[sectionName] || 'other';
     }
 
+    // Cost: accept unit_cost / unitCost / unit_price (catalog's name).
+    // Markup: accept markup_pct / markupPct / markup. Empty string for
+    // markup means "inherit section default" — preserve that intent
+    // so per-line overrides work; otherwise default to null.
+    const unitCost = pickNum(add, ['unit_cost', 'unitCost', 'unit_price', 'unitPrice']);
+    const markupRaw = (add.markup !== undefined) ? add.markup
+                    : (add.markup_pct !== undefined) ? add.markup_pct
+                    : (add.markupPct !== undefined) ? add.markupPct
+                    : null;
+    const markup = (markupRaw === '' || markupRaw == null) ? '' : Number(markupRaw);
+
     const row = {
       id: add.line_id || newLineId(),
       estimateId: data.id,
@@ -801,13 +827,27 @@ function applyLineAdds(data, lineAdds) {
       section: sectionName,
       btCategory: btCategory,
       description: add.description || '',
-      qty: add.qty != null ? Number(add.qty) : 0,
+      qty: pickNum(add, ['qty', 'quantity']) || 0,
       unit: add.unit || '',
-      unit_cost: add.unit_cost != null ? Number(add.unit_cost) : 0,
-      markup_pct: add.markup_pct != null ? Number(add.markup_pct) : null,
+      // Canonical editor field names. unitCost is the source of truth
+      // the line table renders from (estimate-editor.js:813 etc.).
+      unitCost: unitCost != null ? unitCost : 0,
+      markup: markup,
     };
     lines.push(row);
   }
+}
+
+// Same normalization as applyLineAdds — map snake_case / unit_price
+// input keys to the camelCase fields the editor reads. Without this,
+// 86's line_edits with `fields: {unit_cost: 5.99}` would write a
+// `unit_cost` property the editor never looks at, leaving the
+// displayed cost unchanged.
+function normalizeLineFieldKey(k) {
+  if (k === 'unit_cost' || k === 'unit_price' || k === 'unitPrice') return 'unitCost';
+  if (k === 'markup_pct' || k === 'markupPct') return 'markup';
+  if (k === 'quantity') return 'qty';
+  return k;
 }
 
 function applyLineEdits(data, lineEdits) {
@@ -819,10 +859,16 @@ function applyLineEdits(data, lineEdits) {
     for (const k of Object.keys(f)) {
       // Skip blocked keys; let typed fields coerce gently.
       if (k === 'id' || k === 'estimateId') continue;
-      if (k === 'qty' || k === 'unit_cost' || k === 'markup_pct') {
-        lines[idx][k] = f[k] != null ? Number(f[k]) : null;
+      const targetKey = normalizeLineFieldKey(k);
+      const numericKeys = new Set(['qty', 'unitCost']);
+      if (numericKeys.has(targetKey)) {
+        lines[idx][targetKey] = f[k] != null && f[k] !== '' ? Number(f[k]) : null;
+      } else if (targetKey === 'markup') {
+        // Markup empty string means "inherit section default" —
+        // preserve that vs null/0 which would override to no markup.
+        lines[idx][targetKey] = (f[k] === '' || f[k] == null) ? '' : Number(f[k]);
       } else {
-        lines[idx][k] = f[k];
+        lines[idx][targetKey] = f[k];
       }
     }
   }

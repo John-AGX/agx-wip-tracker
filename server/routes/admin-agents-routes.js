@@ -1911,7 +1911,7 @@ const AGENT_SYSTEM_BASELINE = {
     '',
     'Per-entity_type ops vocabulary:',
     '  • client: `{op:\'create\'|\'update\', fields, notes?, structure?}`',
-    '  • estimate: `{op, scope?, field_updates?, sections?, groups?, line_adds?, line_edits?, line_deletes?}` — line_adds: `{description, qty, unit, unit_cost, markup_pct?, subgroup_id?}`',
+    '  • estimate: `{op, scope?, field_updates?, sections?, groups?, line_adds?, line_edits?, line_deletes?}` — line_adds: `{description, qty, unit, unitCost, markup?, subgroup_id?}` (note: camelCase `unitCost` and `markup`; the dispatcher also accepts `unit_cost`/`unit_price`/`markup_pct` as aliases)',
     '  • job: `{field_updates?, phase_updates?, node_values?, wire_updates?, qb_assignments?, change_orders?, purchase_orders?, invoices?, notes?, graph?}`',
     '  • lead: `{op:\'create\'|\'update\', fields, notes?}`',
     '  • schedule: `{blocks: [{op, entry_id?, jobId, startDate, days, crew, ...}]}`',
