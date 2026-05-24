@@ -2866,21 +2866,18 @@
 
     /* ── Lead editor split-pane layout ─────────────────────────────
        Two-column desktop layout for #leadEditor_tab_general:
-       form on the left (1fr, takes remaining space), contextual
-       panels (map / photos / weather) on the right (360px fixed).
-       Collapses to a single column below 900px so the right column
-       stacks below the form on tablets / phones.
-       align-items: stretch lets the left column's Notes fieldset
-       grow to match the right column's combined height when the
-       right has more content. */
+       form on the left (1fr), contextual panels on the right
+       (360px). Collapses to a single column below 900px.
+       align-items: stretch lets the Notes fieldset grow to match
+       the right column's combined height. */
     .lead-editor-split {
       display: grid;
       grid-template-columns: minmax(0, 1fr) 360px;
-      gap: 18px;
+      gap: 16px;
       align-items: stretch;
     }
     .lead-editor-left {
-      gap: 12px !important;  /* tighter than the inline gap:18px */
+      gap: 8px !important;  /* override the inline 18px wrapper gap */
     }
     @media (max-width: 900px) {
       .lead-editor-split {
@@ -2888,25 +2885,29 @@
       }
     }
 
-    /* Lead editor visual polish — bring fieldsets closer to the
-       AGX dark style guide. Padding tightened so labels and inputs
-       don't feel like they're floating in dead space; inputs get a
-       subtle background so they read as discrete fields instead of
-       text on a void. */
+    /* Lead editor visual polish — pulls the AGX dark style guide
+       tighter. The earlier 12px / 18px values still felt floaty;
+       lock everything to a 6/8/10 spacing scale so density reads
+       as "tight grid" instead of "loose floating fields". */
+
     #leadEditor_tab_general fieldset {
-      padding: 10px 12px 12px !important;
-      background: rgba(255, 255, 255, 0.015);
+      padding: 6px 10px 8px !important;
+      background: rgba(255, 255, 255, 0.018);
+      margin: 0 !important;
     }
     #leadEditor_tab_general fieldset legend {
-      /* Inset legend so it sits flush against the border line */
-      padding: 0 6px;
+      font-size: 10px !important;
+      padding: 0 5px !important;
       margin-left: 4px;
+      letter-spacing: 0.6px;
     }
+
+    /* Labels + inputs */
     #leadEditor_tab_general label {
       display: block;
-      font-size: 11px;
+      font-size: 10.5px;
       color: var(--text-dim, #aaa);
-      margin-bottom: 3px;
+      margin-bottom: 1px;
       font-weight: 500;
       letter-spacing: 0.2px;
     }
@@ -2918,13 +2919,14 @@
     #leadEditor_tab_general textarea {
       background: rgba(255, 255, 255, 0.04);
       border: 1px solid var(--border, #333);
-      border-radius: 5px;
-      padding: 6px 10px;
+      border-radius: 4px;
+      padding: 5px 9px;
       color: var(--text, #fff);
       font-size: 13px;
       width: 100%;
       box-sizing: border-box;
       transition: border-color 0.12s, background 0.12s;
+      line-height: 1.3;
     }
     #leadEditor_tab_general input:focus,
     #leadEditor_tab_general select:focus,
@@ -2940,4 +2942,25 @@
     #leadEditor_tab_general input[readonly] {
       background: rgba(255, 255, 255, 0.02);
       color: var(--text-dim, #aaa);
+    }
+
+    /* Form-row grids — each fieldset has rows of inputs laid out
+       in inline grids with gap:10px and margin-top:10px. Override
+       those inline values to keep the column tight. */
+    #leadEditor_tab_general fieldset > div[style*="grid"],
+    #leadEditor_tab_general fieldset > div[style*="form-row"] {
+      gap: 8px !important;
+      margin-top: 6px !important;
+    }
+    /* First row inside a fieldset doesn't need top margin (it sits
+       right under the legend). */
+    #leadEditor_tab_general fieldset > div[style*="grid"]:first-of-type,
+    #leadEditor_tab_general fieldset > div:first-of-type {
+      margin-top: 0 !important;
+    }
+    /* Tighten the section's leading help text (".help"-like text) */
+    #leadEditor_tab_general fieldset > div[style*="font-size:11px"],
+    #leadEditor_tab_general fieldset > div[style*="font-size: 11px"] {
+      margin-top: 2px !important;
+      font-size: 10.5px !important;
     }
