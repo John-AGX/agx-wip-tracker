@@ -211,4 +211,45 @@ router.get('/coords', async function(req, res) {
   }
 });
 
+// GET /api/weather/by-address?address=...
+//   Geocodes a free-form address string and returns the 7-day NWS
+//   forecast at the resolved coordinates. Designed for surfaces that
+//   have an address but no stable entity id (lead editor, free-form
+//   admin probe, etc.) — jobs / estimates with a row id should use
+//   /jobs or /coords instead so the geocode result can be cached on
+//   the row.
+//
+//   Response shape mirrors /coords: { status, lat, lng, days } on
+//   success; { status: 'no_address' | 'failed' | 'error', address?,
+//   error? } on failure. Empty / blank address yields 'no_address'
+//   so the caller can render a polite "add an address" prompt
+//   without parsing an error string.
+router.get('/by-address', async function(req, res) {
+  const address = String((req.query && req.query.address) || '').trim();
+  if (!address) {
+    return res.json({ status: 'no_address' });
+  }
+  try {
+    const geo = await geocodeAddress(address);
+    if (!geo || !Number.isFinite(geo.lat) || !Number.isFinite(geo.lng)) {
+      return res.json({ status: 'failed', address: address });
+    }
+    // Same loose US-coverage check as /coords.
+    if (geo.lat < 17 || geo.lat > 72 || geo.lng < -180 || geo.lng > -65) {
+      return res.json({ status: 'out_of_range', lat: geo.lat, lng: geo.lng, address: address });
+    }
+    const days = await getDailyForecast(geo.lat, geo.lng);
+    res.json({
+      status: 'ok',
+      lat: geo.lat,
+      lng: geo.lng,
+      address: address,
+      days: days
+    });
+  } catch (e) {
+    console.warn('[weather] /by-address failed for "' + address + '":', e.message);
+    res.json({ status: 'error', address: address, error: e.message });
+  }
+});
+
 module.exports = router;

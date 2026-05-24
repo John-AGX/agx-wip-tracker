@@ -493,6 +493,10 @@
     renderLeadProposals(l.id);
     refreshLinkedJobChip(l);
     refreshConvertJobButton(l);
+    // Right-panel context: map, attachments, weather. Loads once on
+    // open + debounced re-fetch when the user edits the address fields.
+    renderLeadEditorRightPanels(l);
+    wireLeadAddressWatchers();
     openLeadDetailView();
     // Edit mode — sections render locked so a stray scroll-tap can't
     // mutate a contract amount or an address. User taps the per-
@@ -514,6 +518,205 @@
     if (statusField) {
       statusField.onchange = function() { refreshLeadDetailHeader(); };
     }
+  }
+
+  // ── Right-panel context (map / photos / weather) ─────────────
+  //
+  // Three contextual panels sit alongside the form. Each is wired to
+  // the lead's current state:
+  //   • Map     — Google Maps iframe centered on Street + City + State.
+  //   • Photos  — list of attachments scoped to lead_id via the
+  //               existing /api/attachments/lead/:id endpoint.
+  //   • Weather — 7-day NWS forecast at the resolved address (via
+  //               the by-address weather endpoint we added).
+  //
+  // On open: paint all three immediately from the lead's current
+  // field state. On address edit: debounced re-fetch of map + weather
+  // (attachments don't depend on address).
+
+  function _composeLeadAddress() {
+    var street = (document.getElementById('leadEditor_street_address') || {}).value || '';
+    var city   = (document.getElementById('leadEditor_city') || {}).value || '';
+    var state  = (document.getElementById('leadEditor_state') || {}).value || '';
+    var zip    = (document.getElementById('leadEditor_zip') || {}).value || '';
+    var parts = [];
+    if (street.trim()) parts.push(street.trim());
+    var cityState = [city.trim(), state.trim()].filter(Boolean).join(', ');
+    if (cityState) parts.push(cityState);
+    if (zip.trim()) parts.push(zip.trim());
+    return parts.join(', ');
+  }
+
+  function renderLeadMap(address) {
+    var host = document.getElementById('leadEditor_mapHost');
+    if (!host) return;
+    if (!address) {
+      host.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;font-style:italic;padding:14px;text-align:center;">Fill in the Project Address to see a map.</div>';
+      return;
+    }
+    // Google Maps iframe — free, no API key, handles geocoding visually.
+    // Using the "search" output mode so the address is rendered as a
+    // pin with the location name in the corner. q= is URL-encoded.
+    var url = 'https://www.google.com/maps?q=' + encodeURIComponent(address) + '&output=embed&z=16';
+    host.innerHTML = '<iframe src="' + url + '" style="border:0;width:100%;height:100%;display:block;" loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>';
+  }
+
+  function renderLeadWeather(address) {
+    var host = document.getElementById('leadEditor_weatherHost');
+    if (!host) return;
+    if (!address) {
+      host.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;font-style:italic;padding:10px 0;">Fill in the Project Address to see the forecast.</div>';
+      return;
+    }
+    host.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;font-style:italic;padding:10px 0;">Loading forecast…</div>';
+    var token = String(Date.now()) + '-' + Math.random().toString(36).slice(2, 6);
+    host.setAttribute('data-weather-token', token);
+    window.p86Api.get('/api/weather/by-address?address=' + encodeURIComponent(address)).then(function(r) {
+      // Drop the response if a newer fetch is in flight (user typed more
+      // address chars while this was loading) — we don't want a stale
+      // result to overwrite the fresh one.
+      if (host.getAttribute('data-weather-token') !== token) return;
+      paintLeadWeatherBody(host, r);
+    }).catch(function(err) {
+      if (host.getAttribute('data-weather-token') !== token) return;
+      host.innerHTML = '<div style="color:#f87171;font-size:12px;padding:10px 0;">Weather unavailable: ' + escapeHTML(err && err.message || 'unknown') + '</div>';
+    });
+  }
+
+  function paintLeadWeatherBody(host, w) {
+    if (!w || w.status === 'no_address') {
+      host.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;font-style:italic;padding:10px 0;">Add an address to see the forecast.</div>';
+      return;
+    }
+    if (w.status === 'failed') {
+      host.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;padding:10px 0;">Could not match this address.</div>';
+      return;
+    }
+    if (w.status === 'out_of_range') {
+      host.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;padding:10px 0;">Address is outside NWS coverage.</div>';
+      return;
+    }
+    if (w.status !== 'ok' || !Array.isArray(w.days) || !w.days.length) {
+      host.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;padding:10px 0;">No forecast data.</div>';
+      return;
+    }
+    // Compact card row. Risk-colored top border (matches schedule.js's
+    // .sch-wx-* classes when present; otherwise plain).
+    var cards = w.days.slice(0, 7).map(function(d) {
+      var date = d.date ? new Date(d.date) : null;
+      var dow = date ? ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][date.getDay()] : '';
+      var mmdd = date ? ((date.getMonth() + 1) + '/' + date.getDate()) : '';
+      var hi = (d.tempHigh != null) ? d.tempHigh + '°' : '—';
+      var lo = (d.tempLow != null) ? d.tempLow + '°' : '';
+      var precip = d.precipPct ? d.precipPct + '% rain' : '';
+      var border = d.risk === 'high' ? '#f87171' : (d.risk === 'med' ? '#fbbf24' : 'rgba(255,255,255,0.08)');
+      return '<div title="' + escapeAttr(d.summary || '') + '" style="flex:1 1 60px;min-width:60px;padding:6px 4px;background:rgba(255,255,255,0.02);border:1px solid var(--border,#333);border-top:2px solid ' + border + ';border-radius:6px;text-align:center;font-size:11px;">' +
+        '<div style="color:var(--text-dim,#aaa);font-size:10px;text-transform:uppercase;letter-spacing:0.4px;">' + escapeHTML(dow) + '</div>' +
+        '<div style="color:var(--text-dim,#888);font-size:10px;">' + escapeHTML(mmdd) + '</div>' +
+        '<div style="color:var(--text,#fff);font-weight:600;margin-top:4px;">' + escapeHTML(hi) + '</div>' +
+        (lo ? '<div style="color:var(--text-dim,#888);font-size:10px;">' + escapeHTML(lo) + '</div>' : '') +
+        (precip ? '<div style="color:#60a5fa;font-size:10px;margin-top:2px;">' + escapeHTML(precip) + '</div>' : '') +
+      '</div>';
+    }).join('');
+    host.innerHTML = '<div style="display:flex;gap:4px;flex-wrap:wrap;">' + cards + '</div>';
+  }
+
+  function renderLeadAttachments(leadId) {
+    var host = document.getElementById('leadEditor_attachmentsHost');
+    if (!host) return;
+    if (!leadId) {
+      host.innerHTML = '<div style="font-size:12px;color:var(--text-dim,#888);font-style:italic;padding:10px 0;">Save the lead first to attach files.</div>';
+      return;
+    }
+    host.innerHTML = '<div style="font-size:12px;color:var(--text-dim,#888);font-style:italic;padding:10px 0;">Loading attachments…</div>';
+    window.p86Api.get('/api/attachments/lead/' + encodeURIComponent(leadId)).then(function(r) {
+      var items = (r && r.attachments) || [];
+      var rows = items.map(function(a) {
+        var thumb = a.is_image
+          ? '<img src="/api/attachments/raw/' + encodeURIComponent(a.id) + '?thumb=1" style="width:48px;height:48px;object-fit:cover;border-radius:4px;border:1px solid var(--border,#333);" alt="" loading="lazy" />'
+          : '<div style="width:48px;height:48px;background:rgba(255,255,255,0.04);border:1px solid var(--border,#333);border-radius:4px;display:flex;align-items:center;justify-content:center;color:var(--text-dim,#888);font-size:18px;">' + (a.mime_type && a.mime_type.indexOf('pdf') >= 0 ? '\u{1F4C4}' : '\u{1F4CE}') + '</div>';
+        return '<a href="/api/attachments/raw/' + encodeURIComponent(a.id) + '" target="_blank" rel="noopener" style="display:flex;align-items:center;gap:10px;padding:6px;border-radius:6px;text-decoration:none;color:var(--text,#fff);transition:background 0.12s;" onmouseover="this.style.background=\'rgba(255,255,255,0.04)\'" onmouseout="this.style.background=\'transparent\'">' +
+          thumb +
+          '<div style="flex:1;min-width:0;overflow:hidden;">' +
+            '<div style="font-size:12px;color:var(--text,#fff);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escapeHTML(a.caption || a.original_filename || 'Attachment') + '</div>' +
+            '<div style="font-size:10px;color:var(--text-dim,#888);">' + escapeHTML(a.original_filename || '') + (a.size_bytes ? ' · ' + Math.round(a.size_bytes/1024) + ' KB' : '') + '</div>' +
+          '</div>' +
+        '</a>';
+      }).join('');
+      var dropZone = '<div id="leadEditor_attachmentDrop" style="margin-top:10px;border:2px dashed var(--border,#333);border-radius:6px;padding:10px;text-align:center;font-size:11px;color:var(--text-dim,#888);cursor:pointer;transition:border-color 0.15s,background 0.15s;" onclick="document.getElementById(\'leadEditor_attachmentFileInput\').click()">' +
+        '\u{1F4CE} Drop a file here, or <span style="color:#4f8cff;">click to pick</span>' +
+        '<input id="leadEditor_attachmentFileInput" type="file" style="display:none;" onchange="uploadLeadAttachment(this.files[0])" />' +
+      '</div>';
+      host.innerHTML = (rows || '<div style="font-size:12px;color:var(--text-dim,#888);font-style:italic;padding:6px 0;">No attachments yet.</div>') + dropZone;
+      wireLeadAttachmentDrop();
+    }).catch(function(err) {
+      host.innerHTML = '<div style="color:#f87171;font-size:12px;padding:10px 0;">Failed to load attachments: ' + escapeHTML(err && err.message || 'unknown') + '</div>';
+    });
+  }
+
+  function wireLeadAttachmentDrop() {
+    var dz = document.getElementById('leadEditor_attachmentDrop');
+    if (!dz) return;
+    dz.ondragover = function(e) { e.preventDefault(); dz.style.borderColor = '#4f8cff'; dz.style.background = 'rgba(79,140,255,0.06)'; };
+    dz.ondragleave = function() { dz.style.borderColor = 'var(--border,#333)'; dz.style.background = 'transparent'; };
+    dz.ondrop = function(e) {
+      e.preventDefault();
+      dz.style.borderColor = 'var(--border,#333)';
+      dz.style.background = 'transparent';
+      var f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+      if (f) window.uploadLeadAttachment(f);
+    };
+  }
+
+  window.uploadLeadAttachment = function(file) {
+    if (!file) return;
+    var leadId = (document.getElementById('leadEditor_id') || {}).value;
+    if (!leadId) { alert('Save the lead first before uploading files.'); return; }
+    var fd = new FormData();
+    fd.append('file', file);
+    var dz = document.getElementById('leadEditor_attachmentDrop');
+    if (dz) dz.textContent = 'Uploading ' + file.name + '…';
+    var tok = window.p86Auth && window.p86Auth.getToken && window.p86Auth.getToken();
+    fetch('/api/attachments/lead/' + encodeURIComponent(leadId), {
+      method: 'POST',
+      headers: tok ? { Authorization: 'Bearer ' + tok } : {},
+      body: fd
+    }).then(function(r) {
+      if (!r.ok) return r.text().then(function(t) { throw new Error('HTTP ' + r.status + ': ' + t.slice(0, 200)); });
+      return r.json();
+    }).then(function() {
+      renderLeadAttachments(leadId);
+    }).catch(function(err) {
+      alert('Upload failed: ' + (err.message || 'unknown'));
+      renderLeadAttachments(leadId);
+    });
+  };
+
+  function renderLeadEditorRightPanels(lead) {
+    var addr = _composeLeadAddress();
+    renderLeadMap(addr);
+    renderLeadWeather(addr);
+    renderLeadAttachments(lead && lead.id);
+  }
+
+  // Debounced rebuild of map + weather when the address fields change.
+  // Bound once per editor open; subsequent calls are no-ops (we check
+  // the data-watcher-bound flag).
+  var _addressRebuildTimer = null;
+  function wireLeadAddressWatchers() {
+    ['leadEditor_street_address', 'leadEditor_city', 'leadEditor_state', 'leadEditor_zip'].forEach(function(id) {
+      var el = document.getElementById(id);
+      if (!el || el.dataset.watcherBound) return;
+      el.dataset.watcherBound = '1';
+      el.addEventListener('input', function() {
+        if (_addressRebuildTimer) clearTimeout(_addressRebuildTimer);
+        _addressRebuildTimer = setTimeout(function() {
+          var addr = _composeLeadAddress();
+          renderLeadMap(addr);
+          renderLeadWeather(addr);
+        }, 700);
+      });
+    });
   }
 
   // Wire the edit-gate pencil into every <fieldset> inside the lead

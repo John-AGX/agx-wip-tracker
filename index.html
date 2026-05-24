@@ -97,7 +97,7 @@
     })();
     </script>
 
-    <link rel="stylesheet" href="css/styles.css?v=80">
+    <link rel="stylesheet" href="css/styles.css?v=81">
     <link rel="stylesheet" href="css/workspace-layout.css?v=56b">
     <link rel="stylesheet" href="css/workspace.css?v=37b">
     <link rel="stylesheet" href="css/schedule.css?v=18b">
@@ -1904,9 +1904,15 @@
           <button class="ws-right-tab" data-leadeditor-tab="photos" onclick="switchLeadEditorTab('photos')">&#x1F4CE; Attachments</button>
         </div>
 
-        <!-- General tab: original form fields -->
-        <div id="leadEditor_tab_general" style="padding:18px 20px;display:flex;flex-direction:column;gap:18px;">
+        <!-- General tab: original form fields on the left, contextual
+             panels (photos, map, weather) on the right. Grid collapses
+             to a single column below 900px so the right panels stack
+             below the form on mobile / narrow viewports. -->
+        <div id="leadEditor_tab_general" class="lead-editor-split" style="padding:18px 20px;">
           <input type="hidden" id="leadEditor_id" />
+
+          <!-- LEFT COLUMN: existing form -->
+          <div class="lead-editor-left" style="display:flex;flex-direction:column;gap:18px;min-width:0;">
 
           <!-- Build-from-PDF drop zone. Hidden in edit mode (only shown when
                creating a new lead). User drops a Buildertrend "Lead Print"
@@ -2022,6 +2028,42 @@
           </div>
 
           <div id="leadEditor_status_msg" style="font-size:13px;"></div>
+
+          </div><!-- /.lead-editor-left -->
+
+          <!-- RIGHT COLUMN: contextual panels. Populated by JS in
+               js/leads.js after the lead loads. Empty placeholders are
+               replaced on data arrival. Order is map -> photos ->
+               weather so the spatial context comes first (most
+               useful for a quick visual of which site this is). -->
+          <div class="lead-editor-right" style="display:flex;flex-direction:column;gap:14px;min-width:0;">
+
+            <!-- Map panel -->
+            <fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;">
+              <legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">&#x1F4CD; Map</legend>
+              <div id="leadEditor_mapHost" style="width:100%;aspect-ratio:4/3;background:rgba(255,255,255,0.02);border:1px solid var(--border,#333);border-radius:6px;overflow:hidden;display:flex;align-items:center;justify-content:center;color:var(--text-dim,#888);font-size:12px;font-style:italic;text-align:center;padding:14px;">
+                Fill in the Project Address to see a map.
+              </div>
+            </fieldset>
+
+            <!-- Photos & Attachments panel -->
+            <fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;">
+              <legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">&#x1F4F7; Photos &amp; Files</legend>
+              <div id="leadEditor_attachmentsHost">
+                <div style="font-size:12px;color:var(--text-dim,#888);font-style:italic;padding:10px 0;">Save the lead first to attach files.</div>
+              </div>
+            </fieldset>
+
+            <!-- Weather panel -->
+            <fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;">
+              <legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">&#x1F324; 7-day Forecast</legend>
+              <div id="leadEditor_weatherHost" style="font-size:12px;color:var(--text-dim,#888);font-style:italic;padding:10px 0;">
+                Fill in the Project Address to see the forecast.
+              </div>
+            </fieldset>
+
+          </div><!-- /.lead-editor-right -->
+
         </div>
 
         <!-- Proposals tab: estimates linked to this lead via estimate.lead_id.
@@ -2381,7 +2423,7 @@
     <script src="js/subs.js?v=8b"></script>
     <script src="js/job-audit.js?v=3b"></script>
     <script src="js/job-reports.js?v=1b"></script>
-    <script src="js/leads.js?v=29"></script>
+    <script src="js/leads.js?v=30"></script>
     <script src="js/job-costs-import.js?v=4"></script>
     <script src="js/qb-costs-view.js?v=11"></script>
     <script src="js/insights.js?v=7"></script>

@@ -2863,3 +2863,21 @@
       /* Summary-grid is already single-column at 768px (line 1901);
          no change needed here. */
     }
+
+    /* ── Lead editor split-pane layout ─────────────────────────────
+       Two-column desktop layout for #leadEditor_tab_general:
+       form on the left (1fr, takes remaining space), contextual
+       panels (map / photos / weather) on the right (380px fixed).
+       Collapses to a single column below 900px so the right column
+       stacks below the form on tablets / phones. */
+    .lead-editor-split {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 380px;
+      gap: 20px;
+      align-items: start;
+    }
+    @media (max-width: 900px) {
+      .lead-editor-split {
+        grid-template-columns: 1fr;
+      }
+    }
