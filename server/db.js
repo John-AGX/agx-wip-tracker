@@ -965,6 +965,31 @@ async function initSchema() {
     -- migration. Safe to re-run; ADD COLUMN IF NOT EXISTS is a no-op
     -- when the column already exists.
     ALTER TABLE materials ADD COLUMN IF NOT EXISTS category TEXT;
+    -- Phase F — materials go org-scoped. Same pattern as
+    -- agent_reference_links (and org_skill_packs / org_memory).
+    -- The catalog was previously implicitly per-tenant (purchases came
+    -- from one tenant's QB feed) but lacked an explicit FK; multi-tenant
+    -- would have leaked one org's pricing into another's drawer. Idempotent
+    -- ADD COLUMN + conditional backfill onto the lowest-id org.
+    ALTER TABLE materials
+      ADD COLUMN IF NOT EXISTS organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE;
+    DO $migrate_materials_org$
+    DECLARE
+      bootstrap_org_id INTEGER;
+    BEGIN
+      SELECT id INTO bootstrap_org_id
+        FROM organizations
+       WHERE archived_at IS NULL
+       ORDER BY id ASC LIMIT 1;
+      IF bootstrap_org_id IS NOT NULL THEN
+        UPDATE materials
+           SET organization_id = bootstrap_org_id
+         WHERE organization_id IS NULL;
+      END IF;
+    END
+    $migrate_materials_org$;
+    CREATE INDEX IF NOT EXISTS idx_materials_org
+      ON materials(organization_id) WHERE organization_id IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_materials_subgroup ON materials(agx_subgroup);
     CREATE INDEX IF NOT EXISTS idx_materials_category ON materials(category);
     CREATE INDEX IF NOT EXISTS idx_materials_sku ON materials(sku);
@@ -1042,6 +1067,51 @@ async function initSchema() {
       updated_at TIMESTAMPTZ DEFAULT NOW(),
       updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL
     );
+    -- Phase F — email_template_overrides go org-scoped so each tenant
+    -- can customize templates independently. Today the table is keyed
+    -- by event_key alone (one row per event globally); adding org_id
+    -- means we can have separate rows per (org, event) pair.
+    --
+    -- Strategy:
+    --   1. Add organization_id column (nullable, FK).
+    --   2. Backfill existing rows to the bootstrap org.
+    --   3. Drop the single-column PK; add composite PK (org_id, event_key).
+    --      The composite key replaces the prior uniqueness guarantee.
+    --   4. Index on org_id for efficient per-tenant fetches.
+    ALTER TABLE email_template_overrides
+      ADD COLUMN IF NOT EXISTS organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE;
+    DO $migrate_email_overrides_org$
+    DECLARE
+      bootstrap_org_id INTEGER;
+      has_composite_pk BOOLEAN;
+    BEGIN
+      SELECT id INTO bootstrap_org_id
+        FROM organizations
+       WHERE archived_at IS NULL
+       ORDER BY id ASC LIMIT 1;
+      IF bootstrap_org_id IS NOT NULL THEN
+        UPDATE email_template_overrides
+           SET organization_id = bootstrap_org_id
+         WHERE organization_id IS NULL;
+      END IF;
+      -- Swap to composite PK if we haven't already. Check by counting
+      -- columns in the current PK; if there's just one (event_key), we
+      -- need to migrate. If there are two (org_id + event_key), we're
+      -- already on the new shape.
+      SELECT (COUNT(*) > 1) INTO has_composite_pk
+        FROM information_schema.key_column_usage
+       WHERE table_name = 'email_template_overrides'
+         AND constraint_name = 'email_template_overrides_pkey';
+      IF NOT has_composite_pk THEN
+        ALTER TABLE email_template_overrides DROP CONSTRAINT IF EXISTS email_template_overrides_pkey;
+        ALTER TABLE email_template_overrides
+          ADD CONSTRAINT email_template_overrides_pkey
+          PRIMARY KEY (organization_id, event_key);
+      END IF;
+    END
+    $migrate_email_overrides_org$;
+    CREATE INDEX IF NOT EXISTS idx_email_template_overrides_org
+      ON email_template_overrides(organization_id);
 
     -- Schedule page: production entries placed on the calendar.
     -- Phase 2 of the schedule feature — replaces the localStorage

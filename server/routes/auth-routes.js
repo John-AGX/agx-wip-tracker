@@ -186,21 +186,37 @@ router.get('/users', requireAuth, async (req, res) => {
 // GET /api/auth/active-users — count of users seen in the last
 // `threshold` minutes (default 5). Drives the "Online Now" metric
 // card on Admin → Metrics. Cheap query backed by idx_users_last_seen_at.
-// Admin-only because it leaks aggregate presence info.
+// Org-scoped: returns count of active users IN THE CALLER'S OWN ORG only.
+// Pre-fix this endpoint did a global COUNT(*) which leaked cross-tenant
+// presence info to anyone with admin role — system-admin saw everyone,
+// per-org admin would also see everyone if multi-tenant landed.
 router.get('/active-users', requireAuth, requireRole('admin'), async (req, res) => {
   try {
     const threshold = Math.max(1, Math.min(60, parseInt(req.query.threshold, 10) || 5));
+    const orgId = req.user && req.user.organization_id;
+    if (!orgId) {
+      // No org on the user record — can happen for legacy/seed accounts.
+      // Return 0 rather than leaking the global count.
+      return res.json({
+        activeCount: 0,
+        asOf: new Date().toISOString(),
+        thresholdMinutes: threshold,
+        note: 'User has no organization_id; org-scoped count unavailable.'
+      });
+    }
     const { rows } = await pool.query(
       "SELECT COUNT(*)::int AS active_count " +
       "FROM users " +
-      "WHERE active = TRUE AND last_seen_at IS NOT NULL " +
+      "WHERE organization_id = $2 " +
+      "  AND active = TRUE AND last_seen_at IS NOT NULL " +
       "  AND last_seen_at > NOW() - ($1 || ' minutes')::interval",
-      [String(threshold)]
+      [String(threshold), orgId]
     );
     res.json({
       activeCount: rows[0].active_count,
       asOf: new Date().toISOString(),
-      thresholdMinutes: threshold
+      thresholdMinutes: threshold,
+      organizationId: orgId
     });
   } catch (e) {
     console.error('GET /api/auth/active-users error:', e);
