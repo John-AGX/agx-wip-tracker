@@ -2114,6 +2114,198 @@
 
   var _skillsDraft = { skills: [] };
 
+  // ==================== ORG MEMORY (always-on per-tenant posture) ====================
+  // Parallel to org_skill_packs but injected into the system prompt on
+  // EVERY turn under "## Working posture". Each row is editable in
+  // place; saves go straight to the per-row PUT endpoint (no
+  // bulk-save draft). New rows POST; soft-deletes hit DELETE.
+  //
+  // Source of truth lives in org_memory table - the admin UI just
+  // mirrors what's there. Failure to save surfaces inline in the row.
+
+  var _memoryRows = []; // [{id, name, body, sort_order, _dirty, _isNew}]
+  var _memoryOrgId = null;
+
+  function loadOrgMemory() {
+    if (_memoryOrgId == null) {
+      return window.p86Api.get('/api/admin/organizations/me').then(function(r) {
+        _memoryOrgId = r.organization.id;
+        return loadOrgMemory();
+      });
+    }
+    return window.p86Api.get('/api/admin/organizations/' + _memoryOrgId + '/memory')
+      .then(function(r) {
+        _memoryRows = (r.memory || []).map(function(m) {
+          return { id: m.id, name: m.name, body: m.body, sort_order: m.sort_order, _dirty: false, _isNew: false };
+        });
+        return _memoryRows;
+      });
+  }
+
+  function renderOrgMemoryHTML() {
+    var html = '';
+    html += '<fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;margin-bottom:14px;background:rgba(52,211,153,0.03);">';
+    html += '<legend style="font-size:11px;font-weight:700;color:#34d399;text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Org Memory (always-on posture)</legend>';
+    html += '<p style="margin:0 0 12px 0;color:var(--text-dim,#888);font-size:12px;line-height:1.55;">' +
+      'Posture / discipline that fires on every turn - injected into the system prompt under a <code>## Working posture</code> header. Use for behavior you want ambient (Talk-through workflow, Change order discipline, etc.) rather than situational. ' +
+      'Each row is independently editable; lower sort_order appears earlier in the prompt.' +
+    '</p>';
+
+    if (!_memoryRows.length) {
+      html += '<div style="padding:14px;text-align:center;color:var(--text-dim,#888);border:1px dashed var(--border,#333);border-radius:6px;font-size:12px;">' +
+        'No memory entries yet. Click <strong>+ Add memory</strong> below to create one.' +
+      '</div>';
+    } else {
+      _memoryRows.forEach(function(row, idx) {
+        var rowId = row.id || ('new-' + idx);
+        var dirtyBadge = row._dirty
+          ? '<span style="background:rgba(251,191,36,0.15);color:#fbbf24;font-size:10px;padding:2px 6px;border-radius:8px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;margin-left:8px;">unsaved</span>'
+          : '';
+        var newBadge = row._isNew
+          ? '<span style="background:rgba(79,140,255,0.15);color:#4f8cff;font-size:10px;padding:2px 6px;border-radius:8px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;margin-left:8px;">new</span>'
+          : '';
+        html += '<div data-mem-idx="' + idx + '" style="border:1px solid var(--border,#333);border-radius:6px;padding:10px 12px;margin-bottom:10px;background:rgba(255,255,255,0.02);">';
+        html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">' +
+          '<input type="text" data-mem-name="' + idx + '" value="' + escapeHTML(row.name || '') + '" placeholder="Memory name (e.g., Talk-through workflow)" style="flex:1;font-weight:600;" oninput="markMemoryDirty(' + idx + ')" />' +
+          '<input type="number" data-mem-sort="' + idx + '" value="' + (row.sort_order || 0) + '" title="Sort order (lower = earlier in prompt)" style="width:70px;font-size:12px;" oninput="markMemoryDirty(' + idx + ')" />' +
+          dirtyBadge + newBadge +
+          '<button class="ee-btn primary" onclick="saveMemoryRow(' + idx + ')" title="Save this row">&#x1F4BE;</button>' +
+          '<button class="ee-btn ee-icon-btn danger" onclick="deleteMemoryRow(' + idx + ')" title="Archive (soft-delete)">&#x1F5D1;</button>' +
+        '</div>';
+        html += '<textarea data-mem-body="' + idx + '" rows="8" style="width:100%;resize:vertical;font-family:\'SF Mono\',monospace;font-size:12px;line-height:1.5;" placeholder="Posture body. Markdown OK. Be tight - this fires on every turn." oninput="markMemoryDirty(' + idx + ')">' + escapeHTML(row.body || '') + '</textarea>';
+        html += '<div data-mem-status="' + idx + '" style="margin-top:6px;font-size:11px;color:var(--text-dim,#888);min-height:14px;"></div>';
+        html += '</div>';
+      });
+    }
+
+    html += '<button class="ee-btn secondary" onclick="addMemoryRow()">&#x2795; Add memory</button>';
+    html += '<button class="ee-btn secondary" onclick="renderOrgMemoryView()" style="margin-left:8px;">&#x21BB; Refresh</button>';
+    html += '</fieldset>';
+    return html;
+  }
+
+  // Read current input values from the DOM back into _memoryRows
+  // (per-row, so we don't lose unsaved edits if other rows re-render).
+  function syncMemoryRowFromInputs(idx) {
+    var row = _memoryRows[idx];
+    if (!row) return;
+    var nameEl = document.querySelector('[data-mem-name="' + idx + '"]');
+    var bodyEl = document.querySelector('[data-mem-body="' + idx + '"]');
+    var sortEl = document.querySelector('[data-mem-sort="' + idx + '"]');
+    if (nameEl) row.name = nameEl.value;
+    if (bodyEl) row.body = bodyEl.value;
+    if (sortEl) {
+      var n = Number(sortEl.value);
+      if (Number.isFinite(n)) row.sort_order = n;
+    }
+  }
+
+  window.markMemoryDirty = function(idx) {
+    if (!_memoryRows[idx]) return;
+    _memoryRows[idx]._dirty = true;
+    // Don't full-rerender on every keystroke - just flip the badge.
+    var row = document.querySelector('[data-mem-idx="' + idx + '"]');
+    if (!row) return;
+    var existingDirty = row.querySelector('[data-dirty-badge]');
+    if (existingDirty) return;
+    var header = row.querySelector('div');
+    if (!header) return;
+    var badge = document.createElement('span');
+    badge.setAttribute('data-dirty-badge', '1');
+    badge.style.cssText = 'background:rgba(251,191,36,0.15);color:#fbbf24;font-size:10px;padding:2px 6px;border-radius:8px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;margin-left:8px;';
+    badge.textContent = 'unsaved';
+    var saveBtn = header.querySelector('.ee-btn.primary');
+    if (saveBtn) header.insertBefore(badge, saveBtn);
+  };
+
+  window.addMemoryRow = function() {
+    // Stash current edits before adding a new row so they survive the re-render.
+    _memoryRows.forEach(function(_, i) { syncMemoryRowFromInputs(i); });
+    var maxSort = _memoryRows.reduce(function(m, r) { return Math.max(m, r.sort_order || 0); }, 0);
+    _memoryRows.push({
+      id: null, name: '', body: '', sort_order: maxSort + 10,
+      _dirty: true, _isNew: true
+    });
+    renderOrgMemoryView();
+  };
+
+  window.saveMemoryRow = function(idx) {
+    syncMemoryRowFromInputs(idx);
+    var row = _memoryRows[idx];
+    if (!row) return;
+    var statusEl = document.querySelector('[data-mem-status="' + idx + '"]');
+    function setStatus(msg, color) {
+      if (statusEl) { statusEl.textContent = msg; statusEl.style.color = color || 'var(--text-dim,#888)'; }
+    }
+    if (!row.name || !row.name.trim()) {
+      setStatus('Name is required.', '#f87171'); return;
+    }
+    if (!row.body || !row.body.trim()) {
+      setStatus('Body is required.', '#f87171'); return;
+    }
+    setStatus('Saving…');
+    var payload = { name: row.name.trim(), body: row.body, sort_order: row.sort_order || 0 };
+    var p;
+    if (row._isNew || row.id == null) {
+      p = window.p86Api.post('/api/admin/organizations/' + _memoryOrgId + '/memory', payload);
+    } else {
+      p = window.p86Api.put('/api/admin/organizations/' + _memoryOrgId + '/memory/' + row.id, payload);
+    }
+    p.then(function(r) {
+      // Repopulate from server response so id, timestamps reflect reality.
+      var saved = r.memory || {};
+      row.id = saved.id || row.id;
+      row.name = saved.name || row.name;
+      row.body = saved.body || row.body;
+      row.sort_order = (saved.sort_order != null) ? saved.sort_order : row.sort_order;
+      row._dirty = false;
+      row._isNew = false;
+      setStatus('Saved.', '#34d399');
+      setTimeout(function() { setStatus(''); }, 2400);
+      // Repaint header badges (without re-rendering bodies and losing focus).
+      var rowEl = document.querySelector('[data-mem-idx="' + idx + '"]');
+      if (rowEl) {
+        var oldBadges = rowEl.querySelectorAll('[data-dirty-badge]');
+        oldBadges.forEach(function(b) { b.remove(); });
+      }
+    }).catch(function(err) {
+      setStatus('Save failed: ' + (err.message || err), '#f87171');
+    });
+  };
+
+  window.deleteMemoryRow = function(idx) {
+    var row = _memoryRows[idx];
+    if (!row) return;
+    if (!confirm('Archive memory entry "' + (row.name || '(unnamed)') + '"? This soft-deletes it - the row stays in the DB with archived_at set, so a future "show archived" view could restore it.')) return;
+    // New rows that haven't been saved yet can just drop from the local array.
+    if (row._isNew || row.id == null) {
+      _memoryRows.splice(idx, 1);
+      renderOrgMemoryView();
+      return;
+    }
+    var statusEl = document.querySelector('[data-mem-status="' + idx + '"]');
+    if (statusEl) { statusEl.textContent = 'Archiving…'; statusEl.style.color = 'var(--text-dim,#888)'; }
+    window.p86Api.del('/api/admin/organizations/' + _memoryOrgId + '/memory/' + row.id)
+      .then(function() {
+        _memoryRows.splice(idx, 1);
+        renderOrgMemoryView();
+      })
+      .catch(function(err) {
+        if (statusEl) { statusEl.textContent = 'Archive failed: ' + (err.message || err); statusEl.style.color = '#f87171'; }
+      });
+  };
+
+  // Mount point + re-render. Called from renderAgentsSkillsView after the
+  // skill-pack panel renders. Keeps a single source of truth on the page.
+  function renderOrgMemoryView() {
+    // Stash current input values before destroying + recreating the DOM
+    // so we don't lose mid-edit content.
+    _memoryRows.forEach(function(_, i) { syncMemoryRowFromInputs(i); });
+    var host = document.getElementById('org-memory-panel');
+    if (host) host.innerHTML = renderOrgMemoryHTML();
+  }
+  window.renderOrgMemoryView = renderOrgMemoryView;
+
   function renderAdminTemplates() {
     if (!isAdmin()) return;
     var pane = document.getElementById('admin-subtab-templates');
@@ -5891,6 +6083,13 @@
           '</div>' +
         '</div>' +
         '<div id="agent-skill-assignments-panel" style="margin-bottom:18px;"></div>' +
+        // NEW: Org Memory panel - always-on per-tenant posture, parallel
+        // to skill packs but injected on every turn instead of loaded
+        // on-demand. Loaded async via loadOrgMemory() after the shell
+        // paints; it populates the #org-memory-panel mount.
+        '<div id="org-memory-panel" style="margin-bottom:18px;">' +
+          '<div style="padding:14px;text-align:center;color:var(--text-dim,#888);font-size:12px;">Loading org memory…</div>' +
+        '</div>' +
         '<details style="margin-top:14px;border-top:1px solid var(--border,#333);padding-top:12px;">' +
           '<summary style="cursor:pointer;font-size:13px;font-weight:600;color:var(--text,#fff);">Local skill packs (' + _skillsDraft.skills.length + ' — on-demand only, edit body / agents here)</summary>' +
           '<p style="margin:10px 0 12px 0;font-size:11px;color:var(--text-dim,#888);line-height:1.55;">' +
@@ -5912,6 +6111,18 @@
       if (typeof loadAgentSkillAssignments === 'function') {
         loadAgentSkillAssignments();
       }
+
+      // Load org_memory rows + paint them into #org-memory-panel. Failure
+      // here is non-fatal; the placeholder "Loading…" gets replaced with
+      // an error message but the rest of the page stays usable.
+      loadOrgMemory().then(function() {
+        renderOrgMemoryView();
+      }).catch(function(err) {
+        var mem = document.getElementById('org-memory-panel');
+        if (mem) {
+          mem.innerHTML = '<div style="padding:14px;color:#f87171;font-size:12px;border:1px solid rgba(248,113,113,0.3);background:rgba(248,113,113,0.05);border-radius:6px;">Failed to load org memory: ' + escapeHTML(err.message || String(err)) + '</div>';
+        }
+      });
     }).catch(function(err) {
       host.innerHTML = '<div style="color:#e74c3c;font-size:12px;padding:20px 0;">Failed: ' + escapeHTML(err.message || 'unknown') + '</div>';
     });
