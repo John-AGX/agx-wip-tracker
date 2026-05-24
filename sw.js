@@ -17,7 +17,7 @@
 //   • clients.claim() takes control of open tabs on activation so
 //     users don't have to refresh to see the new build.
 
-const CACHE_VERSION = 'p86-shell-v4';
+const CACHE_VERSION = 'p86-shell-v5';
 
 const STATIC_ASSETS = [
   '/',
