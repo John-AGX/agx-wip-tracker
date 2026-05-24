@@ -3047,8 +3047,27 @@
     var tbody = document.getElementById('admin-metrics-jobs-tbody');
     if (!cardsEl || !tbody) return;
 
-    var jobs = (window.appData && window.appData.jobs) || [];
-    var users = (_users.length ? _users : []);
+    // Phase F audit finding: this used to paint from window.appData.jobs
+    // which is whatever the SPA cached at page-load time - so the
+    // metrics tiles reflected a stale snapshot, not the live state.
+    // Trigger a server reload first so we paint fresh data. Falls
+    // through to the existing window.appData read after refresh.
+    function paint() {
+      var jobs = (window.appData && window.appData.jobs) || [];
+      var users = (_users.length ? _users : []);
+      paintMetricsContents(cardsEl, tbody, jobs, users);
+    }
+    if (window.p86Data && typeof window.p86Data.reloadFromServer === 'function') {
+      window.p86Data.reloadFromServer().then(paint).catch(paint);
+    } else {
+      paint();
+    }
+    return;
+  }
+
+  // Extracted so renderAdminMetrics can call it post-reload. Original
+  // inline body unchanged from here down.
+  function paintMetricsContents(cardsEl, tbody, jobs, users) {
 
     // ── Site metric cards ─────────────────────────────────
     var liveCount = jobs.filter(function(j) { return j.liveStatus === 'live'; }).length;
