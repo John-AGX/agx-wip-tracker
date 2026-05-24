@@ -711,21 +711,50 @@ function renderWIPMain() {
             document.getElementById('inv-total-amount').textContent = formatCurrency(totalAmt);
         }
 
+        // Apply the same status + type filters renderJobsTable uses,
+        // so the dashboard tiles and the visible rows ALWAYS reflect
+        // the same set. Extracted so both can call it. Audit finding
+        // W1 (memoized-inventing-mountain.md): pre-fix the tiles
+        // looped over EVERY job (including Archived) while the table
+        // default-hid Archived → user saw $2.1M on the tile but the
+        // rows visible summed to $1.2M.
+        function getFilteredJobs() {
+            let jobs = appData.jobs;
+            const filter = appState.currentStatusFilter;
+            if (filter) {
+                jobs = jobs.filter(j => j.status === filter);
+            } else {
+                // "All Active" = hide Archived by default
+                jobs = jobs.filter(j => j.status !== 'Archived');
+            }
+            const typeFilter = appState.currentTypeFilter;
+            if (typeFilter) {
+                jobs = jobs.filter(j => (j.jobType || getJobTypeLabel(getJobType(j.jobNumber))) === typeFilter);
+            }
+            return jobs;
+        }
+
         function calculateWIPSummary() {
+            // Tiles follow the active filter — what the user sees in
+            // the table below is what the tiles sum / count. Switch
+            // the status filter dropdown and the tile values move
+            // in lockstep. Audit finding W1 + W2.
+            const jobs = getFilteredJobs();
             let totalIncome = 0;
             let totalCost = 0;
-            let activeJobs = appData.jobs.filter(j => ['New', 'In Progress', 'On Hold'].includes(j.status)).length;
-
-            appData.jobs.forEach(j => {
+            jobs.forEach(j => {
                 const w = getJobWIP(j.id);
                 totalIncome += w.totalIncome;
                 totalCost += w.actualCosts;
             });
-
-            let totalProfit = totalIncome - totalCost;
+            const totalProfit = totalIncome - totalCost;
 
             document.getElementById('total-pipeline').textContent = formatCurrency(totalIncome);
-            document.getElementById('active-jobs').textContent = activeJobs;
+            // Active Jobs tile = count of currently-visible rows. The
+            // prior hardcoded ['New','In Progress','On Hold'] set was
+            // a different definition than the table's default filter
+            // ("everything except Archived") — caused user confusion.
+            document.getElementById('active-jobs').textContent = jobs.length;
             document.getElementById('total-cost').textContent = formatCurrency(totalCost);
             document.getElementById('total-profit').textContent = formatCurrency(totalProfit);
         }
@@ -750,20 +779,9 @@ function renderWIPMain() {
             const tbody = document.querySelector('#jobs-table tbody');
             tbody.innerHTML = '';
 
-            let jobs = appData.jobs;
-            const filter = appState.currentStatusFilter;
-            if (filter) {
-                jobs = jobs.filter(j => j.status === filter);
-            } else {
-                // "All Active" = hide Archived by default
-                jobs = jobs.filter(j => j.status !== 'Archived');
-            }
-
-            // Apply type filter
-            const typeFilter = appState.currentTypeFilter;
-            if (typeFilter) {
-                jobs = jobs.filter(j => (j.jobType || getJobTypeLabel(getJobType(j.jobNumber))) === typeFilter);
-            }
+            // Shared filter logic via getFilteredJobs so the table
+            // and dashboard tiles always reflect the same set.
+            let jobs = getFilteredJobs();
 
             // Apply sorting
             if (appState.sortColumn) {
@@ -877,6 +895,11 @@ function renderWIPMain() {
             appState.currentStatusFilter = document.getElementById('statusFilter').value;
             appState.currentTypeFilter = document.getElementById('typeFilter').value;
             renderJobsTable();
+            // Tiles follow the filter — see calculateWIPSummary docs
+            // for the W1 audit context. Without this, the user would
+            // change the filter and watch the rows update but the
+            // tile totals stay frozen on the prior set.
+            calculateWIPSummary();
         }
 
         function openAddJobModal() {
