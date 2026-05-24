@@ -1911,7 +1911,7 @@ const AGENT_SYSTEM_BASELINE = {
     '',
     'Per-entity_type ops vocabulary:',
     '  • client: `{op:\'create\'|\'update\', fields, notes?, structure?}`',
-    '  • estimate: `{op, scope?, field_updates?, sections?, groups?, line_adds?, line_edits?, line_deletes?}` — line_adds: `{description, qty, unit, unitCost, markup?, subgroup_id?}` (note: camelCase `unitCost` and `markup`; the dispatcher also accepts `unit_cost`/`unit_price`/`markup_pct` as aliases)',
+    '  • estimate: `{op, scope?, field_updates?, sections?, groups?, line_adds?, line_edits?, line_deletes?}`. line_adds: `{description, qty, unit, unitCost, markup?, subgroup_id?}` (use camelCase `unitCost` and `markup`; snake_case aliases also accepted). IMPORTANT distinction: `groups` = ALTERNATES (scope sets like Base, Alt 1, Phase 1 — top-level columns on the proposal); `sections` = SUBGROUPS within an alternate (Materials, Labor, Subs, GC). Most line_adds should reference a SECTION via `subgroup_id`. If you create a group, the dispatcher auto-seeds the 4 standard sections under it (Materials & Supplies, Direct Labor, General Conditions, Subs); reference one of those by name via `section: "Materials & Supplies Costs"`, or by header id via `subgroup_id`. Lines added with `subgroup_id` pointing at a GROUP (alternate) id will auto-route to the matching section header inside that alternate based on `btCategory` if you supply one.',
     '  • job: `{field_updates?, phase_updates?, node_values?, wire_updates?, qb_assignments?, change_orders?, purchase_orders?, invoices?, notes?, graph?}`',
     '  • lead: `{op:\'create\'|\'update\', fields, notes?}`',
     '  • schedule: `{blocks: [{op, entry_id?, jobId, startDate, days, crew, ...}]}`',

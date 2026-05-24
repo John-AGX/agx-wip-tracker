@@ -693,28 +693,73 @@ function ensureArray(obj, key) {
   return obj[key];
 }
 
+// Map a section name (as 86 might write it) to the canonical BT
+// category enum the editor uses for grouping. Falls back to 'other'
+// for unrecognized names. Centralized here so both applyEstimateSections
+// and applyLineAdds can normalize the same way.
+const BT_CATEGORY_BY_NAME_HINTS = {
+  materials: 'materials', material: 'materials', supplies: 'materials',
+  labor: 'labor',
+  sub: 'sub', subs: 'sub', subcontractor: 'sub', subcontractors: 'sub',
+  gc: 'gc', equipment: 'gc', 'general conditions': 'gc',
+};
+function btCategoryFromName(name) {
+  if (!name) return 'other';
+  const lower = String(name).toLowerCase();
+  for (const k of Object.keys(BT_CATEGORY_BY_NAME_HINTS)) {
+    if (lower.indexOf(k) !== -1) return BT_CATEGORY_BY_NAME_HINTS[k];
+  }
+  if (BT_CATEGORY_BY_SECTION_NAME[name]) return BT_CATEGORY_BY_SECTION_NAME[name];
+  return 'other';
+}
+
+// applyEstimateSections — creates SECTION HEADER ROWS in data.lines[].
+// Was previously writing to data.sections[] (a vestigial metadata
+// array the editor doesn't read), which is why every line 86 added
+// with a subgroup_id reference came out with section: null. The
+// editor renders section headers from rows in data.lines[] with
+// section === '__section_header__' (see estimate-editor.js:632).
+// This function now mirrors the editor's newAlternate seeding flow.
 function applyEstimateSections(data, sectionOps) {
-  const sections = ensureArray(data, 'sections');
+  const lines = ensureArray(data, 'lines');
+  // Default alternate for section header rows when an op doesn't
+  // specify one — most "create section" ops happen in context of
+  // the active alternate.
+  const defaultAltId = data.activeAlternateId
+    || ((data.alternates && data.alternates[0] && data.alternates[0].id) || 'alt_default');
   for (const op of sectionOps) {
     const kind = op && op.op;
     if (kind === 'add') {
       const id = op.section_id || newSectionId();
-      const row = { id, name: op.name || 'Section', position: op.position != null ? op.position : sections.length };
-      sections.push(row);
+      const name = op.name || 'Section';
+      const altId = op.alternateId || op.group_id || defaultAltId;
+      lines.push({
+        id,
+        estimateId: data.id,
+        alternateId: altId,
+        section: '__section_header__',
+        description: name,
+        btCategory: op.btCategory || btCategoryFromName(name),
+        markup: (op.markup != null && op.markup !== '') ? Number(op.markup) : 0,
+      });
     } else if (kind === 'update') {
-      const idx = sections.findIndex((s) => s.id === op.section_id);
-      if (idx < 0) throw new Error(`section_id not found: ${op.section_id}`);
-      if (op.name !== undefined) sections[idx].name = op.name;
-      if (op.position !== undefined) sections[idx].position = op.position;
+      const idx = lines.findIndex((l) => l && l.id === op.section_id && l.section === '__section_header__');
+      if (idx < 0) throw new Error(`section_id not found in lines[]: ${op.section_id}`);
+      if (op.name !== undefined) lines[idx].description = op.name;
+      if (op.btCategory !== undefined) lines[idx].btCategory = op.btCategory;
+      if (op.markup !== undefined) lines[idx].markup = op.markup === '' ? 0 : Number(op.markup);
     } else if (kind === 'delete') {
-      const idx = sections.findIndex((s) => s.id === op.section_id);
-      if (idx >= 0) sections.splice(idx, 1);
+      const before = lines.length;
+      data.lines = lines.filter((l) => !(l && l.id === op.section_id && l.section === '__section_header__'));
+      if (data.lines.length === before) {
+        throw new Error(`section_id not found in lines[]: ${op.section_id}`);
+      }
     } else if (kind === 'reorder') {
-      // op.order: [section_id, ...]
+      // Reorder by setting position on each matching header row.
       if (!Array.isArray(op.order)) throw new Error('reorder requires order: [section_id, ...]');
       op.order.forEach((sid, pos) => {
-        const s = sections.find((x) => x.id === sid);
-        if (s) s.position = pos;
+        const h = lines.find((l) => l && l.id === sid && l.section === '__section_header__');
+        if (h) h.position = pos;
       });
     } else {
       throw new Error(`section op must be add|update|delete|reorder, got: ${kind}`);
@@ -722,21 +767,76 @@ function applyEstimateSections(data, sectionOps) {
   }
 }
 
+// applyEstimateGroups — creates ALTERNATES in data.alternates[] and
+// seeds the four standard section headers under each new alternate
+// (matching the editor's newAlternate flow at estimate-editor.js:626).
+// Was previously writing to data.groups[] (a vestigial metadata
+// array the editor doesn't read), which is why 86's "create a group
+// called Materials and add lines to it" payload landed with
+// section: null and lines stranded under the default Base alternate.
+//
+// "Group" in 86's vocabulary and in the UI's button label means
+// "alternate" (Base, Alt 1, Phase 1, etc.) — the top-level scope set
+// that owns a column on the proposal. Inside each alternate, the
+// four canonical section headers (Materials, Labor, GC, Subs) get
+// pre-created so line_adds.subgroup_id resolves to the right header.
+const STANDARD_SECTION_PRESETS = [
+  { name: 'Materials & Supplies Costs', btCategory: 'materials' },
+  { name: 'Direct Labor',               btCategory: 'labor' },
+  { name: 'General Conditions',         btCategory: 'gc' },
+  { name: 'Subcontractors Costs',       btCategory: 'sub' },
+];
 function applyEstimateGroups(data, groupOps) {
-  const groups = ensureArray(data, 'groups');
+  const alternates = ensureArray(data, 'alternates');
+  const lines = ensureArray(data, 'lines');
   for (const op of groupOps) {
     const kind = op && op.op;
     if (kind === 'add') {
-      const id = op.group_id || newGroupId();
-      groups.push({ id, section_id: op.section_id || null, name: op.name || 'Group' });
+      const id = op.group_id || ('alt_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8));
+      const name = op.name || 'Group';
+      const isDefault = !alternates.length;
+      alternates.push({
+        id,
+        name,
+        isDefault,
+        scope: op.scope || '',
+        excludeFromTotal: false,
+      });
+      // If no active alternate set yet, point at this new one so
+      // subsequent ops.sections.add and ops.line_adds use it as
+      // their default alternateId.
+      if (!data.activeAlternateId || isDefault) {
+        data.activeAlternateId = id;
+      }
+      // Auto-seed the four standard section headers under this
+      // alternate so the line items 86 will add next have a place
+      // to land. The pre-pass in preRegisterEstimateRefs registers
+      // each $ref to its real id, so 86's payload can reference any
+      // of these by $ref names later.
+      STANDARD_SECTION_PRESETS.forEach((s, idx) => {
+        lines.push({
+          id: 's' + Date.now() + '_' + idx + '_' + Math.random().toString(36).slice(2, 4),
+          estimateId: data.id,
+          alternateId: id,
+          section: '__section_header__',
+          description: s.name,
+          btCategory: s.btCategory,
+          markup: 0,
+        });
+      });
     } else if (kind === 'update') {
-      const idx = groups.findIndex((g) => g.id === op.group_id);
-      if (idx < 0) throw new Error(`group_id not found: ${op.group_id}`);
-      if (op.name !== undefined) groups[idx].name = op.name;
-      if (op.section_id !== undefined) groups[idx].section_id = op.section_id;
+      const idx = alternates.findIndex((a) => a.id === op.group_id);
+      if (idx < 0) throw new Error(`group_id not found in alternates[]: ${op.group_id}`);
+      if (op.name !== undefined) alternates[idx].name = op.name;
+      if (op.scope !== undefined) alternates[idx].scope = op.scope;
     } else if (kind === 'delete') {
-      const idx = groups.findIndex((g) => g.id === op.group_id);
-      if (idx >= 0) groups.splice(idx, 1);
+      const before = alternates.length;
+      data.alternates = alternates.filter((a) => a.id !== op.group_id);
+      // Cascade: also drop any lines (headers + items) belonging to that alternate.
+      data.lines = lines.filter((l) => !l || l.alternateId !== op.group_id);
+      if (data.alternates.length === before) {
+        throw new Error(`group_id not found in alternates[]: ${op.group_id}`);
+      }
     } else {
       throw new Error(`group op must be add|update|delete, got: ${kind}`);
     }
@@ -789,24 +889,59 @@ function pickNum(obj, keys) {
 
 function applyLineAdds(data, lineAdds) {
   const lines = ensureArray(data, 'lines');
+  const alternates = Array.isArray(data.alternates) ? data.alternates : [];
   for (const add of lineAdds) {
-    // Resolve which subgroup this line belongs to. Three input
-    // shapes 86 might send (we accept all three for back-compat):
-    //   1. subgroup_id  — header row id ("s<est>_<n>"). Look up the
-    //                     header and copy its section name + btCategory.
-    //   2. section      — direct section name ("Materials & Supplies").
-    //   3. section_name — legacy alias for `section`.
+    // Resolve which subgroup this line belongs to. Input shapes 86
+    // might send (we accept all for back-compat):
+    //   1. subgroup_id   — preferred. Either a section header row id
+    //                      OR an alternate (group) id. If it matches
+    //                      a header in lines[], copy that header's
+    //                      name+btCategory. If it matches an alternate
+    //                      in alternates[] AND the line carries a
+    //                      bt-category hint (or one can be inferred
+    //                      from the section/name), pick the matching
+    //                      section header WITHIN that alternate.
+    //   2. section       — direct section name ("Materials & Supplies").
+    //   3. section_name  — legacy alias for `section`.
+    //   4. alternateId   — explicit "put this line in alternate X".
     let sectionName = add.section || add.section_name || null;
     let btCategory  = add.btCategory || add.bt_category || null;
+    let alternateId = add.alternateId || add.group_id || null;
     if (add.subgroup_id) {
       const header = findSubgroupHeader(lines, add.subgroup_id);
       if (header) {
         sectionName = sectionName || header.description || null;
         btCategory  = btCategory  || header.btCategory  || null;
+        alternateId = alternateId || header.alternateId || null;
+      } else {
+        // subgroup_id may be an ALTERNATE id (86 conflates "group"
+        // with "section"). If it matches an alternate, route the line
+        // to that alternate and pick the matching section header
+        // within it (by btCategory hint if 86 gave one, else by
+        // section-name match, else the first header in the alternate).
+        const alt = alternates.find((a) => a.id === add.subgroup_id);
+        if (alt) {
+          alternateId = alternateId || alt.id;
+          const altHeaders = lines.filter((l) =>
+            l && l.section === '__section_header__' && l.alternateId === alt.id
+          );
+          let chosen = null;
+          if (btCategory) {
+            chosen = altHeaders.find((h) => h.btCategory === btCategory);
+          }
+          if (!chosen && sectionName) {
+            chosen = altHeaders.find((h) => h.description === sectionName);
+          }
+          if (!chosen) chosen = altHeaders[0] || null;
+          if (chosen) {
+            sectionName = sectionName || chosen.description || null;
+            btCategory  = btCategory  || chosen.btCategory  || null;
+          }
+        }
       }
     }
     if (!btCategory && sectionName) {
-      btCategory = BT_CATEGORY_BY_SECTION_NAME[sectionName] || 'other';
+      btCategory = BT_CATEGORY_BY_SECTION_NAME[sectionName] || btCategoryFromName(sectionName);
     }
 
     // Cost: accept unit_cost / unitCost / unit_price (catalog's name).
@@ -823,7 +958,13 @@ function applyLineAdds(data, lineAdds) {
     const row = {
       id: add.line_id || newLineId(),
       estimateId: data.id,
-      alternateId: add.alternateId || add.group_id || 'alt_default',
+      // Use the resolved alternateId from the subgroup_id lookup above
+      // when present (the header/alternate match path); fall back to
+      // the explicit alternateId/group_id on the line, then to the
+      // active alternate on the estimate, then to 'alt_default'.
+      alternateId: alternateId
+        || data.activeAlternateId
+        || 'alt_default',
       section: sectionName,
       btCategory: btCategory,
       description: add.description || '',
