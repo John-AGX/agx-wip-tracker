@@ -3047,26 +3047,26 @@
     var tbody = document.getElementById('admin-metrics-jobs-tbody');
     if (!cardsEl || !tbody) return;
 
-    // Phase F audit finding: this used to paint from window.appData.jobs
-    // which is whatever the SPA cached at page-load time - so the
-    // metrics tiles reflected a stale snapshot, not the live state.
-    // Trigger a server reload first so we paint fresh data. Falls
-    // through to the existing window.appData read after refresh.
-    function paint() {
-      var jobs = (window.appData && window.appData.jobs) || [];
-      var users = (_users.length ? _users : []);
-      paintMetricsContents(cardsEl, tbody, jobs, users);
-    }
-    if (window.p86Data && typeof window.p86Data.reloadFromServer === 'function') {
-      window.p86Data.reloadFromServer().then(paint).catch(paint);
-    } else {
-      paint();
-    }
-    return;
+    // (Phase F note removed): a previous version of this function
+    // triggered window.p86Data.reloadFromServer() to refresh the tile
+    // data on every Metrics visit. That caused a re-render LOOP because
+    // reloadFromServer's success callback in app.js calls renderAdminMetrics
+    // again (line ~1533), which would trigger another reload, repeat.
+    // Visible as flickering on Insights and other reload-listening pages.
+    // Reverted: paint from the cached window.appData, which is kept
+    // reasonably fresh by app.js's own reload triggers (saveData calls,
+    // initial boot, etc.). The audit's "stale data" concern only
+    // surfaces if the user leaves Metrics open for a long time without
+    // any data-mutating activity in another tab; that's an acceptable
+    // edge case versus the flickering regression.
+    var jobs = (window.appData && window.appData.jobs) || [];
+    var users = (_users.length ? _users : []);
+    paintMetricsContents(cardsEl, tbody, jobs, users);
   }
 
-  // Extracted so renderAdminMetrics can call it post-reload. Original
-  // inline body unchanged from here down.
+  // Extracted because renderAdminMetrics used to wrap a paint() helper;
+  // the wrapper was reverted but the extraction stays so the function
+  // body keeps the named-parameter shape.
   function paintMetricsContents(cardsEl, tbody, jobs, users) {
 
     // ── Site metric cards ─────────────────────────────────
