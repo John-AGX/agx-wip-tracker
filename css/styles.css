@@ -707,48 +707,34 @@
             font-style: italic;
         }
 
-        /* Directory popover — Buildertrend-style menu anchored to
-           the directory icon button in the right cluster. Items are
-           SVG icon + label rows with generous padding and a soft
-           accent hover. Reuses .header-popover positioning so the
-           panel hangs off the cluster like Notifications and the
-           avatar menu. */
+        /* Directory popover — icon+label menu anchored to the
+           directory icon button in the right cluster. Inherits the
+           dark .header-popover surface (background, border, text
+           color) so it matches the avatar/notifications dropdowns;
+           only the icon-row layout and tighter padding are added
+           here. Previously this ran a Buildertrend-style light
+           palette which stuck out against the rest of the header
+           chrome. */
         .header-directory-menu {
             min-width: 220px;
             padding: 6px 0;
-            background: #fff;
-            color: #1a1a2e;
-            border-color: #d6d6dd;
         }
         .header-directory-menu button {
             display: flex !important;
             align-items: center;
             justify-content: flex-start;
             gap: 12px;
-            width: 100%;
-            text-align: left;
-            background: transparent;
-            border: 0;
-            color: #1a1a2e;
-            font-size: 14px;
-            padding: 10px 16px;
-            cursor: pointer;
-            font-weight: 500;
             white-space: nowrap;
             height: auto;
         }
-        .header-directory-menu button:hover {
-            background: rgba(79, 140, 255, 0.08);
-            color: #1a1a2e;
-        }
         .header-directory-menu button .p86-icon-slot { margin-right: 0; }
         .header-directory-menu button .p86-icon {
-            width: 22px;
-            height: 22px;
+            width: 18px;
+            height: 18px;
             flex: 0 0 auto;
-            color: #4b4b5a;
+            color: #aaa;
         }
-        .header-directory-menu button:hover .p86-icon { color: #2c2c40; }
+        .header-directory-menu button:hover .p86-icon { color: #fff; }
 
         /* NAVIGATION — inline with logo, height-filling so the active
            underline sits flush with the header's bottom edge for that
