@@ -3486,6 +3486,49 @@
   gap: 10px;
   margin-bottom: 8px;
 }
+
+/* Tile-size variants — driven by data-tile-size on #projPhotoFeed
+   (the parent of .p86-proj-feed-grid), set by the picker buttons in
+   the filter-actions strip. 'normal' is the default and matches the
+   bare .p86-proj-feed-grid rule above; compact and spacious shift
+   the minmax floor + gap so the same tile markup gets denser or
+   roomier without re-rendering. */
+#projPhotoFeed[data-tile-size="compact"] .p86-proj-feed-grid {
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 6px;
+}
+#projPhotoFeed[data-tile-size="spacious"] .p86-proj-feed-grid {
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 14px;
+}
+
+/* Tile-size picker — three icon buttons sitting in the filter-actions
+   row alongside the Upload Photos button. Pattern mirrors
+   .p86-projects-view-toggle (Grid / Map switch) so the UI vocabulary
+   stays consistent. Active button gets the accent tint. */
+.p86-tile-size-picker {
+  display: inline-flex;
+  border: 1px solid var(--border, #333);
+  border-radius: 6px;
+  overflow: hidden;
+  margin-right: 6px;
+}
+.p86-tile-size-btn {
+  background: transparent;
+  border: 0;
+  color: var(--text-dim, #888);
+  padding: 5px 9px;
+  font-size: 13px;
+  cursor: pointer;
+  border-right: 1px solid var(--border, #333);
+  line-height: 1;
+}
+.p86-tile-size-btn:last-child { border-right: 0; }
+.p86-tile-size-btn:hover { color: var(--text, #fff); background: rgba(255, 255, 255, 0.04); }
+.p86-tile-size-btn.active {
+  background: rgba(79, 140, 255, 0.15);
+  color: var(--accent, #4f8cff);
+}
 .p86-proj-photo-tile {
   border: 1px solid var(--border, #333);
   border-radius: 8px; overflow: hidden;

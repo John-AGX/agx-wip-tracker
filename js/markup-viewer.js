@@ -545,7 +545,34 @@
   }
 
   function loadImageInto(canvas) {
-    var proxyUrl = '/api/attachments/raw/' + encodeURIComponent(state.attachment.id) + '?variant=web';
+    // "Annotate before saving" hands us an attachment with id:null
+    // and a local blob: URL in web_url/original_url — the photo
+    // hasn't been uploaded yet, so there's nothing at the proxy
+    // endpoint to fetch. Fall back to whichever direct URL the
+    // caller provided. Same path also lets us short-circuit data:
+    // URLs (e.g. embedded test images) without a network round-trip.
+    var directUrl = null;
+    var a = state.attachment || {};
+    if (!a.id) {
+      directUrl = a.web_url || a.original_url || a.thumb_url || null;
+    }
+    if (directUrl) {
+      var img = new Image();
+      img.onload = function() {
+        state.img = img;
+        state.naturalSize = { w: img.naturalWidth, h: img.naturalHeight };
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
+        redraw();
+      };
+      img.onerror = function() {
+        alert('Failed to load image for annotation.');
+        closeOverlay();
+      };
+      img.src = directUrl;
+      return;
+    }
+    var proxyUrl = '/api/attachments/raw/' + encodeURIComponent(a.id) + '?variant=web';
     var headers = {};
     var token = (window.p86Auth && typeof window.p86Auth.getToken === 'function') ? window.p86Auth.getToken() : null;
     if (!token) { try { token = localStorage.getItem('p86-auth-token'); } catch (e) { /* ignore */ } }

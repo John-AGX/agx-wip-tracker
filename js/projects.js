@@ -1333,6 +1333,24 @@
           '</select>' +
         '</div>' +
         '<div class="p86-proj-filter-actions">' +
+          // Tile-size picker — three-button toggle (compact / normal /
+          // spacious) sets a data-size attribute on #projPhotoFeed
+          // which CSS variant rules read to switch the grid's
+          // minmax floor. Choice is per-user (localStorage), not
+          // per-project, since it's a UI preference. Active button
+          // is restored on paint() from the saved value.
+          (function() {
+            var current = _photoTileSize();
+            var btn = function(size, label, title) {
+              return '<button type="button" class="p86-tile-size-btn' + (current === size ? ' active' : '') + '"' +
+                ' data-tile-size="' + size + '" title="' + escapeAttr(title) + '">' + label + '</button>';
+            };
+            return '<div class="p86-tile-size-picker" role="group" aria-label="Tile size">' +
+              btn('compact',  '&#x2630;', 'Compact tiles')  +
+              btn('normal',   '&#x25A6;', 'Normal tiles')   +
+              btn('spacious', '&#x25A3;', 'Spacious tiles') +
+            '</div>';
+          })() +
           '<button class="primary" onclick="document.getElementById(\'projPhotoFileInput\').click();">&#x2795; Upload Photos</button>' +
           '<input type="file" id="projPhotoFileInput" multiple accept="image/*,application/pdf" capture="environment" style="display:none;" />' +
         '</div>' +
@@ -1408,6 +1426,19 @@
     if (startEl) startEl.addEventListener('change', function() { _detailState.photoFilter.start = startEl.value; paintPhotoFeed(); paintTagChipStrip(); });
     if (endEl) endEl.addEventListener('change', function() { _detailState.photoFilter.end = endEl.value; paintPhotoFeed(); paintTagChipStrip(); });
     if (uploaderEl) uploaderEl.addEventListener('change', function() { _detailState.photoFilter.uploader = uploaderEl.value; paintPhotoFeed(); paintTagChipStrip(); });
+
+    // Tile-size picker click handler. Delegated so the three
+    // buttons share one listener; reads the data-tile-size attribute
+    // off the clicked button. _setPhotoTileSize handles localStorage
+    // + active-state sync + applying the data attribute to the feed.
+    var tilePicker = host.querySelector('.p86-tile-size-picker');
+    if (tilePicker) {
+      tilePicker.addEventListener('click', function(e) {
+        var btn = e.target.closest('[data-tile-size]');
+        if (!btn) return;
+        _setPhotoTileSize(btn.getAttribute('data-tile-size'));
+      });
+    }
 
     // Wire upload input.
     var fileInput = host.querySelector('#projPhotoFileInput');
@@ -2276,9 +2307,41 @@
     return true;
   }
 
+  // Per-user tile-size preference for the project photo feed. Three
+  // values: 'compact' (140px floor), 'normal' (170px, default),
+  // 'spacious' (220px floor). Persisted in localStorage so the choice
+  // survives reloads and applies across every project the user opens.
+  // CSS variants live alongside .p86-proj-feed-grid in styles.css.
+  var _TILE_SIZE_KEY = 'p86-proj-tile-size';
+  var _TILE_SIZES = { compact: 1, normal: 1, spacious: 1 };
+  function _photoTileSize() {
+    try {
+      var v = localStorage.getItem(_TILE_SIZE_KEY);
+      if (v && _TILE_SIZES[v]) return v;
+    } catch (e) { /* localStorage blocked — fall through to default */ }
+    return 'normal';
+  }
+  function _setPhotoTileSize(size) {
+    if (!_TILE_SIZES[size]) return;
+    try { localStorage.setItem(_TILE_SIZE_KEY, size); } catch (e) { /* ignore */ }
+    var feed = document.getElementById('projPhotoFeed');
+    if (feed) feed.setAttribute('data-tile-size', size);
+    // Update the picker's active state in-place — no full paintDetail.
+    var picker = document.querySelector('.p86-tile-size-picker');
+    if (picker) {
+      picker.querySelectorAll('.p86-tile-size-btn').forEach(function(b) {
+        b.classList.toggle('active', b.getAttribute('data-tile-size') === size);
+      });
+    }
+  }
+
   function paintPhotoFeed() {
     var host = document.getElementById('projPhotoFeed');
     if (!host) return;
+    // Apply the saved tile-size to the feed every render — the host
+    // div is recreated on each paintDetail() so the attribute would
+    // otherwise reset to default after a tab switch.
+    host.setAttribute('data-tile-size', _photoTileSize());
     var photos = _detailState.photos.slice();
     var pairs = _detailState.pairs.slice();
 
@@ -3028,10 +3091,16 @@
         if (action === 'cancel') return reject(new Error('cancelled'));
         if (action === 'quick') {
           _quickSaveThisBatch = true;
+          // Honor whatever the preview gave us — caption / tags /
+          // annotations the user already typed should still land
+          // even though they hit Quick Save instead of Save. Falls
+          // back to walkthrough sticky tags when the preview
+          // returned nothing (e.g. very early Quick Save click).
+          var qp = payload || {};
           return doUpload(file, projectId, {
-            caption: null,
-            tags: _walkthroughTags.slice(),
-            annotations: []
+            caption: qp.caption || null,
+            tags: (qp.tags && qp.tags.length) ? qp.tags : _walkthroughTags.slice(),
+            annotations: qp.annotations || []
           }).then(resolve, reject);
         }
         // 'save' — payload has caption, tags, annotations
@@ -3181,7 +3250,17 @@
       // Don't update _walkthroughTags here — quick save uses whatever's
       // already sticky from prior previews. If the user wanted these
       // tags to stick they'd use Save.
-      close('quick');
+      // But DO forward the tags / caption / annotations the user
+      // already typed in this preview — previewAndUpload picks them
+      // up so a typed-tag-then-Quick-Save doesn't silently lose
+      // the just-entered values. (The earlier "no payload" path
+      // dropped them entirely.)
+      var caption = (modal.querySelector('#upPrevCaption').value || '').trim();
+      close('quick', {
+        caption: caption || null,
+        tags: pendingTags.slice(),
+        annotations: pendingAnnotations.slice()
+      });
     });
   }
 
