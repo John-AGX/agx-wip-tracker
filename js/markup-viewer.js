@@ -38,56 +38,91 @@
   // a bare "5" entered while the toggle is "ft" parses as 5 feet,
   // not 5 inches. Quoted units always win regardless of toggle.
   function promptMeasurement(defaultUnit, callback) {
-    var unitLabel = (defaultUnit === 'ft') ? 'feet' : 'inches';
+    // The unit is mutable inside the modal — the user can flip ft/in
+    // here without going back to the side panel. Initial value comes
+    // from the toolbar's current setting.
+    var unit = (defaultUnit === 'ft') ? 'ft' : 'in';
+
     var overlay = document.createElement('div');
     overlay.style.cssText = 'position:fixed;inset:0;z-index:10500;background:rgba(0,0,0,0.65);display:flex;align-items:center;justify-content:center;padding:20px;backdrop-filter:blur(2px);';
 
     var box = document.createElement('div');
-    box.style.cssText = 'background:#0f0f1e;border:1px solid #353545;border-radius:12px;padding:20px 22px;max-width:400px;width:100%;box-shadow:0 16px 48px rgba(0,0,0,0.6);color:#e6e6e6;';
-    box.innerHTML =
-      '<div style="font-size:15px;font-weight:700;color:#fff;margin-bottom:6px;">Measurement</div>' +
-      '<div style="font-size:12px;color:#9aa;margin-bottom:14px;">Distance between the two points. ' +
-        'A bare number is read as <strong>' + unitLabel + '</strong> (toggle in the side panel). ' +
-        'Quoted units like <code>84"</code>, <code>1.5\'</code>, or <code>5\'6"</code> always win.</div>' +
-      '<input id="p86-mk-prompt-input" type="text" autocomplete="off" placeholder="e.g. 84&quot;, 1.5&apos;, 5&apos;6&quot;, or just a number" ' +
-        'style="width:100%;box-sizing:border-box;background:#1a1a2e;color:#fff;border:1px solid #444;border-radius:6px;padding:10px 12px;font-size:14px;font-weight:600;outline:none;" />' +
-      '<div id="p86-mk-prompt-error" style="font-size:11px;color:#f87171;min-height:14px;margin-top:6px;"></div>' +
-      '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;">' +
-        '<button data-mk-prompt-cancel style="padding:8px 16px;background:rgba(255,255,255,0.06);color:#ddd;border:1px solid #444;border-radius:6px;cursor:pointer;font-weight:600;">Cancel</button>' +
-        '<button data-mk-prompt-ok style="padding:8px 16px;background:#4f8cff;color:#fff;border:1px solid #4f8cff;border-radius:6px;cursor:pointer;font-weight:600;">Set Measurement</button>' +
+    box.style.cssText = 'background:#0f0f1e;border:1px solid #353545;border-radius:12px;padding:20px 22px;max-width:440px;width:100%;box-shadow:0 16px 48px rgba(0,0,0,0.6);color:#e6e6e6;';
+
+    function unitChipsHTML() {
+      return '<div style="display:flex;gap:6px;margin-bottom:10px;">' +
+        '<button data-mk-mu="in" style="flex:1;padding:8px 0;font-size:12px;font-weight:700;border-radius:6px;cursor:pointer;border:1px solid ' + (unit === 'in' ? '#4f8cff' : '#444') + ';background:' + (unit === 'in' ? '#4f8cff' : 'rgba(255,255,255,0.05)') + ';color:' + (unit === 'in' ? '#fff' : '#ddd') + ';">in</button>' +
+        '<button data-mk-mu="ft" style="flex:1;padding:8px 0;font-size:12px;font-weight:700;border-radius:6px;cursor:pointer;border:1px solid ' + (unit === 'ft' ? '#4f8cff' : '#444') + ';background:' + (unit === 'ft' ? '#4f8cff' : 'rgba(255,255,255,0.05)') + ';color:' + (unit === 'ft' ? '#fff' : '#ddd') + ';">ft</button>' +
       '</div>';
+    }
+
+    function render() {
+      var unitLabel = (unit === 'ft') ? 'feet' : 'inches';
+      box.innerHTML =
+        '<div style="font-size:15px;font-weight:700;color:#fff;margin-bottom:6px;">Measurement</div>' +
+        '<div style="font-size:12px;color:#9aa;margin-bottom:10px;">Distance between the two points. A bare number reads as <strong>' + unitLabel + '</strong>. Quoted units (<code>84"</code>, <code>1.5\'</code>, <code>5\'6"</code>) always win.</div>' +
+        '<div style="font-size:9px;color:#888;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Unit (for bare numbers)</div>' +
+        unitChipsHTML() +
+        '<input id="p86-mk-prompt-input" type="text" autocomplete="off" placeholder="e.g. 84&quot;, 1.5&apos;, 5&apos;6&quot;, or just a number" ' +
+          'style="width:100%;box-sizing:border-box;background:#1a1a2e;color:#fff;border:1px solid #444;border-radius:6px;padding:10px 12px;font-size:14px;font-weight:600;outline:none;" />' +
+        '<div id="p86-mk-prompt-error" style="font-size:11px;color:#f87171;min-height:14px;margin-top:6px;"></div>' +
+        '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;">' +
+          '<button data-mk-prompt-cancel style="padding:8px 16px;background:rgba(255,255,255,0.06);color:#ddd;border:1px solid #444;border-radius:6px;cursor:pointer;font-weight:600;">Cancel</button>' +
+          '<button data-mk-prompt-ok style="padding:8px 16px;background:#4f8cff;color:#fff;border:1px solid #4f8cff;border-radius:6px;cursor:pointer;font-weight:600;">Set Measurement</button>' +
+        '</div>';
+      wire();
+    }
+
+    function wire() {
+      var input  = box.querySelector('#p86-mk-prompt-input');
+      var errEl  = box.querySelector('#p86-mk-prompt-error');
+      var okBtn  = box.querySelector('[data-mk-prompt-ok]');
+      var cancelBtn = box.querySelector('[data-mk-prompt-cancel]');
+
+      box.querySelectorAll('[data-mk-mu]').forEach(function(btn) {
+        btn.onclick = function() {
+          unit = btn.dataset.mkMu;
+          // Mirror back to global so subsequent draws keep this unit.
+          if (state) state.measureUnit = unit;
+          var preserved = input.value;
+          render();
+          var newInput = box.querySelector('#p86-mk-prompt-input');
+          if (newInput) { newInput.value = preserved; newInput.focus(); }
+        };
+      });
+
+      function tryCommit() {
+        var raw = (input.value || '').trim();
+        if (!raw) { errEl.textContent = 'Enter a measurement (or click Cancel).'; return; }
+        var parsed = parseMeasurement(raw, unit);
+        if (!parsed) { errEl.textContent = 'Could not parse "' + raw + '" — try 84", 1.5\', 10 feet, or 5\'6".'; return; }
+        cleanup(parsed);
+      }
+
+      okBtn.onclick = tryCommit;
+      cancelBtn.onclick = function() { cleanup(null); };
+      setTimeout(function() { input.focus(); }, 0);
+    }
 
     overlay.appendChild(box);
     document.body.appendChild(overlay);
-
-    var input  = box.querySelector('#p86-mk-prompt-input');
-    var errEl  = box.querySelector('#p86-mk-prompt-error');
-    var okBtn  = box.querySelector('[data-mk-prompt-ok]');
-    var cancelBtn = box.querySelector('[data-mk-prompt-cancel]');
+    render();
 
     function cleanup(result) {
       document.removeEventListener('keydown', onKey, true);
       if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
       callback(result);
     }
-    function tryCommit() {
-      var raw = (input.value || '').trim();
-      if (!raw) { errEl.textContent = 'Enter a measurement (or click Cancel).'; return; }
-      var parsed = parseMeasurement(raw, defaultUnit);
-      if (!parsed) { errEl.textContent = 'Could not parse "' + raw + '" — try 84", 1.5\', 10 feet, or 5\'6".'; return; }
-      cleanup(parsed);
-    }
     function onKey(e) {
       if (e.key === 'Escape') { e.preventDefault(); cleanup(null); }
-      else if (e.key === 'Enter' && document.activeElement === input) { e.preventDefault(); tryCommit(); }
+      else if (e.key === 'Enter' && document.activeElement && document.activeElement.id === 'p86-mk-prompt-input') {
+        e.preventDefault();
+        var okBtn = box.querySelector('[data-mk-prompt-ok]');
+        if (okBtn) okBtn.click();
+      }
     }
-
-    okBtn.onclick = tryCommit;
-    cancelBtn.onclick = function() { cleanup(null); };
     overlay.addEventListener('click', function(e) { if (e.target === overlay) cleanup(null); });
     document.addEventListener('keydown', onKey, true);
-
-    setTimeout(function() { input.focus(); }, 0);
   }
 
   // Parse a free-form measurement string into { inches, label }.
@@ -231,6 +266,11 @@
       measureNumberColor: null,
       color: '#ef4444',
       lineWidth: 8,
+      // Explicit text size (px). Previously derived from lineWidth
+      // which made text + line thickness inseparable — bumping the
+      // stroke also bumped every text label, and you couldn't shrink
+      // text without thinning lines.
+      fontPx: 28,
       strokes: [],
       currentStroke: null,
       activePolyline: null,    // mid-build polyline (committed on dblclick / Esc / tool switch)
@@ -258,7 +298,7 @@
         '<strong style="color:#fff;font-size:13px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTML(state.attachment.filename || 'Photo') + '</strong>' +
         '<span id="p86-mk-hint" style="color:#aaa;font-size:11px;margin-right:8px;"></span>' +
         '<button id="p86-mk-cancel" style="background:rgba(255,255,255,0.06);color:#aaa;border:1px solid #444;border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;">Cancel</button>' +
-        '<button id="p86-mk-save" style="background:#4f8cff;color:#fff;border:0;border-radius:6px;padding:6px 16px;font-size:12px;font-weight:700;cursor:pointer;">Save…</button>' +
+        '<button id="p86-mk-save" style="background:#4f8cff;color:#fff;border:0;border-radius:6px;padding:6px 16px;font-size:12px;font-weight:700;cursor:pointer;">Save</button>' +
       '</div>' +
       // Body — left sidebar + canvas area
       '<div style="display:flex;gap:10px;flex:1;min-height:0;">' +
@@ -279,8 +319,15 @@
           // Divider
           '<div style="width:36px;height:1px;background:#3a3a4a;margin:6px 0;"></div>' +
           // Thickness button — opens a popup with preset thickness circles.
-          '<button id="p86-mk-thickness" title="Thickness" style="width:48px;height:44px;background:rgba(255,255,255,0.05);color:#ddd;border:1px solid #444;border-radius:6px;cursor:pointer;display:flex;align-items:center;justify-content:center;line-height:1;padding:0;">' +
+          // When a stroke is selected, the popup also updates the
+          // selected stroke's line width (not just the global default).
+          '<button id="p86-mk-thickness" title="Line thickness" style="width:48px;height:44px;background:rgba(255,255,255,0.05);color:#ddd;border:1px solid #444;border-radius:6px;cursor:pointer;display:flex;align-items:center;justify-content:center;line-height:1;padding:0;">' +
             '<span id="p86-mk-thickness-dot" style="display:block;width:14px;height:14px;border-radius:50%;background:#ddd;"></span>' +
+          '</button>' +
+          // Text size button — controls fontPx for the text tool and
+          // (when a text stroke is selected) the selected stroke's size.
+          '<button id="p86-mk-textsize" title="Text size" style="width:48px;height:44px;background:rgba(255,255,255,0.05);color:#ddd;border:1px solid #444;border-radius:6px;cursor:pointer;display:flex;align-items:center;justify-content:center;line-height:1;padding:0;font-weight:700;">' +
+            '<span id="p86-mk-textsize-label" style="font-size:14px;">T</span>' +
           '</button>' +
           // Divider
           '<div style="width:36px;height:1px;background:#3a3a4a;margin:6px 0;"></div>' +
@@ -344,6 +391,10 @@
       e.stopPropagation();
       openThicknessPopup(overlay);
     };
+    overlay.querySelector('#p86-mk-textsize').onclick = function(e) {
+      e.stopPropagation();
+      openTextSizePopup(overlay);
+    };
     overlay.querySelector('#p86-mk-undo').onclick = function() {
       state.strokes.pop();
       state.selectedIdx = null;
@@ -362,10 +413,30 @@
       if (!state.strokes.length || confirm('Discard your markup?')) closeOverlay();
     };
     overlay.querySelector('#p86-mk-save').onclick = function() {
-      // Commit any in-progress polyline before opening the save dialog.
+      // Streamlined save (2026-05-25): legacy "Save as new / Replace
+      // original / Attach to proposal" dialog removed. Save always
+      // creates a new markup attachment linked to the original; the
+      // user can delete that attachment to undo. Skipping the dialog
+      // makes the common path one click instead of three.
       commitPolylineIfActive();
+      state.selectedIdx = null;
       redraw();
-      openSaveDialog();
+      var saveBtn = overlay.querySelector('#p86-mk-save');
+      var origLabel = saveBtn.textContent;
+      saveBtn.disabled = true;
+      saveBtn.textContent = 'Saving…';
+      var done = state && state.onDone;
+      runSave('new', false).then(function() {
+        saveBtn.textContent = 'Saved';
+        setTimeout(function() {
+          closeOverlay();
+          if (typeof done === 'function') done();
+        }, 250);
+      }).catch(function(err) {
+        saveBtn.disabled = false;
+        saveBtn.textContent = origLabel;
+        alert('Save failed: ' + (err.message || 'unknown error'));
+      });
     };
 
     refreshToolbar(overlay);
@@ -526,6 +597,97 @@
       };
     });
     // Click-outside-to-close (next click on overlay).
+    setTimeout(function() {
+      function onAway(e) {
+        if (popup.contains(e.target)) return;
+        popup.remove();
+        document.removeEventListener('mousedown', onAway, true);
+      }
+      document.addEventListener('mousedown', onAway, true);
+    }, 0);
+  }
+
+  // Text size popup — preset font sizes. Mirrors the thickness popup
+  // shape so it feels at home next to it. Applies to state.fontPx for
+  // future text strokes; also rewrites the selected text stroke's
+  // fontPx if one is selected (so users can resize existing labels).
+  var TEXT_SIZE_PRESETS = [
+    { value: 18, label: 'S' },
+    { value: 28, label: 'M' },
+    { value: 44, label: 'L' },
+    { value: 68, label: 'XL' }
+  ];
+  function openTextSizePopup(overlay) {
+    var existing = document.getElementById('p86-mk-textsize-popup');
+    if (existing) { existing.remove(); return; }
+    var anchor = overlay.querySelector('#p86-mk-textsize');
+    var anchorRect = anchor ? anchor.getBoundingClientRect() : null;
+    var ovRect = overlay.getBoundingClientRect();
+    var popup = document.createElement('div');
+    popup.id = 'p86-mk-textsize-popup';
+    popup.style.cssText = 'position:absolute;background:#fff;color:#1f2937;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,0.4);padding:14px 18px;z-index:5060;min-width:260px;';
+    if (anchorRect) {
+      popup.style.top = (anchorRect.top - ovRect.top) + 'px';
+      popup.style.left = (anchorRect.right - ovRect.left + 8) + 'px';
+    }
+    var current = state.fontPx || 28;
+    popup.innerHTML =
+      '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">' +
+        '<strong style="font-size:14px;">Text size</strong>' +
+        '<button id="p86-mk-textsize-close" style="background:rgba(0,0,0,0.06);color:#1f2937;border:0;width:30px;height:30px;border-radius:50%;font-size:16px;cursor:pointer;">&times;</button>' +
+      '</div>' +
+      '<hr style="border:0;border-top:1px solid #e5e7eb;margin:6px 0 14px;" />' +
+      '<div style="display:flex;align-items:center;justify-content:space-around;gap:10px;">' +
+        TEXT_SIZE_PRESETS.map(function(p) {
+          var active = current === p.value;
+          return '<button data-mk-fontpx="' + p.value + '" title="' + p.value + 'px" ' +
+            'style="background:' + (active ? '#1e293b' : 'transparent') + ';color:' + (active ? '#fff' : '#1e293b') + ';border:1px solid ' + (active ? '#1e293b' : '#cbd5e1') + ';cursor:pointer;width:48px;height:48px;border-radius:8px;display:flex;align-items:center;justify-content:center;padding:0;font-weight:700;font-size:14px;">' +
+            p.label +
+          '</button>';
+        }).join('') +
+      '</div>' +
+      '<div style="margin-top:12px;display:flex;align-items:center;gap:10px;">' +
+        '<input type="range" min="10" max="120" step="2" value="' + current + '" id="p86-mk-textsize-range" style="flex:1;" />' +
+        '<span id="p86-mk-textsize-readout" style="min-width:46px;text-align:right;font-weight:700;color:#1f2937;font-size:13px;">' + current + 'px</span>' +
+      '</div>';
+    overlay.appendChild(popup);
+
+    function applySize(px) {
+      px = Math.max(10, Math.min(120, Math.round(px)));
+      state.fontPx = px;
+      // Refresh the selected text stroke if any.
+      if (state.selectedIdx != null) {
+        var s = state.strokes[state.selectedIdx];
+        if (s && s.tool === 'text') { s.fontPx = px; redraw(); }
+      }
+      var readout = popup.querySelector('#p86-mk-textsize-readout');
+      if (readout) readout.textContent = px + 'px';
+      var range = popup.querySelector('#p86-mk-textsize-range');
+      if (range) range.value = px;
+      // Repaint the preset rows to reflect the new active state.
+      popup.querySelectorAll('[data-mk-fontpx]').forEach(function(b) {
+        var v = parseInt(b.dataset.mkFontpx, 10);
+        var active = v === px;
+        b.style.background = active ? '#1e293b' : 'transparent';
+        b.style.color = active ? '#fff' : '#1e293b';
+        b.style.borderColor = active ? '#1e293b' : '#cbd5e1';
+      });
+    }
+
+    popup.querySelector('#p86-mk-textsize-close').onclick = function(e) {
+      e.stopPropagation();
+      popup.remove();
+    };
+    popup.querySelectorAll('[data-mk-fontpx]').forEach(function(btn) {
+      btn.onclick = function(e) {
+        e.stopPropagation();
+        applySize(parseInt(btn.dataset.mkFontpx, 10) || 28);
+      };
+    });
+    popup.querySelector('#p86-mk-textsize-range').oninput = function(e) {
+      applySize(parseInt(e.target.value, 10));
+    };
+
     setTimeout(function() {
       function onAway(e) {
         if (popup.contains(e.target)) return;
@@ -766,13 +928,15 @@
         return;
       }
 
-      // Text tool: prompt then place.
+      // Text tool: prompt then place. Font size honors the explicit
+      // state.fontPx (controlled via the Text size button in the
+      // sidebar). Falls back to a sensible default if not set.
       if (state.tool === 'text') {
         var msg = prompt('Text to add:');
         if (msg) {
           state.strokes.push({
             tool: 'text', color: state.color, lineWidth: state.lineWidth,
-            x: p.x, y: p.y, text: msg, fontPx: Math.max(14, state.lineWidth * 6)
+            x: p.x, y: p.y, text: msg, fontPx: state.fontPx || 28
           });
           redraw();
         }
