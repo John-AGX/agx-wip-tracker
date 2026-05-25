@@ -542,21 +542,94 @@
   // Backwards-compat — older call sites use createPrompt / createForEntity.
   function createPrompt(prefill) { openCreate(prefill); return Promise.resolve(null); }
   function createForEntity(kind, id) {
+    var inherited = inheritFromEntity(kind, id);
     var prefill = {};
+    if (inherited.name)    prefill.name = inherited.name;
+    if (inherited.address) prefill.address_text = inherited.address;
+    if (kind === 'lead')   {
+      prefill.lead_id = id;
+      if (inherited.client_id) prefill.client_id = inherited.client_id;
+    }
+    if (kind === 'job')    prefill.job_id = id;
+    if (kind === 'client') prefill.client_id = id;
+    openCreate(prefill);
+  }
+
+  // Compose an address string from a lead row (street + city + state + zip).
+  // Skips blank pieces cleanly so we don't end up with double commas.
+  function composeLeadAddress(l) {
+    if (!l) return '';
+    var parts = [];
+    if (l.street_address) parts.push(String(l.street_address).trim());
+    var cityStateZip = [];
+    if (l.city) cityStateZip.push(String(l.city).trim());
+    if (l.state) cityStateZip.push(String(l.state).trim());
+    if (l.zip) cityStateZip.push(String(l.zip).trim());
+    if (cityStateZip.length) parts.push(cityStateZip.join(', '));
+    return parts.filter(Boolean).join(', ');
+  }
+  // Job: data.address > data.buildings[0].address (same priority as the
+  // weather route uses) so we don't surprise the user with a different
+  // address than what the schedule/weather already know about.
+  function composeJobAddress(j) {
+    if (!j) return '';
+    var d = j.data || j;
+    if (d.address && String(d.address).trim()) return String(d.address).trim();
+    var bldgs = Array.isArray(d.buildings) ? d.buildings : [];
+    for (var i = 0; i < bldgs.length; i++) {
+      if (bldgs[i] && bldgs[i].address && String(bldgs[i].address).trim()) {
+        return String(bldgs[i].address).trim();
+      }
+    }
+    return '';
+  }
+  // Client: property_address > mailing address composed from columns.
+  function composeClientAddress(c) {
+    if (!c) return '';
+    if (c.property_address && String(c.property_address).trim()) {
+      return String(c.property_address).trim();
+    }
+    var parts = [];
+    if (c.address) parts.push(String(c.address).trim());
+    var rest = [];
+    if (c.city) rest.push(String(c.city).trim());
+    if (c.state) rest.push(String(c.state).trim());
+    if (c.zip) rest.push(String(c.zip).trim());
+    if (rest.length) parts.push(rest.join(', '));
+    return parts.filter(Boolean).join(', ');
+  }
+
+  // Return { name, address, client_id? } inherited from a lead/job/client.
+  // Used at project creation AND on link change so the project tracks
+  // the entity it's tied to.
+  function inheritFromEntity(kind, id) {
     if (kind === 'lead') {
       var l = ((window.appData && window.appData.leads) || []).find(function(x) { return String(x.id) === String(id); });
-      if (l) { prefill.name = l.title || ''; prefill.lead_id = id; if (l.client_id) prefill.client_id = l.client_id; }
-      else prefill.lead_id = id;
-    } else if (kind === 'job') {
-      var j = ((window.appData && window.appData.jobs) || []).find(function(x) { return String(x.id) === String(id); });
-      if (j) { prefill.name = j.title || j.name || ''; prefill.job_id = id; }
-      else prefill.job_id = id;
-    } else if (kind === 'client') {
-      var c = ((window.appData && window.appData.clients) || []).find(function(x) { return String(x.id) === String(id); });
-      if (c) { prefill.name = c.name || ''; prefill.client_id = id; }
-      else prefill.client_id = id;
+      if (!l) return {};
+      return {
+        name: l.title || '',
+        address: composeLeadAddress(l),
+        client_id: l.client_id || null
+      };
     }
-    openCreate(prefill);
+    if (kind === 'job') {
+      var j = ((window.appData && window.appData.jobs) || []).find(function(x) { return String(x.id) === String(id); });
+      if (!j) return {};
+      var d = j.data || j;
+      return {
+        name: d.title || d.name || '',
+        address: composeJobAddress(j)
+      };
+    }
+    if (kind === 'client') {
+      var c = ((window.appData && window.appData.clients) || []).find(function(x) { return String(x.id) === String(id); });
+      if (!c) return {};
+      return {
+        name: c.name || '',
+        address: composeClientAddress(c)
+      };
+    }
+    return {};
   }
 
   // ──────────────────────────────────────────────────────────────────
@@ -1804,11 +1877,42 @@
     });
 
     modal.querySelector('#plSave').addEventListener('click', function() {
+      var newLeadId = modal.querySelector('#plLead').value || null;
+      var newJobId = modal.querySelector('#plJob').value || null;
+      var newClientId = modal.querySelector('#plClient').value || null;
       var patch = {
-        lead_id:   modal.querySelector('#plLead').value || null,
-        job_id:    modal.querySelector('#plJob').value || null,
-        client_id: modal.querySelector('#plClient').value || null
+        lead_id: newLeadId,
+        job_id: newJobId,
+        client_id: newClientId
       };
+
+      // Inherit title + address from a newly-linked entity. Priority:
+      // job > lead > client (job is the most "final" form of the
+      // project). Only apply when the linkage CHANGED — if the user is
+      // just clearing or re-confirming, we don't stomp their name.
+      var inherit = null;
+      if (newJobId && String(newJobId) !== String(p.job_id || ''))      inherit = inheritFromEntity('job', newJobId);
+      else if (newLeadId && String(newLeadId) !== String(p.lead_id || ''))   inherit = inheritFromEntity('lead', newLeadId);
+      else if (newClientId && String(newClientId) !== String(p.client_id || '')) inherit = inheritFromEntity('client', newClientId);
+
+      if (inherit) {
+        if (inherit.name && (!p.name || /^untitled project$/i.test(p.name))) {
+          patch.name = inherit.name;
+        } else if (inherit.name) {
+          // Always update name on explicit link change — that's the
+          // user's intent. Comment out the heuristic above if you
+          // want to be more conservative.
+          patch.name = inherit.name;
+        }
+        if (inherit.address) {
+          patch.address_text = inherit.address;
+        }
+        // Auto-fill the client linkage when a lead carries one.
+        if (inherit.client_id && !newClientId) {
+          patch.client_id = inherit.client_id;
+        }
+      }
+
       api().update(p.id, patch).then(function(r) {
         _detailState.project = r && r.project;
         modal.remove();

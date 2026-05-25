@@ -118,9 +118,18 @@
 
     // Initial view: fit to all pins or default to continental US.
     var map = L.map(mapEl, { zoomControl: true, attributionControl: true });
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    // Carto Dark Matter — free, no API key, matches our dark UI so
+    // pins don't disappear against a bright canvas. Previously we
+    // used OSM's standard tiles, which:
+    //   1. Render light blue/white (doesn't fit our theme)
+    //   2. Have aggressive rate limits on free / unattributed use
+    //      that were resulting in failed tile loads → empty teal map
+    // Carto subhosts {a,b,c,d}.basemaps.cartocdn.com and is the
+    // canonical Leaflet fallback for free dark basemap.
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
       maxZoom: 19,
-      attribution: '&copy; OSM'
+      subdomains: 'abcd',
+      attribution: '&copy; OSM &copy; CARTO'
     }).addTo(map);
 
     if (!pinnable.length) {
